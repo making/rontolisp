@@ -134,8 +134,9 @@ in place, both classes being literal. A **definition-time MOP subset** is in:
 metaobjects, [`allocate-instance`](../reference/functions/allocate-instance.md)
 works, and a `(:metaclass M)` class option runs the class-definition protocol at
 definition time (see [`defclass`](../reference/special-forms/defclass.md)) — this
-is what loads postmodern's DAO layer verbatim. Out of scope: multiple
-inheritance, specializers on later arguments, and runtime class construction
+is what loads postmodern's DAO layer verbatim. Multiple inheritance works
+(class precedence list, slot merge across superclasses). Out of scope: runtime
+class construction
 (`ensure-class` from computed data, a non-top-level `defclass`, `add-method`,
 `compute-applicable-methods`, class redefinition,
 `update-instance-for-different-class`) — the class and method sets of a compiled

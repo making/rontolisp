@@ -402,6 +402,9 @@ final class JvmExprCompiler {
 				case LispNames.BOUNDP -> JvmSymbolApiCompiler.compileBoundp(cons, ctx, className);
 				case LispNames.FBOUNDP -> JvmSymbolApiCompiler.compileFboundp(cons, ctx, className);
 				case LispNames.FMAKUNBOUND -> JvmSymbolApiCompiler.compileFmakunbound(cons, ctx, className);
+				case LispNames.SET_SYMBOL_FUNCTION_INTERNAL ->
+					JvmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx, className);
+				case LispNames.FENV_FUNCTION_INTERNAL -> JvmSymbolApiCompiler.compileFenvFunction(cons, ctx, className);
 				case LispNames.SYMBOL_VALUE -> JvmSymbolApiCompiler.compileSymbolValue(cons, ctx, className);
 				// Only a COMPUTED designator reaches here: PackageResolver folds a
 				// literal

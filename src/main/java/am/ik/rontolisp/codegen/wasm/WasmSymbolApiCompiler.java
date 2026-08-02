@@ -144,6 +144,33 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
+	 * {@code (%set-symbol-function name value)}: the write-side twin of
+	 * {@code fmakunbound} behind {@code (setf (symbol-function ...))}
+	 * ({@link WasmSymbolApiRuntimeBuilder#buildSetSymbolFunction}); the helper returns
+	 * the value, the setf result.
+	 */
+	static void compileSetSymbolFunction(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new UnsupportedOperationException(
+					LispNames.SET_SYMBOL_FUNCTION_INTERNAL + " expects 2 arguments, got " + (parts.size() - 1));
+		}
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);
+	}
+
+	/**
+	 * {@code (%fenv-function name)}: the GLOBAL_FENV-only function read of the
+	 * setf-only-alias forwarder defuns
+	 * ({@link WasmSymbolApiRuntimeBuilder#buildFenvFunction}); a miss traps.
+	 */
+	static void compileFenvFunction(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		compileUnaryCall(cons, LispNames.FENV_FUNCTION_INTERNAL, WasmLispCompiler.FUNC_FENV_FUNCTION, ctx);
+	}
+
+	/**
 	 * Emits {@code fboundp}'s literal answer for a program that also calls
 	 * {@code fmakunbound}: when {@code GLOBAL_FENV} holds a binding for the name it
 	 * decides (t when the value cell is set, nil when {@code fmakunbound} cleared it),

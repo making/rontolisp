@@ -9,3 +9,5 @@
 ```lisp
 (funcall (fdefinition 'car) '(1 2 3)) ; => 1
 ```
+
+`fdefinition` は [`symbol-function`](symbol-function.md) と同じ `setf` の place です: `(setf (fdefinition 'name) fn)` は `fn` をそのシンボルのグローバルな関数定義としてインストールします。

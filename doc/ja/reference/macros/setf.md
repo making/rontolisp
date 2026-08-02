@@ -20,7 +20,7 @@
 (let ((p (list :a 1))) (setf (getf p :b) 2) p) ; => (:B 2 :A 1)
 ```
 
-組み込みの place のほかに、`defstruct` のアクセサ、CLOS の `:accessor`、そしてユーザー定義の *setf 関数* (`(defun (setf name) ...)`) も place になります。`(setf (name arg...) value)` は新しい値を先頭にして書き込み関数を呼び出します。setf 関数の定義については [defun](../special-forms/defun.md) を参照してください。
+組み込みの place のほかに、`defstruct` のアクセサ、CLOS の `:accessor`、そしてユーザー定義の *setf 関数* (`(defun (setf name) ...)`、または総称関数版の `(defmethod (setf name) ...)` — [defmethod](../special-forms/defmethod.md) 参照) も place になります。`(setf (name arg...) value)` は新しい値を先頭にして書き込み関数を呼び出します。setf 関数の定義については [defun](../special-forms/defun.md) を参照してください。 `(setf (symbol-function 'name) fn)` / `(setf (fdefinition 'name) fn)` はグローバルな関数定義をインストールします（[symbol-function](../functions/symbol-function.md) 参照）。
 
 ```lisp
 (defvar *mode* :xml)

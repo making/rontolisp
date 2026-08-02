@@ -3985,6 +3985,52 @@ cases:
       ("woof" "..." "number" "?")
       ("Rex" "mixed" "Rex")
       "Max!"
+  - name: clos-multiple-inheritance-cpl-slots-and-dispatch
+    source: |
+      (defclass clos-mi-a () ((x :initarg :x :accessor clos-mi-x)))
+      (defclass clos-mi-b () ((y :initarg :y :accessor clos-mi-y)))
+      (defclass clos-mi-c (clos-mi-a clos-mi-b) ((z :initarg :z :accessor clos-mi-z)))
+      (let ((b (make-instance 'clos-mi-b :y 7))
+            (c (make-instance 'clos-mi-c :x 1 :y 2 :z 3)))
+        (setf (clos-mi-y c) 9)
+        (print (list (clos-mi-x c) (clos-mi-y c) (clos-mi-z c) (clos-mi-y b) (typep c 'clos-mi-b))))
+      (defclass clos-mi-base () ((v :initform :base :reader clos-mi-v)))
+      (defclass clos-mi-l (clos-mi-base) ())
+      (defclass clos-mi-r (clos-mi-base) ((v :initform :right)))
+      (defclass clos-mi-d (clos-mi-l clos-mi-r) ())
+      (print (list (clos-mi-v (make-instance 'clos-mi-d)) (length (%obj-slots (make-instance 'clos-mi-d)))))
+      (defgeneric clos-mi-trace (o))
+      (defmethod clos-mi-trace ((o clos-mi-a)) (cons :a (if (next-method-p) (call-next-method) nil)))
+      (defmethod clos-mi-trace ((o clos-mi-b)) (cons :b (if (next-method-p) (call-next-method) nil)))
+      (defmethod clos-mi-trace (o) (list :default))
+      (defclass clos-mi-ba (clos-mi-b clos-mi-a) ())
+      (print (clos-mi-trace (make-instance 'clos-mi-c :x 1 :y 2 :z 3)))
+      (print (clos-mi-trace (make-instance 'clos-mi-ba)))
+    expected: |
+      (1 9 3 7 T)
+      (:RIGHT 1)
+      (:A :B :DEFAULT)
+      (:B :A :DEFAULT)
+  - name: clos-setf-methods-and-setf-generic
+    source: |
+      (defclass csm-a () ((x :initarg :x :accessor csm-val)))
+      (defclass csm-b () ((log :initform nil :reader csm-log)))
+      (defmethod (setf csm-val) (new (b csm-b)) (setf (slot-value b 'log) (list :wrote new)) new)
+      (let ((a (make-instance 'csm-a :x 1))
+            (b (make-instance 'csm-b)))
+        (setf (csm-val a) 2)
+        (setf (csm-val b) 3)
+        (print (list (csm-val a) (csm-log b))))
+      (defclass csm-box () ((v :initform 0 :reader csm-content)))
+      (defgeneric (setf csm-content) (new box)
+        (:method (new (b csm-box)) (setf (slot-value b 'v) new)))
+      (let ((b (make-instance 'csm-box)))
+        (setf (csm-content b) 9)
+        (funcall #'(setf csm-content) 11 b)
+        (print (csm-content b)))
+    expected: |
+      (2 (:WROTE 3))
+      11
   - name: clos-method-qualifiers-and-call-next-method
     source: |
       (defclass clos-mc-animal () ())
@@ -4640,6 +4686,20 @@ cases:
       "SYM-API-SYM"
       "z"
       ("A" "B")
+  - name: setf-symbol-function-and-fdefinition
+    source: |
+      (defun csf-orig (x) (* x 2))
+      (setf (symbol-function 'csf-alias) #'csf-orig)
+      (print (csf-alias 21))
+      (print (funcall #'csf-alias 3))
+      (setf (fdefinition 'csf-alias) (lambda (x) (list :new x)))
+      (print (csf-alias 5))
+      (print (fboundp 'csf-alias))
+    expected: |
+      42
+      6
+      (:NEW 5)
+      T
   - name: runtime-package-symbol-ops
     source: |
       ;; the postmodern shapes: computed find-package / find-symbol, fmakunbound,

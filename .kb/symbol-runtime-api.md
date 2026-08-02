@@ -106,6 +106,46 @@ Returns the name on every backend.
   `WasmSymbolApiCompiler.emitTombstoneGuardedFold` — inline `_env_lookup` on the
   literal's string-table offset, no helper call). A program without `fmakunbound` is
   byte-identical to before.
+
+## `(setf (symbol-function 'f) fn)` / `(setf (fdefinition 'f) fn)` (todo-232, 2026-08-02)
+
+The write-side twin of `fmakunbound`'s tombstone. `expandSetf` lowers both places to
+`(%set-symbol-function name value)` (returns the value, the setf result; the two CL
+internals `%SET-SYMBOL-FUNCTION`/`%FENV-FUNCTION` are in `CL_INTERNALS`).
+
+- **Interpreter**: a builtin over `Environment.defineFunction` + `userMacros.remove`
+  (a same-named macro stops shadowing), beside `fmakunbound`.
+- **JVM** (`JvmSymbolApiCompiler.compileSetSymbolFunction`): mutate the existing
+  `_fenv` cell, else prepend a binding — `compileFmakunbound`'s shape with the value
+  in place of `ACONST_NULL`. **WASM**: `FUNC_SET_SYMBOL_FUNCTION`
+  (`WasmSymbolApiRuntimeBuilder.buildSetSymbolFunction`), same over `GLOBAL_FENV`
+  (canonical-offset discipline: the name's string struct carries the interned
+  offset). Both force `usesEval` via `LispMacroExpander.usesSymbolFunctionWrite`,
+  which scans the RAW setf place shape — the lowering happens per expression, after
+  the gates.
+- **The alias idiom needs a defun to call**: a name bound ONLY by the setf (fast-io's
+  `(setf (symbol-function 'write8-le) #'write8)`) has no compiled function, so its
+  direct call sites would compile to undefined stubs. `expandTopLevelDefinitions`
+  injects one FORWARDER defun per such name (`setfOnlyFunctionAliasNames` +
+  `symbolFunctionForwarderDefuns`, appended after the walk; names with a program
+  defun or a generic are excluded): `(defun NAME (&rest args) (apply (%fenv-function
+  'NAME) args))`. `%fenv-function` probes the function NAMESPACE ONLY — probing the
+  compiled registry would find the forwarder itself and loop — and a miss signals
+  `The function NAME is undefined` (JVM RuntimeException; WASM `unreachable` trap),
+  which is CL's answer for a call before the assignment ran. Because the forwarder
+  IS a defun, `#'name`, `funcall` and the `fboundp`/`symbol-function` literal folds
+  all behave.
+- **Divergences** (fmakunbound's family): an eagerly-bound call site of a name that
+  HAD a defun keeps the old function after a re-setf (late-bound routes see the new
+  binding); the funcall `_invoke_N` dispatchers still probe `_lookup` only (a
+  pre-existing hole shared with fmakunbound — re-evaluate if a library funcalls a
+  COMPUTED symbol naming a re-set function). `--no-gc` has no eval runtime: the
+  place remains unsupported there.
+
+Tests: `LispEvaluatorTest#setfSymbolFunction*`/`#setfFdefinition*`,
+`JvmLispCompilerTest#compileAndRunSetfSymbolFunction*`,
+`WasmLispCompilerIntegrationTest#setfSymbolFunctionAliasAndRedefinition`, ci-spec
+`setf-symbol-function-and-fdefinition`.
 - **The divergence, and its reason**: a call site the compiler already bound directly
   (an `invokestatic`/`call` to the defun) keeps working after `fmakunbound` — eager
   compilation cannot be undone, so only LATE-bound references (`fboundp`, `funcall` /

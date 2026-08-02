@@ -3149,6 +3149,12 @@ public final class LispMacroExpander {
 				// (setf (documentation 'name 'doc-type) "...") -> the docstring value:
 				// docstrings are not stored anywhere (lite, matching the nil reader).
 				case LispNames.DOCUMENTATION -> value;
+				// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn): install
+				// fn as f's global function binding in the runtime function namespace
+				// (the write-side twin of fmakunbound's tombstone); the primitive
+				// returns fn, the setf value.
+				case LispNames.SYMBOL_FUNCTION, LispNames.FDEFINITION -> listToCons(
+						List.of(new LispSymbol(LispNames.SET_SYMBOL_FUNCTION_INTERNAL), placeParts.get(1), value));
 				case LispNames.CAR, LispNames.FIRST -> expandSetfWithRplaca(placeParts.get(1), value);
 				case LispNames.CDR, LispNames.REST -> expandSetfWithRplacd(placeParts.get(1), value);
 				case LispNames.GETHASH ->
@@ -8179,26 +8185,33 @@ public final class LispMacroExpander {
 					LispNames.DEFCLASS + " expects a class name and a superclass list: " + cons.print());
 		}
 		String className = nameSym.name();
-		// Superclass list: empty or exactly one defclass-defined class.
-		ClosRegistry.ClassInfo superInfo = null;
+		// Superclass list: every named superclass must already be registered. The
+		// FIRST superclass provides the layout prefix; the others contribute their
+		// remaining slots after it (see the merge below).
+		List<ClosRegistry.ClassInfo> superInfos = new java.util.ArrayList<>();
 		if (parts.get(2) instanceof LispCons superCons) {
-			List<LispVal> supers = superCons.toList();
-			if (supers.size() > 1) {
-				throw new UnsupportedOperationException(LispNames.DEFCLASS
-						+ " supports at most one superclass (no multiple inheritance): " + cons.print());
-			}
-			if (!(supers.get(0) instanceof LispSymbol superSym)) {
-				throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a superclass name: " + cons.print());
-			}
-			superInfo = closRegistry.findClass(superSym.name());
-			if (superInfo == null) {
-				throw new IllegalArgumentException(LispNames.DEFCLASS + ": unknown superclass " + superSym.name()
-						+ " (a superclass must be defined by defclass first)");
+			for (LispVal superVal : superCons.toList()) {
+				if (!(superVal instanceof LispSymbol superSym)) {
+					throw new IllegalArgumentException(
+							LispNames.DEFCLASS + " expects a superclass name: " + cons.print());
+				}
+				ClosRegistry.ClassInfo found = closRegistry.findClass(superSym.name());
+				if (found == null) {
+					throw new IllegalArgumentException(LispNames.DEFCLASS + ": unknown superclass " + superSym.name()
+							+ " (a superclass must be defined by defclass first)");
+				}
+				if (superInfos.contains(found)) {
+					throw new IllegalArgumentException(
+							LispNames.DEFCLASS + ": duplicate superclass " + superSym.name() + ": " + cons.print());
+				}
+				superInfos.add(found);
 			}
 		}
 		else if (!(parts.get(2) instanceof LispNil)) {
 			throw new IllegalArgumentException(LispNames.DEFCLASS + " expects a superclass list: " + cons.print());
 		}
+		ClosRegistry.ClassInfo superInfo = superInfos.isEmpty() ? null : superInfos.get(0);
+		List<String> cpl = computeCpl(className, superInfos, closRegistry);
 		// Class options after the slot list: (:documentation "...") is accepted and
 		// ignored; (:default-initargs :initarg form ...) overrides the matching slots'
 		// constructor defaults (evaluated at make-instance time when the initarg is
@@ -8262,6 +8275,25 @@ public final class LispMacroExpander {
 		}
 		List<ClosRegistry.SlotSpec> slots = new java.util.ArrayList<>(
 				superInfo == null ? List.of() : superInfo.slots());
+		if (superInfos.size() > 1) {
+			// Multiple inheritance: the first superclass's effective slots keep their
+			// indexes (the layout prefix rule), each later superclass appends the slots
+			// whose base name is not present yet, and every inherited slot's OPTIONS are
+			// then re-merged from the direct specifications along the class precedence
+			// list (a diamond re-declaration on a non-first superclass must still win
+			// over the shared base's specification).
+			for (int s = 1; s < superInfos.size(); s++) {
+				for (ClosRegistry.SlotSpec spec : superInfos.get(s).slots()) {
+					boolean present = slots.stream().anyMatch(x -> x.baseName().equals(spec.baseName()));
+					if (!present) {
+						slots.add(spec);
+					}
+				}
+			}
+			for (int i = 0; i < slots.size(); i++) {
+				slots.set(i, cplMergedSlot(slots.get(i).baseName(), cpl, closRegistry, slots.get(i)));
+			}
+		}
 		// index in `slots` -> the OWN specification contributing there. A slot name the
 		// superclass already declares SHADOWS it (CLHS 7.5.3): the storage stays the one
 		// inherited slot -- so every descendant keeps the index its ancestors baked --
@@ -8304,12 +8336,14 @@ public final class LispMacroExpander {
 			}
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
-		if (superInfo != null) {
-			ancestors.addAll(superInfo.ancestors());
+		for (ClosRegistry.ClassInfo info : superInfos) {
+			ancestors.addAll(info.ancestors());
 		}
 		ancestors.add(ClosRegistry.normalize(className));
-		closRegistry.registerClass(new ClosRegistry.ClassInfo(className, superInfo == null ? null : superInfo.name(),
-				List.copyOf(slots), java.util.Set.copyOf(ancestors)));
+		List<ClosRegistry.SlotSpec> directSlots = ownSlots.stream().map(ParsedSlot::spec).toList();
+		closRegistry.registerClass(
+				new ClosRegistry.ClassInfo(className, superInfos.stream().map(ClosRegistry.ClassInfo::name).toList(),
+						cpl, directSlots, List.copyOf(slots), java.util.Set.copyOf(ancestors)));
 		for (int i = 0; i < slots.size(); i++) {
 			closRegistry.registerSlotPosition(slots.get(i).baseName(), i + 1);
 		}
@@ -8373,6 +8407,61 @@ public final class LispMacroExpander {
 				structAccessors.put(accessor, SETF_FUNCTION_MARKER);
 			}
 		}
+		if (superInfos.size() > 1) {
+			// An inherited slot may sit at a DIFFERENT index here than in the ancestor
+			// that declared its readers/accessors (only the first superclass's block
+			// keeps its indexes). The ancestor's methods bake the ancestor's index and
+			// their class test covers this class too, so synthesize overriding methods
+			// specialized on THIS class for every shifted slot -- subclass-first
+			// dispatch makes them win. Single inheritance never shifts, so nothing is
+			// synthesized there.
+			java.util.Set<String> ownEmitted = new java.util.HashSet<>();
+			for (ClosRegistry.SlotSpec own : ownAt.values()) {
+				ownEmitted.addAll(own.readers());
+				ownEmitted.addAll(own.accessors());
+			}
+			for (int i = 0; i < slots.size(); i++) {
+				ClosRegistry.SlotSpec slot = slots.get(i);
+				if (slot.readers().isEmpty() && slot.accessors().isEmpty()) {
+					continue;
+				}
+				boolean shifted = false;
+				for (int c = 1; c < cpl.size() && !shifted; c++) {
+					ClosRegistry.ClassInfo ancestor = closRegistry.findClass(cpl.get(c));
+					if (ancestor == null) {
+						continue;
+					}
+					for (int j = 0; j < ancestor.slots().size(); j++) {
+						if (ancestor.slots().get(j).baseName().equals(slot.baseName()) && j != i) {
+							shifted = true;
+							break;
+						}
+					}
+				}
+				if (!shifted) {
+					continue;
+				}
+				LispVal body = checkedSlotRead(obj, i, slot.baseName());
+				LispVal writeBody = objSet(obj, i, newVal);
+				LispVal writerParams = listToCons(List.of(newVal, listToCons(List.of(obj, new LispSymbol(className)))));
+				for (String reader : slot.readers()) {
+					if (!ownEmitted.contains(reader)) {
+						forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFMETHOD), new LispSymbol(reader),
+								specialized, body)));
+					}
+				}
+				for (String accessor : slot.accessors()) {
+					if (ownEmitted.contains(accessor)) {
+						continue;
+					}
+					forms.add(listToCons(
+							List.of(new LispSymbol(LispNames.DEFMETHOD), new LispSymbol(accessor), specialized, body)));
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFMETHOD),
+							new LispSymbol(setfFunctionName(accessor)), writerParams, writeBody)));
+					structAccessors.put(accessor, SETF_FUNCTION_MARKER);
+				}
+			}
+		}
 		if (metaclassName != null) {
 			// The definition-time driver call, LAST among the generated forms: the class
 			// is statically registered above, and every consumer evaluates the generated
@@ -8380,9 +8469,121 @@ public final class LispMacroExpander {
 			// compile paths' macro-time evaluator) or at program start in top-level order
 			// (the compiled program), so the metaclass protocol runs with the class's
 			// own definitions already in place.
-			forms.add(ensureClassWithMetaclassCall(className, metaclassName, superInfo, ownSlots, classInitargs));
+			forms.add(ensureClassWithMetaclassCall(className, metaclassName, superInfos, ownSlots, classInitargs));
 		}
 		return forms;
+	}
+
+	/**
+	 * Computes the class precedence list of a class being defined (CLHS 4.3.5): a
+	 * topological sort of the class and its ancestors over the union of every local
+	 * precedence order (each class precedes its direct superclasses, and each direct
+	 * superclass list orders left to right), breaking ties by choosing the candidate with
+	 * a direct subclass rightmost in the list built so far. Canonical names, the class
+	 * itself first, registered classes only.
+	 * @param className the class being defined (canonical spelling)
+	 * @param superInfos its direct superclasses, in definition order
+	 * @param closRegistry the registry resolving the inherited classes
+	 * @return the class precedence list
+	 */
+	private static List<String> computeCpl(String className, List<ClosRegistry.ClassInfo> superInfos,
+			ClosRegistry closRegistry) {
+		if (superInfos.isEmpty()) {
+			return List.of(className);
+		}
+		if (superInfos.size() == 1) {
+			List<String> cpl = new java.util.ArrayList<>();
+			cpl.add(className);
+			cpl.addAll(superInfos.get(0).cpl());
+			return List.copyOf(cpl);
+		}
+		// Every class reachable from the definition, mapped to its direct superclasses.
+		java.util.LinkedHashMap<String, List<String>> directSupers = new java.util.LinkedHashMap<>();
+		directSupers.put(className, superInfos.stream().map(ClosRegistry.ClassInfo::name).toList());
+		java.util.ArrayDeque<ClosRegistry.ClassInfo> queue = new java.util.ArrayDeque<>(superInfos);
+		while (!queue.isEmpty()) {
+			ClosRegistry.ClassInfo info = queue.poll();
+			if (directSupers.containsKey(info.name())) {
+				continue;
+			}
+			directSupers.put(info.name(), info.superclasses());
+			for (String superName : info.superclasses()) {
+				ClosRegistry.ClassInfo superInfo = closRegistry.findClass(superName);
+				if (superInfo != null) {
+					queue.add(superInfo);
+				}
+			}
+		}
+		// The precedence pairs (a precedes b) of every local precedence order.
+		List<String[]> pairs = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<String, List<String>> entry : directSupers.entrySet()) {
+			String previous = entry.getKey();
+			for (String superName : entry.getValue()) {
+				pairs.add(new String[] { previous, superName });
+				previous = superName;
+			}
+		}
+		List<String> result = new java.util.ArrayList<>();
+		java.util.Set<String> remaining = new java.util.LinkedHashSet<>(directSupers.keySet());
+		while (!remaining.isEmpty()) {
+			List<String> candidates = new java.util.ArrayList<>();
+			for (String candidate : remaining) {
+				boolean free = pairs.stream()
+					.noneMatch(pair -> pair[1].equals(candidate) && remaining.contains(pair[0]));
+				if (free) {
+					candidates.add(candidate);
+				}
+			}
+			if (candidates.isEmpty()) {
+				throw new IllegalArgumentException(LispNames.DEFCLASS + ": no consistent class precedence order for "
+						+ className + " (conflicting local precedence orders over " + remaining + ")");
+			}
+			String chosen = candidates.get(0);
+			if (candidates.size() > 1) {
+				int best = -1;
+				for (String candidate : candidates) {
+					int rightmost = -1;
+					for (int i = 0; i < result.size(); i++) {
+						List<String> supers = directSupers.get(result.get(i));
+						if (supers != null && supers.contains(candidate)) {
+							rightmost = i;
+						}
+					}
+					if (rightmost > best) {
+						best = rightmost;
+						chosen = candidate;
+					}
+				}
+			}
+			result.add(chosen);
+			remaining.remove(chosen);
+		}
+		return List.copyOf(result);
+	}
+
+	/**
+	 * The CPL-merged effective specification of one inherited slot: the DIRECT
+	 * specifications of the classes along the precedence list (excluding the class being
+	 * defined -- its own slots merge through {@code shadowSlot}) folded least specific
+	 * first, so a more specific class's re-declaration overrides the options it writes
+	 * while readers/accessors accumulate.
+	 */
+	private static ClosRegistry.SlotSpec cplMergedSlot(String baseName, List<String> cpl, ClosRegistry closRegistry,
+			ClosRegistry.SlotSpec fallback) {
+		ClosRegistry.SlotSpec merged = null;
+		for (int i = cpl.size() - 1; i >= 1; i--) {
+			ClosRegistry.ClassInfo info = closRegistry.findClass(cpl.get(i));
+			if (info == null) {
+				continue;
+			}
+			for (ClosRegistry.SlotSpec direct : info.directSlots()) {
+				if (direct.baseName().equals(baseName)) {
+					merged = merged == null ? direct : shadowSlotSpec(merged, direct);
+					break;
+				}
+			}
+		}
+		return merged == null ? fallback : merged;
 	}
 
 	/**
@@ -8395,8 +8596,7 @@ public final class LispMacroExpander {
 	 * keyed by their keyword with the option TAIL as the value.
 	 */
 	private static LispVal ensureClassWithMetaclassCall(String className, String metaclassName,
-			ClosRegistry.@org.jspecify.annotations.Nullable ClassInfo superInfo, List<ParsedSlot> ownSlots,
-			List<LispVal> classInitargs) {
+			List<ClosRegistry.ClassInfo> superInfos, List<ParsedSlot> ownSlots, List<LispVal> classInitargs) {
 		List<LispVal> slotSpecs = new java.util.ArrayList<>();
 		for (ParsedSlot parsed : ownSlots) {
 			ClosRegistry.SlotSpec slot = parsed.spec();
@@ -8420,7 +8620,8 @@ public final class LispMacroExpander {
 			spec.addAll(parsed.extras());
 			slotSpecs.add(listToCons(spec));
 		}
-		LispVal supers = superInfo == null ? LispNil.INSTANCE : listToCons(List.of(new LispSymbol(superInfo.name())));
+		LispVal supers = superInfos.isEmpty() ? LispNil.INSTANCE
+				: listToCons(superInfos.stream().<LispVal>map(info -> new LispSymbol(info.name())).toList());
 		return listToCons(List.of(new LispSymbol(LispNames.ENSURE_CLASS_WITH_METACLASS), quoteOf(className),
 				quoteOf(metaclassName), quotedData(supers),
 				quotedData(slotSpecs.isEmpty() ? LispNil.INSTANCE : listToCons(slotSpecs)),
@@ -8457,7 +8658,17 @@ public final class LispMacroExpander {
 	 * the superclass's accessor).
 	 */
 	private static ClosRegistry.SlotSpec shadowSlot(ClosRegistry.SlotSpec inherited, ParsedSlot parsed) {
-		ClosRegistry.SlotSpec own = parsed.spec();
+		return shadowSlotSpec(inherited, parsed.spec());
+	}
+
+	/**
+	 * The {@link #shadowSlot} merge over two effective/direct specifications: the
+	 * {@code SlotSpec} suppliedness flags say which options the more specific
+	 * specification wrote. Used by the multiple-inheritance CPL fold
+	 * ({@link #cplMergedSlot}), where the shadowing specification is an ancestor's direct
+	 * spec rather than a just-parsed own slot.
+	 */
+	private static ClosRegistry.SlotSpec shadowSlotSpec(ClosRegistry.SlotSpec inherited, ClosRegistry.SlotSpec own) {
 		List<String> readers = new java.util.ArrayList<>(inherited.readers());
 		own.readers().stream().filter(r -> !readers.contains(r)).forEach(readers::add);
 		List<String> accessors = new java.util.ArrayList<>(inherited.accessors());
@@ -8465,8 +8676,8 @@ public final class LispMacroExpander {
 		return new ClosRegistry.SlotSpec(inherited.name(), inherited.baseName(),
 				own.initformSupplied() ? own.initform() : inherited.initform(),
 				own.initformSupplied() || inherited.initformSupplied(),
-				parsed.initargSupplied() ? own.initargKeyword() : inherited.initargKeyword(),
-				parsed.initargSupplied() || inherited.initargSupplied(), List.copyOf(readers), List.copyOf(accessors),
+				own.initargSupplied() ? own.initargKeyword() : inherited.initargKeyword(),
+				own.initargSupplied() || inherited.initargSupplied(), List.copyOf(readers), List.copyOf(accessors),
 				"T".equals(own.type()) ? inherited.type() : own.type());
 	}
 
@@ -9671,6 +9882,21 @@ public final class LispMacroExpander {
 			if (!sameChain || source.slots().size() >= target.slots().size()) {
 				continue;
 			}
+			// Multiple inheritance can relate two classes whose layouts do NOT share a
+			// prefix (the source's slots sit at shifted indexes in the target). The
+			// positional fill below would write the wrong slots there, so such a source
+			// degrades to the layout-swap-only behavior unrelated classes get ("slots
+			// with the same name are retained" cannot hold positionally).
+			boolean prefix = true;
+			for (int i = 0; i < source.slots().size(); i++) {
+				if (!source.slots().get(i).baseName().equals(target.slots().get(i).baseName())) {
+					prefix = false;
+					break;
+				}
+			}
+			if (!prefix) {
+				continue;
+			}
 			List<LispVal> stores = new java.util.ArrayList<>();
 			for (int i = source.slots().size(); i < target.slots().size(); i++) {
 				stores.add(objSet(objVar, i, target.slots().get(i).initform()));
@@ -10644,6 +10870,23 @@ public final class LispMacroExpander {
 	private static LispVal simpleDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
 			ClosRegistry closRegistry) {
 		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
+		MiRefinement refinement = miRefinement(generic, closRegistry);
+		java.util.Set<ClosRegistry.MethodInfo> exactTagBranches = java.util.Collections
+			.newSetFromMap(new java.util.IdentityHashMap<>());
+		if (refinement != null) {
+			// One EXACT-TAG branch per multiply-inheriting class whose applicable
+			// methods have no single most-specific member: it calls the method its own
+			// class precedence list ranks first, which no per-specializer branch order
+			// can get right for both (a b) and (b a) subclasses at once.
+			for (ClosRegistry.ClassInfo x : refinement.classes()) {
+				ClosRegistry.MethodInfo winner = mostSpecificForClass(generic, refinement.classPos(), x, closRegistry);
+				if (winner != null) {
+					ClosRegistry.MethodInfo rep = miBranchRep(refinement, x, winner.functionName());
+					methods.add(rep);
+					exactTagBranches.add(rep);
+				}
+			}
+		}
 		methods.sort(specificityOrder(closRegistry));
 		boolean variadic = generic.variadic();
 		ClosRegistry.MethodInfo defaultMethod = methods.stream()
@@ -10656,9 +10899,143 @@ public final class LispMacroExpander {
 			if (method.isDefault()) {
 				continue;
 			}
-			chain = makeIf(specializerTest(method, params, closRegistry), methodCall(method, params, variadic), chain);
+			LispVal test = exactTagBranches.contains(method)
+					? miExactTagTest(method, java.util.Objects.requireNonNull(refinement), params)
+					: specializerTest(method, params, closRegistry);
+			chain = makeIf(test, methodCall(method, params, variadic), chain);
 		}
 		return chain;
+	}
+
+	/**
+	 * The multiple-inheritance dispatch refinement of one generic: the single parameter
+	 * position its class-specialized methods dispatch on, and the registered classes
+	 * whose applicable class specializers have NO single most-specific member (an
+	 * instance inheriting from two unrelated specializers through different parents).
+	 * Those classes each get an exact-tag branch; every other class keeps riding the
+	 * per-specializer branches, whose most-derived applicable specializer sorts first.
+	 *
+	 * <p>
+	 * Null (no refinement) when the registry has no multiply-inheriting class -- the gate
+	 * that keeps single-inheritance dispatchers byte-identical -- when class methods
+	 * dispatch on more than one position or carry another specialized position (kept on
+	 * the lite per-specializer branches, a documented divergence), or when no class needs
+	 * a branch.
+	 */
+	private static @Nullable MiRefinement miRefinement(ClosRegistry.GenericInfo generic, ClosRegistry closRegistry) {
+		if (!closRegistry.hasMultipleInheritance()) {
+			return null;
+		}
+		int classPos = -1;
+		java.util.LinkedHashSet<String> classSpecs = new java.util.LinkedHashSet<>();
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			List<ClosRegistry.Specializer> specs = m.specializers();
+			for (int i = 0; i < specs.size(); i++) {
+				if (specs.get(i).kind() != ClosRegistry.SpecializerKind.CLASS) {
+					continue;
+				}
+				if (classPos != -1 && classPos != i) {
+					return null;
+				}
+				for (int j = 0; j < specs.size(); j++) {
+					if (j != i && specs.get(j).kind() != ClosRegistry.SpecializerKind.DEFAULT) {
+						return null;
+					}
+				}
+				classPos = i;
+				classSpecs.add(ClosRegistry.normalize(java.util.Objects.requireNonNull(specs.get(i).name())));
+			}
+		}
+		if (classPos < 0 || classSpecs.size() < 2) {
+			return null;
+		}
+		List<ClosRegistry.ClassInfo> classes = new java.util.ArrayList<>();
+		for (ClosRegistry.ClassInfo x : closRegistry.classes().values()) {
+			List<String> applicable = classSpecs.stream().filter(c -> x.ancestors().contains(c)).toList();
+			if (applicable.size() < 2) {
+				continue;
+			}
+			boolean dominated = false;
+			for (String c : applicable) {
+				ClosRegistry.ClassInfo info = closRegistry.findClass(c);
+				if (info != null && info.ancestors().containsAll(applicable)) {
+					dominated = true;
+					break;
+				}
+			}
+			if (!dominated) {
+				classes.add(x);
+			}
+		}
+		return classes.isEmpty() ? null : new MiRefinement(classPos, classes);
+	}
+
+	/**
+	 * One generic's multiple-inheritance dispatch refinement (see {@link #miRefinement}).
+	 *
+	 * @param classPos the single parameter position the class methods dispatch on
+	 * @param classes the classes needing an exact-tag branch, in registration order
+	 */
+	private record MiRefinement(int classPos, List<ClosRegistry.ClassInfo> classes) {
+	}
+
+	/** A synthesized branch representative: CLASS {@code x} at the dispatch position. */
+	private static ClosRegistry.MethodInfo miBranchRep(MiRefinement refinement, ClosRegistry.ClassInfo x,
+			String functionName) {
+		List<ClosRegistry.Specializer> specs = new java.util.ArrayList<>();
+		for (int i = 0; i < refinement.classPos(); i++) {
+			specs.add(ClosRegistry.Specializer.DEFAULT);
+		}
+		specs.add(new ClosRegistry.Specializer(ClosRegistry.SpecializerKind.CLASS, null, x.name()));
+		return new ClosRegistry.MethodInfo(List.copyOf(specs), functionName, "", false);
+	}
+
+	/**
+	 * The exact-tag test of a synthesized branch: {@code (%obj-is arg '%class-X)} for X
+	 * alone. Descendant classes deliberately fall through -- each diamond-affected
+	 * descendant carries its own exact-tag branch, and the rest are served correctly by
+	 * the ordinary branches (their most-derived applicable specializer sorts first).
+	 */
+	private static LispVal miExactTagTest(ClosRegistry.MethodInfo rep, MiRefinement refinement, List<LispVal> params) {
+		String className = java.util.Objects.requireNonNull(rep.specializers().get(refinement.classPos()).name());
+		return objIs(params.get(refinement.classPos()), List.of(LispLayout.CLASS_TAG_PREFIX + className));
+	}
+
+	/**
+	 * The most specific method applicable to an instance of exactly class {@code x} (by
+	 * {@code x}'s class precedence list), among the methods class-specialized at
+	 * {@code classPos}. Null when none applies.
+	 */
+	private static ClosRegistry.@Nullable MethodInfo mostSpecificForClass(ClosRegistry.GenericInfo generic,
+			int classPos, ClosRegistry.ClassInfo x, ClosRegistry closRegistry) {
+		ClosRegistry.MethodInfo best = null;
+		int bestIndex = Integer.MAX_VALUE;
+		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
+			if (m.isDefault()) {
+				continue;
+			}
+			List<ClosRegistry.Specializer> specs = m.specializers();
+			if (classPos >= specs.size() || specs.get(classPos).kind() != ClosRegistry.SpecializerKind.CLASS) {
+				continue;
+			}
+			int index = cplIndexOf(x,
+					ClosRegistry.normalize(java.util.Objects.requireNonNull(specs.get(classPos).name())));
+			if (index >= 0 && index < bestIndex) {
+				bestIndex = index;
+				best = m;
+			}
+		}
+		return best;
+	}
+
+	/** The position of a (normalized) class name in {@code x}'s CPL, or -1. */
+	private static int cplIndexOf(ClosRegistry.ClassInfo x, String normalizedName) {
+		for (int i = 0; i < x.cpl().size(); i++) {
+			if (ClosRegistry.normalize(x.cpl().get(i)).equals(normalizedName)) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	/**
@@ -10677,11 +11054,27 @@ public final class LispMacroExpander {
 			}
 		}
 		List<ClosRegistry.MethodInfo> branches = new java.util.ArrayList<>(reps.values());
+		MiRefinement refinement = miRefinement(generic, closRegistry);
+		java.util.Set<ClosRegistry.MethodInfo> exactTagBranches = java.util.Collections
+			.newSetFromMap(new java.util.IdentityHashMap<>());
+		if (refinement != null) {
+			// One exact-tag branch per diamond-affected class: its effective method is
+			// computed against THAT class, so the applicable set is complete (a
+			// per-specializer branch only sees the methods its own ancestors carry) and
+			// ordered by that class's precedence list.
+			for (ClosRegistry.ClassInfo x : refinement.classes()) {
+				ClosRegistry.MethodInfo rep = miBranchRep(refinement, x, "%mi-branch");
+				branches.add(rep);
+				exactTagBranches.add(rep);
+			}
+		}
 		branches.sort(specificityOrder(closRegistry));
 		LispVal chain = effectiveMethod(null, generic, params, closRegistry);
 		for (ClosRegistry.MethodInfo rep : branches.reversed()) {
-			chain = makeIf(specializerTest(rep, params, closRegistry),
-					effectiveMethod(rep, generic, params, closRegistry), chain);
+			LispVal test = exactTagBranches.contains(rep)
+					? miExactTagTest(rep, java.util.Objects.requireNonNull(refinement), params)
+					: specializerTest(rep, params, closRegistry);
+			chain = makeIf(test, effectiveMethod(rep, generic, params, closRegistry), chain);
 		}
 		return chain;
 	}
@@ -10731,8 +11124,66 @@ public final class LispMacroExpander {
 				result.add(m);
 			}
 		}
-		result.sort(specificityOrder(closRegistry));
+		result.sort(branchSpecificityOrder(branchRep, closRegistry));
 		return result;
+	}
+
+	/**
+	 * The specificity order WITHIN one branch's applicable methods: like
+	 * {@link #specificityOrder}, but where the branch is class-specialized, two class
+	 * specializers at that position rank by their place in the BRANCH class's precedence
+	 * list -- CL's per-argument method ordering. Under single inheritance the applicable
+	 * class specializers form a chain, where the ancestor-set-size proxy and the CPL
+	 * agree, so the refinement is gated on multiple inheritance to keep the plain sort
+	 * (and its emitted dispatchers) untouched.
+	 */
+	private static java.util.Comparator<ClosRegistry.MethodInfo> branchSpecificityOrder(
+			ClosRegistry.@Nullable MethodInfo branchRep, ClosRegistry closRegistry) {
+		if (branchRep == null || !closRegistry.hasMultipleInheritance()) {
+			return specificityOrder(closRegistry);
+		}
+		List<ClosRegistry.Specializer> branchSpecs = branchRep.specializers();
+		return (a, b) -> {
+			List<ClosRegistry.Specializer> sa = a.specializers();
+			List<ClosRegistry.Specializer> sb = b.specializers();
+			int n = Math.max(sa.size(), sb.size());
+			for (int i = 0; i < n; i++) {
+				ClosRegistry.Specializer branchSpec = i < branchSpecs.size() ? branchSpecs.get(i)
+						: ClosRegistry.Specializer.DEFAULT;
+				int ra = branchAwareRank(i < sa.size() ? sa.get(i) : ClosRegistry.Specializer.DEFAULT, branchSpec,
+						closRegistry);
+				int rb = branchAwareRank(i < sb.size() ? sb.get(i) : ClosRegistry.Specializer.DEFAULT, branchSpec,
+						closRegistry);
+				if (ra != rb) {
+					return Integer.compare(ra, rb);
+				}
+			}
+			return 0;
+		};
+	}
+
+	/**
+	 * The rank of one specializer within a branch: the branch class's CPL index (kept
+	 * inside the 10-99 class band) when both are classes, the global
+	 * {@link #specializerRank} otherwise (also the fallback for an ancestor that reaches
+	 * the branch class only through a {@code define-condition} extra parent, which joins
+	 * the ancestor SET but not the CPL).
+	 */
+	private static int branchAwareRank(ClosRegistry.Specializer spec, ClosRegistry.Specializer branchSpec,
+			ClosRegistry closRegistry) {
+		if (spec.kind() == ClosRegistry.SpecializerKind.CLASS
+				&& branchSpec.kind() == ClosRegistry.SpecializerKind.CLASS) {
+			ClosRegistry.ClassInfo branchClass = closRegistry
+				.findClass(java.util.Objects.requireNonNull(branchSpec.name()));
+			if (branchClass != null) {
+				int index = cplIndexOf(branchClass,
+						ClosRegistry.normalize(java.util.Objects.requireNonNull(spec.name())));
+				if (index >= 0) {
+					return 10 + Math.min(index, 89);
+				}
+			}
+		}
+		return specializerRank(spec, closRegistry);
 	}
 
 	/**
@@ -11270,9 +11721,10 @@ public final class LispMacroExpander {
 		// the expanded program, where a define-condition has become a %obj-new
 		// constructor.
 		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
+		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !metaobjectRuntime
 				&& !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction && !classSlotDefsRuntime
-				&& !readsSlots(program) && !closRegistry.routesConditionReports()
+				&& !symbolFunctionWrite && !readsSlots(program) && !closRegistry.routesConditionReports()
 				&& program.stream()
 					.noneMatch(f -> isDefstructForm(f) || isClosDefinitionForm(f) || isSetfFunctionDefun(f)
 							|| isLetWithNestedDefmethod(f) || isNamedForm(f, LispNames.DEFTYPE))) {
@@ -11322,7 +11774,8 @@ public final class LispMacroExpander {
 			}
 			else if (isNamedForm(form, LispNames.DEFGENERIC)) {
 				List<LispVal> methodDefuns = new java.util.ArrayList<>();
-				String generic = registerDefgeneric((LispCons) form, closRegistry, methodDefuns);
+				String generic = registerDefgeneric(normalizeSetfMethodForm((LispCons) form, structAccessors),
+						closRegistry, methodDefuns);
 				out.addAll(methodDefuns);
 				if (placedDispatchers.add(generic)) {
 					dispatcherSlots.put(out.size(), generic);
@@ -11330,7 +11783,8 @@ public final class LispMacroExpander {
 				}
 			}
 			else if (isNamedForm(form, LispNames.DEFMETHOD)) {
-				addExpandedDefinition(form, out, closRegistry, dispatcherSlots, placedDispatchers);
+				addExpandedDefinition(normalizeSetfMethodForm((LispCons) form, structAccessors), out, closRegistry,
+						dispatcherSlots, placedDispatchers);
 			}
 			else if (isNamedForm(form, LispNames.DEFTYPE)) {
 				// Register a zero-parameter deftype so a later typep/typecase resolves
@@ -11345,7 +11799,8 @@ public final class LispMacroExpander {
 				// (lambda ...)) -- a global closure the dispatcher (placed at top
 				// level, after the let) reaches through the call-through-variable
 				// fallback.
-				expandLetNestedDefmethods((LispCons) form, closRegistry, out, dispatcherSlots, placedDispatchers);
+				expandLetNestedDefmethods((LispCons) form, closRegistry, out, dispatcherSlots, placedDispatchers,
+						structAccessors);
 			}
 			else {
 				out.add(form);
@@ -11357,6 +11812,12 @@ public final class LispMacroExpander {
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.
 		refreshStructPredicates(out, closRegistry);
+		if (symbolFunctionWrite) {
+			// A name bound ONLY by (setf (symbol-function ...)) needs a forwarder defun
+			// so its direct call sites compile; appended once the registry is complete
+			// (a generic's dispatcher must not be shadowed by a forwarder).
+			out.addAll(symbolFunctionForwarderDefuns(setfOnlyFunctionAliasNames(program, closRegistry)));
+		}
 		if (metaobjectRuntime) {
 			// The metaobject runtime: the generated defuns are position-independent and
 			// appended; the data table and the memo global are top-level defvars and must
@@ -11744,16 +12205,18 @@ public final class LispMacroExpander {
 	 * documented divergence.
 	 */
 	private static void expandLetNestedDefmethods(LispCons letForm, ClosRegistry closRegistry, List<LispVal> out,
-			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers) {
+			java.util.Map<Integer, String> dispatcherSlots, java.util.Set<String> placedDispatchers,
+			java.util.Map<String, Integer> structAccessors) {
 		List<LispVal> parts = letForm.toList();
 		List<LispVal> rebuilt = new java.util.ArrayList<>(parts.subList(0, 2));
 		List<String> generics = new java.util.ArrayList<>();
-		for (LispVal bodyForm : parts.subList(2, parts.size())) {
-			if (!isNamedForm(bodyForm, LispNames.DEFMETHOD)) {
-				rebuilt.add(rewriteNestedDefmethods(bodyForm, closRegistry, generics));
+		for (LispVal rawBodyForm : parts.subList(2, parts.size())) {
+			if (!isNamedForm(rawBodyForm, LispNames.DEFMETHOD)) {
+				rebuilt.add(rewriteNestedDefmethods(rawBodyForm, closRegistry, generics, structAccessors));
 				continue;
 			}
-			LispVal expandedMethod = expandDefmethod((LispCons) bodyForm, closRegistry);
+			LispCons bodyForm = normalizeSetfMethodForm((LispCons) rawBodyForm, structAccessors);
+			LispVal expandedMethod = expandDefmethod(bodyForm, closRegistry);
 			if (isNamedForm(expandedMethod, LispNames.PROGN) && expandedMethod instanceof LispCons prognCons) {
 				List<LispVal> members = prognCons.toList();
 				rebuilt.addAll(members.subList(1, members.size()));
@@ -11761,7 +12224,7 @@ public final class LispMacroExpander {
 			else {
 				rebuilt.add(expandedMethod);
 			}
-			generics.add(ClosRegistry.normalize(((LispSymbol) ((LispCons) bodyForm).toList().get(1)).name()));
+			generics.add(ClosRegistry.normalize(((LispSymbol) bodyForm.toList().get(1)).name()));
 		}
 		out.add(listToCons(rebuilt));
 		for (String generic : generics) {
@@ -11777,7 +12240,8 @@ public final class LispMacroExpander {
 	// expansion progn -- an expression-position form, so no splicing is possible or
 	// needed. The method-body defun inside compiles to a global-closure setq exactly
 	// like the direct-member case.
-	private static LispVal rewriteNestedDefmethods(LispVal form, ClosRegistry closRegistry, List<String> generics) {
+	private static LispVal rewriteNestedDefmethods(LispVal form, ClosRegistry closRegistry, List<String> generics,
+			java.util.Map<String, Integer> structAccessors) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
@@ -11787,13 +12251,14 @@ public final class LispMacroExpander {
 				return form;
 			}
 			if (LispNames.DEFMETHOD.equals(member) && cons.isProperList()) {
-				LispVal expandedMethod = expandDefmethod(cons, closRegistry);
-				generics.add(ClosRegistry.normalize(((LispSymbol) cons.toList().get(1)).name()));
+				LispCons normalized = normalizeSetfMethodForm(cons, structAccessors);
+				LispVal expandedMethod = expandDefmethod(normalized, closRegistry);
+				generics.add(ClosRegistry.normalize(((LispSymbol) normalized.toList().get(1)).name()));
 				return expandedMethod;
 			}
 		}
-		return new LispCons(rewriteNestedDefmethods(cons.car(), closRegistry, generics),
-				rewriteNestedDefmethods(cons.cdr(), closRegistry, generics));
+		return new LispCons(rewriteNestedDefmethods(cons.car(), closRegistry, generics, structAccessors),
+				rewriteNestedDefmethods(cons.cdr(), closRegistry, generics, structAccessors));
 	}
 
 	private static LispVal rewriteSetfFunctionDefun(LispCons cons, java.util.Map<String, Integer> structAccessors) {
@@ -11805,9 +12270,147 @@ public final class LispMacroExpander {
 		return listToCons(rewritten);
 	}
 
+	/**
+	 * Normalizes a {@code defmethod}/{@code defgeneric} whose function name is the
+	 * {@code (setf name)} form onto the {@code %setf-} writer-generic convention the
+	 * {@code defclass} {@code :accessor} writers already use: the definition is rewritten
+	 * onto the mangled symbol and the place is registered in {@code structAccessors}, so
+	 * {@code (setf (name args...) v)} funcalls the writer dispatcher (CL setf-function
+	 * argument order, new value first) and a user setf method MERGES with any
+	 * accessor-generated writer method on the same generic instead of shadowing it. A
+	 * plain symbol name passes through untouched. The {@code (defun (setf name) ...)}
+	 * twin is {@link #rewriteSetfFunctionDefun}.
+	 * @param cons the defmethod/defgeneric form
+	 * @param structAccessors mutated: the place name maps to the setf-function marker
+	 * @return the form with a symbol function name
+	 */
+	public static LispCons normalizeSetfMethodForm(LispCons cons, java.util.Map<String, Integer> structAccessors) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return cons;
+		}
+		LispSymbol place = LambdaLists.setfFunctionPlaceName(parts.get(1));
+		if (place == null) {
+			return cons;
+		}
+		structAccessors.put(place.name(), SETF_FUNCTION_MARKER);
+		List<LispVal> rewritten = new java.util.ArrayList<>(parts);
+		rewritten.set(1, new LispSymbol(setfFunctionName(place.name())));
+		return (LispCons) listToCons(rewritten);
+	}
+
 	private static boolean isClosDefinitionForm(LispVal form) {
 		return isNamedForm(form, LispNames.DEFCLASS) || isNamedForm(form, LispNames.DEFGENERIC)
 				|| isNamedForm(form, LispNames.DEFMETHOD) || isNamedForm(form, LispNames.DEFINE_CONDITION);
+	}
+
+	/**
+	 * Whether the program writes the function namespace through a
+	 * {@code (setf (symbol-function ...))} / {@code (setf (fdefinition ...))} place
+	 * (anywhere in the tree, quoted data skipped). Forces the eval runtime's function
+	 * namespace ({@code _fenv}) onto the compile paths, and gates the setf-only-alias
+	 * forwarder injection in {@link #expandTopLevelDefinitions}.
+	 * @param program the top-level forms
+	 * @return true when such a place is written
+	 */
+	public static boolean usesSymbolFunctionWrite(List<LispVal> program) {
+		return program.stream().anyMatch(LispMacroExpander::containsSymbolFunctionWrite);
+	}
+
+	private static boolean containsSymbolFunctionWrite(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (LispNames.SETF.equals(member) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (isSymbolFunctionPlace(parts.get(i))) {
+						return true;
+					}
+				}
+			}
+		}
+		return containsSymbolFunctionWrite(cons.car()) || containsSymbolFunctionWrite(cons.cdr());
+	}
+
+	private static boolean isSymbolFunctionPlace(LispVal place) {
+		if (!(place instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return false;
+		}
+		String member = memberOf(head.name());
+		return LispNames.SYMBOL_FUNCTION.equals(member) || LispNames.FDEFINITION.equals(member);
+	}
+
+	/**
+	 * The literal names the program binds through a {@code (setf (symbol-function 'n)
+	 * ...)}-family place WITHOUT ever defining them as a defun or a generic -- the alias
+	 * idiom ({@code (setf (symbol-function 'write8-le) #'write8)}). Each gets a forwarder
+	 * defun so DIRECT call sites (and {@code #'name}) reach the runtime binding: the
+	 * forwarder applies {@code %fenv-function}, which probes the runtime function
+	 * namespace ONLY -- probing the compiled registry there would find the forwarder
+	 * itself -- and signals {@code The function X is undefined} when called before the
+	 * setf ran, which is what CL says for a call before the assignment.
+	 */
+	private static List<String> setfOnlyFunctionAliasNames(List<LispVal> program, ClosRegistry closRegistry) {
+		java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+		for (LispVal form : program) {
+			collectSetfSymbolFunctionNames(form, names);
+		}
+		if (names.isEmpty()) {
+			return List.of();
+		}
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(memberOf(op.name())) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol nameSym) {
+				names.remove(nameSym.name());
+			}
+		}
+		names.removeIf(name -> closRegistry.findGeneric(name) != null);
+		return List.copyOf(names);
+	}
+
+	private static void collectSetfSymbolFunctionNames(LispVal form, java.util.Set<String> names) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return;
+			}
+			if (LispNames.SETF.equals(member) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				for (int i = 1; i + 1 < parts.size(); i += 2) {
+					if (isSymbolFunctionPlace(parts.get(i)) && parts.get(i) instanceof LispCons place
+							&& place.isProperList() && place.toList().size() > 1
+							&& quotedSymbol(place.toList().get(1)) instanceof LispSymbol nameSym) {
+						names.add(nameSym.name());
+					}
+				}
+			}
+		}
+		collectSetfSymbolFunctionNames(cons.car(), names);
+		collectSetfSymbolFunctionNames(cons.cdr(), names);
+	}
+
+	/** The forwarder defuns of {@link #setfOnlyFunctionAliasNames}. */
+	private static List<LispVal> symbolFunctionForwarderDefuns(List<String> names) {
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		LispSymbol argsVar = new LispSymbol("%SFW-ARGS");
+		for (String name : names) {
+			defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
+					listToCons(List.of(new LispSymbol("&REST"), argsVar)),
+					listToCons(List.of(new LispSymbol(LispNames.APPLY),
+							listToCons(List.of(new LispSymbol(LispNames.FENV_FUNCTION_INTERNAL), quoteOf(name))),
+							argsVar)))));
+		}
+		return defuns;
 	}
 
 	private static boolean isNamedForm(LispVal form, String name) {
@@ -16041,15 +16644,16 @@ public final class LispMacroExpander {
 			String tag = LispLayout.CLASS_TAG_PREFIX + cls.name();
 			String key = null;
 			LispVal report = null;
-			for (String walk = cls.name(); walk != null;) {
+			// The nearest report along the class precedence list (the CPL is the
+			// inheritance order CL specifies for the report, and it degenerates to the
+			// parent chain under single inheritance).
+			for (String walk : cls.cpl()) {
 				LispVal own = closRegistry.findConditionReport(walk);
 				if (own != null) {
 					key = "R:" + ClosRegistry.normalize(walk);
 					report = own;
 					break;
 				}
-				ClosRegistry.ClassInfo info = closRegistry.findClass(walk);
-				walk = info == null ? null : info.superclass();
 			}
 			int controlIndex = -1;
 			int argumentsIndex = -1;
@@ -17018,20 +17622,32 @@ public final class LispMacroExpander {
 		LispVal parentList;
 		if (parts.size() > 2 && parts.get(2) instanceof LispCons parentCons) {
 			List<LispVal> parents = parentCons.toList();
-			// Lite multiple parents: the FIRST parent provides the slot layout (single
-			// inheritance); the remaining parents join the ancestor set only, so
-			// typep/handler-case match through them while their slots are not inherited.
-			parentList = listToCons(List.<LispVal>of(parents.get(0)));
-			if (parents.size() > 1) {
-				List<String> extraParents = new java.util.ArrayList<>();
-				for (int i = 1; i < parents.size(); i++) {
-					if (!(parents.get(i) instanceof LispSymbol parentSym)) {
-						throw new IllegalArgumentException(
-								LispNames.DEFINE_CONDITION + " expects parent type names: " + cons.print());
-					}
-					extraParents.add(parentSym.name());
+			// Multiple parents ride defclass's multiple inheritance: every REGISTERED
+			// parent becomes a real superclass (slots inherited, CPL ordered); a parent
+			// the registry does not know (a forward-referenced type name) joins the
+			// ancestor set only, so typep/handler-case still match through it.
+			List<LispVal> known = new java.util.ArrayList<>();
+			List<String> unknown = new java.util.ArrayList<>();
+			for (LispVal parent : parents) {
+				if (!(parent instanceof LispSymbol parentSym)) {
+					throw new IllegalArgumentException(
+							LispNames.DEFINE_CONDITION + " expects parent type names: " + cons.print());
 				}
-				closRegistry.registerExtraAncestors(nameSym.name(), extraParents);
+				if (known.isEmpty() && unknown.isEmpty()) {
+					// The FIRST parent stays a real superclass unconditionally, keeping
+					// the pre-MI "unknown superclass" error for a bad first parent.
+					known.add(parent);
+				}
+				else if (closRegistry.findClass(parentSym.name()) != null) {
+					known.add(parent);
+				}
+				else {
+					unknown.add(parentSym.name());
+				}
+			}
+			parentList = listToCons(known);
+			if (!unknown.isEmpty()) {
+				closRegistry.registerExtraAncestors(nameSym.name(), unknown);
 			}
 		}
 		else {
@@ -20582,8 +21198,9 @@ public final class LispMacroExpander {
 						slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE, new LispSymbol(slot.type()),
 						readers)));
 			}
-			entries.add(listToCons(List.of(listToCons(spellingSyms),
-					info.superclass() == null ? LispNil.INSTANCE : new LispSymbol(info.superclass()),
+			LispVal superNames = info.superclasses().isEmpty() ? LispNil.INSTANCE
+					: listToCons(info.superclasses().stream().<LispVal>map(LispSymbol::new).toList());
+			entries.add(listToCons(List.of(listToCons(spellingSyms), superNames,
 					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
 		}
 		for (LispLayout layout : closRegistry.layouts().values()) {
@@ -20609,9 +21226,9 @@ public final class LispMacroExpander {
 						new LispSymbol("T"), LispNil.INSTANCE)));
 			}
 			String parent = closRegistry.structParent(layout.printName());
-			entries.add(listToCons(
-					List.of(listToCons(spellingSyms), parent == null ? LispNil.INSTANCE : new LispSymbol(parent),
-							slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
+			entries.add(listToCons(List.of(listToCons(spellingSyms),
+					parent == null ? LispNil.INSTANCE : listToCons(List.<LispVal>of(new LispSymbol(parent))),
+					slotDefs.isEmpty() ? LispNil.INSTANCE : listToCons(slotDefs))));
 		}
 		// Chunked by NODE budget, not entry count: unlike the flat typep/subtypep tag
 		// tables, one entry here nests the whole slot-data tree, so a 48-entry chunk of a
@@ -20759,10 +21376,18 @@ public final class LispMacroExpander {
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
 								List.of(s0, s1, s2, s3, s4)),
 						slots)))));
-		LispVal superName = mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry));
-		LispVal supers = makeIf(superName, mvCall(LispNames.CONS,
-				mvCall(LispNames.FIND_CLASS_INTERNAL, superName, LispTrue.INSTANCE), LispNil.INSTANCE),
-				LispNil.INSTANCE);
+		// The entry's superclass column is a LIST of names (multiple inheritance);
+		// materialize each through the recursive resolver, preserving order.
+		LispVal superNames = mvCall(LispNames.CAR, mvCall(LispNames.CDR, entry));
+		LispSymbol superAcc = new LispSymbol("%fc_sup");
+		LispSymbol superVar = new LispSymbol("%fc_sn");
+		LispVal supers = listToCons(List.of(new LispSymbol(LispNames.LET),
+				listToCons(List.of(listToCons(List.of(superAcc, LispNil.INSTANCE)))),
+				listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+						listToCons(List.of(superVar, superNames, LispNil.INSTANCE)),
+						listToCons(List.of(new LispSymbol(LispNames.SETQ), superAcc, mvCall(LispNames.CONS,
+								mvCall(LispNames.FIND_CLASS_INTERNAL, superVar, LispTrue.INSTANCE), superAcc))))),
+				mvCall(LispNames.REVERSE, superAcc)));
 		LispVal buildMetaobject = objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME,
 				List.of(name, supers, LispNil.INSTANCE, mvCall(LispNames.REVERSE, slots), LispTrue.INSTANCE));
 		LispVal memoize = listToCons(List.of(new LispSymbol(LispNames.SETQ),

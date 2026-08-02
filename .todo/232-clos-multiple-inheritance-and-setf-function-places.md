@@ -3,6 +3,29 @@
 Difficulty: 高 (substrate milestone, multi-session — CPL/slot-merge/dispatch
 on all four backends; do not fold into a library todo)
 
+## Status 2026-08-02: all three items IMPLEMENTED and VERIFIED
+(full suite 5174 green; native-image CiSpecE2eTest 1188 green on all four
+backends incl. the three new cases; -Pweb compile and javadoc clean)
+
+1. Multiple inheritance — DONE (`.kb/clos.md` "Multiple inheritance" section):
+   CPL (CLHS 4.3.5) + first-super layout-prefix slot merge + shifted-accessor
+   override synthesis + exact-tag dispatch refinement, all four backends,
+   ci-spec `clos-multiple-inheritance-cpl-slots-and-dispatch`.
+2. `(defmethod (setf name))` / `(defgeneric (setf name))` — DONE (`.kb/clos.md`
+   "Setf methods"): normalized onto the `%setf-` writer-generic convention;
+   ci-spec `clos-setf-methods-and-setf-generic`.
+3. setf `symbol-function`/`fdefinition` — DONE (`.kb/symbol-runtime-api.md`):
+   `%set-symbol-function` fenv write + setf-only-alias forwarder defuns;
+   ci-spec `setf-symbol-function-and-fdefinition`.
+
+Remaining before closing: re-probe fast-io / circular-streams loading
+(todo-231) — the remaining blockers there (Gray BINARY stream
+classes/generics, `stream-file-position` protocol) are gray-streams scope,
+not this todo's.
+
+The runtime `(export (intern ...))` finding below is NOT fixed here — filed
+with `.todo/038` (runtime package mutation, "Field finding 2026-08-02").
+
 Split out of `.todo/231` (2026-08-02 survey). The ONLY heavyweight between
 circular-streams / lack-request / lack-middleware-session / -csrf and
 loading, and a broad unblocker for the wider CL ecosystem beyond lack.

@@ -10680,6 +10680,68 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void setfSymbolFunctionAliasAndRedefinition() throws Exception {
+		assertThat(compileAndRun("""
+				(defun wsf-orig (x) (* x 2))
+				(setf (symbol-function 'wsf-alias) #'wsf-orig)
+				(print (wsf-alias 21))
+				(print (funcall #'wsf-alias 3))
+				(setf (fdefinition 'wsf-alias) (lambda (x) (list :new x)))
+				(print (wsf-alias 5))
+				(print (fboundp 'wsf-alias))
+				""")).isEqualTo("42\n6\n(:NEW 5)\nT");
+	}
+
+	@Test
+	void compileAndRunDefclassMultipleInheritance() throws Exception {
+		// Slot merge across supers (second super's accessor overridden for the shifted
+		// index), diamond slot dedup with the CPL-most-specific initform, and method
+		// dispatch + call-next-method following the instance class's precedence list.
+		assertThat(compileAndRun("""
+				(defclass wmi-a () ((x :initarg :x :accessor wmi-x)))
+				(defclass wmi-b () ((y :initarg :y :accessor wmi-y)))
+				(defclass wmi-c (wmi-a wmi-b) ((z :initarg :z :accessor wmi-z)))
+				(let ((b (make-instance 'wmi-b :y 7))
+				      (c (make-instance 'wmi-c :x 1 :y 2 :z 3)))
+				  (setf (wmi-y c) 9)
+				  (print (list (wmi-x c) (wmi-y c) (wmi-z c) (wmi-y b))))
+				(defclass wdi-base () ((v :initform :base :reader wdi-v)))
+				(defclass wdi-l (wdi-base) ())
+				(defclass wdi-r (wdi-base) ((v :initform :right)))
+				(defclass wdi-d (wdi-l wdi-r) ())
+				(print (list (wdi-v (make-instance 'wdi-d)) (typep (make-instance 'wdi-d) 'wdi-r)))
+				(defgeneric wlp-who (x))
+				(defmethod wlp-who ((x wmi-a)) (cons :a (if (next-method-p) (call-next-method) nil)))
+				(defmethod wlp-who ((x wmi-b)) (cons :b (if (next-method-p) (call-next-method) nil)))
+				(defmethod wlp-who (x) (list :default))
+				(defclass wlp-ba (wmi-b wmi-a) ())
+				(print (wlp-who (make-instance 'wmi-c :x 1 :y 2 :z 3)))
+				(print (wlp-who (make-instance 'wlp-ba)))
+				""")).isEqualTo("(1 9 3 7)\n(:RIGHT T)\n(:A :B :DEFAULT)\n(:B :A :DEFAULT)");
+	}
+
+	@Test
+	void compileAndRunSetfMethodDispatchesPerClass() throws Exception {
+		assertThat(compileAndRun("""
+				(defclass wsm-a () ((x :initarg :x :accessor wsm-val)))
+				(defclass wsm-b () ((log :initform nil :reader wsm-log)))
+				(defmethod (setf wsm-val) (new (b wsm-b)) (setf (slot-value b 'log) (list :wrote new)) new)
+				(let ((a (make-instance 'wsm-a :x 1))
+				      (b (make-instance 'wsm-b)))
+				  (setf (wsm-val a) 2)
+				  (setf (wsm-val b) 3)
+				  (print (list (wsm-val a) (wsm-log b))))
+				(defclass wsm-box () ((v :initform 0 :reader wsm-content)))
+				(defgeneric (setf wsm-content) (new box)
+				  (:method (new (b wsm-box)) (setf (slot-value b 'v) new)))
+				(let ((b (make-instance 'wsm-box)))
+				  (setf (wsm-content b) 9)
+				  (funcall #'(setf wsm-content) 11 b)
+				  (print (wsm-content b)))
+				""")).isEqualTo("(2 (:WROTE 3))\n11");
+	}
+
+	@Test
 	void compileAndRunListSpecializedMethodExcludesClassInstances() throws Exception {
 		// An instance is a tagged cons internally, but must dispatch to the
 		// standard-object/default method, not a list/cons/sequence-specialized one.

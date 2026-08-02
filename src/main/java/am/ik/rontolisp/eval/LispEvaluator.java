@@ -1169,6 +1169,36 @@ public final class LispEvaluator {
 			this.userMacros.remove(sym.name());
 			return sym;
 		}));
+		// (setf (symbol-function 'f) fn) / (setf (fdefinition 'f) fn) lower here:
+		// install fn as f's global function binding -- fmakunbound's write-side twin,
+		// so a same-named user macro stops shadowing the new definition -- and return
+		// fn, the setf value.
+		this.globalEnv.defineFunction(LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
+				new LispFunction(LispNames.SET_SYMBOL_FUNCTION_INTERNAL, args -> {
+					if (args.size() != 2 || !(args.get(0) instanceof LispSymbol sym)) {
+						throw new LispEvalException("(setf symbol-function) expects a symbol name, got "
+								+ (args.isEmpty() ? "nothing" : args.get(0).print()));
+					}
+					this.globalEnv.defineFunction(sym.name(), args.get(1));
+					this.userMacros.remove(sym.name());
+					return args.get(1);
+				}));
+		// The compile paths' setf-only-alias forwarder body reads the binding through
+		// this primitive; the interpreter serves it against the live environment so
+		// one program means the same thing on every backend.
+		this.globalEnv.defineFunction(LispNames.FENV_FUNCTION_INTERNAL,
+				new LispFunction(LispNames.FENV_FUNCTION_INTERNAL, args -> {
+					requireSingleArg(LispNames.FENV_FUNCTION_INTERNAL, args);
+					if (!(args.get(0) instanceof LispSymbol sym)) {
+						throw new LispEvalException(
+								LispNames.FENV_FUNCTION_INTERNAL + " expects a symbol, got " + args.get(0).print());
+					}
+					LispVal fn = this.globalEnv.lookupFunctionOrNull(sym.name());
+					if (fn == null) {
+						throw new LispEvalException("The function " + sym.name() + " is undefined");
+					}
+					return fn;
+				}));
 		// find-symbol never creates: the symbol comes back only when the name is already
 		// known to the image (a cl symbol, a keyword, or a user definition). The
 		// compilers
@@ -3744,6 +3774,8 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {
+		// A (defgeneric (setf name) ...) rides the %setf- writer-generic convention.
+		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
 		java.util.List<LispVal> methodDefuns = new java.util.ArrayList<>();
 		String generic = LispMacroExpander.registerDefgeneric(cons, this.closRegistry, methodDefuns);
 		for (LispVal defun : methodDefuns) {
@@ -3754,6 +3786,9 @@ public final class LispEvaluator {
 	}
 
 	private LispVal evalDefmethod(LispCons cons, Environment env) {
+		// A (defmethod (setf name) ...) rides the %setf- writer-generic convention, so
+		// it merges with any defclass :accessor writer methods on the same place.
+		cons = LispMacroExpander.normalizeSetfMethodForm(cons, this.structAccessors);
 		// Evaluate the generated method-body defun, then redefine the dispatcher so it
 		// sees the new method (calls by name always dispatch through the fresh one; a
 		// #'name captured earlier keeps the previous dispatcher).

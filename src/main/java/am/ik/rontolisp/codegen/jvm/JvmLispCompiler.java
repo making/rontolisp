@@ -842,6 +842,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
+				// (setf (symbol-function ...)) writes _fenv (the raw place shape is
+				// scanned: the lowering to %set-symbol-function happens per expression,
+				// after this gate).
+				|| LispMacroExpander.usesSymbolFunctionWrite(program)
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL)
 				// #'funcall's injected wrapper body is (apply f r): the wrapper and the
 				// runtime it calls are gated on the same reference (see wrapperExcludes).

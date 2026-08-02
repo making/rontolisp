@@ -2,7 +2,7 @@
 
 `(defgeneric name (param...) option...)`
 
-Defines a generic function and returns the name symbol. Methods are added with [`defmethod`](defmethod.md) — specializers may appear on **any** required parameter, and a call runs the most specific matching method (parameters ranked leftmost-first); calling the generic with no matching method signals an error. A `defgeneric` is optional — the first `defmethod` implicitly creates the generic — but declares the lambda list every method must match. The generic function is an ordinary function, so `#'name` and `funcall` work.
+Defines a generic function and returns the name symbol. Methods are added with [`defmethod`](defmethod.md) — specializers may appear on **any** required parameter, and a call runs the most specific matching method (parameters ranked leftmost-first); calling the generic with no matching method signals an error. A `defgeneric` is optional — the first `defmethod` implicitly creates the generic — but declares the lambda list every method must match. The generic function is an ordinary function, so `#'name` and `funcall` work. `name` may also be a setf function name `(setf reader)` (see [defmethod](defmethod.md)).
 
 The lambda list may continue past the required parameters with `&optional`/`&rest` (the dispatcher forwards the tail to the selected method), and inline `(:method [qualifier] (param...) body...)` clauses define methods in the `defgeneric` itself. `(:documentation "...")` is recorded and ignored.
 

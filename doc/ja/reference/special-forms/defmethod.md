@@ -25,6 +25,18 @@
       (speak 42) (speak :cat) (speak "s")) ; => ("woof" "some sound" "a number" "meow" "?")
 ```
 
+## setf メソッド
+
+`name` には関数名 `(setf reader)` も書けます: メソッドは `reader` の *setf 関数*の一部となり、`(setf (reader arg...) value)` は新しい値を**先頭**パラメータとして（CL の setf 関数の引数順）ディスパッチします。[`defclass`](defclass.md) の `:accessor` と同名の setf メソッドは、アクセサの writer メソッドを隠すのではなくマージされます。`#'(setf reader)` は第一級関数としての writer です。`(defgeneric (setf reader) ...)` も同様に動作し、インラインの `(:method ...)` 節も使えます。
+
+```lisp
+(defclass sbox () ((v :initarg :v :reader content)))
+(defmethod (setf content) (new (b sbox)) (setf (slot-value b 'v) new))
+(let ((b (make-instance 'sbox :v 1)))
+  (setf (content b) 42)
+  (content b)) ; => 42
+```
+
 ## メソッド修飾子と `call-next-method`
 
 ラムダリストの前に `:before`、`:after`、`:around` の**修飾子**を置くと補助メソッドを追加できます（標準メソッド結合）。1 回の呼び出しでは:

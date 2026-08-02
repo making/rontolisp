@@ -8521,6 +8521,98 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSetfSymbolFunctionAliasAndRedefinition() throws Exception {
+		// jsf-alias is bound ONLY by setf, so a forwarder defun carries its direct
+		// call sites to the runtime _fenv binding; the second setf re-binds it.
+		assertThat(compileAndRun("""
+				(defun jsf-orig (x) (* x 2))
+				(setf (symbol-function 'jsf-alias) #'jsf-orig)
+				(print (jsf-alias 21))
+				(print (funcall #'jsf-alias 3))
+				(setf (fdefinition 'jsf-alias) (lambda (x) (list :new x)))
+				(print (jsf-alias 5))
+				(print (fboundp 'jsf-alias))
+				""")).isEqualTo("42\n6\n(:NEW 5)\nT");
+	}
+
+	@Test
+	void compileAndRunSetfSymbolFunctionBeforeAssignmentSignals() throws Exception {
+		assertThat(compileAndRun("""
+				(defun jsf2-target (x) x)
+				(print (handler-case (jsf2-late 1) (error (e) :undefined)))
+				(setf (symbol-function 'jsf2-late) #'jsf2-target)
+				(print (jsf2-late :ok))
+				""")).isEqualTo(":UNDEFINED\n:OK");
+	}
+
+	@Test
+	void compileAndRunDefclassMultipleInheritance() throws Exception {
+		// Slots merge across supers; the second super's accessor (whose slot shifts
+		// from index 0 to 1) is overridden per class; a diamond keeps ONE copy of the
+		// shared slot and the more specific re-declared initform wins by CPL.
+		assertThat(compileAndRun("""
+				(defclass jmi-a () ((x :initarg :x :accessor jmi-x)))
+				(defclass jmi-b () ((y :initarg :y :accessor jmi-y)))
+				(defclass jmi-c (jmi-a jmi-b) ((z :initarg :z :accessor jmi-z)))
+				(let ((b (make-instance 'jmi-b :y 7))
+				      (c (make-instance 'jmi-c :x 1 :y 2 :z 3)))
+				  (setf (jmi-y c) 9)
+				  (print (list (jmi-x c) (jmi-y c) (jmi-z c) (jmi-y b))))
+				(defclass jdi-base () ((v :initform :base :reader jdi-v)))
+				(defclass jdi-l (jdi-base) ())
+				(defclass jdi-r (jdi-base) ((v :initform :right)))
+				(defclass jdi-d (jdi-l jdi-r) ())
+				(let ((d (make-instance 'jdi-d)))
+				  (print (list (jdi-v d) (length (%obj-slots d)) (typep d 'jdi-l) (typep d 'jdi-r))))
+				""")).isEqualTo("(1 9 3 7)\n(:RIGHT 1 T T)");
+	}
+
+	@Test
+	void compileAndRunDefclassMultipleInheritanceDispatchFollowsCpl() throws Exception {
+		// Method selection and call-next-method both follow the instance class's
+		// precedence list: (a b) reaches a's method first, (b a) reaches b's.
+		assertThat(compileAndRun("""
+				(defclass jlp-a () ())
+				(defclass jlp-b () ())
+				(defgeneric jlp-who (x))
+				(defmethod jlp-who ((x jlp-a)) :a)
+				(defmethod jlp-who ((x jlp-b)) :b)
+				(defclass jlp-ab (jlp-a jlp-b) ())
+				(defclass jlp-ba (jlp-b jlp-a) ())
+				(print (list (jlp-who (make-instance 'jlp-ab)) (jlp-who (make-instance 'jlp-ba))))
+				(defgeneric jcn-trace (x))
+				(defmethod jcn-trace ((x jlp-a)) (cons :a (if (next-method-p) (call-next-method) nil)))
+				(defmethod jcn-trace ((x jlp-b)) (cons :b (if (next-method-p) (call-next-method) nil)))
+				(defmethod jcn-trace (x) (list :default))
+				(print (jcn-trace (make-instance 'jlp-ab)))
+				(print (jcn-trace (make-instance 'jlp-ba)))
+				""")).isEqualTo("(:A :B)\n(:A :B :DEFAULT)\n(:B :A :DEFAULT)");
+	}
+
+	@Test
+	void compileAndRunSetfMethodDispatchesPerClass() throws Exception {
+		// (defmethod (setf name) ...) merges with a defclass :accessor writer on the
+		// same generic; (defgeneric (setf name) ...) with an inline method works too.
+		assertThat(compileAndRun("""
+				(defclass jsm-a () ((x :initarg :x :accessor jsm-val)))
+				(defclass jsm-b () ((log :initform nil :reader jsm-log)))
+				(defmethod (setf jsm-val) (new (b jsm-b)) (setf (slot-value b 'log) (list :wrote new)) new)
+				(let ((a (make-instance 'jsm-a :x 1))
+				      (b (make-instance 'jsm-b)))
+				  (setf (jsm-val a) 2)
+				  (setf (jsm-val b) 3)
+				  (print (list (jsm-val a) (jsm-log b))))
+				(defclass jsm-box () ((v :initform 0 :reader jsm-content)))
+				(defgeneric (setf jsm-content) (new box)
+				  (:method (new (b jsm-box)) (setf (slot-value b 'v) new)))
+				(let ((b (make-instance 'jsm-box)))
+				  (setf (jsm-content b) 9)
+				  (funcall #'(setf jsm-content) 11 b)
+				  (print (jsm-content b)))
+				""")).isEqualTo("(2 (:WROTE 3))\n11");
+	}
+
+	@Test
 	void compileAndRunMultiParameterMethodDispatch() throws Exception {
 		assertThat(compileAndRun("""
 				(defclass mp-animal () ())

@@ -229,16 +229,25 @@ public final class ClosRegistry {
 		this.seededClassNames.add(name);
 		ClassInfo parentInfo = parent == null ? null : this.classes.get(parent);
 		java.util.List<SlotSpec> slots = new java.util.ArrayList<>(parentInfo == null ? List.of() : parentInfo.slots());
+		java.util.List<SlotSpec> directSlots = new java.util.ArrayList<>();
 		for (String slotName : slotNames) {
-			slots.add(new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, ":" + slotName, true, List.of(),
-					List.of(), "T"));
+			SlotSpec spec = new SlotSpec(slotName, slotName, LispNil.INSTANCE, true, ":" + slotName, true, List.of(),
+					List.of(), "T");
+			slots.add(spec);
+			directSlots.add(spec);
 		}
 		java.util.Set<String> ancestors = new java.util.LinkedHashSet<>();
 		if (parentInfo != null) {
 			ancestors.addAll(parentInfo.ancestors());
 		}
 		ancestors.add(name);
-		registerClass(new ClassInfo(name, parent, List.copyOf(slots), java.util.Set.copyOf(ancestors)));
+		java.util.List<String> cpl = new java.util.ArrayList<>();
+		cpl.add(name);
+		if (parentInfo != null) {
+			cpl.addAll(parentInfo.cpl());
+		}
+		registerClass(new ClassInfo(name, parent == null ? List.of() : List.of(parent), List.copyOf(cpl),
+				List.copyOf(directSlots), List.copyOf(slots), java.util.Set.copyOf(ancestors)));
 		for (int i = 0; i < slots.size(); i++) {
 			registerSlotPosition(slots.get(i).baseName(), i + 1);
 		}
@@ -274,15 +283,23 @@ public final class ClosRegistry {
 	}
 
 	/**
-	 * One class: its canonical name, optional single superclass, full ordered slot list
-	 * (inherited slots first), and the ancestor set including the class itself.
+	 * One class: its canonical name, direct superclasses (in local precedence order),
+	 * class precedence list, direct (own) slot specifications, full ordered effective
+	 * slot list (inherited slots first), and the ancestor set including the class itself.
 	 *
 	 * @param name the canonical class name
-	 * @param superclass the canonical superclass name, or null
-	 * @param slots the full slot list, inherited slots first
+	 * @param superclasses the canonical direct superclass names, in definition order
+	 * (empty at a root)
+	 * @param cpl the class precedence list (canonical names, the class itself first, most
+	 * specific first -- CLHS 4.3.5 topological order over the registered classes)
+	 * @param directSlots the slot specifications this class wrote itself (shadowing
+	 * re-declarations included), used for CPL-ordered effective-slot option merging
+	 * @param slots the full effective slot list, inherited slots first (the first
+	 * superclass's effective slots keep their indexes -- the layout prefix rule)
 	 * @param ancestors the normalized names of the class and all its ancestors
 	 */
-	public record ClassInfo(String name, @Nullable String superclass, List<SlotSpec> slots, Set<String> ancestors) {
+	public record ClassInfo(String name, List<String> superclasses, List<String> cpl, List<SlotSpec> directSlots,
+			List<SlotSpec> slots, Set<String> ancestors) {
 	}
 
 	/** The kind of one parameter specializer of a method. */
@@ -978,10 +995,10 @@ public final class ClosRegistry {
 			return cached;
 		}
 		LispVal supers = LispNil.INSTANCE;
-		if (info.superclass() != null) {
-			LispInstance superMetaobject = classMetaobject(info.superclass());
+		for (int s = info.superclasses().size() - 1; s >= 0; s--) {
+			LispInstance superMetaobject = classMetaobject(info.superclasses().get(s));
 			if (superMetaobject != null) {
-				supers = new LispCons(superMetaobject, LispNil.INSTANCE);
+				supers = new LispCons(superMetaobject, supers);
 			}
 		}
 		LispVal effectiveSlots = LispNil.INSTANCE;
@@ -1186,7 +1203,8 @@ public final class ClosRegistry {
 					merged.add(extra);
 				}
 			}
-			info = new ClassInfo(info.name(), info.superclass(), info.slots(), Set.copyOf(merged));
+			info = new ClassInfo(info.name(), info.superclasses(), info.cpl(), info.directSlots(), info.slots(),
+					Set.copyOf(merged));
 		}
 		this.classes.put(key, info);
 		// A redefinition invalidates the memoized metaobject; descendants keep theirs
@@ -1335,6 +1353,16 @@ public final class ClosRegistry {
 		else if (existing != position) {
 			this.slotPositions.put(baseName, -1);
 		}
+	}
+
+	/**
+	 * Whether any registered class has more than one direct superclass -- the gate for
+	 * the multiple-inheritance dispatch refinement, so a single-inheritance program
+	 * generates dispatchers byte-identical to the pre-MI shape.
+	 * @return true when a multiply-inheriting class is registered
+	 */
+	public boolean hasMultipleInheritance() {
+		return this.classes.values().stream().anyMatch(c -> c.superclasses().size() > 1);
 	}
 
 	/**

@@ -524,11 +524,19 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_FMAKUNBOUND = FUNC_FBOUNDP + 1;
 
+	// _set_symbol_function(sym, value): the write-side twin of _fmakunbound behind
+	// (setf (symbol-function ...)); _fenv_function(sym): the GLOBAL_FENV-only read the
+	// setf-only-alias forwarder defuns call. Appended beside the other symbol-API
+	// helpers, before FUNC_USER_BASE.
+	static final int FUNC_SET_SYMBOL_FUNCTION = FUNC_FMAKUNBOUND + 1;
+
+	static final int FUNC_FENV_FUNCTION = FUNC_SET_SYMBOL_FUNCTION + 1;
+
 	// read-char runtime helper (WasmIoRuntimeBuilder.buildReadCharBody): one byte from
 	// stdin, a WASI fd or a string input stream, boxed as a character struct. Appended
 	// before FUNC_USER_BASE like the mod/rem helpers, so no import/FUNC_START index
 	// shifts and the component blobs are unaffected.
-	static final int FUNC_READ_CHAR = FUNC_FMAKUNBOUND + 1;
+	static final int FUNC_READ_CHAR = FUNC_FENV_FUNCTION + 1;
 
 	// _str_build (off, len) -> (ref null eq): allocates a $str_bytes GC array of
 	// length len, copies linear[off..off+len) into it, and returns a TYPE_STRING
@@ -1568,6 +1576,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
 				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
 				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
+				// (setf (symbol-function ...)) writes GLOBAL_FENV (the raw place shape
+				// is scanned: the %set-symbol-function lowering happens per expression,
+				// after this gate).
+				|| LispMacroExpander.usesSymbolFunctionWrite(program)
 				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL)
 				// An INJECTED wrapper whose body calls apply -- the map* family,
 				// every/some, funcall -- is reachable as soon as the program takes that
@@ -2901,6 +2913,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] symbolValueBody = WasmSymbolApiRuntimeBuilder.buildSymbolValue(symbolTOffset);
 		final byte[] fboundpBody = WasmSymbolApiRuntimeBuilder.buildFboundp(symbolTOffset);
 		final byte[] fmakunboundBody = WasmSymbolApiRuntimeBuilder.buildFmakunbound();
+		final byte[] setSymbolFunctionBody = WasmSymbolApiRuntimeBuilder.buildSetSymbolFunction();
+		final byte[] fenvFunctionBody = WasmSymbolApiRuntimeBuilder.buildFenvFunction();
 
 		// Case-fold tables. Two compressed (from, to, delta) triple tables, generated
 		// from Character.toUpperCase(int) / toLowerCase(int) so char-upcase /
@@ -3682,6 +3696,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _symbol_value (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fboundp (sym)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fmakunbound (sym)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _set_symbol_function (sym,
+															// value)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _fenv_function (sym)
 				// read-char runtime helper
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 2); // _read_char (stream,
 															// eof-error-p, eof-value) ->
@@ -4156,6 +4173,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(symbolValueBody);
 				code.addFunction(fboundpBody);
 				code.addFunction(fmakunboundBody);
+				code.addFunction(setSymbolFunctionBody);
+				code.addFunction(fenvFunctionBody);
 				// read-char runtime helper body (FUNC_READ_CHAR)
 				code.addFunction(WasmIoRuntimeBuilder.buildReadCharBody());
 				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a

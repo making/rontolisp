@@ -7,3 +7,11 @@ Returns the function value bound to `symbol` in the function namespace -- the sa
 ```lisp
 (funcall (symbol-function 'car) '(1 2 3)) ; => 1
 ```
+
+`symbol-function` is also a `setf` place: `(setf (symbol-function 'name) fn)` installs `fn` as the symbol's global function definition -- defining an alias for an existing function, or replacing one. In the compilers a call site the compiler already bound directly keeps the original function ([`fmakunbound`](fmakunbound.md)'s divergence); a name bound ONLY this way is fully late-bound, and calling it before the assignment signals `The function NAME is undefined`.
+
+```lisp
+(defun double (x) (* x 2))
+(setf (symbol-function 'twice) #'double)
+(twice 21) ; => 42
+```

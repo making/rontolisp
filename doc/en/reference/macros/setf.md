@@ -20,7 +20,7 @@ Multiple place/value pairs assign sequentially (each pair sees the effects of th
 (let ((p (list :a 1))) (setf (getf p :b) 2) p) ; => (:B 2 :A 1)
 ```
 
-Beyond the built-in places, a `defstruct` accessor, a CLOS `:accessor`, and a user-defined *setf-function* (`(defun (setf name) ...)`) are also places: `(setf (name arg...) value)` calls the writer with the new value first. See [defun](../special-forms/defun.md) for setf-function definitions.
+Beyond the built-in places, a `defstruct` accessor, a CLOS `:accessor`, and a user-defined *setf-function* (`(defun (setf name) ...)`, or the generic `(defmethod (setf name) ...)` — see [defmethod](../special-forms/defmethod.md)) are also places: `(setf (name arg...) value)` calls the writer with the new value first. See [defun](../special-forms/defun.md) for setf-function definitions. `(setf (symbol-function 'name) fn)` / `(setf (fdefinition 'name) fn)` install a global function definition (see [symbol-function](../functions/symbol-function.md)).
 
 ```lisp
 (defvar *mode* :xml)

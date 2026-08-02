@@ -1,15 +1,15 @@
 # defclass
 
-`(defclass name (superclass?) ((slot slot-option...) ...) class-option...)`
+`(defclass name (superclass*) ((slot slot-option...) ...) class-option...)`
 
-クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。スーパークラスは最大 1 つ（単一継承）で、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
+クラスを定義し、名前シンボルを返します。これは **静的な CLOS サブセット**です。すべてのスーパークラスは先行する `defclass` で定義済みでなければならず、インスタンスは [`make-instance`](../macros/make-instance.md) で生成される第一級のオブジェクトです（[`defstruct`](defstruct.md) のインスタンスと同様にリストではなく、`consp` は `nil`、`print` は `#<NAME :SLOT value ...>` と表示します）。スロットオプション:
 
 - `:initarg keyword` — コンストラクタで使うキーワード（省略時はスロット名のキーワード）
 - `:initform expr` — スロットが与えられなかったときに生成時に評価されるデフォルト値。**省略するとスロットは未束縛のまま**になります（CL と同じ）: [`slot-boundp`](../macros/slot-boundp.md) は `nil` を返し、読み取りは `unbound-slot` をシグナルします
 - `:reader fn` — `fn` を読み取り関数として定義
 - `:accessor fn` — `:reader` と同様で、さらに `setf` 可能な place になります
 
-サブクラスはスーパークラスの全スロットを継承し、そのインスタンスはスーパークラスに対する [`defmethod`](defmethod.md) のクラス specializer にマッチします。サブクラスは継承したスロットを再宣言できます: 記憶域は継承した 1 つのスロットのままで、サブクラスの `:initform`/`:initarg` が継承分を上書きし、reader/accessor は継承分に追加されます。reader/accessor は通常の defun なので第一級関数です。クラスオプションは `(:documentation "...")`（受理して無視）と `(:default-initargs :initarg value ...)`（[`make-instance`](../macros/make-instance.md) が未指定の initarg に適用するデフォルト）をサポートし、スロットオプション `:type` は記録されます（チェックはなし）。`:metaclass`（後述）がない場合、その他のクラスオプション、その他のスロットオプション（`:allocation`、`:writer` など）、多重継承はエラーです。コンパイルパスでは `defclass` はトップレベルフォームとしてのみサポートされ、[`find-class`](../functions/find-class.md) と [`class-of`](../functions/class-of.md) はクラスメタオブジェクトを返します。実行時のクラス操作のうち存在するのは（リテラルの対象クラスを取る）[`change-class`](../macros/change-class.md) だけで、クラス再定義はありません。
+サブクラスはスーパークラス群の全スロットを継承し、そのインスタンスは各スーパークラスに対する [`defmethod`](defmethod.md) のクラス specializer にマッチします。**多重継承**をサポートします: 最初のスーパークラスのスロットが先頭に並び、以降のスーパークラスはまだ存在しない名前のスロットを追加します。ダイヤモンド継承では共有スロットは 1 つだけ保持され、メソッドディスパッチと再宣言されたスロットオプションはともに**クラス優先順位リスト**（CLHS 4.3.5 — クラス自身、次にスーパークラスを左から右へ、それぞれが自身のスーパークラスより先。局所順序が矛盾する場合はエラー）に従います。サブクラスは継承したスロットを再宣言できます: 記憶域は継承した 1 つのスロットのままで、サブクラスの `:initform`/`:initarg` が継承分を上書きし、reader/accessor は継承分に追加されます。reader/accessor は通常の defun なので第一級関数です。クラスオプションは `(:documentation "...")`（受理して無視）と `(:default-initargs :initarg value ...)`（[`make-instance`](../macros/make-instance.md) が未指定の initarg に適用するデフォルト）をサポートし、スロットオプション `:type` は記録されます（チェックはなし）。`:metaclass`（後述）がない場合、その他のクラスオプションとその他のスロットオプション（`:allocation`、`:writer` など）はエラーです。コンパイルパスでは `defclass` はトップレベルフォームとしてのみサポートされ、[`find-class`](../functions/find-class.md) と [`class-of`](../functions/class-of.md) はクラスメタオブジェクトを返します。実行時のクラス操作のうち存在するのは（リテラルの対象クラスを取る）[`change-class`](../macros/change-class.md) だけで、クラス再定義はありません。
 
 **メタクラス**（静的な MOP サブセット）: クラスオプション `(:metaclass M)` には、先に `defclass` で定義された `standard-class` を継承するクラスを指定します。クラス定義は**定義時**にクラス定義プロトコルを実行します: メタクラスがインスタンス化され（その `shared-initialize` メソッドは、他の未知のクラスオプションを「オプションの残り部分のリスト」を値とする initarg として受け取ります。`:before` メソッドが宣言済み `:initarg` を持つスロットに書いた値は、その後に供給された initarg で上書きされます — CL の充填順です。下の `table-name` のように `:initarg` 宣言のないスロットは `:before` の書き込みを保持します）、各スロットの非標準オプション（`:col-type` など）は initarg として `closer-mop:direct-slot-definition-class` に渡され、その答えのクラスがそのスロットの direct-slot-definition メタオブジェクトとしてインスタンス化されます。実効スロットは `closer-mop:compute-effective-slot-definition` を通して計算され（デフォルトメソッドは、ユーザーのオーバーライドの `call-next-method` の動的スコープの内側で `closer-mop:effective-slot-definition-class` を選んでインスタンス化します）、`closer-mop:finalize-inheritance` は**即時に**実行されます（CL は遅延ファイナライズですが、入力は静的なので定義時エラーのタイミングだけが異なります）。以後 `find-class` と `class-of` はメタクラスのインスタンスを返し、クラス自体のインスタンスは通常のオブジェクトのままです。プロトコルは静的です: トップレベル以外の位置の `defclass` や、定義時に未知のクラスに対するプロトコル呼び出しはエラーをシグナルします。
 
@@ -25,6 +25,18 @@
 (defclass square (shape) ((sides :initform 4 :accessor square-sides)))
 (let ((s (make-instance 'square)))
   (list (sides s) (square-sides s) (slot-boundp s 'label))) ; => (4 4 NIL)
+```
+
+```lisp
+(defclass fast-stream () ((buffer :initform nil :accessor stream-buffer)))
+(defclass output-mixin () ((pos :initform 0 :accessor stream-pos)))
+(defclass fast-output-stream (fast-stream output-mixin) ())
+(defgeneric stream-kind (s))
+(defmethod stream-kind ((s fast-stream)) :fast)
+(defmethod stream-kind ((s output-mixin)) :output)
+(let ((s (make-instance 'fast-output-stream)))
+  (setf (stream-pos s) 10)
+  (list (stream-kind s) (stream-pos s) (typep s 'output-mixin))) ; => (:FAST 10 T)
 ```
 
 ```lisp

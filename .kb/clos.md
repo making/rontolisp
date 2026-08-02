@@ -2,9 +2,10 @@
 
 User-facing behavior: `doc/en/reference/special-forms/{defclass,defgeneric,defmethod}.md`,
 `doc/en/reference/macros/{make-instance,slot-value}.md`, and the missing-features
-guide (what is out of scope: multiple inheritance, MOP/runtime class ops
-permanently). Stages 1+2+3 DONE (2026-07-06): dispatch + standard method
-combination (`:before`/`:after`/`:around` + `call-next-method`/`next-method-p`).
+guide (what is out of scope: runtime class ops permanently). Stages 1+2+3 DONE
+(2026-07-06): dispatch + standard method combination (`:before`/`:after`/`:around`
++ `call-next-method`/`next-method-p`). Multiple inheritance DONE (2026-08-02,
+todo-232) — see "Multiple inheritance" below.
 
 ## Design: the defstruct pattern, one shared registry, one shared dispatcher generator
 
@@ -96,6 +97,83 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
 disagree — `slot-value` then errors "use the accessor"). It lives per evaluator
 (`LispEvaluator.closRegistry`) and per compilation (`Jvm/WasmLispCompiler.Ctx`,
 threaded through `Ctx.Builder` beside `structAccessors`).
+
+## Multiple inheritance (todo-232, 2026-08-02)
+
+`ClosRegistry.ClassInfo` carries `superclasses` (local precedence order), `cpl`
+(the class precedence list -- CLHS 4.3.5 topological sort in
+`LispMacroExpander.computeCpl`, inconsistent local orders are an
+`IllegalArgumentException`) and `directSlots` (the class's OWN specs, for the
+CPL option merge) beside the effective `slots` and the ancestor SET. The ~20
+consumers that only ask "is X an ancestor?" (descendant tags, typep/subtypep
+tables, refill targeting, ...) ride the set unchanged.
+
+- **Layout rule**: the FIRST superclass's effective slots keep their indexes
+  (the prefix rule single inheritance already had), each later superclass
+  appends its not-yet-present slot names, a diamond keeps ONE copy. Inherited
+  slot OPTIONS are then re-merged from the direct specs along the CPL
+  (`cplMergedSlot` + `shadowSlotSpec`), so a non-first superclass's
+  re-declaration still beats the shared base's.
+- **Shifted accessors**: a non-first superclass's readers/accessors bake THEIR
+  index and their class test covers the subclass, so `expandDefclass`
+  synthesizes overriding reader/accessor (+ `%setf-` writer) methods
+  specialized on the SUBCLASS for every inherited slot whose index differs in
+  any CPL ancestor -- subclass-first dispatch makes them win. Single
+  inheritance never shifts, so nothing is synthesized there.
+- **Dispatch refinement** (`miRefinement`, gated on
+  `ClosRegistry.hasMultipleInheritance()` so single-inheritance dispatchers
+  stay byte-identical): a registered class whose applicable class specializers
+  have NO single most-specific member (unrelated supers, e.g. `(a b)` with
+  methods on both) gets an EXACT-TAG branch -- `(%obj-is x '%class-X)`, X
+  alone -- placed by the same specificity sort. Simple body: the branch calls
+  the method X's CPL ranks first. Combined body: the branch's effective method
+  is computed against X (complete applicable set; per-branch method order via
+  `branchSpecificityOrder`, which ranks class specializers by the branch
+  class's CPL index). Classes WITH a dominator need no branch: the dominator's
+  own branch sorts first and `appliesToBranch` over its ancestors is complete.
+  LITE residual: the refinement handles class dispatch on ONE parameter
+  position (every class-specialized method must specialize only that
+  position); a diamond-affected class meeting a generic that class-dispatches
+  on several positions keeps the per-specializer branches, which can miss the
+  second super's methods there. Re-evaluate if a library hits it.
+- `conditionReportGroups` inherits `:report` along the CPL;
+  `define-condition` with several REGISTERED parents now does real MI (slots
+  inherited; an UNREGISTERED extra parent still falls back to the
+  ancestors-only `registerExtraAncestors` route); `change-class`'s initform
+  fill SKIPS a source whose layout is not a base-name prefix of the target
+  (degrades to the layout-swap-only behavior unrelated classes get);
+  `%class-meta-table%`'s superclass column is a LIST (consumed by the
+  `%find-class-materialize` dolist), and mop-protocol.lisp's
+  `finalize-inheritance` merges inherited effective slots across ALL direct
+  supers (first occurrence of a name wins, like the static layout merge).
+
+Pinned by `LispEvaluatorTest#defclassMultipleInheritance*`/`#defclassDiamond*`/
+`#defclassCircularSuperclassesSignalInconsistentPrecedence`,
+`JvmLispCompilerTest#compileAndRunDefclassMultipleInheritance*`,
+`WasmLispCompilerIntegrationTest#compileAndRunDefclassMultipleInheritance`, and
+the `clos-multiple-inheritance-cpl-slots-and-dispatch` ci-spec case (all four
+backends).
+
+## Setf methods -- `(defmethod (setf name) ...)` / `(defgeneric (setf name) ...)` (todo-232, 2026-08-02)
+
+`normalizeSetfMethodForm` rewrites the definition onto the `%setf-` writer-generic
+convention the defclass `:accessor` writers already use: the name becomes the
+mangled `%setf-<place>` symbol (`setfFunctionName`) and the place joins
+`structAccessors` under `SETF_FUNCTION_MARKER`, so `(setf (name args...) v)`
+funcalls the writer dispatcher (new value first) with NO change to `expandSetf`.
+A user setf method therefore MERGES with accessor-generated writer methods on the
+same generic (different specializer) or replaces one (same specializer, CL
+redefinition semantics). Normalization sites: `expandTopLevelDefinitions`'s
+defmethod AND defgeneric branches, the let-nested walkers
+(`expandLetNestedDefmethods`/`rewriteNestedDefmethods`, which now thread
+`structAccessors`), and the interpreter's `evalDefmethod`/`evalDefgeneric` -- all
+BEFORE anything casts the name position to `LispSymbol`. `#'(setf name)` resolves
+to the dispatcher through the existing setf-function route (it is just
+`%setf-name`). Package-qualified places produce `%setf-PKG::NAME`, the exact
+shape the defclass accessor writers have exercised since cl-ppcre. Pinned by
+`LispEvaluatorTest#setfMethod*`/`#defgenericSetfNameWithInlineMethod`,
+`Jvm/Wasm*#compileAndRunSetfMethodDispatchesPerClass`, and ci-spec
+`clos-setf-methods-and-setf-generic`.
 
 ## Where each path hooks in
 
@@ -635,8 +713,8 @@ before and every existing artifact stays byte-identical.
   offending form (`JvmLispCompiler` chunk-loop wrapper).
   `change-class` is the ONE runtime exception and is not MOP: both classes are literal, so
   the whole change is a static expansion (see above).
-- Multiple inheritance, `:allocation`/`:writer` slot options, eql specializers
-  on strings.
+- `:allocation`/`:writer` slot options, eql specializers on strings.
+  (Multiple inheritance is IN since 2026-08-02 -- see the section above.)
   The `:type` slot option is RECORDED since 2026-07-18 (`SlotSpec.type`, plain
   name, `"t"` when omitted; still a checking no-op) so introspection can
   report it.

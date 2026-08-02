@@ -25,6 +25,18 @@ A call runs the most specific matching method: parameters are ranked leftmost-fi
       (speak 42) (speak :cat) (speak "s")) ; => ("woof" "some sound" "a number" "meow" "?")
 ```
 
+## Setf methods
+
+`name` may also be the function name `(setf reader)`: the method becomes part of the *setf function* of `reader`, and `(setf (reader arg...) value)` dispatches through it with the new value as the FIRST parameter (CL's setf-function argument order). A setf method on the same name as a [`defclass`](defclass.md) `:accessor` merges with the accessor's writer methods instead of shadowing them, and `#'(setf reader)` is the writer as a first-class function. `(defgeneric (setf reader) ...)` works the same way, inline `(:method ...)` clauses included.
+
+```lisp
+(defclass sbox () ((v :initarg :v :reader content)))
+(defmethod (setf content) (new (b sbox)) (setf (slot-value b 'v) new))
+(let ((b (make-instance 'sbox :v 1)))
+  (setf (content b) 42)
+  (content b)) ; => 42
+```
+
 ## Method qualifiers and `call-next-method`
 
 An optional `:before`, `:after`, or `:around` **qualifier** before the lambda list adds an auxiliary method (standard method combination). For one call:

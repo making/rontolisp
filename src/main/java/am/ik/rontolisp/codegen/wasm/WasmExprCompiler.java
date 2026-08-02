@@ -627,6 +627,9 @@ final class WasmExprCompiler {
 				case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);
 				case LispNames.SYMBOL_VALUE -> WasmSymbolApiCompiler.compileSymbolValue(cons, ctx);
 				case LispNames.FMAKUNBOUND -> WasmSymbolApiCompiler.compileFmakunbound(cons, ctx);
+				case LispNames.SET_SYMBOL_FUNCTION_INTERNAL ->
+					WasmSymbolApiCompiler.compileSetSymbolFunction(cons, ctx);
+				case LispNames.FENV_FUNCTION_INTERNAL -> WasmSymbolApiCompiler.compileFenvFunction(cons, ctx);
 				// Only a COMPUTED designator reaches here: PackageResolver folds a
 				// literal
 				// one to the quoted package keyword before the compiler ever sees it.

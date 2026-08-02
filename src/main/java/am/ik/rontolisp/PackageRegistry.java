@@ -195,7 +195,7 @@ public final class PackageRegistry {
 			LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
 			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
 			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS,
-			LispNames.MAKE_DIRECTORIES);
+			LispNames.MAKE_DIRECTORIES, LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

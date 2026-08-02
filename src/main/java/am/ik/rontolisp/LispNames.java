@@ -4730,6 +4730,25 @@ public final class LispNames {
 	public static final String FMAKUNBOUND = "FMAKUNBOUND";
 
 	/**
+	 * The internal primitive behind {@code (setf (symbol-function 'f) fn)} /
+	 * {@code (setf (fdefinition 'f) fn)}: installs {@code fn} as the symbol's global
+	 * function binding in the runtime function namespace (the {@code _fenv} the
+	 * late-bound references probe, shadowing any compiled defun of the name) and returns
+	 * the value. The write-side twin of {@link #FMAKUNBOUND}'s tombstone.
+	 */
+	public static final String SET_SYMBOL_FUNCTION_INTERNAL = "%SET-SYMBOL-FUNCTION";
+
+	/**
+	 * The internal primitive reading a symbol's function binding OUT of the runtime
+	 * function namespace only ({@code _fenv}; the compiled-function registry is
+	 * deliberately not probed), signalling {@code The function X is undefined} on a miss.
+	 * The body of the forwarder defun injected for a name that is ONLY defined by
+	 * {@code (setf (symbol-function ...))} -- probing the registry there would find the
+	 * forwarder itself and loop.
+	 */
+	public static final String FENV_FUNCTION_INTERNAL = "%FENV-FUNCTION";
+
+	/**
 	 * The {@code file-position} built-in function -- lite: always {@code nil} (streams do
 	 * not support repositioning), so callers take their non-seeking fallback.
 	 */

@@ -139,8 +139,8 @@ CLOS は**静的なサブセット**です
 [`allocate-instance`](../reference/functions/allocate-instance.md) が動作し、
 クラスオプション `(:metaclass M)` は定義時にクラス定義プロトコルを実行します
 （[`defclass`](../reference/special-forms/defclass.md) 参照）— これが postmodern
-の DAO 層を無改変でロードする仕組みです。対象外: 多重継承、
-第 2 引数以降の specializer、実行時のクラス構築
+の DAO 層を無改変でロードする仕組みです。多重継承も動作します
+（クラス優先順位リスト、スーパークラス間のスロットマージ）。対象外: 実行時のクラス構築
 （計算されたデータからの `ensure-class`、トップレベル以外の `defclass`、
 `add-method`、`compute-applicable-methods`、クラス再定義、
 `update-instance-for-different-class`）—

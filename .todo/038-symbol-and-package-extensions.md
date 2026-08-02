@@ -80,6 +80,17 @@ blocks them.
 - `symbol-value` at compile time vs runtime needs disambiguation.
 - Package operations at compile time affect resolution.
 
+### Field finding (2026-08-02, from the todo-232/231 survey)
+
+A runtime `(export (intern "X" "PKG") "PKG")` after `(defun pkg::x ...)` does
+not make `pkg:x` callable: a computed `export` never reaches the resolver (only
+LITERAL exports fold, `PackageResolver.tryConsumeExport`), and a later `pkg:x`
+spelling is rejected at resolve time ("not external"). The RUNTIME designator
+route already works — the `_lookup` alias rows serve `PKG:NAME` for every
+`PKG::NAME` defun — so the gap is purely the compile-time single-colon
+spelling. Hit while trying to patch uiop from Lisp. Fix belongs to the runtime
+`export` item above (the read/compile-time directive shape `use-package` took).
+
 ### Related
 
 - `[[034-local-function-definition]]` (`macrolet`/`symbol-macrolet`)

@@ -354,6 +354,126 @@ final class JvmSymbolApiCompiler {
 		ctx.emit(nameSlot);
 	}
 
+	/**
+	 * {@code (%set-symbol-function name value)} -- the write-side twin of
+	 * {@code fmakunbound}'s tombstone: stores {@code value} into the name's {@code _fenv}
+	 * binding (mutating an existing cell, else prepending a fresh binding), so every
+	 * LATE-bound reference resolves to it -- and, for a name only ever defined this way,
+	 * the injected forwarder defun's {@code %fenv-function} body. Leaves the value on the
+	 * stack, the setf result.
+	 */
+	static void compileSetSymbolFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = requireArgs(cons, 2, LispNames.SET_SYMBOL_FUNCTION_INTERNAL);
+		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
+		int valueSlot = compileArgToTemp(parts.get(2), ctx, className);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(envLookupRef(ctx, className).index());
+		ctx.emit(Opcode.DUP);
+		int create = emitBranch(ctx, Opcode.IFNULL);
+		// existing binding: overwrite its value cell
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(valueSlot);
+		ctx.emit(Opcode.AASTORE);
+		int done = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, create, ctx.code.size());
+		ctx.emit(Opcode.POP);
+		// _fenv = new Object[]{new Object[]{name, value}, _fenv}
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ICONST_2);
+		ctx.emit(Opcode.ANEWARRAY);
+		ctx.emitU2(ctx.objectClass.index());
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(valueSlot);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.DUP);
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		ctx.emit(Opcode.AASTORE);
+		ctx.emit(Opcode.PUTSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		JvmEmitHelper.patchBranch(ctx, done, ctx.code.size());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(valueSlot);
+	}
+
+	/**
+	 * {@code (%fenv-function name)} -- the name's {@code _fenv} binding value, or
+	 * {@code throw new RuntimeException("The function X is undefined")} when no binding
+	 * exists or {@code fmakunbound} cleared it (same text and catchability as the funcall
+	 * dispatchers' miss arm). The compiled-function registry is deliberately NOT probed:
+	 * the caller is the forwarder defun registered under the very name.
+	 */
+	static void compileFenvFunction(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = requireArgs(cons, 1, LispNames.FENV_FUNCTION_INTERNAL);
+		int nameSlot = compileArgToTemp(parts.get(1), ctx, className);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(evalField(ctx, className, "_fenv").index());
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(envLookupRef(ctx, className).index());
+		ctx.emit(Opcode.DUP);
+		int noBinding = emitBranch(ctx, Opcode.IFNULL);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.AALOAD);
+		ctx.emit(Opcode.DUP);
+		int cleared = emitBranch(ctx, Opcode.IFNULL);
+		int end = emitBranch(ctx, Opcode.GOTO);
+		JvmEmitHelper.patchBranch(ctx, noBinding, ctx.code.size());
+		JvmEmitHelper.patchBranch(ctx, cleared, ctx.code.size());
+		ctx.emit(Opcode.POP);
+		emitUndefinedFunctionThrow(nameSlot, ctx);
+		JvmEmitHelper.patchBranch(ctx, end, ctx.code.size());
+	}
+
+	// throw new RuntimeException("The function " + name + " is undefined") -- the
+	// compile-expression twin of JvmEvalRuntimeBuilder.emitUndefinedFunctionThrow.
+	private static void emitUndefinedFunctionThrow(int nameSlot, JvmLispCompiler.Ctx ctx) {
+		ConstantPool.ClassConstant runtimeEx = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/RuntimeException"));
+		ConstantPool.MethodrefConstant exCtor = ctx.cp.addMethodref(runtimeEx,
+				ctx.cp.addNameAndType(ctx.cp.addUtf8("<init>"), ctx.cp.addUtf8("(Ljava/lang/String;)V")));
+		ConstantPool.MethodrefConstant concat = ctx.cp.addMethodref(ctx.stringClass, ctx.cp
+			.addNameAndType(ctx.cp.addUtf8("concat"), ctx.cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		ctx.emit(Opcode.NEW);
+		ctx.emitU2(runtimeEx.index());
+		ctx.emit(Opcode.DUP);
+		JvmEmitHelper.compileStringLiteral("The function ", ctx);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(nameSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.stringClass.index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat.index());
+		JvmEmitHelper.compileStringLiteral(" is undefined", ctx);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(concat.index());
+		ctx.emit(Opcode.INVOKESPECIAL);
+		ctx.emitU2(exCtor.index());
+		ctx.emit(Opcode.ATHROW);
+	}
+
 	private static List<LispVal> requireArgs(LispCons cons, int count, String name) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != count + 1) {

@@ -7643,6 +7643,32 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setfSymbolFunctionInstallsAGlobalFunction() {
+		assertThat(evalMulti("""
+				(defun ssf-orig (x) (* x 2))
+				(setf (symbol-function 'ssf-alias) #'ssf-orig)
+				(list (ssf-alias 21) (funcall 'ssf-alias 5) (fboundp 'ssf-alias))
+				""").print()).isEqualTo("(42 10 T)");
+	}
+
+	@Test
+	void setfFdefinitionReplacesAnExistingFunction() {
+		assertThat(evalMulti("""
+				(defun ssf2-f (x) :old)
+				(setf (fdefinition 'ssf2-f) (lambda (x) (list :new x)))
+				(ssf2-f 1)
+				""").print()).isEqualTo("(:NEW 1)");
+	}
+
+	@Test
+	void setfSymbolFunctionReturnsTheFunctionValue() {
+		assertThat(evalMulti("""
+				(defun ssf3-add (a b) (+ a b))
+				(funcall (setf (symbol-function 'ssf3-alias) #'ssf3-add) 1 2)
+				""").print()).isEqualTo("3");
+	}
+
+	@Test
 	void findSymbolAnswersNilForAPackageThatDoesNotExist() {
 		// CL signals a package-error; the compile paths cannot (no registry at run
 		// time), and probing an OPTIONAL system this way is what libraries do
@@ -8541,6 +8567,55 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setfMethodDefinesAWriterGeneric() {
+		assertThat(evalMulti("""
+				(defclass sm-box () ((v :initarg :v :reader sm-content)))
+				(defmethod (setf sm-content) (new (b sm-box)) (setf (slot-value b 'v) new) new)
+				(let ((b (make-instance 'sm-box :v 1)))
+				  (list (setf (sm-content b) 42) (sm-content b)))
+				""").print()).isEqualTo("(42 42)");
+	}
+
+	@Test
+	void setfMethodDispatchesPerClassAndMergesWithAccessorWriters() {
+		// sm2-a's :accessor generates writer methods on the same %setf- generic; the
+		// user's (setf sm2-val) method on sm2-b merges instead of shadowing.
+		assertThat(evalMulti("""
+				(defclass sm2-a () ((x :initarg :x :accessor sm2-val)))
+				(defclass sm2-b () ((log :initform nil :reader sm2-log)))
+				(defmethod (setf sm2-val) (new (b sm2-b)) (setf (slot-value b 'log) (list :wrote new)) new)
+				(let ((a (make-instance 'sm2-a :x 1))
+				      (b (make-instance 'sm2-b)))
+				  (setf (sm2-val a) 2)
+				  (setf (sm2-val b) 3)
+				  (list (sm2-val a) (sm2-log b)))
+				""").print()).isEqualTo("(2 (:WROTE 3))");
+	}
+
+	@Test
+	void setfMethodIsFirstClassViaFunctionQuote() {
+		assertThat(evalMulti("""
+				(defclass sm3-box () ((v :initform 0 :reader sm3-content)))
+				(defmethod (setf sm3-content) (new (b sm3-box)) (setf (slot-value b 'v) new))
+				(let ((b (make-instance 'sm3-box)))
+				  (funcall #'(setf sm3-content) 7 b)
+				  (sm3-content b))
+				""").print()).isEqualTo("7");
+	}
+
+	@Test
+	void defgenericSetfNameWithInlineMethod() {
+		assertThat(evalMulti("""
+				(defclass sm4-box () ((v :initform 0 :reader sm4-content)))
+				(defgeneric (setf sm4-content) (new box)
+				  (:method (new (b sm4-box)) (setf (slot-value b 'v) new)))
+				(let ((b (make-instance 'sm4-box)))
+				  (setf (sm4-content b) 9)
+				  (sm4-content b))
+				""").print()).isEqualTo("9");
+	}
+
+	@Test
 	void defgenericDefmethodEqlDispatchAndFuncall() {
 		assertThat(evalMulti("""
 				(defgeneric describe-it (x))
@@ -9337,10 +9412,108 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void defclassMultipleInheritanceIsNotSupported() {
-		assertThatThrownBy(() -> evalMulti("(defclass a () ()) (defclass b () ()) (defclass c (a b) ())"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("at most one superclass");
+	void defclassMultipleInheritanceMergesSlotsAcrossSupers() {
+		assertThat(evalMulti("""
+				(defclass mi-a () ((x :initarg :x :accessor mi-x)))
+				(defclass mi-b () ((y :initarg :y :accessor mi-y)))
+				(defclass mi-c (mi-a mi-b) ((z :initarg :z :accessor mi-z)))
+				(let ((c (make-instance 'mi-c :x 1 :y 2 :z 3)))
+				  (list (mi-x c) (mi-y c) (mi-z c)))
+				""").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
+	void defclassMultipleInheritanceSecondSuperAccessorsWriteTheRightSlot() {
+		// mi2-b's slot y sits at index 0 in mi2-b but at index 1 in mi2-c, so the
+		// subclass must carry an overriding accessor method; without it mi2-b's
+		// method would read/write mi2-c's x slot.
+		assertThat(evalMulti("""
+				(defclass mi2-a () ((x :initarg :x :accessor mi2-x)))
+				(defclass mi2-b () ((y :initarg :y :accessor mi2-y)))
+				(defclass mi2-c (mi2-a mi2-b) ())
+				(let ((b (make-instance 'mi2-b :y 7))
+				      (c (make-instance 'mi2-c :x 1 :y 2)))
+				  (setf (mi2-y c) 9)
+				  (list (mi2-y b) (mi2-x c) (mi2-y c)))
+				""").print()).isEqualTo("(7 1 9)");
+	}
+
+	@Test
+	void defclassDiamondInheritanceKeepsOneCopyOfTheSharedSlot() {
+		assertThat(evalMulti("""
+				(defclass di-base () ((v :initarg :v :accessor di-vv)))
+				(defclass di-l (di-base) ((l :initarg :l :accessor di-ll)))
+				(defclass di-r (di-base) ((r :initarg :r :accessor di-rr)))
+				(defclass di-d (di-l di-r) ())
+				(let ((d (make-instance 'di-d :v 1 :l 2 :r 3)))
+				  (list (di-vv d) (di-ll d) (di-rr d) (length (%obj-slots d))))
+				""").print()).isEqualTo("(1 2 3 3)");
+	}
+
+	@Test
+	void defclassDiamondShadowedInitformFollowsClassPrecedence() {
+		// Only di2-r re-declares v's initform; di2-r precedes di2-base in di2-d's
+		// class precedence list, so its initform wins even though di2-l is the
+		// first (layout-providing) superclass.
+		assertThat(evalMulti("""
+				(defclass di2-base () ((v :initform :base :reader di2-v)))
+				(defclass di2-l (di2-base) ())
+				(defclass di2-r (di2-base) ((v :initform :right)))
+				(defclass di2-d (di2-l di2-r) ())
+				(di2-v (make-instance 'di2-d))
+				""").print()).isEqualTo(":RIGHT");
+	}
+
+	@Test
+	void defclassMultipleInheritanceMethodDispatchFollowsLocalPrecedenceOrder() {
+		assertThat(evalMulti("""
+				(defclass lp-a () ())
+				(defclass lp-b () ())
+				(defgeneric lp-who (x))
+				(defmethod lp-who ((x lp-a)) :a)
+				(defmethod lp-who ((x lp-b)) :b)
+				(defclass lp-ab (lp-a lp-b) ())
+				(defclass lp-ba (lp-b lp-a) ())
+				(list (lp-who (make-instance 'lp-ab)) (lp-who (make-instance 'lp-ba)))
+				""").print()).isEqualTo("(:A :B)");
+	}
+
+	@Test
+	void defclassMultipleInheritanceCallNextMethodChainsAcrossBothSupers() {
+		assertThat(evalMulti("""
+				(defclass cn-a () ())
+				(defclass cn-b () ())
+				(defclass cn-ab (cn-a cn-b) ())
+				(defgeneric cn-trace (x))
+				(defmethod cn-trace ((x cn-a)) (cons :a (if (next-method-p) (call-next-method) nil)))
+				(defmethod cn-trace ((x cn-b)) (cons :b (if (next-method-p) (call-next-method) nil)))
+				(defmethod cn-trace (x) (list :default))
+				(cn-trace (make-instance 'cn-ab))
+				""").print()).isEqualTo("(:A :B :DEFAULT)");
+	}
+
+	@Test
+	void defclassMultipleInheritanceAncestrySatisfiesTypep() {
+		assertThat(evalMulti("""
+				(defclass ty-a () ())
+				(defclass ty-b () ())
+				(defclass ty-ab (ty-a ty-b) ())
+				(let ((x (make-instance 'ty-ab)))
+				  (list (typep x 'ty-a) (typep x 'ty-b) (typep x 'ty-ab)))
+				""").print()).isEqualTo("(T T T)");
+	}
+
+	@Test
+	void defclassCircularSuperclassesSignalInconsistentPrecedence() {
+		// (c (a b)) and (d (b a)) are fine apart, but a class inheriting both has
+		// no consistent precedence order for a and b.
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass cy-a () ())
+				(defclass cy-b () ())
+				(defclass cy-c (cy-a cy-b) ())
+				(defclass cy-d (cy-b cy-a) ())
+				(defclass cy-e (cy-c cy-d) ())
+				""")).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("class precedence");
 	}
 
 	@Test

@@ -45,15 +45,23 @@
                         :readers (%obj-ref dsd 4))))
 
 (defmethod closer-mop:finalize-inheritance (class)
-  ;; Effective slots in static-layout order: the superclass's effective slots
-  ;; first (recomputed through the protocol when an own direct slot shadows
-  ;; one, reused as-is otherwise -- a lite divergence: the direct-definition
-  ;; list handed to compute-effective-slot-definition is the shadowing
-  ;; definition alone), then the own slots that introduce new names.
-  (let* ((super (car (%obj-ref class 1)))
+  ;; Effective slots in static-layout order: the superclasses' effective slots
+  ;; first -- each superclass in local precedence order, the first occurrence
+  ;; of a name keeping its place, like the static layout merge -- (recomputed
+  ;; through the protocol when an own direct slot shadows one, reused as-is
+  ;; otherwise -- a lite divergence: the direct-definition list handed to
+  ;; compute-effective-slot-definition is the shadowing definition alone),
+  ;; then the own slots that introduce new names.
+  (let* ((supers (%obj-ref class 1))
          (direct-slots (%obj-ref class 2))
-         (inherited (if super (%obj-ref super 3) nil))
+         (inherited nil)
          (effective nil))
+    (dolist (super supers)
+      (dolist (eslot (%obj-ref super 3))
+        (if (%mop-find-slot-definition (%obj-ref eslot 0) inherited)
+            nil
+            (setq inherited (cons eslot inherited)))))
+    (setq inherited (reverse inherited))
     (dolist (eslot inherited)
       (let ((own (%mop-find-slot-definition (%obj-ref eslot 0) direct-slots)))
         (setq effective

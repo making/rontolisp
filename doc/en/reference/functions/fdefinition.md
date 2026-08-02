@@ -9,3 +9,5 @@ A quoted symbol literal (`(fdefinition 'car)`) resolves at compile time in the c
 ```lisp
 (funcall (fdefinition 'car) '(1 2 3)) ; => 1
 ```
+
+`fdefinition` is the same `setf` place as [`symbol-function`](symbol-function.md): `(setf (fdefinition 'name) fn)` installs `fn` as the symbol's global function definition.
