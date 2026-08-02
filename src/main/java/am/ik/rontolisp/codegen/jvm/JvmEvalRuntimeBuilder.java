@@ -974,11 +974,26 @@ final class JvmEvalRuntimeBuilder {
 	private static final int LOOKUP_SEGMENT_BUDGET = 24_000;
 
 	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass) {
-		List<Map.Entry<String, JvmLispCompiler.FunctionInfo>> entries = this.k.functions()
+		List<Map.Entry<String, JvmLispCompiler.FunctionInfo>> entries = new ArrayList<>(this.k.functions()
 			.entrySet()
 			.stream()
 			.filter(e -> e.getValue().paramCount() <= MAX_CALLABLE_ARITY)
-			.toList();
+			.toList());
+		// Alias rows for INTERNAL names (todo-229): a runtime-interned symbol carries
+		// the single-colon external spelling (the 2-arg intern/find-symbol lowerings
+		// build it -- exportedness is registry knowledge the run time does not have),
+		// so an unexported PKG::NAME defun also answers to PKG:NAME. Collision-free:
+		// one package cannot house two distinct symbols with one member name.
+		// Appended after the base rows so a genuine key always wins.
+		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> e : List.copyOf(entries)) {
+			int q = e.getKey().indexOf("::");
+			if (q > 0) {
+				String alias = e.getKey().substring(0, q) + e.getKey().substring(q + 1);
+				if (!this.k.functions().containsKey(alias)) {
+					entries.add(Map.entry(alias, e.getValue()));
+				}
+			}
+		}
 		List<List<Integer>> segments = new ArrayList<>();
 		int index = 0;
 		while (true) {
@@ -1118,8 +1133,10 @@ final class JvmEvalRuntimeBuilder {
 		a.astore(FN);
 		a.branch(Opcode.GOTO, resolved);
 		a.bind(desMiss);
-		a.aconstNull();
-		a.areturn();
+		// A symbol that resolves in neither _fenv nor the registry is an undefined
+		// function: fail LOUDLY like the funcall dispatcher (returning nil here
+		// silently swallowed (apply (intern "NOSUCH") ...) -- todo-229).
+		emitUndefinedFunctionThrow(a, FN);
 		a.bind(resolved);
 		a.bind(notSym);
 
@@ -1233,6 +1250,33 @@ final class JvmEvalRuntimeBuilder {
 		a.aconstNull();
 		a.areturn();
 		return a.finish();
+	}
+
+	/**
+	 * Emits {@code throw new RuntimeException("The function " + name + " is
+	 * undefined")}, {@code name} being the String symbol in {@code nameSlot} -- the same
+	 * text (and catchability) as the funcall dispatchers' miss arm
+	 * ({@link JvmRuntimeBuilder}).
+	 */
+	private void emitUndefinedFunctionThrow(Asm a, int nameSlot) {
+		ConstantPool cp = this.k.cp();
+		ConstantPool.ClassConstant runtimeEx = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
+		MethodrefConstant exCtor = cp.addMethodref(runtimeEx,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		MethodrefConstant concat = cp.addMethodref(this.k.stringClass(),
+				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		a.op(Opcode.NEW);
+		a.u2(runtimeEx.index());
+		a.dup();
+		ldcStr(a, "The function ");
+		a.aload(nameSlot);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(concat);
+		ldcStr(a, " is undefined");
+		a.invokevirtual(concat);
+		a.op(Opcode.INVOKESPECIAL);
+		a.u2(exCtor.index());
+		a.op(Opcode.ATHROW);
 	}
 
 	// === _store(place, value, env) -> value ===

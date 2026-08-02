@@ -6914,6 +6914,27 @@ public final class LispMacroExpander {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
+		if (LispNames.SYMBOL_CALL.equals(qn.member()) && parts.size() >= 3) {
+			// REAL since todo-229 (retiring the "no runtime name table" divergence
+			// recorded in .kb/asdf.md): late-bind the name through the runtime 2-arg
+			// intern and the _lookup registry. The two fixed temps keep the
+			// package-before-name evaluation order (.kb/argument-evaluation-order.md);
+			// they are un-capturable in practice (no real program names a variable
+			// %UIOP-SC-*). An absent package signals through the intern lowering's
+			// nil-designator arm; an absent name signals undefined-function at the
+			// call, both later than the interpreter's own probes but just as loud.
+			LispSymbol pkgVar = new LispSymbol(UIOP_SYMBOL_CALL_PKG_VAR);
+			LispSymbol nameVar = new LispSymbol(UIOP_SYMBOL_CALL_NAME_VAR);
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.FUNCALL));
+			call.add(listToCons(List.of(new LispSymbol(LispNames.INTERN),
+					listToCons(List.of(new LispSymbol(LispNames.STRING), nameVar)),
+					listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), pkgVar)))));
+			call.addAll(parts.subList(3, parts.size()));
+			LispVal bindings = listToCons(
+					List.of(listToCons(List.of(pkgVar, parts.get(1))), listToCons(List.of(nameVar, parts.get(2)))));
+			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, listToCons(call)));
+		}
 		if (LispNames.GET_PATHNAME_DEFAULTS.equals(qn.member()) && parts.size() == 1) {
 			// Not a stub: the one uiop pathname accessor with a real cross-backend
 			// answer. See LispNames.GET_PATHNAME_DEFAULTS for why it is "". Only the
@@ -7086,6 +7107,11 @@ public final class LispMacroExpander {
 
 	private static final String FIND_SYMBOL_NAME_VAR = "%FIND-SYMBOL-NAME";
 
+	/** The temporaries the {@code uiop:symbol-call} lowering binds its arguments to. */
+	private static final String UIOP_SYMBOL_CALL_PKG_VAR = "%UIOP-SC-PKG";
+
+	private static final String UIOP_SYMBOL_CALL_NAME_VAR = "%UIOP-SC-NAME";
+
 	/**
 	 * The runtime form of {@code (find-symbol NAME PKG)} for a COMPUTED package
 	 * designator: bind both arguments (each evaluated once), answer nil for a nil
@@ -7098,7 +7124,41 @@ public final class LispMacroExpander {
 	 */
 	private static LispVal computedPackageFindSymbol(LispVal name, LispVal packageForm) {
 		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
-		LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
+		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN),
+				computedQualifiedSpelling(pkgVar, new LispSymbol(FIND_SYMBOL_NAME_VAR))));
+		LispVal guarded = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)), LispNil.INSTANCE, interned));
+		return bindFindSymbolTemps(name, packageForm, guarded);
+	}
+
+	/**
+	 * The runtime form of {@code (intern NAME PKG)} for a COMPUTED package designator
+	 * (todo-229; clack's handler protocol passes the {@code find-handler} package value
+	 * through {@code (apply (intern (string '#:run) handler-package) ...)}): the same
+	 * qualified-spelling build as {@link #computedPackageFindSymbol}, except that a nil
+	 * designator SIGNALS -- intern's contract has no "package does not exist -> nil"
+	 * escape ({@code PackageResolver.internSpellingIn} throws on the interpreter).
+	 */
+	private static LispVal computedPackageIntern(LispVal name, LispVal packageForm) {
+		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
+		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN),
+				computedQualifiedSpelling(pkgVar, new LispSymbol(FIND_SYMBOL_NAME_VAR))));
+		LispVal guarded = listToCons(
+				List.of(new LispSymbol(LispNames.IF), listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)),
+						listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("No such package: NIL"))),
+						interned));
+		return bindFindSymbolTemps(name, packageForm, guarded);
+	}
+
+	/**
+	 * The {@code cond} building the canonical qualified spelling of {@code nameVar} in
+	 * the package held by {@code pkgVar}, shared by the computed-package
+	 * {@code find-symbol} and {@code intern} lowerings: {@code keyword} members are
+	 * spelled {@code :NAME}, {@code cl}/{@code cl-user} members bare, anything else
+	 * {@code PKG:NAME} (the single-colon external spelling -- right for a library's
+	 * exported API; internal names resolve through the function registry's alias rows).
+	 */
+	private static LispVal computedQualifiedSpelling(LispSymbol pkgVar, LispSymbol nameVar) {
 		LispVal pkgString = listToCons(List.of(new LispSymbol(LispNames.STRING), pkgVar));
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(new LispSymbol(LispNames.COND));
@@ -7112,12 +7172,58 @@ public final class LispMacroExpander {
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.CONCATENATE),
 				quoteOf("STRING"), pkgString, new LispString(":"), nameVar)))));
-		LispVal interned = listToCons(List.of(new LispSymbol(LispNames.INTERN), listToCons(clauses)));
-		LispVal guarded = listToCons(List.of(new LispSymbol(LispNames.IF),
-				listToCons(List.of(new LispSymbol(LispNames.NULL), pkgVar)), LispNil.INSTANCE, interned));
+		return listToCons(clauses);
+	}
+
+	/** Binds the shared fixed temporaries around {@code body} (see the field docs). */
+	private static LispVal bindFindSymbolTemps(LispVal name, LispVal packageForm, LispVal body) {
+		LispSymbol pkgVar = new LispSymbol(FIND_SYMBOL_PKG_VAR);
+		LispSymbol nameVar = new LispSymbol(FIND_SYMBOL_NAME_VAR);
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(pkgVar, packageForm)), listToCons(List.of(nameVar, name))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, guarded));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, body));
+	}
+
+	/**
+	 * The compile-path lowering of a two-argument {@code (intern NAME PKG)} (todo-229):
+	 * the same canonical-spelling build as {@link #expandFindSymbolInPackage} -- a symbol
+	 * IS its canonical spelling on the compiled backends, so building the spelling IS the
+	 * intern -- with intern's two contract differences: the {@code keyword} designator
+	 * keeps the existing (byte-identical) keyword lowering, and a package that does not
+	 * exist SIGNALS {@code No such package: X} instead of folding to nil (interpreter
+	 * parity; the signal is a call-time stub, so a library merely CONTAINING the form
+	 * still compiles -- lack/builder.lisp's old-Clack branch interns into
+	 * {@code :clack.middleware}, a package that never exists here).
+	 * @param cons the intern call (must be the three-part shape)
+	 * @param packageTable the backend's baked package table
+	 * ({@code PackageResolver.runtimePackageTable()})
+	 * @return the lowered expression
+	 */
+	public static LispVal expandInternInPackage(LispCons cons, java.util.Map<String, String> packageTable) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("intern with a package expects (intern name package): " + cons.print());
+		}
+		LispVal name = parts.get(1);
+		if (isKeywordPackageDesignator(parts.get(2))) {
+			return internKeywordForm(name);
+		}
+		String pkg = literalPackageDesignator(parts.get(2));
+		if (pkg == null) {
+			return computedPackageIntern(name, parts.get(2));
+		}
+		if (!packageTable.isEmpty() && !packageTable.containsKey(pkg)
+				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
+			// No such package: intern SIGNALS where find-symbol answers nil. (An empty
+			// table means the caller has none -- treat the package as known.)
+			return listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString("No such package: " + pkg)));
+		}
+		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
+			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
+		}
+		LispVal qualified = listToCons(
+				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(pkg + ":"), name));
+		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
 	}
 
 	/**
@@ -7353,22 +7459,27 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The compiled-backend stub for {@code (symbol-function s)} on a symbol that is not a
-	 * compile-time literal: the argument still evaluates (for its effects), then the form
-	 * signals. The compiled backends have no runtime symbol-to-function table, so only a
-	 * literal name can be resolved at compile time.
+	 * The compiled-backend lowering of {@code (symbol-function s)} on a symbol that is
+	 * not a compile-time literal: the IDENTITY (todo-229; it used to be a call-time
+	 * signal, whose "no runtime symbol-to-function table" reason died with the
+	 * {@code _lookup} registry). On the compiled backends a symbol IS a function
+	 * designator wherever a function value is consumed -- {@code funcall}/{@code apply}
+	 * and the dispatchers resolve it through the registry late, exactly like the
+	 * interpreter's live lookup -- so the symbol itself is the most faithful value (the
+	 * jzon {@code :key-fn} shape, {@code (funcall (symbol-function sym) str)}). Two
+	 * deviations from the interpreter, both documented in
+	 * {@code .kb/symbol-runtime-api.md}: {@code functionp} of the result answers nil, and
+	 * an undefined name signals at the CALL, not here.
 	 * @param cons the symbol-function expression
 	 * @return the expanded expression
 	 */
-	public static LispVal expandRuntimeSymbolFunctionError(LispCons cons) {
+	public static LispVal expandRuntimeSymbolFunction(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(
 					LispNames.SYMBOL_FUNCTION + " expects exactly one argument: " + cons.print());
 		}
-		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(LispNames.SYMBOL_FUNCTION
-				+ ": a runtime (non-literal) function name is not supported in compiled code")));
-		return listToCons(List.of(new LispSymbol(LispNames.PROGN), parts.get(1), signal));
+		return parts.get(1);
 	}
 
 	/**
@@ -17096,15 +17207,6 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The call-time stub the compiled backends lower a general 2-arg
-	 * {@code (intern name package)} to: an unconditional {@code error}. Interning into a
-	 * designated package needs the resolver's package state, which only the interpreter
-	 * carries at run time; the stub keeps a library defun merely CONTAINING the form
-	 * compilable (the jzon stub-lowering precedent), and signals only if it is actually
-	 * called.
-	 * @return the signaling expression
-	 */
-	/**
 	 * Normalizes {@code (close stream :abort expr)} to plain {@code (close stream)}:
 	 * every rontolisp close is effectively an aborting close (no buffered data survives
 	 * it), so the option adds nothing. The abort expression is dropped unevaluated (call
@@ -17118,17 +17220,6 @@ public final class LispMacroExpander {
 			return listToCons(List.of(parts.get(0), parts.get(1)));
 		}
 		return null;
-	}
-
-	/**
-	 * The compiled-backend stub for the two-argument {@code (intern name package)} with a
-	 * RUNTIME package: it signals. The compiled backends resolve package spellings at
-	 * compile time, so only the interpreter can honor a package computed at run time.
-	 * @return the expression that signals the unsupported-use error
-	 */
-	public static LispVal internPackageArgumentStub() {
-		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString("intern with a runtime package argument is not supported on compiled backends")));
 	}
 
 	/**
@@ -17150,7 +17241,7 @@ public final class LispMacroExpander {
 	 * The call-time stub the compiled backends lower {@code handler-bind} to: an
 	 * unconditional {@code error}. Its handlers would have to run at the signal point
 	 * without unwinding, which no backend's condition machinery models; the stub keeps a
-	 * library defun merely CONTAINING the form compilable (the 2-arg {@code intern}
+	 * library defun merely CONTAINING the form compilable (the jzon stub-lowering
 	 * precedent) and signals only if it is actually called. The interpreter needs no
 	 * stub: the name resolves to no function, so a call errors on its own.
 	 * @return the signaling expression
@@ -20100,6 +20191,13 @@ public final class LispMacroExpander {
 				if (parts.size() >= 2 && !isStaticFunctionDesignator(parts.get(1))) {
 					return true;
 				}
+			}
+			// uiop:symbol-call lowers to (funcall (intern ...) ...) INSIDE the
+			// per-expression compilers, after this scan ran -- so the pre-lowering
+			// spelling must count as a runtime-designator use itself (todo-229).
+			if (LispNames.SYMBOL_CALL.equals(member) && qn != null && LispNames.UIOP_PKG.equals(qn.pkg())
+					&& cons.isProperList() && cons.toList().size() >= 3) {
+				return true;
 			}
 		}
 		return containsRuntimeFunctionDesignator(cons.car()) || containsRuntimeFunctionDesignator(cons.cdr());

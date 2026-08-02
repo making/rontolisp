@@ -49,18 +49,9 @@ final class WasmSymbolApiCompiler {
 	static void compileIntern(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> full = cons.toList();
 		if (full.size() == 3) {
-			// (intern name :keyword) -> (intern (concatenate 'string ":" name)): keeps
-			// the
-			// keyword lowering backend-neutral. Any other package argument is
-			// unsupported.
-			if (LispMacroExpander.isKeywordPackageDesignator(full.get(2))) {
-				WasmExprCompiler.compileExpr(LispMacroExpander.internKeywordForm(full.get(1)), ctx);
-				return;
-			}
-			// A runtime package argument needs the resolver's package state, which only
-			// the interpreter has -- lower to a call-time signal (the jzon stub-lowering
-			// precedent) so a library defun merely CONTAINING the form still compiles.
-			WasmExprCompiler.compileExpr(LispMacroExpander.internPackageArgumentStub(), ctx);
+			// (intern name pkg): the canonical-spelling lowering shared with the 2-arg
+			// find-symbol (todo-229; an unknown package is a call-time signal).
+			WasmExprCompiler.compileExpr(LispMacroExpander.expandInternInPackage(cons, ctx.packageTable), ctx);
 			return;
 		}
 		compileUnaryCall(cons, LispNames.INTERN, WasmLispCompiler.FUNC_INTERN_SYM, ctx, true);

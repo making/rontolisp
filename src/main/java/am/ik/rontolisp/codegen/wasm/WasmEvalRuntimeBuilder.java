@@ -1813,8 +1813,10 @@ final class WasmEvalRuntimeBuilder {
 		structNew(w, WasmLispCompiler.TYPE_CLOSURE);
 		setLocal(w, FN);
 		w.write(Instruction.ELSE);
-		emitNull(w);
-		w.write(Instruction.RETURN);
+		// A symbol that resolves in neither $fenv nor the registry is an undefined
+		// function: fail LOUDLY like the funcall dispatchers' miss arm (returning
+		// nil here silently swallowed (apply (intern "NOSUCH") ...) -- todo-229).
+		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);

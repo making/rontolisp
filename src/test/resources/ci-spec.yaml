@@ -4665,6 +4665,43 @@ cases:
       RPS-NEVER-DEFINED
       NIL
       NIL
+  - name: runtime-intern-funcall
+    source: |
+      ;; the clack handler-protocol shapes (todo-229): funcall/apply of a
+      ;; runtime-interned symbol, 2-arg intern into a literal / computed
+      ;; package, symbol-value/boundp of an interned special, builtins
+      ;; through runtime designators
+      (defpackage :rif-pkg (:use :cl) (:export :rif-run :*rif-mw*))
+      (in-package :rif-pkg)
+      (defun rif-run (x) (concatenate 'string "run:" x))
+      (defun rif-inner (x) (+ x 2))
+      (defparameter *rif-mw* "the-mw")
+      (in-package :cl-user)
+      (print (eq (intern "RIF-RUN" :rif-pkg) 'rif-pkg:rif-run))
+      (print (funcall (intern "RIF-RUN" :rif-pkg) "a"))
+      (print (funcall (intern "RIF-INNER" :rif-pkg) 40))
+      (let ((pkg (find-package :rif-pkg)))
+        (print (apply (intern (string :rif-run) pkg) (list "b")))
+        (print (symbol-value (intern (concatenate 'string "*RIF" "-MW*") pkg)))
+        (print (boundp (intern "*RIF-MW*" pkg))))
+      (print (intern "RIF-K" (find-package :keyword)))
+      (print (funcall (intern "CAR") (list 9 8)))
+      (print (sort (list 3 1 2) (intern "<")))
+      (setq rif-s (intern "RIF-INNER" :rif-pkg))
+      (print (funcall (symbol-function rif-s) 5))
+      (print (uiop:symbol-call :rif-pkg :rif-run "sc"))
+    expected: |
+      T
+      "run:a"
+      42
+      "run:b"
+      "the-mw"
+      T
+      :RIF-K
+      9
+      (1 2 3)
+      7
+      "run:sc"
   - name: split-sequence-residue-features
     source: |
       (defun res-two () (values 40 40))

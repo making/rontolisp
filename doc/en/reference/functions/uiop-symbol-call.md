@@ -19,7 +19,8 @@ than a `nil` that fails one frame later.
 
 - **Interpreter**: full support (the lookup runs against the live package and
   function tables).
-- **JVM** and **WASM**: the call compiles, but signals when it is *executed*: a
-  compiled program carries no run-time name-to-function table. A library whose
-  cold branch calls it therefore still builds -- which is the shape the loadable
-  libraries have.
+- **JVM** and **WASM**: full support -- the call is late-bound through the
+  compiled name registry, like `funcall` of a runtime-interned symbol. An
+  absent package still signals; an absent *name* signals at the call (the
+  undefined-function error) rather than at the lookup, slightly later than the
+  interpreter's own probe but just as loud.

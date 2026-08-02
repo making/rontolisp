@@ -56,9 +56,10 @@ final class JvmFunctionFormCompiler {
 			compileNamed(sym.name(), ctx, className);
 			return;
 		}
-		// A non-literal designator becomes a cold-path runtime signal (no runtime
-		// name-to-function table without --dynamic).
-		JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeSymbolFunctionError(cons), ctx, className);
+		// A non-literal designator lowers to the symbol itself (todo-229): funcall /
+		// apply / the dispatchers resolve a symbol late through the _lookup registry,
+		// so the designator IS the function value here.
+		JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeSymbolFunction(cons), ctx, className);
 	}
 
 	static void compileNamed(String name, JvmLispCompiler.Ctx ctx, String className) {

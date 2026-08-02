@@ -2,7 +2,7 @@
 
 `(intern string)`
 
-Returns the symbol named by `string` (no case folding). rontolisp symbols compare by name — there is no separate intern table — so the result is `eq` to any symbol with the same name, including quoted literals. On the interpreter the name is interned into the **current package** (Common Lisp's `*package*` semantics): an accessible symbol keeps its home spelling, and an unknown name becomes a symbol of the package selected by `in-package` — which is what lets a macro-time `(intern (concatenate ...))` name the same function as a literal `defun` in that file. `(intern name :keyword)` builds a keyword. Deviations from Common Lisp: any other package argument signals an error, there is no second `status` value, and on the compiled backends a runtime `intern` call is package-blind (the name is used exactly as given).
+Returns the symbol named by `string` (no case folding). rontolisp symbols compare by name — there is no separate intern table — so the result is `eq` to any symbol with the same name, including quoted literals. On the interpreter the name is interned into the **current package** (Common Lisp's `*package*` semantics): an accessible symbol keeps its home spelling, and an unknown name becomes a symbol of the package selected by `in-package` — which is what lets a macro-time `(intern (concatenate ...))` name the same function as a literal `defun` in that file. `(intern name :keyword)` builds a keyword, and `(intern name package)` accepts any package designator — a keyword, a string, or a package value held in a variable; a package that does not exist signals an error. Deviations from Common Lisp: there is no second `status` value, and on the compiled backends a package-qualified `intern` always yields the single-colon external spelling, so an unexported symbol interned this way is not `eq` to its double-colon literal (calling it as a function still works).
 
 ```lisp
 (intern "hello") ; => hello
@@ -15,4 +15,12 @@ Returns the symbol named by `string` (no case folding). rontolisp symbols compar
 ```lisp
 (defvar *level* 7)
 (symbol-value (intern "*LEVEL*")) ; => 7
+```
+
+```lisp
+(defpackage :evt (:use :cl) (:export :fire))
+(in-package :evt)
+(defun fire (x) (list :fired x))
+(in-package :cl-user)
+(funcall (intern "FIRE" :evt) 7) ; => (:FIRED 7)
 ```

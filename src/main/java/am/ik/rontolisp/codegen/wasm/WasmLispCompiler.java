@@ -1810,7 +1810,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The intern built-in canonicalizes through the reader runtime's _intern (so a
 		// runtime-interned symbol's offset matches literals in env lookups); it forces
 		// the real _intern body without pulling in the rest of the reader.
-		boolean usesIntern = usesRead || programUsesSymbol(program, LispNames.INTERN);
+		// uiop:symbol-call lowers to (funcall (intern ...) ...) inside the expression
+		// compiler, after this scan -- its pre-lowering spelling counts (todo-229).
+		boolean usesIntern = usesRead || programUsesSymbol(program, LispNames.INTERN)
+				|| programUsesSymbol(program, LispNames.UIOP_SYMBOL_CALL);
 
 		// Inject built-in function wrappers (user defuns take priority)
 		Set<String> userDefinedNames = new HashSet<>();
@@ -2693,6 +2696,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// differ in bytes (the wit-import byte-identity pins).
 		if (usesEval || usesRuntimeDesignator) {
 			ByteArrayOutputStream registry = new ByteArrayOutputStream();
+			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
 				int nameOffset = stringTable.addString(defun.name).offset();
@@ -2701,9 +2705,35 @@ public final class WasmLispCompiler implements LispCompiler {
 				// arity; a variadic function is encoded as -physicalParamCount so the
 				// eval call path evaluates every argument instead of exactly arity
 				writeLittleEndian32(registry, defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+				registryCount++;
+			}
+			// Alias rows for INTERNAL names (todo-229): a runtime-interned symbol
+			// carries the single-colon external spelling (the 2-arg intern/find-symbol
+			// lowerings build it -- exportedness is registry knowledge the run time
+			// does not have), so an unexported PKG::NAME defun also answers to
+			// PKG:NAME. Collision-free (one package cannot house two distinct symbols
+			// with one member name); appended after the base rows so a genuine key
+			// always wins in the linear scan.
+			Set<String> defunNames = new HashSet<>();
+			for (DefunDecl defun : defuns) {
+				defunNames.add(defun.name);
+			}
+			for (int i = 0; i < defuns.size(); i++) {
+				DefunDecl defun = defuns.get(i);
+				int q = defun.name.indexOf("::");
+				if (q > 0) {
+					String alias = defun.name.substring(0, q) + defun.name.substring(q + 1);
+					if (!defunNames.contains(alias)) {
+						writeLittleEndian32(registry, stringTable.addString(alias).offset());
+						writeLittleEndian32(registry, i);
+						writeLittleEndian32(registry,
+								defun.variadic ? -defun.paramNames.size() : defun.paramNames.size());
+						registryCount++;
+					}
+				}
 			}
 			int registryBase = stringTable.appendBlob(registry.toByteArray());
-			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, defuns.size());
+			lookupBody = WasmEvalRuntimeBuilder.buildLookupBody(registryBase, registryCount);
 		}
 		else {
 			lookupBody = WasmEvalRuntimeBuilder.buildLookupStub();

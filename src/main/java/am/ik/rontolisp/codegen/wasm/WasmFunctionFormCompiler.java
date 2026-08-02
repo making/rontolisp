@@ -57,9 +57,10 @@ final class WasmFunctionFormCompiler {
 			compileNamed(sym.name(), ctx);
 			return;
 		}
-		// A non-literal designator becomes a cold-path runtime signal (no runtime
-		// name-to-function table without --dynamic).
-		WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeSymbolFunctionError(cons), ctx);
+		// A non-literal designator lowers to the symbol itself (todo-229): funcall /
+		// apply / the dispatchers resolve a symbol late through the _lookup registry,
+		// so the designator IS the function value here.
+		WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeSymbolFunction(cons), ctx);
 	}
 
 	static void compileNamed(String name, WasmLispCompiler.Ctx ctx) {

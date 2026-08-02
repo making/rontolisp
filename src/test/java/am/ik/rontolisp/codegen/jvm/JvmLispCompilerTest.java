@@ -1218,11 +1218,88 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void compileInternWithARuntimePackageArgumentSignalsAtCallTime() throws Exception {
-		// Interning into a designated package needs the resolver's package state, which
-		// only the interpreter carries at run time. The call compiles (so a library
-		// merely CONTAINING the form builds) and signals when it is reached.
-		assertThat(compileAndRun("(print (ignore-errors (intern \"foo\" :cl-user)))")).isEqualTo("NIL");
+	void compileAndRunInternIntoALiteralPackage() throws Exception {
+		// 2-arg intern with a literal package designator lowers to the canonical-
+		// spelling build the 2-arg find-symbol lowering already uses (todo-229): an
+		// exported name gets the single-colon external spelling (eq to the
+		// source-quoted symbol) and resolves through the function registry; an
+		// internal name resolves through the registry's single-colon alias row.
+		// cl/cl-user need no qualifier.
+		assertThat(compileAndRun("""
+				(defpackage :rt-pkg (:use :cl) (:export :ex-fn))
+				(in-package :rt-pkg)
+				(defun ex-fn (x) (+ x 1))
+				(defun in-fn (x) (+ x 2))
+				(in-package :cl-user)
+				(print (eq (intern "EX-FN" :rt-pkg) 'rt-pkg:ex-fn))
+				(print (funcall (intern "EX-FN" :rt-pkg) 1))
+				(print (funcall (intern "IN-FN" :rt-pkg) 1))
+				(print (intern "foo" :cl-user))
+				""")).isEqualTo("T\n2\n3\nfoo");
+	}
+
+	@Test
+	void compileAndRunInternIntoAComputedPackage() throws Exception {
+		// clack's handler protocol is late-bound by name against a package VALUE:
+		// (apply (intern (string :run) handler-package) ...) in handler.lisp, and
+		// find-middleware's (symbol-value (intern (format ...) package)). The
+		// computed designator is tested at run time like computedPackageFindSymbol.
+		assertThat(compileAndRun("""
+				(defpackage :rt-h (:use :cl) (:export :run :*mw*))
+				(in-package :rt-h)
+				(defun run (x) (concatenate 'string "run:" x))
+				(defparameter *mw* "the-mw")
+				(in-package :cl-user)
+				(let ((pkg (find-package :rt-h)))
+				  (print (apply (intern (string :run) pkg) (list "a")))
+				  (print (symbol-value (intern (concatenate 'string "*" "MW*") pkg)))
+				  (print (boundp (intern "*MW*" pkg))))
+				(let ((kw (find-package :keyword)))
+				  (print (intern "K2" kw)))
+				""")).isEqualTo("\"run:a\"\n\"the-mw\"\nT\n:K2");
+	}
+
+	@Test
+	void compileInternIntoAnUnknownPackageSignalsAtCallTime() {
+		// find-symbol folds an unknown literal package to nil, but intern must
+		// SIGNAL there (interpreter parity: PackageResolver.internSpellingIn).
+		assertThatThrownBy(() -> compileAndRun("(print (intern \"X\" :rt-no-such-pkg))"))
+			.hasRootCauseInstanceOf(RuntimeException.class)
+			.rootCause()
+			.hasMessageContaining("No such package: RT-NO-SUCH-PKG");
+	}
+
+	@Test
+	void compileAndRunComputedSymbolFunctionResolvesLate() throws Exception {
+		// the jzon :key-fn shape: (funcall (symbol-function sym) x) with a runtime
+		// symbol. The computed designator lowers to the symbol itself, which the
+		// dispatchers resolve through the _lookup registry (todo-229).
+		assertThat(compileAndRun("(defun sf-f (x) (* x 2)) (setq s (intern \"SF-F\"))"
+				+ "(print (funcall (symbol-function s) 21)) (print (funcall (fdefinition s) 5))"))
+			.isEqualTo("42\n10");
+	}
+
+	@Test
+	void compileAndRunUiopSymbolCall() throws Exception {
+		// REAL on the compile paths since todo-229 (used to be a call-time error, see
+		// .kb/asdf.md): lowers to (funcall (intern (string name) (find-package pkg))
+		// args...), late-bound through the registry like the interpreter's
+		// resolveFunction.
+		assertThat(compileAndRun("(defpackage :usc-pkg (:use :cl) (:export :usc-fn))"
+				+ "(in-package :usc-pkg) (defun usc-fn (a b) (+ a b)) (in-package :cl-user)"
+				+ "(print (uiop:symbol-call :usc-pkg :usc-fn 40 2))" + "(print (uiop:symbol-call :cl :list 1 2))"))
+			.isEqualTo("42\n(1 2)");
+	}
+
+	@Test
+	void compileAndRunApplyOfAnUndefinedRuntimeSymbolSignals() {
+		// _apply's symbol-designator miss used to return nil SILENTLY; it must fail
+		// loudly like the funcall dispatcher (the tree-shaker carve-out contract:
+		// a shaken-out or unknown name errors, never silent wrong output).
+		assertThatThrownBy(() -> compileAndRun("(defun rt-a (x) x) (print (apply (intern \"RT-NOPE\") (list 1)))"))
+			.hasRootCauseInstanceOf(RuntimeException.class)
+			.rootCause()
+			.hasMessageContaining("The function RT-NOPE is undefined");
 	}
 
 	@Test

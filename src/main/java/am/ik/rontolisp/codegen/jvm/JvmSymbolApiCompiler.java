@@ -62,18 +62,10 @@ final class JvmSymbolApiCompiler {
 	static void compileIntern(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> full = cons.toList();
 		if (full.size() == 3) {
-			// (intern name :keyword) -> (intern (concatenate 'string ":" name)): keeps
-			// the
-			// keyword lowering backend-neutral. Any other package argument is
-			// unsupported.
-			if (LispMacroExpander.isKeywordPackageDesignator(full.get(2))) {
-				JvmExprCompiler.compileExpr(LispMacroExpander.internKeywordForm(full.get(1)), ctx, className);
-				return;
-			}
-			// A runtime package argument needs the resolver's package state, which only
-			// the interpreter has -- lower to a call-time signal (the jzon stub-lowering
-			// precedent) so a library defun merely CONTAINING the form still compiles.
-			JvmExprCompiler.compileExpr(LispMacroExpander.internPackageArgumentStub(), ctx, className);
+			// (intern name pkg): the canonical-spelling lowering shared with the 2-arg
+			// find-symbol (todo-229; an unknown package is a call-time signal).
+			JvmExprCompiler.compileExpr(LispMacroExpander.expandInternInPackage(cons, ctx.packageTable), ctx,
+					className);
 			return;
 		}
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.INTERN);

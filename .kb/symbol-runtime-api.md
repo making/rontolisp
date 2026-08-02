@@ -62,7 +62,7 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
 `unintern`, `export` and the rest of the runtime package-mutation API remain in
 `.todo/038`.
 
-Seven CL functions (`PackageRegistry.CL_FUNCTIONS`, cl function count 210 -> 217) in all three backends. rontolisp symbols compare by name (no intern table), which shapes every deviation: `symbol-name` returns the name **without the package marker** — a keyword's leading `:` and a gensym's `#:` are stripped (`LispSymbol.displayName`, shared with `princ`/`~A`/`string`; `prin1`/`print` keep the stored spelling) — the STORED spelling verbatim, which under the uppercase-canonical model (`.kb/reader-case-upcase.md`) is upcased for every symbol read from source — user AND standard (`(symbol-name 'foo)` = `"FOO"`, `(symbol-name 'car)` = `"CAR"`, the CL answer; there is no lowercase-standard-name deviation); `intern`/`find-symbol` take the name VERBATIM (`(find-symbol "car")` = `NIL` because the standard symbol is named `"CAR"`; `(intern "TIME")` = `TIME`, `(intern "time")` = the distinct `time`). `intern` (1-arg) interns into the **current package** on the interpreter (`PackageResolver.internSpelling`: an accessible symbol keeps its canonical home spelling, an unknown name is homed verbatim into the resolver's `in-package` state — the LispEvaluator override; the Environment converter and the compiled backends stay package-blind), `(intern name :keyword)` builds a keyword, any other package argument is a hard error (as is find-symbol's); `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike CL); `find-symbol` returns the symbol only when the (verbatim) name is "known".
+Seven CL functions (`PackageRegistry.CL_FUNCTIONS`, cl function count 210 -> 217) in all three backends. rontolisp symbols compare by name (no intern table), which shapes every deviation: `symbol-name` returns the name **without the package marker** — a keyword's leading `:` and a gensym's `#:` are stripped (`LispSymbol.displayName`, shared with `princ`/`~A`/`string`; `prin1`/`print` keep the stored spelling) — the STORED spelling verbatim, which under the uppercase-canonical model (`.kb/reader-case-upcase.md`) is upcased for every symbol read from source — user AND standard (`(symbol-name 'foo)` = `"FOO"`, `(symbol-name 'car)` = `"CAR"`, the CL answer; there is no lowercase-standard-name deviation); `intern`/`find-symbol` take the name VERBATIM (`(find-symbol "car")` = `NIL` because the standard symbol is named `"CAR"`; `(intern "TIME")` = `TIME`, `(intern "time")` = the distinct `time`). `intern` (1-arg) interns into the **current package** on the interpreter (`PackageResolver.internSpelling`: an accessible symbol keeps its canonical home spelling, an unknown name is homed verbatim into the resolver's `in-package` state — the LispEvaluator override; the Environment converter and the compiled backends stay package-blind), `(intern name :keyword)` builds a keyword, and any other package argument works via the canonical-spelling lowering on the compile paths (see "Runtime-interned symbols as function designators" below; the interpreter is registry-backed via `PackageResolver.internSpellingIn`, which throws `No such package: X` for an unknown package on every backend); `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike CL); `find-symbol` returns the symbol only when the (verbatim) name is "known".
 
 **Interpreter**: the pure converters live in `Environment` (next to gensym), but `intern` is overridden in `LispEvaluator.registerEval` (it needs the evaluator's `packageResolver` for the current package -- the Environment version stays as the resolver-less fallback); `boundp`/`symbol-value`/`fboundp`/`find-symbol` live in `LispEvaluator.registerEval` because they capture `globalEnv` (variable lookups see GLOBAL bindings only — CL's dynamic-only semantics; `Environment.lookupOrNull` was added for this) and `userMacros`/`SPECIAL_OPERATORS` (fboundp is t for macros, special forms and car/cdr compositions, like CL). t/nil/keywords are self-bound in boundp/symbol-value on every backend.
 
@@ -158,3 +158,80 @@ is nil rather than a type error, matching CL.
 Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three backend
 tests, the `runtime-package-symbol-ops` ci-spec case, and the 325 count pinned in
 ci-spec + LispEvaluatorTest + JvmLispCompilerTest (x2) + WasmLispCompilerIntegrationTest.
+
+## Runtime-interned symbols as function designators (todo-229, 2026-08-02)
+
+Clack's handler protocol is late-bound by NAME — `(apply (intern #.(string '#:run)
+handler-package) ...)` in handler.lisp, `(funcall (intern (string :wrap)
+:clack.middleware) ...)` in lack's builder, `(symbol-value (intern (format nil "*~A*"
+...) package))` in find-middleware — so the compile paths carry a full
+symbol-to-function route. Three pieces, on BOTH compile backends (the interpreter
+resolves designators against the live environment and needs none of it):
+
+- **2-arg `(intern name pkg)` lowers like 2-arg `find-symbol`**
+  (`LispMacroExpander.expandInternInPackage`, called from
+  `Jvm/WasmSymbolApiCompiler.compileIntern`): the `keyword` designator keeps the
+  byte-identical keyword lowering; a literal `cl`/`cl-user` drops the qualifier; any
+  other literal known package builds `(intern (concatenate "PKG:" name))`; a computed
+  designator runs the same three-way `cond` as `computedPackageFindSymbol` (the two
+  share `computedQualifiedSpelling`). The old "runtime package argument is not
+  supported" stub is retired — its "needs the resolver's package state" reason died
+  when todo-198 built the canonical-spelling machinery. **Intern's two contract
+  differences from find-symbol**: an unknown LITERAL package is a call-time
+  `(error "No such package: X")` stub, not a nil fold (so lack/builder.lisp's dead
+  old-Clack branch interning into the never-existing `:clack.middleware` still
+  compiles), and a nil COMPUTED designator signals the same way. That interpreter
+  error (`LispPackageException`) is NOT handler-case-catchable on any backend, so it
+  is pinned per-backend, not in ci-spec.
+- **Alias rows for internal names in the `_lookup` registries**
+  (`JvmEvalRuntimeBuilder.lookupSegments`, the registry-blob loop in
+  `WasmLispCompiler`): the runtime-built spelling is always the single-colon EXTERNAL
+  one (exportedness is compile-time knowledge), so every registered `PKG::NAME` defun
+  also answers to `PKG:NAME` — appended after the base rows, genuine keys win,
+  collision-free because one package cannot house two distinct symbols with one member
+  name. Emitted only when the registry itself is (the
+  `usesRuntimeFunctionDesignator` / `usesEval` gate), so ordinary programs stay
+  byte-identical. **VARIABLES do not get the alias**: `boundp`/`symbol-value` of an
+  interned symbol probe the `_genv` mirror by the single-colon spelling, so only
+  EXPORTED specials resolve (lack's `*lack-middleware-backtrace*` is exported).
+  Re-evaluate if a library reads an unexported special through runtime intern.
+- **`_apply`'s symbol miss is LOUD**: a designator resolving in neither `_fenv` nor
+  the registry throws `The function X is undefined` (JVM,
+  `emitUndefinedFunctionThrow` — same text as the funcall dispatchers' miss arm) /
+  traps (`unreachable`, WASM). It used to return nil silently, hiding a shaken-out or
+  never-defined name behind wrong output — the tree-shaker carve-out
+  (`.kb/library-defun-pruning.md`) promises a loud failure there.
+
+Two divergences retired in the same pass because their "no runtime name table" reason
+died with the registry:
+
+- **Computed `(symbol-function x)` / `(fdefinition x)` lowers to the IDENTITY**
+  (`LispMacroExpander.expandRuntimeSymbolFunction`, was an unconditional call-time
+  signal): on the compiled backends a symbol is a function designator wherever a
+  function value is consumed, so the symbol itself is the most faithful value — the
+  jzon `:key-fn` residue `(funcall (symbol-function sym) str)` now runs. Two
+  deviations vs the interpreter's live lookup: `functionp` of the result is nil, and
+  an undefined name signals at the CALL, not at `symbol-function`. The literal-name
+  fold is untouched.
+- **`uiop:symbol-call` is REAL on the compile paths** (was interpreter-only, see the
+  history in `.kb/asdf.md`): `expandUiopStubCall` lowers it to
+  `(funcall (intern (string name) (find-package pkg)) args...)` over two fixed
+  `%UIOP-SC-*` temps that keep the package-before-name evaluation order. Because that
+  lowering happens INSIDE the per-expression compilers, AFTER the emission-gate scans
+  ran, the pre-lowering spelling itself counts in two gates: the shared
+  `containsRuntimeFunctionDesignator` (the registry/`_lookup` gate) and the WASM
+  `usesIntern` (the real `_intern` body). **Any future lowering that synthesizes
+  `intern`/`funcall`/`apply` at compile-expression time has the same obligation** —
+  check every gate the synthesized forms need, or the runtime pieces are stubs.
+
+The rest was already in place since the cl-postgres work: the registry and `_lookup`
+themselves, symbol resolution in the funcall dispatchers and `_apply`, builtin
+designators via the injected wrappers, and the WASM canonical-offset discipline
+(`_intern` routes the runtime-built spelling to the same string-table offset the
+registry row carries — alias rows add their spelling to the static table, which is
+what makes the offset compare hit).
+
+Tests: the *InternIntoALiteralPackage* / *InternIntoAComputedPackage* /
+*InternIntoAnUnknownPackage* / *ApplyOfAnUndefinedRuntimeSymbol* groups in
+JvmLispCompilerTest + WasmLispCompilerIntegrationTest, and the
+`runtime-intern-funcall` ci-spec case.
