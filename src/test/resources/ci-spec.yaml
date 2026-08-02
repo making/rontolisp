@@ -5432,6 +5432,47 @@ cases:
         (print (slot-value gsd-s 'gsd-acc)))
     expected: |
       "HELLO!"
+  - name: gray-stream-binary-round-trip-and-file-position
+    source: |
+      ; The read side of the Gray protocol (todo-235): write-byte/read-byte through
+      ; a user binary stream class, the :eof -> eof-value translation, and the
+      ; file-position protocol (the read generic + the (setf ...) writer generic).
+      (defclass gbt-sink (rontolisp:fundamental-binary-output-stream)
+        ((gbt-bytes :initform nil)))
+      (defmethod rontolisp:stream-write-byte ((gbt-s gbt-sink) gbt-byte)
+        (setf (slot-value gbt-s 'gbt-bytes) (cons gbt-byte (slot-value gbt-s 'gbt-bytes)))
+        gbt-byte)
+      (defclass gbt-source (rontolisp:fundamental-binary-input-stream)
+        ((gbt-items :initarg :gbt-items) (gbt-pos :initform 0)))
+      (defmethod rontolisp:stream-read-byte ((gbt-s gbt-source))
+        (let ((gbt-items (slot-value gbt-s 'gbt-items)) (gbt-pos (slot-value gbt-s 'gbt-pos)))
+          (if (>= gbt-pos (length gbt-items))
+              :eof
+              (progn (setf (slot-value gbt-s 'gbt-pos) (+ gbt-pos 1)) (nth gbt-pos gbt-items)))))
+      (defmethod rontolisp:stream-file-position ((gbt-s gbt-source))
+        (slot-value gbt-s 'gbt-pos))
+      (defmethod (setf rontolisp:stream-file-position) (gbt-position (gbt-s gbt-source))
+        (setf (slot-value gbt-s 'gbt-pos) gbt-position))
+      (let ((gbt-out (make-instance 'gbt-sink)))
+        (write-byte 7 gbt-out)
+        (write-byte 250 gbt-out)
+        (print (reverse (slot-value gbt-out 'gbt-bytes))))
+      (let ((gbt-in (make-instance 'gbt-source :gbt-items (list 10 20 30))))
+        (print (read-byte gbt-in))
+        (print (file-position gbt-in))
+        (file-position gbt-in 0)
+        (print (read-byte gbt-in))
+        (print (read-byte gbt-in nil :gbt-done))
+        (print (read-byte gbt-in nil :gbt-done))
+        (print (read-byte gbt-in nil :gbt-done)))
+    expected: |
+      (7 250)
+      10
+      1
+      10
+      20
+      30
+      :GBT-DONE
   - name: uiop-add-package-local-nickname
     source: |
       (defpackage #:com.example.apn.deep (:use #:cl) (:export #:apn-answer))

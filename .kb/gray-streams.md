@@ -4,42 +4,92 @@ rontolisp OWNS the Gray-stream protocol; third-party portability layers adapt
 onto it and the core knows no third-party name.
 
 **The protocol** (`src/main/resources/am/ik/rontolisp/eval/gray.lisp`, served by
-`eval/GrayStreamsLibrary`): two base classes
-(`rontolisp:fundamental-character-output-stream` / `-input-stream`) and two
-generics (`rontolisp:stream-write-char (stream character)`,
-`rontolisp:stream-write-string (stream string &optional start end)`), all
-plain CLOS-subset definitions — so the whole protocol is backend-free
-expansion output, no codegen.
+`eval/GrayStreamsLibrary`): a CL-shaped base-class hierarchy —
+`rontolisp:fundamental-stream` at the root, `-input-stream`/`-output-stream`
+below it, `-character-input/-output-stream` and `-binary-input/-output-stream`
+as leaves — plus the generics `stream-write-char`, `stream-write-string
+(stream string &optional start end)`, `stream-write-byte`, `stream-read-byte`,
+`stream-read-char`, `stream-unread-char` (protocol-only, no built-in
+dispatches), `stream-read-line`, `stream-listen`, `stream-read-sequence` /
+`stream-write-sequence` `(stream sequence start end)` (end always an integer by
+method time), `stream-file-position` and its `(setf ...)` writer generic
+(todo-232 setf methods) — all plain CLOS-subset definitions, so the whole
+protocol is backend-free expansion output, no codegen. **Read-side EOF
+convention: the read generics answer the keyword `:eof`**; the dispatch layer
+translates it into the `eof-error-p`/`eof-value` contract, signalling
+`(error 'end-of-file)` (same class + "end of file" message as the built-ins).
+`stream-read-line` answers a partial last line as that line and returns
+PRIMARY values only (no missing-newline-p — .todo/212, secondary values do not
+cross function boundaries on the compile paths). Default methods on the base
+classes: `stream-read-line` / `stream-read-sequence` / `stream-write-sequence`
+loop the element generics (shared `%gray-default-*` defuns), `stream-listen`
+answers nil, `stream-file-position` and its setf answer nil (CL's "not
+supported").
 
-**Interpreter dispatch**: `LispEvaluator` wraps the `write-string` builtin —
-when the stream argument is an INSTANCE (`%obj-p`, `.kb/instance-syntax.md`) it lazy-loads
-`gray.lisp` (`ensureGrayStreamsLoaded`) and applies
-`rontolisp:stream-write-string` with `(stream string)`. `write-char` lowers to
-`write-string` (shared `expandWriteChar`), so it dispatches too. A `defclass`
-naming a Gray base class as a superclass ALSO eager-loads `gray.lisp`
-(`referencesGrayBaseClass` in `evalDefclass`) — without that, a bare-protocol
-user class (no `trivial-gray-streams` load) died on "unknown superclass"
-while the compile path worked.
+**The dispatch helpers** (`rontolisp::%gray-*-dispatch` defuns at the bottom of
+gray.lisp) hold the ONE copy of "instance -> generic, anything else -> the
+built-in" plus the `:eof` translation, shared by both dispatch seams:
+write-string/char, write-byte, read-byte/char/line (read-line's eof-error-p
+defaults NIL — the built-in's lite convention; read-byte/char default T),
+listen, read-sequence/write-sequence (normalize a missing end to
+`(length sequence)`), file-position get/set.
+
+**Interpreter dispatch**: `LispEvaluator` wraps the built-ins — when the
+stream argument is an INSTANCE (`%obj-p`, `.kb/instance-syntax.md`) the wrap
+lazy-loads `gray.lisp` (`ensureGrayStreamsLoaded`) and applies the matching
+`%gray-*-dispatch` defun (`applyGrayDispatch`); non-instances go straight to
+the base built-in (the helpers' fallbacks re-enter the wraps, one extra hop, no
+recursion). `read-sequence`/`write-sequence` are macro expansions, not
+functions, so they are intercepted at `evalCons`
+(`evalSequenceWithGrayDispatch`): seq and stream evaluate once, an instance
+routes to the sequence dispatch helper, anything else re-enters the shared
+expansion with the two evaluated values QUOTED in place (no double
+evaluation). A `defclass` naming a Gray base class as a superclass eager-loads
+`gray.lisp` (`referencesGrayBaseClass`/`GRAY_BASE_CLASSES` — all seven class
+names) — without that, a bare-protocol user class died on "unknown
+superclass".
 
 **Compile path** (`GrayStreamsLibrary.process`, the usocket `process()`
 pattern): runs after `UserMacroExpander` in `RontoLispCli`, the playground
 frontend and `AsdfLibraryE2eSupport`. Triggered by any protocol name in the
 program (`splitQualified` member match, so `trivial-gray-streams:` spellings
-count). It (1) splices `gray.lisp` unless a load already did (guard: a
-`defclass` of `rontolisp:fundamental-character-output-stream` is present), and
-(2) rewrites every `(write-string s STREAM)` / `(write-char c STREAM)` call
-with an explicit non-literal stream (not `t`/`nil`/string literal) onto
-`rontolisp::%gray-write-string-dispatch` / `-char-dispatch` — defuns at the
-bottom of `gray.lisp` that test `(%obj-p stream)` and route instances to the
-generic, everything else back to the builtin. The rewrite walker skips quoted
-data and the dispatch defuns' own bodies (their fallback `write-string` call
-must not rewrite into itself). The compiled runtimes themselves know nothing:
-the dispatch is ordinary Lisp riding the generic dispatcher defuns.
+count; the match set is ALL-UPPERCASE — the reader upcases every symbol, and
+the pre-widening set carried two dead lowercase class names). It (1) splices
+the gray.lisp PROTOCOL forms unless a load already did (guard: a `defclass` of
+`rontolisp:fundamental-character-output-stream` is present), (2) rewrites
+every stream-taking call with an explicit non-literal stream (not
+`t`/`nil`/string literal) onto the dispatch helpers —
+`write-string`/`write-char`, `write-byte`, `read-byte`/`read-char`/`read-line`
+(absent eof args become their literal defaults), `listen`, `file-position`
+(1-arg -> get helper, 2-arg -> set helper), `read-sequence`/`write-sequence`
+(literal `:start`/`:end` keywords parsed, missing end stays nil) — and (3)
+**splices ONLY the dispatch defuns the rewrites referenced**
+(`SPLICE_ON_USE`, collected via `dispatchSymbol`; `WRITE_CHAR_DISPATCH`
+transitively pulls `WRITE_STRING_DISPATCH`). Selective splicing is
+load-bearing, not just size: `LibraryDefunPruner` does NOT cover this splice
+(nor the shim systems), and `%gray-listen-dispatch`'s fallback names the
+`listen` built-in, which Preview 1 WASM rejects at COMPILE time — an
+unconditional splice broke every Gray program on that backend. Same reason the
+shim load path (`ShimLibraries.forms`) combines `protocolForms()` (no dispatch
+defuns), and `process` adds the used ones on top. The rewrite walker skips
+quoted data and the gray.lisp defuns' own bodies (`DISPATCH_DEFUNS` — their
+fallback built-in calls must not rewrite into themselves). The compiled
+runtimes themselves know nothing: the dispatch is ordinary Lisp.
 
 **Shim** (`trivial-gray-streams.lisp` via `ShimLibraries`/`BuiltinSystems`):
-subclasses the rontolisp base classes and delegates the rontolisp generics to
-`trivial-gray-streams:stream-write-char`/`-string`, so libraries written
-against the portable API (jzon) run unchanged.
+mirrors the full hierarchy — each `trivial-gray-streams:` class subclasses its
+trivial-gray-streams parent AND its rontolisp twin, so ONE delegating method
+per generic, specialized on the input/output/root class, covers every adapter
+subclass — plus `trivial-gray-stream-mixin` (empty; upstream's own class) and
+the portable generics (`stream-read/write-sequence` spelled `(stream sequence
+start end &key)` like upstream). Delegations route rontolisp's protocol into
+the portable generics; portable-side DEFAULT methods reuse the
+`%gray-default-*` loops (without them the delegations would shadow the
+rontolisp base-class defaults for a class defining only element generics);
+`stream-file-position` delegates in both directions (reader and setf writer).
+Package seeding: `PackageRegistry` (both the rontolisp externals and the
+trivial-gray-streams package symbols), name constants in `LispNames`
+(`GRAY_*`).
 
 **format rewrite (todo-146, jzon's `(format %stream "~D" value)`)**: the
 pre-pass also rewrites `(format STREAM ctrl args...)` with a possibly-instance
@@ -65,19 +115,30 @@ walk has no position awareness: (1) a lambda-list keyword is never a stream arg
 as a call (`rewriteTail` — `(error 'ty :format-control format
 :format-arguments args)` has a tail whose car is `format`).
 
-**Limits**: output side only (`stream-write-char`/`-string`); the input
-generics of full Gray (stream-read-char, ...) do not exist. Both the interpreter
-and the compiled dispatch key on "is this an instance", so they agree; a plain
-cons handed as a stream falls through to the built-in either way. A bounded
+**Limits**: `stream-unread-char` has no dispatching built-in and `peek-char`
+does not dispatch. `listen` on a Gray instance works interpreter/JVM; Preview 1
+WASM rejects ANY `listen` at compile time (pre-existing platform limit, Gray
+or not — the rewrite keeps that error, it neither adds nor removes it). Both
+seams key on "is this an instance", so they agree; a plain cons handed as a
+stream falls through to the built-in either way. A bounded
 `(write-string s instance :start ...)` is NOT rewritten (interpreter ignores
-the bounds for instances; both are edge behavior). A runtime-nil `format`
-destination used to write like a designator here instead of returning the string;
-that divergence is RETIRED (see the run-time test in the rewrite above) — the
-reason it was tolerable, "jzon never does it", stopped holding the moment a
-program combined a Gray stream with an ordinary optional-stream renderer.
+the bounds for instances; both are edge behavior). First-class
+`(funcall #'read-byte instance)` does not dispatch on the compile paths (no
+call site to rewrite). `stream-read-sequence`/`-write-sequence` methods are
+honored on BOTH seams (the rewrite and `evalSequenceWithGrayDispatch` route to
+the same sequence dispatch helper). A runtime-nil `format` destination used to
+write like a designator instead of returning the string; that divergence is
+RETIRED (see the run-time test in the rewrite above).
 
 Pinning tests: `LispEvaluatorTest#grayStreamInstanceReceivesWriteCharAndWriteString`
 (shim), `#grayBaseClassSuperclassLoadsGrayStreamsEagerly` (bare protocol),
-`JvmLispCompilerTest#compileAndRunGrayStreamInstanceDispatch`,
-`WasmLispCompilerIntegrationTest#grayStreamInstanceDispatch`, ci-spec
-`gray-stream-instance-dispatch`.
+`#grayBinaryStreamReadWriteBytesAndFilePosition`,
+`#grayInputStreamReadCharReadLineAndSequenceDefaults`,
+`#grayShimBinaryInputStreamWithMixinAndSetfFilePosition` (the circular-streams
+class shape), `JvmLispCompilerTest#compileAndRunGrayStreamInstanceDispatch`,
+`#compileAndRunGrayBinaryStreamDispatchAndFilePosition`,
+`#compileAndRunGrayInputStreamReadLineAndSequenceDefaults`,
+`WasmLispCompilerIntegrationTest#grayStreamInstanceDispatch`,
+`#grayBinaryStreamDispatchAndFilePosition`, ci-spec
+`gray-stream-instance-dispatch` and
+`gray-stream-binary-round-trip-and-file-position`.

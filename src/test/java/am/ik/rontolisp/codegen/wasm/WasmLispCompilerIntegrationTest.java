@@ -6107,6 +6107,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayBinaryStreamDispatchAndFilePosition() throws Exception {
+		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
+		// file-position call sites with a non-literal stream rewrite onto the
+		// %gray-*-dispatch helpers; only the helpers a rewrite produced are
+		// spliced (an unconditional %gray-listen-dispatch would not compile here).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
+				(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
+				  ((bytes :initform nil)))
+				(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
+				  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
+				  byte)
+				(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
+				  ((items :initarg :items) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-byte ((s gbs-source))
+				  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length items))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+				(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
+				(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
+				  (setf (slot-value s 'pos) position))
+				(let ((out (make-instance 'gbs-sink)))
+				  (write-byte 7 out)
+				  (write-byte 250 out)
+				  (print (reverse (slot-value out 'bytes))))
+				(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
+				  (print (read-byte in))
+				  (print (file-position in))
+				  (file-position in 0)
+				  (print (read-byte in))
+				  (print (read-byte in nil :done))
+				  (print (read-byte in nil :done))
+				  (print (read-byte in nil :done)))
+				""")))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
+	}
+
+	@Test
 	void readTimeEvalMarkers() throws Exception {
 		// The CLI pipeline: marker read -> UserMacroExpander resolves each marker
 		// against the macro-time evaluator -> the compilers see plain forms.

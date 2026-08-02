@@ -5536,6 +5536,68 @@ public final class LispNames {
 	 */
 	public static final String GRAY_STREAM_WRITE_STRING = "STREAM-WRITE-STRING";
 
+	/** {@code rontolisp:fundamental-stream} -- the root Gray base class. */
+	public static final String GRAY_FUNDAMENTAL_STREAM = "FUNDAMENTAL-STREAM";
+
+	/** {@code rontolisp:fundamental-input-stream}. */
+	public static final String GRAY_INPUT_STREAM = "FUNDAMENTAL-INPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-output-stream}. */
+	public static final String GRAY_OUTPUT_STREAM = "FUNDAMENTAL-OUTPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-binary-input-stream}. */
+	public static final String GRAY_BINARY_INPUT_STREAM = "FUNDAMENTAL-BINARY-INPUT-STREAM";
+
+	/** {@code rontolisp:fundamental-binary-output-stream}. */
+	public static final String GRAY_BINARY_OUTPUT_STREAM = "FUNDAMENTAL-BINARY-OUTPUT-STREAM";
+
+	/**
+	 * {@code trivial-gray-streams:trivial-gray-stream-mixin} -- the portable mixin class
+	 * of the trivial-gray-streams shim (upstream's own class name; the only Gray class
+	 * name that lives in the shim package alone).
+	 */
+	public static final String GRAY_STREAM_MIXIN = "TRIVIAL-GRAY-STREAM-MIXIN";
+
+	/**
+	 * {@code rontolisp:stream-read-byte} -- the Gray read generic the {@code read-byte}
+	 * built-in dispatches to for CLOS-instance streams. Answers a byte or {@code :eof}
+	 * (the read-side EOF convention, shared by {@code stream-read-char} and
+	 * {@code stream-read-line}).
+	 */
+	public static final String GRAY_STREAM_READ_BYTE = "STREAM-READ-BYTE";
+
+	/** {@code rontolisp:stream-read-char} -- see {@link #GRAY_STREAM_READ_BYTE}. */
+	public static final String GRAY_STREAM_READ_CHAR = "STREAM-READ-CHAR";
+
+	/** {@code rontolisp:stream-unread-char} -- protocol-only (no built-in dispatches). */
+	public static final String GRAY_STREAM_UNREAD_CHAR = "STREAM-UNREAD-CHAR";
+
+	/** {@code rontolisp:stream-read-line} -- see {@link #GRAY_STREAM_READ_BYTE}. */
+	public static final String GRAY_STREAM_READ_LINE = "STREAM-READ-LINE";
+
+	/** {@code rontolisp:stream-listen} -- the {@code listen} built-in's Gray generic. */
+	public static final String GRAY_STREAM_LISTEN = "STREAM-LISTEN";
+
+	/** {@code rontolisp:stream-write-byte} -- the {@code write-byte} Gray generic. */
+	public static final String GRAY_STREAM_WRITE_BYTE = "STREAM-WRITE-BYTE";
+
+	/**
+	 * {@code rontolisp:stream-read-sequence (stream sequence start end)} -- the
+	 * {@code read-sequence} Gray generic; end is always an integer (the dispatch
+	 * normalizes a missing {@code :end} to the sequence length).
+	 */
+	public static final String GRAY_STREAM_READ_SEQUENCE = "STREAM-READ-SEQUENCE";
+
+	/** {@code rontolisp:stream-write-sequence} -- see the read twin. */
+	public static final String GRAY_STREAM_WRITE_SEQUENCE = "STREAM-WRITE-SEQUENCE";
+
+	/**
+	 * {@code rontolisp:stream-file-position} -- the {@code file-position} Gray generic;
+	 * the two-argument {@code (file-position s pos)} goes through the
+	 * {@code (setf rontolisp:stream-file-position)} writer generic.
+	 */
+	public static final String GRAY_STREAM_FILE_POSITION = "STREAM-FILE-POSITION";
+
 	/**
 	 * The {@code *standard-output*} variable -- bound to the stream designator {@code t}
 	 * (standard output), which every print-family function accepts.

@@ -129,8 +129,12 @@ public final class ShimLibraries {
 			List<LispVal> parsed = LispReader.readAllFromString(readSource(resource), features);
 			if ("trivial-gray-streams".equals(name)) {
 				// The adapter's superclasses and delegation targets are rontolisp's
-				// own Gray protocol: its definitions must precede the adapter's.
-				List<LispVal> combined = new java.util.ArrayList<>(GrayStreamsLibrary.forms());
+				// own Gray protocol: its definitions must precede the adapter's. The
+				// protocol only -- the on-use dispatch defuns are spliced by
+				// GrayStreamsLibrary.process exactly when a call-site rewrite
+				// references them (this splice is outside LibraryDefunPruner's scope,
+				// and %gray-listen-dispatch does not compile on Preview 1 WASM).
+				List<LispVal> combined = new java.util.ArrayList<>(GrayStreamsLibrary.protocolForms());
 				combined.addAll(parsed);
 				return List.copyOf(combined);
 			}

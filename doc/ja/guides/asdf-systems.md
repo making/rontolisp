@@ -156,7 +156,7 @@ Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ご
 | システム | シムが提供するもの |
 |--------|------------------------|
 | `usocket` | `rontolisp:tcp-*` 上のソケット API ([TCP ガイド](tcp-sockets.md#the-usocket-compatible-shim)を参照) |
-| `trivial-gray-streams` | ポータブルな Gray ストリームのクラス/総称関数。rontolisp 自身のプロトコル (`rontolisp:fundamental-character-output-stream`、`rontolisp:stream-write-char`/`-string` — CLOS インスタンスストリームに対して `write-string`/`write-char` がディスパッチする先) へのアダプタ |
+| `trivial-gray-streams` | ポータブルな Gray ストリームのクラス/総称関数 (バイナリ/入力クラスと `trivial-gray-stream-mixin` を含む基底クラス階層、読み書き/シーケンス総称関数、`stream-file-position` とその `(setf ...)` ライタ)。rontolisp 自身のプロトコル — ストリームを取る組み込みが CLOS インスタンスストリームに対してディスパッチする先 — へのアダプタ ([Gray ストリーム](gray-streams.md)を参照) |
 | `closer-mop` | 実クラスメタオブジェクト([`find-class`](../reference/functions/find-class.md) / [`class-of`](../reference/functions/class-of.md) の返り値)に対するクラスイントロスペクションのリーダー群: `classp`、`class-slots`、`slot-definition-name`/`-initargs`/`-type`、`class-name`、`class-direct-superclasses`、`class-finalized-p`、`ensure-finalized`。レガシーのタグシンボル指定子には従来通り `(name declared-type)` ペアを返す。フラットな `closer-common-lisp` 再エクスポートパッケージ(ニックネーム `c2cl`: `cl` 全体にこれらを重ねたもので、衝突は closer-mop が優先)は常に登録済みのため、`(:use :closer-common-lisp)` するパッケージが動作する |
 | `flexi-streams` | パススルーのストリーム (flexi ストリームは基底ストリームそのもの) |
 | `babel` | UTF-8 コーデック: `babel:string-to-octets`/`octets-to-string` (`:start`/`:end`/`:errorp` 付き)、`babel:string-size-in-octets`、`babel-encodings:*default-character-encoding*` (`:utf-8`)、`babel:list-character-encodings`。本物の babel は 20,000 行のテーブルから 40 種類以上のコードページを生成しますが、rontolisp の文字モデルは 1 つだけ (文字は Unicode コードポイントそのもので、外部表現は UTF-8) なので、シムはそのコーデックだけを実装し、`:latin-1`/`:us-ascii` は表現できるオクテットの範囲でコードポイント同一視として扱い、**それ以外の `:encoding` はシグナルします** — 誤った符号化のバイト列を黙って返すよりも |

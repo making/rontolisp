@@ -5507,6 +5507,69 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGrayBinaryStreamDispatchAndFilePosition() throws Exception {
+		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
+		// file-position call sites with a non-literal stream rewrite onto the
+		// %gray-*-dispatch helpers; only the helpers a rewrite produced are spliced.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
+				(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
+				  ((bytes :initform nil)))
+				(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
+				  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
+				  byte)
+				(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
+				  ((items :initarg :items) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-byte ((s gbs-source))
+				  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length items))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+				(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
+				(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
+				  (setf (slot-value s 'pos) position))
+				(let ((out (make-instance 'gbs-sink)))
+				  (write-byte 7 out)
+				  (write-byte 250 out)
+				  (print (reverse (slot-value out 'bytes))))
+				(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
+				  (print (read-byte in))
+				  (print (file-position in))
+				  (file-position in 0)
+				  (print (read-byte in))
+				  (print (read-byte in nil :done))
+				  (print (read-byte in nil :done))
+				  (print (read-byte in nil :done)))
+				""")))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
+	}
+
+	@Test
+	void compileAndRunGrayInputStreamReadLineAndSequenceDefaults() throws Exception {
+		// read-char/read-line and the sequence built-ins on a character input
+		// class defining only stream-read-char: the default element loops of
+		// gray.lisp answer read-line (nil at EOF, the lite default) and
+		// read-sequence, exactly like the interpreter.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
+				(defclass gcs-source (rontolisp:fundamental-character-input-stream)
+				  ((text :initarg :text) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-char ((s gcs-source))
+				  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length text))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+				(let ((in (make-instance 'gcs-source :text (format nil "ab~%cd")))
+				      (buf (make-string 2)))
+				  (print (read-char in))
+				  (print (read-line in))
+				  (print (read-line in))
+				  (print (read-line in))
+				  (print (read-line in nil :end))
+				  (setf (slot-value in 'pos) 0)
+				  (print (read-sequence buf in))
+				  (print buf))
+				""")))).isEqualTo("#\\a\n\"b\"\n\"cd\"\nNIL\n:END\n2\n\"ab\"");
+	}
+
+	@Test
 	void compileAndRunReadTimeEval() throws Exception {
 		// The CLI pipeline: marker read -> UserMacroExpander resolves each marker
 		// against the macro-time evaluator -> the compilers see plain forms.

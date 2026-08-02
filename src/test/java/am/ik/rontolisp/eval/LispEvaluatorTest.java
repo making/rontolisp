@@ -10506,6 +10506,109 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void grayBinaryStreamReadWriteBytesAndFilePosition() {
+		// The read side of the Gray protocol (todo-235): the read-byte/write-byte
+		// built-ins dispatch an INSTANCE stream to rontolisp:stream-read-byte /
+		// -write-byte, the :eof answer translates through the eof-error-p/eof-value
+		// contract, and file-position routes through the stream-file-position
+		// generic (2-argument form through its (setf ...) writer generic).
+		assertThat(evalMulti("""
+				(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
+				  ((bytes :initform nil)))
+				(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
+				  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
+				  byte)
+				(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
+				  ((items :initarg :items) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-byte ((s gbs-source))
+				  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length items))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+				(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
+				(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
+				  (setf (slot-value s 'pos) position))
+				(let ((out (make-instance 'gbs-sink))
+				      (in (make-instance 'gbs-source :items (list 10 20 30))))
+				  (write-byte 7 out)
+				  (write-byte 250 out)
+				  (list (reverse (slot-value out 'bytes))
+				        (read-byte in)
+				        (file-position in)
+				        (progn (file-position in 0) (read-byte in))
+				        (read-byte in nil :done)
+				        (read-byte in nil :done)
+				        (read-byte in nil :done)))
+				""").print()).isEqualTo("((7 250) 10 1 10 20 30 :DONE)");
+	}
+
+	@Test
+	void grayInputStreamReadCharReadLineAndSequenceDefaults() {
+		// A character input class defining only stream-read-char: read-char
+		// dispatches, read-line runs the protocol's default element loop (nil at
+		// EOF, the built-in's lite default), and read-sequence/write-sequence use
+		// the default element loops over stream-read-char/stream-write-char.
+		assertThat(evalMulti("""
+				(defclass gcs-source (rontolisp:fundamental-character-input-stream)
+				  ((text :initarg :text) (pos :initform 0)))
+				(defmethod rontolisp:stream-read-char ((s gcs-source))
+				  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length text))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+				(defclass gcs-sink (rontolisp:fundamental-character-output-stream)
+				  ((acc :initform "")))
+				(defmethod rontolisp:stream-write-string ((s gcs-sink) string &optional start end)
+				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) string))
+				  string)
+				(defmethod rontolisp:stream-write-char ((s gcs-sink) c)
+				  (rontolisp:stream-write-string s (string c)))
+				(let ((in (make-instance 'gcs-source :text (format nil "ab~%cd")))
+				      (buf (make-string 2))
+				      (out (make-instance 'gcs-sink)))
+				  (write-sequence "xy" out)
+				  (list (read-char in)
+				        (read-line in)
+				        (read-line in)
+				        (read-line in)
+				        (read-line in nil :end)
+				        (progn (setf (slot-value in 'pos) 0)
+				               (list (read-sequence buf in) buf))
+				        (slot-value out 'acc)))
+				""").print()).isEqualTo("(#\\a \"b\" \"cd\" NIL :END (2 \"ab\") \"xy\")");
+	}
+
+	@Test
+	void grayShimBinaryInputStreamWithMixinAndSetfFilePosition() {
+		// The trivial-gray-streams shim, circular-streams' exact class shape:
+		// trivial-gray-stream-mixin plus fundamental-binary-input-stream, methods
+		// on the PORTABLE generics, and a (setf stream-file-position) writer
+		// delegated both directions.
+		assertThat(evalMulti("""
+				(asdf:load-system "trivial-gray-streams")
+				(defclass mem-in (trivial-gray-streams:trivial-gray-stream-mixin
+				                  trivial-gray-streams:fundamental-binary-input-stream)
+				  ((items :initarg :items) (pos :initform 0)))
+				(defmethod trivial-gray-streams:stream-read-byte ((s mem-in))
+				  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+				    (if (>= pos (length items))
+				        :eof
+				        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+				(defmethod trivial-gray-streams:stream-file-position ((s mem-in))
+				  (slot-value s 'pos))
+				(defmethod (setf trivial-gray-streams:stream-file-position) (new-pos (s mem-in))
+				  (setf (slot-value s 'pos) new-pos))
+				(let ((in (make-instance 'mem-in :items (list 7 8 9))))
+				  (list (read-byte in)
+				        (file-position in)
+				        (progn (file-position in 0) (read-byte in))
+				        (read-byte in nil :eof-hit)
+				        (read-byte in nil :eof-hit)
+				        (read-byte in nil :eof-hit)))
+				""").print()).isEqualTo("(7 1 7 8 9 :EOF-HIT)");
+	}
+
+	@Test
 	void loadResolvesReadTimeEvalAgainstEarlierTopLevelForms(@TempDir Path dir) throws Exception {
 		Path file = dir.resolve("rt.lisp");
 		Files.writeString(file, """

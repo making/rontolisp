@@ -945,6 +945,68 @@ public final class LispEvaluator {
 			}
 			return apply(baseWriteString, args, this.globalEnv);
 		}));
+		// Read-side and file-position Gray dispatch: the stream-taking built-ins
+		// handed an INSTANCE delegate to the rontolisp::%gray-*-dispatch helpers of
+		// gray.lisp, so the eof-error-p/eof-value contract and the :eof translation
+		// live in ONE place shared with the compile path's call-site rewrites
+		// (GrayStreamsLibrary.process). The helpers' non-instance fallbacks call the
+		// wrapped built-ins again, which is one extra hop and no recursion (the wrap
+		// routes non-instances straight to the base function).
+		LispVal baseReadByte = this.globalEnv.lookupFunction(LispNames.READ_BYTE);
+		this.globalEnv.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
+			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+				return applyGrayDispatch(GRAY_READ_BYTE_DISPATCH,
+						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
+								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+			}
+			return apply(baseReadByte, args, this.globalEnv);
+		}));
+		LispVal baseReadChar = this.globalEnv.lookupFunction(LispNames.READ_CHAR);
+		this.globalEnv.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, args -> {
+			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+				return applyGrayDispatch(GRAY_READ_CHAR_DISPATCH,
+						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
+								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+			}
+			return apply(baseReadChar, args, this.globalEnv);
+		}));
+		LispVal baseReadLine = this.globalEnv.lookupFunction(LispNames.READ_LINE);
+		this.globalEnv.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
+			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+				// eof-error-p defaults to NIL, the read-line lite convention the
+				// handle-based built-in documents.
+				return applyGrayDispatch(GRAY_READ_LINE_DISPATCH,
+						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispNil.INSTANCE,
+								args.size() >= 3 ? args.get(2) : LispNil.INSTANCE));
+			}
+			return apply(baseReadLine, args, this.globalEnv);
+		}));
+		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
+		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, args -> {
+			if (args.size() == 2 && args.get(1) instanceof LispInstance) {
+				return applyGrayDispatch(GRAY_WRITE_BYTE_DISPATCH, List.of(args.get(0), args.get(1)));
+			}
+			return apply(baseWriteByte, args, this.globalEnv);
+		}));
+		LispVal baseListen = this.globalEnv.lookupFunction(LispNames.LISTEN);
+		this.globalEnv.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, args -> {
+			if (args.size() == 1 && args.get(0) instanceof LispInstance) {
+				return applyGrayDispatch(GRAY_LISTEN_DISPATCH, List.of(args.get(0)));
+			}
+			return apply(baseListen, args, this.globalEnv);
+		}));
+		LispVal baseFilePosition = this.globalEnv.lookupFunction(LispNames.FILE_POSITION);
+		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
+			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
+				if (args.size() == 1) {
+					return applyGrayDispatch(GRAY_FILE_POSITION_DISPATCH, List.of(args.get(0)));
+				}
+				if (args.size() == 2) {
+					return applyGrayDispatch(GRAY_FILE_POSITION_SET_DISPATCH, List.of(args.get(0), args.get(1)));
+				}
+			}
+			return apply(baseFilePosition, args, this.globalEnv);
+		}));
 		// probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
 		// host without a filesystem (the browser playground's in-memory loader) answers
 		// from whatever IT can load. Working-directory-relative like open, not resolved
@@ -2881,6 +2943,10 @@ public final class LispEvaluator {
 	 * adapter, which subclasses it).
 	 */
 	/** Whether the defclass form names a rontolisp Gray base class as a superclass. */
+	private static final java.util.Set<String> GRAY_BASE_CLASSES = java.util.Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM,
+			LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
+			LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM);
+
 	private static boolean referencesGrayBaseClass(LispCons cons) {
 		java.util.List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(2) instanceof LispCons supers)) {
@@ -2889,14 +2955,94 @@ public final class LispEvaluator {
 		for (LispVal sup : supers.toList()) {
 			if (sup instanceof LispSymbol sym) {
 				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-				if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg())
-						&& (qn.member().equals("FUNDAMENTAL-CHARACTER-OUTPUT-STREAM")
-								|| qn.member().equals("FUNDAMENTAL-CHARACTER-INPUT-STREAM"))) {
+				if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && GRAY_BASE_CLASSES.contains(qn.member())) {
 					return true;
 				}
 			}
 		}
 		return false;
+	}
+
+	private static final String GRAY_READ_BYTE_DISPATCH = GrayStreamsLibrary.READ_BYTE_DISPATCH;
+
+	private static final String GRAY_READ_CHAR_DISPATCH = GrayStreamsLibrary.READ_CHAR_DISPATCH;
+
+	private static final String GRAY_READ_LINE_DISPATCH = GrayStreamsLibrary.READ_LINE_DISPATCH;
+
+	private static final String GRAY_WRITE_BYTE_DISPATCH = GrayStreamsLibrary.WRITE_BYTE_DISPATCH;
+
+	private static final String GRAY_LISTEN_DISPATCH = GrayStreamsLibrary.LISTEN_DISPATCH;
+
+	private static final String GRAY_FILE_POSITION_DISPATCH = GrayStreamsLibrary.FILE_POSITION_DISPATCH;
+
+	private static final String GRAY_FILE_POSITION_SET_DISPATCH = GrayStreamsLibrary.FILE_POSITION_SET_DISPATCH;
+
+	private static final String GRAY_READ_SEQUENCE_DISPATCH = GrayStreamsLibrary.READ_SEQUENCE_DISPATCH;
+
+	private static final String GRAY_WRITE_SEQUENCE_DISPATCH = GrayStreamsLibrary.WRITE_SEQUENCE_DISPATCH;
+
+	/**
+	 * Applies a {@code rontolisp::%gray-*-dispatch} helper of gray.lisp (loading it on
+	 * first use). The helpers hold the instance test, the :eof translation and the
+	 * fallback to the handle built-in, shared verbatim with the compile path.
+	 */
+	private LispVal applyGrayDispatch(String helperName, List<LispVal> args) {
+		ensureGrayStreamsLoaded();
+		LispVal helper = resolveFunction(LispNames.RONTOLISP_PKG + "::" + helperName);
+		return apply(helper, args, this.globalEnv);
+	}
+
+	/**
+	 * Evaluates {@code (read-sequence seq stream ...)} / {@code (write-sequence seq
+	 * stream ...)}: the sequence and stream arguments are evaluated once (in the macro
+	 * expansion's order), and an INSTANCE stream routes to the Gray sequence dispatch
+	 * helper so {@code rontolisp:stream-read-sequence}/{@code -write-sequence} methods
+	 * are honored like on the compile path. Anything else re-enters the shared macro
+	 * expansion with the two evaluated values quoted in place (no double evaluation); the
+	 * {@code :start}/{@code :end} value expressions stay unevaluated and keep their
+	 * position.
+	 */
+	private LispVal evalSequenceWithGrayDispatch(LispCons cons, Environment env, boolean read) {
+		java.util.List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			// Let the expansion signal the arity error.
+			return eval(read ? LispMacroExpander.expandReadSequence(cons) : LispMacroExpander.expandWriteSequence(cons),
+					env);
+		}
+		LispVal seq = eval(parts.get(1), env);
+		LispVal stream = eval(parts.get(2), env);
+		if (stream instanceof LispInstance) {
+			LispVal start = new LispInteger(0);
+			LispVal end = LispNil.INSTANCE;
+			for (int i = 3; i + 1 < parts.size(); i += 2) {
+				if (parts.get(i) instanceof LispSymbol kw) {
+					if (":START".equals(kw.name())) {
+						start = eval(parts.get(i + 1), env);
+					}
+					else if (":END".equals(kw.name())) {
+						end = eval(parts.get(i + 1), env);
+					}
+				}
+			}
+			return applyGrayDispatch(read ? GRAY_READ_SEQUENCE_DISPATCH : GRAY_WRITE_SEQUENCE_DISPATCH,
+					List.of(seq, stream, start, end));
+		}
+		java.util.List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(parts.get(0));
+		rebuilt.add(quoteValue(seq));
+		rebuilt.add(quoteValue(stream));
+		rebuilt.addAll(parts.subList(3, parts.size()));
+		LispVal tail = LispNil.INSTANCE;
+		for (int i = rebuilt.size() - 1; i >= 0; i--) {
+			tail = new LispCons(rebuilt.get(i), tail);
+		}
+		LispCons rebuiltCons = (LispCons) tail;
+		return eval(read ? LispMacroExpander.expandReadSequence(rebuiltCons)
+				: LispMacroExpander.expandWriteSequence(rebuiltCons), env);
+	}
+
+	private static LispVal quoteValue(LispVal value) {
+		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 	}
 
 	private void ensureGrayStreamsLoaded() {
@@ -3339,9 +3485,9 @@ public final class LispEvaluator {
 				break;
 			}
 			case LispNames.READ_SEQUENCE:
-				return eval(LispMacroExpander.expandReadSequence(cons), env);
+				return evalSequenceWithGrayDispatch(cons, env, true);
 			case LispNames.WRITE_SEQUENCE:
-				return eval(LispMacroExpander.expandWriteSequence(cons), env);
+				return evalSequenceWithGrayDispatch(cons, env, false);
 			case LispNames.MAKE_STRING:
 				return eval(LispMacroExpander.expandMakeString(cons), env);
 			// REPLACE is intentionally NOT expanded here: the interpreter uses the

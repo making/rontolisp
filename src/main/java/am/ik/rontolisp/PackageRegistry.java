@@ -383,7 +383,12 @@ public final class PackageRegistry {
 				// rontolisp's own Gray-stream extension
 				// (eval.GrayStreamsLibrary).
 				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
-				LispNames.GRAY_STREAM_WRITE_STRING));
+				LispNames.GRAY_STREAM_WRITE_STRING, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
+				LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+				LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE, LispNames.GRAY_STREAM_READ_CHAR,
+				LispNames.GRAY_STREAM_UNREAD_CHAR, LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
+				LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
+				LispNames.GRAY_STREAM_FILE_POSITION));
 		Set<String> rontolispSymbols = new HashSet<>(rontolispExternals);
 		// Internal: the stoppable HTTP server seam behind the clack-handler-rontolisp
 		// shim, spelled rontolisp::%http-server-* by its call sites. Owned by the
@@ -485,7 +490,14 @@ public final class PackageRegistry {
 						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT))));
 		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
-						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
+						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING,
+						LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM,
+						LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+						LispNames.GRAY_STREAM_MIXIN, LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
+						LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR,
+						LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
+						LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
+						LispNames.GRAY_STREAM_FILE_POSITION))));
 		// bordeaux-threads (nickname bt) + bt2 (nickname bordeaux-threads-2, mirroring
 		// upstream's apiv2/pkgdcl.lisp): one shim system (bordeaux-threads.lisp,
 		// eval.ShimLibraries) providing both API namespaces. The locking subset rides the
