@@ -85,7 +85,14 @@ JVM and component legs are green too (or their divergence is recorded).
    at `No such package: BT2` in clack's own `src/handler.lisp` — i.e. the next
    blocker is exactly `.todo/227`, and nothing in 224/225/226 stands in front of
    it any more.
-4. `.todo/227` bordeaux-threads: `bt2` package + real thread creation — 中〜高
+4. `.todo/227` bordeaux-threads: `bt2` package + real thread creation — 中〜高 —
+   **DONE 2026-08-01** (see the todo's own status section; `.kb/threads.md`).
+   `(ql:quickload "clack")` now completes on the interpreter with ZERO userland
+   workarounds, and clack's own handler.lisp runs its default `:use-thread t`
+   path end-to-end (spike-shape bridge: clackup returned a handler whose
+   acceptor answered `bt2:threadp` t, and curl got the response from the
+   spawned thread). Next blocker on the milestone: `.todo/228` (the
+   clack-handler-rontolisp shim system) and `.todo/229` (compile backends).
 5. `.todo/228` the `clack-handler-rontolisp` backend + E2E + docs — 中〜高
 6. `.todo/229` runtime intern->funcall dispatch on the compile backends — 高
    (critical path: the JVM and component legs are in scope, see above)

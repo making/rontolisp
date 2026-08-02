@@ -5,6 +5,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LispThread;
 import am.ik.rontolisp.LispVal;
 
 /**
@@ -63,6 +64,30 @@ final class AsyncRuntime {
 			throw new LispEvalException("async body interrupted before its first suspension");
 		}
 		return LispFuture.of(result);
+	}
+
+	/**
+	 * Spawns a plain (non-async) virtual thread running the given body:
+	 * {@code rontolisp:make-thread}. Unlike {@link #run(Supplier)} there is no
+	 * eager-start handoff -- the caller resumes immediately, because a spawned body (a
+	 * server accept loop, say) may neither await nor complete. Kept HERE so the browser
+	 * playground's wholesale substitution of this class covers thread creation too (Web
+	 * Image has no threads; the substituted spawn runs the body synchronously to
+	 * completion).
+	 * @param body the zero-argument thread function
+	 * @return the thread handle carrying the thread and its result future
+	 */
+	static LispThread spawnThread(Supplier<LispVal> body) {
+		CompletableFuture<LispVal> result = new CompletableFuture<>();
+		Thread thread = Thread.ofVirtual().start(() -> {
+			try {
+				result.complete(body.get());
+			}
+			catch (Throwable ex) {
+				result.completeExceptionally(ex);
+			}
+		});
+		return new LispThread(thread, result);
 	}
 
 	/**

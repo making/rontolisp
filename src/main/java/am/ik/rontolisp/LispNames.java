@@ -4184,6 +4184,42 @@ public final class LispNames {
 	public static final String WITH_MUTEX_QUALIFIED = RONTOLISP_PKG + ":" + WITH_MUTEX;
 
 	/**
+	 * The {@code rontolisp:make-thread} function: spawns a (virtual) thread running a
+	 * zero-argument function and returns an OPAQUE thread handle (a {@code LispThread} on
+	 * the interpreter, a marker-headed array on the JVM backend -- see
+	 * {@link #MAKE_MUTEX} for the opacity rule). The optional second argument is an alist
+	 * of {@code (symbol . value)} pairs, each established as a thread-scoped dynamic
+	 * binding in the new thread before the function runs (the spawned thread otherwise
+	 * inherits NO dynamic bindings from its spawner). Interpreter and JVM only: the WASM
+	 * backends are single-threaded by construction and do not compile it -- the
+	 * {@code bordeaux-threads} shim's spawn entry points signal there instead.
+	 */
+	public static final String MAKE_THREAD = "MAKE-THREAD";
+
+	/**
+	 * The {@code rontolisp:join-thread} function: blocks until the thread's function
+	 * returns and yields its value; an error the thread died on is re-signaled in the
+	 * joiner.
+	 */
+	public static final String JOIN_THREAD = "JOIN-THREAD";
+
+	/** The {@code rontolisp:threadp} function: whether the value is a thread handle. */
+	public static final String THREADP = "THREADP";
+
+	/**
+	 * The {@code rontolisp:thread-alive-p} function: whether the handle's thread is still
+	 * running.
+	 */
+	public static final String THREAD_ALIVE_P = "THREAD-ALIVE-P";
+
+	/**
+	 * The {@code rontolisp:destroy-thread} function: interrupts the handle's thread (a
+	 * blocked operation unblocks with an error there) and returns the handle. Like
+	 * {@code Thread.interrupt}, a body that never blocks may run to completion anyway.
+	 */
+	public static final String DESTROY_THREAD = "DESTROY-THREAD";
+
+	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:async}, as it appears
 	 * in call position after {@code PackageResolver} resolution.
 	 */
@@ -5191,6 +5227,37 @@ public final class LispNames {
 	 * {@code bordeaux-threads:with-lock-held}.
 	 */
 	public static final String WITH_LOCK_HELD_QUALIFIED = BORDEAUX_THREADS_PKG + ":" + WITH_LOCK_HELD;
+
+	/**
+	 * The {@code bt2} shim package name: the modern (v2) bordeaux-threads API namespace,
+	 * exactly as upstream's {@code apiv2/pkgdcl.lisp} declares it ({@code defpackage :bt2
+	 * (:nicknames :bordeaux-threads-2)}); the same built-in ASDF system
+	 * {@code bordeaux-threads} provides both packages. Home of the thread-creation names
+	 * ({@code make-thread} and friends over the {@code rontolisp:make-thread} primitive,
+	 * clack's handler.lisp is the driving consumer) and of
+	 * {@code *default-special-bindings*}; the v1 lock subset stays home in
+	 * {@code bordeaux-threads} and is re-exported here by import, and conversely the
+	 * thread names are imported into the v1 package (clack {@code :import-from}s them
+	 * there).
+	 */
+	public static final String BT2_PKG = "BT2";
+
+	/**
+	 * {@code bt2:*default-special-bindings*} -- the default {@code :initial-bindings}
+	 * alist of {@code bt2:make-thread}: {@code (symbol . form)} pairs bound dynamically
+	 * around the spawned thread's function. The shim supports {@code quote} forms and
+	 * self-evaluating values (whose value is thread-independent, so where they are
+	 * evaluated is unobservable) and signals on any other form.
+	 */
+	public static final String DEFAULT_SPECIAL_BINDINGS = "*DEFAULT-SPECIAL-BINDINGS*";
+
+	/**
+	 * {@code bt2::resolve-binding-value} -- internal to the shim: resolves one
+	 * {@code :initial-bindings} value form (quote or self-evaluating), or signals. Owned
+	 * by the package rather than left to the resolver's tolerance for an unknown
+	 * {@code ::} member (the {@code babel::normalize-encoding} precedent).
+	 */
+	public static final String RESOLVE_BINDING_VALUE = "RESOLVE-BINDING-VALUE";
 
 	/** The {@code uiop} stub package (and built-in ASDF system) name. */
 	public static final String UIOP_PKG = "UIOP";

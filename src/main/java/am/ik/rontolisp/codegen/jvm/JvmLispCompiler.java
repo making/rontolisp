@@ -509,6 +509,19 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_ACQUIRE))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MUTEX_RELEASE));
+		// Thread helpers: emitted only when the program references one of the five
+		// rontolisp thread primitives (the bordeaux-threads/bt2 shim delegates here), so
+		// a thread-free program keeps byte-identical output. The gate also forces every
+		// special into the dynamically-bound set below: make-thread's bindings alist is
+		// runtime data naming specials by string, so each needs its _d$ ThreadLocal.
+		boolean usesThreads = programUsesSymbol(program,
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD))
+				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREADP))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREAD_ALIVE_P))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD));
 		MethodrefConstant tcpConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
@@ -570,7 +583,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// part of the SOCKET gate, not the narrower tls-connect one. Only the interface
 		// and its three trust methods stay on usesTlsConnect (nothing calls them from
 		// bytecode; JSSE does, and only a tls-connect call site can reach _tlsConnect).
-		boolean needsInstanceCtor = usesSockets || usesHttpHandler || usesAsyncRuntime;
+		boolean needsInstanceCtor = usesSockets || usesHttpHandler || usesAsyncRuntime || usesThreads;
 		ClassConstant x509TrustManagerClass = usesTlsConnect ? cp.addClass(cp.addUtf8("javax/net/ssl/X509TrustManager"))
 				: null;
 		ClassConstant x509CertificateClass = usesTlsConnect
@@ -753,6 +766,16 @@ public final class JvmLispCompiler implements LispCompiler {
 		// program: a local (declare (special x)) inside a defun body (cl-ppcre's
 		// remove-registers-p) must make x a global cell for its free readers too.
 		Set<String> specialVars = SpecialVarCollector.collect(program);
+		if (usesThreads) {
+			// make-thread's bindings alist names specials at runtime, and the canonical
+			// consumer (clack's handler.lisp) binds the stream specials that way -- a
+			// binding the static collector cannot see. Force them special so the
+			// redirect machinery activates (the same state a source-level let-binding
+			// would produce, .kb/standard-output-redirect.md).
+			specialVars.add(LispNames.STANDARD_OUTPUT_VAR);
+			specialVars.add(LispNames.STANDARD_INPUT_VAR);
+			specialVars.add(LispNames.ERROR_OUTPUT_VAR);
+		}
 		globals.addAll(specialVars);
 		Map<String, FieldrefConstant> globalFields = new HashMap<>();
 		List<Utf8Constant> globalFieldNameUtfs = new ArrayList<>();
@@ -769,6 +792,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A special never let-bound keeps the bare static field, so its reads stay a
 		// single getstatic and a binding-free program compiles byte-identically.
 		Set<String> boundSpecialVars = SpecialVarCollector.collectDynamicallyBound(program, specialVars);
+		if (usesThreads) {
+			// Every special becomes runtime-bindable by name through make-thread's
+			// bindings alist, so each needs its _d$ ThreadLocal (the _dtl dispatch in
+			// JvmThreadRuntimeBuilder). Over-collection is only a small read cost.
+			boundSpecialVars.addAll(specialVars);
+		}
 		final JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVarRuntime = boundSpecialVars.isEmpty() ? null
 				: JvmDynVarRuntimeBuilder.build(cp, thisClass, objectArrayClass, boundSpecialVars);
 
@@ -824,6 +853,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (usesAsyncRuntime) {
 			indirectCallArities.add(0);
 			indirectCallArities.add(1);
+		}
+		// _thread_spawn's call() applies the thread function through the arity-0
+		// dispatcher, so its emission must be forced whenever the thread runtime is
+		// present.
+		if (usesThreads) {
+			indirectCallArities.add(0);
 		}
 
 		// Whether the program can produce a packed float array (a #d(...) literal or
@@ -1547,6 +1582,30 @@ public final class JvmLispCompiler implements LispCompiler {
 			asyncRuntimeBodies = null;
 			runnableClass = null;
 		}
+		// The thread runtime: _thread_spawn + call() (the class implements Callable),
+		// join/alive/destroy/threadp and the _dtl name-to-ThreadLocal dispatch. It rides
+		// the condition channel (call()'s error payload re-signals typed conditions
+		// across the join, the _await pattern).
+		final JvmThreadRuntimeBuilder.@Nullable ThreadRuntime threadRuntimeBodies;
+		final @Nullable ClassConstant callableClass;
+		if (usesThreads) {
+			mainCtx.conditionChannel.ensure(cp, this.className);
+			MethodrefConstant progInitForThread = cp.addMethodref(thisClass,
+					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
+					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
+					java.util.Objects.requireNonNull(dynVarRuntime));
+			callableClass = cp.addClass(cp.addUtf8("java/util/concurrent/Callable"));
+		}
+		else {
+			threadRuntimeBodies = null;
+			callableClass = null;
+		}
+		final @Nullable Utf8Constant threadFnFieldName = usesThreads ? cp.addUtf8(JvmThreadRuntimeBuilder.FN_FIELD)
+				: null;
+		final @Nullable Utf8Constant threadBindingsFieldName = usesThreads
+				? cp.addUtf8(JvmThreadRuntimeBuilder.BINDINGS_FIELD) : null;
+		final @Nullable Utf8Constant threadInstanceFieldDesc = usesThreads ? cp.addUtf8("Ljava/lang/Object;") : null;
 		final @Nullable Utf8Constant handoffFieldName = usesAsyncRuntime
 				? cp.addUtf8(JvmAsyncRuntimeBuilder.HANDOFF_FIELD) : null;
 		final @Nullable Utf8Constant handoffFieldDesc = usesAsyncRuntime ? cp.addUtf8("Ljava/lang/ThreadLocal;") : null;
@@ -1620,6 +1679,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				if (runnableClass != null) {
 					i.add(w -> w.writeU2(runnableClass.index()));
 				}
+				if (callableClass != null) {
+					i.add(w -> w.writeU2(callableClass.index()));
+				}
 			})
 			.writeFields(f -> {
 				f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
@@ -1676,6 +1738,15 @@ public final class JvmLispCompiler implements LispCompiler {
 						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
 							.writeU2(instField)
 							.writeU2(java.util.Objects.requireNonNull(asyncInstanceFieldDesc))
+							.writeU2(0));
+					}
+				}
+				if (threadRuntimeBodies != null) {
+					for (Utf8Constant instField : List.of(java.util.Objects.requireNonNull(threadFnFieldName),
+							java.util.Objects.requireNonNull(threadBindingsFieldName))) {
+						f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE)
+							.writeU2(instField)
+							.writeU2(java.util.Objects.requireNonNull(threadInstanceFieldDesc))
 							.writeU2(0));
 					}
 				}
@@ -2084,6 +2155,27 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(0);
 							})));
 				}
+				if (threadRuntimeBodies != null) {
+					for (JvmThreadRuntimeBuilder.ThreadMethod tm : threadRuntimeBodies.staticMethods()) {
+						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, tm.name(), tm.desc(),
+								method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+									attr.writeU2(tm.maxStack())
+										.writeU2(tm.maxLocals())
+										.writeCode((Object[]) tm.code().toArray(new Integer[0]));
+									writeThreadExceptionTable(attr, tm);
+									attr.writeU2(0);
+								})));
+					}
+					JvmThreadRuntimeBuilder.ThreadMethod callBody = threadRuntimeBodies.callMethod();
+					methods.add(AccessFlag.ACC_PUBLIC, callBody.name(), callBody.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(callBody.maxStack())
+									.writeU2(callBody.maxLocals())
+									.writeCode((Object[]) callBody.code().toArray(new Integer[0]));
+								writeThreadExceptionTable(attr, callBody);
+								attr.writeU2(0);
+							})));
+				}
 				if (socketRuntime != null) {
 					for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
 						methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
@@ -2339,6 +2431,11 @@ public final class JvmLispCompiler implements LispCompiler {
 			if (usesAsyncRuntime) {
 				roots.add("run");
 			}
+			// The thread runtime's FutureTask invokes call() through the Callable
+			// interface -- the same invisible edge as run() above.
+			if (usesThreads) {
+				roots.add("call");
+			}
 			classBytes = JvmClassShaker.shake(classBytes, roots);
 		}
 		// Insert the StackMapTable every class version above 50 requires (and the shaker
@@ -2362,6 +2459,15 @@ public final class JvmLispCompiler implements LispCompiler {
 	private static void writeAsyncExceptionTable(ByteCodeWriter attr, JvmAsyncRuntimeBuilder.AsyncMethod am) {
 		List<ByteCodeWriter.ExceptionTableEntry> entries = new java.util.ArrayList<>();
 		for (int[] e : am.exceptionTable()) {
+			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
+		}
+		attr.writeExceptionTable(entries);
+	}
+
+	// The thread runtime twin of writeAsyncExceptionTable.
+	private static void writeThreadExceptionTable(ByteCodeWriter attr, JvmThreadRuntimeBuilder.ThreadMethod tm) {
+		List<ByteCodeWriter.ExceptionTableEntry> entries = new java.util.ArrayList<>();
+		for (int[] e : tm.exceptionTable()) {
 			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
 		}
 		attr.writeExceptionTable(entries);

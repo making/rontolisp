@@ -45,14 +45,16 @@ pinned). Releasing a mutex the calling thread does not hold is an error --
 `LispEvalException` on the interpreter, `IllegalMonitorStateException` from
 `unlock()` on the JVM, unnoticed on WASM.
 
-Thread CREATION stays out: no backend can spawn a thread from Lisp, and a shim
-that pretended otherwise would turn a compile-time error into a silently
-sequential program.
+Thread CREATION is real since todo-227: `rontolisp:make-thread` and friends
+spawn virtual threads on the interpreter and the JVM (call-time errors from the
+WASM shim defuns) -- mechanics, the bindings alist and the `bt2` package half of
+the shim: `.kb/threads.md`.
 
 **`bordeaux-threads` (nickname `bt`)** is a Tier-1 shim system
-(`ShimLibraries` + `BuiltinSystems` + a `PackageRegistry` package) covering
-`make-lock`, `acquire-lock`, `release-lock`, `with-lock-held` and
-`*supports-threads-p*` -- upstream's own `.asd` hard-errors on an unknown
+(`ShimLibraries` + `BuiltinSystems` + a `PackageRegistry` package) whose LOCK
+half covers `make-lock`, `acquire-lock`, `release-lock`, `with-lock-held` and
+`*supports-threads-p*` (the thread half lives in the `bt2` package,
+`.kb/threads.md`) -- upstream's own `.asd` hard-errors on an unknown
 implementation, so a shim is the only route. `with-lock-held` is NOT a shim
 defun but the same built-in expansion as `with-mutex` (dispatched on its
 qualified name in all three dispatchers), so one lowering serves every backend.

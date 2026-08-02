@@ -28,6 +28,7 @@ import am.ik.rontolisp.macro.MopEvalCapture;
 import am.ik.rontolisp.macro.MopProtocol;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LispThread;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.LispRatio;
@@ -1315,6 +1316,91 @@ public final class LispEvaluator {
 			}
 			LispVal thunk = args.get(0);
 			return AsyncRuntime.run(() -> apply(thunk, List.of(), this.globalEnv));
+		}));
+		// The thread primitives live here rather than in Environment because running the
+		// spawned function needs the evaluator's apply (the %async-run precedent). The
+		// handle is opaque (LispThread; the JVM backend hands out a marker-headed array
+		// instead, and the WASM backends have none). The optional bindings alist of
+		// (symbol . value) pairs is established as dynamic bindings in the NEW thread
+		// only: DynamicBindings is thread-scoped, so the spawned thread inherits no
+		// bindings from its spawner and its own pushes die with it -- no pop is needed.
+		String makeThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_THREAD);
+		this.globalEnv.defineFunction(makeThreadName, new LispFunction(makeThreadName, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.MAKE_THREAD + " expects 1 or 2 arguments, got " + args.size());
+			}
+			LispVal fn = args.get(0);
+			List<String> bindingNames = new ArrayList<>();
+			List<LispVal> bindingValues = new ArrayList<>();
+			if (args.size() == 2) {
+				LispVal cur = args.get(1);
+				while (cur instanceof LispCons cons) {
+					if (!(cons.car() instanceof LispCons pair) || !(pair.car() instanceof LispSymbol sym)) {
+						throw new LispEvalException(LispNames.MAKE_THREAD
+								+ " expects an alist of (symbol . value) bindings, got " + args.get(1).print());
+					}
+					bindingNames.add(sym.name());
+					bindingValues.add(pair.cdr());
+					cur = cons.cdr();
+				}
+				if (!(cur instanceof LispNil)) {
+					throw new LispEvalException(LispNames.MAKE_THREAD
+							+ " expects an alist of (symbol . value) bindings, got " + args.get(1).print());
+				}
+			}
+			if (!bindingNames.isEmpty()) {
+				// Like progv, a bound name need not be proclaimed special, so reads must
+				// consult the dynamic store even when specialVars is empty.
+				this.progvUsed = true;
+			}
+			return AsyncRuntime.spawnThread(() -> {
+				for (int i = 0; i < bindingNames.size(); i++) {
+					this.dynamicBindings.push(bindingNames.get(i), bindingValues.get(i));
+				}
+				return apply(fn, List.of(), this.globalEnv);
+			});
+		}));
+		String joinThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JOIN_THREAD);
+		this.globalEnv.defineFunction(joinThreadName, new LispFunction(joinThreadName, args -> {
+			LispThread thread = requireThread(LispNames.JOIN_THREAD, args);
+			try {
+				LispVal value = thread.result().join();
+				// Also wait for the thread itself to die, so thread-alive-p answers nil
+				// deterministically after a join (the result settles inside the body,
+				// a beat before the thread's teardown).
+				thread.thread().join();
+				return value;
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				throw new LispEvalException(LispNames.JOIN_THREAD + ": interrupted while joining the thread");
+			}
+			catch (java.util.concurrent.CompletionException ex) {
+				// Re-signal what the thread died on: the original condition-carrying
+				// runtime exception, so handler-case in the joiner dispatches by type.
+				if (ex.getCause() instanceof RuntimeException cause) {
+					throw cause;
+				}
+				throw new LispEvalException(LispNames.JOIN_THREAD + ": the thread died: " + ex.getCause());
+			}
+		}));
+		String threadpName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREADP);
+		this.globalEnv.defineFunction(threadpName, new LispFunction(threadpName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.THREADP + " expects 1 argument, got " + args.size());
+			}
+			return args.get(0) instanceof LispThread ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		String threadAlivePName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREAD_ALIVE_P);
+		this.globalEnv.defineFunction(threadAlivePName, new LispFunction(threadAlivePName, args -> {
+			LispThread thread = requireThread(LispNames.THREAD_ALIVE_P, args);
+			return thread.thread().isAlive() ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		String destroyThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD);
+		this.globalEnv.defineFunction(destroyThreadName, new LispFunction(destroyThreadName, args -> {
+			LispThread thread = requireThread(LispNames.DESTROY_THREAD, args);
+			thread.thread().interrupt();
+			return thread;
 		}));
 		// http-handler lives here rather than in Environment because serving a request
 		// applies the handler function, which needs the evaluator's apply. It runs a
@@ -2614,6 +2700,7 @@ public final class LispEvaluator {
 			case am.ik.rontolisp.LispIntVector iv -> iv;
 			case LispJavaObject j -> j;
 			case LispFuture f -> f;
+			case am.ik.rontolisp.LispThread th -> th;
 			case LispStream s -> s;
 			case LispInstance inst -> inst;
 			// A #S(...) literal the top-level fold did not reach (one produced by a
@@ -5978,6 +6065,17 @@ public final class LispEvaluator {
 			}
 		}
 		return v;
+	}
+
+	// The single-argument thread-handle check shared by the thread primitives.
+	private static LispThread requireThread(String fn, List<LispVal> args) {
+		if (args.size() != 1) {
+			throw new LispEvalException(fn + " expects 1 argument, got " + args.size());
+		}
+		if (!(args.get(0) instanceof LispThread thread)) {
+			throw new LispEvalException(fn + " expects a thread handle, got " + args.get(0).print());
+		}
+		return thread;
 	}
 
 	// Adapts one incoming HTTP request to the Lisp handler: builds the request property

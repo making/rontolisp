@@ -21,9 +21,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The mutex primitives on the JVM backend. The property under test is the one the
  * interpreter's {@code MutexTest} pins and the one a served handler depends on:
  * concurrent increments of a shared global under the lock agree with the sequential
- * result. The compiled program cannot spawn a thread itself, so the threads are Java's --
- * they invoke the compiled {@code defun} directly, which is exactly what
- * {@code rontolisp:serve} does per request.
+ * result. The threads here are Java's, invoking the compiled {@code defun} directly --
+ * exactly what {@code rontolisp:serve} does per request (Lisp-spawned threads are
+ * {@code JvmThreadTest}'s subject).
  */
 class JvmMutexTest {
 

@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.LispFuture;
+import am.ik.rontolisp.LispThread;
 import am.ik.rontolisp.LispVal;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
@@ -31,6 +32,20 @@ final class Target_AsyncRuntime {
 
 	@Substitute
 	static void releaseHandoffIfPending() {
+	}
+
+	@Substitute
+	static LispThread spawnThread(Supplier<LispVal> body) {
+		// no threads in the browser worker: the body runs synchronously to completion
+		// and an already-settled handle is returned (the async-run precedent above).
+		java.util.concurrent.CompletableFuture<LispVal> result = new java.util.concurrent.CompletableFuture<>();
+		try {
+			result.complete(body.get());
+		}
+		catch (RuntimeException ex) {
+			result.completeExceptionally(ex);
+		}
+		return new LispThread(Thread.currentThread(), result);
 	}
 
 	@Substitute

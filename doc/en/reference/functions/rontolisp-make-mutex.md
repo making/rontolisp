@@ -10,9 +10,10 @@ handle actually is differs per backend, so printing one, comparing two with `<`,
 arithmetic on it is not portable. Comparing a handle with `eq`/`eql` to itself does work.
 
 rontolisp really runs concurrent code — [`rontolisp:http-handler`](rontolisp-http-handler.md)
-puts one virtual thread per request on the interpreter and the JVM backend — which is what
-a lock is for. On both WASM backends there is only ever one thread, so the primitives are
-no-ops there; the same source runs everywhere.
+puts one virtual thread per request on the interpreter and the JVM backend, and
+[`rontolisp:make-thread`](rontolisp-make-thread.md) lets your own code spawn one — which
+is what a lock is for. On both WASM backends there is only ever one thread, so the
+primitives are no-ops there; the same source runs everywhere.
 
 ```lisp
 (let ((m (rontolisp:make-mutex)))
@@ -24,7 +25,5 @@ as many times as it acquired it.
 
 ## Limitations
 
-- There is no way to spawn a thread from Lisp; the concurrency comes from the runtime
-  (one virtual thread per served request).
 - The handle is opaque and backend-dependent — do not print or order it.
 - Macros and these primitives have no function value: `#'rontolisp:make-mutex` is an error.

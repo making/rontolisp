@@ -343,6 +343,11 @@
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | 新しい相互排他ロック。不透明なハンドル(インタプリタと JVM では実体があり、WASM では no-op) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | このスレッドが mutex を保持するまでブロックし、それを返します(通常は `rontolisp:with-mutex` を使用) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | mutex の獲得を 1 回分解放し、それを返します |
+| `rontolisp:make-thread` | `(rontolisp:make-thread fn bindings)` | 引数なしの関数を実行する仮想スレッドを生成します。省略可能な `(symbol . value)` の動的束縛をその中に確立し、不透明なハンドルを返します(インタプリタと JVM。WASM のシムはエラーを通知) |
+| `rontolisp:join-thread` | `(rontolisp:join-thread th)` | スレッドを待ってその関数の値を返します。スレッドが通知したエラーはここで再通知されます |
+| `rontolisp:threadp` | `(rontolisp:threadp v)` | 値がスレッドハンドルなら `t` |
+| `rontolisp:thread-alive-p` | `(rontolisp:thread-alive-p th)` | スレッドが実行中の間 `t`(join 後は `nil`) |
+| `rontolisp:destroy-thread` | `(rontolisp:destroy-thread th)` | スレッドに割り込みをかけ、ハンドルを返します |
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | パッケージの関数シンボルをソートしたもの(デフォルトは `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |

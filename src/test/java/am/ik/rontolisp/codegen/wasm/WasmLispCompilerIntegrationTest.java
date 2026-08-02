@@ -13077,4 +13077,25 @@ class WasmLispCompilerIntegrationTest {
 				""")).isEqualTo("3\nHELD\nT");
 	}
 
+	// Thread creation does not exist on WASM (single-threaded by construction): the
+	// bordeaux-threads/bt2 shim's spawn entry points SIGNAL at call time (never run
+	// inline -- that would turn a compile-time error into a silently sequential
+	// program) while threadp answers nil, so clack's non-threaded path compiles and
+	// runs. The shim must be spliced with the TARGET backend's features, so the
+	// #+rontolisp-wasm defuns are the ones compiled (the *supports-threads-p* rule).
+	@Test
+	void bt2ThreadEntryPointsSignalWhileThreadpAnswersNil() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "bordeaux-threads")
+				(print (bt2:threadp 42))
+				(print (handler-case (bt2:thread-alive-p 42) (error (e) :not-a-thread)))
+				(print (handler-case (bt2:make-thread (lambda () 1)) (error (e) :spawn-error)))
+				(print bordeaux-threads:*supports-threads-p*)
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		}, null, List.of(), am.ik.rontolisp.reader.Features.WASM);
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))
+			.isEqualTo("NIL\n:NOT-A-THREAD\n:SPAWN-ERROR\nNIL");
+	}
+
 }

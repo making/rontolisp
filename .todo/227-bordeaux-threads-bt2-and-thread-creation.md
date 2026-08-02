@@ -1,5 +1,35 @@
 # bordeaux-threads: bt2 package + real thread creation
 
+## Status: DONE 2026-08-01 (all four backends; `.kb/threads.md` has the full mechanics)
+
+- `rontolisp:make-thread`/`join-thread`/`threadp`/`thread-alive-p`/`destroy-thread`
+  landed on the interpreter (`LispEvaluator` + `AsyncRuntime.spawnThread`, browser
+  substitution runs inline) and the JVM (`JvmThreadRuntimeBuilder`: Callable/`call()`
+  over a FutureTask, `_dtl` runtime name->ThreadLocal dispatch, EMARKER join
+  re-signal). WASM: the shim's `#+rontolisp-wasm` defuns signal at call time,
+  `threadp` nil — the documented divergence, with its why and re-evaluation trigger
+  in `.kb/threads.md`.
+- `bt2` package (canonical BT2, nickname BORDEAUX-THREADS-2, upstream's own shape)
+  with cross-package import redirects, so the v1 `:import-from` names clack uses and
+  `bt2:with-lock-held` all resolve onto single definitions (work unit 1 done,
+  including the lock re-homing via imports — no new dispatcher entries).
+- `:initial-bindings`/`*default-special-bindings*` map onto the primitive's
+  `(symbol . value)` alist via `bt2::resolve-binding-value` (quote +
+  self-evaluating forms; anything else signals — within that subset the eval site
+  is unobservable). The JVM leg needed the todo-189 store widened: every special
+  gets a `_d$` ThreadLocal when the program uses the thread primitives, and the
+  three stream specials are force-proclaimed (clack binds them through the alist).
+- Verified with the exact clack shape: `(ql:quickload "clack")` completes, and
+  clackup's DEFAULT `:use-thread t` serves from the spawned thread (curl round
+  trip) with `bt2:threadp` t on the acceptor. The `*standard-output*` rebinding
+  test the todo asked for is pinned on both backends
+  (`ThreadTest`/`JvmThreadTest` makeThreadBindings cases).
+- Work unit 4 (retire the shim header's "thread creation is deliberately absent"
+  clause) done: shim header, PackageRegistry comment, `.kb/mutexes.md` and the
+  make-mutex doc pages all updated in this pass.
+- `ClackE2eTest` driving `:use-thread t`/`clack:stop` stays with `.todo/228` (its
+  backend `run`/`stop` do not exist yet).
+
 Difficulty: 中〜高 (the shim edit is easy; the real work is deciding and
 pinning the interpreter/JVM thread-spawn semantics — the evaluator already
 survives one-virtual-thread-per-request concurrency, but `make-thread` makes

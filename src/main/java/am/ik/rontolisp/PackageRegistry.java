@@ -328,7 +328,8 @@ public final class PackageRegistry {
 	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("COMMON-LISP", LispNames.CL_PKG,
 			"COMMON-LISP-USER", LispNames.CL_USER_PKG, "RL", LispNames.RONTOLISP_PKG, "LA", LispNames.LINALG_PKG,
 			"QUICKLISP", LispNames.QL_PKG, "C2MOP", LispNames.CLOSER_MOP_PKG, "C2CL", LispNames.CLOSER_COMMON_LISP_PKG,
-			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG, "BT", LispNames.BORDEAUX_THREADS_PKG);
+			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG, "BT", LispNames.BORDEAUX_THREADS_PKG, "BORDEAUX-THREADS-2",
+			LispNames.BT2_PKG);
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -346,7 +347,7 @@ public final class PackageRegistry {
 			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
 			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
-			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BABEL_PKG,
+			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 			LispNames.BABEL_ENCODINGS_PKG, LispNames.UIOP_IMAGE_PKG, LispNames.SWANK_PKG, "KEYWORD");
 
 	/**
@@ -374,7 +375,8 @@ public final class PackageRegistry {
 						LispNames.HTTP_HANDLER, LispNames.TCP_CONNECT, LispNames.TCP_LISTEN, LispNames.TCP_ACCEPT,
 						LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
 						LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
-						LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES,
+						LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD,
+						LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
 						// rontolisp's own Gray-stream extension
 						// (eval.GrayStreamsLibrary).
 						LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
@@ -471,15 +473,37 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
 						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING))));
-		// bordeaux-threads (nickname bt): the locking subset over the rontolisp:*-mutex
-		// primitives, implemented in bordeaux-threads.lisp (eval.ShimLibraries) except
-		// with-lock-held, which is a built-in LispMacroExpander expansion dispatched on
-		// its qualified name (the usocket:with-* pattern). Thread CREATION is out: no
-		// backend can spawn one from Lisp, and a library that asked would be broken by a
-		// shim that pretended otherwise.
-		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK,
-						LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P))));
+		// bordeaux-threads (nickname bt) + bt2 (nickname bordeaux-threads-2, mirroring
+		// upstream's apiv2/pkgdcl.lisp): one shim system (bordeaux-threads.lisp,
+		// eval.ShimLibraries) providing both API namespaces. The locking subset rides the
+		// rontolisp:*-mutex primitives and stays home in the v1 package (with-lock-held
+		// is a built-in LispMacroExpander expansion dispatched on its qualified name, the
+		// usocket:with-* pattern); thread creation rides the rontolisp:make-thread
+		// primitive (interpreter + JVM; the WASM entry points signal at call time) and is
+		// home in bt2, the modern API clack's handler.lisp drives. Each package imports
+		// the other's half, so both spellings of every name resolve to the ONE defining
+		// symbol (the closer-common-lisp / uiop-image redirect precedent).
+		Map<String, String> btThreadImports = Map.of(LispNames.MAKE_THREAD, LispNames.BT2_PKG, LispNames.JOIN_THREAD,
+				LispNames.BT2_PKG, LispNames.THREADP, LispNames.BT2_PKG, LispNames.THREAD_ALIVE_P, LispNames.BT2_PKG,
+				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG);
+		Set<String> btV1Externals = new HashSet<>(
+				Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
+						LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
+						LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS));
+		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
+				btThreadImports));
+		Map<String, String> bt2LockImports = Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
+				LispNames.ACQUIRE_LOCK, LispNames.BORDEAUX_THREADS_PKG, LispNames.RELEASE_LOCK,
+				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG);
+		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
+				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
+				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD));
+		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
+		// Internal: the shim's own :initial-bindings value-form resolver, spelled
+		// bt2::resolve-binding-value by its call site. Owned by the package rather than
+		// left to the resolver's tolerance for an unknown :: member.
+		bt2Symbols.add(LispNames.RESOLVE_BINDING_VALUE);
+		define(new LispPackage(LispNames.BT2_PKG, List.of(), bt2Symbols, Set.copyOf(bt2Externals), bt2LockImports));
 		// babel + babel-encodings: the UTF-8 slice of the charset-conversion library,
 		// implemented in babel.lisp (eval.ShimLibraries). Real babel carries 40+ code
 		// pages; rontolisp has one character model (a character IS a code point, the

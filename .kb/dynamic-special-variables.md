@@ -126,7 +126,13 @@ The pre-existing rules keep working on top of that store:
   like the interpreter's `DynamicBindings`): it reads the global default until
   it binds for itself. Pinned by
   `JvmLispCompilerTest.specialVarBindingIsThreadScoped` (Thread.start/join via
-  `java:` interop, fully deterministic).
+  `java:` interop, fully deterministic) and, with user code as the spawner
+  since todo-227, `JvmThreadTest.spawnedThreadDoesNotInheritTheSpawnersDynamicBindings`.
+  `rontolisp:make-thread`'s bindings alist is the supported way to hand a
+  spawned thread dynamic bindings -- and when a program uses the thread
+  primitives, EVERY special is forced into the dynamically-bound set (plus the
+  three stream specials into `specialVars`) so the runtime `_dtl` name dispatch
+  can bind any of them; see `.kb/threads.md`.
 
 ## WASM (`WasmLetCompiler`) -- shallow binding over the module global
 

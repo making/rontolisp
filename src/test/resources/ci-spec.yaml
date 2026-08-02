@@ -5343,6 +5343,22 @@ cases:
       :HELD
       T
       :NESTED
+  - name: bt2-thread-api-portable-surface
+    source: |
+      ; The portable slice of the bordeaux-threads/bt2 thread API: the type
+      ; predicate, the not-a-thread error, and the bt2 spellings of the lock
+      ; subset (import-redirected onto the v1 definitions). Spawn/join stay out:
+      ; they succeed on the interpreter and the JVM and SIGNAL on the WASM
+      ; backends (single-threaded by construction, .kb/threads.md), so their
+      ; output cannot be identical across the four backends this file pins.
+      (asdf:load-system "bordeaux-threads")
+      (print (bt2:threadp 42))
+      (print (handler-case (bt2:thread-alive-p 42) (error (e) :not-a-thread)))
+      (print (let ((ci-bt2-l (bt2:make-lock))) (bt2:with-lock-held (ci-bt2-l) :held)))
+    expected: |
+      NIL
+      :NOT-A-THREAD
+      :HELD
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))

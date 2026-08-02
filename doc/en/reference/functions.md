@@ -346,6 +346,11 @@ package system. Each name below links to its own page.
 | `rontolisp:make-mutex` | `(rontolisp:make-mutex)` | a fresh mutual-exclusion lock, as an opaque handle (real on the interpreter and the JVM, a no-op on WASM) |
 | `rontolisp:mutex-acquire` | `(rontolisp:mutex-acquire m)` | block until this thread holds the mutex; returns it (prefer `rontolisp:with-mutex`) |
 | `rontolisp:mutex-release` | `(rontolisp:mutex-release m)` | release one acquisition of the mutex; returns it |
+| `rontolisp:make-thread` | `(rontolisp:make-thread fn bindings)` | spawn a virtual thread running the zero-argument function, with optional `(symbol . value)` dynamic bindings established in it; returns an opaque handle (interpreter and JVM; the WASM shims signal) |
+| `rontolisp:join-thread` | `(rontolisp:join-thread th)` | wait for the thread and yield its function's value; an error it died on is re-signaled here |
+| `rontolisp:threadp` | `(rontolisp:threadp v)` | `t` if the value is a thread handle |
+| `rontolisp:thread-alive-p` | `(rontolisp:thread-alive-p th)` | `t` while the thread is still running (`nil` after a join) |
+| `rontolisp:destroy-thread` | `(rontolisp:destroy-thread th)` | interrupt the thread; returns the handle |
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | the function symbols of a package, sorted (defaults to `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |

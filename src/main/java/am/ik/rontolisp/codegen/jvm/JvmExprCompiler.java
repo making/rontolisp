@@ -281,6 +281,14 @@ final class JvmExprCompiler {
 					compileMutex(qn.member(), cons, ctx, className);
 					return;
 				}
+				if (LispNames.MAKE_THREAD.equals(qn.member()) || LispNames.JOIN_THREAD.equals(qn.member())
+						|| LispNames.THREADP.equals(qn.member()) || LispNames.THREAD_ALIVE_P.equals(qn.member())
+						|| LispNames.DESTROY_THREAD.equals(qn.member())) {
+					// A real virtual thread behind a marker-headed opaque handle
+					// (JvmThreadRuntimeBuilder, emitted because the reference gated it).
+					compileThread(qn.member(), cons, ctx, className);
+					return;
+				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
 			if (qn != null && LispNames.JAVA_PKG.equals(qn.pkg()) && JvmJavaInteropCompiler.handles(qn.member())) {
@@ -1269,6 +1277,52 @@ final class JvmExprCompiler {
 		String desc = arity == 0 ? JvmMutexRuntimeBuilder.NEW_DESC : JvmMutexRuntimeBuilder.UNARY_DESC;
 		if (arity == 1) {
 			compileExpr(args.get(1), ctx, className);
+		}
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(ctx.cp
+			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+					ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
+			.index());
+	}
+
+	/**
+	 * Compiles one of the five thread primitives onto its {@link JvmThreadRuntimeBuilder}
+	 * helper. {@code make-thread} takes the function and an optional bindings alist
+	 * (compiled as nil when absent); the other four take the handle (or, for
+	 * {@code threadp}, any value).
+	 */
+	private static void compileThread(String member, LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		String method;
+		String desc;
+		if (LispNames.MAKE_THREAD.equals(member)) {
+			if (args.size() < 2 || args.size() > 3) {
+				throw new UnsupportedOperationException(
+						"rontolisp:" + member + " expects 1 or 2 argument(s), got " + (args.size() - 1));
+			}
+			compileExpr(args.get(1), ctx, className);
+			if (args.size() == 3) {
+				compileExpr(args.get(2), ctx, className);
+			}
+			else {
+				ctx.emit(Opcode.ACONST_NULL);
+			}
+			method = JvmThreadRuntimeBuilder.SPAWN_METHOD;
+			desc = JvmThreadRuntimeBuilder.SPAWN_DESC;
+		}
+		else {
+			if (args.size() != 2) {
+				throw new UnsupportedOperationException(
+						"rontolisp:" + member + " expects 1 argument(s), got " + (args.size() - 1));
+			}
+			compileExpr(args.get(1), ctx, className);
+			method = switch (member) {
+				case LispNames.JOIN_THREAD -> JvmThreadRuntimeBuilder.JOIN_METHOD;
+				case LispNames.THREADP -> JvmThreadRuntimeBuilder.THREADP_METHOD;
+				case LispNames.THREAD_ALIVE_P -> JvmThreadRuntimeBuilder.ALIVE_METHOD;
+				default -> JvmThreadRuntimeBuilder.DESTROY_METHOD;
+			};
+			desc = JvmThreadRuntimeBuilder.UNARY_DESC;
 		}
 		ctx.emit(Opcode.INVOKESTATIC);
 		ctx.emitU2(ctx.cp

@@ -9,5 +9,5 @@ This is an **interpreter-only** operator: the compiled backends carry no package
 ```lisp
 (let ((names nil))
   (do-external-symbols (s :rontolisp names) (push (symbol-name s) names))
-  (length names)) ; => 64
+  (length names)) ; => 69
 ```

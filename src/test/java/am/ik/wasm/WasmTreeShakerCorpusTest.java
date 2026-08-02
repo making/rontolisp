@@ -76,11 +76,17 @@ class WasmTreeShakerCorpusTest {
 		List<LispVal> read = source.contains("#.")
 				? LispReader.readAllWithReadEvalMarkers(source, am.ik.rontolisp.reader.Features.WASM)
 				: LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM);
+		// LoadInliner splices the built-in ASDF shim systems the corpus load-systems
+		// (bordeaux-threads' bt2 case), exactly like the CLI; the corpus references no
+		// filesystem source, so the loader throws.
+		List<LispVal> inlined = am.ik.rontolisp.cli.LoadInliner.inline(read, path -> {
+			throw new java.io.FileNotFoundException(path);
+		}, null, List.of(), am.ik.rontolisp.reader.Features.WASM);
 		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UsocketLibrary
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary
 				.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UrlLibrary
 					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(read)))))))));
+						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(inlined)))))))));
 
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.
