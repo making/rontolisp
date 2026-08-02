@@ -6119,6 +6119,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void readTimeEvalGeneratedDefconstants() throws Exception {
+		// fast-http's multipart-parser idiom: #. generates the state defconstants via
+		// a backquoted eval-when whose datum value is CODE, evaluated in place.
+		assertThat(compileAndRunProgram(
+				am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers("""
+						#.`(eval-when (:compile-toplevel :load-toplevel :execute)
+						     ,@(loop for i from 0
+						             for state in '(re-state-alpha re-state-beta re-state-gamma)
+						             collect `(defconstant ,(intern (format nil "+~A+" state)) ,i)))
+						(print +re-state-beta+)
+						(print +re-state-gamma+)
+						""", am.ik.rontolisp.reader.Features.WASM))))
+			.isEqualTo("1\n2");
+	}
+
+	@Test
 	void writeStringBoundsAndReplaceNilBounds() throws Exception {
 		assertThat(compileAndRun("(write-string \"hello\" t :start 1 :end 3) (terpri)"
 				+ " (write-string \"hello\" t :start 1 :end nil) (terpri) (print (write-string \"xy\"))"))

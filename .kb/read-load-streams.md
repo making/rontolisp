@@ -14,7 +14,9 @@ path exactly like the frontend's `readSymbol` (`#foo` is the symbol `#FOO`, `#:g
 PERMANENT limits because they need an evaluator / the feature set at run time: `#.`,
 `#+`/`#-` and `#n=`/`#n#` reader labels signal a catchable error (the interpreter's
 runtime read still resolves the first two and reads labels -- the one documented
-interpreter/compiled divergence). Reader errors are `RuntimeException`s on the JVM
+interpreter/compiled divergence; `#.` there EVALUATES via the marker resolver
+`LispEvaluator` installs into `Environment.setReadTimeEvalResolver`, gated on
+`*read-eval*` -- mechanics in `.kb/reader-features.md`). Reader errors are `RuntimeException`s on the JVM
 (handler-case catches them as `simple-error` with the frontend's EXACT messages;
 `LispEvaluator.foldStructLiteralsOf` converts the interpreter's `LispReadException` the
 same way), and on WASM an `unreachable` trap -- or, in EH mode, a catchable

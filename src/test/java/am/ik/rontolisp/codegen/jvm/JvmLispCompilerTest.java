@@ -5518,6 +5518,20 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunReadTimeEvalGeneratedDefconstants() throws Exception {
+		// fast-http's multipart-parser idiom: #. generates the state defconstants via
+		// a backquoted eval-when whose datum value is CODE, evaluated in place.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllWithReadEvalMarkers("""
+				#.`(eval-when (:compile-toplevel :load-toplevel :execute)
+				     ,@(loop for i from 0
+				             for state in '(re-state-alpha re-state-beta re-state-gamma)
+				             collect `(defconstant ,(intern (format nil "+~A+" state)) ,i)))
+				(print +re-state-beta+)
+				(print +re-state-gamma+)
+				""", am.ik.rontolisp.reader.Features.JVM)))).isEqualTo("1\n2");
+	}
+
+	@Test
 	void compileAndRunIeee754Bits() throws Exception {
 		assertThat(compileAndRun("(print (%ieee754-double-bits 1.0)) (print (%ieee754-double-bits -2.5))"
 				+ " (print (%ieee754-double-from-bits 4607182418800017408))"

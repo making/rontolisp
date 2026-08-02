@@ -6570,6 +6570,48 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRuntimeReadSharpDotEvaluates() {
+		// #. in runtime-read data evaluates through the evaluator's marker resolver
+		// (Environment.readRuntimeDatum), like CL's read under a true *read-eval*.
+		assertThat(eval("(read-from-string \"#.(+ 1 2)\")")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(read-from-string \"(a #.(* 2 3) c)\")").print()).isEqualTo("(A 6 C)");
+		assertThat(eval("(with-input-from-string (s \"#.(+ 2 3)\") (read s))")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalReadEvalNilMakesSharpDotSignal() {
+		// CLHS: binding *read-eval* to nil makes reading #. signal, catchably; the
+		// read after the binding exits works again.
+		assertThat(eval("""
+				(let ((*read-eval* nil))
+				  (handler-case (read-from-string "#.(+ 1 2)")
+				    (error (e) :signaled)))""").print()).isEqualTo(":SIGNALED");
+		assertThat(evalMulti("""
+				(let ((*read-eval* nil)) nil)
+				(read-from-string "#.(+ 1 2)")
+				""")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalSharpDotGeneratedDefconstants() {
+		// fast-http's multipart-parser idiom on the interpreter path: the marker read
+		// plus per-form resolution, the same pipeline loadFile/interpret use.
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
+		for (LispVal expr : LispReader.readAllWithReadEvalMarkers("""
+				#.`(eval-when (:compile-toplevel :load-toplevel :execute)
+				     ,@(loop for i from 0
+				             for state in '(re-state-alpha re-state-beta re-state-gamma)
+				             collect `(defconstant ,(intern (format nil "+~A+" state)) ,i)))
+				(print +re-state-beta+)
+				(print +re-state-gamma+)
+				""", am.ik.rontolisp.reader.Features.INTERPRETER)) {
+			evaluator.eval(evaluator.resolveReadTimeEval(expr));
+		}
+		assertThat(baos.toString().trim()).isEqualTo("1\n2");
+	}
+
+	@Test
 	void readStreamRoundTrip(@TempDir Path tempDir) {
 		String file = tempDir.resolve("data.txt").toString().replace("\\", "\\\\");
 		LispVal result = evalMulti("""

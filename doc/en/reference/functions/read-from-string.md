@@ -2,7 +2,7 @@
 
 `(read-from-string string)`
 
-Parses and returns one datum from the given string. It reuses the same reader as [`read`](read.md), so on the compiled backends it accepts the same frontend-parity syntax (`#S(...)`, `#(...)`, `#\a`, ratios, radix integers, ... -- with `#.`, `#+`/`#-` and reader labels signaling; the WASM reader's numbers carry integers of any magnitude but no float exponents), and `(read-from-string (prin1-to-string x))` round-trips. The optional `eof-error-p`/`eof-value` and the `:start`/`:end` keyword arguments are not supported -- only the single string argument is accepted. Works in all three backends and is usable as a first-class value (`#'read-from-string`).
+Parses and returns one datum from the given string. It reuses the same reader as [`read`](read.md), so on the compiled backends it accepts the same frontend-parity syntax (`#S(...)`, `#(...)`, `#\a`, ratios, radix integers, ... -- with `#.`, `#+`/`#-` and reader labels signaling; the WASM reader's numbers carry integers of any magnitude but no float exponents), and `(read-from-string (prin1-to-string x))` round-trips. The interpreter evaluates a `#.` datum in place (binding `*read-eval*` to `nil` makes it signal, per the standard). The optional `eof-error-p`/`eof-value` and the `:start`/`:end` keyword arguments are not supported -- only the single string argument is accepted. Works in all three backends and is usable as a first-class value (`#'read-from-string`).
 
 ```lisp
 (read-from-string "(+ 1 2)") ; => (+ 1 2)

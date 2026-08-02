@@ -98,7 +98,14 @@ public final class RontoPlayground {
 	static String evalLine(String source) {
 		replBuffer.reset();
 		try {
-			List<LispVal> exprs = LispReader.readAllFromString(source);
+			// #. read-time eval, like the CLI REPL: only a source textually containing
+			// #. pays for the marker read; each form's markers resolve just before it
+			// runs. The COMPILE buttons keep the error-mode read (frontend below): their
+			// pipeline has no macro-time marker resolution pass.
+			boolean markers = source.contains("#.");
+			List<LispVal> exprs = markers
+					? LispReader.readAllWithReadEvalMarkers(source, am.ik.rontolisp.reader.Features.INTERPRETER)
+					: LispReader.readAllFromString(source);
 			// The last form's values are echoed one per line: (floor 10 3) echoes 3
 			// then 1. Deliberately only the LAST form, unlike the CLI REPL (which
 			// echoes every form, as SBCL does reading them one at a time): this same
@@ -107,11 +114,12 @@ public final class RontoPlayground {
 			// See .kb/multiple-values.md.
 			List<LispVal> values = List.of();
 			for (int i = 0; i < exprs.size(); i++) {
+				LispVal expr = markers ? evaluator.resolveReadTimeEval(exprs.get(i)) : exprs.get(i);
 				if (i == exprs.size() - 1) {
-					values = evaluator.evalValues(exprs.get(i));
+					values = evaluator.evalValues(expr);
 				}
 				else {
-					evaluator.eval(exprs.get(i));
+					evaluator.eval(expr);
 				}
 			}
 			replOut.flush();

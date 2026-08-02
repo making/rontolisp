@@ -159,7 +159,7 @@ public final class PackageRegistry {
 			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
 			LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR,
 			LispNames.LAMBDA_LIST_KEYWORDS, LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
-			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR);
+			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READ_EVAL_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also

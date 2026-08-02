@@ -331,6 +331,9 @@ public final class LispEvaluator {
 		// too (nothing here does).
 		this.specialVars.add(LispNames.PRINT_ESCAPE_VAR);
 		this.specialVars.add(LispNames.PRINT_READABLY_VAR);
+		// *read-eval* joins them: (let ((*read-eval* nil)) (read ...)) must bind
+		// dynamically for the #. check in resolveReadTimeEval to see it.
+		this.specialVars.add(LispNames.READ_EVAL_VAR);
 	}
 
 	/**
@@ -542,6 +545,12 @@ public final class LispEvaluator {
 		// #'read/#'read-from-string folding.
 		foldStructLiteralsOf(LispNames.READ);
 		foldStructLiteralsOf(LispNames.READ_FROM_STRING);
+		// #. read-time eval for the runtime readers: with the resolver installed,
+		// read/read-from-string read a #.-bearing datum in marker mode and this evaluator
+		// substitutes each datum's value in place (Environment.readRuntimeDatum). Without
+		// it (a bare Environment) the error-mode read signals, matching the compiled
+		// backends' embedded readers.
+		this.globalEnv.setReadTimeEvalResolver(this::resolveReadTimeEval);
 		this.globalEnv.defineFunction(LispNames.EVAL, new LispFunction(LispNames.EVAL, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.EVAL + " expects 1 argument, got " + args.size());
@@ -2306,6 +2315,23 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Signals when the current -- dynamic-first -- value of {@code *read-eval*} is nil:
+	 * CLHS forbids reading {@code #.} then. Checked at marker RESOLUTION rather than at
+	 * read, which is the same instant for the runtime read built-ins and, for the
+	 * form-at-a-time load/compile paths, lets a top-level {@code (setq *read-eval* nil)}
+	 * disable {@code #.} in every later form -- CL's one-form-at-a-time timing.
+	 */
+	private void requireReadEvalEnabled() {
+		LispVal value = (!this.specialVars.isEmpty() || this.progvUsed)
+				&& this.dynamicBindings.isBound(LispNames.READ_EVAL_VAR)
+						? this.dynamicBindings.get(LispNames.READ_EVAL_VAR)
+						: this.globalEnv.lookupOrNull(LispNames.READ_EVAL_VAR);
+		if (value instanceof LispNil) {
+			throw new LispEvalException("cannot read #. while *read-eval* is nil");
+		}
+	}
+
+	/**
 	 * Replaces the reader's {@code #.} markers in an already-read form by the value of
 	 * the marked datum, rebuilding only the conses that actually change. The reader
 	 * leaves the marker in place instead of evaluating it, because read-time evaluation
@@ -2319,6 +2345,7 @@ public final class LispEvaluator {
 		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
+			requireReadEvalEnabled();
 			return eval(resolveReadTimeEval(datumCons.car()));
 		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL_TEMPLATE.equals(head.name())
@@ -2326,6 +2353,7 @@ public final class LispEvaluator {
 			// A marker inside backquote construction code (the reader's renamed
 			// variant): the value is template DATA, so it substitutes quoted --
 			// evaluating the construction code embeds the value itself.
+			requireReadEvalEnabled();
 			LispVal value = eval(resolveReadTimeEval(datumCons.car()));
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		}

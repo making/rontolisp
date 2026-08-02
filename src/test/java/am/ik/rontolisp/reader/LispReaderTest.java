@@ -615,6 +615,13 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readReadEvalSingleDatumWithMarkers() {
+		// The runtime read built-ins' entry point: one datum, marker mode.
+		assertThat(LispReader.readFromStringWithReadEvalMarkers("#.(+ 1 2)", Features.INTERPRETER))
+			.isEqualTo(LispReader.readFromString("(%read-eval (+ 1 2))"));
+	}
+
+	@Test
 	void readReadEvalUnparsableDatumSkippedInTolerantMode() {
 		// A #. datum that does not parse (here an unquote outside a backquote) falls
 		// back to a nil placeholder so it cannot shift the surrounding structure (e.g.

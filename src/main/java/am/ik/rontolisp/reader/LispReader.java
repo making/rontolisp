@@ -68,6 +68,25 @@ public final class LispReader {
 	}
 
 	/**
+	 * Read a single expression from the input string, wrapping each {@code #.}
+	 * read-time-eval datum in a {@code (%read-eval datum)} marker (see
+	 * {@link #readAllWithReadEvalMarkers}). The runtime {@code read} /
+	 * {@code read-from-string} built-ins use this when the evaluator has installed its
+	 * marker resolver, so {@code #.} in runtime-read data evaluates like CL's
+	 * {@code read} under a true {@code *read-eval*}.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @return the parsed expression
+	 */
+	public static LispVal readFromStringWithReadEvalMarkers(String input, Features features) {
+		List<LispVal> exprs = readAllWithReadEvalMarkers(input, features);
+		if (exprs.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		return exprs.get(0);
+	}
+
+	/**
 	 * Read all expressions from the input string with the interpreter feature set.
 	 * @param input the source code string
 	 * @return the list of parsed expressions

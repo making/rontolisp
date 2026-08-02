@@ -4279,6 +4279,23 @@ cases:
         3
         :RONTOLISP
         :UNICODE
+  - name: reader-sharp-dot-generated-defconstants
+    # fast-http's multipart-parser idiom: #. generates definitions via a
+    # backquoted eval-when whose datum value is CODE, evaluated in place. The
+    # runtime read-from-string half runs on the interpreter only (the compiled
+    # embedded readers signal on #., a permanent limit -- read-load-streams.md).
+    source: |
+      #.`(eval-when (:compile-toplevel :load-toplevel :execute)
+           ,@(loop for i from 0
+                   for state in '(ci-sd-alpha ci-sd-beta ci-sd-gamma)
+                   collect `(defconstant ,(intern (format nil "+~A+" state)) ,i)))
+      (print +ci-sd-beta+)
+      (print +ci-sd-gamma+)
+      (print (list :stamp #.(* 7 6)))
+    expected: |
+      1
+      2
+      (:STAMP 42)
   - name: declarations-eval-when-check-type-assert
     source: |
       (declaim (optimize (speed 3)))

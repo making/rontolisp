@@ -185,14 +185,20 @@ public final class RontoLispCli {
 
 	static void evalBuffer(LispEvaluator evaluator, PrintStream out, StringBuilder buffer) {
 		try {
-			List<LispVal> exprs = LispReader.readAllFromString(buffer.toString());
+			// #. read-time eval at the REPL: only a buffer textually containing #. pays
+			// for the marker read; each form's markers resolve just before it runs, the
+			// same timing interpret/loadFile use.
+			String source = buffer.toString();
+			boolean markers = source.contains("#.");
+			List<LispVal> exprs = markers ? LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)
+					: LispReader.readAllFromString(source);
 			// EVERY form in the buffer is echoed, right after it runs, and as a
 			// multiple-value consumer would see it: one value per line, as in any CL
 			// REPL ((floor 10 3) echoes 3 then 1; (values) echoes nothing). A form's
 			// own output therefore precedes its own value, and two forms typed on one
 			// line echo twice -- what SBCL does reading them one at a time.
 			for (LispVal expr : exprs) {
-				List<LispVal> values = evaluator.evalValues(expr);
+				List<LispVal> values = evaluator.evalValues(markers ? evaluator.resolveReadTimeEval(expr) : expr);
 				freshLine(evaluator);
 				for (LispVal value : values) {
 					out.println(value.print());

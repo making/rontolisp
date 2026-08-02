@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.DoubleUnaryOperator;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispDoubleFloatArray;
@@ -245,6 +246,26 @@ public final class Environment implements Scope {
 	 */
 	public void setDefaultInput(Supplier<@Nullable LispVal> supplier) {
 		this.defaultInput = supplier;
+	}
+
+	/**
+	 * Resolves {@code (%read-eval datum)} markers in a runtime-read datum -- the
+	 * {@code #.} read-time-eval hook. Set by the evaluator (on the global environment) to
+	 * {@code LispEvaluator.resolveReadTimeEval}, so the runtime {@code read} /
+	 * {@code read-from-string} built-ins evaluate a {@code #.} datum exactly like the
+	 * frontend load path does. A {@code null} resolver (no evaluator installed one) keeps
+	 * the error-mode read, whose {@code #.} signal matches the compiled backends'
+	 * embedded readers.
+	 */
+	@Nullable private UnaryOperator<LispVal> readTimeEvalResolver;
+
+	/**
+	 * Installs the {@code #.} marker resolver consulted by the runtime read built-ins;
+	 * see {@link #readTimeEvalResolver}.
+	 * @param resolver replaces every read-eval marker with its datum's value
+	 */
+	public void setReadTimeEvalResolver(UnaryOperator<LispVal> resolver) {
+		this.readTimeEvalResolver = resolver;
 	}
 
 	/**
@@ -522,6 +543,9 @@ public final class Environment implements Scope {
 		// Accepted and ignored: the reader is not readtable-driven, a "readtable" is an
 		// opaque nil token (see LispNames.COPY_READTABLE).
 		env.define(LispNames.READTABLE_VAR, LispNil.INSTANCE);
+		// #. read-time eval is enabled by default; binding it nil makes the marker
+		// resolver signal (LispEvaluator.resolveReadTimeEval), per CLHS.
+		env.define(LispNames.READ_EVAL_VAR, LispTrue.INSTANCE);
 		// The load-context pathname variables. *load-pathname* / *load-truename* are
 		// REBOUND around each loaded file (LispEvaluator.loadFile); the compile-file pair
 		// is permanently nil because rontolisp has no compile-file (see LispNames).
@@ -4559,6 +4583,18 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(port);
 		}));
+		// One datum out of a runtime-read line. With the evaluator's #. resolver
+		// installed, a datum textually containing #. is read in marker mode and the
+		// resolver evaluates each marker in place -- CL's read under a true *read-eval*
+		// (the resolver itself signals when *read-eval* is bound nil). A bare Environment
+		// keeps the error-mode read, matching the compiled backends' embedded readers.
+		java.util.function.Function<String, LispVal> readRuntimeDatum = input -> {
+			if (env.readTimeEvalResolver != null && input.contains("#.")) {
+				return env.readTimeEvalResolver.apply(LispReader.readFromStringWithReadEvalMarkers(input,
+						am.ik.rontolisp.reader.Features.INTERPRETER));
+			}
+			return LispReader.readFromString(input, am.ik.rontolisp.reader.Features.INTERPRETER);
+		};
 		env.defineFunction(LispNames.READ, new LispFunction(LispNames.READ, args -> {
 			try {
 				// (read) reads from stdin; (read stream) reads from an open input
@@ -4593,7 +4629,7 @@ public final class Environment implements Scope {
 					// fold applies, so (read "foo") is FOO and (read "car") folds to car.
 					// The compiled backends' embedded reader runtimes fold to match, so
 					// cross-backend identity holds (see .kb/reader-case-upcase.md).
-					return LispReader.readFromString(line, am.ik.rontolisp.reader.Features.INTERPRETER);
+					return readRuntimeDatum.apply(line);
 				}
 				return LispNil.INSTANCE;
 			}
@@ -4611,7 +4647,7 @@ public final class Environment implements Scope {
 			}
 			// Folds like read above (upcase premise), so (read-from-string "foo") is
 			// the symbol FOO and (read-from-string "car") folds to the standard car.
-			return LispReader.readFromString(str.value(), am.ik.rontolisp.reader.Features.INTERPRETER);
+			return readRuntimeDatum.apply(str.value());
 		}));
 		// parse-integer: parse an integer from a string, with the common :radix,
 		// :junk-allowed, :start and :end keywords.

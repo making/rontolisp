@@ -4453,12 +4453,13 @@ public final class LispNames {
 	public static final String REGISTER_SYSTEM_PACKAGES = "REGISTER-SYSTEM-PACKAGES";
 
 	/**
-	 * {@code %read-eval} -- the internal marker the tolerant reader wraps a {@code #.}
-	 * read-time-eval datum in ({@code #.datum} lexes to {@code (%read-eval datum)}), so
-	 * {@code .asd} consumers ({@code eval.AsdfSystems}) can resolve the datum against the
-	 * file's top-level {@code defparameter} bindings (the cl-postgres
-	 * {@code (:file #.*string-file*)} idiom). Never appears in evaluated/compiled ASTs:
-	 * only the {@code .asd} reading path tolerates {@code #.} at all.
+	 * {@code %read-eval} -- the internal marker the marker-mode reader wraps a {@code #.}
+	 * read-time-eval datum in ({@code #.datum} lexes to {@code (%read-eval datum)}).
+	 * Consumers resolve the marker by evaluating the datum: {@code eval.AsdfSystems}
+	 * against a {@code .asd} file's top-level {@code defparameter} bindings (the
+	 * cl-postgres {@code (:file #.*string-file*)} idiom), the evaluator's load / the
+	 * runtime {@code read} built-ins / the compile path's macro-time interpreter against
+	 * the global environment ({@code LispEvaluator.resolveReadTimeEval}).
 	 */
 	public static final String READ_EVAL = "%READ-EVAL";
 
@@ -4470,6 +4471,17 @@ public final class LispNames {
 	 * evaluate as the same 1-arg identity.
 	 */
 	public static final String READ_EVAL_TEMPLATE = "%READ-EVAL-TEMPLATE";
+
+	/**
+	 * {@code *read-eval*} -- whether {@code #.} read-time evaluation is enabled (CLHS:
+	 * binding it to {@code nil} makes the reader signal on {@code #.}). Seeded {@code t}
+	 * and proclaimed special on the interpreter, checked by
+	 * {@code LispEvaluator.resolveReadTimeEval} -- which also covers the compile path's
+	 * macro-time marker resolution. The compiled runtime readers signal on {@code #.}
+	 * unconditionally (a permanent limit, see {@code .kb/read-load-streams.md}), so the
+	 * variable itself exists only on the interpreter.
+	 */
+	public static final String READ_EVAL_VAR = "*READ-EVAL*";
 
 	/** The canonical qualified spelling of {@code asdf:defsystem}. */
 	public static final String ASDF_DEFSYSTEM = ASDF_PKG + ":" + DEFSYSTEM;
