@@ -960,6 +960,11 @@ final class WasmExprCompiler {
 				case LispNames.SLOT_VALUE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx);
 				case LispNames.WITH_SLOTS -> WasmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx);
+				case LispNames.SYMBOL_MACROLET ->
+					// No user-macro hook: UserMacroExpander has already expanded every
+					// user
+					// macro on the compile path.
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSymbolMacrolet(cons), ctx);
 				case LispNames.WITH_ACCESSORS ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithAccessors(cons), ctx);
 				case LispNames.CHANGE_CLASS -> WasmExprCompiler

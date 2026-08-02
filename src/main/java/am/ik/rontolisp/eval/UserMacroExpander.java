@@ -794,6 +794,19 @@ public final class UserMacroExpander {
 					}
 					return expandMacrolet(parts, macroEval);
 				}
+				case LispNames.SYMBOL_MACROLET: {
+					// (symbol-macrolet ((name expansion)...) body...): the binding names
+					// stay; the expansion forms and the body are expressions -- user
+					// macros
+					// inside BOTH must be gone before the backends run the substitution
+					// (the compilers have no macro table to expand a call the
+					// substitution
+					// splices in).
+					if (parts.size() < 2) {
+						return form; // malformed; the expansion reports it
+					}
+					return rebuild(parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
+				}
 				case LispNames.MULTIPLE_VALUE_BIND: {
 					// (multiple-value-bind (vars...) values-form body...): the variable
 					// list stays, the values form and the body are expressions.

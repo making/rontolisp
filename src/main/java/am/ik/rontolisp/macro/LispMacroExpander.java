@@ -115,6 +115,7 @@ public final class LispMacroExpander {
 			case LispNames.MAKE_CONDITION -> expandMakeCondition(cons);
 			case LispNames.WITH_SLOTS -> expandWithSlots(cons);
 			case LispNames.WITH_ACCESSORS -> expandWithAccessors(cons);
+			case LispNames.SYMBOL_MACROLET -> expandSymbolMacrolet(cons);
 			case LispNames.IGNORE_ERRORS -> expandIgnoreErrors(cons);
 			case LispNames.DOCUMENTATION -> expandDocumentation(cons);
 			case LispNames.COMPLEMENT -> expandComplement(cons);
@@ -10351,6 +10352,764 @@ public final class LispMacroExpander {
 		return new LispCons(car, cdr);
 	}
 
+	/**
+	 * One-step expansion of a user ({@code defmacro}/{@code macrolet}) macro call,
+	 * supplied by the interpreter to
+	 * {@link #expandSymbolMacrolet(LispCons, UserMacroHook)} so the substitution walk can
+	 * expand a user macro it meets before substituting into its expansion (macro
+	 * arguments may be data, e.g. trivia {@code match} patterns; the expansion is code).
+	 * The compile path passes no hook: {@code UserMacroExpander} has already expanded
+	 * every user macro when the compilers run the substitution.
+	 */
+	@FunctionalInterface
+	public interface UserMacroHook {
+
+		/**
+		 * Expands the form one macro step.
+		 * @param form a proper-list form with a symbol head
+		 * @return the expansion, or {@code null} (or the form itself) when the head is
+		 * not a user macro
+		 */
+		@Nullable LispVal expandOneStep(LispCons form);
+
+	}
+
+	/**
+	 * Expands {@code (symbol-macrolet ((name expansion)...) body...)} without a
+	 * user-macro hook -- the compile path and {@code macroexpand-1} entry point. See
+	 * {@link #expandSymbolMacrolet(LispCons, UserMacroHook)}.
+	 * @param cons the symbol-macrolet expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandSymbolMacrolet(LispCons cons) {
+		return expandSymbolMacrolet(cons, null);
+	}
+
+	/**
+	 * Expands {@code (symbol-macrolet ((name expansion)...) body...)} by walking the body
+	 * and replacing each free reference to a bound name with its expansion -- the CL
+	 * symbol-macro semantics, shared by the evaluator and all compilers. Unlike the lite
+	 * {@link #substituteSymbols} behind {@code with-slots}, this substitution is
+	 * SHADOW-AWARE: an inner {@code let}/{@code let*}/{@code lambda}/{@code do}/...
+	 * binding of the same name stops the substitution in its scope (trivia's
+	 * {@code match} expansions rely on a {@code let} rebinding a symbol-macro name).
+	 * Details:
+	 *
+	 * <ul>
+	 * <li>Quoted data, {@code declare} specifiers, function-namespace positions
+	 * ({@code #'name}, call heads), {@code go} tags, {@code block} names, and
+	 * {@code case}-family keys are never substituted (Lisp-2 + data positions).</li>
+	 * <li>A {@code setq} whose target is a bound name becomes a {@code setf} of the
+	 * expansion place, so the ordinary setf machinery sees the real place (dbi assigns
+	 * {@code (setf auto-commit ...)} through a {@code slot-value} expansion). A textual
+	 * {@code setf} needs no rewrite: substituting the place position already yields the
+	 * expansion place.</li>
+	 * <li>Declarations directly in the symbol-macrolet body are dropped: they describe
+	 * the macro names, which no longer exist after substitution (trivia emits
+	 * {@code (declare (type ...))} / {@code (declare (ignorable ...))} there).</li>
+	 * <li>A replacement is substituted again with the just-replaced name removed, so
+	 * sibling bindings chain ({@code ((a b) (b 42))} reads 42 through {@code a}) while a
+	 * self-referential expansion terminates instead of looping.</li>
+	 * <li>Complex binding macros without a stable surface shape ({@code loop},
+	 * {@code prog}/{@code prog*}) are lowered one step first and the expansion is walked;
+	 * every other known form is walked structurally so the compilers' optimized shapes
+	 * survive.</li>
+	 * <li>Definition bodies that do not see the lexical environment ({@code defmacro},
+	 * {@code macrolet} definitions) and the class-family definitions
+	 * ({@code defclass}/{@code defstruct}/{@code defgeneric}) are kept verbatim.</li>
+	 * </ul>
+	 *
+	 * The global {@code define-symbol-macro} is deliberately NOT supported -- no library
+	 * on the current closure uses it; re-evaluate if one appears.
+	 * @param cons the symbol-macrolet expression
+	 * @param userMacros one-step user-macro expander, or {@code null} on the compile path
+	 * @return the expanded expression (a {@code progn} of the substituted body)
+	 */
+	public static LispVal expandSymbolMacrolet(LispCons cons, @Nullable UserMacroHook userMacros) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new IllegalArgumentException(LispNames.SYMBOL_MACROLET
+					+ " expects (symbol-macrolet ((name expansion)...) body...): " + cons.print());
+		}
+		java.util.Map<String, LispVal> macros = parseSymbolMacroBindings(parts.get(1), cons);
+		List<LispVal> body = new java.util.ArrayList<>();
+		for (int i = 2; i < parts.size(); i++) {
+			if (isDeclareForm(parts.get(i))) {
+				continue;
+			}
+			body.add(substituteSymbolMacros(parts.get(i), macros, userMacros));
+		}
+		return prognOrNil(body);
+	}
+
+	/** Parses the {@code ((name expansion)...)} binding list of a symbol-macrolet. */
+	private static java.util.Map<String, LispVal> parseSymbolMacroBindings(LispVal bindingList, LispCons cons) {
+		java.util.LinkedHashMap<String, LispVal> macros = new java.util.LinkedHashMap<>();
+		if (bindingList instanceof LispCons bindingsCons) {
+			for (LispVal entry : bindingsCons.toList()) {
+				if (!(entry instanceof LispCons pair) || !pair.isProperList() || pair.toList().size() != 2
+						|| !(pair.toList().get(0) instanceof LispSymbol name) || name.isKeyword()) {
+					throw new IllegalArgumentException(
+							LispNames.SYMBOL_MACROLET + " expects (name expansion) pairs: " + cons.print());
+				}
+				macros.put(name.name(), pair.toList().get(1));
+			}
+		}
+		return macros;
+	}
+
+	/** Whether the form is a {@code (declare ...)} form. */
+	private static boolean isDeclareForm(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.DECLARE.equals(head.name());
+	}
+
+	/**
+	 * The shadow-aware substitution behind {@link #expandSymbolMacrolet}; see there for
+	 * the rules. {@code macros} maps each active symbol-macro name to its expansion.
+	 */
+	private static LispVal substituteSymbolMacros(LispVal form, java.util.Map<String, LispVal> macros,
+			@Nullable UserMacroHook userMacros) {
+		if (macros.isEmpty()) {
+			return form;
+		}
+		if (form instanceof LispSymbol sym) {
+			LispVal expansion = macros.get(sym.name());
+			if (expansion == null) {
+				return form;
+			}
+			return substituteSymbolMacros(expansion, symbolMacrosWithout(macros, sym.name()), userMacros);
+		}
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (!cons.isProperList()) {
+			// An improper list is never a call form; the legitimate appearances are data
+			// patterns whose elements are plain variables, kept verbatim.
+			return form;
+		}
+		if (!(cons.car() instanceof LispSymbol head)) {
+			// ((lambda (x) ...) arg...): every element is an expression.
+			return substituteSymbolMacroTail(cons.toList(), 0, macros, userMacros);
+		}
+		List<LispVal> parts = cons.toList();
+		switch (head.name()) {
+			case LispNames.QUOTE, LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM, LispNames.GO,
+					LispNames.DEFMACRO, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE, LispNames.DEFSTRUCT,
+					LispNames.DEFCLASS, LispNames.DEFGENERIC, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
+					LispNames.DEFSETF, LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFINE_COMPILER_MACRO,
+					LispNames.DEFINE_MODIFY_MACRO: {
+				// Data-only shapes, and definition bodies that do not see the lexical
+				// environment: kept verbatim.
+				return form;
+			}
+			case LispNames.LET: {
+				return substituteSymbolMacroLet(parts, macros, userMacros, false);
+			}
+			case LispNames.LET_STAR: {
+				return substituteSymbolMacroLet(parts, macros, userMacros, true);
+			}
+			case LispNames.DO, LispNames.DO_STAR: {
+				return substituteSymbolMacroDo(parts, macros, userMacros, LispNames.DO_STAR.equals(head.name()));
+			}
+			case LispNames.LAMBDA, LispNames.ASYNC_LAMBDA: {
+				return parts.size() < 2 ? form : substituteSymbolMacroLambdaLike(parts, 1, macros, userMacros);
+			}
+			case LispNames.DEFUN, LispNames.ASYNC_DEFUN: {
+				return parts.size() < 3 ? form : substituteSymbolMacroLambdaLike(parts, 2, macros, userMacros);
+			}
+			case LispNames.DEFMETHOD: {
+				// (defmethod name [qualifier] (params...) body...): specializers are data
+				// (they precede any lambda-list keyword, so defaults stay unwalked
+				// there).
+				if (parts.size() < 3) {
+					return form;
+				}
+				int llIndex = parts.get(2) instanceof LispSymbol ? 3 : 2;
+				return parts.size() <= llIndex ? form
+						: substituteSymbolMacroLambdaLike(parts, llIndex, macros, userMacros);
+			}
+			case LispNames.FLET, LispNames.LABELS: {
+				return substituteSymbolMacroFlet(parts, macros, userMacros);
+			}
+			case LispNames.MACROLET: {
+				// Local macro DEFINITIONS run at expansion time in the null lexical
+				// environment; only the body is expressions.
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			}
+			case LispNames.SYMBOL_MACROLET: {
+				return substituteNestedSymbolMacrolet(parts, macros, userMacros);
+			}
+			case LispNames.SETQ: {
+				// A target naming a symbol macro substitutes into a PLACE; the whole form
+				// then becomes a setf, which accepts both symbol and place targets.
+				boolean placeTarget = false;
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					LispVal substituted = substituteSymbolMacros(parts.get(i), macros, userMacros);
+					if (i % 2 == 1 && substituted instanceof LispCons) {
+						placeTarget = true;
+					}
+					out.add(substituted);
+				}
+				if (placeTarget) {
+					out.set(0, new LispSymbol(LispNames.SETF));
+				}
+				return listToCons(out);
+			}
+			case LispNames.FUNCTION: {
+				// Lisp-2: #'name is a function-namespace reference, never substituted;
+				// only a literal lambda expression is walked.
+				if (parts.size() == 2 && parts.get(1) instanceof LispCons target
+						&& target.car() instanceof LispSymbol lam
+						&& (LispNames.LAMBDA.equals(lam.name()) || LispNames.ASYNC_LAMBDA.equals(lam.name()))) {
+					return substituteSymbolMacroTail(parts, 1, macros, userMacros);
+				}
+				return form;
+			}
+			case LispNames.BLOCK, LispNames.RETURN_FROM: {
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			}
+			case LispNames.TAGBODY: {
+				// Atoms in a tagbody body are go tags (data); conses are statements.
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					out.add(parts.get(i) instanceof LispCons ? substituteSymbolMacros(parts.get(i), macros, userMacros)
+							: parts.get(i));
+				}
+				return listToCons(out);
+			}
+			case LispNames.COND: {
+				// Every element of every clause is an expression (a bare-symbol test must
+				// substitute, which the generic walk's head-keeping would miss).
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					out.add(parts.get(i) instanceof LispCons clause && clause.isProperList()
+							? substituteSymbolMacroTail(clause.toList(), 0, macros, userMacros) : parts.get(i));
+				}
+				return listToCons(out);
+			}
+			case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE: {
+				// (case keyform (keys body...)...): keys/type specifiers are data. Walked
+				// structurally, not expanded: the typecase expansion needs the class
+				// registry, which the shared walk does not have.
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				if (parts.size() > 1) {
+					out.add(substituteSymbolMacros(parts.get(1), macros, userMacros));
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					out.add(parts.get(i) instanceof LispCons clause && clause.isProperList()
+							? substituteSymbolMacroTail(clause.toList(), 1, macros, userMacros) : parts.get(i));
+				}
+				return listToCons(out);
+			}
+			case LispNames.HANDLER_CASE, LispNames.RESTART_CASE: {
+				return substituteSymbolMacroHandlerClauses(parts, macros, userMacros);
+			}
+			case LispNames.HANDLER_BIND: {
+				// (handler-bind ((type handler)...) body...): types are data, handlers
+				// and the body are expressions.
+				if (parts.size() < 2) {
+					return form;
+				}
+				LispVal bindings = parts.get(1);
+				if (bindings instanceof LispCons bindingsCons && bindingsCons.isProperList()) {
+					List<LispVal> newBindings = new java.util.ArrayList<>();
+					for (LispVal binding : bindingsCons.toList()) {
+						newBindings.add(binding instanceof LispCons pair && pair.isProperList()
+								? substituteSymbolMacroTail(pair.toList(), 1, macros, userMacros) : binding);
+					}
+					bindings = listToCons(newBindings);
+				}
+				return substituteSymbolMacroTail(parts, 2, macros, userMacros, bindings);
+			}
+			case LispNames.DOLIST, LispNames.DOTIMES: {
+				// (dolist (var listform result) body...): the listform is outer scope,
+				// the result and the body see the variable (which shadows).
+				if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList()) {
+					return form;
+				}
+				List<LispVal> specParts = spec.toList();
+				java.util.Map<String, LispVal> inner = specParts.get(0) instanceof LispSymbol var
+						? symbolMacrosWithout(macros, var.name()) : macros;
+				List<LispVal> newSpec = new java.util.ArrayList<>(specParts.size());
+				newSpec.add(specParts.get(0));
+				for (int i = 1; i < specParts.size(); i++) {
+					newSpec.add(substituteSymbolMacros(specParts.get(i), i == 1 ? macros : inner, userMacros));
+				}
+				return substituteSymbolMacroTail(parts, 2, inner, userMacros, listToCons(newSpec));
+			}
+			case LispNames.WITH_OPEN_FILE, LispNames.WITH_OPEN_STREAM, LispNames.WITH_OUTPUT_TO_STRING,
+					LispNames.WITH_INPUT_FROM_STRING: {
+				// (with-... (var args...) body...): the spec args are outer scope, the
+				// body sees the variable.
+				if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || !spec.isProperList()) {
+					return form;
+				}
+				List<LispVal> specParts = spec.toList();
+				java.util.Map<String, LispVal> inner = specParts.get(0) instanceof LispSymbol var
+						? symbolMacrosWithout(macros, var.name()) : macros;
+				List<LispVal> newSpec = new java.util.ArrayList<>(specParts.size());
+				newSpec.add(specParts.get(0));
+				for (int i = 1; i < specParts.size(); i++) {
+					newSpec.add(substituteSymbolMacros(specParts.get(i), macros, userMacros));
+				}
+				return substituteSymbolMacroTail(parts, 2, inner, userMacros, listToCons(newSpec));
+			}
+			case LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS: {
+				// (with-slots (slot | (var slot)...) obj body...): the entry variables
+				// establish their own (symbol-macro) bindings, shadowing outer ones.
+				if (parts.size() < 3) {
+					return form;
+				}
+				java.util.Map<String, LispVal> inner = macros;
+				if (parts.get(1) instanceof LispCons entries && entries.isProperList()) {
+					for (LispVal entry : entries.toList()) {
+						if (entry instanceof LispSymbol var) {
+							inner = symbolMacrosWithout(inner, var.name());
+						}
+						else if (entry instanceof LispCons pair && pair.car() instanceof LispSymbol var) {
+							inner = symbolMacrosWithout(inner, var.name());
+						}
+					}
+				}
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				out.add(parts.get(1));
+				out.add(substituteSymbolMacros(parts.get(2), macros, userMacros));
+				for (int i = 3; i < parts.size(); i++) {
+					out.add(substituteSymbolMacros(parts.get(i), inner, userMacros));
+				}
+				return listToCons(out);
+			}
+			case LispNames.MULTIPLE_VALUE_BIND: {
+				// (multiple-value-bind (vars...) values-form body...): the values form is
+				// outer scope, the body sees the variables.
+				if (parts.size() < 3 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+					return form;
+				}
+				java.util.Map<String, LispVal> inner = macros;
+				if (parts.get(1) instanceof LispCons vars && vars.isProperList()) {
+					for (LispVal var : vars.toList()) {
+						if (var instanceof LispSymbol name) {
+							inner = symbolMacrosWithout(inner, name.name());
+						}
+					}
+				}
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				out.add(parts.get(1));
+				out.add(substituteSymbolMacros(parts.get(2), macros, userMacros));
+				for (int i = 3; i < parts.size(); i++) {
+					out.add(substituteSymbolMacros(parts.get(i), inner, userMacros));
+				}
+				return listToCons(out);
+			}
+			case LispNames.MULTIPLE_VALUE_SETQ: {
+				// (multiple-value-setq (vars...) form): a var naming a symbol macro needs
+				// the setf semantics of the lowering; otherwise the vars are data.
+				if (parts.size() >= 2 && parts.get(1) instanceof LispCons vars && vars.isProperList()
+						&& vars.toList()
+							.stream()
+							.anyMatch(v -> v instanceof LispSymbol s && macros.containsKey(s.name()))) {
+					return substituteSymbolMacros(expandMultipleValueSetq(cons), macros, userMacros);
+				}
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			}
+			case LispNames.PSETQ: {
+				// (psetq a 1 b 2): a target naming a symbol macro needs the setf
+				// semantics of the lowering; otherwise the targets are data.
+				boolean macroTarget = false;
+				for (int i = 1; i < parts.size(); i += 2) {
+					if (parts.get(i) instanceof LispSymbol target && macros.containsKey(target.name())) {
+						macroTarget = true;
+						break;
+					}
+				}
+				if (macroTarget) {
+					return substituteSymbolMacros(expandPsetq(cons), macros, userMacros);
+				}
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				for (int i = 1; i < parts.size(); i++) {
+					out.add(i % 2 == 0 ? substituteSymbolMacros(parts.get(i), macros, userMacros) : parts.get(i));
+				}
+				return listToCons(out);
+			}
+			case LispNames.DESTRUCTURING_BIND: {
+				// (destructuring-bind pattern form body...): every symbol in the pattern
+				// is a binding (defaults inside &optional/&key specs stay unwalked --
+				// conservative).
+				if (parts.size() < 3) {
+					return form;
+				}
+				java.util.Set<String> names = new java.util.HashSet<>();
+				collectPatternNames(parts.get(1), names);
+				java.util.Map<String, LispVal> inner = symbolMacrosWithoutAll(macros, names);
+				List<LispVal> out = new java.util.ArrayList<>(parts.size());
+				out.add(parts.get(0));
+				out.add(parts.get(1));
+				out.add(substituteSymbolMacros(parts.get(2), macros, userMacros));
+				for (int i = 3; i < parts.size(); i++) {
+					out.add(substituteSymbolMacros(parts.get(i), inner, userMacros));
+				}
+				return listToCons(out);
+			}
+			case LispNames.THE: {
+				return parts.size() < 3 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			}
+			case LispNames.CHECK_TYPE, LispNames.ASSERT: {
+				// (check-type place type [string]) / (assert test ...): the type / the
+				// trailing places-and-datum are data-bearing; only the first argument is
+				// walked.
+				if (parts.size() < 2) {
+					return form;
+				}
+				List<LispVal> out = new java.util.ArrayList<>(parts);
+				out.set(1, substituteSymbolMacros(parts.get(1), macros, userMacros));
+				return listToCons(out);
+			}
+			case LispNames.DEFVAR, LispNames.DEFPARAMETER, LispNames.DEFCONSTANT: {
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			}
+			case LispNames.EVAL_WHEN: {
+				return parts.size() < 2 ? form : substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+			}
+			case LispNames.LOOP: {
+				// No stable surface shape (clause keywords, destructuring patterns):
+				// lower one step and walk the expansion, like SpecialVarCollector.
+				return substituteSymbolMacros(expandLoop(cons), macros, userMacros);
+			}
+			case LispNames.PROG: {
+				return substituteSymbolMacros(expandProg(cons, false), macros, userMacros);
+			}
+			case LispNames.PROG_STAR: {
+				return substituteSymbolMacros(expandProg(cons, true), macros, userMacros);
+			}
+			default: {
+				if (userMacros != null) {
+					LispVal expansion = userMacros.expandOneStep(cons);
+					if (expansion != null && expansion != cons) {
+						return substituteSymbolMacros(expansion, macros, userMacros);
+					}
+				}
+				// Ordinary call / all-expression form: the head is a function-namespace
+				// reference (Lisp-2), the arguments are expressions.
+				return substituteSymbolMacroTail(parts, 1, macros, userMacros);
+			}
+		}
+	}
+
+	/**
+	 * Rebuilds a form keeping {@code parts[0]} (unless {@code from} is 0) and the given
+	 * fixed subforms (standing for {@code parts[1..from-1]}) verbatim, substituting
+	 * {@code parts[from..]} as expressions with the given (possibly narrowed) map.
+	 */
+	private static LispVal substituteSymbolMacroTail(List<LispVal> parts, int from,
+			java.util.Map<String, LispVal> macros, @Nullable UserMacroHook userMacros, LispVal... fixed) {
+		List<LispVal> out = new java.util.ArrayList<>(parts.size());
+		if (from > 0) {
+			out.add(parts.get(0));
+		}
+		out.addAll(List.of(fixed));
+		for (int i = from; i < parts.size(); i++) {
+			out.add(substituteSymbolMacros(parts.get(i), macros, userMacros));
+		}
+		return listToCons(out);
+	}
+
+	/**
+	 * Substitutes a {@code let}/{@code let*} form: binding names stay and shadow the
+	 * macros in the body; each init is an expression -- in the outer scope for
+	 * {@code let}, in the incrementally narrowed scope for {@code let*}.
+	 */
+	private static LispVal substituteSymbolMacroLet(List<LispVal> parts, java.util.Map<String, LispVal> macros,
+			@Nullable UserMacroHook userMacros, boolean sequential) {
+		if (parts.size() < 2) {
+			return listToCons(parts);
+		}
+		java.util.Map<String, LispVal> inner = macros;
+		LispVal bindingList = parts.get(1);
+		if (bindingList instanceof LispCons bindingsCons && bindingsCons.isProperList()) {
+			List<LispVal> newBindings = new java.util.ArrayList<>();
+			for (LispVal binding : bindingsCons.toList()) {
+				if (binding instanceof LispSymbol name) {
+					newBindings.add(binding);
+					inner = symbolMacrosWithout(inner, name.name());
+				}
+				else if (binding instanceof LispCons pair && pair.isProperList()
+						&& pair.car() instanceof LispSymbol name) {
+					newBindings
+						.add(substituteSymbolMacroTail(pair.toList(), 1, sequential ? inner : macros, userMacros));
+					inner = symbolMacrosWithout(inner, name.name());
+				}
+				else {
+					newBindings.add(binding);
+				}
+			}
+			bindingList = listToCons(newBindings);
+		}
+		return substituteSymbolMacroTail(parts, 2, inner, userMacros, bindingList);
+	}
+
+	/**
+	 * Substitutes a {@code do}/{@code do*} form: {@code ((var init step)...) (end
+	 * result...) body...}. Inits follow the let/let* scoping; steps, the end test, the
+	 * result forms, and the body all see every variable.
+	 */
+	private static LispVal substituteSymbolMacroDo(List<LispVal> parts, java.util.Map<String, LispVal> macros,
+			@Nullable UserMacroHook userMacros, boolean sequential) {
+		if (parts.size() < 3) {
+			return listToCons(parts);
+		}
+		java.util.Map<String, LispVal> inner = macros;
+		if (parts.get(1) instanceof LispCons bindingsCons && bindingsCons.isProperList()) {
+			for (LispVal binding : bindingsCons.toList()) {
+				LispSymbol name = binding instanceof LispSymbol s ? s
+						: binding instanceof LispCons pair && pair.car() instanceof LispSymbol n ? n : null;
+				if (name != null) {
+					inner = symbolMacrosWithout(inner, name.name());
+				}
+			}
+		}
+		LispVal bindingList = parts.get(1);
+		if (bindingList instanceof LispCons bindingsCons && bindingsCons.isProperList()) {
+			java.util.Map<String, LispVal> initScope = macros;
+			List<LispVal> newBindings = new java.util.ArrayList<>();
+			for (LispVal binding : bindingsCons.toList()) {
+				if (binding instanceof LispCons pair && pair.isProperList() && pair.car() instanceof LispSymbol name) {
+					List<LispVal> pairParts = pair.toList();
+					List<LispVal> newPair = new java.util.ArrayList<>(pairParts.size());
+					newPair.add(name);
+					if (pairParts.size() > 1) {
+						newPair.add(substituteSymbolMacros(pairParts.get(1), initScope, userMacros));
+					}
+					// The step form sees every do variable.
+					for (int i = 2; i < pairParts.size(); i++) {
+						newPair.add(substituteSymbolMacros(pairParts.get(i), inner, userMacros));
+					}
+					newBindings.add(listToCons(newPair));
+					if (sequential) {
+						initScope = symbolMacrosWithout(initScope, name.name());
+					}
+				}
+				else {
+					newBindings.add(binding);
+					if (sequential && binding instanceof LispSymbol name) {
+						initScope = symbolMacrosWithout(initScope, name.name());
+					}
+				}
+			}
+			bindingList = listToCons(newBindings);
+		}
+		LispVal endClause = parts.get(2);
+		if (endClause instanceof LispCons endCons && endCons.isProperList()) {
+			endClause = substituteSymbolMacroTail(endCons.toList(), 0, inner, userMacros);
+		}
+		return substituteSymbolMacroTail(parts, 3, inner, userMacros, bindingList, endClause);
+	}
+
+	/**
+	 * Substitutes a lambda-like form ({@code lambda}/{@code defun}/{@code defmethod}/the
+	 * async variants): everything before the lambda list is kept, the parameter names
+	 * shadow the macros in defaults and the body, and only defaults AFTER a lambda-list
+	 * keyword are walked (a cons before one is a defmethod specializer -- data).
+	 */
+	private static LispVal substituteSymbolMacroLambdaLike(List<LispVal> parts, int llIndex,
+			java.util.Map<String, LispVal> macros, @Nullable UserMacroHook userMacros) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		collectLambdaListNames(parts.get(llIndex), names);
+		java.util.Map<String, LispVal> inner = symbolMacrosWithoutAll(macros, names);
+		LispVal lambdaList = parts.get(llIndex);
+		if (lambdaList instanceof LispCons llCons && llCons.isProperList()) {
+			List<LispVal> out = new java.util.ArrayList<>();
+			boolean afterKeyword = false;
+			for (LispVal param : llCons.toList()) {
+				if (param instanceof LispSymbol sym && sym.name().startsWith("&")) {
+					afterKeyword = true;
+					out.add(param);
+				}
+				else if (afterKeyword && param instanceof LispCons spec && spec.isProperList()
+						&& spec.toList().size() >= 2) {
+					// (name default [supplied-p]): the default is an expression in the
+					// narrowed scope.
+					List<LispVal> specParts = spec.toList();
+					List<LispVal> newSpec = new java.util.ArrayList<>(specParts.size());
+					newSpec.add(specParts.get(0));
+					newSpec.add(substituteSymbolMacros(specParts.get(1), inner, userMacros));
+					for (int i = 2; i < specParts.size(); i++) {
+						newSpec.add(specParts.get(i));
+					}
+					out.add(listToCons(newSpec));
+				}
+				else {
+					out.add(param);
+				}
+			}
+			lambdaList = listToCons(out);
+		}
+		List<LispVal> kept = new java.util.ArrayList<>(parts.subList(1, llIndex));
+		kept.add(lambdaList);
+		return substituteSymbolMacroTail(parts, llIndex + 1, inner, userMacros, kept.toArray(new LispVal[0]));
+	}
+
+	/**
+	 * Substitutes an {@code flet}/{@code labels} form: definition names live in the
+	 * function namespace (no variable shadowing); each definition body sees the macros
+	 * minus its own lambda-list names, the main body sees them all.
+	 */
+	private static LispVal substituteSymbolMacroFlet(List<LispVal> parts, java.util.Map<String, LispVal> macros,
+			@Nullable UserMacroHook userMacros) {
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons defsCons) || !defsCons.isProperList()) {
+			return parts.size() < 2 ? listToCons(parts)
+					: substituteSymbolMacroTail(parts, 2, macros, userMacros, parts.get(1));
+		}
+		List<LispVal> newDefs = new java.util.ArrayList<>();
+		for (LispVal def : defsCons.toList()) {
+			if (def instanceof LispCons defCons && defCons.isProperList() && defCons.toList().size() >= 2) {
+				newDefs.add(substituteSymbolMacroLambdaLike(defCons.toList(), 1, macros, userMacros));
+			}
+			else {
+				newDefs.add(def);
+			}
+		}
+		return substituteSymbolMacroTail(parts, 2, macros, userMacros, listToCons(newDefs));
+	}
+
+	/**
+	 * Substitutes {@code handler-case}/{@code restart-case} clauses: the protected form
+	 * is walked in the outer scope; each clause's first element (condition type / restart
+	 * name) and lambda list are data, and the clause body sees the macros minus the
+	 * lambda-list names.
+	 */
+	private static LispVal substituteSymbolMacroHandlerClauses(List<LispVal> parts,
+			java.util.Map<String, LispVal> macros, @Nullable UserMacroHook userMacros) {
+		if (parts.size() < 2) {
+			return listToCons(parts);
+		}
+		List<LispVal> out = new java.util.ArrayList<>(parts.size());
+		out.add(parts.get(0));
+		out.add(substituteSymbolMacros(parts.get(1), macros, userMacros));
+		for (int i = 2; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons clause && clause.isProperList() && clause.toList().size() >= 2) {
+				List<LispVal> clauseParts = clause.toList();
+				java.util.Set<String> names = new java.util.HashSet<>();
+				collectLambdaListNames(clauseParts.get(1), names);
+				java.util.Map<String, LispVal> inner = symbolMacrosWithoutAll(macros, names);
+				out.add(substituteSymbolMacroTail(clauseParts, 2, inner, userMacros, clauseParts.get(1)));
+			}
+			else {
+				out.add(parts.get(i));
+			}
+		}
+		return listToCons(out);
+	}
+
+	/**
+	 * Substitutes a nested {@code symbol-macrolet}: the inner expansion forms are walked
+	 * in the OUTER scope (a use of the inner macro re-expands through them later), the
+	 * inner body is walked with the inner names shadowing the outer ones, and the form
+	 * itself is kept for the later expansion of the inner binding.
+	 */
+	private static LispVal substituteNestedSymbolMacrolet(List<LispVal> parts, java.util.Map<String, LispVal> macros,
+			@Nullable UserMacroHook userMacros) {
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			return listToCons(parts);
+		}
+		java.util.Map<String, LispVal> inner = macros;
+		LispVal bindingList = parts.get(1);
+		if (bindingList instanceof LispCons bindingsCons && bindingsCons.isProperList()) {
+			List<LispVal> newBindings = new java.util.ArrayList<>();
+			for (LispVal binding : bindingsCons.toList()) {
+				if (binding instanceof LispCons pair && pair.isProperList() && pair.toList().size() == 2
+						&& pair.car() instanceof LispSymbol name) {
+					newBindings.add(substituteSymbolMacroTail(pair.toList(), 1, macros, userMacros));
+					inner = symbolMacrosWithout(inner, name.name());
+				}
+				else {
+					newBindings.add(binding);
+				}
+			}
+			bindingList = listToCons(newBindings);
+		}
+		return substituteSymbolMacroTail(parts, 2, inner, userMacros, bindingList);
+	}
+
+	/**
+	 * Collects the variable names a lambda list binds: plain symbols (lambda-list
+	 * keywords excluded), spec heads ({@code (name ...)} and the {@code ((:key name)
+	 * ...)} keyword form), and supplied-p names.
+	 */
+	private static void collectLambdaListNames(LispVal lambdaList, java.util.Set<String> names) {
+		if (!(lambdaList instanceof LispCons llCons) || !llCons.isProperList()) {
+			return;
+		}
+		for (LispVal param : llCons.toList()) {
+			if (param instanceof LispSymbol sym) {
+				if (!sym.name().startsWith("&")) {
+					names.add(sym.name());
+				}
+			}
+			else if (param instanceof LispCons spec && spec.isProperList()) {
+				List<LispVal> specParts = spec.toList();
+				if (specParts.get(0) instanceof LispSymbol name) {
+					names.add(name.name());
+				}
+				else if (specParts.get(0) instanceof LispCons keyPair && keyPair.isProperList()
+						&& keyPair.toList().size() == 2 && keyPair.toList().get(1) instanceof LispSymbol name) {
+					names.add(name.name());
+				}
+				if (specParts.size() >= 3 && specParts.get(2) instanceof LispSymbol suppliedP) {
+					names.add(suppliedP.name());
+				}
+			}
+		}
+	}
+
+	/**
+	 * Collects every symbol of a destructuring pattern (lambda-list keywords excluded) --
+	 * conservative: a nested spec's default expression symbols are collected as names
+	 * too, which can only over-shadow, never mis-substitute.
+	 */
+	private static void collectPatternNames(LispVal pattern, java.util.Set<String> names) {
+		if (pattern instanceof LispSymbol sym) {
+			if (!sym.name().startsWith("&")) {
+				names.add(sym.name());
+			}
+			return;
+		}
+		if (pattern instanceof LispCons cons) {
+			collectPatternNames(cons.car(), names);
+			collectPatternNames(cons.cdr(), names);
+		}
+	}
+
+	/** The map minus one name; the map itself when the name is absent. */
+	private static java.util.Map<String, LispVal> symbolMacrosWithout(java.util.Map<String, LispVal> macros,
+			String name) {
+		if (!macros.containsKey(name)) {
+			return macros;
+		}
+		java.util.Map<String, LispVal> narrowed = new java.util.LinkedHashMap<>(macros);
+		narrowed.remove(name);
+		return narrowed;
+	}
+
+	/** The map minus a set of names; the map itself when none is present. */
+	private static java.util.Map<String, LispVal> symbolMacrosWithoutAll(java.util.Map<String, LispVal> macros,
+			java.util.Set<String> names) {
+		if (names.stream().noneMatch(macros::containsKey)) {
+			return macros;
+		}
+		java.util.Map<String, LispVal> narrowed = new java.util.LinkedHashMap<>(macros);
+		narrowed.keySet().removeAll(names);
+		return narrowed;
+	}
+
 	/** The symbol inside a literal {@code (quote sym)} form, or null. */
 	private static @Nullable LispSymbol quotedSymbol(LispVal form) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
@@ -19517,10 +20276,11 @@ public final class LispMacroExpander {
 				return rewriteKeeping(parts, 2, fns, rewriteLambdaList(parts.get(1), fns));
 			case LispNames.DEFUN:
 				return rewriteKeeping(parts, 3, fns, parts.get(1), rewriteLambdaList(parts.get(2), fns));
-			case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR:
+			case LispNames.LET, LispNames.LET_STAR, LispNames.DO, LispNames.DO_STAR, LispNames.SYMBOL_MACROLET:
 				// (let ((name init)...) body...) / (do ((var init step)...) (end
-				// result...) body...): binding names stay (they are variables, not
-				// functions), init/step/end/result and the body are expressions.
+				// result...) body...) / (symbol-macrolet ((name expansion)...) body...):
+				// binding names stay (they are variables, not functions), init/step/
+				// end/result/expansion and the body are expressions.
 				return rewriteKeeping(parts, 2, fns, rewriteBindings(parts.get(1), fns));
 			case LispNames.DOLIST, LispNames.DOTIMES, LispNames.WITH_OPEN_FILE: {
 				// (dolist (var listform result) body...): var stays.
@@ -22343,7 +23103,25 @@ public final class LispMacroExpander {
 			}
 			return;
 		}
-		if (!(pattern instanceof LispCons patternCons) || !patternCons.isProperList()) {
+		if (pattern instanceof LispCons dotted && !dotted.isProperList()) {
+			// A dotted tail in a keyword-USING pattern is CL shorthand for &rest
+			// (trivia level0's ((pattern &rest body) . rest)): normalize and recurse.
+			// The keyword-free path already handles dotted tails in destructurePairs.
+			List<LispVal> normalized = new java.util.ArrayList<>();
+			LispVal tail = pattern;
+			while (tail instanceof LispCons tailCons) {
+				normalized.add(tailCons.car());
+				tail = tailCons.cdr();
+			}
+			if (tail instanceof LispSymbol tailVar && !tailVar.name().startsWith("&")) {
+				normalized.add(new LispSymbol(LispNames.LAMBDA_REST));
+				normalized.add(tailVar);
+				destructuringBindings(listToCons(normalized), source, prefix, counter, out);
+				return;
+			}
+			throw new IllegalArgumentException("invalid destructuring pattern: " + pattern.print());
+		}
+		if (!(pattern instanceof LispCons patternCons)) {
 			throw new IllegalArgumentException("invalid destructuring pattern: " + pattern.print());
 		}
 		List<LispVal> elements = patternCons.toList();

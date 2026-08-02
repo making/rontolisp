@@ -1427,7 +1427,7 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
       362
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
@@ -4627,6 +4627,48 @@ cases:
       3
       15
       (11 3)
+  # symbol-macrolet: shadow-aware substitution shared by every backend
+  # (LispMacroExpander.expandSymbolMacrolet) -- substitution, let-shadowing,
+  # nesting, setq write-through, the dbi setf-through-slot-value shape, and a
+  # lambda-body reference.
+  - name: symbol-macrolet-substitution-and-setf
+    source: |
+      (symbol-macrolet ((ci-sm-x 42)) (print (list (let ((ci-sm-x 1)) ci-sm-x) ci-sm-x)))
+      (symbol-macrolet ((ci-sm-x 1)) (symbol-macrolet ((ci-sm-x 2)) (print ci-sm-x)))
+      (let ((ci-sm-cell (list 1 2)))
+        (symbol-macrolet ((ci-sm-head (car ci-sm-cell)))
+          (setq ci-sm-head 99)
+          (print ci-sm-cell)))
+      (defclass ci-sm-conn () ((ci-sm-auto-commit :initform nil)))
+      (defvar *ci-sm-c* (make-instance 'ci-sm-conn))
+      (symbol-macrolet ((ci-sm-ac (slot-value *ci-sm-c* 'ci-sm-auto-commit)))
+        (setf ci-sm-ac 'on)
+        (print ci-sm-ac))
+      (let ((ci-sm-n 10))
+        (symbol-macrolet ((ci-sm-big (* ci-sm-n ci-sm-n)))
+          (print (funcall (lambda () ci-sm-big)))))
+    expected: |
+      (1 42)
+      2
+      (99 2)
+      ON
+      100
+  # ',@xs in a backquote template = (quote ,@xs) = (cons 'quote xs): the
+  # one-element splice yields 'x (trivia level0's `(equal ,*what* ',@args)),
+  # the empty splice (QUOTE), the two-element splice (QUOTE A B).
+  - name: backquote-quoted-splice
+    source: |
+      (print `(a ',@'(b)))
+      (let ((ci-bq-args '(v))) (print `(equal x ',@ci-bq-args)))
+      (let ((ci-bq-args nil)) (print `(f ',@ci-bq-args)))
+      (let ((ci-bq-args '(a b))) (print `(f ',@ci-bq-args)))
+      (let ((ci-bq-fns '(g))) (print `(f #',@ci-bq-fns)))
+    expected: |
+      (A (QUOTE B))
+      (EQUAL X (QUOTE V))
+      (F (QUOTE))
+      (F (QUOTE A B))
+      (F (FUNCTION G))
   # Nested backquote (once-only): three levels of read-time backquote, expanded
   # entirely by the reader. Prints only integers, so gensym names never surface
   # (the expansion-time gensym runs after every counter-printing case above).

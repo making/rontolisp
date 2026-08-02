@@ -346,6 +346,19 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readBackquoteSplicingIntoQuote() {
+		// ',@xs is the template (quote ,@xs) = (cons 'quote xs); the single-element
+		// splice reads back as 'x (trivia level0's `(equal ,*what* ',@args)).
+		assertThat(LispReader.readFromString("`(equal ,w ',@args)").print())
+			.isEqualTo("(LIST (QUOTE EQUAL) W (CONS (QUOTE QUOTE) ARGS))");
+		assertThat(LispReader.readFromString("`(f #',@fns)").print())
+			.isEqualTo("(LIST (QUOTE F) (CONS (QUOTE FUNCTION) FNS))");
+		// The trivia site verbatim: a plain quote wrapping the backquote template.
+		assertThat(LispReader.readFromString("(quote `(equal ,*what* ',@args))").print())
+			.isEqualTo("(QUOTE (LIST (QUOTE EQUAL) *WHAT* (CONS (QUOTE QUOTE) ARGS)))");
+	}
+
+	@Test
 	void readBackquoteWithoutWhitespaceAroundUnquote() {
 		// ',' terminates a symbol, so `(a ,b) parses the same without the space.
 		assertThat(LispReader.readFromString("`(a,b)").print()).isEqualTo("(LIST (QUOTE A) B)");

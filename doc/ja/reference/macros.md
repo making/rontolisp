@@ -57,6 +57,7 @@
 | `write-char` | `(write-char char [stream])` | 1 文字を書き出してその文字を返します。1 文字の文字列の `write-string` に展開されるため、ファイル/文字列ストリームでも動きます |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | 局所的な非再帰の関数束縛（Lisp-2: 呼び出し位置と `#'name`）。定義本体は同名の外側の関数を参照し、兄弟定義は見えません。ラムダリストは `defun` の拡張をサポートします |
 | `labels` | `(labels ((name lambda-list body...)...) body...)` | `flet` と同様ですが定義同士が互いに見えます（再帰と相互再帰） |
+| `symbol-macrolet` | `(symbol-macrolet ((name expansion)...) body...)` | 局所シンボルマクロ。`name` への自由参照はその位置で `expansion` を評価し、`name` への `setq`/`setf` は展開形の place へ代入します。同名の内側の束縛はシャドウします |
 | `multiple-value-bind` | `(multiple-value-bind (var...) values-form body...)` | 変数をプロデューサフォームの値に束縛します。リテラルの `(values ...)` 呼び出し、多値の組み込み関数（`floor` ファミリ、`gethash`、`parse-integer`）、`(values ...)` を返すユーザ関数は全ての値を供給します。余った変数は nil に束縛されます |
 | `multiple-value-list` | `(multiple-value-list values-form)` | プロデューサの値をリストに集めます（`multiple-value-bind` と同様に認識） |
 | `multiple-value-call` | `(multiple-value-call function values-form...)` | 全てのプロデューサの全ての値を引数として関数を呼び出します。ユーザ関数の値も実行時に展開されて渡ります（CL からの逸脱: 特殊オペレータではなくマクロに分類） |

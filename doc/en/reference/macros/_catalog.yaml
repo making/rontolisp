@@ -54,6 +54,7 @@ categories:
       - { slug: flet, name: flet }
       - { slug: labels, name: labels }
       - { slug: macrolet, name: macrolet }
+      - { slug: symbol-macrolet, name: symbol-macrolet }
       - { slug: multiple-value-bind, name: multiple-value-bind }
       - { slug: multiple-value-list, name: multiple-value-list }
       - { slug: multiple-value-call, name: multiple-value-call }

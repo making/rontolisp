@@ -184,6 +184,17 @@ public final class LispEvaluator {
 	private final java.util.Map<String, UserMacro> compilerMacros = new java.util.HashMap<>();
 
 	/**
+	 * One-step user-macro expander handed to
+	 * {@link LispMacroExpander#expandSymbolMacrolet(LispCons, LispMacroExpander.UserMacroHook)}:
+	 * the substitution walk must expand a user macro it meets before substituting into
+	 * its expansion (a nested trivia {@code match} inside a symbol-macrolet body
+	 * references the macro names only through its own expansion). Consults the live
+	 * table, so {@code macrolet}-local macros active at evaluation time are seen too.
+	 */
+	private final LispMacroExpander.UserMacroHook symbolMacroUserMacroHook = form -> form.car() instanceof LispSymbol op
+			&& this.userMacros.containsKey(op.name()) ? expandUserMacro(form) : null;
+
+	/**
 	 * Memo of {@link #expandCompilerMacro}, keyed by the CALL SITE's cons identity: a
 	 * compiler macro is a compile-time hint, so applying it once per source occurrence
 	 * (rather than once per evaluation) is both the point of the optimization and what
@@ -3588,6 +3599,12 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandProg(cons, false), env);
 			case LispNames.PROG_STAR:
 				return eval(LispMacroExpander.expandProg(cons, true), env);
+			case LispNames.SYMBOL_MACROLET:
+				// The substitution walk expands a user macro it meets before substituting
+				// into its expansion (macro arguments may be data, the expansion is
+				// code),
+				// so it gets this evaluator's one-step expander as the hook.
+				return eval(LispMacroExpander.expandSymbolMacrolet(cons, this.symbolMacroUserMacroHook), env);
 			case LispNames.TAGBODY:
 				return evalTagbody(cons, env);
 			case LispNames.GO: {

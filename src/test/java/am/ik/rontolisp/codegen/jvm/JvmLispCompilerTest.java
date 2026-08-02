@@ -928,6 +928,69 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSymbolMacrolet() throws Exception {
+		// Basic substitution and let-shadowing (trivia's match expansions rely on it).
+		assertThat(compileAndRun("(symbol-macrolet ((x 42)) (print x))")).isEqualTo("42");
+		assertThat(compileAndRun("(symbol-macrolet ((x 42)) (print (list (let ((x 1)) x) x)))")).isEqualTo("(1 42)");
+		// Nested symbol-macrolet: the inner binding shadows the outer one.
+		assertThat(compileAndRun("(symbol-macrolet ((x 1)) (symbol-macrolet ((x 2)) (print x)))")).isEqualTo("2");
+		// setq of a symbol-macro target writes through the expansion place.
+		assertThat(compileAndRun(
+				"(let ((cell (list 1 2))) (symbol-macrolet ((head (car cell))) (setq head 99) (print cell)))"))
+			.isEqualTo("(99 2)");
+		// A reference inside a lambda body substitutes (closure over the expansion).
+		assertThat(compileAndRun("(let ((n 10)) (symbol-macrolet ((big (* n n))) (print (funcall (lambda () big)))))"))
+			.isEqualTo("100");
+	}
+
+	@Test
+	void compileAndRunSymbolMacroletSetfThroughSlotValuePlace() throws Exception {
+		// The dbi driver shape: the body assigns through a slot-value expansion.
+		assertThat(compileAndRun("""
+				(defclass conn () ((auto-commit :initform nil)))
+				(defvar *c* (make-instance 'conn))
+				(symbol-macrolet ((auto-commit (slot-value *c* 'auto-commit)))
+				  (setf auto-commit 'on)
+				  (print auto-commit))
+				""")).isEqualTo("ON");
+	}
+
+	@Test
+	void compileAndRunSymbolMacroletEmittedByUserMacro() throws Exception {
+		// The trivia shape: a user macro EXPANDS INTO symbol-macrolet, and user macro
+		// calls inside the binding expansions and the body are expanded away by
+		// UserMacroExpander before the compilers run the substitution.
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro sq (x) `(* ,x ,x))
+				(defmacro with-head (var place &body body) `(symbol-macrolet ((,var (car ,place))) ,@body))
+				(let ((cell (list 3 0)))
+				  (with-head h cell
+				    (setq h (sq h))
+				    (print cell)))
+				(symbol-macrolet ((s (sq 4))) (print s))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(9 0)\n16");
+		}
+	}
+
+	@Test
 	void compileAndRunUnwindProtectValueAndNormalCleanup() throws Exception {
 		assertThat(compileAndRun("(let ((n 1)) (print (unwind-protect (+ n 1) (setq n 10))) (print n))"))
 			.isEqualTo("2\n10");
@@ -6488,7 +6551,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test

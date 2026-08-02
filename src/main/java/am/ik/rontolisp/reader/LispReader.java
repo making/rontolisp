@@ -649,11 +649,15 @@ public final class LispReader {
 	// 'x inside a template is the two-element template (quote x); #'x is (function x).
 	private LispVal readWrappedTemplate(String operator) {
 		TemplateElement inner = readTemplateElement();
-		if (inner.splicing()) {
-			throw new LispReadException(",@ cannot follow ' or #' in a backquote template");
-		}
 		LispVal quoteSym = new LispCons(new LispSymbol(LispNames.QUOTE),
 				new LispCons(new LispSymbol(operator), LispNil.INSTANCE));
+		if (inner.splicing()) {
+			// ',@xs is the template (quote ,@xs), i.e. construction code
+			// (cons 'quote xs): with the customary single-element splice the result
+			// reads back as 'x (trivia level0's `(equal ,*what* ',@args)).
+			return new LispCons(new LispSymbol(LispNames.CONS),
+					new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
+		}
 		return new LispCons(new LispSymbol(LispNames.LIST),
 				new LispCons(quoteSym, new LispCons(inner.form(), LispNil.INSTANCE)));
 	}

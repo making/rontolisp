@@ -181,6 +181,13 @@ public final class FreeVarAnalyzer {
 						// the default walk would misread as free references.
 						case LispNames.WITH_SLOTS -> collectFreeVars(LispMacroExpander.expandWithSlots(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						// Expand before walking: the substitution replaces the macro
+						// names
+						// (which the default walk would misread as free references) and
+						// the
+						// shadow-aware scoping is the expansion's own.
+						case LispNames.SYMBOL_MACROLET -> collectFreeVars(LispMacroExpander.expandSymbolMacrolet(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
 						case LispNames.WITH_ACCESSORS -> collectFreeVars(LispMacroExpander.expandWithAccessors(cons),
 								boundVars, knownFunctions, globals, specialNames, freeVars);
 						case LispNames.DOLIST -> collectFreeVars(LispMacroExpander.expandDolist(cons), boundVars,

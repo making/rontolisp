@@ -694,6 +694,11 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandSlotValue(cons, ctx.closRegistry), ctx, className);
 				case LispNames.WITH_SLOTS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithSlots(cons), ctx, className);
+				case LispNames.SYMBOL_MACROLET ->
+					// No user-macro hook: UserMacroExpander has already expanded every
+					// user
+					// macro on the compile path.
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandSymbolMacrolet(cons), ctx, className);
 				case LispNames.WITH_ACCESSORS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithAccessors(cons), ctx, className);
 				case LispNames.CHANGE_CLASS -> JvmExprCompiler

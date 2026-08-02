@@ -9,6 +9,7 @@ Macro bodies usually build the expansion with the backquote template syntax, whi
 - `` `form `` quotes `form` except where a comma unquotes it
 - `,expr` inserts the value of `expr`
 - `,@expr` splices the value of `expr` (a list) into the surrounding list
+- `',@expr` (a splice directly after `'` or `#'`) builds a `(quote ...)`/`(function ...)` list from the spliced elements; with the customary one-element splice the result reads back as `'x`/`#'x`
 
 Nested backquote (a backquote template inside another) is supported and fully expanded at read time, so classic macro-writing macros such as `once-only` work. Use [`gensym`](../functions/gensym.md) to generate capture-safe temporaries in macro bodies, and [`macroexpand-1`](../functions/macroexpand-1.md)/[`macroexpand`](../functions/macroexpand.md) to inspect an expansion.
 

@@ -1556,6 +1556,17 @@ public final class LispNames {
 	public static final String MACROLET = "MACROLET";
 
 	/**
+	 * The {@code symbol-macrolet} macro (local, lexically scoped symbol macros). Expanded
+	 * by a shadow-aware substitution over the body shared by the evaluator and all
+	 * compilers ({@code LispMacroExpander.expandSymbolMacrolet}): free references to a
+	 * bound name are replaced by its expansion, an inner binding form ({@code let},
+	 * {@code lambda}, ...) of the same name stops the substitution in its scope, and a
+	 * {@code setq}/{@code setf} of a bound name writes through the expansion place. The
+	 * global {@code define-symbol-macro} is deliberately absent (no consumer needs it).
+	 */
+	public static final String SYMBOL_MACROLET = "SYMBOL-MACROLET";
+
+	/**
 	 * The {@code make-condition} operator. Lite expansion to the {@code :format-control}
 	 * value (or the condition type name as a string), so the common
 	 * {@code (error (make-condition 'type :format-control "..."))} idiom signals with the

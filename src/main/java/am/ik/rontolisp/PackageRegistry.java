@@ -47,14 +47,15 @@ public final class PackageRegistry {
 			LispNames.DESTRUCTURING_BIND, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
 			LispNames.WITH_STANDARD_IO_SYNTAX, LispNames.PUSHNEW, LispNames.DEFTYPE, LispNames.DEFINE_CONDITION,
 			LispNames.DEFINE_MODIFY_MACRO, LispNames.DEFINE_SETF_EXPANDER, LispNames.DEFSETF,
-			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.MAKE_CONDITION,
-			LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN, LispNames.SIGNAL,
-			LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE, LispNames.WITH_SLOTS,
-			LispNames.WITH_ACCESSORS, LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS,
-			LispNames.HANDLER_BIND, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE, LispNames.PROG, LispNames.PROG_STAR,
-			LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP, LispNames.SLOT_BOUNDP,
-			LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR,
-			LispNames.DO_EXTERNAL_SYMBOLS, LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART);
+			LispNames.DEFINE_COMPILER_MACRO, LispNames.RESTART_CASE, LispNames.MACROLET, LispNames.SYMBOL_MACROLET,
+			LispNames.MAKE_CONDITION, LispNames.DOCUMENTATION, LispNames.COMPLEMENT, LispNames.COMPLEX, LispNames.WARN,
+			LispNames.SIGNAL, LispNames.RETURN_FROM, LispNames.MAKE_INSTANCE, LispNames.SLOT_VALUE,
+			LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS, LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE,
+			LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE,
+			LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP,
+			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
+			LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.RESTART_BIND,
+			LispNames.WITH_SIMPLE_RESTART);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via

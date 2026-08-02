@@ -3624,6 +3624,90 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalBackquoteSplicingIntoQuote() {
+		// ',@xs = (quote ,@xs) = (cons 'quote xs): the one-element splice yields 'x,
+		// the empty splice (QUOTE), the two-element splice (QUOTE A B) -- the exact
+		// list structure SBCL produces, no arity special-casing.
+		assertThat(eval("`(a ',@'(b))").print()).isEqualTo("(A (QUOTE B))");
+		assertThat(eval("(let ((args nil)) `(f ',@args))").print()).isEqualTo("(F (QUOTE))");
+		assertThat(eval("(let ((args '(a b))) `(f ',@args))").print()).isEqualTo("(F (QUOTE A B))");
+		assertThat(eval("(let ((fns '(g))) `(f #',@fns))").print()).isEqualTo("(F (FUNCTION G))");
+	}
+
+	@Test
+	void evalSymbolMacroletBasic() {
+		// Free references substitute; quoted data and empty binding lists do not.
+		assertThat(eval("(symbol-macrolet ((x 42)) x)")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(symbol-macrolet ((x (+ 1 2))) (* x 10))")).isEqualTo(new LispInteger(30));
+		assertThat(eval("(symbol-macrolet () 'ok)").print()).isEqualTo("OK");
+		assertThat(eval("(symbol-macrolet ((x 42)) (list 'x x))").print()).isEqualTo("(X 42)");
+		// Declarations directly in the body describe the macro names; they are dropped.
+		assertThat(eval("(symbol-macrolet ((x 42)) (declare (ignorable x)) x)")).isEqualTo(new LispInteger(42));
+		// case-family keys are data, never substituted.
+		assertThat(eval("(symbol-macrolet ((x 42)) (case 'x ((x) 'sym) (t 'other)))").print()).isEqualTo("SYM");
+	}
+
+	@Test
+	void evalSymbolMacroletShadowing() {
+		// trivia's match expansions rely on an inner let rebinding a symbol-macro name.
+		assertThat(eval("(symbol-macrolet ((x 42)) (let ((x 1)) x))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(symbol-macrolet ((x 42)) (list (let ((x 1)) x) x))").print()).isEqualTo("(1 42)");
+		// The shadowing binding's own init is still in the outer scope.
+		assertThat(eval("(symbol-macrolet ((x 42)) (let ((x (+ x 1))) x))")).isEqualTo(new LispInteger(43));
+		// A lambda parameter and an iteration variable shadow too.
+		assertThat(eval("(symbol-macrolet ((x 42)) (funcall (lambda (x) x) 7))")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(symbol-macrolet ((x 42)) (dotimes (x 3 x)))")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalSymbolMacroletNested() {
+		assertThat(eval("(symbol-macrolet ((x 1)) (symbol-macrolet ((y 2)) (+ x y)))")).isEqualTo(new LispInteger(3));
+		// An inner binding of the same name shadows the outer one.
+		assertThat(eval("(symbol-macrolet ((x 1)) (symbol-macrolet ((x 2)) x))")).isEqualTo(new LispInteger(2));
+		// Sibling macros chain through each other's expansions.
+		assertThat(eval("(symbol-macrolet ((a b) (b 42)) a)")).isEqualTo(new LispInteger(42));
+	}
+
+	@Test
+	void evalSymbolMacroletSetfThroughSlotValuePlace() {
+		// The dbi driver shape: the body ASSIGNS through a slot-value expansion.
+		assertThat(evalMulti("""
+				(defclass conn () ((auto-commit :initform nil)))
+				(defvar *c* (make-instance 'conn))
+				(symbol-macrolet ((auto-commit (slot-value *c* 'auto-commit)))
+				  (setf auto-commit 'on)
+				  auto-commit)
+				""").print()).isEqualTo("ON");
+	}
+
+	@Test
+	void evalSymbolMacroletSetqAndIncfWriteThrough() {
+		// setq of a symbol-macro target becomes a setf of the expansion place.
+		assertThat(eval("(let ((cell (list 1 2)))" + " (symbol-macrolet ((head (car cell))) (setq head 99) cell))")
+			.print()).isEqualTo("(99 2)");
+		// A mixed setq keeps the plain-variable pairs working.
+		assertThat(eval("(let ((y 0) (cell (cons 1 nil)))"
+				+ " (symbol-macrolet ((head (car cell))) (setq y 5 head 9) (list y (car cell))))")
+			.print()).isEqualTo("(5 9)");
+		// Read-modify-write macros expand against the substituted place.
+		assertThat(
+				eval("(let ((cell (cons 1 nil)))" + " (symbol-macrolet ((head (car cell))) (incf head) (car cell)))"))
+			.isEqualTo(new LispInteger(2));
+	}
+
+	@Test
+	void evalSymbolMacroletInsideLambdaBodyAndUserMacro() {
+		// A reference inside a lambda body substitutes (the expansion closes over n).
+		assertThat(eval("(let ((n 10)) (symbol-macrolet ((big (* n n))) (funcall (lambda () big))))"))
+			.isEqualTo(new LispInteger(100));
+		// A user macro met by the walk is expanded first, then its expansion substituted
+		// (macro arguments may be data; the expansion is code).
+		assertThat(evalMulti("(defmacro twice (f) `(progn ,f ,f))" + " (defvar *acc* nil)"
+				+ " (symbol-macrolet ((x (push 1 *acc*))) (twice x))" + " (length *acc*)"))
+			.isEqualTo(new LispInteger(2));
+	}
+
+	@Test
 	void evalDefineCompilerMacroRewritesCallSites() {
 		// A compiler macro rewrites calls to the function it names.
 		assertThat(evalMulti("(defun myinc (x) (+ x 1))" + " (define-compiler-macro myinc (x) `(+ ,x 100)) (myinc 10)"))
@@ -3755,6 +3839,16 @@ class LispEvaluatorTest {
 		assertThat(eval("(destructuring-bind ((a &key k) b) '((1 :k 2) 3) (list a k b))").print()).isEqualTo("(1 2 3)");
 		assertThat(eval("(destructuring-bind (x (y &optional (z 9))) '(1 (2)) (list x y z))").print())
 			.isEqualTo("(1 2 9)");
+	}
+
+	@Test
+	void evalDestructuringBindDottedTailWithNestedKeywords() {
+		// A dotted tail in a keyword-using pattern is CL shorthand for &rest (trivia
+		// level0's ematch0 destructures clauses as ((pattern &rest body) . rest)).
+		assertThat(eval("(destructuring-bind ((pat &rest body) . rest) '((p 1 2) (q 3)) (list pat body rest))").print())
+			.isEqualTo("(P (1 2) ((Q 3)))");
+		assertThat(eval("(destructuring-bind ((a &optional (b 9)) . more) '((1)) (list a b more))").print())
+			.isEqualTo("(1 9 NIL)");
 	}
 
 	@Test
@@ -5103,7 +5197,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
