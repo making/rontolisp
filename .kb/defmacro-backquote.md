@@ -22,6 +22,40 @@ Consequences: the runtime `_eval`/`read` of compiled output knows neither `defma
 
 Tests: `LispReaderTest`/`LispLexerTest` (backquote), `LispEvaluatorTest` (defmacro + destructuring-bind sections), `UserMacroExpanderTest`, `JvmLispCompilerTest#compileAndRunUserMacroAfterExpansionPass`/`#compileAndRunDestructuringBind`/`#compileAndRunUserMacroWithDestructuringLambdaList`, `WasmLispCompilerIntegrationTest#destructuringBindForms`, ci-spec `defmacro-user-macros`/`destructuring-bind-and-defmacro-lambda-lists`. Follow-ups in `.todo/044`.
 
+## `(setf (macro-function 'new) (macro-function 'existing))` — macro aliases (todo-242, 2026-08-02)
+
+**Invariant: a macro alias is a write to the MACRO TABLE, carried out by whichever pass
+owns that table, and the form never reaches a backend.** `macro-function` itself stays the
+lite prelude stub that always answers `nil` (there is no runtime macro table on any
+backend), so the alias is recognized SYNTACTICALLY, before the value form would evaluate:
+`LispMacroExpander.isSetfMacroFunctionForm` + `macroFunctionArgumentName` (both public,
+shared) match `(setf (macro-function 'new) (macro-function 'existing))`. The interpreter
+handles it in `evalCons`'s `SETF` case (`LispEvaluator.aliasMacroFunction`, before the
+place expansion) by putting the existing `UserMacro` under the new name, so the two names
+share ONE expander from then on; the compile path handles it in `UserMacroExpander.expand`
+by replaying the form into the macro-time evaluator and DROPPING it, exactly like the
+`defmacro` it aliases (the same predicate is in the pass's activation list, so a program
+whose only macro business is an alias still activates it). Both sides therefore agree by
+construction — the compile path's macro table IS a `LispEvaluator`.
+
+Reaching `expandSetf`'s `MACRO-FUNCTION` case means neither interception applied, i.e. the
+form is not an alias of a user macro; it throws naming the one supported shape. The
+consumer is lisp-namespace's `(setf (macro-function 'nslet) (macro-function 'namespace-let))`
+(a trivia.level2 dependency, `.todo/238`). **Deliberate narrowness, with its re-evaluation
+trigger**: an arbitrary expander FUNCTION (a lambda over form+env) is rejected because
+there is no macro function object to store — the day a program needs one, the macro table
+would have to hold callables, and `macro-function` itself would have to answer one; the
+lookup is package-tolerant (`LispEvaluator.lookupUserMacro`, exact → member of the
+qualified spelling → unique member match) because a QUOTED name is resolved against the
+current package while the table may be keyed by either spelling. The alias captures the
+expander at alias time, as in CL, where the alias captured the function object: a later
+redefinition of either name replaces only that name's entry. Tests:
+`LispEvaluatorTest#setfMacroFunctionAliasesAUserMacro`/`#setfMacroFunctionRejectsNonAliasShapes`,
+`JvmLispCompilerTest#compileAndRunSetfMacroFunctionAliasAfterExpansionPass`,
+`WasmLispCompilerIntegrationTest#compileSetfMacroFunctionAliasAfterExpansionPass`, ci-spec
+`defmacro-user-macros`. The class-name twin of this idiom is `(setf (find-class ...))`,
+`.kb/clos.md`.
+
 A `define-compiler-macro` reuses every mechanism above (`makeUserMacro`, the
 `&whole`/`&environment` handling, `expandMacroCall`) but lives in its own table and
 is applied only after a same-named `defmacro` has had its chance — see

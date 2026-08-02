@@ -9,3 +9,12 @@ Returns the class metaobject named by `symbol` -- a `standard-class` instance wh
 (list (eq (find-class 'point) (find-class 'point))
       (find-class 'no-such-class nil)) ; => (T NIL)
 ```
+
+`(setf (find-class alias) class)` registers `class` under a second name: after it, `find-class`, `make-instance`, `typep`, `subtypep` and a `handler-case` clause all resolve the alias to the very same class (the metaobject is `eq`). Only this aliasing shape is supported -- the value must be a literal `(find-class 'target)` naming an already defined class -- and only at top level, because the compiled backends build their class table at compile time.
+
+```lisp
+(defclass shape () ((n :initarg :n :reader shape-n)))
+(setf (find-class '<shape>) (find-class 'shape))
+(list (eq (find-class '<shape>) (find-class 'shape))
+      (shape-n (make-instance '<shape> :n 7))) ; => (T 7)
+```

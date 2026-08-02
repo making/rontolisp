@@ -3624,6 +3624,30 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void setfMacroFunctionAliasesAUserMacro() {
+		// lisp-namespace's (setf (macro-function 'nslet) (macro-function
+		// 'namespace-let)):
+		// the new name shares the existing macro's expander, so both spellings expand
+		// identically -- and macroexpand-1 through the alias yields the same form.
+		assertThat(evalMulti("""
+				(defmacro sfmf-greet (x) `(list :hello ,x))
+				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
+				(list (sfmf-hi "world") (macroexpand-1 '(sfmf-hi 1)))
+				""").print()).isEqualTo("((:HELLO \"world\") (LIST :HELLO 1))");
+	}
+
+	@Test
+	void setfMacroFunctionRejectsNonAliasShapes() {
+		// There is no runtime macro table on any backend, so only aliasing an existing
+		// user macro is supported -- an arbitrary expander function is rejected, as is
+		// an alias of a name that is not a defmacro-defined macro.
+		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-x) (lambda (form env) form))"))
+			.hasMessageContaining("only supports aliasing a user macro");
+		assertThatThrownBy(() -> eval("(setf (macro-function 'sfmf-y) (macro-function 'sfmf-no-such))"))
+			.hasMessageContaining("is not a user macro");
+	}
+
+	@Test
 	void evalBackquoteSplicingIntoQuote() {
 		// ',@xs = (quote ,@xs) = (cons 'quote xs): the one-element splice yields 'x,
 		// the empty splice (QUOTE), the two-element splice (QUOTE A B) -- the exact
@@ -9112,6 +9136,52 @@ class LispEvaluatorTest {
 				(list (find-class 'fc-no-such nil)
 				      (handler-case (find-class 'fc-no-such) (error (e) :signaled)))
 				""").print()).isEqualTo("(NIL :SIGNALED)");
+	}
+
+	@Test
+	void setfFindClassRegistersAnAliasNameForTheSameClass() {
+		// (setf (find-class 'alias) (find-class 'target)) is cl-dbi's defclass/a idiom:
+		// the alias is a SECOND NAME of one class, so the metaobject is eq, and
+		// make-instance / typep / class-name all behave as through the target.
+		assertThat(evalMulti("""
+				(defclass fca-shape () ((n :initarg :n :reader fca-n)))
+				(setf (find-class '<fca-shape>) (find-class 'fca-shape))
+				(list (eq (find-class '<fca-shape>) (find-class 'fca-shape))
+				      (fca-n (make-instance '<fca-shape> :n 7))
+				      (typep (make-instance 'fca-shape :n 1) '<fca-shape>)
+				      (class-name (find-class '<fca-shape>))
+				      (subtypep '<fca-shape> 'fca-shape))
+				""").print()).isEqualTo("(T 7 T FCA-SHAPE T)");
+	}
+
+	@Test
+	void setfFindClassAliasIsVisibleToHandlerCase() {
+		// The condition half of the same idiom (define-condition/a): a handler-case
+		// clause naming the alias catches the condition signaled under the real name.
+		assertThat(evalMulti("""
+				(define-condition fca-error (error) ((code :initarg :code :reader fca-code)))
+				(setf (find-class '<fca-error>) (find-class 'fca-error))
+				(handler-case (error 'fca-error :code 42) (<fca-error> (e) (fca-code e)))
+				""").print()).isEqualTo("42");
+	}
+
+	@Test
+	void setfFindClassRejectsNonAliasShapesAndUnknownTargets() {
+		// Only the aliasing shape is supported (the class table is fixed at compile time
+		// on the compiled backends), and the target must already be a registered class.
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass fca-thing () ())
+				(setf (find-class 'fca-other) (make-instance 'fca-thing))
+				""")).hasMessageContaining("only supports aliasing an existing class");
+		assertThatThrownBy(() -> eval("(setf (find-class 'fca-gone) (find-class 'fca-no-such))"))
+			.hasMessageContaining("there is no class named");
+		// An exact class name wins over the alias table, so rebinding one would be a
+		// silent no-op -- it is rejected instead.
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass fca-a () ())
+				(defclass fca-b () ())
+				(setf (find-class 'fca-a) (find-class 'fca-b))
+				""")).hasMessageContaining("a class of that name is already defined");
 	}
 
 	@Test

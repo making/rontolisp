@@ -133,6 +133,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSetfFindClassRegistersAnAliasNameForTheSameClass() throws Exception {
+		// The alias joins the registry in the definition walk, so it is an extra SPELLING
+		// of the target's %class-meta-table% entry: the runtime %find-class memoizes one
+		// metaobject for both names, and the static make-instance / typep / handler-case
+		// resolutions see the target's class.
+		assertThat(compileAndRun("""
+				(defclass fca-shape () ((n :initarg :n :reader fca-n)))
+				(setf (find-class '<fca-shape>) (find-class 'fca-shape))
+				(define-condition fca-error (error) ((code :initarg :code :reader fca-code)))
+				(setf (find-class '<fca-error>) (find-class 'fca-error))
+				(print (list (eq (find-class '<fca-shape>) (find-class 'fca-shape))
+				             (fca-n (make-instance '<fca-shape> :n 7))
+				             (typep (make-instance 'fca-shape :n 1) '<fca-shape>)
+				             (class-name (find-class '<fca-shape>))
+				             (handler-case (error 'fca-error :code 42) (<fca-error> (e) (fca-code e)))))
+				""")).isEqualTo("(T 7 T FCA-SHAPE 42)");
+	}
+
+	@Test
 	void compileFindClassAnswersForSeededConditionClasses() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((c (find-class 'type-error)))
@@ -1164,6 +1183,39 @@ class JvmLispCompilerTest {
 				System.setOut(oldOut);
 			}
 			assertThat(baos.toString().trim()).isEqualTo("20\n(2 1)");
+		}
+	}
+
+	// (setf (macro-function 'new) (macro-function 'existing)) is a macro-TABLE write, so
+	// the same pass carries it out and drops the form: the compiler sees only the
+	// expanded call site, exactly as for the defmacro it aliases (lisp-namespace's
+	// nslet / namespace-let).
+	@Test
+	void compileAndRunSetfMacroFunctionAliasAfterExpansionPass() throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro sfmf-greet (x) `(list :hello ,x))
+				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
+				(print (sfmf-hi 1))
+				(print (sfmf-greet 2))
+				"""));
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		byte[] classBytes = compiler.compile(program);
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, classBytes);
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Class<?> clazz = loader.loadClass("Test");
+			Method main = clazz.getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			System.setOut(new PrintStream(baos));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+			}
+			assertThat(baos.toString().trim()).isEqualTo("(:HELLO 1)\n(:HELLO 2)");
 		}
 	}
 

@@ -7235,6 +7235,36 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileSetfFindClassRegistersAnAliasNameForTheSameClass() throws Exception {
+		// The alias is an extra SPELLING of the target's %class-meta-table% entry, so the
+		// runtime %find-class memoizes one metaobject for both names and the static
+		// make-instance / typep / handler-case resolutions see the target's class.
+		assertThat(compileAndRunEh("""
+				(defclass fca-shape () ((n :initarg :n :reader fca-n)))
+				(setf (find-class '<fca-shape>) (find-class 'fca-shape))
+				(define-condition fca-error (error) ((code :initarg :code :reader fca-code)))
+				(setf (find-class '<fca-error>) (find-class 'fca-error))
+				(print (list (eq (find-class '<fca-shape>) (find-class 'fca-shape))
+				             (fca-n (make-instance '<fca-shape> :n 7))
+				             (typep (make-instance 'fca-shape :n 1) '<fca-shape>)
+				             (%obj-ref (find-class '<fca-shape>) 0)
+				             (handler-case (error 'fca-error :code 42) (<fca-error> (e) (fca-code e)))))
+				""")).isEqualTo("(T 7 T FCA-SHAPE 42)");
+	}
+
+	@Test
+	void compileSetfMacroFunctionAliasAfterExpansionPass() throws Exception {
+		// The macro alias is carried out by the compile-path macro pass (the only macro
+		// table the backends have) and the form is dropped, like the defmacro it aliases.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.UserMacroExpander.expand(LispReader.readAllFromString("""
+				(defmacro sfmf-greet (x) `(list :hello ,x))
+				(setf (macro-function 'sfmf-hi) (macro-function 'sfmf-greet))
+				(print (sfmf-hi 1))
+				(print (sfmf-greet 2))
+				""")))).isEqualTo("(:HELLO 1)\n(:HELLO 2)");
+	}
+
+	@Test
 	void compileFindClassAnswersForSeededConditionClasses() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((c (find-class 'type-error)))

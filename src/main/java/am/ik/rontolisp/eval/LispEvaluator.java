@@ -3324,13 +3324,23 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandThird(cons), env);
 				case LispNames.FOURTH:
 					return eval(LispMacroExpander.expandFourth(cons), env);
-				case LispNames.SETF:
+				case LispNames.SETF: {
+					// (setf (macro-function 'new) (macro-function 'existing)) is a write
+					// to
+					// the MACRO table, which lives here and nowhere else -- the shared
+					// expander cannot lower it to a runtime form, so it is carried out
+					// during evaluation instead of being expanded.
+					LispVal macroAlias = aliasMacroFunction(cons);
+					if (macroAlias != null) {
+						return macroAlias;
+					}
 					// A prelude-provided (setf PLACE) writer (the (defun (setf get) ...)
 					// beside the get defun) registers its place only when the prelude
 					// entry loads; a setf place reference must trigger that load the same
 					// way a function call would.
 					ensurePreludeSetfPlacesLoaded(cons);
 					return eval(expandSetfMaybeUserExpander(expandUserMacroPlaces(cons)), env);
+				}
 				case LispNames.PUSH:
 					return eval(LispMacroExpander.expandPush(cons), env);
 				case LispNames.POP:
@@ -4393,6 +4403,75 @@ public final class LispEvaluator {
 	 */
 	public boolean isUserMacro(String name) {
 		return this.userMacros.containsKey(name);
+	}
+
+	/**
+	 * Carries out {@code (setf (macro-function 'new) (macro-function 'existing))} -- a
+	 * macro ALIAS, the shape lisp-namespace uses to give {@code namespace-let} the short
+	 * name {@code nslet}. The new name is bound to the SAME expander, so the two names
+	 * expand identically forever after (a later redefinition of either name replaces only
+	 * that name's entry, as in CL, where the alias captured the function object).
+	 *
+	 * <p>
+	 * Only this shape is supported: the macro namespace has no runtime representation on
+	 * any backend (macros are gone before a backend sees the program), so there is no
+	 * macro FUNCTION object to store -- a value that is not literally
+	 * {@code (macro-function 'name)} of a {@code defmacro}-defined macro is rejected
+	 * rather than silently dropped. Returns {@code null} when the form is some other
+	 * {@code setf}, so the caller falls through to the ordinary place expansion.
+	 * @param cons the setf form
+	 * @return the alias name symbol, or {@code null} when the form is not a macro alias
+	 */
+	private @Nullable LispVal aliasMacroFunction(LispCons cons) {
+		if (!LispMacroExpander.isSetfMacroFunctionForm(cons)) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		String alias = parts.size() == 3 ? LispMacroExpander.macroFunctionArgumentName(parts.get(1)) : null;
+		String target = alias == null ? null : LispMacroExpander.macroFunctionArgumentName(parts.get(2));
+		if (alias == null || target == null) {
+			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION
+					+ " only supports aliasing a user macro -- (setf (macro-function 'new) (macro-function 'existing)): "
+					+ cons.print());
+		}
+		java.util.Map.Entry<String, UserMacro> macro = lookupUserMacro(target);
+		if (macro == null) {
+			throw new LispEvalException("setf " + LispNames.MACRO_FUNCTION + ": " + target
+					+ " is not a user macro (only a defmacro-defined macro can be aliased)");
+		}
+		this.userMacros.put(alias, macro.getValue());
+		return new LispSymbol(alias);
+	}
+
+	/**
+	 * Looks a user macro up with the package tolerance a QUOTED name needs: quoted
+	 * symbols are not package-resolved, so {@code 'namespace-let} must still find the
+	 * {@code lispn::namespace-let} the {@code defmacro} registered (and vice versa).
+	 * Exact spelling first, then the qualified spelling's member, then a UNIQUE member
+	 * match -- the same ladder {@link #lookupSetfExpander} walks.
+	 */
+	private java.util.Map.@Nullable Entry<String, UserMacro> lookupUserMacro(String name) {
+		UserMacro exact = this.userMacros.get(name);
+		if (exact != null) {
+			return java.util.Map.entry(name, exact);
+		}
+		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
+			UserMacro byMember = this.userMacros.get(qn.member());
+			if (byMember != null) {
+				return java.util.Map.entry(qn.member(), byMember);
+			}
+		}
+		java.util.Map.Entry<String, UserMacro> found = null;
+		for (var entry : this.userMacros.entrySet()) {
+			if (PackageRegistry.splitQualified(entry.getKey()) instanceof PackageRegistry.QualifiedName eqn
+					&& eqn.member().equals(name)) {
+				if (found != null) {
+					return null;
+				}
+				found = java.util.Map.entry(entry.getKey(), entry.getValue());
+			}
+		}
+		return found;
 	}
 
 	/**

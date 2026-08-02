@@ -175,6 +175,52 @@ shape the defclass accessor writers have exercised since cl-ppcre. Pinned by
 `Jvm/Wasm*#compileAndRunSetfMethodDispatchesPerClass`, and ci-spec
 `clos-setf-methods-and-setf-generic`.
 
+## `(setf (find-class 'alias) (find-class 'target))` -- class name aliases (todo-242, 2026-08-02)
+
+**Invariant: an alias is a second NAME for one class, never a second class.** The
+registry keeps `ClosRegistry.classAliases` (alias -> the target's CANONICAL name,
+resolved at registration time so the map is one level deep) and `findClass` consults
+it right after the exact-name lookup, ahead of the package-tolerant fallbacks --
+`aliasTarget` matches the exact spelling, the qualified spelling's member, then a
+UNIQUE member match over the alias table, mirroring `uniqueByMember` (a quoted alias
+name is no more package-resolved than a quoted class name). Because every consumer
+goes through `findClass`, the metaobject, the instance tag, the layout, the ancestor
+set and the `%obj-ref` indexes all stay the TARGET's: `(eq (find-class 'alias)
+(find-class 'target))` holds, and `make-instance` / `typep` / `subtypep` /
+`handler-case` / `class-name` through the alias behave exactly as through the target.
+
+The registration happens at EXPANSION time (`LispMacroExpander.expandSetfFindClass`,
+the `FIND-CLASS` case of `expandSetf`), which is the one moment both paths share: the
+interpreter expands the form as it evaluates it, and the compile path expands it in
+`expandTopLevelDefinitions` -- a dedicated `isSetfFindClassForm` branch beside the
+`deftype` one, so the alias is in the registry BEFORE the class tables are built. It
+becomes an extra SPELLING of the target's `%class-meta-table%` entry (so the runtime
+`%find-class` memoizes one metaobject for both names), an extra name in the runtime
+`typep` tag table, and an extra member of the runtime-`subtypep` universe. The form's
+own value stays the value CL gives it (the target's metaobject), so a macro whose last
+form is the setf still answers a class.
+
+**Divergence + its re-evaluation trigger.** Only the ALIASING shape is accepted: both
+names must be literal quoted symbols and the value must be a `find-class` call --
+anything else throws naming the supported shape, and an unknown target throws
+`there is no class named`. The reason is that the compiled backends fix their class
+table at compile time; the same reason makes a NON-top-level alias an error rather
+than a silent wrong answer: `classMetaTableForms` calls
+`ClosRegistry.markClassMetaTableEmitted`, after which `registerClassAlias` refuses
+(the interpreter never emits that table, so it is unaffected). If the class table
+ever becomes runtime-extensible (a real `ensure-class`, `.todo/246`), both
+restrictions can go -- they are consequences of the static class model, not of the
+alias design. The `--no-gc` backend shares one never-mutated `EMPTY_CLOS_REGISTRY`
+for its CLOS-free `expandSetf` overload, so the place is rejected there outright.
+
+Consumer: cl-dbi's `defclass/a` / `define-condition/a` (`src/utils.lisp`), which give
+every class a `<bracket>`-spelled twin (`.todo/238`). Tests:
+`LispEvaluatorTest#setfFindClassRegistersAnAliasNameForTheSameClass`/`#setfFindClassAliasIsVisibleToHandlerCase`/`#setfFindClassRejectsNonAliasShapesAndUnknownTargets`,
+`JvmLispCompilerTest#compileSetfFindClassRegistersAnAliasNameForTheSameClass`,
+`WasmLispCompilerIntegrationTest#compileSetfFindClassRegistersAnAliasNameForTheSameClass`,
+ci-spec `find-class-metaobject-substrate`. The macro-namespace twin of this idiom is
+`(setf (macro-function ...))`, `.kb/defmacro-backquote.md`.
+
 ## A user method on a BUILT-IN name (todo-237, 2026-08-02)
 
 **A built-in whose name a program defines a method on becomes that generic's

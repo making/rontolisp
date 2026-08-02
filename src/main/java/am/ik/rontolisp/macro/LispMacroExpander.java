@@ -3409,6 +3409,31 @@ public final class LispMacroExpander {
 
 					yield expandSetfWithRplaca(nthcdrExpr, value);
 				}
+				case LispNames.FIND_CLASS -> {
+					// (setf (find-class 'alias) (find-class 'target)) -- registering one
+					// class under a SECOND NAME (cl-dbi's defclass/a giving every class a
+					// <bracket> twin). The registration happens HERE, at expansion time,
+					// because that is the one moment both backends share: the interpreter
+					// expands the form as it evaluates it, and the compile paths expand
+					// it
+					// while the class table they emit is still being built (see
+					// expandTopLevelDefinitions). The form's VALUE stays the target's
+					// metaobject, so the setf still answers what CL says it answers.
+					yield expandSetfFindClass(cons, placeParts, value, closRegistry);
+				}
+				case LispNames.MACRO_FUNCTION ->
+					// The macro namespace has no runtime table on any backend (macros are
+					// fully expanded before a backend sees them), so the alias must be
+					// registered in the macro EXPANDER -- which this shared,
+					// evaluator-free
+					// pass has no access to. Both consumers therefore intercept the form
+					// before it gets here (LispEvaluator.evalCons for the interpreter,
+					// UserMacroExpander.expand for the compile paths); reaching this
+					// point
+					// means the shape is not an alias of a user macro.
+					throw new UnsupportedOperationException("setf " + LispNames.MACRO_FUNCTION
+							+ " only supports aliasing a user macro -- (setf (macro-function 'new) (macro-function "
+							+ "'existing)): " + cons.print());
 				default ->
 
 				{
@@ -3443,6 +3468,44 @@ public final class LispMacroExpander {
 			};
 		}
 		throw new UnsupportedOperationException("setf expects a symbol or accessor form as place");
+	}
+
+	/**
+	 * Registers the {@code (setf (find-class 'alias) (find-class 'target))} alias and
+	 * yields the form's value (the target's metaobject). Only the ALIASING shape is
+	 * supported: both names must be literal quoted symbols and the value must be a
+	 * {@code find-class} call, because an alias is a fact about the class TABLE -- which
+	 * the compile paths freeze at compile time -- and not a runtime assignment. Anything
+	 * else is rejected with a message naming the supported shape.
+	 * @param cons the whole setf form, for the error message
+	 * @param placeParts the {@code (find-class 'alias ...)} place, already split
+	 * @param value the value form
+	 * @param closRegistry the registry to register into
+	 * @return the value form
+	 */
+	private static LispVal expandSetfFindClass(LispCons cons, List<LispVal> placeParts, LispVal value,
+			ClosRegistry closRegistry) {
+		String alias = placeParts.size() >= 2 ? quotedSymbolName(placeParts.get(1)) : null;
+		String target = null;
+		if (value instanceof LispCons valueCons && valueCons.car() instanceof LispSymbol op
+				&& LispNames.FIND_CLASS.equals(plainTypeName(op))) {
+			List<LispVal> valueParts = valueCons.toList();
+			target = valueParts.size() >= 2 ? quotedSymbolName(valueParts.get(1)) : null;
+		}
+		if (alias == null || target == null) {
+			throw new UnsupportedOperationException(
+					"setf " + LispNames.FIND_CLASS + " only supports aliasing an existing class -- "
+							+ "(setf (find-class 'alias) (find-class 'target)): " + cons.print());
+		}
+		if (closRegistry == EMPTY_CLOS_REGISTRY) {
+			// The CLOS-free expandSetf overloads (the --no-gc backend, the generic expand
+			// entry point) share one never-mutated registry; an alias registered there
+			// would leak into every later program and reach no backend anyway.
+			throw new UnsupportedOperationException(
+					"setf " + LispNames.FIND_CLASS + " is not supported on this backend: " + cons.print());
+		}
+		closRegistry.registerClassAlias(alias, target);
+		return value;
 	}
 
 	/**
@@ -12765,6 +12828,14 @@ public final class LispMacroExpander {
 				// its name; the form itself is a runtime no-op (replaced by nil).
 				out.add(expandDeftype((LispCons) form, closRegistry));
 			}
+			else if (isSetfFindClassForm(form)) {
+				// (setf (find-class 'alias) (find-class 'target)): the alias must join
+				// the registry HERE, in the definition walk, so it is in the class table
+				// emitted below -- expanding it later, during expression compilation,
+				// would register it after the table is frozen. The form is replaced by
+				// its value (the target's metaobject), like the interpreter's.
+				out.add(expandSetf((LispCons) form, structAccessors, closRegistry));
+			}
 			else if (isLetWithNestedDefmethod(form)) {
 				// The closure-over-let method idiom (cl-ppcre's
 				// build-replacement-template capturing reg-scanner): each defmethod in
@@ -13389,6 +13460,69 @@ public final class LispMacroExpander {
 
 	private static boolean isNamedForm(LispVal form, String name) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && name.equals(sym.name());
+	}
+
+	/**
+	 * Whether the form is a top-level {@code (setf (find-class ...) ...)} -- the class
+	 * ALIAS registration, which the definition walk must expand before the class table is
+	 * emitted. A multi-pair setf counts when ANY pair writes a {@code find-class} place;
+	 * {@code expandSetf} splits the pairs itself.
+	 * @param form the top-level form
+	 * @return true when the form writes a {@code find-class} place
+	 */
+	/**
+	 * Whether the form is a {@code (setf (macro-function ...) ...)} -- a write to the
+	 * MACRO table, which only a macro-expanding consumer can carry out: the interpreter
+	 * does it as it evaluates the form, and the compile paths do it in
+	 * {@code UserMacroExpander} (their only macro table), dropping the form afterwards.
+	 * @param form the form
+	 * @return true when the form writes a {@code macro-function} place
+	 */
+	public static boolean isSetfMacroFunctionForm(LispVal form) {
+		return isSetfPlaceForm(form, LispNames.MACRO_FUNCTION);
+	}
+
+	/**
+	 * The macro name inside a literal {@code (macro-function 'name)} form -- the only
+	 * shape both sides of a macro alias may take.
+	 * @param form the place or value form
+	 * @return the quoted macro name, or null when the form is not that shape
+	 */
+	public static @Nullable String macroFunctionArgumentName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.MACRO_FUNCTION.equals(plainTypeName(op))) {
+			List<LispVal> parts = cons.toList();
+			return parts.size() >= 2 ? quotedSymbolName(parts.get(1)) : null;
+		}
+		return null;
+	}
+
+	private static boolean isSetfFindClassForm(LispVal form) {
+		return isSetfPlaceForm(form, LispNames.FIND_CLASS);
+	}
+
+	// Whether any PLACE of a setf form is a call to the named accessor. Walks the pair
+	// chain without materializing it: the interpreter asks this of every setf it
+	// evaluates.
+	private static boolean isSetfPlaceForm(LispVal form, String accessorName) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.SETF.equals(op.name())) {
+			return false;
+		}
+		LispVal rest = cons.cdr();
+		while (rest instanceof LispCons pair) {
+			if (pair.car() instanceof LispCons place && place.car() instanceof LispSymbol accessor
+					&& accessorName.equals(plainTypeName(accessor))) {
+				return true;
+			}
+			// Skip the value form; an odd tail is not a well-formed setf and is left to
+			// the expander to report.
+			if (!(pair.cdr() instanceof LispCons valueCell)) {
+				return false;
+			}
+			rest = valueCell.cdr();
+		}
+		return false;
 	}
 
 	/**
@@ -22008,6 +22142,19 @@ public final class LispMacroExpander {
 			if (qn != null) {
 				names.add(qn.member());
 			}
+			// A (setf find-class) alias designates the same tags: a RUNTIME (typep x
+			// alias-name) must answer like the static test the compile-time resolution
+			// already gives a literal alias name.
+			for (java.util.Map.Entry<String, String> alias : closRegistry.classAliases().entrySet()) {
+				if (!ClosRegistry.normalize(info.name()).equals(alias.getValue())) {
+					continue;
+				}
+				names.add(alias.getKey());
+				PackageRegistry.QualifiedName aliasQn = PackageRegistry.splitQualified(alias.getKey());
+				if (aliasQn != null) {
+					names.add(aliasQn.member());
+				}
+			}
 		}
 		List<String> allClassTags = new java.util.ArrayList<>();
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
@@ -22141,6 +22288,9 @@ public final class LispMacroExpander {
 	 * {@link #nodeBudgetedTableForms}.
 	 */
 	private static List<LispVal> classMetaTableForms(ClosRegistry closRegistry) {
+		// From here on the table is frozen: a later registerClassAlias would describe a
+		// class table the emitted program does not have, so the registry refuses it.
+		closRegistry.markClassMetaTableEmitted();
 		List<LispVal> entries = new java.util.ArrayList<>();
 		java.util.Set<String> seen = new java.util.HashSet<>();
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
@@ -22156,6 +22306,21 @@ public final class LispMacroExpander {
 				spellings.add(qn.member());
 			}
 			spellings.add(LispLayout.CLASS_TAG_PREFIX + info.name());
+			// Every (setf find-class) alias of this class is just another spelling of the
+			// same entry, so the runtime %find-class memoizes ONE metaobject for the
+			// class
+			// and its aliases -- the interpreter's (eq (find-class 'alias) (find-class
+			// 'target)) holds on the compiled backends too.
+			for (java.util.Map.Entry<String, String> alias : closRegistry.classAliases().entrySet()) {
+				if (!ClosRegistry.normalize(info.name()).equals(alias.getValue())) {
+					continue;
+				}
+				spellings.add(alias.getKey());
+				PackageRegistry.QualifiedName aliasQn = PackageRegistry.splitQualified(alias.getKey());
+				if (aliasQn != null) {
+					spellings.add(aliasQn.member());
+				}
+			}
 			List<LispVal> spellingSyms = new java.util.ArrayList<>();
 			for (String spelling : spellings) {
 				spellingSyms.add(new LispSymbol(spelling));
@@ -22941,6 +23106,18 @@ public final class LispMacroExpander {
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
 			names.add(info.name());
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+			if (qn != null) {
+				names.add(qn.member());
+			}
+		}
+		// Every (setf find-class) alias is a type name too -- the static subtypep
+		// resolves
+		// it through the registry, so the emitted table answers a runtime (subtypep
+		// 'alias
+		// 'target) with the target's own row.
+		for (String alias : closRegistry.classAliases().keySet()) {
+			names.add(alias);
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(alias);
 			if (qn != null) {
 				names.add(qn.member());
 			}

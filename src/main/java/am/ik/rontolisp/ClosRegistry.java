@@ -611,11 +611,86 @@ public final class ClosRegistry {
 	private final Map<String, LispVal> deftypes = new LinkedHashMap<>();
 
 	/**
+	 * Alias name (normalized) to the CANONICAL name of the class it names -- what
+	 * {@code (setf (find-class 'alias) (find-class 'target))} registers. The target is
+	 * resolved to its canonical spelling at registration time, so the map is one level
+	 * deep by construction and {@link #findClass} needs no chain walk. An alias is a
+	 * second NAME for one class, never a second class: the metaobject, the instance tag,
+	 * the ancestor set and the layout all stay the target's, so
+	 * {@code (eq (find-class 'alias) (find-class 'target))} holds and
+	 * {@code make-instance}/{@code typep}/{@code handler-case} through the alias behave
+	 * exactly as through the target.
+	 */
+	private final Map<String, String> classAliases = new LinkedHashMap<>();
+
+	/**
+	 * Whether the compile paths have already emitted the class metaobject table from this
+	 * registry (see {@code LispMacroExpander.classMetaTableForms}). A registration after
+	 * that point can no longer reach the emitted program, so {@link #registerClassAlias}
+	 * refuses instead of registering an alias the compiled program would never see.
+	 */
+	private boolean classMetaTableEmitted = false;
+
+	/**
 	 * The classes by normalized name, in definition order.
 	 * @return the class registry
 	 */
 	public Map<String, ClassInfo> classes() {
 		return this.classes;
+	}
+
+	/**
+	 * The registered {@code (setf find-class)} aliases: alias name (normalized) to the
+	 * canonical class name it resolves to. The compile paths add each alias as an extra
+	 * SPELLING of its target's metaobject-table entry, so a runtime
+	 * {@code (find-class 'alias)} answers the same object there as in the interpreter.
+	 * @return the alias table, possibly empty
+	 */
+	public Map<String, String> classAliases() {
+		return this.classAliases;
+	}
+
+	/**
+	 * Registers {@code alias} as an additional name of an already registered class -- the
+	 * {@code (setf (find-class 'alias) (find-class 'target))} idiom cl-dbi's
+	 * {@code defclass/a} uses to give every condition a bracket-spelled twin.
+	 * @param alias the new name
+	 * @param target the name of the class to alias; must already be registered
+	 * @throws IllegalArgumentException when the target is unknown, when the alias already
+	 * names a class of its own, or when the compile path has already emitted its
+	 * metaobject table (a non-top-level registration)
+	 */
+	public void registerClassAlias(String alias, String target) {
+		ClassInfo info = findClass(target);
+		if (info == null) {
+			throw new IllegalArgumentException("(setf (find-class '" + alias + ")): there is no class named " + target);
+		}
+		String key = normalize(alias);
+		String canonical = normalize(info.name());
+		if (canonical.equals(this.classAliases.get(key))) {
+			return;
+		}
+		if (this.classes.containsKey(key)) {
+			// An exact class name beats the alias table in findClass, so registering one
+			// would be a silent no-op. Rebinding an existing class NAME is a different
+			// (runtime-class) feature, not the aliasing this supports.
+			throw new IllegalArgumentException("(setf (find-class '" + alias
+					+ ")): a class of that name is already defined -- only naming an EXISTING class under a NEW "
+					+ "name is supported");
+		}
+		if (this.classMetaTableEmitted) {
+			throw new IllegalArgumentException("(setf (find-class '" + alias
+					+ ")) is only supported at top level on the compiled backends: the class table is built at "
+					+ "compile time, so an alias registered from inside a function body would not exist at run time");
+		}
+		this.classAliases.put(key, canonical);
+	}
+
+	/**
+	 * Marks the class metaobject table as emitted; see {@link #classMetaTableEmitted}.
+	 */
+	public void markClassMetaTableEmitted() {
+		this.classMetaTableEmitted = true;
 	}
 
 	/**
@@ -925,6 +1000,13 @@ public final class ClosRegistry {
 		if (exact != null) {
 			return exact;
 		}
+		// A (setf find-class) alias resolves to its target's class -- checked before the
+		// package-tolerant fallbacks below, so an alias never loses to an unrelated
+		// same-member class in another package.
+		ClassInfo aliased = aliasTarget(name);
+		if (aliased != null) {
+			return aliased;
+		}
 		if (PackageRegistry.splitQualified(name) instanceof PackageRegistry.QualifiedName qn) {
 			// A qualified spelling also matches a class registered under the plain name:
 			// the built-in condition hierarchy is package-less, while the resolver
@@ -942,6 +1024,42 @@ public final class ClosRegistry {
 			return uniqueByMember(qn.member());
 		}
 		return uniqueByMember(name);
+	}
+
+	// The class an alias names, with the same package tolerance findClass gives a class
+	// name: an exact spelling first, then the qualified spelling's member, then a
+	// UNIQUE member match over the alias table (a quoted alias name is not
+	// package-resolved, exactly like a quoted class name).
+	@Nullable private ClassInfo aliasTarget(String name) {
+		if (this.classAliases.isEmpty()) {
+			return null;
+		}
+		String canonical = this.classAliases.get(normalize(name));
+		if (canonical == null) {
+			canonical = this.classAliases.get(plainNameOf(name));
+		}
+		if (canonical == null) {
+			canonical = uniqueAliasByMember(plainNameOf(name));
+		}
+		// The target was canonicalized at registration time, so this is a plain lookup --
+		// never a recursion back through findClass.
+		return canonical == null ? null : this.classes.get(canonical);
+	}
+
+	// The one alias whose member name matches, or null when none does (or when the match
+	// is ambiguous) -- uniqueByMember's twin over the alias table.
+	@Nullable private String uniqueAliasByMember(String member) {
+		String found = null;
+		for (Map.Entry<String, String> entry : this.classAliases.entrySet()) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(entry.getKey());
+			if (qn != null && qn.member().equals(member)) {
+				if (found != null) {
+					return null;
+				}
+				found = entry.getValue();
+			}
+		}
+		return found;
 	}
 
 	// The one registered class whose member name matches, or null when none does (or

@@ -52,6 +52,7 @@ public final class UserMacroExpander {
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_MODIFY_MACRO))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFINE_SETF_EXPANDER))
 				&& program.stream().noneMatch(form -> isOperator(form, LispNames.DEFSETF))
+				&& program.stream().noneMatch(LispMacroExpander::isSetfMacroFunctionForm)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacroexpand)
 				&& program.stream().noneMatch(UserMacroExpander::usesMacrolet)
 				&& program.stream().noneMatch(UserMacroExpander::usesReadEvalMarker)
@@ -89,6 +90,15 @@ public final class UserMacroExpander {
 			// P-qualified).
 			LispVal resolved = macroEval.resolvePackages(form);
 			if (isOperator(resolved, LispNames.DEFMACRO)) {
+				macroEval.evalResolved(resolved);
+				continue;
+			}
+			if (LispMacroExpander.isSetfMacroFunctionForm(resolved)) {
+				// (setf (macro-function 'new) (macro-function 'existing)): a macro ALIAS
+				// is a fact about the macro table, and this evaluator holds the only
+				// macro
+				// table the compile paths have. Register it and drop the form, exactly
+				// like the defmacro it aliases -- the backends never see either.
 				macroEval.evalResolved(resolved);
 				continue;
 			}

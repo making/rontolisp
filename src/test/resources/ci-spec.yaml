@@ -3570,6 +3570,14 @@ cases:
       (print (ci-with-doubled 5 1))
       (print (ci-outer 41))
       (print `(a ,(+ 1 2) ,@(list 3 4) b))
+      ;; (setf (macro-function 'new) (macro-function 'existing)) -- lisp-namespace's
+      ;; nslet/namespace-let alias. The new name shares the existing expander, so
+      ;; both spellings expand identically on every backend (the interpreter writes
+      ;; its macro table as it evaluates the form, the compile path writes the
+      ;; macro-time evaluator's and drops the form).
+      (setf (macro-function 'ci-when2) (macro-function 'ci-my-when))
+      (print (ci-when2 (> 3 1) :aliased))
+      (print (ci-my-when (> 3 1) :original))
     expected: |
       20
       NIL
@@ -3577,6 +3585,8 @@ cases:
       11
       42
       (A 3 3 4 B)
+      :ALIASED
+      :ORIGINAL
   # gensym + macroexpand/macroexpand-1. Runtime gensym names print identically on
   # all four backends only while no earlier form runs gensym at macro-expansion
   # time: the interpreter shares one counter between expansion time and run time,
@@ -6707,6 +6717,19 @@ cases:
                      (slot-value p 'name)
                      (slot-boundp (allocate-instance 'fcm-animal) 'legs)
                      (handler-case (allocate-instance 'fcm-node) (error (e) :signaled)))))
+      ;; (setf (find-class 'alias) (find-class 'target)) registers a SECOND NAME
+      ;; for one class (cl-dbi's defclass/a): the metaobject is eq, and
+      ;; make-instance / typep / handler-case through the alias behave as through
+      ;; the target. Definition-time on every backend -- the compiled class table
+      ;; is built at compile time.
+      (setf (find-class '<fcm-dog>) (find-class 'fcm-dog))
+      (define-condition fcm-error (error) ((code :initarg :code :reader fcm-code)))
+      (setf (find-class '<fcm-error>) (find-class 'fcm-error))
+      (print (list (eq (find-class '<fcm-dog>) (find-class 'fcm-dog))
+                   (class-name (find-class '<fcm-dog>))
+                   (typep (make-instance '<fcm-dog> :name "rex") '<fcm-dog>)
+                   (subtypep '<fcm-dog> 'fcm-animal)
+                   (handler-case (error 'fcm-error :code 42) (<fcm-error> (e) (fcm-code e)))))
     expected: |
       (T FCM-DOG T T)
       NIL
@@ -6715,6 +6738,7 @@ cases:
       (T T T FCM-NODE STRING)
       #<STANDARD-CLASS :NAME INTEGER :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS NIL :FINALIZED-P T>
       (T NIL "rex" NIL :SIGNALED)
+      (T FCM-DOG T T 42)
   - name: defclass-metaclass-protocol
     source: |
       ;; The metaclass protocol (the postmodern dao-class shape): a defclass
