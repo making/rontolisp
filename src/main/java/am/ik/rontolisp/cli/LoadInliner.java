@@ -437,6 +437,16 @@ public final class LoadInliner {
 		}
 		out.add(marker(LispNames.END_SYSTEM));
 		ctx.loadedSystems().add(name);
+		if ("clack".equals(name)) {
+			// The compile paths must carry the rontolisp handler backend EAGERLY: clack
+			// resolves it late-bound by name at clackup time (find-package ->
+			// asdf:load-system), a route only the interpreter can walk at run time. On
+			// a compiled backend the package probe reads the baked table and the
+			// interned RUN resolves through the _lookup registry, so the shim's forms
+			// have to be part of the program -- splicing it with clack is what puts
+			// them there.
+			spliceSystem(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, out, ctx, requestBaseDir);
+		}
 	}
 
 	/**

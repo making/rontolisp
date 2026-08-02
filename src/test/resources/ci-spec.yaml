@@ -4268,9 +4268,17 @@ cases:
       (print (car *features*))
       (print #+unicode :unicode #-unicode :octets)
     expected: |
-      3
+      4
       :RONTOLISP
       :UNICODE
+    expectedByBackend:
+      # The WASM backends are single-threaded by construction, so :thread-support
+      # (declared statically on the interpreter and the JVM, see reader.Features)
+      # is absent there.
+      wasm: |
+        3
+        :RONTOLISP
+        :UNICODE
   - name: declarations-eval-when-check-type-assert
     source: |
       (declaim (optimize (speed 3)))

@@ -166,8 +166,18 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   shuts servers down. Registered in `LispEvaluator` (not `Environment`) because
   serving a request applies the handler via the evaluator's `apply`;
   `invokeHttpHandler` builds the request plist and reads the response plist.
+  Since todo-228 the class also carries the STOPPABLE per-server seam behind
+  the internal `rontolisp::%http-server-start/-join/-stop/-port` functions
+  (`startServer`/`joinServer`/`stopServer`/`serverPort`: handler as a FUNCTION
+  VALUE, bind address, opaque integer handle -- the socket/mutex convention --
+  idempotent stop, interrupt-tolerant join) -- the clack-handler-rontolisp
+  acceptor, `.kb/clack.md`. The JVM lowering (`JvmHttpServerSeamCompiler`)
+  reuses the directive's `_httpHandlerFn` slot and injected `handle` runtime,
+  so `JvmLispCompiler`'s `usesHttpHandler` gate also fires on
+  `%http-server-start` -- which is also why there is ONE handler slot and so
+  one Clack server per process.
   Tests: `HttpHandlerTest` (Java seam round trip + directive round trip via a
-  background thread + validation).
+  background thread + validation + the stoppable-seam group).
 - **JVM (implemented)** -- reuses the interpreter's `HttpHandlerSupport` server:
   the generated class ITSELF implements `HttpHandlerSupport.Handler` (the same
   mechanism as the tls-connect trust-all `X509TrustManager`; the public no-arg
@@ -202,6 +212,14 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   `rontolisp:http-handler` directive with the serve half of http.lisp, a
   `(defun %serve-dispatch (r) (HANDLER r))` bridge, and a
   `(rontolisp:wasm-export '%serve-handle :as "handle" :params '(:int) :returns :void)`.
+  Since todo-228 the directive is detected NESTED inside a defun body too (a
+  `(rontolisp:http-handler '<literal-name> ...)` call still yields a static
+  handler name; quoted data excluded, first name wins, the call site lowers to
+  nil) -- the clack-handler-rontolisp shim's `run` is the driving shape, and
+  `HttpHandlerInliner.usesHttpHandler` (the CLI's serve-mode switch) walks the
+  same way. The bridge + export are appended AFTER the program so a
+  package-qualified nested handler name resolves against its own spliced
+  defpackage. `.kb/clack.md` has the whole flow.
   The core `handle` export is `[i32 request] -> []` and is lifted
   `canon lift (memory, utf8, async)` against
   `async func(request: own<request>) -> result<own<response>, error-code>` -- the
@@ -245,8 +263,13 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   the serve `handle` wrapper for hosts that reuse one instance across requests
   (wasmtime serve re-instantiates per request, so it never sees the growth).
   serve + `rontolisp:tcp-*` COMPILES now (sockets.lisp is one more user WIT
-  import beside the fixed wasi:http surface, `.kb/tcp-sockets.md`); Preview-1
-  WASM output is a compile error ("requires --component"). Hosts: wasmtime 46+; wasmCloud
+  import beside the fixed wasi:http surface, `.kb/tcp-sockets.md`); on Preview-1
+  WASM the directive is a CALL-time error stub since todo-228 (same "requires
+  --component" message; was a compile error -- the clack shim's `run` carries
+  the directive as dead code there, the todo-195 socket policy), and so are
+  `stream-read`/`stream-close`/`streamp` when no stream type exists (Preview 1
+  or a non-async component; an uncaught error is a silent trap on Preview 1,
+  so pin messages through handler-case). Hosts: wasmtime 46+; wasmCloud
   hosts it (released wash 2.5.2, `wash dev` with `dev.wasm_proposals:
   [gc, exception-handling, component-model-async]` -- verified 2026-07-16 on
   examples/wasmcloud/http-handler); Spin hosts it from the canary build

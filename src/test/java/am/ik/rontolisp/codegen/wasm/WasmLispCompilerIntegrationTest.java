@@ -8344,11 +8344,15 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void asyncStreamsAreACompileErrorInPreview1Mode() {
+	void asyncStreamsAreACompileErrorInPreview1Mode() throws Exception {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:make-stream))"))
 			.hasMessageContaining("guest-created streams are not available on the WASM backends yet");
-		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:stream-read 1))"))
-			.hasMessageContaining("requires the interpreter, the JVM backend or an asynchronous --component program");
+		// stream-read/stream-close/streamp compile to CALL-time error stubs since
+		// todo-228 (the clack-handler-rontolisp bridge carries a body drain that is
+		// dead code on Preview 1): the message is handler-case-catchable, and an
+		// uncaught one is the usual silent trap.
+		assertThat(compileAndRun("(print (handler-case (rontolisp:stream-read 1) (error (e) (princ-to-string e))))"))
+			.contains("requires the interpreter, the JVM backend or an asynchronous --component program");
 		assertThatThrownBy(() -> compileAndRun("(defun bad () (rontolisp:await 1))"))
 			.hasMessageContaining("only allowed inside");
 	}

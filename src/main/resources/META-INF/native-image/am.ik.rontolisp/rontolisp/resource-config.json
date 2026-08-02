@@ -215,6 +215,12 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
         },
+        "pattern": "am/ik/rontolisp/eval/clack-handler-rontolisp\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
         "pattern": "am/ik/rontolisp/eval/jzon-eisel-lemire\\.lisp"
       },
       {

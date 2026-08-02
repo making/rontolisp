@@ -4128,6 +4128,44 @@ public final class LispNames {
 	public static final String HTTP_HANDLER = "HTTP-HANDLER";
 
 	/**
+	 * The internal {@code rontolisp::%http-server-start} function: the STOPPABLE
+	 * counterpart of the {@link #HTTP_HANDLER} directive, used as
+	 * {@code (rontolisp::%http-server-start handler-fn port address)} where
+	 * {@code handler-fn} is a FUNCTION VALUE (unlike the directive's quoted name). Starts
+	 * an embedded HTTP server bound to {@code address:port} and returns an opaque server
+	 * handle (nothing portable may print or compare one) for {@link #HTTP_SERVER_JOIN} /
+	 * {@link #HTTP_SERVER_STOP}. Interpreter and JVM backend only
+	 * ({@code HttpHandlerSupport.startServer}); the {@code clack-handler-rontolisp} shim
+	 * is the driving consumer -- a WASM component serves through the exported
+	 * {@code wasi:http} handler instead (the host owns the socket), so the shim's
+	 * {@code #+rontolisp-wasm} branch never names this.
+	 */
+	public static final String HTTP_SERVER_START = "%HTTP-SERVER-START";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-join} function: blocks until the given
+	 * server is stopped or the calling thread is interrupted
+	 * ({@code rontolisp:destroy-thread} on the acceptor thread -- clack's
+	 * {@code :use-thread t} stop path); both return normally so an {@code unwind-protect}
+	 * around the join runs its cleanup in an orderly unwind.
+	 */
+	public static final String HTTP_SERVER_JOIN = "%HTTP-SERVER-JOIN";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-stop} function: stops the given server
+	 * and releases its joiners. Idempotent, so the acceptor's unwind cleanup and an
+	 * explicit {@code clack:stop} cannot double-fault.
+	 */
+	public static final String HTTP_SERVER_STOP = "%HTTP-SERVER-STOP";
+
+	/**
+	 * The internal {@code rontolisp::%http-server-port} function: the bound port of a
+	 * running server ({@code -1} after stop) -- the ephemeral-port readback that makes
+	 * {@code :port 0} usable.
+	 */
+	public static final String HTTP_SERVER_PORT = "%HTTP-SERVER-PORT";
+
+	/**
 	 * The {@code with-arena} macro provided by the {@code rontolisp} package. Used as
 	 * {@code (rontolisp:with-arena () body...)} to name a reclamation boundary: on the
 	 * interpreter, the JVM backend and wasm-GC it expands to a plain {@code progn} (a
@@ -5413,6 +5451,34 @@ public final class LispNames {
 	 * port was recorded, and nothing was ever started.
 	 */
 	public static final String STOP_SERVER = "STOP-SERVER";
+
+	/**
+	 * The {@code clack.handler.rontolisp} package: the rontolisp handler backend for
+	 * Clack, satisfied by the built-in ASDF system {@code clack-handler-rontolisp}
+	 * ({@code clack-handler-rontolisp.lisp}, {@code eval.ShimLibraries}). Unlike the
+	 * other shim packages it is NOT seeded in {@code PackageRegistry}: clack locates a
+	 * handler backend by probing {@code (find-package "CLACK.HANDLER.RONTOLISP")} and
+	 * loading the system only on a miss (lack's {@code find-package-or-load}), so a
+	 * pre-seeded package would short-circuit the load and leave {@code run} undefined.
+	 * The shim carries the {@code defpackage} instead (the leaf-module pattern),
+	 * registering the package when the system loads.
+	 */
+	public static final String CLACK_HANDLER_RONTOLISP_PKG = "CLACK.HANDLER.RONTOLISP";
+
+	/**
+	 * The {@code clack-handler-rontolisp} built-in ASDF system name -- the
+	 * ecosystem-conventional hyphenated spelling a user names directly.
+	 */
+	public static final String CLACK_HANDLER_RONTOLISP_SYSTEM = "clack-handler-rontolisp";
+
+	/**
+	 * The dotted system name lack's {@code find-package-or-load} actually derives from
+	 * the package name (it hyphenates {@code /} but leaves {@code .} alone when not in
+	 * backward-compatible mode), registered as an alias of
+	 * {@link #CLACK_HANDLER_RONTOLISP_SYSTEM} so {@code (clackup app :server :rontolisp)}
+	 * resolves the backend at run time.
+	 */
+	public static final String CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM = "clack.handler.rontolisp";
 
 	/**
 	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each

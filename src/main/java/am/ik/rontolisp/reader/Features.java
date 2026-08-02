@@ -26,12 +26,23 @@ import am.ik.rontolisp.LispVal;
  */
 public final class Features {
 
-	/** The features active when interpreting (and in the REPL). */
-	public static final Features INTERPRETER = new Features(List.of("rontolisp", "rontolisp-interpreter", "unicode"),
-			false);
+	/**
+	 * The features active when interpreting (and in the REPL). {@code :thread-support} is
+	 * the ecosystem's portable spelling of "this image spawns threads" -- upstream
+	 * bordeaux-threads pushes it from its {@code .asd} at load time, and the push can
+	 * never reach a read-time conditional here, so the backends that really spawn threads
+	 * ({@code rontolisp:make-thread} on the interpreter and the JVM,
+	 * {@code .kb/threads.md}) declare it statically like {@code :unicode}. Both WASM
+	 * backends are single-threaded by construction and stay without it -- which is what
+	 * makes {@code clack:clackup}'s {@code #+thread-support} default {@code :use-thread}
+	 * to t here and to nil there.
+	 */
+	public static final Features INTERPRETER = new Features(
+			List.of("rontolisp", "rontolisp-interpreter", "unicode", "thread-support"), false);
 
 	/** The features active when compiling to JVM bytecode. */
-	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode"), true);
+	public static final Features JVM = new Features(List.of("rontolisp", "rontolisp-jvm", "unicode", "thread-support"),
+			true);
 
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
 	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"), true);

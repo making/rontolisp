@@ -1,5 +1,61 @@
 # clack-handler-rontolisp: the rontolisp handler backend for Clack
 
+## Status: DONE 2026-08-02 (all four backends; `.kb/clack.md` has the mechanics)
+
+Shipped exactly as shaped below, with these resolutions of the open choices:
+
+- Shim system `clack-handler-rontolisp.lisp` registered under BOTH the
+  hyphenated name and the dotted `clack.handler.rontolisp` — the latter is
+  what lack's `find-package-or-load` actually derives (it hyphenates `/`, not
+  `.`, on the handler path). The package is NOT seeded (it would short-circuit
+  the find-package probe); the shim carries the defpackage, the interpreter's
+  builtin loadSystem branch evaluates through the resolving eval, runtime
+  `asdf:find-system` answers built-ins, and `LoadInliner` splices the shim
+  eagerly after system "clack" for the compile paths.
+- `run` BLOCKS (the hunchentoot shape) over the new stoppable seam
+  `rontolisp::%http-server-start/-join/-stop/-port`
+  (`HttpHandlerSupport.startServer` + bind address + opaque integer handle):
+  with the default `:use-thread t`, `clack:stop`'s destroy-thread interrupt
+  lands in the join and the unwind-protect stops that one server; verified
+  live on the interpreter and the compiled JVM class (serve -> stop -> port
+  closed). `:use-thread` defaults to t because `Features` INTERPRETER/JVM now
+  declare `:thread-support` (`.kb/threads.md`).
+- raw-body: PRE-DRAINED into a string input stream (`%bridge` is an
+  async-defun; the one await lives there). remote-addr/-port ship as ""/nil —
+  the HttpPlistShape extension stays a follow-up.
+- Response bodies: list-of-strings / string / (vector (unsigned-byte 8)) /
+  nil; a PATHNAME body signals a clear error like the FUNCTION (streaming)
+  body — a deliberate v1 narrowing of the shape below (static files need a
+  binary file read; revisit with the streaming work). Documented in the guide.
+- Component leg: nested-directive detection in HttpLibrary/HttpHandlerInliner
+  landed as shaped; bridge+export append AFTER the program so the qualified
+  handler name resolves. Preview 1: http-handler AND the stream ops became
+  CALL-time error stubs (todo-195 policy) — pinned via handler-case in the
+  E2E because an uncaught P1 error is a silent trap.
+- Compile-path enablers that were not in the shape: nested/computed
+  asdf:load-system / ql:quickload -> call-time stubs, nested asdf:find-system
+  -> args-then-nil, with-open-file non-native option values -> call-time
+  stubs, FreeVarAnalyzer typecase/etypecase clause-head fix, PATHNAME joined
+  CL_TYPES (all in `.kb/clack.md` / `.kb/asdf.md`).
+- Tests: `ClackE2eTest` (opt-in RONTOLISP_CLACK_E2E=1; interpreter + JVM
+  self-driving round trip incl. POST body + stop-proof, component under
+  wasmtime serve, P1 pin) — 4/4 green; HttpHandlerTest seam group,
+  HttpLibraryTest nested-detection group, LispEvaluatorAsdfTest find-system/
+  load-system-shim tests, JvmLispCompilerTest etypecase-capture pin; full
+  suite + native CiSpecE2eTest green (ci-spec feature count updated for
+  :thread-support).
+- Docs: guides/asdf-systems.md (en+ja): shim row, library row, "Running a
+  Clack application" section, plus the stale bordeaux-threads (todo-227) and
+  uiop:symbol-call (todo-229) rows corrected; examples/asdf/clack-hello.lisp
+  + README row.
+
+Note (user, 2026-08-02): rewriting `rontolisp:http-handler` itself into a
+clack-native protocol (breaking change) was offered and deliberately not
+taken: the request/response plist is the ONE WIT-derived HTTP value model
+shared with `rontolisp:fetch` (HttpPlistShape), and the ~90-line shim buys
+full Clack compatibility without forking that model. Re-evaluate if the shim
+ever needs per-server state the single `*app*` slot cannot carry.
+
 Difficulty: 中〜高 (the bridge itself is ~60 lines of Lisp — the spike proved
 it end to end — but making `stop` real needs a stoppable server seam, and the
 env/response mapping has a tail of cases: raw-body stream, byte-vector and

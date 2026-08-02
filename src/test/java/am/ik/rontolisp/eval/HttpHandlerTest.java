@@ -67,6 +67,77 @@ class HttpHandlerTest {
 		assertThat(response.headers().firstValue("content-type")).hasValue("text/plain");
 	}
 
+	@Test
+	void stoppableSeamServesJoinsAndStops() throws Exception {
+		// The %http-server-* seam behind the clack-handler-rontolisp shim: start on an
+		// ephemeral port with a bind address, read the port back, serve, stop -- and
+		// the stop releases a blocked joiner.
+		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
+				request -> new HttpHandlerSupport.Response(200, List.of(), "stoppable " + request.path()));
+		int port = (int) HttpHandlerSupport.serverPort(handle);
+		assertThat(port).isPositive();
+		assertThat(get(port, "/x").body()).isEqualTo("stoppable /x");
+		Thread joiner = Thread.ofVirtual().start(() -> HttpHandlerSupport.joinServer(handle));
+		HttpHandlerSupport.stopServer(handle);
+		joiner.join(Duration.ofSeconds(5));
+		assertThat(joiner.isAlive()).isFalse();
+		assertThat(HttpHandlerSupport.serverPort(handle)).isEqualTo(-1);
+		// Idempotent: a second stop (the unwind cleanup after an explicit clack:stop)
+		// is a no-op.
+		HttpHandlerSupport.stopServer(handle);
+		assertThatThrownBy(() -> get(port, "/x")).isInstanceOf(IOException.class);
+	}
+
+	@Test
+	void joinServerReturnsWhenTheJoinerIsInterrupted() throws Exception {
+		// clack's :use-thread t stop path destroy-threads the acceptor: the interrupt
+		// must land in the join and return normally so the Lisp unwind-protect stops
+		// the server in an orderly unwind.
+		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
+				request -> new HttpHandlerSupport.Response(200, List.of(), "ok"));
+		Thread joiner = Thread.ofVirtual().start(() -> HttpHandlerSupport.joinServer(handle));
+		Thread.sleep(50);
+		joiner.interrupt();
+		joiner.join(Duration.ofSeconds(5));
+		assertThat(joiner.isAlive()).isFalse();
+		HttpHandlerSupport.stopServer(handle);
+	}
+
+	@Test
+	void startServerUnwrapsAQuoteWrappedAddress() throws Exception {
+		// The JVM backend passes its runtime string rep (quote-wrapped) as-is.
+		long handle = HttpHandlerSupport.startServer(0, "\"127.0.0.1\"",
+				request -> new HttpHandlerSupport.Response(200, List.of(), "wrapped"));
+		int port = (int) HttpHandlerSupport.serverPort(handle);
+		assertThat(get(port, "/").body()).isEqualTo("wrapped");
+		HttpHandlerSupport.stopServer(handle);
+	}
+
+	@Test
+	void interpreterSeamFunctionsRoundTrip() throws Exception {
+		// The rontolisp::%http-server-* functions on the interpreter: start with a
+		// function value, read the ephemeral port back, serve, stop.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true));
+		for (var expr : LispReader.readAllFromString("""
+				(defun seam-handler (req)
+				  (list :status 200 :headers nil :body (getf req :path)))
+				(defvar *server* (rontolisp::%http-server-start #'seam-handler 0 "127.0.0.1"))
+				(print (rontolisp::%http-server-port *server*))
+				""")) {
+			evaluator.eval(expr);
+		}
+		int port = Integer.parseInt(out.toString().trim());
+		assertThat(get(port, "/from-lisp").body()).isEqualTo("/from-lisp");
+		for (var expr : LispReader.readAllFromString("""
+				(rontolisp::%http-server-stop *server*)
+				(rontolisp::%http-server-join *server*)
+				""")) {
+			evaluator.eval(expr);
+		}
+		assertThatThrownBy(() -> get(port, "/from-lisp")).isInstanceOf(IOException.class);
+	}
+
 	// Runs a rontolisp program on a background thread (http-handler blocks) and waits
 	// until
 	// the port is accepting connections.

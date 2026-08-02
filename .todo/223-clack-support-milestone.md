@@ -93,9 +93,16 @@ JVM and component legs are green too (or their divergence is recorded).
    acceptor answered `bt2:threadp` t, and curl got the response from the
    spawned thread). Next blocker on the milestone: `.todo/228` (the
    clack-handler-rontolisp shim system) and `.todo/229` (compile backends).
-5. `.todo/228` the `clack-handler-rontolisp` backend + E2E + docs — 中〜高
+5. `.todo/228` the `clack-handler-rontolisp` backend + E2E + docs — 中〜高 —
+   **DONE 2026-08-02** (all four backends; see the todo's own status section
+   and `.kb/clack.md`). With it the MILESTONE ACCEPTANCE below is met:
+   `(ql:quickload "clack")` with zero workarounds and unpatched sources,
+   `clackup` with the default middlewares AND the default `:use-thread t`
+   (via the new `:thread-support` feature), `clack:stop` stopping the server,
+   and `ClackE2eTest`'s three live legs + the Preview 1 call-time pin all
+   green. Remaining units: 230 (optional) and 231 (stretch/survey).
 6. `.todo/229` runtime intern->funcall dispatch on the compile backends — 高
-   (critical path: the JVM and component legs are in scope, see above)
+   — **DONE 2026-08-02** (see `.kb/symbol-runtime-api.md`)
 7. `.todo/230` `subtypep` on class metaobjects (old-Clack middleware detection)
    — 低〜中, optional
 8. `.todo/231` lack-request/lack-response + middleware ecosystem (quri lineage)

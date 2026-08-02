@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 
@@ -21,17 +22,25 @@ public final class BuiltinSystems {
 
 	// Keyed by the ASDF system name -- always the canonical lower-case coerce-name form
 	// (system names are a separate namespace from the upcase-canonical package names).
-	private static final Map<String, Function<Features, List<LispVal>>> SYSTEMS = Map.of("usocket",
-			features -> UsocketLibrary.forms(), "closer-mop", features -> ShimLibraries.forms("closer-mop", features),
-			"flexi-streams", features -> ShimLibraries.forms("flexi-streams", features), "float-features",
-			features -> ShimLibraries.forms("float-features", features), "trivial-gray-streams",
-			features -> ShimLibraries.forms("trivial-gray-streams", features), "bordeaux-threads",
-			features -> ShimLibraries.forms("bordeaux-threads", features), "babel",
-			features -> ShimLibraries.forms("babel", features), "swank",
-			features -> ShimLibraries.forms("swank", features),
+	private static final Map<String, Function<Features, List<LispVal>>> SYSTEMS = Map.ofEntries(
+			Map.entry("usocket", (Function<Features, List<LispVal>>) features -> UsocketLibrary.forms()),
+			Map.entry("closer-mop", features -> ShimLibraries.forms("closer-mop", features)),
+			Map.entry("flexi-streams", features -> ShimLibraries.forms("flexi-streams", features)),
+			Map.entry("float-features", features -> ShimLibraries.forms("float-features", features)),
+			Map.entry("trivial-gray-streams", features -> ShimLibraries.forms("trivial-gray-streams", features)),
+			Map.entry("bordeaux-threads", features -> ShimLibraries.forms("bordeaux-threads", features)),
+			Map.entry("babel", features -> ShimLibraries.forms("babel", features)),
+			Map.entry("swank", features -> ShimLibraries.forms("swank", features)),
+			// The Clack handler backend: both the hyphenated ecosystem spelling and the
+			// dotted spelling lack's find-package-or-load derives from the package name
+			// resolve to the one shim (see ShimLibraries.RESOURCES).
+			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM,
+					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, features)),
+			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM,
+					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, features)),
 			// The uiop package stub is seeded in PackageRegistry; the system contributes
 			// no forms (real libraries only name it so its symbols resolve).
-			"uiop", features -> List.of());
+			Map.entry("uiop", features -> List.of()));
 
 	private BuiltinSystems() {
 	}

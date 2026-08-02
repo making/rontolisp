@@ -25,25 +25,39 @@ public final class HttpHandlerInliner {
 	}
 
 	/**
-	 * Returns whether any top-level form is a {@code rontolisp:http-handler} directive.
+	 * Returns whether the program calls the {@code rontolisp:http-handler} directive --
+	 * as a top-level form or NESTED inside a defun body (quoted data excluded). The
+	 * nested shape is the {@code clack-handler-rontolisp} shim's: its {@code run} defun
+	 * calls the directive with a literal quoted handler name, and
+	 * {@code eval/HttpLibrary} extracts that name for the serve export exactly like a
+	 * top-level directive's.
 	 * @param program the top-level forms
 	 * @return {@code true} if the program serves HTTP via {@code http-handler}
 	 */
 	public static boolean usesHttpHandler(List<LispVal> program) {
 		for (LispVal form : program) {
-			if (isHttpHandlerForm(form)) {
+			if (containsHttpHandlerCall(form)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean isHttpHandlerForm(LispVal form) {
-		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol sym)) {
+	private static boolean containsHttpHandlerCall(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.HTTP_HANDLER.equals(qn.member());
+		if (cons.car() instanceof LispSymbol sym) {
+			if (LispNames.QUOTE.equals(sym.name())) {
+				// Quoted data is not a call site.
+				return false;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			if (qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.HTTP_HANDLER.equals(qn.member())) {
+				return true;
+			}
+		}
+		return containsHttpHandlerCall(cons.car()) || containsHttpHandlerCall(cons.cdr());
 	}
 
 }

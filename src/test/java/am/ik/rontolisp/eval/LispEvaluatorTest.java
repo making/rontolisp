@@ -4667,9 +4667,12 @@ class LispEvaluatorTest {
 	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
 		// :if-exists is accepted only with the value the native behavior already
-		// implements (:supersede); :append must not be silently reinterpreted.
+		// implements (:supersede); :append must not be silently reinterpreted. It
+		// signals at CALL time as a Lisp condition (was an expansion-time throw):
+		// the eager compile paths expand every branch of a spliced library, and
+		// lack-middleware-backtrace's :append branch is dead code by default.
 		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :append) s)"))
-			.isInstanceOf(UnsupportedOperationException.class)
+			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining(":IF-EXISTS supports only the native default value");
 	}
 

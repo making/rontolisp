@@ -1426,6 +1426,52 @@ public final class LispEvaluator {
 			HttpHandlerSupport.serve(port, request -> invokeHttpHandler(handler, request));
 			return LispNil.INSTANCE; // serve() blocks forever; unreachable in practice
 		}));
+		// The stoppable HTTP server seam behind the clack-handler-rontolisp shim
+		// (internal rontolisp::%http-server-*): start takes a FUNCTION VALUE (unlike
+		// the directive's quoted name), binds address:port and returns an opaque
+		// handle; join blocks until stop (or the acceptor thread's interrupt -- the
+		// clack :use-thread t stop path); stop is idempotent. Registered here like
+		// http-handler because serving applies the handler via the evaluator.
+		String httpServerStartName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_START);
+		this.globalEnv.defineFunction(httpServerStartName, new LispFunction(httpServerStartName, args -> {
+			if (args.size() != 3) {
+				throw new LispEvalException(
+						LispNames.HTTP_SERVER_START + " expects (handler port address), got " + args.size());
+			}
+			final LispVal handler = args.get(0);
+			if (!(args.get(1) instanceof LispInteger portArg)) {
+				throw new LispEvalException(
+						LispNames.HTTP_SERVER_START + " expects an integer port, got: " + args.get(1).print());
+			}
+			String address = switch (args.get(2)) {
+				case LispString str -> str.value();
+				case LispNil ignored -> null;
+				default -> throw new LispEvalException(LispNames.HTTP_SERVER_START
+						+ " expects a string (or nil) address, got: " + args.get(2).print());
+			};
+			long handle = HttpHandlerSupport.startServer((int) portArg.value(), address,
+					request -> invokeHttpHandler(handler, request));
+			return new LispInteger(handle);
+		}));
+		String httpServerJoinName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_JOIN);
+		this.globalEnv.defineFunction(httpServerJoinName, new LispFunction(httpServerJoinName, args -> {
+			HttpHandlerSupport.joinServer(requireHttpServerHandle(LispNames.HTTP_SERVER_JOIN, args));
+			return LispNil.INSTANCE;
+		}));
+		String httpServerStopName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_STOP);
+		this.globalEnv.defineFunction(httpServerStopName, new LispFunction(httpServerStopName, args -> {
+			HttpHandlerSupport.stopServer(requireHttpServerHandle(LispNames.HTTP_SERVER_STOP, args));
+			return LispNil.INSTANCE;
+		}));
+		String httpServerPortName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
+				LispNames.HTTP_SERVER_PORT);
+		this.globalEnv.defineFunction(httpServerPortName, new LispFunction(httpServerPortName, args -> {
+			return new LispInteger(
+					HttpHandlerSupport.serverPort(requireHttpServerHandle(LispNames.HTTP_SERVER_PORT, args)));
+		}));
 		// The JSON functions live here because they dispatch to the Lisp-source
 		// library (JsonLibrary), evaluated into the global environment on first use.
 		String jsonParseName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.JSON_PARSE);
@@ -1774,6 +1820,13 @@ public final class LispEvaluator {
 			boolean errorP = args.size() < 2 || !(args.get(1) instanceof LispNil);
 			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
 			if (system == null) {
+				// A built-in system (a shim) is findable even before it is loaded:
+				// lack's find-package-or-load probes (asdf:find-system name nil) and
+				// loads on a hit -- the route by which (clackup app :server :rontolisp)
+				// pulls in the clack-handler-rontolisp backend at run time.
+				if (BuiltinSystems.isBuiltin(name)) {
+					return new LispString(name);
+				}
 				if (errorP) {
 					throw new LispEvalException(LispNames.ASDF_FIND_SYSTEM + ": system not registered: " + name);
 				}
@@ -2362,7 +2415,10 @@ public final class LispEvaluator {
 					this.closRegistry.ensureMopClassesSeeded();
 				}
 				for (LispVal form : BuiltinSystems.forms(name, Features.INTERPRETER)) {
-					eval(form, this.globalEnv);
+					// Through the package resolver (the leaf-module rule): a shim that
+					// carries its own defpackage (clack-handler-rontolisp) must register
+					// it, and for the canonical-shape shims resolution is an identity.
+					eval(form);
 				}
 			}
 			this.loadedSystems.add(name);
@@ -6080,6 +6136,16 @@ public final class LispEvaluator {
 
 	// Adapts one incoming HTTP request to the Lisp handler: builds the request property
 	// list, applies the handler and reads the response property list back.
+	// The opaque %http-server-* handle: an integer index into HttpHandlerSupport's
+	// handle table (the socket/mutex handle convention).
+	private static long requireHttpServerHandle(String fn, List<LispVal> args) {
+		if (args.size() != 1 || !(args.get(0) instanceof LispInteger handle)) {
+			throw new LispEvalException(fn + " expects a server handle, got "
+					+ (args.size() == 1 ? args.get(0).print() : args.size() + " arguments"));
+		}
+		return handle.value();
+	}
+
 	private HttpHandlerSupport.Response invokeHttpHandler(LispVal handler, HttpHandlerSupport.Request request) {
 		LispVal headers = LispNil.INSTANCE;
 		List<HttpHandlerSupport.Header> requestHeaders = request.headers();

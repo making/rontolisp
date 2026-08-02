@@ -148,14 +148,15 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
-	void httpHandlerInPreview1ModeRequiresComponent() {
-		// In Preview 1 (no --component) the http-handler directive reaches the compiler
-		// and
-		// is rejected; the component path (via the CLI's HttpHandlerInliner + serve mode)
-		// is exercised end to end in WasmLispCompilerIntegrationTest.
-		assertThatThrownBy(() -> compile("(defun h (r) nil) (rontolisp:http-handler 'h)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("--component");
+	void httpHandlerInPreview1ModeCompilesToACallTimeError() {
+		// In Preview 1 (no --component) the http-handler directive compiles to a
+		// CALL-time error stub since todo-228 (the todo-195 socket policy: the
+		// clack-handler-rontolisp shim carries the directive as dead code there,
+		// and rejecting it would fail the whole clack graph). The "requires
+		// --component" message is pinned end to end by ClackE2eTest's Preview 1
+		// leg through handler-case; the component path is exercised in
+		// WasmLispCompilerIntegrationTest.
+		assertThat(compile("(defun h (r) nil) (rontolisp:http-handler 'h)")).isNotEmpty();
 	}
 
 	@Test

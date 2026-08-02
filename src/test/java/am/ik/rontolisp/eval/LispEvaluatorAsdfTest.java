@@ -110,6 +110,34 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void findSystemAnswersABuiltinSystemBeforeItIsLoaded() {
+		// lack's find-package-or-load probes (asdf:find-system name nil) and loads on
+		// a hit: this is the route by which (clackup app :server :rontolisp) resolves
+		// the clack-handler-rontolisp backend at run time, under the DOTTED spelling
+		// find-package-or-load derives from the package name.
+		String output = run("""
+				(print (asdf:find-system "clack.handler.rontolisp" nil))
+				(print (asdf:find-system "no-such-system" nil))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\"clack.handler.rontolisp\"").contains("NIL");
+	}
+
+	@Test
+	void loadSystemResolvesTheClackHandlerShimAndRegistersItsPackage() {
+		// The shim carries its own defpackage (NOT seeded in PackageRegistry: a
+		// pre-seeded package would short-circuit lack's find-package probe and skip
+		// the load), so find-package answers nil before and the package after; the
+		// interned RUN then names the shim's exported function.
+		String output = run("""
+				(print (find-package "CLACK.HANDLER.RONTOLISP"))
+				(asdf:load-system "clack.handler.rontolisp")
+				(print (find-package "CLACK.HANDLER.RONTOLISP"))
+				(print (fboundp (intern "RUN" (find-package "CLACK.HANDLER.RONTOLISP"))))
+				""", Map.of(), List.of());
+		assertThat(output).containsSubsequence("NIL", ":CLACK.HANDLER.RONTOLISP", "T");
+	}
+
+	@Test
 	void quickloadResolvesBuiltinUsocketWithoutDownloading() {
 		// A built-in system short-circuits before the QuicklispClient is even
 		// created, so no network or cache is touched.

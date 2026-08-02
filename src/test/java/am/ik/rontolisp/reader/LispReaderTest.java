@@ -596,7 +596,7 @@ class LispReaderTest {
 		LispVal result = LispReader.readFromString("*features*");
 		assertThat(result.print()).isEqualTo("*FEATURES*");
 		List<LispVal> jvm = LispReader.readAllFromString("*features*", Features.JVM);
-		assertThat(jvm.get(0).print()).isEqualTo("(QUOTE (:RONTOLISP :RONTOLISP-JVM :UNICODE))");
+		assertThat(jvm.get(0).print()).isEqualTo("(QUOTE (:RONTOLISP :RONTOLISP-JVM :UNICODE :THREAD-SUPPORT))");
 	}
 
 	@Test

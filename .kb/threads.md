@@ -61,6 +61,18 @@ itself to die (Thread.join after the value settles), so `thread-alive-p` answers
 nil deterministically after a join. `destroy-thread` is `Thread.interrupt`: a
 request, not a kill.
 
+## The `:thread-support` feature (todo-228)
+
+`Features.INTERPRETER` and `Features.JVM` include **`thread-support`**; the WASM
+set does not. It is the ecosystem's portable spelling of "this image spawns
+threads": upstream bordeaux-threads pushes it from its `.asd` at load time, and
+a push can never reach a read-time conditional here (`.todo/181`), so the
+backends whose threads are real declare it statically like `:unicode`. The
+driving consumer is `clack:clackup`'s `#+thread-support t #-thread-support nil`
+default for `:use-thread` — t on the interpreter/JVM, nil on WASM, exactly the
+documented divergence (`.kb/clack.md`). Pinned by the ci-spec
+`reader-features-variable` case (feature count 4 vs 3 per backend).
+
 ## The bt2 package and the shim
 
 `bordeaux-threads.lisp` (ShimLibraries) now provides BOTH API namespaces of the

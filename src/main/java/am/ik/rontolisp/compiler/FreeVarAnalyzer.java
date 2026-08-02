@@ -200,6 +200,28 @@ public final class FreeVarAnalyzer {
 								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.ASSERT -> collectFreeVars(LispMacroExpander.expandAssert(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
+						// typecase clause HEADS are type specifiers (data), not variable
+						// references -- walk the keyform and the clause bodies only.
+						// Walked structurally rather than expanded: the expansion needs
+						// the class registry for a class-name head (lack-middleware-
+						// backtrace's (or pathname string) head is what surfaced this).
+						case LispNames.TYPECASE, LispNames.ETYPECASE -> {
+							List<LispVal> parts = cons.toList();
+							if (parts.size() > 1) {
+								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, specialNames,
+										freeVars);
+							}
+							for (int i = 2; i < parts.size(); i++) {
+								if (!(parts.get(i) instanceof LispCons clause)) {
+									continue;
+								}
+								List<LispVal> clauseParts = clause.toList();
+								for (int j = 1; j < clauseParts.size(); j++) {
+									collectFreeVars(clauseParts.get(j), boundVars, knownFunctions, globals,
+											specialNames, freeVars);
+								}
+							}
+						}
 						case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
 							// Parsed no-ops: no variable references.
 						}
@@ -477,6 +499,24 @@ public final class FreeVarAnalyzer {
 								localVars, knownFunctions, captured, insideLambda);
 						case LispNames.ASSERT -> collectCapturedVars(LispMacroExpander.expandAssert(cons), localVars,
 								knownFunctions, captured, insideLambda);
+						// typecase clause HEADS are type specifiers (data): walk the
+						// keyform and the clause bodies only (the collectFreeVars twin).
+						case LispNames.TYPECASE, LispNames.ETYPECASE -> {
+							List<LispVal> parts = cons.toList();
+							if (parts.size() > 1) {
+								collectCapturedVars(parts.get(1), localVars, knownFunctions, captured, insideLambda);
+							}
+							for (int i = 2; i < parts.size(); i++) {
+								if (!(parts.get(i) instanceof LispCons clause)) {
+									continue;
+								}
+								List<LispVal> clauseParts = clause.toList();
+								for (int j = 1; j < clauseParts.size(); j++) {
+									collectCapturedVars(clauseParts.get(j), localVars, knownFunctions, captured,
+											insideLambda);
+								}
+							}
+						}
 						case LispNames.DECLARE, LispNames.DECLAIM, LispNames.PROCLAIM -> {
 							// Parsed no-ops: no variable references.
 						}

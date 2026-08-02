@@ -270,13 +270,18 @@ final class WasmExprCompiler {
 					}
 				}
 				if (LispNames.HTTP_HANDLER.equals(qn.member())) {
-					// In component mode the HttpHandlerInliner rewrites http-handler into
-					// a
-					// %http-dispatch wasm-export wrapper before compilation, so it never
-					// reaches here; reaching here means Preview 1 (no --component).
-					throw new UnsupportedOperationException(LispNames.HTTP_HANDLER
+					// In component mode HttpLibrary.process rewrites http-handler into
+					// the %serve-handle export before compilation, so it never reaches
+					// here; reaching here means Preview 1 (no --component), which has
+					// no incoming TCP by design (.kb/tcp-sockets.md). A CALL-TIME error
+					// (the todo-195 socket policy), not a compile error: the call may be
+					// dead code -- the clack-handler-rontolisp shim's run defun is
+					// compiled whenever clack is loaded, reached only by an actual
+					// clackup.
+					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(LispNames.HTTP_HANDLER
 							+ " requires --component (it compiles to a wasi:http/incoming-handler component "
-							+ "runnable with `wasmtime serve`)");
+							+ "runnable with `wasmtime serve`)"), ctx);
+					return;
 				}
 				if (LispNames.AWAIT.equals(qn.member())) {
 					WasmAwaitCompiler.compile(cons, ctx);
@@ -414,9 +419,16 @@ final class WasmExprCompiler {
 						WasmWasiStreamCompiler.compile(qn.member(), cons, ctx);
 						return;
 					}
-					throw new UnsupportedOperationException("rontolisp:" + qn.member()
+					// No stream value can exist here (Preview 1, or a component that
+					// neither fetches nor serves), so any executed call has a bug to
+					// report -- but the SITE may be dead code (the
+					// clack-handler-rontolisp bridge drains a request body it can never
+					// receive on Preview 1), so it signals at CALL time, never rejects
+					// the program (the todo-195 socket policy).
+					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub("rontolisp:" + qn.member()
 							+ " requires the interpreter, the JVM backend or an asynchronous --component program"
-							+ " (streams come from rontolisp:fetch / rontolisp:http-handler bodies there)");
+							+ " (streams come from rontolisp:fetch / rontolisp:http-handler bodies there)"), ctx);
+					return;
 				}
 				if (LispNames.MAKE_STREAM.equals(qn.member()) || LispNames.STREAM_WRITE.equals(qn.member())) {
 					throw new UnsupportedOperationException(
@@ -879,10 +891,24 @@ final class WasmExprCompiler {
 				// consumed by the compile-time LoadInliner pass; anything left is nested
 				// or non-literal, which the compiled runtime reader cannot execute
 				// (unlike a runtime load).
-				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_LOAD_SYSTEM, LispNames.ASDF_DEFSYSTEM,
-						LispNames.QL_QUICKLOAD ->
+				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_DEFSYSTEM ->
 					throw new UnsupportedOperationException(
 							sym.name() + " is only supported as a literal top-level form on the compile path");
+				// A nested/computed load reached at run time cannot load anything (every
+				// loadable system was spliced at compile time), but it may be dead code
+				// -- lack's find-package-or-load calls it behind a find-package probe
+				// -- so it signals at CALL time (the undefined-function policy).
+				case LispNames.ASDF_LOAD_SYSTEM, LispNames.QL_QUICKLOAD ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
+							sym.name() + " cannot load a system at run time on the compiled backends"
+									+ " (systems are spliced at compile time)"),
+							ctx);
+				// The runtime counterpart of the literal fold: a compiled program has no
+				// system registry, so a COMPUTED find-system answers nil after
+				// evaluating its arguments (the (asdf:find-system name nil) probe
+				// shape; see LispMacroExpander.expandRuntimeFindSystem).
+				case LispNames.ASDF_FIND_SYSTEM ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx);
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);
 				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
 				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);

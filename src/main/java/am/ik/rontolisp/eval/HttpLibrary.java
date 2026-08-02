@@ -95,7 +95,24 @@ public final class HttpLibrary {
 			}
 			withoutDirective.add(form);
 		}
-		if (!serve) {
+		if (serve) {
+			// A NESTED (rontolisp:http-handler '<literal-name> ...) call -- the
+			// clack-handler-rontolisp shim calls the directive inside its run defun --
+			// still yields a static handler name: extract it for the export wiring and
+			// lower the call site to nil (the host owns the socket; instantiation runs
+			// the top-level program, clackup stores its app, and requests arrive
+			// through the exported handle).
+			String[] nested = new String[1];
+			List<LispVal> rewritten = new ArrayList<>(withoutDirective.size());
+			for (LispVal form : withoutDirective) {
+				rewritten.add(rewriteNestedHandlerCalls(form, nested));
+			}
+			withoutDirective = rewritten;
+			if (handler == null) {
+				handler = nested[0];
+			}
+		}
+		else {
 			handler = null;
 		}
 		if (!fetch && handler == null) {
@@ -138,16 +155,19 @@ public final class HttpLibrary {
 			}
 			out.add(form);
 		}
+		out.addAll(withoutDirective);
 		if (handler != null) {
 			// The bridge to the user's handler and the handler export of %serve-handle
 			// (one own<request> parameter; the response is delivered mid-task through
-			// the task-return built-in, so the core function returns nothing).
+			// the task-return built-in, so the core function returns nothing). Appended
+			// AFTER the program so a package-qualified nested handler name (the
+			// clack-handler-rontolisp shim's %bridge) resolves against the shim's own
+			// defpackage, which the program splices ahead of it.
 			out.addAll(LispReader.readAllFromString("""
 					(defun %%serve-dispatch (%%serve-req) (%s %%serve-req))
 					(rontolisp:wasm-export '%%serve-handle :as "handle" :params '(:int) :returns :void)
 					""".formatted(handler), Features.INTERPRETER));
 		}
-		out.addAll(withoutDirective);
 		return out;
 	}
 
@@ -221,6 +241,31 @@ public final class HttpLibrary {
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.HTTP_HANDLER.equals(qn.member());
+	}
+
+	// Rewrites every NESTED (rontolisp:http-handler 'name ...) call inside the form to
+	// nil, recording the first literal handler name into holder[0]. Quoted data is left
+	// untouched; unchanged subtrees keep their identity (no needless rebuild of the
+	// whole spliced program).
+	private static LispVal rewriteNestedHandlerCalls(LispVal form, String[] holder) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol sym && LispNames.QUOTE.equals(sym.name())) {
+			return form;
+		}
+		if (isHttpHandlerForm(form)) {
+			if (holder[0] == null) {
+				holder[0] = handlerName(cons);
+			}
+			return am.ik.rontolisp.LispNil.INSTANCE;
+		}
+		LispVal car = rewriteNestedHandlerCalls(cons.car(), holder);
+		LispVal cdr = rewriteNestedHandlerCalls(cons.cdr(), holder);
+		if (car == cons.car() && cdr == cons.cdr()) {
+			return form;
+		}
+		return new LispCons(car, cdr);
 	}
 
 	// Extracts the handler function name from (rontolisp:http-handler 'name [port]).

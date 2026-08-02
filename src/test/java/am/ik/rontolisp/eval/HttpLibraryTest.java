@@ -59,6 +59,58 @@ class HttpLibraryTest {
 		assertThat(out).isEqualTo(program);
 	}
 
+	@Test
+	void processExtractsANestedHttpHandlerCallAndLowersTheCallSiteToNil() {
+		// The clack-handler-rontolisp shape: the directive is called INSIDE a defun
+		// body with a literal quoted (package-qualified) handler name. The name must
+		// reach the export wiring and the call site must become nil -- the host owns
+		// the socket, so run returns at once and requests arrive via the exported
+		// handle.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun my.pkg::%bridge (req) req)
+				(defun my.pkg:run (app port)
+				  (rontolisp:http-handler 'my.pkg::%bridge port))
+				(my.pkg:run (lambda (env) env) 5000)
+				""");
+		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, true);
+		// The bridge defun dispatches to the extracted handler name.
+		assertThat(definesDefun(out, "%SERVE-DISPATCH")).isTrue();
+		String printed = printAll(out);
+		assertThat(printed).contains("(MY.PKG::%BRIDGE %SERVE-REQ)");
+		// The nested call site itself is gone (only the bridge references the
+		// directive's machinery).
+		assertThat(printed).doesNotContain("RONTOLISP:HTTP-HANDLER");
+	}
+
+	@Test
+	void processLeavesAQuotedHttpHandlerFormAlone() {
+		// Quoted data is not a call site: nothing to extract, nothing rewritten.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defvar *x* '(rontolisp:http-handler 'my.pkg::%bridge 5000))
+				""");
+		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, true);
+		assertThat(out).isEqualTo(program);
+	}
+
+	@Test
+	void processKeepsTheTopLevelDirectiveShapeWorking() {
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun my-handler (req) req)
+				(rontolisp:http-handler 'my-handler 8080)
+				""");
+		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, true);
+		assertThat(definesDefun(out, "%SERVE-DISPATCH")).isTrue();
+		assertThat(printAll(out)).contains("(MY-HANDLER %SERVE-REQ)");
+	}
+
+	private static String printAll(List<LispVal> forms) {
+		StringBuilder sb = new StringBuilder();
+		for (LispVal form : forms) {
+			sb.append(form.print()).append('\n');
+		}
+		return sb.toString();
+	}
+
 	static boolean definesDefun(List<LispVal> forms, String name) {
 		for (LispVal form : forms) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && "DEFUN".equals(head.name())

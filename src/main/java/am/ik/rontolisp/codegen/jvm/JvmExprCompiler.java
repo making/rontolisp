@@ -236,6 +236,10 @@ final class JvmExprCompiler {
 					JvmHttpHandlerCompiler.compile(cons, ctx, className);
 					return;
 				}
+				if (JvmHttpServerSeamCompiler.handles(qn.member())) {
+					JvmHttpServerSeamCompiler.compile(qn.member(), cons, ctx, className);
+					return;
+				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
 					// One cryptographically strong byte from the lazily created
 					// SecureRandom (_randomByte, emitted because the reference gated it).
@@ -892,10 +896,29 @@ final class JvmExprCompiler {
 				// consumed by the compile-time LoadInliner pass; anything left is nested
 				// or non-literal, which the compiled runtime reader cannot execute
 				// (unlike a runtime load).
-				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_LOAD_SYSTEM, LispNames.ASDF_DEFSYSTEM,
-						LispNames.QL_QUICKLOAD ->
+				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_DEFSYSTEM ->
 					throw new UnsupportedOperationException(
 							sym.name() + " is only supported as a literal top-level form on the compile path");
+				// A nested/computed load reached at run time cannot load anything (every
+				// loadable system was spliced at compile time), but it may be dead code
+				// -- lack's find-package-or-load calls it behind a find-package probe
+				// that a spliced system's baked package table already answers -- so it
+				// signals at CALL time (the undefined-function policy), never rejects
+				// the program.
+				case LispNames.ASDF_LOAD_SYSTEM,
+						LispNames.QL_QUICKLOAD ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
+							sym.name() + " cannot load a system at run time on the compiled backends"
+									+ " (systems are spliced at compile time)"),
+							ctx, className);
+				// The runtime counterpart of the literal fold
+				// (CompileTimePathnameFolder):
+				// a compiled program has no system registry, so a COMPUTED find-system
+				// answers nil ("no such system") after evaluating its arguments -- the
+				// probe shape libraries use ((asdf:find-system name nil) guarding a
+				// load-system), where nil routes the caller onto its not-found branch.
+				case LispNames.ASDF_FIND_SYSTEM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx, className);
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);

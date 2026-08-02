@@ -7,9 +7,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -102,6 +104,105 @@ public final class HttpHandlerSupport {
 	// Servers started in this process, tracked so tests can shut them all down.
 	private static final List<HttpServer> SERVERS = new CopyOnWriteArrayList<>();
 
+	// A stoppable server: the HttpServer plus the latch a joiner blocks on until the
+	// server is stopped. The Lisp-visible handle is an opaque integer index into
+	// HANDLES (the socket/mutex handle convention -- nothing portable may print or
+	// compare one), so the interpreter and the JVM backend share one representation
+	// (a boxed integer).
+	private record StoppableServer(HttpServer server, CountDownLatch stopped) {
+	}
+
+	private static final Map<Long, StoppableServer> HANDLES = new ConcurrentHashMap<>();
+
+	private static final AtomicLong NEXT_HANDLE = new AtomicLong(1);
+
+	/**
+	 * Starts an embedded HTTP server bound to the given address and port and returns an
+	 * opaque handle for {@link #joinServer} / {@link #stopServer} -- the stoppable seam
+	 * behind the internal {@code rontolisp::%http-server-start} function (the
+	 * {@code clack-handler-rontolisp} backend's acceptor). Unlike the
+	 * {@code http-handler} directive's {@link #serve}, the server is per-handle stoppable
+	 * and binds the given address instead of the wildcard.
+	 * @param port the TCP port to bind (0 = ephemeral)
+	 * @param address the bind address (a hostname or IP literal); {@code null} binds the
+	 * wildcard address. A JVM-runtime quote-wrapped string ({@code "\"host\""}) is
+	 * accepted and unwrapped, so the compiled backend can pass its string value rep
+	 * as-is.
+	 * @param handler the request handler
+	 * @return the opaque server handle
+	 */
+	public static long startServer(int port, @Nullable Object address, Handler handler) {
+		String bindAddress = null;
+		if (address instanceof String str) {
+			bindAddress = str.length() >= 2 && str.startsWith("\"") && str.endsWith("\"")
+					? str.substring(1, str.length() - 1) : str;
+		}
+		final HttpServer server;
+		try {
+			server = HttpServer.create(
+					bindAddress == null ? new InetSocketAddress(port) : new InetSocketAddress(bindAddress, port), 0);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException(LispNames.HTTP_HANDLER + ": failed to bind "
+					+ (bindAddress == null ? "port " + port : bindAddress + ":" + port) + ": " + ex.getMessage());
+		}
+		server.createContext("/", exchange -> dispatch(exchange, handler));
+		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+		server.start();
+		SERVERS.add(server);
+		long handle = NEXT_HANDLE.getAndIncrement();
+		HANDLES.put(handle, new StoppableServer(server, new CountDownLatch(1)));
+		return handle;
+	}
+
+	/**
+	 * Returns the local port the given server is bound to (the ephemeral-port readback
+	 * for port 0), or {@code -1} for an unknown or already-stopped handle.
+	 * @param handle a handle returned by {@link #startServer}
+	 * @return the bound port, or {@code -1}
+	 */
+	public static long serverPort(long handle) {
+		StoppableServer stoppable = HANDLES.get(handle);
+		return stoppable == null ? -1 : stoppable.server().getAddress().getPort();
+	}
+
+	/**
+	 * Blocks the calling thread until the given server is stopped ({@link #stopServer})
+	 * or the thread is interrupted ({@code rontolisp:destroy-thread} on the acceptor
+	 * thread -- clack's {@code :use-thread t} stop path); both return normally, so a Lisp
+	 * {@code unwind-protect} around the join runs its cleanup in an orderly unwind. An
+	 * unknown or already-stopped handle returns immediately.
+	 * @param handle a handle returned by {@link #startServer}
+	 */
+	public static void joinServer(long handle) {
+		StoppableServer stoppable = HANDLES.get(handle);
+		if (stoppable == null) {
+			return;
+		}
+		try {
+			stoppable.stopped().await();
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	/**
+	 * Stops the given server and releases its joiners. Idempotent: an unknown or
+	 * already-stopped handle is a no-op, so the acceptor's {@code unwind-protect}-cleanup
+	 * stop and an explicit {@code clack:stop} cannot double-fault.
+	 * @param handle a handle returned by {@link #startServer}
+	 */
+	public static void stopServer(long handle) {
+		StoppableServer stoppable = HANDLES.remove(handle);
+		if (stoppable == null) {
+			return;
+		}
+		stoppable.server().stop(0);
+		SERVERS.remove(stoppable.server());
+		stoppable.stopped().countDown();
+	}
+
 	/**
 	 * Start an embedded HTTP server bound to the given port and return it immediately
 	 * (non-blocking). All request paths route to {@code handler}. Passing port 0 binds an
@@ -153,6 +254,9 @@ public final class HttpHandlerSupport {
 			server.stop(0);
 		}
 		SERVERS.clear();
+		for (Long handle : HANDLES.keySet()) {
+			stopServer(handle);
+		}
 	}
 
 	// Reads the request, invokes the handler and writes the response. A handler that

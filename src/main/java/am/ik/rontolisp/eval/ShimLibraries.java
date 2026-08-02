@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -73,7 +74,13 @@ public final class ShimLibraries {
 	private static final Map<String, String> RESOURCES = Map.of("closer-mop", "closer-mop.lisp", "flexi-streams",
 			"flexi-streams.lisp", "float-features", "float-features.lisp", "trivial-gray-streams",
 			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp", "babel", "babel.lisp", "swank",
-			"swank.lisp");
+			"swank.lisp",
+			// The Clack handler backend (run/stop over the %http-server-* seam). Both
+			// system spellings resolve to the ONE resource: the hyphenated name is the
+			// ecosystem convention a user names directly, the dotted one is what lack's
+			// find-package-or-load derives from the package name at clackup time.
+			LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, "clack-handler-rontolisp.lisp",
+			LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp");
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's

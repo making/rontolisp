@@ -5625,9 +5625,13 @@ public final class LispMacroExpander {
 				// Accepted and dropped like open's keyword normalization -- but only
 				// with the value the native behavior already implements (UTF-8, the
 				// create/supersede defaults); any other value must not be silently
-				// reinterpreted.
+				// reinterpreted. It signals at CALL time, not expansion time (the
+				// undefined-function policy): the eager compile paths expand every
+				// branch of a spliced library, and lack-middleware-backtrace's
+				// file-output branch (:if-exists :append) is dead code in the default
+				// *error-output* configuration.
 				if (i + 1 >= specParts.size() || !ignorableOpenOptionValue(key.name(), specParts.get(i + 1))) {
-					throw new UnsupportedOperationException(LispNames.WITH_OPEN_FILE + " " + key.name()
+					return callTimeUnsupportedStub(LispNames.WITH_OPEN_FILE + " " + key.name()
 							+ " supports only the native default value (" + (":EXTERNAL-FORMAT".equals(key.name())
 									? ":utf-8" : ":IF-EXISTS".equals(key.name()) ? ":supersede" : ":create or :error")
 							+ ")");
@@ -17275,6 +17279,28 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal callTimeUnsupportedStub(String message) {
 		return listToCons(List.of(new LispSymbol(LispNames.ERROR), new LispString(message)));
+	}
+
+	/**
+	 * Lowers a nested/computed {@code (asdf:find-system NAME [ERROR-P])} on the compile
+	 * paths to its arguments evaluated for effect followed by {@code nil}: a compiled
+	 * program carries no system registry (every loadable system was spliced at compile
+	 * time; a LITERAL name folds via {@code CompileTimePathnameFolder} before this is
+	 * reached), so "no such system" is the honest runtime answer. This serves the probe
+	 * shape libraries actually use -- lack's {@code find-package-or-load} guards its
+	 * {@code load-system} with {@code (asdf:find-system name nil)}, and nil routes it
+	 * onto the not-found branch. Divergence vs the interpreter (which answers from its
+	 * live registry) is accepted and documented in {@code .kb/asdf.md}.
+	 * @param cons the find-system call
+	 * @return the lowered expression
+	 */
+	public static LispVal expandRuntimeFindSystem(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> progn = new java.util.ArrayList<>();
+		progn.add(new LispSymbol(LispNames.PROGN));
+		progn.addAll(parts.subList(1, parts.size()));
+		progn.add(LispNil.INSTANCE);
+		return listToCons(progn);
 	}
 
 	/**

@@ -418,7 +418,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		String fetchQualified = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FETCH);
 		String awaitQualified = LispNames.AWAIT_QUALIFIED;
 		boolean usesHttpHandler = programUsesSymbol(program,
-				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER));
+				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER))
+				// The stoppable %http-server-* seam (the clack-handler-rontolisp shim)
+				// rides the same runtime: the Handler interface, the injected handle()
+				// method and the _httpHandlerFn slot.
+				|| programUsesSymbol(program,
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.HTTP_SERVER_START));
 		boolean usesFetch = programUsesSymbol(program, fetchQualified);
 		boolean usesAsyncSpawn = programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || usesHttpHandler;
 		boolean usesStreamOps = programUsesSymbol(program,

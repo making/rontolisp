@@ -4886,6 +4886,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunEtypecaseInsideACapturingLambda() throws Exception {
+		// The lack-middleware-backtrace shape: an etypecase whose clause heads include
+		// (or pathname string), inside a lambda that captures the scrutinee. The
+		// free/captured-variable analysis must read the clause HEADS as type
+		// specifiers, not variable references -- it used to try to capture PATHNAME.
+		assertThat(compileAndRun("""
+				(defparameter *mw*
+				  (lambda (app &key (output '*error-output*) result-on-error)
+				    (check-type output (or symbol stream pathname string))
+				    (flet ((classify ()
+				             (etypecase output
+				               (symbol :symbol)
+				               (stream :stream)
+				               ((or pathname string) :path))))
+				      (lambda (env)
+				        (list (classify) (funcall app env))))))
+				(print (funcall (funcall *mw* (lambda (e) (* e 2))) 21))
+				""")).isEqualTo("(:SYMBOL 42)");
+	}
+
+	@Test
 	void compileAndRunError() throws Exception {
 		assertThatThrownBy(() -> compileAndRun("(error \"boom\")")).hasRootCauseMessage("boom");
 		assertThatThrownBy(() -> compileAndRun("(error \"bad value: ~a\" (+ 1 2))"))
