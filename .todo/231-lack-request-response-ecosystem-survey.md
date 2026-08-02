@@ -6,7 +6,9 @@ found by the survey are split out — this todo is blocked on them for the
 lack-request half:
 
 - `.todo/232` CLOS multiple inheritance + setf methods + setf
-  symbol-function/fdefinition places (高) — gates circular-streams,
+  symbol-function/fdefinition places (高) — DONE 2026-08-02 (`.kb/clos.md`,
+  `.kb/symbol-runtime-api.md`); the remaining Gray-stream half is
+  `.todo/235` (中〜高) — gates circular-streams,
   and therefore lack-request / -session / -csrf
 - `.todo/233` `#.` read-time eval (中) — gates fast-http
 - `.todo/234` `:method-combination progn` (中) — gates yason (http-body's
@@ -47,12 +49,9 @@ them loaded during the probe.
    needed); `vector-stream` class + internal `vector-stream-vector` accessor
    (http-body `slurp-stream` fast path — can degrade to the read-sequence
    branch if typep on the class can answer nil).
-3. **trivial-gray-streams shim widening (中)** — only the CHARACTER classes
-   exist. fast-io/circular-streams subclass `trivial-gray-stream-mixin`,
-   `fundamental-stream`, `fundamental-binary-input-stream` /
-   `-output-stream`, and need the binary protocol (`stream-read-byte`,
-   `stream-write-byte`, `stream-read-sequence`/`stream-write-sequence`,
-   `stream-file-position`).
+3. **trivial-gray-streams shim widening (中)** — moved to `.todo/235`
+   (Gray binary/input stream classes, input generics,
+   `stream-file-position`), which owns the core-protocol half too.
 4. **.asd front-end (低)** — fast-io.asd opens with a top-level
    `(eval-when ... (pushnew :fast-io *features*))`; the front-end accepts
    only DEFSYSTEM/DEFPACKAGE/IN-PACKAGE/DEFPARAMETER/REGISTER-SYSTEM-PACKAGES.
