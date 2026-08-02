@@ -59,11 +59,13 @@ public final class AsdfSystems {
 	 * @param baseDir the directory the component files resolve against (the directory of
 	 * the {@code .asd} file, or of the source that defined the system inline; empty for
 	 * working-directory-relative)
-	 * @param features the feature names the system's {@code :rontolisp-features} option
-	 * declares: the static encoding of a {@code .asd} that pushes onto {@code *features*}
-	 * from an {@code eval-when}. They hold while THIS system's own clauses are parsed and
-	 * while its component files are read, and each loader widens its own base set with
-	 * them ({@code Features.with}) -- so the backend feature stays the loader's, and a
+	 * @param features the feature names this system holds beyond the loader's own set:
+	 * those its {@code :rontolisp-features} option declares, plus those the enclosing
+	 * {@code .asd} really pushed onto {@code *features*} from an {@code eval-when} ahead
+	 * of the form ({@code AsdfSystems.collectFeaturePushes}) -- one mechanism, two
+	 * spellings. They hold while THIS system's own clauses are parsed and while its
+	 * component files are read, and each loader widens its own base set with them
+	 * ({@code Features.with}) -- so the backend feature stays the loader's, and a
 	 * dependency (parsed from its own {@code .asd}) never inherits them
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
@@ -148,12 +150,13 @@ public final class AsdfSystems {
 	 * {@code defpackage} forms are skipped (the file is never evaluated, so the
 	 * system-definition package header idiom does not matter), a top-level
 	 * {@code defparameter} of a pure literal/conditional value is evaluated into a
-	 * parse-time data environment (the cl-postgres {@code *string-file*} idiom), and any
-	 * other form is a hard error naming the file. A {@code #.} read-time-eval datum
-	 * (wrapped in a {@code %read-eval} marker by the tolerant reader) is resolved against
-	 * that environment; an unresolvable one is skipped with a warning (the
-	 * ASDF-version-guard idiom). {@code #+}/{@code #-} conditionals are evaluated against
-	 * {@code features}.
+	 * parse-time data environment (the cl-postgres {@code *string-file*} idiom), a
+	 * top-level {@code eval-when} announcing features with {@code pushnew} declares them
+	 * for the systems defined after it ({@link #collectFeaturePushes}), and any other
+	 * form is a hard error naming the file. A {@code #.} read-time-eval datum (wrapped in
+	 * a {@code %read-eval} marker by the tolerant reader) is resolved against that
+	 * environment; an unresolvable one is skipped with a warning (the ASDF-version-guard
+	 * idiom). {@code #+}/{@code #-} conditionals are evaluated against {@code features}.
 	 * @param source the {@code .asd} source text
 	 * @param asdPath the resolved path of the {@code .asd} file (for the base directory
 	 * and error messages)
@@ -164,6 +167,10 @@ public final class AsdfSystems {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
 		Map<String, LispVal> parameters = new HashMap<>();
+		// Features the file pushes onto *features* ahead of a defsystem, accumulated in
+		// file order and merged into the declared features of every LATER system (see
+		// collectFeaturePushes).
+		List<String> pushedFeatures = new ArrayList<>();
 		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
 			// A #. datum the lexer could not re-lex leaves a nil placeholder (so it does
 			// not shift plist/alist pairing inside a defsystem option); a top-level one
@@ -191,13 +198,19 @@ public final class AsdfSystems {
 				defineParameter(form, parameters, asdPath);
 				continue;
 			}
+			if (operatorMemberIs(form, LispNames.EVAL_WHEN) || operatorMemberIs(form, LispNames.PUSHNEW)
+					|| operatorMemberIs(form, LispNames.PUSH)) {
+				collectFeaturePushes(form, true, features, pushedFeatures, asdPath);
+				continue;
+			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
-				systems.add(parseDefsystem(substituteReadEval(form, parameters), baseDir, features));
+				systems.add(parseDefsystem(substituteReadEval(form, parameters), baseDir, features, pushedFeatures));
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
-					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + ", " + LispNames.DEFPARAMETER
-					+ " and " + LispNames.REGISTER_SYSTEM_PACKAGES + " are recognized): " + form.print());
+					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + ", " + LispNames.DEFPARAMETER + ", "
+					+ LispNames.REGISTER_SYSTEM_PACKAGES + " and a " + LispNames.EVAL_WHEN + "/" + LispNames.PUSHNEW
+					+ " feature announcement are recognized): " + form.print());
 		}
 		return systems;
 	}
@@ -222,6 +235,135 @@ public final class AsdfSystems {
 					+ ex.getMessage() + " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not"
 					+ " over earlier defparameters)");
 		}
+	}
+
+	/**
+	 * Collects the features a top-level {@code (eval-when (SITUATION...) (pushnew :F
+	 * *features*) ...)} -- or a bare top-level {@code pushnew}/{@code push} -- announces.
+	 * This is the idiom a real {@code .asd} uses to say "this library is present" and to
+	 * take its own per-implementation decisions before its {@code defsystem} reads them
+	 * back; fast-io.asd opens with exactly two of them.
+	 * <p>
+	 * The push is recorded STATICALLY and handed to {@link #parseDefsystem} as if the
+	 * system had declared it with {@code :rontolisp-features} -- one mechanism, so an
+	 * upstream file and a bundled replacement {@code .asd} behave identically (see
+	 * {@code .kb/asdf.md}). What that buys is the system's own {@code :if-feature} /
+	 * {@code (:feature ...)} clauses and the reading of its component files; it does NOT
+	 * reach a {@code #+} in the same {@code .asd}, which the reader resolved before this
+	 * parse ever ran ({@code .todo/181}), nor a dependency, which declares its own.
+	 * <p>
+	 * Only the feature-announcement shape is accepted -- anything else inside the
+	 * {@code eval-when} is a hard error naming the form, like every other unsupported
+	 * {@code .asd} form (deny by default; the file is data, never evaluated).
+	 * @param form the {@code eval-when}/{@code pushnew} form
+	 * @param fires whether the enclosing {@code eval-when} situations fire when the
+	 * {@code .asd} is loaded
+	 * @param features the active reader features (to recognize a substituted
+	 * {@code *features*})
+	 * @param pushed the accumulating feature names, in file order
+	 * @param asdPath the {@code .asd} path, for error messages
+	 */
+	private static void collectFeaturePushes(LispVal form, boolean fires, Features features, List<String> pushed,
+			String asdPath) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			throw featurePushError(asdPath, form);
+		}
+		List<LispVal> items = cons.toList();
+		if (operatorMemberIs(form, LispNames.EVAL_WHEN)) {
+			if (items.size() < 2) {
+				throw featurePushError(asdPath, form);
+			}
+			boolean nested = fires && firesOnLoad(items.get(1));
+			for (LispVal body : items.subList(2, items.size())) {
+				collectFeaturePushes(body, nested, features, pushed, asdPath);
+			}
+			return;
+		}
+		if (!operatorMemberIs(form, LispNames.PUSHNEW) && !operatorMemberIs(form, LispNames.PUSH)) {
+			throw featurePushError(asdPath, form);
+		}
+		if (items.size() != 3 || !(items.get(1) instanceof LispSymbol feature) || !feature.isKeyword()
+				|| !isFeaturesReference(items.get(2), features)) {
+			throw featurePushError(asdPath, form);
+		}
+		String name = symbolName(feature);
+		if (fires && !pushed.contains(name)) {
+			pushed.add(name);
+		}
+	}
+
+	/**
+	 * Merges the {@code .asd}'s feature pushes with a system's own declared features,
+	 * pushes first, without duplicates.
+	 */
+	private static List<String> mergeFeatureNames(List<String> pushed, List<String> declared) {
+		if (pushed.isEmpty()) {
+			return declared;
+		}
+		List<String> merged = new ArrayList<>(pushed);
+		for (String name : declared) {
+			if (!merged.contains(name)) {
+				merged.add(name);
+			}
+		}
+		return List.copyOf(merged);
+	}
+
+	private static IllegalStateException featurePushError(String asdPath, LispVal form) {
+		return new IllegalStateException(asdPath + ": only a feature announcement -- (pushnew :FEATURE *features*),"
+				+ " alone or inside an " + LispNames.EVAL_WHEN + " -- is supported here: " + form.print());
+	}
+
+	/**
+	 * Whether an {@code eval-when}'s situation list fires when the {@code .asd} is
+	 * LOADED. ASDF {@code load}s a system-definition file and never compiles it, so a
+	 * {@code (:compile-toplevel)}-only push genuinely has no effect in a real
+	 * implementation either and must not widen the feature set here.
+	 */
+	private static boolean firesOnLoad(LispVal situations) {
+		for (LispVal situation : properList(LispNames.EVAL_WHEN, situations)) {
+			if (situation instanceof LispSymbol sym) {
+				String name = symbolName(sym);
+				if ("load-toplevel".equals(name) || "execute".equals(name) || "load".equals(name)
+						|| "eval".equals(name)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether {@code form} is a reference to {@code *features*}. Two spellings reach
+	 * here, because the reader that produced this form differs per target: the
+	 * interpreter leaves the symbol standing (it binds {@code *features*} as a global),
+	 * while the compile backends substitute it at read time with the quoted active
+	 * feature list ({@code Features.substituteFeaturesVar}). Matching the substituted
+	 * list against the active set -- rather than accepting any quoted list -- keeps a
+	 * stray {@code (pushnew :x '(:a :b))} an error.
+	 */
+	private static boolean isFeaturesReference(LispVal form, Features features) {
+		if (form instanceof LispSymbol sym) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			return LispNames.FEATURES_VAR.equals(qn == null ? sym.name() : qn.member());
+		}
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() != 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.QUOTE.equals(op.name())) {
+			return false;
+		}
+		List<String> substituted = new ArrayList<>();
+		LispVal rest = items.get(1);
+		while (rest instanceof LispCons cell) {
+			if (!(cell.car() instanceof LispSymbol name)) {
+				return false;
+			}
+			substituted.add(symbolName(name));
+			rest = cell.cdr();
+		}
+		return rest instanceof LispNil && substituted.equals(features.names());
 	}
 
 	/**
@@ -342,6 +484,24 @@ public final class AsdfSystems {
 	 * @return the parsed system
 	 */
 	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures) {
+		return parseDefsystem(form, baseDir, givenFeatures, List.of());
+	}
+
+	/**
+	 * Parses a {@code defsystem} form that an enclosing {@code .asd} preceded with
+	 * feature pushes ({@link #collectFeaturePushes}). The pushed names are merged into
+	 * the system's declared features ahead of its own {@code :rontolisp-features}, so
+	 * both spellings of "this system holds these features" travel one path.
+	 * @param form the {@code defsystem} form
+	 * @param baseDir the directory the component files resolve against, or {@code null}
+	 * for working-directory-relative
+	 * @param givenFeatures the features the {@code :if-feature} component option tests
+	 * @param pushedFeatures the feature names the enclosing {@code .asd} pushed onto
+	 * {@code *features*} before this form
+	 * @return the parsed system
+	 */
+	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
+			List<String> pushedFeatures) {
 		if (!(form instanceof LispCons cons)) {
 			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " expects a system definition form");
 		}
@@ -357,8 +517,9 @@ public final class AsdfSystems {
 		// :rontolisp-features is read BEFORE the option loop: upstream pushes such a
 		// feature from an eval-when ahead of its defsystem, so it must already hold for
 		// this system's own :if-feature / (:feature ...) clauses, whatever order the
-		// options happen to appear in.
-		List<String> declaredFeatures = declaredFeatures(name, items);
+		// options happen to appear in. A push the .asd really made (pushedFeatures) is
+		// the same declaration, arriving from the file rather than from the option.
+		List<String> declaredFeatures = mergeFeatureNames(pushedFeatures, declaredFeatures(name, items));
 		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> dependsOn = new ArrayList<>();
 		boolean serial = false;
@@ -415,11 +576,13 @@ public final class AsdfSystems {
 
 	/**
 	 * Reads the {@code :rontolisp-features} option's list of feature designators, ahead
-	 * of the option loop. rontolisp's own extension, not an ASDF option: a real
-	 * {@code .asd} pushes such a feature onto {@code *features*} from an
-	 * {@code eval-when} before its {@code defsystem}, which never reaches the reader here
-	 * (the push happens at load time, the conditionals at read time), so the replacement
-	 * declares it statically. The declaration is additive only -- there is no way to turn
+	 * of the option loop. rontolisp's own extension, not an ASDF option: it declares
+	 * statically what an upstream {@code .asd} pushes onto {@code *features*} from an
+	 * {@code eval-when}, for a replacement {@code .asd} that also has to decide the
+	 * per-implementation branch upstream takes at run time (postmodern's two). The
+	 * upstream push itself is read too now ({@link #collectFeaturePushes}) and lands in
+	 * the same place; what neither can reach is a {@code #+} in the SAME file, resolved
+	 * when the file was read. The declaration is additive only -- there is no way to turn
 	 * a feature OFF, since that would let a system claim to be a backend it is not.
 	 */
 	private static List<String> declaredFeatures(String systemName, List<LispVal> items) {

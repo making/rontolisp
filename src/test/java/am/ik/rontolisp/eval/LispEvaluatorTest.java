@@ -8874,6 +8874,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void slotValueOnAnUndeclaredSlotSignalsAtRunTime() {
+		// No registered class declares the slot: CL reaches such a read through
+		// slot-missing at RUN time, so it is a catchable condition, never a
+		// compile-time/expansion-time failure. fast-io's open-stream-p reads a slot
+		// name that is a typo for its own, in a method nothing calls.
+		assertThat(evalMulti("""
+				(defclass ms-box () ((a :initform 1)))
+				(list (handler-case (slot-value (make-instance 'ms-box) 'nope)
+				        (error (e) (princ-to-string e)))
+				      (handler-case (setf (slot-value (make-instance 'ms-box) 'nope) 3)
+				        (error (e) (princ-to-string e))))
+				""").print()).isEqualTo("(\"The slot NOPE is missing\" \"The slot NOPE is missing\")");
+	}
+
+	@Test
 	void defclassSubclassShadowsAnInheritedSlot() {
 		// The storage stays the ONE inherited slot: the superclass reader and the
 		// subclass accessor see the same value, at the same index.
@@ -10342,6 +10357,32 @@ class LispEvaluatorTest {
 				    (push 2 items))
 				  (slot-value b 'items))
 				""").print()).isEqualTo("(2 1)");
+	}
+
+	@Test
+	void withSlotsBindsAWriteOnlyUnboundSlot() {
+		// with-slots establishes bindings, it never reads: a body that only ASSIGNS a
+		// slot declared without an :initform must not signal on entry. fast-io's
+		// initialize-instance fills its buffer slot exactly this way.
+		assertThat(evalMulti("""
+				(defclass wsu-box () ((buffer)))
+				(defmethod initialize-instance ((self wsu-box) &key)
+				  (call-next-method)
+				  (with-slots (buffer) self
+				    (setf buffer (list 1 2))))
+				(slot-value (make-instance 'wsu-box) 'buffer)
+				""").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void withSlotsStillSignalsWhenTheBodyReadsAnUnboundSlot() {
+		// The entry-time fallback is boundness-guarded; the body's own reads are not --
+		// they are the slot itself, and an unbound one signals like any slot-value.
+		assertThat(evalMulti("""
+				(defclass wsr-box () ((buffer)))
+				(handler-case (with-slots (buffer) (make-instance 'wsr-box) buffer)
+				  (unbound-slot (e) (cell-error-name e)))
+				""").print()).isEqualTo("BUFFER");
 	}
 
 	@Test

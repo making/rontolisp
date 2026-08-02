@@ -8727,6 +8727,33 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunWithSlotsWriteOnlyUnboundSlot() throws Exception {
+		// with-slots binds, it never reads: a body that only ASSIGNS a slot declared
+		// without an :initform must not signal on entry (fast-io's initialize-instance).
+		assertThat(compileAndRun("""
+				(defclass wsu-box () ((buffer)))
+				(defmethod initialize-instance ((self wsu-box) &key)
+				  (call-next-method)
+				  (with-slots (buffer) self
+				    (setf buffer (list 1 2))))
+				(print (slot-value (make-instance 'wsu-box) 'buffer))
+				""")).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void compileAndRunSlotValueOnAnUndeclaredSlotSignalsAtRunTime() throws Exception {
+		// The eagerly expanding compile path must not fail the BUILD over a slot read
+		// that may never execute (fast-io's open-stream-p reads a typo'd slot name):
+		// it lowers to a run-time error, like the interpreter and like slot-missing.
+		assertThat(compileAndRun("""
+				(defclass ms-box () ((a :initform 1)))
+				(print (handler-case (slot-value (make-instance 'ms-box) 'nope)
+				         (error (e) (princ-to-string e))))
+				(print (slot-value (make-instance 'ms-box) 'a))
+				""")).isEqualTo("\"The slot NOPE is missing\"\n1");
+	}
+
+	@Test
 	void compileAndRunDefstructOptions() throws Exception {
 		assertThat(compileAndRun("""
 				(defstruct (so-kv (:constructor make-so-pair) (:conc-name so-get-)

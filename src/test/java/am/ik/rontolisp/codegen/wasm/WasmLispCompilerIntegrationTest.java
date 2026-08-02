@@ -5889,6 +5889,13 @@ class WasmLispCompilerIntegrationTest {
 						+ " (print (slot-boundp p 'x)) (print (slot-boundp p 'sb-absent))"
 						+ " (slot-makunbound p 'x) (print (slot-boundp p 'x)))"))
 			.isEqualTo("T\nNIL\nNIL");
+		// A slot NO class declares is a run-time error, never a compile-time one: the
+		// eagerly expanding compile path must not fail the build over a read that may
+		// never execute (fast-io's open-stream-p reads a typo'd slot name).
+		assertThat(compileAndRun("(defclass ms-box () ((a :initform 1)))"
+				+ " (print (handler-case (slot-value (make-instance 'ms-box) 'nope)"
+				+ " (error (e) (princ-to-string e))))" + " (print (slot-value (make-instance 'ms-box) 'a))"))
+			.isEqualTo("\"The slot NOPE is missing\"\n1");
 	}
 
 	@Test
@@ -6074,6 +6081,11 @@ class WasmLispCompilerIntegrationTest {
 				(let ((p (make-instance 'ws-pt :x 1 :y 2)))
 				  (with-slots (x (why y)) p (setf x (+ x 10)) (print (list x why)))
 				  (print (slot-value p 'x)))
+				(defclass wsu-box () ((buffer)))
+				(defmethod initialize-instance ((self wsu-box) &key)
+				  (call-next-method)
+				  (with-slots (buffer) self (setf buffer (list 1 2))))
+				(print (slot-value (make-instance 'wsu-box) 'buffer))
 				(defstruct (so-kv (:constructor make-so-pair) (:conc-name so-get-)
 				                  (:predicate so-kv?) (:copier so-clone))
 				  key val)
@@ -6082,8 +6094,8 @@ class WasmLispCompilerIntegrationTest {
 				  (let ((k2 (so-clone k)))
 				    (setf (so-get-val k2) 99)
 				    (print (list (so-get-val k) (so-get-val k2)))))
-				""")).isEqualTo(
-				"(:CHASE :FLEE :IGNORE)\n(:DOG (1 2))\n(\"localhost\" 8080 9090)\n(11 2)\n11\n" + "(A T NIL)\n(1 99)");
+				""")).isEqualTo("(:CHASE :FLEE :IGNORE)\n(:DOG (1 2))\n(\"localhost\" 8080 9090)\n(11 2)\n11\n(1 2)\n"
+				+ "(A T NIL)\n(1 99)");
 	}
 
 	@Test

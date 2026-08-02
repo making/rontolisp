@@ -116,6 +116,17 @@ below.
   version guard, is skipped with a warning — and a `:depends-on` entry may be
   `(:feature EXPR DEP)`, contributing its dependency only when the feature
   expression holds.
+- A `.asd` may **announce features**: a top-level
+  `(eval-when (:load-toplevel :execute) (pushnew :my-feature *features*))`
+  (or a bare `pushnew`/`push`) before a `defsystem` declares that feature for
+  every system defined after it in the file — the same effect as writing
+  `:rontolisp-features (:my-feature)` on those systems. The declaration reaches
+  the system's own `:if-feature` / `(:feature ...)` clauses and the reading of
+  its component files; it does **not** reach a `#+`/`#-` in the same `.asd`,
+  which was already resolved when the file was read, nor a dependency, which
+  declares its own. An `eval-when` whose situations are only
+  `(:compile-toplevel)` is inert (ASDF loads a `.asd`, it never compiles one),
+  and any other form inside the `eval-when` is an error naming it.
 - `defsystem` supports the metadata options (ignored), `:depends-on`,
   `:serial`, `:pathname` (a literal directory prefixed to every component, so
   a system whose sources live in `src/` can name them bare) and `:components`

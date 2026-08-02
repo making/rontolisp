@@ -111,6 +111,17 @@ $ rontolisp
   (`(:file #.*string-file*)` の慣用形)。解決できないもの — ASDF バージョンガードなど —
   は警告付きでスキップされます。また `:depends-on` のエントリには
   `(:feature EXPR DEP)` を書け、フィーチャ式が成立するときだけ依存が追加されます。
+- `.asd` は**フィーチャーを宣言**できます: `defsystem` の前にあるトップレベルの
+  `(eval-when (:load-toplevel :execute) (pushnew :my-feature *features*))`
+  (裸の `pushnew`/`push` も可) は、そのファイル内でそれ以降に定義される全システムに
+  対してそのフィーチャーを宣言します — 各システムに
+  `:rontolisp-features (:my-feature)` を書いたのと同じ効果です。この宣言はシステム
+  自身の `:if-feature` / `(:feature ...)` 句と、そのコンポーネントファイルの読み取りに
+  効きます。同じ `.asd` 内の `#+`/`#-` には**効きません** (ファイル読み取り時に既に
+  解決済みのため)。依存システムにも効きません (それぞれが自分で宣言します)。
+  situation が `(:compile-toplevel)` だけの `eval-when` は無効です (ASDF は `.asd` を
+  ロードするだけでコンパイルしません)。`eval-when` 内のそれ以外のフォームは、その
+  フォームを名指しするエラーです。
 - `defsystem` はメタデータオプション (無視)、`:depends-on`、`:serial`、`:pathname`
   (全コンポーネントに前置されるリテラルなディレクトリ。ソースが `src/` にあるシステムは
   コンポーネント名を裸で書けます)、`:file`/`:module`/`:static-file` エントリを持つ

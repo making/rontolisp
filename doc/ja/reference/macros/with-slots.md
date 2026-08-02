@@ -6,6 +6,15 @@ CLOS サブセットインスタンス([`defclass`](../special-forms/defclass.md
 
 lite: 本体の中で実行時に「生成される」コード(スロット名に言及する `macrolet` テンプレートなど)は、エントリ時点のスロット値を保持するフォールバック束縛を通じて名前を解決します — 読み取りは機能しますが、そのような生成コードからの書き込みはローカルコピーのみを更新します。
 
+`with-slots` は束縛するだけで、エントリ時にスロットを読み取ることはありません。そのため `:initform` を持たないスロットに代入するだけの本体も動作し、上記のフォールバック束縛はそのようなスロットに対して `nil` を保持します。本体が実際に行う読み取りは、これまでどおり `unbound-slot` をシグナルします。
+
+```lisp
+(defclass buffered () ((buffer)))
+(let ((b (make-instance 'buffered)))
+  (with-slots (buffer) b (setf buffer (list 1 2)))
+  (slot-value b 'buffer)) ; => (1 2)
+```
+
 ```lisp
 (defclass ws-point () ((x :initarg :x) (y :initarg :y)))
 (with-slots (x (why y)) (make-instance 'ws-point :x 3 :y 4) (list x why)) ; => (3 4)

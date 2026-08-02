@@ -4087,6 +4087,27 @@ cases:
       (:MAYBE :NONE)
       (CLOS-U-SUB "c" :POOLED T NIL)
       ("#<CLOS-U-SUB d>" "#<CLOS-U-SUB d>|#<CLOS-U-SUB d>")
+  - name: with-slots-write-only-unbound-slot-and-missing-slot
+    source: |
+      ;; with-slots BINDS, it never reads: a body that only assigns a slot
+      ;; declared without an :initform must not signal on entry (fast-io's
+      ;; initialize-instance fills its buffer slot exactly that way). A read the
+      ;; body really performs still signals unbound-slot, and a slot NO class
+      ;; declares is a run-time error on every backend, never a compile-time one
+      ;; (fast-io's open-stream-p reads a typo'd slot name).
+      (defclass clos-ws-box () ((buffer)))
+      (defmethod initialize-instance ((self clos-ws-box) &key)
+        (call-next-method)
+        (with-slots (buffer) self (setf buffer (list 1 2))))
+      (print (slot-value (make-instance 'clos-ws-box) 'buffer))
+      (print (handler-case (with-slots (buffer) (allocate-instance 'clos-ws-box) buffer)
+               (unbound-slot (e) (cell-error-name e))))
+      (print (handler-case (slot-value (make-instance 'clos-ws-box) 'nope)
+               (error (e) (princ-to-string e))))
+    expected: |
+      (1 2)
+      BUFFER
+      "The slot NOPE is missing"
   - name: binary-file-round-trip-with-read-byte-write-byte
     source: |
       (with-open-file (out "bin.dat" :direction :output :element-type '(unsigned-byte 8))

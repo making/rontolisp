@@ -3346,6 +3346,11 @@ public final class LispMacroExpander {
 						// value, like every other setf expansion.
 						yield mvCall(LispNames.SLOT_VALUE_SET_RUNTIME, placeParts.get(1), placeParts.get(2), value);
 					}
+					if (litSlot != null && resolveSlotBaseName(slotBaseSpelling(litSlot), closRegistry) == null) {
+						// No registered class declares the slot: a run-time error like
+						// the READ's, never a compile-time one (see missingSlotStub).
+						yield missingSlotStub(slotBaseSpelling(litSlot), placeParts.get(1), value);
+					}
 					if (litSlot != null && ambiguousSlotPosition(litSlot, closRegistry)) {
 						// The name sits at different indexes in unrelated types, so no
 						// one
@@ -9040,8 +9045,7 @@ public final class LispMacroExpander {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = resolveSlotBaseName(qn == null ? slotSym.name() : qn.member(), closRegistry);
 		if (baseName == null) {
-			throw new IllegalArgumentException(
-					LispNames.SLOT_VALUE + ": unknown slot " + (qn == null ? slotSym.name() : qn.member()));
+			return missingSlotStub(qn == null ? slotSym.name() : qn.member(), parts.get(1));
 		}
 		Integer index = uniqueLayoutSlotIndex(baseName, closRegistry);
 		if (index == null) {
@@ -9056,6 +9060,33 @@ public final class LispMacroExpander {
 			return expandAmbiguousSlotRead(parts.get(1), baseName, closRegistry);
 		}
 		return objRef(parts.get(1), index);
+	}
+
+	/**
+	 * The lowering of a {@code slot-value} read or write naming a slot NO registered
+	 * class declares: the subforms evaluated for effect, then a run-time {@code error}.
+	 * CL reaches such a read through {@code slot-missing} at RUN time, and so does the
+	 * interpreter -- it expands a method body only when the method is called. The compile
+	 * paths expand everything up front, so a compile-time error here would fail the whole
+	 * BUILD over a read that may never execute: fast-io's {@code open-stream-p} reads
+	 * {@code 'openep}, a typo for its own {@code openp} slot, in a method nothing in the
+	 * library calls. Signalling instead of throwing also makes the failure a Lisp
+	 * condition {@code handler-case} can see, on every backend.
+	 * @param slotName the slot name as written
+	 * @param subforms the place subforms to evaluate for effect (the instance, plus the
+	 * value for a write)
+	 * @return the expression
+	 */
+	private static LispVal missingSlotStub(String slotName, LispVal... subforms) {
+		List<LispVal> forms = new java.util.ArrayList<>(List.of(subforms));
+		forms.add(callTimeUnsupportedStub("The slot " + slotName + " is missing"));
+		return prognOf(forms);
+	}
+
+	/** A slot symbol's base name: the member of a package-qualified spelling. */
+	private static String slotBaseSpelling(LispSymbol slotSym) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		return qn == null ? slotSym.name() : qn.member();
 	}
 
 	/**
@@ -10138,7 +10169,9 @@ public final class LispMacroExpander {
 	 * </pre>
 	 *
 	 * Lite: the substitution is textual over the body tree (quoted data is skipped); an
-	 * inner binding shadowing a slot variable is still substituted.
+	 * inner binding shadowing a slot variable is still substituted. The entry-time
+	 * fallback binding each variable also gets is boundness-guarded -- see
+	 * {@link #boundOrNil}.
 	 * @param cons the with-slots expression
 	 * @return the expanded expression
 	 */
@@ -10169,10 +10202,10 @@ public final class LispMacroExpander {
 					throw new IllegalArgumentException(
 							LispNames.WITH_SLOTS + " expects slot names or (var slot) pairs: " + cons.print());
 				}
-				LispVal read = listToCons(List.of(new LispSymbol(LispNames.SLOT_VALUE), obj,
-						listToCons(List.of(new LispSymbol(LispNames.QUOTE), slot))));
+				LispVal quotedSlot = listToCons(List.of(new LispSymbol(LispNames.QUOTE), slot));
+				LispVal read = listToCons(List.of(new LispSymbol(LispNames.SLOT_VALUE), obj, quotedSlot));
 				substitutions.put(var.name(), read);
-				letBindings.add(listToCons(List.of(var, read)));
+				letBindings.add(listToCons(List.of(var, boundOrNil(obj, quotedSlot, read))));
 			}
 		}
 		else if (!(parts.get(1) instanceof LispNil)) {
@@ -10191,6 +10224,22 @@ public final class LispMacroExpander {
 		LispVal inner = letBindings.isEmpty() ? prognOrNil(body)
 				: listToCons(concatForms(List.of(new LispSymbol(LispNames.LET), listToCons(letBindings)), body));
 		return makeLet(WITH_SLOTS_OBJ_VAR, parts.get(2), inner);
+	}
+
+	/**
+	 * The entry-time fallback value {@link #expandWithSlots} binds a slot variable to:
+	 * {@code (if (slot-boundp obj 'slot) (slot-value obj 'slot) nil)}. The boundness
+	 * guard is what makes the fallback compatible with CL's symbol-macro semantics for a
+	 * WRITE-ONLY slot: {@code with-slots} establishes bindings, it never reads, so a body
+	 * that only assigns a slot declared without an {@code :initform} must not signal
+	 * {@code unbound-slot} on ENTRY -- fast-io's
+	 * {@code (with-slots (buffer) self (setf buffer (make-output-buffer ...)))} inside
+	 * {@code initialize-instance} is exactly that shape. An unbound (or undeclared) slot
+	 * simply binds nil; the textual substitution is unaffected either way.
+	 */
+	private static LispVal boundOrNil(LispSymbol obj, LispVal quotedSlot, LispVal read) {
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.SLOT_BOUNDP), obj, quotedSlot));
+		return listToCons(List.of(new LispSymbol(LispNames.IF), test, read, LispNil.INSTANCE));
 	}
 
 	private static final String WITH_ACCESSORS_OBJ_VAR = "__with_accessors_obj";

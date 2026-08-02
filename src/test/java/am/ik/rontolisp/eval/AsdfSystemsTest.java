@@ -175,6 +175,102 @@ class AsdfSystemsTest {
 			.hasMessageContaining("unsupported form in .asd file");
 	}
 
+	// The verbatim fast-io.asd header: an eval-when pushing :fast-io onto *features*,
+	// then a second one gated OFF by #+ that would have pushed :fast-io-sv.
+	private static final String FAST_IO_ASD = """
+			(eval-when (:compile-toplevel :load-toplevel :execute)
+			  (pushnew :fast-io *features*))
+
+			#+(or sbcl ccl cmucl ecl lispworks allegro)
+			(eval-when (:compile-toplevel :load-toplevel :execute)
+			  (pushnew :fast-io-sv *features*))
+
+			(defsystem :fast-io
+			  :depends-on (:alexandria :trivial-gray-streams
+			               #+fast-io-sv
+			               :static-vectors)
+			  :pathname "src"
+			  :serial t
+			  :components ((:file "package") (:file "types") (:file "io") (:file "gray")))""";
+
+	@Test
+	void parsesTheFastIoAsdFeatureAnnouncementHeader() {
+		// The push is recorded as a declared feature of the system defined after it (so
+		// its component files are read with :fast-io active); the #+-gated one never
+		// happens, so the #+fast-io-sv :depends-on entry drops :static-vectors. Every
+		// backend, because the two reader spellings of *features* differ: the
+		// interpreter leaves the symbol standing, the compile paths substitute the
+		// quoted active list at read time.
+		for (Features features : List.of(Features.INTERPRETER, Features.JVM, Features.WASM)) {
+			List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(FAST_IO_ASD, "sw/fast-io.asd", features);
+			assertThat(systems).hasSize(1);
+			assertThat(systems.get(0).features()).containsExactly("fast-io");
+			assertThat(systems.get(0).dependsOn()).containsExactly("alexandria", "trivial-gray-streams");
+			assertThat(systems.get(0).files()).containsExactly("src/package.lisp", "src/types.lisp", "src/io.lisp",
+					"src/gray.lisp");
+		}
+	}
+
+	@Test
+	void anAnnouncedFeatureReachesTheSystemsOwnFeatureClauses() {
+		// What the declaration buys inside the same defsystem: :if-feature and
+		// (:feature ...) see the pushed name. (A #+ in the same file does not -- the
+		// reader resolved it before this parse, .todo/181.)
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(eval-when (:load-toplevel :execute) (pushnew :lib-sv *features*))
+				(defsystem :lib
+				  :depends-on ((:feature :lib-sv "static-vectors"))
+				  :components ((:file "main") (:file "sv" :if-feature :lib-sv)))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).dependsOn()).containsExactly("static-vectors");
+		assertThat(systems.get(0).files()).containsExactly("main.lisp", "sv.lisp");
+	}
+
+	@Test
+	void anAnnouncedFeatureReachesOnlyTheSystemsDefinedAfterIt() {
+		// A push takes effect where it stands, like the load-time push it encodes.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defsystem :lib/early)
+				(pushnew :lib *features*)
+				(defsystem :lib)""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).features()).isEmpty();
+		assertThat(systems.get(1).features()).containsExactly("lib");
+	}
+
+	@Test
+	void anAnnouncedFeatureJoinsTheDeclaredOnes() {
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(eval-when (:execute) (pushnew :pushed *features*))
+				(defsystem :lib :rontolisp-features (:declared))""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).features()).containsExactly("pushed", "declared");
+	}
+
+	@Test
+	void aCompileToplevelOnlyPushIsInert() {
+		// ASDF loads a .asd, it never compiles one, so such a push has no effect in a
+		// real implementation either.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(eval-when (:compile-toplevel) (pushnew :never *features*))
+				(defsystem :lib)""", "lib.asd", Features.INTERPRETER);
+		assertThat(systems.get(0).features()).isEmpty();
+	}
+
+	@Test
+	void anEvalWhenThatIsNotAFeatureAnnouncementIsRejected() {
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+				(eval-when (:load-toplevel :execute) (load "helper.lisp"))
+				(defsystem :lib)""", "lib.asd", Features.INTERPRETER)).isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("lib.asd")
+			.hasMessageContaining("only a feature announcement")
+			.hasMessageContaining("(LOAD \"helper.lisp\")");
+	}
+
+	@Test
+	void aPushOntoSomethingOtherThanFeaturesIsRejected() {
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(pushnew :x '(:a :b))", "lib.asd", Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("only a feature announcement");
+	}
+
 	@Test
 	void ifFeatureDisabledComponentContributesNoFiles() {
 		// The split-sequence shape: the CLOS-only file is gated behind other

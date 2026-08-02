@@ -423,6 +423,37 @@ an unbound slot rather than writing `null`.
 - **`with-slots` now resolves `defstruct` slots too**: `expandSlotValueRaw` picks the
   index out of the LAYOUT registry (`uniqueLayoutSlotIndex`, both kinds) instead of the
   class-only `slotPosition` map, falling back to the tag dispatch when types disagree.
+- **`with-slots`' entry-time fallback binding is BOUNDNESS-GUARDED** (todo-236): besides
+  substituting each slot variable textually, `expandWithSlots` also `let`-binds it to an
+  entry-time read, so code GENERATED inside the body (a user macro whose template
+  mentions a slot variable -- macros expand after this) still resolves the name. That
+  read is `(if (slot-boundp obj 'slot) (slot-value obj 'slot) nil)`, never a bare
+  `slot-value` (`LispMacroExpander.boundOrNil`). **Why the guard is not cosmetic**:
+  `with-slots` BINDS, it never reads, so a body that only ASSIGNS a slot declared without
+  an `:initform` must not signal on entry -- fast-io's
+  `(with-slots (buffer) self (setf buffer (make-output-buffer ...)))` inside
+  `initialize-instance` is exactly that, and it made every
+  `(make-instance 'fast-io:fast-input-stream ...)` die with "The slot BUFFER is unbound".
+  A read the body REALLY performs still signals: that one went through the substitution
+  and is the slot itself. Cost: one extra dispatch per named slot per entry, on the
+  compile paths. `with-accessors`' fallback is NOT guarded -- an accessor is a generic
+  function with no boundness twin, and wrapping it would force EH mode on WASM for every
+  `with-accessors`; a write-only `with-accessors` over an unbound slot still signals.
+  Pinned by `LispEvaluatorTest#withSlotsBindsAWriteOnlyUnboundSlot` +
+  `#withSlotsStillSignalsWhenTheBodyReadsAnUnboundSlot`,
+  `JvmLispCompilerTest#compileAndRunWithSlotsWriteOnlyUnboundSlot`,
+  `WasmLispCompilerIntegrationTest#multiParameterDispatchVariadicGenericsAndDefaultInitargs`
+  and the ci-spec case `with-slots-write-only-unbound-slot-and-missing-slot`.
+- **A `slot-value` naming a slot NO registered class declares is a RUN-time error**
+  (todo-236, `LispMacroExpander.missingSlotStub`): the subforms evaluate for effect, then
+  `(error "The slot X is missing")` -- read side and `setf` place alike. It used to throw
+  out of the expander, which on the eagerly expanding compile paths failed the whole
+  BUILD over a read that may never execute; the interpreter never noticed because it
+  expands a method body only when the method is called. fast-io's `open-stream-p` reads
+  `'openep`, a typo for its own `openp` slot, in a method nothing in the library calls.
+  Signalling also makes it a condition `handler-case` can see, on every backend, which is
+  what CL's `slot-missing` protocol does. `slot-boundp` on an undeclared slot already
+  answered nil and still does.
 
 ## `change-class` -- in place, on all four backends (todo-199)
 
