@@ -1,5 +1,12 @@
 # `subtypep` on class metaobjects (optional for Clack)
 
+> **Absorbed by `.todo/246` (2026-08-02, Mito milestone spike).** The "real
+> library leaning on class-metaobject subtypep" this file waited for arrived:
+> mito's `contains-class-or-subclasses` (src/core/util.lisp:101-111) does
+> `(typep class 'class)` + `(subtypep target-class class)` on metaobjects, so
+> the item is REQUIRED there. Do the work as `.todo/246` item 5; delete this
+> file in that session.
+
 Difficulty: 低〜中 (the ancestor walk exists in the CLOS registry; this is
 routing `subtypep` through it when the arguments are class metaobjects)
 
