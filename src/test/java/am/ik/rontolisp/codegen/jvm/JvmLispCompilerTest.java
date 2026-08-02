@@ -8676,6 +8676,60 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDefmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() throws Exception {
+		// (close X) is compiler-lowered, so the generated dispatcher defun used to be
+		// dead under its own name and the user method was silently ignored
+		// (ClassCastException on an instance). ShadowedBuiltins renames the dispatcher,
+		// rewrites the call sites and keeps the built-in as the default method.
+		assertThat(compileAndRun("""
+				(defclass sbm-cls () ())
+				(defmethod length ((x sbm-cls)) 42)
+				(print (list (length (make-instance 'sbm-cls)) (length "abc") (length '(1 2 3))))
+				""")).isEqualTo("(42 3 3)");
+	}
+
+	@Test
+	void compileAndRunDefmethodOnAVariadicBuiltinNameForwardsThroughTheDispatcher() throws Exception {
+		// fast-io's gray.lisp shape: a (close (s cls) &key abort) method must not
+		// poison close for real stream handles -- with-open-file (whose expansion
+		// spells (close f)) still closes, and an explicit (close s :abort t) reaches
+		// the built-in through the dispatcher's %gf-rest tail.
+		String file = tempDir.resolve("sbm-closed.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(defclass sbm-stream () ())
+				(defmethod close ((s sbm-stream) &key abort) (declare (ignore abort)) :closed)
+				(print (close (make-instance 'sbm-stream)))
+				(with-open-file (out "%s" :direction :output) (write-line "hi" out))
+				(print (with-open-file (in "%s") (read-line in)))
+				(let ((s (open "%s"))) (print (close s :abort t)))
+				""".formatted(file, file, file))).isEqualTo(":CLOSED\n\"hi\"\nT");
+	}
+
+	@Test
+	void compileAndRunDefgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() throws Exception {
+		assertThat(compileAndRun("""
+				(defgeneric length (x))
+				(print (length "abc"))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunDefmethodOnABuiltinNameQualifiersAndFirstClassReference() throws Exception {
+		// A :before-only branch composes with the built-in default method instead of
+		// "No applicable primary method", call-next-method out of the least specific
+		// user primary reaches the built-in, and #'length is rewritten onto the
+		// dispatcher so a funcall dispatches too.
+		assertThat(compileAndRun("""
+				(defclass sbq-cls () ())
+				(defparameter *sbq-log* nil)
+				(defmethod length :before ((x string)) (push :before *sbq-log*))
+				(defmethod length ((x sbq-cls)) (call-next-method))
+				(print (list (length "abc") (reverse *sbq-log*)))
+				(print (funcall #'length "abcd"))
+				""")).isEqualTo("(3 (:BEFORE))\n4");
+	}
+
+	@Test
 	void compileAndRunMultiParameterMethodDispatch() throws Exception {
 		assertThat(compileAndRun("""
 				(defclass mp-animal () ())

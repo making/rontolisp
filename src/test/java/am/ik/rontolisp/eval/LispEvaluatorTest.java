@@ -8760,6 +8760,85 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
+		// The dispatcher SHADOWS the built-in defun; without stashing it as the
+		// generic's default method every non-instance argument dies with "No
+		// applicable method". In CL these are generic functions whose standard
+		// methods survive a user defmethod.
+		assertThat(evalMulti("""
+				(defclass mycls () ())
+				(defmethod length ((x mycls)) 42)
+				(list (length (make-instance 'mycls)) (length "abc") (length '(1 2 3)))
+				""").print()).isEqualTo("(42 3 3)");
+	}
+
+	@Test
+	void defmethodOnABuiltinNameStashesTheBuiltinExactlyOnce() {
+		// The dispatcher is regenerated on EVERY defmethod, so a stash that reruns
+		// captures the dispatcher itself and the fall-through recurses forever.
+		assertThat(evalMulti("""
+				(defclass a () ())
+				(defclass b () ())
+				(defmethod length ((x a)) 1)
+				(defmethod length ((x b)) 2)
+				(defmethod length ((x (eql :three))) 3)
+				(list (length (make-instance 'a)) (length (make-instance 'b)) (length :three) (length "abcd"))
+				""").print()).isEqualTo("(1 2 3 4)");
+	}
+
+	@Test
+	void defgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
+		assertThat(evalMulti("""
+				(defgeneric length (x))
+				(length "abc")
+				""").print()).isEqualTo("3");
+	}
+
+	@Test
+	void defmethodOnAVariadicBuiltinNameForwardsTheKeywordTail(@TempDir Path tempDir) {
+		// fast-io's gray.lisp shape: a (close (s mycls) &key abort) method used to
+		// poison close for the whole image, so any later with-open-file -- on an
+		// unrelated file -- died with "No applicable method: CLOSE on INTEGER".
+		// The dispatcher is variadic here, so the built-in has to be reached
+		// through its %gf-rest tail.
+		String file = tempDir.resolve("closed.txt").toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(defclass mycls () ())
+				(defmethod close ((s mycls) &key abort) (declare (ignore abort)) :closed)
+				(list (close (make-instance 'mycls))
+				      (with-open-file (out "%s" :direction :output) (write-line "hi" out))
+				      (with-open-file (in "%s") (read-line in))
+				      (let ((s (open "%s"))) (close s :abort t)))
+				""".formatted(file, file, file)).print()).isEqualTo("(:CLOSED \"hi\" \"hi\" T)");
+	}
+
+	@Test
+	void defmethodOnABuiltinNameQualifiersRunAroundTheBuiltin() {
+		// With the built-in as the default method, a :before/:after-only method
+		// composes with it instead of signalling "No applicable primary method",
+		// and the least-specific primary's call-next-method reaches it.
+		assertThat(evalMulti("""
+				(defclass mycls () ())
+				(defparameter *log* nil)
+				(defmethod length :before ((x string)) (push :before *log*))
+				(defmethod length ((x mycls)) (call-next-method))
+				(list (length "abc") (reverse *log*))
+				""").print()).isEqualTo("(3 (:BEFORE))");
+	}
+
+	@Test
+	void defmethodOnABuiltinNameUserDefaultMethodStillWins() {
+		// A user default (unspecialized) method replaces the built-in outright --
+		// the built-in is the LAST resort, not a method the sort can outrank.
+		assertThat(evalMulti("""
+				(defclass mycls () ())
+				(defmethod length ((x mycls)) 42)
+				(defmethod length (x) :fallback)
+				(list (length (make-instance 'mycls)) (length "abc"))
+				""").print()).isEqualTo("(42 :FALLBACK)");
+	}
+
+	@Test
 	void defmethodBeforeAndAfterQualifiersRunAroundThePrimary() {
 		// :before methods run most-specific-first, :after least-specific-first, and the
 		// primary value is returned.

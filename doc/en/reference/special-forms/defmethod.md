@@ -59,3 +59,15 @@ Inside a primary or `:around` method, `(call-next-method)` invokes the next less
 ```
 
 Lite subset: `&key` is an error, `call-next-method` on a variadic generic forwards the required arguments only, and standard method combination is supported for class and default methods (an `:around`/`:before`/`:after` with an `eql` or built-in-type specializer combines only with primaries of the same specializer plus the default method). On the compilation path `defmethod` is only supported as a top-level form; the dispatched method set of a compiled program is fixed at compile time.
+
+## A method on a built-in name
+
+Defining a method on the name of a built-in function (`close`, `open-stream-p`, `stream-element-type`, ...) makes the **built-in the generic function's default method**: instances of the specialized class run the method, and every other argument keeps the built-in behavior — including through a `(call-next-method)` out of the least specific primary method. A method on `close` for your own stream class therefore leaves `(close stream)` on a real file stream working. A user default (unspecialized) method still replaces the built-in outright.
+
+```lisp
+(defclass counter () ((n :initform 3)))
+(defmethod length ((c counter)) (slot-value c 'n))
+(list (length (make-instance 'counter)) (length "abcd")) ; => (3 4)
+```
+
+Lite subset: this works on every backend — the compilation paths route calls to such a name through the generated dispatcher, whose fall-through is the original built-in. Only names backed by a native built-in function participate; a name implemented as an expansion (`mapcar`, `sort`, `format`, ...) cannot take methods, and a plain `defun` on a built-in name is still ignored on the compilation paths.

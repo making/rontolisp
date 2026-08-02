@@ -10485,7 +10485,7 @@ public final class LispMacroExpander {
 	 * {@code apply} (a bare {@code call-next-method} then forwards the required arguments
 	 * only -- lite). Defining the same qualifier + specializers again replaces the
 	 * previous method. The caller regenerates the dispatcher with
-	 * {@link #generateDispatcher}.
+	 * {@link #generateDispatcher(String, ClosRegistry)}.
 	 * @param cons the defmethod expression
 	 * @param closRegistry mutated: the method is registered (and the generic implicitly
 	 * created when no defgeneric preceded it)
@@ -10885,6 +10885,25 @@ public final class LispMacroExpander {
 	 * @return the dispatcher defun
 	 */
 	public static LispVal generateDispatcher(String genericName, ClosRegistry closRegistry) {
+		return generateDispatcher(genericName, closRegistry, null);
+	}
+
+	/**
+	 * Generates the dispatcher defun with a BUILT-IN function as the generic's default
+	 * method: {@code builtinFallback} names a function holding the Java-backed built-in
+	 * the dispatcher's own defun is about to shadow, and every path that would otherwise
+	 * signal "No applicable method" calls it instead (a bare {@code call-next-method} out
+	 * of the least specific primary reaches it too). This is what keeps
+	 * {@code (defmethod close ((s my-stream)) ...)} from poisoning {@code close} for real
+	 * streams -- in CL these are generic functions whose standard methods survive a user
+	 * method.
+	 * @param genericName the generic-function name (any spelling)
+	 * @param closRegistry the registry holding the generic and the class ancestor sets
+	 * @param builtinFallback the function name holding the shadowed built-in, or null
+	 * @return the dispatcher defun
+	 */
+	public static LispVal generateDispatcher(String genericName, ClosRegistry closRegistry,
+			@Nullable String builtinFallback) {
 		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
 		if (generic == null) {
 			throw new IllegalArgumentException("Unknown generic function: " + genericName);
@@ -10895,8 +10914,8 @@ public final class LispMacroExpander {
 		// qualifier or call-next-method is present; otherwise the historical single-call
 		// dispatcher is emitted unchanged.
 		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
-		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry)
-				: simpleDispatchBody(generic, params, closRegistry);
+		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback)
+				: simpleDispatchBody(generic, params, closRegistry, builtinFallback);
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
 		defun.add(new LispSymbol(generic.name()));
@@ -10914,10 +10933,114 @@ public final class LispMacroExpander {
 	private static final String GF_REST_VAR = "%gf-rest";
 
 	/**
+	 * The internal name a built-in is stashed under when a program defines a method on
+	 * its name: {@code %<generic>--builtin}, the {@code %<generic>--m<i>} convention of
+	 * the method-body defuns with a reserved index, so it cannot collide with a method.
+	 * @param genericName the generic-function name (any spelling)
+	 * @return the stash name to pass to
+	 * {@link #generateDispatcher(String, ClosRegistry, String)}
+	 */
+	public static String builtinDefaultMethodName(String genericName) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(genericName);
+		return (qn == null ? "%" + genericName : qn.pkg() + "::%" + qn.member()) + "--builtin";
+	}
+
+	/**
+	 * The internal name the COMPILE paths install a shadowed built-in's dispatcher under:
+	 * {@code %<generic>--dispatch}, the {@link #builtinDefaultMethodName} convention. The
+	 * expression compilers lower the original name in call position no matter what defuns
+	 * exist, so the dispatcher of a generic whose name is a compiler-lowered built-in is
+	 * dead under its own name -- {@code ShadowedBuiltins} (compiler package) emits it
+	 * under this name instead and rewrites the program's call sites onto it.
+	 * @param genericName the generic-function name (any spelling)
+	 * @return the compile-path dispatcher name
+	 */
+	public static String shadowedDispatcherName(String genericName) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(genericName);
+		return (qn == null ? "%" + genericName : qn.pkg() + "::%" + qn.member()) + "--dispatch";
+	}
+
+	/**
+	 * The compile-path dispatcher of a generic function whose name is a compiler-lowered
+	 * built-in: the exact {@link #generateDispatcher(String, ClosRegistry, String)} body
+	 * the interpreter installs (fallback = {@link #builtinDefaultMethodName}, so the
+	 * built-in stays the generic's default method), but emitted under
+	 * {@link #shadowedDispatcherName} -- under the original name the defun would be dead,
+	 * because the expression compilers lower that name in call position unconditionally.
+	 * The fallback name is bound by {@link #builtinForwarderDefun} on these paths.
+	 * @param genericName the generic-function name (any spelling)
+	 * @param closRegistry the registry holding the generic and the class ancestor sets
+	 * @return the renamed dispatcher defun
+	 */
+	public static LispVal shadowedBuiltinDispatcher(String genericName, ClosRegistry closRegistry) {
+		LispCons defun = (LispCons) generateDispatcher(genericName, closRegistry,
+				builtinDefaultMethodName(genericName));
+		LispCons nameCell = (LispCons) defun.cdr();
+		return new LispCons(defun.car(),
+				new LispCons(new LispSymbol(shadowedDispatcherName(genericName)), nameCell.cdr()));
+	}
+
+	/**
+	 * The compile-path binding of {@link #builtinDefaultMethodName}: where the
+	 * interpreter stashes the Java-backed {@code LispFunction} it found in the global
+	 * environment, the compilers have no function VALUE to stash -- but they still lower
+	 * the original name in call position. So the stash becomes a forwarder defun,
+	 * {@code (defun %<generic>--builtin (p1..pn [&rest %gf-rest]) (<generic> p1..pn))}:
+	 * its body spells the ORIGINAL built-in call, which the expression compilers lower,
+	 * and the walker that rewrites the program's call sites onto the dispatcher must skip
+	 * this defun (rewriting it would recurse through the dispatcher forever -- the
+	 * {@code GrayStreamsLibrary.DISPATCH_DEFUNS} rule). A variadic generic's
+	 * {@code &rest} tail is deliberately NOT forwarded: the lite built-ins ignore their
+	 * keyword tails anyway (the lowered {@code close} strips a literal {@code :abort} the
+	 * same way), and forwarding a runtime tail would need {@code apply} over a
+	 * first-class value of the original name, which not every lowered built-in has.
+	 * @param genericName the generic-function name (any spelling)
+	 * @param closRegistry the registry holding the generic (for the parameter names)
+	 * @return the forwarder defun
+	 */
+	public static LispVal builtinForwarderDefun(String genericName, ClosRegistry closRegistry) {
+		return builtinForwarderDefun(genericName, closRegistry, genericName);
+	}
+
+	/**
+	 * As {@link #builtinForwarderDefun(String, ClosRegistry)}, but spelling
+	 * {@code targetName} in the body's call position instead of the generic's own name --
+	 * for a backend whose pre-pass has already redirected the built-in onto a dispatch
+	 * defun of its own ({@code WasmSocketsRewrite}'s {@code rontolisp::%io-close}): the
+	 * fall-through must reach THAT defun, or its bookkeeping (the socket table) silently
+	 * diverges.
+	 * @param genericName the generic-function name (any spelling)
+	 * @param closRegistry the registry holding the generic (for the parameter names)
+	 * @param targetName the function name the forwarder body calls
+	 * @return the forwarder defun
+	 */
+	public static LispVal builtinForwarderDefun(String genericName, ClosRegistry closRegistry, String targetName) {
+		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
+		if (generic == null) {
+			throw new IllegalArgumentException("Unknown generic function: " + genericName);
+		}
+		List<LispVal> params = generic.paramNames().stream().<LispVal>map(LispSymbol::new).toList();
+		List<LispVal> defun = new java.util.ArrayList<>();
+		defun.add(new LispSymbol(LispNames.DEFUN));
+		defun.add(new LispSymbol(builtinDefaultMethodName(genericName)));
+		List<LispVal> defunParams = new java.util.ArrayList<>(params);
+		if (generic.variadic()) {
+			defunParams.add(new LispSymbol("&REST"));
+			defunParams.add(new LispSymbol(GF_REST_VAR));
+		}
+		defun.add(defunParams.isEmpty() ? LispNil.INSTANCE : listToCons(defunParams));
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(targetName));
+		call.addAll(params);
+		defun.add(listToCons(call));
+		return listToCons(defun);
+	}
+
+	/**
 	 * The single-method-per-branch dispatcher body (no qualifiers, no call-next-method).
 	 */
 	private static LispVal simpleDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
-			ClosRegistry closRegistry) {
+			ClosRegistry closRegistry, @Nullable String builtinFallback) {
 		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
 		MiRefinement refinement = miRefinement(generic, closRegistry);
 		java.util.Set<ClosRegistry.MethodInfo> exactTagBranches = java.util.Collections
@@ -10943,7 +11066,7 @@ public final class LispMacroExpander {
 			.findFirst()
 			.orElse(null);
 		LispVal chain = defaultMethod != null ? methodCall(defaultMethod, params, variadic)
-				: noApplicableMethod(generic.name(), params);
+				: fallbackOrNoApplicableMethod(generic.name(), params, variadic, builtinFallback);
 		for (ClosRegistry.MethodInfo method : methods.reversed()) {
 			if (method.isDefault()) {
 				continue;
@@ -11095,7 +11218,7 @@ public final class LispMacroExpander {
 	 * branch.
 	 */
 	private static LispVal combinedDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
-			ClosRegistry closRegistry) {
+			ClosRegistry closRegistry, @Nullable String builtinFallback) {
 		java.util.LinkedHashMap<String, ClosRegistry.MethodInfo> reps = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
 			if (!m.isDefault()) {
@@ -11118,12 +11241,12 @@ public final class LispMacroExpander {
 			}
 		}
 		branches.sort(specificityOrder(closRegistry));
-		LispVal chain = effectiveMethod(null, generic, params, closRegistry);
+		LispVal chain = effectiveMethod(null, generic, params, closRegistry, builtinFallback);
 		for (ClosRegistry.MethodInfo rep : branches.reversed()) {
 			LispVal test = exactTagBranches.contains(rep)
 					? miExactTagTest(rep, java.util.Objects.requireNonNull(refinement), params)
 					: specializerTest(rep, params, closRegistry);
-			chain = makeIf(test, effectiveMethod(rep, generic, params, closRegistry), chain);
+			chain = makeIf(test, effectiveMethod(rep, generic, params, closRegistry, builtinFallback), chain);
 		}
 		return chain;
 	}
@@ -11142,17 +11265,20 @@ public final class LispMacroExpander {
 	 * everything.
 	 */
 	private static LispVal effectiveMethod(ClosRegistry.@Nullable MethodInfo branchRep,
-			ClosRegistry.GenericInfo generic, List<LispVal> params, ClosRegistry closRegistry) {
+			ClosRegistry.GenericInfo generic, List<LispVal> params, ClosRegistry closRegistry,
+			@Nullable String builtinFallback) {
 		boolean variadic = generic.variadic();
 		List<ClosRegistry.MethodInfo> arounds = applicableMethods(generic, branchRep, ":AROUND", closRegistry);
 		List<ClosRegistry.MethodInfo> befores = applicableMethods(generic, branchRep, ":BEFORE", closRegistry);
 		List<ClosRegistry.MethodInfo> primaries = applicableMethods(generic, branchRep, "", closRegistry);
 		List<ClosRegistry.MethodInfo> afters = applicableMethods(generic, branchRep, ":AFTER", closRegistry);
 		afters = afters.reversed();
-		if (primaries.isEmpty() && arounds.isEmpty()) {
+		// A stashed built-in is the generic's default method, so it supplies the primary
+		// a qualifier-only branch would otherwise lack.
+		if (primaries.isEmpty() && arounds.isEmpty() && builtinFallback == null) {
 			return noApplicableMethod(generic.name(), params);
 		}
-		LispVal core = buildCore(befores, primaries, afters, params, generic.name(), variadic);
+		LispVal core = buildCore(befores, primaries, afters, params, generic.name(), variadic, builtinFallback);
 		if (arounds.isEmpty()) {
 			return core;
 		}
@@ -11289,18 +11415,25 @@ public final class LispMacroExpander {
 	 * (whose value is returned), then run the afters for effect.
 	 */
 	private static LispVal buildCore(List<ClosRegistry.MethodInfo> befores, List<ClosRegistry.MethodInfo> primaries,
-			List<ClosRegistry.MethodInfo> afters, List<LispVal> params, String genericName, boolean variadic) {
+			List<ClosRegistry.MethodInfo> afters, List<LispVal> params, String genericName, boolean variadic,
+			@Nullable String builtinFallback) {
 		List<LispVal> sequence = new java.util.ArrayList<>();
 		for (ClosRegistry.MethodInfo before : befores) {
 			sequence.add(callWithNext(before.functionName(), LispNil.INSTANCE, params, variadic));
 		}
 		LispVal primaryInvocation;
 		if (primaries.isEmpty()) {
-			primaryInvocation = listToCons(List.of(new LispSymbol(LispNames.ERROR),
-					new LispString("No applicable primary method: " + genericName)));
+			primaryInvocation = builtinFallback != null ? fallbackCall(builtinFallback, params, variadic)
+					: listToCons(List.of(new LispSymbol(LispNames.ERROR),
+							new LispString("No applicable primary method: " + genericName)));
 		}
 		else {
-			LispVal next = buildNextChain(primaries, 1, LispNil.INSTANCE, params, variadic);
+			// The stashed built-in closes the primary chain: a bare (call-next-method)
+			// out of the least specific user primary reaches the default method, as in
+			// CL.
+			LispVal base = builtinFallback != null
+					? lambdaOf(params, fallbackCall(builtinFallback, params, variadic), variadic) : LispNil.INSTANCE;
+			LispVal next = buildNextChain(primaries, 1, base, params, variadic);
 			primaryInvocation = callWithNext(primaries.get(0).functionName(), next, params, variadic);
 		}
 		sequence.add(primaryInvocation);
@@ -11371,6 +11504,39 @@ public final class LispMacroExpander {
 		progn.add(new LispSymbol(LispNames.PROGN));
 		progn.addAll(forms);
 		return listToCons(progn);
+	}
+
+	/**
+	 * The dispatcher's last resort: the stashed built-in when the program methoded a
+	 * built-in name, the "No applicable method" signal otherwise.
+	 */
+	private static LispVal fallbackOrNoApplicableMethod(String genericName, List<LispVal> params, boolean variadic,
+			@Nullable String builtinFallback) {
+		return builtinFallback != null ? fallbackCall(builtinFallback, params, variadic)
+				: noApplicableMethod(genericName, params);
+	}
+
+	/**
+	 * The call of the stashed built-in: {@code (fallback params...)}, or, for a variadic
+	 * generic, {@code (apply (function fallback) params... %gf-rest)} so a
+	 * {@code &key}/{@code &optional} tail (close's {@code :abort}) reaches it. Unlike a
+	 * method-body defun the built-in takes no leading next-method thunk -- it IS the end
+	 * of the chain.
+	 */
+	private static LispVal fallbackCall(String builtinFallback, List<LispVal> params, boolean variadic) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		if (variadic) {
+			call.add(new LispSymbol(LispNames.APPLY));
+			call.add(listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(builtinFallback))));
+		}
+		else {
+			call.add(new LispSymbol(builtinFallback));
+		}
+		call.addAll(params);
+		if (variadic) {
+			call.add(new LispSymbol(GF_REST_VAR));
+		}
+		return listToCons(call);
 	}
 
 	private static LispVal noApplicableMethod(String genericName, List<LispVal> params) {

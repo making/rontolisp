@@ -184,6 +184,17 @@ public final class BuiltinFunctionWrappers {
 	}
 
 	/**
+	 * Every wrapped operator name -- by construction a built-in FUNCTION both expression
+	 * compilers lower in call position (each wrapper body uses its operator exactly
+	 * there). {@code ShadowedBuiltins} unions this with its own list of lowered-but-
+	 * unwrappable names to decide when a user {@code defmethod} shadows a built-in.
+	 * @return the wrapped operator names
+	 */
+	public static Set<String> names() {
+		return WRAPPER_NAMES;
+	}
+
+	/**
 	 * Generates wrapper defuns for built-in operators that are not already defined by the
 	 * user.
 	 * @param userDefinedNames names already defined by user defuns
@@ -918,6 +929,16 @@ public final class BuiltinFunctionWrappers {
 			// when the program calls them directly -- so none of those four can be a
 			// first-class value in compiled output (macroexpand precedent).
 			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unary(LispNames.INTERN));
+
+	/** Backing set of {@link #names()}; initialized after {@code WRAPPER_DEFS}. */
+	private static final Set<String> WRAPPER_NAMES;
+	static {
+		Set<String> names = new java.util.HashSet<>();
+		for (WrapperDef def : WRAPPER_DEFS) {
+			names.add(def.name());
+		}
+		WRAPPER_NAMES = Set.copyOf(names);
+	}
 
 	private static LispVal listToCons(List<LispVal> elements) {
 		LispVal result = LispNil.INSTANCE;

@@ -175,6 +175,114 @@ shape the defclass accessor writers have exercised since cl-ppcre. Pinned by
 `Jvm/Wasm*#compileAndRunSetfMethodDispatchesPerClass`, and ci-spec
 `clos-setf-methods-and-setf-generic`.
 
+## A user method on a BUILT-IN name (todo-237, 2026-08-02)
+
+**A built-in whose name a program defines a method on becomes that generic's
+DEFAULT METHOD.** In CL these are generic functions whose standard methods stay;
+adding one never removes the built-in behavior. Here the dispatcher is an
+ordinary `defun` of the generic's name, so without this it SHADOWS the built-in
+and every non-instance argument dies with "No applicable method: CLOSE on
+INTEGER" — `(ql:quickload "fast-io")` poisoned `close` for the whole image
+(its `gray.lisp` methods `close`, `open-stream-p`, `input-stream-p`,
+`output-stream-p`, `stream-element-type`, all CL built-ins here), so any later
+`with-open-file` anywhere in the program died.
+
+- `generateDispatcher(name, registry, builtinFallback)` is the overload; the
+  2-arg one passes null and emits the byte-identical old shape, which is what
+  keeps a program with no colliding generic byte-identical. The fallback name
+  replaces the
+  `noApplicableMethod(...)` last resort in BOTH bodies (`simpleDispatchBody`,
+  `combinedDispatchBody` -> `effectiveMethod`), supplies `buildCore`'s primary
+  when a branch has only `:before`/`:after` methods, and closes the primary
+  chain as `buildNextChain`'s base — so a bare `(call-next-method)` out of the
+  least specific user primary reaches the built-in, as in CL. A user DEFAULT
+  (unspecialized) method still wins outright: the built-in is the last resort,
+  not a method the specificity sort can outrank.
+- `fallbackCall` takes no leading `%next-method` thunk (the built-in IS the end
+  of the chain) and, for a variadic generic, spells
+  `(apply #'<stash> params... %gf-rest)` — that tail is what carries `close`'s
+  `&key abort` to the built-in.
+- **Interpreter**: `LispEvaluator.defineDispatcher` is the ONE installation
+  seam (all four sites in `evalDefclass`/`evalDefgeneric`/`evalDefmethod` route
+  through it). `builtinDefaultMethodFor` stashes the built-in under
+  `LispMacroExpander.builtinDefaultMethodName` (`%<generic>--builtin`, the
+  `%<generic>--m<i>` convention with a reserved index) and MEMOIZES the hit in
+  `builtinDefaultMethods`. **The memo is load-bearing**: the dispatcher is
+  regenerated on every `defmethod`, and the second pass would find no built-in
+  to stash and silently drop the default method. A Java-backed built-in is a
+  `LispFunction`; a user/prelude/library `defun` is a `LispLambda` and is
+  deliberately left to be shadowed — that type test is also why a MISS needs no
+  memo (a dispatcher is itself a `LispLambda`, so re-probing keeps answering
+  null).
+- **Compile paths** (half 2, `compiler/ShadowedBuiltins`, run by BOTH backends
+  right after `expandTopLevelDefinitions`): `(close X)` is compiler-lowered
+  (`Jvm/WasmExprCompiler` `case LispNames.CLOSE` -> `Jvm/WasmCloseCompiler`)
+  no matter what defuns exist, so the dispatcher defun the splice emits under
+  the generic's own name is dead there. The pass follows the Gray-dispatch
+  model with a COMPUTED name set — every registered generic whose name is in
+  `ShadowedBuiltins.loweredBuiltinFunctions()` — and per name: replaces the
+  dead dispatcher (found by structural equality against a regenerated 2-arg
+  dispatcher, so a user defun of the same name is never mistaken for it) with
+  the SAME dispatcher body the interpreter installs, renamed to
+  `%<name>--dispatch` (`shadowedBuiltinDispatcher`); binds the fallback
+  `%<name>--builtin` with a FORWARDER defun whose body spells the original
+  built-in call, which the compilers still lower (`builtinForwarderDefun`; the
+  `&rest` tail is dropped — the lite built-ins ignore keyword tails, e.g. the
+  lowered `close` strips `:abort`); and rewrites the program's call sites and
+  `#'name` references onto the dispatcher. The walker skips quoted data,
+  `defmacro`/`macrolet` bodies, the generated defuns themselves (rewriting the
+  forwarder's fallback would recurse — the Gray `DISPATCH_DEFUNS` rule) and the
+  non-evaluated positions of `let`/`lambda`/`flet`/`do`/`dolist`/`case`/
+  `handler-case` families. When `close` is shadowed the `with-open-file`/
+  `with-open-stream`/`with-*-to-string` forms are pre-expanded
+  (`unwindProtect=true`) so their implicit `(close f)` routes through the
+  dispatcher exactly like the interpreter's global-binding lookup — a side
+  effect is that such a WASM module is always in EH mode.
+- **The name set**: `BuiltinFunctionWrappers.names()` minus `%`-internals,
+  minus `NOT_SHADOWABLE` (signal operators — they double as handler-case
+  clause heads — and `make-instance`/`class-of`, which have their own dispatch
+  machinery), minus `EXPANSION_LOWERED` (wrapped names the INTERPRETER
+  evaluates via `evalCons`/macro expansion, not a global `LispFunction` — its
+  half stashes nothing for those, so dispatching them here would diverge the
+  other way), plus `LOWERED_WITHOUT_WRAPPER` (lowered names with no wrapper,
+  `close` first among them). **Pinned by `ShadowedBuiltinsTest`: every member
+  must be a Java-backed `LispFunction` in a fresh global environment** — that
+  is the exact interpreter stash criterion, so the two halves keep the same
+  boundary. A new built-in added per the CLAUDE.md workflow lands in
+  `Environment` + `WRAPPER_DEFS` and is therefore shadowable automatically.
+- **Remaining divergences (re-evaluation triggers)**: (1) a plain
+  `(defun close (x) ...)` of a built-in name is still ignored by the compile
+  paths — same boundary as the interpreter half, which deliberately lets
+  defuns shadow each other, but the interpreter DOES honor the defun at call
+  sites while the compilers do not; (2) `EXPANSION_LOWERED` names (mapcar,
+  sort, format, ...) are un-dispatchable on EVERY path today — if the
+  interpreter ever routes them through global function bindings, move them out
+  of the exclusion; (3) under `--component` with sockets spliced,
+  `WasmSocketsRewrite` runs BEFORE this pass and has already turned
+  `close`/`listen`/... call sites into `rontolisp::%io-*` calls — the pass
+  COMPOSES via `WasmSocketsRewrite.builtinDispatchAliases`: those alias heads
+  rewrite onto the dispatcher too, and the forwarder's fall-through calls the
+  `%io-*` defun (socket-table bookkeeping stays in the loop; without this an
+  instance reaching `%io-close` was a wasm CAST-FAILURE trap, caught by the
+  concatenated ci-spec, whose `sleep` case makes the module async and splices
+  the io dispatch). Still open there: the ASYNC read promotions
+  (`read-line`/`read-char`/`read-byte` -> `(await (%*-future ...))`) bypass a
+  user method on those names; (4) a runtime
+  designator (`(funcall 'close x)`, `symbol-function`) does not dispatch on
+  the compile paths (no call site to rewrite — the Gray limitation).
+
+Pinned by `LispEvaluatorTest#defmethodOnABuiltinName*`/
+`#defmethodOnAVariadicBuiltinNameForwardsTheKeywordTail`/
+`#defgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod`,
+`JvmLispCompilerTest#compileAndRunDefmethodOnABuiltinName*`/
+`#compileAndRunDefgenericOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod`,
+`WasmLispCompilerIntegrationTest#defmethodOnABuiltinName*`, ci-spec
+`defmethod-on-a-builtin-name-keeps-the-builtin` (concatenated, so it also
+proves the whole-program rewrite does not disturb the other cases' call
+sites), and `FastIoCircularStreamsE2eTest` (a real `(asdf:load-system
+:circular-streams)` pulling fast-io's five built-in-name methods, then a real
+file round-trip through `with-open-file` on all four backends).
+
 ## Where each path hooks in
 
 - **Interpreter**: `evalDefclass` (expands + evals the defuns, then REGENERATES

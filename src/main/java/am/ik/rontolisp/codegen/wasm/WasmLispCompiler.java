@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Section;
@@ -1530,6 +1531,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::spellsAsExternal);
+		// A generic function whose name is a compiler-lowered built-in (fast-io's close
+		// methods): rename its dispatcher, keep the built-in as the default method, and
+		// route the program's call sites through it. No-op without such a generic.
+		// Under --component with sockets.lisp spliced, WasmSocketsRewrite has already
+		// redirected close/listen/... call sites onto its %io-* dispatch defuns, so the
+		// alias map makes those heads dispatch too and points each fall-through at the
+		// %io-* defun (whose socket-table bookkeeping must stay in the loop).
+		program = ShadowedBuiltins.process(program, closRegistry,
+				this.component ? WasmSocketsRewrite.builtinDispatchAliases(program) : java.util.Map.of());
 		// Every struct/class layout is registered by the pass above, so the instance gate
 		// can be decided here -- it must be, because the struct type index and the baked
 		// layout addresses are needed as constants before any body is compiled. Restart

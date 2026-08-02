@@ -4,7 +4,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import am.ik.rontolisp.ClosRegistry;
@@ -356,6 +358,17 @@ public final class LispEvaluator {
 	 * {@code slot-value}. Kept per evaluator, like the struct accessor registry.
 	 */
 	private final ClosRegistry closRegistry = new ClosRegistry();
+
+	/**
+	 * Generic-function name -&gt; the internal name the Java-backed built-in it shadows
+	 * was stashed under, for the generics whose name a program defined a method on. The
+	 * stash happens EXACTLY ONCE per name and every later dispatcher regeneration (there
+	 * is one per {@code defmethod}) reuses it: re-probing the binding would find the
+	 * dispatcher where the built-in was and silently drop the default method, and
+	 * re-stashing what it found would make the dispatcher's own fall-through recurse
+	 * forever. See {@link #builtinDefaultMethodFor}.
+	 */
+	private final Map<String, String> builtinDefaultMethods = new HashMap<>();
 
 	/**
 	 * The {@code compile} built-in's capture target when this evaluator is a compile
@@ -3913,7 +3926,7 @@ public final class LispEvaluator {
 		}
 		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
 			if (generic.hasClassMethod()) {
-				eval(LispMacroExpander.generateDispatcher(generic.name(), this.closRegistry), env);
+				defineDispatcher(generic.name(), env);
 			}
 		}
 		return cons.toList().get(1);
@@ -3927,7 +3940,7 @@ public final class LispEvaluator {
 		for (LispVal defun : methodDefuns) {
 			eval(defun, env);
 		}
-		eval(LispMacroExpander.generateDispatcher(generic, this.closRegistry), env);
+		defineDispatcher(generic, env);
 		return cons.toList().get(1);
 	}
 
@@ -3940,16 +3953,61 @@ public final class LispEvaluator {
 		// #'name captured earlier keeps the previous dispatcher).
 		eval(LispMacroExpander.expandDefmethod(cons, this.closRegistry), env);
 		String generic = ((LispSymbol) cons.toList().get(1)).name();
-		eval(LispMacroExpander.generateDispatcher(generic, this.closRegistry), env);
+		defineDispatcher(generic, env);
 		// The expansion may have REGISTERED a further generic (the
 		// instance-initialization protocol's shared-initialize) whose dispatcher does not
 		// exist yet; define any such dispatcher too.
 		for (ClosRegistry.GenericInfo info : this.closRegistry.generics().values()) {
 			if (this.globalEnv.lookupFunctionOrNull(info.name()) == null) {
-				eval(LispMacroExpander.generateDispatcher(info.name(), this.closRegistry), env);
+				defineDispatcher(info.name(), env);
 			}
 		}
 		return cons.toList().get(1);
+	}
+
+	/**
+	 * Installs (or reinstalls) a generic function's dispatcher defun, stashing the
+	 * Java-backed built-in of the same name first so it survives as the generic's default
+	 * method.
+	 * @param genericName the generic-function name
+	 * @param env the environment to evaluate the dispatcher defun in
+	 */
+	private void defineDispatcher(String genericName, Environment env) {
+		String fallback = builtinDefaultMethodFor(genericName);
+		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
+	}
+
+	/**
+	 * Stashes the built-in a generic function's dispatcher is about to shadow, so the
+	 * dispatcher's fall-through can call it: a program methoding a CL built-in name
+	 * (fast-io's {@code close}/{@code open-stream-p}/... methods on its stream classes)
+	 * must not lose the built-in behavior for every other argument -- in CL these are
+	 * generic functions whose standard methods a user method joins rather than replaces.
+	 *
+	 * <p>
+	 * A Java-backed built-in is a {@link LispFunction}; a user {@code defun} (a prelude
+	 * or library definition included) is a {@code LispLambda} and is deliberately left to
+	 * be shadowed, as is a name that is not defined yet. A HIT is memoized because the
+	 * dispatcher is regenerated on every {@code defmethod}: the second pass would
+	 * otherwise find nothing to stash and drop the default method. A MISS needs no memo
+	 * -- a dispatcher is itself a {@code LispLambda}, so re-probing a shadowed name keeps
+	 * answering null.
+	 * @param genericName the generic-function name
+	 * @return the internal name the built-in is stashed under, or null when the name has
+	 * no built-in to preserve
+	 */
+	private @Nullable String builtinDefaultMethodFor(String genericName) {
+		String stashed = this.builtinDefaultMethods.get(genericName);
+		if (stashed != null) {
+			return stashed;
+		}
+		if (!(this.globalEnv.lookupFunctionOrNull(genericName) instanceof LispFunction builtin)) {
+			return null;
+		}
+		String internal = LispMacroExpander.builtinDefaultMethodName(genericName);
+		this.globalEnv.defineFunction(internal, builtin);
+		this.builtinDefaultMethods.put(genericName, internal);
+		return internal;
 	}
 
 	/**

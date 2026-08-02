@@ -32,6 +32,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 
 import am.ik.jvm.AccessFlag;
@@ -248,6 +249,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::spellsAsExternal);
+		// A generic function whose name is a compiler-lowered built-in (fast-io's close
+		// methods): rename its dispatcher, keep the built-in as the default method, and
+		// route the program's call sites through it. No-op without such a generic.
+		program = ShadowedBuiltins.process(program, closRegistry);
 		// Whether an instance value can exist in this class at all. The predicates and
 		// _equal need the answer BEFORE any body is compiled (their shape changes), and
 		// with the gate off nothing they would guard against can be constructed -- so an

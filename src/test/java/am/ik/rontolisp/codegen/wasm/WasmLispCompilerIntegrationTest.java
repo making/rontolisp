@@ -6584,6 +6584,52 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() throws Exception {
+		// (length X) is compiler-lowered, so the generated dispatcher defun used to be
+		// dead under its own name and the user method was silently ignored.
+		// ShadowedBuiltins renames the dispatcher, rewrites the call sites and keeps
+		// the built-in as the default method.
+		assertThat(compileAndRun("""
+				(defclass sbm-cls () ())
+				(defmethod length ((x sbm-cls)) 42)
+				(print (list (length (make-instance 'sbm-cls)) (length "abc") (length '(1 2 3))))
+				(defgeneric endp (x))
+				(print (endp nil))
+				""")).isEqualTo("(42 3 3)\nT");
+	}
+
+	@Test
+	void defmethodOnAVariadicBuiltinNameForwardsThroughTheDispatcher() throws Exception {
+		// fast-io's gray.lisp shape: a (close (s cls) &key abort) method must not
+		// poison close for real stream handles -- with-open-file (pre-expanded so its
+		// implicit close routes through the dispatcher) still closes, and an explicit
+		// (close s :abort t) reaches the built-in through the %gf-rest tail.
+		assertThat(compileAndRunWithDir("""
+				(defclass sbm-stream () ())
+				(defmethod close ((s sbm-stream) &key abort) (declare (ignore abort)) :closed)
+				(print (close (make-instance 'sbm-stream)))
+				(with-open-file (out "sbm-closed.txt" :direction :output) (write-line "hi" out))
+				(print (with-open-file (in "sbm-closed.txt") (read-line in)))
+				(let ((s (open "sbm-closed.txt"))) (print (close s :abort t)))
+				""")).isEqualTo(":CLOSED\n\"hi\"\nT");
+	}
+
+	@Test
+	void defmethodOnABuiltinNameQualifiersAndFirstClassReference() throws Exception {
+		// A :before-only branch composes with the built-in default method,
+		// call-next-method out of the least specific user primary reaches it, and
+		// #'length is rewritten onto the dispatcher so a funcall dispatches too.
+		assertThat(compileAndRun("""
+				(defclass sbq-cls () ())
+				(defparameter *sbq-log* nil)
+				(defmethod length :before ((x string)) (push :before *sbq-log*))
+				(defmethod length ((x sbq-cls)) (call-next-method))
+				(print (list (length "abc") (reverse *sbq-log*)))
+				(print (funcall #'length "abcd"))
+				""")).isEqualTo("(3 (:BEFORE))\n4");
+	}
+
+	@Test
 	void probeFileAnswersThePathOrNil() throws Exception {
 		// The missing-path branch is the load-bearing one: _open TRAPS on a non-zero
 		// path_open errno (and a trap is not catchable), so the program only survives to

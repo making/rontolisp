@@ -6776,3 +6776,27 @@ cases:
     expected: |
       "users:row"
       "users:k7"
+  - name: defmethod-on-a-builtin-name-keeps-the-builtin
+    source: |
+      ;; todo-237: a built-in whose name a program defines a method on becomes
+      ;; that generic's DEFAULT METHOD. The user method dispatches on instances;
+      ;; every other argument -- with-open-file's implicit close included --
+      ;; still reaches the built-in, identically on all four backends. Being
+      ;; concatenated here also proves the whole-program call-site rewrite does
+      ;; not disturb the length/close call sites of every case around this one.
+      (defclass sbi-cls () ())
+      (defmethod close ((sbi-s sbi-cls) &key abort) (declare (ignore abort)) :sbi-closed)
+      (defmethod length ((sbi-x sbi-cls)) 42)
+      (print (close (make-instance 'sbi-cls)))
+      (print (list (length (make-instance 'sbi-cls)) (length "abc")))
+      (with-open-file (sbi-out "sbi.dat" :direction :output :element-type '(unsigned-byte 8))
+        (write-byte 65 sbi-out))
+      (with-open-file (sbi-in "sbi.dat" :element-type '(unsigned-byte 8))
+        (print (read-byte sbi-in)))
+      (let ((sbi-h (open "sbi.dat")))
+        (print (close sbi-h :abort t)))
+    expected: |
+      :SBI-CLOSED
+      (42 3)
+      65
+      T

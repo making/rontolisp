@@ -48,6 +48,7 @@ examples/browser/hiragana/data/
 /seq.dat
 /crlf.dat
 /probe.dat
+/sbi.dat
 
 ### Compiled-program scratch: the docs' `rontolisp prog.lisp -o Prog.class` writes to the CWD ###
 /*.class

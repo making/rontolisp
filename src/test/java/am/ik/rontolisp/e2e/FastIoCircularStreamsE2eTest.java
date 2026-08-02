@@ -88,10 +88,21 @@ class FastIoCircularStreamsE2eTest extends AsdfLibraryE2eSupport {
 			  (file-position cs 1)
 			  (format t "~a~%" (file-position cs))
 			  (format t "~a~%" (list (read-byte cs) (read-byte cs))))
+
+			;; todo-237: fast-io's gray.lisp defines close/open-stream-p/... methods, which
+			;; used to poison the built-ins for real stream handles -- any later
+			;; with-open-file died with "No applicable method: CLOSE on INTEGER" (and the
+			;; compile paths silently ignored the methods instead). The built-in must stay
+			;; each generic's default method, so a real file round-trip after the load works.
+			(with-open-file (fio-out "target/fio-roundtrip.tmp" :direction :output)
+			  (write-line "roundtrip" fio-out))
+			(with-open-file (fio-in "target/fio-roundtrip.tmp")
+			  (format t "~a~%" (open-stream-p fio-in))
+			  (format t "~a~%" (read-line fio-in)))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(1 2)", "(10 20 30)", "3", "(10 20 30 EOF 10 20 30)", "3",
-			"1", "(20 30)");
+			"1", "(20 30)", "T", "roundtrip");
 
 	@Override
 	protected String systemDir() {

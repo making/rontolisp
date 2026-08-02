@@ -111,6 +111,29 @@ final class WasmSocketsRewrite {
 	}
 
 	/**
+	 * The {@code ShadowedBuiltins} composition seam: when this rewrite has fired on the
+	 * program, every {@code close}/{@code listen}/... call site already spells the
+	 * {@code rontolisp::%io-*} dispatch defun, so a user method on such a built-in name
+	 * must intercept THOSE heads -- and its dispatcher's fall-through must call the
+	 * {@code %io-*} defun (which keeps the socket table honest and falls back to the
+	 * {@code %...-raw} native aliases itself), never the raw built-in. Returns the
+	 * canonical qualified dispatch name -&gt; native built-in name map when the rewrite
+	 * fired, an empty map otherwise.
+	 * @param program the top-level forms, after {@link #rewrite}
+	 * @return qualified {@code %io-*} name -&gt; native name, or empty
+	 */
+	static Map<String, String> builtinDispatchAliases(List<LispVal> program) {
+		if (!spliced(program)) {
+			return Map.of();
+		}
+		Map<String, String> aliases = new java.util.HashMap<>();
+		for (Map.Entry<String, String> entry : SYNC_DISPATCH.entrySet()) {
+			aliases.put(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, entry.getValue()), entry.getKey());
+		}
+		return Map.copyOf(aliases);
+	}
+
+	/**
 	 * Rewrites the program when sockets.lisp is spliced; returns it untouched otherwise.
 	 * @param program the resolved, async-sugar-rewritten top-level forms
 	 * @return the program with socket I/O redirected

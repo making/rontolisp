@@ -174,13 +174,17 @@ abstract class AsdfLibraryE2eSupport {
 	}
 
 	// Copies the module into the container and runs it under wasmtime, returning stdout.
+	// The run gets /tmp as its preopened working directory (with a target/ subdirectory,
+	// so an exercise can write "target/..." like the in-process interpreter/JVM runs do
+	// from the project root): a file round-trip after a library load is part of what
+	// these tests pin (todo-237's close methods).
 	private String runWasm(byte[] wasmBytes, boolean component) throws Exception {
 		String path = "/tmp/" + artifactName() + (component ? "-component.wasm" : "-p1.wasm");
 		GenericContainer<?> wasmtime = WasmtimeSupport.container();
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path);
-		ExecResult result = component
-				? wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", path)
-				: wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", path);
+		String flags = component ? "run -W gc=y -W exceptions=y" : "--wasm gc --wasm exceptions=y";
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"mkdir -p /tmp/target && cd /tmp && wasmtime " + flags + " --dir . " + path);
 		assertThat(result.getExitCode()).as("exit code (component=%s): stderr: %s", component, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
