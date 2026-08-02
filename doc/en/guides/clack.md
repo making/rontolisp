@@ -1,6 +1,6 @@
 # Clack Web Applications
 
-[Clack](https://github.com/fukamachi/clack) — Eitaro Fukamachi's web
+[Clack](https://github.com/fukamachi/clack) — a web
 application environment for Common Lisp — loads verbatim via
 `(ql:quickload "clack")`, and `clack:clackup` runs a Clack application on the
 built-in `clack-handler-rontolisp` backend:

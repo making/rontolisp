@@ -1,6 +1,6 @@
 # Clack Web アプリケーション
 
-[Clack](https://github.com/fukamachi/clack) — 深町英太郎さんによる Common Lisp
+[Clack](https://github.com/fukamachi/clack) — Common Lisp
 の Web アプリケーション環境 — は `(ql:quickload "clack")` で無改変のまま
 ロードでき、`clack:clackup` は組み込みの `clack-handler-rontolisp`
 バックエンドで Clack アプリケーションを実行します:
