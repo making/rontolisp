@@ -178,6 +178,25 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   one Clack server per process.
   Tests: `HttpHandlerTest` (Java seam round trip + directive round trip via a
   background thread + validation + the stoppable-seam group).
+  **Every entry point reachable from `LispEvaluator` must have a matching
+  `@Substitute` in `Target_HttpHandlerSupport` (`src/web/java`).** GraalVM Web
+  Image's points-to analysis reaches `java.lang.VirtualThread.runContinuation`
+  -- which calls a `Thread.isInterrupted()` substitution unavailable on the
+  `svm-wasm` platform -- from ANY un-substituted method that still touches the
+  real `HttpServer`/`Executors.newVirtualThreadPerTaskExecutor` (build failure,
+  not a runtime one: `[1/8] Performing analysis...` reports "Method ...
+  Target_java_lang_Thread.isInterrupted() is not available in this platform"
+  while parsing `VirtualThread.runContinuation`). `serve` alone was substituted
+  when the directive shipped; todo-228 added `startServer`/`joinServer`/
+  `stopServer`/`serverPort` without extending the substitution, which passed
+  every JVM-side test (the class compiles and runs fine there) but broke the
+  `Deploy playground to GitHub Pages` build, because the pages workflow is the
+  only CI job that actually runs `-Pweb` `native-image --tool:svm-wasm`. Add
+  the stub to `Target_HttpHandlerSupport` in the SAME commit as any new
+  `HttpHandlerSupport` entry point, and verify with
+  `./mvnw -Pweb -DskipTests package` (needs a `wasm-as` on `PATH`, e.g. from
+  the Binaryen release the pages workflow installs) -- `./mvnw test` does not
+  catch this.
 - **JVM (implemented)** -- reuses the interpreter's `HttpHandlerSupport` server:
   the generated class ITSELF implements `HttpHandlerSupport.Handler` (the same
   mechanism as the tls-connect trust-all `X509TrustManager`; the public no-arg
