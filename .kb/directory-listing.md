@@ -132,16 +132,60 @@ namestring", not of this operator:
 **DIRECTORY components are never wild** (`"src/*/f.lisp"` matches nothing) --
 there is no structured directory list to walk.
 
-**`uiop:directory-files` offers only the 1-argument shape.** Real UIOP's second
-argument is a wildcard pathname object.
+**`uiop:directory-files` takes UIOP's optional PATTERN** (todo-249) -- as the
+NAMESTRING of a wildcard rather than a wildcard pathname object, appended to the
+directory and matched by exactly the rules above:
+`(uiop:directory-files "db/" "*.up.sql")`. Omitting it is `"*.*"`, UIOP's own
+`*wild-file-for-directory*` default. A pattern carrying a DIRECTORY component is
+an error, as it is in real UIOP -- there is no directory-wildcard machinery here
+to give it a meaning. The caller that asked for it is mito's migration reader,
+which lists `*.up.sql` out of a `migrations/` directory.
 
 **An unreadable directory reads as absent.** `Files.list` needs read permission
 where `Files.isDirectory` does not, so a directory you may stat but not read
 answers `nil`. Accepted: it is the same answer the WASM backends give for it, and
 the alternative is a second primitive whose only job is the difference.
 
+## `make-pathname` / `pathname-name` / `pathname-type`: the same family, at RUN time
+
+The pathname DECOMPOSITION siblings landed with todo-249, and closing
+`.todo/222` was the price of admission: `make-pathname` used to exist only as
+`cli/CompileTimePathnameFolder`'s literal-shape fold plus an interpreter Java
+function, so a call with a COMPUTED `:defaults` or `:name` compiled to a
+call-time error on all three compiled backends. It is now prelude Lisp as well,
+and the Java `Environment` entry is gone -- the interpreter and the three
+compiled backends run the ONE definition, and the folder (which is what makes an
+ASDF-located data directory a literal in the emitted artifact) stays as the
+compile-time half. `LispPreludeLibraryTest#thePreludeMakePathnameAgreesWithPathnameOps`
+pins the two renderings against each other, the `merge-pathnames` precedent.
+
+Two rules are load-bearing and both are SBCL-checked:
+
+- **`:defaults` defaults COMPONENT-WISE; it is not a merge.** A supplied
+  component REPLACES the defaults' one -- `(make-pathname :directory '(:relative
+  "m") :defaults "d/a.sql")` is `"m/b.sql"`, not `"d/m/b.sql"` -- and an
+  explicitly supplied `nil` means "no component", not "take the default". The
+  first cut composed name+type into a filename and then ran the whole thing
+  through `merge-pathnames`, which silently dropped the defaults' TYPE whenever
+  only `:name` was supplied; mito's migration down-file path
+  (`(make-pathname :name "...down" :defaults up-file)`) is the caller that
+  surfaced it.
+- **The LAST dot separates the type, and a dot at position 0 does not.**
+  `"d/a.b.c"` is name `"a.b"` type `"c"`; `"d/.a"` is name `".a"` with no type.
+  One rendering, `%pathname-split`, is read by `pathname-name`, `pathname-type`
+  AND `make-pathname`'s defaulting, so the three cannot disagree;
+  `PathnameOps.components` is its Java twin.
+
+`pathname` also stopped being an EMPTY type in the same pass -- see
+`.kb/declarations-type-checks.md`. A rontolisp pathname IS its namestring, so
+`(typep x 'pathname)` and `pathnamep` are `stringp`; while the type was empty,
+`(check-type directory pathname)` rejected the very values rontolisp uses as
+pathnames (mito's `migrate` and `migration-status` both hit it).
+
 ## Coverage
 
+- `LispPreludeLibraryTest#thePreludeMakePathnameAgreesWithPathnameOps`,
+  `#thePreludePathnameSplitAgreesWithPathnameOps`
 - `LispEvaluatorTest#directoryMatchesPathnamesTheWayAnsiDoes` (the SBCL-checked
   table), `#uiopDirectoryWalkersRunOverTheSamePrimitive`,
   `#directoryGoesThroughTheInstalledSourceLoader`

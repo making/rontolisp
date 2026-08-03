@@ -34,8 +34,19 @@ codegen), classified in `PackageRegistry.CL_MACROS` (precedent: `error` is a
 old `makeTypecaseTest` now delegates to it, so `typecase`/`etypecase` clause
 heads accept the same specs as `check-type`:
 
-- EMPTY types (constant-nil tests, todo-243 widened the family `pathname`
-  started): `bit-vector`/`simple-bit-vector` (no bit-vector value exists —
+- `pathname` -> `stringp` (todo-249). It USED to head the empty-type family
+  below, on the reasoning that rontolisp has no pathname object -- but a
+  rontolisp pathname IS its namestring (`.kb/directory-listing.md`), so the
+  empty test made the type reject the very values rontolisp uses as pathnames.
+  mito is where that bit: `(check-type directory pathname)` in `migrate` and
+  `(etypecase file (null ...) (pathname ...))` in `migration-status` both fail
+  on a namestring that came out of `uiop:directory-files`. `pathnamep` answers
+  the same test, as CL requires the two to agree. Consequence to know: a
+  `typecase` listing `pathname` BEFORE `string` now takes the pathname branch
+  for a string -- which is the same statement as "a namestring is a pathname",
+  and is the deviation from CL (where it is not) that this model forces.
+- EMPTY types (constant-nil tests, todo-243 widened the family):
+  `bit-vector`/`simple-bit-vector` (no bit-vector value exists —
   the bit type is dead, `.todo/180`; a typecase's bit-vector clause falls
   through to its vector clause), `generic-function`/
   `standard-generic-function` (a defgeneric's dispatcher is a plain function

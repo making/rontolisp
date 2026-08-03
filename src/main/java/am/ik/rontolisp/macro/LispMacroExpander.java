@@ -7168,18 +7168,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (make-broadcast-stream)} into {@code (make-string-output-stream)}: a
-	 * discarding sink stream, exactly what the interpreter allocates (component streams
-	 * are unsupported everywhere).
+	 * Expands {@code (make-broadcast-stream ...)}. With NO components the discarding sink
+	 * ({@code %make-string-output-stream}), unchanged since before broadcast streams
+	 * existed; with components {@code (%make-broadcast-stream (list ...))}, the Gray
+	 * output stream prelude entry that loops them. The choice is by ARGUMENT COUNT here,
+	 * at expansion time, which is what keeps a sink-only program from carrying the Gray
+	 * protocol.
 	 * @param cons the make-broadcast-stream expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandMakeBroadcastStream(LispCons cons) {
-		if (!(cons.cdr() instanceof LispNil)) {
-			throw new UnsupportedOperationException(
-					LispNames.MAKE_BROADCAST_STREAM + " with component streams is not supported: " + cons.print());
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 1) {
+			return fmtCall(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL);
 		}
-		return fmtCall(LispNames.MAKE_STRING_OUTPUT_STREAM_INTERNAL);
+		List<LispVal> components = new ArrayList<>(parts.subList(1, parts.size()));
+		components.add(0, new LispSymbol(LispNames.LIST));
+		return fmtCall(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, listToCons(components));
 	}
 
 	/**
@@ -7256,6 +7261,12 @@ public final class LispMacroExpander {
 			// &optional defaults shape falls through to the stub error rather than
 			// silently discarding the argument.
 			return new LispString("");
+		}
+		if (LispNames.NAMESTRING.equals(qn.member()) && parts.size() == 2) {
+			// Not a stub: real UIOP re-exports CL's namestring, and rontolisp's CL one is
+			// prelude Lisp (a pathname IS its namestring), so both spellings must name
+			// the one function rather than leaving uiop:namestring a call-time error.
+			return listToCons(List.of(new LispSymbol(LispNames.NAMESTRING_CL), parts.get(1)));
 		}
 		if (LispNames.FILE_EXISTS_P.equals(qn.member()) && parts.size() == 2) {
 			// Not a stub either: uiop:file-exists-p IS probe-file (same contract -- the
@@ -11983,15 +11994,32 @@ public final class LispMacroExpander {
 		// A bare (call-next-method) passes the method's ORIGINAL arguments, the optional
 		// and keyword ones included -- ironclad's hmac reinitialize-instance forwards its
 		// :key that way to the system default. The forwarding needs a rest variable, so
-		// one is injected when the method declares a keyword/optional tail without one
-		// (CL section order allows &rest before &key; a tail already starting with
-		// &optional keeps the required-args-only forwarding).
+		// one is injected when the method declares a keyword tail without one (CL section
+		// order allows &rest before &key).
+		List<LispVal> methodBody = parts.subList(llIndex + 1, parts.size());
+		boolean usesNext = usesNextMethod(methodBody);
 		String methodRestVar = restVarOf(tail);
 		if (methodRestVar == null && !tail.isEmpty() && tail.get(0) instanceof LispSymbol firstMarker
 				&& LispNames.LAMBDA_KEY.equals(firstMarker.name())) {
 			methodRestVar = "%method-args";
 			tail.add(0, new LispSymbol(methodRestVar));
 			tail.add(0, new LispSymbol(LispNames.LAMBDA_REST));
+		}
+		// An &optional section needs more than a rest variable: &rest binds what is left
+		// AFTER the optionals, so forwarding it alone silently drops them -- the defect
+		// that made cl-dbi's (do-sql conn sql &optional params) reach its driver method
+		// with params NIL and send a raw `?` to PostgreSQL. Each optional gains a
+		// supplied-p variable (synthesized when absent) so the bare call can forward
+		// exactly the ones that were passed, which is what CL specifies; an UNSUPPLIED
+		// optional must not be handed on as its default. Done only for a method that
+		// actually chains, so every other method's emitted code is unchanged.
+		List<OptionalForward> optionalForwards = List.of();
+		if (usesNext && hasOptionalSection(tail)) {
+			optionalForwards = normalizeOptionalsForForwarding(tail);
+			if (methodRestVar == null) {
+				methodRestVar = "%method-args";
+				insertRestVariable(tail, methodRestVar);
+			}
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(generic.name());
 		String functionName = (qn == null ? "%" + generic.name() : qn.pkg() + "::%" + qn.member()) + "--m"
@@ -12001,8 +12029,7 @@ public final class LispMacroExpander {
 		// primary dog method coexist while redefining the same qualifier+specializers
 		// replaces (CL semantics).
 		String key = qualifier.isEmpty() ? specKey : qualifier + " " + specKey;
-		List<LispVal> body = parts.subList(llIndex + 1, parts.size());
-		boolean usesNext = usesNextMethod(body);
+		List<LispVal> body = methodBody;
 		generic.methods()
 			.put(key, new ClosRegistry.MethodInfo(List.copyOf(specializers), functionName, qualifier, usesNext));
 		// Every method-body defun takes a leading %next-method thunk; call-next-method
@@ -12023,7 +12050,7 @@ public final class LispMacroExpander {
 		blockParts.add(new LispSymbol(LispNames.BLOCK));
 		blockParts.add(new LispSymbol(generic.name()));
 		for (LispVal form : body) {
-			blockParts.add(rewriteNextMethod(form, paramNames, methodRestVar));
+			blockParts.add(rewriteNextMethod(form, paramNames, methodRestVar, optionalForwards));
 		}
 		defun.add(listToCons(blockParts));
 		LispVal methodDefun = listToCons(defun);
@@ -12235,7 +12262,8 @@ public final class LispMacroExpander {
 	 * the thunk, and {@code (next-method-p)} to a nil-test of that thunk. Quoted data and
 	 * other symbols are left untouched.
 	 */
-	private static LispVal rewriteNextMethod(LispVal form, List<String> paramNames, @Nullable String restVar) {
+	private static LispVal rewriteNextMethod(LispVal form, List<String> paramNames, @Nullable String restVar,
+			List<OptionalForward> optionals) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
 		}
@@ -12256,7 +12284,7 @@ public final class LispMacroExpander {
 				call.add(new LispSymbol(plain));
 				call.add(new LispSymbol(NEXT_METHOD_VAR));
 				for (int i = 2; i < parts.size(); i++) {
-					call.add(rewriteNextMethod(parts.get(i), paramNames, restVar));
+					call.add(rewriteNextMethod(parts.get(i), paramNames, restVar, optionals));
 				}
 				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
 						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
@@ -12264,7 +12292,7 @@ public final class LispMacroExpander {
 			if (LispNames.CALL_NEXT_METHOD.equals(plain)) {
 				List<LispVal> rawArgs = cons.toList().subList(1, cons.toList().size());
 				List<LispVal> args = rawArgs.isEmpty() ? paramNames.stream().<LispVal>map(LispSymbol::new).toList()
-						: rawArgs.stream().map(a -> rewriteNextMethod(a, paramNames, restVar)).toList();
+						: rawArgs.stream().map(a -> rewriteNextMethod(a, paramNames, restVar, optionals)).toList();
 				List<LispVal> call = new java.util.ArrayList<>();
 				// A bare (call-next-method) in a method with a rest tail forwards that
 				// tail too (the original arguments, keywords included), so it becomes an
@@ -12274,7 +12302,12 @@ public final class LispMacroExpander {
 				call.add(new LispSymbol(NEXT_METHOD_VAR));
 				call.addAll(args);
 				if (forwardedRest != null) {
-					call.add(new LispSymbol(forwardedRest));
+					// With optionals in play the apply's last argument is the ORIGINAL
+					// tail rebuilt: the optionals that were actually supplied, then
+					// whatever &rest holds. Without them it is the rest variable alone,
+					// exactly as before.
+					call.add(rawArgs.isEmpty() && !optionals.isEmpty() ? forwardedTail(optionals, forwardedRest)
+							: new LispSymbol(forwardedRest));
 				}
 				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
 						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
@@ -12285,9 +12318,104 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		for (LispVal element : cons.toList()) {
-			out.add(rewriteNextMethod(element, paramNames, restVar));
+			out.add(rewriteNextMethod(element, paramNames, restVar, optionals));
 		}
 		return listToCons(out);
+	}
+
+	/**
+	 * One {@code &optional} parameter of a chaining method: its variable and the
+	 * supplied-p variable a bare {@code call-next-method} tests to decide whether to
+	 * forward it.
+	 *
+	 * @param var the parameter variable name
+	 * @param suppliedP its supplied-p variable name
+	 */
+	private record OptionalForward(String var, String suppliedP) {
+	}
+
+	/** Whether a lambda-list tail declares an {@code &optional} section. */
+	private static boolean hasOptionalSection(List<LispVal> tail) {
+		return tail.stream().anyMatch(p -> p instanceof LispSymbol s && LispNames.LAMBDA_OPTIONAL.equals(s.name()));
+	}
+
+	/**
+	 * Rewrites every {@code &optional} entry of {@code tail} in place into the full
+	 * {@code (var init supplied-p)} shape, synthesizing the supplied-p variable when the
+	 * source did not name one, and answers the {var, supplied-p} pairs in order.
+	 */
+	private static List<OptionalForward> normalizeOptionalsForForwarding(List<LispVal> tail) {
+		List<OptionalForward> forwards = new java.util.ArrayList<>();
+		boolean inOptional = false;
+		for (int i = 0; i < tail.size(); i++) {
+			if (tail.get(i) instanceof LispSymbol marker && marker.name().startsWith("&")) {
+				inOptional = LispNames.LAMBDA_OPTIONAL.equals(marker.name());
+				continue;
+			}
+			if (!inOptional) {
+				continue;
+			}
+			LispVal entry = tail.get(i);
+			String var;
+			LispVal init = LispNil.INSTANCE;
+			String suppliedP = null;
+			if (entry instanceof LispSymbol bare) {
+				var = bare.name();
+			}
+			else if (entry instanceof LispCons spec && spec.car() instanceof LispSymbol name) {
+				List<LispVal> specParts = spec.toList();
+				var = name.name();
+				if (specParts.size() > 1) {
+					init = specParts.get(1);
+				}
+				if (specParts.size() > 2 && specParts.get(2) instanceof LispSymbol sp) {
+					suppliedP = sp.name();
+				}
+			}
+			else {
+				continue;
+			}
+			if (suppliedP == null) {
+				suppliedP = "%next-opt-p-" + forwards.size();
+				tail.set(i, listToCons(List.of(new LispSymbol(var), init, new LispSymbol(suppliedP))));
+			}
+			forwards.add(new OptionalForward(var, suppliedP));
+		}
+		return List.copyOf(forwards);
+	}
+
+	/**
+	 * Inserts {@code &rest <name>} at the only position CL's section order allows once an
+	 * {@code &optional} section is present: immediately before {@code &key} /
+	 * {@code &allow-other-keys} when there is one, otherwise at the end.
+	 */
+	private static void insertRestVariable(List<LispVal> tail, String name) {
+		int at = tail.size();
+		for (int i = 0; i < tail.size(); i++) {
+			if (tail.get(i) instanceof LispSymbol marker && (LispNames.LAMBDA_KEY.equals(marker.name())
+					|| LispNames.LAMBDA_ALLOW_OTHER_KEYS.equals(marker.name()))) {
+				at = i;
+				break;
+			}
+		}
+		tail.add(at, new LispSymbol(name));
+		tail.add(at, new LispSymbol(LispNames.LAMBDA_REST));
+	}
+
+	/**
+	 * The argument list a bare {@code call-next-method} applies: the supplied optionals
+	 * followed by the {@code &rest} tail --
+	 * {@code (append (if sp1 (list o1) nil) ... restVar)}.
+	 */
+	private static LispVal forwardedTail(List<OptionalForward> optionals, String restVar) {
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(LispNames.APPEND));
+		for (OptionalForward opt : optionals) {
+			call.add(makeIf(new LispSymbol(opt.suppliedP()),
+					listToCons(List.of(new LispSymbol(LispNames.LIST), new LispSymbol(opt.var()))), LispNil.INSTANCE));
+		}
+		call.add(new LispSymbol(restVar));
+		return listToCons(call);
 	}
 
 	/**
@@ -12326,6 +12454,22 @@ public final class LispMacroExpander {
 		}
 		throw new UnsupportedOperationException(LispNames.DEFMETHOD
 				+ " eql specializers support keyword/symbol/number/character literals only: " + defmethodForm.print());
+	}
+
+	/**
+	 * Expands {@code (pathnamep x)} into {@code (stringp x)}: a rontolisp pathname IS its
+	 * namestring, so a string is one and nothing else is. Agrees with
+	 * {@code (typep x 'pathname)}, as CL requires -- see the {@code PATHNAME} case of
+	 * {@link #makeTypeTest}.
+	 * @param cons the pathnamep expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPathnamep(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.PATHNAMEP + " expects exactly one argument: " + cons.print());
+		}
+		return callOf(LispNames.STRINGP, parts.get(1));
 	}
 
 	/** Whether a plain (package-stripped) type name is usable as a TYPE specializer. */
@@ -12691,6 +12835,7 @@ public final class LispMacroExpander {
 			}
 		}
 		List<ClosRegistry.MethodInfo> branches = new java.util.ArrayList<>(reps.values());
+		addMeetBranches(reps, branches, closRegistry);
 		MiRefinement refinement = miRefinement(generic, closRegistry);
 		java.util.Set<ClosRegistry.MethodInfo> exactTagBranches = java.util.Collections
 			.newSetFromMap(new java.util.IdentityHashMap<>());
@@ -12719,6 +12864,86 @@ public final class LispMacroExpander {
 	/** The specializer key of a method, ignoring its qualifier. */
 	private static String specKeyOf(ClosRegistry.MethodInfo m) {
 		return specKeyText(m.specializers());
+	}
+
+	/**
+	 * Adds a branch for every position-wise MEET of two methods whose specializer vectors
+	 * are INCOMPARABLE -- neither one's vector applies to the other's.
+	 *
+	 * <p>
+	 * One branch per method is enough only while the vectors form a chain, because
+	 * {@link #appliesToBranch} is a subset test: a branch keyed on
+	 * {@code (dbd-postgres-connection, DEFAULT)} does NOT admit a method specialized
+	 * {@code (dbi-connection, string)}, since {@code string} is not a subtype of
+	 * {@code DEFAULT}'s position there. With no branch for the meet
+	 * {@code (dbd-postgres-connection, string)}, a call satisfying BOTH takes the coarser
+	 * branch and the other method vanishes from the applicable set -- cl-dbi's
+	 * {@code do-sql} lost its `next method' that way, and so would any {@code :before} /
+	 * {@code :after} in the same shape. CL has no such notion: it computes the applicable
+	 * set from the actual arguments, which is exactly what a meet branch restores for the
+	 * one combination that needed it.
+	 *
+	 * <p>
+	 * Cost control: the scan is quadratic in the method count and runs only for the
+	 * generics that actually have an incomparable pair (a compatible-but-incomparable
+	 * pair is rare -- in cl-dbi's whole surface exactly one qualifies), and every added
+	 * branch is a real dispatcher branch, so a generic with none keeps its emitted code
+	 * byte-identical. The fixpoint terminates because each round can only add strictly
+	 * more specific vectors out of a finite specializer lattice.
+	 */
+	private static void addMeetBranches(java.util.LinkedHashMap<String, ClosRegistry.MethodInfo> reps,
+			List<ClosRegistry.MethodInfo> branches, ClosRegistry closRegistry) {
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			List<ClosRegistry.MethodInfo> current = List.copyOf(branches);
+			for (int i = 0; i < current.size() && !grew; i++) {
+				for (int j = i + 1; j < current.size() && !grew; j++) {
+					List<ClosRegistry.Specializer> meet = specializerMeet(current.get(i).specializers(),
+							current.get(j).specializers(), closRegistry);
+					if (meet == null) {
+						continue;
+					}
+					String key = specKeyText(meet);
+					if (reps.containsKey(key)) {
+						continue;
+					}
+					ClosRegistry.MethodInfo rep = new ClosRegistry.MethodInfo(meet, "%meet-branch", "", false);
+					reps.put(key, rep);
+					branches.add(rep);
+					grew = true;
+				}
+			}
+		}
+	}
+
+	/**
+	 * The position-wise meet of two specializer vectors, or null when they can never both
+	 * apply (incompatible at some position) or when one already dominates the other
+	 * (nothing new to branch on).
+	 */
+	@Nullable private static List<ClosRegistry.Specializer> specializerMeet(List<ClosRegistry.Specializer> left,
+			List<ClosRegistry.Specializer> right, ClosRegistry closRegistry) {
+		int size = Math.max(left.size(), right.size());
+		List<ClosRegistry.Specializer> meet = new java.util.ArrayList<>(size);
+		boolean leftDominates = true;
+		boolean rightDominates = true;
+		for (int i = 0; i < size; i++) {
+			ClosRegistry.Specializer a = i < left.size() ? left.get(i) : ClosRegistry.Specializer.DEFAULT;
+			ClosRegistry.Specializer b = i < right.size() ? right.get(i) : ClosRegistry.Specializer.DEFAULT;
+			// specApplies(x, y) reads "a y-branch instance satisfies x", i.e. y is at
+			// least as specific as x -- so the meet takes whichever side the other one
+			// applies to.
+			boolean aFromB = specApplies(a, b, closRegistry);
+			boolean bFromA = specApplies(b, a, closRegistry);
+			if (!aFromB && !bFromA) {
+				return null;
+			}
+			meet.add(aFromB ? b : a);
+			leftDominates &= bFromA;
+			rightDominates &= aFromB;
+		}
+		return (leftDominates || rightDominates) ? null : List.copyOf(meet);
 	}
 
 	/**
@@ -18887,7 +19112,8 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> clauseParts = clause.toList();
 			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
-			LispVal test = makeTypeTest(var, clauseParts.get(0), closRegistry);
+			LispVal test = pathnameClauseYields(clauseParts.get(0), clauses) ? (LispVal) LispNil.INSTANCE
+					: makeTypeTest(var, clauseParts.get(0), closRegistry);
 			List<LispVal> condClause = new java.util.ArrayList<>();
 			condClause.add(test);
 			if (body.isEmpty()) {
@@ -18937,7 +19163,8 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> clauseParts = clause.toList();
 			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
-			LispVal test = makeTypeTest(var, clauseParts.get(0), closRegistry);
+			LispVal test = pathnameClauseYields(clauseParts.get(0), clauses) ? (LispVal) LispNil.INSTANCE
+					: makeTypeTest(var, clauseParts.get(0), closRegistry);
 			List<LispVal> condClause = new java.util.ArrayList<>();
 			condClause.add(test);
 			if (body.isEmpty()) {
@@ -18950,6 +19177,69 @@ public final class LispMacroExpander {
 		}
 		condParts.add(makeExhaustiveErrorClause(var, "ETYPECASE"));
 		return makeLet(ETYPECASE_VAR, keyform, listToCons(condParts));
+	}
+
+	/**
+	 * Whether a {@code pathname} clause of a {@code typecase}/{@code etypecase} must
+	 * YIELD the strings it would otherwise claim to a sibling clause.
+	 *
+	 * <p>
+	 * A rontolisp pathname IS its namestring (there is no pathname object,
+	 * {@code .kb/directory-listing.md}), so the {@code pathname} type has to accept a
+	 * string -- otherwise {@code (check-type directory pathname)} and
+	 * {@code (etypecase file (null ...) (pathname ...))} reject the very values rontolisp
+	 * hands out as pathnames (mito's {@code migrate} and {@code migration-status}). But a
+	 * form that ALSO lists a clause a string can land in is not asking "is this a path?",
+	 * it is DISCRIMINATING a path from string CONTENT -- jzon's
+	 * {@code (typecase in (pathname (open in ...)) (t ...))} reads JSON text from
+	 * anything that is not a file, and claiming its string turned
+	 * {@code (jzon:parse "\"text\"")} into an attempt to open a file named {@code text}.
+	 * So the pathname clause yields to any sibling that could take the string: the
+	 * catch-all, and the string/vector/array/sequence family.
+	 *
+	 * <p>
+	 * This is a heuristic standing in for a type rontolisp does not have.
+	 * <strong>Re-evaluation trigger</strong>: give rontolisp a distinct pathname VALUE
+	 * (an instance carrying its namestring, the way defstruct instances already work on
+	 * every backend) and this rule -- and the whole "is a namestring a pathname" question
+	 * -- disappears with it.
+	 * @param clauseHead the clause's type specifier
+	 * @param clauses every clause of the form, including this one
+	 * @return whether the clause's test must be constant nil
+	 */
+	private static boolean pathnameClauseYields(LispVal clauseHead, List<LispVal> clauses) {
+		if (!(clauseHead instanceof LispSymbol head) || !"PATHNAME".equals(plainTypeName(head.name()))) {
+			return false;
+		}
+		for (LispVal other : clauses) {
+			if (!(other instanceof LispCons otherClause)) {
+				continue;
+			}
+			// The catch-all reads as LispTrue, not a symbol named T -- missing that is
+			// what let jzon's (typecase in (pathname (open in)) (t ...)) still claim its
+			// string on the first cut.
+			if (otherClause.car() instanceof LispTrue || (otherClause.car() instanceof LispSymbol otherHead
+					&& matchesAString(plainTypeName(otherHead.name())))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** A type-specifier symbol's name with any package qualifier stripped. */
+	private static String plainTypeName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	/** Whether a bare type-specifier name can be satisfied by a string. */
+	private static boolean matchesAString(String plainName) {
+		return switch (plainName) {
+			case "T", "OTHERWISE", "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "VECTOR",
+					"SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "ATOM" ->
+				true;
+			default -> false;
+		};
 	}
 
 	/**
@@ -18999,8 +19289,16 @@ public final class LispMacroExpander {
 			case "STRUCTURE-OBJECT":
 				return makeAnyStructInstanceTest(value, closRegistry);
 			case "PATHNAME":
-				// No pathname type exists in rontolisp: nothing is a pathname.
-				return LispNil.INSTANCE;
+				// A rontolisp pathname IS its namestring (there is no pathname object,
+				// see LispNames.MAKE_PATHNAME), so a STRING is what a pathname is here.
+				// The empty test this used to be made the type reject the very values
+				// rontolisp uses as pathnames: mito's (check-type directory pathname) in
+				// migrate and its (etypecase file (null ...) (pathname ...)) in
+				// migration-status both failed on a namestring that came out of
+				// uiop:directory-files. Consequence to know: a typecase listing
+				// `pathname' BEFORE `string' now takes the pathname branch for a string
+				// -- which is the same statement as "a namestring is a pathname".
+				return callOf(LispNames.STRINGP, value);
 			case "PACKAGE":
 				// A package value is find-package's answer -- the name KEYWORD
 				// (.kb/symbol-runtime-api.md) -- so the test is "a keyword naming a
@@ -19802,6 +20100,22 @@ public final class LispMacroExpander {
 	public static LispVal makeDirectoriesStub() {
 		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString("ensure-directories-exist is not supported on the WASM backends")));
+	}
+
+	/**
+	 * The call-time stub both WASM backends lower {@code %delete-file} -- and therefore
+	 * {@code delete-file} -- to, for the same reason as {@link #makeDirectoriesStub()}:
+	 * WASI's import set here carries no unlink call, and "the file is gone afterwards"
+	 * has no honest non-answer, so anything but an error would be a lie. Like the other
+	 * stubs it keeps a library defun merely CONTAINING the form compilable and signals
+	 * only if it is actually called -- which is what lets mito's
+	 * {@code generate-migrations} compile on the WASM backends even though its
+	 * delete-superseded-files branch cannot run there.
+	 * @return the signaling expression
+	 */
+	public static LispVal deleteFileStub() {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("delete-file is not supported on the WASM backends")));
 	}
 
 	/**

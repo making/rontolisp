@@ -54,6 +54,7 @@
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |
 | `read-line` | `(read-line)`, `(read-line stream)` | 標準入力(または入力ストリーム)から1行読み込み、文字列として返します。EOFでは `nil` |
+| `y-or-n-p` | `(y-or-n-p "Delete ~A?" f)` | 省略可能な `format` 制御文字列と `" (y or n) "` を出力し、標準入力から 1 **行**読んで、`y`/`Y` なら `t`、`n`/`N` なら `nil` を返し、それ以外は聞き直します。lite 版: CL はエコーなしで 1 文字を読み、入力の終端ではここでは `nil` を返します |
 | `peek-char` | `(peek-char nil s)`, `(peek-char t s)`, `(peek-char #\; s)` | ストリームの次の文字を消費せずに返します。`peek-type` が `nil` なら何も読み飛ばさず、`t` なら空白を、文字ならその文字までを読み飛ばします。返した文字はストリームに残ります。EOF では `end-of-file` を通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | ファイルを開いてストリームを返します。方向はリテラルの `:input`(デフォルト、読み込み)または `:output`(作成/切り詰め、書き込み)でなければなりません。省略可能な要素型はリテラルの `'character`(デフォルト、テキスト)または `'(unsigned-byte 8)`(バイナリ)でなければなりません |
 | `close` | `(close stream)` | `open` で開いたストリームを閉じます。`t` を返します |
@@ -61,6 +62,10 @@
 | `truename` | `(truename "f.txt")` | ファイルが存在すればそのパス名、存在しなければエラー — `probe-file` の通知する版であり、`(ignore-errors (truename p))` が可搬な存在検査になる理由です |
 | `directory` | `(directory "src/*.lisp")` | pathspec に一致するパス名をソートして返します。そのディレクトリ接頭辞を保ち、サブディレクトリには末尾に `/` を付けます。ワイルドな**名前**コンポーネントは照合され (`*` は任意個、`?` は 1 文字、`*` 単独は CL と同じく「型なし」の意味)、ワイルドでない場合は自分自身を指すので、ディレクトリの一覧は `"src/"` ではなく `"src/*.*"` です。ディレクトリコンポーネントはワイルドになりません |
 | `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — パス名のディレクトリ部分を CL のリスト形式 (`:absolute`/`:relative` と階層ごとの文字列) で返し、無ければ `nil`。純粋な文字列処理で、ファイルシステムは読みません |
+| `pathname-name` | `(pathname-name "d/a.b.c")` | `"a.b"` — 型を除いたファイル名部分。最後の `/` より後ろで、かつ**最後の**ドットより前です (位置 0 のドットは名前の一部)。ファイルを指さないパス名では `nil` |
+| `pathname-type` | `(pathname-type "d/a.b.c")` | `"c"` — ドットを除いた型 (拡張子)。無ければ `nil`。同じ分割のもう半分です |
+| `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `"d/b.sql"` — `:directory`/`:name`/`:type` から名前文字列を組み立て、**指定されなかった**構成要素は `:defaults` から取ります。構成要素ごとの補完でありマージではありません: 指定した構成要素は defaults のものを置き換え、明示的な `nil` は「その構成要素なし」を意味します。4 バックエンドすべてで実行時の関数として動作し、リテラルの呼び出しは加えてコンパイル時に畳み込まれます |
+| `namestring` | `(namestring "/tmp/x")` | パス名の名前文字列。ここではパス名は名前文字列そのものなので文字列に対しては恒等関数で、それ以外はシグナルを発生させます。`uiop:namestring` も同じ関数です |
 | `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | 第 1 の名前文字列の欠けている部分を第 2 のもので補います。絶対ディレクトリが優先され、相対ディレクトリは連結され、無い場合は defaults のものが使われます。`uiop:merge-pathnames*` は同じマージです |
 | `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
@@ -312,11 +317,12 @@
 | `file-length` | `(file-length s)` | ファイルストリームが開いているファイルのバイト長。他のストリームでは `nil`、2つのWASMバックエンドでも `nil` |
 | `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil`(2つのWASMバックエンドでは常に `nil`) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | pathspec のディレクトリ部分を作成して pathspec を返します(2つのWASMバックエンドではシグナルを発生させます) |
+| `delete-file` | `(delete-file "notes.txt")` | 指定したファイルを削除して `t` を返します。ファイルが残る場合は「そもそも無かった」場合も含めてシグナルを発生させます(2つのWASMバックエンドでは `ensure-directories-exist` と同じ理由でシグナルを発生させます) |
 | `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数のストリームへ転送する指定子。`*standard-output*` と `*standard-input*` は操作ごとに転送します (`nil` 指定子)。それ以外のシンボルはライト実装で、ストリームを作った時点で一度だけ解決します |
-| `make-broadcast-stream` | `(make-broadcast-stream)` | 書き込みを捨てるシンクストリーム(コンポーネントストリーム非対応) |
-| `pathnamep` | `(pathnamep "/tmp/x")` | 常に `nil` -- rontolisp に pathname 型はありません |
+| `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので `format`/`princ`/`prin1`/`write-string`/`write-char` が使え、`terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` はシグナルを発生させます |
+| `pathnamep` | `(pathnamep "/tmp/x")` | `t` — ここではパス名は名前文字列そのものなので `stringp` と同じで、`(typep x 'pathname)` とも一致します |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
 | `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム |
@@ -555,9 +561,10 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 | `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
 | `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すれば（末尾に `/` を付けた）そのパス名、存在しなければ `nil` — `file-exists-p` のディレクトリ版であり、空のディレクトリと存在しないディレクトリを区別できる唯一の手段です |
-| `uiop:directory-files` | `(uiop:directory-files "src/")` | ディレクトリのうちディレクトリでないエントリ — `(directory "src/*.*")` からサブディレクトリを除いたものです。本家 UIOP の省略可能なワイルドカード引数は提供しません |
+| `uiop:directory-files` | `(uiop:directory-files "db/" "*.up.sql")` | ディレクトリのうちディレクトリでないエントリ — `(directory "db/*.*")` からサブディレクトリを除いたものです。UIOP の省略可能な第 2 引数 (名前と型のみのワイルドカードのパス名文字列) は `directory` とまったく同じ規則で絞り込みます。省略するとすべてを一覧し、ディレクトリ部分を含むパターンはエラーです |
 | `uiop:subdirectories` | `(uiop:subdirectories "src/")` | ディレクトリのサブディレクトリを、それぞれ末尾に `/` を付けて返します |
 | `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | ディレクトリツリーを走査します。`collectp` が `collector` へ渡すものを、`recursep` が降りていく先を決めます。渡されるディレクトリはルートも含めてすべてディレクトリ形式です |
+| `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | ファイルの内容全体を 1 つの文字列として返します。ファイルを入力用に開けるすべてのバックエンドで動きます。lite 版: 本家 UIOP の `&rest` キーワードは受け付けて無視します (`:external-format` は rontolisp には存在せず、どのバックエンドも UTF-8 で読みます) |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ (ここではパス名は名前文字列そのものです)。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
@@ -572,8 +579,11 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 ディレクトリを基準に解決され、`""` はまさにそれを指す名前文字列なので、
 `(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
 
+`uiop:namestring` も実装されており、[`namestring`](functions/namestring.md) そのものです。
+本家 UIOP が Common Lisp の `namestring` を再エクスポートしているのと同じです。
+
 パッケージの残りは**名前解決のためのスタブ**です。`uiop:native-namestring`、
-`uiop:namestring`、`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は
+`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は
 解決はされる (ので `(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、
 コンパイルできる) ものの、呼び出すと undefined-function エラーになります。未実装ではなく
 意図的です: 外部プロセスの起動 (`run-program`) はどのバックエンドのサンドボックスの外に

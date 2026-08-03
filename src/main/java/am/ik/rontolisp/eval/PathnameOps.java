@@ -78,9 +78,21 @@ public final class PathnameOps {
 	 * Builds a namestring from a CL {@code make-pathname} argument list. Supported
 	 * keywords: {@code :directory} (a list starting with {@code :relative} or
 	 * {@code :absolute}, followed by name components), {@code :name} (a string or
-	 * {@code nil}), {@code :type} (a string or {@code nil}), {@code :defaults} (a
-	 * namestring merged into the result), plus the tolerated no-ops {@code :host},
-	 * {@code :device}, {@code :version}, {@code :case} (accepted and dropped).
+	 * {@code nil}), {@code :type} (a string or {@code nil}), {@code :defaults} (the
+	 * namestring each UNSUPPLIED component is taken from), plus the tolerated no-ops
+	 * {@code :host}, {@code :device}, {@code :version}, {@code :case} (accepted and
+	 * dropped).
+	 *
+	 * <p>
+	 * {@code :defaults} defaults COMPONENT-WISE and is NOT a merge: a supplied component
+	 * REPLACES the defaults' one (so {@code :directory (:relative "m")} with
+	 * {@code :defaults "d/a.sql"} is {@code "m/b.sql"}, not {@code "d/m/b.sql"}), and an
+	 * explicitly supplied {@code nil} means "no component" rather than "take the
+	 * default". That is what CL specifies and what SBCL answers; the first cut merged the
+	 * whole composed namestring instead, which silently dropped the defaults' TYPE
+	 * whenever only {@code :name} was supplied -- mito's migration down-file path
+	 * ({@code (make-pathname :name "...down" :defaults up-file)}) is the caller that
+	 * surfaced it.
 	 * @param args the keyword-value pairs after {@code make-pathname}
 	 * @return the composed namestring
 	 */
@@ -109,15 +121,59 @@ public final class PathnameOps {
 				default -> throw new LispEvalException(LispNames.MAKE_PATHNAME + ": unsupported option " + key.name());
 			}
 		}
-		String directory = formatDirectory(directoryArg);
-		String name = optionalString(nameArg);
-		String type = optionalString(typeArg);
-		String filename = type.isEmpty() ? name : name.isEmpty() ? "" : name + "." + type;
-		String out = directory + filename;
-		if (defaultsArg != null) {
-			out = mergePathnames(out, namestring(LispNames.MAKE_PATHNAME, defaultsArg));
+		Components defaults = defaultsArg == null ? new Components("", "", "")
+				: components(namestring(LispNames.MAKE_PATHNAME, defaultsArg));
+		String directory = directoryArg == null ? defaults.directory() : formatDirectory(directoryArg);
+		String name = nameArg == null ? defaults.name() : optionalString(nameArg);
+		String type = typeArg == null ? defaults.type() : optionalString(typeArg);
+		return directory + filename(name, type);
+	}
+
+	/**
+	 * The three namestring components CL's {@code make-pathname} defaults independently.
+	 * {@code directory} carries its trailing {@code /}; {@code name} and {@code type} are
+	 * the empty string when absent (rontolisp has no pathname type, so there is no
+	 * {@code nil} component to model).
+	 *
+	 * @param directory the directory prefix through the last {@code /}
+	 * @param name the file name without its type
+	 * @param type the file type (extension) without its dot
+	 */
+	record Components(String directory, String name, String type) {
+	}
+
+	/**
+	 * Splits a namestring into its directory / name / type components, following CL's
+	 * rule that the LAST dot separates the type and a dot at position 0 does not (so
+	 * {@code "d/a.b.c"} is name {@code "a.b"} type {@code "c"} and {@code "d/.a"} is name
+	 * {@code ".a"} with no type). Checked against SBCL's {@code pathname-name} /
+	 * {@code pathname-type} by {@code LispPreludeLibraryTest}.
+	 * @param namestring the namestring
+	 * @return its components
+	 */
+	static Components components(String namestring) {
+		Parts parts = split(namestring);
+		String file = parts.filename();
+		int dot = file.lastIndexOf('.');
+		if (dot <= 0) {
+			return new Components(parts.directory(), file, "");
 		}
-		return out;
+		return new Components(parts.directory(), file.substring(0, dot), file.substring(dot + 1));
+	}
+
+	/**
+	 * Recomposes a name and a type into the file part of a namestring: no type is the
+	 * name alone, and a type with no name is the dotted extension by itself (CL's
+	 * {@code #P".sql"}).
+	 * @param name the name component
+	 * @param type the type component
+	 * @return the file part
+	 */
+	static String filename(String name, String type) {
+		if (type.isEmpty()) {
+			return name;
+		}
+		return name + "." + type;
 	}
 
 	private record Parts(String directory, String filename) {

@@ -3865,6 +3865,14 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandStreamp(cons), env);
 			case LispNames.SIMPLE_STRING_P:
 				return eval(LispMacroExpander.expandSimpleStringP(cons), env);
+			// make-broadcast-stream goes through the SAME expansion the compile paths
+			// use, so the component form (a Gray output stream looping its components)
+			// exists on every backend from one definition. The component-less form
+			// expands to %make-string-output-stream, which is the very primitive the
+			// Java built-in below it calls -- that one stays only so
+			// #'make-broadcast-stream remains a value.
+			case LispNames.MAKE_BROADCAST_STREAM:
+				return eval(LispMacroExpander.expandMakeBroadcastStream(cons), env);
 			case LispNames.PROG2:
 				return eval(LispMacroExpander.expandProg2(cons), env);
 			case LispNames.PSETQ:

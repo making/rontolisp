@@ -140,6 +140,71 @@ class LispPreludeLibraryTest {
 	}
 
 	@Test
+	void thePreludeMakePathnameAgreesWithPathnameOps() {
+		// Same pinning as merge-pathnames above, for the pair that replaced .todo/222's
+		// compile-time-only make-pathname: the RUNTIME form is prelude Lisp (one
+		// definition, all four backends) and cli/CompileTimePathnameFolder still folds
+		// the literal shapes with PathnameOps.makePathname. Every case below was also
+		// checked against SBCL 2.2.9, which is why :defaults is component-wise and not a
+		// merge -- (:directory (:relative "m") :defaults "d/a.sql") is "m/b.sql", not
+		// "d/m/b.sql".
+		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		List<String> forms = List.of("(make-pathname :name \"b\" :defaults \"d/a.sql\")",
+				"(make-pathname :name \"b\" :type nil :defaults \"d/a.sql\")",
+				"(make-pathname :type \"txt\" :defaults \"d/a.sql\")",
+				"(make-pathname :name \"x.up\" :type \"sql\" :defaults \"db/migrations/\")",
+				"(make-pathname :name \"20260101.down\" :defaults \"db/migrations/20260101.up.sql\")",
+				"(make-pathname :name nil :type nil :defaults \"d/a.sql\")",
+				"(make-pathname :directory (list :relative \"m\") :name \"b\" :defaults \"d/a.sql\")",
+				"(make-pathname :name \"b\" :defaults \"d/a\")", "(make-pathname :defaults \"d/a.sql\")",
+				"(make-pathname :name \"b\" :type \"c\")",
+				"(make-pathname :directory (list :absolute \"u\" \"s\") :name \"b\" :type \"c\")",
+				"(make-pathname :directory (list :relative \"m\") :defaults \"d/a.sql\")");
+		for (String form : forms) {
+			LispCons call = (LispCons) LispReader.readFromString(form);
+			List<LispVal> args = new java.util.ArrayList<>(call.toList().subList(1, call.toList().size()));
+			// The folder sees literal arguments; the prelude sees evaluated ones. The
+			// only non-self-evaluating argument shape used above is the (list ...)
+			// directory, which evaluates to the same list the folder reads.
+			args.replaceAll(arg -> arg instanceof LispCons listCall && listCall.car() instanceof LispSymbol head
+					&& "LIST".equals(head.name()) ? listToQuotedList(listCall) : arg);
+			assertThat(evaluator.eval(LispReader.readFromString(form)).print()).as(form)
+				.isEqualTo("\"" + PathnameOps.makePathname(args) + "\"");
+		}
+	}
+
+	@Test
+	void thePreludePathnameSplitAgreesWithPathnameOps() {
+		// pathname-name / pathname-type read %pathname-split; PathnameOps.components is
+		// the Java twin make-pathname's :defaults handling uses. Both must implement the
+		// one CL rule (the LAST dot separates the type, a dot at position 0 does not) --
+		// the expectations are SBCL 2.2.9's answers.
+		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		for (String path : List.of("d/a.sql", "d/a", "d/.a", "d/a.b.c", "a.sql", ".sql", "d/")) {
+			PathnameOps.Components expected = PathnameOps.components(path);
+			assertThat(evaluator.eval(LispReader.readFromString("(pathname-name \"" + path + "\")")).print())
+				.as("(pathname-name %s)", path)
+				.isEqualTo(expected.name().isEmpty() ? "NIL" : "\"" + expected.name() + "\"");
+			assertThat(evaluator.eval(LispReader.readFromString("(pathname-type \"" + path + "\")")).print())
+				.as("(pathname-type %s)", path)
+				.isEqualTo(expected.type().isEmpty() ? "NIL" : "\"" + expected.type() + "\"");
+		}
+	}
+
+	/**
+	 * {@code (list :relative "m")} -> the LIST it evaluates to, which is the value
+	 * PathnameOps reads.
+	 */
+	private static LispVal listToQuotedList(LispCons listCall) {
+		List<LispVal> elements = listCall.toList();
+		LispVal data = am.ik.rontolisp.LispNil.INSTANCE;
+		for (int i = elements.size() - 1; i >= 1; i--) {
+			data = new LispCons(elements.get(i), data);
+		}
+		return data;
+	}
+
+	@Test
 	void anUnresolvableProgramStillGetsItsSplice() {
 		// A package error is not this pass's to report -- the compiler runs the identical
 		// resolution first thing -- so selection falls back to member-name matching.

@@ -11,6 +11,18 @@ everything. This is CL's answer, and it is what makes name surgery work: a
 library that does `(intern (concatenate 'string (symbol-name x) "-SUFFIX"))`
 under `(in-package p)` would otherwise re-qualify an already-qualified spelling
 into `P::P:X-SUFFIX` (ironclad's `optimized-maker-name`).
+**The CASE-folding designators are in that set too** — `string-upcase` /
+`string-downcase` / `string-capitalize` — and on the compiled backends they were
+NOT: their designator coercion dropped only a LEADING keyword colon, so
+`(string-downcase 'foo::test)` answered `"foo::test"` where `(string 'foo::test)`
+answered `"TEST"` and both the interpreter and SBCL answer `"test"`. Both
+compiled renderings now go through the same princ-spelling coercion the other
+designators use (`_lispToDisplayString` on the JVM, the last-colon scan in
+`WasmStringRuntimeBuilder.emitDesignatorContentRange` on WASM). The caller that
+surfaced it: sxql renders a column name with exactly that call, so mito's
+migration DDL came out as `CREATE TABLE t (mito.type::test ...)` on the compiled
+backends only. Pinned by the `symbol-runtime-api` ci-spec case (all four
+backends, SBCL-checked).
 
 **A "package" at runtime is the UPCASED canonical package name as a keyword** —
 there are no package objects, and `eq` compares symbols by content, so

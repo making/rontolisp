@@ -165,6 +165,15 @@ public final class LibraryDefunPruner {
 				collectReferences(resolved.get(i), prunable, roots);
 			}
 		}
+		// %make-broadcast-stream is reached from a call the expression compilers
+		// SYNTHESIZE
+		// (LispMacroExpander.expandMakeBroadcastStream's multi-argument branch), so the
+		// reference this walk looks for does not exist yet. Root it on the same surface
+		// form LispPreludeLibrary selects it by, or the tree-shaker drops the very entry
+		// that pass just spliced.
+		if (LispPreludeLibrary.referencedBySurfaceForm(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, resolved, true)) {
+			roots.add(LispNames.MAKE_BROADCAST_STREAM_INTERNAL);
+		}
 		for (String name : roots) {
 			if (live.add(name)) {
 				queue.add(name);

@@ -7,6 +7,30 @@ bilingual docs set)
 Part of the Mito milestone `.todo/238` — the closing unit. Blocked by
 `.todo/249`.
 
+## Already done by `.todo/249` (2026-08-03) — do not redo
+
+- The workflow itself runs on all three in-scope backends (see `.kb/mito.md`);
+  what is missing is the AUTOMATED harness, not the capability.
+- The per-operator doc pages for the built-ins the workflow needed
+  (`pathname-name`, `pathname-type`, `namestring`, `delete-file`, `y-or-n-p`,
+  `uiop:read-file-string`, `make-pathname`, and the changed `pathnamep` /
+  `make-broadcast-stream` / `uiop:directory-files`) are written in both
+  languages. What is left here is the mito/sxql LIBRARY pages and the
+  `doc/{en,ja}/guides/asdf-systems.md` row.
+- ci-spec gained `pathname-family-and-broadcast-streams`,
+  `clos-call-next-method-optional-and-meet-branch` and the case-designator lines
+  of `symbol-runtime-api` — all four backends. The sxql `yield` pins from
+  `.todo/244` still need verifying under the native driver here.
+- **The E2E harness MUST create its container with
+  `POSTGRES_HOST_AUTH_METHOD=trust` (or `md5`)**: a scram-sha-256 connect costs
+  ~60 s here and races PostgreSQL's 60 s `authentication_timeout`, surfacing as
+  `Database error: end of file`. Reason and the fix path: `.todo/253`.
+- Known-failing shapes to keep OUT of the E2E assertions (all upstream defects,
+  reproduced identically by SBCL — `.kb/mito.md`): bare `:references` without a
+  `:col-type`, and `migrate-table` adding a NOT NULL column that has an
+  `:initform` (sxql loses the bind; `(let ((sxql:*use-placeholder* nil)) ...)`
+  is the workaround on both engines).
+
 ## E2E test
 
 `MitoE2eTest`, opt-in via `RONTOLISP_POSTGRES_E2E=1` (reuse the existing

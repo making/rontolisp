@@ -28,31 +28,36 @@ public final class AsdOverrides {
 	 * The {@code .asd} file name (as computed from the primary system name by
 	 * {@code locate}) to the classpath resource holding the replacement source.
 	 */
-	private static final Map<String, String> RESOURCES = Map.of("ironclad.asd", "ironclad-slice.asd",
+	private static final Map<String, String> RESOURCES = Map.ofEntries(Map.entry("ironclad.asd", "ironclad-slice.asd"),
 			// Not unparseable but UNDER-DECLARED: sql-string.lisp needs alexandria and
 			// data-types.lisp needs cl-ppcre, neither in the upstream :depends-on (a
 			// full CL image nearly always has them loaded already). The replacement
 			// declares the true set so one (ql:quickload "cl-postgres") resolves on
 			// the eagerly-resolving compile paths too.
-			"cl-postgres.asd", "cl-postgres-deps.asd",
+			Map.entry("cl-postgres.asd", "cl-postgres-deps.asd"),
 			// Unparseable AND under-declared: a top-level eval-when pushes the
 			// :postmodern-thread-safe / :postmodern-use-mop features per
 			// implementation. The replacement takes both decisions statically (a
 			// *features* push would be invisible to the reader anyway) and declares
 			// cl-ppcre + uax-15, which the sources call but the .asd never names.
-			"postmodern.asd", "postmodern-deps.asd",
+			Map.entry("postmodern.asd", "postmodern-deps.asd"),
 			// Not unparseable but re-routed: upstream depends on trivia.balland2006
 			// (the match-clause OPTIMIZER), which needs iterate + type-i -- a large
 			// substrate investment buying zero semantics. The replacement maps the
 			// system to trivia.trivial, upstream's own sanctioned base system.
 			// Re-evaluation trigger in the replacement source and .kb/asdf.md.
-			"trivia.asd", "trivia-trivial.asd",
+			Map.entry("trivia.asd", "trivia-trivial.asd"),
 			// Not unparseable but MIS-DECIDED here: upstream selects its cache
 			// (per-thread vs single) from a thread-capability feature expression that
 			// can never match rontolisp's feature set, so the verbatim parse picks the
 			// single-threaded cache on backends that really run concurrent handlers.
 			// The replacement takes the decision per backend; reasons in the file.
-			"dbi.asd", "dbi-deps.asd");
+			Map.entry("dbi.asd", "dbi-deps.asd"),
+			// Not unparseable but OVER-SCOPED: the only consumer in any supported
+			// closure is mito-migration's advisory-lock id, which needs the three
+			// crc32 entry points and nothing else. The replacement declares just
+			// package.lisp + crc32.lisp; the inflate/bzip2 decompressor stays out.
+			Map.entry("chipz.asd", "chipz-crc32-slice.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

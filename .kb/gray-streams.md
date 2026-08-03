@@ -115,6 +115,16 @@ walk has no position awareness: (1) a lambda-list keyword is never a stream arg
 as a call (`rewriteTail` — `(error 'ty :format-control format
 :format-arguments args)` has a tail whose car is `format`).
 
+**A BINDING form's structural position is not a call.** The rewrite walker skips
+the lambda list of `lambda`/`defun`/`defmacro`/`defmethod`/`destructuring-bind`
+and the variable half of a `let`/`let*`/`flet`/`labels`/`macrolet` binding
+(`rewriteBindingForm`). Without that, cl-postgres' `messages.lisp:218`
+`(flet ((set-param (format size value) ...)))` had its PARAMETER LIST rewritten
+as a `format` call -- the rewrite runs over the WHOLE program whenever any of it
+uses the protocol, so the failure was "Parameter must be a symbol" in an
+unrelated library. Latent until todo-249 made a mito program trigger the splice
+across cl-postgres.
+
 **Limits**: `stream-unread-char` has no dispatching built-in and `peek-char`
 does not dispatch. `listen` on a Gray instance works interpreter/JVM; Preview 1
 WASM rejects ANY `listen` at compile time (pre-existing platform limit, Gray
@@ -129,6 +139,34 @@ honored on BOTH seams (the rewrite and `evalSequenceWithGrayDispatch` route to
 the same sequence dispatch helper). A runtime-nil `format` destination used to
 write like a designator instead of returning the string; that divergence is
 RETIRED (see the run-time test in the rewrite above).
+
+## `make-broadcast-stream` is a Gray stream (todo-249)
+
+CL's broadcast stream -- writes fanning out to several components -- is not a
+new stream KIND in any runtime: it is prelude Lisp
+(`LispPreludeLibrary.MAKE_BROADCAST_STREAM`) defining a
+`rontolisp:fundamental-character-output-stream` subclass whose
+`stream-write-char` / `stream-write-string` methods loop the components. The
+dispatch above carries it, so ONE definition serves all four backends and the
+Java built-in the interpreter used to have (a StringWriter, zero-argument shape
+only) is gone.
+
+The consequence is worth stating plainly, because it is the price of the design:
+**a broadcast stream with components is a Gray stream, so exactly the operators
+that dispatch on one work with it** -- `format`, `princ`, `write-string`,
+`write-char`. `terpri` / `fresh-line` / `write-line` / `force-output` /
+`finish-output` / `print` / `close` are not part of the protocol here and signal
+on ANY Gray stream, broadcast or not (see Limits above); that is a pre-existing
+protocol boundary this feature inherits rather than one it introduces.
+Widening the protocol to those five is the re-evaluation trigger: do it and
+broadcast streams gain them for free.
+
+A component-LESS `(make-broadcast-stream)` is unchanged -- the same discarding
+`%make-string-output-stream` handle it always returned -- but note it now rides
+the same prelude entry, so a program that uses only the sink also carries
+gray.lisp. That was the deliberate trade against a second, arity-selected
+lowering; the driver was mito's `generate-migrations`, which echoes its DDL to
+`*standard-output*` and the migration file at once.
 
 Pinning tests: `LispEvaluatorTest#grayStreamInstanceReceivesWriteCharAndWriteString`
 (shim), `#grayBaseClassSuperclassLoadsGrayStreamsEagerly` (bare protocol),

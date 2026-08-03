@@ -1,69 +1,67 @@
 # 222. `make-pathname` has no runtime form on the compile paths
 
-## Problem
+Difficulty: Low (what is left is ONE gap, and it is not about pathnames)
 
-`make-pathname` exists only as a COMPILE-TIME fold (`cli/CompileTimePathnameFolder`,
-which reduces the literal-keyword shapes to a namestring) plus a real interpreter
-function. On the JVM and both WASM backends a call the folder cannot reduce
-compiles to a call-time error, with
+## Status (2026-08-03, done inside `.todo/249`)
+
+**Items 1-4 are DONE.** `make-pathname` is prelude Lisp
+(`LispPreludeLibrary.MAKE_PATHNAME`) on top of the shared `%pathname-split`
+rule, so the shapes the folder declines -- a computed `:defaults` or `:name` --
+run on all four backends instead of compiling to a call-time error. The Java
+`Environment` entry is gone (one definition, four backends); the compile-time
+fold stays, and `LispPreludeLibraryTest#thePreludeMakePathnameAgreesWithPathnameOps`
+pins the two renderings against each other, SBCL-checked. `pathname-name` and
+`pathname-type` landed with it (item 4), plus `namestring`; details and the two
+load-bearing rules are in `.kb/directory-listing.md`.
+
+Two corrections came out of that work and are recorded there and in
+`.kb/declarations-type-checks.md`:
+
+- `:defaults` defaults COMPONENT-WISE and is not a merge (the first cut dropped
+  the defaults' TYPE whenever only `:name` was supplied).
+- `pathname` stopped being an EMPTY type -- a namestring IS a pathname here --
+  with a yield rule so a `typecase` that also has a catch-all still
+  discriminates a path from string CONTENT.
+
+## What is left: item 5, and it is NOT a pathname problem
+
+The E2E this todo named -- the ZERO-argument
+`(local-time:reread-timezone-repository)` -- still works on the interpreter only.
+Verified 2026-08-03 with the runtime `make-pathname` in place:
 
 ```
-warning: the function MAKE-PATHNAME is undefined; compiled as a call-time error
+interpreter: *default-timezone-repository-path*
+             = ".../local-time-20260101-git/zoneinfo/"   -> Asia/Tokyo resolves
+JVM:         = NIL -> "The value of TIMEZONE-REPOSITORY is NIL,
+                       which is not of type (OR PATHNAME STRING)"
 ```
 
-The folder cannot reduce a call whose `:defaults` is a runtime value -- a local
-variable, a `flet` parameter, anything computed. That is not a rare shape: it is
-what a library does when it builds a path from something it just looked up.
-
-## Why it matters (the caller that surfaced it)
-
-local-time computes `*default-timezone-repository-path*` at load time from the
-system's own source directory:
+`make-pathname` is no longer the reason. local-time computes the defvar
+(`src/local-time.lisp:100-116`) from
 
 ```lisp
-(flet ((try (project-home-directory)
-         (when project-home-directory
-           (ignore-errors
-             (truename
-               (merge-pathnames "zoneinfo/"
-                                (make-pathname :name nil :type nil
-                                               :defaults project-home-directory)))))))
-  ...)
+(when (find-package "ASDF")
+  (eval (read-from-string
+          "(let ((system (asdf:find-system :local-time nil)))
+             (when system (asdf:component-pathname system)))")))
 ```
 
-`project-home-directory` is a `flet` parameter, so the fold declines, the call
-signals, `ignore-errors` swallows it and the defvar ends up `nil`. The
-consequence is visible since the directory-listing work landed (`.todo/221`,
-`.kb/directory-listing.md`): `(local-time:reread-timezone-repository)` now walks
-the bundled `zoneinfo/` tree and resolves `"Asia/Tokyo"` on ALL FOUR backends --
-but on the three compiled ones only when the caller passes the repository
-explicitly:
+with `#.(or *compile-file-truename* '*load-truename*)` as the fallback. On the
+compile paths BOTH are empty: there is no ASDF system registry at run time in a
+compiled artifact (the systems are a compile-time notion, `.kb/asdf.md`), and
+`*load-truename*` is nil because the load was inlined away.
 
-```lisp
-(local-time:reread-timezone-repository :timezone-repository "zoneinfo/")
-```
+So item 5 is really "an artifact cannot ask ASDF where its system's source
+directory was". The honest options, in order of preference:
 
-The zero-argument call, which is the one every program actually writes, works
-only on the interpreter. Documented in `doc/{en,ja}/guides/asdf-systems.md`.
+1. Have `LoadInliner` FOLD the `(asdf:component-pathname (asdf:find-system ...))`
+   shape the way `CompileTimePathnameFolder` already folds
+   `asdf:system-source-directory` -- it declines here only because the call is
+   wrapped in `(eval (read-from-string "..."))`. Folding through a literal
+   `read-from-string` + `eval` of a constant string is the narrow, checkable fix.
+2. Or bind `*load-truename*` at compile time to the inlined file's namestring,
+   which is what the `#.` fallback wants.
 
-## What to do if picked up
-
-1. Decide the SURFACE first. A rontolisp pathname IS its namestring, so a runtime
-   `make-pathname` is pure string assembly over `:directory` / `:name` /
-   `:type` / `:defaults` -- the same rule `PathnameOps.makePathname` already
-   implements for the folder. The obvious move is to make that ONE rule reachable
-   at run time on every backend rather than write a second one.
-2. Prefer prelude Lisp (`LispPreludeLibrary`) over four Java runtimes, the way
-   the `.todo/221` family went: `merge-pathnames`, `pathname-directory`,
-   `directory` and the `uiop:` walkers are all one Lisp definition each, and
-   `LispPreludeLibraryTest#thePreludeMergePathnamesAgreesWithPathnameOps` is the
-   existing pattern for pinning a Lisp rendering against the Java one.
-   `make-pathname` takes keywords, which the prelude already handles
-   (`&key` desugars on every backend).
-3. Keep the compile-time fold. It is what makes an ASDF-located data directory a
-   literal in the emitted artifact; the runtime form is the fallback for the
-   shapes it declines, not a replacement.
-4. `pathname-name` / `pathname-type` are the natural siblings and are likewise
-   absent; `pathname-directory` landed with `.todo/221`.
-5. Then the zero-argument `(local-time:reread-timezone-repository)` is the E2E
-   case, and the `asdf-systems.md` caveat comes out.
+Until one of them lands, the caveat in `doc/{en,ja}/guides/asdf-systems.md`
+stays: on the compiled backends pass the repository explicitly,
+`(local-time:reread-timezone-repository :timezone-repository "zoneinfo/")`.

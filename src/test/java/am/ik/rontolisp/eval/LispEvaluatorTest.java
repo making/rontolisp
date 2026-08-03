@@ -5552,7 +5552,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
 			.isSorted()
-			.hasSize(382);
+			.hasSize(387);
 	}
 
 	@Test

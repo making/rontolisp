@@ -1613,10 +1613,16 @@ final class WasmStringRuntimeBuilder {
 	// indices into arrLocal, the value's $str_bytes) of the value at the given param
 	// local, so the case functions accept a symbol/keyword as well as a string (CL
 	// string-designator coercion). A real string ({@code "abc"}) uses the range between
-	// its surrounding quotes ([1, len-1)); a symbol (bare name, no quotes) uses its whole
-	// name minus a leading keyword colon ([0 or 1, len)). Either way the build core
-	// re-wraps the copied content in quotes, yielding a proper string. fbLocal is scratch
-	// for the first content byte. The length is still read from the struct (field 1).
+	// its surrounding quotes ([1, len-1)); a symbol (a bare, RESOLVED spelling with no
+	// quotes) uses everything after its LAST colon, which is the same "princ spelling"
+	// rule symbol-name and string already use (_princ_to_str). Dropping only a LEADING
+	// colon was not enough: a package-qualified symbol kept its qualifier, so
+	// (string-downcase 'foo::test) answered "foo::test" on the compiled backends where
+	// the interpreter and SBCL answer "test" -- and sxql renders a column name with
+	// exactly that call, which put mito.type::test into mito's migration DDL. Either way
+	// the build core re-wraps the copied content in quotes, yielding a proper string.
+	// fbLocal is scratch: first the leading byte, then the scan index. The length is
+	// still read from the struct (field 1).
 	private static void emitDesignatorContentRange(WasmWriter w, int paramLocal, int arrLocal, int posLocal,
 			int endLocal, int fbLocal) {
 		// fbLocal := arr[0] (the first byte)
@@ -1638,18 +1644,36 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.I32_SUB);
 		set(w, endLocal);
 		w.write(Instruction.ELSE);
-		// Symbol: pos = 0, or 1 to drop a leading keyword colon; end = len.
+		// Symbol: end = len; pos = (index of the LAST colon) + 1, i.e. 0 when the name
+		// carries no package qualifier and no keyword colon.
+		emitStrLen(w, paramLocal);
+		set(w, endLocal);
 		i32(w, 0);
 		set(w, posLocal);
+		i32(w, 0);
+		set(w, fbLocal);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
 		get(w, fbLocal);
+		get(w, endLocal);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, arrLocal, fbLocal);
 		i32(w, COLON);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
+		get(w, fbLocal);
 		i32(w, 1);
+		w.write(Instruction.I32_ADD);
 		set(w, posLocal);
 		w.write(Instruction.END);
-		emitStrLen(w, paramLocal);
-		set(w, endLocal);
+		get(w, fbLocal);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, fbLocal);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 	}
 

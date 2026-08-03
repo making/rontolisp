@@ -1569,7 +1569,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		final JvmIoRuntimeBuilder.FileMeta fileMeta = new JvmIoRuntimeBuilder.FileMeta(
 				programUsesSymbol(program, LispNames.FILE_WRITE_DATE),
 				programUsesSymbol(program, LispNames.MAKE_DIRECTORIES),
-				programUsesSymbol(program, LispNames.FILE_LENGTH));
+				programUsesSymbol(program, LispNames.FILE_LENGTH),
+				programUsesSymbol(program, LispNames.DELETE_FILE_INTERNAL));
 		List<JvmIoRuntimeBuilder.IoMethod> ioMethods = JvmIoRuntimeBuilder
 			.create(cp, thisClass, objectClass, stringClass, longClass, longValueOf, longValue, stringLengthForIo,
 					stringSubstring, stringConcat, systemOut, printlnStr, readLineHelperMethod, socketRuntime,

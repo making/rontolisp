@@ -1429,7 +1429,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      382
+      387
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -4059,6 +4059,95 @@ cases:
     expected: |
       (:AROUND :DONE T)
       (:BEFORE-DOG :BEFORE-ANIMAL :PRIMARY-DOG :PRIMARY-ANIMAL :AFTER-ANIMAL :AFTER-DOG)
+  - name: pathname-family-and-broadcast-streams
+    source: |
+      ;; The pathname DECOMPOSITION rule: the LAST dot separates the type, and a
+      ;; dot at position 0 does not. One rendering (%pathname-split) is read by
+      ;; pathname-name, pathname-type AND make-pathname's :defaults defaulting.
+      (print (mapcar #'pathname-name (list "d/a.sql" "d/a" "d/.a" "d/a.b.c" "a.sql" ".sql" "d/")))
+      (print (mapcar #'pathname-type (list "d/a.sql" "d/a" "d/.a" "d/a.b.c" "a.sql" ".sql" "d/")))
+      ;; make-pathname at RUN time (.todo/222): a computed :name and :defaults is
+      ;; the shape the compile-time folder declines. :defaults defaults
+      ;; COMPONENT-WISE, so the "sql" type survives a :name-only call.
+      (defun pn-down (up) (make-pathname :name (concatenate 'string (pathname-name up) ".down") :defaults up))
+      (print (pn-down "db/migrations/20260101.up.sql"))
+      (print (make-pathname :directory (list :absolute "u" "s") :name "b" :type "c"))
+      ;; A rontolisp pathname IS its namestring, so a string is one -- but a
+      ;; typecase that also has a catch-all is discriminating a path from string
+      ;; CONTENT, and there the pathname clause yields.
+      (print (list (pathnamep "/tmp/x") (pathnamep 1) (typep "/tmp/x" 'pathname)))
+      (print (etypecase "a.sql" (null :none) (pathname :path)))
+      (print (typecase "text" (pathname :path) (t :content)))
+      (print (namestring "d/x"))
+      ;; make-broadcast-stream WITH components: a Gray output stream looping them.
+      (let* ((s (make-string-output-stream))
+             (b (make-broadcast-stream *standard-output* s)))
+        (format b "fan~A~%" 1)
+        (write-string "out
+      " b)
+        (print (get-output-stream-string s)))
+      ;; and with NO components: the discarding sink handle, unchanged.
+      (print (typep (make-broadcast-stream) 'integer))
+    expected: |
+      ("a" "a" ".a" "a.b" "a" ".sql" NIL)
+      ("sql" NIL NIL "c" "sql" NIL NIL)
+      "db/migrations/20260101.up.down.sql"
+      "/u/s/b.c"
+      (T NIL T)
+      :PATH
+      :CONTENT
+      "d/x"
+      fan1
+      out
+      "fan1
+      out
+      "
+      T
+  - name: clos-call-next-method-optional-and-meet-branch
+    source: |
+      ;; (1) a bare call-next-method forwards the &optional section too: &rest
+      ;; binds what is left AFTER the optionals, so forwarding it alone dropped
+      ;; them (cl-dbi's (do-sql conn sql &optional params) reached its driver
+      ;; method with params NIL and sent a raw ? to PostgreSQL).
+      (defclass cnm-base () ())
+      (defclass cnm-sub (cnm-base) ())
+      (defgeneric cnm-g (x &optional p))
+      (defmethod cnm-g ((x cnm-base) &optional p) (list :base p))
+      (defmethod cnm-g ((x cnm-sub) &optional p) (list :sub p (call-next-method)))
+      (print (cnm-g (make-instance 'cnm-sub) 42))
+      (print (cnm-g (make-instance 'cnm-sub)))
+      (defgeneric cnm-h (c s &optional p)
+        (:method ((c cnm-base) s &optional p) (list :primary s p))
+        (:method :around ((c cnm-base) s &optional p) (call-next-method)))
+      (print (cnm-h (make-instance 'cnm-base) "x" 1))
+      (defgeneric cnm-k (x &optional p &rest r))
+      (defmethod cnm-k ((x cnm-base) &optional p &rest r) (list :base p r))
+      (defmethod cnm-k ((x cnm-sub) &optional p &rest r) (list :sub p r (call-next-method)))
+      (print (cnm-k (make-instance 'cnm-sub) 1 2 3))
+      ;; (2) a MEET branch: two specializer vectors neither of which applies to
+      ;; the other. Without a branch for (cnm-sub, string) the coarser
+      ;; (cnm-sub, DEFAULT) branch dropped the (cnm-base, string) primary and
+      ;; call-next-method had no next method.
+      (defgeneric cnm-m (x s)
+        (:method ((x cnm-base) (s string)) (list :base-string s))
+        (:method ((x cnm-sub) s) (cons :sub (if (next-method-p) (call-next-method) (list :none))))
+        (:method :before ((x cnm-base) (s string)) (print :before-base-string))
+        (:method :after ((x cnm-sub) s) (print :after-sub)))
+      (print (cnm-m (make-instance 'cnm-sub) "q"))
+      (print (cnm-m (make-instance 'cnm-sub) 7))
+      (print (cnm-m (make-instance 'cnm-base) "q"))
+    expected: |
+      (:SUB 42 (:BASE 42))
+      (:SUB NIL (:BASE NIL))
+      (:PRIMARY "x" 1)
+      (:SUB 1 (2 3) (:BASE 1 (2 3)))
+      :BEFORE-BASE-STRING
+      :AFTER-SUB
+      (:SUB :BASE-STRING "q")
+      :AFTER-SUB
+      (:SUB :NONE)
+      :BEFORE-BASE-STRING
+      (:BASE-STRING "q")
   - name: clos-unbound-slots-shadowing-change-class-and-print-object
     source: |
       (defclass clos-u-base ()
@@ -4732,6 +4821,16 @@ cases:
       (print (string 'sym-api-sym))
       (print (string #\z))
       (print (mapcar #'string '(a b)))
+      ;; The case-folding designators must strip the package qualifier exactly as
+      ;; string / symbol-name do -- the compiled backends used to drop only a
+      ;; LEADING keyword colon, so (string-downcase 'pkg::test) kept "pkg::".
+      ;; sxql renders a column name with that call (mito's migration DDL).
+      (defpackage :sym-api-other (:use :cl))
+      (print (list (string-downcase 'sym-api-other::test)
+                   (string-upcase 'sym-api-other::test)
+                   (string-capitalize 'sym-api-other::test)
+                   (string-downcase :sym-api-kw)
+                   (string-downcase "AbC")))
     expected: |
       "FOO"
       "BAR"
@@ -4759,6 +4858,7 @@ cases:
       "SYM-API-SYM"
       "z"
       ("A" "B")
+      ("test" "TEST" "Test" "sym-api-kw" "abc")
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))
@@ -5380,7 +5480,7 @@ cases:
       (print (char-name (code-char 1)))
       (defun lbr-double (x) (* x 2))
       (print (funcall (fdefinition 'lbr-double) 21))
-      (print (list (file-position t) (file-length t) (pathnamep "/tmp/x")))
+      (print (list (file-position t) (file-length t) (pathnamep "/tmp/x") (pathnamep 1)))
       (print (list (input-stream-p t) (output-stream-p (make-broadcast-stream)) (input-stream-p "s")))
       (print (stream-element-type t))
       ;; class-of = the metaobject view (eq to find-class); %class-designator
@@ -5408,7 +5508,7 @@ cases:
       "Space"
       "U+0001"
       42
-      (NIL NIL NIL)
+      (NIL NIL T NIL)
       (T T NIL)
       CHARACTER
       (INTEGER STRING NULL BOOLEAN)

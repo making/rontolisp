@@ -153,10 +153,12 @@ public final class PackageRegistry {
 			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
 			LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE, LispNames.CELL_ERROR_NAME,
 			LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME, LispNames.MERGE_PATHNAMES, LispNames.TRUENAME,
-			LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE,
-			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME, LispNames.TYPE_OF,
-			LispNames.INVOKE_RESTART, LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME,
-			LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
+			LispNames.PATHNAME_NAME, LispNames.PATHNAME_TYPE, LispNames.DELETE_FILE, LispNames.Y_OR_N_P,
+			LispNames.NAMESTRING_CL, LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER,
+			LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME,
+			LispNames.TYPE_OF, LispNames.INVOKE_RESTART, LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS,
+			LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE,
+			LispNames.STORE_VALUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -233,8 +235,11 @@ public final class PackageRegistry {
 			LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P, LispNames.OBJ_SLOTS,
 			LispNames.RUN_HANDLERS_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR,
 			LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY, LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH,
-			LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS, LispNames.MAKE_DIRECTORIES,
-			LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL);
+			LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS, LispNames.MAKE_DIRECTORIES, LispNames.PATHNAME_SPLIT,
+			LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.BROADCAST_STREAM_CLASS,
+			LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.PATHNAME_DIRECTORY_STRING,
+			LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL, LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
+			LispNames.FENV_FUNCTION_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -511,7 +516,7 @@ public final class PackageRegistry {
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
 				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.SPLIT_STRING, LispNames.DIRECTORY_EXISTS_P,
 				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES,
-				LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE,
+				LispNames.READ_FILE_STRING, LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE,
 				// define-package is external in real uiop too; a literal top-level call
 				// is consumed by PackageResolver.resolve like defpackage (dbi's package
 				// headers spell it uiop:define-package).
@@ -521,8 +526,12 @@ public final class PackageRegistry {
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by
 		// the resolver's tolerance for an unknown :: member.
 		uiopSymbols.add(LispNames.GET_PATHNAME_DEFAULTS);
+		// namestring is IMPORTED from cl rather than owned: real UIOP re-exports CL's,
+		// rontolisp's cl:namestring is a real prelude function, and two same-member
+		// symbols would be two functions of which only one is defined.
 		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, Set.copyOf(uiopExternals),
-				Map.of(LispNames.PRINT_CONDITION_BACKTRACE, LispNames.UIOP_IMAGE_PKG)));
+				Map.of(LispNames.PRINT_CONDITION_BACKTRACE, LispNames.UIOP_IMAGE_PKG, LispNames.NAMESTRING,
+						LispNames.CL_PKG)));
 		// The dependency-shim packages behind the built-in ASDF systems of the same
 		// names (see eval.ShimLibraries): closer-mop (nickname c2mop),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and

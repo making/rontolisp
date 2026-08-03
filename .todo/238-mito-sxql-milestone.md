@@ -92,12 +92,33 @@ Library chain (each blocked by the listed units):
 10. `.todo/247` uuid + mito-core DAO round trip — 高 — needs 241, 243, 244,
     245, 246
 11. `.todo/249` mito-migration + chipz slice + full `mito` + lack-middleware-mito
-    — 中〜高 — needs 247, 248
+    — 中〜高 — needs 247, 248 — **DONE 2026-08-03**
 12. `.todo/250` MitoE2eTest + docs — 中 — needs 249
 
 Interpreter leg lands first inside each unit, but a unit is DONE only when the
 JVM and component legs are green too (or the divergence is recorded with its
 reason + re-evaluation trigger in `.kb`).
+
+## Status after `.todo/249` (2026-08-03)
+
+`(ql:quickload "mito")` loads the FULL system and the migration workflow runs on
+the interpreter, the JVM and the WASM component against a live PostgreSQL:
+`deftable` -> `ensure-table-exists` -> redefine -> `migration-expressions` ->
+`migrate-table` -> clean re-run, `generate-migrations` -> `migration-status` ->
+`migrate` (esrap re-reading the generated `.sql`), plus `lack-middleware-mito`
+inside a `lack:builder` app. `.kb/mito.md` is the topic file: the chipz CRC32
+slice, the `generate-migrations` filesystem scoping (interpreter+JVM), the three
+UPSTREAM defects reproduced faithfully, and the SCRAM caveat every DB E2E needs.
+
+Getting there closed `.todo/222`'s core (a runtime `make-pathname`) and fixed
+four rontolisp defects the mito path was the first to reach, each SBCL-checked
+and each owned by its own `.kb` file: two CLOS dispatch bugs (`call-next-method`
+dropping `&optional`; no dispatch branch for the MEET of two incomparable
+specializer vectors), the case-folding string designators keeping a package
+qualifier on the compiled backends, and the Gray-streams rewrite treating a
+binding form's lambda list as a call. Follow-ups: `.todo/251` (DAO accessors,
+relational `:col-type`), `.todo/252` (Gray output protocol), `.todo/253` (SCRAM
+cost, cached-connection lifetime).
 
 ## Acceptance (interpreter + JVM + WASM component; P1 = out of scope)
 

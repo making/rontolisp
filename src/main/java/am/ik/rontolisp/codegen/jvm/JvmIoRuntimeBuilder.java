@@ -99,6 +99,13 @@ final class JvmIoRuntimeBuilder {
 	static final String MAKE_DIRECTORIES_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
+	 * {@code %delete-file}: the other write-side sibling; null when nothing was removed.
+	 */
+	static final String DELETE_FILE_METHOD = "_deleteFile";
+
+	static final String DELETE_FILE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
 	 * {@code file-length}: the byte length of the file behind a FILE stream, read off the
 	 * {@link #STREAM_PATHS_FIELD} table; null for every other stream kind.
 	 */
@@ -371,6 +378,8 @@ final class JvmIoRuntimeBuilder {
 
 	@Nullable private final MethodrefConstant fileMkdirs;
 
+	@Nullable private final MethodrefConstant fileDelete;
+
 	@Nullable private final MethodrefConstant fileLengthRef;
 
 	@Nullable private final FieldrefConstant streamPathsField;
@@ -568,6 +577,8 @@ final class JvmIoRuntimeBuilder {
 				: null;
 		this.fileMkdirs = fileMeta.makeDirectories()
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("mkdirs"), cp.addUtf8("()Z"))) : null;
+		this.fileDelete = fileMeta.deleteFile()
+				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("delete"), cp.addUtf8("()Z"))) : null;
 		this.fileLengthRef = fileMeta.fileLength()
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))) : null;
 		this.streamPathsField = fileMeta.fileLength() ? cp.addFieldref(thisClass,
@@ -587,10 +598,11 @@ final class JvmIoRuntimeBuilder {
 	 * @param writeDate whether {@code file-write-date} is called
 	 * @param makeDirectories whether {@code %make-directories} is called
 	 * @param fileLength whether {@code file-length} is called
+	 * @param deleteFile whether {@code %delete-file} is called
 	 */
-	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength) {
+	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false);
 
 	}
 
@@ -663,6 +675,10 @@ final class JvmIoRuntimeBuilder {
 		if (this.fileMeta.makeDirectories()) {
 			ms.add(new IoMethod(this.cp.addUtf8(MAKE_DIRECTORIES_METHOD), this.cp.addUtf8(MAKE_DIRECTORIES_DESC), 4, 2,
 					buildMakeDirectories()));
+		}
+		if (this.fileMeta.deleteFile()) {
+			ms.add(new IoMethod(this.cp.addUtf8(DELETE_FILE_METHOD), this.cp.addUtf8(DELETE_FILE_DESC), 4, 2,
+					buildDeleteFile()));
 		}
 		if (this.fileMeta.fileLength()) {
 			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC), 4, 4,
@@ -1326,6 +1342,34 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, Objects.requireNonNull(this.fileMkdirs).index());
 		code.add(Opcode.POP);
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _deleteFile(Object path) -> "T" | null}. Removes the named file, answering
+	 * null when there was nothing to remove or the host refused -- the "a missing file is
+	 * a file-error" decision belongs to the Lisp {@code delete-file} above it, not here.
+	 */
+	private List<Integer> buildDeleteFile() {
+		// Slots: 0=path (Object), 1=p (String)
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_1, Opcode.ALOAD_1);
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, Objects.requireNonNull(this.fileDelete).index());
+		int ifDeletedPos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifDeletedPos, code.size());
 		emitLdc(code, this.tStr.index());
 		code.add(Opcode.ARETURN);
 		return code;

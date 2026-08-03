@@ -57,6 +57,7 @@ page.
 | `string-left-trim` | `(string-left-trim "x" "xxhi")` | `"hi"` |
 | `string-right-trim` | `(string-right-trim "x" "hixx")` | `"hi"` |
 | `read-line` | `(read-line)`, `(read-line stream)` | Read one line from stdin (or from an input stream), return as string. `nil` on EOF |
+| `y-or-n-p` | `(y-or-n-p "Delete ~A?" f)` | Print the optional `format` control plus `" (y or n) "`, read a LINE from stdin, and answer `t` for `y`/`Y`, `nil` for `n`/`N`, re-asking otherwise. Lite: CL reads single characters without echo, and end of input answers `nil` |
 | `peek-char` | `(peek-char nil s)`, `(peek-char t s)`, `(peek-char #\; s)` | The next character of a stream WITHOUT consuming it. `peek-type` `nil` skips nothing, `t` skips whitespace, a character skips up to that character; the character returned is left in the stream. At EOF, signal `end-of-file`, or return `eof-value` when `eof-error-p` is `nil` |
 | `open` | `(open "f.txt")`, `(open "f.txt" :output)`, `(open "f.bin" :input '(unsigned-byte 8))` | Open a file and return a stream. The direction must be the literal `:input` (default, read) or `:output` (create/truncate, write); the optional element type must be the literal `'character` (default, text) or `'(unsigned-byte 8)` (binary) |
 | `close` | `(close stream)` | Close a stream opened by `open`. Returns `t` |
@@ -64,6 +65,10 @@ page.
 | `truename` | `(truename "f.txt")` | The pathname when the file exists, an error otherwise — the signalling twin of `probe-file`, which is what makes `(ignore-errors (truename p))` a portable existence probe |
 | `directory` | `(directory "src/*.lisp")` | The pathnames matching the pathspec, sorted, keeping its directory prefix and giving each subdirectory a trailing `/`. A wild NAME component matches (`*` any sequence, `?` one character, `*` alone meaning "no type" as in CL); a non-wild one designates itself, so listing a directory is `"src/*.*"`, not `"src/"`. Directory components are never wild |
 | `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — the directory component of a namestring as CL's list (`:absolute`/`:relative` plus one string per level), `nil` when there is none. Pure string work; nothing is read |
+| `pathname-name` | `(pathname-name "d/a.b.c")` | `"a.b"` — the file-name component without its type: everything after the last `/` and before the LAST dot (a dot at position 0 belongs to the name). `nil` when the namestring names no file |
+| `pathname-type` | `(pathname-type "d/a.b.c")` | `"c"` — the type (extension) without its dot, `nil` when there is none. The other half of the same split |
+| `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `"d/b.sql"` — composes a namestring from `:directory`/`:name`/`:type`, taking every UNSUPPLIED component from `:defaults`. Component-wise, NOT a merge: a supplied component replaces the defaults' one and an explicit `nil` means "no component". A real function on all four backends; literal calls are additionally folded at compile time |
+| `namestring` | `(namestring "/tmp/x")` | the namestring of a pathname — the identity on a string, since a pathname IS its namestring here; anything else signals. `uiop:namestring` is the same function |
 | `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | Fills the gaps in the first namestring from the second: an absolute directory wins, a relative one is appended, an absent one is taken from the defaults. `uiop:merge-pathnames*` is the same merge |
 | `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
@@ -315,11 +320,12 @@ page.
 | `file-length` | `(file-length s)` | the byte length of the file a file stream is open on; `nil` for any other stream, and `nil` on both WASM backends |
 | `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined (always `nil` on both WASM backends) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | create the pathspec's directory component and return the pathspec (signals on both WASM backends) |
+| `delete-file` | `(delete-file "notes.txt")` | delete the named file and return `t`; anything that leaves it in place signals, "it was not there" included (signals on both WASM backends, like `ensure-directories-exist` and for the same reason) |
 | `make-string-output-stream` | `(make-string-output-stream)` | a fresh string output stream -- the explicit form of what `with-output-to-string` builds |
 | `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a designator forwarding to the named variable's stream. `*standard-output*` / `*standard-input*` forward per operation (the `nil` designator); any other symbol is lite -- resolved ONCE, where the stream is built |
-| `make-broadcast-stream` | `(make-broadcast-stream)` | a discarding sink stream (no component streams) |
-| `pathnamep` | `(pathnamep "/tmp/x")` | always `nil` -- rontolisp has no pathname type |
+| `make-broadcast-stream` | `(make-broadcast-stream a b)` | an output stream fanning every write out to each component, in order; with no components, a discarding sink. A stream WITH components is a Gray stream, so `format`/`princ`/`prin1`/`write-string`/`write-char` work and `terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` signal |
+| `pathnamep` | `(pathnamep "/tmp/x")` | `t` — a pathname IS its namestring here, so this is `stringp`, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |
 | `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream |
@@ -600,9 +606,10 @@ implements the members below; each name links to its own page.
 | `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed here because Common Lisp has no `getenv`. All backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
 | `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
-| `uiop:directory-files` | `(uiop:directory-files "src/")` | the non-directory entries of a directory — `(directory "src/*.*")` with the subdirectories dropped. Real UIOP's optional wildcard argument is not offered |
+| `uiop:directory-files` | `(uiop:directory-files "db/" "*.up.sql")` | the non-directory entries of a directory — `(directory "db/*.*")` with the subdirectories dropped. UIOP's optional second argument, the namestring of a name-and-type wildcard, filters them exactly as `directory` matches; omitting it lists everything, and a pattern carrying a directory component is an error |
 | `uiop:subdirectories` | `(uiop:subdirectories "src/")` | the subdirectories of a directory, each with its trailing `/` |
 | `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
+| `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | the whole file as one string. Runs on every backend that can open a file for input. Lite: real UIOP's `&rest` keys are accepted and ignored (`:external-format` has no rontolisp surface — every backend reads UTF-8) |
 | `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — the defaults-aware pathname merge (a pathname is its namestring here). A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
@@ -618,8 +625,12 @@ relative path resolves against the host's working directory, and `""` is the
 namestring designating exactly that, so `(merge-pathnames x
 (uiop::get-pathname-defaults))` yields `x`.
 
+`uiop:namestring` is implemented too, as the very function
+[`namestring`](functions/namestring.md) is — real UIOP re-exports Common Lisp's,
+and so does this.
+
 The rest of the package is a **name-resolution stub**: `uiop:native-namestring`,
-`uiop:namestring`, `uiop:os-unix-p`, `uiop:os-macosx-p` and `uiop:run-program`
+`uiop:os-unix-p`, `uiop:os-macosx-p` and `uiop:run-program`
 resolve — so a library naming them in an `(:import-from #:uiop)` clause reads and
 compiles — but calling one signals an undefined-function error. That is
 deliberate rather than unfinished: spawning an external process (`run-program`)

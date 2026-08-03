@@ -184,3 +184,29 @@ answers nil because its contract has no "cannot be determined" answer -- the dir
 either exists afterwards or it does not. Lite: CL's second value (`created`) is not
 returned, since a prelude defun's secondary value does not cross the function boundary on
 the compile paths (`.todo/212`).
+
+**`delete-file` is the same shape** (todo-249): prelude Lisp over `%delete-file`, the other
+write-side sibling. The primitive answers nil rather than signalling when the file is not
+there or the host refused, so the "a missing file is a `file-error`" decision lives once, in
+the Lisp above it. Per backend: interpreter `Files.deleteIfExists`, JVM `_deleteFile`
+(`JvmIoRuntimeBuilder`, gated through `FileMeta` like the metadata trio, so a program that
+never deletes keeps its bytes), both WASM backends a call-time
+`LispMacroExpander.deleteFileStub()` error -- same reason as `%make-directories`, and the
+same tenth-import re-evaluation trigger (`path_unlink_file`). mito's `generate-migrations`
+is the caller: it deletes superseded migration files, which is therefore an
+interpreter/JVM-only branch of an operation that otherwise runs everywhere.
+
+**`uiop:read-file-string` must NOT size its buffer from `file-length`** (todo-249). It is
+prelude Lisp over `with-open-file` + a CHUNKED `read-sequence` loop, and both properties of
+that loop are load-bearing rather than stylistic:
+
+- `file-length` answers nil on both WASM backends (see the paragraph above), so
+  `(make-string (file-length s))` traps there -- an uncatchable `unreachable`, not an error
+  a caller could handle.
+- The loop stops on the first SHORT read, so end of file is read at most ONCE. A SECOND read
+  past EOF traps on the `--component` backend alone: `adapter.wat`'s `$fd_read` calls
+  `stream.read` after the writable end has dropped, which wasmtime rejects
+  (`cannot read after being notified that the writable end dropped`). That is a
+  pre-existing component divergence -- any slurp loop hits it -- and the
+  **re-evaluation trigger** is the adapter learning to answer 0 bytes/EOF idempotently;
+  until then, read-loops here must not read past EOF twice.

@@ -5920,9 +5920,9 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (scale-float 1.5 3))" + " (print (scale-float 1.0 -100000))"
 				+ " (defun fd-doubler (x) (* x 2)) (print (funcall (fdefinition 'fd-doubler) 21))"
 				+ " (print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
-				+ " (print (stream-element-type t))" + " (print (input-stream-p t))"
+				+ " (print (pathnamep 1))" + " (print (stream-element-type t))" + " (print (input-stream-p t))"
 				+ " (print (output-stream-p (make-broadcast-stream)))" + " (print (input-stream-p \"s\"))"))
-			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nNIL\nCHARACTER\nT\nT\nNIL");
+			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nT\nNIL\nCHARACTER\nT\nT\nNIL");
 	}
 
 	@Test
@@ -8129,7 +8129,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("382");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("387");
 	}
 
 	@Test

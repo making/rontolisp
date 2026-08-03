@@ -548,9 +548,12 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
 				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx, className);
-				case LispNames.FILE_POSITION, LispNames.PATHNAMEP -> JvmExprCompiler
+				case LispNames.FILE_POSITION -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
-				case LispNames.FILE_WRITE_DATE, LispNames.MAKE_DIRECTORIES, LispNames.FILE_LENGTH ->
+				case LispNames.PATHNAMEP ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx, className);
+				case LispNames.FILE_WRITE_DATE, LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL,
+						LispNames.FILE_LENGTH ->
 					JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
 				case LispNames.STREAM_ELEMENT_TYPE -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx,

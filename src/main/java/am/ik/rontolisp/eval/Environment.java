@@ -3743,12 +3743,14 @@ public final class Environment implements Scope {
 					return new LispInteger(handle);
 				}));
 		// Lite: with no component streams a broadcast stream is a discarding sink -- a
-		// fresh string output stream nobody ever reads. Component streams (writes
-		// fanning out to several streams) are not supported.
+		// fresh string output stream nobody ever reads. A CALL with components never
+		// reaches here (LispEvaluator expands it, like the compile paths, into the Gray
+		// %make-broadcast-stream); this definition survives so #'make-broadcast-stream is
+		// still a first-class value, and that value is the sink shape only.
 		env.defineFunction(LispNames.MAKE_BROADCAST_STREAM, new LispFunction(LispNames.MAKE_BROADCAST_STREAM, args -> {
 			if (!args.isEmpty()) {
 				throw new LispEvalException(
-						LispNames.MAKE_BROADCAST_STREAM + " supports the zero-argument (sink) form only");
+						LispNames.MAKE_BROADCAST_STREAM + " supports the zero-argument (sink) form only as a value");
 			}
 			long handle = nextStreamHandle.getAndIncrement();
 			streams.put(handle, new StringWriter());
@@ -4071,6 +4073,23 @@ public final class Environment implements Scope {
 			catch (IOException | RuntimeException ex) {
 				throw new LispEvalException(
 						LispNames.MAKE_DIRECTORIES + ": cannot create " + path.value() + ": " + ex.getMessage());
+			}
+		}));
+		// %delete-file: the ONE file-REMOVING primitive, the other write-side sibling of
+		// %list-directory, and Files-based for the same reason as %make-directories.
+		// Answers nil rather than signalling when the file is not there or cannot be
+		// removed, so the "a missing file is a file-error" decision lives once, in the
+		// Lisp delete-file above it (LispPreludeLibrary).
+		env.defineFunction(LispNames.DELETE_FILE_INTERNAL, new LispFunction(LispNames.DELETE_FILE_INTERNAL, args -> {
+			requireArgCount(LispNames.DELETE_FILE_INTERNAL, args, 1);
+			if (!(args.get(0) instanceof LispString path)) {
+				throw new LispEvalException(LispNames.DELETE_FILE_INTERNAL + " expects a string pathname");
+			}
+			try {
+				return Files.deleteIfExists(Path.of(path.value())) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (IOException | RuntimeException ex) {
+				return LispNil.INSTANCE;
 			}
 		}));
 		env.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
@@ -4919,11 +4938,16 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.PATHNAMEP, new LispFunction(LispNames.PATHNAMEP, args -> {
 			requireArgCount(LispNames.PATHNAMEP, args, 1);
-			// No pathname type exists: paths are plain strings.
-			return LispNil.INSTANCE;
+			// A pathname IS its namestring here, so a string is one (and nothing else
+			// is). Agrees with (typep x 'pathname), as CL requires.
+			return args.get(0) instanceof LispString ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
-		env.defineFunction(LispNames.MAKE_PATHNAME,
-				new LispFunction(LispNames.MAKE_PATHNAME, args -> new LispString(PathnameOps.makePathname(args))));
+		// make-pathname is NOT defined here: it is prelude Lisp
+		// (LispPreludeLibrary.MAKE_PATHNAME), so the interpreter and the three compiled
+		// backends run the same definition rather than a Java one here and a spliced
+		// Lisp one there. PathnameOps.makePathname stays -- it is what
+		// cli/CompileTimePathnameFolder folds the literal shapes with, and
+		// LispPreludeLibraryTest pins the two renderings against each other.
 		env.defineFunction(LispNames.CHAR_NAME, new LispFunction(LispNames.CHAR_NAME, args -> {
 			requireArgCount(LispNames.CHAR_NAME, args, 1);
 			int cp = requireChar(LispNames.CHAR_NAME, args.get(0)).codePoint();

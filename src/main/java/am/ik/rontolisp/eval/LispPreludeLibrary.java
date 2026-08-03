@@ -339,6 +339,146 @@ public final class LispPreludeLibrary {
 				                    (t (concatenate 'string ddir pdir)))))
 				    (concatenate 'string dir (if (string= pfile "") dfile pfile))))
 				""");
+		// %pathname-split: the ONE rendering of CL's "the LAST dot separates the type,
+		// and a dot at position 0 does not" rule -- (directory name type), with name and
+		// type nil when absent. pathname-name / pathname-type / make-pathname all read
+		// it, so the three cannot disagree; PathnameOps.components is the Java twin the
+		// compile-time folder uses and LispPreludeLibraryTest pins them against each
+		// other.
+		SOURCES.put(LispNames.PATHNAME_SPLIT, """
+				(defun %pathname-split (%ps-path)
+				  (let* ((%ps-p (if (stringp %ps-path) %ps-path ""))
+				         (%ps-s (position #\\/ %ps-p :from-end t))
+				         (%ps-d (if %ps-s (subseq %ps-p 0 (+ %ps-s 1)) ""))
+				         (%ps-f (if %ps-s (subseq %ps-p (+ %ps-s 1)) %ps-p))
+				         (%ps-dot (position #\\. %ps-f :from-end t)))
+				    (if (or (null %ps-dot) (= %ps-dot 0))
+				        (list %ps-d (if (string= %ps-f "") nil %ps-f) nil)
+				        (list %ps-d (subseq %ps-f 0 %ps-dot) (subseq %ps-f (+ %ps-dot 1))))))
+				""");
+		SOURCES.put(LispNames.PATHNAME_NAME, """
+				(defun pathname-name (%pn-path)
+				  (second (%pathname-split %pn-path)))
+				""");
+		SOURCES.put(LispNames.PATHNAME_TYPE, """
+				(defun pathname-type (%pt-path)
+				  (third (%pathname-split %pt-path)))
+				""");
+		SOURCES.put(LispNames.PATHNAME_DIRECTORY_STRING, """
+				(defun %pathname-directory-string (%pds-dir)
+				  (cond ((null %pds-dir) "")
+				        ((stringp %pds-dir)
+				         (if (or (string= %pds-dir "")
+				                 (char= (char %pds-dir (- (length %pds-dir) 1)) #\\/))
+				             %pds-dir
+				             (concatenate 'string %pds-dir "/")))
+				        ((consp %pds-dir)
+				         (let* ((%pds-head (car %pds-dir))
+				                (%pds-abs (eq %pds-head :absolute))
+				                (%pds-rest (if (or %pds-abs (eq %pds-head :relative))
+				                               (cdr %pds-dir)
+				                               %pds-dir))
+				                (%pds-acc (if %pds-abs "/" "")))
+				           (dolist (%pds-c %pds-rest)
+				             (setq %pds-acc
+				                   (concatenate 'string %pds-acc
+				                                (cond ((stringp %pds-c) %pds-c)
+				                                      ((eq %pds-c :up) "..")
+				                                      ((eq %pds-c :back) "..")
+				                                      ((eq %pds-c :wild) "*")
+				                                      (t (error "MAKE-PATHNAME: unsupported :directory component ~S"
+				                                                %pds-c)))
+				                                "/")))
+				           %pds-acc))
+				        (t (error "MAKE-PATHNAME: :directory must be a list or string, got ~S" %pds-dir))))
+				""");
+		// make-pathname at RUN time (.todo/222): the shapes cli/CompileTimePathnameFolder
+		// declines -- a computed :defaults or :name -- used to compile to a call-time
+		// error on all three compiled backends. One Lisp definition serves all four, and
+		// it implements the SAME rule as PathnameOps.makePathname (which the folder still
+		// uses, so an ASDF-located data directory stays a literal in the artifact).
+		//
+		// :defaults defaults COMPONENT-WISE and is NOT a merge: a supplied :directory
+		// REPLACES the defaults' directory rather than being appended to it, and a
+		// supplied nil means "no component". That is what CL specifies and what SBCL
+		// answers. :host / :device / :version / :case are accepted and dropped (the
+		// components a namestring does not model), as is any other key, so a portability
+		// layer's call still works.
+		SOURCES.put(LispNames.MAKE_PATHNAME, """
+				(defun make-pathname (&key (directory nil %mkp-dp) (name nil %mkp-np) (type nil %mkp-tp)
+				                           defaults host device version case
+				                      &allow-other-keys)
+				  (let* ((%mkp-d (%pathname-split (if (stringp defaults) defaults "")))
+				         (%mkp-dir (if %mkp-dp (%pathname-directory-string directory) (first %mkp-d)))
+				         (%mkp-n (if %mkp-np (%pathname-component-string name) (or (second %mkp-d) "")))
+				         (%mkp-t (if %mkp-tp (%pathname-component-string type) (or (third %mkp-d) ""))))
+				    (concatenate 'string %mkp-dir
+				                 (if (string= %mkp-t "")
+				                     %mkp-n
+				                     (concatenate 'string %mkp-n "." %mkp-t)))))
+				""");
+		SOURCES.put(LispNames.PATHNAME_COMPONENT_STRING, """
+				(defun %pathname-component-string (%pcs-v)
+				  (cond ((null %pcs-v) "")
+				        ((stringp %pcs-v) %pcs-v)
+				        ((symbolp %pcs-v) (string %pcs-v))
+				        (t (error "MAKE-PATHNAME: :name and :type must be a string or nil, got ~S" %pcs-v))))
+				""");
+		// delete-file: the signalling ANSI surface over the %delete-file primitive (nil
+		// when the file is not there), so the "a missing file is a file-error" rule has
+		// one definition. mito's generate-migrations deletes superseded migration files
+		// with it.
+		SOURCES.put(LispNames.DELETE_FILE, """
+				(defun delete-file (%dfl-path)
+				  (if (%delete-file %dfl-path)
+				      t
+				      (error "DELETE-FILE: cannot delete ~A" %dfl-path)))
+				""");
+		// y-or-n-p: prompt + a line of standard input, re-asking on anything that is
+		// neither y nor n. Lite: CL reads single characters without echo, and end of
+		// input answers nil here rather than looping forever on a non-interactive
+		// backend.
+		SOURCES.put(LispNames.Y_OR_N_P, """
+				(defun y-or-n-p (&optional %ynp-control &rest %ynp-args)
+				  (let ((%ynp-done nil) (%ynp-answer nil))
+				    (do () (%ynp-done %ynp-answer)
+				      (when %ynp-control
+				        (apply #'format t %ynp-control %ynp-args))
+				      (format t " (y or n) ")
+				      (finish-output)
+				      (let ((%ynp-line (read-line *standard-input* nil nil)))
+				        (cond ((null %ynp-line) (setq %ynp-done t))
+				              ((string= %ynp-line "") nil)
+				              (t (let ((%ynp-c (char-downcase (char %ynp-line 0))))
+				                   (cond ((char= %ynp-c #\\y) (setq %ynp-answer t) (setq %ynp-done t))
+				                         ((char= %ynp-c #\\n) (setq %ynp-done t))
+				                         (t nil)))))))))
+				""");
+		// A broadcast stream WITH components is a Gray output stream whose two write
+		// generics loop the components (.kb/gray-streams.md): no runtime learns a new
+		// stream kind, the dispatch that already exists carries it, and the four backends
+		// therefore cannot drift. Reached only through
+		// LispMacroExpander.expandMakeBroadcastStream's multi-argument branch -- a
+		// component-LESS (make-broadcast-stream) still lowers to the discarding
+		// %make-string-output-stream sink and pulls NONE of this in, which is what keeps
+		// every existing sink program's bytes (and keeps the entry from dragging the Gray
+		// protocol into pipelines that never run GrayStreamsLibrary.process).
+		SOURCES.put(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, """
+				(defclass %broadcast-stream (rontolisp:fundamental-character-output-stream)
+				  ((components :initarg :components :reader %broadcast-stream-components)))
+				(defmethod rontolisp:stream-write-char ((%bs-s %broadcast-stream) %bs-c)
+				  (dolist (%bs-x (%broadcast-stream-components %bs-s))
+				    (write-char %bs-c %bs-x))
+				  %bs-c)
+				(defmethod rontolisp:stream-write-string ((%bs-s %broadcast-stream) %bs-str
+				                                         &optional (%bs-start 0) %bs-end)
+				  (let ((%bs-part (subseq %bs-str %bs-start (or %bs-end (length %bs-str)))))
+				    (dolist (%bs-x (%broadcast-stream-components %bs-s))
+				      (write-string %bs-part %bs-x)))
+				  %bs-str)
+				(defun %make-broadcast-stream (%mbs-components)
+				  (make-instance '%broadcast-stream :components %mbs-components))
+				""");
 		SOURCES.put(LispNames.CONSTANTLY, """
 				(defun constantly (%ct-value)
 				  (lambda (&rest %ct-args) %ct-value))
@@ -352,6 +492,12 @@ public final class LispPreludeLibrary {
 				(defun package-name (%pn-pkg)
 				  (string (or (find-package %pn-pkg)
 				              (error "PACKAGE-NAME: no package named ~A" %pn-pkg))))
+				""");
+		SOURCES.put(LispNames.NAMESTRING_CL, """
+				(defun namestring (%ns-path)
+				  (if (stringp %ns-path)
+				      %ns-path
+				      (error "NAMESTRING: not a pathname designator: ~S" %ns-path)))
 				""");
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
@@ -450,13 +596,35 @@ public final class LispPreludeLibrary {
 				  (let ((%de-d (%dir-namestring %de-path)))
 				    (if (%list-directory (if (string= %de-d "") "." %de-d)) %de-d nil)))
 				""");
+		// The optional PATTERN is UIOP's own second argument: a name-and-type wildcard
+		// (never a directory one -- real UIOP signals "Invalid file pattern" for that and
+		// so does this), appended to the directory and matched by the same `directory`
+		// rules. mito's migration reader spells it (uiop:directory-files dir "*.up.sql").
 		SOURCES.put(LispNames.DIRECTORY_FILES, """
-				(defun uiop:directory-files (%df-dir)
+				(defun uiop:directory-files (%df-dir &optional (%df-pat "*.*"))
+				  (when (position #\\/ %df-pat)
+				    (error "Invalid file pattern ~S" %df-pat))
 				  (let ((%df-acc nil))
-				    (dolist (%df-e (directory (concatenate 'string (%dir-namestring %df-dir) "*.*")))
+				    (dolist (%df-e (directory (concatenate 'string (%dir-namestring %df-dir) %df-pat)))
 				      (unless (char= (char %df-e (- (length %df-e) 1)) #\\/)
 				        (setq %df-acc (cons %df-e %df-acc))))
 				    (nreverse %df-acc)))
+				""");
+		// Chunked, NOT (make-string (file-length s)): file-length answers nil on both
+		// WASM backends (no WASI filestat call is imported, .kb/read-load-streams.md), so
+		// sizing the buffer from it traps there. The loop also reads EOF at most once --
+		// it stops as soon as a read comes back short -- because a SECOND read past EOF
+		// traps on the --component backend (the adapter's stream_read after the writable
+		// end dropped).
+		SOURCES.put(LispNames.READ_FILE_STRING, """
+				(defun uiop:read-file-string (%rfs-file &rest %rfs-keys)
+				  (with-open-file (%rfs-in %rfs-file)
+				    (let ((%rfs-acc "") (%rfs-buf (make-string 4096)) (%rfs-n 4096))
+				      (while (= %rfs-n 4096)
+				        (setq %rfs-n (read-sequence %rfs-buf %rfs-in))
+				        (when (> %rfs-n 0)
+				          (setq %rfs-acc (concatenate 'string %rfs-acc (subseq %rfs-buf 0 %rfs-n)))))
+				      %rfs-acc)))
 				""");
 		SOURCES.put(LispNames.SUBDIRECTORIES, """
 				(defun uiop:subdirectories (%sd-dir)
@@ -1075,7 +1243,8 @@ public final class LispPreludeLibrary {
 				if (referenced.contains(name) || definesName(resolved, defined, canonical)) {
 					continue;
 				}
-				boolean used = referencesName(resolved, defined, canonical);
+				boolean used = referencesName(resolved, defined, canonical)
+						|| referencedBySurfaceForm(name, resolved, canonical);
 				for (String pulled : referenced) {
 					// Prelude sources spell each other exactly as they define
 					// themselves, so the entry-to-entry edges stay member-matched:
@@ -1100,6 +1269,54 @@ public final class LispPreludeLibrary {
 		}
 		out.addAll(program);
 		return out;
+	}
+
+	/**
+	 * Whether an entry the program never NAMES is nonetheless reached from it.
+	 *
+	 * <p>
+	 * {@code %make-broadcast-stream} is the one such entry:
+	 * {@code LispMacroExpander.expandMakeBroadcastStream} produces the call, and that
+	 * runs inside the expression compilers -- long after this pass. Selection therefore
+	 * keys on the SURFACE form the expansion answers to, and on its ARITY, because the
+	 * two shapes lower differently: a component-less {@code (make-broadcast-stream)}
+	 * becomes the string-output-stream sink and must keep splicing nothing (it would
+	 * otherwise drag the Gray protocol into every program that merely wanted a discarding
+	 * sink -- and into every pipeline that runs this pass without
+	 * {@code GrayStreamsLibrary.process}), while a call WITH components becomes the Gray
+	 * stream defined here.
+	 *
+	 * <p>
+	 * {@code LibraryDefunPruner} consults the same predicate, for the same reason: the
+	 * reference the tree-shaker would look for does not exist yet either.
+	 * @param entry the prelude entry key
+	 * @param program the resolved program
+	 * @param canonical whether the program resolved (see {@link #matches})
+	 * @return whether the entry must be spliced
+	 */
+	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
+		return LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)
+				&& callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
+	}
+
+	private static boolean callsWithArguments(List<LispVal> program, String name, boolean canonical) {
+		for (LispVal form : program) {
+			if (callsWithArguments(form, name, canonical)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean callsWithArguments(LispVal form, String name, boolean canonical) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && matches(head.name(), name, canonical)
+				&& cons.cdr() instanceof LispCons) {
+			return true;
+		}
+		return callsWithArguments(cons.car(), name, canonical) || callsWithArguments(cons.cdr(), name, canonical);
 	}
 
 	/**

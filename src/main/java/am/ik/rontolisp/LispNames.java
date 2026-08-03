@@ -2849,6 +2849,83 @@ public final class LispNames {
 	public static final String PATHNAME_DIRECTORY = "PATHNAME-DIRECTORY";
 
 	/**
+	 * The {@code pathname-name} built-in: the file-name component of a namestring without
+	 * its type -- everything after the last {@code /} and before the LAST dot, where a
+	 * dot at position 0 is part of the name rather than a type separator
+	 * ({@code "d/a.b.c"} is {@code "a.b"}, {@code "d/.a"} is {@code ".a"}). {@code nil}
+	 * when the namestring names no file (it ends in {@code /}), which is what CL answers.
+	 * Prelude Lisp over the shared {@code %pathname-split} rule, so it cannot drift from
+	 * {@link #PATHNAME_TYPE} or from {@link #MAKE_PATHNAME}'s {@code :defaults}
+	 * component-wise defaulting.
+	 */
+	public static final String PATHNAME_NAME = "PATHNAME-NAME";
+
+	/**
+	 * The {@code pathname-type} built-in: the type (extension) component of a namestring
+	 * without its dot, or {@code nil} when there is none. The sibling of
+	 * {@link #PATHNAME_NAME} and the same split rule.
+	 */
+	public static final String PATHNAME_TYPE = "PATHNAME-TYPE";
+
+	/**
+	 * The {@code %pathname-split} internal helper: a namestring to
+	 * {@code (directory name . type)}, where {@code name} and {@code type} are nil when
+	 * absent. The ONE place the "last dot separates the type, position 0 does not" rule
+	 * lives, shared by {@link #PATHNAME_NAME}, {@link #PATHNAME_TYPE} and the runtime
+	 * {@link #MAKE_PATHNAME}; pinned against the Java {@code PathnameOps.components} by
+	 * {@code LispPreludeLibraryTest}.
+	 */
+	public static final String PATHNAME_SPLIT = "%PATHNAME-SPLIT";
+
+	/**
+	 * The {@code %pathname-directory-string} internal helper: {@link #MAKE_PATHNAME}'s
+	 * {@code :directory} argument (a {@code (:relative "a" "b")} / {@code (:absolute
+	 * ...)} list, a bare list of components, or a directory namestring) as a directory
+	 * prefix with its trailing {@code /}. The Lisp twin of
+	 * {@code PathnameOps.formatDirectory}.
+	 */
+	public static final String PATHNAME_DIRECTORY_STRING = "%PATHNAME-DIRECTORY-STRING";
+
+	/**
+	 * The {@code %pathname-component-string} internal helper: {@link #MAKE_PATHNAME}'s
+	 * {@code :name} / {@code :type} argument as a string -- a string passes through, nil
+	 * is the empty component, a symbol or keyword contributes its name.
+	 */
+	public static final String PATHNAME_COMPONENT_STRING = "%PATHNAME-COMPONENT-STRING";
+
+	/**
+	 * The {@code delete-file} built-in function: deletes the named file, answering
+	 * {@code t}. Interpreter and JVM delete for real; both WASM backends signal at CALL
+	 * time, exactly like {@link #ENSURE_DIRECTORIES_EXIST} and for the same reason -- the
+	 * WASI import set here carries no unlink call, and "the file is gone afterwards" has
+	 * no honest non-answer. Lite deviation: CL signals a {@code file-error} when the file
+	 * does not exist, and so does this.
+	 */
+	public static final String DELETE_FILE = "DELETE-FILE";
+
+	/**
+	 * The {@code %delete-file} internal primitive: delete the named file, answering
+	 * {@code t}, or {@code nil} when it does not exist / cannot be deleted. The
+	 * write-side sibling of {@link #LIST_DIRECTORY} and {@link #MAKE_DIRECTORIES}, and
+	 * the one call {@link #DELETE_FILE} is Lisp source over, so the "what does a missing
+	 * file do" rule has a single definition. Both WASM backends lower it to a call-time
+	 * error.
+	 */
+	public static final String DELETE_FILE_INTERNAL = "%DELETE-FILE";
+
+	/**
+	 * The {@code y-or-n-p} built-in function: prints the (optional) {@code format}
+	 * control + arguments followed by {@code " (y or n) "} and reads one line from
+	 * standard input, answering {@code t} for a line starting with {@code y}/{@code Y}
+	 * and {@code nil} for one starting with {@code n}/{@code N}, re-asking otherwise.
+	 * Prelude Lisp over {@code read-line}, so every backend behaves identically. Lite
+	 * deviation: CL's {@code y-or-n-p} reads single CHARACTERS without echo where this
+	 * reads a line, and end-of-input answers {@code nil} instead of signalling (a
+	 * non-interactive backend has no way to ask again).
+	 */
+	public static final String Y_OR_N_P = "Y-OR-N-P";
+
+	/**
 	 * The {@code directory} built-in, in ANSI's shape: the pathnames MATCHING the
 	 * pathspec, sorted with {@code string<} so every backend answers in the same order
 	 * whatever the host's readdir order is, and nil when nothing matches (it never
@@ -4742,8 +4819,21 @@ public final class LispNames {
 	/**
 	 * {@code make-pathname} (CL) -- builds a pathname value. Rontolisp uses strings for
 	 * paths, so this returns a namestring composed of {@code :directory} (a list starting
-	 * with {@code :relative} or {@code :absolute}) plus optional {@code :name} and
-	 * {@code :type} components.
+	 * with {@code :relative} or {@code :absolute}, or a bare directory namestring) plus
+	 * optional {@code :name} and {@code :type} components, with each UNSUPPLIED component
+	 * taken from {@code :defaults}.
+	 *
+	 * <p>
+	 * Two renderings of the SAME rule, pinned against each other by
+	 * {@code LispPreludeLibraryTest}: {@code cli/CompileTimePathnameFolder} reduces the
+	 * literal-keyword shapes to a namestring at compile time (which is what makes an
+	 * ASDF-located data directory a literal in the emitted artifact), and prelude Lisp
+	 * answers the shapes the folder declines -- anything with a computed
+	 * {@code :defaults} or {@code :name}, which is what a library writes when it builds a
+	 * path from something it just looked up (mito's {@code generate-migrations} names its
+	 * {@code .up.sql} / {@code .down.sql} files that way). Before that runtime form
+	 * existed those calls compiled to a call-time error on all three compiled backends
+	 * ({@code .todo/222}).
 	 */
 	public static final String MAKE_PATHNAME = "MAKE-PATHNAME";
 
@@ -4983,13 +5073,63 @@ public final class LispNames {
 	public static final String MAKE_DIRECTORIES = "%MAKE-DIRECTORIES";
 
 	/**
-	 * The {@code make-broadcast-stream} built-in function -- lite: with no component
-	 * streams it returns a discarding sink (a fresh string output stream nobody reads).
+	 * The {@code make-broadcast-stream} built-in function. With NO component streams it
+	 * returns a discarding sink (a fresh string output stream nobody reads); with
+	 * components it returns a {@link #MAKE_BROADCAST_STREAM_INTERNAL} Gray output stream
+	 * that fans every write out to each component in order. The two shapes are chosen by
+	 * the ARGUMENT COUNT at expansion time, which is why a component-less call keeps
+	 * emitting exactly the bytes it always did.
 	 */
 	public static final String MAKE_BROADCAST_STREAM = "MAKE-BROADCAST-STREAM";
 
-	/** The {@code pathnamep} built-in function -- no pathname type exists: always nil. */
+	/**
+	 * The {@code %make-broadcast-stream} internal primitive: the component-carrying half
+	 * of {@link #MAKE_BROADCAST_STREAM}, taking the component list. Prelude Lisp defining
+	 * a {@code rontolisp:fundamental-character-output-stream} subclass whose
+	 * {@code stream-write-char} / {@code stream-write-string} methods loop the
+	 * components, so ONE definition serves every backend and no runtime learns a new
+	 * stream kind -- the Gray dispatch that already exists carries it
+	 * ({@code .kb/gray-streams.md}).
+	 *
+	 * <p>
+	 * The consequence to know: a broadcast stream with components IS a Gray stream, so
+	 * exactly the operators that dispatch on one work with it ({@code format},
+	 * {@code princ}, {@code write-string}, {@code write-char}). {@code terpri} /
+	 * {@code fresh-line} / {@code write-line} / {@code force-output} / {@code close} are
+	 * not part of the protocol here and signal on any Gray stream, broadcast or not.
+	 */
+	public static final String MAKE_BROADCAST_STREAM_INTERNAL = "%MAKE-BROADCAST-STREAM";
+
+	/**
+	 * The {@code %broadcast-stream} internal class name -- the Gray output-stream class
+	 * {@link #MAKE_BROADCAST_STREAM_INTERNAL} instantiates. Owned by {@code cl} so the
+	 * spliced prelude forms and a user program in any package name the same class.
+	 */
+	public static final String BROADCAST_STREAM_CLASS = "%BROADCAST-STREAM";
+
+	/**
+	 * The {@code %broadcast-stream-components} reader of {@link #BROADCAST_STREAM_CLASS}.
+	 */
+	public static final String BROADCAST_STREAM_COMPONENTS = "%BROADCAST-STREAM-COMPONENTS";
+
+	/**
+	 * The {@code pathnamep} built-in function: a rontolisp pathname IS its namestring, so
+	 * this is {@code stringp}. It answers exactly what {@code (typep x 'pathname)} does
+	 * (CL requires the two to agree) -- see the {@code PATHNAME} case of
+	 * {@code LispMacroExpander.makeTypeTest} for why that is a string test and what it
+	 * costs. Deviates from CL, where a namestring is NOT a pathname; here there is no
+	 * other value that could be one.
+	 */
 	public static final String PATHNAMEP = "PATHNAMEP";
+
+	/**
+	 * The {@code namestring} built-in function -- the identity on a namestring, since a
+	 * rontolisp pathname IS one. Prelude Lisp; {@code uiop:namestring} lowers onto this
+	 * same function ({@code LispMacroExpander.expandUiopStubCall}), as real UIOP
+	 * re-exports CL's. The constant is spelled {@code NAMESTRING_CL} because
+	 * {@link #NAMESTRING} is the {@code uiop} package MEMBER of the same name.
+	 */
+	public static final String NAMESTRING_CL = "NAMESTRING";
 
 	/** The {@code input-stream-p} built-in function -- lite: any stream handle. */
 	public static final String INPUT_STREAM_P = "INPUT-STREAM-P";
@@ -5763,11 +5903,28 @@ public final class LispNames {
 
 	/**
 	 * {@code uiop:directory-files} -- the non-directory entries of a directory, Lisp
-	 * source over {@link #DIRECTORY}. UIOP's second optional argument is a wildcard
-	 * pathname, which rontolisp has no machinery for, so only the 1-argument shape is
-	 * offered.
+	 * source over {@link #DIRECTORY}. UIOP's optional second argument is a
+	 * name-and-type-only wildcard pathname; here it is the namestring of one, appended to
+	 * the directory and matched by {@link #WILD_MATCH} exactly as {@link #DIRECTORY}
+	 * would ({@code (uiop:directory-files "db/" "*.up.sql")}). Omitting it lists
+	 * everything, UIOP's {@code *wild-file-for-directory*} default. A pattern carrying a
+	 * DIRECTORY component is an error in real UIOP and here too.
 	 */
 	public static final String DIRECTORY_FILES = "DIRECTORY-FILES";
+
+	/**
+	 * {@code uiop:read-file-string} -- the whole file as one string. Prelude Lisp over
+	 * {@code with-open-file} + a CHUNKED {@code read-sequence} loop, so it runs on every
+	 * backend that can open a file for input. Two constraints shape that loop and neither
+	 * is cosmetic: sizing one buffer from {@code file-length} would trap on both WASM
+	 * backends (they answer nil for it -- no WASI filestat call is imported), and the
+	 * loop stops on the first SHORT read so that end of file is read at most once (a
+	 * second read past EOF traps on the {@code --component} backend). Lite deviation:
+	 * real UIOP passes its {@code &rest} keys through to the open, and they are accepted
+	 * and ignored here (the only one that could matter, {@code :external-format}, has no
+	 * rontolisp surface -- every backend reads UTF-8).
+	 */
+	public static final String READ_FILE_STRING = "READ-FILE-STRING";
 
 	/**
 	 * {@code uiop:subdirectories} -- the {@link #DIRECTORY_FILES} twin that keeps only

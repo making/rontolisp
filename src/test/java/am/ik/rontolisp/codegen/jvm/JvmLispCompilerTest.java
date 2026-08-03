@@ -5592,9 +5592,11 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunLiteStreamBuiltins() throws Exception {
+		// pathnamep is stringp: a rontolisp pathname IS its namestring, and it agrees
+		// with (typep x 'pathname) as CL requires (todo-249).
 		assertThat(compileAndRun("(print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
-				+ " (print (stream-element-type t))"))
-			.isEqualTo("NIL\nNIL\nNIL\nCHARACTER");
+				+ " (print (pathnamep 1)) (print (stream-element-type t))"))
+			.isEqualTo("NIL\nNIL\nT\nNIL\nCHARACTER");
 		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-broadcast-stream)))"
 				+ " (print (input-stream-p \"s\"))"))
 			.isEqualTo("T\nT\nNIL");
@@ -6748,12 +6750,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("382");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("387");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("382");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("387");
 	}
 
 	@Test

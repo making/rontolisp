@@ -301,6 +301,7 @@ categories:
     functions:
       - { slug: read, name: "read" }
       - { slug: read-line, name: "read-line" }
+      - { slug: y-or-n-p, name: "y-or-n-p" }
       - { slug: read-char, name: "read-char" }
       - { slug: peek-char, name: "peek-char" }
       - { slug: read-from-string, name: "read-from-string" }
@@ -341,7 +342,11 @@ categories:
       - { slug: directory, name: "directory" }
       - { slug: truename, name: "truename" }
       - { slug: merge-pathnames, name: "merge-pathnames" }
+      - { slug: make-pathname, name: "make-pathname" }
+      - { slug: namestring, name: "namestring" }
       - { slug: pathname-directory, name: "pathname-directory" }
+      - { slug: pathname-name, name: "pathname-name" }
+      - { slug: pathname-type, name: "pathname-type" }
       - { slug: open-stream-p, name: "open-stream-p" }
       - { slug: force-output, name: "force-output" }
       - { slug: finish-output, name: "finish-output" }
@@ -356,6 +361,7 @@ categories:
       - { slug: file-length, name: "file-length" }
       - { slug: file-write-date, name: "file-write-date" }
       - { slug: ensure-directories-exist, name: "ensure-directories-exist" }
+      - { slug: delete-file, name: "delete-file" }
       - { slug: make-string-output-stream, name: "make-string-output-stream" }
       - { slug: get-output-stream-string, name: "get-output-stream-string" }
       - { slug: make-synonym-stream, name: "make-synonym-stream" }
@@ -525,6 +531,7 @@ categories:
       - { slug: uiop-directory-files, name: "uiop:directory-files" }
       - { slug: uiop-subdirectories, name: "uiop:subdirectories" }
       - { slug: uiop-collect-sub-directories, name: "uiop:collect-sub*directories" }
+      - { slug: uiop-read-file-string, name: "uiop:read-file-string" }
       - { slug: uiop-merge-pathnames-star, name: "uiop:merge-pathnames*" }
       - { slug: uiop-add-package-local-nickname, name: "uiop:add-package-local-nickname" }
       - { slug: uiop-emptyp, name: "uiop:emptyp" }

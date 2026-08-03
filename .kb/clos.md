@@ -61,8 +61,9 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   stable sort keeps definition order within a rank), and a branch tests every
   specialized parameter. A generic whose lambda list continues past the
   required params (`&optional`/`&rest`) gets a variadic dispatcher that
-  forwards the tail to the selected method via `apply` (`call-next-method`
-  there forwards the required args only). `defgeneric` inline
+  forwards the tail to the selected method via `apply` (and `call-next-method`
+  there forwards that tail too -- see the argument-forwarding note below).
+  `defgeneric` inline
   `(:method [qualifier] (params) body...)` clauses register like separate
   defmethods (`registerDefgeneric` collects their method defuns;
   `expandTopLevelDefinitions` splices them on the compile path). Falls back to
@@ -86,6 +87,24 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
     sql-statement `:include` tree, todo-244; eql and built-in type methods apply
     only to their exact-same branch — cross-type subtyping among THEM stays out
     of scope),
+    **plus one branch per position-wise MEET of two INCOMPARABLE specializer
+    vectors** (todo-249, `addMeetBranches`/`specializerMeet`). One branch per
+    method is enough only while the vectors form a chain, because
+    `appliesToBranch` is a SUBSET test: a `(dbd-postgres-connection, DEFAULT)`
+    branch does not admit a `(dbi-connection, string)` method, since `string`
+    is not a subtype of that position's `DEFAULT`. Without a branch for the meet
+    `(dbd-postgres-connection, string)`, a call satisfying BOTH took the coarser
+    branch and the other method vanished from the applicable set — cl-dbi's
+    `do-sql` lost its next method that way, and a `:before`/`:after` in the same
+    shape would vanish too. CL has no such notion: it computes the applicable set
+    from the actual arguments, and a meet branch is what restores that for the
+    combinations that need it. The scan is quadratic but runs to a fixpoint only
+    over pairs that are compatible AND incomparable — rare enough that in
+    cl-dbi's whole surface exactly one pair qualifies — so a generic with none
+    keeps its emitted dispatcher byte-identical. **Re-evaluation trigger**: the
+    JVM 64 KB method ceiling (`.kb/jvm-method-size-limits.md`) is the thing to
+    watch if a future library has many mutually incomparable methods on one
+    generic,
     then composes them: `:around` (most specific first) wrap a `coreThunk`; the
     core runs `:before` (msf, for effect), the primary chain (msf, value kept via a
     `%clos-result` let), then `:after` (LEAST specific first). The primary/around
@@ -628,12 +647,27 @@ had been approximating:
 - **A defclass constructor tolerates extra initargs** (`&allow-other-keys` on
   `%make-<name>`): a non-slot initarg belongs to an `initialize-instance` /
   `shared-initialize` method, not the constructor (`(make-instance 'hmac :key k)`).
-- **A bare `(call-next-method)` forwards the rest tail**, not just the required
-  parameters: `rewriteNextMethod` emits `apply` over the method's `&rest`
-  variable, injecting one (`%method-args`) when the method declares a `&key` tail
-  without a `&rest`. Without this, ironclad's hmac `reinitialize-instance` lost
-  the `:key` it forwards to the system default and PBKDF2 silently produced the
-  wrong key.
+- **A bare `(call-next-method)` forwards the WHOLE original argument list**, not
+  just the required parameters: `rewriteNextMethod` emits `apply` over the
+  method's `&rest` variable, injecting one (`%method-args`) when the method
+  declares a `&key` tail without a `&rest`. Without this, ironclad's hmac
+  `reinitialize-instance` lost the `:key` it forwards to the system default and
+  PBKDF2 silently produced the wrong key.
+  **`&optional` needs more than the rest variable** (todo-249): `&rest` binds
+  what is left AFTER the optionals, so forwarding it alone silently drops them.
+  A method that actually chains therefore has every `&optional` entry normalized
+  to `(var init supplied-p)` (synthesizing the supplied-p variable when the
+  source named none) and the bare call becomes
+  `(apply %next-method req... (append (if sp1 (list o1) nil) ... %method-args))`
+  -- CL's rule that an UNSUPPLIED optional is not passed on, not "pass its
+  default". The widening is gated on the body actually mentioning
+  `call-next-method`/`next-method-p`, so every other method's emitted code is
+  unchanged. The driver: cl-dbi's `(do-sql conn sql &optional params)` has an
+  `:around` that just calls `call-next-method`, so its postgres primary saw
+  `params` NIL, took its no-parameters branch and sent a raw `?` to PostgreSQL.
+  Pinned against SBCL over six tail shapes (none, `&rest`, `&key`, `&optional`,
+  `&optional &rest`, `&optional &key`) for `:around`->primary and
+  primary->primary.
 
 **Cold-branch tolerance**: on the COMPILE paths only,
 `expandMakeInstance(cons, registry, true)` lowers an unknown class to a runtime

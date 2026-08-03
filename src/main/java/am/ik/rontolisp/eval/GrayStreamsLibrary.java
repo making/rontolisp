@@ -235,6 +235,17 @@ public final class GrayStreamsLibrary {
 					&& DISPATCH_DEFUNS.contains(member(defName.name()))) {
 				return form;
 			}
+			// A BINDING form's lambda list / binding list is not a call, and one of its
+			// entries can look exactly like one: cl-postgres' messages.lisp has
+			// (flet ((set-param (format size value) ...))), whose parameter list is a
+			// three-element form headed by FORMAT. Rewriting it produced a `let` where a
+			// parameter belonged and failed the compile with "Parameter must be a
+			// symbol". The walk therefore skips the structural position and rewrites only
+			// the BODY (and, for let/let*/flet/labels, each binding's value forms).
+			LispVal bindingForm = rewriteBindingForm(cons, opName, used);
+			if (bindingForm != null) {
+				return bindingForm;
+			}
 			List<LispVal> parts = cons.toList();
 			if (parts.size() == 3 && (LispNames.WRITE_STRING.equals(opName) || LispNames.WRITE_CHAR.equals(opName))
 					&& streamArgMayBeInstance(parts.get(2))) {
@@ -344,6 +355,77 @@ public final class GrayStreamsLibrary {
 			return form;
 		}
 		return new am.ik.rontolisp.LispCons(car, cdr);
+	}
+
+	/**
+	 * Rewrites a binding form without treating its structural position -- the lambda
+	 * list, or the binding list's variable names -- as a call. Returns null when
+	 * {@code opName} is not a binding form.
+	 *
+	 * <ul>
+	 * <li>{@code lambda} / {@code defun} / {@code defmethod} /
+	 * {@code destructuring-bind}: the lambda list is left alone, everything after it is
+	 * rewritten.</li>
+	 * <li>{@code let} / {@code let*}: each binding's VALUE form is rewritten, the
+	 * variable is not.</li>
+	 * <li>{@code flet} / {@code labels} / {@code macrolet}: each local function's lambda
+	 * list is left alone and its body rewritten.</li>
+	 * </ul>
+	 */
+	@org.jspecify.annotations.Nullable
+	private static LispVal rewriteBindingForm(am.ik.rontolisp.LispCons cons, String opName,
+			java.util.Set<String> used) {
+		List<LispVal> parts = cons.toList();
+		int lambdaListAt = switch (opName) {
+			case LispNames.LAMBDA, LispNames.DESTRUCTURING_BIND -> 1;
+			case LispNames.DEFUN, LispNames.DEFMACRO, LispNames.DEFMETHOD -> 2;
+			default -> -1;
+		};
+		if (lambdaListAt >= 0) {
+			// A defmethod may carry a qualifier before its lambda list.
+			if (LispNames.DEFMETHOD.equals(opName) && lambdaListAt < parts.size()
+					&& !(parts.get(lambdaListAt) instanceof am.ik.rontolisp.LispCons)) {
+				lambdaListAt++;
+			}
+			if (lambdaListAt >= parts.size()) {
+				return null;
+			}
+			List<LispVal> out = new java.util.ArrayList<>(parts.subList(0, lambdaListAt + 1));
+			for (int i = lambdaListAt + 1; i < parts.size(); i++) {
+				out.add(rewrite(parts.get(i), used));
+			}
+			return listOf(out.toArray(LispVal[]::new));
+		}
+		boolean valueBindings = LispNames.LET.equals(opName) || LispNames.LET_STAR.equals(opName);
+		boolean functionBindings = LispNames.FLET.equals(opName) || LispNames.LABELS.equals(opName)
+				|| LispNames.MACROLET.equals(opName);
+		if ((!valueBindings && !functionBindings) || parts.size() < 2
+				|| !(parts.get(1) instanceof am.ik.rontolisp.LispCons bindings) || !bindings.isProperList()) {
+			return null;
+		}
+		List<LispVal> rewrittenBindings = new java.util.ArrayList<>();
+		for (LispVal binding : bindings.toList()) {
+			if (!(binding instanceof am.ik.rontolisp.LispCons bindingCons) || !bindingCons.isProperList()) {
+				rewrittenBindings.add(binding);
+				continue;
+			}
+			List<LispVal> bindingParts = bindingCons.toList();
+			// (var value) for let/let*; (name (params...) body...) for flet/labels.
+			int bodyFrom = valueBindings ? 1 : 2;
+			List<LispVal> out = new java.util.ArrayList<>(
+					bindingParts.subList(0, Math.min(bodyFrom, bindingParts.size())));
+			for (int i = bodyFrom; i < bindingParts.size(); i++) {
+				out.add(rewrite(bindingParts.get(i), used));
+			}
+			rewrittenBindings.add(listOf(out.toArray(LispVal[]::new)));
+		}
+		List<LispVal> out = new java.util.ArrayList<>();
+		out.add(parts.get(0));
+		out.add(listOf(rewrittenBindings.toArray(LispVal[]::new)));
+		for (int i = 2; i < parts.size(); i++) {
+			out.add(rewrite(parts.get(i), used));
+		}
+		return listOf(out.toArray(LispVal[]::new));
 	}
 
 	private static LispVal rewriteTail(LispVal tail, java.util.Set<String> used) {

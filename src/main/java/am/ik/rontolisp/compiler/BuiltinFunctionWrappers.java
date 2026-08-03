@@ -863,10 +863,10 @@ public final class BuiltinFunctionWrappers {
 			// slot-makunbound are omitted -- their expansions need a literal slot name)
 			unary(LispNames.PROBE_FILE), unary(LispNames.SLEEP), unary(LispNames.FILE_POSITION),
 			unary(LispNames.FILE_LENGTH), unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
+			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(), List.of(call(LispNames.MAKE_BROADCAST_STREAM))),
 			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
 			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),
 			unary(LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS),
-			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(), List.of(call(LispNames.MAKE_BROADCAST_STREAM))),
 			// 1+ and 1-: body is (+ a 1) and (- a 1)
 			new WrapperDef(LispNames.ONE_PLUS, List.of("a"),
 					List.of(callV(LispNames.ADD, new LispSymbol("a"), new LispInteger(1)))),
