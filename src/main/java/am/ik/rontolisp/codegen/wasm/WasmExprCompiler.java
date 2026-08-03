@@ -703,6 +703,8 @@ final class WasmExprCompiler {
 				// close-after-body shape so they still compile without the tag section.
 				case LispNames.WITH_OUTPUT_TO_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons, ctx.ehMode), ctx);
+				case LispNames.PPRINT_LOGICAL_BLOCK ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandPprintLogicalBlock(cons), ctx);
 				case LispNames.WITH_INPUT_FROM_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons, ctx.ehMode), ctx);
 				case LispNames.PUSHNEW -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPushnew(cons), ctx);

@@ -127,7 +127,9 @@
 ;;; arguments. Used by the scanners that locate a composite directive's end.
 (defun %fmt-shape (ctrl pos end)
   (let ((tk (%fmt-token ctrl pos end nil 0)))
-    (list (nth 0 tk) (nth 4 tk) (nth 2 tk))))
+    (if (char= (nth 4 tk) #\/)
+        (list (+ (%fmt-slash-end ctrl (nth 0 tk) end) 1) (nth 4 tk) (nth 2 tk))
+        (list (nth 0 tk) (nth 4 tk) (nth 2 tk)))))
 
 ;;; The closing directive an opening one expects, or nil when the directive opens
 ;;; nothing. A closer of a DIFFERENT kind is ordinary text to the scanners below,
@@ -136,7 +138,18 @@
   (cond ((char= c #\() #\))
         ((char= c #\[) #\])
         ((char= c #\{) #\})
+        ((char= c #\<) #\>)
         (t nil)))
+
+;;; The index of the / that closes a ~/name/ directive whose name starts at pos,
+;;; or end when it is unterminated. The name is arbitrary text, so every scanner
+;;; has to step OVER it -- a ~ or a closing directive inside a function name is
+;;; not a directive.
+(defun %fmt-slash-end (ctrl pos end)
+  (let ((p pos) (res -1))
+    (while (and (< p end) (< res 0))
+      (if (char= (char ctrl p) #\/) (setq res p) (setq p (+ p 1))))
+    (if (< res 0) end res)))
 
 ;;; The index of the ~ that begins the matching close directive of the composite
 ;;; whose body starts at pos, or end when it is unterminated. A nested composite
@@ -160,8 +173,12 @@
   (if (>= pos end) end (nth 0 (%fmt-shape ctrl (+ pos 1) end))))
 
 ;;; (list clauses close-pos); a clause is (start end default-p), default-p being
-;;; the : of the ~:; separator that introduced it.
+;;; the : of the ~:; separator that introduced it. Used for ~[ ... ~] and, with
+;;; closer #\>, for the ~< ... ~> section list.
 (defun %fmt-clauses (ctrl pos end)
+  (%fmt-clauses-until ctrl pos end #\]))
+
+(defun %fmt-clauses-until (ctrl pos end closer)
   (let ((segs nil) (start pos) (p pos) (defnext nil) (close end) (done nil))
     (while (and (< p end) (not done))
       (if (char= (char ctrl p) #\~)
@@ -169,7 +186,7 @@
                  (np (nth 0 sh))
                  (d (nth 1 sh))
                  (inner (%fmt-closer-of d)))
-            (cond ((char= d #\])
+            (cond ((char= d closer)
                    (setq segs (append segs (list (list start p defnext))))
                    (setq close p)
                    (setq done t))
@@ -388,6 +405,8 @@
           ((char= d #\() (%fmt-case ctrl end all out np idx colon at))
           ((char= d #\[) (%fmt-cond-directive ctrl end all out np idx params colon at))
           ((char= d #\{) (%fmt-iterate ctrl end all out np idx params colon at))
+          ((char= d #\<) (%fmt-block ctrl end all out np idx at))
+          ((char= d #\/) (%fmt-user-function ctrl end all out np idx colon at))
           (t (%fmt-control ctrl end all out np idx params colon at d raw)))))
 
 (defun %fmt-value-directive-p (d)
@@ -406,7 +425,114 @@
         ((char= d #\t) (list (%fmt-tab out (%fmt-int params 0 1) (%fmt-int params 1 1) at) pos i nil))
         ((char= d #\*) (list out pos (%fmt-jump all i params colon at) nil))
         ((char= d #\^) (list out pos i (%fmt-escape all i params)))
+        ;; Conditional newline. Only the MANDATORY kind (~:@_) breaks a line: the
+        ;; three others need the stream's current column to decide, and no backend
+        ;; tracks one (.kb/pretty-printer.md). ~i (indent) is inert for the same
+        ;; reason. Both obey *print-pretty*, like pprint-newline.
+        ((char= d #\_)
+         (list (if (and colon at *print-pretty*) (%fmt-cat out (string #\Newline)) out) pos i nil))
+        ((char= d #\i) (list out pos i nil))
         (t (list (%fmt-cat out (%fmt-cat "~" (string raw))) pos i nil))))
+
+;;; ------------------------------------------------- logical block / ~/name/
+
+;;; ~<...~> is JUSTIFICATION and ~<...~:> a LOGICAL BLOCK; the closing directive
+;;; decides which. What separates them in CL -- padding a justification out to
+;;; :mincol, wrapping a logical block at the right margin -- both need the
+;;; stream's current column, and no backend tracks one (.kb/pretty-printer.md),
+;;; so neither happens here: the TEXT is exactly what a wide enough line holds.
+;;; The SECTIONS still differ, and that is not cosmetic:
+;;;   - justification: every ~; section is a segment consuming arguments in turn;
+;;;   - logical block: with 2+ sections the first is the prefix (a ~@; separator
+;;;     makes it a per-line prefix, which without line breaks is the same text)
+;;;     and, with 3, the last is the suffix. Both are literal text and consume no
+;;;     argument.
+;;; A logical block without @ takes ONE argument -- a LIST -- and renders its
+;;; body against that list as the whole argument list; with @ the body continues
+;;; on the enclosing arguments. esrap's context report is the plain form:
+;;; (format s "~2@T~<~@;~A~:>" (list line)) prints the line, not the list.
+(defun %fmt-block (ctrl end all out pos i at)
+  (let* ((cl (%fmt-clauses-until ctrl pos end #\>))
+         (segs (nth 0 cl))
+         (close (nth 1 cl))
+         (after (%fmt-after ctrl close end))
+         (blockp (nth 2 (%fmt-shape ctrl (+ close 1) end))))
+    (if blockp
+        (%fmt-logical-block ctrl all out segs i after at)
+        (%fmt-justify ctrl all out segs i after))))
+
+;;; Justification: the segments share one argument cursor, left to right.
+(defun %fmt-justify (ctrl all out segs i after)
+  (let ((acc out) (cur i) (rest segs))
+    (while rest
+      (let ((r (%fmt-run ctrl (nth 0 (car rest)) (nth 1 (car rest)) all cur)))
+        (setq acc (%fmt-cat acc (nth 0 r)))
+        (setq cur (nth 1 r))
+        (setq rest (cdr rest))))
+    (list acc after cur nil)))
+
+(defun %fmt-logical-block (ctrl all out segs i after at)
+  (let* ((n (length segs))
+         (body (if (> n 1) (nth 1 segs) (nth 0 segs)))
+         (pre (if (> n 1) (nth 0 segs) nil))
+         (suf (if (> n 2) (nth 2 segs) nil))
+         ;; Without @ the block's arguments are the elements of ONE argument.
+         (items (if at all (nth i all)))
+         (start (if at i 0))
+         (r (%fmt-run ctrl (nth 0 body) (nth 1 body) items start))
+         (acc out))
+    (if pre (setq acc (%fmt-cat acc (nth 0 (%fmt-run ctrl (nth 0 pre) (nth 1 pre) items start)))))
+    (setq acc (%fmt-cat acc (nth 0 r)))
+    (if suf (setq acc (%fmt-cat acc (nth 0 (%fmt-run ctrl (nth 0 suf) (nth 1 suf) items start)))))
+    (list acc after (if at (nth 1 r) (+ i 1)) nil)))
+
+;;; ~/name/: call the named function as (name stream object colon-p at-p) and
+;;; splice what it writes. The name is looked up as if by find-symbol, where a
+;;; single and a double colon are equivalent (CLHS 22.3.5.4) -- so the INTERNAL
+;;; spelling is tried first (that is the canonical one for a symbol the package
+;;; does not export) and the external one second.
+;;; The string stream is opened and closed by hand rather than with
+;;; with-output-to-string on purpose: the WASM exception-handling gate scans the
+;;; program for a with-* form, and the renderer is spliced into EVERY program
+;;; that formats a computed control string -- one with-output-to-string here
+;;; would put a tag section into modules that catch nothing
+;;; (.kb/wasi-component.md). This IS the shape with-output-to-string lowers to
+;;; outside EH mode.
+(defun %fmt-user-function (ctrl end all out pos i colon at)
+  (let* ((stop (%fmt-slash-end ctrl pos end))
+         (fn (%fmt-function-designator (string-upcase (subseq ctrl pos stop))))
+         (stream (%make-string-output-stream)))
+    (funcall fn stream (nth i all) colon at)
+    (let ((text (%string-stream-contents stream)))
+      (close stream)
+      (list (%fmt-cat out text) (+ stop 1) (+ i 1) nil))))
+
+(defun %fmt-function-designator (name)
+  (let ((k (%fmt-colon-index name)))
+    (if (< k 0)
+        (intern name)
+        (let* ((pkg (subseq name 0 k))
+               (member (if (and (< (+ k 1) (length name)) (char= (char name (+ k 1)) #\:))
+                           (subseq name (+ k 2))
+                           (subseq name (+ k 1))))
+               (found (find-symbol member pkg))
+               (internal (intern (concatenate 'string pkg "::" member)))
+               (external (intern (concatenate 'string pkg ":" member))))
+          ;; find-symbol answers the canonical spelling wherever a live symbol
+          ;; table exists; the two built spellings cover the compiled backends,
+          ;; where a symbol IS its spelling and the internal one is the common
+          ;; case (a library rarely exports the function it names in a ~/.../).
+          (cond ((and found (fboundp found)) found)
+                ((fboundp internal) internal)
+                ((fboundp external) external)
+                ((null found) internal)
+                (t found))))))
+
+(defun %fmt-colon-index (name)
+  (let ((p 0) (n (length name)) (res -1))
+    (while (and (< p n) (< res 0))
+      (if (char= (char name p) #\:) (setq res p) (setq p (+ p 1))))
+    res))
 
 ;;; ~<newline>: the newline is swallowed; the default also swallows the leading
 ;;; whitespace of the next line, ~@ keeps the newline, ~: keeps the whitespace.

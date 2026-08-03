@@ -55,7 +55,7 @@ public final class PackageRegistry {
 			LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP,
 			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_EXISTS_P,
 			LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS,
-			LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART);
+			LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART, LispNames.PPRINT_LOGICAL_BLOCK);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -118,8 +118,10 @@ public final class PackageRegistry {
 			LispNames.GET_INTERNAL_RUN_TIME, LispNames.SLEEP, LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT,
 			LispNames.LISTEN, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR,
 			LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE,
-			LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_UPCASE,
-			LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
+			LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_NOT_EQUAL,
+			LispNames.CHAR_LESSP, LispNames.CHAR_GREATERP, LispNames.CHAR_NOT_LESSP, LispNames.CHAR_NOT_GREATERP,
+			LispNames.GRAPHIC_CHAR_P, LispNames.STANDARD_CHAR_P, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE,
+			LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
 			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
 			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
 			LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES,
@@ -131,9 +133,11 @@ public final class PackageRegistry {
 			LispNames.SVREF, LispNames.ARRAY_DIMENSIONS, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_RANK,
 			LispNames.ARRAY_TOTAL_SIZE, LispNames.ROW_MAJOR_AREF, LispNames.ARRAY_ROW_MAJOR_INDEX, LispNames.COERCE,
 			LispNames.GENSYM, LispNames.MACROEXPAND, LispNames.MACROEXPAND_1, LispNames.VALUES, LispNames.WRITE_STRING,
-			LispNames.WRITE_TO_STRING, LispNames.SYMBOL_NAME, LispNames.INTERN, LispNames.FIND_SYMBOL,
-			LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.FMAKUNBOUND, LispNames.SYMBOL_VALUE,
-			LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER,
+			LispNames.WRITE_TO_STRING, LispNames.WRITE, LispNames.PPRINT, LispNames.PPRINT_NEWLINE,
+			LispNames.PPRINT_INDENT, LispNames.PPRINT_TAB, LispNames.COPY_PPRINT_DISPATCH,
+			LispNames.SET_PPRINT_DISPATCH, LispNames.PPRINT_DISPATCH, LispNames.SYMBOL_NAME, LispNames.INTERN,
+			LispNames.FIND_SYMBOL, LispNames.MAKE_SYMBOL, LispNames.BOUNDP, LispNames.FBOUNDP, LispNames.FMAKUNBOUND,
+			LispNames.SYMBOL_VALUE, LispNames.FUNCTIONP, LispNames.VALUES_LIST, LispNames.NE, LispNames.FILL_POINTER,
 			LispNames.ARRAY_HAS_FILL_POINTER_P, LispNames.ADJUSTABLE_ARRAY_P, LispNames.VECTOR_PUSH,
 			LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ARRAY_ELEMENT_TYPE, LispNames.ADJUST_ARRAY,
 			LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ, LispNames.READ_CHAR,
@@ -161,7 +165,12 @@ public final class PackageRegistry {
 			LispNames.PRINT_READABLY_VAR, LispNames.FEATURES_VAR, LispNames.STANDARD_OUTPUT_VAR,
 			LispNames.ERROR_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR, LispNames.READTABLE_VAR,
 			LispNames.LAMBDA_LIST_KEYWORDS, LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
-			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READ_EVAL_VAR);
+			LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READ_EVAL_VAR,
+			LispNames.PRINT_PRETTY_VAR, LispNames.PRINT_RIGHT_MARGIN_VAR, LispNames.PRINT_MISER_WIDTH_VAR,
+			LispNames.PRINT_LINES_VAR, LispNames.PRINT_PPRINT_DISPATCH_VAR, LispNames.PRINT_LENGTH_VAR,
+			LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_RADIX_VAR, LispNames.PRINT_CASE_VAR,
+			LispNames.PRINT_ARRAY_VAR, LispNames.PRINT_GENSYM_VAR, LispNames.MODULES_VAR, LispNames.TRACE_OUTPUT_VAR,
+			LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -219,12 +228,13 @@ public final class PackageRegistry {
 			LispNames.WARN_INTERNAL, LispNames.SCHAR_SET, LispNames.IEEE754_DOUBLE_BITS,
 			LispNames.IEEE754_DOUBLE_FROM_BITS, LispNames.IEEE754_SINGLE_BITS, LispNames.IEEE754_SINGLE_FROM_BITS,
 			LispNames.READ_EVAL, LispNames.READ_EVAL_TEMPLATE, LispNames.SUBSEQ_CORE, LispNames.NLX_TAG_INTERNAL,
-			LispNames.NLX_CATCH_INTERNAL, LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE, LispNames.OBJ_NEW,
-			LispNames.OBJ_REF, LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P,
-			LispNames.OBJ_SLOTS, LispNames.RUN_HANDLERS_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR,
-			LispNames.RESTART_CLUSTERS_VAR, LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY,
-			LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH, LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS,
-			LispNames.MAKE_DIRECTORIES, LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL);
+			LispNames.NLX_CATCH_INTERNAL, LispNames.NLX_THROW_INTERNAL, LispNames.STRING_COMPARE,
+			LispNames.CHAR_FOLD_CHAIN, LispNames.PPRINT_DISPATCH_DEFAULT, LispNames.OBJ_NEW, LispNames.OBJ_REF,
+			LispNames.OBJ_SET, LispNames.OBJ_IS, LispNames.OBJ_TAG, LispNames.OBJ_P, LispNames.OBJ_SLOTS,
+			LispNames.RUN_HANDLERS_INTERNAL, LispNames.HANDLER_CLUSTERS_VAR, LispNames.RESTART_CLUSTERS_VAR,
+			LispNames.RESTART_RECORD_TAG, LispNames.LIST_DIRECTORY, LispNames.DIR_NAMESTRING, LispNames.WILD_MATCH,
+			LispNames.PATHNAME_TYPED_P, LispNames.SLEEP_MS, LispNames.MAKE_DIRECTORIES,
+			LispNames.SET_SYMBOL_FUNCTION_INTERNAL, LispNames.FENV_FUNCTION_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

@@ -1025,7 +1025,13 @@ public final class LispReader {
 	}
 
 	private LispVal bqAttachAppend(LispSymbol op, LispVal item, LispVal result) {
-		if (nullOrQuoted(item) && nullOrQuoted(result)) {
+		// The constant fold is an `append`, so the ITEM (a non-final argument) has to be
+		// a PROPER list. It is not when the template had a dotted tail: bq-process emits
+		// (bq-append (bq-list 'p) 'q) for `(p . q), and folding 'q as a list would walk
+		// it to nothing and silently drop the tail. Falling through instead leaves the
+		// quoted tail as the result, which the bq-attach-conses below then conses onto --
+		// where a non-list tail IS legal, because there it is `append`'s LAST argument.
+		if (nullOrQuoted(item) && nullOrQuoted(result) && isProperList(quotedValue(item))) {
 			return list2(BQ_QUOTE, appendLists(quotedValue(item), quotedValue(result)));
 		}
 		if (result instanceof LispNil || isQuoteNil(result)) {
@@ -1164,7 +1170,18 @@ public final class LispReader {
 		return true;
 	}
 
-	// Appends two proper lists (used only on constant fold paths).
+	// True for nil and for a cons chain ending in nil (the shape `append` requires of
+	// every argument but the last).
+	private boolean isProperList(LispVal x) {
+		LispVal p = x;
+		while (p instanceof LispCons cons) {
+			p = cons.cdr();
+		}
+		return p instanceof LispNil;
+	}
+
+	// Appends a proper list to any object: like CL's two-argument append, so a non-list
+	// B yields a DOTTED result (used only on constant fold paths).
 	private LispVal appendLists(LispVal a, LispVal b) {
 		List<LispVal> items = new ArrayList<>();
 		LispVal p = a;

@@ -188,6 +188,17 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 - user macros are unknown to the runtime `eval` of compiled programs, and a
   `lambda` built at runtime by that `eval` does not parse lambda-list keywords
   (see [Compiled eval Limitations](eval-limitations.md)).
+- the PRETTY PRINTER produces the text a wide enough line holds, but never
+  changes the LAYOUT: no rontolisp stream carries a column, so a logical block
+  never wraps, every conditional line break (`pprint-newline` with `:linear` /
+  `:fill` / `:miser`, the format directives `~_` / `~:_` / `~@_` / `~i`) is a
+  no-op, and `*print-right-margin*` / `*print-miser-width*` / `*print-lines*` are
+  accepted and ignored. Only `(pprint-newline :mandatory)` and `~:@_` break a
+  line. Every other `*print-*` variable exists and holds the value the printer
+  really behaves as -- binding one to a non-default value is what has no effect,
+  except for `*print-escape*` / `*print-readably*` / `*print-pretty*`. The
+  ordinary printing operators do not consult `*print-pprint-dispatch*`: an entry
+  fires where the program calls the entry function itself.
 - `#.` read-time eval is skipped with a warning inside `.asd` files.
 - built-in macro names (`cond`, `case`, `when`, `setf`, `push`, ...) cannot be
   redefined; list them with `(rontolisp:list-macros)`.

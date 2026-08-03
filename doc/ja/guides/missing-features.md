@@ -191,6 +191,7 @@ NaN      ; full Common Lisp would return #C(0.0 1.0)
 - ユーザーマクロはコンパイル済みプログラムの実行時 `eval` では認識されず、
   その `eval` がランタイムに構築する `lambda` はラムダリストキーワードを
   解釈しません（[コンパイル済み eval の制限](eval-limitations.md)を参照）。
+- **プリティプリンタ**は、行が十分に広いものとしてのテキストを生成しますが、**レイアウト**は変えません。rontolisp のストリームは桁位置を持たないため、論理ブロックが折り返すことはなく、条件付き改行（`pprint-newline` の `:linear` / `:fill` / `:miser`、format の `~_` / `~:_` / `~@_` / `~i`）はすべて何もせず、`*print-right-margin*` / `*print-miser-width*` / `*print-lines*` は受理のみで無視されます。行を分けるのは `(pprint-newline :mandatory)` と `~:@_` だけです。その他の `*print-*` 変数はすべて存在し、プリンタが実際に行う動作そのものの値を保持します。既定値以外を束縛しても効果がないというだけです（`*print-escape*` / `*print-readably*` / `*print-pretty*` を除く）。通常の印字操作は `*print-pprint-dispatch*` を参照しません。エントリが効くのは、プログラム自身がエントリ関数を呼ぶ箇所です。
 - `#.` の read 時評価は `.asd` ファイル内では警告付きでスキップされます。
 - 組み込みマクロの名前（`cond`、`case`、`when`、`setf`、`push` など）は
   再定義できません。一覧は `(rontolisp:list-macros)` で取得できます。

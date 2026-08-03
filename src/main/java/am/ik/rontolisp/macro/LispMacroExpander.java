@@ -34,6 +34,46 @@ public final class LispMacroExpander {
 
 	private static final String COND_VAR = "__cond";
 
+	/**
+	 * The printer-mode variables and their global values, in emission order. A compiled
+	 * program that MENTIONS one gets a top-level {@code defvar} for it from
+	 * {@link #injectMvSpillGlobal}; the interpreter seeds the same set in
+	 * {@code Environment.createGlobal} / {@code LispEvaluator}'s special-variable set.
+	 * The value is a supplier because {@code *print-pprint-dispatch*}'s initial value is
+	 * a fresh mutable table rather than a constant (see {@code .kb/pretty-printer.md}).
+	 */
+	private static final java.util.Map<String, java.util.function.Supplier<LispVal>> PRINTER_MODE_VARS = new java.util.LinkedHashMap<>();
+
+	static {
+		PRINTER_MODE_VARS.put(LispNames.PRINT_ESCAPE_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_READABLY_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_PRETTY_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_CIRCLE_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_RIGHT_MARGIN_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_MISER_WIDTH_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_LINES_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_LENGTH_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_LEVEL_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_BASE_VAR, () -> new LispInteger(10));
+		PRINTER_MODE_VARS.put(LispNames.PRINT_RADIX_VAR, () -> LispNil.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_CASE_VAR, () -> new LispSymbol(":UPCASE"));
+		PRINTER_MODE_VARS.put(LispNames.PRINT_ARRAY_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.PRINT_GENSYM_VAR, () -> LispTrue.INSTANCE);
+		// The remaining standard STREAM variables. They are not printer modes, but they
+		// need the same treatment for the same reason -- a program may BIND one, and only
+		// a proclaimed-special name gets a dynamic binding -- and t is the designator
+		// *standard-output* already holds (see LispNames.TRACE_OUTPUT_VAR).
+		PRINTER_MODE_VARS.put(LispNames.TRACE_OUTPUT_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.DEBUG_IO_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.QUERY_IO_VAR, () -> LispTrue.INSTANCE);
+		PRINTER_MODE_VARS.put(LispNames.TERMINAL_IO_VAR, () -> LispTrue.INSTANCE);
+		// (list nil): the one-element list a pprint dispatch table is, built at run time
+		// so
+		// the table the program mutates is its own.
+		PRINTER_MODE_VARS.put(LispNames.PRINT_PPRINT_DISPATCH_VAR,
+				() -> listToCons(List.of(new LispSymbol(LispNames.LIST), LispNil.INSTANCE)));
+	}
+
 	private LispMacroExpander() {
 	}
 
@@ -102,6 +142,7 @@ public final class LispMacroExpander {
 			case LispNames.ROTATEF -> expandRotatef(cons);
 			case LispNames.DESTRUCTURING_BIND -> expandDestructuringBind(cons);
 			case LispNames.WITH_OUTPUT_TO_STRING -> expandWithOutputToString(cons);
+			case LispNames.PPRINT_LOGICAL_BLOCK -> expandPprintLogicalBlock(cons);
 			case LispNames.WITH_INPUT_FROM_STRING -> expandWithInputFromString(cons);
 			case LispNames.PUSHNEW -> expandPushnew(cons);
 			case LispNames.DEFTYPE -> expandDeftype(cons);
@@ -2581,6 +2622,11 @@ public final class LispMacroExpander {
 
 	private static final String REDUCE_FN_VAR = "__reduce_fn";
 
+	// A SEPARATE name from REDUCE_FN_VAR: the :from-end lowering builds a lambda that
+	// reads REDUCE_FN_VAR, and the empty-sequence guard wraps that lowering's output --
+	// reusing the name would rebind it to the wrapper lambda itself.
+	private static final String REDUCE_GUARD_FN_VAR = "__reduce_gfn";
+
 	private static final String REDUCE_A_VAR = "__reduce_a";
 
 	private static final String REDUCE_B_VAR = "__reduce_b";
@@ -2609,6 +2655,10 @@ public final class LispMacroExpander {
 		if (parts.size() < 3) {
 			return null; // arity errors surface in the native reduce
 		}
+		if (parts.size() == 3 && !isSeqDispatchVar(parts.get(2))) {
+			// A plain (reduce fn seq) still needs the empty-sequence guard below.
+			return buildPlainReduce(parts.get(1), parts.get(2), null, null);
+		}
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispVal fromEndForm = keywordValue(parts, 3, LispNames.FROM_END_KEYWORD);
 		LispVal startForm = keywordValue(parts, 3, LispNames.START_KEYWORD);
@@ -2636,7 +2686,7 @@ public final class LispMacroExpander {
 		LispVal seqExpr = hasKey
 				? listToCons(List.of(new LispSymbol(LispNames.MAPCAR), keyForm, seqAsListForm(seqForm))) : seqForm;
 		if (!fromEnd) {
-			return buildPlainReduce(fnForm, seqExpr, initForm);
+			return buildPlainReduce(fnForm, seqExpr, initForm, null);
 		}
 		// Right fold: reverse the (mapped) sequence and swap the folding function's args
 		// so
@@ -2649,19 +2699,43 @@ public final class LispMacroExpander {
 		LispVal swapped = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(a, b)),
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), fnVar, b, a))));
 		LispVal reversed = listToCons(List.of(new LispSymbol(LispNames.REVERSE), seqExpr));
-		return makeLet(REDUCE_FN_VAR, fnForm, buildPlainReduce(swapped, reversed, initForm));
+		return makeLet(REDUCE_FN_VAR, fnForm, buildPlainReduce(swapped, reversed, initForm, fnVar));
 	}
 
-	private static LispVal buildPlainReduce(LispVal fnForm, LispVal seqExpr, @Nullable LispVal initForm) {
+	/**
+	 * Builds the plain {@code reduce} call every backend compiles natively, adding the
+	 * EMPTY-sequence guard when there is no {@code :initial-value}: CL calls the function
+	 * with ZERO arguments and returns that, which no backend's native fold does (esrap's
+	 * {@code (reduce #'append all-children)} relies on {@code (append)} = nil for a
+	 * result node with no children). The guard also does the string-to-character-list
+	 * coercion, so the inner call folds a non-empty LIST and re-entering
+	 * {@code expandReduce} on it returns null -- its sequence is the dispatch variable by
+	 * then.
+	 * @param emptyFnForm the function to call with zero arguments on an empty sequence,
+	 * or null to use {@code fnForm} itself. The {@code :from-end} lowering passes the
+	 * ORIGINAL function here, because its {@code fnForm} is the argument-SWAPPING wrapper
+	 * and a zero-argument call must not reach that.
+	 */
+	private static LispVal buildPlainReduce(LispVal fnForm, LispVal seqExpr, @Nullable LispVal initForm,
+			@Nullable LispVal emptyFnForm) {
 		List<LispVal> reduceParts = new java.util.ArrayList<>();
 		reduceParts.add(new LispSymbol(LispNames.REDUCE));
-		reduceParts.add(fnForm);
-		reduceParts.add(seqExpr);
 		if (initForm != null) {
+			reduceParts.add(fnForm);
+			reduceParts.add(seqExpr);
 			reduceParts.add(new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD));
 			reduceParts.add(initForm);
+			return listToCons(reduceParts);
 		}
-		return listToCons(reduceParts);
+		LispSymbol fn = new LispSymbol(REDUCE_GUARD_FN_VAR);
+		LispSymbol seq = new LispSymbol(SEQ_LIST_VAR);
+		reduceParts.add(fn);
+		reduceParts.add(seq);
+		// The function binds FIRST so the argument evaluation order stays
+		// (function, sequence) -- .kb/argument-evaluation-order.md.
+		return makeLet(REDUCE_GUARD_FN_VAR, fnForm, makeLet(SEQ_LIST_VAR, seqAsListForm(seqExpr), makeIf(seq,
+				listToCons(reduceParts),
+				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), emptyFnForm == null ? fn : emptyFnForm)))));
 	}
 
 	/**
@@ -3908,7 +3982,7 @@ public final class LispMacroExpander {
 	public static LispVal expandMember(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.MEMBER, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__member_item");
 		LispSymbol cur = new LispSymbol("__member_cur");
@@ -3938,19 +4012,41 @@ public final class LispMacroExpander {
 	}
 
 	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
-	// every keyword must be :test or :key. Unsupported keywords (:from-end, :start, ...)
-	// are rejected loudly rather than silently ignored.
+	// every keyword must be :test, :test-not or :key. Unsupported keywords (:from-end,
+	// :start, ...) are rejected loudly rather than silently ignored.
 	private static void requireTestKeyKeywords(String name, List<LispVal> parts, int start) {
 		for (int i = start; i < parts.size(); i += 2) {
-			if (!(parts.get(i) instanceof LispSymbol kw)
-					|| (!LispNames.TEST_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
+			if (!(parts.get(i) instanceof LispSymbol kw) || (!LispNames.TEST_KEYWORD.equals(kw.name())
+					&& !LispNames.TEST_NOT_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
 				throw new IllegalArgumentException(
-						name + " expects keyword arguments :test/:key, got: " + parts.get(i).print());
+						name + " expects keyword arguments :test/:test-not/:key, got: " + parts.get(i).print());
 			}
 			if (i + 1 >= parts.size()) {
 				throw new IllegalArgumentException(name + " expects a value after " + kw.name());
 			}
 		}
+	}
+
+	/**
+	 * The {@code :test} / {@code :test-not} designator of a sequence or alist call. CL
+	 * specifies the pair as one equality decision -- {@code :test-not fn} matches exactly
+	 * where {@code (funcall fn item element)} is FALSE -- so both spellings travel
+	 * together through {@code testMatchForm} and are forwarded together by
+	 * {@code memberCallForm}. Deprecated in CL, still emitted by libraries (esrap's
+	 * error-report tree prunes with {@code (remove max children :test-not #'= :key
+	 * #'first)}).
+	 */
+	private record TestSpec(@Nullable LispVal form, boolean negated) {
+	}
+
+	// The :test / :test-not pair of a call's keyword tail, starting at index `start`.
+	private static TestSpec testSpec(List<LispVal> parts, int start) {
+		LispVal test = keywordValue(parts, start, LispNames.TEST_KEYWORD);
+		if (test != null) {
+			return new TestSpec(test, false);
+		}
+		LispVal testNot = keywordValue(parts, start, LispNames.TEST_NOT_KEYWORD);
+		return new TestSpec(testNot, testNot != null);
 	}
 
 	// Applies the :key selector form to an element form ((funcall key elem)), or returns
@@ -3969,17 +4065,24 @@ public final class LispMacroExpander {
 				: listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testForm, item, keyedElem));
 	}
 
+	// The same, for a call that accepts :test-not too: a negated designator wraps the
+	// call in `not` rather than in a `complement` closure, so no allocation lands inside
+	// the scan loop.
+	private static LispVal testMatchForm(TestSpec spec, LispVal item, LispVal keyedElem) {
+		LispVal match = testMatchForm(spec.form(), item, keyedElem);
+		return spec.negated() ? makeNot(match) : match;
+	}
+
 	// Builds an inner (member item lst :test ... :key ...) call forwarding the given
 	// designator forms. The set-style functions (adjoin/union/intersection/
 	// set-difference/remove-duplicates) compare via member, so their item side must be
 	// pre-keyed by the caller while member's own :key covers the list side (CL applies
 	// :key to both operands for these functions).
-	private static LispVal memberCallForm(LispVal item, LispVal lst, @Nullable LispVal testForm,
-			@Nullable LispVal keyForm) {
+	private static LispVal memberCallForm(LispVal item, LispVal lst, TestSpec testSpec, @Nullable LispVal keyForm) {
 		List<LispVal> parts = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.MEMBER), item, lst));
-		if (testForm != null) {
-			parts.add(new LispSymbol(LispNames.TEST_KEYWORD));
-			parts.add(testForm);
+		if (testSpec.form() != null) {
+			parts.add(new LispSymbol(testSpec.negated() ? LispNames.TEST_NOT_KEYWORD : LispNames.TEST_KEYWORD));
+			parts.add(testSpec.form());
 		}
 		if (keyForm != null) {
 			parts.add(new LispSymbol(LispNames.KEY_KEYWORD));
@@ -4355,8 +4458,7 @@ public final class LispMacroExpander {
 	 * </pre>
 	 */
 	private static LispVal buildPositionScan(List<LispVal> parts, PositionMode mode, PositionResult resultKind) {
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
-		LispVal testNotForm = keywordValue(parts, 3, LispNames.TEST_NOT_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispVal startForm = keywordValue(parts, 3, LispNames.START_KEYWORD);
 		LispVal endForm = keywordValue(parts, 3, LispNames.END_KEYWORD);
@@ -4383,9 +4485,9 @@ public final class LispMacroExpander {
 		LispVal endClause = listToCons(List.of(atEnd, LispNil.INSTANCE));
 		LispVal keyedElem = keyedForm(keyForm, callOf(LispNames.CAR, cur));
 		LispVal match = switch (mode) {
-			case ITEM -> testNotForm != null
-					? makeNot(listToCons(List.of(new LispSymbol(LispNames.FUNCALL), testNotForm, item, keyedElem)))
-					: testMatchForm(testForm, item, keyedElem);
+			// :test / :test-not are decided by the shared TestSpec, so find/position
+			// spell the pair exactly as member/remove/assoc do.
+			case ITEM -> testMatchForm(testForm, item, keyedElem);
 			case PREDICATE -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), item, keyedElem));
 			case PREDICATE_NOT -> makeNot(listToCons(List.of(new LispSymbol(LispNames.FUNCALL), item, keyedElem)));
 		};
@@ -4450,9 +4552,20 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandCount(LispCons cons) {
 		List<LispVal> parts = cons.toList();
-		requireTestKeyKeywords(LispNames.COUNT, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		requireKeywords(LispNames.COUNT, parts, 3, LispNames.TEST_KEYWORD, LispNames.TEST_NOT_KEYWORD,
+				LispNames.KEY_KEYWORD, LispNames.START_KEYWORD, LispNames.END_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
+		// :start/:end restrict the scan to a subsequence, the same way reduce's do
+		// (subseq accepts a nil end). esrap's line/column report counts newlines with
+		// (count #\Newline text :end position).
+		LispVal startForm = keywordValue(parts, 3, LispNames.START_KEYWORD);
+		LispVal endForm = keywordValue(parts, 3, LispNames.END_KEYWORD);
+		LispVal seqForm = parts.get(2);
+		if (startForm != null || endForm != null) {
+			seqForm = listToCons(List.of(new LispSymbol(LispNames.SUBSEQ), seqForm,
+					startForm == null ? new LispInteger(0) : startForm, endForm == null ? LispNil.INSTANCE : endForm));
+		}
 		LispSymbol item = new LispSymbol("__count_item");
 		LispSymbol n = new LispSymbol("__count_n");
 		LispSymbol cur = new LispSymbol("__count_cur");
@@ -4463,7 +4576,7 @@ public final class LispMacroExpander {
 		// (setq __count_n (+ __count_n 1)) nil))
 		LispVal bindings = listToCons(
 				List.of(listToCons(List.of(item, parts.get(1))), listToCons(List.of(n, new LispInteger(0))),
-						listToCons(List.of(cur, seqAsListForm(parts.get(2)), callOf(LispNames.CDR, cur)))));
+						listToCons(List.of(cur, seqAsListForm(seqForm), callOf(LispNames.CDR, cur)))));
 		LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), n));
 		LispVal match = testMatchForm(testForm, item, keyedForm(keyForm, callOf(LispNames.CAR, cur)));
 		LispVal increment = listToCons(List.of(new LispSymbol(LispNames.ADD), n, new LispInteger(1)));
@@ -4514,7 +4627,7 @@ public final class LispMacroExpander {
 	public static LispVal expandAssoc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.ASSOC, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol key = new LispSymbol("__assoc_key");
 		LispSymbol cur = new LispSymbol("__assoc_cur");
@@ -4757,7 +4870,7 @@ public final class LispMacroExpander {
 				throw new IllegalArgumentException(operator + " expects a value after " + kw.name());
 			}
 		}
-		LispVal testForm = keywordValue(parts, 2, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 2);
 		LispVal keyForm = keywordValue(parts, 2, LispNames.KEY_KEYWORD);
 		LispVal fromEndForm = keywordValue(parts, 2, LispNames.FROM_END_KEYWORD);
 		if (fromEndForm != null && !(fromEndForm instanceof LispNil) && !(fromEndForm instanceof LispTrue)) {
@@ -4979,7 +5092,7 @@ public final class LispMacroExpander {
 	public static LispVal expandAdjoin(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.ADJOIN, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__adjoin_item");
 		LispSymbol lst = new LispSymbol("__adjoin_lst");
@@ -5006,7 +5119,7 @@ public final class LispMacroExpander {
 	public static LispVal expandUnion(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.UNION, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol cur = new LispSymbol("__un_cur");
 		LispSymbol acc = new LispSymbol("__un_acc");
@@ -5037,7 +5150,7 @@ public final class LispMacroExpander {
 	public static LispVal expandIntersection(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.INTERSECTION, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol cur = new LispSymbol("__in_cur");
 		LispSymbol b = new LispSymbol("__in_b");
@@ -5069,7 +5182,7 @@ public final class LispMacroExpander {
 	public static LispVal expandSetDifference(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.SET_DIFFERENCE, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol cur = new LispSymbol("__sd_cur");
 		LispSymbol b = new LispSymbol("__sd_b");
@@ -5203,7 +5316,7 @@ public final class LispMacroExpander {
 	public static LispVal expandRemove(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.REMOVE, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__remove_item");
 		// The item binds outside the string dispatch to keep the argument evaluation
@@ -5293,7 +5406,7 @@ public final class LispMacroExpander {
 	public static LispVal expandSubstitute(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.SUBSTITUTE, parts, 4);
-		LispVal testForm = keywordValue(parts, 4, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 4);
 		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
 		LispSymbol newItem = new LispSymbol("__subst_new");
 		LispSymbol oldItem = new LispSymbol("__subst_old");
@@ -5331,7 +5444,7 @@ public final class LispMacroExpander {
 	public static LispVal expandNsubstitute(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.NSUBSTITUTE, parts, 4);
-		LispVal testForm = keywordValue(parts, 4, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 4);
 		LispVal keyForm = keywordValue(parts, 4, LispNames.KEY_KEYWORD);
 		LispSymbol newItem = new LispSymbol("__nsub_new");
 		LispSymbol oldItem = new LispSymbol("__nsub_old");
@@ -5470,7 +5583,7 @@ public final class LispMacroExpander {
 	public static LispVal expandDelete(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.DELETE, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol item = new LispSymbol("__delete_item");
 		return expandDeleteFilter(item, parts.get(1), parts.get(2), "__delete",
@@ -5910,6 +6023,81 @@ public final class LispMacroExpander {
 	}
 
 	private static final String WOTS_RESULT_VAR = "__wots_result";
+
+	/**
+	 * One {@code (:constructor name [boa-lambda-list])} option of a {@code defstruct}. A
+	 * null lambda list means the keyword constructor over every slot.
+	 */
+	private record StructConstructor(String name, @Nullable LispVal boaLambdaList) {
+	}
+
+	private static final String PLB_OBJECT_VAR = "__plb_object";
+
+	/**
+	 * Expands {@code (pprint-logical-block (stream object &key prefix per-line-prefix
+	 * suffix) body...)}.
+	 *
+	 * <pre>
+	 * (pprint-logical-block (s obj :prefix "(" :suffix ")") body...) ->
+	 *   (let ((__plb_object obj))
+	 *     (if (listp __plb_object)
+	 *         (progn (write-string "(" s) body... (write-string ")" s) nil)
+	 *         (progn (write __plb_object :stream s) nil)))
+	 * </pre>
+	 *
+	 * The non-list arm is CL's own rule (an atom is printed with {@code write} and the
+	 * body is skipped), which is what makes the macro safe to wrap around a value that
+	 * may or may not be a list. What a stream with no column cannot do -- WRAP -- is
+	 * {@code pprint-newline}'s business, not this macro's: see
+	 * {@code .kb/pretty-printer.md}. {@code :per-line-prefix} is accepted as a synonym of
+	 * {@code :prefix} (no line ever gets a prefix, because the block never breaks a line
+	 * by itself).
+	 * @param cons the pprint-logical-block expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandPprintLogicalBlock(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)) {
+			throw new IllegalArgumentException(
+					LispNames.PPRINT_LOGICAL_BLOCK + " expects a (stream object ...) spec as the first argument");
+		}
+		List<LispVal> specParts = spec.toList();
+		if (specParts.size() < 2) {
+			throw new IllegalArgumentException(
+					LispNames.PPRINT_LOGICAL_BLOCK + " expects a (stream object ...) spec as the first argument");
+		}
+		LispVal stream = specParts.get(0);
+		LispVal object = specParts.get(1);
+		LispVal prefix = null;
+		LispVal suffix = null;
+		for (int i = 2; i + 1 < specParts.size(); i += 2) {
+			if (!(specParts.get(i) instanceof LispSymbol key)) {
+				throw new IllegalArgumentException(LispNames.PPRINT_LOGICAL_BLOCK + " expects keyword options");
+			}
+			switch (key.name()) {
+				case ":PREFIX", ":PER-LINE-PREFIX" -> prefix = specParts.get(i + 1);
+				case ":SUFFIX" -> suffix = specParts.get(i + 1);
+				default -> throw new UnsupportedOperationException(
+						LispNames.PPRINT_LOGICAL_BLOCK + ": unsupported option " + key.name());
+			}
+		}
+		LispSymbol objectVar = new LispSymbol(PLB_OBJECT_VAR);
+		List<LispVal> listArm = new ArrayList<>();
+		listArm.add(new LispSymbol(LispNames.PROGN));
+		if (prefix != null) {
+			listArm.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), prefix, stream)));
+		}
+		listArm.addAll(parts.subList(2, parts.size()));
+		if (suffix != null) {
+			listArm.add(listToCons(List.of(new LispSymbol(LispNames.WRITE_STRING), suffix, stream)));
+		}
+		listArm.add(LispNil.INSTANCE);
+		LispVal atomArm = listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(
+				List.of(new LispSymbol(LispNames.WRITE), objectVar, new LispSymbol(LispNames.STREAM_KEYWORD), stream)),
+				LispNil.INSTANCE));
+		return makeLet(PLB_OBJECT_VAR, object,
+				makeIf(callOf(LispNames.LISTP, objectVar), listToCons(listArm), atomArm));
+	}
 
 	/**
 	 * Expands (with-input-from-string (var string) body...) into a string-backed input
@@ -7849,8 +8037,12 @@ public final class LispMacroExpander {
 		// (:copier name-or-nil), (:predicate name-or-nil), (:include parent) and
 		// (:type (vector ...)); anything else is a hard error naming the clause.
 		LispSymbol nameSym;
-		String customConstructor = null;
-		LispVal boaLambdaList = null;
+		// Every (:constructor ...) option defines its OWN function, so this is a list:
+		// esrap's failed-parse declares both a full make-failed-parse and a
+		// make-failed-parse/no-position BOA over a subset of the inherited slots.
+		// Empty = the default keyword constructor; suppressConstructor = (:constructor
+		// nil).
+		List<StructConstructor> constructors = new java.util.ArrayList<>();
 		boolean suppressConstructor = false;
 		String concNameOverride = null;
 		boolean concNameGiven = false;
@@ -7883,13 +8075,13 @@ public final class LispMacroExpander {
 									LispNames.DEFSTRUCT + " option is not supported: " + option.print());
 						}
 						if (optValue instanceof LispSymbol s) {
-							customConstructor = s.name();
-							if (optParts.size() == 3) {
-								// A BOA constructor: the explicit lambda list is used
-								// verbatim; a slot it binds reads the parameter, any
-								// other slot falls back to its initform.
-								boaLambdaList = optParts.get(2);
-							}
+							// A BOA constructor's explicit lambda list is used verbatim;
+							// a
+							// slot it binds reads the parameter, any other slot falls
+							// back
+							// to its initform.
+							constructors
+								.add(new StructConstructor(s.name(), optParts.size() == 3 ? optParts.get(2) : null));
 						}
 						else {
 							suppressConstructor = true;
@@ -8087,26 +8279,31 @@ public final class LispMacroExpander {
 			}
 		}
 		if (!suppressConstructor) {
-			String constructorName = customConstructor != null ? customConstructor : inPackage.apply(makeAffix + base);
-			if (boaLambdaList != null) {
-				// (defun name (<boa lambda list>) (%obj-new '%struct-<name> value...)):
-				// a slot bound by the lambda list reads that parameter, the rest
-				// evaluate their initforms in the constructor body.
-				java.util.Map<String, LispSymbol> boaParams = boaParameterSymbols(boaLambdaList);
-				List<LispVal> boaValues = new java.util.ArrayList<>();
-				for (int i = 0; i < slotSyms.size(); i++) {
-					LispSymbol param = boaParams.get(slotBases.get(i));
-					boaValues.add(param != null ? param : slotDefaults.get(i));
+			List<StructConstructor> declared = constructors.isEmpty()
+					? List.of(new StructConstructor(inPackage.apply(makeAffix + base), null)) : constructors;
+			for (StructConstructor ctor : declared) {
+				if (ctor.boaLambdaList() != null) {
+					// (defun name (<boa lambda list>) (%obj-new '%struct-<name>
+					// value...)):
+					// a slot bound by the lambda list reads that parameter, the rest
+					// evaluate their initforms in the constructor body.
+					java.util.Map<String, LispSymbol> boaParams = boaParameterSymbols(ctor.boaLambdaList());
+					List<LispVal> boaValues = new java.util.ArrayList<>();
+					for (int i = 0; i < slotSyms.size(); i++) {
+						LispSymbol param = boaParams.get(slotBases.get(i));
+						boaValues.add(param != null ? param : slotDefaults.get(i));
+					}
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()),
+							ctor.boaLambdaList(), typedVector ? vectorOf(boaValues) : objNew(structTag, boaValues))));
 				}
-				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName),
-						boaLambdaList, typedVector ? vectorOf(boaValues) : objNew(structTag, boaValues))));
-			}
-			else {
-				// A slot-less struct has an EMPTY lambda list, which is nil rather than a
-				// cons -- listToCons would blow up casting it.
-				LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
-				forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(constructorName), params0,
-						typedVector ? vectorOf(List.copyOf(slotSyms)) : objNew(structTag, List.copyOf(slotSyms)))));
+				else {
+					// A slot-less struct has an EMPTY lambda list, which is nil rather
+					// than
+					// a cons -- listToCons would blow up casting it.
+					LispVal params0 = lambdaList.isEmpty() ? LispNil.INSTANCE : listToCons(lambdaList);
+					forms.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(ctor.name()), params0,
+							typedVector ? vectorOf(List.copyOf(slotSyms)) : objNew(structTag, List.copyOf(slotSyms)))));
+				}
 			}
 		}
 		// (defun <base>-p (__struct) (%obj-is __struct '%struct-<name> ...)): the tag
@@ -17291,7 +17488,7 @@ public final class LispMacroExpander {
 	public static LispVal expandRassoc(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		requireTestKeyKeywords(LispNames.RASSOC, parts, 3);
-		LispVal testForm = keywordValue(parts, 3, LispNames.TEST_KEYWORD);
+		TestSpec testForm = testSpec(parts, 3);
 		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol key = new LispSymbol("__rassoc_key");
 		LispSymbol cur = new LispSymbol("__rassoc_cur");
@@ -18946,6 +19143,19 @@ public final class LispMacroExpander {
 		};
 	}
 
+	/**
+	 * The atomic type predicates whose compound spelling carries RANGE BOUNDS; every
+	 * other compound spelling of an atomic type ignores its arguments (see
+	 * {@code makeCompoundTypeTest}'s default arm).
+	 */
+	private static final java.util.Set<String> NUMERIC_TYPE_PREDICATES = java.util.Set.of(LispNames.INTEGERP,
+			LispNames.FLOATP, LispNames.NUMBERP, LispNames.RATIONALP);
+
+	/** True for the {@code *} that stands for "any" in a compound type specifier. */
+	private static boolean isWildcardTypeArgument(LispVal arg) {
+		return arg instanceof LispSymbol s && "*".equals(plainTypeName(s));
+	}
+
 	/** The canonical element-type name of an array type specifier's element type. */
 	private static String canonicalElementTypeName(LispSymbol sym) {
 		return switch (plainTypeName(sym)) {
@@ -19005,11 +19215,34 @@ public final class LispMacroExpander {
 				// (unsigned-byte 8|16|32) spec its packed vectors, anything else the
 				// general (element-type t) array. A general #(...) is never a
 				// (vector (unsigned-byte 8)) (s-sql's sql-escape dispatches on this).
+				//
+				// The argument SHAPES differ, and getting that wrong is not a lite
+				// approximation but a wrong answer: (simple-vector SIZE) carries only a
+				// size (its element type is always t), while (vector ELEMENT-TYPE SIZE)
+				// and (array ELEMENT-TYPE DIMS) lead with the element type. Reading
+				// esrap's (typep cell '(simple-vector 41)) size as an element type made
+				// the packrat cache miss its own vector and hand it to gethash.
+				boolean simpleVector = "SIMPLE-VECTOR".equals(plainTypeName(head));
+				LispVal sizeArg = null;
+				if (simpleVector) {
+					sizeArg = parts.size() > 1 ? parts.get(1) : null;
+				}
+				else if ("VECTOR".equals(plainTypeName(head))) {
+					sizeArg = parts.size() > 2 ? parts.get(2) : null;
+				}
+				LispVal sizeTest = null;
+				if (sizeArg instanceof LispInteger size) {
+					sizeTest = listToCons(List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value), size));
+				}
 				boolean characterElements = true;
 				LispVal packedElement = null;
-				if (parts.size() > 1 && !(parts.get(1) instanceof LispSymbol star && "*".equals(plainTypeName(star)))) {
+				if (!simpleVector && parts.size() > 1
+						&& !(parts.get(1) instanceof LispSymbol star && "*".equals(plainTypeName(star)))) {
 					LispVal elementType = parts.get(1);
-					String elementName = elementType instanceof LispSymbol s ? canonicalElementTypeName(s) : "";
+					// t reads as LispTrue, not a symbol, so the general element type has
+					// to be recognized on both spellings.
+					String elementName = elementType instanceof LispTrue ? "T"
+							: elementType instanceof LispSymbol s ? canonicalElementTypeName(s) : "";
 					characterElements = "CHARACTER".equals(elementName) || "T".equals(elementName);
 					if (!characterElements && elementType instanceof LispCons ub
 							&& ub.car() instanceof LispSymbol ubHead && "UNSIGNED-BYTE".equals(plainTypeName(ubHead))
@@ -19020,18 +19253,58 @@ public final class LispMacroExpander {
 								List.of(new LispSymbol("UNSIGNED-BYTE"), new LispInteger(width.value())));
 					}
 				}
+				LispVal base;
 				if (characterElements) {
-					return listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
+					base = listToCons(List.of(new LispSymbol(LispNames.OR), callOf(LispNames.STRINGP, value),
 							callOf(LispNames.ARRAYP_INTERNAL, value)));
 				}
-				LispVal expectedElementType = packedElement != null ? packedElement : LispTrue.INSTANCE;
-				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.ARRAYP_INTERNAL, value),
-						listToCons(List.of(new LispSymbol(LispNames.EQUAL), callOf(LispNames.ARRAY_ELEMENT_TYPE, value),
-								listToCons(List.of(new LispSymbol(LispNames.QUOTE), expectedElementType))))));
+				else {
+					LispVal expectedElementType = packedElement != null ? packedElement : LispTrue.INSTANCE;
+					base = listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.ARRAYP_INTERNAL, value),
+							listToCons(List.of(new LispSymbol(LispNames.EQUAL),
+									callOf(LispNames.ARRAY_ELEMENT_TYPE, value),
+									listToCons(List.of(new LispSymbol(LispNames.QUOTE), expectedElementType))))));
+				}
+				return sizeTest == null ? base : listToCons(List.of(new LispSymbol(LispNames.AND), base, sizeTest));
 			}
-			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING":
-				// (simple-string SIZE): the size is not checked.
+			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING": {
+				// (string SIZE): a string of EXACTLY that length; * (or an omitted size)
+				// is
+				// any length. The size is load-bearing, not decoration -- esrap
+				// classifies
+				// an ordered choice with (typep sub '(or character (string 1))), and an
+				// unchecked size made every string look one character long, so
+				// (or "foo" "bar") compiled to the single-character dispatch.
+				if (parts.size() > 1 && !isWildcardTypeArgument(parts.get(1))) {
+					return listToCons(List
+						.of(new LispSymbol(LispNames.AND), callOf(LispNames.STRINGP, value), listToCons(
+								List.of(new LispSymbol(LispNames.EQ), callOf(LispNames.LENGTH, value), parts.get(1)))));
+				}
 				return callOf(LispNames.STRINGP, value);
+			}
+			case "CONS": {
+				// (cons CAR-TYPE CDR-TYPE): consp plus a test on each half, with * (or an
+				// omitted argument) meaning "any". This case is what makes a RECURSIVE
+				// list-shape specifier work -- esrap's expression kinds are all of the
+				// form
+				// (cons (eql function) (cons symbol null)) -- and without it the
+				// arguments
+				// fell through to the ranged-numeric default below and were compiled as
+				// numeric BOUNDS, which evaluated `function` as a variable.
+				if (parts.size() > 3) {
+					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				List<LispVal> tests = new java.util.ArrayList<>();
+				tests.add(new LispSymbol(LispNames.AND));
+				tests.add(callOf(LispNames.CONSP, value));
+				if (parts.size() > 1 && !isWildcardTypeArgument(parts.get(1))) {
+					tests.add(makeTypeTest(callOf(LispNames.CAR, value), parts.get(1), closRegistry));
+				}
+				if (parts.size() > 2 && !isWildcardTypeArgument(parts.get(2))) {
+					tests.add(makeTypeTest(callOf(LispNames.CDR, value), parts.get(2), closRegistry));
+				}
+				return listToCons(tests);
+			}
 			case "UNSIGNED-BYTE": {
 				// (unsigned-byte N) = (integer 0 (2^N - 1)).
 				List<LispVal> tests = new java.util.ArrayList<>();
@@ -19063,6 +19336,17 @@ public final class LispMacroExpander {
 				String pred = atomicTypePredicate(plainTypeName(head));
 				if (pred == null) {
 					throw new IllegalArgumentException("Unsupported type specifier: " + spec.print());
+				}
+				if (!NUMERIC_TYPE_PREDICATES.contains(pred)) {
+					// A compound spelling of a NON-numeric atomic type -- (function (t)
+					// t),
+					// (hash-table ...). Its arguments are not range bounds and nothing
+					// here
+					// can test them, so the base predicate alone answers, the same "the
+					// size is not checked" bargain (simple-string SIZE) makes. Reading
+					// them
+					// as bounds is what the cons case above documents going wrong.
+					return callOf(pred, value);
 				}
 				// A ranged numeric type like (integer 0 10): the base predicate plus
 				// bound checks; * is unbounded and (n) is an exclusive bound.
@@ -24532,26 +24816,40 @@ public final class LispMacroExpander {
 	public static List<LispVal> injectMvSpillGlobal(List<LispVal> program) {
 		boolean usesMv = false;
 		boolean usesFloatFormat = false;
-		boolean usesPrintEscape = false;
-		boolean usesPrintReadably = false;
+		// The printer-mode variables the program actually mentions, in PRINTER_MODE_VARS
+		// order so the emitted program stays deterministic
+		// (.kb/emitted-output-determinism.md).
+		java.util.List<String> printerVars = new java.util.ArrayList<>();
 		// The load-context pathname variables (LispNames.LOAD_TRUENAME_VAR &c) plus
 		// *readtable*, which a loader binds in the same let (clack's %load-file binds all
-		// four around its read/eval loop). On the compile paths they are all nil and stay
-		// nil: a library file is SPLICED into the program at compile time, so nothing is
-		// being loaded -- nor compile-file'd -- at run time, and the reader is the
-		// frontend's, with no runtime readtable object to name. Declared anyway so a
-		// library that reads or rebinds one (local-time's
-		// (or *compile-file-truename* *load-truename*) zoneinfo lookup) compiles; nil is
-		// also what the interpreter's *readtable* holds, so the value agrees everywhere.
+		// four around its read/eval loop), and *modules*. On the compile paths they are
+		// all
+		// nil and stay nil: a library file is SPLICED into the program at compile time,
+		// so
+		// nothing is being loaded -- nor compile-file'd, nor require'd/provide'd -- at
+		// run
+		// time, and the reader is the frontend's, with no runtime readtable object to
+		// name.
+		// Declared anyway so a library that reads or rebinds one (local-time's
+		// (or *compile-file-truename* *load-truename*) zoneinfo lookup, esrap's
+		// (member "SWANK-INDENTATION" *modules*) editor probe) compiles; nil is also what
+		// the interpreter's *readtable* holds, so the value agrees everywhere.
 		java.util.List<String> loadContextVars = new java.util.ArrayList<>();
 		for (LispVal form : program) {
 			usesMv = usesMv || usesMvOperator(form);
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
-			usesPrintEscape = usesPrintEscape || usesSymbol(form, LispNames.PRINT_ESCAPE_VAR);
-			usesPrintReadably = usesPrintReadably || usesSymbol(form, LispNames.PRINT_READABLY_VAR);
+		}
+		for (String name : PRINTER_MODE_VARS.keySet()) {
+			for (LispVal form : program) {
+				if (usesSymbol(form, name)) {
+					printerVars.add(name);
+					break;
+				}
+			}
 		}
 		for (String name : List.of(LispNames.LOAD_PATHNAME_VAR, LispNames.LOAD_TRUENAME_VAR,
-				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR)) {
+				LispNames.COMPILE_FILE_PATHNAME_VAR, LispNames.COMPILE_FILE_TRUENAME_VAR, LispNames.READTABLE_VAR,
+				LispNames.MODULES_VAR)) {
 			for (LispVal form : program) {
 				if (usesSymbol(form, name)) {
 					loadContextVars.add(name);
@@ -24559,24 +24857,23 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		if (!usesMv && !usesFloatFormat && !usesPrintEscape && !usesPrintReadably && loadContextVars.isEmpty()) {
+		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty()) {
 			return program;
 		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 4 + loadContextVars.size());
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 2 + printerVars.size() + loadContextVars.size());
 		for (String name : loadContextVars) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));
 		}
-		// The printer-mode variables: declared with defvar (not setq) because the
-		// print-object route BINDS *print-escape* around the method call, and only a
+		// The printer-mode variables: declared with defvar (not setq) because they are
+		// BOUND, not just read -- the print-object route binds *print-escape* around the
+		// method call and `write` binds the whole set around one print -- and only a
 		// proclaimed-special name gets a dynamic binding. This pass runs AFTER
 		// expandTopLevelDefinitions, so the route's own reference is already in view.
-		if (usesPrintEscape) {
-			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
-					LispTrue.INSTANCE)));
-		}
-		if (usesPrintReadably) {
-			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.PRINT_READABLY_VAR),
-					LispNil.INSTANCE)));
+		for (java.util.Map.Entry<String, java.util.function.Supplier<LispVal>> entry : PRINTER_MODE_VARS.entrySet()) {
+			if (printerVars.contains(entry.getKey())) {
+				out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(entry.getKey()),
+						entry.getValue().get())));
+			}
 		}
 		if (usesMv) {
 			out.add(listToCons(

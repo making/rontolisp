@@ -540,6 +540,35 @@ public final class Environment implements Scope {
 		// so the method can tell prin1 from princ (LispMacroExpander.printObjectCall).
 		env.define(LispNames.PRINT_ESCAPE_VAR, LispTrue.INSTANCE);
 		env.define(LispNames.PRINT_READABLY_VAR, LispNil.INSTANCE);
+		// The pretty-printer control variables. *print-pretty* is t as in most
+		// implementations, and gates the one thing the subset really does -- a MANDATORY
+		// line break; the three width variables are accepted and ignored because a
+		// conditional break needs a column no backend tracks (.kb/pretty-printer.md).
+		env.define(LispNames.PRINT_PRETTY_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.PRINT_RIGHT_MARGIN_VAR, LispNil.INSTANCE);
+		env.define(LispNames.PRINT_MISER_WIDTH_VAR, LispNil.INSTANCE);
+		env.define(LispNames.PRINT_LINES_VAR, LispNil.INSTANCE);
+		// The remaining CL printer-control variables. Every default here is what the
+		// printer ACTUALLY does, so a program that only reads them sees the truth;
+		// binding one to a non-default value is what has no effect.
+		env.define(LispNames.PRINT_LENGTH_VAR, LispNil.INSTANCE);
+		env.define(LispNames.PRINT_LEVEL_VAR, LispNil.INSTANCE);
+		env.define(LispNames.PRINT_BASE_VAR, new LispInteger(10));
+		env.define(LispNames.PRINT_RADIX_VAR, LispNil.INSTANCE);
+		env.define(LispNames.PRINT_CASE_VAR, new LispSymbol(":UPCASE"));
+		env.define(LispNames.PRINT_ARRAY_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.PRINT_GENSYM_VAR, LispTrue.INSTANCE);
+		// The remaining standard stream variables, all the t designator like
+		// *standard-output* (see LispNames.TRACE_OUTPUT_VAR).
+		env.define(LispNames.TRACE_OUTPUT_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.DEBUG_IO_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.QUERY_IO_VAR, LispTrue.INSTANCE);
+		env.define(LispNames.TERMINAL_IO_VAR, LispTrue.INSTANCE);
+		// The initial pprint dispatch table: a one-element list holding the (empty) entry
+		// list, mutable so set-pprint-dispatch can add to the table it is handed.
+		env.define(LispNames.PRINT_PPRINT_DISPATCH_VAR, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE));
+		// The provided-module list `provide` pushes onto and `require` consults.
+		env.define(LispNames.MODULES_VAR, LispNil.INSTANCE);
 		// Accepted and ignored: the reader is not readtable-driven, a "readtable" is an
 		// opaque nil token (see LispNames.COPY_READTABLE).
 		env.define(LispNames.READTABLE_VAR, LispNil.INSTANCE);

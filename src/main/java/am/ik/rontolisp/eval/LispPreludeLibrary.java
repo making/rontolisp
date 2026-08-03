@@ -38,6 +38,11 @@ import org.jspecify.annotations.Nullable;
  * {@code string-not-equal} -- lexicographic comparison returning the mismatch index or
  * nil, with {@code :start1}/{@code :end1}/{@code :start2}/{@code :end2}; all ten share
  * the {@code %string-compare} walk.</li>
+ * <li>{@code char-lessp} / {@code char-greaterp} / {@code char-not-lessp} /
+ * {@code char-not-greaterp} -- the case-insensitive character ordering chain, all four
+ * over the shared {@code %char-fold-chain} walk; {@code char-not-equal} (pairwise
+ * distinct, like {@code char/=}); and {@code graphic-char-p} / {@code standard-char-p} by
+ * code point.</li>
  * <li>{@code get-setf-expansion} -- the five setf-expansion values (lite: variable and
  * accessor-cons places, environment ignored), consumed through the ordinary
  * {@code %mv-spill} channel by a {@code multiple-value-bind} caller.</li>
@@ -78,6 +83,11 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code rontolisp:alist-plist} / {@code rontolisp:plist-alist} -- the same pair of
  * lightweight {@code alexandria} subsets without the hash table in between, so both
  * directions preserve the input order.</li>
+ * <li>{@code write} / {@code pprint} plus the pretty-printer subset
+ * ({@code pprint-newline}, {@code pprint-indent}, {@code pprint-tab},
+ * {@code copy-pprint-dispatch} / {@code set-pprint-dispatch} / {@code pprint-dispatch})
+ * -- see {@code .kb/pretty-printer.md} for what is real (the keyword bindings, the
+ * dispatch tables) and what a stream with no column cannot do.</li>
  * </ul>
  */
 public final class LispPreludeLibrary {
@@ -824,6 +834,159 @@ public final class LispPreludeLibrary {
 				(defun string-not-equal (string1 string2 &key (start1 0) end1 (start2 0) end2)
 				  (let ((r (%string-compare string1 string2 start1 end1 start2 end2 t)))
 				    (if (= (car r) 0) nil (cdr r))))
+				""");
+		// The case-INSENSITIVE character ordering family, on the same "one shared walk,
+		// one-line operators" plan as %string-compare above: %char-fold-chain checks each
+		// ADJACENT pair's sign against [lo, hi] after downcasing both, which is exactly
+		// the
+		// interpreter's Java charCompareChain with a fold added. char-not-equal is the
+		// odd
+		// one out -- CL specifies it as ALL arguments pairwise distinct, not adjacent
+		// ones,
+		// so it gets its own quadratic walk (mirroring char/=).
+		SOURCES.put(LispNames.CHAR_FOLD_CHAIN, """
+				(defun %char-fold-chain (chars lo hi)
+				  (let ((ok t))
+				    (while (and ok (cdr chars))
+				      (let* ((a (char-code (char-downcase (car chars))))
+				             (b (char-code (char-downcase (car (cdr chars)))))
+				             (s (cond ((< a b) -1) ((> a b) 1) (t 0))))
+				        (if (and (>= s lo) (<= s hi))
+				            (setq chars (cdr chars))
+				            (setq ok nil))))
+				    ok))
+				""");
+		SOURCES.put(LispNames.CHAR_LESSP, """
+				(defun char-lessp (character &rest more-characters)
+				  (%char-fold-chain (cons character more-characters) -1 -1))
+				""");
+		SOURCES.put(LispNames.CHAR_GREATERP, """
+				(defun char-greaterp (character &rest more-characters)
+				  (%char-fold-chain (cons character more-characters) 1 1))
+				""");
+		SOURCES.put(LispNames.CHAR_NOT_GREATERP, """
+				(defun char-not-greaterp (character &rest more-characters)
+				  (%char-fold-chain (cons character more-characters) -1 0))
+				""");
+		SOURCES.put(LispNames.CHAR_NOT_LESSP, """
+				(defun char-not-lessp (character &rest more-characters)
+				  (%char-fold-chain (cons character more-characters) 0 1))
+				""");
+		SOURCES.put(LispNames.CHAR_NOT_EQUAL, """
+				(defun char-not-equal (character &rest more-characters)
+				  (let ((rest (cons character more-characters))
+				        (ok t))
+				    (while rest
+				      (let ((a (char-code (char-downcase (car rest)))))
+				        (dolist (b (cdr rest))
+				          (when (= a (char-code (char-downcase b)))
+				            (setq ok nil))))
+				      (setq rest (cdr rest)))
+				    ok))
+				""");
+		// The graphic / standard character predicates, by code point: 32..126 prints on
+		// every backend, and so does everything from 160 up (128..159 is the C1 control
+		// block). Newline is NOT graphic but IS standard -- the one place the two
+		// predicates disagree, and the reason describe-terminal prints a character's name
+		// rather than the character for it.
+		SOURCES.put(LispNames.GRAPHIC_CHAR_P, """
+				(defun graphic-char-p (character)
+				  (let ((n (char-code character)))
+				    (if (or (and (> n 31) (< n 127)) (> n 159)) t nil)))
+				""");
+		SOURCES.put(LispNames.STANDARD_CHAR_P, """
+				(defun standard-char-p (character)
+				  (let ((n (char-code character)))
+				    (if (or (and (> n 31) (< n 127)) (= n 10)) t nil)))
+				""");
+		// The printer entry point: CL specifies write's keywords as BINDINGS of the
+		// printer
+		// control variables around one print, so that is literally what this does -- the
+		// keywords rontolisp models take effect, the ones it does not are inert because
+		// the
+		// variable they bind is inert (.kb/pretty-printer.md). Only :escape / :readably
+		// change the text, and they pick between the two conversions every backend has.
+		SOURCES.put(LispNames.WRITE, """
+				(defun write (object &key (stream *standard-output*)
+				                          (escape *print-escape*) (readably *print-readably*)
+				                          (pretty *print-pretty*) (circle *print-circle*)
+				                          (right-margin *print-right-margin*)
+				                          (miser-width *print-miser-width*)
+				                          (lines *print-lines*)
+				                          (pprint-dispatch *print-pprint-dispatch*))
+				  (let ((*print-escape* escape) (*print-readably* readably)
+				        (*print-pretty* pretty) (*print-circle* circle)
+				        (*print-right-margin* right-margin) (*print-miser-width* miser-width)
+				        (*print-lines* lines) (*print-pprint-dispatch* pprint-dispatch))
+				    (write-string (if (or *print-escape* *print-readably*)
+				                      (prin1-to-string object)
+				                      (princ-to-string object))
+				                  stream))
+				  object)
+				""");
+		SOURCES.put(LispNames.PPRINT, """
+				(defun pprint (object &optional (stream *standard-output*))
+				  (terpri stream)
+				  (write object :stream stream :escape t :pretty t)
+				  (values))
+				""");
+		// A conditional line break needs the stream's current column; no backend tracks
+		// one, so only :mandatory breaks and the other three kinds are no-ops. That is
+		// the
+		// SAME rule the format logical block follows (.kb/format.md), and it is why
+		// *print-right-margin* is accepted and ignored rather than partly honored.
+		SOURCES.put(LispNames.PPRINT_NEWLINE, """
+				(defun pprint-newline (kind &optional (stream *standard-output*))
+				  (when (and *print-pretty* (eq kind :mandatory))
+				    (terpri stream))
+				  nil)
+				""");
+		SOURCES.put(LispNames.PPRINT_INDENT, """
+				(defun pprint-indent (relative-to n &optional (stream *standard-output*))
+				  nil)
+				""");
+		SOURCES.put(LispNames.PPRINT_TAB, """
+				(defun pprint-tab (kind colnum colinc &optional (stream *standard-output*))
+				  nil)
+				""");
+		// A pprint dispatch table is a one-element LIST holding the entry list, so
+		// set-pprint-dispatch can mutate a table it was handed (rplaca) -- the whole
+		// point
+		// of the (copy-pprint-dispatch) + set-pprint-dispatch idiom esrap builds its
+		// result
+		// printer with. Each entry is (type-specifier function priority).
+		SOURCES.put(LispNames.COPY_PPRINT_DISPATCH, """
+				(defun copy-pprint-dispatch (&optional (table *print-pprint-dispatch*))
+				  (list (if (consp table) (copy-list (car table)) nil)))
+				""");
+		SOURCES.put(LispNames.SET_PPRINT_DISPATCH, """
+				(defun set-pprint-dispatch (type-specifier function
+				                            &optional (priority 0) (table *print-pprint-dispatch*))
+				  (when (consp table)
+				    (let ((kept nil))
+				      (dolist (entry (car table))
+				        (unless (equal (car entry) type-specifier)
+				          (setq kept (cons entry kept))))
+				      (when function
+				        (setq kept (cons (list type-specifier function priority) kept)))
+				      (rplaca table (reverse kept))))
+				  nil)
+				""");
+		SOURCES.put(LispNames.PPRINT_DISPATCH, """
+				(defun pprint-dispatch (object &optional (table *print-pprint-dispatch*))
+				  (let ((best nil))
+				    (when (consp table)
+				      (dolist (entry (car table))
+				        (when (and (typep object (car entry))
+				                   (or (null best) (> (third entry) (third best))))
+				          (setq best entry))))
+				    (if best
+				        (values (second best) t)
+				        (values #'%pprint-dispatch-default nil))))
+				""");
+		SOURCES.put(LispNames.PPRINT_DISPATCH_DEFAULT, """
+				(defun %pprint-dispatch-default (stream object)
+				  (write object :stream stream))
 				""");
 	}
 

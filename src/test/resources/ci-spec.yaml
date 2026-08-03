@@ -1427,9 +1427,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      367
+      382
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -7210,3 +7210,103 @@ cases:
       :FROM-OWNER
       (T T)
       (1 NIL NIL)
+  - name: esrap-enablement-language-group
+    source: |
+      ;; the esrap (.todo/248) enablement batch: general language features the
+      ;; verbatim esrap-20260101-git load and run forced, none esrap-specific.
+      ;; The real (asdf:load-system "esrap") + mito's migration grammar run in
+      ;; EsrapE2eTest (all four backends; the .asd cannot ride the concatenated
+      ;; driver).
+      ;; (cons CAR-TYPE CDR-TYPE): esrap's whole expression-kind table is of
+      ;; this shape, and its arguments used to be read as numeric range bounds
+      (print (list (typep '(function bar) '(cons (eql function) (cons symbol null)))
+                   (typep '(function bar baz) '(cons (eql function) (cons symbol null)))
+                   (typep '(1 . 2) '(cons integer integer))
+                   (typep '(1 . 2) '(cons * integer))
+                   (typep 5 '(cons (eql or)))))
+      ;; the SIZE of (string N) / (simple-vector N) is checked: the ordered-choice
+      ;; classifier tests (or character (string 1)), the packrat cache dispatches
+      ;; on (simple-vector 41)
+      (print (list (typep "f" '(string 1)) (typep "foo" '(string 1))
+                   (typep #\f '(or character (string 1)))
+                   (typep (make-array 41) '(simple-vector 41))
+                   (typep (make-array 4) '(simple-vector 41))
+                   (typep (make-array 3) '(vector t 3))))
+      ;; a constant DOTTED pair in a template that also carries a nested
+      ;; backquote (esrap's *expression-kinds* alist)
+      (print `((a . (eql a))
+               ,@(mapcar (lambda (s) `(,s . (cons (eql ,s)))) '(x y))
+               (terminal . terminal)
+               (t . t)))
+      ;; more than one (:constructor ...) on one defstruct -- all are defined
+      (defstruct (ci-es-span (:constructor make-ci-es-span (start end))
+                             (:constructor make-ci-es-empty (start))
+                             (:copier nil))
+        start (end 0))
+      (print (list (ci-es-span-start (make-ci-es-span 1 2)) (ci-es-span-end (make-ci-es-span 1 2))
+                   (ci-es-span-start (make-ci-es-empty 7)) (ci-es-span-end (make-ci-es-empty 7))))
+      ;; :test-not -- the complemented equality designator (esrap prunes its
+      ;; error-report tree with (remove max children :test-not #'= :key #'first))
+      (print (list (remove 3 '((1 a) (3 b) (3 c) (2 d)) :test-not #'= :key #'first)
+                   (member 3 '(1 2 3) :test-not #'=)
+                   (assoc 1 '((1 . a) (2 . b)) :test-not #'=)
+                   (count 1 '(1 2 3) :test-not #'=)
+                   (position 1 '(1 2 3) :test-not #'=)))
+      ;; reduce over an EMPTY sequence calls the function with ZERO arguments
+      (print (list (reduce #'append '()) (reduce #'+ '()) (funcall #'append)
+                   (reduce #'append '((1 2) (3)))))
+      ;; count with :start/:end (esrap's line/column report counts newlines)
+      (print (list (count #\a "abcabc" :end 3) (count #\a "abcabc")))
+      ;; the case-insensitive character ordering family + graphic/standard-char-p
+      (print (list (char-lessp #\a #\B) (char-lessp #\B #\a) (char-greaterp #\b #\A)
+                   (char-not-lessp #\b #\A) (char-not-greaterp #\a #\B)
+                   (char-not-equal #\a #\b #\c) (char-not-equal #\a #\b #\A)
+                   (graphic-char-p #\a) (graphic-char-p #\Newline)
+                   (standard-char-p #\Newline) (standard-char-p #\Tab)))
+      ;; write + the pprint-dispatch tables + pprint-logical-block
+      (print (with-output-to-string (s) (write "hi" :stream s)))
+      (print (with-output-to-string (s) (write "hi" :stream s :escape nil)))
+      (print (let ((d (copy-pprint-dispatch)))
+               (set-pprint-dispatch 'string (lambda (s x) (write x :stream s :escape t)) 0 d)
+               (with-output-to-string (out) (funcall (pprint-dispatch "abc" d) out "abc"))))
+      (print (with-output-to-string (s)
+               (pprint-logical-block (s '(1 2 3) :prefix "<" :suffix ">") (princ "body" s))))
+      (print (with-output-to-string (s)
+               (pprint-logical-block (s 5 :prefix "<" :suffix ">") (princ "body" s))))
+      ;; the format logical block and ~/name/ (esrap's parse-error report is
+      ;; built out of them). ~< declines in the static expansion, so both the
+      ;; literal and the runtime control render through the shared renderer.
+      (defun ci-es-brackets (s x &optional c a) (princ (if c "[" "<") s) (princ x s)
+        (princ (if a "]" ">") s))
+      (print (format nil "~@<a~:@_b~:>"))
+      (print (format nil "~@<Problem: ~a~@:_~@:_more~:>" "oops"))
+      (print (format nil "~<~@;~a-~a~:>" (list "a" "b")))
+      (print (format nil "~<~a~;~a~>" 1 2))
+      (print (format nil "~/ci-es-brackets/ ~:@/ci-es-brackets/" 1 2))
+      (print (let ((c "~@<~{~a~^, ~}~:>")) (format nil c '(1 2 3))))
+      ;; *modules* is what provide records and require consults
+      (print *modules*)
+    expected: |
+      (T NIL T T NIL)
+      (T NIL T T NIL T)
+      ((A EQL A) (X CONS (EQL X)) (Y CONS (EQL Y)) (TERMINAL . TERMINAL) (T . T))
+      (1 2 7 0)
+      (((3 B) (3 C)) (1 2 3) (2 . B) 2 1)
+      (NIL 0 NIL (1 2 3))
+      (1 2)
+      (T NIL T T T T NIL T NIL T NIL)
+      "\"hi\""
+      "hi"
+      "\"abc\""
+      "<body>"
+      "5"
+      "a
+      b"
+      "Problem: oops
+
+      more"
+      "a-b"
+      "12"
+      "<1> [2]"
+      "1, 2, 3"
+      NIL

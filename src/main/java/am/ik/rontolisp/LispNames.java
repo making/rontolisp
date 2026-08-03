@@ -2287,6 +2287,13 @@ public final class LispNames {
 	 */
 	public static final String STRING_COMPARE = "%STRING-COMPARE";
 
+	/**
+	 * The {@code %char-fold-chain} internal helper backing the case-INSENSITIVE character
+	 * ordering family ({@code char-lessp} and friends): one adjacent-pair walk over
+	 * downcased code points, accepting a sign in {@code [lo, hi]}.
+	 */
+	public static final String CHAR_FOLD_CHAIN = "%CHAR-FOLD-CHAIN";
+
 	/** The {@code string-trim} built-in function. */
 	public static final String STRING_TRIM = "STRING-TRIM";
 
@@ -2428,6 +2435,48 @@ public final class LispNames {
 	 * The {@code char-equal} built-in function (case-insensitive {@code char=} chain).
 	 */
 	public static final String CHAR_EQUAL = "CHAR-EQUAL";
+
+	/**
+	 * The {@code char-not-equal} built-in function (case-insensitive {@code char/=}: all
+	 * arguments pairwise distinct once downcased). A prelude defun.
+	 */
+	public static final String CHAR_NOT_EQUAL = "CHAR-NOT-EQUAL";
+
+	/**
+	 * The {@code char-lessp} built-in function (case-insensitive {@code char<} chain). A
+	 * prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_LESSP = "CHAR-LESSP";
+
+	/**
+	 * The {@code char-greaterp} built-in function (case-insensitive {@code char>} chain).
+	 * A prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_GREATERP = "CHAR-GREATERP";
+
+	/**
+	 * The {@code char-not-greaterp} built-in function (case-insensitive {@code char<=}
+	 * chain). A prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_NOT_GREATERP = "CHAR-NOT-GREATERP";
+
+	/**
+	 * The {@code char-not-lessp} built-in function (case-insensitive {@code char>=}
+	 * chain). A prelude defun over {@link #CHAR_FOLD_CHAIN}.
+	 */
+	public static final String CHAR_NOT_LESSP = "CHAR-NOT-LESSP";
+
+	/**
+	 * The {@code graphic-char-p} built-in function (true for a printing character --
+	 * space included, newline excluded). A prelude defun over the code point.
+	 */
+	public static final String GRAPHIC_CHAR_P = "GRAPHIC-CHAR-P";
+
+	/**
+	 * The {@code standard-char-p} built-in function (true for the 96 standard characters:
+	 * the printing ASCII range plus newline). A prelude defun over the code point.
+	 */
+	public static final String STANDARD_CHAR_P = "STANDARD-CHAR-P";
 
 	/** The {@code char-upcase} built-in function (the uppercase form of a character). */
 	public static final String CHAR_UPCASE = "CHAR-UPCASE";
@@ -2997,6 +3046,76 @@ public final class LispNames {
 	 * operation to the CURRENT value of the symbol it names.
 	 */
 	public static final String MAKE_SYNONYM_STREAM = "MAKE-SYNONYM-STREAM";
+
+	// The printer entry points and the pretty-printer subset (.kb/pretty-printer.md)
+
+	/**
+	 * The {@code write} standard function: the printer entry point whose keyword
+	 * arguments BIND the printer control variables around one print. A prelude defun over
+	 * {@code prin1-to-string} / {@code princ-to-string}.
+	 */
+	public static final String WRITE = "WRITE";
+
+	/**
+	 * The {@code pprint} standard function: a fresh line then {@code write} with
+	 * {@code :escape t :pretty t}, returning no values. A prelude defun.
+	 */
+	public static final String PPRINT = "PPRINT";
+
+	/**
+	 * The {@code pprint-logical-block} standard macro: writes the prefix, runs the body,
+	 * writes the suffix. rontolisp streams carry no column, so the block never WRAPS --
+	 * see {@link #PPRINT_NEWLINE}.
+	 */
+	public static final String PPRINT_LOGICAL_BLOCK = "PPRINT-LOGICAL-BLOCK";
+
+	/**
+	 * The {@code pprint-newline} standard function: a line break for {@code :mandatory},
+	 * nothing for the three conditional kinds ({@code :linear} / {@code :fill} /
+	 * {@code :miser}) -- deciding those needs the stream's current column, which no
+	 * backend tracks. A prelude defun.
+	 */
+	public static final String PPRINT_NEWLINE = "PPRINT-NEWLINE";
+
+	/**
+	 * The {@code pprint-indent} standard function: accepted and ignored (no column
+	 * tracking, so no indentation state exists to change). A prelude defun.
+	 */
+	public static final String PPRINT_INDENT = "PPRINT-INDENT";
+
+	/**
+	 * The {@code pprint-tab} standard function: accepted and ignored, like
+	 * {@link #PPRINT_INDENT}. A prelude defun.
+	 */
+	public static final String PPRINT_TAB = "PPRINT-TAB";
+
+	/**
+	 * The {@code copy-pprint-dispatch} standard function: a fresh dispatch table holding
+	 * a copy of the argument's entries (an explicit nil means the INITIAL table, which is
+	 * empty here). A prelude defun.
+	 */
+	public static final String COPY_PPRINT_DISPATCH = "COPY-PPRINT-DISPATCH";
+
+	/**
+	 * The {@code set-pprint-dispatch} standard function: adds (or, with a nil function,
+	 * removes) the entry for a type specifier in a dispatch table. A prelude defun.
+	 */
+	public static final String SET_PPRINT_DISPATCH = "SET-PPRINT-DISPATCH";
+
+	/**
+	 * The {@code pprint-dispatch} standard function: the highest-priority entry function
+	 * matching an object, and whether one was found. A prelude defun.
+	 */
+	public static final String PPRINT_DISPATCH = "PPRINT-DISPATCH";
+
+	/**
+	 * The {@code %pprint-dispatch-default} internal helper: the {@code (stream object)}
+	 * printer {@code pprint-dispatch} answers with when no entry matches.
+	 */
+	public static final String PPRINT_DISPATCH_DEFAULT = "%PPRINT-DISPATCH-DEFAULT";
+
+	/** The {@code :stream} keyword argument of {@link #WRITE}. */
+	public static final String STREAM_KEYWORD = ":STREAM";
 
 	// Packages
 
@@ -5152,6 +5271,15 @@ public final class LispNames {
 	public static final String PRINT_CIRCLE_VAR = "*PRINT-CIRCLE*";
 
 	/**
+	 * {@code *modules*} -- the list of module name STRINGS {@code provide} has recorded,
+	 * and the very set {@code require} consults. On the compile paths it stays nil: a
+	 * {@code require} is resolved by splicing the file in at compile time
+	 * ({@code LoadInliner}), so no module is ever provided at run time. esrap's
+	 * editor-support reads it to detect a swank/slynk image.
+	 */
+	public static final String MODULES_VAR = "*MODULES*";
+
+	/**
 	 * {@code *print-escape*} -- t while {@code prin1}/{@code print}/{@code ~S} render and
 	 * nil while {@code princ}/{@code ~A} do, bound around the {@code print-object} method
 	 * call so a method can tell the two apart (quri's {@code uri} method renders the bare
@@ -5165,6 +5293,79 @@ public final class LispNames {
 	 * alongside {@link #PRINT_ESCAPE_VAR}.
 	 */
 	public static final String PRINT_READABLY_VAR = "*PRINT-READABLY*";
+
+	/**
+	 * {@code *print-pretty*} -- t, as in most implementations. It gates only the
+	 * pretty-printer subset ({@link #PPRINT_NEWLINE} and the format logical block); the
+	 * ordinary printer never changes layout, so binding it nil only turns MANDATORY line
+	 * breaks off.
+	 */
+	public static final String PRINT_PRETTY_VAR = "*PRINT-PRETTY*";
+
+	/**
+	 * {@code *print-right-margin*} -- nil, and accepted-and-ignored: a conditional line
+	 * break needs the stream's current column, which no backend tracks.
+	 */
+	public static final String PRINT_RIGHT_MARGIN_VAR = "*PRINT-RIGHT-MARGIN*";
+
+	/**
+	 * {@code *print-miser-width*} -- nil, accepted and ignored (see the margin above).
+	 */
+	public static final String PRINT_MISER_WIDTH_VAR = "*PRINT-MISER-WIDTH*";
+
+	/** {@code *print-lines*} -- nil, accepted and ignored (see the margin above). */
+	public static final String PRINT_LINES_VAR = "*PRINT-LINES*";
+
+	/**
+	 * {@code *print-length*} -- nil (print every element), which is also what the printer
+	 * does; binding it does not truncate. esrap's {@code print-object} on a parse result
+	 * binds it, so it has to EXIST on the compile paths.
+	 */
+	public static final String PRINT_LENGTH_VAR = "*PRINT-LENGTH*";
+
+	/** {@code *print-level*} -- nil (print to any depth), like the printer. */
+	public static final String PRINT_LEVEL_VAR = "*PRINT-LEVEL*";
+
+	/** {@code *print-base*} -- 10, the base the printer writes integers in. */
+	public static final String PRINT_BASE_VAR = "*PRINT-BASE*";
+
+	/** {@code *print-radix*} -- nil: no radix prefix, like the printer. */
+	public static final String PRINT_RADIX_VAR = "*PRINT-RADIX*";
+
+	/**
+	 * {@code *print-case*} -- {@code :upcase}, which is how the printer spells a symbol
+	 * (the reader upcases, {@code .kb/reader-case-upcase.md}).
+	 */
+	public static final String PRINT_CASE_VAR = "*PRINT-CASE*";
+
+	/** {@code *print-array*} -- t: an array prints its elements, like the printer. */
+	public static final String PRINT_ARRAY_VAR = "*PRINT-ARRAY*";
+
+	/** {@code *print-gensym*} -- t, CL's default. */
+	public static final String PRINT_GENSYM_VAR = "*PRINT-GENSYM*";
+
+	/**
+	 * {@code *trace-output*} -- the t designator (the process standard output), like
+	 * {@link #STANDARD_OUTPUT_VAR}. esrap's rule tracing formats to it.
+	 */
+	public static final String TRACE_OUTPUT_VAR = "*TRACE-OUTPUT*";
+
+	/** {@code *debug-io*} -- the t designator, read and written like the terminal. */
+	public static final String DEBUG_IO_VAR = "*DEBUG-IO*";
+
+	/** {@code *query-io*} -- the t designator (see {@link #DEBUG_IO_VAR}). */
+	public static final String QUERY_IO_VAR = "*QUERY-IO*";
+
+	/** {@code *terminal-io*} -- the t designator (see {@link #DEBUG_IO_VAR}). */
+	public static final String TERMINAL_IO_VAR = "*TERMINAL-IO*";
+
+	/**
+	 * {@code *print-pprint-dispatch*} -- the current pretty-print dispatch table, a
+	 * mutable one-element list holding the entry list. Real entries, real lookup through
+	 * {@link #PPRINT_DISPATCH}; the ordinary printing operators do NOT consult it (see
+	 * {@code .kb/pretty-printer.md}).
+	 */
+	public static final String PRINT_PPRINT_DISPATCH_VAR = "*PRINT-PPRINT-DISPATCH*";
 
 	/**
 	 * {@code %ieee754-double-bits} -- the IEEE 754 bits of a double as an unsigned 64-bit

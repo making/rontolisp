@@ -242,10 +242,26 @@ public final class LispEvaluator {
 
 	/**
 	 * The modules marked loaded by {@code provide}: a {@code require} of a member is a
-	 * no-op (the Common Lisp {@code *modules*} set, kept per evaluator so REPL state
-	 * persists across inputs like the resolver's current package).
+	 * no-op. This is CL's {@code *modules*}, and the VARIABLE is the authority rather
+	 * than a Java set beside it -- a program may push onto {@code *modules*} itself
+	 * (esrap's editor-support reads it to decide whether swank is present), and then a
+	 * {@code require} must see that. Kept in the global environment, so REPL state
+	 * persists across inputs like the resolver's current package.
 	 */
-	private final java.util.Set<String> providedModules = new java.util.HashSet<>();
+	private java.util.List<String> providedModules() {
+		List<String> names = new java.util.ArrayList<>();
+		LispVal modules = this.globalEnv.lookupOrNull(LispNames.MODULES_VAR);
+		while (modules instanceof LispCons cons) {
+			if (cons.car() instanceof LispString name) {
+				names.add(name.value());
+			}
+			else if (cons.car() instanceof LispSymbol name) {
+				names.add(name.name());
+			}
+			modules = cons.cdr();
+		}
+		return names;
+	}
 
 	/**
 	 * The systems registered by {@code asdf:defsystem} (evaluated inline or read out of a
@@ -345,6 +361,26 @@ public final class LispEvaluator {
 		// too (nothing here does).
 		this.specialVars.add(LispNames.PRINT_ESCAPE_VAR);
 		this.specialVars.add(LispNames.PRINT_READABLY_VAR);
+		// The pretty-printer control variables join them: `write` BINDS all of them
+		// around one print (CL's own definition of its keywords), and esrap rebinds
+		// *print-pprint-dispatch* around its result printer.
+		this.specialVars.add(LispNames.PRINT_PRETTY_VAR);
+		this.specialVars.add(LispNames.PRINT_CIRCLE_VAR);
+		this.specialVars.add(LispNames.PRINT_RIGHT_MARGIN_VAR);
+		this.specialVars.add(LispNames.PRINT_MISER_WIDTH_VAR);
+		this.specialVars.add(LispNames.PRINT_LINES_VAR);
+		this.specialVars.add(LispNames.PRINT_PPRINT_DISPATCH_VAR);
+		this.specialVars.add(LispNames.PRINT_LENGTH_VAR);
+		this.specialVars.add(LispNames.PRINT_LEVEL_VAR);
+		this.specialVars.add(LispNames.PRINT_BASE_VAR);
+		this.specialVars.add(LispNames.PRINT_RADIX_VAR);
+		this.specialVars.add(LispNames.PRINT_CASE_VAR);
+		this.specialVars.add(LispNames.PRINT_ARRAY_VAR);
+		this.specialVars.add(LispNames.PRINT_GENSYM_VAR);
+		this.specialVars.add(LispNames.TRACE_OUTPUT_VAR);
+		this.specialVars.add(LispNames.DEBUG_IO_VAR);
+		this.specialVars.add(LispNames.QUERY_IO_VAR);
+		this.specialVars.add(LispNames.TERMINAL_IO_VAR);
 		// *read-eval* joins them: (let ((*read-eval* nil)) (read ...)) must bind
 		// dynamically for the #. check in resolveReadTimeEval to see it.
 		this.specialVars.add(LispNames.READ_EVAL_VAR);
@@ -370,6 +406,26 @@ public final class LispEvaluator {
 	 * {@code slot-value}. Kept per evaluator, like the struct accessor registry.
 	 */
 	private final ClosRegistry closRegistry = new ClosRegistry();
+
+	/**
+	 * The {@code deftype} names this evaluator has registered, in registration order --
+	 * including the macro-GENERATED ones, which is why the compile path's
+	 * {@code UserMacroExpander} reads them back out (see
+	 * {@code emitMacroGeneratedDeftypes}).
+	 * @return the registered deftype names
+	 */
+	public java.util.Set<String> deftypeNames() {
+		return this.closRegistry.deftypeNames();
+	}
+
+	/**
+	 * The registered expansion of a {@code deftype} name, or null.
+	 * @param name the deftype name
+	 * @return the literal type specifier it expands to
+	 */
+	public @Nullable LispVal findDeftype(String name) {
+		return this.closRegistry.findDeftype(name);
+	}
 
 	/**
 	 * Generic-function name -&gt; the internal name the Java-backed built-in it shadows
@@ -1786,8 +1842,13 @@ public final class LispEvaluator {
 			if (args.size() == 2) {
 				LispVal list = Environment.seqAsList(args.get(1));
 				if (!(list instanceof LispCons first)) {
-					throw new LispEvalException(
-							"reduce requires a non-empty sequence when no initial value is provided");
+					// CL: an empty sequence with no :initial-value calls the function
+					// with
+					// ZERO arguments and returns that -- (reduce #'append '()) is nil,
+					// not
+					// an error. The compile paths get the same rule from the shared
+					// LispMacroExpander.expandReduce guard.
+					return apply(args.get(0), List.of(), this.globalEnv);
 				}
 				return reduceValues(args.get(0), first.car(), first.cdr());
 			}
@@ -1844,13 +1905,13 @@ public final class LispEvaluator {
 			// before the test. The default eql designator keeps the historic behavior of
 			// the eql-based scan.
 			requireTestKeyKeywords(LispNames.MEMBER, args, 2);
-			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			RuntimeTest test = runtimeTest(args, 2);
 			LispVal keyFn = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
 			LispVal item = args.get(0);
 			LispVal cur = args.get(1);
 			while (cur instanceof LispCons cell) {
 				LispVal elem = (keyFn == null) ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
-				if (isTruthy(apply(test, List.of(item, elem), this.globalEnv))) {
+				if (testMatches(test, item, elem)) {
 					return cell;
 				}
 				cur = cell.cdr();
@@ -1877,14 +1938,14 @@ public final class LispEvaluator {
 			// as (funcall fn key (car pair)), and :key applies a selector to each pair's
 			// car before the test, mirroring member.
 			requireTestKeyKeywords(LispNames.ASSOC, args, 2);
-			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			RuntimeTest test = runtimeTest(args, 2);
 			LispVal keyFn = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
 			LispVal key = args.get(0);
 			LispVal cur = args.get(1);
 			while (cur instanceof LispCons cell) {
 				if (cell.car() instanceof LispCons pair) {
 					LispVal elem = (keyFn == null) ? pair.car() : apply(keyFn, List.of(pair.car()), this.globalEnv);
-					if (isTruthy(apply(test, List.of(key, elem), this.globalEnv))) {
+					if (testMatches(test, key, elem)) {
 						return pair;
 					}
 				}
@@ -1898,14 +1959,14 @@ public final class LispEvaluator {
 			}
 			// The mirror of assoc: matches each pair's cdr instead of its car.
 			requireTestKeyKeywords(LispNames.RASSOC, args, 2);
-			LispVal test = keywordArg(args, 2, LispNames.TEST_KEYWORD, new LispSymbol(LispNames.EQL));
+			RuntimeTest test = runtimeTest(args, 2);
 			LispVal keyFn = optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD);
 			LispVal value = args.get(0);
 			LispVal cur = args.get(1);
 			while (cur instanceof LispCons cell) {
 				if (cell.car() instanceof LispCons pair) {
 					LispVal elem = (keyFn == null) ? pair.cdr() : apply(keyFn, List.of(pair.cdr()), this.globalEnv);
-					if (isTruthy(apply(test, List.of(value, elem), this.globalEnv))) {
+					if (testMatches(test, value, elem)) {
 						return pair;
 					}
 				}
@@ -2027,8 +2088,13 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.PROVIDE + " expects 1 argument, got " + args.size());
 			}
 			String name = moduleDesignator(LispNames.PROVIDE, args.get(0));
-			// A duplicate provide is a no-op, like Common Lisp.
-			this.providedModules.add(name);
+			// A duplicate provide is a no-op, like Common Lisp. Module names go onto
+			// *modules* as STRINGS, which is what CL specifies and what a (member "X"
+			// *modules* :test #'string=) probe expects.
+			if (!providedModules().contains(name)) {
+				this.globalEnv.set(LispNames.MODULES_VAR,
+						new LispCons(new LispString(name), this.globalEnv.lookup(LispNames.MODULES_VAR)));
+			}
 			return new LispSymbol(name);
 		}));
 		this.globalEnv.defineFunction(LispNames.REQUIRE, new LispFunction(LispNames.REQUIRE, args -> {
@@ -2036,7 +2102,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.REQUIRE + " expects 1 or 2 arguments, got " + args.size());
 			}
 			String name = moduleDesignator(LispNames.REQUIRE, args.get(0));
-			if (!this.providedModules.contains(name)) {
+			if (!providedModules().contains(name)) {
 				String path;
 				if (args.size() == 2) {
 					if (!(args.get(1) instanceof LispString str)) {
@@ -3619,6 +3685,8 @@ public final class LispEvaluator {
 					return eval(LispMacroExpander.expandWithOpenFile(cons), env);
 				case LispNames.WITH_OUTPUT_TO_STRING:
 					return eval(LispMacroExpander.expandWithOutputToString(cons), env);
+				case LispNames.PPRINT_LOGICAL_BLOCK:
+					return eval(LispMacroExpander.expandPprintLogicalBlock(cons), env);
 				case LispNames.WITH_ARENA_QUALIFIED:
 					// A reclamation boundary for --no-gc; a real GC already reclaims, so
 					// the interpreter runs the body as a plain progn.
@@ -7134,16 +7202,39 @@ public final class LispEvaluator {
 		return null;
 	}
 
+	/**
+	 * The {@code :test} / {@code :test-not} designator of a first-class sequence or alist
+	 * call, as ONE predicate: a {@code :test-not} designator's result is INVERTED.
+	 * Mirrors {@code LispMacroExpander.TestSpec}, so
+	 * {@code (apply #'member ... :test-not f)} decides the same way the compiled call
+	 * does.
+	 */
+	private record RuntimeTest(LispVal fn, boolean negated) {
+	}
+
+	private RuntimeTest runtimeTest(List<LispVal> args, int start) {
+		LispVal test = optionalKeywordArg(args, start, LispNames.TEST_KEYWORD);
+		if (test != null) {
+			return new RuntimeTest(test, false);
+		}
+		LispVal testNot = optionalKeywordArg(args, start, LispNames.TEST_NOT_KEYWORD);
+		return testNot != null ? new RuntimeTest(testNot, true) : new RuntimeTest(new LispSymbol(LispNames.EQL), false);
+	}
+
+	private boolean testMatches(RuntimeTest test, LispVal a, LispVal b) {
+		return test.negated() != isTruthy(apply(test.fn(), List.of(a, b), this.globalEnv));
+	}
+
 	// Validates the keyword tail of a sequence/alist call: keyword/value pairs only, and
-	// every keyword must be :test or :key. Unsupported keywords (:from-end, :start, ...)
-	// are rejected loudly rather than silently ignored, mirroring the compile-time check
-	// in LispMacroExpander.
+	// every keyword must be :test, :test-not or :key. Unsupported keywords (:from-end,
+	// :start, ...) are rejected loudly rather than silently ignored, mirroring the
+	// compile-time check in LispMacroExpander.
 	private static void requireTestKeyKeywords(String name, List<LispVal> args, int start) {
 		for (int i = start; i < args.size(); i += 2) {
-			if (!(args.get(i) instanceof LispSymbol kw)
-					|| (!LispNames.TEST_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
+			if (!(args.get(i) instanceof LispSymbol kw) || (!LispNames.TEST_KEYWORD.equals(kw.name())
+					&& !LispNames.TEST_NOT_KEYWORD.equals(kw.name()) && !LispNames.KEY_KEYWORD.equals(kw.name()))) {
 				throw new LispEvalException(
-						name + " expects keyword arguments :test/:key, got: " + args.get(i).print());
+						name + " expects keyword arguments :test/:test-not/:key, got: " + args.get(i).print());
 			}
 			if (i + 1 >= args.size()) {
 				throw new LispEvalException(name + " expects a value after " + kw.name());

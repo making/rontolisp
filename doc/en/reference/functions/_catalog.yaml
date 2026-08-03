@@ -111,6 +111,9 @@ categories:
       - { slug: princ-to-string, name: "princ-to-string" }
       - { slug: prin1-to-string, name: "prin1-to-string" }
       - { slug: write-to-string, name: "write-to-string" }
+      - { slug: write, name: "write" }
+      - { slug: pprint, name: "pprint pprint-newline pprint-indent pprint-tab" }
+      - { slug: pprint-dispatch, name: "copy-pprint-dispatch set-pprint-dispatch pprint-dispatch" }
   - title: "Strings"
     functions:
       - { slug: concatenate, name: "concatenate" }
@@ -134,9 +137,11 @@ categories:
       - { slug: char-code, name: "char-code" }
       - { slug: code-char, name: "code-char" }
       - { slug: char-compare, name: "char= char< char<= char> char>= char/= char-equal" }
+      - { slug: char-compare-ci, name: "char-lessp char-greaterp char-not-lessp char-not-greaterp char-not-equal" }
       - { slug: char-case, name: "char-upcase char-downcase" }
       - { slug: alpha-char-p, name: "alpha-char-p" }
       - { slug: alphanumericp, name: "alphanumericp" }
+      - { slug: graphic-char-p, name: "graphic-char-p standard-char-p" }
       - { slug: make-load-form-saving-slots, name: "make-load-form-saving-slots" }
       - { slug: sxhash, name: "sxhash" }
       - { slug: sbit, name: "sbit" }

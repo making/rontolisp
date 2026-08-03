@@ -248,7 +248,35 @@ public final class UserMacroExpander {
 				mopSplice.clear();
 			}
 		}
+		emitMacroGeneratedDeftypes(macroEval, result);
 		return result;
+	}
+
+	/**
+	 * Re-emits, as the zero-parameter {@code (deftype name () 'spec)} shape the
+	 * compilers' registry pass understands, every {@code deftype} the macro-time
+	 * evaluator learned that is NOT already a top-level {@code deftype} in the program.
+	 * The ones that are not are the macro-GENERATED ones: alexandria defines its whole
+	 * {@code positive-integer} / {@code array-index} family from one {@code macrolet}, so
+	 * nothing in the emitted program names them -- and a {@code typecase} clause using
+	 * one (esrap's lookahead expression kinds) failed the COMPILE while the interpreter,
+	 * which evaluates the macrolet and reaches evalDeftype, resolved it.
+	 */
+	private static void emitMacroGeneratedDeftypes(LispEvaluator macroEval, List<LispVal> result) {
+		java.util.Set<String> alreadyEmitted = new java.util.HashSet<>();
+		for (LispVal form : result) {
+			if (isOperator(form, LispNames.DEFTYPE) && form instanceof LispCons cons && cons.isProperList()
+					&& cons.toList().size() >= 2 && cons.toList().get(1) instanceof LispSymbol name) {
+				alreadyEmitted.add(name.name());
+			}
+		}
+		for (String name : macroEval.deftypeNames()) {
+			LispVal expansion = macroEval.findDeftype(name);
+			if (expansion != null && alreadyEmitted.add(name)) {
+				result.add(properList(List.of(new LispSymbol(LispNames.DEFTYPE), new LispSymbol(name), LispNil.INSTANCE,
+						properList(List.of(new LispSymbol(LispNames.QUOTE), expansion)))));
+			}
+		}
 	}
 
 	/**

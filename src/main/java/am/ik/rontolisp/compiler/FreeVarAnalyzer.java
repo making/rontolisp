@@ -276,6 +276,12 @@ public final class FreeVarAnalyzer {
 						case LispNames.DESTRUCTURING_BIND ->
 							collectFreeVars(LispMacroExpander.expandDestructuringBind(cons), boundVars, knownFunctions,
 									globals, specialNames, freeVars);
+						// Expand before walking: the default walk would misread the
+						// (stream object ...) spec as a call form, so the STREAM the body
+						// writes to would never count as a free variable.
+						case LispNames.PPRINT_LOGICAL_BLOCK ->
+							collectFreeVars(LispMacroExpander.expandPprintLogicalBlock(cons), boundVars, knownFunctions,
+									globals, specialNames, freeVars);
 						// handler-case binds each clause's condition variable; the
 						// default
 						// walk would misread it as a free reference (and the clause type
@@ -563,6 +569,10 @@ public final class FreeVarAnalyzer {
 						// Expand before walking (same reason as collectFreeVars).
 						case LispNames.DESTRUCTURING_BIND ->
 							collectCapturedVars(LispMacroExpander.expandDestructuringBind(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						// Expand before walking (same reason as collectFreeVars).
+						case LispNames.PPRINT_LOGICAL_BLOCK ->
+							collectCapturedVars(LispMacroExpander.expandPprintLogicalBlock(cons), localVars,
 									knownFunctions, captured, insideLambda);
 						// Expand before walking: the restart expansions introduce lambdas
 						// (restart invokers, handler type tests) whose captures of USER

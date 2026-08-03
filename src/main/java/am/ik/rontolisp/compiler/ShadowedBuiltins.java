@@ -89,13 +89,14 @@ public final class ShadowedBuiltins {
 	 */
 	private static final Set<String> EXPANSION_LOWERED = Set.of(LispNames.NE, LispNames.ASSOC, LispNames.ASSOC_IF,
 			LispNames.COUNT_IF, LispNames.DELETE_IF, LispNames.DELETE_IF_NOT, LispNames.EVERY,
-			LispNames.FILE_WRITE_DATE, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.FORMAT,
-			LispNames.FUNCALL, LispNames.MAPC, LispNames.MAPCAN, LispNames.MAPCAR, LispNames.MAPCON, LispNames.MAPHASH,
-			LispNames.MAPL, LispNames.MAPLIST, LispNames.MEMBER, LispNames.MEMBER_IF, LispNames.NSUBSTITUTE_IF,
-			LispNames.NSUBSTITUTE_IF_NOT, LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT,
-			LispNames.PROBE_FILE, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.REMOVE_IF, LispNames.REMOVE_IF_NOT,
-			LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS, LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SOME,
-			LispNames.SORT, LispNames.STABLE_SORT, LispNames.SUBSTITUTE_IF, LispNames.SUBSTITUTE_IF_NOT);
+			LispNames.FILE_WRITE_DATE, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.FIND_PACKAGE,
+			LispNames.FORMAT, LispNames.FUNCALL, LispNames.MAPC, LispNames.MAPCAN, LispNames.MAPCAR, LispNames.MAPCON,
+			LispNames.MAPHASH, LispNames.MAPL, LispNames.MAPLIST, LispNames.MEMBER, LispNames.MEMBER_IF,
+			LispNames.NSUBSTITUTE_IF, LispNames.NSUBSTITUTE_IF_NOT, LispNames.POSITION, LispNames.POSITION_IF,
+			LispNames.POSITION_IF_NOT, LispNames.PROBE_FILE, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.REMOVE_IF,
+			LispNames.REMOVE_IF_NOT, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
+			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SOME, LispNames.SORT, LispNames.STABLE_SORT,
+			LispNames.SUBSTITUTE_IF, LispNames.SUBSTITUTE_IF_NOT);
 
 	private static volatile @org.jspecify.annotations.Nullable Set<String> lowered;
 

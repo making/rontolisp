@@ -35,6 +35,9 @@
 | `fresh-line` | `(fresh-line)` | 標準出力がまだ行頭にない場合のみ改行を印字します。nilを返します |
 | `princ-to-string` | `(princ-to-string '(1 "x"))` | `"(1 x)"` -- `princ` が印字する文字列 |
 | `prin1-to-string` | `(prin1-to-string "abc")` | `"\"abc\""` -- `prin1` が印字する文字列(読み戻し可能な形式) |
+| `write` | `(write "hi" :escape nil)` | `hi` を印字します。各キーワードはその 1 回の出力のあいだ対応する印字制御変数を束縛します |
+| `pprint` `pprint-newline` `pprint-indent` `pprint-tab` | `(pprint-newline :mandatory s)` | 改行するのは `:mandatory` のときだけです。ストリームが桁位置を持たないため折り返しは起きません |
+| `copy-pprint-dispatch` `set-pprint-dispatch` `pprint-dispatch` | `(pprint-dispatch 21 table)` | プリティプリント・ディスパッチテーブル(エントリと検索は実装済み。通常の印字操作は参照しません) |
 | `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"`(`'string` / `'list` / `'vector` の 3 系統。コンパイラはリテラルの引用指定子を要求します) |
 | `string-upcase` | `(string-upcase "abc")` | `"ABC"`(WASMバックエンドでは大小文字変換はASCII限定です) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
@@ -78,10 +81,12 @@
 | `char-code` | `(char-code #\A)` | `65` -- 文字のコードポイント |
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
 | `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t`(コードポイントによる可変長引数比較) |
+| `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t`(大文字・小文字を区別しない比較の一群) |
 | `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A`(WASMバックエンドではASCII大小文字変換) |
 | `characterp` | `(characterp #\a)` | `t` |
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil`(WASMバックエンドではASCII文字) |
 | `alphanumericp` | `(alphanumericp #\x)`, `(alphanumericp #\-)` | `t`, `nil`(英字または10進数字) |
+| `graphic-char-p` `standard-char-p` | `(graphic-char-p #\Space)`, `(standard-char-p #\Newline)` | `t`, `t`(印字可能な文字 / 96 個の標準文字) |
 | `make-load-form-saving-slots` | `(make-load-form-saving-slots obj)` | ライト版スタブ: エラーをシグナル(faslダンパなし)。`make-load-form` メソッドをコンパイル可能にするために存在 |
 | `sxhash` | `(sxhash "ab")` | 構造的ハッシュ(整数/文字/文字列/シンボル/コンス)。実行内では安定、バックエンド間では非規定 |
 | `sbit` | `(sbit #*0110 1)` | ビットベクタ要素の読み取り。`(setf (sbit v i) b)` で書き込み |

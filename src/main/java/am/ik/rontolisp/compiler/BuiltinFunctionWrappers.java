@@ -473,6 +473,18 @@ public final class BuiltinFunctionWrappers {
 				List.of(foldReduce(name, call(LispNames.CDR, "r"), call(LispNames.CAR, "r"))));
 	}
 
+	// Variadic wrapper for append, the same shape as nconc's below. It has to be
+	// variadic, not binary: CL's (append) with ZERO arguments is nil, and that call is
+	// REACHABLE -- reduce over an empty sequence with no :initial-value calls its
+	// function with no arguments, which is exactly how esrap's
+	// (reduce #'append all-children) answers nil for a result node with no children.
+	private static WrapperDef variadicAppend() {
+		LispVal reduce = listToCons(
+				List.of(new LispSymbol(LispNames.REDUCE), foldLambda(LispNames.APPEND), new LispSymbol("r")));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), new LispSymbol("r"), reduce, LispNil.INSTANCE));
+		return new WrapperDef(LispNames.APPEND, List.of(LispNames.LAMBDA_REST, "r"), List.of(body));
+	}
+
 	// Variadic wrapper for nconc: (lambda (&rest r) (if r (reduce (lambda (a x) (nconc a
 	// x)) r) nil)). A left fold over the 2-arg nconc yields correct CL semantics -- each
 	// pair links the accumulator's last cdr to the next argument and the fold returns the
@@ -772,7 +784,7 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.CONS), binary(LispNames.EQ_GENERAL), binary(LispNames.EQL), binary(LispNames.EQUAL),
 			// min/max are variadic (need at least one argument)
 			variadicNonEmpty(LispNames.MIN), variadicNonEmpty(LispNames.MAX), binary(LispNames.NTHCDR),
-			binary(LispNames.APPEND),
+			variadicAppend(),
 			// List access (arity 1; first/rest/second/... compile via macro expansion)
 			unary(LispNames.CAR), unary(LispNames.CDR), unary(LispNames.FIRST), unary(LispNames.REST),
 			unary(LispNames.SECOND), unary(LispNames.THIRD), unary(LispNames.FOURTH), binary(LispNames.NTH),
@@ -948,7 +960,14 @@ public final class BuiltinFunctionWrappers {
 			// boundp/fboundp/symbol-value need the eval runtime, which is only emitted
 			// when the program calls them directly -- so none of those four can be a
 			// first-class value in compiled output (macroexpand precedent).
-			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unary(LispNames.INTERN));
+			unary(LispNames.SYMBOL_NAME), unary(LispNames.MAKE_SYMBOL), unary(LispNames.INTERN),
+			// find-package IS one of them, because its wrapper body is a COMPUTED
+			// designator and that already has a real lowering: the per-expression
+			// compilers rewrite it to a lookup in the package table the backend bakes in
+			// (LispMacroExpander.expandRuntimeFindPackage), which is exactly what
+			// #'find-package must answer. esrap's resolve-function reaches it with
+			// (mapcar #'find-package '(#:cl #:esrap)).
+			unary(LispNames.FIND_PACKAGE));
 
 	/** Backing set of {@link #names()}; initialized after {@code WRAPPER_DEFS}. */
 	private static final Set<String> WRAPPER_NAMES;

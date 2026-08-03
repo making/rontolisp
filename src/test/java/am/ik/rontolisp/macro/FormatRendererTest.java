@@ -46,7 +46,13 @@ class FormatRendererTest {
 			"~:@{[~a ~a]~}|'(1 2) '(3 4)", "~2{~a,~}|'(1 2 3 4)", "~d ~:d ~@d|-5 -1234567 -7",
 			"~,3f ~,2f|-3.14159 -0.005", "~e ~,3e|0.0 0.0", "~,3,2e|1234.5", "~$ ~,3$ ~2,4$|3.5 3.5 3.5",
 			"~:a ~:s|nil nil", "[~10@a]|\"hi\"", "~,,,4:b|255", "~a~^~a|1", "~{~a~^-~}|'(1 2 3)",
-			"~:{~a~^/~a~}|'((1 2) (3))", "&#x~x;|233" })
+			"~:{~a~^/~a~}|'((1 2) (3))", "&#x~x;|233",
+			// The logical block / justification family. The static expansion DECLINES
+			// every one of these, so both columns are the runtime renderer -- the rows
+			// are here so a future static implementation has to match it.
+			"~@<a~:@_b~:>|", "~@<a~_b~:>|", "~@<~a and ~a~:>|1 2", "~<~@;~a~:>|'(\"x\")",
+			"~<~@;~a-~a~:>|'(\"a\" \"b\")", "~<~a~;~a~>|1 2", "~@<x~;y~;z~:>|", "~@<~{~a~^, ~}~:>|'(1 2 3)",
+			"before ~@<in~:> after|", "~@<x ~2@T~<~s~:>~:>|'(\"hi\")" })
 	void staticAndRuntimeRenderingAgree(String testCase) {
 		int split = testCase.lastIndexOf('|');
 		String control = testCase.substring(0, split);
@@ -84,6 +90,26 @@ class FormatRendererTest {
 		assertThat(eval("(let ((c \"~d\")) (format nil c \"xyz\"))")).isEqualTo(new LispString("xyz"));
 	}
 
+	/**
+	 * {@code ~/name/} calls a user function as {@code (name stream object colon-p at-p)}.
+	 * The name resolves as if by {@code find-symbol}, where a single and a double colon
+	 * are equivalent -- so a package-qualified spelling reaches an INTERNAL symbol too,
+	 * which is what esrap's {@code ~/esrap:print-terminal/} needs.
+	 */
+	@Test
+	void userFunctionDirectiveCallsTheNamedFunction() {
+		String define = "(defun fmt-brackets (s x &optional c a) (princ (if c \"[\" \"<\") s) (princ x s)"
+				+ " (princ (if a \"]\" \">\") s))";
+		assertThat(evalAll(define + " (let ((c \"~/fmt-brackets/\")) (format nil c 42))"))
+			.isEqualTo(new LispString("<42>"));
+		assertThat(evalAll(define + " (let ((c \"~:@/fmt-brackets/\")) (format nil c 42))"))
+			.isEqualTo(new LispString("[42]"));
+		assertThat(evalAll(define + " (let ((c \"a ~/cl-user::fmt-brackets/ b\")) (format nil c 1))"))
+			.isEqualTo(new LispString("a <1> b"));
+		assertThat(evalAll(define + " (let ((c \"~{~/fmt-brackets/~}\")) (format nil c '(1 2)))"))
+			.isEqualTo(new LispString("<1><2>"));
+	}
+
 	/** The renderer is injected once per program, and only when it can be reached. */
 	@Test
 	void theRendererIsInjectedOnlyForAProgramThatReachesIt() {
@@ -110,6 +136,16 @@ class FormatRendererTest {
 	private LispVal eval(String input) {
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		return evaluator.eval(LispReader.readFromString(input));
+	}
+
+	/** Evaluates several top-level forms in ONE evaluator and answers the last value. */
+	private LispVal evalAll(String input) {
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		LispVal result = am.ik.rontolisp.LispNil.INSTANCE;
+		for (LispVal form : LispReader.readAllFromString(input)) {
+			result = evaluator.eval(form);
+		}
+		return result;
 	}
 
 }

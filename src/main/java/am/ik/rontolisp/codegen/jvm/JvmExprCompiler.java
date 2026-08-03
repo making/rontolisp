@@ -480,6 +480,8 @@ final class JvmExprCompiler {
 					JvmStringStreamCompiler.compileContents(cons, ctx, className);
 				case LispNames.WITH_OUTPUT_TO_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithOutputToString(cons), ctx, className);
+				case LispNames.PPRINT_LOGICAL_BLOCK ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandPprintLogicalBlock(cons), ctx, className);
 				case LispNames.WITH_INPUT_FROM_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWithInputFromString(cons), ctx, className);
 				case LispNames.PUSHNEW ->

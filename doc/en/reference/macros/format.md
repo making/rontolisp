@@ -99,8 +99,7 @@ one yes x=42
 
 ## Limitations
 
-Other destinations (strings with fill pointers) are not supported, and
-`~<...~>` justification is not implemented. The loop escape `~^` is
+Other destinations (strings with fill pointers) are not supported. The loop escape `~^` is
 supported at the top level and inside `~{ ... ~}` / `~@{ ... ~}` bodies (the
 join idiom `"~{~a~^, ~}"`; inside `~:{ ... ~}` it ends the current sublist's
 body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes:
@@ -145,10 +144,35 @@ differences follow from the control being data rather than source:
   error. A literal control reports the same problems at expansion time, where a
   diagnostic belongs; a runtime control usually arrives with the data being
   reported, and a report must not fail while reporting.
-- The column-control directive `~t` (`~n,mT`, `~n@T`) and the plural directive
-  `~p` are available here but not in the literal expansion -- a literal control
-  using one falls back to this renderer, so both work either way. `~t` measures
-  the column from the text rendered so far.
+- The column-control directive `~t` (`~n,mT`, `~n@T`), the plural directive
+  `~p`, the logical-block / justification directive `~<...~>` and the
+  call-a-function directive `~/name/` are available here but not in the literal
+  expansion -- a literal control using one falls back to this renderer, so all
+  four work either way. `~t` measures the column from the text rendered so far.
+
+`~<...~>` is justification and `~<...~:>` a logical block; the closing directive
+decides which. Their SECTION rules are the standard ones: a justification's `~;`
+segments consume arguments in turn, while a logical block's first section is the
+prefix and, when there are three, the last is the suffix (neither consumes an
+argument), and a block without `@` takes one argument -- a list -- as its whole
+argument list. What does not happen is the LAYOUT: no padding to a minimum
+column, no wrapping at the right margin, and of the conditional newlines only the
+mandatory `~:@_` breaks a line (`~_` / `~:_` / `~@_` and `~i` do nothing).
+Deciding the others needs the stream's current column, which no rontolisp stream
+carries -- the same reason `pprint-newline` only honors `:mandatory`.
+
+`~/name/` calls the named function as `(name stream object colon-p at-p)` and
+splices what it writes. The name is looked up as if by `find-symbol`, where a
+single and a double colon are equivalent, so `~/mypkg:helper/` reaches an
+internal symbol too.
+
+```lisp
+(defun brackets (stream x &optional colonp atp)
+  (princ (if colonp "[" "<") stream) (princ x stream) (princ (if atp "]" ">") stream))
+(list (format nil "~@<a and ~a~:>" 1)
+      (format nil "~<~@;~a-~a~:>" (list "x" "y"))
+      (format nil "~/brackets/ ~:@/brackets/" 1 2)) ; => ("a and 1" "x-y" "<1> [2]")
+```
 
 `~r` without a radix parameter prints the decimal digits; English cardinals and
 ordinals are not implemented.

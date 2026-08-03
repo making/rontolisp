@@ -1,10 +1,35 @@
 # Readtable and printing control (`*readtable*` + the reader-macro API, `peek-char`/`unread-char`/`write-char`, output flushing, the `*print-*` / stream variables, `pprint`)
 
-**Status:** mostly not implemented. Low priority — readtable customization and
-pretty printing are advanced features. Done since: `read-char`
-(`LispNames.READ_CHAR`, in the `PackageRegistry` CL symbols;
-`doc/en/reference/functions/read-char.md`), and the string-stream macros
-`with-input-from-string` / `with-output-to-string` (see #36).
+**Status:** the READTABLE half is not implemented; the printing half largely is.
+Low priority — readtable customization is an advanced feature. Done since:
+`read-char` (`LispNames.READ_CHAR`, in the `PackageRegistry` CL symbols;
+`doc/en/reference/functions/read-char.md`), the string-stream macros
+`with-input-from-string` / `with-output-to-string` (see #36), and — with
+`.todo/248` (esrap) — the whole printer surface below: `write`, `pprint`, the
+pprint DISPATCH tables, `pprint-logical-block` / `pprint-newline` /
+`pprint-indent` / `pprint-tab`, every `*print-*` control variable and the four
+remaining standard stream variables (`*trace-output*` / `*debug-io*` /
+`*query-io*` / `*terminal-io*`), plus the format logical block `~<...~:>` and
+`~/name/`. **`.kb/pretty-printer.md` owns what is real and what is not**: every
+variable holds the value the printer actually behaves as, but no stream carries a
+COLUMN, so nothing wraps and every conditional line break is a no-op. That one
+missing field is what is left of the "pretty printing" item here.
+
+## Still open after `.todo/248`
+
+- **A column on the stream** — the one change that turns `*print-right-margin*` /
+  `*print-miser-width*` / `*print-lines*`, `pprint-newline`'s three conditional
+  kinds, `pprint-indent`/`pprint-tab`, `~_`/`~i` and justification's `:mincol`
+  padding from no-ops into the real thing, all at once. See the re-evaluation
+  trigger in `.kb/pretty-printer.md`.
+- **The printing operators consulting `*print-pprint-dispatch*`** — wants the same
+  seam (`%print-object-str`, `.kb/clos.md`) widened; today an entry fires only
+  where the program calls the entry function itself.
+- **`write-to-string` keywords** — `write` takes the full set, `write-to-string`
+  still takes one argument (`.kb/pretty-printer.md` has the reason).
+- **`pprint-linear` / `pprint-tabular` / `pprint-fill` / `pprint-pop` /
+  `pprint-exit-if-list-exhausted`** — not defined; the first three are layout the
+  column would decide, the last two are `pprint-logical-block` iteration.
 
 ## What's missing
 
@@ -54,34 +79,38 @@ pretty printing are advanced features. Done since: `read-char`
 
 ### Print control variables
 
+All of these EXIST since todo-248, each holding the value the printer actually
+behaves as; only `*print-escape*` / `*print-readably*` / `*print-pretty*` change
+anything when BOUND (`.kb/pretty-printer.md` has the table).
+
 | Variable | Purpose |
 |----------|---------|
-| `*print-level*` | Max nesting depth |
-| `*print-length*` | Max list elements |
-| `*print-circle*` | Show circular structure |
-| `*print-array*` | Print arrays fully |
-| `*print-base*` | Integer base |
-| `*print-case*` | `:upper`, `:downcase`, `:capitalize` |
-| `*print-escape*` | Use escape sequences |
-| `*print-readably*` | Readable output |
-| `*print-gensym*` | Print gensyms specially |
-| `*print-right-margin*` | Right margin |
-| `*print-lines*` | Max lines |
+| `*print-level*` | Max nesting depth (nil = no truncation, which is the behavior) |
+| `*print-length*` | Max list elements (nil = no truncation, which is the behavior) |
+| `*print-circle*` | Show circular structure (no circle detection) |
+| `*print-array*` | Print arrays fully (t = the behavior) |
+| `*print-base*` | Integer base (10 = the behavior) |
+| `*print-case*` | `:upcase` = the behavior |
+| `*print-escape*` | DONE (honored) |
+| `*print-readably*` | DONE (honored) |
+| `*print-gensym*` | Print gensyms specially (t = the behavior) |
+| `*print-right-margin*` | Right margin (inert: no column) |
+| `*print-lines*` | Max lines (inert: no column) |
 
 ### Pretty printing
 
 | Operator | Purpose |
 |----------|---------|
-| `pprint` | Pretty print |
+| `pprint` | DONE (todo-248) |
 | `pprint-linear` | Linear block |
 | `pprint-tabular` | Tabular block |
-| `pprint-indent` | Indent |
-| `pprint-newline` | Newline |
+| `pprint-indent` | DONE (todo-248; a no-op, no column) |
+| `pprint-newline` | DONE (todo-248; only `:mandatory` breaks a line) |
 | `pprint-fill` | Fill block |
-| `pprint-tab` | Tab |
-| `pprint-logical-block` | Logical block |
-| `pprint-dispatch` | Custom dispatch |
-| `set-pprint-dispatch` | Set dispatch table |
+| `pprint-tab` | DONE (todo-248; a no-op, no column) |
+| `pprint-logical-block` | DONE (todo-248; never wraps) |
+| `pprint-dispatch` | DONE (todo-248) |
+| `set-pprint-dispatch` | DONE (todo-248) |
 
 ### Implementation approach
 

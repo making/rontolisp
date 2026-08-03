@@ -404,7 +404,6 @@ public final class LibraryDefunPruner {
 	/**
 	 * The name sets the reachability scan matches against, split by how a reference to
 	 * them may be spelled.
-	 *
 	 * @param exact every prunable definition name, matched against a symbol occurrence
 	 * verbatim
 	 * @param substringScanned the bundled-library names only -- the original carve-out,
@@ -419,6 +418,36 @@ public final class LibraryDefunPruner {
 	 * ({@code (find-symbol
 	 * "FOO" :pkg)}, which is folded at codegen time, after this pass)
 	 */
+	/**
+	 * The function names a {@code format} control string names with {@code ~/name/}, in
+	 * the reader's upcased spelling. The scan is deliberately shallow -- it does not
+	 * parse the control, it just pairs slashes after a {@code ~} -- because a false
+	 * positive only KEEPS a definition, while a miss deletes one the program calls.
+	 * @param upcasedControl the string literal, already upcased
+	 * @return the names, or an empty list
+	 */
+	private static List<String> formatFunctionNames(String upcasedControl) {
+		List<String> names = new ArrayList<>();
+		int i = upcasedControl.indexOf('~');
+		while (i >= 0 && i + 1 < upcasedControl.length()) {
+			int open = upcasedControl.indexOf('/', i + 1);
+			// Only a directive whose PARAMETERS/modifiers separate the ~ from the /, or
+			// nothing at all: a / further away belongs to some other directive's text.
+			if (open < 0) {
+				break;
+			}
+			int close = upcasedControl.indexOf('/', open + 1);
+			if (close > open && upcasedControl.substring(i + 1, open).matches("[0-9,'vV#:@]*")) {
+				names.add(upcasedControl.substring(open + 1, close));
+				i = upcasedControl.indexOf('~', close + 1);
+			}
+			else {
+				i = upcasedControl.indexOf('~', i + 1);
+			}
+		}
+		return names;
+	}
+
 	private record Prunable(Set<String> exact, Set<String> substringScanned,
 			Map<String, List<String>> thirdPartyByMember) {
 
@@ -566,6 +595,22 @@ public final class LibraryDefunPruner {
 					out.add(value);
 				}
 				addAll(prunable.thirdPartyByMember().get(value), out);
+				// A ~/name/ directive inside a FORMAT control is a function reference and
+				// the only trace of one: the renderer resolves the name at run time
+				// (.kb/format.md), so nothing else in the program mentions it. esrap's
+				// parse-error report is built entirely out of ~/esrap:print-terminal/ and
+				// ~/esrap::print-result/. Matched like the uninterned-designator case
+				// above -- the whole spelling and, for a qualified one, the member name.
+				for (String directive : formatFunctionNames(value)) {
+					if (prunable.exact().contains(directive)) {
+						out.add(directive);
+					}
+					String member = LispSymbol.memberName(directive);
+					if (prunable.exact().contains(member)) {
+						out.add(member);
+					}
+					addAll(prunable.thirdPartyByMember().get(member), out);
+				}
 			}
 			case LispCons cons -> {
 				collectReferences(cons.car(), prunable, out);

@@ -1499,12 +1499,17 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalFormatUnsupportedDirectiveFallsBackToRuntimeRenderer() {
-		// Same fallback as the uneven-~[ case: the runtime renderer emits an unknown
-		// directive verbatim rather than failing the whole compile.
+		// Same fallback as the uneven-~[ case: the static expansion declines and the
+		// runtime renderer takes over -- it renders what it knows and emits an UNKNOWN
+		// directive verbatim rather than failing the whole compile. ~< is declined but
+		// rendered (a logical block); ~Q is neither.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
-		evaluator.eval(LispReader.readFromString("(format t \"~<~>\" 65)"));
-		assertThat(baos.toString()).isEqualTo("~<~>");
+		evaluator.eval(LispReader.readFromString("(format t \"~@<[~a]~:>\" 65)"));
+		assertThat(baos.toString()).isEqualTo("[65]");
+		ByteArrayOutputStream unknown = new ByteArrayOutputStream();
+		new LispEvaluator(new PrintStream(unknown)).eval(LispReader.readFromString("(format t \"~@<x~:>~Q\" 65)"));
+		assertThat(unknown.toString()).isEqualTo("x~Q");
 	}
 
 	@Test
@@ -2276,6 +2281,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalReduceOverAnEmptySequenceCallsTheFunctionWithNoArguments() {
+		// CL's rule, and it is load-bearing rather than a curiosity: esrap's
+		// (reduce #'append all-children) answers nil for a result node with no children
+		// while BUILDING a parse-error report, and used to signal instead.
+		assertThat(eval("(reduce #'append '())")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(reduce #'+ '())")).isEqualTo(new LispInteger(0));
+		assertThat(eval("(reduce #'append \"\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(reduce #'append '() :from-end t)")).isEqualTo(LispNil.INSTANCE);
+		// An :initial-value keeps the old answer, and a non-empty sequence never calls
+		// the function with zero arguments.
+		assertThat(eval("(reduce #'+ '() :initial-value 7)")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(reduce #'append '((1 2) (3)))").print()).isEqualTo("(1 2 3)");
+		// #'append itself must therefore accept zero arguments (its wrapper is what a
+		// compiled backend funcalls here).
+		assertThat(eval("(funcall #'append)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(funcall #'append '(1) '(2) '(3))").print()).isEqualTo("(1 2 3)");
+	}
+
+	@Test
 	void evalReduceLeftFoldSubtraction() {
 		// ((((1-2)-3)-4)) = -8
 		assertThat(eval("(reduce #'- '(1 2 3 4))")).isEqualTo(new LispInteger(-8));
@@ -2783,11 +2807,31 @@ class LispEvaluatorTest {
 		// position family's scan and so takes the whole keyword set (see
 		// evalFindFamilyTakesThePositionKeywordSet).
 		assertThatThrownBy(() -> eval("(assoc 1 '((1 . a)) :from-end t)")).isInstanceOf(RuntimeException.class)
-			.hasMessageContaining(":test/:key");
+			.hasMessageContaining(":test/:test-not/:key");
 		assertThatThrownBy(() -> eval("(remove 1 '(1 2) :count 1)")).isInstanceOf(RuntimeException.class)
-			.hasMessageContaining(":test/:key");
+			.hasMessageContaining(":test/:test-not/:key");
 		assertThatThrownBy(() -> eval("(find 1 '(1 2) :count 1)")).isInstanceOf(RuntimeException.class)
 			.hasMessageContaining(":FROM-END");
+	}
+
+	@Test
+	void evalSequenceFunctionsTakeTestNot() {
+		// :test-not is CL's complemented equality designator: it matches exactly where
+		// the predicate is FALSE. esrap's error-report tree prunes with
+		// (remove max children :test-not #'= :key #'first) -- keep only the entries whose
+		// first is = max. One shared TestSpec decides it for the whole family, so the
+		// compiled call and the first-class function value agree.
+		assertThat(eval("(remove 3 '((1 a) (3 b) (3 c) (2 d)) :test-not #'= :key #'first)").print())
+			.isEqualTo("((3 B) (3 C))");
+		assertThat(eval("(member 3 '(1 2 3) :test-not #'=)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(assoc 1 '((1 . a) (2 . b)) :test-not #'=)").print()).isEqualTo("(2 . B)");
+		assertThat(eval("(rassoc 1 '((a . 1) (b . 2)) :test-not #'=)").print()).isEqualTo("(B . 2)");
+		assertThat(eval("(count 1 '(1 2 3) :test-not #'=)").print()).isEqualTo("2");
+		assertThat(eval("(position 1 '(1 2 3) :test-not #'=)").print()).isEqualTo("1");
+		assertThat(eval("(find 1 '(1 2 3) :test-not #'=)").print()).isEqualTo("2");
+		// The first-class function values decide the same way.
+		assertThat(eval("(apply #'member 3 '(1 2 3) '(:test-not =))").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(apply #'assoc 1 '((1 . a) (2 . b)) '(:test-not =))").print()).isEqualTo("(2 . B)");
 	}
 
 	@Test
@@ -3463,6 +3507,139 @@ class LispEvaluatorTest {
 		assertThat(eval("(typecase \"x\" (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"s\"");
 		assertThat(eval("(typecase 'sym (string \"s\") (integer \"i\") (t \"?\"))").print()).isEqualTo("\"?\"");
 		assertThat(eval("(typecase '(1) (cons \"c\") (null \"n\"))").print()).isEqualTo("\"c\"");
+	}
+
+	@Test
+	void evalCaseInsensitiveCharacterPredicates() {
+		assertThat(eval("(list (char-lessp #\\a #\\B) (char-lessp #\\B #\\a) (char-lessp #\\a)"
+				+ " (char-lessp #\\a #\\b #\\C))")
+			.print()).isEqualTo("(T NIL T T)");
+		assertThat(
+				eval("(list (char-greaterp #\\b #\\A) (char-not-lessp #\\b #\\A)" + " (char-not-greaterp #\\a #\\B))")
+					.print())
+			.isEqualTo("(T T T)");
+		// char-not-equal is ALL arguments pairwise distinct, like char/=
+		assertThat(eval("(list (char-not-equal #\\a #\\b #\\c) (char-not-equal #\\a #\\b #\\A))").print())
+			.isEqualTo("(T NIL)");
+		// #\Newline is the one character graphic-char-p and standard-char-p disagree on
+		assertThat(eval("(list (graphic-char-p #\\a) (graphic-char-p #\\Space) (graphic-char-p #\\Newline)"
+				+ " (standard-char-p #\\Newline) (standard-char-p #\\Tab))")
+			.print()).isEqualTo("(T T NIL T NIL)");
+	}
+
+	@Test
+	void evalWriteAndPprintDispatch() {
+		// write's keywords BIND the printer control variables around one print, which is
+		// CL's own definition of them; only :escape / :readably change the text.
+		assertThat(eval("(with-output-to-string (s) (write \"hi\" :stream s))").print()).isEqualTo("\"\\\"hi\\\"\"");
+		assertThat(eval("(with-output-to-string (s) (write \"hi\" :stream s :escape nil :pretty nil))").print())
+			.isEqualTo("\"hi\"");
+		// The dispatch table is real: real entries, real typep matching, real priority.
+		// set-pprint-dispatch MUTATES the table it is handed, which is what makes the
+		// (copy-pprint-dispatch) + set-pprint-dispatch idiom work.
+		assertThat(evalMulti("""
+				(defvar tbl (copy-pprint-dispatch))
+				(set-pprint-dispatch 'integer (lambda (s x) (princ (* 2 x) s)) 0 tbl)
+				(set-pprint-dispatch 'string (lambda (s x) (princ (length x) s)) 5 tbl)
+				(list (with-output-to-string (out) (funcall (pprint-dispatch 21 tbl) out 21))
+				      (with-output-to-string (out) (funcall (pprint-dispatch "abc" tbl) out "abc"))
+				      (nth-value 1 (pprint-dispatch 21 tbl))
+				      (nth-value 1 (pprint-dispatch #\\a tbl)))
+				""").print()).isEqualTo("(\"42\" \"3\" T NIL)");
+		// A nil function removes the entry, and a copy is independent of its original.
+		assertThat(evalMulti("""
+				(defvar t1 (copy-pprint-dispatch))
+				(set-pprint-dispatch 'integer (lambda (s x) (princ :hit s)) 0 t1)
+				(defvar t2 (copy-pprint-dispatch t1))
+				(set-pprint-dispatch 'integer nil 0 t1)
+				(list (nth-value 1 (pprint-dispatch 1 t1)) (nth-value 1 (pprint-dispatch 1 t2)))
+				""").print()).isEqualTo("(NIL T)");
+	}
+
+	@Test
+	void evalPprintLogicalBlock() {
+		// prefix + body + suffix; a NON-LIST object prints with write and the body is
+		// skipped, which is CL's own rule.
+		assertThat(eval("""
+				(list (with-output-to-string (s)
+				        (pprint-logical-block (s '(1 2 3) :prefix "<" :suffix ">") (princ "body" s)))
+				      (with-output-to-string (s)
+				        (pprint-logical-block (s 5 :prefix "<" :suffix ">") (princ "body" s)))
+				      (with-output-to-string (s)
+				        (pprint-logical-block (s nil) (princ "bare" s))))
+				""").print()).isEqualTo("(\"<body>\" \"5\" \"bare\")");
+		// No stream carries a column, so only the MANDATORY conditional newline breaks a
+		// line and *print-pretty* gates even that (.kb/pretty-printer.md).
+		assertThat(eval("""
+				(list (with-output-to-string (s) (princ "a" s) (pprint-newline :fill s) (princ "b" s))
+				      (with-output-to-string (s) (princ "a" s) (pprint-indent :block 4 s) (princ "b" s))
+				      (length (with-output-to-string (s)
+				                (princ "a" s) (pprint-newline :mandatory s) (princ "b" s)))
+				      (let ((*print-pretty* nil))
+				        (with-output-to-string (s)
+				          (princ "a" s) (pprint-newline :mandatory s) (princ "b" s))))
+				""").print()).isEqualTo("(\"ab\" \"ab\" 3 \"ab\")");
+	}
+
+	@Test
+	void evalConsCompoundTypeSpecifier() {
+		// (cons CAR-TYPE CDR-TYPE) tests each half. Before todo-248 the arguments fell
+		// through to the ranged-NUMERIC default and were compiled as bounds, so
+		// esrap's expression-kind table -- (cons (eql function) (cons symbol null)) --
+		// evaluated the symbol `function` as a variable.
+		assertThat(eval("(typep '(function bar) '(cons (eql function) (cons symbol null)))").print()).isEqualTo("T");
+		assertThat(eval("(typep '(function bar baz) '(cons (eql function) (cons symbol null)))").print())
+			.isEqualTo("NIL");
+		assertThat(eval("(typep '(or \"a\") '(cons (eql or)))").print()).isEqualTo("T");
+		assertThat(eval("(typep '(and \"a\") '(cons (eql or)))").print()).isEqualTo("NIL");
+		assertThat(eval("(typep 5 '(cons (eql or)))").print()).isEqualTo("NIL");
+		// * is "any", and an omitted half is the same
+		assertThat(eval("(typep '(1 . 2) '(cons integer integer))").print()).isEqualTo("T");
+		assertThat(eval("(typep '(1 . 2) '(cons * integer))").print()).isEqualTo("T");
+		assertThat(eval("(typep '(1 . 2) '(cons integer string))").print()).isEqualTo("NIL");
+		assertThat(eval("(typep '(1 . 2) '(cons))").print()).isEqualTo("T");
+		assertThat(
+				eval("(typecase '(function bar) ((cons (eql function) (cons symbol null)) \"f\") (t \"?\"))").print())
+			.isEqualTo("\"f\"");
+		// A compound spelling of a non-numeric atomic type carries no range bounds: the
+		// base predicate alone.
+		assertThat(eval("(typep #'car '(function (t) t))").print()).isEqualTo("T");
+	}
+
+	@Test
+	void evalSizedStringTypeSpecifier() {
+		// (string SIZE) is a string of EXACTLY that length. The size used to be ignored,
+		// which made esrap's (typep sub '(or character (string 1))) answer true for every
+		// string -- so (or "foo" "bar") compiled to the single-CHARACTER choice and a
+		// successful parse advanced one position instead of three.
+		assertThat(eval("(typep \"f\" '(string 1))").print()).isEqualTo("T");
+		assertThat(eval("(typep \"foo\" '(string 1))").print()).isEqualTo("NIL");
+		assertThat(eval("(typep \"foo\" '(string 3))").print()).isEqualTo("T");
+		assertThat(eval("(typep 'foo '(string 3))").print()).isEqualTo("NIL");
+		assertThat(eval("(typep \"foo\" '(string *))").print()).isEqualTo("T");
+		assertThat(eval("(typep \"foo\" '(simple-string 3))").print()).isEqualTo("T");
+		assertThat(eval("(typep #\\f '(or character (string 1)))").print()).isEqualTo("T");
+		assertThat(eval("(typep \"foo\" '(or character (string 1)))").print()).isEqualTo("NIL");
+	}
+
+	@Test
+	void evalSizedVectorTypeSpecifier() {
+		// (simple-vector SIZE) carries only a SIZE -- its element type is always t --
+		// while (vector ELEMENT-TYPE SIZE) leads with the element type. Reading the
+		// simple-vector size as an element type made esrap's packrat cache dispatch
+		// (typep cell '(simple-vector 41)) answer nil for its own vector and fall
+		// through to the hash-table arm, which then got the vector.
+		assertThat(eval("(typep (make-array 41) '(simple-vector 41))").print()).isEqualTo("T");
+		assertThat(eval("(typep (make-array 4) '(simple-vector 41))").print()).isEqualTo("NIL");
+		assertThat(eval("(typep (make-array 41) '(simple-vector *))").print()).isEqualTo("T");
+		assertThat(eval("(typep (make-array 41) 'simple-vector)").print()).isEqualTo("T");
+		// t as an element type reads as LispTrue, not a symbol, and must still name the
+		// general array.
+		assertThat(eval("(typep (make-array 3) '(vector t))").print()).isEqualTo("T");
+		assertThat(eval("(typep (make-array 3) '(vector t 3))").print()).isEqualTo("T");
+		assertThat(eval("(typep (make-array 3) '(vector t 4))").print()).isEqualTo("NIL");
+		// A packed element type still rejects the general array.
+		assertThat(eval("(typep (make-array 3) '(vector (unsigned-byte 8)))").print()).isEqualTo("NIL");
 	}
 
 	@Test
@@ -5318,7 +5495,7 @@ class LispEvaluatorTest {
 	@Test
 	void listMacrosReturnsSortedClMacros() {
 		assertThat(eval("(rontolisp:list-macros)").print()).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -5369,8 +5546,13 @@ class LispEvaluatorTest {
 			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p")
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
+			.contains("CHAR-LESSP", "CHAR-GREATERP", "CHAR-NOT-LESSP", "CHAR-NOT-GREATERP", "CHAR-NOT-EQUAL",
+					"GRAPHIC-CHAR-P", "STANDARD-CHAR-P")
+			.contains("WRITE", "PPRINT", "PPRINT-NEWLINE", "PPRINT-INDENT", "PPRINT-TAB", "COPY-PPRINT-DISPATCH",
+					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
+			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
 			.isSorted()
-			.hasSize(367);
+			.hasSize(382);
 	}
 
 	@Test
@@ -8433,6 +8615,23 @@ class LispEvaluatorTest {
 				(setq p (make-point :x 1))
 				(list (point-x p) (point-y p))
 				""").print()).isEqualTo("(1 10)");
+	}
+
+	@Test
+	void defstructDefinesEveryDeclaredConstructor() {
+		// CL allows more than one (:constructor ...) option and defines them ALL; only
+		// the last one used to survive. esrap's failed-parse declares a full BOA plus a
+		// make-failed-parse/no-position over a subset of the inherited slots, so the
+		// missing one showed up as "The function MAKE-FAILED-PARSE is undefined" the
+		// first time a rule failed to match.
+		assertThat(evalMulti("""
+				(defstruct (span (:constructor make-span (start end))
+				                 (:constructor make-empty-span (start))
+				                 (:copier nil))
+				  start (end 0))
+				(list (span-start (make-span 1 2)) (span-end (make-span 1 2))
+				      (span-start (make-empty-span 7)) (span-end (make-empty-span 7)))
+				""").print()).isEqualTo("(1 2 7 0)");
 	}
 
 	@Test

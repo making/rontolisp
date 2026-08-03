@@ -399,6 +399,24 @@ class LispReaderTest {
 	}
 
 	@Test
+	void readNestedBackquoteKeepsDottedPairs() {
+		// A CONSTANT dotted pair in a template that also carries a nested backquote (so
+		// the CLtL2 path runs instead of the optimized single-level one). The dotted
+		// tail used to vanish: bq-attach-append's constant fold appended the tail as if
+		// it were a proper list, and a symbol tail walked to nothing. esrap's
+		// *expression-kinds* is exactly this shape -- (terminal . terminal) entries in a
+		// template whose ,@ splices build inner backquotes -- so every alist lookup
+		// answered nil and no grammar expression was recognized.
+		assertThat(LispReader.readFromString("`((p . q) `(a))").print()).isEqualTo("(QUOTE ((P . Q) (QUOTE (A))))");
+		assertThat(LispReader.readFromString("`(o (p . q) ,@(mapcar (lambda (s) `(,s)) xs))").print())
+			.isEqualTo("(LIST* (QUOTE O) (QUOTE (P . Q)) (MAPCAR (LAMBDA (S) (LIST S)) XS))");
+		// The same template WITHOUT a nested backquote takes the optimized path and
+		// always got this right -- the two paths must agree.
+		assertThat(LispReader.readFromString("`(o (p . q) ,@(mapcar #'list xs))").print())
+			.isEqualTo("(APPEND (LIST (QUOTE O) (CONS (QUOTE P) (QUOTE Q))) (MAPCAR (FUNCTION LIST) XS))");
+	}
+
+	@Test
 	void readNestedBackquoteInDataPosition() {
 		// The inner backquote sits in a data position, so only its ,(+ 1 2) that
 		// reaches level 0 would evaluate here; ,(+ 1 2) stays at level 1 and is kept.

@@ -96,10 +96,36 @@ zero.
   is a compile-time diagnostic. Reason: a runtime control usually arrives with
   the data being reported -- a condition report must not fail while reporting.
   Do not "fix" this by signalling; it would put a crash inside the error path.
-- **`~t` and `~p` are renderer-only.** The static path declines them and falls
-  back, so both work either way; the fallback is what makes that acceptable. If
-  the static path ever grows them, drop them from this list, not from the
-  renderer.
+- **`~t`, `~p`, `~<...~>` and `~/name/` are renderer-only.** The static path
+  declines them and falls back, so all four work either way; the fallback is what
+  makes that acceptable. If the static path ever grows them, drop them from this
+  list, not from the renderer. The `staticAndRuntimeRenderingAgree` table carries
+  rows for the logical-block family anyway, so a future static implementation has
+  to match the renderer rather than invent its own answer.
+- **`~<...~>` is JUSTIFICATION, `~<...~:>` a LOGICAL BLOCK, and the closing
+  directive is what decides.** The SECTION rules are real: a justification's `~;`
+  segments consume arguments in turn; a logical block's first section is the
+  prefix (a `~@;` separator makes it a per-line prefix, the same text without line
+  breaks) and, with three sections, the last is the suffix, neither consuming an
+  argument; a block WITHOUT `@` takes one argument -- a LIST -- as its whole
+  argument list, which is why esrap's
+  `(format s "~2@T~<~@;~A~:>" (list line))` prints the line and not the list. What
+  does NOT happen is the LAYOUT: no padding to `:mincol`, no wrapping at the right
+  margin, and only the MANDATORY conditional newline (`~:@_`, gated on
+  `*print-pretty*`) breaks a line -- deciding the other three needs the stream's
+  current column. `~i` is inert for the same reason. Full reasoning and the
+  re-evaluation trigger: `.kb/pretty-printer.md`.
+- **`~/name/` resolves the name as if by `find-symbol`, INTERNAL spelling first.**
+  `:` and `::` are equivalent in this directive (CLHS 22.3.5.4), and a library
+  rarely exports the function it names in one, so `%fmt-function-designator` tries
+  `find-symbol`'s answer, then `PKG::NAME`, then `PKG:NAME`, picking the first that
+  is `fboundp`. It also opens and closes its string stream by hand rather than with
+  `with-output-to-string`: the WASM exception-handling gate scans the program for a
+  `with-*` form, and the renderer is spliced into every program that formats a
+  computed control -- one `with-output-to-string` here would put a tag section into
+  modules that catch nothing. **A `~/name/` is a function REFERENCE, and the only
+  trace of one**: `LibraryDefunPruner.formatFunctionNames` scans string literals for
+  it, or the tree-shaker would delete the very function the report calls.
 - **`~r` without a radix prints decimal digits.** English cardinals/ordinals are
   not implemented on either path.
 - **`~&` measures the column from the text rendered so far** (an empty
