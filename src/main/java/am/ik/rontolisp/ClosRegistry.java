@@ -111,8 +111,10 @@ public final class ClosRegistry {
 		seedClass(CLASS_NAME, null);
 		seedClass(STANDARD_CLASS_NAME, CLASS_NAME, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
 				"FINALIZED-P");
-		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS");
-		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS");
+		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS",
+				"INITFUNCTION");
+		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS",
+				"INITFUNCTION");
 	}
 
 	/**
@@ -235,14 +237,15 @@ public final class ClosRegistry {
 	/**
 	 * The seeded direct-slot-definition base class a user metaclass protocol subclasses
 	 * (postmodern's {@code direct-column-slot}). Slot order: name, initargs, initform,
-	 * type, readers.
+	 * type, readers, initfunction (appended 2026-08-03; nil except on driver-built
+	 * definitions).
 	 */
 	public static final String STANDARD_DIRECT_SLOT_DEFINITION_NAME = "STANDARD-DIRECT-SLOT-DEFINITION";
 
 	/**
 	 * The seeded effective-slot-definition class {@link #classMetaobject} builds the
 	 * {@code class-slots} entries from. Slot order: name, initargs, initform, type,
-	 * readers.
+	 * readers, initfunction.
 	 */
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
 
@@ -585,6 +588,35 @@ public final class ClosRegistry {
 
 	/** Whether {@link #ensureMopClassesSeeded()} has run. */
 	private boolean mopClassesSeeded;
+
+	/**
+	 * Whether the metaclass-protocol runtime ({@code macro/mop-protocol.lisp}) is part of
+	 * this evaluation/compilation -- set by the interpreter's protocol load and by the
+	 * compile paths when the forms are prepended. It gates the CHAIN-FILL construction of
+	 * metaobject-class instances ({@code expandMakeInstance},
+	 * {@code mopMakeInstanceDefuns}): allocate unbound, then run the initialization
+	 * generic whose system {@code shared-initialize} primary performs the initarg fill --
+	 * without the protocol those primaries do not exist and the static constructor shape
+	 * must stay.
+	 */
+	private boolean mopProtocolActive;
+
+	/**
+	 * Whether the metaclass-protocol runtime is part of this evaluation/compilation --
+	 * see {@link #setMopProtocolActive()}.
+	 * @return {@code true} once the protocol forms are loaded or prepended
+	 */
+	public boolean isMopProtocolActive() {
+		return this.mopProtocolActive;
+	}
+
+	/**
+	 * Records that the metaclass-protocol forms are loaded (interpreter) or prepended
+	 * (compile paths) into this registry's evaluation.
+	 */
+	public void setMopProtocolActive() {
+		this.mopProtocolActive = true;
+	}
 
 	/** The names registered by {@code seedClass} (see {@link #isSeededClass}). */
 	private final Set<String> seededClassNames = new java.util.HashSet<>();
@@ -1223,6 +1255,36 @@ public final class ClosRegistry {
 	public void registerClassMetaobject(String name, LispInstance metaobject) {
 		ClassInfo info = findClass(name);
 		this.classMetaobjects.put(normalize(info != null ? info.name() : name), metaobject);
+	}
+
+	/**
+	 * The canonical names of the classes whose DIRECT superclasses contain the given
+	 * class -- the {@code class-direct-subclasses} answer. Two sources, merged: the
+	 * memoized metaobjects' direct-superclass lists (a driver-built metaclass instance
+	 * may carry superclasses a user {@code initialize-instance :around} INJECTED, which
+	 * the static registry never sees -- mito's dao-class push), then the static
+	 * registry's declared superclasses for classes never materialized at run time.
+	 * @param targetName the canonical class name
+	 * @return the subclass names, memoized-first then registration order
+	 */
+	public List<String> directSubclassNames(String targetName) {
+		java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+		for (java.util.Map.Entry<String, LispInstance> entry : this.classMetaobjects.entrySet()) {
+			LispVal supers = entry.getValue().slotCount() > 1 ? entry.getValue().slot(1) : LispNil.INSTANCE;
+			while (supers instanceof LispCons cons) {
+				if (cons.car() instanceof LispInstance superMo && superMo.slotCount() > 0
+						&& superMo.slot(0) instanceof LispSymbol superName && targetName.equals(superName.name())) {
+					out.add(entry.getKey());
+				}
+				supers = cons.cdr();
+			}
+		}
+		for (ClassInfo candidate : this.classes.values()) {
+			if (candidate.superclasses().contains(targetName)) {
+				out.add(normalize(candidate.name()));
+			}
+		}
+		return List.copyOf(out);
 	}
 
 	// The struct half of classMetaobject: built from the layout (slot types all read T,

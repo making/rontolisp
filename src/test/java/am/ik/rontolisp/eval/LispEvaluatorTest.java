@@ -9646,6 +9646,29 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void defclassMetaclassEnsureClassUsingClassAndInitargMunging() {
+		// The mito metaclass shape WITHOUT mito (todo-246): the driver routes through
+		// ensure-class-using-class, so the user :around on it fires on REdefinition
+		// only (0 then 1); an initialize-instance :around's MUNGED initargs take
+		// effect because the fill runs INSIDE the chain (the injected dao-class
+		// superclass, the :extra initarg pushed into a slot-definition's :initargs);
+		// custom direct/effective slot classes carry an extra col-type slot copied by
+		// the user's compute-effective-slot-definition :around; effective slots carry
+		// the initform THUNK at index 5 (slot-definition-initfunction); redefining
+		// the same class name reinitializes the SAME metaobject in place; and
+		// %class-direct-subclasses sees the runtime-injected superclass edge.
+		assertThat(evalMulti(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_SOURCE + """
+				(list *mt-first*
+				      (let ((c (find-class 'mt-user)))
+				        (list *mt-ecuc*
+				              (slot-value c 'table-name)
+				              (mapcar (lambda (s) (%obj-ref s 0)) (%obj-ref c 2))
+				              (slot-value c 'col-count)
+				              (mt-user-id (make-instance 'mt-user :id 1)))))
+				""").print()).isEqualTo(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_EXPECTED);
+	}
+
+	@Test
 	void defclassMetaclassRequiresARegisteredMetaclass() {
 		// :metaclass must name a class inheriting standard-class, defined first -- the
 		// static model's definition-time contract.

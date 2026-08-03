@@ -59,3 +59,27 @@
   (if (%obj-p slot)
       (%obj-ref slot 3)
       (car (cdr slot))))
+
+(defun closer-mop:slot-definition-readers (slot)
+  (if (%obj-p slot)
+      (%obj-ref slot 4)
+      nil))
+
+(defun closer-mop:slot-definition-initfunction (slot)
+  ;; Index 5 of the slot-definition contract (appended 2026-08-03): a live
+  ;; (lambda () initform) thunk on DRIVER-built definitions (a :metaclass
+  ;; class's canonicalized specs carry one); nil on materialized plain views
+  ;; and on slots with no :initform -- mito's migration diffing branches on
+  ;; exactly that truthiness.
+  (if (%obj-p slot)
+      (%obj-ref slot 5)
+      nil))
+
+(defun closer-mop:class-direct-slots (class)
+  ;; Direct-slot-definition metaobjects; nil on a materialized plain view (the
+  ;; static registry keeps direct specs, but only the metaclass driver builds
+  ;; direct-slot metaobjects).
+  (%obj-ref class 2))
+
+(defun closer-mop:class-direct-subclasses (class)
+  (%class-direct-subclasses class))

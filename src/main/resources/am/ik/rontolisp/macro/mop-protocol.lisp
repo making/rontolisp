@@ -9,7 +9,7 @@
 ;; deliberately SELF-CONTAINED: metaobject slots are read/written through the
 ;; seeded %obj-ref index contract (standard-class: 0 name, 1 direct-superclasses,
 ;; 2 direct-slots, 3 effective-slots, 4 finalized-p; slot definitions: 0 name,
-;; 1 initargs, 2 initform, 3 type, 4 readers -- see
+;; 1 initargs, 2 initform, 3 type, 4 readers, 5 initfunction -- see
 ;; ClosRegistry.ensureMopClassesSeeded), never through the closer-mop shim
 ;; defuns, so the protocol works whether or not the shim library is loaded.
 ;;
@@ -18,6 +18,56 @@
 ;; methods answer the NAME, so the defaults drag no find-class runtime into the
 ;; program; a user method (postmodern returns (find-class 'direct-column-slot))
 ;; may answer the metaobject.
+;;
+;; Definition entry point (todo-246): the driver routes through
+;; closer-mop:ensure-class-using-class, dispatching on the EXISTING driver-built
+;; metaobject (nil for a first definition) -- so a user :around specialized on a
+;; metaclass (mito's dao-table-class superclass injection) fires on
+;; REdefinition, per AMOP. Initialization runs through the ordinary generic
+;; chain: %mop-make-instance allocates the instance UNBOUND and calls the
+;; initialization generic, whose system shared-initialize primaries below
+;; perform the initarg fill (%mop-fill-slots) -- which is what makes a user
+;; initialize-instance :around's MUNGED initargs (mito's :direct-superclasses /
+;; :direct-slots rewrites) actually take effect.
+
+;; The classes the DRIVER has defined, most recent first -- deliberately
+;; separate from the find-class memo: the compile paths' class table (and the
+;; interpreter's registry) answer a materialized plain view for a class whose
+;; driver call has not run yet, so find-class cannot tell "already ensured"
+;; from "statically known".
+(defvar %mop-ensured-classes% nil)
+
+(defun %mop-ensured-class (name)
+  (let ((hit nil))
+    (dolist (pair %mop-ensured-classes%)
+      (if (eq (car pair) name)
+          (if hit nil (setq hit (cdr pair)))
+          nil))
+    hit))
+
+(defun %mop-record-ensured-class (name class)
+  (if (%mop-ensured-class name)
+      nil
+      (setq %mop-ensured-classes% (cons (cons name class) %mop-ensured-classes%)))
+  class)
+
+;; The leftmost tail of a plist whose key matches, nil when absent -- getf that
+;; can tell a supplied nil from an absent key.
+(defun %mop-initarg-tail (plist key)
+  (do ((cursor plist (cdr (cdr cursor))))
+      ((null cursor) nil)
+    (if (eq (car cursor) key)
+        (return (cdr cursor))
+        nil)))
+
+(defun %mop-resolve-class-list (designators)
+  ;; A :direct-superclasses element may be a name or a metaobject (a user
+  ;; :around pushes (find-class 'dao-class) instances into the initargs);
+  ;; storage always holds metaobjects.
+  (let ((out nil))
+    (dolist (c designators)
+      (setq out (cons (if (symbolp c) (find-class c) c) out)))
+    (reverse out)))
 
 (defmethod closer-mop:validate-superclass (class superclass)
   ;; Permissive by design (lite divergence): CL's cross-metaclass rejection is
@@ -31,6 +81,49 @@
 (defmethod closer-mop:effective-slot-definition-class (class &rest initargs)
   'standard-effective-slot-definition)
 
+;; The system initarg fill, run INSIDE the initialization chain (the least
+;; specific primary a user :around's call-next-method reaches): store each
+;; supplied initarg, then -- on initialize (slot-names t), not reinitialize
+;; (slot-names nil) -- each still-unbound slot's initform. A class metaobject
+;; additionally resolves :direct-superclasses designators and converts the
+;; canonicalized :direct-slots spec plists into direct-slot-definition
+;; metaobjects through the protocol, AFTER the raw fill (the raw plists land in
+;; the slots first and are then replaced), so a user :around's post-
+;; call-next-method code already sees real metaobjects.
+(defmethod shared-initialize ((class standard-class) slot-names &rest initargs)
+  (%mop-fill-slots class initargs slot-names)
+  (let ((supers-tail (%mop-initarg-tail initargs ':direct-superclasses)))
+    (if supers-tail
+        (%obj-set class 1 (%mop-resolve-class-list (car supers-tail)))
+        nil))
+  (let ((slots-tail (%mop-initarg-tail initargs ':direct-slots)))
+    (if slots-tail
+        (let ((direct-slots nil))
+          (dolist (spec (car slots-tail))
+            (setq direct-slots
+                  (cons (apply #'%mop-make-instance
+                               (apply #'closer-mop:direct-slot-definition-class class spec)
+                               spec)
+                        direct-slots)))
+          (%obj-set class 2 (reverse direct-slots)))
+        nil))
+  class)
+
+(defmethod shared-initialize ((slot standard-direct-slot-definition) slot-names &rest initargs)
+  (%mop-fill-slots slot initargs slot-names)
+  slot)
+
+(defmethod shared-initialize ((slot standard-effective-slot-definition) slot-names &rest initargs)
+  (%mop-fill-slots slot initargs slot-names)
+  slot)
+
+;; Forces the reinitialize-instance generic into existence (the redefinition
+;; path below calls it whether or not user methods exist); same chain CL's
+;; default runs -- shared-initialize with slot-names nil, so initforms do NOT
+;; refill on redefinition.
+(defmethod reinitialize-instance ((class standard-class) &rest initargs)
+  (apply #'shared-initialize class nil initargs))
+
 (defmethod closer-mop:compute-effective-slot-definition (class name direct-slot-definitions)
   ;; The effective-slot-definition-class call AND the instantiation both happen
   ;; here, INSIDE the dynamic extent of a user override's call-next-method --
@@ -42,7 +135,8 @@
                         :initargs (%obj-ref dsd 1)
                         :initform (%obj-ref dsd 2)
                         :type (%obj-ref dsd 3)
-                        :readers (%obj-ref dsd 4))))
+                        :readers (%obj-ref dsd 4)
+                        :initfunction (%obj-ref dsd 5))))
 
 (defmethod closer-mop:finalize-inheritance (class)
   ;; Effective slots in static-layout order: the superclasses' effective slots
@@ -87,36 +181,45 @@
           nil))
     hit))
 
+(defmethod closer-mop:ensure-class-using-class (class name &rest initargs)
+  ;; The AMOP default: nil class = first definition (instantiate the metaclass
+  ;; through the initialization chain, validate, register, finalize); a class =
+  ;; REdefinition (reinitialize the SAME metaobject in place -- identity
+  ;; survives, per AMOP -- then re-finalize). The :metaclass initarg rides
+  ;; along untouched; no slot declares it, so the fill ignores it.
+  (let ((metaclass (car (%mop-initarg-tail initargs ':metaclass))))
+    (if class
+        (progn
+          (apply #'reinitialize-instance class ':name name initargs)
+          ;; Re-prime the memo: a redefinition invalidated the registry's view.
+          (%register-class-metaobject name class)
+          (closer-mop:finalize-inheritance class)
+          class)
+        (let ((new-class (apply #'%mop-make-instance metaclass ':name name initargs)))
+          (dolist (super (%obj-ref new-class 1))
+            (if (closer-mop:validate-superclass new-class super)
+                nil
+                (error "The class ~A cannot be a superclass of the ~A class ~A"
+                       (%obj-ref super 0) metaclass name)))
+          ;; Register BEFORE finalizing, like CL's ensure-class: find-class must
+          ;; answer THIS metaobject inside finalize-inheritance's user :after
+          ;; hooks (the captured build-dao-methods method definitions read the
+          ;; class back through (find-class 'name), see MopEvalCapture).
+          (%register-class-metaobject name new-class)
+          (%mop-record-ensured-class name new-class)
+          (closer-mop:finalize-inheritance new-class)
+          new-class))))
+
 (defun %ensure-class-with-metaclass (name metaclass supers slot-specs class-initargs)
-  ;; The definition-time driver: instantiate the metaclass (the user's
-  ;; shared-initialize hooks run with the canonicalized slot-spec plists as the
-  ;; :direct-slots initarg, per AMOP), validate the superclasses, build the
-  ;; direct-slot-definition metaobjects through the protocol, prime the
-  ;; find-class/class-of memo, and finalize EAGERLY (a documented divergence --
-  ;; inputs are static, so only the timing of definition errors moves).
-  (let* ((super-metaobjects (mapcar #'find-class supers))
-         (class (apply #'%mop-make-instance metaclass
-                       :name name
-                       :direct-superclasses super-metaobjects
-                       :direct-slots slot-specs
-                       class-initargs)))
-    (dolist (super super-metaobjects)
-      (if (closer-mop:validate-superclass class super)
-          nil
-          (error "The class ~A cannot be a superclass of the ~A class ~A"
-                 (%obj-ref super 0) metaclass name)))
-    (let ((direct-slots nil))
-      (dolist (spec slot-specs)
-        (setq direct-slots
-              (cons (apply #'%mop-make-instance
-                           (apply #'closer-mop:direct-slot-definition-class class spec)
-                           spec)
-                    direct-slots)))
-      (%obj-set class 2 (reverse direct-slots)))
-    ;; Register BEFORE finalizing, like CL's ensure-class: find-class must
-    ;; answer THIS metaobject inside finalize-inheritance's user :after hooks
-    ;; (the captured build-dao-methods method definitions read the class back
-    ;; through (find-class 'name), see MopEvalCapture).
-    (%register-class-metaobject name class)
-    (closer-mop:finalize-inheritance class)
-    class))
+  ;; The definition-time driver: route through ensure-class-using-class with
+  ;; the existing DRIVER-BUILT metaobject (nil on first definition), passing
+  ;; the superclass NAMES (resolution happens in the shared-initialize fill,
+  ;; AFTER user :arounds may have munged the list) and the canonicalized
+  ;; slot-spec plists.
+  (apply #'closer-mop:ensure-class-using-class
+         (%mop-ensured-class name)
+         name
+         ':metaclass metaclass
+         ':direct-superclasses supers
+         ':direct-slots slot-specs
+         class-initargs))

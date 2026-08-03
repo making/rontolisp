@@ -895,6 +895,73 @@ public final class LispEvaluator {
 					slot.write(args.get(2));
 					return args.get(2);
 				}));
+		this.globalEnv.defineFunction(LispNames.MOP_FILL_SLOTS, new LispFunction(LispNames.MOP_FILL_SLOTS, args -> {
+			// (%mop-fill-slots obj initargs initforms-p) -- the metaclass
+			// protocol's system initarg fill (the shared-initialize primaries of
+			// mop-protocol.lisp call it): store each supplied initarg into its
+			// slot (leftmost wins), then -- when initforms-p is true, i.e.
+			// initialize rather than reinitialize -- each still-unbound slot's
+			// initform. Registry-backed, so it stays correct as classes are
+			// defined; the compile paths generate a per-class dispatch defun of
+			// the same name.
+			if (args.size() != 3 || !(args.get(0) instanceof LispInstance obj)) {
+				throw new LispEvalException(LispNames.MOP_FILL_SLOTS + " expects (instance initargs initforms-p)");
+			}
+			ClosRegistry.ClassInfo info = this.closRegistry.findClass(obj.layout().printName());
+			if (info == null) {
+				throw new LispEvalException(
+						LispNames.MOP_FILL_SLOTS + ": not a registered class instance: " + args.get(0).print());
+			}
+			boolean initforms = !(args.get(2) instanceof LispNil);
+			java.util.List<ClosRegistry.SlotSpec> slots = info.slots();
+			for (int i = 0; i < slots.size() && i < obj.slotCount(); i++) {
+				ClosRegistry.SlotSpec slot = slots.get(i);
+				// Only a DECLARED :initarg fills from the initargs, per CL -- see the
+				// generated twin in LispMacroExpander.
+				LispVal supplied = slot.initargSupplied() ? leftmostInitargValue(args.get(1), slot.initargKeyword())
+						: null;
+				if (supplied != null) {
+					obj.setSlot(i, supplied);
+				}
+				else if (initforms && slot.initformSupplied() && obj.slot(i) instanceof LispInstance marker
+						&& marker.hasTag(ClosRegistry.UNBOUND_TAG)) {
+					obj.setSlot(i, eval(slot.initform(), this.globalEnv));
+				}
+			}
+			return obj;
+		}));
+		this.globalEnv.defineFunction(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL,
+				new LispFunction(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL, args -> {
+					// (%class-direct-subclasses designator) -- the registered classes
+					// whose direct superclasses contain the designated class, as
+					// metaobjects (driver-built instances answer through the memo). The
+					// shim's closer-mop:class-direct-subclasses rides it; the compile
+					// paths generate a dispatch defun over the static registry.
+					requireSingleArg(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL, args);
+					LispVal designator = args.get(0);
+					if (designator instanceof LispInstance inst && this.closRegistry.isClassMetaobject(inst)) {
+						designator = inst.slot(0);
+					}
+					if (!(designator instanceof LispSymbol sym)) {
+						return LispNil.INSTANCE;
+					}
+					ClosRegistry.ClassInfo target = this.closRegistry.findClass(sym.name());
+					if (target == null) {
+						return LispNil.INSTANCE;
+					}
+					java.util.List<LispVal> subs = new java.util.ArrayList<>();
+					for (String subName : this.closRegistry.directSubclassNames(target.name())) {
+						LispVal metaobject = this.closRegistry.classMetaobject(subName);
+						if (metaobject != null) {
+							subs.add(metaobject);
+						}
+					}
+					LispVal result = LispNil.INSTANCE;
+					for (int i = subs.size() - 1; i >= 0; i--) {
+						result = new LispCons(subs.get(i), result);
+					}
+					return result;
+				}));
 		this.globalEnv.defineFunction(LispNames.REGISTER_CLASS_METAOBJECT,
 				new LispFunction(LispNames.REGISTER_CLASS_METAOBJECT, args -> {
 					// (%register-class-metaobject name metaobject) -- primes the registry
@@ -3202,6 +3269,23 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * The value of the leftmost pair of the initarg plist whose key is the given keyword
+	 * (compared by spelling), or null when absent -- absent and supplied-nil must stay
+	 * distinguishable for the {@code %mop-fill-slots} fill.
+	 */
+	private static @Nullable LispVal leftmostInitargValue(LispVal plist, String keyword) {
+		LispVal cursor = plist;
+		while (cursor instanceof LispCons pair) {
+			if (pair.car() instanceof LispSymbol key && keyword.equals(key.name())
+					&& pair.cdr() instanceof LispCons valueCell) {
+				return valueCell.car();
+			}
+			cursor = pair.cdr() instanceof LispCons rest ? rest.cdr() : LispNil.INSTANCE;
+		}
+		return null;
+	}
+
 	private boolean mopProtocolLoaded;
 
 	/**
@@ -3220,6 +3304,10 @@ public final class LispEvaluator {
 			}
 			this.mopProtocolLoaded = true;
 			this.closRegistry.ensureMopClassesSeeded();
+			// The chain-fill construction of metaobject instances (expandMakeInstance)
+			// is valid from here on: the protocol's shared-initialize fill primaries
+			// are about to be defined.
+			this.closRegistry.setMopProtocolActive();
 			for (LispVal form : LispMacroExpander.seededMopConstructorDefuns(this.closRegistry)) {
 				eval(form, this.globalEnv);
 			}

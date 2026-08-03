@@ -8704,12 +8704,18 @@ public final class LispMacroExpander {
 
 	/**
 	 * Builds the {@code (%ensure-class-with-metaclass 'name 'metaclass '(supers)
-	 * '(slot-specs) '(class-initargs))} driver call of a {@code :metaclass} defclass.
-	 * Every argument is quoted data: the direct slot specs are canonicalized plists
-	 * ({@code :name}/{@code :initargs}/{@code :initform}/{@code :type}/{@code :readers}
-	 * -- the seeded slot-definition initarg contract -- followed by the slot's
-	 * non-standard options verbatim), the class initargs are the unknown class options
-	 * keyed by their keyword with the option TAIL as the value.
+	 * (list slot-specs...) (list class-initargs...))} driver call of a {@code :metaclass}
+	 * defclass. The direct slot specs are canonicalized plists
+	 * ({@code :name}/{@code :initargs}/{@code :initform}/{@code :initfunction}/
+	 * {@code :type}/{@code :readers} -- the seeded slot-definition initarg contract --
+	 * followed by the slot's non-standard options verbatim), the class initargs are the
+	 * unknown class options keyed by their keyword with the option TAIL as the value. The
+	 * spec spines are built with {@code list} rather than quoted, for two reasons:
+	 * {@code :initfunction} carries a LIVE {@code (lambda () initform)} thunk (mito's
+	 * migration diffing funcalls it), and a user {@code initialize-instance :around} may
+	 * MUTATE a spec in place (mito's {@code add-referencing-slots} rplacd's ghost markers
+	 * into column plists) -- each driver-call evaluation must hand out fresh cells, never
+	 * shared literals.
 	 */
 	private static LispVal ensureClassWithMetaclassCall(String className, String metaclassName,
 			List<ClosRegistry.ClassInfo> superInfos, List<ParsedSlot> ownSlots, List<LispVal> classInitargs) {
@@ -8717,14 +8723,19 @@ public final class LispMacroExpander {
 		for (ParsedSlot parsed : ownSlots) {
 			ClosRegistry.SlotSpec slot = parsed.spec();
 			List<LispVal> spec = new java.util.ArrayList<>();
+			spec.add(new LispSymbol(LispNames.LIST));
 			spec.add(new LispSymbol(":NAME"));
-			spec.add(new LispSymbol(slot.baseName()));
+			spec.add(quoteOf(slot.baseName()));
 			spec.add(new LispSymbol(":INITARGS"));
-			spec.add(listToCons(List.of(new LispSymbol(slot.initargKeyword()))));
+			spec.add(quotedData(listToCons(List.of(new LispSymbol(slot.initargKeyword())))));
 			spec.add(new LispSymbol(":INITFORM"));
-			spec.add(slot.initformSupplied() ? slot.initform() : LispNil.INSTANCE);
+			spec.add(slot.initformSupplied() ? quotedData(slot.initform()) : LispNil.INSTANCE);
+			spec.add(new LispSymbol(":INITFUNCTION"));
+			spec.add(slot.initformSupplied()
+					? listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, slot.initform()))
+					: LispNil.INSTANCE);
 			spec.add(new LispSymbol(":TYPE"));
-			spec.add(new LispSymbol(slot.type()));
+			spec.add(quoteOf(slot.type()));
 			spec.add(new LispSymbol(":READERS"));
 			List<String> readerNames = new java.util.ArrayList<>(slot.readers());
 			readerNames.addAll(slot.accessors());
@@ -8732,16 +8743,29 @@ public final class LispMacroExpander {
 			for (int i = readerNames.size() - 1; i >= 0; i--) {
 				readers = new LispCons(new LispSymbol(readerNames.get(i)), readers);
 			}
-			spec.add(readers);
-			spec.addAll(parsed.extras());
+			spec.add(quotedData(readers));
+			// The extras alternate keyword and VALUE; the value position is quoted so
+			// the spec list evaluates (the spine is a list call now).
+			List<LispVal> extras = parsed.extras();
+			for (int i = 0; i < extras.size(); i++) {
+				spec.add(i % 2 == 0 ? extras.get(i) : quotedData(extras.get(i)));
+			}
 			slotSpecs.add(listToCons(spec));
 		}
 		LispVal supers = superInfos.isEmpty() ? LispNil.INSTANCE
 				: listToCons(superInfos.stream().<LispVal>map(info -> new LispSymbol(info.name())).toList());
+		List<LispVal> specsCall = new java.util.ArrayList<>();
+		specsCall.add(new LispSymbol(LispNames.LIST));
+		specsCall.addAll(slotSpecs);
+		List<LispVal> initargsCall = new java.util.ArrayList<>();
+		initargsCall.add(new LispSymbol(LispNames.LIST));
+		for (int i = 0; i < classInitargs.size(); i++) {
+			initargsCall.add(i % 2 == 0 ? classInitargs.get(i) : quotedData(classInitargs.get(i)));
+		}
 		return listToCons(List.of(new LispSymbol(LispNames.ENSURE_CLASS_WITH_METACLASS), quoteOf(className),
 				quoteOf(metaclassName), quotedData(supers),
-				quotedData(slotSpecs.isEmpty() ? LispNil.INSTANCE : listToCons(slotSpecs)),
-				quotedData(classInitargs.isEmpty() ? LispNil.INSTANCE : listToCons(classInitargs))));
+				slotSpecs.isEmpty() ? LispNil.INSTANCE : listToCons(specsCall),
+				classInitargs.isEmpty() ? LispNil.INSTANCE : listToCons(initargsCall)));
 	}
 
 	/** Builds a {@code (quote datum)} form around an arbitrary value. */
@@ -9029,6 +9053,15 @@ public final class LispMacroExpander {
 			call.addAll(parts.subList(2, parts.size()));
 			return listToCons(call);
 		}
+		// A METAOBJECT class (a metaclass, a slot-definition class) under the loaded
+		// metaclass protocol constructs through the CHAIN FILL instead: allocate the
+		// instance with every slot unbound, then run the initialization generic --
+		// whose system shared-initialize primary (mop-protocol.lisp + the generated
+		// %mop-fill-slots) performs the initarg fill INSIDE the chain, so a user
+		// initialize-instance :around's munged initargs (mito's :direct-superclasses /
+		// :direct-slots rewrites) take effect. CL's ordering (:before -> fill) holds
+		// natively here, so the refill replay below is skipped.
+		boolean chainFill = closRegistry.isMopProtocolActive() && isMetaobjectClass(info);
 		// A user initialize-instance method exists (an :after in practice; make-instance
 		// runs it on the fresh instance with the initargs, like CL). Each initarg
 		// expression is hoisted into a let* temp so the constructor call and the
@@ -9052,7 +9085,12 @@ public final class LispMacroExpander {
 			ctorCall.add(temp);
 			initCall.add(temp);
 		}
-		bindings.add(listToCons(List.of(objVar, listToCons(ctorCall))));
+		List<LispVal> unbound = new java.util.ArrayList<>();
+		for (int i = 0; i < info.slots().size(); i++) {
+			unbound.add(unboundMarker());
+		}
+		bindings.add(listToCons(List.of(objVar,
+				chainFill ? objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound) : listToCons(ctorCall))));
 		List<LispVal> letParts = new java.util.ArrayList<>();
 		letParts.add(new LispSymbol(LispNames.LET_STAR));
 		letParts.add(listToCons(bindings));
@@ -9064,7 +9102,7 @@ public final class LispMacroExpander {
 		// (postmodern's dao-class resetting direct-keys) is overwritten exactly like
 		// CL's fill would overwrite it -- while undeclared (slot-name-default)
 		// initargs and unsupplied slots keep the hook's writes.
-		if (closRegistry.needsInitRefill(info)) {
+		if (!chainFill && closRegistry.needsInitRefill(info)) {
 			List<ClosRegistry.SlotSpec> slots = info.slots();
 			for (int s = 0; s < slots.size(); s++) {
 				ClosRegistry.SlotSpec slot = slots.get(s);
@@ -11675,11 +11713,32 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Whether the form is {@code #'call-next-method}
+	 * ({@code (function call-next-method)}).
+	 */
+	private static boolean isCallNextMethodReference(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol fn
+				&& LispNames.FUNCTION.equals(fn.name()) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol sym && LispNames.CALL_NEXT_METHOD.equals(plainTypeName(sym));
+	}
+
+	/** The name of a top-level {@code (defun name ...)} form, or null. */
+	@Nullable private static String topLevelDefunName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.DEFUN.equals(head.name()) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		return null;
+	}
+
+	/**
 	 * Rewrites {@code (call-next-method args...)} to a guarded {@code funcall} of the
 	 * method's {@code %next-method} thunk (no args reuse the method's own parameters, so
-	 * a bare {@code (call-next-method)} passes the current arguments) and
-	 * {@code (next-method-p)} to a nil-test of that thunk. Quoted data and other symbols
-	 * are left untouched.
+	 * a bare {@code (call-next-method)} passes the current arguments),
+	 * {@code (apply/funcall #'call-next-method args...)} to the same guarded call over
+	 * the thunk, and {@code (next-method-p)} to a nil-test of that thunk. Quoted data and
+	 * other symbols are left untouched.
 	 */
 	private static LispVal rewriteNextMethod(LispVal form, List<String> paramNames, @Nullable String restVar) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
@@ -11690,6 +11749,23 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String plain = plainTypeName(head);
+			// (apply #'call-next-method args...) / (funcall #'call-next-method args...)
+			// -- mito's :around idiom on every metaclass hook. The function reference is
+			// the thunk itself, guarded like the direct-call rewrite; the explicit args
+			// are recursively rewritten, never defaulted (the spelling always passes
+			// them).
+			if ((LispNames.APPLY.equals(plain) || LispNames.FUNCALL.equals(plain))
+					&& cons.cdr() instanceof LispCons callee && isCallNextMethodReference(callee.car())) {
+				List<LispVal> parts = cons.toList();
+				List<LispVal> call = new java.util.ArrayList<>();
+				call.add(new LispSymbol(plain));
+				call.add(new LispSymbol(NEXT_METHOD_VAR));
+				for (int i = 2; i < parts.size(); i++) {
+					call.add(rewriteNextMethod(parts.get(i), paramNames, restVar));
+				}
+				return makeIf(new LispSymbol(NEXT_METHOD_VAR), listToCons(call), listToCons(
+						List.of(new LispSymbol(LispNames.ERROR), new LispString("call-next-method: no next method"))));
+			}
 			if (LispNames.CALL_NEXT_METHOD.equals(plain)) {
 				List<LispVal> rawArgs = cons.toList().subList(1, cons.toList().size());
 				List<LispVal> args = rawArgs.isEmpty() ? paramNames.stream().<LispVal>map(LispSymbol::new).toList()
@@ -12795,6 +12871,10 @@ public final class LispMacroExpander {
 			List<LispVal> withProtocol = new java.util.ArrayList<>(MopProtocol.forms());
 			withProtocol.addAll(program);
 			program = withProtocol;
+			// The chain-fill construction of metaobject instances (expandMakeInstance,
+			// mopMakeInstanceDefuns) is valid exactly when the protocol's
+			// shared-initialize fill primaries are part of the program.
+			closRegistry.setMopProtocolActive();
 		}
 		// The closer-mop library's classp is (typep x 'standard-class): when its defuns
 		// are in the program (spliced by the system loaders, which have no registry in
@@ -12811,7 +12891,11 @@ public final class LispMacroExpander {
 		// consistent registry. The public find-class defun is separately gated so a
 		// program defining its own find-class keeps it without losing class-of.
 		boolean findClassDefun = needsFindClassRuntime(program);
-		boolean metaobjectRuntime = findClassDefun || referencesClassOf(program);
+		// The %class-direct-subclasses runtime (the shim's class-direct-subclasses)
+		// resolves its answers through %find-class, so it forces the metaobject runtime
+		// with it.
+		boolean classDirectSubclasses = needsClassDirectSubclassesRuntime(program);
+		boolean metaobjectRuntime = findClassDefun || referencesClassOf(program) || classDirectSubclasses;
 		if (metaobjectRuntime) {
 			closRegistry.ensureMopClassesSeeded();
 		}
@@ -12865,6 +12949,12 @@ public final class LispMacroExpander {
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
 		java.util.Set<String> placedDispatchers = new java.util.HashSet<>();
+		// defclass-generated plain defuns (constructors) by name -> index in `out`: a
+		// same-name class REdefinition regenerates them, and two defuns of one name in
+		// one compiled program are a JVM ClassFormatError -- the earlier one is
+		// nil-ed, the static "last definition wins" half of the redefinition story
+		// (the runtime half is the driver's reinitialize-instance path).
+		java.util.Map<String, Integer> classDefunSlots = new java.util.HashMap<>();
 		for (LispVal rawForm : program) {
 			// Fold this form's #S(...) literals against the registry as it stands BEFORE
 			// the form is processed, so the defstruct must precede the literal -- CL's
@@ -12885,6 +12975,13 @@ public final class LispMacroExpander {
 				// reader/writer defmethods; the methods go through the same
 				// expansion + dispatcher placement as a top-level defmethod.
 				for (LispVal generated : expandDefclass((LispCons) form, closRegistry, structAccessors)) {
+					String defunName = topLevelDefunName(generated);
+					if (defunName != null) {
+						Integer earlier = classDefunSlots.put(defunName, out.size());
+						if (earlier != null) {
+							out.set(earlier, LispNil.INSTANCE);
+						}
+					}
 					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
 				}
 			}
@@ -12961,6 +13058,9 @@ public final class LispMacroExpander {
 			// materializer is in their view.
 			out.addAll(findClassRuntimeDefuns(findClassDefun));
 			out.addAll(0, classMetaTableForms(closRegistry));
+			if (classDirectSubclasses) {
+				out.addAll(classDirectSubclassesDefuns(closRegistry));
+			}
 		}
 		if (allocateInstanceRuntime) {
 			// Position-independent defuns, appended once the registry is complete so
@@ -12992,6 +13092,10 @@ public final class LispMacroExpander {
 			out.addAll(mopMakeInstanceDefuns(closRegistry, makeInstanceFunction));
 			if (metaclassProtocol) {
 				out.add(registerClassMetaobjectDefun());
+				// The system initarg fill the protocol's shared-initialize primaries
+				// call -- the chain-fill construction above allocates unbound and
+				// relies on it.
+				out.addAll(mopFillSlotsDefuns(closRegistry));
 			}
 		}
 		if (classSlotDefsRuntime) {
@@ -22788,11 +22892,14 @@ public final class LispMacroExpander {
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef))));
 		LispVal s4 = mvCall(LispNames.CAR,
 				mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, mvCall(LispNames.CDR, slotDef)))));
+		// The 6th slot (initfunction, appended 2026-08-03) stays nil on materialized
+		// plain views: the table is quoted data and cannot carry a live thunk; only
+		// driver-built definitions fill it.
 		LispVal slotBuild = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
 				listToCons(List.of(slotDef, slotData, LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.SETQ), slots, mvCall(LispNames.CONS,
 						objNew(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
-								List.of(s0, s1, s2, s3, s4)),
+								List.of(s0, s1, s2, s3, s4, LispNil.INSTANCE)),
 						slots)))));
 		// The entry's superclass column is a LIST of names (multiple inheritance);
 		// materialize each through the recursive resolver, preserving order.
@@ -23112,7 +23219,13 @@ public final class LispMacroExpander {
 			if (qn != null && closRegistry.findClass(qn.member()) == info) {
 				spellings.add(qn.member());
 			}
-			LispVal refillForms = info.ancestors().stream().anyMatch(refillTargets::contains)
+			// A metaobject class under the loaded metaclass protocol constructs through
+			// the CHAIN FILL (see expandMakeInstance): the arm allocates the instance
+			// UNBOUND and the initialization generic -- whose system shared-initialize
+			// primary performs the fill -- runs on it like on any other construction.
+			// CL's ordering holds natively there, so the refill replay is skipped.
+			boolean chainFill = closRegistry.isMopProtocolActive() && isMetaobjectClass(info) && initCallOnObj != null;
+			LispVal refillForms = !chainFill && info.ancestors().stream().anyMatch(refillTargets::contains)
 					? initRefillFormsFor(info, obj, args) : null;
 			if (refillForms != null) {
 				refillClauses
@@ -23120,7 +23233,17 @@ public final class LispMacroExpander {
 			}
 			String ctor = qn == null ? affixFor("%make-", info.name()) + info.name()
 					: qn.pkg() + "::" + affixFor("%make-", qn.member()) + qn.member();
-			LispVal construct = listToCons(List.of(new LispSymbol(LispNames.APPLY), functionRef(ctor), args));
+			LispVal construct;
+			if (chainFill) {
+				List<LispVal> unbound = new java.util.ArrayList<>();
+				for (int i = 0; i < info.slots().size(); i++) {
+					unbound.add(unboundMarker());
+				}
+				construct = objNew(LispLayout.CLASS_TAG_PREFIX + info.name(), unbound);
+			}
+			else {
+				construct = listToCons(List.of(new LispSymbol(LispNames.APPLY), functionRef(ctor), args));
+			}
 			LispVal arm;
 			if (allClasses || initCallOnObj == null) {
 				// Chunked mode (and the no-init-generic case): the arm only constructs;
@@ -23262,6 +23385,221 @@ public final class LispMacroExpander {
 		return info.ancestors().contains(ClosRegistry.STANDARD_CLASS_NAME)
 				|| info.ancestors().contains(ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME)
 				|| info.ancestors().contains(ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
+	}
+
+	/**
+	 * Builds the generated {@code %mop-fill-slots} defun (plus its chunked
+	 * {@code %MOP-FILL-<n>} helpers): the metaclass protocol's system initarg fill,
+	 * called by the {@code shared-initialize} primaries of {@code mop-protocol.lisp}. One
+	 * arm per METAOBJECT-ancestored class -- the only classes the chain-fill construction
+	 * allocates unbound -- storing, per slot, the leftmost supplied initarg
+	 * ({@code %mop-initarg-tail}, the protocol's plist scanner) or, when the third
+	 * argument is true (initialize, not reinitialize) and the slot is still unbound, the
+	 * slot's initform. The interpreter serves the same name as a registry-backed builtin,
+	 * which stays correct as its registry grows.
+	 */
+	private static List<LispVal> mopFillSlotsDefuns(ClosRegistry closRegistry) {
+		LispSymbol obj = new LispSymbol("%mf_obj");
+		LispSymbol args = new LispSymbol("%mf_args");
+		LispSymbol initforms = new LispSymbol("%mf_forms");
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		List<String> helperNames = new java.util.ArrayList<>();
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		int clauseNodes = 0;
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!seen.add(info.name()) || !isMetaobjectClass(info)) {
+				continue;
+			}
+			List<LispVal> fills = new java.util.ArrayList<>();
+			List<ClosRegistry.SlotSpec> slots = info.slots();
+			for (int s = 0; s < slots.size(); s++) {
+				ClosRegistry.SlotSpec slot = slots.get(s);
+				LispSymbol tail = new LispSymbol("%mf_tail");
+				// Unsupplied + no initform leaves the slot unbound (mito's col-type
+				// rides slot-boundp on exactly that).
+				LispVal initformFill = !slot.initformSupplied() ? LispNil.INSTANCE
+						: makeIf(
+								makeIf(initforms,
+										objIs(mvCall(LispNames.OBJ_REF, obj, new LispInteger(s)),
+												List.of(ClosRegistry.UNBOUND_TAG)),
+										LispNil.INSTANCE),
+								mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), slot.initform()), LispNil.INSTANCE);
+				// Only a DECLARED :initarg fills from the initargs, per CL -- the
+				// slot-name-default keyword the lite constructors accept must not
+				// clobber an initialization hook's write here (postmodern's table-name
+				// slot keeps the :before's parsed string while (:table-name ...) rides
+				// as a metaclass initarg -- the very case the refill replay skips too).
+				fills.add(!slot.initargSupplied() ? initformFill
+						: makeLet(tail.name(), mvCall(MOP_INITARG_TAIL, args, quoteOf(slot.initargKeyword())),
+								makeIf(tail,
+										mvCall(LispNames.OBJ_SET, obj, new LispInteger(s), callOf(LispNames.CAR, tail)),
+										initformFill)));
+			}
+			fills.add(LispTrue.INSTANCE);
+			LispVal clause = listToCons(
+					List.of(objIs(obj, List.of(LispLayout.CLASS_TAG_PREFIX + info.name())), makeProgn(fills)));
+			clauses.add(clause);
+			clauseNodes += consNodeCount(clause);
+			if (clauseNodes >= 600) {
+				defuns.add(mopFillHelperDefun(helperNames, clauses, obj, args, initforms));
+				clauses = new java.util.ArrayList<>();
+				clauseNodes = 0;
+			}
+		}
+		if (!clauses.isEmpty()) {
+			defuns.add(mopFillHelperDefun(helperNames, clauses, obj, args, initforms));
+		}
+		List<LispVal> orParts = new java.util.ArrayList<>();
+		orParts.add(new LispSymbol(LispNames.OR));
+		for (String helper : helperNames) {
+			orParts.add(mvCall(helper, obj, args, initforms));
+		}
+		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.MOP_FILL_SLOTS),
+				listToCons(List.of(obj, args, initforms)),
+				helperNames.isEmpty() ? LispNil.INSTANCE : listToCons(orParts))));
+		return defuns;
+	}
+
+	/** The protocol's plist scanner defun name (defined in {@code mop-protocol.lisp}). */
+	private static final String MOP_INITARG_TAIL = "%MOP-INITARG-TAIL";
+
+	/** One {@code %MOP-FILL-<n>} helper: a cond over its chunk's per-class fill arms. */
+	private static LispVal mopFillHelperDefun(List<String> helperNames, List<LispVal> clauses, LispSymbol obj,
+			LispSymbol args, LispSymbol initforms) {
+		String helperName = "%MOP-FILL-" + helperNames.size();
+		helperNames.add(helperName);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
+				listToCons(List.of(obj, args, initforms)), listToCons(condParts)));
+	}
+
+	/**
+	 * Whether the program references {@code %class-direct-subclasses} (the shim's
+	 * {@code closer-mop:class-direct-subclasses} lowers onto it) without defining it --
+	 * the injection gate of {@link #classDirectSubclassesDefuns}.
+	 */
+	private static boolean needsClassDirectSubclassesRuntime(List<LispVal> program) {
+		boolean referenced = false;
+		for (LispVal form : program) {
+			if (definesFunction(form, LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL)) {
+				return false;
+			}
+			referenced = referenced || referencesFunction(form, LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL);
+		}
+		return referenced;
+	}
+
+	/**
+	 * Builds the generated {@code %class-direct-subclasses} defun (plus its chunked
+	 * {@code %CDS-<n>} static helpers, the registry-growth pattern): for a class
+	 * designator (a metaobject's name slot, or the name symbol), the metaobjects of every
+	 * class whose DIRECT superclasses contain it. Two sources, merged like the
+	 * interpreter's {@code ClosRegistry.directSubclassNames}: the runtime metaobject memo
+	 * ({@code %class-metaobjects%}) FIRST -- a driver-built metaclass instance may carry
+	 * superclasses a user {@code initialize-instance :around} INJECTED, which the static
+	 * registry never sees (mito's dao-class push) -- then the static registry's declared
+	 * superclasses for classes never materialized at run time. Names resolve through
+	 * {@code %find-class}, so the answers are the memoized instances.
+	 */
+	private static List<LispVal> classDirectSubclassesDefuns(ClosRegistry closRegistry) {
+		LispSymbol name = new LispSymbol("%cds_name");
+		List<LispVal> defuns = new java.util.ArrayList<>();
+		List<String> helperNames = new java.util.ArrayList<>();
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		int clauseNodes = 0;
+		java.util.Set<String> seen = new java.util.HashSet<>();
+		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
+			if (!seen.add(info.name())) {
+				continue;
+			}
+			List<String> subs = new java.util.ArrayList<>();
+			java.util.Set<String> subSeen = new java.util.HashSet<>();
+			for (ClosRegistry.ClassInfo candidate : closRegistry.classes().values()) {
+				if (candidate.superclasses().contains(info.name()) && subSeen.add(candidate.name())) {
+					subs.add(candidate.name());
+				}
+			}
+			if (subs.isEmpty()) {
+				continue;
+			}
+			List<String> spellings = new java.util.ArrayList<>();
+			spellings.add(info.name());
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(info.name());
+			if (qn != null && closRegistry.findClass(qn.member()) == info) {
+				spellings.add(qn.member());
+			}
+			LispVal clause = listToCons(
+					List.of(mvCall(LispNames.MEMBER, name, quotedSymbolList(spellings)), quotedSymbolList(subs)));
+			clauses.add(clause);
+			clauseNodes += consNodeCount(clause);
+			if (clauseNodes >= 600) {
+				defuns.add(classDirectSubclassesHelperDefun(helperNames, clauses, name));
+				clauses = new java.util.ArrayList<>();
+				clauseNodes = 0;
+			}
+		}
+		if (!clauses.isEmpty()) {
+			defuns.add(classDirectSubclassesHelperDefun(helperNames, clauses, name));
+		}
+		LispSymbol cls = new LispSymbol("%cds_class");
+		LispSymbol names = new LispSymbol("%cds_out");
+		LispSymbol pair = new LispSymbol("%cds_pair");
+		LispSymbol superVar = new LispSymbol("%cds_sup");
+		LispSymbol nameVar = new LispSymbol("%cds_sn");
+		LispSymbol metaobjects = new LispSymbol("%cds_mos");
+		LispVal designator = makeIf(callOf(LispNames.OBJ_P, cls), mvCall(LispNames.OBJ_REF, cls, new LispInteger(0)),
+				cls);
+		LispVal chain = LispNil.INSTANCE;
+		if (!helperNames.isEmpty()) {
+			List<LispVal> orParts = new java.util.ArrayList<>();
+			orParts.add(new LispSymbol(LispNames.OR));
+			for (String helper : helperNames) {
+				orParts.add(mvCall(helper, name));
+			}
+			chain = listToCons(orParts);
+		}
+		LispVal pushName = makeIf(mvCall(LispNames.MEMBER, callOf(LispNames.CAR, pair), names), LispNil.INSTANCE,
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), names,
+						mvCall(LispNames.CONS, callOf(LispNames.CAR, pair), names))));
+		LispVal memoScan = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(pair, new LispSymbol(LispNames.CLASS_METAOBJECT_MEMO), LispNil.INSTANCE)),
+				listToCons(List.of(new LispSymbol(LispNames.DOLIST), listToCons(List.of(superVar,
+						mvCall(LispNames.OBJ_REF, callOf(LispNames.CDR, pair), new LispInteger(1)), LispNil.INSTANCE)),
+						makeIf(fmtCall(LispNames.EQ_GENERAL, mvCall(LispNames.OBJ_REF, superVar, new LispInteger(0)),
+								name), pushName, LispNil.INSTANCE)))));
+		LispVal staticMerge = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(nameVar, chain, LispNil.INSTANCE)),
+				makeIf(mvCall(LispNames.MEMBER, nameVar, names), LispNil.INSTANCE, listToCons(
+						List.of(new LispSymbol(LispNames.SETQ), names, mvCall(LispNames.CONS, nameVar, names))))));
+		LispVal materialize = listToCons(List.of(new LispSymbol(LispNames.DOLIST),
+				listToCons(List.of(nameVar, mvCall(LispNames.REVERSE, names), LispNil.INSTANCE)),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), metaobjects, mvCall(LispNames.CONS,
+						mvCall(LispNames.FIND_CLASS_INTERNAL, nameVar, LispTrue.INSTANCE), metaobjects)))));
+		LispVal body = makeLet(name.name(), designator,
+				listToCons(List.of(new LispSymbol(LispNames.LET),
+						listToCons(List.of(listToCons(List.of(names, LispNil.INSTANCE)),
+								listToCons(List.of(metaobjects, LispNil.INSTANCE)))),
+						memoScan, staticMerge, materialize, mvCall(LispNames.REVERSE, metaobjects))));
+		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL), listToCons(List.<LispVal>of(cls)), body)));
+		return defuns;
+	}
+
+	/** One {@code %CDS-<n>} helper: the static subclass NAMES of its chunk's classes. */
+	private static LispVal classDirectSubclassesHelperDefun(List<String> helperNames, List<LispVal> clauses,
+			LispSymbol name) {
+		String helperName = "%CDS-" + helperNames.size();
+		helperNames.add(helperName);
+		List<LispVal> condParts = new java.util.ArrayList<>();
+		condParts.add(new LispSymbol(LispNames.COND));
+		condParts.addAll(clauses);
+		condParts.add(listToCons(List.of(LispTrue.INSTANCE, LispNil.INSTANCE)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(helperName),
+				listToCons(List.<LispVal>of(name)), listToCons(condParts)));
 	}
 
 	/** Builds a {@code (function name)} reference. */

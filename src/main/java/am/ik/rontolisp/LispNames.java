@@ -5246,6 +5246,60 @@ public final class LispNames {
 	 */
 	public static final String FINALIZE_INHERITANCE = "FINALIZE-INHERITANCE";
 
+	/**
+	 * {@code closer-mop:ensure-class-using-class} -- the AMOP definition entry point the
+	 * {@code %ensure-class-with-metaclass} driver routes through. The system default
+	 * method ({@code macro/mop-protocol.lisp}) dispatches on the EXISTING class
+	 * metaobject: nil takes the first-definition path, a metaobject the
+	 * reinitialize-instance redefinition path -- which is why a user {@code :around}
+	 * specialized on a metaclass (mito's dao-table-class superclass injection) fires on
+	 * REdefinition only, per AMOP.
+	 */
+	public static final String ENSURE_CLASS_USING_CLASS = "ENSURE-CLASS-USING-CLASS";
+
+	/** {@code closer-mop:slot-definition-readers} ({@code %obj-ref} index 4). */
+	public static final String SLOT_DEFINITION_READERS = "SLOT-DEFINITION-READERS";
+
+	/**
+	 * {@code closer-mop:slot-definition-initfunction} -- the initform thunk at
+	 * {@code %obj-ref} index 5 (appended 2026-08-03, the append-only slot-definition
+	 * contract). Filled only on DRIVER-built slot definitions (a {@code :metaclass}
+	 * class's canonicalized specs carry a live {@code (lambda () initform)}); the
+	 * materialized plain views answer nil.
+	 */
+	public static final String SLOT_DEFINITION_INITFUNCTION = "SLOT-DEFINITION-INITFUNCTION";
+
+	/** {@code closer-mop:class-direct-slots} over a class metaobject (index 2). */
+	public static final String CLASS_DIRECT_SLOTS = "CLASS-DIRECT-SLOTS";
+
+	/**
+	 * {@code closer-mop:class-direct-subclasses} -- the registered classes whose direct
+	 * superclasses contain the given class, as metaobjects. Backed by
+	 * {@link #CLASS_DIRECT_SUBCLASSES_INTERNAL}.
+	 */
+	public static final String CLASS_DIRECT_SUBCLASSES = "CLASS-DIRECT-SUBCLASSES";
+
+	/**
+	 * The internal {@code %class-direct-subclasses} resolver behind
+	 * {@link #CLASS_DIRECT_SUBCLASSES}: a native registry scan on the interpreter, a
+	 * generated dispatch defun over the static registry on the compile paths (injected
+	 * gated on a reference, like the allocate-instance runtime).
+	 */
+	public static final String CLASS_DIRECT_SUBCLASSES_INTERNAL = "%CLASS-DIRECT-SUBCLASSES";
+
+	/**
+	 * The {@code %mop-fill-slots} initarg fill of the metaclass protocol:
+	 * {@code (%mop-fill-slots obj initargs initforms-p)} stores each supplied initarg
+	 * into its slot (leftmost wins) and, when {@code initforms-p} is true, each
+	 * still-unbound slot's initform. It is the system {@code shared-initialize} primary's
+	 * body for METAOBJECT classes (metaclasses, slot-definition classes), which is what
+	 * lets a user {@code initialize-instance :around}'s munged initargs take effect --
+	 * the fill happens INSIDE the generic chain, unlike the static constructor. A native
+	 * registry-backed builtin on the interpreter, a generated per-class dispatch defun on
+	 * the compile paths.
+	 */
+	public static final String MOP_FILL_SLOTS = "%MOP-FILL-SLOTS";
+
 	/** The {@code flexi-streams} shim package (and built-in ASDF system) name. */
 	public static final String FLEXI_STREAMS_PKG = "FLEXI-STREAMS";
 

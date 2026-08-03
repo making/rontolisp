@@ -158,6 +158,111 @@ Pinned by `LispEvaluatorTest#defclassMultipleInheritance*`/`#defclassDiamond*`/
 the `clos-multiple-inheritance-cpl-slots-and-dispatch` ci-spec case (all four
 backends).
 
+## MOP protocol widening for mito (todo-246, 2026-08-03)
+
+Extends the Phase B metaclass protocol (see the MOP-boundary section below) to
+mito's `table-class`/`dao-table-class`/`dao-table-mixin` shapes
+(class/table.lisp, dao/table.lisp, dao/mixin.lisp) and its `table-column-class`
+slot-definition subclass (class/column.lisp). Five pieces, landed together:
+
+- **`ensure-class-using-class` routing.** `%ensure-class-with-metaclass` no
+  longer builds the class itself: it applies
+  `closer-mop:ensure-class-using-class` with the EXISTING driver-built
+  metaobject (nil on first definition), the name, and
+  `:metaclass`/`:direct-superclasses` (NAMES -- resolution happens inside the
+  chain, after user :arounds may munge the list)/`:direct-slots` + the class
+  initargs. The system default method (mop-protocol.lisp) takes the make path
+  for nil and the reinitialize path for a class -- so a user `:around`
+  specialized on a metaclass (mito's dao-table-class superclass injection)
+  fires on REdefinition, per AMOP. "Existing" is tracked in the protocol's own
+  `%mop-ensured-classes%` alist, deliberately NOT via find-class: the static
+  class table answers a materialized plain view for a class whose driver call
+  has not run yet, so find-class cannot tell "already ensured" from
+  "statically known".
+- **Chain-fill initialization of METAOBJECT instances.** For a class whose
+  ancestors include a seeded MOP base class -- and only when the protocol is
+  loaded (`ClosRegistry.isMopProtocolActive`, set by the interpreter's protocol
+  load and the compile paths' prepend) -- `expandMakeInstance` and the generated
+  `%mop-make-instance` arms allocate the instance UNBOUND (`%obj-new` of unbound
+  markers) instead of calling the keyword constructor, then run the
+  initialization generic on it; the system `shared-initialize` primaries
+  (mop-protocol.lisp, specialized on `standard-class` and the two
+  slot-definition base classes) perform the initarg fill via `%mop-fill-slots`
+  (interpreter: registry-backed builtin, stays correct as classes accrue;
+  compile paths: generated per-class dispatch chunked into `%MOP-FILL-<n>`
+  helpers; slot-names nil = supplied initargs only, non-nil = plus initforms
+  for still-unbound slots -- unsupplied-no-initform stays UNBOUND, mito's
+  col-type `slot-boundp` rides that). This is what makes a user
+  `initialize-instance :around`'s MUNGED initargs take effect (mito rewrites
+  `:direct-superclasses`/`:direct-slots`; its `table-column-class` :around
+  pushes a default initarg into a slot spec's `:initargs`): CL's ordering
+  (:before -> fill) holds natively here, so metaobject classes are EXCLUDED
+  from the initarg re-fill replay -- the refill stays the mechanism for
+  REGULAR classes only, whose constructor still fills first (that divergence
+  stands; its reason, the static constructor model, is unchanged). The
+  standard-class primary additionally -- INSIDE the chain, so an :around's
+  post-`call-next-method` code already sees the results -- resolves
+  `:direct-superclasses` designators (names or metaobjects; mito pushes
+  `(find-class 'dao-class)` instances) into metaobjects on slot 1, and converts
+  the `:direct-slots` canonicalized spec plists into direct-slot-definition
+  metaobjects on slot 2 through `direct-slot-definition-class` +
+  `%mop-make-instance` (which recurses into the same chain, so slot-definition
+  :arounds fire too).
+- **Class REdefinition (metaclass classes).** Re-evaluating a
+  `defclass ... (:metaclass M)` for an existing name reinitializes the SAME
+  metaobject (identity survives, per AMOP: `reinitialize-instance` ->
+  shared-initialize with slot-names nil), re-registers it in the find-class
+  memo (the registry's re-registration had invalidated it) and re-finalizes.
+  Scope + divergence: the INTERPRETER does real redefinition (registry
+  re-registers, constructor/accessors re-evaluate); the COMPILE paths see the
+  program statically -- the static tables (layout, typep tags, baked accessor
+  indexes, constructor) keep the LAST definition
+  (`expandTopLevelDefinitions` nil-s the earlier defclass-generated
+  constructor defun via `classDefunSlots`; two same-name defuns in one class
+  file are a JVM ClassFormatError) while BOTH driver calls still run in
+  top-level order (first creates, second reinitializes), so the metaobject
+  protocol observably matches the interpreter. Reason for the divergence:
+  classes are compile-time-static (dispatch tables, `--optimize` DCE);
+  re-evaluate if a library uses the FIRST layout before redefining. On every
+  path, existing instances are not updated
+  (`update-instance-for-redefined-class` stays out), and a slot whose INDEX
+  changes between definitions poisons the shared `slotPositions` map exactly
+  like two unrelated classes disagreeing (use the accessor).
+- **Slot-definition contract: index 5 = INITFUNCTION** (append-only contract,
+  both slot-definition base classes). The driver call builds each canonicalized
+  spec with `list` -- fresh cells per evaluation, because mito's
+  add-referencing-slots `rplacd`s ghost markers into them -- carrying
+  `:initfunction (lambda () initform)` (nil when no initform), and the default
+  `compute-effective-slot-definition` copies it onto the effective slot. Filled
+  only on DRIVER-built definitions: the materialized plain views (interpreter
+  `classMetaobject`, compiled `%find-class-materialize`) answer nil there --
+  the meta table is quoted data and cannot carry a live thunk. Shim additions
+  (closer-mop.lisp): `slot-definition-readers` (index 4),
+  `slot-definition-initfunction` (5), `class-direct-slots` (2),
+  `class-direct-subclasses` (next bullet).
+- **`class-direct-subclasses`** rides the internal `%class-direct-subclasses`:
+  interpreter = `ClosRegistry.directSubclassNames` -- the metaobject memo's
+  direct-superclass lists FIRST (a driver-built instance may carry a
+  superclass a user :around INJECTED, which the static registry never sees --
+  mito's dao-class push), then the static registry's declared superclasses;
+  compile paths = a generated defun (gated on the reference; forces the
+  metaobject runtime, whose `%class-metaobjects%` memo it scans) plus chunked
+  static-arm helpers (`%CDS-<n>`), names materialized through `%find-class`.
+- **`(apply #'call-next-method ...)` / `(funcall #'call-next-method ...)`** are
+  rewritten by `rewriteNextMethod` onto the guarded `%next-method` thunk with
+  the explicit arguments -- mito spells EVERY :around's chaining this way;
+  before this only the head-position `(call-next-method ...)` call was
+  rewritten and the apply spelling died on an undefined function.
+
+Pinned by `defclassMetaclassEnsureClassUsingClassAndInitargMunging`
+(`LispEvaluatorTest`; `compile`-prefixed in `JvmLispCompilerTest`; same name in
+`WasmLispCompilerIntegrationTest` -- all three share
+`MopWideningFixture.MITO_SHAPE_SOURCE`) and ci-spec `mop-widening-for-mito`
+(all four backends): e-c-u-c :around superclass injection +
+initialize-instance :around initarg munging on the metaclass AND on a
+slot-definition class + custom slot classes with an extra col-type slot +
+initfunction readback + same-name redefinition.
+
 ## Setf methods -- `(defmethod (setf name) ...)` / `(defgeneric (setf name) ...)` (todo-232, 2026-08-02)
 
 `normalizeSetfMethodForm` rewrites the definition onto the `%setf-` writer-generic
@@ -212,9 +317,10 @@ table at compile time; the same reason makes a NON-top-level alias an error rath
 than a silent wrong answer: `classMetaTableForms` calls
 `ClosRegistry.markClassMetaTableEmitted`, after which `registerClassAlias` refuses
 (the interpreter never emits that table, so it is unaffected). If the class table
-ever becomes runtime-extensible (a real `ensure-class`, `.todo/246`), both
-restrictions can go -- they are consequences of the static class model, not of the
-alias design. The `--no-gc` backend shares one never-mutated `EMPTY_CLOS_REGISTRY`
+ever becomes runtime-extensible, both restrictions can go -- they are consequences
+of the static class model, not of the alias design. (todo-246 landed
+`ensure-class-using-class`, but only over statically-known names -- the table is
+still fixed at compile time, so the restrictions stand.) The `--no-gc` backend shares one never-mutated `EMPTY_CLOS_REGISTRY`
 for its CLOS-free `expandSetf` overload, so the place is rejected there outright.
 
 Consumer: cl-dbi's `defclass/a` / `define-condition/a` (`src/utils.lisp`), which give
@@ -798,8 +904,11 @@ before and every existing artifact stays byte-identical.
   i.e. defined by an earlier `defclass (standard-class)` -- keeps its full
   static expansion (constructor, accessors, registry entry; instances of the
   class stay ordinary) and additionally emits ONE
-  `(%ensure-class-with-metaclass 'name 'M '(supers) '(slot-spec-plists)
-  '(class-initargs))` driver call as its last generated form. Unknown CLASS
+  `(%ensure-class-with-metaclass 'name 'M '(supers) (list slot-specs...)
+  (list class-initargs...))` driver call as its last generated form (the spec
+  spines are `list`-built and carry `:initfunction` thunks since todo-246 --
+  see the widening section above; the driver itself now routes through
+  `ensure-class-using-class`). Unknown CLASS
   options become metaclass initargs whose value is the option TAIL list
   (`(:table-name "u")` -> `:table-name ("u")`, AMOP canonicalization); unknown
   SLOT options are collected per slot (single occurrence each) and ride the
@@ -831,7 +940,9 @@ before and every existing artifact stays byte-identical.
   seeded MOP base classes, whose defclass never ran), the generated
   `%mop-make-instance` (runtime-class make-instance: designator -> name ->
   per-class `apply` of the generated constructor + the program's
-  initialization generic; arms bounded to METAOBJECT-ancestored classes,
+  initialization generic; a METAOBJECT-ancestored class's arm instead
+  allocates UNBOUND for the chain fill since todo-246 -- see the widening
+  section; arms bounded to METAOBJECT-ancestored classes,
   WIDENED to every program-registered class -- seeded condition classes
   excluded, they have no keyword constructor -- and chunked into `%MMI-<n>`
   helpers with the init call hoisted, whenever the program takes
@@ -840,13 +951,15 @@ before and every existing artifact stays byte-identical.
   driver-built metaclass instance shadows the materialized plain view -- the
   memo scan takes the first hit; the interpreter twin primes
   `ClosRegistry.classMetaobjects` via `registerClassMetaobject`). Lite
-  divergences (documented on the defclass page): shared-initialize hooks run
+  divergences (documented on the defclass page): for REGULAR (non-metaobject)
+  classes -- metaobject classes moved to the chain fill in todo-246, where
+  CL's order holds natively -- shared-initialize hooks run
   AFTER constructor slot-filling -- and that IS observable, the earlier "the
   default primary is identity, so the DAO protocol cannot tell" claim was
   wrong: upstream dao-class's `shared-initialize :before` RESETS its
   `direct-keys` slot and counts on CL's order (:before -> initarg fill) to
   restore it from the `:keys` class option. The repair is the initarg RE-FILL
-  (2026-08-01): for a class specialized by a `:before` method on
+  (2026-08-01): for a REGULAR class specialized by a `:before` method on
   initialize-instance/shared-initialize (`ClosRegistry.initRefillTargets`,
   ancestor-inclusive via `needsInitRefill`), make-instance re-sets every
   DECLARED-initarg slot the call supplies (`SlotSpec.initargSupplied`; the
@@ -921,8 +1034,10 @@ before and every existing artifact stays byte-identical.
   OUT (the divergence's remaining "why": classes are compile-time-static,
   `--optimize` DCE and the dispatch tables depend on it): runtime class
   construction (`ensure-class` from computed data, a non-top-level
-  `defclass`), `add-method`, `compute-applicable-methods`, class
-  redefinition, `update-instance-for-*`.
+  `defclass`), `add-method`, `compute-applicable-methods`,
+  `update-instance-for-*`. Class REdefinition of a statically-known name is IN
+  since todo-246 (the widening section above); redefinition from computed data
+  remains out with the rest.
   Known static-model seam: on the compile paths `find-class`/`class-of` see the
   WHOLE program's classes regardless of form order, while the interpreter only
   knows classes already defined at call time.

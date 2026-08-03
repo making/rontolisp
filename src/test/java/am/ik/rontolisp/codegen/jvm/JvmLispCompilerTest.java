@@ -366,6 +366,25 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileDefclassMetaclassEnsureClassUsingClassAndInitargMunging() throws Exception {
+		// Mirrors
+		// LispEvaluatorTest#defclassMetaclassEnsureClassUsingClassAndInitargMunging
+		// on the compile path (the mito shape, todo-246): e-c-u-c routing +
+		// chain-fill initarg munging + initfunction + same-name redefinition (the
+		// second defclass reinitializes the SAME metaobject at runtime while the
+		// static tables keep the last definition).
+		assertThat(compileAndRun(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_SOURCE + """
+				(print (list *mt-first*
+				             (let ((c (find-class 'mt-user)))
+				               (list *mt-ecuc*
+				                     (slot-value c 'table-name)
+				                     (mapcar (lambda (s) (%obj-ref s 0)) (%obj-ref c 2))
+				                     (slot-value c 'col-count)
+				                     (mt-user-id (make-instance 'mt-user :id 1))))))
+				""")).isEqualTo(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_EXPECTED);
+	}
+
+	@Test
 	void compileInterceptsDefinitionTimeMethodConstruction() throws Exception {
 		// The build-dao-methods idiom on the compile path, mirroring
 		// LispEvaluatorTest#compileInterceptsDefinitionTimeMethodConstruction. The

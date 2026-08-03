@@ -326,8 +326,12 @@ public final class PackageRegistry {
 			// package (closer-common-lisp re-exports them).
 			LispNames.VALIDATE_SUPERCLASS, LispNames.DIRECT_SLOT_DEFINITION_CLASS,
 			LispNames.EFFECTIVE_SLOT_DEFINITION_CLASS, LispNames.COMPUTE_EFFECTIVE_SLOT_DEFINITION,
-			LispNames.FINALIZE_INHERITANCE, ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME,
-			ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
+			LispNames.FINALIZE_INHERITANCE, LispNames.ENSURE_CLASS_USING_CLASS,
+			ClosRegistry.STANDARD_DIRECT_SLOT_DEFINITION_NAME, ClosRegistry.STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME,
+			// The mito-era accessors (todo-246): readers/initfunction on slot
+			// definitions, direct slots/subclasses on class metaobjects.
+			LispNames.SLOT_DEFINITION_READERS, LispNames.SLOT_DEFINITION_INITFUNCTION, LispNames.CLASS_DIRECT_SLOTS,
+			LispNames.CLASS_DIRECT_SUBCLASSES);
 
 	private static final List<String> USOCKET_FUNCTION_NAMES = sorted(USOCKET_FUNCTIONS);
 

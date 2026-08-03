@@ -6088,6 +6088,22 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void defclassMetaclassEnsureClassUsingClassAndInitargMunging() throws Exception {
+		// Mirrors
+		// JvmLispCompilerTest#compileDefclassMetaclassEnsureClassUsingClassAndInitargMunging
+		// on the WASM path (the mito shape, todo-246).
+		assertThat(compileAndRun(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_SOURCE + """
+				(print (list *mt-first*
+				             (let ((c (find-class 'mt-user)))
+				               (list *mt-ecuc*
+				                     (slot-value c 'table-name)
+				                     (mapcar (lambda (s) (%obj-ref s 0)) (%obj-ref c 2))
+				                     (slot-value c 'col-count)
+				                     (mt-user-id (make-instance 'mt-user :id 1))))))
+				""")).isEqualTo(am.ik.rontolisp.MopWideningFixture.MITO_SHAPE_EXPECTED);
+	}
+
+	@Test
 	void compileInterceptsDefinitionTimeMethodConstruction() throws Exception {
 		// The build-dao-methods idiom on the WASM path, mirroring
 		// JvmLispCompilerTest#compileInterceptsDefinitionTimeMethodConstruction: the
