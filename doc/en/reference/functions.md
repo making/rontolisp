@@ -167,7 +167,8 @@ page.
 | `remove` | `(remove 2 '(1 2 3 2))` | `(1 3)` (new list without items `eql` to the given one; optional `:test`/`:key` keywords) |
 | `remove-if` | `(remove-if #'evenp '(1 2 3 4))` | `(1 3)` (new list without items satisfying the predicate) |
 | `remove-if-not` | `(remove-if-not #'evenp '(1 2 3 4))` | `(2 4)` (new list keeping only items satisfying the predicate) |
-| `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)` (copy with duplicate elements removed, keeping the last occurrence; `eql` compare by default, optional `:test`/`:key` keywords) |
+| `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)` (copy with duplicate elements removed, keeping the last occurrence; `eql` compare by default, optional `:test`/`:key` keywords, `:from-end t` keeps the first occurrence) |
+| `delete-duplicates` | `(delete-duplicates '(1 2 1 3) :from-end t)` | `(1 2 3)` (`remove-duplicates`' would-be-destructive twin, same rendering and keywords — the standard requires using the result) |
 | `delete` | `(delete 2 '(1 2 3 2))` | `(1 3)` (destructive `remove`: splices out matching cells in place; optional `:test`/`:key` keywords; use the return value since the head may change) |
 | `delete-if` | `(delete-if #'evenp '(1 2 3 4))` | `(1 3)` (destructive `remove-if`) |
 | `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)` (destructive `remove-if-not`) |
@@ -599,6 +600,7 @@ implements the members below; each name links to its own page.
 | `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
 | `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — the first character of a non-empty string, `nil` for an empty string or a non-string |
 | `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — the last character of a non-empty string, `nil` for an empty string or a non-string |
+| `uiop:split-string` | `(uiop:split-string "a.b.c" :separator ".")` | `("a" "b" "c")` — split on any character of `:separator` (upstream's semantics: right-to-left scan, `:max` keeps the unsplit head) |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | look the name up in the package at run time and apply it — UIOP's late-binding call into a system the caller does not depend on. Interpreter only; the compiled backends carry no run-time name-to-function table, so the call compiles and signals when executed |
 | `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | print a report for a condition (lite: the condition alone — no backend carries a Lisp-level call stack). Re-exported as `uiop:print-condition-backtrace` |
 

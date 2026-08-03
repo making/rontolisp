@@ -164,7 +164,8 @@
 | `remove` | `(remove 2 '(1 2 3 2))` | `(1 3)`(指定した要素と `eql` になる要素を除いた新しいリスト。省略可能な `:test`/`:key` キーワードを取ります) |
 | `remove-if` | `(remove-if #'evenp '(1 2 3 4))` | `(1 3)`(述語を満たす要素を除いた新しいリスト) |
 | `remove-if-not` | `(remove-if-not #'evenp '(1 2 3 4))` | `(2 4)`(述語を満たす要素のみを残した新しいリスト) |
-| `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)`(重複要素を除き、最後の出現を残したコピー。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取ります) |
+| `remove-duplicates` | `(remove-duplicates '(1 2 1 3))` | `(2 1 3)`(重複要素を除き、最後の出現を残したコピー。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取り、`:from-end t` は最初の出現を残します) |
+| `delete-duplicates` | `(delete-duplicates '(1 2 1 3) :from-end t)` | `(1 2 3)`(`remove-duplicates` の破壊的版という位置づけで、レンダリングとキーワードは同じです — 標準は結果を使うことを要求します) |
 | `delete` | `(delete 2 '(1 2 3 2))` | `(1 3)`(破壊的な `remove`。マッチするセルをその場で切り出します。省略可能な `:test`/`:key` キーワードを取ります。先頭が変わる場合があるので戻り値を使ってください) |
 | `delete-if` | `(delete-if #'evenp '(1 2 3 4))` | `(1 3)`(破壊的な `remove-if`) |
 | `delete-if-not` | `(delete-if-not #'evenp '(1 2 3 4))` | `(2 4)`(破壊的な `remove-if-not`) |
@@ -554,6 +555,7 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
 | `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — 空でない文字列の最初の文字。空文字列や文字列以外では `nil` |
 | `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — 空でない文字列の最後の文字。空文字列や文字列以外では `nil` |
+| `uiop:split-string` | `(uiop:split-string "a.b.c" :separator ".")` | `("a" "b" "c")` — `:separator` のいずれかの文字で分割(上流のセマンティクス: 右から左へ走査し、`:max` は分割されなかった先頭部を残します) |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです。インタプリタのみ。コンパイル済みバックエンドは名前から関数への実行時テーブルを持たないため、呼び出しはコンパイルできますが実行するとエラーになります |
 | `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | コンディションのレポートを出力します (ライト版: どのバックエンドも Lisp レベルのコールスタックを持たないため、出力されるのはコンディション自体だけです)。`uiop:print-condition-backtrace` としても再エクスポートされています |
 

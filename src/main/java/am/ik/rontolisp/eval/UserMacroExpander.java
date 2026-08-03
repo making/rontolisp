@@ -93,7 +93,7 @@ public final class UserMacroExpander {
 			// resolves them just before its top-level form evaluates): each datum runs in
 			// the macro-time evaluator, so it sees the defuns/defvars registered by the
 			// preceding forms.
-			LispVal form = usesReadEvalMarker(rawForm) ? macroEval.resolveReadTimeEval(rawForm) : rawForm;
+			LispVal form = usesReadEvalMarker(rawForm) ? macroEval.resolveReadTimeEvalInCode(rawForm) : rawForm;
 			// A package directive updates the macro evaluator's resolver state (so a
 			// defmacro under (in-package P) registers its canonical qualified name and
 			// its template symbols resolve against P) and is kept verbatim for the

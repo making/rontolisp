@@ -18,9 +18,12 @@ ALL-BACKEND now (interpreter + JVM + both WASM backends):
 - `(setf (values ...))`.
 - setf through a `(the T place)` wrapper.
 - `typep` -- literal type specifiers via the shared static type-test builder.
-- `subtypep` -- built-in lattice + class registry, single value; shared
-  `LispMacroExpander.subtypep`; the compilers FOLD literal specifiers at compile
-  time via `expandSubtypep`.
+- `subtypep` -- built-in lattice + class registry + struct `:include` ancestry
+  (`structure-object` = every struct's supertype) + user deftype expansion on
+  either side + `(or ...)` compounds (todo-244: sxql's
+  `multiple-allowed-clause`), single value; shared `LispMacroExpander.subtypep`;
+  the compilers FOLD literal specifiers at compile time via `expandSubtypep`,
+  and the runtime table's universe includes struct + deftype names.
 - `(symbolp nil)` / `(symbolp t)` = t.
 - `|...|` reader symbol escape (verbatim, whitespace included).
 - `equalp` compares arrays element-wise (prelude).

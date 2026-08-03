@@ -1793,6 +1793,21 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopSplitString() {
+		// Upstream's semantics: split on ANY character of the separator sequence
+		// (a string or a character list), scanning right to left so :max keeps the
+		// UNsplit head; the empty string yields (""). sxql tokenizes dotted column
+		// names with (uiop:split-string name :separator ".").
+		assertThat(eval("(uiop:split-string \"a.b.c\" :separator \".\")").print()).isEqualTo("(\"a\" \"b\" \"c\")");
+		assertThat(eval("(uiop:split-string \"a.b.c.d.e\" :max 3 :separator \".\")").print())
+			.isEqualTo("(\"a.b.c\" \"d\" \"e\")");
+		assertThat(eval("(uiop:split-string \"a b\tc\")").print()).isEqualTo("(\"a\" \"b\" \"c\")");
+		assertThat(eval("(uiop:split-string \"\")").print()).isEqualTo("(\"\")");
+		assertThat(eval("(uiop:split-string \"abc\" :separator \".\")").print()).isEqualTo("(\"abc\")");
+		assertThat(eval("(uiop:split-string \"a..b\" :separator \".\")").print()).isEqualTo("(\"a\" \"\" \"b\")");
+	}
+
+	@Test
 	void bareGetenvIsNotACommonLispFunction() {
 		// Common Lisp has no getenv: the only spelling is uiop's. An unqualified call is
 		// an ordinary unknown symbol, not a built-in.
@@ -2917,6 +2932,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalDeleteDuplicatesAndFromEnd() {
+		// delete-duplicates shares remove-duplicates' lowering (the caller must use
+		// the RESULT, so the non-destructive rendering is conforming), and both take
+		// :from-end -- t keeps the FIRST occurrence of each duplicate set. sxql's
+		// group-by and select-statement ordering call
+		// (delete-duplicates l :test #'eq :from-end t).
+		assertThat(eval("(delete-duplicates '(1 2 1 3 2))").print()).isEqualTo("(1 3 2)");
+		assertThat(eval("(delete-duplicates '(1 2 1 3 2) :from-end t)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(remove-duplicates '(1 2 1 3 2) :from-end t)").print()).isEqualTo("(1 2 3)");
+		assertThat(eval("(remove-duplicates '(1 2 1 3 2) :from-end nil)").print()).isEqualTo("(1 3 2)");
+		assertThat(eval("(delete-duplicates '(\"a\" \"A\" \"b\") :test #'string-equal :from-end t)").print())
+			.isEqualTo("(\"a\" \"b\")");
+		assertThat(eval("(delete-duplicates '((1 . :a) (1 . :b) (2 . :c)) :key #'car :from-end t)").print())
+			.isEqualTo("((1 . :A) (2 . :C))");
+		assertThat(eval("(funcall #'delete-duplicates '(a b a a c))").print()).isEqualTo("(B A C)");
+	}
+
+	@Test
 	void evalButlast() {
 		assertThat(eval("(butlast '(1 2 3))").print()).isEqualTo("(1 2)");
 		assertThat(eval("(butlast '(1))")).isSameAs(LispNil.INSTANCE);
@@ -3463,6 +3496,61 @@ class LispEvaluatorTest {
 		assertThatThrownBy(() -> eval("(etypecase 'sym (string \"s\") (integer \"i\"))"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("ETYPECASE");
+	}
+
+	@Test
+	void evalCaseKeyListSymbolsResolveLikeQuotedData() {
+		// A clause KEY LIST's symbols must resolve against the reading package like a
+		// lone-symbol key does, or a key never matches an imported symbol: sxql's
+		// define-op dispatches (ecase struct-type ((unary-op ...) ...)) at macro
+		// time where struct-type holds SXQL/SQL-TYPE:UNARY-OP.
+		assertThat(evalMulti("""
+				(defpackage #:ckl-home (:use #:cl) (:export #:aa #:bb))
+				(defpackage #:ckl-user (:use #:cl) (:import-from #:ckl-home #:aa #:bb))
+				(in-package #:ckl-user)
+				(defmacro ckl-m (x)
+				  `(quote ,(ecase x ((aa) 1) ((bb) 2))))
+				(in-package #:cl-user)
+				(list (ckl-user::ckl-m ckl-home:aa) (ckl-user::ckl-m ckl-home:bb))
+				""").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
+	void evalSubtypepWalksStructIncludeChainsAndDeftypes() {
+		// subtypep answers struct :include ancestry (sxql's (subtypep type
+		// 'multiple-allowed-clause) gates whether a second where/join clause merges
+		// or errors), structure-object as every struct's supertype, and a user
+		// deftype expanding to an (or ...) of struct names -- exactly
+		// multiple-allowed-clause's shape.
+		assertThat(evalMulti("""
+				(defstruct stp-base)
+				(defstruct (stp-mid (:include stp-base)))
+				(defstruct (stp-leaf (:include stp-mid)))
+				(defstruct stp-other)
+				(deftype stp-either () '(or stp-mid stp-other))
+				(list (subtypep 'stp-leaf 'stp-base)
+				      (subtypep 'stp-base 'stp-leaf)
+				      (subtypep 'stp-leaf 'structure-object)
+				      (subtypep 'stp-leaf 'stp-either)
+				      (subtypep 'stp-other 'stp-either)
+				      (subtypep 'stp-base 'stp-either))
+				""").print()).isEqualTo("(T NIL T T T NIL)");
+	}
+
+	@Test
+	void evalPackageTypeSpecifier() {
+		// A package value is find-package's answer -- the name keyword
+		// (.kb/symbol-runtime-api.md) -- so the package type test accepts exactly
+		// those. cl-package-locks' resolve-package dispatches
+		// (etypecase p (package p) (symbol (find-package p))), which sxql loads
+		// through.
+		assertThat(eval("(typep (find-package :cl-user) 'package)").print()).isEqualTo("T");
+		assertThat(eval("(typep :no-such-package-xyz 'package)").print()).isEqualTo("NIL");
+		assertThat(eval("(typep 'cl-user 'package)").print()).isEqualTo("NIL");
+		assertThat(eval("(typep 42 'package)").print()).isEqualTo("NIL");
+		assertThat(eval("(etypecase (find-package :cl) (package \"pkg\") (symbol \"sym\"))").print())
+			.isEqualTo("\"pkg\"");
+		assertThat(eval("(etypecase 'cl (package \"pkg\") (symbol \"sym\"))").print()).isEqualTo("\"sym\"");
 	}
 
 	@Test
@@ -5282,7 +5370,7 @@ class LispEvaluatorTest {
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(364);
+			.hasSize(365);
 	}
 
 	@Test
@@ -6726,6 +6814,25 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void loadSharpDotSymbolValueInCodePositionIsTheObject(@TempDir Path tempDir) throws Exception {
+		// A #. whose value is a SYMBOL spliced into an evaluated position must stand
+		// for the object itself, not become a variable reference: sxql's
+		// (intern name #.*package*) idiom (compile.lisp/statement.lisp/clause.lisp)
+		// splices the package value -- a plain symbol here -- as an argument.
+		Path lib = tempDir.resolve("rte.lisp");
+		java.nio.file.Files.writeString(lib, """
+				(defpackage #:rte-pkg (:use #:cl))
+				(in-package #:rte-pkg)
+				(defun rte-make (name) (intern name #.*package*))
+				""");
+		LispVal result = evalMulti("""
+				(load "%s")
+				(eq (rte-pkg::rte-make "ZZZ") 'rte-pkg::zzz)
+				""".formatted(lib.toString().replace("\\", "\\\\")));
+		assertThat(result.print()).isEqualTo("T");
+	}
+
+	@Test
 	void evalReadEvalNilMakesSharpDotSignal() {
 		// CLHS: binding *read-eval* to nil makes reading #. signal, catchably; the
 		// read after the binding exits works again.
@@ -6753,7 +6860,7 @@ class LispEvaluatorTest {
 				(print +re-state-beta+)
 				(print +re-state-gamma+)
 				""", am.ik.rontolisp.reader.Features.INTERPRETER)) {
-			evaluator.eval(evaluator.resolveReadTimeEval(expr));
+			evaluator.eval(evaluator.resolveReadTimeEvalInCode(expr));
 		}
 		assertThat(baos.toString().trim()).isEqualTo("1\n2");
 	}
@@ -9053,6 +9160,43 @@ class LispEvaluatorTest {
 				(defmethod describe-chain ((x leaf)) (cons :leaf (call-next-method)))
 				(describe-chain (make-instance 'leaf))
 				""").print()).isEqualTo("(:LEAF :MID :BASE NIL)");
+	}
+
+	@Test
+	void callNextMethodChainsStructIncludeAncestry() {
+		// A method specialized on an :include PARENT struct is applicable to the
+		// child's branch, so the child's call-next-method reaches it (sxql's yield
+		// methods over the sql-statement :include tree), and an :around on t wraps
+		// a struct-specialized primary the same way it wraps a class one.
+		assertThat(evalMulti("""
+				(defstruct cnm-base (name "b"))
+				(defstruct (cnm-child (:include cnm-base)))
+				(defgeneric cnm-render (x))
+				(defmethod cnm-render ((x cnm-base)) (list :base (cnm-base-name x) (next-method-p)))
+				(defmethod cnm-render ((x cnm-child)) (cons :child (call-next-method)))
+				(defmethod cnm-render :around ((x t)) (cons :around (call-next-method)))
+				(cnm-render (make-cnm-child))
+				""").print()).isEqualTo("(:AROUND :CHILD :BASE \"b\" NIL)");
+	}
+
+	@Test
+	void aStructDefinedAfterTheMethodJoinsStructDispatch() {
+		// A defstruct must refresh the dispatchers that test struct specializers
+		// (the struct-side twin of evalDefclass's regeneration): sxql's
+		// convert-for-sql declares (:method ((object structure-object)) ...) in
+		// operator.lisp while the set=-clause struct arrives later from clause.lisp,
+		// and a struct-specialized method's descendant tag set must widen when a
+		// later (:include it) struct appears.
+		assertThat(evalMulti("""
+				(defgeneric sod-render (x))
+				(defmethod sod-render ((x structure-object)) :struct)
+				(defmethod sod-render ((x t)) :other)
+				(defstruct sod-late)
+				(defstruct sod-base)
+				(defmethod sod-tag ((x sod-base)) :base)
+				(defstruct (sod-kid (:include sod-base)))
+				(list (sod-render (make-sod-late)) (sod-render 42) (sod-tag (make-sod-kid)))
+				""").print()).isEqualTo("(:STRUCT :OTHER :BASE)");
 	}
 
 	@Test

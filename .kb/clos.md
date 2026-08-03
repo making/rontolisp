@@ -80,8 +80,12 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
     default fallback; each branch's value is `effectiveMethod(branchRep, ...)`.
   - `effectiveMethod` collects the applicable methods per role (`applicableMethods`
     filters by `appliesToBranch`: default methods always apply; a class method
-    applies to a class branch whose class has it as an ancestor; eql/type methods
-    apply only to their exact-same branch — cross-type subtyping is out of scope),
+    applies to a class branch whose class has it as an ancestor; a STRUCT (type)
+    method applies to a branch struct that `:include`-descends from it, via the
+    spelling-tolerant `descendantStructTags` — sxql's yield methods over the
+    sql-statement `:include` tree, todo-244; eql and built-in type methods apply
+    only to their exact-same branch — cross-type subtyping among THEM stays out
+    of scope),
     then composes them: `:around` (most specific first) wrap a `coreThunk`; the
     core runs `:before` (msf, for effect), the primary chain (msf, value kept via a
     `%clos-result` let), then `:after` (LEAST specific first). The primary/around
@@ -333,7 +337,13 @@ file round-trip through `with-open-file` on all four backends).
 
 - **Interpreter**: `evalDefclass` (expands + evals the defuns, then REGENERATES
   every dispatcher that has a class-specialized method — the new class may
-  extend a descendant set), `evalDefgeneric` (register + eval dispatcher),
+  extend a descendant set), `evalDefstruct` (likewise regenerates every
+  dispatcher with a struct-specialized or `structure-object` method,
+  `GenericInfo.hasStructMethod` — a later defstruct widens a struct
+  specializer's descendant tag set AND the `structure-object` enumeration;
+  sxql defines convert-for-sql's `structure-object` method in operator.lisp
+  and the clause structs it must catch in clause.lisp, todo-244),
+  `evalDefgeneric` (register + eval dispatcher),
   `evalDefmethod` (eval method defun + re-eval the regenerated dispatcher).
   Works anywhere (REPL/load/macro expansion), like defstruct. Known edge: a
   `#'generic` captured BEFORE a later defmethod keeps the stale dispatcher;

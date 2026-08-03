@@ -537,6 +537,26 @@ public final class ClosRegistry {
 			}));
 		}
 
+		/**
+		 * Whether some method dispatches on a struct type: a specializer naming a
+		 * registered {@code defstruct} type, or {@code structure-object}. A later
+		 * {@code defstruct} widens both (a new {@code :include} descendant joins the
+		 * specializer's tag set; any new struct joins the {@code structure-object}
+		 * enumeration), so the interpreter regenerates these dispatchers per defstruct --
+		 * the struct-side twin of {@link #hasClassMethod}.
+		 * @param registry the registry that knows the struct types
+		 * @return true when such a method exists
+		 */
+		public boolean hasStructMethod(ClosRegistry registry) {
+			return this.methods.values()
+				.stream()
+				.anyMatch(m -> m.specializers()
+					.stream()
+					.anyMatch(s -> s.kind() == SpecializerKind.TYPE && s.name() != null
+							&& ("STRUCTURE-OBJECT".equals(plainNameOf(s.name()))
+									|| registry.findStructTag(s.name()) != null)));
+		}
+
 	}
 
 	private final LinkedHashMap<String, ClassInfo> classes = new LinkedHashMap<>();
@@ -759,6 +779,15 @@ public final class ClosRegistry {
 			return this.deftypes.get(qn.member());
 		}
 		return null;
+	}
+
+	/**
+	 * The registered {@code deftype} names (normalized), in registration order -- the
+	 * user-type extension of the runtime-subtypep universe.
+	 * @return the deftype names
+	 */
+	public java.util.Set<String> deftypeNames() {
+		return java.util.Collections.unmodifiableSet(this.deftypes.keySet());
 	}
 
 	/**

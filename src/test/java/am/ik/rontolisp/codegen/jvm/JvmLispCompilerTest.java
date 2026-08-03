@@ -172,6 +172,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSlotValueWithAPackageQualifiedRuntimeSlotName() throws Exception {
+		// The runtime name arrives in the caller's package spelling while the shared
+		// %slot-value-runtime dispatch matches package-stripped slot base names:
+		// sxql's compute-select-statement-children reads struct slots through a
+		// quoted clause-type list resolved under sxql/statement.
+		assertThat(compileAndRun("""
+				(defpackage :rsn-pkg (:use :cl) (:export #:make-holder))
+				(in-package :rsn-pkg)
+				(defstruct holder (fields-clause 7))
+				(in-package :cl-user)
+				(let ((h (rsn-pkg:make-holder))
+				      (n (car (list 'rsn-pkg::fields-clause))))
+				  (setf (slot-value h n) 8)
+				  (print (slot-value h n)))
+				""")).isEqualTo("8");
+	}
+
+	@Test
 	void compileMakeInstanceAsAFirstClassFunction() throws Exception {
 		// (apply #'make-instance class initargs) -- the postmodern make-dao idiom: a
 		// runtime class (metaobject or name) routes through the generated
@@ -4482,6 +4500,35 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDeleteDuplicatesAndFromEnd() throws Exception {
+		// delete-duplicates shares remove-duplicates' lowering; :from-end t keeps
+		// the FIRST occurrence (sxql's group-by / select-statement ordering).
+		assertThat(compileAndRun(
+				"(print (delete-duplicates '(1 2 1 3 2))) (print (delete-duplicates '(1 2 1 3 2) :from-end t)) (print (remove-duplicates '(1 2 1 3 2) :from-end t)) (print (funcall #'delete-duplicates '(a b a a c)))"))
+			.isEqualTo("(1 3 2)\n(1 2 3)\n(1 2 3)\n(B A C)");
+	}
+
+	@Test
+	void compileAndRunCallNextMethodOverAStructIncludeChain() throws Exception {
+		// A method on an :include PARENT struct joins the child's chain, and an
+		// :around on t wraps struct-specialized primaries (sxql's yield tree).
+		assertThat(compileAndRun("""
+				(defstruct cnm-base (name "b"))
+				(defstruct (cnm-child (:include cnm-base)))
+				(defgeneric cnm-render (x))
+				(defmethod cnm-render ((x cnm-base)) (list :base (cnm-base-name x) (next-method-p)))
+				(defmethod cnm-render ((x cnm-child)) (cons :child (call-next-method)))
+				(defmethod cnm-render :around ((x t)) (cons :around (call-next-method)))
+				(defgeneric cnm-kind (x))
+				(defmethod cnm-kind ((x structure-object)) :struct)
+				(defmethod cnm-kind ((x t)) :other)
+				(defstruct cnm-late)
+				(print (cnm-render (make-cnm-child)))
+				(print (list (cnm-kind (make-cnm-late)) (cnm-kind 42)))
+				""")).isEqualTo("(:AROUND :CHILD :BASE \"b\" NIL)\n(:STRUCT :OTHER)");
+	}
+
+	@Test
 	void compileAndRunButlast() throws Exception {
 		assertThat(compileAndRun(
 				"(print (butlast '(1 2 3))) (print (butlast '(1))) (print (butlast nil)) (print (funcall #'butlast '(a b c d)))"))
@@ -6638,12 +6685,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("364");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("365");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("364");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("365");
 	}
 
 	@Test

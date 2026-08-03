@@ -540,6 +540,13 @@ public final class LispNames {
 	public static final String REMOVE_DUPLICATES = "REMOVE-DUPLICATES";
 
 	/**
+	 * The {@code delete-duplicates} built-in function: {@code remove-duplicates}'
+	 * would-be-destructive twin, rendered non-destructively (the caller must use the
+	 * result, so sharing the lowering is conforming).
+	 */
+	public static final String DELETE_DUPLICATES = "DELETE-DUPLICATES";
+
+	/**
 	 * The {@code delete} built-in function (destructive variant of {@code remove}:
 	 * splices out every element {@code eql} to the given one in place, reusing the
 	 * surviving cons cells; use the return value since the head may change).
@@ -4574,6 +4581,13 @@ public final class LispNames {
 
 	/** {@code uiop:last-char} -- the last character of a non-empty string, else nil. */
 	public static final String LAST_CHAR = "LAST-CHAR";
+
+	/**
+	 * {@code uiop:split-string} -- splits a string on any character of a separator
+	 * sequence, right to left, honoring {@code :max} (a {@code LispPreludeLibrary} entry
+	 * with upstream's semantics).
+	 */
+	public static final String SPLIT_STRING = "SPLIT-STRING";
 
 	/**
 	 * {@code make-pathname} (CL) -- builds a pathname value. Rontolisp uses strings for

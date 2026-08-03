@@ -211,6 +211,7 @@ categories:
       - { slug: remove-if, name: "remove-if" }
       - { slug: remove-if-not, name: "remove-if-not" }
       - { slug: remove-duplicates, name: "remove-duplicates" }
+      - { slug: delete-duplicates, name: "delete-duplicates" }
       - { slug: delete, name: "delete" }
       - { slug: delete-if, name: "delete-if" }
       - { slug: delete-if-not, name: "delete-if-not" }
@@ -521,6 +522,7 @@ categories:
       - { slug: uiop-emptyp, name: "uiop:emptyp" }
       - { slug: uiop-first-char, name: "uiop:first-char" }
       - { slug: uiop-last-char, name: "uiop:last-char" }
+      - { slug: uiop-split-string, name: "uiop:split-string" }
       - { slug: uiop-symbol-call, name: "uiop:symbol-call" }
       - { slug: uiop-print-condition-backtrace, name: "uiop/image:print-condition-backtrace" }
   - title: "ql パッケージ (Quicklisp)"

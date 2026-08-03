@@ -784,9 +784,9 @@ public final class BuiltinFunctionWrappers {
 			binary(LispNames.COUNT), binary(LispNames.COUNT_IF), binary(LispNames.ASSOC), binary(LispNames.ASSOC_IF),
 			binary(LispNames.RASSOC), binary(LispNames.RASSOC_IF), ternary(LispNames.ACONS), binary(LispNames.PAIRLIS),
 			unary(LispNames.COPY_ALIST), binaryOptionalThird(LispNames.GETF), unary(LispNames.REMOVE_DUPLICATES),
-			variadicNconc(), unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST), unary(LispNames.NREVERSE),
-			unary(LispNames.MAKE_LIST), binary(LispNames.UNION), binary(LispNames.INTERSECTION),
-			binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN),
+			unary(LispNames.DELETE_DUPLICATES), variadicNconc(), unary(LispNames.IDENTITY), unary(LispNames.COPY_LIST),
+			unary(LispNames.NREVERSE), unary(LispNames.MAKE_LIST), binary(LispNames.UNION),
+			binary(LispNames.INTERSECTION), binary(LispNames.SET_DIFFERENCE), binary(LispNames.ADJOIN),
 			// every/some carry ANY number of sequences, the same as in call position.
 			everySomeWrapper(LispNames.EVERY, true), everySomeWrapper(LispNames.SOME, false), binary(LispNames.REMOVE),
 			binary(LispNames.REMOVE_IF), binary(LispNames.REMOVE_IF_NOT), binary(LispNames.DELETE),

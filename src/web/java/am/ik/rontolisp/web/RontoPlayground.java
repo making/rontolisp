@@ -114,7 +114,7 @@ public final class RontoPlayground {
 			// See .kb/multiple-values.md.
 			List<LispVal> values = List.of();
 			for (int i = 0; i < exprs.size(); i++) {
-				LispVal expr = markers ? evaluator.resolveReadTimeEval(exprs.get(i)) : exprs.get(i);
+				LispVal expr = markers ? evaluator.resolveReadTimeEvalInCode(exprs.get(i)) : exprs.get(i);
 				if (i == exprs.size() - 1) {
 					values = evaluator.evalValues(expr);
 				}

@@ -2192,7 +2192,7 @@ public final class LispEvaluator {
 			// per-form substitution walk; every other file keeps the plain read.
 			if (source.contains("#.")) {
 				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, features)) {
-					eval(resolveReadTimeEval(form));
+					eval(resolveReadTimeEvalInCode(form));
 				}
 			}
 			else {
@@ -2518,18 +2518,52 @@ public final class LispEvaluator {
 	 * Replaces the reader's {@code #.} markers in an already-read form by the value of
 	 * the marked datum, rebuilding only the conses that actually change. The reader
 	 * leaves the marker in place instead of evaluating it, because read-time evaluation
-	 * needs an evaluator; this is where it happens.
+	 * needs an evaluator; this is where it happens. This entry substitutes every value
+	 * RAW -- the runtime {@code read} family's contract, where the whole form is data.
 	 * @param form the form as read
 	 * @return the form with every read-time-eval marker resolved
 	 */
 	public LispVal resolveReadTimeEval(LispVal form) {
+		return resolveReadTimeEval(form, false);
+	}
+
+	/**
+	 * Like {@link #resolveReadTimeEval(LispVal)} but for a form about to be EVALUATED
+	 * (the load/compile pipelines): a marker in an evaluated position splices a SYMBOL
+	 * value QUOTED, so the value stands for the object it renders -- sxql's
+	 * {@code (intern name #.*package*)} splices the package value, which rontolisp
+	 * renders as a plain symbol where CL's package object would self-evaluate. Every
+	 * other value splices raw like CL's object splice: notably a CONS value in code
+	 * position IS code (fast-http's {@code #.`(eval-when ...)} defconstant generator). A
+	 * marker inside a {@code (quote ...)} datum or a {@code defpackage} form splices raw
+	 * (data), and a marker inside backquote construction code arrives as the reader's
+	 * renamed TEMPLATE variant, which always splices quoted.
+	 * @param form the form as read
+	 * @return the form with every read-time-eval marker resolved
+	 */
+	public LispVal resolveReadTimeEvalInCode(LispVal form) {
+		return resolveReadTimeEval(form, true);
+	}
+
+	private LispVal resolveReadTimeEval(LispVal form, boolean inCode) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL.equals(head.name())
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
 			requireReadEvalEnabled();
-			return eval(resolveReadTimeEval(datumCons.car()));
+			// The datum itself is always evaluated, so nested markers are in code.
+			LispVal value = eval(resolveReadTimeEval(datumCons.car(), true));
+			// ONLY a symbol value quotes: rontolisp renders a package object as a
+			// symbol, and quoting keeps it the OBJECT it is in CL (where a package
+			// self-evaluates). A cons value stays raw exactly like CL -- the spliced
+			// list IS code (fast-http's #.`(eval-when ... (defconstant ...))
+			// generator relies on it), and a caller wanting list DATA spells '#.
+			// there as it must in CL.
+			if (inCode && value instanceof LispSymbol sym && !sym.name().startsWith(":")) {
+				return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+			}
+			return value;
 		}
 		if (cons.car() instanceof LispSymbol head && LispNames.READ_EVAL_TEMPLATE.equals(head.name())
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
@@ -2537,11 +2571,31 @@ public final class LispEvaluator {
 			// variant): the value is template DATA, so it substitutes quoted --
 			// evaluating the construction code embeds the value itself.
 			requireReadEvalEnabled();
-			LispVal value = eval(resolveReadTimeEval(datumCons.car()));
+			LispVal value = eval(resolveReadTimeEval(datumCons.car(), true));
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
 		}
-		LispVal car = resolveReadTimeEval(cons.car());
-		LispVal cdr = resolveReadTimeEval(cons.cdr());
+		if (inCode && cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
+				&& cons.cdr() instanceof LispCons datumCell && datumCell.cdr() instanceof LispNil) {
+			// The well-formed (quote DATUM) shape: the datum is data, so a marker
+			// inside it splices raw.
+			LispVal datum = resolveReadTimeEval(datumCell.car(), false);
+			if (datum == datumCell.car()) {
+				return form;
+			}
+			return new LispCons(cons.car(), new LispCons(datum, LispNil.INSTANCE));
+		}
+		if (inCode && cons.car() instanceof LispSymbol dataOp
+				&& LispNames.DEFPACKAGE.equals(LispSymbol.memberName(dataOp.name()))) {
+			// defpackage's clauses are unevaluated data: alexandria-2 splices its
+			// re-export list as (:export . #.(let ...)).
+			LispVal rest = resolveReadTimeEval(cons.cdr(), false);
+			if (rest == cons.cdr()) {
+				return form;
+			}
+			return new LispCons(cons.car(), rest);
+		}
+		LispVal car = resolveReadTimeEval(cons.car(), inCode);
+		LispVal cdr = resolveReadTimeEval(cons.cdr(), inCode);
 		if (car == cons.car() && cdr == cons.cdr()) {
 			return form;
 		}
@@ -3768,6 +3822,7 @@ public final class LispEvaluator {
 			case LispNames.DELETE:
 				return eval(LispMacroExpander.expandDelete(cons), env);
 			case LispNames.REMOVE_DUPLICATES:
+			case LispNames.DELETE_DUPLICATES:
 				return eval(LispMacroExpander.expandRemoveDuplicates(cons), env);
 			case LispNames.UNION:
 				return eval(LispMacroExpander.expandUnion(cons), env);
@@ -3981,6 +4036,16 @@ public final class LispEvaluator {
 				if (predicateName != null && !ancestor.equals(ClosRegistry.normalize(structName))) {
 					eval(LispMacroExpander.structPredicateDefun(ancestor, predicateName, this.closRegistry), env);
 				}
+			}
+		}
+		// Regenerate the dispatchers that test struct specializers (the struct-side
+		// twin of evalDefclass's regeneration): this struct may have widened a
+		// struct specializer's descendant tag set or the structure-object
+		// enumeration (sxql defines convert-for-sql's structure-object method in
+		// operator.lisp and the clause structs it must catch in clause.lisp).
+		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
+			if (generic.hasStructMethod(this.closRegistry)) {
+				defineDispatcher(generic.name(), env);
 			}
 		}
 		// defstruct returns the structure name, like Common Lisp.
@@ -5087,7 +5152,11 @@ public final class LispEvaluator {
 	private static String packageDesignator(String operator, LispVal val) {
 		return switch (val) {
 			case LispString str -> str.value();
-			case LispSymbol sym -> LispSymbol.displayName(sym.name());
+			// A symbol designates a package by its symbol-name -- the MEMBER part of a
+			// qualified spelling (CL: the qualifier says where the symbol lives, not
+			// what it names). A #.*package* splice re-resolved as quoted data arrives
+			// qualified (rte-pkg::rte-pkg) and still designates RTE-PKG.
+			case LispSymbol sym -> LispSymbol.memberName(sym.name());
 			// nil is the symbol named "NIL", so it designates a package by that name --
 			// which no image has, so (find-package nil) is nil rather than a type error.
 			case LispNil ignored -> "NIL";

@@ -133,6 +133,32 @@ public final class LispPreludeLibrary {
 				(defun uiop:last-char (s)
 				  (and (stringp s) (plusp (length s)) (char s (1- (length s)))))
 				""");
+		// uiop:split-string -- upstream's semantics (split on ANY character of the
+		// separator sequence, scanning right to left so :max keeps the UNsplit head:
+		// ("a.b.c" :max 2 -> ("a.b" "c")), empty string -> ("")), rewritten without
+		// upstream's flet-return-from-outer-block shape: a `return` inside `do` would
+		// exit do's own nil block, so the loop carries an explicit done flag instead.
+		// sxql's sql-symbol tokenizer calls it on every dotted column name.
+		SOURCES.put(LispNames.SPLIT_STRING, """
+				(defun uiop:split-string (string &key max (separator '(#\\Space #\\Tab)))
+				  (let ((end (length string)))
+				    (if (zerop end)
+				        (list "")
+				        (let ((parts nil) (words 0) (done nil))
+				          (do ()
+				              (done)
+				            (if (and max (>= words (1- max)))
+				                (setq done t)
+				                (let ((start (position-if (lambda (c) (find c separator))
+				                                          string :end end :from-end t)))
+				                  (if (null start)
+				                      (setq done t)
+				                      (progn
+				                        (setq parts (cons (subseq string (1+ start) end) parts))
+				                        (setq words (1+ words))
+				                        (setq end start))))))
+				          (cons (subseq string 0 end) parts)))))
+				""");
 		// uiop/image:print-condition-backtrace -- lite: no backend carries a Lisp-level
 		// call stack, so there is no backtrace to print and the honest rendering is the
 		// condition alone. Real UIOP's own fallback for an implementation without a

@@ -84,7 +84,8 @@ public final class PackageRegistry {
 			LispNames.MEMBER, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.MEMBER_IF,
 			LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT, LispNames.COUNT, LispNames.COUNT_IF,
 			LispNames.ASSOC, LispNames.ASSOC_IF, LispNames.LAST, LispNames.BUTLAST, LispNames.GETF,
-			LispNames.REMOVE_DUPLICATES, LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING,
+			LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES, LispNames.NCONC, LispNames.REST,
+			LispNames.PRINC_TO_STRING,
 			// The printer generic: a defmethod on it belongs to cl, so a method defined
 			// inside a package that uses cl specializes CL:PRINT-OBJECT rather than
 			// minting that package's own (quri's uri method).
@@ -191,7 +192,11 @@ public final class PackageRegistry {
 			// CLASS is additionally a REAL class once the MOP surface seeds (the
 			// superclass of standard-class, .kb/clos.md), so the bare spelling is also
 			// what makes (typep x 'class) find it.
-			"CLASS", "STRUCTURE", "TYPE");
+			"CLASS", "STRUCTURE", "TYPE",
+			// The package TYPE name (a package value is find-package's keyword answer,
+			// .kb/symbol-runtime-api.md): cl-package-locks' (etypecase p (package p)
+			// (symbol ...)) must not resolve it to cl-package-locks::package.
+			"PACKAGE");
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
@@ -472,7 +477,7 @@ public final class PackageRegistry {
 		Set<String> uiopExternals = new HashSet<>(Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING,
 				LispNames.GETENV, LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
-				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.DIRECTORY_EXISTS_P,
+				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.SPLIT_STRING, LispNames.DIRECTORY_EXISTS_P,
 				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES,
 				LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE));
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);

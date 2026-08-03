@@ -198,7 +198,7 @@ public final class RontoLispCli {
 			// own output therefore precedes its own value, and two forms typed on one
 			// line echo twice -- what SBCL does reading them one at a time.
 			for (LispVal expr : exprs) {
-				List<LispVal> values = evaluator.evalValues(markers ? evaluator.resolveReadTimeEval(expr) : expr);
+				List<LispVal> values = evaluator.evalValues(markers ? evaluator.resolveReadTimeEvalInCode(expr) : expr);
 				freshLine(evaluator);
 				for (LispVal value : values) {
 					out.println(value.print());
@@ -250,7 +250,7 @@ public final class RontoLispCli {
 		// same timing the runtime loadFile uses.
 		if (source.contains("#.")) {
 			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)) {
-				evaluator.eval(evaluator.resolveReadTimeEval(expr));
+				evaluator.eval(evaluator.resolveReadTimeEvalInCode(expr));
 			}
 			return;
 		}

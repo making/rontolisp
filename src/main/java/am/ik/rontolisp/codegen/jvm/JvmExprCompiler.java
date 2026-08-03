@@ -803,7 +803,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIf(cons), ctx, className);
 				case LispNames.NSUBSTITUTE_IF_NOT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons), ctx, className);
-				case LispNames.REMOVE_DUPLICATES -> JvmExprCompiler
+				case LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons, ctx.usesArrays), ctx, className);
 				case LispNames.NCONC ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx, className);

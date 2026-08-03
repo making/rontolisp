@@ -701,6 +701,27 @@ public final class PackageResolver {
 		return new LispStructLiteral(resolved.name(), literal.slotNames(), literal.slotValues());
 	}
 
+	/**
+	 * Resolves a {@code case}/{@code ecase}/{@code ccase} clause head: a lone symbol key
+	 * through {@link #resolveSymbol} and a key LIST element-wise the same way (non-symbol
+	 * keys -- numbers, characters, keywords -- stay as read).
+	 */
+	private LispVal resolveCaseKeys(LispVal key) {
+		if (key instanceof LispSymbol keySym) {
+			return resolveSymbol(keySym);
+		}
+		if (key instanceof LispCons keyList) {
+			List<LispVal> resolved = new ArrayList<>();
+			LispVal tail = keyList;
+			while (tail instanceof LispCons cell) {
+				resolved.add(cell.car() instanceof LispSymbol el ? resolveSymbol(el) : cell.car());
+				tail = cell.cdr();
+			}
+			return properListOf(resolved);
+		}
+		return key;
+	}
+
 	private LispVal resolveCons(LispCons cons) {
 		if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(operatorMember(op))
 				&& cons.cdr() instanceof LispCons datumCons && datumCons.cdr() instanceof LispNil) {
@@ -775,8 +796,10 @@ public final class PackageResolver {
 			// expand-table-name dispatches on `(case (car name) (quote (concatenate
 			// ...)))`; the generic walk would treat that clause as quoted data and leave
 			// its variable references unresolved). Keys resolve like quoted data: a lone
-			// symbol through resolveSymbol (so it stays eql to a data symbol), a key
-			// LIST untouched.
+			// symbol through resolveSymbol (so it stays eql to a data symbol), and a key
+			// LIST element-wise the same way (sxql's define-op dispatches (ecase
+			// struct-type ((unary-op ...) ...)) where struct-type holds the imported
+			// SXQL/SQL-TYPE:UNARY-OP; an unresolved key list never matches it).
 			List<LispVal> resolvedParts = new ArrayList<>();
 			resolvedParts.add(resolveForm(cons.car()));
 			resolvedParts.add(resolveForm(caseRest.car()));
@@ -785,7 +808,7 @@ public final class PackageResolver {
 				if (clauseCell.car() instanceof LispCons clauseCons) {
 					List<LispVal> newClause = new ArrayList<>();
 					LispVal key = clauseCons.car();
-					newClause.add(key instanceof LispSymbol keySym ? resolveSymbol(keySym) : key);
+					newClause.add(resolveCaseKeys(key));
 					LispVal body = clauseCons.cdr();
 					while (body instanceof LispCons bodyCell) {
 						newClause.add(resolveForm(bodyCell.car()));

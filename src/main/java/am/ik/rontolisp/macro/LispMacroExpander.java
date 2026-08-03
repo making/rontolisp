@@ -4720,9 +4720,14 @@ public final class LispMacroExpander {
 	 * Expands (remove-duplicates lst) into a do scan that accumulates (in reverse) every
 	 * element that does not occur again later in the list, then reverses the accumulator
 	 * back to source order. Elements are compared with {@code eql} via {@code member}, so
-	 * the last occurrence of each element is kept (Common Lisp's default). The
+	 * the last occurrence of each element is kept (Common Lisp's default); a literal
+	 * {@code :from-end t} keeps the FIRST occurrence instead (the scan then tests the
+	 * candidate against the already-kept accumulator rather than the tail). The
 	 * {@code :test}/{@code :key} keywords forward to the inner {@code member}; the
 	 * {@code :key} selector applies to both sides of the comparison (CL semantics).
+	 * {@code delete-duplicates} shares this lowering: its contract lets the caller use
+	 * only the RESULT, so the non-destructive rendering is conforming (the
+	 * {@code sort}-via-{@code stable-sort} precedent).
 	 * @param cons the remove-duplicates expression
 	 * @return the expanded expression
 	 */
@@ -4740,21 +4745,40 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandRemoveDuplicates(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
-		requireTestKeyKeywords(LispNames.REMOVE_DUPLICATES, parts, 2);
+		String operator = cons.car() instanceof LispSymbol op ? LispSymbol.memberName(op.name())
+				: LispNames.REMOVE_DUPLICATES;
+		for (int i = 2; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol kw) || (!LispNames.TEST_KEYWORD.equals(kw.name())
+					&& !LispNames.KEY_KEYWORD.equals(kw.name()) && !LispNames.FROM_END_KEYWORD.equals(kw.name()))) {
+				throw new IllegalArgumentException(
+						operator + " expects keyword arguments :test/:key/:from-end, got: " + parts.get(i).print());
+			}
+			if (i + 1 >= parts.size()) {
+				throw new IllegalArgumentException(operator + " expects a value after " + kw.name());
+			}
+		}
 		LispVal testForm = keywordValue(parts, 2, LispNames.TEST_KEYWORD);
 		LispVal keyForm = keywordValue(parts, 2, LispNames.KEY_KEYWORD);
+		LispVal fromEndForm = keywordValue(parts, 2, LispNames.FROM_END_KEYWORD);
+		if (fromEndForm != null && !(fromEndForm instanceof LispNil) && !(fromEndForm instanceof LispTrue)) {
+			// The direction changes the expansion's shape, so it must be knowable here.
+			throw new IllegalArgumentException(operator + " expects a literal t or nil for :from-end");
+		}
+		boolean fromEnd = fromEndForm instanceof LispTrue;
 		LispSymbol acc = new LispSymbol("__rd_acc");
 		LispSymbol cur = new LispSymbol("__rd_cur");
 		// (do ((__rd_acc nil) (__rd_cur lst (cdr __rd_cur)))
 		// ((atom __rd_cur) (reverse __rd_acc))
-		// (if (member (car __rd_cur) (cdr __rd_cur) [:test fn] [:key fn]) nil
+		// (if (member (car __rd_cur) DUPS [:test fn] [:key fn]) nil
 		// (setq __rd_acc (cons (car __rd_cur) __rd_acc))))
+		// where DUPS is the tail (cdr __rd_cur) for the keep-last default and the
+		// already-kept accumulator for :from-end t (keep-first).
 		return seqResultDispatchForm(parts.get(1), lst -> {
 			LispVal bindings = listToCons(List.of(listToCons(List.of(acc, LispNil.INSTANCE)),
 					listToCons(List.of(cur, lst, callOf(LispNames.CDR, cur)))));
 			LispVal endClause = listToCons(List.of(callOf(LispNames.ATOM, cur), callOf(LispNames.NREVERSE, acc)));
-			LispVal dup = memberCallForm(keyedForm(keyForm, callOf(LispNames.CAR, cur)), callOf(LispNames.CDR, cur),
-					testForm, keyForm);
+			LispVal dup = memberCallForm(keyedForm(keyForm, callOf(LispNames.CAR, cur)),
+					fromEnd ? acc : callOf(LispNames.CDR, cur), testForm, keyForm);
 			LispVal keep = listToCons(List.of(new LispSymbol(LispNames.SETQ), acc,
 					listToCons(List.of(new LispSymbol(LispNames.CONS), callOf(LispNames.CAR, cur), acc))));
 			LispVal body = makeIf(dup, LispNil.INSTANCE, keep);
@@ -9387,7 +9411,30 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(entry.getKey()))),
 					listToCons(innerCond))));
 		}
-		return chainedDispatchDefuns(LispNames.SLOT_VALUE_RUNTIME, "%SVR-", List.of(v, n), clauses, signal);
+		return slotNameNormalizedDispatchDefuns(LispNames.SLOT_VALUE_RUNTIME, "%SVR-", List.of(v, n), n, clauses,
+				signal);
+	}
+
+	/**
+	 * Like {@link #chainedDispatchDefuns}, with the PUBLIC defun first folding the
+	 * runtime slot name to the bare base-name spelling the {@code member} arms quote: the
+	 * name arrives in the caller's package spelling (sxql's
+	 * {@code (slot-value select-statement type)} reads struct slots through a quoted
+	 * clause-type list resolved under {@code sxql/statement}), and
+	 * {@code (intern (symbol-name n))} is that fold on every backend. Normalizing inside
+	 * the defun (not at call sites) also puts the {@code intern} spelling into the
+	 * program the WASM {@code usesIntern} emission gate scans, so the {@code _intern}
+	 * runtime it needs is emitted with it.
+	 */
+	private static List<LispVal> slotNameNormalizedDispatchDefuns(String publicName, String helperPrefix,
+			List<LispSymbol> params, LispSymbol nameParam, List<LispVal> clauses, LispVal fallback) {
+		List<LispVal> defuns = new java.util.ArrayList<>(
+				chainedDispatchDefuns(publicName, helperPrefix, params, clauses, fallback));
+		List<LispVal> first = ((LispCons) defuns.get(0)).toList();
+		LispVal normalizedBody = makeLet(nameParam.name(),
+				mvCall(LispNames.INTERN, mvCall(LispNames.SYMBOL_NAME, nameParam)), first.get(3));
+		defuns.set(0, listToCons(List.of(first.get(0), first.get(1), first.get(2), normalizedBody)));
+		return defuns;
 	}
 
 	/**
@@ -9439,7 +9486,8 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(mvCall(LispNames.MEMBER, n, quotedSymbolList(List.of(entry.getKey()))),
 					listToCons(innerCond))));
 		}
-		return chainedDispatchDefuns(LispNames.SLOT_VALUE_SET_RUNTIME, "%SVW-", List.of(v, n, nv), clauses, signal);
+		return slotNameNormalizedDispatchDefuns(LispNames.SLOT_VALUE_SET_RUNTIME, "%SVW-", List.of(v, n, nv), n,
+				clauses, signal);
 	}
 
 	/**
@@ -9602,7 +9650,8 @@ public final class LispMacroExpander {
 			innerCond.addAll(inner);
 			clauses.add(listToCons(List.of(objIs(v, List.of(layout.tag())), listToCons(innerCond))));
 		}
-		return chainedDispatchDefuns(LispNames.SLOT_BOUNDP_RUNTIME, "%SBR-", List.of(v, n), clauses, LispNil.INSTANCE);
+		return slotNameNormalizedDispatchDefuns(LispNames.SLOT_BOUNDP_RUNTIME, "%SBR-", List.of(v, n), n, clauses,
+				LispNil.INSTANCE);
 	}
 
 	/**
@@ -12210,9 +12259,10 @@ public final class LispMacroExpander {
 	 * Whether an instance selecting {@code branchRep}'s branch (null = the default
 	 * branch) also satisfies method {@code m}'s specializers -- checked per parameter
 	 * position. A default (unspecialized) parameter always applies; a class parameter
-	 * applies when the branch's parameter is a descendant class; eql/type parameters
-	 * apply only when the branch's parameter matches exactly (cross-type subtyping among
-	 * specializers is out of scope).
+	 * applies when the branch's parameter is a descendant class; a struct (type)
+	 * parameter applies when the branch's struct descends from it through
+	 * {@code :include}; eql and built-in type parameters apply only when the branch's
+	 * parameter matches exactly (cross-type subtyping among them is out of scope).
 	 */
 	private static boolean appliesToBranch(ClosRegistry.MethodInfo m, ClosRegistry.@Nullable MethodInfo branchRep,
 			ClosRegistry closRegistry) {
@@ -12250,8 +12300,24 @@ public final class LispMacroExpander {
 				ClosRegistry.ClassInfo branchClass = closRegistry.classes().get(branch.name());
 				yield branchClass != null && branchClass.ancestors().contains(spec.name());
 			}
-			case TYPE -> branch.kind() == ClosRegistry.SpecializerKind.TYPE
-					&& java.util.Objects.equals(spec.name(), branch.name());
+			case TYPE -> {
+				if (branch.kind() != ClosRegistry.SpecializerKind.TYPE) {
+					yield false;
+				}
+				if (java.util.Objects.equals(spec.name(), branch.name())) {
+					yield true;
+				}
+				// A struct specializer applies to a branch struct that descends from it
+				// through :include -- the struct-side twin of the class ancestry test
+				// above (sxql's yield methods over the sql-statement :include tree).
+				// Compared via the spelling-tolerant tag APIs; built-in type
+				// specializers keep the exact-name rule (cross-type subtyping among
+				// them stays out of scope).
+				String branchTag = branch.name() == null ? null
+						: closRegistry.findStructTag(java.util.Objects.requireNonNull(branch.name()));
+				yield branchTag != null && spec.name() != null
+						&& closRegistry.descendantStructTags(spec.name()).contains(branchTag);
+			}
 		};
 	}
 
@@ -18301,6 +18367,13 @@ public final class LispMacroExpander {
 			case "PATHNAME":
 				// No pathname type exists in rontolisp: nothing is a pathname.
 				return LispNil.INSTANCE;
+			case "PACKAGE":
+				// A package value is find-package's answer -- the name KEYWORD
+				// (.kb/symbol-runtime-api.md) -- so the test is "a keyword naming a
+				// registered package". cl-package-locks' resolve-package etypecase
+				// dispatches (package p) vs (symbol (find-package p)) on exactly this.
+				return listToCons(List.of(new LispSymbol(LispNames.AND), callOf(LispNames.KEYWORDP, value),
+						callOf(LispNames.FIND_PACKAGE, value)));
 			case "BIT-VECTOR", "SIMPLE-BIT-VECTOR":
 				// No bit-vector type exists either (the bit type is dead in the
 				// lattice, .todo/180: a (make-array n :element-type 'bit) is a plain
@@ -21744,7 +21817,7 @@ public final class LispMacroExpander {
 	private static final List<String> RUNTIME_TYPEP_BUILTINS = List.of("NULL", "BOOLEAN", "KEYWORD", "SYMBOL",
 			"INTEGER", "FIXNUM", "RATIONAL", "RATIO", "FLOAT", "REAL", "NUMBER", "CHARACTER", "STRING", "CONS", "LIST",
 			"ATOM", "VECTOR", "ARRAY", "SEQUENCE", "HASH-TABLE", "FUNCTION", "STANDARD-OBJECT", "STRUCTURE-OBJECT",
-			"UNSIGNED-BYTE", "T");
+			"UNSIGNED-BYTE", "PACKAGE", "T");
 
 	/**
 	 * Expands a {@code typep} whose type specifier is computed at run time: a
@@ -21876,9 +21949,14 @@ public final class LispMacroExpander {
 
 	/**
 	 * Whether {@code sub} names a subtype of {@code super}: exact/alias equality, the
-	 * built-in lattice, or the CLOS class registry's ancestor sets. Unknown pairs answer
-	 * false (the lite single-value {@code subtypep}).
-	 * @param subV the sub type designator (a symbol, {@code t} or {@code nil})
+	 * built-in lattice, the CLOS class registry's ancestor sets, struct {@code :include}
+	 * ancestry (with {@code structure-object} as every struct's supertype), a registered
+	 * user {@code deftype} on either side (expanded and re-tested), and an
+	 * {@code (or ...)} compound on either side (any branch as the super, every branch as
+	 * the sub -- sxql's {@code multiple-allowed-clause} is a deftype for an {@code or} of
+	 * struct names). Unknown pairs answer false (the lite single-value {@code subtypep}).
+	 * @param subV the sub type designator (a symbol, {@code t}, {@code nil} or an
+	 * {@code (or ...)} list)
 	 * @param superV the super type designator
 	 * @param closRegistry the class registry for class-name type specifiers
 	 * @return whether {@code sub} is a subtype of {@code super}
@@ -21891,6 +21969,33 @@ public final class LispMacroExpander {
 		}
 		if (subV instanceof LispNil) {
 			return true;
+		}
+		if (superV instanceof LispCons supCons) {
+			// (or A B ...) as the super: sub is a subtype when it is one of ANY branch.
+			if (supCons.car() instanceof LispSymbol head && LispNames.OR.equals(plainTypeName(head))
+					&& supCons.isProperList()) {
+				List<LispVal> parts = supCons.toList();
+				for (int i = 1; i < parts.size(); i++) {
+					if (subtypep(subV, parts.get(i), closRegistry)) {
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+		if (subV instanceof LispCons subCons) {
+			// (or A B ...) as the sub: a subtype when EVERY branch is.
+			if (subCons.car() instanceof LispSymbol head && LispNames.OR.equals(plainTypeName(head))
+					&& subCons.isProperList()) {
+				List<LispVal> parts = subCons.toList();
+				for (int i = 1; i < parts.size(); i++) {
+					if (!subtypep(parts.get(i), superV, closRegistry)) {
+						return false;
+					}
+				}
+				return parts.size() > 1;
+			}
+			return false;
 		}
 		if (!(subV instanceof LispSymbol subSym) || !(superV instanceof LispSymbol superSym)) {
 			return false;
@@ -21907,6 +22012,29 @@ public final class LispMacroExpander {
 				return subClass.ancestors().contains(ClosRegistry.normalize(superClass.name()));
 			}
 			return "STANDARD-OBJECT".equals(sup);
+		}
+		// A defstruct type: :include ancestry via the spelling-tolerant tag APIs;
+		// structure-object is every struct's supertype. A struct sub whose super is
+		// neither falls through to the deftype resolution below (sxql's
+		// multiple-allowed-clause names structs through a deftype'd or).
+		String subStructTag = closRegistry.findStructTag(subSym.name());
+		if (subStructTag != null) {
+			if ("STRUCTURE-OBJECT".equals(sup)) {
+				return true;
+			}
+			if (closRegistry.findStructTag(superSym.name()) != null) {
+				return closRegistry.descendantStructTags(superSym.name()).contains(subStructTag);
+			}
+		}
+		// A user deftype on either side resolves to its expansion and re-tests.
+		LispVal subExpansion = closRegistry.findDeftype(subSym.name());
+		LispVal supExpansion = closRegistry.findDeftype(superSym.name());
+		if (subExpansion != null || supExpansion != null) {
+			return subtypep(subExpansion != null ? subExpansion : subV, supExpansion != null ? supExpansion : superV,
+					closRegistry);
+		}
+		if (subStructTag != null) {
+			return false;
 		}
 		// Walk the built-in lattice upward from sub.
 		java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
@@ -23291,6 +23419,22 @@ public final class LispMacroExpander {
 				names.add(qn.member());
 			}
 		}
+		// Struct types (their :include ancestry + structure-object) and user deftype
+		// names (resolved through their expansion) answer through the same static
+		// subtypep, so they belong to the emitted universe too -- sxql's runtime
+		// (subtypep (type-of clause) 'multiple-allowed-clause) needs both sides.
+		names.add("STRUCTURE-OBJECT");
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			if (layout.kind() == LispLayout.Kind.STRUCT) {
+				String structName = layout.tag().substring(LispLayout.STRUCT_TAG_PREFIX.length());
+				names.add(structName);
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
+				if (qn != null) {
+					names.add(qn.member());
+				}
+			}
+		}
+		names.addAll(closRegistry.deftypeNames());
 		return List.copyOf(names);
 	}
 

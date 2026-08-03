@@ -1048,7 +1048,7 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIf(cons), ctx);
 				case LispNames.NSUBSTITUTE_IF_NOT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandNsubstituteIfNot(cons), ctx);
-				case LispNames.REMOVE_DUPLICATES ->
+				case LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRemoveDuplicates(cons), ctx);
 				case LispNames.NCONC -> WasmExprCompiler.compileExpr(LispMacroExpander.expandNconc(cons), ctx);
 				case LispNames.LAST -> WasmExprCompiler.compileExpr(LispMacroExpander.expandLast(cons), ctx);

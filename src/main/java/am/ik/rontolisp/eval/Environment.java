@@ -2831,33 +2831,38 @@ public final class Environment implements Scope {
 			// Absent: the optional default, nil when it was not supplied.
 			return (args.size() == 3) ? args.get(2) : LispNil.INSTANCE;
 		}));
-		env.defineFunction(LispNames.REMOVE_DUPLICATES, new LispFunction(LispNames.REMOVE_DUPLICATES, args -> {
-			requireArgCount(LispNames.REMOVE_DUPLICATES, args, 1);
-			List<LispVal> kept = new java.util.ArrayList<>();
-			LispVal cur = seqAsList(args.get(0));
-			// Keep an element only when it does not occur again later in the list, so the
-			// last occurrence of each value survives (Common Lisp default; eql compare).
-			while (cur instanceof LispCons cell) {
-				LispVal rest = cell.cdr();
-				boolean dup = false;
-				while (rest instanceof LispCons restCell) {
-					if (isEq(cell.car(), restCell.car())) {
-						dup = true;
-						break;
+		// remove-duplicates and delete-duplicates share one rendering (the caller must
+		// use the RESULT, so the non-destructive scan is conforming for both).
+		for (String dedupName : List.of(LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES)) {
+			env.defineFunction(dedupName, new LispFunction(dedupName, args -> {
+				requireArgCount(dedupName, args, 1);
+				List<LispVal> kept = new java.util.ArrayList<>();
+				LispVal cur = seqAsList(args.get(0));
+				// Keep an element only when it does not occur again later in the list, so
+				// the last occurrence of each value survives (Common Lisp default; eql
+				// compare).
+				while (cur instanceof LispCons cell) {
+					LispVal rest = cell.cdr();
+					boolean dup = false;
+					while (rest instanceof LispCons restCell) {
+						if (isEq(cell.car(), restCell.car())) {
+							dup = true;
+							break;
+						}
+						rest = restCell.cdr();
 					}
-					rest = restCell.cdr();
+					if (!dup) {
+						kept.add(cell.car());
+					}
+					cur = cell.cdr();
 				}
-				if (!dup) {
-					kept.add(cell.car());
+				LispVal result = LispNil.INSTANCE;
+				for (int i = kept.size() - 1; i >= 0; i--) {
+					result = new LispCons(kept.get(i), result);
 				}
-				cur = cell.cdr();
-			}
-			LispVal result = LispNil.INSTANCE;
-			for (int i = kept.size() - 1; i >= 0; i--) {
-				result = new LispCons(kept.get(i), result);
-			}
-			return seqResult(args.get(0), result);
-		}));
+				return seqResult(args.get(0), result);
+			}));
+		}
 		env.defineFunction(LispNames.NCONC, new LispFunction(LispNames.NCONC, args -> {
 			// Variadic: (nconc) = nil, (nconc x) = x, otherwise destructively link each
 			// non-nil list's last cdr to the next argument, returning the first non-nil
