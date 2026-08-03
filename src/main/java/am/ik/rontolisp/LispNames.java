@@ -5528,13 +5528,13 @@ public final class LispNames {
 	/**
 	 * The {@code trivial-cltl2} shim package (nickname {@code cltl2}, and built-in ASDF
 	 * system) name. The real library is a pure re-export of each host implementation's
-	 * CLtL2 environment API (sb-cltl2 etc.) -- on rontolisp every implementation branch of
-	 * its one source file is feature-false, so loading it verbatim yields a package whose
-	 * every export is undefined. The shim provides the two members trivia level2 calls
-	 * ({@code define-declaration} as a registering no-op, {@code declaration-information}
-	 * answering nil -- rontolisp declarations are no-ops, so there is never information
-	 * to report); the remaining exports resolve but are undefined-function errors when
-	 * called (the uiop stub convention).
+	 * CLtL2 environment API (sb-cltl2 etc.) -- on rontolisp every implementation branch
+	 * of its one source file is feature-false, so loading it verbatim yields a package
+	 * whose every export is undefined. The shim provides the two members trivia level2
+	 * calls ({@code define-declaration} as a registering no-op,
+	 * {@code declaration-information} answering nil -- rontolisp declarations are no-ops,
+	 * so there is never information to report); the remaining exports resolve but are
+	 * undefined-function errors when called (the uiop stub convention).
 	 */
 	public static final String TRIVIAL_CLTL2_PKG = "TRIVIAL-CLTL2";
 
