@@ -156,11 +156,30 @@ everywhere except `--no-gc`.
   (`expandIgnoreErrors`) over `(error (c) (values nil c))`.
 - **Interpreter** (`evalHandlerCase`): `try/catch (LispEvalException)` —
   `LispReturnSignal` passes through; clause tests eval'd against a child env
-  binding a temp to the condition. A per-evaluator `ThreadLocal<Integer>
-  handlerDepth` is incremented around the protected eval; `%signal-cond`
-  raises only when it is positive, else returns nil (CL fall-through; LITE
-  deviation: a raised signal that no established handler matches aborts
-  instead of returning nil).
+  binding a temp to the condition. A per-evaluator
+  `ThreadLocal<ArrayDeque<List<LispVal>>> handlerCaseTypes` holds the clause
+  TYPE SPECIFIERS of every established handler-case (pushed around the
+  protected eval); `%signal-cond` raises only when some active clause type
+  actually MATCHES the condition (`anyHandlerCaseMatches`, the same
+  `makeHandlerTypeTest` the catch path applies), else returns nil — the CL
+  contract: `signal` unwinds only to a handler that will handle it. The
+  driving consumer is trivia level2 (todo-243), whose pattern expander
+  signals its own wildcard/guard-pattern conditions inside USER handler-case
+  bodies at macro-expansion time; under the old depth-counter approximation
+  any active handler-case turned those into aborts. **DIVERGENCE, with its
+  re-evaluation trigger**: the COMPILED backends keep the depth-counter
+  approximation (`Jvm/WasmSignalCondCompiler` test `_hcDepthTl > 0`), so a
+  runtime `(handler-case (signal 'x) (error () ...))` falls through to nil
+  on the interpreter but unwinds (and, unmatched, aborts) compiled. Reason:
+  matching at the signal point needs a runtime stack of per-handler-case
+  clause-type tests, machinery the emitted depth channel does not carry —
+  and trivia itself never needs it, because pattern expansion always runs on
+  the (macro-time) interpreter for every backend. Trigger: a library that
+  signals non-error conditions at RUN time under a handler-case for another
+  type (progress/telemetry signaling); then teach the handler-case emitters
+  to push a static clause-tag set and `%signal-cond` to consult it. Pinned
+  by `LispEvaluatorTest#signalFallsThroughAHandlerCaseWhoseClausesDoNotMatch`
+  (deliberately absent from ci-spec).
 - **JVM** (`JvmHandlerCaseCompiler`): catch-any exception-table region over
   the protected expression (the unwind-protect machinery, holes included — a
   `return` inside the region decrements the depth through the
@@ -588,6 +607,15 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
   restart records print as plain lists, `:report`/`:interactive` are stored but
   never rendered/run (no debugger — `break`/`*debugger-hook*` remain absent), and
   `check-type`/`assert`/`ccase` still offer no `store-value` restart.
+- `use-value` / `store-value` (todo-243) joined the restart-runtime defuns
+  (`LispMacroExpander.valueRestartDefun`, one shape for both): invoke the
+  innermost restart of the same name with ONE value, nil when none is active —
+  the CL contract, same nil-tolerance as `continue`. trivia level2's guard
+  lifting (`(use-value s2)` from a handler-bind handler against the expander's
+  own `use-value` restart-case clause) is the driving consumer. In
+  `RESTART_RUNTIME_FUNCTION_NAMES` (so a bare call activates restart mode and
+  the interpreter's lazy load) and `PackageRegistry.CL_FUNCTIONS`; doc pages
+  `reference/functions/{use-value,store-value}.md`.
 - Pinned by the restart block of `LispEvaluatorTest` / `JvmLispCompilerTest` /
   the `ehRestart*`/`ehHandlerBind*` block of `WasmLispCompilerIntegrationTest`
   (15-16 cases each, mirroring the postmodern site survey: keyword restart

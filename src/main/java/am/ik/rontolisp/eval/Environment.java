@@ -2979,6 +2979,20 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.INTERN, args, 1);
 			return new LispSymbol(requireString(LispNames.INTERN, args.get(0)));
 		}));
+		// find-symbol: the resolver-less fallback, like intern above -- the
+		// LispEvaluator registration (registry-backed, package-aware) replaces it. It
+		// exists so the #'find-symbol wrapper's name is a Java-backed builtin on a bare
+		// Environment too (the ShadowedBuiltins parity pin): known = a cl symbol, a
+		// keyword, or a global function/variable binding under the verbatim name.
+		env.defineFunction(LispNames.FIND_SYMBOL, new LispFunction(LispNames.FIND_SYMBOL, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String name = requireString(LispNames.FIND_SYMBOL, args.get(0));
+			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
+					|| env.lookupFunctionOrNull(name) != null || env.hasBinding(name);
+			return known ? new LispSymbol(name) : LispNil.INSTANCE;
+		}));
 		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
 			requireArgCount(LispNames.COPY_LIST, args, 1);
 			List<LispVal> elements = new java.util.ArrayList<>();

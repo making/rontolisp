@@ -82,6 +82,42 @@ Yes — nothing on the roadmap (split-sequence, CLOS subset, condition system, d
 2. **True uninterned identity is unrepresentable**: `(make-symbol "x")` twice is `eq`, hand-written `#:x` literals in two independent macros collide, `copy-symbol` cannot exist. Only affects code that bypasses `gensym`; accepted.
 3. **`unintern` and shadowing can never be implemented** (an intern table is the thing you'd unintern from) — the same deliberate line as `defpackage` rejecting `:shadow`. A library depending on either is where this design hits its wall (`.todo/038`).
 
+## A definition IS an interning: the find-symbol namespace probe (+ `#'find-symbol`, runtime `export`) — todo-243, 2026-08-03
+
+Three widenings for trivia level2, all on the "no intern table" model:
+
+- **Interpreter `find-symbol` probes the global namespaces under the canonical
+  spelling** (`LispEvaluator.definedInImage`: user macros, functions, global
+  bindings) when the package registry misses: a `defun` — or a
+  defstruct-GENERATED defun like `POINT-P` — under `(in-package p)` registers
+  only in the function namespace as `P::POINT-P`, never in the registry, so the
+  registry-backed answer alone said nil for names that are plainly fbound.
+  Both arities: the 2-arg form builds `qualifyInternal(pkg, name)` (bare for
+  cl-user), the 1-arg form asks `internSpelling` for the current package's
+  spelling. trivia's `predicatep` (`(find-symbol "POINT-P" (symbol-package
+  type))`, the struct-pattern fallback gate) is the driving consumer. What
+  this deliberately does NOT do: a symbol merely READ (not defined) is still
+  invisible — that is the intern-table axis (`.todo/156` Phase 5). Also `nil`
+  is a SYMBOL to `fboundp` now (answers nil instead of type-erroring):
+  `(fboundp (find-symbol ...))` on a miss. Pinned by
+  `LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage`; the
+  COMPILED 2-arg lowering keeps its unknown-name-yields-a-symbol deviation
+  (below), which is why the ci-spec trivia case omits the probe.
+- **`#'find-symbol` is a reference-gated wrapper**
+  (`BuiltinFunctionWrappers.findSymbolWrapper`): dispatches on argument count
+  onto the two call-position lowerings, so the computed-name intern deviation
+  applies to the wrapper too. Gated because the wrapper body lowers to
+  `intern` and the WASM `_intern` runtime is gated — `usesIntern` now also
+  counts a `find-symbol` reference for the same reason. trivia's
+  `(remove-if-not #'find-symbol ...)` visibility filter is the consumer.
+- **A RUNTIME `(export ...)`/`(unexport ...)` call** (inside a defun body — a
+  literal top-level call is still consumed by `PackageResolver`) compiles to
+  its arguments evaluated for effect plus `t`
+  (`LispMacroExpander.expandRuntimeExport`): the compiled registry is frozen
+  and every reference already resolved, so there is nothing left to change;
+  the interpreter's live registration keeps running the real one. trivia's
+  `set-vector-matcher` (arrays.lisp) is the consumer.
+
 ## Runtime (COMPUTED) package/symbol operations — `fmakunbound`, computed `find-package`/`find-symbol` (todo-198, 2026-07-28)
 
 The section above covers the LITERAL forms, which fold. postmodern reaches the same

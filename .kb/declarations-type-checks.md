@@ -34,6 +34,22 @@ codegen), classified in `PackageRegistry.CL_MACROS` (precedent: `error` is a
 old `makeTypecaseTest` now delegates to it, so `typecase`/`etypecase` clause
 heads accept the same specs as `check-type`:
 
+- EMPTY types (constant-nil tests, todo-243 widened the family `pathname`
+  started): `bit-vector`/`simple-bit-vector` (no bit-vector value exists —
+  the bit type is dead, `.todo/180`; a typecase's bit-vector clause falls
+  through to its vector clause), `generic-function`/
+  `standard-generic-function` (a defgeneric's dispatcher is a plain function
+  value with no marker — routes trivia level2's `(etypecase fn
+  (generic-function ...))` onto its portable test-call fallback) and
+  `structure-class`/`built-in-class` (a defstruct's class metaobject IS a
+  standard-class, `.kb/instance-syntax.md` — routes trivia's
+  `(typecase (find-class type) ...)` onto its `t` = slot-value branch).
+  All six agree with runtime `typep`'s nil and are in
+  `PackageRegistry.CL_TYPES` so they resolve bare in user packages; `CLASS`/
+  `STRUCTURE`/`TYPE` joined CL_TYPES for a different reason — they are the
+  CL symbols trivia NAMES its class/structure/type patterns with, and the
+  defpattern site and a user's pattern site must resolve to the same bare
+  spelling or the pattern-namespace lookup misses.
 - Atomic map (`atomicTypePredicate`): integer/fixnum/bignum -> `integerp`,
   float* -> `floatp`, number/real -> `numberp`, rational/ratio ->
   `rationalp`, string, symbol, keyword, cons, list, null, atom, character,

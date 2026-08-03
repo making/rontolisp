@@ -497,9 +497,24 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readBackquoteSplicingWithDottedTailFails() {
-		assertThatThrownBy(() -> LispReader.readFromString("`(,@xs . ,b)")).isInstanceOf(LispReadException.class)
-			.hasMessageContaining(",@");
+	void readBackquoteSplicingWithDottedUnquoteTail() {
+		// `(x1 ... xn . tail) with splices is (append [x1] ... [xn] tail): the
+		// dotted tail becomes the last append argument (CLHS 2.4.6.1).
+		assertThat(LispReader.readFromString("`(,@xs . ,b)").print()).isEqualTo("(APPEND XS B)");
+		assertThat(LispReader.readFromString("`(a ,@xs . ,b)").print()).isEqualTo("(APPEND (LIST (QUOTE A)) XS B)");
+	}
+
+	@Test
+	void readBackquoteSplicingWithDottedConstantTail() {
+		assertThat(LispReader.readFromString("`(,@xs . b)").print()).isEqualTo("(APPEND XS (QUOTE B))");
+	}
+
+	@Test
+	void readBackquoteSplicingWithDottedTailTriviaShape() {
+		// trivia level2 impl.lisp:224 verbatim shape:
+		// `((,head ,@(mappend #'car pairs) . ,(cdr (last args))))
+		assertThat(LispReader.readFromString("`((,head ,@(mappend #'car pairs) . ,(cdr (last args))))").print())
+			.isEqualTo("(LIST (APPEND (LIST HEAD) (MAPPEND (FUNCTION CAR) PAIRS) (CDR (LAST ARGS))))");
 	}
 
 	@Test

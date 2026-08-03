@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -1231,6 +1232,11 @@ public final class LispEvaluator {
 		// operators too).
 		this.globalEnv.defineFunction(LispNames.FBOUNDP, new LispFunction(LispNames.FBOUNDP, args -> {
 			requireSingleArg(LispNames.FBOUNDP, args);
+			if (args.get(0) instanceof LispNil) {
+				// nil IS a symbol in CL and names no function -- trivia level2 probes
+				// (fboundp (find-symbol ...)) whose argument is nil on a miss.
+				return LispNil.INSTANCE;
+			}
 			if (!(args.get(0) instanceof LispSymbol sym)) {
 				throw new LispEvalException(LispNames.FBOUNDP + " expects a symbol, got " + args.get(0).print());
 			}
@@ -1309,11 +1315,23 @@ public final class LispEvaluator {
 					return LispNil.INSTANCE;
 				}
 				String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
-				if (this.packageResolver.findPackageName(designator) == null) {
+				String pkgName = this.packageResolver.findPackageName(designator);
+				if (pkgName == null) {
 					return LispNil.INSTANCE;
 				}
 				String spelling = this.packageResolver.memberSpelling(designator, str.value());
-				return spelling == null ? LispNil.INSTANCE : new LispSymbol(spelling);
+				if (spelling != null) {
+					return new LispSymbol(spelling);
+				}
+				// A definition IS an interning: a defun (or a defstruct-GENERATED
+				// defun/defvar) under (in-package pkg) registers only in the global
+				// namespaces under its canonical spelling, never in the package
+				// registry (no intern table). Probe those namespaces so
+				// (find-symbol "POINT-P" pkg) finds a defstruct predicate (trivia
+				// level2's predicatep).
+				String candidate = LispNames.CL_USER_PKG.equals(pkgName) ? str.value()
+						: PackageRegistry.qualifyInternal(pkgName, str.value());
+				return definedInImage(candidate) ? new LispSymbol(candidate) : LispNil.INSTANCE;
 			}
 			requireSingleArg(LispNames.FIND_SYMBOL, args);
 			if (!(args.get(0) instanceof LispString str)) {
@@ -1323,9 +1341,16 @@ public final class LispEvaluator {
 			// model -- (find-symbol "car") is NIL, (find-symbol "CAR") names CAR.
 			String name = str.value();
 			boolean known = PackageRegistry.isClSymbol(name) || (!name.isEmpty() && name.charAt(0) == ':')
-					|| this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
-					|| this.globalEnv.hasBinding(name);
-			return known ? new LispSymbol(name) : LispNil.INSTANCE;
+					|| definedInImage(name);
+			if (known) {
+				return new LispSymbol(name);
+			}
+			// The current-package half of the definition-is-an-interning probe above.
+			String spelling = this.packageResolver.internSpelling(name);
+			if (!spelling.equals(name) && definedInImage(spelling)) {
+				return new LispSymbol(spelling);
+			}
+			return LispNil.INSTANCE;
 		}));
 		// intern overrides the package-blind Environment converter: a bare name is
 		// interned into the CURRENT package (the resolver's in-package state), so a
@@ -1773,18 +1798,20 @@ public final class LispEvaluator {
 			return LispNil.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.REMOVE_IF, new LispFunction(LispNames.REMOVE_IF, args -> {
-			if (args.size() != 2) {
+			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF + " expects 2 arguments, got " + args.size());
 			}
-			return Environment.seqResult(args.get(1),
-					removeIfValues(args.get(0), Environment.seqAsList(args.get(1)), false));
+			requireKeyKeyword(LispNames.REMOVE_IF, args, 2);
+			return Environment.seqResult(args.get(1), removeIfValues(args.get(0), Environment.seqAsList(args.get(1)),
+					false, optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD)));
 		}));
 		this.globalEnv.defineFunction(LispNames.REMOVE_IF_NOT, new LispFunction(LispNames.REMOVE_IF_NOT, args -> {
-			if (args.size() != 2) {
+			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.REMOVE_IF_NOT + " expects 2 arguments, got " + args.size());
 			}
-			return Environment.seqResult(args.get(1),
-					removeIfValues(args.get(0), Environment.seqAsList(args.get(1)), true));
+			requireKeyKeyword(LispNames.REMOVE_IF_NOT, args, 2);
+			return Environment.seqResult(args.get(1), removeIfValues(args.get(0), Environment.seqAsList(args.get(1)),
+					true, optionalKeywordArg(args, 2, LispNames.KEY_KEYWORD)));
 		}));
 		// substitute-if/-if-not and their destructive n- twins: like substitute, but the
 		// element is selected by a predicate instead of an eql comparison. Registered
@@ -5816,12 +5843,15 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The number of {@code handler-case} handlers established on the current thread of
-	 * control. {@code signal} raises its condition only when a handler exists and falls
-	 * through to nil otherwise (the CL fall-through, minus the handler-by-handler
-	 * decline). Thread-scoped for the same reason as {@link DynamicBindings}.
+	 * The clause type specifiers of every {@code handler-case} established on the current
+	 * thread of control, innermost last. {@code signal} raises its condition only when
+	 * some active clause TYPE actually matches it and falls through to nil otherwise --
+	 * the CL contract: an active handler-case for an unrelated type must not turn a
+	 * signal into an unwind (trivia level2's pattern expander signals its own
+	 * wildcard/guard-pattern conditions inside user handler-case bodies). Thread-scoped
+	 * for the same reason as {@link DynamicBindings}.
 	 */
-	private final ThreadLocal<Integer> handlerDepth = ThreadLocal.withInitial(() -> 0);
+	private final ThreadLocal<ArrayDeque<List<LispVal>>> handlerCaseTypes = ThreadLocal.withInitial(ArrayDeque::new);
 
 	/**
 	 * Evaluates {@code (handler-case expr (type ([var]) body...)... [(:no-error ([var])
@@ -5855,12 +5885,17 @@ public final class LispEvaluator {
 		}
 		LispVal value;
 		try {
-			this.handlerDepth.set(this.handlerDepth.get() + 1);
+			List<LispVal> clauseTypes = new ArrayList<>(errorClauses.size());
+			for (LispVal clauseVal : errorClauses) {
+				clauseTypes.add(((LispCons) clauseVal).car());
+			}
+			ArrayDeque<List<LispVal>> frames = this.handlerCaseTypes.get();
+			frames.addLast(clauseTypes);
 			try {
 				value = eval(parts.get(1), env);
 			}
 			finally {
-				this.handlerDepth.set(this.handlerDepth.get() - 1);
+				frames.removeLast();
 			}
 		}
 		catch (LispEvalException e) {
@@ -5925,11 +5960,46 @@ public final class LispEvaluator {
 		}
 		LispVal condition = eval(parts.get(1), env);
 		LispVal message = eval(parts.get(2), env);
-		if (this.handlerDepth.get() > 0) {
+		if (anyHandlerCaseMatches(condition)) {
 			throw new LispEvalException(message instanceof am.ik.rontolisp.LispString s ? s.value() : message.display(),
 					condition);
 		}
 		return LispNil.INSTANCE;
+	}
+
+	/**
+	 * Whether the (canonical-spelling) name is defined in any global namespace --
+	 * function, macro, or variable. The find-symbol "a definition is an interning" probe:
+	 * definitions register here, never in the package registry.
+	 */
+	private boolean definedInImage(String name) {
+		return this.userMacros.containsKey(name) || this.globalEnv.lookupFunctionOrNull(name) != null
+				|| this.globalEnv.hasBinding(name);
+	}
+
+	/**
+	 * Whether any active {@code handler-case} clause type matches the condition -- the
+	 * same test {@link #evalHandlerCase} applies when catching, run at the SIGNAL point
+	 * so an unmatched signal can return nil without unwinding (CL: {@code signal} only
+	 * unwinds to a handler that will handle it).
+	 */
+	private boolean anyHandlerCaseMatches(LispVal condition) {
+		ArrayDeque<List<LispVal>> frames = this.handlerCaseTypes.get();
+		if (frames.isEmpty()) {
+			return false;
+		}
+		Environment testEnv = new Environment(this.globalEnv);
+		LispSymbol condTemp = new LispSymbol("__signal_cond");
+		testEnv.define(condTemp.name(), condition);
+		for (List<LispVal> clauseTypes : frames) {
+			for (LispVal typeSpec : clauseTypes) {
+				LispVal test = LispMacroExpander.makeHandlerTypeTest(condTemp, typeSpec, this.closRegistry);
+				if (eval(test, testEnv) != LispNil.INSTANCE) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -6249,10 +6319,17 @@ public final class LispEvaluator {
 	// false (remove-if) elements failing the predicate are kept; when true
 	// (remove-if-not) elements satisfying the predicate are kept.
 	private LispVal removeIfValues(LispVal predicate, LispVal list, boolean keepWhenTrue) {
+		return removeIfValues(predicate, list, keepWhenTrue, null);
+	}
+
+	// The predicate sees the keyed value (:key selector); the kept elements are the
+	// originals, like remove's.
+	private LispVal removeIfValues(LispVal predicate, LispVal list, boolean keepWhenTrue, @Nullable LispVal keyFn) {
 		List<LispVal> kept = new ArrayList<>();
 		LispVal cursor = list;
 		while (cursor instanceof LispCons cell) {
-			if (isTruthy(apply(predicate, List.of(cell.car()), this.globalEnv)) == keepWhenTrue) {
+			LispVal probe = keyFn == null ? cell.car() : apply(keyFn, List.of(cell.car()), this.globalEnv);
+			if (isTruthy(apply(predicate, List.of(probe), this.globalEnv)) == keepWhenTrue) {
 				kept.add(cell.car());
 			}
 			cursor = cell.cdr();

@@ -6614,12 +6614,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("362");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("364");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("362");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("364");
 	}
 
 	@Test

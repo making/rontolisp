@@ -114,7 +114,7 @@ public final class LambdaLists {
 			return new Expanded(required, null, body);
 		}
 		Parsed parsed = parse(params);
-		if (parsed.optionals().isEmpty() && parsed.keys().isEmpty() && parsed.auxes().isEmpty()) {
+		if (parsed.optionals().isEmpty() && !parsed.sawKey() && parsed.auxes().isEmpty()) {
 			// Pure (a b &rest r): already native, no prologue needed.
 			return new Expanded(parsed.required(), parsed.rest(), body);
 		}
@@ -123,7 +123,7 @@ public final class LambdaLists {
 		List<LispVal> bindings = new ArrayList<>();
 		appendPrologueBindings(parsed, restVar, false, bindings);
 		List<LispVal> letBody = new ArrayList<>();
-		if (!parsed.keys().isEmpty() && !parsed.allowOtherKeys()) {
+		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			letBody.add(unknownKeyCheck(parsed.rest() != null ? parsed.rest() : restVar, parsed.keys()));
 		}
 		letBody.addAll(body);
@@ -377,7 +377,7 @@ public final class LambdaLists {
 	public static void appendTailBindings(List<LispVal> tailParams, LispSymbol restVar, List<LispVal> out) {
 		Parsed parsed = parse(tailParams);
 		appendPrologueBindings(parsed, restVar, true, out);
-		if (!parsed.keys().isEmpty() && !parsed.allowOtherKeys()) {
+		if (parsed.sawKey() && !parsed.allowOtherKeys()) {
 			LispSymbol keySource = parsed.rest() != null ? parsed.rest() : restVar;
 			out.add(list(new LispSymbol("__ll_check"), unknownKeyCheck(keySource, parsed.keys())));
 		}
@@ -395,13 +395,14 @@ public final class LambdaLists {
 	}
 
 	private record Parsed(List<LispSymbol> required, List<OptionalParam> optionals, @Nullable LispSymbol rest,
-			List<KeyParam> keys, boolean allowOtherKeys, List<AuxParam> auxes) {
+			boolean sawKey, List<KeyParam> keys, boolean allowOtherKeys, List<AuxParam> auxes) {
 	}
 
 	private static Parsed parse(List<LispVal> params) {
 		List<LispSymbol> required = new ArrayList<>();
 		List<OptionalParam> optionals = new ArrayList<>();
 		LispSymbol rest = null;
+		boolean sawKey = false;
 		List<KeyParam> keys = new ArrayList<>();
 		boolean allowOtherKeys = false;
 		List<AuxParam> auxes = new ArrayList<>();
@@ -434,6 +435,12 @@ public final class LambdaLists {
 					i += 2;
 					continue;
 				}
+				if (section == 3) {
+					// &key with no key parameters still switches the tail to keyword
+					// convention: the marker itself must not be lost (a bare
+					// (x &key &allow-other-keys) accepts any keyword tail).
+					sawKey = true;
+				}
 				if (section == 4) {
 					allowOtherKeys = true;
 				}
@@ -449,7 +456,7 @@ public final class LambdaLists {
 			}
 			i++;
 		}
-		return new Parsed(required, optionals, rest, keys, allowOtherKeys, auxes);
+		return new Parsed(required, optionals, rest, sawKey, keys, allowOtherKeys, auxes);
 	}
 
 	private static OptionalParam parseOptional(LispVal spec) {

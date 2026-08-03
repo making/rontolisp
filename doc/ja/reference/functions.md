@@ -328,6 +328,8 @@
 | `muffle-warning` | `(muffle-warning w)` | `warn` が確立する `muffle-warning` リスタートを起動し、印字される前に警告を中止します |
 | `abort` | `(abort)` | 最内の `abort` リスタートを起動します。アクティブなものがなければエラー |
 | `continue` | `(continue)` | 最内の `continue` リスタート(`cerror` のもの)を起動します。アクティブなものがなければ `nil` |
+| `use-value` | `(use-value v)` | 最内の `use-value` リスタートを値を渡して起動します。アクティブなものがなければ `nil` |
+| `store-value` | `(store-value v)` | 最内の `store-value` リスタートを値を渡して起動します。アクティブなものがなければ `nil` |
 
 ## rontolisp パッケージの関数
 

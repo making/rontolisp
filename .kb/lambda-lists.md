@@ -19,6 +19,14 @@ wrapping the body in a generated `let*` prologue:
   derive from it. Unknown keywords signal `(error "Unknown keyword argument: ~a" ...)`
   unless `&allow-other-keys` is declared or the caller passes `:allow-other-keys t`.
 - `&aux (v e)`: plain trailing `let*` bindings.
+- `&key` with NO key parameters still switches the tail to keyword convention
+  (`Parsed.sawKey`, todo-243): a bare `(x &key &allow-other-keys)` accepts any
+  keyword tail, and a bare `(x &key)` consumes the tail and signals on any
+  keyword (`:allow-other-keys t` still overrides). The marker used to be lost
+  when `keys()` was empty, making the function fixed-arity — trivia's
+  `:trivial` optimizer is `(lambda (clauses &key &allow-other-keys) clauses)`
+  funcalled with `:types`. Pinned by `LispEvaluatorTest#defunEmptyKeySection` +
+  ci-spec `trivia-enablement-language-group`.
 - `&whole` is rejected (`Unsupported lambda-list keyword`).
 
 Generated helper variables use the `__ll_` prefix (`__ll_rest`, `__ll_cur`,

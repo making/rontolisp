@@ -1429,7 +1429,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      362
+      364
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -6866,3 +6866,66 @@ cases:
       (42 3)
       65
       T
+  - name: trivia-enablement-language-group
+    source: |
+      ;; The language features (ql:quickload "trivia") needs (todo-243),
+      ;; exercised without the asdf load -- trivia's own tree lives in the
+      ;; quicklisp cache, so the end-to-end run is TriviaE2eTest (vendored
+      ;; sources, all four backends).
+      ;; 1. A backquote splice with a dotted tail is (append segs... tail)
+      ;;    (CLHS 2.4.6.1; trivia level2's inline-pattern-expand).
+      (let ((tvs-mid '(2 3)) (tvs-tail '(4 5)))
+        (print `(1 ,@tvs-mid . ,tvs-tail))
+        (print `(,@tvs-mid . tvs-atom)))
+      ;; 2. &key with NO key parameters still consumes a keyword tail (the
+      ;;    :trivial optimizer is (lambda (clauses &key &allow-other-keys) ...)).
+      (print (funcall (lambda (tvs-x &key &allow-other-keys) tvs-x) 1 :types '(t)))
+      ;; (On the INTERPRETER, signal now unwinds only to a handler-case whose
+      ;; clause matches -- trivia's expander signals its own wildcard conditions
+      ;; inside user handler-case bodies at macro-expansion time, which runs on
+      ;; the interpreter for every backend. The compiled backends keep the
+      ;; depth-counter approximation; divergence record in
+      ;; .kb/error-handling.md, pinned by LispEvaluatorTest instead of here.)
+      (define-condition tvs-ping () ())
+      ;; 4. use-value invokes the innermost use-value restart with a value,
+      ;;    and answers nil when none is active (trivia's guard lifting).
+      (print (handler-bind ((tvs-ping (lambda (tvs-c) (use-value 42))))
+               (restart-case (progn (signal 'tvs-ping) :not-restarted)
+                 (use-value (tvs-v) (list :used tvs-v)))))
+      (print (use-value 1))
+      ;; 5. remove-if/remove-if-not take :key; the kept elements are the
+      ;;    originals (trivia's find-effective-slot slot filters).
+      (print (remove-if #'evenp '((1 a) (2 b) (3 c)) :key #'car))
+      (print (remove-if-not #'evenp '((1 a) (2 b) (3 c)) :key #'car))
+      ;; 6. A RUNTIME export (inside a defun body) yields t on every backend:
+      ;;    the compiled package registry is frozen, the interpreter's is live
+      ;;    (trivia level2's set-vector-matcher).
+      (defun tvs-export-it () (export 'tvs-exported))
+      (print (tvs-export-it))
+      ;; 7. The empty types trivia dispatches typecase/etypecase over: a
+      ;;    defgeneric's dispatcher is a plain function, no bit-vector value
+      ;;    exists, and a defstruct's class metaobject is a standard-class.
+      (defgeneric tvs-gf (tvs-a))
+      (defmethod tvs-gf ((tvs-a integer)) tvs-a)
+      (defstruct tvs-pt tvs-slot-x)
+      (print (list (typep #'tvs-gf 'generic-function)
+                   (etypecase #'tvs-gf (generic-function :gf) (function :fn))
+                   (typecase #(1 0 1) (bit-vector :bv) (vector :vec))
+                   (typecase (find-class 'tvs-pt)
+                     (structure-class :sc) (built-in-class :bic) (t :other))))
+      ;; (find-symbol's definition-is-an-interning probe -- trivia's predicatep
+      ;; resolves struct predicates with (find-symbol "POINT-P" pkg) -- is
+      ;; INTERPRETER semantics: pattern expansion always runs there, and the
+      ;; compiled 2-arg lowering keeps its documented unknown-name-yields-a-
+      ;; symbol deviation (.kb/symbol-runtime-api.md). Pinned by
+      ;; LispEvaluatorTest#findSymbolSeesDefinitionsMadeInsideAUserPackage.)
+    expected: |
+      (1 2 3 4 5)
+      (2 3 . TVS-ATOM)
+      1
+      (:USED 42)
+      NIL
+      ((1 A) (3 C))
+      ((2 B))
+      T
+      (NIL :FN :VEC :OTHER)

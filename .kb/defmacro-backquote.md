@@ -1,6 +1,6 @@
 # `defmacro` (user macros) + read-time backquote — NO backend codegen involved
 
-Backquote (`` ` ``/`,`/`,@`; `Token.Backquote`/`Unquote`/`UnquoteSplicing`, `,` and `` ` `` are symbol-terminating chars, digit-grouping `1,000` still lexes inside `readNumber`) is expanded BY THE READER (`LispReader.readBackquote`/`readTemplateElement`) into plain `list`/`append`/`cons`/`quote` forms, so all backends get it for free. `',@xs` / `#',@xs` (a splice directly after `'`/`#'`, `readWrappedTemplate`) is the template `(quote ,@xs)` / `(function ,@xs)`, lowered to `(cons 'quote xs)` — the customary one-element splice reads back as `'x` (trivia level0's `` `(equal ,*what* ',@args) ``, same idiom in type-i); empty and multi-element splices yield `(QUOTE)` / `(QUOTE A B)`, matching SBCL's list structure with no arity special-casing. Tests: `LispReaderTest#readBackquoteSplicingIntoQuote`, `LispEvaluatorTest#evalBackquoteSplicingIntoQuote`, ci-spec `backquote-quoted-splice`.
+Backquote (`` ` ``/`,`/`,@`; `Token.Backquote`/`Unquote`/`UnquoteSplicing`, `,` and `` ` `` are symbol-terminating chars, digit-grouping `1,000` still lexes inside `readNumber`) is expanded BY THE READER (`LispReader.readBackquote`/`readTemplateElement`) into plain `list`/`append`/`cons`/`quote` forms, so all backends get it for free. `',@xs` / `#',@xs` (a splice directly after `'`/`#'`, `readWrappedTemplate`) is the template `(quote ,@xs)` / `(function ,@xs)`, lowered to `(cons 'quote xs)` — the customary one-element splice reads back as `'x` (trivia level0's `` `(equal ,*what* ',@args) ``, same idiom in type-i); empty and multi-element splices yield `(QUOTE)` / `(QUOTE A B)`, matching SBCL's list structure with no arity special-casing. Tests: `LispReaderTest#readBackquoteSplicingIntoQuote`, `LispEvaluatorTest#evalBackquoteSplicingIntoQuote`, ci-spec `backquote-quoted-splice`. A splice COMBINED with a dotted tail is legal (todo-243): `` `(x1 ... xn . tail) `` with splices is `(append [x1] ... [xn] tail)` per CLHS 2.4.6.1 — the tail (an unquote, or a constant that `readTemplateElement` quotes) becomes the LAST append argument (`buildTemplateList`; trivia level2's `` `((,head ,@(mappend #'car pairs) . ,(cdr (last args)))) ``). `,@` directly after the dot stays an error. Tests: `LispReaderTest#readBackquoteSplicingWithDotted{UnquoteTail,ConstantTail,TailTriviaShape}`, ci-spec `trivia-enablement-language-group`.
 
 **Nested backquote** is supported. A non-nested template keeps the optimized single-level expander (`readTemplateElement`/`readTemplateList`, unchanged output shapes). `readBackquote` first raw-reads the template (`readRawTemplate`) to detect an inner `` ` ``; if present, the whole template goes through a faithful port of the CLtL2/Steele Appendix C algorithm (`bqCompletelyProcess` = `bqProcess` + `bqSimplify` + `bqRemoveTokens`, over identity-compared sentinel markers `BQ_COMMA`/`BQ_BACKQUOTE`/`BQ_LIST`/...). Every quasiquote level is expanded at read time into `list`/`cons`/`list*`/`append`/`quote` calls with NO runtime quasiquote/comma marker left, so the evaluator and all four backends are unaffected. The one deviation from CLtL2: an inner backquote that escapes to level 0 (inside a comma argument) is expanded in place by `bqExpandEscaped` rather than left as a live `backquote` macro call, because the runtime has no backquote. Verified against SBCL (incl. `cl-utilities` `once-only`, three levels deep). Tests: `LispReaderTest` (`readNestedBackquote*`), `LispEvaluatorTest#defmacroNestedBackquoteOnceOnly`, `JvmLispCompilerTest#compileAndRunNestedBackquoteOnceOnly`, `WasmLispCompilerIntegrationTest#nestedBackquoteOnceOnly`, ci-spec `nested-backquote-once-only`.
 
@@ -61,3 +61,35 @@ A `define-compiler-macro` reuses every mechanism above (`makeUserMacro`, the
 is applied only after a same-named `defmacro` has had its chance — see
 `.kb/compiler-macros.md`, which also covers `load-time-value`'s evaluate-once
 contract, the pair being what makes a library's own constant-folding optimization run.
+
+## The macro-time evaluator is the "compiling image": spliced-system replay + expanded eval-when (todo-243, 2026-08-03)
+
+In CL, compiling a file requires its DEPENDENCY systems LOADED into the compiling image —
+fully executed, registries built. Under the splice model the macro-time evaluator is that
+image, and until todo-243 it under-loaded: only definitions registered
+(`registerMacroTimeDefinitions`), so a library that builds a macro-consulted registry
+with plain top-level CALLS was invisible to expansion. trivia registers its vector
+matchers with top-level `(set-vector-matcher ...)` calls and a `dolist`; the pattern
+lookup missed, the expander fell back to its structure-pattern guess, and the emitted
+code called nonexistent accessors (an NPE three layers later). Two rules retire that:
+
+- **Spliced-system replay** (`UserMacroExpander.replayLibraryTopLevel`): inside the
+  `(%begin-system ...)`/`(%end-system)` provenance brackets ([library-defun-pruning.md](library-defun-pruning.md)),
+  every plain top-level form is EVALUATED into the macro-time evaluator — progn walked
+  member-wise, the defvar family still lazy (`registerLazyGlobal`, the 86.5s→3.6s
+  uax-15 lesson), atoms/quotes skipped, failures warned and skipped. USER-file forms
+  (depth 0) keep compile-file semantics: definitions register, nothing else runs, so a
+  user's own top-level side effect is never double-run. Replay output is discarded (the
+  macro evaluator prints to a null stream); the forms stay in the program, so the
+  compiled artifact still runs them at run time — the same double execution CL's
+  load-then-compile-then-load gives.
+- **A macro-EXPANDED `(eval-when ...)` honors its situations**
+  (`UserMacroExpander.processExpandedEvalWhen`; source-level top-level eval-whens were
+  already flattened before the loop): `:compile-toplevel`/`compile` replays every member
+  (lisp-namespace's `define-namespace` and trivia's `defoptimizer` build their
+  symbol->function registries there), `:load-toplevel`/`load` keeps the member in the
+  program, a defmacro member is consumed, a nested eval-when recurses, and a
+  neither-situation member is dropped (CL compile-file semantics).
+
+Both are pinned end-to-end by `TriviaE2eTest` (the JVM/WASM legs die at expansion or at
+run time without them).

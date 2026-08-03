@@ -70,7 +70,25 @@ public final class UserMacroExpander {
 		List<LispVal> mopSplice = new ArrayList<>();
 		macroEval.setMopEvalSpliceSink(mopSplice);
 		List<LispVal> result = new ArrayList<>();
+		// Nesting depth of the (%begin-system "NAME") / (%end-system) provenance
+		// brackets LoadInliner puts around every spliced ASDF system. Inside them the
+		// pass REPLAYS plain top-level forms into the macro-time evaluator (see
+		// replayLibraryTopLevel): in CL, compiling a file requires its DEPENDENCY
+		// systems loaded into the compiling image -- fully executed, registries built
+		// -- and the macro-time evaluator is that image here. trivia registers its
+		// vector matchers with plain top-level set-vector-matcher CALLS whose effect a
+		// later match expansion reads; without the replay the pattern lookup misses
+		// and the expander degrades to its structure-pattern fallback. User-file forms
+		// (depth 0) keep compile-file semantics: only definitions register, nothing
+		// else runs.
+		int systemDepth = 0;
 		for (LispVal rawForm : program) {
+			if (isProvenanceMarker(rawForm, LispNames.BEGIN_SYSTEM)) {
+				systemDepth++;
+			}
+			else if (isProvenanceMarker(rawForm, LispNames.END_SYSTEM)) {
+				systemDepth = Math.max(0, systemDepth - 1);
+			}
 			// Resolve #. markers first (before package resolution, like the interpreter
 			// resolves them just before its top-level form evaluates): each datum runs in
 			// the macro-time evaluator, so it sees the defuns/defvars registered by the
@@ -146,15 +164,32 @@ public final class UserMacroExpander {
 			// A macro may expand into the (rontolisp:async (defun ...)) wrapper; rewrite
 			// it here so the definition scanners downstream (WitExportInliner, the
 			// library pruner) see the canonical async-defun/async-lambda forms, exactly
-			// as they would for source the CLI rewrote before macro expansion.
+			// as they would for code the CLI rewrote before macro expansion.
 			expanded = LispMacroExpander.rewriteAsyncSugarForm(expanded);
 			if (isOperator(expanded, LispNames.DEFMACRO)) {
 				// A macro expanded into a macro definition: consume it as well.
 				macroEval.evalResolved(expanded);
 				continue;
 			}
-			registerMacroTimeDefinitions(expanded, macroEval);
-			if (isPureConfigSetf(expanded, macroEval)) {
+			if (isOperator(expanded, LispNames.EVAL_WHEN)) {
+				// A macro EXPANDED into an eval-when (source-level top-level eval-whens
+				// were flattened before the loop): honor the compile-file situations.
+				// :compile-toplevel replays every member into the macro-time evaluator
+				// -- lisp-namespace's define-namespace and trivia's defoptimizer build
+				// their symbol->function registries this way, and a later match
+				// expansion READS them at macro time -- and :load-toplevel keeps the
+				// member in the program. A defmacro member is consumed here like a
+				// top-level one.
+				processExpandedEvalWhen((LispCons) expanded, macroEval, result);
+				continue;
+			}
+			if (systemDepth > 0) {
+				replayLibraryTopLevel(expanded, macroEval);
+			}
+			else {
+				registerMacroTimeDefinitions(expanded, macroEval);
+			}
+			if (systemDepth == 0 && isPureConfigSetf(expanded, macroEval)) {
 				// A top-level (setf (PLACE ...) V) whose (defun (setf PLACE) ...) writer
 				// is
 				// a PURE CONFIGURATION SETTER -- its body only assigns special/global
@@ -194,6 +229,57 @@ public final class UserMacroExpander {
 			}
 		}
 		return result;
+	}
+
+	/**
+	 * Processes an {@code (eval-when (situations) member...)} produced by a macro
+	 * expansion with compile-file semantics: {@code :compile-toplevel} (or old-style
+	 * {@code compile}) replays every member into the macro-time evaluator -- the whole
+	 * member, not just definitions, because registry-building side effects like
+	 * lisp-namespace's {@code (setf (gethash ...))} are exactly what the situation asks
+	 * for -- and {@code :load-toplevel} (or {@code load}) keeps the member in the
+	 * program. A member that is itself an eval-when recurses; a defmacro member is
+	 * consumed. A member the macro-time evaluator cannot run is skipped with a warning
+	 * instead of failing the compile (the lazy-defvar precedent): expansions reading the
+	 * state it would have built fail later, plain runtime uses are unaffected.
+	 */
+	private static void processExpandedEvalWhen(LispCons evalWhen, LispEvaluator macroEval, List<LispVal> result) {
+		List<LispVal> parts = evalWhen.toList();
+		boolean compileTime = false;
+		boolean loadTime = false;
+		if (parts.size() >= 2 && parts.get(1) instanceof LispCons situations && situations.isProperList()) {
+			for (LispVal situation : situations.toList()) {
+				String name = situation instanceof LispSymbol sym ? member(sym.name()) : "";
+				compileTime = compileTime || ":COMPILE-TOPLEVEL".equals(name) || "COMPILE".equals(name);
+				loadTime = loadTime || ":LOAD-TOPLEVEL".equals(name) || "LOAD".equals(name);
+			}
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			LispVal member = parts.get(i);
+			if (isOperator(member, LispNames.EVAL_WHEN) && member instanceof LispCons nested) {
+				processExpandedEvalWhen(nested, macroEval, result);
+				continue;
+			}
+			if (isOperator(member, LispNames.DEFMACRO)) {
+				macroEval.evalResolved(member);
+				continue;
+			}
+			if (compileTime) {
+				try {
+					macroEval.evalResolved(member);
+				}
+				catch (RuntimeException ex) {
+					System.err.println(
+							"WARNING: eval-when (:compile-toplevel) form failed at compile time: " + ex.getMessage());
+				}
+			}
+			else {
+				registerMacroTimeDefinitions(member, macroEval);
+			}
+			if (loadTime) {
+				result.add(requalifyShadowedClNames(member, macroEval));
+			}
+		}
 	}
 
 	/**
@@ -295,6 +381,49 @@ public final class UserMacroExpander {
 		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
 				|| isOperator(form, LispNames.DEFCONSTANT)) {
 			macroEval.registerLazyGlobal(form);
+		}
+	}
+
+	/** A provenance-marker form, matched by member name in any package spelling. */
+	private static boolean isProvenanceMarker(LispVal form, String marker) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
+				&& marker.equals(member(sym.name()));
+	}
+
+	/**
+	 * Replays a top-level form of a SPLICED SYSTEM into the macro-time evaluator: in CL,
+	 * the systems a file depends on are LOADED into the compiling image before the file
+	 * compiles, so their registry-building top-level calls have already run when macro
+	 * expansion reads the registries (trivia's set-vector-matcher pattern table). The
+	 * defvar family keeps the lazy registration (the value expression runs only if an
+	 * expansion reads the global, see {@link #registerMacroTimeDefinitions}); atoms and
+	 * quoted data have no effect to replay; everything else evaluates, and a form the
+	 * macro-time evaluator cannot run is skipped with a warning instead of failing the
+	 * compile -- expansions reading the state it would have built fail later, plain
+	 * runtime uses are unaffected. Output the replay writes is discarded (the macro
+	 * evaluator prints to a null stream), and the form stays in the program either way.
+	 */
+	private static void replayLibraryTopLevel(LispVal form, LispEvaluator macroEval) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| LispNames.QUOTE.equals(op.name())) {
+			return;
+		}
+		if (isOperator(form, LispNames.PROGN) && cons.isProperList()) {
+			for (LispVal member : cons.toList().subList(1, cons.toList().size())) {
+				replayLibraryTopLevel(member, macroEval);
+			}
+			return;
+		}
+		if (isOperator(form, LispNames.DEFVAR) || isOperator(form, LispNames.DEFPARAMETER)
+				|| isOperator(form, LispNames.DEFCONSTANT)) {
+			macroEval.registerLazyGlobal(form);
+			return;
+		}
+		try {
+			macroEval.evalResolved(form);
+		}
+		catch (RuntimeException ex) {
+			System.err.println("WARNING: library top-level form failed at compile time (skipped): " + ex.getMessage());
 		}
 	}
 

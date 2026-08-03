@@ -40,7 +40,13 @@ public final class AsdOverrides {
 			// implementation. The replacement takes both decisions statically (a
 			// *features* push would be invisible to the reader anyway) and declares
 			// cl-ppcre + uax-15, which the sources call but the .asd never names.
-			"postmodern.asd", "postmodern-deps.asd");
+			"postmodern.asd", "postmodern-deps.asd",
+			// Not unparseable but re-routed: upstream depends on trivia.balland2006
+			// (the match-clause OPTIMIZER), which needs iterate + type-i -- a large
+			// substrate investment buying zero semantics. The replacement maps the
+			// system to trivia.trivial, upstream's own sanctioned base system.
+			// Re-evaluation trigger in the replacement source and .kb/asdf.md.
+			"trivia.asd", "trivia-trivial.asd");
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

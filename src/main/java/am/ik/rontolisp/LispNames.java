@@ -1516,6 +1516,19 @@ public final class LispNames {
 	public static final String CONTINUE = "CONTINUE";
 
 	/**
+	 * The {@code use-value} function (restart-runtime defun): invokes the innermost
+	 * {@code use-value} restart with the given value, nil when none is active (the CL
+	 * contract). trivia level2's guard-lifting handler is the driving consumer.
+	 */
+	public static final String USE_VALUE = "USE-VALUE";
+
+	/**
+	 * The {@code store-value} function (restart-runtime defun): as {@link #USE_VALUE} for
+	 * the {@code store-value} restart (the CLHS sibling; added together).
+	 */
+	public static final String STORE_VALUE = "STORE-VALUE";
+
+	/**
 	 * The internal {@code %run-handlers} defun (restart runtime): walks the dynamic
 	 * {@code handler-bind} cluster stack at the SIGNAL POINT, before unwinding, calling
 	 * each matching handler with the condition; a handler that returns declines and the
@@ -5133,6 +5146,24 @@ public final class LispNames {
 	/** {@code closer-mop:ensure-finalized} -- identity (metaobjects are born final). */
 	public static final String ENSURE_FINALIZED = "ENSURE-FINALIZED";
 
+	/**
+	 * {@code closer-mop:compute-slots} -- the effective slots of a class metaobject.
+	 * Finalization is eager here ({@link #FINALIZE_INHERITANCE}), so this is
+	 * {@code class-slots} over the already-final metaobject (trivia level2's
+	 * find-effective-slot is the driving consumer).
+	 */
+	public static final String COMPUTE_SLOTS = "COMPUTE-SLOTS";
+
+	/**
+	 * {@code closer-mop:generic-function-lambda-list}. A defgeneric's dispatcher is a
+	 * plain function value on every backend -- no metaobject exists to read a lambda list
+	 * from -- so the shim defun signals. Reachable only through an explicit call: the
+	 * {@code generic-function} type is empty (see the macro expander's type tests), so
+	 * trivia level2's {@code (etypecase fn (generic-function ...))} guard routes around
+	 * it to the portable test-call fallback.
+	 */
+	public static final String GENERIC_FUNCTION_LAMBDA_LIST = "GENERIC-FUNCTION-LAMBDA-LIST";
+
 	/** {@code closer-mop:classp} -- whether a value is a class metaobject. */
 	public static final String CLASSP = "CLASSP";
 
@@ -5493,6 +5524,25 @@ public final class LispNames {
 	 * port was recorded, and nothing was ever started.
 	 */
 	public static final String STOP_SERVER = "STOP-SERVER";
+
+	/**
+	 * The {@code trivial-cltl2} shim package (nickname {@code cltl2}, and built-in ASDF
+	 * system) name. The real library is a pure re-export of each host implementation's
+	 * CLtL2 environment API (sb-cltl2 etc.) -- on rontolisp every implementation branch of
+	 * its one source file is feature-false, so loading it verbatim yields a package whose
+	 * every export is undefined. The shim provides the two members trivia level2 calls
+	 * ({@code define-declaration} as a registering no-op, {@code declaration-information}
+	 * answering nil -- rontolisp declarations are no-ops, so there is never information
+	 * to report); the remaining exports resolve but are undefined-function errors when
+	 * called (the uiop stub convention).
+	 */
+	public static final String TRIVIAL_CLTL2_PKG = "TRIVIAL-CLTL2";
+
+	/** {@code trivial-cltl2:define-declaration} -- expands to the declaration name. */
+	public static final String DEFINE_DECLARATION = "DEFINE-DECLARATION";
+
+	/** {@code trivial-cltl2:declaration-information} -- always nil (no-op declares). */
+	public static final String DECLARATION_INFORMATION = "DECLARATION-INFORMATION";
 
 	/**
 	 * The {@code clack.handler.rontolisp} package: the rontolisp handler backend for

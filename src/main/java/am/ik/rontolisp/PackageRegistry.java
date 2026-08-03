@@ -151,7 +151,7 @@ public final class PackageRegistry {
 			LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE,
 			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
 			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
-			LispNames.ABORT, LispNames.CONTINUE);
+			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -176,7 +176,19 @@ public final class PackageRegistry {
 			// The pathname TYPE name (nothing satisfies it -- rontolisp pathnames are
 			// namestrings): clack's (typecase app ((or pathname string) ...)) must not
 			// resolve it to clack::pathname, which the type tests cannot know.
-			"PATHNAME");
+			"PATHNAME",
+			// More empty types (nothing satisfies them, by the same must-not-become-
+			// pkg::name rule): no bit-vector value exists (the bit type is dead,
+			// .todo/180), a defgeneric's dispatcher is a plain function, a defstruct's
+			// class metaobject is a standard-class and built-in types have no
+			// metaobjects -- trivia level2 dispatches typecase/etypecase over all six.
+			"BIT-VECTOR", "SIMPLE-BIT-VECTOR", "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION", "STRUCTURE-CLASS",
+			"BUILT-IN-CLASS",
+			// CL symbols used as NAMES by libraries: trivia's class/structure/type
+			// patterns are (defpattern class ...) &c on the CL symbols, so the
+			// defpattern site (inside trivia's package) and a user's pattern site must
+			// resolve to the SAME bare spelling or the pattern-namespace lookup misses.
+			"CLASS", "STRUCTURE", "TYPE");
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
@@ -298,6 +310,7 @@ public final class PackageRegistry {
 	private static final Set<String> CLOSER_MOP_EXTERNALS = Set.of(LispNames.CLASS_SLOTS, LispNames.ENSURE_FINALIZED,
 			LispNames.CLASSP, LispNames.CLASS_NAME, LispNames.CLASS_DIRECT_SUPERCLASSES, LispNames.CLASS_FINALIZED_P,
 			LispNames.SLOT_DEFINITION_NAME, LispNames.SLOT_DEFINITION_INITARGS, LispNames.SLOT_DEFINITION_TYPE,
+			LispNames.COMPUTE_SLOTS, LispNames.GENERIC_FUNCTION_LAMBDA_LIST,
 			// The metaclass protocol generics (system defaults in
 			// macro/mop-protocol.lisp)
 			// and the two slot-definition base-class names a user metaclass protocol
@@ -330,11 +343,13 @@ public final class PackageRegistry {
 	 * {@link #splitQualified} can normalize built-in qualifiers for the compile-path
 	 * pre-passes that scan the program before package resolution runs.
 	 */
-	private static final Map<String, String> BUILTIN_NICKNAMES = Map.of("COMMON-LISP", LispNames.CL_PKG,
-			"COMMON-LISP-USER", LispNames.CL_USER_PKG, "RL", LispNames.RONTOLISP_PKG, "LA", LispNames.LINALG_PKG,
-			"QUICKLISP", LispNames.QL_PKG, "C2MOP", LispNames.CLOSER_MOP_PKG, "C2CL", LispNames.CLOSER_COMMON_LISP_PKG,
-			"FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG, "BT", LispNames.BORDEAUX_THREADS_PKG, "BORDEAUX-THREADS-2",
-			LispNames.BT2_PKG);
+	private static final Map<String, String> BUILTIN_NICKNAMES = Map.ofEntries(
+			Map.entry("COMMON-LISP", LispNames.CL_PKG), Map.entry("COMMON-LISP-USER", LispNames.CL_USER_PKG),
+			Map.entry("RL", LispNames.RONTOLISP_PKG), Map.entry("LA", LispNames.LINALG_PKG),
+			Map.entry("QUICKLISP", LispNames.QL_PKG), Map.entry("C2MOP", LispNames.CLOSER_MOP_PKG),
+			Map.entry("C2CL", LispNames.CLOSER_COMMON_LISP_PKG),
+			Map.entry("FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG), Map.entry("BT", LispNames.BORDEAUX_THREADS_PKG),
+			Map.entry("BORDEAUX-THREADS-2", LispNames.BT2_PKG), Map.entry("CLTL2", LispNames.TRIVIAL_CLTL2_PKG));
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -353,7 +368,8 @@ public final class PackageRegistry {
 			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
 			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
 			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-			LispNames.BABEL_ENCODINGS_PKG, LispNames.UIOP_IMAGE_PKG, LispNames.SWANK_PKG, "KEYWORD");
+			LispNames.BABEL_ENCODINGS_PKG, LispNames.UIOP_IMAGE_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
+			"KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -556,6 +572,17 @@ public final class PackageRegistry {
 		// downloads the SLIME tarball and dies on it.
 		define(new LispPackage(LispNames.SWANK_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.CREATE_SERVER, LispNames.STOP_SERVER))));
+		// trivial-cltl2 (nickname cltl2): the shim behind the built-in ASDF system of
+		// the same name (trivial-cltl2.lisp, eval.ShimLibraries). The real library is
+		// a pure re-export of the host's CLtL2 environment API; on rontolisp every
+		// implementation branch is feature-false, so loading it verbatim yields only
+		// undefined names. define-declaration / declaration-information have shim
+		// definitions (trivia level2 calls them); the rest of the export list resolves
+		// but is an undefined-function error when called (the uiop stub convention).
+		define(new LispPackage(LispNames.TRIVIAL_CLTL2_PKG, List.of(),
+				new HashSet<>(Set.of(LispNames.DEFINE_DECLARATION, LispNames.DECLARATION_INFORMATION, "COMPILER-LET",
+						"VARIABLE-INFORMATION", "FUNCTION-INFORMATION", "AUGMENT-ENVIRONMENT", "PARSE-MACRO",
+						"ENCLOSE"))));
 	}
 
 	/**

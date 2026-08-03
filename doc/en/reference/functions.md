@@ -331,6 +331,8 @@ page.
 | `muffle-warning` | `(muffle-warning w)` | invoke the `muffle-warning` restart a `warn` establishes, aborting the warning before it prints |
 | `abort` | `(abort)` | invoke the innermost `abort` restart; an error when none is active |
 | `continue` | `(continue)` | invoke the innermost `continue` restart (a `cerror`'s); `nil` when none is active |
+| `use-value` | `(use-value v)` | invoke the innermost `use-value` restart with a value; `nil` when none is active |
+| `store-value` | `(store-value v)` | invoke the innermost `store-value` restart with a value; `nil` when none is active |
 
 ## rontolisp Package Functions
 

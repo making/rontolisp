@@ -128,6 +128,11 @@ public final class BuiltinFunctionWrappers {
 		// flags of programs that never sleep -- and the mode gate, which scans the source
 		// program, would not even see it coming.
 		gated.add(LispNames.SLEEP);
+		// #'find-symbol: the wrapper body lowers to intern (the computed-name
+		// deviation, .kb/symbol-runtime-api.md), and the WASM _intern runtime is
+		// gated -- so the wrapper is injected only for a program that actually takes
+		// find-symbol as a value (trivia level2's (remove-if-not #'find-symbol ...)).
+		gated.add(LispNames.FIND_SYMBOL);
 		REFERENCE_GATED_FUNCTIONS = Set.copyOf(gated);
 	}
 
@@ -727,6 +732,16 @@ public final class BuiltinFunctionWrappers {
 				List.of(listToCons(List.of(new LispSymbol(LispNames.IF), isBinary, binaryBranch, textBranch))));
 	}
 
+	// #'find-symbol: (lambda (n &rest p) (if (consp p) (find-symbol n (car p))
+	// (find-symbol n))) -- both branches are call positions the backends lower.
+	private static WrapperDef findSymbolWrapper() {
+		LispSymbol n = new LispSymbol("n");
+		LispSymbol p = new LispSymbol("p");
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.CONSP, p),
+				callV(LispNames.FIND_SYMBOL, n, callV(LispNames.CAR, p)), callV(LispNames.FIND_SYMBOL, n)));
+		return new WrapperDef(LispNames.FIND_SYMBOL, List.of("n", LispNames.LAMBDA_REST, "p"), List.of(body));
+	}
+
 	private static final List<WrapperDef> WRAPPER_DEFS = List.of(
 			// Signal operators and format (gated by REFERENCE_GATED_FUNCTIONS in the
 			// backend compilers)
@@ -738,6 +753,11 @@ public final class BuiltinFunctionWrappers {
 			// #'open (reference-gated): dispatches an option plist onto the four literal
 			// direction/element-type shapes the compiled open needs.
 			openWrapper(),
+			// #'find-symbol (reference-gated): dispatches on argument count onto the
+			// two call-position lowerings; the computed name lowers to intern, so the
+			// documented unknown-name-yields-a-symbol deviation applies to the wrapper
+			// too (harmless in trivia's visibility filter, the driving consumer).
+			findSymbolWrapper(),
 			// Arithmetic: +/-/*// are variadic in CL, so their wrappers accept any arity
 			// (a fixed-arity wrapper returned nil on the JVM / trapped on WASM when
 			// funcall/apply passed a different argument count). - and / keep their

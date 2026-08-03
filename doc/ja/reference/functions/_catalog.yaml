@@ -550,3 +550,5 @@ categories:
       - { slug: muffle-warning, name: "muffle-warning" }
       - { slug: abort, name: "abort" }
       - { slug: continue, name: "continue" }
+      - { slug: use-value, name: "use-value" }
+      - { slug: store-value, name: "store-value" }

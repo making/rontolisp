@@ -4182,6 +4182,15 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalRemoveIfWithKey() {
+		// The predicate sees the keyed value, the kept elements are the originals
+		// (trivia level2's find-effective-slot filters slot metaobjects by
+		// :key #'slot-definition-initargs).
+		assertThat(eval("(remove-if #'evenp '((1 a) (2 b) (3 c)) :key #'car)").print()).isEqualTo("((1 A) (3 C))");
+		assertThat(eval("(remove-if-not #'evenp '((1 a) (2 b) (3 c)) :key #'car)").print()).isEqualTo("((2 B))");
+	}
+
+	@Test
 	void evalEveryAsFunctionValue() {
 		assertThat(evalMulti("(funcall #'remove 2 '(1 2 3 2)) ").print()).isEqualTo("(1 3)");
 	}
@@ -5273,7 +5282,7 @@ class LispEvaluatorTest {
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.isSorted()
-			.hasSize(362);
+			.hasSize(364);
 	}
 
 	@Test
@@ -5859,6 +5868,26 @@ class LispEvaluatorTest {
 		assertThat(eval("(handler-case (progn (signal \"quiet\") :not-raised) (condition (c) :raised))").print())
 			.isEqualTo(":RAISED");
 		assertThat(eval("(signal \"quiet\")")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void signalFallsThroughAHandlerCaseWhoseClausesDoNotMatch() {
+		// CL: signal unwinds only to a handler that will actually handle the
+		// condition; an active handler-case for an unrelated type must not turn the
+		// signal into an error. trivia level2's pattern expander signals its own
+		// wildcard condition inside user handler-case bodies (the ematch expansion
+		// under a user (handler-case ... (error ...))).
+		assertThat(evalMulti("""
+				(define-condition ping-sig () ())
+				(handler-case (progn (signal 'ping-sig) :fell-through) (error (e) :caught))
+				""").print()).isEqualTo(":FELL-THROUGH");
+		// A matching clause still catches, through a non-matching inner frame.
+		assertThat(evalMulti("""
+				(define-condition ping-sig2 () ())
+				(handler-case
+				    (handler-case (progn (signal 'ping-sig2) :no) (error (e) :inner))
+				  (ping-sig2 () :outer))
+				""").print()).isEqualTo(":OUTER");
 	}
 
 	@Test
@@ -7707,6 +7736,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void findSymbolSeesDefinitionsMadeInsideAUserPackage() {
+		// A definition IS an interning: a defun (or a defstruct-GENERATED defun)
+		// under (in-package p) is registered only in the function namespace under
+		// its canonical spelling, never in the package registry, so find-symbol
+		// must probe that namespace too. trivia level2's predicatep resolves a
+		// struct's predicate with (find-symbol "POINT-P" (symbol-package 'point-)).
+		assertThat(evalMulti("""
+				(defpackage :fs-probe (:use :cl))
+				(in-package :fs-probe)
+				(defun my-local-fn (x) x)
+				(defstruct fspt a b)
+				(list (find-symbol "MY-LOCAL-FN")
+				      (find-symbol "FSPT-P")
+				      (find-symbol "FSPT-P" :fs-probe)
+				      (find-symbol "MAKE-FSPT" :fs-probe)
+				      (find-symbol "NO-SUCH-FN" :fs-probe))
+				""").print())
+			.isEqualTo("(FS-PROBE::MY-LOCAL-FN FS-PROBE::FSPT-P FS-PROBE::FSPT-P FS-PROBE::MAKE-FSPT NIL)");
+	}
+
+	@Test
 	void makeSymbolReturnsAFreshUninternedSymbol() {
 		assertThat(evalMulti("(make-symbol \"temp\")").print()).isEqualTo("#:temp");
 		assertThat(evalMulti("(symbolp (make-symbol \"temp\"))")).isEqualTo(LispTrue.INSTANCE);
@@ -8221,6 +8271,21 @@ class LispEvaluatorTest {
 			.hasMessageContaining("Unknown keyword argument: :BOGUS");
 		assertThat(evalMulti("(defun f (&key k) k) (f :bogus 1 :allow-other-keys t)").print()).isEqualTo("NIL");
 		assertThat(evalMulti("(defun f (&key k &allow-other-keys) k) (f :bogus 1 :k 2)").print()).isEqualTo("2");
+	}
+
+	@Test
+	void defunEmptyKeySection() {
+		// &key with NO key parameters must still accept a keyword tail: trivia's
+		// :trivial optimizer is (lambda (clauses &key &allow-other-keys) clauses)
+		// funcalled as (funcall opt clauses :types types).
+		assertThat(evalMulti("(defun f (x &key &allow-other-keys) x) (f 1 :types '(t))").print()).isEqualTo("1");
+		assertThat(eval("(funcall (lambda (x &key &allow-other-keys) x) 1 :a 2 :b 3)").print()).isEqualTo("1");
+		// Without &allow-other-keys, every keyword is unknown -- but the tail is
+		// still consumed, and :allow-other-keys t still overrides.
+		assertThat(evalMulti("(defun f (x &key) x) (f 1)").print()).isEqualTo("1");
+		assertThatThrownBy(() -> evalMulti("(defun f (x &key) x) (f 1 :bogus 2)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("Unknown keyword argument: :BOGUS");
+		assertThat(evalMulti("(defun f (x &key) x) (f 1 :bogus 2 :allow-other-keys t)").print()).isEqualTo("1");
 	}
 
 	@Test

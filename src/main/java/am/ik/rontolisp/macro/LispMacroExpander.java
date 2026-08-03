@@ -5208,12 +5208,13 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandRemoveIf(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
+		requireKeywords(LispNames.REMOVE_IF, parts, 3, LispNames.KEY_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol pred = new LispSymbol("__removeif_pred");
 		return makeLet(pred.name(), parts.get(1),
-				seqResultDispatchForm(parts.get(2),
-						lst -> expandFilter(pred, pred, lst, "__removeif",
-								elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), false),
-						arraysExist));
+				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeif",
+						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
+						false), arraysExist));
 	}
 
 	/**
@@ -5236,12 +5237,13 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal expandRemoveIfNot(LispCons cons, boolean arraysExist) {
 		List<LispVal> parts = cons.toList();
+		requireKeywords(LispNames.REMOVE_IF_NOT, parts, 3, LispNames.KEY_KEYWORD);
+		LispVal keyForm = keywordValue(parts, 3, LispNames.KEY_KEYWORD);
 		LispSymbol pred = new LispSymbol("__removeifnot_pred");
 		return makeLet(pred.name(), parts.get(1),
-				seqResultDispatchForm(parts.get(2),
-						lst -> expandFilter(pred, pred, lst, "__removeifnot",
-								elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, elem)), true),
-						arraysExist));
+				seqResultDispatchForm(parts.get(2), lst -> expandFilter(pred, pred, lst, "__removeifnot",
+						elem -> listToCons(List.of(new LispSymbol(LispNames.FUNCALL), pred, keyedForm(keyForm, elem))),
+						true), arraysExist));
 	}
 
 	/**
@@ -7179,6 +7181,27 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal computedFindSymbol(LispVal nameForm) {
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN), nameForm));
+	}
+
+	/**
+	 * The compiled backends' lowering of a RUNTIME {@code (export ...)} /
+	 * {@code (unexport ...)} call (one inside a defun body -- a literal top-level call is
+	 * consumed by {@code PackageResolver} like {@code in-package}): evaluate the
+	 * arguments for effect and yield {@code t}, CL's return value. The compiled package
+	 * registry is FROZEN at compile time -- symbols are their canonical spellings and
+	 * every reference already resolved -- so there is nothing left for the export to
+	 * change; the macro-time/interpreter side, which still resolves, runs the real one.
+	 * trivia level2's set-vector-matcher (arrays.lisp) is the driving consumer.
+	 * @param cons the export/unexport call
+	 * @return the equivalent progn
+	 */
+	public static LispVal expandRuntimeExport(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> progn = new java.util.ArrayList<>();
+		progn.add(new LispSymbol(LispNames.PROGN));
+		progn.addAll(parts.subList(1, parts.size()));
+		progn.add(LispTrue.INSTANCE);
+		return listToCons(progn);
 	}
 
 	/** The temporaries {@link #computedPackageFindSymbol} binds its two arguments to. */
@@ -18278,6 +18301,28 @@ public final class LispMacroExpander {
 			case "PATHNAME":
 				// No pathname type exists in rontolisp: nothing is a pathname.
 				return LispNil.INSTANCE;
+			case "BIT-VECTOR", "SIMPLE-BIT-VECTOR":
+				// No bit-vector type exists either (the bit type is dead in the
+				// lattice, .todo/180: a (make-array n :element-type 'bit) is a plain
+				// vector). The empty test lets a typecase's bit-vector clause fall
+				// through to its vector clause (trivia level2's constant-pattern
+				// decomposition orders exactly that way).
+				return LispNil.INSTANCE;
+			case "GENERIC-FUNCTION", "STANDARD-GENERIC-FUNCTION":
+				// A defgeneric's dispatcher is a plain function value on every backend
+				// -- no marker distinguishes it, and runtime typep answers NIL the same
+				// way. The empty test routes an etypecase's generic-function clause to
+				// its portable function fallback (trivia level2's unary-function-p
+				// test-call path).
+				return LispNil.INSTANCE;
+			case "STRUCTURE-CLASS", "BUILT-IN-CLASS":
+				// A defstruct's class metaobject IS a standard-class here (the one
+				// instance model, .kb/instance-syntax.md) and built-in types have no
+				// metaobjects at all, so neither metaclass type has instances. The
+				// empty test routes trivia level2's (typecase (find-class type)
+				// (structure-class ...) (built-in-class ...) (t ...)) to its t branch
+				// -- the slot-value accessor form, which works on struct instances.
+				return LispNil.INSTANCE;
 			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY":
 				// Strings are vectors (so arrays) in CL. The rank is NOT checked (a
 				// rank-n array passes a `vector` test too): the rank read would drag
@@ -19489,7 +19534,7 @@ public final class LispMacroExpander {
 	/** The restart-runtime defun names (also restart-mode triggers when called). */
 	public static final java.util.Set<String> RESTART_RUNTIME_FUNCTION_NAMES = java.util.Set.of(
 			LispNames.INVOKE_RESTART, LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME,
-			LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE);
+			LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
 
 	/**
 	 * Whether the program uses the restart system: any {@code handler-bind} /
@@ -19593,6 +19638,12 @@ public final class LispMacroExpander {
 		}
 		if (!userDefinedNames.contains(LispNames.CONTINUE)) {
 			forms.add(continueDefun());
+		}
+		if (!userDefinedNames.contains(LispNames.USE_VALUE)) {
+			forms.add(valueRestartDefun(LispNames.USE_VALUE, "__uv"));
+		}
+		if (!userDefinedNames.contains(LispNames.STORE_VALUE)) {
+			forms.add(valueRestartDefun(LispNames.STORE_VALUE, "__sv"));
 		}
 		return forms;
 	}
@@ -19759,6 +19810,21 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.ABORT),
 				listToCons(List.of(new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)),
 				callOf(LispNames.INVOKE_RESTART, quoteOf(LispNames.ABORT))));
+	}
+
+	// (defun use-value (__uv_v &optional __uv_c)
+	// (let ((__uv_r (find-restart 'use-value)))
+	// (if (null __uv_r) nil (invoke-restart __uv_r __uv_v))))
+	// -- and the same shape for store-value (the CLHS one-value pair).
+	private static LispVal valueRestartDefun(String name, String prefix) {
+		LispSymbol value = new LispSymbol(prefix + "_v");
+		LispSymbol cond = new LispSymbol(prefix + "_c");
+		LispSymbol r = new LispSymbol(prefix + "_r");
+		LispVal body = makeLet(r.name(), callOf(LispNames.FIND_RESTART, quoteOf(name)),
+				makeIf(callOf(LispNames.NULL, r), LispNil.INSTANCE,
+						listToCons(List.of(new LispSymbol(LispNames.INVOKE_RESTART), r, value))));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
+				listToCons(List.of(value, new LispSymbol(LispNames.LAMBDA_OPTIONAL), cond)), body));
 	}
 
 	// (defun continue (&optional __ct_c)

@@ -1835,7 +1835,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// uiop:symbol-call lowers to (funcall (intern ...) ...) inside the expression
 		// compiler, after this scan -- its pre-lowering spelling counts (todo-229).
 		boolean usesIntern = usesRead || programUsesSymbol(program, LispNames.INTERN)
-				|| programUsesSymbol(program, LispNames.UIOP_SYMBOL_CALL);
+				|| programUsesSymbol(program, LispNames.UIOP_SYMBOL_CALL)
+				// A computed find-symbol (call position or the reference-gated #'
+				// wrapper) lowers to intern, so it needs the _intern runtime too.
+				|| programUsesSymbol(program, LispNames.FIND_SYMBOL);
 
 		// Inject built-in function wrappers (user defuns take priority)
 		Set<String> userDefinedNames = new HashSet<>();

@@ -691,10 +691,8 @@ public final class LispReader {
 	}
 
 	private static LispVal buildTemplateList(List<TemplateElement> elements, @Nullable TemplateElement tail) {
-		if (tail != null) {
-			if (elements.stream().anyMatch(TemplateElement::splicing)) {
-				throw new LispReadException(",@ cannot be combined with a dotted tail in a backquote template");
-			}
+		boolean anySplicing = elements.stream().anyMatch(TemplateElement::splicing);
+		if (tail != null && !anySplicing) {
 			// (cons f1 (cons f2 ... tail))
 			LispVal result = tail.form();
 			for (int i = elements.size() - 1; i >= 0; i--) {
@@ -705,13 +703,15 @@ public final class LispReader {
 		if (elements.isEmpty()) {
 			return LispNil.INSTANCE;
 		}
-		boolean anySplicing = elements.stream().anyMatch(TemplateElement::splicing);
 		if (!anySplicing) {
 			// (list f1 ... fn)
 			return properList(new LispSymbol(LispNames.LIST), elements.stream().map(TemplateElement::form).toList());
 		}
-		// (append seg1 ... segk): each splicing element is its own segment, runs of
-		// non-splicing elements collapse into (list f...) segments.
+		// (append seg1 ... segk [tail]): each splicing element is its own segment, runs
+		// of non-splicing elements collapse into (list f...) segments, and a dotted
+		// tail is the last append argument (CLHS 2.4.6.1: `(x1 ... xn . tail) is
+		// (append [x1] ... [xn] tail) -- trivia level2's
+		// `((,head ,@(mappend #'car pairs) . ,(cdr (last args))))).
 		List<LispVal> segments = new ArrayList<>();
 		List<LispVal> run = new ArrayList<>();
 		for (TemplateElement element : elements) {
@@ -728,6 +728,9 @@ public final class LispReader {
 		}
 		if (!run.isEmpty()) {
 			segments.add(properList(new LispSymbol(LispNames.LIST), run));
+		}
+		if (tail != null) {
+			segments.add(tail.form());
 		}
 		return properList(new LispSymbol(LispNames.APPEND), segments);
 	}

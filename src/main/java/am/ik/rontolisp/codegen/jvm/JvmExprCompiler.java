@@ -398,6 +398,10 @@ final class JvmExprCompiler {
 				case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
 				case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 				case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);
+				// A runtime export/unexport (inside a defun body): the compiled package
+				// registry is frozen, so evaluate the arguments and yield t.
+				case LispNames.EXPORT, LispNames.UNEXPORT ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons), ctx, className);
 				case LispNames.MAKE_SYMBOL -> JvmSymbolApiCompiler.compileMakeSymbol(cons, ctx, className);
 				case LispNames.BOUNDP -> JvmSymbolApiCompiler.compileBoundp(cons, ctx, className);
 				case LispNames.FBOUNDP -> JvmSymbolApiCompiler.compileFboundp(cons, ctx, className);

@@ -31,6 +31,9 @@ public final class BuiltinSystems {
 			Map.entry("bordeaux-threads", features -> ShimLibraries.forms("bordeaux-threads", features)),
 			Map.entry("babel", features -> ShimLibraries.forms("babel", features)),
 			Map.entry("swank", features -> ShimLibraries.forms("swank", features)),
+			// The CLtL2 environment-API shim (trivia.level2's dependency): the real
+			// library re-exports host-implementation members that do not exist here.
+			Map.entry("trivial-cltl2", features -> ShimLibraries.forms("trivial-cltl2", features)),
 			// The Clack handler backend: both the hyphenated ecosystem spelling and the
 			// dotted spelling lack's find-package-or-load derives from the package name
 			// resolve to the one shim (see ShimLibraries.RESOURCES).
