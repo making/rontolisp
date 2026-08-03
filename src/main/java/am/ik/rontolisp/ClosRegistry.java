@@ -103,10 +103,38 @@ public final class ClosRegistry {
 			return;
 		}
 		this.mopClassesSeeded = true;
-		seedClass(STANDARD_CLASS_NAME, null, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
+		// CLASS is slot-less and never instantiated: it exists so that (typep x 'class)
+		// -- the metaobject predicate mito's contains-class-or-subclasses rides -- is an
+		// ordinary registry ancestor test on every backend, and so that standard-class
+		// keeps its own slots at index 0 (a slot-less parent contributes nothing to the
+		// layout, so the %obj-ref index contract below is unchanged).
+		seedClass(CLASS_NAME, null);
+		seedClass(STANDARD_CLASS_NAME, CLASS_NAME, "NAME", "DIRECT-SUPERCLASSES", "DIRECT-SLOTS", "EFFECTIVE-SLOTS",
 				"FINALIZED-P");
 		seedClass(STANDARD_DIRECT_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS");
 		seedClass(STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME, null, "NAME", "INITARGS", "INITFORM", "TYPE", "READERS");
+	}
+
+	/**
+	 * Seeds the MOP base classes when the given type-specifier name is one of them --
+	 * {@code (typep x 'class)}, {@code (subtypep m 'standard-class)} and friends. A type
+	 * TEST is as good a MOP-surface trigger as the closer-mop load or a
+	 * {@code :metaclass}: the interpreter expands such a test against the live registry,
+	 * and without the seeding the test would compile to a constant nil BEFORE the
+	 * {@code find-class} call that produces the very metaobject it is about had a chance
+	 * to seed. The name may be package-qualified ({@code closer-mop:standard-class}); the
+	 * member spelling decides.
+	 * @param typeName the type-specifier name as spelled
+	 */
+	public void ensureMopClassesSeededFor(String typeName) {
+		if (this.mopClassesSeeded) {
+			return;
+		}
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(typeName);
+		String member = qualified == null ? typeName : qualified.member();
+		if (MOP_BASE_CLASS_NAMES.contains(member.toUpperCase(java.util.Locale.ROOT))) {
+			ensureMopClassesSeeded();
+		}
 	}
 
 	/**
@@ -196,6 +224,15 @@ public final class ClosRegistry {
 	public static final String STANDARD_CLASS_NAME = "STANDARD-CLASS";
 
 	/**
+	 * The seeded root of the metaclass hierarchy -- CL's {@code class}, the superclass of
+	 * {@link #STANDARD_CLASS_NAME} and hence of every user metaclass. Slot-less and never
+	 * instantiated: its only job is to make {@code (typep x 'class)} / {@code (subtypep m
+	 * 'class)} answer for a class metaobject through the ordinary ancestor machinery,
+	 * identically on all four backends.
+	 */
+	public static final String CLASS_NAME = "CLASS";
+
+	/**
 	 * The seeded direct-slot-definition base class a user metaclass protocol subclasses
 	 * (postmodern's {@code direct-column-slot}). Slot order: name, initargs, initform,
 	 * type, readers.
@@ -208,6 +245,10 @@ public final class ClosRegistry {
 	 * readers.
 	 */
 	public static final String STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME = "STANDARD-EFFECTIVE-SLOT-DEFINITION";
+
+	/** The classes {@link #ensureMopClassesSeeded()} registers, in seeding order. */
+	private static final List<String> MOP_BASE_CLASS_NAMES = List.of(CLASS_NAME, STANDARD_CLASS_NAME,
+			STANDARD_DIRECT_SLOT_DEFINITION_NAME, STANDARD_EFFECTIVE_SLOT_DEFINITION_NAME);
 
 	/**
 	 * The built-in class names {@code class-of} can answer for a non-instance value --

@@ -12957,7 +12957,7 @@ public final class LispMacroExpander {
 			// position-independent pass, so appending is safe. The data table is a
 			// top-level defvar and must run before any top-level subtypep call, so it
 			// goes FIRST (after the dispatcher slots above were filled by index).
-			out.add(runtimeSubtypepDefun());
+			out.add(runtimeSubtypepDefun(closRegistry));
 			out.addAll(0, subtypepAncestorTableForms(closRegistry));
 		}
 		if (runtimeTypep) {
@@ -21776,9 +21776,9 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(
 					List.of(nameMatchTest(tn, typeName), makeIf(test, LispTrue.INSTANCE, LispNil.INSTANCE))));
 		}
-		// tn = T accepts everything (makeTypeTest only knows the LispTrue spelling,
-		// which a runtime specifier value never is).
-		clauses.add(listToCons(List.of(nameMatchTest(tn, "T"), LispTrue.INSTANCE)));
+		// tn = T accepts everything -- the name spelling, and the boolean t the built-in
+		// T class carries in its name slot, which is what (find-class 't) normalizes to.
+		clauses.add(listToCons(List.of(universalTypeMatchTest(tn), LispTrue.INSTANCE)));
 		for (String builtin : RUNTIME_TYPEP_BUILTINS) {
 			LispVal test;
 			try {
@@ -21794,7 +21794,12 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
-		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, listToCons(condParts)));
+		LispVal body = listToCons(condParts);
+		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, true);
+		if (normalize != null) {
+			body = listToCons(List.of(new LispSymbol(LispNames.PROGN), normalize, body));
+		}
+		return makeLet(v.name(), value, makeLet(tn.name(), typeExpr, body));
 	}
 
 	/**
@@ -21811,6 +21816,17 @@ public final class LispMacroExpander {
 		}
 		return listToCons(List.of(new LispSymbol(LispNames.OR), exact,
 				listToCons(List.of(new LispSymbol(LispNames.EQUAL), runtimeName, quoteOf(qn.member())))));
+	}
+
+	/**
+	 * The runtime-specifier match of the UNIVERSAL type: the {@code T} name spelling, and
+	 * also the boolean {@code t} itself, which is the name slot of the built-in {@code T}
+	 * class -- so {@code (typep x (find-class 't))} accepts everything the way the quoted
+	 * spelling does.
+	 */
+	private static LispVal universalTypeMatchTest(LispSymbol runtimeName) {
+		return listToCons(List.of(new LispSymbol(LispNames.OR), nameMatchTest(runtimeName, "T"),
+				fmtCall(LispNames.EQ_GENERAL, runtimeName, LispTrue.INSTANCE)));
 	}
 
 	/** The immediate supertypes of each built-in type name ({@code subtypep} lattice). */
@@ -21868,6 +21884,8 @@ public final class LispMacroExpander {
 	 * @return whether {@code sub} is a subtype of {@code super}
 	 */
 	public static boolean subtypep(LispVal subV, LispVal superV, ClosRegistry closRegistry) {
+		subV = classMetaobjectDesignator(subV, closRegistry);
+		superV = classMetaobjectDesignator(superV, closRegistry);
 		if (superV instanceof LispTrue) {
 			return true;
 		}
@@ -21904,6 +21922,60 @@ public final class LispMacroExpander {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * A class METAOBJECT standing where a type specifier is expected designates its own
+	 * class: replace it with the name in its slot 0 (the {@code T} class's name slot
+	 * holds the boolean {@code t}, which the callers already read as the universal type).
+	 * Any other value passes through. This is the interpreter half of the normalization;
+	 * the compile paths do the same one level down, in the emitted
+	 * {@code %typep-runtime}/{@code %subtypep-runtime} preambles
+	 * ({@link #metaobjectNameNormalization}).
+	 * @param value the runtime type designator
+	 * @param closRegistry the class registry
+	 * @return the class name when the value is a metaobject, else the value itself
+	 */
+	private static LispVal classMetaobjectDesignator(LispVal value, ClosRegistry closRegistry) {
+		if (value instanceof LispInstance instance && instance.slotCount() > 0
+				&& closRegistry.isClassMetaobject(instance)) {
+			return instance.slot(0);
+		}
+		return value;
+	}
+
+	/**
+	 * The emitted twin of {@link #classMetaobjectDesignator}: {@code (if (%obj-is var
+	 * '<metaobject tags>) (setq var (%obj-ref var 0)) nil)}, so a runtime type designator
+	 * that is a class metaobject continues as its class NAME -- the spelling the type
+	 * tables are keyed by.
+	 *
+	 * <p>
+	 * With no metaclass registered the COMPILE paths drop the preamble
+	 * ({@code liveRegistry} false): a compiled program's class set is fixed before the
+	 * emission, so no metaobject can exist there (the {@code %class-slot-defs-runtime}
+	 * precedent). The INTERPRETER cannot make that inference -- it seeds the MOP classes
+	 * LAZILY, and the very {@code (find-class 'c)} producing the metaobject runs AFTER
+	 * this expansion, so an unseeded registry does NOT mean "no metaobject at run time".
+	 * It falls back to the base metaclass tag, which is a constant and is the only tag a
+	 * metaobject can carry while no user metaclass is defined.
+	 * @param var the variable holding the runtime type designator
+	 * @param closRegistry the class registry
+	 * @param liveRegistry whether the registry may still grow before the form is
+	 * evaluated (the interpreter), rather than being final (the compile paths)
+	 * @return the normalization form, or null when it is provably unnecessary
+	 */
+	@Nullable private static LispVal metaobjectNameNormalization(LispSymbol var, ClosRegistry closRegistry,
+			boolean liveRegistry) {
+		List<String> metaobjectTags = closRegistry.descendantTags(ClosRegistry.STANDARD_CLASS_NAME);
+		if (metaobjectTags.isEmpty()) {
+			if (!liveRegistry) {
+				return null;
+			}
+			metaobjectTags = List.of(LispLayout.CLASS_TAG_PREFIX + ClosRegistry.STANDARD_CLASS_NAME);
+		}
+		return makeIf(objIs(var, List.copyOf(metaobjectTags)),
+				listToCons(List.of(new LispSymbol(LispNames.SETQ), var, objRef(var, 0))), LispNil.INSTANCE);
 	}
 
 	/**
@@ -21969,11 +22041,11 @@ public final class LispMacroExpander {
 	 * Builds the shared {@code (defun %subtypep-runtime (a b) ...)} dispatch defun; see
 	 * {@link #expandRuntimeSubtypep}.
 	 */
-	private static LispVal runtimeSubtypepDefun() {
+	private static LispVal runtimeSubtypepDefun(ClosRegistry closRegistry) {
 		LispSymbol a = new LispSymbol("%st_ra");
 		LispSymbol b = new LispSymbol("%st_rb");
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SUBTYPEP_RUNTIME),
-				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b)));
+				listToCons(List.of(a, b)), expandRuntimeSubtypep(a, b, closRegistry)));
 	}
 
 	/**
@@ -22310,13 +22382,17 @@ public final class LispMacroExpander {
 								makeIf(mvCall(LispNames.MEMBER, tag, mvCall(LispNames.CDR, entry)), LispTrue.INSTANCE,
 										LispNil.INSTANCE))),
 						LispNil.INSTANCE)));
-		LispVal instanceBranch = makeIf(mvCall(LispNames.MEMBER, tn, quotedSymbolList(List.of("T", "ATOM"))),
+		LispVal instanceBranch = makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.OR),
+						mvCall(LispNames.MEMBER, tn, quotedSymbolList(List.of("T", "ATOM"))),
+						fmtCall(LispNames.EQ_GENERAL, tn, LispTrue.INSTANCE))),
 				LispTrue.INSTANCE, makeLet(tag.name(), objTag(v), tableScan));
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(listToCons(List.of(callOf(LispNames.OBJ_P, v), instanceBranch)));
-		// tn = T accepts everything (makeTypeTest only knows the LispTrue spelling,
-		// which a runtime specifier value never is).
-		clauses.add(listToCons(List.of(nameMatchTest(tn, "T"), LispTrue.INSTANCE)));
+		// tn = T accepts everything -- the name spelling, and the boolean t the built-in
+		// T class carries in its name slot (the metaobject normalization above leaves it
+		// as-is; the quoted-symbol T is what a plain runtime name spelling looks like).
+		clauses.add(listToCons(List.of(universalTypeMatchTest(tn), LispTrue.INSTANCE)));
 		for (String builtin : RUNTIME_TYPEP_BUILTINS) {
 			if ("STANDARD-OBJECT".equals(builtin) || "STRUCTURE-OBJECT".equals(builtin)) {
 				// v is not an instance here, so these are constant nil: fall through.
@@ -22336,8 +22412,16 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
-		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.TYPEP_RUNTIME),
-				listToCons(List.of(v, tn)), listToCons(condParts)));
+		List<LispVal> bodyParts = new java.util.ArrayList<>();
+		bodyParts.add(new LispSymbol(LispNames.DEFUN));
+		bodyParts.add(new LispSymbol(LispNames.TYPEP_RUNTIME));
+		bodyParts.add(listToCons(List.of(v, tn)));
+		LispVal normalize = metaobjectNameNormalization(tn, closRegistry, false);
+		if (normalize != null) {
+			bodyParts.add(normalize);
+		}
+		bodyParts.add(listToCons(condParts));
+		return listToCons(bodyParts);
 	}
 
 	/**
@@ -23103,7 +23187,7 @@ public final class LispMacroExpander {
 	 * the previous inline clause-per-group shape grew past the JVM's 16-bit branch
 	 * offsets at cl-postgres scale (59 KB of bytecode at 165 registered classes).
 	 */
-	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr) {
+	private static LispVal expandRuntimeSubtypep(LispVal subExpr, LispVal supExpr, ClosRegistry closRegistry) {
 		String prefix = "__st" + MV_COUNTER.getAndIncrement();
 		LispSymbol a = new LispSymbol(prefix + "_a");
 		LispSymbol b = new LispSymbol(prefix + "_b");
@@ -23122,7 +23206,26 @@ public final class LispMacroExpander {
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);
-		return makeLet(a.name(), subExpr, makeLet(b.name(), supExpr, listToCons(condParts)));
+		LispVal body = listToCons(condParts);
+		// Either specifier may arrive as a class METAOBJECT (the (subtypep (find-class
+		// 'sub) (find-class 'super)) idiom); normalize both to the class NAME the
+		// ancestor table is keyed by, before the constant edges are tested -- the T
+		// class's name slot holds the boolean t, which the (eq b t) edge then answers.
+		List<LispVal> normalizations = new java.util.ArrayList<>();
+		for (LispSymbol var : List.of(a, b)) {
+			LispVal normalize = metaobjectNameNormalization(var, closRegistry, false);
+			if (normalize != null) {
+				normalizations.add(normalize);
+			}
+		}
+		if (!normalizations.isEmpty()) {
+			List<LispVal> prognParts = new java.util.ArrayList<>();
+			prognParts.add(new LispSymbol(LispNames.PROGN));
+			prognParts.addAll(normalizations);
+			prognParts.add(body);
+			body = listToCons(prognParts);
+		}
+		return makeLet(a.name(), subExpr, makeLet(b.name(), supExpr, body));
 	}
 
 	/**

@@ -188,6 +188,9 @@ public final class PackageRegistry {
 			// patterns are (defpattern class ...) &c on the CL symbols, so the
 			// defpattern site (inside trivia's package) and a user's pattern site must
 			// resolve to the SAME bare spelling or the pattern-namespace lookup misses.
+			// CLASS is additionally a REAL class once the MOP surface seeds (the
+			// superclass of standard-class, .kb/clos.md), so the bare spelling is also
+			// what makes (typep x 'class) find it.
 			"CLASS", "STRUCTURE", "TYPE");
 
 	/**

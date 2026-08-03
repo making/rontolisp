@@ -213,6 +213,30 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileTypepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers() throws Exception {
+		// The compile-path twin of
+		// LispEvaluatorTest#typepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers: the
+		// emitted %typep-runtime/%subtypep-runtime preambles replace a metaobject
+		// argument with its class name before the tag/ancestor tables are scanned.
+		assertThat(compileAndRun("""
+				(defclass mo-super () ())
+				(defclass mo-sub (mo-super) ())
+				(print (list (subtypep (find-class 'mo-sub) (find-class 'mo-super))
+				             (subtypep (find-class 'mo-super) (find-class 'mo-sub))
+				             (subtypep (find-class 'mo-sub) 'mo-super)
+				             (subtypep 'mo-sub (find-class 'mo-super))
+				             (typep (find-class 'mo-sub) 'class)
+				             (typep (find-class 'mo-sub) 'standard-class)
+				             (typep 42 'class)
+				             (typep (make-instance 'mo-sub) (find-class 'mo-super))
+				             (typep (make-instance 'mo-super) (find-class 'mo-sub))
+				             (typep 42 (find-class 'integer))
+				             (typep 42 (find-class 't))
+				             (typep (make-instance 'mo-sub) (find-class 't))))
+				""")).isEqualTo("(T NIL T T T T NIL T NIL T T T)");
+	}
+
+	@Test
 	void compileAllocateInstanceAnswersAnAllSlotsUnboundInstance() throws Exception {
 		// The generated allocate-instance runtime (injected when referenced) resolves a
 		// metaobject OR a name designator to the per-class construction arm; every

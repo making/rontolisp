@@ -9300,6 +9300,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void typepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers() {
+		// A class metaobject stands where a type specifier is expected: it designates
+		// its own class, so subtypep consults the registry's ancestor sets exactly as
+		// the name spelling does, and typep tests the value against it. `class' is a
+		// real class (the superclass of standard-class), so (typep x 'class) is the
+		// metaobject predicate -- mito's contains-class-or-subclasses idiom.
+		assertThat(evalMulti("""
+				(defclass mo-super () ())
+				(defclass mo-sub (mo-super) ())
+				(list (subtypep (find-class 'mo-sub) (find-class 'mo-super))
+				      (subtypep (find-class 'mo-super) (find-class 'mo-sub))
+				      (subtypep (find-class 'mo-sub) 'mo-super)
+				      (subtypep 'mo-sub (find-class 'mo-super))
+				      (typep (find-class 'mo-sub) 'class)
+				      (typep (find-class 'mo-sub) 'standard-class)
+				      (typep 42 'class)
+				      (typep (make-instance 'mo-sub) (find-class 'mo-super))
+				      (typep (make-instance 'mo-super) (find-class 'mo-sub))
+				      (typep 42 (find-class 'integer))
+				      (typep 42 (find-class 't))
+				      (typep (make-instance 'mo-sub) (find-class 't)))
+				""").print()).isEqualTo("(T NIL T T T T NIL T NIL T T T)");
+	}
+
+	@Test
 	void allocateInstanceAnswersAnAllSlotsUnboundInstance() {
 		// allocate-instance takes the class metaobject (or its name) and answers an
 		// instance with EVERY slot unbound -- no initforms, no initialize-instance;

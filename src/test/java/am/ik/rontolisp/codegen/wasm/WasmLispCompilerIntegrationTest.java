@@ -5916,6 +5916,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void typepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers() throws Exception {
+		// The WASM twin of
+		// JvmLispCompilerTest#compileTypepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers:
+		// a class metaobject standing where a type specifier is expected designates its
+		// own class, and `class' is the metaobject predicate.
+		assertThat(compileAndRun("""
+				(defclass mo-super () ())
+				(defclass mo-sub (mo-super) ())
+				(print (list (subtypep (find-class 'mo-sub) (find-class 'mo-super))
+				             (subtypep (find-class 'mo-super) (find-class 'mo-sub))
+				             (subtypep (find-class 'mo-sub) 'mo-super)
+				             (subtypep 'mo-sub (find-class 'mo-super))
+				             (typep (find-class 'mo-sub) 'class)
+				             (typep (find-class 'mo-sub) 'standard-class)
+				             (typep 42 'class)
+				             (typep (make-instance 'mo-sub) (find-class 'mo-super))
+				             (typep (make-instance 'mo-super) (find-class 'mo-sub))
+				             (typep 42 (find-class 'integer))
+				             (typep 42 (find-class 't))
+				             (typep (make-instance 'mo-sub) (find-class 't))))
+				""")).isEqualTo("(T NIL T T T T NIL T NIL T T T)");
+	}
+
+	@Test
 	void setfSlotValueWithARuntimeSlotName() throws Exception {
 		// Mirrors JvmLispCompilerTest#compileSetfSlotValueWithARuntimeSlotName.
 		assertThat(compileAndRun("""

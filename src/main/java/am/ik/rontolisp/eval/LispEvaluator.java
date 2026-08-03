@@ -2224,7 +2224,47 @@ public final class LispEvaluator {
 	 * lattice + class-registry walk the compilers fold at compile time.
 	 */
 	private boolean subtypep(LispVal subV, LispVal superV) {
+		seedMopClassesForTypeSpecifier(subV);
+		seedMopClassesForTypeSpecifier(superV);
 		return LispMacroExpander.subtypep(subV, superV, this.closRegistry);
+	}
+
+	/**
+	 * The {@code typep} half of {@link #seedMopClassesForTypeSpecifier}: unwraps the
+	 * quoted specifier of a {@code (typep value 'spec)} FORM (unlike {@code subtypep},
+	 * whose arguments reach the built-in as values) and seeds from it.
+	 */
+	private void seedMopClassesForTypepForm(LispCons cons) {
+		if (!cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() == 3 && parts.get(2) instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
+				&& LispNames.QUOTE.equals(plainName(head.name())) && quoted.cdr() instanceof LispCons specCell) {
+			seedMopClassesForTypeSpecifier(specCell.car());
+		}
+	}
+
+	/**
+	 * Registers the MOP base classes when a {@code typep}/{@code subtypep} type specifier
+	 * names one of them, so {@code (typep x 'class)} answers even when this is the
+	 * program's first MOP surface (the registry seeds lazily, and the interpreter expands
+	 * the test BEFORE the {@code find-class} call in its own argument runs). Walks
+	 * compound specifiers, and stops at a quote so an {@code (eql ...)} / {@code (member
+	 * ...)} datum cannot trigger it.
+	 */
+	private void seedMopClassesForTypeSpecifier(LispVal specifier) {
+		switch (specifier) {
+			case LispSymbol sym -> this.closRegistry.ensureMopClassesSeededFor(sym.name());
+			case LispCons cons -> {
+				if (!(cons.car() instanceof LispSymbol head) || !LispNames.QUOTE.equals(plainName(head.name()))) {
+					seedMopClassesForTypeSpecifier(cons.car());
+					seedMopClassesForTypeSpecifier(cons.cdr());
+				}
+			}
+			default -> {
+			}
+		}
 	}
 
 	/** The package-stripped member name of a possibly qualified symbol name. */
@@ -3623,6 +3663,7 @@ public final class LispEvaluator {
 			case LispNames.LOAD_TIME_VALUE:
 				return evalLoadTimeValue(cons, env);
 			case LispNames.TYPEP:
+				seedMopClassesForTypepForm(cons);
 				return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
 			case LispNames.PRINT_UNREADABLE_OBJECT:
 				return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);

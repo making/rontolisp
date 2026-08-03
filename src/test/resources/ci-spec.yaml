@@ -6730,6 +6730,20 @@ cases:
                    (typep (make-instance '<fcm-dog> :name "rex") '<fcm-dog>)
                    (subtypep '<fcm-dog> 'fcm-animal)
                    (handler-case (error 'fcm-error :code 42) (<fcm-error> (e) (fcm-code e)))))
+      ;; A class METAOBJECT standing where a type specifier is expected
+      ;; designates its own class, so typep/subtypep answer through the same
+      ;; ancestor machinery as the name spelling; `class' is the metaobject
+      ;; predicate (mito's contains-class-or-subclasses idiom).
+      (print (list (subtypep (find-class 'fcm-dog) (find-class 'fcm-animal))
+                   (subtypep (find-class 'fcm-animal) (find-class 'fcm-dog))
+                   (subtypep (find-class 'fcm-dog) 'fcm-animal)
+                   (subtypep 'fcm-dog (find-class 'fcm-animal))
+                   (typep (find-class 'fcm-dog) 'class)
+                   (typep 42 'class)
+                   (typep (make-instance 'fcm-dog) (find-class 'fcm-animal))
+                   (typep 42 (find-class 'integer))
+                   (typep 42 (find-class 't))
+                   (typep (make-instance 'fcm-dog) (find-class 't))))
     expected: |
       (T FCM-DOG T T)
       NIL
@@ -6739,6 +6753,7 @@ cases:
       #<STANDARD-CLASS :NAME INTEGER :DIRECT-SUPERCLASSES NIL :DIRECT-SLOTS NIL :EFFECTIVE-SLOTS NIL :FINALIZED-P T>
       (T NIL "rex" NIL :SIGNALED)
       (T FCM-DOG T T 42)
+      (T NIL T T T NIL T T T T)
   - name: defclass-metaclass-protocol
     source: |
       ;; The metaclass protocol (the postmodern dao-class shape): a defclass

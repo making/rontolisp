@@ -53,11 +53,13 @@ seeded `%obj-ref` index contract) covers postmodern's DAO shape. Mito's
    `compute-effective-slot-definition` (mito overrides
    `direct-slot-definition-class`/`effective-slot-definition-class`/
    `compute-effective-slot-definition` — 4+4+2 sites).
-5. **`typep`/`subtypep` on metaobjects** (= old `.todo/230`): `(typep x
-   'class)`, `(typep c 'table-class)` where x is a metaobject; `(subtypep
-   class-a class-b)` on metaobjects. The ancestor walk exists in ClosRegistry;
-   route the type predicates through it when arguments are metaobjects, on
-   all four backends (`%class-meta-table%` on compile paths).
+5. **`typep`/`subtypep` on metaobjects** (= old `.todo/230`): **DONE 2026-08-03.**
+   A class metaobject standing where a type specifier is expected designates its
+   own class, on all four backends, and `class` is now a seeded slot-less
+   superclass of `standard-class` so `(typep x 'class)` is an ordinary ancestor
+   test. Mechanics, the two lazy-seeding traps and the pinning tests:
+   `.kb/clos.md` (the MOP-boundary section) + ci-spec
+   `find-class-metaobject-substrate`.
 6. **Unknown class options as metaclass initargs** — `deftable` passes
    `(:conc-name ...)`, mito user code passes `(:table-name ...)`
    `(:primary-key ...)` etc.; Phase B already canonicalizes unknown options
@@ -68,8 +70,9 @@ seeded `%obj-ref` index contract) covers postmodern's DAO shape. Mito's
 
 Items 1+2+6 (definition-time hooks) are the load gate for mito-core's own
 sources; 3 (redefinition) is the gate for RE-evaluating a deftable and for
-mito-migration; 4+5 are mechanical. If needed, land 1/2/4/5/6 and spin 3 off
-into a follow-up todo rather than shipping a half-wired redefinition.
+mito-migration; 4 is mechanical (5 is already landed). If needed, land 1/2/4/6
+and spin 3 off into a follow-up todo rather than shipping a half-wired
+redefinition.
 
 ## Acceptance
 
@@ -78,7 +81,8 @@ into a follow-up todo rather than shipping a half-wired redefinition.
   munging + custom direct/effective slot classes with an extra slot +
   initfunction readback + redefinition of the same class name — identical
   behavior on all four backends (ci-spec.yaml case).
-- `typep`/`subtypep` metaobject cases pinned (the old `.todo/230` acceptance).
+- ~~`typep`/`subtypep` metaobject cases pinned (the old `.todo/230` acceptance).~~
+  Done 2026-08-03, see item 5.
 - `.kb/clos.md` updated in the same pass: the new protocol pieces, the index
   contract addition (slot 5 = initfunction), and the redefinition scope with
   its reason + re-evaluation trigger.

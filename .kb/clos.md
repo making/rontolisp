@@ -725,7 +725,42 @@ before and every existing artifact stays byte-identical.
   keep every non-MOP program byte-identical. `%class-slot-defs` accepts a class
   metaobject as designator too (reads its name slot; the generated
   `%class-slot-defs-runtime` gains that preamble only when `standard-class` is
-  registered). `#'class-of`'s wrapper is REFERENCE_GATED in
+  registered). `typep`/`subtypep` take a class METAOBJECT wherever a type
+  specifier is expected (todo-230, 2026-08-03): it designates its own class, so
+  `(subtypep (find-class 'sub) (find-class 'super))` answers exactly like the
+  name spelling and `(typep x (find-class 'c))` tests the value against it --
+  mito's `contains-class-or-subclasses` (src/core/util.lisp) rides both. ONE
+  normalization rule -- "an instance tagged as a `standard-class` descendant
+  continues as its slot-0 name" -- with three emission sites: `subtypep` folds
+  it in Java for the interpreter (`LispMacroExpander.classMetaobjectDesignator`,
+  applied AHEAD of the `t`/`nil` constant edges), and the emitted
+  `%typep-runtime` (the specifier) / `%subtypep-runtime` (BOTH arguments) carry
+  `LispMacroExpander.metaobjectNameNormalization`, the very
+  `(if (%obj-is v '<standard-class descendants>) (setq v (%obj-ref v 0)))`
+  preamble `%class-slot-defs-runtime` uses. A metaobject is always a RUNTIME
+  value, so the specifier is never literal and the runtime dispatch is always
+  the path taken; the literal fold is untouched.
+  `class` is a SEEDED slot-less class (`ClosRegistry.CLASS_NAME`), the
+  superclass of `standard-class` and hence of every user metaclass, so
+  `(typep x 'class)` is the metaobject predicate through the ordinary ancestor
+  machinery rather than a fourth special case. It is never instantiated and
+  contributes no slots, so the `%obj-ref` index contract below is unchanged.
+  Two traps this cost a round to learn, both from the LAZY seeding:
+  (a) the preamble's tag list is `descendantTags(STANDARD-CLASS)`, and an EMPTY
+  one means "no metaobject can exist" on the compile paths (final registry) but
+  NOT in the interpreter, where the `(find-class 'c)` in the test's own argument
+  seeds AFTER the expansion -- hence the `liveRegistry` flag, which falls back
+  to the constant `%class-STANDARD-CLASS` tag (the only tag possible while no
+  user metaclass is defined) instead of dropping the preamble;
+  (b) a type SPECIFIER naming a MOP base class is itself a seeding trigger
+  (`ClosRegistry.ensureMopClassesSeededFor`, called from the interpreter's
+  `typep`/`subtypep`) -- otherwise `(typep (find-class 'c) 'class)` as a
+  program's first MOP form expands to a constant nil before anything seeds.
+  The built-in `T` class's name slot holds the boolean `t`, not the symbol, so
+  the runtime `typep` universal-type arms match BOTH spellings
+  (`universalTypeMatchTest`, plus the instance branch's `(member tn '(t atom))`);
+  `subtypep`'s existing `(eq b t)` edge already did.
+  `#'class-of`'s wrapper is REFERENCE_GATED in
   `BuiltinFunctionWrappers` -- ungated it referenced `%find-class` in programs
   the injection scan said needed no runtime. `class-name` is core (a prelude
   defun over metaobject slot 0). The metaobject slot order (name,
@@ -864,6 +899,8 @@ before and every existing artifact stays byte-identical.
   `WasmLispCompilerIntegrationTest` `*FindClass*` + `*CloserMopShim*` +
   `classOf*`/`compileAndRunClassOf`/`classOfAndSlotAccessors` +
   `allocateInstance*`/`compileAllocateInstance*` +
+  `typepAndSubtypepAcceptClassMetaobjectsAsTypeSpecifiers` (all three suites,
+  `compile`-prefixed on the JVM) +
   `defclassMetaclass*`/`compileDefclassMetaclass*`/
   `defclassMetaclassRunsTheClassDefinitionProtocol` (WASM),
   `compileCoercesALambdaExpressionToAFunction` +
