@@ -249,6 +249,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::spellsAsExternal);
+		if (System.getProperty("rontolisp.debug.dump-program") != null) {
+			for (LispVal form : program) {
+				System.err.println(form.print());
+			}
+		}
 		// A generic function whose name is a compiler-lowered built-in (fast-io's close
 		// methods): rename its dispatcher, keep the built-in as the default method, and
 		// route the program's call sites through it. No-op without such a generic.
@@ -1029,17 +1034,30 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 			}
 			try {
+				if (defun.bodyExprs.isEmpty()) {
+					// (defun f ()) -- an empty body answers nil, per CL (dissect's
+					// no-op interface stubs are this shape).
+					JvmExprCompiler.compileExpr(LispNil.INSTANCE, funcCtx, this.className);
+				}
 				for (int i = 0; i < defun.bodyExprs.size(); i++) {
 					if (i > 0) {
 						funcCtx.emit(Opcode.POP);
 					}
 					JvmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx, this.className);
 				}
+				// Inside the try so an underflow here (a valueless body) still reports
+				// WHICH defun it was.
+				funcCtx.emit(Opcode.ARETURN);
 			}
-			catch (IllegalStateException ex) {
+			catch (UnsupportedOperationException ex) {
+				// Keep the type: callers (and tests) distinguish an unsupported form
+				// from an emitter invariant violation.
+				throw new UnsupportedOperationException("while compiling defun " + defun.name + ": " + ex.getMessage(),
+						ex);
+			}
+			catch (RuntimeException ex) {
 				throw new IllegalStateException("while compiling defun " + defun.name + ": " + ex.getMessage(), ex);
 			}
-			funcCtx.emit(Opcode.ARETURN);
 			funcCtxs.add(funcCtx);
 		}
 

@@ -1324,7 +1324,25 @@ public final class PackageResolver {
 			return source;
 		}
 		String home = pkg.imports().get(member);
-		return home == null ? source : home;
+		if (home != null) {
+			return home;
+		}
+		// A name the source package only INHERITS through its use list: CL's import
+		// works on any ACCESSIBLE symbol (find-symbol semantics), so an (:import-from
+		// #:mito.class #:table-column-references-column) -- where mito.class merely
+		// uses mito.class.column and does not re-export the name -- must reach the
+		// exporting package's symbol, not mint a mito.class-internal one.
+		if (!pkg.symbols().contains(member) && !PackageRegistry.isClSymbol(member)) {
+			for (String used : pkg.useList()) {
+				if (!LispNames.CL_PKG.equals(used)) {
+					LispPackage usedPkg = this.registry.get(used);
+					if (usedPkg != null && usedPkg.exports(member)) {
+						return trueHome(used, member);
+					}
+				}
+			}
+		}
+		return source;
 	}
 
 	private boolean currentUsesCl() {

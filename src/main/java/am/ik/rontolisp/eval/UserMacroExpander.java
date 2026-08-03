@@ -160,6 +160,17 @@ public final class UserMacroExpander {
 				macroEval.evalResolved(resolved);
 				continue;
 			}
+			// A pax:defsection AUTOEXPORTS its entries (PackageResolver consumes them on
+			// the resolve above), but the expansion below reduces the form to a defvar,
+			// so the COMPILERS' own resolver pass would never see the section again and
+			// its registry would miss the exports -- a later single-colon spelling
+			// (trivial-utf-8:string-to-utf-8-bytes, uuid's whole surface) then fails
+			// "not external". Emit the residue as a literal top-level (export '(...)),
+			// which that pass consumes in the section's place.
+			LispVal defsectionExport = paxDefsectionExportForm(form);
+			if (defsectionExport != null) {
+				result.add(defsectionExport);
+			}
 			LispVal expanded = expandAll(resolved, macroEval);
 			// A macro may expand into the (rontolisp:async (defun ...)) wrapper; rewrite
 			// it here so the definition scanners downstream (WitExportInliner, the
@@ -189,6 +200,15 @@ public final class UserMacroExpander {
 			else {
 				registerMacroTimeDefinitions(expanded, macroEval);
 			}
+			// A :metaclass defclass just ran in the macro-time evaluator, where a user
+			// initialize-instance :around may have INJECTED direct superclasses (mito's
+			// dao-table-class pushes dao-class + the auto-pk/timestamp mixins). The
+			// compile paths register the class statically from the FORM, so emit the
+			// widened spelling the driver-built metaobject actually holds -- layout,
+			// ancestors, dispatch and constructor then match the interpreter. The
+			// runtime driver call re-runs the :around, whose own contains-checks make
+			// the injection idempotent over the widened list.
+			expanded = widenMetaclassDefclasses(expanded, macroEval);
 			if (systemDepth == 0 && isPureConfigSetf(expanded, macroEval)) {
 				// A top-level (setf (PLACE ...) V) whose (defun (setf PLACE) ...) writer
 				// is
@@ -432,6 +452,68 @@ public final class UserMacroExpander {
 		return isOperator(form, LispNames.DEFUN) || isOperator(form, LispNames.DEFCLASS)
 				|| isOperator(form, LispNames.DEFGENERIC) || isOperator(form, LispNames.DEFMETHOD)
 				|| isOperator(form, LispNames.DEFINE_CONDITION) || isOperator(form, LispNames.DEFSTRUCT);
+	}
+
+	/**
+	 * The {@code (export '(entries...))} residue of a literal top-level
+	 * {@code (pax:defsection NAME ...)} -- every body list whose head is a non-keyword
+	 * symbol names an entry, the same rule
+	 * {@code PackageResolver.consumeDefsectionExports} applies -- or null when the form
+	 * is not a pax defsection (the qualifier is required, like the resolver's own
+	 * {@code isMglPaxOperator} test) or has no entries. The names keep their source
+	 * spelling; the consuming resolver member-strips them itself.
+	 */
+	@org.jspecify.annotations.Nullable
+	private static LispVal paxDefsectionExportForm(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !"DEFSECTION".equals(qn.member().toUpperCase(java.util.Locale.ROOT))) {
+			return null;
+		}
+		String pkg = qn.pkg().toUpperCase(java.util.Locale.ROOT);
+		if (!"MGL-PAX".equals(pkg) && !"PAX".equals(pkg)) {
+			return null;
+		}
+		List<LispVal> entries = new ArrayList<>();
+		List<LispVal> parts = cons.toList();
+		for (LispVal part : parts.subList(Math.min(2, parts.size()), parts.size())) {
+			if (part instanceof LispCons entry && entry.car() instanceof LispSymbol entrySym && !entrySym.isKeyword()) {
+				entries.add(entrySym);
+			}
+		}
+		if (entries.isEmpty()) {
+			return null;
+		}
+		return properList(List.of(new LispSymbol(LispNames.EXPORT),
+				properList(List.of(new LispSymbol(LispNames.QUOTE), properList(entries)))));
+	}
+
+	/**
+	 * Rewrites every top-level {@code :metaclass} defclass in the form (a bare one, or
+	 * members of a top-level {@code progn} a macro expanded into) onto the
+	 * direct-superclass list its driver-built metaobject holds in the macro-time
+	 * evaluator ({@link LispEvaluator#widenedMetaclassDefclassOrNull}); forms without an
+	 * injection come back identical.
+	 */
+	private static LispVal widenMetaclassDefclasses(LispVal form, LispEvaluator macroEval) {
+		if (isOperator(form, LispNames.DEFCLASS) && form instanceof LispCons defclass) {
+			LispCons widened = macroEval.widenedMetaclassDefclassOrNull(defclass);
+			return widened != null ? widened : form;
+		}
+		if (isOperator(form, LispNames.PROGN) && form instanceof LispCons progn && progn.isProperList()) {
+			List<LispVal> parts = progn.toList();
+			List<LispVal> out = new ArrayList<>(parts.size());
+			boolean changed = false;
+			for (LispVal member : parts) {
+				LispVal widened = widenMetaclassDefclasses(member, macroEval);
+				changed = changed || widened != member;
+				out.add(widened);
+			}
+			return changed ? properList(out) : form;
+		}
+		return form;
 	}
 
 	/**

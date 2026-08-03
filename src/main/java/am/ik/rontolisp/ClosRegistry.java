@@ -265,6 +265,19 @@ public final class ClosRegistry {
 			"STRING", "CHARACTER", "KEYWORD", "SYMBOL", "HASH-TABLE", "FUNCTION", "CONS");
 
 	/**
+	 * Names {@code find-class} resolves to a memoized slot-less metaobject but that are
+	 * deliberately NOT in {@link #BUILTIN_CLASS_NAMES}: {@code class-of} never answers
+	 * them, so the designator view stays untouched, and the typep/subtypep special-casing
+	 * of {@code standard-object} ("every CLOS instance") keeps winning over any registry
+	 * ancestor test. {@code standard-object} exists as a metaobject because AMOP walks
+	 * eq-compare superclass metaobjects against {@code (find-class 'standard-object)}
+	 * (mito's {@code map-all-superclasses}), and the metaclass protocol defaults a
+	 * driver-built class's empty {@code :direct-superclasses} to it
+	 * ({@code mop-protocol.lisp}), per AMOP.
+	 */
+	public static final List<String> FIND_CLASS_ONLY_CLASS_NAMES = List.of("STANDARD-OBJECT");
+
+	/**
 	 * Registers a built-in class (a condition of the seeded hierarchy, or one of the MOP
 	 * base classes) with nil-defaulted slots: parent slots first, then the given ones,
 	 * each accepting its {@code :slot-name} initarg.
@@ -1338,7 +1351,7 @@ public final class ClosRegistry {
 	 * @return the metaobject, or null when the name is not a built-in class
 	 */
 	@Nullable public LispInstance builtinClassMetaobject(String name) {
-		if (!BUILTIN_CLASS_NAMES.contains(name)) {
+		if (!BUILTIN_CLASS_NAMES.contains(name) && !FIND_CLASS_ONLY_CLASS_NAMES.contains(name)) {
 			return null;
 		}
 		ensureMopClassesSeeded();

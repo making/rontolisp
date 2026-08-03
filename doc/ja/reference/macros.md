@@ -77,6 +77,7 @@
 | `typep` | `(typep x '(unsigned-byte 8))` | `typecase` の指定子集合に対する型判定。指定子はリテラル(クオートされた)型に限られます |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | スロットが値を保持しているか: 未知のスロット、`:initform` なしで書かれ値も与えられていないスロット、`slot-makunbound` で空にしたスロットは `nil` |
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | スロットを未束縛にしてインスタンスを返します。以後の読み取りは `unbound-slot` をシグナルします |
+| `slot-exists-p` | `(slot-exists-p obj 'slot)` | インスタンスのクラスがそのスロットを宣言しているか(束縛の有無は無関係)。インスタンスでない値には `nil` |
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | 本体出力を `#<[type ]...>` で囲んで書き、nil を返します(`:identity` は受理のみでアドレスは出力しません) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | ライト版: イテレータ名を「もうシンボルはない」と常に返すローカル関数に束縛(intern テーブルなし) |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | パッケージのエクスポート済みシンボルを反復 (インタプリタ専用。コンパイル済みバックエンドはパッケージレジストリを持たない) |

@@ -6,12 +6,18 @@
 ;; every other program -- closer-mop users included -- stays byte-identical.
 ;;
 ;; Written in canonical (pre-resolved) shape like closer-mop.lisp, and
-;; deliberately SELF-CONTAINED: metaobject slots are read/written through the
-;; seeded %obj-ref index contract (standard-class: 0 name, 1 direct-superclasses,
-;; 2 direct-slots, 3 effective-slots, 4 finalized-p; slot definitions: 0 name,
-;; 1 initargs, 2 initform, 3 type, 4 readers, 5 initfunction -- see
-;; ClosRegistry.ensureMopClassesSeeded), never through the closer-mop shim
-;; defuns, so the protocol works whether or not the shim library is loaded.
+;; deliberately SELF-CONTAINED: metaobject slots are read/written BY NAME
+;; through slot-value (a CL builtin, never the closer-mop shim defuns, so the
+;; protocol works whether or not the shim library is loaded). By name and NOT
+;; by %obj-ref index, because a user slot-definition class may inherit the
+;; seeded base through MULTIPLE inheritance with its own mixin first (mito's
+;; table-column-class is (column-slot-definitions
+;; c2mop:standard-direct-slot-definition)), which puts the mixin's slots ahead
+;; of the base's in the layout -- no fixed index is valid across subclasses,
+;; only the slot NAMES (standard-class: name, direct-superclasses,
+;; direct-slots, effective-slots, finalized-p; slot definitions: name,
+;; initargs, initform, type, readers, initfunction -- see
+;; ClosRegistry.ensureMopClassesSeeded) are a contract.
 ;;
 ;; The class arguments of %mop-make-instance are DESIGNATORS (a metaobject or a
 ;; plain name symbol): the default direct/effective-slot-definition-class
@@ -63,10 +69,19 @@
 (defun %mop-resolve-class-list (designators)
   ;; A :direct-superclasses element may be a name or a metaobject (a user
   ;; :around pushes (find-class 'dao-class) instances into the initargs);
-  ;; storage always holds metaobjects.
+  ;; storage always holds metaobjects. DEDUPED by resolved identity: the
+  ;; compile paths emit the defclass with the superclasses the driver-built
+  ;; metaobject held (the injected-superclass reconciliation, .kb/clos.md),
+  ;; and a user :around that tests membership with the METAOBJECT against the
+  ;; NAME list re-injects its class -- the first definition on the
+  ;; interpreter never sees the widened list, so without the dedupe the two
+  ;; paths diverge (and CL rejects duplicate direct superclasses anyway).
   (let ((out nil))
     (dolist (c designators)
-      (setq out (cons (if (symbolp c) (find-class c) c) out)))
+      (let ((resolved (if (symbolp c) (find-class c) c)))
+        (if (member resolved out)
+            nil
+            (setq out (cons resolved out)))))
     (reverse out)))
 
 (defmethod closer-mop:validate-superclass (class superclass)
@@ -94,7 +109,8 @@
   (%mop-fill-slots class initargs slot-names)
   (let ((supers-tail (%mop-initarg-tail initargs ':direct-superclasses)))
     (if supers-tail
-        (%obj-set class 1 (%mop-resolve-class-list (car supers-tail)))
+        (setf (slot-value class 'direct-superclasses)
+              (%mop-resolve-class-list (car supers-tail)))
         nil))
   (let ((slots-tail (%mop-initarg-tail initargs ':direct-slots)))
     (if slots-tail
@@ -105,7 +121,7 @@
                                (apply #'closer-mop:direct-slot-definition-class class spec)
                                spec)
                         direct-slots)))
-          (%obj-set class 2 (reverse direct-slots)))
+          (setf (slot-value class 'direct-slots) (reverse direct-slots)))
         nil))
   class)
 
@@ -132,11 +148,11 @@
   (let ((dsd (car direct-slot-definitions)))
     (%mop-make-instance (closer-mop:effective-slot-definition-class class :name name)
                         :name name
-                        :initargs (%obj-ref dsd 1)
-                        :initform (%obj-ref dsd 2)
-                        :type (%obj-ref dsd 3)
-                        :readers (%obj-ref dsd 4)
-                        :initfunction (%obj-ref dsd 5))))
+                        :initargs (slot-value dsd 'initargs)
+                        :initform (slot-value dsd 'initform)
+                        :type (slot-value dsd 'type)
+                        :readers (slot-value dsd 'readers)
+                        :initfunction (slot-value dsd 'initfunction))))
 
 (defmethod closer-mop:finalize-inheritance (class)
   ;; Effective slots in static-layout order: the superclasses' effective slots
@@ -146,37 +162,37 @@
   ;; otherwise -- a lite divergence: the direct-definition list handed to
   ;; compute-effective-slot-definition is the shadowing definition alone),
   ;; then the own slots that introduce new names.
-  (let* ((supers (%obj-ref class 1))
-         (direct-slots (%obj-ref class 2))
+  (let* ((supers (slot-value class 'direct-superclasses))
+         (direct-slots (slot-value class 'direct-slots))
          (inherited nil)
          (effective nil))
     (dolist (super supers)
-      (dolist (eslot (%obj-ref super 3))
-        (if (%mop-find-slot-definition (%obj-ref eslot 0) inherited)
+      (dolist (eslot (slot-value super 'effective-slots))
+        (if (%mop-find-slot-definition (slot-value eslot 'name) inherited)
             nil
             (setq inherited (cons eslot inherited)))))
     (setq inherited (reverse inherited))
     (dolist (eslot inherited)
-      (let ((own (%mop-find-slot-definition (%obj-ref eslot 0) direct-slots)))
+      (let ((own (%mop-find-slot-definition (slot-value eslot 'name) direct-slots)))
         (setq effective
               (cons (if own
-                        (closer-mop:compute-effective-slot-definition class (%obj-ref eslot 0) (cons own nil))
+                        (closer-mop:compute-effective-slot-definition class (slot-value eslot 'name) (cons own nil))
                         eslot)
                     effective))))
     (dolist (dsd direct-slots)
-      (if (%mop-find-slot-definition (%obj-ref dsd 0) inherited)
+      (if (%mop-find-slot-definition (slot-value dsd 'name) inherited)
           nil
           (setq effective
-                (cons (closer-mop:compute-effective-slot-definition class (%obj-ref dsd 0) (cons dsd nil))
+                (cons (closer-mop:compute-effective-slot-definition class (slot-value dsd 'name) (cons dsd nil))
                       effective))))
-    (%obj-set class 3 (reverse effective))
-    (%obj-set class 4 t)
+    (setf (slot-value class 'effective-slots) (reverse effective))
+    (setf (slot-value class 'finalized-p) t)
     class))
 
 (defun %mop-find-slot-definition (name slot-definitions)
   (let ((hit nil))
     (dolist (s slot-definitions)
-      (if (eq (%obj-ref s 0) name)
+      (if (eq (slot-value s 'name) name)
           (setq hit s)
           nil))
     hit))
@@ -196,11 +212,19 @@
           (closer-mop:finalize-inheritance class)
           class)
         (let ((new-class (apply #'%mop-make-instance metaclass ':name name initargs)))
-          (dolist (super (%obj-ref new-class 1))
+          ;; AMOP default: a class with no direct superclasses gets
+          ;; (standard-object) -- the walk shape libraries rely on (mito's
+          ;; map-all-superclasses flushes its accumulator when the superclass
+          ;; chain reaches (find-class 'standard-object)).
+          (if (slot-value new-class 'direct-superclasses)
+              nil
+              (setf (slot-value new-class 'direct-superclasses)
+                    (cons (find-class 'standard-object) nil)))
+          (dolist (super (slot-value new-class 'direct-superclasses))
             (if (closer-mop:validate-superclass new-class super)
                 nil
                 (error "The class ~A cannot be a superclass of the ~A class ~A"
-                       (%obj-ref super 0) metaclass name)))
+                       (slot-value super 'name) metaclass name)))
           ;; Register BEFORE finalizing, like CL's ensure-class: find-class must
           ;; answer THIS metaobject inside finalize-inheritance's user :after
           ;; hooks (the captured build-dao-methods method definitions read the

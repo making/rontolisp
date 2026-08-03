@@ -333,6 +333,16 @@ public final class LispPreludeLibrary {
 				(defun constantly (%ct-value)
 				  (lambda (&rest %ct-args) %ct-value))
 				""");
+		// package-name: a "package" is its canonical upcased name as a keyword
+		// (.kb/symbol-runtime-api.md), so the name string is that keyword's string;
+		// resolving through find-package first honors designators and nicknames, and
+		// an unknown designator signals like CL's package-error. dbi's
+		// connection-driver-type is the driving consumer.
+		SOURCES.put(LispNames.PACKAGE_NAME, """
+				(defun package-name (%pn-pkg)
+				  (string (or (find-package %pn-pkg)
+				              (error "PACKAGE-NAME: no package named ~A" %pn-pkg))))
+				""");
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
 				  (or (probe-file %tn-path)

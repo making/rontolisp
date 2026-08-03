@@ -2126,6 +2126,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 
+			if (defun.bodyExprs.isEmpty()) {
+				// (defun f ()) -- an empty body answers nil, per CL (dissect's no-op
+				// interface stubs are this shape).
+				WasmExprCompiler.compileExpr(LispNil.INSTANCE, funcCtx);
+			}
 			for (int i = 0; i < defun.bodyExprs.size(); i++) {
 				// Non-tail statements compile for effect: a docstring materializes
 				// nothing (it used to _str_build a fresh string per call), and a

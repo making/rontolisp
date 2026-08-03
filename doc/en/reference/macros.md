@@ -78,6 +78,7 @@ description and a runnable example you can evaluate in your browser.
 | `typep` | `(typep x '(unsigned-byte 8))` | Type test over the `typecase` specifier set; the specifier must be a literal (quoted) type |
 | `slot-boundp` | `(slot-boundp obj 'slot)` | Whether the slot holds a value: `nil` for an unknown slot, one written with no `:initform` and never supplied, or one `slot-makunbound` emptied |
 | `slot-makunbound` | `(slot-makunbound obj 'slot)` | Makes the slot unbound and returns the instance; a later read signals `unbound-slot` |
+| `slot-exists-p` | `(slot-exists-p obj 'slot)` | Whether the instance's class declares the slot, regardless of boundness; `nil` for a non-instance |
 | `print-unreadable-object` | `(print-unreadable-object (obj stream :type t) body...)` | Writes `#<[type ]...>` around the body's output; returns nil (`:identity` accepted, prints no address) |
 | `with-package-iterator` | `(with-package-iterator (next pkgs :external) body...)` | Lite: binds the iterator name to a local FUNCTION always reporting no more symbols (no intern table) |
 | `do-external-symbols` | `(do-external-symbols (s :rontolisp) (print s))` | Iterate a package's exported symbols (interpreter only: the compiled backends carry no package registry) |

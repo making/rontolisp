@@ -812,6 +812,8 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx);
 				case LispNames.SLOT_BOUNDP ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx);
+				case LispNames.SLOT_EXISTS_P ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotExistsP(cons, ctx.closRegistry), ctx);
 				case LispNames.SLOT_MAKUNBOUND ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx);
 				case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> WasmExprCompiler
@@ -1268,7 +1270,18 @@ final class WasmExprCompiler {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandReduction(cons), ctx);
 					}
 				}
-				case LispNames.RANDOM -> WasmRandomCompiler.compile(cons, ctx);
+				case LispNames.RANDOM -> {
+					if (cons.toList().size() == 3) {
+						// The optional random-state argument: normalized away (state
+						// evaluated for effect, backend entropy draws).
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandRandomWithState(cons), ctx);
+					}
+					else {
+						WasmRandomCompiler.compile(cons, ctx);
+					}
+				}
+				case LispNames.MAKE_RANDOM_STATE ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
 				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
 					WasmTimeCompiler.compile(cons, ctx, sym.name());
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);

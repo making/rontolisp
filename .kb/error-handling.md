@@ -500,7 +500,17 @@ class (`%ERROR-RT-n` — the same `expandTypedSignal` a literal call would get:
 instance construction + :report rendering + catchable class tag, over `getf`
 reads of the runtime initarg list with each slot's `:initform` as the getf
 default) and the `%error-runtime` dispatch defun matching the datum against
-both the qualified and (when unambiguous) plain spelling. A NON-condition
+both the qualified and (when unambiguous) plain spelling. Since todo-247 the
+dispatch is CHAINED (`%error-runtime` → `%ER-1` → ..., the
+`chainedDispatchDefuns` shape, ~600 cons nodes per segment): one cond lowers
+to nested `if`s on the JVM, so past ~140 condition classes the outermost arm's
+else-branch overflowed the signed-16-bit branch encoding (todo-211; mito's
+tree crossed the threshold). One shared shape on all four backends — only the
+JVM has the hard limit, but a per-backend split would be a divergence with no
+reason behind it. Pinned by
+`JvmLispCompilerTest#compileRuntimeErrorDispatchScalesPastTheBranchLimit`
+(200 classes, computed dispatch at the END of the chain, RUN not just
+compiled). A NON-condition
 class name (an invalid CL datum) and any non-symbol fall to the
 `expandObjectSignal` arm; note the interpreter's inline dispatch still
 constructs ANY class — a divergence only for undefined-behavior programs.

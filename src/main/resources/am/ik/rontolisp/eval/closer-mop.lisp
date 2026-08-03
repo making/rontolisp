@@ -6,8 +6,13 @@
 ;; serializers handed a %class-designator TAG symbol consume), and the real
 ;; standard-class / standard-effective-slot-definition instances find-class
 ;; and class-of answer with (seeded layouts, see
-;; ClosRegistry.ensureMopClassesSeeded; the %obj-ref indexes below are that
-;; seeding's documented order contract).
+;; ClosRegistry.ensureMopClassesSeeded).
+;; Metaobject slots are read BY NAME (slot-value), not by %obj-ref index: a
+;; user slot-definition class may inherit the seeded base through MULTIPLE
+;; inheritance with its own mixin first (mito's table-column-class is
+;; (column-slot-definitions c2mop:standard-direct-slot-definition)), which
+;; puts the mixin's slots ahead of the base's in the layout, so no fixed
+;; index is valid across subclasses -- only the slot NAMES are a contract.
 ;; Written in canonical (pre-resolved) shape like usocket.lisp; the package and
 ;; its nickname (c2mop) are seeded in PackageRegistry, as is the flat
 ;; closer-common-lisp (nickname c2cl) re-export package over cl + this one.
@@ -19,17 +24,17 @@
   class)
 
 (defun closer-mop:class-name (class)
-  (%obj-ref class 0))
+  (slot-value class 'name))
 
 (defun closer-mop:class-direct-superclasses (class)
-  (%obj-ref class 1))
+  (slot-value class 'direct-superclasses))
 
 (defun closer-mop:class-finalized-p (class)
-  (%obj-ref class 4))
+  (slot-value class 'finalized-p))
 
 (defun closer-mop:class-slots (class)
   (if (closer-mop:classp class)
-      (%obj-ref class 3)
+      (slot-value class 'effective-slots)
       (%class-slot-defs class)))
 
 (defun closer-mop:compute-slots (class)
@@ -47,39 +52,38 @@
 
 (defun closer-mop:slot-definition-name (slot)
   (if (%obj-p slot)
-      (%obj-ref slot 0)
+      (slot-value slot 'name)
       (car slot)))
 
 (defun closer-mop:slot-definition-initargs (slot)
   (if (%obj-p slot)
-      (%obj-ref slot 1)
+      (slot-value slot 'initargs)
       nil))
 
 (defun closer-mop:slot-definition-type (slot)
   (if (%obj-p slot)
-      (%obj-ref slot 3)
+      (slot-value slot 'type)
       (car (cdr slot))))
 
 (defun closer-mop:slot-definition-readers (slot)
   (if (%obj-p slot)
-      (%obj-ref slot 4)
+      (slot-value slot 'readers)
       nil))
 
 (defun closer-mop:slot-definition-initfunction (slot)
-  ;; Index 5 of the slot-definition contract (appended 2026-08-03): a live
-  ;; (lambda () initform) thunk on DRIVER-built definitions (a :metaclass
-  ;; class's canonicalized specs carry one); nil on materialized plain views
-  ;; and on slots with no :initform -- mito's migration diffing branches on
-  ;; exactly that truthiness.
+  ;; The initfunction slot (appended 2026-08-03): a live (lambda () initform)
+  ;; thunk on DRIVER-built definitions (a :metaclass class's canonicalized
+  ;; specs carry one); nil on materialized plain views and on slots with no
+  ;; :initform -- mito's migration diffing branches on exactly that truthiness.
   (if (%obj-p slot)
-      (%obj-ref slot 5)
+      (slot-value slot 'initfunction)
       nil))
 
 (defun closer-mop:class-direct-slots (class)
   ;; Direct-slot-definition metaobjects; nil on a materialized plain view (the
   ;; static registry keeps direct specs, but only the metaclass driver builds
   ;; direct-slot metaobjects).
-  (%obj-ref class 2))
+  (slot-value class 'direct-slots))
 
 (defun closer-mop:class-direct-subclasses (class)
   (%class-direct-subclasses class))

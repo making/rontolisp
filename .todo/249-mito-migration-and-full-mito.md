@@ -71,3 +71,24 @@ there, don't do it twice.
   (esrap round trip through real output).
 - lack-middleware-mito smoke inside a clack app (one request that queries
   through the middleware-provided connection).
+
+## Findings handed over from `.todo/247` (2026-08-03)
+
+- **Bare relational `:references` is broken**: `(deftable u3 () ((u1 :references u1)))`
+  dies IDENTICALLY on every backend inside `create-table-sxql` — the column's
+  `col-type` slot is unbound (`table-column-not-null-p` reads
+  `%table-column-type` unguarded), i.e. `expand-relational-keys`' rewrite of a
+  references column into the derived `<name>-id` col-type did not take effect.
+  The col-type-carrying form `(u1-id :col-type :bigint :references (u1 id))`
+  works and renders the right DDL, and is what the todo-247 acceptance
+  ("relation-less `:references` column type accepted") pinned. Debug from
+  `mito.class::expand-relational-keys` / `add-referencing-slots` (the rplacd
+  ghost-marker path, `.kb/clos.md` todo-246 "fresh cells per evaluation").
+- **`(:auto-pk :uuid)` untested end to end.** The uuid library loads and
+  2-arg `random` + `make-random-state` landed (todo-247), so v1/v4 generation
+  should run; nothing exercised a uuid-pk table against the DB yet.
+- The DDL acceptance pins (serial auto-pk + record-timestamps, explicit
+  `:primary-key`, references-with-col-type) ran as MANUAL probes
+  (`create-table-sxql` with an explicit `:postgres` driver-type — no DB
+  needed; `table-definition` itself reads the live connection's driver). Fold
+  them into the automated `.todo/250` E2E as unit-style legs.

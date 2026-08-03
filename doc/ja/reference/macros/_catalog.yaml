@@ -94,6 +94,7 @@ categories:
       - { slug: typep, name: typep }
       - { slug: slot-boundp, name: slot-boundp }
       - { slug: slot-makunbound, name: slot-makunbound }
+      - { slug: slot-exists-p, name: slot-exists-p }
       - { slug: print-unreadable-object, name: "print-unreadable-object" }
       - { slug: with-package-iterator, name: "with-package-iterator" }
       - { slug: do-external-symbols, name: "do-external-symbols" }

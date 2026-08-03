@@ -33,7 +33,17 @@ defuns/lambdas — where every one of these had crossed or neared a limit):
 
 - **Registry-proportional expansions** (computed `typep` 37 KB/site, runtime
   `subtypep` 59 KB, computed-`error` dispatch 90 KB) became shared injected
-  defuns over quoted DATA tables; mechanics in [clos.md](clos.md).
+  defuns over quoted DATA tables; mechanics in [clos.md](clos.md). The shared
+  defun must itself stay bounded: `%error-runtime` was one cond over every
+  condition class, and a cond lowers to NESTED ifs, so the outermost arm's
+  else-branch spans every remaining arm and hit the signed-16-bit BRANCH limit
+  (~195 bytes/class, overflow at 143 classes -- long before the 64 KB code
+  limit the segmentation budgets were sized for). Chained since todo-247
+  (`%error-runtime` → `%ER-1` → ..., the generated-Lisp `chainedDispatchDefuns`
+  shape, all four backends; todo-211's measurement). The AMBIGUOUS literal
+  `slot-value` dispatch had the same registry-proportional shape inlined PER
+  SITE and now outlines onto the shared `%slot-value(-set)-runtime` defuns
+  ([clos.md](clos.md), the mito-core batch).
 - **`_invoke_<arity>`** (the indirect-call dispatcher, one `if` case per
   callable of that arity — variadics match every arity above their required
   count; 66 KB at arity 9): `JvmRuntimeBuilder.buildDispatchMethods` splits the

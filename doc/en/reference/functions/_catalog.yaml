@@ -49,6 +49,7 @@ categories:
       - { slug: asin-acos-atan, name: "asin acos atan" }
       - { slug: sinh-cosh-tanh, name: "sinh cosh tanh" }
       - { slug: random, name: "random" }
+      - { slug: make-random-state, name: "make-random-state" }
       - { slug: scale-float, name: "scale-float" }
       - { slug: decode-float, name: "decode-float" }
   - title: "Bitwise Operations"
@@ -316,6 +317,7 @@ categories:
       - { slug: find-package, name: "find-package" }
       - { slug: symbol-name, name: "symbol-name" }
       - { slug: symbol-package, name: "symbol-package" }
+      - { slug: package-name, name: "package-name" }
       - { slug: symbol-value, name: "symbol-value" }
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }

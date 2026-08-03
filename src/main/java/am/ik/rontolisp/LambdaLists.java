@@ -102,6 +102,13 @@ public final class LambdaLists {
 
 	private static Expanded expand(LispVal paramList, List<LispVal> body, boolean wrapReturnFrom,
 			@Nullable LispVal blockNameSym) {
+		if (body.isEmpty()) {
+			// An empty function body answers nil, per CL -- dissect's
+			// (defun restarts (&optional condition)) interface stubs; without the
+			// explicit nil the desugared (let* (...)) prologue has no value form and
+			// the compilers' emitters underflow.
+			body = List.of(LispNil.INSTANCE);
+		}
 		if (wrapReturnFrom) {
 			body = wrapReturnFrom(blockNameSym, body);
 		}

@@ -263,6 +263,88 @@ initialize-instance :around initarg munging on the metaclass AND on a
 slot-definition class + custom slot classes with an extra col-type slot +
 initfunction readback + same-name redefinition.
 
+## The mito-core integration batch (todo-247, 2026-08-03)
+
+What `(ql:quickload "mito-core")` + live DAO CRUD forced on top of todo-246,
+each a general mechanism:
+
+- **Metaobject slots are read/written BY NAME, never by `%obj-ref` index.**
+  `mop-protocol.lisp` and the closer-mop shim used to bake the seeded index
+  contract (slot definitions: 0 name, 1 initargs, ...). That contract is only
+  valid for the seeded base classes themselves: a user slot-definition class
+  may inherit the base through MULTIPLE inheritance with its own mixin FIRST
+  (mito's `table-column-class` is `(column-slot-definitions
+  c2mop:standard-direct-slot-definition)`), which puts the mixin's slots ahead
+  of the base's in the layout -- index 1 read DEFLATE where INITARGS was meant,
+  so every effective slot came out shifted. Both files now spell every access
+  `(slot-value x 'name)` / `(setf (slot-value x 'name) v)`; only the slot NAMES
+  are a contract. The `%obj-ref` index contract remains valid for
+  Java/generated code that CONSTRUCTS instances of the seeded layouts
+  (`%find-class-materialize`, `newSeededInstance`) -- construction picks the
+  layout, so its indexes are its own.
+- **An AMBIGUOUS literal slot name outlines onto the shared runtime dispatch.**
+  `expandAmbiguousSlotRead`/`expandAmbiguousSlotSet` used to inline a
+  per-layout tag dispatch AT EVERY SITE -- registry-proportional, and the
+  by-name protocol above put six such reads into `finalize-inheritance`, which
+  crossed the JVM's 64 KB method limit at mito scale (~250 layouts declaring
+  NAME). They now emit `(%slot-value-runtime obj 'name)` /
+  `(%slot-value-set-runtime obj 'name v)` -- the same chunked defuns a runtime
+  slot name uses; `needsRuntimeSlotNameDispatch`/`needsRuntimeSlotSetDispatch`
+  take the registry and gate on ambiguous literal names too. The INTERPRETER
+  defines both `%slot-value(-set)-runtime` as registry-backed builtins
+  (`LispEvaluator`), because the shared setf expansion emits the calls there as
+  well.
+- **Injected direct superclasses reconcile the STATIC registration.** A user
+  `initialize-instance :around` munges `:direct-superclasses` at ensure-class
+  time (mito's dao-table-class pushes dao-class + the auto-pk/timestamp
+  mixins), which the static layout/ancestors/dispatch/constructor never saw --
+  a `deftable`'d instance was missing the mixin slots and no `insert-dao`
+  method applied. The driver-built metaobject is the truth, per AMOP:
+  `evalDefclass` (interpreter) re-registers the class from
+  `LispMacroExpander.widenDefclassToMetaobjectSupers` (the metaobject's
+  superclass list minus the `standard-object` default, plus per-slot
+  `:initarg`s a slot-definition :around pushed -- ONLY onto specs that declare
+  none, since the static model keeps one initarg per slot) without re-running
+  the driver; `UserMacroExpander.widenMetaclassDefclasses` (compile paths)
+  rewrites the EMITTED defclass form the same way after the macro-time
+  evaluator ran it, so the static tables match the interpreter. The runtime
+  driver re-runs the :around, whose own contains-checks make the injection
+  idempotent over the widened list.
+- **A driver-built class with no direct superclasses defaults to
+  `(standard-object)`**, per AMOP (`mop-protocol.lisp` e-c-u-c) -- the walk
+  shape mito's `map-all-superclasses` relies on (it flushes its accumulator
+  when the chain reaches `(find-class 'standard-object)`). `standard-object`
+  resolves through find-class only (`ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES`
+  + the generated `%find-class` fallback list): `class-of` never answers it and
+  the typep/subtypep special-casing keeps winning. `STANDARD-OBJECT` and
+  `STANDARD-CLASS` joined `PackageRegistry.CL_TYPES` -- the compiled
+  `%find-class` matches SPELLINGS, so a package-local
+  `MITO...::STANDARD-CLASS` resolution missed the seeded entry (the
+  interpreter's registry normalizes spellings and hid the gap).
+- **The synthesized `shared-initialize` system default FILLS.** It used to
+  return the instance unchanged (correct only for the constructor-fills-first
+  make-instance path); mito's `make-dao-instance` is `allocate-instance` +
+  `(shared-initialize obj nil initargs)`, where the default IS the fill. It now
+  calls `%mop-fill-slots` (slot-names nil = supplied declared initargs only,
+  per CL), whose generated dispatch covers EVERY registered class (not only the
+  metaobject-ancestored ones) and is injected whenever the expanded output
+  references it -- programs with an init-protocol method and no metaclass
+  included. The interpreter builtin answers an UNREGISTERED instance untouched
+  instead of throwing, matching the generated dispatch's fall-through.
+- **`slot-exists-p`** (all four backends): true when the instance's layout
+  declares the slot, regardless of boundness -- mito probes
+  `(slot-exists-p x 'col-type)` before `slot-boundp`. Interpreter =
+  `instanceSlotRef != null`; compile paths = a `%obj-is` membership test over
+  the declaring layouts for a literal name, the shared
+  `%slot-exists-p-runtime` dispatch (own gate) for a runtime name.
+
+Pinned by `slotExistsPAnswersDeclaredSlotsRegardlessOfBoundness`
+(`LispEvaluatorTest` + the JVM/WASM twins) and ci-spec
+`mito-core-enablement-language-group`; the end-to-end `(ql:quickload
+'("mito-core" "dbd-postgres"))` + DAO CRUD run is manual on the interpreter,
+the JVM and the WASM component (byte-identical; the automated E2E is
+`.todo/250`).
+
 ## Setf methods -- `(defmethod (setf name) ...)` / `(defgeneric (setf name) ...)` (todo-232, 2026-08-02)
 
 `normalizeSetfMethodForm` rewrites the definition onto the `%setf-` writer-generic

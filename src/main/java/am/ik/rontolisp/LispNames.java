@@ -93,6 +93,14 @@ public final class LispNames {
 	public static final String RANDOM = "RANDOM";
 
 	/**
+	 * The {@code make-random-state} standard function, lowered to a nil-returning no-op:
+	 * rontolisp has no random-state objects ({@link #RANDOM} ignores its optional state
+	 * argument and draws from the backend's own entropy), and nil is what a caller stores
+	 * and later passes back (uuid's {@code *uuid-random-state*} seeding).
+	 */
+	public static final String MAKE_RANDOM_STATE = "MAKE-RANDOM-STATE";
+
+	/**
 	 * The internal {@code %random-byte} primitive: one cryptographically strong random
 	 * byte (0-255). Unlike {@code random} (a plain PRNG on the interpreter/JVM) this
 	 * draws from the platform's cryptographic entropy source on every backend --
@@ -447,6 +455,16 @@ public final class LispNames {
 	 * uninterned ({@code #:}) ones.
 	 */
 	public static final String SYMBOL_PACKAGE = "SYMBOL-PACKAGE";
+
+	/**
+	 * The {@code package-name} standard function: the name STRING of a package
+	 * designator, resolved through {@link #FIND_PACKAGE} (a "package" is its canonical
+	 * upcased name as a keyword, so the name is that keyword's string); an unknown
+	 * designator signals. A {@code LispPreludeLibrary} entry on every backend -- dbi's
+	 * {@code connection-driver-type} reads
+	 * {@code (package-name (symbol-package (type-of conn)))}.
+	 */
+	public static final String PACKAGE_NAME = "PACKAGE-NAME";
 
 	/**
 	 * The {@code copy-readtable} standard function, lowered to a nil-returning no-op:
@@ -4880,6 +4898,20 @@ public final class LispNames {
 	 * so {@code slot-boundp} goes nil and a read signals {@code unbound-slot}.
 	 */
 	public static final String SLOT_MAKUNBOUND = "SLOT-MAKUNBOUND";
+
+	/**
+	 * The {@code slot-exists-p} built-in: true when the instance's type declares the
+	 * slot, regardless of boundness (an unbound slot exists; {@link #SLOT_BOUNDP} is the
+	 * boundness test).
+	 */
+	public static final String SLOT_EXISTS_P = "SLOT-EXISTS-P";
+
+	/**
+	 * The shared runtime-slot-name {@code slot-exists-p} dispatch, the existence twin of
+	 * {@link #SLOT_BOUNDP_RUNTIME}: a class-tag dispatch answering t when the value's
+	 * layout declares the (base-spelling-normalized) name.
+	 */
+	public static final String SLOT_EXISTS_P_RUNTIME = "%SLOT-EXISTS-P-RUNTIME";
 
 	/**
 	 * The internal {@code (%slot-read value instance 'name)} checked read: the value

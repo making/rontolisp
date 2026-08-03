@@ -2041,8 +2041,24 @@ public final class Environment implements Scope {
 		// type as the limit (integer -> integer, float -> float). The interpreter and the
 		// JVM backend draw from Math.random(); the WASM backend draws real entropy from
 		// the WASI random_get host function.
+		// make-random-state: nil, always -- no random-state objects exist (random
+		// ignores its optional state argument), and nil is what a caller stores and
+		// passes back. The argument (nil / t / a state) is accepted and ignored.
+		env.defineFunction(LispNames.MAKE_RANDOM_STATE, new LispFunction(LispNames.MAKE_RANDOM_STATE, args -> {
+			if (args.size() > 1) {
+				throw new LispEvalException(
+						LispNames.MAKE_RANDOM_STATE + " expects 0 or 1 arguments, got " + args.size());
+			}
+			return LispNil.INSTANCE;
+		}));
 		env.defineFunction(LispNames.RANDOM, new LispFunction(LispNames.RANDOM, args -> {
-			requireArgCount(LispNames.RANDOM, args, 1);
+			// CL's optional second argument is a random-state; no random-state
+			// objects exist here (make-random-state answers nil), so it is accepted
+			// and ignored -- the backend's own entropy draws (uuid's
+			// (random #xffffffffffff *uuid-random-state*)).
+			if (args.size() != 1 && args.size() != 2) {
+				throw new LispEvalException(LispNames.RANDOM + " expects 1 or 2 arguments, got " + args.size());
+			}
 			LispVal limit = args.get(0);
 			if (limit instanceof LispDouble d) {
 				if (d.value() <= 0.0) {

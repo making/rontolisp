@@ -61,6 +61,26 @@ public final class MopProtocol {
 		return cached;
 	}
 
+	/**
+	 * The {@code %mop-initarg-tail} defun alone -- the plist scanner
+	 * {@code %mop-fill-slots}' generated dispatch calls. A program whose synthesized
+	 * {@code shared-initialize} default needs the fill WITHOUT the metaclass protocol
+	 * (any init-protocol method activates it) splices just this form; under the protocol
+	 * the whole file already carries it, and a second same-name defun in one JVM class is
+	 * a ClassFormatError.
+	 * @return the defun form
+	 */
+	public static LispVal initargTailDefun() {
+		for (LispVal form : forms()) {
+			if (form instanceof am.ik.rontolisp.LispCons cons && cons.cdr() instanceof am.ik.rontolisp.LispCons nameCons
+					&& nameCons.car() instanceof am.ik.rontolisp.LispSymbol name
+					&& "%MOP-INITARG-TAIL".equals(name.name())) {
+				return form;
+			}
+		}
+		throw new IllegalStateException("mop-protocol.lisp no longer defines %MOP-INITARG-TAIL");
+	}
+
 	private static String readSource() {
 		try (InputStream in = MopProtocol.class.getResourceAsStream("mop-protocol.lisp")) {
 			if (in == null) {

@@ -53,9 +53,9 @@ public final class PackageRegistry {
 			LispNames.WITH_SLOTS, LispNames.WITH_ACCESSORS, LispNames.CHANGE_CLASS, LispNames.HANDLER_CASE,
 			LispNames.IGNORE_ERRORS, LispNames.HANDLER_BIND, LispNames.WRITE_CHAR, LispNames.MAKE_SEQUENCE,
 			LispNames.PROG, LispNames.PROG_STAR, LispNames.SHIFTF, LispNames.LOAD_TIME_VALUE, LispNames.TYPEP,
-			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.PRINT_UNREADABLE_OBJECT,
-			LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS, LispNames.RESTART_BIND,
-			LispNames.WITH_SIMPLE_RESTART);
+			LispNames.SLOT_BOUNDP, LispNames.SLOT_MAKUNBOUND, LispNames.SLOT_EXISTS_P,
+			LispNames.PRINT_UNREADABLE_OBJECT, LispNames.WITH_PACKAGE_ITERATOR, LispNames.DO_EXTERNAL_SYMBOLS,
+			LispNames.RESTART_BIND, LispNames.WITH_SIMPLE_RESTART);
 
 	/**
 	 * The {@code cl} functions: every standard name usable as a function value via
@@ -67,25 +67,25 @@ public final class PackageRegistry {
 			LispNames.MUL, LispNames.DIV, LispNames.MOD, LispNames.REM, LispNames.ABS, LispNames.MIN, LispNames.MAX,
 			LispNames.SQRT, LispNames.ISQRT, LispNames.EXPT, LispNames.EXP, LispNames.LOG, LispNames.SIN, LispNames.COS,
 			LispNames.TAN, LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
-			LispNames.TANH, LispNames.RANDOM, LispNames.GCD, LispNames.LCM, LispNames.SIGNUM, LispNames.EQ,
-			LispNames.EQ_GENERAL, LispNames.EQL, LispNames.EQUAL, LispNames.EQUALP, LispNames.LT, LispNames.GT,
-			LispNames.LE, LispNames.GE, LispNames.CONS, LispNames.CAR, LispNames.CDR, LispNames.LIST, LispNames.APPEND,
-			LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAPCAR, LispNames.MAP, LispNames.MAP_INTO,
-			LispNames.MAPC, LispNames.MAPCAN, LispNames.APPLY, LispNames.SORT, LispNames.REDUCE, LispNames.EVERY,
-			LispNames.SOME, LispNames.REMOVE, LispNames.REMOVE_IF, LispNames.REMOVE_IF_NOT, LispNames.NOT,
-			LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP, LispNames.INTEGERP, LispNames.FLOATP,
-			LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR, LispNames.SYMBOLP, LispNames.STRINGP,
-			LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT, LispNames.TRUNCATE, LispNames.FLOOR,
-			LispNames.CEILING, LispNames.ROUND, LispNames.ONE_PLUS, LispNames.ONE_MINUS, LispNames.ZEROP,
-			LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP, LispNames.FIRST, LispNames.SECOND,
-			LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT, LispNames.PRIN1, LispNames.PRINC,
-			LispNames.TERPRI, LispNames.FRESH_LINE, LispNames.READ_LINE, LispNames.READ, LispNames.EVAL, LispNames.LOAD,
-			LispNames.REQUIRE, LispNames.PROVIDE, LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE,
-			LispNames.MEMBER, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.MEMBER_IF,
-			LispNames.POSITION, LispNames.POSITION_IF, LispNames.POSITION_IF_NOT, LispNames.COUNT, LispNames.COUNT_IF,
-			LispNames.ASSOC, LispNames.ASSOC_IF, LispNames.LAST, LispNames.BUTLAST, LispNames.GETF,
-			LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES, LispNames.NCONC, LispNames.REST,
-			LispNames.PRINC_TO_STRING,
+			LispNames.TANH, LispNames.RANDOM, LispNames.MAKE_RANDOM_STATE, LispNames.GCD, LispNames.LCM,
+			LispNames.SIGNUM, LispNames.EQ, LispNames.EQ_GENERAL, LispNames.EQL, LispNames.EQUAL, LispNames.EQUALP,
+			LispNames.LT, LispNames.GT, LispNames.LE, LispNames.GE, LispNames.CONS, LispNames.CAR, LispNames.CDR,
+			LispNames.LIST, LispNames.APPEND, LispNames.NTHCDR, LispNames.RPLACA, LispNames.RPLACD, LispNames.MAPCAR,
+			LispNames.MAP, LispNames.MAP_INTO, LispNames.MAPC, LispNames.MAPCAN, LispNames.APPLY, LispNames.SORT,
+			LispNames.REDUCE, LispNames.EVERY, LispNames.SOME, LispNames.REMOVE, LispNames.REMOVE_IF,
+			LispNames.REMOVE_IF_NOT, LispNames.NOT, LispNames.NULL, LispNames.ATOM, LispNames.NUMBERP,
+			LispNames.INTEGERP, LispNames.FLOATP, LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR,
+			LispNames.SYMBOLP, LispNames.STRINGP, LispNames.LISTP, LispNames.CONSP, LispNames.KEYWORDP, LispNames.FLOAT,
+			LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.ONE_PLUS,
+			LispNames.ONE_MINUS, LispNames.ZEROP, LispNames.PLUSP, LispNames.MINUSP, LispNames.EVENP, LispNames.ODDP,
+			LispNames.FIRST, LispNames.SECOND, LispNames.THIRD, LispNames.FOURTH, LispNames.NTH, LispNames.PRINT,
+			LispNames.PRIN1, LispNames.PRINC, LispNames.TERPRI, LispNames.FRESH_LINE, LispNames.READ_LINE,
+			LispNames.READ, LispNames.EVAL, LispNames.LOAD, LispNames.REQUIRE, LispNames.PROVIDE,
+			LispNames.SYMBOL_FUNCTION, LispNames.LENGTH, LispNames.REVERSE, LispNames.MEMBER, LispNames.FIND,
+			LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.MEMBER_IF, LispNames.POSITION, LispNames.POSITION_IF,
+			LispNames.POSITION_IF_NOT, LispNames.COUNT, LispNames.COUNT_IF, LispNames.ASSOC, LispNames.ASSOC_IF,
+			LispNames.LAST, LispNames.BUTLAST, LispNames.GETF, LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES,
+			LispNames.NCONC, LispNames.REST, LispNames.PRINC_TO_STRING,
 			// The printer generic: a defmethod on it belongs to cl, so a method defined
 			// inside a package that uses cl specializes CL:PRINT-OBJECT rather than
 			// minting that package's own (quri's uri method).
@@ -150,9 +150,9 @@ public final class PackageRegistry {
 			LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE, LispNames.CELL_ERROR_NAME,
 			LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME, LispNames.MERGE_PATHNAMES, LispNames.TRUENAME,
 			LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE,
-			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
-			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
-			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
+			LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME, LispNames.TYPE_OF,
+			LispNames.INVOKE_RESTART, LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME,
+			LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -196,7 +196,15 @@ public final class PackageRegistry {
 			// The package TYPE name (a package value is find-package's keyword answer,
 			// .kb/symbol-runtime-api.md): cl-package-locks' (etypecase p (package p)
 			// (symbol ...)) must not resolve it to cl-package-locks::package.
-			"PACKAGE");
+			"PACKAGE",
+			// The root class name: (find-class 'standard-object) must reach the
+			// find-class fallback (ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES) as the bare
+			// CL spelling -- mito's map-all-superclasses eq-compares superclass
+			// metaobjects against it from inside mito's own package. STANDARD-CLASS is
+			// its metaclass sibling: the compiled %find-class matches SPELLINGS, so a
+			// package-local MITO...::STANDARD-CLASS resolution missed the seeded entry
+			// (the interpreter's registry normalizes spellings and hid the gap).
+			"STANDARD-OBJECT", "STANDARD-CLASS");
 
 	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the

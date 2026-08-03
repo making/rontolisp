@@ -909,8 +909,11 @@ public final class LispEvaluator {
 			}
 			ClosRegistry.ClassInfo info = this.closRegistry.findClass(obj.layout().printName());
 			if (info == null) {
-				throw new LispEvalException(
-						LispNames.MOP_FILL_SLOTS + ": not a registered class instance: " + args.get(0).print());
+				// Not a registered class (a struct instance through a user
+				// reinitialize-instance, say): no fill, like the generated dispatch's
+				// fall-through -- the shared-initialize default still answers the
+				// instance.
+				return obj;
 			}
 			boolean initforms = !(args.get(2) instanceof LispNil);
 			java.util.List<ClosRegistry.SlotSpec> slots = info.slots();
@@ -1020,6 +1023,45 @@ public final class LispEvaluator {
 			// slot-makunbound, holds one).
 			SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
 			return slot != null && !isUnboundMarker(slot.read()) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+		}));
+		// The runtime-slot-name dispatch pair the compile paths generate as defuns:
+		// the shared setf/with-slots expansions emit calls to them for an AMBIGUOUS
+		// literal slot name too (outlined since todo-247), and those expansions serve
+		// the interpreter as well -- here they are the registry-backed reads/writes.
+		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_RUNTIME,
+				new LispFunction(LispNames.SLOT_VALUE_RUNTIME, args -> {
+					if (args.size() != 2) {
+						throw new LispEvalException(
+								LispNames.SLOT_VALUE_RUNTIME + " expects 2 arguments, got " + args.size());
+					}
+					SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+					if (slot == null) {
+						throw new LispEvalException(LispNames.SLOT_VALUE + ": unknown slot " + args.get(1).print()
+								+ " on " + args.get(0).print());
+					}
+					return slot.read();
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_VALUE_SET_RUNTIME,
+				new LispFunction(LispNames.SLOT_VALUE_SET_RUNTIME, args -> {
+					if (args.size() != 3) {
+						throw new LispEvalException(
+								LispNames.SLOT_VALUE_SET_RUNTIME + " expects 3 arguments, got " + args.size());
+					}
+					SlotRef slot = instanceSlotRef(args.get(0), args.get(1));
+					if (slot == null) {
+						throw new LispEvalException(LispNames.SLOT_VALUE + ": unknown slot " + args.get(1).print()
+								+ " on " + args.get(0).print());
+					}
+					slot.write(args.get(2));
+					return args.get(2);
+				}));
+		this.globalEnv.defineFunction(LispNames.SLOT_EXISTS_P, new LispFunction(LispNames.SLOT_EXISTS_P, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.SLOT_EXISTS_P + " expects 2 arguments, got " + args.size());
+			}
+			// Exists = the value is an instance whose layout declares the slot; an
+			// unbound slot exists (slot-boundp is the boundness test).
+			return instanceSlotRef(args.get(0), args.get(1)) != null ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// Gray-stream dispatch: write-string (and write-char, which lowers to it)
 		// handed an INSTANCE as its stream calls rontolisp's own Gray protocol
@@ -4176,8 +4218,34 @@ public final class LispEvaluator {
 		// Expand into the generated defuns (constructor, readers/accessors) and
 		// evaluate each, then regenerate the dispatchers that test class specializers:
 		// the new class may extend one of their descendant tag sets.
+		LispVal driverMetaobject = null;
 		for (LispVal form : LispMacroExpander.expandDefclass(cons, this.closRegistry, this.structAccessors)) {
-			eval(form, env);
+			LispVal value = eval(form, env);
+			if (isEnsureClassDriverCall(form)) {
+				driverMetaobject = value;
+			}
+		}
+		// A user initialize-instance :around may have INJECTED direct superclasses the
+		// static registration never saw (mito's dao-table-class pushes dao-class and the
+		// auto-pk/timestamp mixins). The driver-built metaobject is the truth, per AMOP;
+		// reconcile the static side -- layout, ancestors (typep/dispatch), constructor,
+		// accessors -- by re-registering the class with the metaobject's superclass
+		// list. The driver call itself is NOT re-run (its :arounds are user code).
+		if (driverMetaobject instanceof LispInstance metaobject) {
+			LispCons widened = LispMacroExpander.widenDefclassToMetaobjectSupers(cons, metaobject);
+			if (widened != null) {
+				for (LispVal form : LispMacroExpander.expandDefclass(widened, this.closRegistry,
+						this.structAccessors)) {
+					if (!isEnsureClassDriverCall(form)) {
+						eval(form, env);
+					}
+				}
+				// The static re-registration invalidated the find-class memo; the
+				// driver-built metaobject stays the class's canonical view.
+				if (cons.toList().get(1) instanceof LispSymbol nameSym) {
+					this.closRegistry.registerClassMetaobject(nameSym.name(), metaobject);
+				}
+			}
 		}
 		for (ClosRegistry.GenericInfo generic : this.closRegistry.generics().values()) {
 			if (generic.hasClassMethod()) {
@@ -4185,6 +4253,42 @@ public final class LispEvaluator {
 			}
 		}
 		return cons.toList().get(1);
+	}
+
+	/**
+	 * Whether the generated form is the metaclass-protocol driver call
+	 * ({@code %ensure-class-with-metaclass}) an {@code expandDefclass} of a
+	 * {@code :metaclass} defclass ends with.
+	 */
+	private static boolean isEnsureClassDriverCall(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.ENSURE_CLASS_WITH_METACLASS.equals(plainName(op.name()));
+	}
+
+	/**
+	 * The macro-time-evaluator half of the injected-superclass reconciliation (see
+	 * {@code evalDefclass}): after this evaluator ran a {@code :metaclass} defclass, the
+	 * registered metaobject carries the direct superclasses a user
+	 * {@code initialize-instance :around} injected. The compile paths re-register the
+	 * class statically from the FORM, so {@code UserMacroExpander} asks here for the
+	 * widened spelling to emit instead; null when nothing was injected (or the form is
+	 * not a {@code :metaclass} defclass).
+	 * @param defclass the defclass form as the compile pipeline will see it
+	 * @return the widened defclass form, or null
+	 */
+	@Nullable public LispCons widenedMetaclassDefclassOrNull(LispCons defclass) {
+		if (!LispMacroExpander.defclassUsesMetaclass(defclass)) {
+			return null;
+		}
+		List<LispVal> parts = defclass.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			return null;
+		}
+		LispInstance metaobject = this.closRegistry.classMetaobject(nameSym.name());
+		if (metaobject == null) {
+			return null;
+		}
+		return LispMacroExpander.widenDefclassToMetaobjectSupers(defclass, metaobject);
 	}
 
 	private LispVal evalDefgeneric(LispCons cons, Environment env) {

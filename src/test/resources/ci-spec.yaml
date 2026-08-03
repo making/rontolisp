@@ -1427,9 +1427,9 @@ cases:
       (print (member 'car (rontolisp:list-functions :cl-user)))
       (print (rontolisp:list-macros :cl-user))
     expected: |
-      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
+      (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      365
+      367
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -7123,3 +7123,90 @@ cases:
       (:STRUCT :OTHER)
       8
       (T NIL T T NIL T)
+  - name: mito-core-enablement-language-group
+    source: |
+      ;; the mito-core (.todo/247) enablement batch: general language features
+      ;; the verbatim mito-20260101-git core load forced, none mito-specific.
+      ;; The real (ql:quickload '("mito-core" "dbd-postgres")) + DAO CRUD run is
+      ;; manual against PostgreSQL (the automated milestone E2E is .todo/250).
+      ;; slot-exists-p: an unbound slot EXISTS (slot-boundp is the boundness
+      ;; test), an undeclared one does not, a non-instance answers nil, and a
+      ;; runtime name rides the shared dispatch (mito's col-type probe)
+      (defclass ci-mc-box () ((a :initarg :a) (b :initform 7)))
+      (let ((o (make-instance 'ci-mc-box)))
+        (print (list (slot-exists-p o 'a) (slot-exists-p o 'b)
+                     (slot-exists-p o 'zz) (slot-exists-p 42 'a)
+                     (slot-exists-p o (car (list 'a))))))
+      ;; an empty function body answers nil (dissect's no-op interface stubs),
+      ;; with and without a desugared lambda list
+      (defun ci-mc-stack ())
+      (defun ci-mc-restarts (&optional condition))
+      (print (list (ci-mc-stack) (ci-mc-restarts) (ci-mc-restarts 1)))
+      ;; make-random-state answers nil (no random-state objects exist) and
+      ;; random accepts-and-ignores the optional state argument, drawing from
+      ;; the backend's own entropy (uuid's *uuid-random-state* seeding)
+      (print (make-random-state t))
+      (let ((s (make-random-state t)))
+        (print (< (random 10 s) 10)))
+      ;; a case clause KEY LIST inside an flet/labels-lowered lambda is data,
+      ;; not an expression: (lambda flet labels) as keys made the free-variable
+      ;; analysis capture LABELS (mito.logger's get-prev-stack normalize-call)
+      (defun ci-mc-norm (call)
+        (flet ((norm (c)
+                 (case (first c)
+                   (:method (second c))
+                   ((lambda flet labels) nil)
+                   (otherwise (second c)))))
+          (norm call)))
+      (print (list (ci-mc-norm '(lambda x)) (ci-mc-norm '(:method m)) (ci-mc-norm '(f g))))
+      ;; map with a COMPUTED result type walks as a list and coerces through
+      ;; the runtime family dispatch (mito's (map (type-of value) ...))
+      (let ((ty (car (list 'vector))))
+        (print (coerce (map ty #'1+ '(1 2 3)) 'list)))
+      (let ((ty (car (list 'list))))
+        (print (map ty #'1+ #(1 2 3))))
+      ;; package-name: the name STRING of a package designator, resolved
+      ;; through find-package (dbi's connection-driver-type reads
+      ;; (package-name (symbol-package (type-of conn))))
+      (print (package-name (find-package :cl-user)))
+      (print (package-name (symbol-package :kw)))
+      ;; :import-from of a name the source package only INHERITS through its
+      ;; use list (CL's find-symbol semantics): mito.dao imports
+      ;; table-column-references-column from mito.class, which merely uses
+      ;; mito.class.column and does not re-export the name
+      (defpackage :ci-mc-owner (:use :cl) (:export #:ci-mc-fn))
+      (in-package :ci-mc-owner)
+      (defun ci-mc-fn () :from-owner)
+      (in-package :cl-user)
+      (defpackage :ci-mc-middle (:use :cl :ci-mc-owner))
+      (defpackage :ci-mc-user (:use :cl) (:import-from :ci-mc-middle #:ci-mc-fn))
+      (in-package :ci-mc-user)
+      (defun ci-mc-call () (ci-mc-fn))
+      (in-package :cl-user)
+      (print (ci-mc-user::ci-mc-call))
+      ;; standard-object resolves through find-class (eq-stable), its class is
+      ;; standard-class, and class-of never answers it -- the AMOP walk shape
+      ;; mito's map-all-superclasses eq-compares against
+      (print (list (eq (find-class 'standard-object) (find-class 'standard-object))
+                   (eq (class-of (find-class 'standard-object)) (find-class 'standard-class))))
+      ;; the synthesized shared-initialize system default FILLS: allocate
+      ;; unbound + (shared-initialize obj nil initargs) is mito's
+      ;; make-dao-instance shape; slot-names nil stores supplied initargs only
+      (defclass ci-mc-dao () ((a :initarg :a) (b :initform 5) (c :initarg :c)))
+      (defmethod initialize-instance :after ((x ci-mc-dao) &key) x)
+      (let ((o (allocate-instance (find-class 'ci-mc-dao))))
+        (shared-initialize o nil :a 1)
+        (print (list (slot-value o 'a) (slot-boundp o 'b) (slot-boundp o 'c))))
+    expected: |
+      (T T NIL NIL T)
+      (NIL NIL NIL)
+      NIL
+      T
+      (NIL M G)
+      (2 3 4)
+      (2 3 4)
+      "CL-USER"
+      "KEYWORD"
+      :FROM-OWNER
+      (T T)
+      (1 NIL NIL)

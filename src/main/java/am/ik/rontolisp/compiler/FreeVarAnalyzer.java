@@ -207,12 +207,17 @@ public final class FreeVarAnalyzer {
 								knownFunctions, globals, specialNames, freeVars);
 						case LispNames.ASSERT -> collectFreeVars(LispMacroExpander.expandAssert(cons), boundVars,
 								knownFunctions, globals, specialNames, freeVars);
-						// typecase clause HEADS are type specifiers (data), not variable
-						// references -- walk the keyform and the clause bodies only.
-						// Walked structurally rather than expanded: the expansion needs
-						// the class registry for a class-name head (lack-middleware-
-						// backtrace's (or pathname string) head is what surfaced this).
-						case LispNames.TYPECASE, LispNames.ETYPECASE -> {
+						// typecase clause HEADS are type specifiers and case/ecase/ccase
+						// clause HEADS are unevaluated key lists -- data, not variable
+						// references -- so walk the keyform and the clause bodies only.
+						// Walked structurally rather than expanded: the typecase
+						// expansion needs the class registry for a class-name head
+						// (lack-middleware-backtrace's (or pathname string) head is what
+						// surfaced this), and a case key list like mito's
+						// (lambda flet labels) read as an expression makes its keys
+						// free variables.
+						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CASE, LispNames.ECASE,
+								LispNames.CCASE -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() > 1) {
 								collectFreeVars(parts.get(1), boundVars, knownFunctions, globals, specialNames,
@@ -506,9 +511,10 @@ public final class FreeVarAnalyzer {
 								localVars, knownFunctions, captured, insideLambda);
 						case LispNames.ASSERT -> collectCapturedVars(LispMacroExpander.expandAssert(cons), localVars,
 								knownFunctions, captured, insideLambda);
-						// typecase clause HEADS are type specifiers (data): walk the
-						// keyform and the clause bodies only (the collectFreeVars twin).
-						case LispNames.TYPECASE, LispNames.ETYPECASE -> {
+						// typecase/case clause HEADS are data: walk the keyform and the
+						// clause bodies only (the collectFreeVars twin).
+						case LispNames.TYPECASE, LispNames.ETYPECASE, LispNames.CASE, LispNames.ECASE,
+								LispNames.CCASE -> {
 							List<LispVal> parts = cons.toList();
 							if (parts.size() > 1) {
 								collectCapturedVars(parts.get(1), localVars, knownFunctions, captured, insideLambda);

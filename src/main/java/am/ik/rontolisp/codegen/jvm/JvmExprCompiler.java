@@ -569,6 +569,8 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandClassSlotDefs(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_BOUNDP -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSlotBoundp(cons, ctx.closRegistry), ctx, className);
+				case LispNames.SLOT_EXISTS_P -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandSlotExistsP(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SLOT_MAKUNBOUND -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandSlotMakunbound(cons, ctx.closRegistry), ctx, className);
 				case LispNames.SIMPLE_CONDITION_FORMAT_CONTROL -> JvmExprCompiler.compileExpr(
@@ -1097,7 +1099,18 @@ final class JvmExprCompiler {
 						LispNames.ASIN, LispNames.ACOS, LispNames.ATAN, LispNames.SINH, LispNames.COSH,
 						LispNames.TANH ->
 					JvmMathFnCompiler.compile(cons, ctx, className, sym.name());
-				case LispNames.RANDOM -> JvmRandomCompiler.compile(cons, ctx, className);
+				case LispNames.RANDOM -> {
+					if (cons.toList().size() == 3) {
+						// The optional random-state argument: normalized away (state
+						// evaluated for effect, backend entropy draws).
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandRandomWithState(cons), ctx, className);
+					}
+					else {
+						JvmRandomCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.MAKE_RANDOM_STATE -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
 				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
 					JvmTimeCompiler.compile(cons, ctx, sym.name());
 				case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);

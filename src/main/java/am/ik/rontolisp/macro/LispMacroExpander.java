@@ -6942,6 +6942,27 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Normalizes {@code (random limit state)} -- CL's optional random-state argument --
+	 * onto the 1-argument {@code random} the backends implement: no random-state objects
+	 * exist here ({@code make-random-state} answers nil), so the state is evaluated for
+	 * effect after the limit (left to right, like any argument list) and dropped; the
+	 * backend's own entropy draws. uuid's
+	 * {@code (random #xffffffffffff *uuid-random-state*)} is the driving consumer.
+	 * @param cons the 2-argument random expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandRandomWithState(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new UnsupportedOperationException(
+					LispNames.RANDOM + " expects 1 or 2 arguments, got " + (parts.size() - 1));
+		}
+		String prefix = "__rnd" + MV_COUNTER.getAndIncrement();
+		LispSymbol limit = new LispSymbol(prefix + "_l");
+		return makeLet(limit.name(), parts.get(1), makeProgn(List.of(parts.get(2), mvCall(LispNames.RANDOM, limit))));
+	}
+
+	/**
 	 * Expands a lite always-constant operator ({@code file-position},
 	 * {@code file-length}, {@code pathnamep}, {@code stream-element-type}) into a
 	 * {@code progn} evaluating the arguments for effect and yielding the fixed result.
@@ -8773,6 +8794,146 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), datum));
 	}
 
+	/**
+	 * The defclass form re-spelled to what the driver-built metaobject actually holds, or
+	 * null when nothing differs. Two reconciliations, both consequences of user
+	 * {@code initialize-instance :around}s munging the initargs at ensure-class time
+	 * (which the static registration -- layout, ancestors, dispatch tables, constructor,
+	 * the {@code %mop-fill-slots} arms -- never saw):
+	 * <ul>
+	 * <li>the direct-superclass list (mito's dao-table-class pushes dao-class and the
+	 * auto-pk/timestamp mixins), minus the AMOP {@code standard-object} default (which is
+	 * find-class-resolvable but not a registered class); order is the metaobject's (its
+	 * local precedence order);</li>
+	 * <li>per-slot {@code :initarg}s a slot-definition :around pushed (mito's
+	 * table-column-class defaults every column slot's initarg to its keywordized name;
+	 * the CL fill rule stores only DECLARED initargs, so without this the
+	 * make-dao-instance fill skips exactly the user's own columns).</li>
+	 * </ul>
+	 * @param cons the original defclass form
+	 * @param metaobject the driver-built class metaobject
+	 * @return the reconciled defclass form, or null when nothing was injected
+	 */
+	@Nullable public static LispCons widenDefclassToMetaobjectSupers(LispCons cons, LispInstance metaobject) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof LispCons || parts.get(2) instanceof LispNil)) {
+			return null;
+		}
+		List<String> declared = new java.util.ArrayList<>();
+		if (parts.get(2) instanceof LispCons declaredCons && declaredCons.isProperList()) {
+			for (LispVal sup : declaredCons.toList()) {
+				if (sup instanceof LispSymbol sym) {
+					declared.add(memberOf(sym.name()));
+				}
+			}
+		}
+		List<LispVal> finalSupers = new java.util.ArrayList<>();
+		List<String> finalMembers = new java.util.ArrayList<>();
+		LispVal supersVal = metaobjectSlot(metaobject, "DIRECT-SUPERCLASSES");
+		if (supersVal instanceof LispCons supersCons && supersCons.isProperList()) {
+			for (LispVal superVal : supersCons.toList()) {
+				if (!(superVal instanceof LispInstance superInst)) {
+					return null;
+				}
+				if (!(metaobjectSlot(superInst, "NAME") instanceof LispSymbol nameSym)) {
+					// The T class metaobject's name slot holds the boolean; no
+					// registered class to widen onto.
+					continue;
+				}
+				String member = memberOf(nameSym.name());
+				if ("STANDARD-OBJECT".equals(member)) {
+					continue;
+				}
+				finalSupers.add(new LispSymbol(nameSym.name()));
+				finalMembers.add(member);
+			}
+		}
+		boolean supersChanged = !finalMembers.isEmpty() && !finalMembers.equals(declared);
+		List<LispVal> widened = new java.util.ArrayList<>(parts);
+		if (supersChanged) {
+			widened.set(2, listToCons(finalSupers));
+		}
+		boolean slotsChanged = parts.size() >= 4 && reconcileSlotInitargs(widened, metaobject);
+		if (!supersChanged && !slotsChanged) {
+			return null;
+		}
+		return (LispCons) listToCons(widened);
+	}
+
+	/** A metaobject slot read BY NAME off the instance's own layout, or null. */
+	@Nullable private static LispVal metaobjectSlot(LispInstance instance, String slotName) {
+		int index = instance.layout().slotNames().indexOf(slotName);
+		return index < 0 ? null : instance.slot(index);
+	}
+
+	/**
+	 * Adds to each direct-slot spec of the (mutable) defclass part list the
+	 * {@code :initarg}s its driver-built direct-slot-definition metaobject carries but
+	 * the spec does not declare; true when any spec changed.
+	 */
+	private static boolean reconcileSlotInitargs(List<LispVal> widened, LispInstance metaobject) {
+		if (!(metaobjectSlot(metaobject, "DIRECT-SLOTS") instanceof LispCons directSlots) || !directSlots.isProperList()
+				|| !(widened.get(3) instanceof LispCons specList) || !specList.isProperList()) {
+			return false;
+		}
+		java.util.Map<String, List<String>> initargsByName = new java.util.LinkedHashMap<>();
+		for (LispVal dsdVal : directSlots.toList()) {
+			if (!(dsdVal instanceof LispInstance dsd) || !(metaobjectSlot(dsd, "NAME") instanceof LispSymbol nameSym)) {
+				continue;
+			}
+			List<String> initargs = new java.util.ArrayList<>();
+			if (metaobjectSlot(dsd, "INITARGS") instanceof LispCons initargCons && initargCons.isProperList()) {
+				for (LispVal k : initargCons.toList()) {
+					if (k instanceof LispSymbol kw && kw.isKeyword()) {
+						initargs.add(kw.name());
+					}
+				}
+			}
+			initargsByName.put(memberOf(nameSym.name()), initargs);
+		}
+		boolean changed = false;
+		List<LispVal> newSpecs = new java.util.ArrayList<>();
+		for (LispVal specVal : specList.toList()) {
+			String slotName = specVal instanceof LispSymbol bare ? memberOf(bare.name())
+					: specVal instanceof LispCons specCons && specCons.car() instanceof LispSymbol head
+							? memberOf(head.name()) : null;
+			List<String> wanted = slotName == null ? null : initargsByName.get(slotName);
+			if (wanted == null || wanted.isEmpty()) {
+				newSpecs.add(specVal);
+				continue;
+			}
+			List<LispVal> spec = specVal instanceof LispCons specCons ? new java.util.ArrayList<>(specCons.toList())
+					: new java.util.ArrayList<>(List.of(specVal));
+			boolean declaresInitarg = false;
+			for (int i = 1; i + 1 < spec.size(); i += 2) {
+				if (spec.get(i) instanceof LispSymbol opt && ":INITARG".equals(memberOf(opt.name()))) {
+					declaresInitarg = true;
+					break;
+				}
+			}
+			if (declaresInitarg) {
+				// The static model keeps ONE initarg per slot: a spec that declares its
+				// own must keep it (adding a second would clobber it in the registry),
+				// so extra driver-pushed initargs (the fixture's :extra) stay a
+				// metaobject-only fact.
+				newSpecs.add(specVal);
+				continue;
+			}
+			// No declared initarg but the driver-built definition carries some (mito's
+			// table-column-class :around defaults every column's initarg to its
+			// keywordized name): take the LAST -- :arounds PUSH extras onto the front,
+			// so the tail is the canonical one.
+			spec.add(new LispSymbol(":INITARG"));
+			spec.add(new LispSymbol(wanted.get(wanted.size() - 1)));
+			changed = true;
+			newSpecs.add(listToCons(spec));
+		}
+		if (changed) {
+			widened.set(3, listToCons(newSpecs));
+		}
+		return changed;
+	}
+
 	/** Parameter holding the new value in a generated {@code %setf-} writer method. */
 	private static final String CLOS_NEW_VAL_VAR = "__new";
 
@@ -9289,27 +9450,16 @@ public final class LispMacroExpander {
 
 	/**
 	 * Expands {@code (slot-value obj 'AMBIGUOUS)} -- a literal slot name that unrelated
-	 * types place at different indexes -- into an instance-TAG dispatch reading the
-	 * type-correct index: the read-side twin of {@link #expandAmbiguousSlotSet}. An
-	 * instance of a type that does not declare the slot signals at run time.
+	 * types place at different indexes -- into a call of the shared
+	 * {@code %slot-value-runtime} dispatch (the same defun a runtime slot name uses): the
+	 * read-side twin of {@link #expandAmbiguousSlotSet}. Outlined rather than inlined per
+	 * site since todo-247 -- an inline per-layout dispatch is registry-proportional, and
+	 * the metaclass protocol's finalize-inheritance (six such reads in one defun) crossed
+	 * the JVM's 64 KB method limit at mito scale. An instance of a type that does not
+	 * declare the slot signals at run time.
 	 */
 	private static LispVal expandAmbiguousSlotRead(LispVal objExpr, String baseName, ClosRegistry closRegistry) {
-		String prefix = "__sr" + MV_COUNTER.getAndIncrement();
-		LispSymbol v = new LispSymbol(prefix + "_v");
-		List<LispVal> clauses = new java.util.ArrayList<>();
-		for (LispLayout layout : closRegistry.layouts().values()) {
-			int index = layout.slotNames().indexOf(baseName);
-			if (index < 0) {
-				continue;
-			}
-			clauses.add(listToCons(List.of(objIs(v, List.of(layout.tag())), objRef(v, index))));
-		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString(LispNames.SLOT_VALUE + ": no slot " + baseName + " in this instance"))))));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(clauses);
-		return makeLet(v.name(), objExpr, listToCons(condParts));
+		return mvCall(LispNames.SLOT_VALUE_RUNTIME, objExpr, quoteOf(baseName));
 	}
 
 	/**
@@ -9323,33 +9473,16 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (setf (slot-value obj 'AMBIGUOUS) val)} into an instance-TAG
-	 * dispatch that writes the type-correct index: the write-side twin of the ambiguous
-	 * read dispatch in {@link #expandSlotValue}. An instance of a type that does not
-	 * declare the slot signals at run time.
+	 * Expands {@code (setf (slot-value obj 'AMBIGUOUS) val)} into a call of the shared
+	 * {@code %slot-value-set-runtime} dispatch (the same defun a runtime slot name uses):
+	 * the write-side twin of the ambiguous read. Outlined rather than inlined per site
+	 * since todo-247 (see {@link #expandAmbiguousSlotRead}).
 	 */
 	private static LispVal expandAmbiguousSlotSet(LispVal objExpr, LispSymbol slotSym, LispVal value,
 			ClosRegistry closRegistry) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
 		String baseName = qn == null ? slotSym.name() : qn.member();
-		String prefix = "__ss" + MV_COUNTER.getAndIncrement();
-		LispSymbol v = new LispSymbol(prefix + "_v");
-		LispSymbol nv = new LispSymbol(prefix + "_n");
-		List<LispVal> clauses = new java.util.ArrayList<>();
-		for (LispLayout layout : closRegistry.layouts().values()) {
-			int index = layout.slotNames().indexOf(baseName);
-			if (index < 0) {
-				continue;
-			}
-			clauses.add(
-					listToCons(List.of(objIs(v, List.of(layout.tag())), makeProgn(List.of(objSet(v, index, nv), nv)))));
-		}
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString(LispNames.SLOT_VALUE + ": no slot " + baseName + " in this instance"))))));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(clauses);
-		return makeLet(v.name(), objExpr, makeLet(nv.name(), value, listToCons(condParts)));
+		return mvCall(LispNames.SLOT_VALUE_SET_RUNTIME, objExpr, quoteOf(baseName), value);
 	}
 
 	/**
@@ -9701,14 +9834,102 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Whether the program contains a {@code slot-value} or {@code slot-boundp} whose
-	 * slot-name argument is not a literal quoted symbol -- the condition under which
-	 * {@link #expandTopLevelDefinitions} injects the shared runtime-slot-name dispatch
-	 * defuns (the call sites lower to them during the backend passes). Quoted data is
-	 * skipped.
+	 * Expands {@code (slot-exists-p obj 'slot)} (literal slot name) into a
+	 * {@code %obj-is} membership test over every layout that declares the slot -- true
+	 * regardless of boundness (an unbound slot exists; {@code slot-boundp} is the
+	 * boundness test). A name no class declares keeps the constant-nil shape with the
+	 * object still evaluated ({@code objIs} with no tags). A runtime slot name lowers to
+	 * the shared {@code %slot-exists-p-runtime} defun.
+	 * @param cons the slot-exists-p expression
+	 * @param closRegistry the class registry
+	 * @return the expanded expression
 	 */
-	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program) {
-		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSlotName);
+	public static LispVal expandSlotExistsP(LispCons cons, ClosRegistry closRegistry) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException(
+					LispNames.SLOT_EXISTS_P + " expects (slot-exists-p obj 'slot): " + cons.print());
+		}
+		LispSymbol slotSym = quotedSymbol(parts.get(2));
+		if (slotSym == null) {
+			return mvCall(LispNames.SLOT_EXISTS_P_RUNTIME, parts.get(1), parts.get(2));
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(slotSym.name());
+		String asked = qn == null ? slotSym.name() : qn.member();
+		String baseName = resolveSlotBaseName(asked, closRegistry);
+		List<String> tags = new java.util.ArrayList<>();
+		if (baseName != null) {
+			for (LispLayout layout : closRegistry.layouts().values()) {
+				if (layout.slotIndex(baseName) >= 0) {
+					tags.add(layout.tag());
+				}
+			}
+		}
+		return objIs(parts.get(1), tags);
+	}
+
+	/**
+	 * Builds the shared {@code %slot-exists-p-runtime} defun: the existence twin of
+	 * {@link #runtimeSlotBoundpDefuns} -- a class-tag dispatch whose arm answers whether
+	 * the (base-spelling-normalized) runtime name is among that layout's declared slot
+	 * names. Injected beside the slot-value/slot-boundp dispatch defuns under its own
+	 * gate, so programs without a runtime-name {@code slot-exists-p} stay byte-identical.
+	 */
+	private static List<LispVal> runtimeSlotExistsPDefuns(ClosRegistry closRegistry) {
+		LispSymbol v = new LispSymbol("%ser_v");
+		LispSymbol n = new LispSymbol("%ser_n");
+		List<LispVal> clauses = new java.util.ArrayList<>();
+		for (LispLayout layout : closRegistry.layouts().values()) {
+			if (layout.slotCount() == 0) {
+				continue;
+			}
+			clauses.add(listToCons(List.of(objIs(v, List.of(layout.tag())),
+					listToCons(List.of(new LispSymbol(LispNames.IF),
+							mvCall(LispNames.MEMBER, n, quotedSymbolList(layout.slotNames())), LispTrue.INSTANCE,
+							LispNil.INSTANCE)))));
+		}
+		return slotNameNormalizedDispatchDefuns(LispNames.SLOT_EXISTS_P_RUNTIME, "%SER-", List.of(v, n), n, clauses,
+				LispNil.INSTANCE);
+	}
+
+	/**
+	 * Whether the program contains a {@code slot-exists-p} whose slot-name argument is
+	 * not a literal quoted symbol -- the gate for {@link #runtimeSlotExistsPDefuns}.
+	 */
+	private static boolean needsRuntimeSlotExistsDispatch(List<LispVal> program) {
+		return program.stream().anyMatch(f -> containsRuntimeSlotNameCall(f, LispNames.SLOT_EXISTS_P));
+	}
+
+	private static boolean containsRuntimeSlotNameCall(LispVal form, String opName) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String member = memberOf(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				return false;
+			}
+			if (opName.equals(member) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
+					return true;
+				}
+			}
+		}
+		return containsRuntimeSlotNameCall(cons.car(), opName) || containsRuntimeSlotNameCall(cons.cdr(), opName);
+	}
+
+	/**
+	 * Whether the program contains a {@code slot-value} or {@code slot-boundp} whose
+	 * slot-name argument is not a literal quoted symbol -- OR a literal one whose name is
+	 * AMBIGUOUS across the registered layouts, which the read expansion outlines onto the
+	 * same shared dispatch (see {@code expandAmbiguousSlotRead}) -- the condition under
+	 * which {@link #expandTopLevelDefinitions} injects the shared runtime-slot-name
+	 * dispatch defuns (the call sites lower to them during the backend passes). Quoted
+	 * data is skipped.
+	 */
+	private static boolean needsRuntimeSlotNameDispatch(List<LispVal> program, ClosRegistry closRegistry) {
+		return program.stream().anyMatch(form -> containsRuntimeSlotName(form, closRegistry));
 	}
 
 	/**
@@ -9718,11 +9939,11 @@ public final class LispMacroExpander {
 	 * {@code setf} is recognized; an exotic spelling that reaches the same expansion
 	 * without the defun fails loudly at compile time rather than silently.
 	 */
-	private static boolean needsRuntimeSlotSetDispatch(List<LispVal> program) {
-		return program.stream().anyMatch(LispMacroExpander::containsRuntimeSlotSet);
+	private static boolean needsRuntimeSlotSetDispatch(List<LispVal> program, ClosRegistry closRegistry) {
+		return program.stream().anyMatch(form -> containsRuntimeSlotSet(form, closRegistry));
 	}
 
-	private static boolean containsRuntimeSlotSet(LispVal form) {
+	private static boolean containsRuntimeSlotSet(LispVal form, ClosRegistry closRegistry) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
@@ -9735,15 +9956,35 @@ public final class LispMacroExpander {
 					&& rest.car() instanceof LispCons place && place.car() instanceof LispSymbol placeOp
 					&& LispNames.SLOT_VALUE.equals(memberOf(placeOp.name())) && place.isProperList()) {
 				List<LispVal> parts = place.toList();
-				if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
-					return true;
+				if (parts.size() == 3) {
+					LispSymbol litSlot = quotedSymbol(parts.get(2));
+					// An AMBIGUOUS literal write outlines onto the same shared
+					// dispatch as a runtime name (expandAmbiguousSlotSet).
+					if (litSlot == null || ambiguousSlotPosition(litSlot, closRegistry)) {
+						return true;
+					}
 				}
 			}
+			// slot-makunbound stores through the setf slot-value place, and a
+			// with-slots body may write through its symbol-macrolet -- both reach the
+			// ambiguous write expansion without a surface (setf (slot-value ...)).
+			if (LispNames.SLOT_MAKUNBOUND.equals(member) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() == 3) {
+					LispSymbol litSlot = quotedSymbol(parts.get(2));
+					if (litSlot == null || ambiguousSlotPosition(litSlot, closRegistry)) {
+						return true;
+					}
+				}
+			}
+			if (LispNames.WITH_SLOTS.equals(member) && withSlotsNamesAmbiguousSlot(cons, closRegistry)) {
+				return true;
+			}
 		}
-		return containsRuntimeSlotSet(cons.car()) || containsRuntimeSlotSet(cons.cdr());
+		return containsRuntimeSlotSet(cons.car(), closRegistry) || containsRuntimeSlotSet(cons.cdr(), closRegistry);
 	}
 
-	private static boolean containsRuntimeSlotName(LispVal form) {
+	private static boolean containsRuntimeSlotName(LispVal form, ClosRegistry closRegistry) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
@@ -9754,12 +9995,47 @@ public final class LispMacroExpander {
 			}
 			if ((LispNames.SLOT_VALUE.equals(member) || LispNames.SLOT_BOUNDP.equals(member)) && cons.isProperList()) {
 				List<LispVal> parts = cons.toList();
-				if (parts.size() == 3 && quotedSymbol(parts.get(2)) == null) {
-					return true;
+				if (parts.size() == 3) {
+					LispSymbol litSlot = quotedSymbol(parts.get(2));
+					if (litSlot == null
+							|| (LispNames.SLOT_VALUE.equals(member) && ambiguousSlotPosition(litSlot, closRegistry))) {
+						return true;
+					}
 				}
 			}
+			// with-slots expands to slot-value reads during BODY compilation, invisible
+			// to this surface scan -- but its slot NAMES are right in the spec list
+			// (cl-ppcre's compute-offsets methods over ambiguous names).
+			if (LispNames.WITH_SLOTS.equals(member) && withSlotsNamesAmbiguousSlot(cons, closRegistry)) {
+				return true;
+			}
 		}
-		return containsRuntimeSlotName(cons.car()) || containsRuntimeSlotName(cons.cdr());
+		return containsRuntimeSlotName(cons.car(), closRegistry) || containsRuntimeSlotName(cons.cdr(), closRegistry);
+	}
+
+	/**
+	 * Whether a {@code (with-slots (spec...) obj body...)} form names a slot whose
+	 * position is AMBIGUOUS across the registered layouts -- each spec is a symbol or a
+	 * {@code (var slot)} pair; the expansion's slot-value reads/writes then outline onto
+	 * the shared runtime dispatch, so the gates must fire.
+	 */
+	private static boolean withSlotsNamesAmbiguousSlot(LispCons cons, ClosRegistry closRegistry) {
+		if (!cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons specs) || !specs.isProperList()) {
+			return false;
+		}
+		for (LispVal spec : specs.toList()) {
+			LispSymbol slotSym = spec instanceof LispSymbol bare ? bare
+					: spec instanceof LispCons pair && pair.isProperList() && pair.toList().size() == 2
+							&& pair.toList().get(1) instanceof LispSymbol slot ? slot : null;
+			if (slotSym != null && ambiguousSlotPosition(slotSym, closRegistry)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -11623,7 +11899,21 @@ public final class LispMacroExpander {
 		LispSymbol instanceVar = new LispSymbol(generic.paramNames().get(0));
 		LispVal body;
 		if ("SHARED-INITIALIZE".equals(plain)) {
-			body = instanceVar;
+			// CL's system default primary FILLS the slots: each supplied (declared)
+			// initarg, then -- when the slot-names argument is true -- each
+			// still-unbound slot's initform (%mop-fill-slots: registry-backed builtin
+			// on the interpreter, generated per-class dispatch on the compile paths).
+			// The identity body this used to have was correct only for the
+			// constructor-fills-first make-instance path; mito's make-dao-instance is
+			// allocate-instance + (shared-initialize obj nil initargs), where this
+			// method IS the fill.
+			if (generic.paramNames().size() >= 2) {
+				body = makeProgn(List.of(mvCall(LispNames.MOP_FILL_SLOTS, instanceVar, new LispSymbol("%init-args"),
+						new LispSymbol(generic.paramNames().get(1))), instanceVar));
+			}
+			else {
+				body = instanceVar;
+			}
 		}
 		else {
 			ClosRegistry.GenericInfo shared = closRegistry.generics()
@@ -13109,11 +13399,22 @@ public final class LispMacroExpander {
 			out.addAll(mopMakeInstanceDefuns(closRegistry, makeInstanceFunction));
 			if (metaclassProtocol) {
 				out.add(registerClassMetaobjectDefun());
-				// The system initarg fill the protocol's shared-initialize primaries
-				// call -- the chain-fill construction above allocates unbound and
-				// relies on it.
-				out.addAll(mopFillSlotsDefuns(closRegistry));
 			}
+		}
+		if (metaclassProtocol || out.stream().anyMatch(f -> referencesFunction(f, LispNames.MOP_FILL_SLOTS))) {
+			// The system initarg fill: the metaclass protocol's shared-initialize
+			// primaries call it (the chain-fill construction allocates unbound and
+			// relies on it), and so does the SYNTHESIZED shared-initialize system
+			// default (see synthesizeInitProtocolDefault) -- which exists in any
+			// program with an init-protocol method and no metaclass, hence the
+			// reference scan over the expanded output.
+			if (!metaclassProtocol) {
+				// The fill's plist scanner is defined by mop-protocol.lisp; without the
+				// protocol its defun must ride along (once -- a second same-name defun
+				// in one JVM class is a ClassFormatError).
+				out.add(MopProtocol.initargTailDefun());
+			}
+			out.addAll(mopFillSlotsDefuns(closRegistry));
 		}
 		if (classSlotDefsRuntime) {
 			// Same shape as the typep runtime: the defun is position-independent and
@@ -13122,7 +13423,7 @@ public final class LispMacroExpander {
 			out.add(classSlotDefsRuntimeDefun(closRegistry));
 			out.addAll(0, classSlotDefsTableForms(closRegistry));
 		}
-		if (needsRuntimeSlotNameDispatch(program)) {
+		if (needsRuntimeSlotNameDispatch(program, closRegistry)) {
 			// The shared runtime-slot-name dispatch defuns: the slot-value/slot-boundp
 			// call sites lower to them during the backend passes, and the bodies are
 			// built HERE, once the registry is complete -- position-independent defuns,
@@ -13130,7 +13431,12 @@ public final class LispMacroExpander {
 			out.addAll(runtimeSlotValueDefuns(closRegistry));
 			out.addAll(runtimeSlotBoundpDefuns(closRegistry));
 		}
-		if (needsRuntimeSlotSetDispatch(program)) {
+		if (needsRuntimeSlotExistsDispatch(program)) {
+			// The existence twin, separately gated so programs without a runtime-name
+			// slot-exists-p stay byte-identical.
+			out.addAll(runtimeSlotExistsPDefuns(closRegistry));
+		}
+		if (needsRuntimeSlotSetDispatch(program, closRegistry)) {
 			// The write-side twin, separately gated so read-only programs stay
 			// byte-identical.
 			out.addAll(runtimeSlotValueSetDefuns(closRegistry));
@@ -17424,6 +17730,16 @@ public final class LispMacroExpander {
 			mapList.set(1, listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))));
 			return expandCoerce((LispCons) listToCons(List.of(new LispSymbol(LispNames.COERCE), listToCons(mapList),
 					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR"))))));
+		}
+		if (resultType == null && !nilResult) {
+			// A COMPUTED result type -- mito's (map (type-of value) #'f value): walk
+			// as a list, then coerce through the same runtime family dispatch a
+			// computed coerce uses. The type binds first, per evaluation order.
+			LispSymbol typeVar = new LispSymbol("__map_t" + MV_COUNTER.getAndIncrement());
+			List<LispVal> mapList = new java.util.ArrayList<>(parts);
+			mapList.set(1, listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))));
+			return makeLet(typeVar.name(), resultTypeForm,
+					listToCons(List.of(new LispSymbol(LispNames.COERCE), listToCons(mapList), typeVar)));
 		}
 		if (!nilResult && !"LIST".equals(resultType) && !"STRING".equals(resultType)) {
 			throw new UnsupportedOperationException(
@@ -22455,13 +22771,14 @@ public final class LispMacroExpander {
 		// format control, and then the second argument is its format-argument list
 		// rather than an initarg plist, so the object designator renders it (todo-220);
 		// every other value keeps the plain object shape, which ignores the list.
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE,
-				expandObjectSignal(LispNames.ERROR_INTERNAL, d, closRegistry, signalHook, a))));
-		List<LispVal> condParts = new java.util.ArrayList<>();
-		condParts.add(new LispSymbol(LispNames.COND));
-		condParts.addAll(clauses);
-		defuns.add(listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.ERROR_RUNTIME),
-				listToCons(List.of(d, a)), listToCons(condParts))));
+		// The dispatch is CHAINED (%error-runtime -> %er-1 -> ...) rather than one
+		// cond: a cond lowers to nested ifs on the JVM, so past ~140 condition
+		// classes the outermost arm's else-branch overflowed the signed-16-bit
+		// branch encoding (todo-211; mito's tree is past the threshold). One shared
+		// shape on all four backends -- only the JVM has the hard limit, but a
+		// per-backend split here would be a divergence with no reason behind it.
+		LispVal fallback = expandObjectSignal(LispNames.ERROR_INTERNAL, d, closRegistry, signalHook, a);
+		defuns.addAll(chainedDispatchDefuns(LispNames.ERROR_RUNTIME, "%ER-", List.of(d, a), clauses, fallback));
 		return defuns;
 	}
 
@@ -22858,6 +23175,11 @@ public final class LispMacroExpander {
 		// the symbol spelling.
 		List<LispVal> builtinSyms = new java.util.ArrayList<>();
 		for (String name : ClosRegistry.BUILTIN_CLASS_NAMES) {
+			builtinSyms.add(new LispSymbol(name));
+		}
+		for (String name : ClosRegistry.FIND_CLASS_ONLY_CLASS_NAMES) {
+			// find-class-resolvable only (standard-object): a slot-less metaobject
+			// through the same memo; class-of never answers these.
 			builtinSyms.add(new LispSymbol(name));
 		}
 		LispVal builtinList = listToCons(
@@ -23425,7 +23747,11 @@ public final class LispMacroExpander {
 		int clauseNodes = 0;
 		java.util.Set<String> seen = new java.util.HashSet<>();
 		for (ClosRegistry.ClassInfo info : closRegistry.classes().values()) {
-			if (!seen.add(info.name()) || !isMetaobjectClass(info)) {
+			// EVERY registered class, not only the metaobject-ancestored ones: the
+			// synthesized shared-initialize system default routes any instance through
+			// this fill (mito's make-dao-instance fills a plain DAO instance via
+			// allocate-instance + shared-initialize).
+			if (!seen.add(info.name())) {
 				continue;
 			}
 			List<LispVal> fills = new java.util.ArrayList<>();

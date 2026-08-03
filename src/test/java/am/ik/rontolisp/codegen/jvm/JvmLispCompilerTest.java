@@ -172,6 +172,40 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileSlotExistsPAnswersDeclaredSlotsRegardlessOfBoundness() throws Exception {
+		// The compile-path twin of the interpreter case: a literal name compiles to a
+		// %obj-is membership test over the declaring layouts, a runtime name to the
+		// shared %slot-exists-p-runtime dispatch.
+		assertThat(compileAndRun("""
+				(defclass se-box () ((a :initarg :a) (b :initform 7)))
+				(let ((o (make-instance 'se-box)))
+				  (print (list (slot-exists-p o 'a) (slot-exists-p o 'b)
+				               (slot-exists-p o 'zz) (slot-exists-p 42 'a)
+				               (slot-exists-p o (car (list 'a))))))
+				""")).isEqualTo("(T T NIL NIL T)");
+	}
+
+	@Test
+	void compileRuntimeErrorDispatchScalesPastTheBranchLimit() throws Exception {
+		// todo-211: %error-runtime used to be ONE cond over every condition class, and
+		// past ~140 the outermost arm's else-branch overflowed the signed-16-bit
+		// branch encoding. The dispatch is chained now (%error-runtime -> %er-1 ->
+		// ...); 200 classes leave headroom past the old threshold, and the computed
+		// (error ty :initarg v) at the END of the chain must still dispatch -- RUN, not
+		// just compile: a segmentation bug is a VerifyError at class-load time.
+		StringBuilder program = new StringBuilder();
+		for (int i = 0; i < 200; i++) {
+			program.append("(define-condition big-e").append(i).append(" (simple-error) ())\n");
+		}
+		program.append("""
+				(define-condition big-last (error) ((who :initarg :who :reader big-last-who)))
+				(print (handler-case (error (car (list 'big-last)) :who 7)
+				         (big-last (e) (list :caught (big-last-who e)))))
+				""");
+		assertThat(compileAndRun(program.toString())).isEqualTo("(:CAUGHT 7)");
+	}
+
+	@Test
 	void compileSlotValueWithAPackageQualifiedRuntimeSlotName() throws Exception {
 		// The runtime name arrives in the caller's package spelling while the shared
 		// %slot-value-runtime dispatch matches package-stripped slot base names:
@@ -6693,7 +6727,7 @@ class JvmLispCompilerTest {
 	@Test
 	void compileAndRunListMacros() throws Exception {
 		assertThat(compileAndRun("(print (rontolisp:list-macros))")).isEqualTo(
-				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
+				"(AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)");
 	}
 
 	@Test
@@ -6704,12 +6738,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("365");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("367");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("365");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("367");
 	}
 
 	@Test
