@@ -287,7 +287,8 @@ final class JvmExprCompiler {
 				}
 				if (LispNames.MAKE_THREAD.equals(qn.member()) || LispNames.JOIN_THREAD.equals(qn.member())
 						|| LispNames.THREADP.equals(qn.member()) || LispNames.THREAD_ALIVE_P.equals(qn.member())
-						|| LispNames.DESTROY_THREAD.equals(qn.member())) {
+						|| LispNames.DESTROY_THREAD.equals(qn.member())
+						|| LispNames.CURRENT_THREAD.equals(qn.member())) {
 					// A real virtual thread behind a marker-headed opaque handle
 					// (JvmThreadRuntimeBuilder, emitted because the reference gated it).
 					compileThread(qn.member(), cons, ctx, className);
@@ -1330,7 +1331,15 @@ final class JvmExprCompiler {
 		List<LispVal> args = cons.toList();
 		String method;
 		String desc;
-		if (LispNames.MAKE_THREAD.equals(member)) {
+		if (LispNames.CURRENT_THREAD.equals(member)) {
+			if (args.size() != 1) {
+				throw new UnsupportedOperationException(
+						"rontolisp:" + member + " expects no arguments, got " + (args.size() - 1));
+			}
+			method = JvmThreadRuntimeBuilder.CURRENT_METHOD;
+			desc = JvmThreadRuntimeBuilder.CURRENT_DESC;
+		}
+		else if (LispNames.MAKE_THREAD.equals(member)) {
 			if (args.size() < 2 || args.size() > 3) {
 				throw new UnsupportedOperationException(
 						"rontolisp:" + member + " expects 1 or 2 argument(s), got " + (args.size() - 1));

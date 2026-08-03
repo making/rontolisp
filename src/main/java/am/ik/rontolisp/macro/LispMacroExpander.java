@@ -9011,8 +9011,16 @@ public final class LispMacroExpander {
 		}
 		LispSymbol classSym = quotedSymbol(parts.get(1));
 		if (classSym == null) {
-			throw new UnsupportedOperationException(
-					LispNames.MAKE_INSTANCE + " requires a literal quoted class name: " + cons.print());
+			// A computed class ((make-instance driver) -- dbi's connect instantiates
+			// the class metaobject find-driver returned): route through the runtime
+			// %mop-make-instance, which takes a metaobject or a name symbol. The
+			// interpreter defines it natively; the compile paths emit it because a
+			// computed direct call flips the same gate #'make-instance-as-a-value does
+			// (referencesMakeInstanceValue).
+			List<LispVal> call = new java.util.ArrayList<>();
+			call.add(new LispSymbol(LispNames.MOP_MAKE_INSTANCE));
+			call.addAll(parts.subList(1, parts.size()));
+			return listToCons(call);
 		}
 		ClosRegistry.ClassInfo info = closRegistry.findClass(classSym.name());
 		if (info == null) {
@@ -12810,6 +12818,15 @@ public final class LispMacroExpander {
 			if (LispNames.FUNCTION.equals(member) && cons.cdr() instanceof LispCons rest
 					&& rest.car() instanceof LispSymbol named
 					&& LispNames.MAKE_INSTANCE.equals(memberOf(named.name()))) {
+				return true;
+			}
+			// A DIRECT call whose class argument is computed ((make-instance driver) --
+			// dbi's connect instantiates the class metaobject find-driver returned)
+			// lowers to %mop-make-instance like the #'make-instance value does, so it
+			// flips the same gate. A literal (make-instance 'name ...) keeps the
+			// static expansion and never flips this.
+			if (LispNames.MAKE_INSTANCE.equals(member) && cons.cdr() instanceof LispCons argCell
+					&& quotedSymbol(argCell.car()) == null) {
 				return true;
 			}
 		}

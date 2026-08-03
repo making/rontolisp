@@ -64,6 +64,18 @@ final class JvmThreadRuntimeBuilder {
 
 	static final String THREADP_METHOD = "_threadp";
 
+	static final String CURRENT_METHOD = "_thread_current";
+
+	static final String CURRENT_DESC = "()Ljava/lang/Object;";
+
+	/**
+	 * The static ThreadLocal caching each thread's own handle, so
+	 * {@code rontolisp:current-thread} is EQ-stable per thread (it must key an {@code eq}
+	 * hash table -- dbi's per-thread connection cache). Declared and
+	 * {@code <clinit>}-initialized by the class writer next to the condition channel's.
+	 */
+	static final String CURRENT_TL_FIELD = "_curThreadTl";
+
 	static final String UNARY_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String DTL_METHOD = "_dtl";
@@ -106,7 +118,7 @@ final class JvmThreadRuntimeBuilder {
 	static ThreadRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, JvmLispCompiler.ConditionChannel channel,
 			MethodrefConstant instanceInitRef, MethodrefConstant stringConcat,
-			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime) {
+			JvmDynVarRuntimeBuilder.DynVarRuntime dynVarRuntime, FieldrefConstant curThreadTlField) {
 		ClassConstant threadClass = cp.addClass(cp.addUtf8("java/lang/Thread"));
 		MethodrefConstant threadOfVirtual = cp.addMethodref(threadClass,
 				cp.addNameAndType(cp.addUtf8("ofVirtual"), cp.addUtf8("()Ljava/lang/Thread$Builder$OfVirtual;")));
@@ -317,6 +329,49 @@ final class JvmThreadRuntimeBuilder {
 			a.areturn();
 			methods
 				.add(new ThreadMethod(cp.addUtf8(DESTROY_METHOD), cp.addUtf8(UNARY_DESC), 2, 1, a.finish(), List.of()));
+		}
+
+		// --- _thread_current(): the calling thread's own handle, cached in the
+		// _curThreadTl ThreadLocal so repeated calls return the SAME array (an eq
+		// hash-table key -- dbi's per-thread connection cache). Works for any thread,
+		// not only _thread_spawn's; the task slot is null, so joining your own handle
+		// is an error rather than a value (joining yourself deadlocks upstream too).
+		{
+			MethodrefConstant threadCurrent = cp.addMethodref(threadClass,
+					cp.addNameAndType(cp.addUtf8("currentThread"), cp.addUtf8("()Ljava/lang/Thread;")));
+			MethodrefConstant tlGetRef = java.util.Objects.requireNonNull(channel.tlGet);
+			MethodrefConstant tlSetRef = java.util.Objects.requireNonNull(channel.tlSet);
+			Asm a = new Asm();
+			a.op(Opcode.GETSTATIC);
+			a.u2(curThreadTlField.index());
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(tlGetRef.index());
+			a.astore(0);
+			int ret = a.label();
+			a.aload(0);
+			a.branch(Opcode.IFNONNULL, ret);
+			a.iconst(3);
+			a.anewarray(objectClass);
+			a.op(Opcode.DUP);
+			a.iconst(0);
+			a.ldc(tMarker.index());
+			a.aastore();
+			a.op(Opcode.DUP);
+			a.iconst(1);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(threadCurrent.index());
+			a.aastore();
+			a.astore(0);
+			a.op(Opcode.GETSTATIC);
+			a.u2(curThreadTlField.index());
+			a.aload(0);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(tlSetRef.index());
+			a.bind(ret);
+			a.aload(0);
+			a.areturn();
+			methods.add(new ThreadMethod(cp.addUtf8(CURRENT_METHOD), cp.addUtf8(CURRENT_DESC), 4, 1, a.finish(),
+					List.of()));
 		}
 
 		// --- _threadp(x): the marker identity test

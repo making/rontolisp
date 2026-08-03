@@ -9527,6 +9527,22 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aCapturedGenericFunctionValueSeesLaterMethods() {
+		// #'generic is late-bound: defmethod REDEFINES the dispatcher under the name,
+		// so a snapshot captured before a later-loaded system adds its method would
+		// silently miss it -- dbi stashes #'disconnect in its connection pool at load
+		// time and dbd-postgres defines the dbd-postgres-connection method afterwards.
+		assertThat(evalMulti("""
+				(defgeneric poke (x))
+				(defmethod poke ((x integer)) :int)
+				(defvar *captured* #'poke)
+				(defclass zebra () ())
+				(defmethod poke ((x zebra)) :zebra)
+				(list (funcall *captured* 1) (funcall *captured* (make-instance 'zebra)))
+				""").print()).isEqualTo("(:INT :ZEBRA)");
+	}
+
+	@Test
 	void initProtocolGenericsAreSharedAcrossPackages() {
 		// initialize-instance / shared-initialize / reinitialize-instance are CL
 		// symbols with ONE generic each, like print-object: a method defined inside
@@ -10039,10 +10055,17 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void makeInstanceRequiresALiteralClassName() {
-		assertThatThrownBy(() -> evalMulti("(defclass a () ()) (setq n 'a) (make-instance n)"))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("requires a literal quoted class name");
+	void makeInstanceTakesAComputedClassDesignator() {
+		// A non-literal class expression routes through the runtime
+		// %mop-make-instance (a name symbol or a class metaobject both work) -- dbi's
+		// connect instantiates the class metaobject find-driver returned. A literal
+		// quoted name keeps the static constructor expansion.
+		assertThat(evalMulti("""
+				(defclass a () ((v :initarg :v :reader a-v)))
+				(setq n 'a)
+				(list (a-v (make-instance n :v 1))
+				      (a-v (make-instance (find-class 'a) :v 2)))
+				""").print()).isEqualTo("(1 2)");
 	}
 
 	@Test

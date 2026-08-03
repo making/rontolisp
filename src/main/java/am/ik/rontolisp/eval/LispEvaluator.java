@@ -1619,6 +1619,13 @@ public final class LispEvaluator {
 			thread.thread().interrupt();
 			return thread;
 		}));
+		String currentThreadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD);
+		this.globalEnv.defineFunction(currentThreadName, new LispFunction(currentThreadName, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(LispNames.CURRENT_THREAD + " expects no arguments, got " + args.size());
+			}
+			return AsyncRuntime.currentThreadHandle();
+		}));
 		// http-handler lives here rather than in Environment because serving a request
 		// applies the handler function, which needs the evaluator's apply. It runs a
 		// blocking embedded HTTP server; the handler receives a request property list
@@ -5218,6 +5225,17 @@ public final class LispEvaluator {
 			return resolveFunction(LispMacroExpander.setfFunctionName(setfPlace.name()));
 		}
 		if (designator instanceof LispSymbol sym) {
+			// A GENERIC function's #' value is late-bound: defmethod REDEFINES the
+			// dispatcher under the name (evalDefmethod), so a captured snapshot would
+			// silently miss every method a later-loaded system adds -- dbi stashes
+			// #'disconnect in its connection pool at load time and dbd-postgres
+			// defines its method afterwards. The wrapper resolves the CURRENT binding
+			// at call time (real CL semantics: #'name IS the generic object methods
+			// join). Non-generic names keep the direct value.
+			if (this.closRegistry.findGeneric(sym.name()) != null) {
+				String name = sym.name();
+				return new LispFunction(name, args -> apply(resolveFunction(name), args, this.globalEnv));
+			}
 			return resolveFunction(sym.name());
 		}
 		throw new LispEvalException(

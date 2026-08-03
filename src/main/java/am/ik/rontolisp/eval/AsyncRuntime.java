@@ -91,6 +91,27 @@ final class AsyncRuntime {
 	}
 
 	/**
+	 * The calling thread's own EQ-stable handle ({@code rontolisp:current-thread}):
+	 * lazily wraps the current {@code Thread} on first ask and caches it, so repeated
+	 * calls from one thread return the SAME record and can key an {@code eq} hash table
+	 * (dbi's per-thread connection cache). Works for any thread, not only
+	 * {@code spawnThread} spawns; the never-completed result future means joining your
+	 * own handle blocks forever, which is what joining yourself means anyway. Kept HERE
+	 * for the same reason as {@link #spawnThread}: the playground substitutes this class
+	 * wholesale.
+	 */
+	private static final ThreadLocal<LispThread> CURRENT_THREAD_HANDLE = new ThreadLocal<>();
+
+	static LispThread currentThreadHandle() {
+		LispThread handle = CURRENT_THREAD_HANDLE.get();
+		if (handle == null) {
+			handle = new LispThread(Thread.currentThread(), new CompletableFuture<>());
+			CURRENT_THREAD_HANDLE.set(handle);
+		}
+		return handle;
+	}
+
+	/**
 	 * Starts a timer: the returned future settles to {@code nil} after the given number
 	 * of milliseconds ({@code rontolisp:wait-for}). Uses
 	 * {@link CompletableFuture#completeOnTimeout} so the delay rides the JDK's shared

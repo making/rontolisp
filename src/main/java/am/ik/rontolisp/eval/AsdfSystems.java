@@ -152,11 +152,15 @@ public final class AsdfSystems {
 	 * {@code defparameter} of a pure literal/conditional value is evaluated into a
 	 * parse-time data environment (the cl-postgres {@code *string-file*} idiom), a
 	 * top-level {@code eval-when} announcing features with {@code pushnew} declares them
-	 * for the systems defined after it ({@link #collectFeaturePushes}), and any other
-	 * form is a hard error naming the file. A {@code #.} read-time-eval datum (wrapped in
-	 * a {@code %read-eval} marker by the tolerant reader) is resolved against that
-	 * environment; an unresolvable one is skipped with a warning (the ASDF-version-guard
-	 * idiom). {@code #+}/{@code #-} conditionals are evaluated against {@code features}.
+	 * for the systems defined after it ({@link #collectFeaturePushes}), a
+	 * {@code (defmethod perform ...)} hook is tolerated and ignored
+	 * ({@link #checkToleratedPerformMethod}), a doc-file component-class {@code defclass}
+	 * declares an ordering-only component type ({@link #collectDocFileClass}), and any
+	 * other form is a hard error naming the file. A {@code #.} read-time-eval datum
+	 * (wrapped in a {@code %read-eval} marker by the tolerant reader) is resolved against
+	 * that environment; an unresolvable one is skipped with a warning (the
+	 * ASDF-version-guard idiom). {@code #+}/{@code #-} conditionals are evaluated against
+	 * {@code features}.
 	 * @param source the {@code .asd} source text
 	 * @param asdPath the resolved path of the {@code .asd} file (for the base directory
 	 * and error messages)
@@ -171,6 +175,9 @@ public final class AsdfSystems {
 		// file order and merged into the declared features of every LATER system (see
 		// collectFeaturePushes).
 		List<String> pushedFeatures = new ArrayList<>();
+		// Component-class names a tolerated doc-file defclass declared, in file order
+		// like the feature pushes: they reach only the systems defined after them.
+		Set<String> docComponentTypes = new HashSet<>();
 		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
 			// A #. datum the lexer could not re-lex leaves a nil placeholder (so it does
 			// not shift plist/alist pairing inside a defsystem option); a top-level one
@@ -203,14 +210,24 @@ public final class AsdfSystems {
 				collectFeaturePushes(form, true, features, pushedFeatures, asdPath);
 				continue;
 			}
+			if (operatorMemberIs(form, LispNames.DEFMETHOD)) {
+				checkToleratedPerformMethod(form, asdPath);
+				continue;
+			}
+			if (operatorMemberIs(form, LispNames.DEFCLASS)) {
+				collectDocFileClass(form, docComponentTypes, asdPath);
+				continue;
+			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
-				systems.add(parseDefsystem(substituteReadEval(form, parameters), baseDir, features, pushedFeatures));
+				systems.add(parseDefsystem(substituteReadEval(form, parameters), baseDir, features, pushedFeatures,
+						docComponentTypes));
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
 					+ ", " + LispNames.DEFPACKAGE + ", " + LispNames.IN_PACKAGE + ", " + LispNames.DEFPARAMETER + ", "
-					+ LispNames.REGISTER_SYSTEM_PACKAGES + " and a " + LispNames.EVAL_WHEN + "/" + LispNames.PUSHNEW
-					+ " feature announcement are recognized): " + form.print());
+					+ LispNames.REGISTER_SYSTEM_PACKAGES + ", a " + LispNames.EVAL_WHEN + "/" + LispNames.PUSHNEW
+					+ " feature announcement, a (" + LispNames.DEFMETHOD + " PERFORM ...) hook and a doc-file "
+					+ LispNames.DEFCLASS + " are recognized): " + form.print());
 		}
 		return systems;
 	}
@@ -235,6 +252,86 @@ public final class AsdfSystems {
 					+ ex.getMessage() + " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not"
 					+ " over earlier defparameters)");
 		}
+	}
+
+	/**
+	 * Checks a top-level {@code defmethod} in a {@code .asd} file: only a
+	 * {@code (defmethod PERFORM ...)} hook is tolerated (and then IGNORED whole -- there
+	 * is no {@code operate} machinery for it to run on), any other method name stays a
+	 * hard error. Two upstream shapes drive the tolerance: iterate.asd's test-op wiring
+	 * and esrap.asd's {@code perform :after} on {@code load-op}, which pushes six
+	 * {@code :esrap.*} capability features and {@code (provide :esrap)}. Ignoring the
+	 * esrap pushes is deliberate, not an oversight: nothing reads them -- grep of the
+	 * whole cached dist for {@code #+esrap.}/{@code #-esrap.} and of esrap's own sources
+	 * for any {@code esrap.} feature reference found zero hits (2026-08-03). If a future
+	 * esrap or a downstream starts reading one, fold the pushed keywords into the
+	 * system's features instead (the {@code :rontolisp-features} channel,
+	 * {@code collectFeaturePushes}); a load-time push could never reach a reader
+	 * conditional anyway ({@code .todo/181}).
+	 */
+	private static void checkToleratedPerformMethod(LispVal form, String asdPath) {
+		List<LispVal> items = ((LispCons) form).toList();
+		if (items.size() >= 2 && items.get(1) instanceof LispSymbol name && "PERFORM".equals(memberName(name))) {
+			return;
+		}
+		throw new IllegalStateException(asdPath + ": only a (" + LispNames.DEFMETHOD
+				+ " PERFORM ...) hook is tolerated as a top-level method in a .asd file: " + form.print());
+	}
+
+	/**
+	 * Collects a tolerated top-level {@code defclass} in a {@code .asd} file: only a
+	 * DOC-FILE component class is accepted -- every superclass must be ASDF's
+	 * {@code doc-file} or a doc-file class this file declared earlier -- and the declared
+	 * name is recorded so components of that type parse as ordering-only entries (like
+	 * {@code :static-file}). chipz.asd is the driving shape: {@code (defclass txt-file
+	 * (doc-file) ...)} + {@code (:txt-file "chipz-doc")} components. Any other defclass
+	 * (a {@code cl-source-file} subclass changes how sources LOAD, which the data-only
+	 * parse cannot honor) stays a hard error.
+	 */
+	private static void collectDocFileClass(LispVal form, Set<String> docComponentTypes, String asdPath) {
+		List<LispVal> items = ((LispCons) form).toList();
+		if (items.size() >= 3 && items.get(1) instanceof LispSymbol name && items.get(2) instanceof LispCons supers
+				&& supers.isProperList()) {
+			boolean allDoc = true;
+			for (LispVal superClass : supers.toList()) {
+				if (!(superClass instanceof LispSymbol superSym) || !(DOC_FILE.equals(memberName(superSym))
+						|| docComponentTypes.contains(memberName(superSym)))) {
+					allDoc = false;
+					break;
+				}
+			}
+			if (allDoc) {
+				docComponentTypes.add(memberName(name));
+				return;
+			}
+		}
+		throw new IllegalStateException(asdPath + ": only a doc-file component class is tolerated as a top-level "
+				+ LispNames.DEFCLASS + " in a .asd file: " + form.print());
+	}
+
+	/** ASDF's own documentation component classes, valid without a local defclass. */
+	private static final String DOC_FILE = "DOC-FILE";
+
+	private static final String HTML_FILE = "HTML-FILE";
+
+	/**
+	 * The UPPERCASE member name of a symbol, package qualifier and {@code #:} stripped --
+	 * the spelling a component-type keyword ({@code :txt-file} -> {@code TXT-FILE})
+	 * matches a defclass name against.
+	 */
+	private static String memberName(LispSymbol sym) {
+		String name = sym.name();
+		if (name.startsWith("#:")) {
+			name = name.substring(2);
+		}
+		else if (sym.isKeyword()) {
+			name = name.substring(1);
+		}
+		else {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+			name = qn == null ? name : qn.member();
+		}
+		return name.toUpperCase(java.util.Locale.ROOT);
 	}
 
 	/**
@@ -502,6 +599,26 @@ public final class AsdfSystems {
 	 */
 	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
 			List<String> pushedFeatures) {
+		return parseDefsystem(form, baseDir, givenFeatures, pushedFeatures, Set.of());
+	}
+
+	/**
+	 * Parses a {@code defsystem} form with the doc-file component-class names the
+	 * enclosing {@code .asd} declared with tolerated top-level {@code defclass} forms
+	 * ({@link #collectDocFileClass}); a component of such a type (or of ASDF's own
+	 * {@code :doc-file}/{@code :html-file}) parses as an ordering-only entry.
+	 * @param form the {@code defsystem} form
+	 * @param baseDir the directory the component files resolve against, or {@code null}
+	 * for working-directory-relative
+	 * @param givenFeatures the features the {@code :if-feature} component option tests
+	 * @param pushedFeatures the feature names the enclosing {@code .asd} pushed onto
+	 * {@code *features*} before this form
+	 * @param docComponentTypes the doc-file component-class names declared before this
+	 * form
+	 * @return the parsed system
+	 */
+	private static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
+			List<String> pushedFeatures, Set<String> docComponentTypes) {
 		if (!(form instanceof LispCons cons)) {
 			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " expects a system definition form");
 		}
@@ -570,7 +687,7 @@ public final class AsdfSystems {
 		}
 		String prefix = pathname == null || pathname.isEmpty() ? "" : pathname + "/";
 		List<String> files = components == null ? List.of()
-				: orderComponents(name, components, serial, prefix, features);
+				: orderComponents(name, components, serial, prefix, features, docComponentTypes);
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures);
 	}
 
@@ -653,6 +770,18 @@ public final class AsdfSystems {
 			if (":FEATURE".equals(op.name())) {
 				return featureDependency(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :depends-on", cons, features,
 						(spec) -> dependencyName(systemName, spec, features));
+			}
+			if (":VERSION".equals(op.name())) {
+				// (:version NAME "1.2.3") (mito-core.asd's dbi entry) resolves to the
+				// plain dependency; the version constraint is NOT checked -- the systems
+				// reachable here carry no reliable :version to check against (that option
+				// is parsed-and-ignored metadata), so a check would compare with nothing.
+				List<LispVal> items = cons.toList();
+				if (items.size() < 3) {
+					throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
+							+ " :depends-on (:version ...) expects (:version NAME VERSION): " + dep.print());
+				}
+				return dependencyName(systemName, items.get(1), features);
 			}
 			if (":REQUIRE".equals(op.name())) {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
@@ -762,11 +891,11 @@ public final class AsdfSystems {
 	 * implicit dependency on the previous sibling; a module's files stay contiguous.
 	 */
 	private static List<String> orderComponents(String systemName, LispVal componentsVal, boolean serial, String prefix,
-			Features features) {
+			Features features, Set<String> docComponentTypes) {
 		List<Component> components = new ArrayList<>();
 		String previous = null;
 		for (LispVal entry : properList(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :components", componentsVal)) {
-			Component component = parseComponent(systemName, entry, prefix, features);
+			Component component = parseComponent(systemName, entry, prefix, features, docComponentTypes);
 			List<String> deps = new ArrayList<>(component.dependsOn());
 			if (serial && previous != null) {
 				deps.add(previous);
@@ -809,7 +938,8 @@ public final class AsdfSystems {
 		return List.copyOf(files);
 	}
 
-	private static Component parseComponent(String systemName, LispVal entry, String prefix, Features features) {
+	private static Component parseComponent(String systemName, LispVal entry, String prefix, Features features,
+			Set<String> docComponentTypes) {
 		if (!(entry instanceof LispCons compCons) || !(compCons.car() instanceof LispSymbol type)
 				|| !type.isKeyword()) {
 			throw new IllegalStateException(
@@ -880,10 +1010,19 @@ public final class AsdfSystems {
 				// An empty :pathname is ASDF's "this module adds no directory level".
 				String dir = pathname == null ? name : pathname;
 				yield orderComponents(systemName, nested, moduleSerial, dir.isEmpty() ? prefix : prefix + dir + "/",
-						features);
+						features, docComponentTypes);
 			}
-			default -> throw new IllegalStateException("system " + systemName + ": unsupported component type "
-					+ type.name() + " (supported: :file :module :static-file)");
+			default -> {
+				// A documentation component -- ASDF's own :doc-file/:html-file or a type
+				// the .asd declared with a tolerated doc-file defclass (chipz's
+				// :txt-file/:css-file) -- is ordering-only, like :static-file.
+				String member = type.name().substring(1);
+				if (DOC_FILE.equals(member) || HTML_FILE.equals(member) || docComponentTypes.contains(member)) {
+					yield List.of();
+				}
+				throw new IllegalStateException("system " + systemName + ": unsupported component type " + type.name()
+						+ " (supported: :file :module :static-file and declared doc-file classes)");
+			}
 		};
 		// A feature-disabled component keeps its place in the dependency graph (a
 		// sibling may :depends-on it) but contributes no source files.

@@ -48,6 +48,31 @@ class ThreadTest {
 	}
 
 	@Test
+	void currentThreadIsAnEqStableLiveHandle() {
+		// EQ-stability is the property dbi's per-thread connection cache keys on: the
+		// handle must be reusable as an eq hash-table key across calls.
+		assertThat(evalAll(evaluator(), """
+				(let ((h (rontolisp:current-thread)))
+				  (list (rontolisp:threadp h)
+				        (eq h (rontolisp:current-thread))
+				        (rontolisp:thread-alive-p h)
+				        (let ((table (make-hash-table :test 'eq)))
+				          (setf (gethash (rontolisp:current-thread) table) :hit)
+				          (gethash (rontolisp:current-thread) table))))
+				""").print()).isEqualTo("(T T T :HIT)");
+	}
+
+	@Test
+	void currentThreadDiffersAcrossThreads() {
+		// A spawned body's self-handle is its own, not the spawner's.
+		assertThat(evalAll(evaluator(), """
+				(let ((mine (rontolisp:current-thread)))
+				  (eq mine (rontolisp:join-thread
+				            (rontolisp:make-thread (lambda () (rontolisp:current-thread))))))
+				""")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void threadAlivePOnANonThreadIsAnError() {
 		assertThatThrownBy(() -> evalAll(evaluator(), "(rontolisp:thread-alive-p 42)"))
 			.isInstanceOf(LispEvalException.class)

@@ -354,6 +354,7 @@ package system. Each name below links to its own page.
 | `rontolisp:threadp` | `(rontolisp:threadp v)` | `t` if the value is a thread handle |
 | `rontolisp:thread-alive-p` | `(rontolisp:thread-alive-p th)` | `t` while the thread is still running (`nil` after a join) |
 | `rontolisp:destroy-thread` | `(rontolisp:destroy-thread th)` | interrupt the thread; returns the handle |
+| `rontolisp:current-thread` | `(rontolisp:current-thread)` | the calling thread's own handle, `eq`-stable per thread (works for any thread, not only `make-thread` spawns) |
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | the function symbols of a package, sorted (defaults to `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | the macro symbols of a package, sorted |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | the special-form symbols of a package, sorted |

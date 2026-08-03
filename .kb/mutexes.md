@@ -61,7 +61,12 @@ qualified name in all three dispatchers), so one lowering serves every backend.
 Two deliberate divergences, both supersets: `make-lock` returns a REENTRANT lock
 (upstream's is not -- a program that would deadlock there merely proceeds here),
 and `acquire-lock`'s `:wait-p` is accepted and ignored (the acquisition always
-blocks).
+blocks). `make-lock` takes `&rest` (todo-245): the v1 spelling passes a
+positional name, the v2 spelling (`bt2:make-lock :name "..."` -- dbi's
+cache/thread.lisp) a keyword pair, both onto the ONE defining symbol through the
+package redirects, and the name is ignored either way. `bt2:with-lock-held
+((lock-form))` -- the v2 double-paren shape -- parses through the same
+one-element-spec expansion, since the spec's single element IS the lock form.
 
 `bt:*supports-threads-p*` is per-backend, and getting it there is why
 **`ShimLibraries.forms` now takes the TARGET backend's `Features`** instead of

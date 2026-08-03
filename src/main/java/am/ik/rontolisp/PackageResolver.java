@@ -133,6 +133,25 @@ public final class PackageResolver {
 			if (LispNames.DEFPACKAGE.equals(member)) {
 				return resolveDefpackage(cons);
 			}
+			// A literal top-level (uiop:define-package ...) / (mgl-pax:define-package
+			// ...) is defpackage in the variant's clothing and is consumed exactly like
+			// one: dbi's package headers and trivial-utf-8's opening form. The variant's
+			// extra tolerance (redefining an existing package) and its extra clauses
+			// (:use-reexport, :mix, ...) error loudly in resolveDefpackage until a
+			// consumer needs them -- deny by default, like the rest of this subset.
+			if (LispNames.DEFINE_PACKAGE.equals(member) && isDefinePackageOperator(op)) {
+				return resolveDefpackage(cons, true);
+			}
+			// mgl-pax:defsection AUTOEXPORTS: each (SYMBOL LOCATIVE) entry of a section
+			// body is exported from the current package at load time (mgl-pax's
+			// documented default), and trivial-utf-8 has no other export mechanism --
+			// its whole public API is exported by its @reference section. Which symbols
+			// are external is a read/compile-time notion here, so the entries are
+			// consumed into the export set on THIS pass; the form itself still resolves
+			// and expands below (the stub macro defines the section variable).
+			if ("DEFSECTION".equals(member) && isMglPaxOperator(op)) {
+				consumeDefsectionExports(cons);
+			}
 			// A literal top-level (use-package P) is consumed like in-package: the use
 			// list is a read/compile-time notion here, so the directive has to take
 			// effect on THIS pass for the forms that follow -- and consuming it is what
@@ -190,6 +209,45 @@ public final class PackageResolver {
 	private boolean isUiopOperator(LispSymbol op) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 		return qn != null && LispNames.UIOP_PKG.equals(this.registry.canonicalName(qn.pkg()));
+	}
+
+	/**
+	 * Whether {@code op} is a package-qualified {@code define-package} of one of the two
+	 * packages that define the variant: {@code uiop} or {@code mgl-pax} (nickname
+	 * {@code pax}). The qualifier is required -- a bare {@code define-package} is a user
+	 * symbol.
+	 */
+	private boolean isDefinePackageOperator(LispSymbol op) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null) {
+			return false;
+		}
+		String pkg = this.registry.canonicalName(qn.pkg());
+		return LispNames.UIOP_PKG.equals(pkg) || LispNames.MGL_PAX_PKG.equals(pkg);
+	}
+
+	private boolean isMglPaxOperator(LispSymbol op) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		return qn != null && LispNames.MGL_PAX_PKG.equals(this.registry.canonicalName(qn.pkg()));
+	}
+
+	/**
+	 * Exports the entries of a literal top-level {@code (pax:defsection NAME (:title
+	 * ...) "docs..." (SYMBOL LOCATIVE) ...)} from the current package: every body list
+	 * whose head is a non-keyword symbol names an entry (section references included,
+	 * like real mgl-pax); docstrings and keyword-led option lists are not entries.
+	 */
+	private void consumeDefsectionExports(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<String> names = new ArrayList<>();
+		for (LispVal part : parts.subList(Math.min(2, parts.size()), parts.size())) {
+			if (part instanceof LispCons entry && entry.car() instanceof LispSymbol entrySym && !entrySym.isKeyword()) {
+				names.add(entrySym.name());
+			}
+		}
+		if (!names.isEmpty()) {
+			exportSymbols(names, this.currentPackage, true);
+		}
 	}
 
 	/**
@@ -498,6 +556,16 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveDefpackage(LispCons cons) {
+		return resolveDefpackage(cons, false);
+	}
+
+	/**
+	 * Resolves a {@code defpackage} -- or, with {@code definePackageVariant} true, a
+	 * consumed {@code uiop:define-package}/{@code mgl-pax:define-package} -- form. The
+	 * variant additionally accepts {@code :use-reexport}; its other extra clauses stay
+	 * unsupported until a consumer needs them.
+	 */
+	private LispVal resolveDefpackage(LispCons cons, boolean definePackageVariant) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 2) {
 			throw new LispPackageException(LispNames.DEFPACKAGE + " expects a package name");
@@ -510,6 +578,7 @@ public final class PackageResolver {
 		Set<String> exports = new HashSet<>();
 		List<String> nicknames = new ArrayList<>();
 		Map<String, String> imports = new HashMap<>();
+		Map<String, String> shadowingImports = new HashMap<>();
 		Set<String> shadows = new HashSet<>();
 		for (LispVal clause : parts.subList(2, parts.size())) {
 			if (!(clause instanceof LispCons clauseCons) || !(clauseCons.car() instanceof LispSymbol keyword)
@@ -538,6 +607,29 @@ public final class PackageResolver {
 						exports.add(designator(LispNames.EXPORT_KEYWORD, "a symbol name", arg));
 					}
 				}
+				case ":USE-REEXPORT" -> {
+					// define-package only (dbi's package header): use the packages AND
+					// re-export their external symbols. The exports ride the same
+					// import-redirect the export-of-an-inherited-name pass below records,
+					// so each re-exported name stays the used package's symbol.
+					if (!definePackageVariant) {
+						throw new LispPackageException(
+								"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
+					}
+					for (LispVal arg : args.subList(1, args.size())) {
+						String used = registeredPackageName(
+								this.registry.canonicalName(designator(":use-reexport", "a package name", arg)));
+						if (!this.registry.contains(used)) {
+							throw new LispPackageException("No such package: " + used);
+						}
+						for (String use : withImpliedUses(used)) {
+							if (!useList.contains(use)) {
+								useList.add(use);
+							}
+						}
+						exports.addAll(this.registry.get(used).externals());
+					}
+				}
 				case LispNames.NICKNAMES_KEYWORD -> {
 					for (LispVal arg : args.subList(1, args.size())) {
 						String nickname = designator(LispNames.NICKNAMES_KEYWORD, "a package name", arg);
@@ -561,28 +653,16 @@ public final class PackageResolver {
 								designator(LispNames.LOCAL_NICKNAMES_KEYWORD, "a package name", pair.toList().get(1)));
 					}
 				}
-				case LispNames.IMPORT_FROM_KEYWORD -> {
-					if (args.size() < 2) {
-						throw new LispPackageException(LispNames.IMPORT_FROM_KEYWORD + " expects a package name");
-					}
-					String source = registeredPackageName(this.registry
-						.canonicalName(designator(LispNames.IMPORT_FROM_KEYWORD, "a package name", args.get(1))));
-					if (!this.registry.contains(source)) {
-						throw new LispPackageException("No such package: " + source);
-					}
-					for (LispVal arg : args.subList(2, args.size())) {
-						String member = designator(LispNames.IMPORT_FROM_KEYWORD, "a symbol name", arg);
-						// The upcase reader premise upcases the designator while a
-						// built-in source package's canonical spellings are lowercase:
-						// fold when the lowercase spelling is the one the source
-						// actually provides ((:import-from #:cl #:car) imports car).
-						String lower = member.toLowerCase(java.util.Locale.ROOT);
-						if (!member.equals(lower) && sourceProvides(source, lower) && !sourceProvides(source, member)) {
-							member = lower;
-						}
-						imports.put(member, trueHome(source, member));
-					}
-				}
+				case LispNames.IMPORT_FROM_KEYWORD -> collectImportFrom(LispNames.IMPORT_FROM_KEYWORD, args, imports);
+				// (:shadowing-import-from PKG name...): the import map is the FIRST
+				// thing resolveUnqualified consults -- before the shadow set, the cl
+				// symbol table and the use list -- so a recorded import already has
+				// exactly the always-wins precedence CL gives a shadowing import. The
+				// clauses share one collector; shadowing entries are merged LAST, so
+				// they beat a plain :import-from of the same name (dbd-postgres takes
+				// database-error-message/-code from cl-postgres-error over the ones its
+				// use list inherits from dbi.error).
+				case ":SHADOWING-IMPORT-FROM" -> collectImportFrom(":shadowing-import-from", args, shadowingImports);
 				// Metadata: accepted for portability, not recorded anywhere.
 				case ":DOCUMENTATION", ":SIZE" -> {
 				}
@@ -600,12 +680,13 @@ public final class PackageResolver {
 						shadows.add(PackageRegistry.isClSymbol(shadowedLower) ? shadowedLower : shadowed);
 					}
 				}
-				case ":SHADOWING-IMPORT-FROM" -> throw new LispPackageException(LispNames.DEFPACKAGE + " "
-						+ keyword.name() + " is not supported (rontolisp has no symbol shadowing import)");
 				default -> throw new LispPackageException(
 						"Unsupported " + LispNames.DEFPACKAGE + " clause: " + keyword.name());
 			}
 		}
+		// Shadowing imports win over plain imports of the same name (their whole
+		// point).
+		imports.putAll(shadowingImports);
 		// An :export of a name the package does not define but INHERITS through its use
 		// list is a re-export of the used package's symbol -- in Common Lisp the very
 		// same symbol object, so postmodern's (:use :s-sql) + (:export #:sql) exports
@@ -637,6 +718,34 @@ public final class PackageResolver {
 
 	private static String packageDesignator(String context, LispVal designator) {
 		return designator(context, "a package name", designator);
+	}
+
+	/**
+	 * Collects an {@code (:import-from PKG name...)} / {@code (:shadowing-import-from
+	 * PKG name...)} clause's names into {@code target} as import redirects to the source
+	 * package.
+	 */
+	private void collectImportFrom(String clauseName, List<LispVal> args, Map<String, String> target) {
+		if (args.size() < 2) {
+			throw new LispPackageException(clauseName + " expects a package name");
+		}
+		String source = registeredPackageName(
+				this.registry.canonicalName(designator(clauseName, "a package name", args.get(1))));
+		if (!this.registry.contains(source)) {
+			throw new LispPackageException("No such package: " + source);
+		}
+		for (LispVal arg : args.subList(2, args.size())) {
+			String member = designator(clauseName, "a symbol name", arg);
+			// The upcase reader premise upcases the designator while a built-in source
+			// package's canonical spellings are lowercase: fold when the lowercase
+			// spelling is the one the source actually provides ((:import-from #:cl
+			// #:car) imports car).
+			String lower = member.toLowerCase(java.util.Locale.ROOT);
+			if (!member.equals(lower) && sourceProvides(source, lower) && !sourceProvides(source, member)) {
+				member = lower;
+			}
+			target.put(member, trueHome(source, member));
+		}
 	}
 
 	/**

@@ -49,7 +49,12 @@
   #+rontolisp-wasm nil
   #-rontolisp-wasm t)
 
-(defun bordeaux-threads:make-lock (&optional name)
+;; &rest rather than &optional: the v1 spelling passes a positional name,
+;; the v2 spelling (bt2:make-lock :name "...") passes a keyword pair -- both
+;; resolve to this ONE symbol through the package import redirects, and the
+;; name is ignored either way (a debugging label upstream).
+(defun bordeaux-threads:make-lock (&rest name)
+  (declare (ignore name))
   (rontolisp:make-mutex))
 
 (defun bordeaux-threads:acquire-lock (lock &optional (wait-p t))
@@ -99,6 +104,15 @@
 (defun bt2:destroy-thread (thread)
   (rontolisp:destroy-thread thread))
 
+;; The calling thread's own handle, EQ-stable per thread (the primitive caches
+;; it in a ThreadLocal), so it can key an eq hash table -- dbi's per-thread
+;; connection cache (cache/thread.lisp's steal-cache-table) is the driving
+;; consumer. Works for the main thread and served requests too, not only
+;; make-thread spawns.
+#-rontolisp-wasm
+(defun bt2:current-thread ()
+  (rontolisp:current-thread))
+
 #+rontolisp-wasm
 (defun bt2:make-thread (function &key name initial-bindings trap-conditions)
   (error "bt2:make-thread: the WASM backends are single-threaded by construction; run without threads (clack:clackup takes :use-thread nil)"))
@@ -121,3 +135,10 @@
 #+rontolisp-wasm
 (defun bt2:destroy-thread (thread)
   (error "bt2:destroy-thread: the WASM backends are single-threaded by construction"))
+
+;; Signals like the other wasm thread entry points. Nothing bundled reaches it:
+;; the dbi override .asd selects the single-threaded cache there (single.lisp,
+;; upstream's own choice for a threadless implementation), which never asks.
+#+rontolisp-wasm
+(defun bt2:current-thread ()
+  (error "bt2:current-thread: the WASM backends are single-threaded by construction"))

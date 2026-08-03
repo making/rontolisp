@@ -531,7 +531,9 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.THREAD_ALIVE_P))
 				|| programUsesSymbol(program,
-						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD));
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.DESTROY_THREAD))
+				|| programUsesSymbol(program,
+						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.CURRENT_THREAD));
 		MethodrefConstant tcpConnectHelperMethod = usesSockets
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_METHOD),
 						cp.addUtf8(JvmSocketRuntimeBuilder.TCP_CONNECT_DESC)))
@@ -1602,18 +1604,30 @@ public final class JvmLispCompiler implements LispCompiler {
 		// across the join, the _await pattern).
 		final JvmThreadRuntimeBuilder.@Nullable ThreadRuntime threadRuntimeBodies;
 		final @Nullable ClassConstant callableClass;
+		final ConstantPool.@Nullable FieldrefConstant curThreadTlFieldRef;
+		final @Nullable Utf8Constant curThreadTlFieldName;
+		final @Nullable Utf8Constant curThreadTlFieldDesc;
 		if (usesThreads) {
 			mainCtx.conditionChannel.ensure(cp, this.className);
 			MethodrefConstant progInitForThread = cp.addMethodref(thisClass,
 					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			// The per-thread handle cache behind _thread_current (declared below,
+			// initialized in <clinit> next to the condition channel's ThreadLocals).
+			curThreadTlFieldName = cp.addUtf8(JvmThreadRuntimeBuilder.CURRENT_TL_FIELD);
+			curThreadTlFieldDesc = cp.addUtf8("Ljava/lang/ThreadLocal;");
+			curThreadTlFieldRef = cp.addFieldref(thisClass,
+					cp.addNameAndType(curThreadTlFieldName, curThreadTlFieldDesc));
 			threadRuntimeBodies = JvmThreadRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass,
 					stringClass, mainCtx.conditionChannel, progInitForThread, stringConcat,
-					java.util.Objects.requireNonNull(dynVarRuntime));
+					java.util.Objects.requireNonNull(dynVarRuntime), curThreadTlFieldRef);
 			callableClass = cp.addClass(cp.addUtf8("java/util/concurrent/Callable"));
 		}
 		else {
 			threadRuntimeBodies = null;
 			callableClass = null;
+			curThreadTlFieldRef = null;
+			curThreadTlFieldName = null;
+			curThreadTlFieldDesc = null;
 		}
 		final @Nullable Utf8Constant threadFnFieldName = usesThreads ? cp.addUtf8(JvmThreadRuntimeBuilder.FN_FIELD)
 				: null;
@@ -1763,6 +1777,10 @@ public final class JvmLispCompiler implements LispCompiler {
 							.writeU2(java.util.Objects.requireNonNull(threadInstanceFieldDesc))
 							.writeU2(0));
 					}
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(java.util.Objects.requireNonNull(curThreadTlFieldName))
+						.writeU2(java.util.Objects.requireNonNull(curThreadTlFieldDesc))
+						.writeU2(0));
 				}
 				// One static Object field per top-level global variable (default null =
 				// nil); written by setq/defvar, read by getstatic from any method body.
@@ -1933,6 +1951,10 @@ public final class JvmLispCompiler implements LispCompiler {
 					}
 					if (channel.nleUsed) {
 						tlFields.add(java.util.Objects.requireNonNull(channel.nleTlField));
+					}
+					if (curThreadTlFieldRef != null) {
+						// The _thread_current handle cache joins the same initializer.
+						tlFields.add(curThreadTlFieldRef);
 					}
 					List<Integer> clinitCode = new java.util.ArrayList<>();
 					for (FieldrefConstant tlField : tlFields) {

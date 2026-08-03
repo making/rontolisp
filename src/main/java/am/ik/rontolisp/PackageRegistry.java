@@ -361,7 +361,8 @@ public final class PackageRegistry {
 			Map.entry("QUICKLISP", LispNames.QL_PKG), Map.entry("C2MOP", LispNames.CLOSER_MOP_PKG),
 			Map.entry("C2CL", LispNames.CLOSER_COMMON_LISP_PKG),
 			Map.entry("FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG), Map.entry("BT", LispNames.BORDEAUX_THREADS_PKG),
-			Map.entry("BORDEAUX-THREADS-2", LispNames.BT2_PKG), Map.entry("CLTL2", LispNames.TRIVIAL_CLTL2_PKG));
+			Map.entry("BORDEAUX-THREADS-2", LispNames.BT2_PKG), Map.entry("CLTL2", LispNames.TRIVIAL_CLTL2_PKG),
+			Map.entry("PAX", LispNames.MGL_PAX_PKG), Map.entry("TG", LispNames.TRIVIAL_GARBAGE_PKG));
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -381,7 +382,7 @@ public final class PackageRegistry {
 			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
 			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
 			LispNames.BABEL_ENCODINGS_PKG, LispNames.UIOP_IMAGE_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-			"KEYWORD");
+			LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, "KEYWORD");
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -408,7 +409,7 @@ public final class PackageRegistry {
 				LispNames.TCP_LOCAL_PORT, LispNames.TCP_LOCAL_ADDRESS, LispNames.TCP_PEER_ADDRESS,
 				LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
 				LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD,
-				LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
+				LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
 				// rontolisp's own Gray-stream extension
 				// (eval.GrayStreamsLibrary).
 				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
@@ -454,7 +455,16 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
 						LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
-						LispNames.COMPONENT_PATHNAME))));
+						LispNames.COMPONENT_PATHNAME,
+						// The system CLASS name, the missing-component CONDITION name and
+						// the retry RESTART name, all external in real ASDF and all
+						// resolve-only here (never defined): trivial-utf-8's
+						// pax:defsection body says (trivial-utf-8 asdf:system), and dbi's
+						// with-autoload-on-missing handler-binds asdf:missing-component /
+						// invokes asdf:retry around its runtime load-system call -- dead
+						// code here, since a missing system is a hard Java-side error,
+						// never a signaled missing-component.
+						"SYSTEM", "MISSING-COMPONENT", "RETRY"))));
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical
@@ -483,7 +493,11 @@ public final class PackageRegistry {
 				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
 				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.SPLIT_STRING, LispNames.DIRECTORY_EXISTS_P,
 				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES,
-				LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE));
+				LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE,
+				// define-package is external in real uiop too; a literal top-level call
+				// is consumed by PackageResolver.resolve like defpackage (dbi's package
+				// headers spell it uiop:define-package).
+				LispNames.DEFINE_PACKAGE));
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
 		// Internal in real UIOP too: every call site spells it
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by
@@ -539,11 +553,12 @@ public final class PackageRegistry {
 		// symbol (the closer-common-lisp / uiop-image redirect precedent).
 		Map<String, String> btThreadImports = Map.of(LispNames.MAKE_THREAD, LispNames.BT2_PKG, LispNames.JOIN_THREAD,
 				LispNames.BT2_PKG, LispNames.THREADP, LispNames.BT2_PKG, LispNames.THREAD_ALIVE_P, LispNames.BT2_PKG,
-				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG);
-		Set<String> btV1Externals = new HashSet<>(
-				Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
-						LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
-						LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS));
+				LispNames.DESTROY_THREAD, LispNames.BT2_PKG, LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.BT2_PKG,
+				LispNames.CURRENT_THREAD, LispNames.BT2_PKG);
+		Set<String> btV1Externals = new HashSet<>(Set.of(LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK,
+				LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD, LispNames.SUPPORTS_THREADS_P, LispNames.MAKE_THREAD,
+				LispNames.JOIN_THREAD, LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD,
+				LispNames.DEFAULT_SPECIAL_BINDINGS, LispNames.CURRENT_THREAD));
 		define(new LispPackage(LispNames.BORDEAUX_THREADS_PKG, List.of(), btV1Externals, Set.copyOf(btV1Externals),
 				btThreadImports));
 		Map<String, String> bt2LockImports = Map.of(LispNames.MAKE_LOCK, LispNames.BORDEAUX_THREADS_PKG,
@@ -551,7 +566,8 @@ public final class PackageRegistry {
 				LispNames.BORDEAUX_THREADS_PKG, LispNames.WITH_LOCK_HELD, LispNames.BORDEAUX_THREADS_PKG);
 		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
 				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
-				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD));
+				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
+				LispNames.CURRENT_THREAD));
 		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
 		// Internal: the shim's own :initial-bindings value-form resolver, spelled
 		// bt2::resolve-binding-value by its call site. Owned by the package rather than
@@ -595,6 +611,21 @@ public final class PackageRegistry {
 				new HashSet<>(Set.of(LispNames.DEFINE_DECLARATION, LispNames.DECLARATION_INFORMATION, "COMPILER-LET",
 						"VARIABLE-INFORMATION", "FUNCTION-INFORMATION", "AUGMENT-ENVIRONMENT", "PARSE-MACRO",
 						"ENCLOSE"))));
+		// mgl-pax (nickname pax): the STUB behind the built-in ASDF system
+		// "mgl-pax-bootstrap" (mgl-pax-bootstrap.lisp, eval.ShimLibraries). Real
+		// mgl-pax-bootstrap's own .asd uses :defsystem-depends-on, outside the
+		// defsystem-as-data subset; trivial-utf-8 (a uuid dependency) hard-depends on
+		// it and its source calls exactly these members. define-package is consumed by
+		// PackageResolver.resolve like defpackage; section appears only as data inside
+		// defsection bodies (unevaluated, so it needs to resolve but never to be
+		// defined).
+		define(new LispPackage(LispNames.MGL_PAX_PKG, List.of(), new HashSet<>(Set.of(LispNames.DEFINE_PACKAGE,
+				"DEFSECTION", "SECTION", "MAKE-GITHUB-SOURCE-URI-FN", "REGISTER-DOC-IN-PAX-WORLD"))));
+		// trivial-garbage (nickname tg): the no-op GC-finalizer shim behind the
+		// built-in ASDF system of the same name (trivial-garbage.lisp,
+		// eval.ShimLibraries) -- dbd-postgres imports these two members.
+		define(new LispPackage(LispNames.TRIVIAL_GARBAGE_PKG, List.of(),
+				new HashSet<>(Set.of("FINALIZE", "CANCEL-FINALIZATION"))));
 	}
 
 	/**

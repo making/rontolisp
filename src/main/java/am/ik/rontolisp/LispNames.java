@@ -4289,6 +4289,19 @@ public final class LispNames {
 	public static final String DESTROY_THREAD = "DESTROY-THREAD";
 
 	/**
+	 * The {@code rontolisp:current-thread} function: the calling thread's own handle,
+	 * EQ-stable per thread (cached in a ThreadLocal on both backends that have it), so it
+	 * can key an {@code eq} hash table -- dbi's per-thread connection cache
+	 * ({@code steal-cache-table}) is the driving consumer through
+	 * {@code bt2:current-thread}. Works for ANY thread (the main thread and served
+	 * requests included, not only {@code make-thread} spawns); the self-handle a spawned
+	 * body sees is its own cached one, not the spawner's handle for it -- only
+	 * {@code threadp}/{@code thread-alive-p} answers are portable on a handle either way.
+	 * Interpreter and JVM only, like the rest of the family.
+	 */
+	public static final String CURRENT_THREAD = "CURRENT-THREAD";
+
+	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:async}, as it appears
 	 * in call position after {@code PackageResolver} resolution.
 	 */
@@ -5592,6 +5605,37 @@ public final class LispNames {
 	 * port was recorded, and nothing was ever started.
 	 */
 	public static final String STOP_SERVER = "STOP-SERVER";
+
+	/**
+	 * The {@code mgl-pax} stub package (nickname {@code pax}) behind the built-in ASDF
+	 * system {@code mgl-pax-bootstrap}. Real mgl-pax is a documentation system;
+	 * mgl-pax-bootstrap is its tiny package-definition core, which trivial-utf-8 (a uuid
+	 * dependency) hard-depends on -- and whose own {@code .asd} uses
+	 * {@code :defsystem-depends-on}, outside the defsystem-as-data subset. The stub
+	 * defines only what trivial-utf-8's source calls: {@code define-package} (consumed by
+	 * the resolver as {@code defpackage}), {@code defsection} (defines the section name
+	 * as a nil variable), and nil no-ops for the PAX-World registration helpers.
+	 */
+	public static final String MGL_PAX_PKG = "MGL-PAX";
+
+	/**
+	 * {@code define-package} -- uiop's and mgl-pax's {@code defpackage} variant. A
+	 * literal top-level call qualified to either package is consumed by
+	 * {@code PackageResolver.resolve} exactly like {@code defpackage} (the variant's
+	 * extra tolerance -- redefinition without warnings -- is the resolver's behavior
+	 * already; its extra clauses error loudly until a consumer needs them).
+	 */
+	public static final String DEFINE_PACKAGE = "DEFINE-PACKAGE";
+
+	/**
+	 * The {@code trivial-garbage} shim package (nickname {@code tg}, and built-in ASDF
+	 * system) name. The real library is a per-implementation portability layer over GC
+	 * finalizers, weak tables and weak pointers; no backend exposes GC hooks, and its
+	 * {@code .asd} errors under rontolisp's features. The shim's {@code finalize} is a
+	 * no-op returning the object (CL guarantees finalizers nothing, so a conforming
+	 * consumer already works when they never fire); dbd-postgres is the consumer.
+	 */
+	public static final String TRIVIAL_GARBAGE_PKG = "TRIVIAL-GARBAGE";
 
 	/**
 	 * The {@code trivial-cltl2} shim package (nickname {@code cltl2}, and built-in ASDF

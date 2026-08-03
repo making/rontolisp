@@ -376,6 +376,7 @@ categories:
       - { slug: rontolisp-threadp, name: "rontolisp:threadp" }
       - { slug: rontolisp-thread-alive-p, name: "rontolisp:thread-alive-p" }
       - { slug: rontolisp-destroy-thread, name: "rontolisp:destroy-thread" }
+      - { slug: rontolisp-current-thread, name: "rontolisp:current-thread" }
       - { slug: rontolisp-list-functions, name: "rontolisp:list-functions" }
       - { slug: rontolisp-list-macros, name: "rontolisp:list-macros" }
       - { slug: rontolisp-list-special-forms, name: "rontolisp:list-special-forms" }

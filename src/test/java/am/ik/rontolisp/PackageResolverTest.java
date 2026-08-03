@@ -340,6 +340,69 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void definePackageIsConsumedLikeDefpackage() {
+		// dbi spells its package headers uiop:define-package and trivial-utf-8 spells
+		// pax:define-package -- both are defpackage in the variant's clothing and are
+		// consumed exactly like one.
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(uiop:define-package :dp1 (:use :cl) (:export :f))")).isEqualTo("(QUOTE DP1)");
+		assertThat(resolve(resolver, "(pax:define-package :dp2 (:use :cl))")).isEqualTo("(QUOTE DP2)");
+		resolve(resolver, "(in-package :dp1)");
+		assertThat(resolve(resolver, "(defun f (x) x)")).isEqualTo("(DEFUN DP1:F (DP1::X) DP1::X)");
+	}
+
+	@Test
+	void aBareDefinePackageIsNotTheVariant() {
+		// Only the uiop/mgl-pax qualified spellings are the defpackage variant; a bare
+		// define-package is an ordinary user symbol and stays a call form.
+		assertThat(resolve("(define-package :x)")).isEqualTo("(DEFINE-PACKAGE :X)");
+	}
+
+	@Test
+	void definePackageUseReexportUsesAndReexports() {
+		// dbi's package header: (:use-reexport #:dbi.error ...) uses the packages AND
+		// re-exports their external symbols, so a dbi:connection-error reference
+		// resolves to the dbi.error symbol. define-package only -- the clause stays
+		// unsupported in plain defpackage.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :re-src (:use :cl) (:export :frob))");
+		resolve(resolver, "(uiop:define-package :re-facade (:use :cl) (:use-reexport :re-src))");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(re-facade:frob 1)")).isEqualTo("(RE-SRC:FROB 1)");
+		assertThatThrownBy(() -> resolve(resolver, "(defpackage :plain (:use-reexport :re-src))"))
+			.isInstanceOf(LispPackageException.class)
+			.hasMessageContaining(":USE-REEXPORT");
+	}
+
+	@Test
+	void shadowingImportFromWinsOverTheUseList() {
+		// dbd-postgres takes database-error-message from cl-postgres-error over the
+		// one its use list inherits: the shadowing import must resolve to the named
+		// source package's symbol.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :err-a (:use :cl) (:export :oops))");
+		resolve(resolver, "(defpackage :err-b (:use :cl) (:export :oops))");
+		resolve(resolver, "(defpackage :consumer (:use :cl :err-a) (:shadowing-import-from :err-b :oops))");
+		resolve(resolver, "(in-package :consumer)");
+		assertThat(resolve(resolver, "(oops 1)")).isEqualTo("(ERR-B:OOPS 1)");
+	}
+
+	@Test
+	void paxDefsectionExportsItsEntries() {
+		// mgl-pax's defsection autoexports each (SYMBOL LOCATIVE) entry -- and that is
+		// trivial-utf-8's ONLY export mechanism (its define-package has no :export
+		// clause), so uuid's trivial-utf-8:string-to-utf-8-bytes reference depends on
+		// this. Docstrings and the (:title ...) option are not entries.
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(pax:define-package :tu8 (:use :cl))");
+		resolve(resolver, "(in-package :tu8)");
+		resolve(resolver, "(pax:defsection @manual (:title \"Manual\") \"docs\" (frob function) (@sub pax:section))");
+		resolve(resolver, "(in-package :cl-user)");
+		assertThat(resolve(resolver, "(tu8:frob 1)")).isEqualTo("(TU8:FROB 1)");
+		assertThat(resolve(resolver, "tu8:@sub")).isEqualTo("TU8:@SUB");
+	}
+
+	@Test
 	void defpackageExportedDefunIsExternalUnexportedIsInternal() {
 		PackageResolver resolver = new PackageResolver();
 		resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))");
@@ -543,9 +606,10 @@ class PackageResolverTest {
 
 	@Test
 	void defpackageUnsupportedClauseIsRejected() {
-		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadowing-import-from :other :f))"))
+		// :shadowing-import-from names a package that must exist, like :import-from.
+		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:shadowing-import-from :no-such-pkg :f))"))
 			.isInstanceOf(LispPackageException.class)
-			.hasMessageContaining(":SHADOWING-IMPORT-FROM is not supported");
+			.hasMessageContaining("No such package");
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:intern :f))")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("Unsupported DEFPACKAGE clause: :INTERN");
 	}

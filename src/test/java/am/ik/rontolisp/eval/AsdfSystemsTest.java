@@ -134,9 +134,16 @@ class AsdfSystemsTest {
 
 	@Test
 	void unsupportedComponentTypeIsAHardError() {
-		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :components ((:doc-file \"README\")))"))
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :components ((:c-source-file \"ffi\")))"))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("unsupported component type :DOC-FILE");
+			.hasMessageContaining("unsupported component type :C-SOURCE-FILE");
+	}
+
+	@Test
+	void asdfsOwnDocComponentTypesAreOrderingOnly() {
+		AsdfSystems.LispSystem system = parse(
+				"(asdf:defsystem :lib :components ((:doc-file \"README\") (:html-file \"index\") (:file \"main\")))");
+		assertThat(system.files()).containsExactly("main.lisp");
 	}
 
 	@Test
@@ -173,6 +180,114 @@ class AsdfSystemsTest {
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("lib.asd")
 			.hasMessageContaining("unsupported form in .asd file");
+	}
+
+	@Test
+	void parsesTheBundledDbiReplacementAsd() {
+		// The dbi.asd upstream ships parses fine as data, but its cache selection
+		// rides a thread-capability feature expression that can never match
+		// rontolisp's feature set -- so the verbatim parse would pick the
+		// single-threaded cache on backends that really run concurrent handlers.
+		// AsdOverrides substitutes this replacement: thread.lisp + the real
+		// bordeaux-threads dependency on the thread-capable backends, single.lisp
+		// (upstream's own threadless choice) on WASM.
+		String source = AsdOverrides.replacementSource("dbi.asd");
+		assertThat(source).isNotNull();
+		for (Features features : List.of(Features.INTERPRETER, Features.JVM)) {
+			List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(source, "sw/dbi.asd", features);
+			assertThat(systems).hasSize(1);
+			assertThat(systems.get(0).dependsOn()).containsExactly("split-sequence", "closer-mop", "cl-ppcre",
+					"bordeaux-threads");
+			assertThat(systems.get(0).files()).containsExactly("src/utils.lisp", "src/cache/thread.lisp",
+					"src/logger.lisp", "src/error.lisp", "src/driver.lisp", "src/dbi.lisp");
+		}
+		List<AsdfSystems.LispSystem> wasmSystems = AsdfSystems.parseAsdSource(source, "sw/dbi.asd", Features.WASM);
+		assertThat(wasmSystems.get(0).files()).containsExactly("src/utils.lisp", "src/cache/single.lisp",
+				"src/logger.lisp", "src/error.lisp", "src/driver.lisp", "src/dbi.lisp");
+	}
+
+	@Test
+	void aVersionDependsOnEntryResolvesToThePlainDependency() {
+		// mito-core.asd's shape. The version constraint is parsed and IGNORED like the
+		// defsystem-level :version metadata: the systems reachable here carry no
+		// reliable :version to check against.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem "mito-core"
+				  :depends-on ((:version "dbi" "0.11.1") "sxql")
+				  :components ((:file "src/core")))""");
+		assertThat(system.dependsOn()).containsExactly("dbi", "sxql");
+	}
+
+	@Test
+	void aVersionDependsOnEntryWithoutAVersionIsAHardError() {
+		assertThatThrownBy(() -> parse("(asdf:defsystem :x :depends-on ((:version \"dbi\")))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining(":version");
+	}
+
+	@Test
+	void toleratesATopLevelPerformDefmethod() {
+		// iterate.asd's test-op wiring and esrap.asd's feature-pushing load-op hook.
+		// The esrap pushes are IGNORED with the whole body (grep-verified 2026-08-03:
+		// nothing in the dist reads #+esrap.*), so they must NOT surface as system
+		// features.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(defsystem :lib :components ((:file "main")))
+				(defmethod perform ((operation test-op) (component (eql (find-system :lib))))
+				  (uiop:symbol-call '#:lib.test '#:run))
+				(defmethod perform :after ((op load-op) (sys (eql (find-system "lib"))))
+				  (pushnew :lib.extra *features*)
+				  (provide :lib))
+				(defsystem :lib/late :components ((:file "late")))""", "sw/lib.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(2);
+		assertThat(systems.get(0).features()).isEmpty();
+		assertThat(systems.get(1).features()).isEmpty();
+	}
+
+	@Test
+	void aTopLevelDefmethodOnAnotherNameIsAHardError() {
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defmethod operation-done-p ((o compile-op) (c t)) nil)",
+				"lib.asd", Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("lib.asd")
+			.hasMessageContaining("OPERATION-DONE-P");
+	}
+
+	@Test
+	void toleratesADocFileDefclassAndItsComponentTypes() {
+		// chipz.asd's documentation-file machinery: two defclasses over ASDF's
+		// doc-file, whose component types then appear inside a :module. They
+		// participate in ordering but contribute no source, like :static-file.
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+				(cl:defpackage :chipz-system (:use :cl :asdf) (:export #:gray-streams))
+				(cl:in-package :chipz-system)
+				(defclass txt-file (doc-file) ((type :initform "txt")))
+				(defclass css-file (doc-file) ((type :initform "css")))
+				(asdf:defsystem :chipz
+				  :components ((:file "package")
+				               (:module "doc"
+				                :components ((:html-file "index")
+				                             (:txt-file "chipz-doc")
+				                             (:css-file "style")))
+				               (:file "inflate" :depends-on ("package"))))""", "sw/chipz.asd", Features.INTERPRETER);
+		assertThat(systems).hasSize(1);
+		assertThat(systems.get(0).files()).containsExactly("package.lisp", "inflate.lisp");
+	}
+
+	@Test
+	void aDefclassWithANonDocSuperclassIsAHardError() {
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("(defclass my-file (cl-source-file) ())", "lib.asd",
+				Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("lib.asd")
+			.hasMessageContaining("MY-FILE");
+	}
+
+	@Test
+	void aDocComponentTypeWithoutItsDefclassIsAHardError() {
+		assertThatThrownBy(() -> parse("(asdf:defsystem :x :components ((:txt-file \"readme\")))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining(":TXT-FILE");
 	}
 
 	// The verbatim fast-io.asd header: an eval-when pushing :fast-io onto *features*,

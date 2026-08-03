@@ -34,6 +34,13 @@ public final class BuiltinSystems {
 			// The CLtL2 environment-API shim (trivia.level2's dependency): the real
 			// library re-exports host-implementation members that do not exist here.
 			Map.entry("trivial-cltl2", features -> ShimLibraries.forms("trivial-cltl2", features)),
+			// The mgl-pax package stub (trivial-utf-8's hard dependency, on the uuid /
+			// mito path): real mgl-pax-bootstrap's .asd uses :defsystem-depends-on,
+			// which the defsystem-as-data front-end cannot read -- the swank precedent.
+			Map.entry("mgl-pax-bootstrap", features -> ShimLibraries.forms("mgl-pax-bootstrap", features)),
+			// GC finalizers as no-ops (dbd-postgres's dependency): the real library's
+			// .asd errors under rontolisp's features, and no backend has GC hooks.
+			Map.entry("trivial-garbage", features -> ShimLibraries.forms("trivial-garbage", features)),
 			// The Clack handler backend: both the hyphenated ecosystem spelling and the
 			// dotted spelling lack's find-package-or-load derives from the package name
 			// resolve to the one shim (see ShimLibraries.RESOURCES).

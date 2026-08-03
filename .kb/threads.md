@@ -98,6 +98,28 @@ passes a variable-reference form, the resolver needs eval-in-the-new-thread
 (the compiled backends have an eval runtime, `.kb/eval-runtime.md` — route it
 there and gate `usesEval` on the thread primitives).
 
+## current-thread (todo-245)
+
+`rontolisp:current-thread` (behind `bt2:current-thread`) answers the calling
+thread's OWN handle and is **EQ-stable per thread** -- the property dbi's
+per-thread connection cache keys on (`cache/thread.lisp`'s `steal-cache-table`
+gethashes an `eq` table by `(bt2:current-thread)`). Interpreter:
+`AsyncRuntime.currentThreadHandle()` lazily wraps `Thread.currentThread()` in a
+`LispThread` and caches it in a ThreadLocal (kept in AsyncRuntime for the
+playground-substitution reason above; the result future is never completed, so
+joining your own handle blocks forever -- what joining yourself means anyway).
+JVM: `_thread_current` (JvmThreadRuntimeBuilder) caches a fresh
+`{TMARKER, Thread.currentThread(), null}` in the `_curThreadTl` static
+ThreadLocal (declared + `<clinit>`-initialized by the class writer next to the
+condition channel's; the null task slot means a self-join NPEs, same
+non-answer). It works for ANY thread -- main, served requests -- not only
+`make-thread` spawns; a spawned body's self-handle is its own cached one, NOT
+the spawner's handle for it, so only the `threadp`/`thread-alive-p` answers are
+portable on a handle (pinned in both suites). On WASM the shim entry point
+signals like the other spawn names; nothing bundled reaches it, because the dbi
+override `.asd` selects the single-threaded cache there (`.kb/asdf.md`,
+dbi-deps).
+
 ## WASM divergence (the why, and its trigger)
 
 Both WASM backends are single-threaded by construction, so the shim's

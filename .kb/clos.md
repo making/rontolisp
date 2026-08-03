@@ -451,9 +451,16 @@ file round-trip through `with-open-file` on all four backends).
   and the clause structs it must catch in clause.lisp, todo-244),
   `evalDefgeneric` (register + eval dispatcher),
   `evalDefmethod` (eval method defun + re-eval the regenerated dispatcher).
-  Works anywhere (REPL/load/macro expansion), like defstruct. Known edge: a
-  `#'generic` captured BEFORE a later defmethod keeps the stale dispatcher;
-  calls by name always dispatch fresh.
+  Works anywhere (REPL/load/macro expansion), like defstruct. The former known
+  edge -- a `#'generic` captured BEFORE a later defmethod kept the stale
+  dispatcher -- is CLOSED (todo-245): `evalFunction` answers a LATE-BOUND
+  wrapper for any name `closRegistry.findGeneric` knows, resolving the CURRENT
+  binding at call time (real CL semantics: `#'name` IS the generic object
+  methods join). dbi was the first consumer: it stashes `#'disconnect` in its
+  connection pool's cleanup-fn at load time and dbd-postgres defines the
+  method afterwards. Non-generic names keep the direct value; the compile
+  paths never had the edge (dispatchers are built after the whole-program
+  walk). Pinned by `aCapturedGenericFunctionValueSeesLaterMethods`.
 - **Compilers**: `expandTopLevelDefstructs` grew into
   `LispMacroExpander.expandTopLevelDefinitions(program, structAccessors,
   closRegistry)` at the same pipeline slot (after `flattenTopLevel`, before
@@ -473,7 +480,14 @@ file round-trip through `with-open-file` on all four backends).
   VALUE gets a `BuiltinFunctionWrappers` wrapper (REFERENCE_GATED) forwarding
   to the generated `%mop-make-instance` (the interpreter defines the same
   function natively beside it) -- postmodern's make-dao
-  `(apply #'make-instance class args)`; a runtime slot NAME dispatches through
+  `(apply #'make-instance class args)`; and (todo-245) a DIRECT call whose
+  class argument is computed -- `(make-instance driver)`, dbi's connect
+  instantiating the class metaobject find-driver returned -- lowers in
+  `expandMakeInstance` to a `%mop-make-instance` call (a name symbol or a
+  class metaobject both work) and flips the SAME emission gate
+  (`referencesMakeInstanceValue` detects the computed head too), so the
+  runtime defun is present on the compile paths; a runtime slot NAME
+  dispatches through
   the shared `%slot-value-runtime`/`%slot-boundp-runtime`/
   `%slot-value-set-runtime` defuns (the setf twin is separately gated on a
   runtime-name `(setf (slot-value ...))` -- `needsRuntimeSlotSetDispatch` --

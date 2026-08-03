@@ -71,16 +71,25 @@ public final class ShimLibraries {
 	 * Built-in system name (canonical lower-case coerce-name form -- a separate namespace
 	 * from the upcase-canonical package names) to its classpath resource.
 	 */
-	private static final Map<String, String> RESOURCES = Map.of("closer-mop", "closer-mop.lisp", "flexi-streams",
-			"flexi-streams.lisp", "float-features", "float-features.lisp", "trivial-gray-streams",
-			"trivial-gray-streams.lisp", "bordeaux-threads", "bordeaux-threads.lisp", "babel", "babel.lisp", "swank",
-			"swank.lisp", "trivial-cltl2", "trivial-cltl2.lisp",
+	private static final Map<String, String> RESOURCES = Map.ofEntries(Map.entry("closer-mop", "closer-mop.lisp"),
+			Map.entry("flexi-streams", "flexi-streams.lisp"), Map.entry("float-features", "float-features.lisp"),
+			Map.entry("trivial-gray-streams", "trivial-gray-streams.lisp"),
+			Map.entry("bordeaux-threads", "bordeaux-threads.lisp"), Map.entry("babel", "babel.lisp"),
+			Map.entry("swank", "swank.lisp"), Map.entry("trivial-cltl2", "trivial-cltl2.lisp"),
+			// The mgl-pax package stub (trivial-utf-8's hard dependency, on the uuid /
+			// mito path): real mgl-pax-bootstrap's .asd uses :defsystem-depends-on,
+			// outside the defsystem-as-data subset -- the swank precedent.
+			Map.entry("mgl-pax-bootstrap", "mgl-pax-bootstrap.lisp"),
+			// GC finalizers (dbd-postgres's dependency): no backend exposes GC hooks,
+			// and CL guarantees finalizers nothing anyway -- finalize is a no-op
+			// returning the object, so explicit dbi:disconnect stays the contract.
+			Map.entry("trivial-garbage", "trivial-garbage.lisp"),
 			// The Clack handler backend (run/stop over the %http-server-* seam). Both
 			// system spellings resolve to the ONE resource: the hyphenated name is the
 			// ecosystem convention a user names directly, the dotted one is what lack's
 			// find-package-or-load derives from the package name at clackup time.
-			LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, "clack-handler-rontolisp.lisp",
-			LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp");
+			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, "clack-handler-rontolisp.lisp"),
+			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp"));
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's

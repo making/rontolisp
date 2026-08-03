@@ -351,6 +351,7 @@
 | `rontolisp:threadp` | `(rontolisp:threadp v)` | 値がスレッドハンドルなら `t` |
 | `rontolisp:thread-alive-p` | `(rontolisp:thread-alive-p th)` | スレッドが実行中の間 `t`(join 後は `nil`) |
 | `rontolisp:destroy-thread` | `(rontolisp:destroy-thread th)` | スレッドに割り込みをかけ、ハンドルを返します |
+| `rontolisp:current-thread` | `(rontolisp:current-thread)` | 呼び出したスレッド自身のハンドル。スレッドごとに `eq` 安定です (`make-thread` で生成したスレッドに限らず任意のスレッドで動作します) |
 | `rontolisp:list-functions` | `(rontolisp:list-functions :cl)` | パッケージの関数シンボルをソートしたもの(デフォルトは `:cl`) |
 | `rontolisp:list-macros` | `(rontolisp:list-macros)` | パッケージのマクロシンボルをソートしたもの |
 | `rontolisp:list-special-forms` | `(rontolisp:list-special-forms)` | パッケージの特殊形式シンボルをソートしたもの |

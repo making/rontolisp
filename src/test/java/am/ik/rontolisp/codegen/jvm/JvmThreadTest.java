@@ -67,6 +67,24 @@ class JvmThreadTest {
 	}
 
 	@Test
+	void currentThreadIsAnEqStableLiveHandle() throws Exception {
+		// EQ-stability (the _curThreadTl cache) is the property dbi's per-thread
+		// connection cache keys on: the handle must be reusable as an eq
+		// hash-table key across calls, and a spawned body's self-handle is its own.
+		assertThat(compileAndRun("""
+				(let ((h (rontolisp:current-thread)))
+				  (print (list (rontolisp:threadp h)
+				               (eq h (rontolisp:current-thread))
+				               (rontolisp:thread-alive-p h)
+				               (let ((table (make-hash-table :test 'eq)))
+				                 (setf (gethash (rontolisp:current-thread) table) :hit)
+				                 (gethash (rontolisp:current-thread) table))
+				               (eq h (rontolisp:join-thread
+				                      (rontolisp:make-thread (lambda () (rontolisp:current-thread))))))))
+				""", "ThreadCurrentProg")).isEqualTo("(T T T :HIT NIL)");
+	}
+
+	@Test
 	void joinThreadResignalsTheThreadsErrorSoHandlerCaseDispatches() throws Exception {
 		// The EMARKER payload: call() completes normally with {EMARKER, throwable,
 		// condition}, _thread_join re-sets the condition on the joining thread and

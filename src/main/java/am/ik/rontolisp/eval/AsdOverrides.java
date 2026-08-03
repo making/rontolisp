@@ -46,7 +46,13 @@ public final class AsdOverrides {
 			// substrate investment buying zero semantics. The replacement maps the
 			// system to trivia.trivial, upstream's own sanctioned base system.
 			// Re-evaluation trigger in the replacement source and .kb/asdf.md.
-			"trivia.asd", "trivia-trivial.asd");
+			"trivia.asd", "trivia-trivial.asd",
+			// Not unparseable but MIS-DECIDED here: upstream selects its cache
+			// (per-thread vs single) from a thread-capability feature expression that
+			// can never match rontolisp's feature set, so the verbatim parse picks the
+			// single-threaded cache on backends that really run concurrent handlers.
+			// The replacement takes the decision per backend; reasons in the file.
+			"dbi.asd", "dbi-deps.asd");
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

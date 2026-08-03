@@ -221,6 +221,18 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
         },
+        "pattern": "am/ik/rontolisp/eval/mgl-pax-bootstrap\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/trivial-garbage\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
         "pattern": "am/ik/rontolisp/eval/clack-handler-rontolisp\\.lisp"
       },
       {
@@ -276,6 +288,12 @@
           "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
         },
         "pattern": "am/ik/rontolisp/eval/trivia-trivial\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/dbi-deps\\.asd"
       },
       {
         "condition": {
