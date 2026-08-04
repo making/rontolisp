@@ -6,12 +6,12 @@ withdraw 200:
   refused: wanted 200 but only 70 available
 withdraw 60:
   ok, new balance 10
-ignore-errors on withdraw 999 -> nil
+ignore-errors on withdraw 999 -> NIL
 audit log (newest first): (999 60 200 30)
 balance is still 10
 
-caught by the parent type -> caught-as-account-error
-signal without a handler -> nil
-signal with a handler    -> noticed
-typecase classifies it as an-account-error
+caught by the parent type -> CAUGHT-AS-ACCOUNT-ERROR
+signal without a handler -> NIL
+signal with a handler    -> NOTICED
+typecase classifies it as AN-ACCOUNT-ERROR
 with-slots reads: requested=5 balance=1

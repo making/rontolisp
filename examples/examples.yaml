@@ -411,7 +411,7 @@ examples:
         - "/docs exists?      yes"
         - "/docs exists now?  no"
         - 'keys:              ("/index" "/pricing")'
-        - "bad store:         no-such-store"
+        - "bad store:         NO-SUCH-STORE"
         - 'seeded:            ("/a" "/b")'
 
   - path: wit/keyvalue/page-hits-server.lisp

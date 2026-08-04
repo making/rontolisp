@@ -159,8 +159,8 @@ hits per page:
 /docs exists?      yes
 /docs exists now?  no
 keys:              ("/index" "/pricing")
-/nope:             nil
-bad store:         no-such-store
+/nope:             NIL
+bad store:         NO-SUCH-STORE
 seeded:            ("/a" "/b")
 ```
 
@@ -220,8 +220,8 @@ hits per page:
 ;; [java store] delete /docs
 /docs exists now?  no
 keys:              ("/index" "/pricing")
-/nope:             nil
-bad store:         no-such-store
+/nope:             NIL
+bad store:         NO-SUCH-STORE
 ;; [java store] set /a = seeded
 ;; [java store] set /b = seeded
 seeded:            ("/a" "/b")
@@ -250,8 +250,8 @@ hits per page:
 /docs exists?      yes
 /docs exists now?  no
 keys:              ("/index" "/pricing")
-/nope:             nil
-bad store:         no-such-store
+/nope:             NIL
+bad store:         NO-SUCH-STORE
 seeded:            ("/a" "/b")
 ```
 

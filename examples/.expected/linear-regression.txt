@@ -2,7 +2,7 @@ samples:      xs=(-2 -1 0 1 2) ys=(12 4 2 0 3)
 vandermonde:  #2A((1 -2 4) (1 -1 1) (1 0 0) (1 1 1) (1 2 4))  shape (5 3)
 normal matrix A^T A: #d((5.0 0.0 10.0) (0.0 10.0 0.0) (10.0 0.0 34.0))  (det 700.0)
 coefficients x1000 (c0 c1 c2): (1057 -2200 1571)
-solution residual < 1e-6: t
+solution residual < 1e-6: T
 
     x   y   fitted x1000   residual x1000
   -2  12  11743  257
