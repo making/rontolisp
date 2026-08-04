@@ -104,7 +104,13 @@ JVM and component legs are green too (or their divergence is recorded).
 6. `.todo/229` runtime intern->funcall dispatch on the compile backends — 高
    — **DONE 2026-08-02** (see `.kb/symbol-runtime-api.md`)
 7. `.todo/230` `subtypep` on class metaobjects (old-Clack middleware detection)
-   — 低〜中, optional
+   — 低〜中, optional — **DONE 2026-08-03** (`4f80fe58`, `.kb/clos.md`). It was
+   optional HERE (clack's only call site,
+   `lack/builder:clack-middleware-symbol-p`, is short-circuited by
+   `(find-package :clack.middleware)` being nil in any modern setup) and became
+   REQUIRED for the Mito milestone (`.todo/246` item 5): `typep`/`subtypep` now
+   accept a class metaobject wherever a type specifier is expected, on all four
+   backends.
 8. `.todo/231` lack-request/lack-response + middleware ecosystem (quri lineage)
    — 高, stretch/survey — **DONE 2026-08-04** (see `.kb/lack.md`). The whole set
    loads verbatim — lack-request/-response/-util, the accesslog / auth-basic /
@@ -119,6 +125,26 @@ JVM and component legs are green too (or their divergence is recorded).
    (`.kb/packages.md`; the general fix is `.todo/255`). The lack chain itself is
    INTERPRETER-ONLY, blocked by two PRE-EXISTING compile-backend ceilings now
    tracked as `.todo/256`.
+
+## MILESTONE COMPLETE (2026-08-04)
+
+All eight work units are closed (224/225/226 on 2026-08-01, 227/228/229 on
+2026-08-02, 230 on 2026-08-03, 231 on 2026-08-04) and the acceptance below was
+re-verified on 2026-08-04 by running `ClackE2eTest` against the live Quicklisp
+dist: 4 tests, 0 failures — the self-driving clackup round trip (all defaults:
+`:use-thread t`, `:use-default-middlewares t`, GET with a query string + POST
+with a body, `clack:stop`, port-closed proof) on the INTERPRETER and on the
+JVM class, the same clackup program as a `--component` under `wasmtime serve`,
+and the Preview 1 call-time-error pin. Mechanics: `.kb/clack.md`; docs:
+`doc/{en,ja}/guides/clack.md`.
+
+Known limits carried forward, each tracked elsewhere — none of them is a clack
+acceptance gap: the LACK-REQUEST/-RESPONSE + middleware ecosystem of unit 8 is
+interpreter-only, blocked by two PRE-EXISTING compile-backend ceilings
+(`.todo/256`); `.todo/255` (the `*package*`-derived symbol construction found
+on the way); plus the out-of-scope list at the bottom of this file
+(`clack.socket`/WebSocket, streaming responders, `:swank-port`, Preview 1
+incoming TCP).
 
 ## Acceptance (interpreter + JVM + WASM component; P1 = call-time error)
 
