@@ -309,8 +309,10 @@ public final class RontoLispCli {
 		// checks and the library pruner all recognize async-defun, never the sugar.
 		loaded = LispMacroExpander.rewriteAsyncSugar(loaded);
 		// Under --component the inliner also prunes the interface members the program
-		// never references (the component path skips --optimize's core tree shaker by
-		// design); --no-prune / --dynamic disable that, like the library defun pruner.
+		// never references -- the core tree shaker cannot do that job even under
+		// --optimize, because a WIT member costs a component-level import declaration and
+		// a canon lower, not just a core function; --no-prune / --dynamic disable that,
+		// like the library defun pruner.
 		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem(), !dynamic && !noPrune);
 		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
 		// Lisp-source library (http.lisp) over a wit-imported wasi:http@0.3.0 surface,

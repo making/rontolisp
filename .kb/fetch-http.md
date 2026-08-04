@@ -245,8 +245,15 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   `fields.append` out). http.lisp uses `handler-case`, so a serve component is
   EH-mode. Run with `wasmtime serve -W gc=y -W exceptions=y
   `.
-  **Top-level init runs on the FIRST handle call, once per instance**: a serve
-  component never lifts `run`, so the `handle` wrapper
+  **Top-level init runs on the FIRST handle call, once per instance** -- and an
+  instance serves MANY requests, not one: `wasmtime serve` (and Spin) retire a
+  WASIp3 instance after `--max-instance-reuse-count` requests, 128 by default,
+  so init is amortized ~128:1 rather than paid per request
+  (`.kb/tcp-sockets.md`'s three-host comparison has the measurement). What the
+  instance lifetime DOES make per-request-visible is anything `_start` itself
+  costs: that is why serve mode pre-grows a 1 MiB GC heap instead of 16 MiB
+  (`.kb/wasm-gc-heap-pregrow.md`, worth +30% rps at the default reuse count).
+  A serve component never lifts `run`, so the `handle` wrapper
   (`WasmExportCompiler.emitBody`) calls `_start` under a serve-only
   `(mut i32)` init flag (`serveInitGlobalIndex`, the last module global;
   non-serve output is byte-identical) before the request task begins --

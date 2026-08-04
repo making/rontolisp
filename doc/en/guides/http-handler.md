@@ -143,10 +143,14 @@ feature flags are needed. The response is still delivered mid-task through
 ## Other WASI HTTP runtimes
 
 The component asks its host for `wasi:http` **0.3** (async) plus wasm-GC.
-wasmtime 46+ serves it, and so does **wasmCloud**: the released `wash` (2.5.2)
-runs it with `wash dev`, given
+wasmtime 46+ serves it, and so does **wasmCloud**: `wash` 2.5.2 runs it with
+`wash dev`, given
 `dev.wasm_proposals: [gc, exception-handling, component-model-async]` in the
-project manifest.
+project manifest. Install it with
+`curl -fsSL https://wasmcloud.com/sh | bash` — verified on wash 2.6.1. (Binaries
+picked by tag from the separate `wasmCloud/wash` repository are a different, older
+line: 2.0.0-rc.x offers `wasi:http` **0.2** only and rejects the component while
+extracting its interfaces.)
 
 **Spin** runs it too, from the
 [canary build](https://github.com/spinframework/spin/releases/tag/canary)
@@ -266,9 +270,20 @@ answers it as JSON.
 ## Keeping State: a store, not a global
 
 On the interpreter and the JVM the server is one long-lived process, so a global
-hash table survives between requests. **A served component's does not**: a
-`wasi:http` host instantiates the component afresh for every request, so anything
-the handler wrote reads back empty on the next one.
+hash table survives between requests. **A served component's does not** — and the
+way it does not is worse than "it resets every time". How long an instance lives
+is the host's decision, and the hosts disagree:
+
+| host | instance lifetime |
+|---|---|
+| `wasmtime serve` | 128 requests, then retired (`--max-instance-reuse-count`) |
+| Spin | 128 requests (it inherits wasmtime's default) |
+| wasmCloud `wash dev` | 1 request — always a fresh instance |
+
+So a global neither survives the run nor resets per request: under wasmtime and
+Spin the top level runs again on every 128th request, and everything the handler
+accumulated in a global vanishes with it. Treat top-level side effects as
+idempotent, and keep anything that must survive outside the component.
 
 The way to keep state is therefore to put it outside the component — in a WIT
 interface the handler *calls*, bound with
@@ -299,11 +314,44 @@ $ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 The same source runs on the interpreter and the JVM, where a
 [provider](../reference/functions/rontolisp-wit-provide.md) written in Lisp
 answers the interface instead. Whether the counts *survive* on a component is the
-host's business: wasmtime's built-in key-value provider is an in-memory store it
-rebuilds per instance (so, under `wasmtime serve`, per request), while a host that
-links an out-of-process provider — wasmCloud (`wash dev`), say — keeps them. The
+host's business: wasmtime's built-in key-value provider is an in-memory store that
+starts empty on every request (verified: each request reports 1 hit), while a host
+that links an out-of-process provider — wasmCloud (`wash dev`), say — keeps them.
+The
 worked example is
 [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
+
+## Throughput, and what the component pays for
+
+The three backends are in the same league on a trivial handler. Measured on one
+machine (16 concurrent connections, 10 s closed loop, a handler that answers
+`"Hello " + :path-info`; wasmtime 47.0.2, `wasmtime serve` at its defaults):
+
+| backend | requests/s | mean | p99 |
+|---|---|---|---|
+| interpreter | 33 900 | 0.47 ms | 0.99 ms |
+| JVM class | 36 600 | 0.44 ms | 0.88 ms |
+| WASI component | 24 500 | 0.65 ms | 1.19 ms |
+
+The component's gap is **instantiation**, not the handler: the host runs the
+whole top level (`_start`) once per instance, and it retires an instance every
+`--max-instance-reuse-count` requests. Lowering that knob makes the cost visible
+— at `--max-instance-reuse-count 1` the same component drops to roughly a third
+of the throughput above, because every request pays a full instantiation.
+
+Two consequences worth knowing:
+
+- **Where the top level goes matters, and how much depends on the host.** Work
+  done at top level is paid once per instance — amortized over 128 requests
+  under wasmtime and Spin, but paid on *every* request under wasmCloud, where
+  the same handler serves 7 900 rps against wasmtime's 24 500. A
+  `ql:quickload "clack"` program and a bare `rontolisp:http-handler` one serve
+  at nearly the same rate under wasmtime for exactly this reason, and at
+  visibly different rates under wasmCloud.
+- **`--optimize` is about size, not speed here.** It tree-shakes the compiled
+  core module (a serve component loses a few percent; a non-serve component can
+  lose 90%), which shortens instantiation slightly, but it does not change the
+  steady-state per-request cost.
 
 ## Limitations
 

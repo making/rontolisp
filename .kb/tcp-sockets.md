@@ -210,24 +210,45 @@ output is byte-identical), inside the handle call's task context, so a
 top-level suspension drives through the blocking event loop exactly as under
 `wasmtime run`. Pinned by `httpHandlerReadsATopLevelGlobalUnderWasmtimeServe`.
 
-**"Once per instance" is a HOST decision, and the three hosts all differ**
+**"Once per instance" is a HOST decision, and the hosts differ**
 (measured 2026-07-27 with `examples/db/postgres-web.lisp`, a served handler over
 a top-level PostgreSQL connection; Spin added 2026-07-30 with a top-level
-`defvar` hit counter): `wasmtime serve` keeps ONE instance for the whole server
-run, so the top level runs once; wasmCloud `wash dev` (2.5.2) gives each request
-a FRESH instance, so the top level runs again on every request and its side
-effects repeat. A `drop table` + `create table` startup pair therefore emptied
-the table on each wasmCloud request while accumulating normally under wasmtime
--- the example uses `create table if not exists` for exactly this reason.
-**Spin (canary, https://github.com/spinframework/spin/releases/tag/canary) is a
-third point: BOUNDED reuse.** It runs a p3 component's
-instance for exactly 128 requests and then retires it -- the counter climbed
-1..128, then reset to 1 on a visibly newer instance -- so a global neither
-persists for the run nor resets every request. The bound is
-`--max-instance-reuse-count` (`1` reproduces the wash shape exactly, verified;
-`DEFAULT_WASIP3_MAX_INSTANCE_REUSE_COUNT` in spin's `trigger-http`), and
-`--max-instance-concurrent-reuse-count` (default 16) lets 16 requests share one
-instance concurrently, which wasmtime serve and wash do not.
+`defvar` hit counter; the wasmtime line corrected 2026-08-04, todo-259):
+**`wasmtime serve` and Spin both do BOUNDED reuse -- 128 requests per instance,
+the same number because Spin inherits wasmtime's default.** `wasmtime serve
+--max-instance-reuse-count` documents it outright ("defaults to 1 for WASIp2
+components and 128 for WASIp3 components"), and it reproduces: 20167 requests
+against a handler that prints at top level AND in the handler logged 165
+top-level runs (~122 requests each; instances retire early under concurrency),
+while 20 sequential curls logged exactly ONE. Spin's own knob is the same flag
+(`DEFAULT_WASIP3_MAX_INSTANCE_REUSE_COUNT` in its `trigger-http`), verified by
+the counter climbing 1..128 and then resetting on a visibly newer instance.
+wasmCloud `wash dev` (2.5.2) is the third point: each request gets a FRESH
+instance, so the top level runs again every request and its side effects repeat
+(`--max-instance-reuse-count 1` reproduces that shape under wasmtime exactly).
+**Re-verified 2026-08-04 on wash 2.6.1** with the `defvar` counter: it reads 1 on
+every request, no exceptions -- the fresh-instance row stands.
+**Install wash with `curl -fsSL https://wasmcloud.com/sh | bash`** (it resolves
+`wasmcloud/wasmCloud`'s `releases/latest`). Do NOT go looking for the binary by
+tag: that repo's wash releases are tagged plain `vX.Y.Z` (v2.6.1), while the
+SEPARATE `wasmCloud/wash` repo is stuck at `wash-v2.0.0-rc.7` -- and rc.7/rc.8
+advertise `wasi:http@0.2.0` ONLY and reject a serve component during interface
+extraction ("`stream` requires the component model async feature"), before
+`dev.wasm_proposals` can apply. 2.6.1 lists `wasi:http/handler,types@0.3.0`
+among its host interfaces and runs the component; an rc.x binary looks exactly
+like a rontolisp regression and is not one.
+A `drop table` + `create table` startup pair therefore emptied the table on each
+wasmCloud request while accumulating normally under wasmtime -- the example uses
+`create table if not exists` for exactly this reason. **The earlier reading
+"`wasmtime serve` keeps ONE instance for the whole server run" was a
+small-sample artifact**: the probe made far fewer than 128 requests. Under load
+a global there neither persists for the run nor resets every request, which is
+the WORST case for a program that assumes either.
+`--max-instance-concurrent-reuse-count` (default 16 for a p3 component, on
+wasmtime serve and Spin alike) additionally lets 16 requests share one instance
+concurrently; wash does not.
+The per-instance cost of that lifetime is real and is why serve mode pre-grows
+a smaller GC heap -- `.kb/wasm-gc-heap-pregrow.md`.
 The rule for a served program: treat top-level side effects as
 idempotent-or-per-request, and keep durable state in the store, not in a global.
 External state (a PostgreSQL row) survives; a defvar does not.

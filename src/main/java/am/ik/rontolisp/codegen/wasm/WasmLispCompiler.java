@@ -1254,6 +1254,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// the retained heap capacity, not a live copy on every collection.
 	static final int GC_HEAP_PREGROW_BYTES = 16 * 1024 * 1024;
 
+	// The serve-mode counterpart. A served component is instantiated MANY times over a
+	// process lifetime (wasmtime serve retires an instance after
+	// --max-instance-reuse-count requests, 128 by default for a WASIp3 component; Spin
+	// uses the same default), so the pre-grow is paid per instance rather than per
+	// process and its cost lands on request latency. It is not free: the growth is
+	// linear in the size, ~1.5 ms per MiB on the 47.x engine (mostly first-touch page
+	// faults on the new semispace), i.e. 25 ms for the 16 MiB above. 1 MiB is the
+	// measured optimum across the reuse counts a real host uses -- see
+	// .kb/wasm-gc-heap-pregrow.md for the sweep and the re-evaluation trigger.
+	static final int GC_HEAP_PREGROW_SERVE_BYTES = 1024 * 1024;
+
 	// Reader cursor/end (absolute byte offsets) used by the read/load runtime.
 	static final int READ_CURSOR_ADDR = 88;
 
@@ -2169,9 +2180,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// collects -- copying the entire live set -- every few hundred KB of
 		// allocation, and the cost of every hot loop scales with the amount of code
 		// loaded. The heap never shrinks, so this single allocation permanently buys
-		// headroom instead. See .kb/wasm-gc-heap-pregrow.md.
+		// headroom instead. A SERVE component pays this per INSTANCE, not per process
+		// (the host retires an instance every N requests), so it pre-grows a smaller
+		// heap. See .kb/wasm-gc-heap-pregrow.md.
 		startWriter.write(Instruction.I32_CONST);
-		startWriter.writeSignedLeb128(GC_HEAP_PREGROW_BYTES);
+		startWriter.writeSignedLeb128(this.serve ? GC_HEAP_PREGROW_SERVE_BYTES : GC_HEAP_PREGROW_BYTES);
 		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		startWriter.writeSignedLeb128(TYPE_STR_BYTES);
 		startWriter.write(Instruction.DROP);
@@ -4389,10 +4402,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			return coreModule;
 		}
 		if (this.component) {
-			// The WASI 0.3 adapter binds the core's imports/exports by their fixed
-			// layout,
-			// so tree-shaking the core is unsafe here; leave the component path
-			// untouched.
+			if (this.optimize) {
+				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule);
+			}
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
 				// into a wasi:http/handler@0.3 component (wasmtime serve). A program that

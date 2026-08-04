@@ -210,6 +210,11 @@ class WasmLispCompilerIntegrationTest {
 	// need -- including FetchLibrary, so a handler that also calls rontolisp:fetch (the
 	// proxy shape) gets fetch.lisp spliced alongside serve.lisp, over the wider block.
 	private static byte[] compileServeComponent(String source, @org.jspecify.annotations.Nullable String baseDir) {
+		return compileServeComponent(source, baseDir, false);
+	}
+
+	private static byte[] compileServeComponent(String source, @org.jspecify.annotations.Nullable String baseDir,
+			boolean optimize) {
 		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source),
 				baseDir, witBackend, am.ik.rontolisp.eval.SourceLoader.fileSystem());
@@ -232,7 +237,7 @@ class WasmLispCompilerIntegrationTest {
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
-		return new WasmLispCompiler(false, true, false, false, true).compile(program);
+		return new WasmLispCompiler(false, true, false, optimize, true).compile(program);
 	}
 
 	// warn writes its "WARNING: ..." line to standard ERROR, which the stdout helpers
@@ -1191,8 +1196,7 @@ class WasmLispCompilerIntegrationTest {
 	@Test
 	void noGcComponentHonorsAsAliasAndComposesWithOptimize() throws Exception {
 		// :as renames to a valid component label; --optimize tree-shakes the core module
-		// before the wrap (unlike the GC path, where --optimize is skipped under
-		// --component).
+		// before the wrap (the GC path does the same since todo-259).
 		String program = """
 				(defun sum-sq (a b) (* (+ a b) (+ a b)))
 				(rontolisp:wasm-export 'sum-sq :as "sum-squared" :params '(:int :int) :returns :int)
@@ -2820,6 +2824,62 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getExitCode()).as("exit code for component: %s\nstderr: %s", lispCode, result.getStderr())
 			.isZero();
 		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentCoreIsTreeShakenUnderOptimize() throws Exception {
+		// --optimize shakes the core module on the --component path too: every core
+		// <-> component linkage is by NAME (alias core func "name"; core:instantiate
+		// args keyed by import module name), so renumbering the surviving functions is
+		// invisible to the wrapper (.kb/optimize-dead-code-elimination.md). The lifted
+		// exports and the canonical-ABI helpers are core exports, hence shaker roots --
+		// a string-returning export proves cabi_realloc / cabi_post_* survived.
+		String program = """
+				(defun add (a b) (+ a b))
+				(rontolisp:wasm-export 'add :params '(:int :int) :returns :int)
+				(defun greet (s) (concatenate 'string "Hello, " s))
+				(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+				(defun never-called (x) (* x x x))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		byte[] plain = new WasmLispCompiler(false, true, false, false).compile(parsed);
+		byte[] optimized = new WasmLispCompiler(false, true, false, true).compile(parsed);
+		assertThat(optimized.length).as("--optimize should shrink the component").isLessThan(plain.length);
+		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.optcomp.wasm"));
+		ExecResult add = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", "add(3, 4)",
+				path("test.optcomp.wasm"));
+		assertThat(add.getExitCode()).as("stderr: %s", add.getStderr()).isZero();
+		assertThat(add.getStdout().trim()).isEqualTo("7");
+		ExecResult greet = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", "greet(\"bob\")",
+				path("test.optcomp.wasm"));
+		assertThat(greet.getExitCode()).as("stderr: %s", greet.getStderr()).isZero();
+		assertThat(greet.getStdout().trim()).isEqualTo("\"Hello, bob\"");
+	}
+
+	@Test
+	void optimizedServeComponentStillServesUnderWasmtimeServe() throws Exception {
+		// The serve shape is the one the shaker could most easily break: `handle` and
+		// `async_cb` are reached ONLY from the component's canon lift (and its callback
+		// option), never from a `call` inside the core. Both are core exports, so both
+		// are roots -- pinned by actually serving a request from the shaken component.
+		String program = """
+				(defun handle (env)
+				  (list 200 nil
+				        (list (symbol-name (getf env :request-method)) " " (getf env :path-info))))
+				(rontolisp:http-handler 'handle)
+				""";
+		byte[] plain = compileServeComponent(program, null);
+		byte[] optimized = compileServeComponent(program, null, true);
+		assertThat(optimized.length).as("--optimize should shrink the serve component").isLessThan(plain.length);
+		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/serve-opt.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8093 serve-opt.wasm"
+						+ " >/tmp/serve-opt.log 2>&1 &"
+						+ " for i in $(seq 1 60); do out=$(curl -s http://127.0.0.1:8093/hello) && [ -n \"$out\" ]"
+						+ " && { echo \"$out\"; exit 0; }; sleep 0.25; done; cat /tmp/serve-opt.log; exit 1");
+		assertThat(result.getExitCode()).as("optimized wasmtime serve round trip; log: %s", result.getStderr())
+			.isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("GET /hello");
 	}
 
 	@Test
