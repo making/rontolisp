@@ -62,7 +62,8 @@ run on every backend by `LackEcosystemE2eTest`:
   Interpreter and JVM spill for real; both WASM backends signal the standard
   `ensure-directories-exist` message at CALL time -- the documented
   no-directory-creation divergence (`.kb/directory-listing.md`), reported through
-  `handler-case` rather than trapping.
+  `handler-case` rather than trapping. Lifting that is `.todo/257` (two more
+  preview1 imports plus their `wasi:filesystem@0.3.0` adapter halves).
 
 ## Tests
 

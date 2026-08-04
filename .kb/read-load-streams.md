@@ -192,7 +192,7 @@ the Lisp above it. Per backend: interpreter `Files.deleteIfExists`, JVM `_delete
 (`JvmIoRuntimeBuilder`, gated through `FileMeta` like the metadata trio, so a program that
 never deletes keeps its bytes), both WASM backends a call-time
 `LispMacroExpander.deleteFileStub()` error -- same reason as `%make-directories`, and the
-same tenth-import re-evaluation trigger (`path_unlink_file`). mito's `generate-migrations`
+same tenth-import re-evaluation trigger (`path_unlink_file`) -- which has now FIRED (smart-buffer's disk spill), so the work is tracked as `.todo/257`. mito's `generate-migrations`
 is the caller: it deletes superseded migration files, which is therefore an
 interpreter/JVM-only branch of an operation that otherwise runs everywhere.
 
