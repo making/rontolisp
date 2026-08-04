@@ -90,13 +90,13 @@ final class StreamHandleConcurrencySupport {
 	 */
 	static String echoingHandlerProgram(int echoPort, int servePort) {
 		return """
-				(defun handle (request)
-				  (let* ((token (getf request :path))
+				(defun handle (env)
+				  (let* ((token (getf env :path-info))
 				         (sock (rontolisp:tcp-connect "127.0.0.1" %d)))
 				    (write-line token sock)
 				    (let ((reply (read-line sock)))
 				      (close sock)
-				      (list :status 200 :body (format nil "~A ~A" sock reply)))))
+				      (list 200 nil (list (format nil "~A ~A" sock reply))))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(echoPort, servePort);
 	}

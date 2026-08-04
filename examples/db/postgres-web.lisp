@@ -99,23 +99,23 @@
        (dolist (note (all-notes db))
          (cl-who:htm (:li (cl-who:esc (first note))))))))))
 
-;; async-defun because the request :body is a stream: read-all drains it and
+;; async-defun because the env :raw-body is a stream: read-all drains it and
 ;; await waits for the whole thing. Draining comes first, and taking a
 ;; connection second, so none is held open while we wait on the client.
-(rontolisp:async-defun handle (request)
-  (let* ((form (rontolisp:await (rontolisp:read-all (getf request :body))))
+(rontolisp:async-defun handle (env)
+  (let* ((form (rontolisp:await (rontolisp:read-all (getf env :raw-body))))
          (db (connect)))
     (unwind-protect
-        (if (string= (getf request :path) "/add")
+        (if (string= (getf env :path-info) "/add")
             ;; What arrived is url-encoded, the same shape as a query string.
             (let ((body (rontolisp:query-param form "body")))
               (when (and body (string/= body ""))
                 (add-note db body))
-              ;; 303 + Location: back to the list, so a reload does not re-post.
-              '(:status 303 :headers (("location" . "/")) :body ""))
-            (list :status 200
-                  :headers '(("content-type" . "text/html; charset=utf-8"))
-                  :body (page db)))
+              ;; 303 + Location: back to the list, so a reload does not
+              ;; re-post; a two-element response is a bodyless one.
+              '(303 (:location "/")))
+            (list 200 '(:content-type "text/html; charset=utf-8")
+                  (list (page db))))
       ;; Handed back even if a query signals.
       (cl-postgres:close-database db))))
 

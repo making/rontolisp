@@ -265,7 +265,7 @@ class WitExportInlinerTest {
 		Files.writeString(wit, WORLD);
 		Path lisp = this.tempDir.resolve("serve.lisp");
 		Files.writeString(lisp, BODY + """
-				(defun handle (req) (list :status 200 :body "hi"))
+				(defun handle (env) (list 200 nil (list "hi")))
 				(rontolisp:http-handler 'handle)
 				(rontolisp:wit-export "world.wit")
 				""");

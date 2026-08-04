@@ -14,7 +14,7 @@ URL やリクエストターゲット文字列のうち、最初の `?` より�
 ```
 
 [`rontolisp:http-handler`](rontolisp-http-handler.md) のハンドラー内では
-リクエスト plist の `:path` が既にパスのみを保持しているため、このヘルパー
+環境 plist の `:path-info` が既にパスのみを保持しているため、このヘルパー
 は主に [`rontolisp:fetch`](rontolisp-fetch.md)(クライアント)側で URL
 文字列を分割するのに使います。
 

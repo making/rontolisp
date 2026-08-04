@@ -34,9 +34,9 @@
 ;; --- request helpers ------------------------------------------------------
 
 ;; args and headers have dynamic keys, so they stay hash tables (which nest as
-;; JSON objects inside the response instance). query-params and the request
-;; headers are already alists, so rontolisp:alist-hash-table (a subset of
-;; alexandria:alist-hash-table) turns each into a hash table directly.
+;; JSON objects inside the response instance). query-params gives an alist, so
+;; rontolisp:alist-hash-table (a subset of alexandria:alist-hash-table) turns
+;; it into a hash table; the env :headers already is one.
 
 ;; Parse the body as JSON when it looks like a JSON object or array, else the
 ;; symbol null (which stringifies to JSON null).
@@ -63,15 +63,13 @@
    (json :initarg :json)))
 
 (defun json-response (status obj)
-  (list :status status
-        :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+  (list status '(:content-type "application/json")
+        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
 ;; The index page: a plain cl-who template, no request data to escape.
 (defun index-page ()
-  (list :status 200
-        :headers (list (cons "content-type" "text/html; charset=utf-8"))
-        :body (cl-who:with-html-output-to-string (s)
+  (list 200 '(:content-type "text/html; charset=utf-8")
+        (list (cl-who:with-html-output-to-string (s)
                 (:html
                  (:head (:title "rontolisp httpbin"))
                  (:body
@@ -86,55 +84,57 @@
                    (:li (:code "DELETE /delete") " -- ditto"))
                   (:p "Try it:")
                   (:pre (:code (cl-who:esc "curl 'http://127.0.0.1:8080/get?a=1&b=two'")))
-                  (:pre (:code (cl-who:esc "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post"))))))))
+                  (:pre (:code (cl-who:esc "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post")))))))))
 
-(defun echo (request)
+(defun echo (env)
   (json-response 200
                  (make-instance 'echo-response
-                                :args (rontolisp:alist-hash-table (rontolisp:query-params (getf request :query)))
-                                :headers (rontolisp:alist-hash-table (getf request :headers))
-                                :method (getf request :method)
-                                :path (getf request :path))))
+                                :args (rontolisp:alist-hash-table (rontolisp:query-params (getf env :query-string)))
+                                :headers (getf env :headers)
+                                :method (symbol-name (getf env :request-method))
+                                :path (getf env :path-info))))
 
-(defun echo-with-body (request)
+(defun echo-with-body (env)
   (json-response 200
                  (make-instance 'echo-with-body-response
-                                :args (rontolisp:alist-hash-table (rontolisp:query-params (getf request :query)))
-                                :headers (rontolisp:alist-hash-table (getf request :headers))
-                                :method (getf request :method)
-                                :path (getf request :path)
-                                :data (getf request :body)
-                                :json (body-json (getf request :body)))))
+                                :args (rontolisp:alist-hash-table (rontolisp:query-params (getf env :query-string)))
+                                :headers (getf env :headers)
+                                :method (symbol-name (getf env :request-method))
+                                :path (getf env :path-info)
+                                :data (getf env :body)
+                                :json (body-json (getf env :body)))))
 
 ;; Echo the request (with the body fields when with-body is non-nil) only
-;; when the request used the expected method; otherwise 405. The ad-hoc error
+;; when the request used the expected method; otherwise 405 (:request-method
+;; is an interned keyword, so the comparison is eq). The ad-hoc error
 ;; objects stay hash tables (rontolisp:plist-hash-table), the flexible tool for
 ;; a shape that is not worth a class.
-(defun echo-when (request expected with-body)
-  (cond ((not (string= (getf request :method) expected))
+(defun echo-when (env expected with-body)
+  (cond ((not (eq (getf env :request-method) expected))
          (json-response 405 (rontolisp:plist-hash-table
-                             (list :error "method not allowed" :allowed expected))))
-        (with-body (echo-with-body request))
-        (t (echo request))))
+                             (list :error "method not allowed"
+                                   :allowed (symbol-name expected)))))
+        (with-body (echo-with-body env))
+        (t (echo env))))
 
 ;; --- routing --------------------------------------------------------------
 
-(defun route (request)
-  (let ((path (getf request :path)))
+(defun route (env)
+  (let ((path (getf env :path-info)))
     (cond ((string= path "/") (index-page))
-          ((string= path "/get") (echo-when request "GET" nil))
-          ((string= path "/post") (echo-when request "POST" t))
-          ((string= path "/put") (echo-when request "PUT" t))
-          ((string= path "/patch") (echo-when request "PATCH" t))
-          ((string= path "/delete") (echo-when request "DELETE" t))
+          ((string= path "/get") (echo-when env :GET nil))
+          ((string= path "/post") (echo-when env :POST t))
+          ((string= path "/put") (echo-when env :PUT t))
+          ((string= path "/patch") (echo-when env :PATCH t))
+          ((string= path "/delete") (echo-when env :DELETE t))
           (t (json-response 404 (rontolisp:plist-hash-table
                                  (list :error "not found" :path path)))))))
 
-;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string.
-(rontolisp:async-defun handle (request)
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-    (route (append (list :body body) request))))
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string.
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

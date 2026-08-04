@@ -212,7 +212,8 @@ Guest-created streams (`make-stream` / `stream-write`) exist on the interpreter
 and the JVM backend. On `--component` the stream *operations* work too, but the
 streams themselves arrive from the host: a [`rontolisp:fetch`](http-fetch.md)
 response `:body` and a [`rontolisp:http-handler`](http-handler.md) request
-`:body` are asynchronous streams on every backend.
+`:raw-body` (in its default `:stream` mode) are asynchronous streams on every
+backend.
 
 ## Under the hood: WASI Preview 3 futures & streams
 
@@ -237,7 +238,8 @@ streams lower directly onto them:
   `wasi:clocks/monotonic-clock@0.3.0`'s `wait-for`, returned as a pending
   future the event loop settles — which is why timers genuinely overlap in a
   component too.
-- A response/request body `:body` is a component-model `stream<u8>` wrapped as
+- A fetch response's `:body` / a served request's `:raw-body` is a
+  component-model `stream<u8>` wrapped as
   a rontolisp stream; `stream-read` of a chunk the host still has in flight is a
   pending future, so a slow body read parks only its own task while another
   task's timer or fetch keeps running.

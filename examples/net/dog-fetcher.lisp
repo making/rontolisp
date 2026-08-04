@@ -21,9 +21,8 @@
 ;;   curl http://127.0.0.1:8080/
 
 (defun json-response (status obj)
-  (list :status status
-        :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+  (list status '(:content-type "application/json")
+        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
 ;; One upstream round trip: dog.ceo answers {"message": "<image url>",
 ;; "status": "success"}. A failed fetch surfaces as a nil/non-200 response
@@ -39,8 +38,8 @@
         (gethash "message" (rontolisp:json-parse body))
         nil)))
 
-(rontolisp:async-defun handle (request)
-  (if (string= (getf request :path) "/")
+(rontolisp:async-defun handle (env)
+  (if (string= (getf env :path-info) "/")
       (let ((dog (rontolisp:await (fetch-dog))))
         (if dog
             (json-response 200

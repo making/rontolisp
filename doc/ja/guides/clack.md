@@ -21,6 +21,12 @@ $ curl http://127.0.0.1:5000/hello
 Hello, Clack! GET /hello
 ```
 
+この裏に変換レイヤはありません: rontolisp 自身のサーバプロトコルが Clack の
+プロトコル*そのもの*なので（[HTTP サーバ](http-handler.md)を参照）、
+バックエンドはアプリケーションをハンドラとしてサーバに渡すだけで、
+リクエストごとの変換を一切行いません — Clack アプリケーションはそのまま
+有効な `rontolisp:http-handler` ハンドラであり、その逆も成り立ちます。
+
 初回実行時に clack、[lack](https://github.com/fukamachi/lack) とその依存が
 `~/.rontolisp/quicklisp` にダウンロードされます。依存は実ライブラリ
 (alexandria、ironclad スライス) と
@@ -49,23 +55,27 @@ Hello, Clack! GET /hello
 
 | env キー | 値 |
 |---------|-------|
-| `:request-method` | メソッドのキーワード (`:GET`、`:POST`、...) |
+| `:request-method` | メソッドの大文字化・intern 済みキーワード (`:GET`、`:POST`、...) |
 | `:script-name` | `""` |
-| `:path-info` | リクエストパス |
+| `:path-info` | パーセントデコード済みのリクエストパス |
 | `:query-string` | 生のクエリ文字列、なければ `nil` |
-| `:request-uri` | パス + `?` + クエリ |
-| `:server-name` / `:server-port` | `clackup` の `:address` / `:port` から |
-| `:server-protocol` | `:http/1.1` |
-| `:url-scheme` | `"http"` |
-| `:headers` | 小文字化したヘッダ名をキーとするハッシュテーブル (`:test 'equal`)。重複したリクエストヘッダは最後の値が残ります |
-| `:content-type` / `:content-length` | 上のテーブルから (なければ `nil`) |
-| `:raw-body` | リクエストボディの読み取り可能なストリーム (リクエストごとに事前ドレイン済み) |
-| `:remote-addr` / `:remote-port` | `""` / `nil` — サーバがまだ運んでいません |
+| `:request-uri` | 生のリクエストターゲットそのまま (エンコードされたまま、クエリ込み) |
+| `:server-name` / `:server-port` | `Host` ヘッダがあればそこから、なければリスナーの値 |
+| `:server-protocol` | キーワード。例: `:HTTP/1.1` |
+| `:url-scheme` | `"http"` または `"https"` |
+| `:headers` | 小文字化したヘッダ名をキーとするハッシュテーブル (`:test 'equal`)。重複したリクエストヘッダはワイヤ順に `", "` で結合されます |
+| `:content-type` / `:content-length` | 上のテーブルから (なければ `nil`。`:content-length` は整数) |
+| `:raw-body` | リクエストボディの同期・インメモリな bivalent ストリーム — `read-line`/`read-char` と `read-byte`/`read-sequence` の両方が動き、本物の `file-position` を持ちます (lack-request と http-body が必要とする形)。ボディの無いリクエストでは `nil` |
+| `:remote-addr` / `:remote-port` | インタープリタと JVM では実際のピア。WASI コンポーネントでは `nil` (`wasi:http@0.3.0` はピアのアクセサを公開しません) |
 
-レスポンスの `body` は文字列のリスト・単一の文字列・
+レスポンスの `body` は文字列のリスト・
 `(vector (unsigned-byte 8))` (各オクテットがそのコードポイントの文字になる)・
-`nil` のいずれかです。pathname のボディ (静的ファイル) と関数のボディ
-(ストリーミングレスポンダプロトコル) は明確なエラーを送出します。
+rontolisp のストリーム・`nil` のいずれかで、2 要素の `(status headers)` 形も
+有効です。裸の文字列 — したがって pathname のボディも (rontolisp の
+pathname はその namestring です) — は明確なエラーを送出します。Clack 自身も
+文字列を拒否します。関数のボディは Clack の delayed レスポンス形
+(responder が最終的なレスポンスリストで呼ばれる形) に対応し、streaming
+writer 形はエラーを送出します。
 
 ## バックエンド
 
@@ -89,8 +99,8 @@ Hello, Clack! GET /hello
   アプリケーションを置き換えます。
 - `clack.socket` (WebSocket) と `:swank-port` は未対応です (`:swank-port` は
   `swank` スタブに到達し、エラーを送出します)。
-- レスポンスのストリーミング (関数ボディ) と pathname ボディは上記のとおり
-  エラーを送出します。
+- streaming writer 形のレスポンスと裸の文字列／pathname のボディは上記の
+  とおりエラーを送出します (delayed 形の関数レスポンスは動作します)。
 
 関連: 土台となるサーバは [HTTP を Serve する (http-handler)](http-handler.md)、
 バックエンドごとの実行コマンド付きデモは

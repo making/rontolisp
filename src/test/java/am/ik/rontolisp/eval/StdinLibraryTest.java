@@ -64,7 +64,7 @@ class StdinLibraryTest {
 		// The wasi:http service world has no stdin; a served handler's fd_read is EOF
 		// by construction, so there is nothing to migrate.
 		List<LispVal> program = LispReader.readAllFromString(
-				"(rontolisp:async-defun h (r) (list :status 200 :body (read-line)))\n(rontolisp:http-handler 'h)");
+				"(rontolisp:async-defun h (env) (list 200 nil (list (read-line))))\n(rontolisp:http-handler 'h)");
 		assertThat(StdinLibrary.process(program, COMPONENT, true)).isSameAs(program);
 	}
 
@@ -88,7 +88,7 @@ class StdinLibraryTest {
 		// wasi:cli/stdin to bind, so the real machinery (and its wit-import) must be
 		// absent.
 		List<LispVal> program = SocketsLibrary.process(LispReader.readAllFromString("""
-				(defun h (r) (list :status 200 :body (rontolisp:tcp-peer-address 0)))
+				(defun h (env) (list 200 nil (list (rontolisp:tcp-peer-address 0))))
 				(rontolisp:http-handler 'h)
 				"""), COMPONENT);
 		List<LispVal> out = StdinLibrary.process(program, COMPONENT, true);

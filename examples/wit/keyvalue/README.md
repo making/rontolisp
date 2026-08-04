@@ -316,14 +316,13 @@ Through a store it can -- and the store is the one thing that outlives the
 instance.
 
 ```lisp
-(defun handle (request)
-  (let* ((page (getf request :path))
+(defun handle (env)
+  (let* ((page (getf env :path-info))
          (bucket (kv:open *store*))
          (hits (record-hit bucket page)))
-    (list :status 200
-          :headers (list (cons "content-type" "text/plain"))
-          :body (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a"
-                        page hits (= hits 1) (report bucket)))))
+    (list 200 '(:content-type "text/plain")
+          (list (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a"
+                        page hits (= hits 1) (report bucket))))))
 
 (rontolisp:http-handler 'handle 8080)
 ```

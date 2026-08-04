@@ -770,8 +770,7 @@ class WasmComponentImportCompilerTest {
 				+ "(rontolisp::%component-import \"wasi:keyvalue/store@0.2.0-draft\" " + witLiteral
 				+ " (\"open\" \"KV::%OPEN\") (\"bucket-get\" \"KV::%BUCKET-GET\"))\n"
 				+ "(defun kv:open (identifier) (rontolisp::%wit-result (kv::%open identifier)))\n"
-				+ "(defun handle (request) (list :status 200 :body (kv:open \"\")))\n"
-				+ "(rontolisp:http-handler 'handle)\n");
+				+ "(defun handle (env) (list 200 nil (list (kv:open \"\"))))\n" + "(rontolisp:http-handler 'handle)\n");
 		assertThat(containsAscii(component, "wasi:keyvalue/store@0.2.0-draft")).isTrue();
 		assertThat(containsAscii(component, "[method]bucket.get")).isTrue();
 		assertThat(containsAscii(component, "wasi:http/handler@0.3.0")).isTrue();

@@ -21,10 +21,15 @@ the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with
-`(rontolisp:await (rontolisp:read-all ...))`. It is the response half of the
-one-place plist shape, `compiler/HttpPlistShape` (see the `http-handler`
-section below), so its keys and order are derived, not hand-written, in each
-backend's fetch runtime.
+`(rontolisp:await (rontolisp:read-all ...))`. Its shape is written once, in
+`compiler/FetchResponseShape` (the fetch-only remainder of the pre-Clack
+`HttpPlistShape`), so its keys and order are derived, not hand-written, in each
+backend's fetch runtime (`Environment`'s fetch result, `JvmAsyncRuntimeBuilder`,
+and the `%http-response-plist` helpers `HttpLibrary` splices for http.lisp's
+fetch half). The SERVER side no longer shares this shape: since the Clack
+cutover a handler receives the Clack environment and returns the Clack response
+(`.kb/http-server.md`), while fetch deliberately keeps this plist -- it is the
+client side, a different thing.
 
 **Error timing** is JS-like: options are validated at `fetch` time; request/transport
 failures surface at `await` -- EVERY backend signals there (on WASM the send result's
@@ -88,9 +93,10 @@ compile error.
   keeps running), and the close thunk (run ONCE, at EOF or an early stream-close) drops
   the readable end + the unread trailers and resolves the transmit future ok (an
   unfinished body traps). `%serve-handle` stream-closes the request body after
-  dispatch so the protocol completes even when the handler never read it, and
-  drains a STREAM response body via its private `%http-drain` (http.lisp stays
-  self-contained -- no prelude dependency). http.lisp accepts the per-call
+  dispatch so the protocol completes even when the handler never read it; a
+  STREAM response body drains inside `%http-serve-request` via
+  `rontolisp::%http-drain`, which lives in http-server.lisp since the Clack
+  cutover (both libraries stay prelude-free). http.lisp accepts the per-call
   bump-heap growth of an async start (the start wrapper must not pop its staging --
   args + retptr outlive the call until the lift).
 
@@ -121,35 +127,18 @@ four backends.
 
 ## `rontolisp:http-handler` (incoming HTTP / serving)
 
-The incoming counterpart of `fetch`, sharing the HTTP value model: the handler
-(a quoted defun name, like `wasm-export`) takes a request plist
-`(:method :path :query :headers :body)` and returns a response plist
-`(:status :headers :body)`; missing keys default to `:status 200` / empty body.
-
-**The plist SHAPE is written once — `compiler/HttpPlistShape`**, a WIT `record`
-pair (the house `record` = keyword plist convention, `WitTypeMapper.Rep.PLIST`)
-parsed at class load; `HttpPlistShapeTest` pins it. Every backend derives its
-builders and readers from the parsed fields: the interpreter
-(`LispEvaluator.invokeHttpHandler`, `Environment`'s fetch result) and the JVM
-(`JvmHttpHandlerRuntimeBuilder`, `JvmAsyncRuntimeBuilder`'s fetch result) loop
-over the fields in Java, and the WASM component path calls generated Lisp
-helper defuns (`%http-request-plist` / `%http-response-plist` builders +
-`%http-response-status`-style accessors, `HttpPlistShape.lispHelpersSource()`
-spliced by `HttpLibrary` next to `http.lisp`). The response defaults
-(`:status 200`, empty body) are shape constants consumed the same three ways.
-A record field with no per-backend value extraction — the one part that cannot
-be derived — fails that backend loudly at build/compile time (a switch default
-or `requireResponseHandled`), so a field change is one record edit plus the
-extraction it demands, never a silent per-backend drift. Shape deviations from
-the settled WIT mapping (dotted-pair `:headers` alist, the response defaults, a
-string response body) are documented on the class.
-
-`:path` is the path only and `:query` the raw query string without the `?`
-(nil when the request has none; `""` for a bare trailing `?`). The split at
-the first `?` is VALUE EXTRACTION, not shape, so it remains per-backend code:
-`HttpHandlerSupport.Request.of` (interpreter and JVM inherit it) and
-`%serve-read-request` in `http.lisp` on the component path. Decoding policy
-lives in the URL library (`.kb/url.md`), not here.
+The incoming counterpart of `fetch`. Since the Clack cutover its value model
+is CLACK'S, not fetch's: the handler (a quoted defun name, like `wasm-export`)
+receives the Clack ENVIRONMENT plist (`:request-method` keyword, decoded
+`:path-info`, `:query-string`, the `:headers` equal table, `:raw-body`, ...)
+and returns the Clack RESPONSE list `(status headers [body])` -- so a Clack
+application is a rontolisp handler with zero per-request conversion. The whole
+contract -- the `compiler/ClackEnv` shape declaration, the shared
+`http-server.lisp` model, the per-backend construction division and its
+measurements, the two `:raw-body` modes -- lives in `.kb/http-server.md`; the
+directive also takes `:raw-body :stream|:buffered` after the optional port.
+Query-string DECODING policy lives in the URL library (`.kb/url.md`);
+`:query-string` stays raw.
 
 ONE VIRTUAL THREAD PER REQUEST is a correctness constraint on everything a handler
 touches, not just an implementation note: process-wide mutable state reached from a
@@ -165,7 +154,8 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   is the non-blocking test seam (port 0 = ephemeral) and `stopAllForTesting()`
   shuts servers down. Registered in `LispEvaluator` (not `Environment`) because
   serving a request applies the handler via the evaluator's `apply`;
-  `invokeHttpHandler` builds the request plist and reads the response plist.
+  `invokeHttpHandler` builds the Clack environment and normalizes the Clack
+  response, in Java (`.kb/http-server.md`).
   Since todo-228 the class also carries the STOPPABLE per-server seam behind
   the internal `rontolisp::%http-server-start/-join/-stop/-port` functions
   (`startServer`/`joinServer`/`stopServer`/`serverPort`: handler as a FUNCTION
@@ -206,22 +196,23 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   (`JvmHttpHandlerCompiler`) resolves the quoted handler name against the Pass-1
   function registry like `#'name`, stores the funcref in the `_httpHandlerFn`
   static field, and emits `HttpHandlerSupport.serve(port, new Prog())` (port
-  default 8080; a non-literal port expression compiles as `(int) Long`). The
-  injected `public handle(Request)` method (`JvmHttpHandlerRuntimeBuilder`)
-  builds the request plist `(:method m :path p :query q :headers <alist> :body b)`
-  (q is null = nil when `Request.query()` is null) as cons
-  cells in the shared runtime value rep (quote-wrapped strings, like
-  `JvmFetchRuntimeBuilder`), applies the handler via the `_invoke_1` dispatcher
-  (arity 1 is force-registered like the fetch runtime does), reads
-  `:status`/`:headers`/`:body` back with plist-get loops (the `:headers` alist
-  of `(name . value)` string pairs is marshalled into an `ArrayList` of
-  `Header`, skipping malformed entries like the interpreter does) and returns
-  `new Response(status, hdrs, body)`. CONSEQUENCE:
+  default 8080; a non-literal port expression compiles as `(int) Long`; the
+  optional trailing `:raw-body` keyword pair is validated and dropped -- the
+  mode is a compile-time constant `ClackEnv.usesBufferedBody` already read off
+  the program). The injected `public handle(Request)` method
+  (`JvmHttpHandlerRuntimeBuilder`) is thin glue since the Clack cutover: the
+  environment is built by `eval/HttpHandlerJvmRuntime.buildEnv` (real Java in
+  the runtime value rep), the handler runs via `_invoke_1` + `_await` (arity 1
+  force-registered like the fetch runtime), the response goes through a DIRECT
+  call to the compiled `%http-normalize-response` and `_drain_body`, and
+  `HttpHandlerJvmRuntime.toResponse` marshals the triple back
+  (`.kb/http-server.md` has the full division and its measurements).
+  CONSEQUENCE (pre-existing, now relied on even harder):
   the compiled class is NOT standalone -- it needs the rontolisp jar on the
   runtime classpath (`java -cp rontolisp.jar:. App`), unlike every other JVM
   program. Tests: `HttpHandlerJvmTest` (eval pkg for the shutdown seam;
-  compile + curl round trips incl. `--optimize`) and
-  `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`.
+  compile + curl round trips incl. `--optimize` and the buffered `:raw-body`)
+  and `JvmLispCompilerTest.compileHttpHandlerImplementsHandlerInterface`.
 - **WASM component (implemented, `--component`; serve and serve+fetch are ONE
   shape)** -- the HTTP glue is **`http.lisp`** over wit-imported `wasi:http@0.3.0`
   (see the fetch section above for the splice and the async machinery). There is
@@ -229,7 +220,9 @@ table, the interpreter's lazy library loads) and the shape new code must follow 
   (spliced in the CLI right after `WitImportInliner`, before `UserMacroExpander`,
   gated to `--component` serve -- and off for a `wit-export` world) replaces the
   `rontolisp:http-handler` directive with the serve half of http.lisp, a
-  `(defun %serve-dispatch (r) (HANDLER r))` bridge, and a
+  `(defun %serve-dispatch (r) (HANDLER r))` bridge, a mode-matched
+  `%serve-request-body` (the `:raw-body` mode synthesized at compile time,
+  `.kb/http-server.md`), and a
   `(rontolisp:wasm-export '%serve-handle :as "handle" :params '(:int) :returns :void)`.
   Since todo-228 the directive is detected NESTED inside a defun body too (a
   `(rontolisp:http-handler '<literal-name> ...)` call still yields a static

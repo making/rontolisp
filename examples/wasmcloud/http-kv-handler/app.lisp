@@ -36,15 +36,13 @@
   (and (stringp body) (> (length body) 0) (eql (char body 0) #\{)))
 
 (defun text-response (status body)
-  (list :status status
-        :headers (list (cons "content-type" "text/plain"))
-        :body body))
+  (list status '(:content-type "text/plain") (list body)))
 
 ;; --- handlers ----------------------------------------------------------------
 
 ;; POST / with {"key":"...","value":"..."} stores the pair.
-(defun handle-post (request)
-  (let ((body (getf request :body)))
+(defun handle-post (env)
+  (let ((body (getf env :body)))
     (if (json-object-p body)
         (let* ((payload (rontolisp:json-parse body))
                (key (gethash "key" payload))
@@ -57,10 +55,10 @@
         (text-response 400 (format nil "Invalid JSON (expected key and value string fields)~%")))))
 
 ;; GET /?key=<key> answers the stored value, or 404 when the key is unknown.
-;; The raw query string arrives as :query; rontolisp:query-param url-decodes
-;; the value.
-(defun handle-get (request)
-  (let ((key (rontolisp:query-param (getf request :query) "key")))
+;; The raw query string arrives as :query-string; rontolisp:query-param
+;; url-decodes the value.
+(defun handle-get (env)
+  (let ((key (rontolisp:query-param (getf env :query-string) "key")))
     (if key
         (let ((value (gethash key *store*)))
           (if value
@@ -68,18 +66,19 @@
               (text-response 404 (format nil "[in_memory] Key '~a' not found~%" key))))
         (text-response 400 (format nil "Missing required query parameter: key~%")))))
 
-(defun route (request)
-  (let ((method (getf request :method)))
-    (cond ((string= method "POST") (handle-post request))
-          ((string= method "GET") (handle-get request))
+;; :request-method is an interned keyword, so the comparisons are eq.
+(defun route (env)
+  (let ((method (getf env :request-method)))
+    (cond ((eq method :POST) (handle-post env))
+          ((eq method :GET) (handle-get env))
           (t (text-response 405 (format nil "Method Not Allowed~%"))))))
 
-;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string (getf
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string (getf
 ;; finds the prepended pair first).
-(rontolisp:async-defun handle (request)
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-    (route (append (list :body body) request))))
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
 
 ;; Blocks and serves on port 8080.
 (rontolisp:http-handler 'handle 8080)

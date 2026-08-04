@@ -38,9 +38,8 @@
 ;; --- JSON request/response helpers ---------------------------------------
 
 (defun json-response (status obj)
-  (list :status status
-        :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+  (list status '(:content-type "application/json")
+        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
 ;; rontolisp:plist-hash-table (a subset of alexandria:plist-hash-table) turns a
 ;; keyword plist into a string-keyed hash table, which json-stringify serializes
@@ -90,8 +89,8 @@
 
 ;; --- POST /solve : solve a.x = b -------------------------------------------
 
-(defun handle-solve (request)
-  (let* ((spec (body-object (getf request :body)))
+(defun handle-solve (env)
+  (let* ((spec (body-object (getf env :body)))
          (a (and spec (json-array->list (gethash "a" spec))))
          (b (and spec (json-array->list (gethash "b" spec)))))
     (cond ((null spec) (bad-request "the body must be a JSON object"))
@@ -124,8 +123,8 @@
           ((> col degree))
         (setf (aref m row col) (expt (car rest) col))))))
 
-(defun handle-fit (request)
-  (let* ((spec (body-object (getf request :body)))
+(defun handle-fit (env)
+  (let* ((spec (body-object (getf env :body)))
          (degree (and spec (gethash "degree" spec)))
          (points (and spec (json-array->list (gethash "points" spec)))))
     (cond ((null spec) (bad-request "the body must be a JSON object"))
@@ -168,25 +167,26 @@
                                (list :method "POST" :path "/fit"
                                      :body "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))))
 
-;; The request plist's :path carries the path only (any query string arrives
-;; separately as :query), so the comparisons are exact.
-(defun route (request)
-  (let ((path (getf request :path))
-        (method (getf request :method)))
+;; The env plist's :path-info carries the (percent-decoded) path only (any
+;; query string arrives separately as :query-string), so the comparisons are
+;; exact; :request-method is an interned keyword, so the comparison is eq.
+(defun route (env)
+  (let ((path (getf env :path-info))
+        (method (getf env :request-method)))
     (cond ((string= path "/solve")
-           (if (string= method "POST") (handle-solve request) (method-not-allowed)))
+           (if (eq method :POST) (handle-solve env) (method-not-allowed)))
           ((string= path "/fit")
-           (if (string= method "POST") (handle-fit request) (method-not-allowed)))
+           (if (eq method :POST) (handle-fit env) (method-not-allowed)))
           ((string= path "/") (usage))
           (t (json-response 404 (rontolisp:plist-hash-table
                                  (list :error "not found" :path path)))))))
 
-;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string (getf
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string (getf
 ;; finds the prepended pair first).
-(rontolisp:async-defun handle (request)
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-    (route (append (list :body body) request))))
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

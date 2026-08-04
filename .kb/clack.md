@@ -53,7 +53,7 @@ stopServer/serverPort`; the handle is an opaque integer index, the socket/mutex
 convention; owned by the rontolisp package as INTERNAL symbols):
 
 ```lisp
-(let ((server (rontolisp::%http-server-start #'%bridge port address)))
+(let ((server (rontolisp::%http-server-start app port address :raw-body :buffered)))
   (unwind-protect (progn (rontolisp::%http-server-join server) server)
     (rontolisp::%http-server-stop server)))
 ```
@@ -83,31 +83,31 @@ convention; owned by the rontolisp package as INTERNAL symbols):
   a read-time conditional here, declared statically like `:unicode`. WASM
   stays without it, so the default is nil there.
 
-## The env / response bridge (`%bridge`, an async-defun)
+## There is no env / response bridge any more (the todo-258 cutover)
 
-Request plist -> Clack env: `:request-method` (upcased keyword),
-`:script-name ""`, `:path-info`, `:query-string`, `:server-name`/`:server-port`
-(from run's arguments), `:server-protocol :http/1.1`, `:url-scheme "http"`,
-`:request-uri` (path + "?" + query), `:headers` (lowercased-name `equal` hash
-table; duplicate request headers: last wins), `:content-type`/`:content-length`
-(from that table; length via `parse-integer :junk-allowed`), `:raw-body`
-(PRE-DRAINED: `%bridge` is an `async-defun` because the request `:body` is an
-asynchronous stream and `await` is only legal in an async body — the drained
-string becomes a `%make-string-input-stream`, which is what lack-request-style
-consumers expect), `:remote-addr ""` / `:remote-port nil` (the request plist
-carries neither; extend `HttpPlistShape` to close the gap). Response
-`(status headers body)` -> response plist: headers plist ->
-lowercased dotted alist (non-string values through `princ-to-string`); body
-list-of-strings/string/`(vector (unsigned-byte 8))` (each octet's code point)
-/nil; a PATHNAME or FUNCTION (streaming responder) body signals a clear error
-— v1 limits, with WebSocket (`clack.socket`) and `:swank-port`, per
-`.todo/223`'s out-of-scope list.
+Since the Clack cutover rontolisp's own server protocol IS Clack's
+(`.kb/http-server.md`): the handler receives the Clack environment and returns
+the Clack response, built and normalized once in `http-server.lisp` for every
+backend. The shim therefore hands the application to `%http-server-start`
+DIRECTLY (no `%bridge`, no `%env`, no `%headers-table`, no `%body-string`) and
+asks for the one thing Clack needs that rontolisp's default is not:
+`:raw-body :buffered` — a synchronous bivalent body stream instead of the
+native asynchronous one, which is what lets lack-request / circular-streams /
+http-body actually read a served body (sessions, CSRF, ningle). What used to
+be documented here as shim limits is now the shared model's contract:
+`:remote-addr`/`:remote-port` carry the real peer on the interpreter/JVM (nil
+on the component — wasi:http exposes none); duplicate request headers join
+with `", "`; a bare-string response body is REFUSED; of the function-response
+protocol the DELAYED form is supported and the streaming writer refused.
+Still out of scope per `.todo/223`: WebSocket (`clack.socket`) and
+`:swank-port`.
 
 ## WASM component / Preview 1
 
 The shim's `#+rontolisp-wasm` `run` stores the app and calls the
-`rontolisp:http-handler` DIRECTIVE with the literal quoted `'%bridge` — inside
-a defun body. `HttpLibrary.process` (and `HttpHandlerInliner.usesHttpHandler`)
+`rontolisp:http-handler` DIRECTIVE with the literal quoted `'%app` (a one-line
+`(funcall *app* env)` indirection — the directive requires a literal quoted
+name) plus `:raw-body :buffered` — inside a defun body. `HttpLibrary.process` (and `HttpHandlerInliner.usesHttpHandler`)
 therefore detect the directive NESTED in a form (quoted data excluded),
 extract the static handler name for the `%serve-handle` export wiring, and
 lower the call site to nil: instantiation runs the top-level program (clackup
@@ -125,7 +125,7 @@ policy, extended):** `rontolisp:http-handler` on Preview 1 is now a CALL-time
 error stub (was a compile error) with the same "requires --component" message,
 and so are `stream-read`/`stream-close`/`streamp` when no stream type exists
 (Preview 1, or a non-async component) — both sit in the shim's wasm `run`/
-`%bridge`, which are DEAD code on Preview 1 but are compiled whenever clack
+`%app`, which are DEAD code on Preview 1 but are compiled whenever clack
 loads. An uncaught error is a silent trap on Preview 1, so the E2E pins the
 message through `handler-case`.
 

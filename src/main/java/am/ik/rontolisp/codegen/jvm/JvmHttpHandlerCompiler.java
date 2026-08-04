@@ -28,9 +28,9 @@ final class JvmHttpHandlerCompiler {
 			throw new IllegalStateException(LispNames.HTTP_HANDLER + " runtime was not prepared for this program");
 		}
 		List<LispVal> parts = cons.toList();
-		if (parts.size() != 2 && parts.size() != 3) {
+		if (parts.size() < 2 || parts.size() > 5) {
 			throw new UnsupportedOperationException(
-					LispNames.HTTP_HANDLER + " expects 1 or 2 arguments, got " + (parts.size() - 1));
+					LispNames.HTTP_HANDLER + " expects 1 to 4 arguments, got " + (parts.size() - 1));
 		}
 		if (!(parts.get(1) instanceof LispCons quoteForm && quoteForm.car() instanceof LispSymbol quoteSym
 				&& LispNames.QUOTE.equals(quoteSym.name()) && quoteForm.cdr() instanceof LispCons nameCell
@@ -38,13 +38,37 @@ final class JvmHttpHandlerCompiler {
 			throw new UnsupportedOperationException(
 					LispNames.HTTP_HANDLER + " expects a quoted handler name, got: " + parts.get(1).print());
 		}
+		// The optional (:raw-body :stream|:buffered) keyword pair is a COMPILE-TIME
+		// constant: ClackEnv.usesBufferedBody already read it off the program and the
+		// injected handle(Request) method was built for that mode, so the pair is
+		// validated and dropped here -- nothing of it survives to run time. The port is
+		// the first non-keyword argument after the handler.
+		LispVal portExpr = null;
+		for (int i = 2; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispSymbol key && key.isKeyword()) {
+				if (!LispNames.RAW_BODY_KEYWORD.equalsIgnoreCase(key.name()) || i + 1 >= parts.size()
+						|| !(parts.get(i + 1) instanceof LispSymbol mode
+								&& (LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name())
+										|| LispNames.STREAM_KEYWORD.equalsIgnoreCase(mode.name())))) {
+					throw new UnsupportedOperationException(
+							LispNames.HTTP_HANDLER + " :raw-body expects :stream or :buffered");
+				}
+				i++;
+				continue;
+			}
+			if (portExpr != null) {
+				throw new UnsupportedOperationException(
+						LispNames.HTTP_HANDLER + " expects one port argument, got: " + parts.get(i).print());
+			}
+			portExpr = parts.get(i);
+		}
 		// _httpHandlerFn = #'name
 		JvmFunctionFormCompiler.compileNamed(nameSym.name(), ctx, className);
 		ctx.emit(Opcode.PUTSTATIC);
 		ctx.emitU2(runtime.handlerField().index());
 		// port (int); default 8080
-		if (parts.size() == 3) {
-			JvmExprCompiler.compileExpr(parts.get(2), ctx, className);
+		if (portExpr != null) {
+			JvmExprCompiler.compileExpr(portExpr, ctx, className);
 			ctx.emit(Opcode.CHECKCAST);
 			ctx.emitU2(ctx.longClass.index());
 			ctx.emit(Opcode.INVOKEVIRTUAL);

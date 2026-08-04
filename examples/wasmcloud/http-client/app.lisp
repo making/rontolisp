@@ -23,19 +23,16 @@
 
 ;; A failed fetch surfaces as a nil/non-integer :status, mapped to 502 --
 ;; anything else (including upstream 4xx/5xx) is forwarded unchanged.
-(rontolisp:async-defun handle (request)
-  ;; awaiting needs an async-defun; the response :body is an asynchronous
-  ;; stream on every backend, drained with read-all.
+(rontolisp:async-defun handle (env)
+  ;; awaiting needs an async-defun; the fetch response :body is an
+  ;; asynchronous stream on every backend, drained with read-all.
   (let* ((res (rontolisp:await (rontolisp:fetch (upstream-url))))
          (status (getf res :status))
          (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
     (if (integerp status)
-        (list :status status
-              :headers (list (cons "content-type" "application/json"))
-              :body body)
-        (list :status 502
-              :headers (list (cons "content-type" "text/plain"))
-              :body (format nil "upstream request failed~%")))))
+        (list status '(:content-type "application/json") (list body))
+        (list 502 '(:content-type "text/plain")
+              (list (format nil "upstream request failed~%"))))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

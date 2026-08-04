@@ -213,7 +213,11 @@ class WasmLispCompilerIntegrationTest {
 		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source),
 				baseDir, witBackend, am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		boolean bufferBody = am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(loaded);
 		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded, witBackend, true);
+		// The server value model (the Clack environment build + response normalizer)
+		// mirrors the CLI splice; without it %http-serve-request is undefined.
+		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
 		// The wait-for / sockets / stdin splices mirror the CLI order (each a no-op for
 		// a handler that references nothing of it), so a served handler may also use
 		// the tcp built-ins.
@@ -222,9 +226,12 @@ class WasmLispCompilerIntegrationTest {
 		loaded = am.ik.rontolisp.eval.StdinLibrary.process(loaded, witBackend, true);
 		loaded = am.ik.rontolisp.eval.EnvironmentLibrary.process(loaded, witBackend);
 		// The prelude splice mirrors the CLI: a handler draining a body stream calls
-		// the prelude's rontolisp:read-all.
-		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
-				am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
+		// the prelude's rontolisp:read-all. GrayStreamsLibrary runs after the macro
+		// expansion like the CLI; the buffered :raw-body Gray class needs its call-site
+		// rewrite.
+		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
+			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
 		return new WasmLispCompiler(false, true, false, false, true).compile(program);
 	}
 
@@ -2823,9 +2830,9 @@ class WasmLispCompilerIntegrationTest {
 		// it with curl (installed in the image), asserting the handler echoes the
 		// request.
 		byte[] componentBytes = compileServeComponent("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string (getf request :method) " " (getf request :path))))
+				(defun handle (env)
+				  (list 200 nil
+				        (list (symbol-name (getf env :request-method)) " " (getf env :path-info))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve.wasm");
@@ -2844,11 +2851,11 @@ class WasmLispCompilerIntegrationTest {
 		// adapter-http-client.wat's request-body loop). 64 chars doubled 7 times = 8192
 		// bytes.
 		byte[] componentBytes = compileServeComponent("""
-				(defun handle (request)
+				(defun handle (env)
 				  (let ((s "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
 				    (dotimes (i 7)
 				      (setq s (concatenate 'string s s)))
-				    (list :status 200 :body s)))
+				    (list 200 nil (list s))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-big.wasm");
@@ -2871,14 +2878,13 @@ class WasmLispCompilerIntegrationTest {
 		// wasi:random / wasi:clocks / wasi:cli interfaces of the wasi:http proxy world
 		// (adapter-http-server-p1.wat) instead of trapping.
 		byte[] componentBytes = compileServeComponent("""
-				(defun handle (request)
+				(defun handle (env)
 				  (print "handling")
 				  (let ((r (random 10)))
-				    (list :status 200
-				          :body (concatenate 'string
-				                             (if (and (integerp r) (>= r 0) (< r 10)) "r-in" "r-out")
-				                             " "
-				                             (if (numberp (get-universal-time)) "t-num" "t-bad")))))
+				    (list 200 nil
+				          (list (if (and (integerp r) (>= r 0) (< r 10)) "r-in" "r-out")
+				                " "
+				                (if (numberp (get-universal-time)) "t-num" "t-bad")))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-rand.wasm");
@@ -2905,18 +2911,16 @@ class WasmLispCompilerIntegrationTest {
 		// The
 		// backend is itself a plain rontolisp serve component, so the test stays offline.
 		byte[] backendBytes = compileServeComponent("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string "backend " (getf request :path))))
+				(defun handle (env)
+				  (list 200 nil (list "backend " (getf env :path-info))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		byte[] proxyBytes = compileServeComponent("""
-				(rontolisp:async-defun handle (request)
+				(rontolisp:async-defun handle (env)
 				  (let* ((resp (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8083/up")))
 				         (body (rontolisp:await (rontolisp:read-all (getf resp :body)))))
-				    (list :status 200
-				          :body (concatenate 'string "proxied " body
-				                             " " (princ-to-string (getf resp :status))))))
+				    (list 200 nil
+				          (list "proxied " body " " (princ-to-string (getf resp :status))))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/serve-backend.wasm");
@@ -2973,14 +2977,14 @@ class WasmLispCompilerIntegrationTest {
 		java.nio.file.Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_WIT);
 		byte[] component = compileServeComponent("""
 				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
-				(defun handle (request)
-				  (let* ((page (getf request :path))
+				(defun handle (env)
+				  (let* ((page (getf env :path-info))
 				         (bucket (kv:open ""))
 				         (seen (kv:bucket-get bucket page)))
 				    (kv:bucket-set bucket page
 				                   (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
-				    (list :status 200
-				          :body (concatenate 'string page " " (kv:bucket-get bucket page)))))
+				    (list 200 nil
+				          (list page " " (kv:bucket-get bucket page)))))
 				(rontolisp:http-handler 'handle)
 				""", dir.toString());
 		wasmtime.copyFileToContainer(Transferable.of(component), "/tmp/serve-kv.wasm");
@@ -3004,12 +3008,11 @@ class WasmLispCompilerIntegrationTest {
 		// that binding existed every variable read back nil here while the interpreter,
 		// the JVM, Preview 1 and the run-mode component all answered.
 		byte[] componentBytes = compileServeComponent("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string
-				                           (or (uiop:getenv "RLENV") "unset")
-				                           " "
-				                           (if (uiop:getenv "RL_UNSET") "leaked" "nil"))))
+				(defun handle (env)
+				  (list 200 nil
+				        (list (or (uiop:getenv "RLENV") "unset")
+				              " "
+				              (if (uiop:getenv "RL_UNSET") "leaked" "nil"))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-env.wasm");
@@ -3030,8 +3033,8 @@ class WasmLispCompilerIntegrationTest {
 		// on it traps with "cast failure".
 		byte[] componentBytes = compileServeComponent("""
 				(defvar *base* 41)
-				(defun handle (request)
-				  (list :status 200 :body (princ-to-string (+ *base* 1))))
+				(defun handle (env)
+				  (list 200 nil (list (princ-to-string (+ *base* 1)))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-global.wasm");
@@ -3055,13 +3058,13 @@ class WasmLispCompilerIntegrationTest {
 		// request. Needs -S cli=y: without it wasmtime serve's linker reports the
 		// tcp-socket resource as missing at instantiation.
 		byte[] componentBytes = compileServeComponent("""
-				(defun handle (request)
+				(defun handle (env)
 				  (let ((sock (rontolisp:tcp-connect "127.0.0.1" 8091)))
 				    (if sock
 				        (progn
 				          (close sock)
-				          (list :status 200 :body "connected"))
-				        (list :status 200 :body "no-listener"))))
+				          (list 200 nil (list "connected")))
+				        (list 200 nil (list "no-listener")))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-tcp.wasm");
@@ -12797,9 +12800,8 @@ class WasmLispCompilerIntegrationTest {
 		// stream out of the wrong handle table).
 		// The backend is a plain rontolisp serve component, so the test stays offline.
 		byte[] backendBytes = compileServeComponent("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string "backend " (getf request :path))))
+				(defun handle (env)
+				  (list 200 nil (list "backend " (getf env :path-info))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		// blocking-read signals rontolisp:wit-error on the `closed` arm (a WIT result's
@@ -12880,10 +12882,9 @@ class WasmLispCompilerIntegrationTest {
 		// The backend echoes the request body back, so the assertion proves the body
 		// ARRIVED -- not merely that the request was accepted.
 		byte[] backendBytes = compileServeComponent("""
-				(rontolisp:async-defun handle (request)
-				  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-				    (list :status 200
-				          :body (concatenate 'string "echo " body))))
+				(rontolisp:async-defun handle (env)
+				  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				    (list 200 nil (list "echo " body))))
 				(rontolisp:http-handler 'handle)
 				""", null);
 		byte[] postBytes = compileWitImportComponent(vendoredWasiHttpWit(), """

@@ -13,65 +13,59 @@ import am.ik.wit.WitType;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The single source of truth for the HTTP plist shapes — the request plist a
- * {@code rontolisp:http-handler} handler receives and the response plist it returns,
- * which is also the plist a {@code rontolisp:fetch} future settles to. The shape is
- * declared ONCE, as the WIT {@code record} pair below (the house {@code record} = keyword
- * plist convention, {@link WitTypeMapper.Rep#PLIST}), and every backend derives its plist
- * builders and readers from the parsed fields instead of hand-writing the shape:
+ * The single source of truth for the CLIENT-side HTTP result shape: the
+ * {@code (:status :headers :body)} plist a {@code rontolisp:fetch} future settles to. The
+ * shape is declared ONCE, as the WIT {@code record} below (the house {@code record} =
+ * keyword plist convention, {@link WitTypeMapper.Rep#PLIST}), and every backend derives
+ * its plist builder and readers from the parsed fields instead of hand-writing the shape:
  *
  * <ul>
- * <li><strong>Interpreter</strong> — {@code LispEvaluator.invokeHttpHandler} and the
- * {@code Environment} fetch runtime loop over {@link #requestFields()} /
- * {@link #responseFields()} when assembling and reading the plists.</li>
- * <li><strong>JVM</strong> — {@code JvmHttpHandlerRuntimeBuilder} and
- * {@code JvmAsyncRuntimeBuilder} iterate the fields at codegen time, so the emitted
- * bytecode carries the derived keywords in record order.</li>
+ * <li><strong>Interpreter</strong> — the {@code Environment} fetch runtime loops over
+ * {@link #responseFields()} when assembling the plist.</li>
+ * <li><strong>JVM</strong> — {@code JvmAsyncRuntimeBuilder} iterates the fields at
+ * codegen time, so the emitted bytecode carries the derived keywords in record
+ * order.</li>
  * <li><strong>WASM component</strong> — {@code eval/HttpLibrary} splices
- * {@link #lispHelpersSource()}, the generated builder/accessor defuns {@code http.lisp}
- * calls in place of literal {@code (list :method ...)} forms.</li>
+ * {@link #lispHelpersSource()}, the generated builder/accessor defuns {@code http.lisp}'s
+ * fetch half calls in place of literal {@code (list :status ...)} forms.</li>
  * </ul>
+ *
+ * <p>
+ * This class is the fetch-only remainder of the pre-Clack {@code HttpPlistShape}: the
+ * SERVER side ({@code rontolisp:http-handler}) no longer has a plist shape of its own —
+ * since the Clack cutover a handler receives the Clack environment ({@link ClackEnv}) and
+ * returns the Clack response list, and {@code http-server.lisp} owns that contract.
+ * {@code rontolisp:fetch} deliberately keeps this plist unchanged: it is the client side,
+ * a different thing.
  *
  * <p>
  * A consumer that switches over the fields must throw on an unknown field name, and a
  * by-key reader guards itself with {@link #requireResponseHandled(Set)} — so adding a
- * field to a record here fails each backend loudly at build/compile time until its
+ * field to the record here fails each backend loudly at build/compile time until its
  * per-backend value extraction (the one part that cannot be derived) is supplied.
  *
  * <p>
  * Documented deviations from the settled WIT mapping ({@link WitTypeMapper}), all
  * predating it and user-facing: {@code headers} crosses as an alist of dotted
  * {@code (name . value)} conses, not the positional 2-lists a
- * {@code list<tuple<string, string>>} would map to; a missing response {@code status}
- * defaults to {@link #RESPONSE_STATUS_DEFAULT} and a missing response {@code body} to
- * {@link #RESPONSE_BODY_DEFAULT}; a response {@code body} may also be an eager string,
- * not only a stream. Defaults live here (WIT cannot express them) so they too are written
- * once.
+ * {@code list<tuple<string, string>>} would map to; a missing {@code status} defaults to
+ * {@link #RESPONSE_STATUS_DEFAULT} and a missing {@code body} to
+ * {@link #RESPONSE_BODY_DEFAULT}; a {@code body} may also be an eager string, not only a
+ * stream. Defaults live here (WIT cannot express them) so they too are written once.
  */
-public final class HttpPlistShape {
+public final class FetchResponseShape {
 
 	/**
-	 * The WIT declaration of the two plist shapes. This is rontolisp's own record pair —
-	 * {@code wasi:http@0.3.0} models request/response as resources with accessor methods,
-	 * so the plist shape needs its own authoritative record — and it is never emitted
-	 * into a component: it exists to be parsed, here, as the one place the shape is
-	 * written.
+	 * The WIT declaration of the plist shape. This is rontolisp's own record —
+	 * {@code wasi:http@0.3.0} models the response as a resource with accessor methods, so
+	 * the plist shape needs its own authoritative record — and it is never emitted into a
+	 * component: it exists to be parsed, here, as the one place the shape is written.
 	 */
 	static final String WIT = """
 			package rontolisp:http-plist;
 
 			interface plist {
-			  /// The request plist a rontolisp:http-handler handler receives.
-			  record request {
-			    method: string,
-			    path: string,
-			    query: option<string>,
-			    headers: list<tuple<string, string>>,
-			    body: stream<u8>,
-			  }
-
-			  /// The response plist a handler returns, and the plist a rontolisp:fetch
-			  /// future settles to.
+			  /// The response plist a rontolisp:fetch future settles to.
 			  record response {
 			    status: u16,
 			    headers: list<tuple<string, string>>,
@@ -86,8 +80,6 @@ public final class HttpPlistShape {
 	/** The response {@code body} used when the plist has none. */
 	public static final String RESPONSE_BODY_DEFAULT = "";
 
-	private static final List<Field> REQUEST_FIELDS;
-
 	private static final List<Field> RESPONSE_FIELDS;
 
 	static {
@@ -101,11 +93,10 @@ public final class HttpPlistShape {
 		if (plist == null) {
 			throw new IllegalStateException("http-plist WIT lacks the plist interface");
 		}
-		REQUEST_FIELDS = fieldsOf(plist, "request");
 		RESPONSE_FIELDS = fieldsOf(plist, "response");
 	}
 
-	private HttpPlistShape() {
+	private FetchResponseShape() {
 	}
 
 	/**
@@ -118,14 +109,6 @@ public final class HttpPlistShape {
 	 * @param type the WIT field type
 	 */
 	public record Field(String name, String keyword, WitType type) {
-	}
-
-	/**
-	 * The request plist fields, in record (= plist) order.
-	 * @return the fields
-	 */
-	public static List<Field> requestFields() {
-		return REQUEST_FIELDS;
 	}
 
 	/**
@@ -171,19 +154,15 @@ public final class HttpPlistShape {
 
 	/**
 	 * The Lisp helper defuns the WASM component path uses in place of hand-written plist
-	 * forms, generated from the records: a positional builder per record (parameters
-	 * named after the fields, in record order) and a per-field accessor applying the
-	 * declared default. {@code eval/HttpLibrary} splices them next to {@code http.lisp};
-	 * unreferenced helpers are dropped by its reachability walk.
+	 * forms, generated from the record: a positional builder (parameters named after the
+	 * fields, in record order) and a per-field accessor applying the declared default.
+	 * {@code eval/HttpLibrary} splices them next to {@code http.lisp}; unreferenced
+	 * helpers are dropped by its reachability walk.
 	 * @return the generated Lisp source
 	 */
 	public static String lispHelpersSource() {
 		StringBuilder source = new StringBuilder();
-		appendBuilder(source, "%http-request-plist", REQUEST_FIELDS);
 		appendBuilder(source, "%http-response-plist", RESPONSE_FIELDS);
-		for (Field field : REQUEST_FIELDS) {
-			appendAccessor(source, "%http-request-" + field.name(), field, null);
-		}
 		for (Field field : RESPONSE_FIELDS) {
 			appendAccessor(source, "%http-response-" + field.name(), field, responseDefaultExpr(field.name()));
 		}

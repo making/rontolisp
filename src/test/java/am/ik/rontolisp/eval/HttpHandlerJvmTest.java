@@ -81,8 +81,13 @@ class HttpHandlerJvmTest {
 
 	private void compileAndServeInBackground(String program, int port, boolean optimize) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("TestHttpServe", false, optimize);
-		// mirror the CLI pipeline's prelude splice so rontolisp:read-all resolves
-		byte[] classBytes = compiler.compile(LispPreludeLibrary.process(LispReader.readAllFromString(program)));
+		// mirror the CLI pipeline's splices: http-server.lisp (the shared server value
+		// model the injected handle() calls into), then the Gray call-site rewrite its
+		// buffered :raw-body stream needs, then the prelude for rontolisp:read-all
+		java.util.List<am.ik.rontolisp.LispVal> forms = LispReader.readAllFromString(program);
+		forms = HttpServerLibrary.process(forms, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(forms));
+		forms = GrayStreamsLibrary.process(forms);
+		byte[] classBytes = compiler.compile(LispPreludeLibrary.process(forms));
 		Path classFile = this.tempDir.resolve("TestHttpServe.class");
 		Files.write(classFile, classBytes);
 		URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
@@ -103,12 +108,11 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
-	void compiledDirectiveServesRequestPlist() throws Exception {
+	void compiledDirectiveServesClackEnvironment() throws Exception {
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string "path=" (getf request :path))))
+				(defun handle (env)
+				  (list 200 nil (list "path=" (getf env :path-info))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = get(port, "/hello");
@@ -117,13 +121,33 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
-	void compiledDirectiveSplitsPathAndQuery() throws Exception {
+	void compiledDirectiveDecodesPathInfoAndServesBufferedRawBody() throws Exception {
+		// :raw-body :buffered on the JVM backend: the compiled %http-body-stream Gray
+		// instance, read through the compiled Gray dispatch -- read-line and read-byte
+		// share one cursor and file-position is a real byte index.
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string "path=" (getf request :path)
-				                           " query=" (if (getf request :query) (getf request :query) "none"))))
+				(defun handle (env)
+				  (let* ((s (getf env :raw-body))
+				         (line (if s (read-line s nil nil) "none"))
+				         (b (if s (read-byte s nil nil) 0))
+				         (pos (if s (file-position s) 0)))
+				    (list 200 nil
+				          (list (getf env :path-info) "/" (format nil "~a/~a/~a" line b pos)))))
+				(rontolisp:http-handler 'handle %d :raw-body :buffered)
+				""".formatted(port), port);
+		assertThat(post(port, "/a%20b", "first\nsecond").body()).isEqualTo("/a b/first/115/7");
+		assertThat(get(port, "/plain").body()).isEqualTo("/plain/none/0/0");
+	}
+
+	@Test
+	void compiledDirectiveSplitsPathInfoAndQueryString() throws Exception {
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (list 200 nil
+				        (list "path=" (getf env :path-info)
+				              " query=" (if (getf env :query-string) (getf env :query-string) "none"))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		assertThat(get(port, "/hello?a=1&b=two").body()).isEqualTo("path=/hello query=a=1&b=two");
@@ -136,10 +160,10 @@ class HttpHandlerJvmTest {
 		// with read-all and the injected handle() awaits the handler's future
 		int port = freePort();
 		compileAndServeInBackground("""
-				(rontolisp:async-defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string (getf request :method) ":"
-				                           (rontolisp:await (rontolisp:read-all (getf request :body))))))
+				(rontolisp:async-defun handle (env)
+				  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				    (list 200 nil
+				          (list (if (eq (getf env :request-method) :POST) "POST" "?") ":" body))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = post(port, "/", "payload");
@@ -147,16 +171,16 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
-	void compiledDirectiveDefaultsStatusTo200AndEmptyBody() throws Exception {
+	void compiledDirectiveServesTheTwoElementBodylessResponse() throws Exception {
+		// lack's finalize-response answers (status headers) for a bodyless response.
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request) (list :body "ok"))
+				(defun handle (env) (list 204 nil))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = get(port, "/");
-		assertThat(response.statusCode()).isEqualTo(200);
-		assertThat(response.body()).isEqualTo("ok");
-		// A handler returning nil serves an empty 200 as well (all keys defaulted).
+		assertThat(response.statusCode()).isEqualTo(204);
+		assertThat(response.body()).isEmpty();
 	}
 
 	@Test
@@ -165,8 +189,8 @@ class HttpHandlerJvmTest {
 		// through the Handler interface, an edge the call-graph shaker cannot see.
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request)
-				  (list :status 200 :body (concatenate 'string "opt=" (getf request :path))))
+				(defun handle (env)
+				  (list 200 nil (list "opt=" (getf env :path-info))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port, true);
 		HttpResponse<String> response = get(port, "/x");
@@ -176,19 +200,13 @@ class HttpHandlerJvmTest {
 
 	@Test
 	void compiledDirectiveMarshalsRequestHeaders() throws Exception {
-		// The JDK HttpServer normalizes header names (first letter upper, rest lower),
-		// so the handler looks the normalized name up in the :headers alist.
+		// The Clack :headers value is an equal hash table with LOWERCASED names,
+		// whatever casing the wire (or the JDK server's normalization) used.
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun header-value (headers name)
-				  (if headers
-				      (if (equal (car (car headers)) name)
-				          (cdr (car headers))
-				          (header-value (cdr headers) name))
-				      "missing"))
-				(defun handle (request)
-				  (list :status 200
-				        :body (header-value (getf request :headers) "X-token")))
+				(defun handle (env)
+				  (list 200 nil
+				        (list (gethash "x-token" (getf env :headers)))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpClient client = HttpClient.newHttpClient();
@@ -202,12 +220,14 @@ class HttpHandlerJvmTest {
 
 	@Test
 	void compiledDirectiveMarshalsResponseHeaders() throws Exception {
+		// Response headers are a keyword plist (Clack), with the dotted alist (a fetch
+		// result's :headers) accepted too -- exercise the plist form here.
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request)
-				  (list :status 200
-				        :headers (list (cons "content-type" "text/plain") (cons "x-custom" "v1"))
-				        :body "ok"))
+				(defun handle (env)
+				  (list 200
+				        '(:content-type "text/plain" :x-custom "v1")
+				        (list "ok")))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = get(port, "/");
@@ -221,10 +241,10 @@ class HttpHandlerJvmTest {
 	void compiledDirectiveReturnsCustomStatusPerRequest() throws Exception {
 		int port = freePort();
 		compileAndServeInBackground("""
-				(defun handle (request)
-				  (if (equal (getf request :path) "/found")
-				      (list :status 200 :body "yes")
-				      (list :status 404 :body "no")))
+				(defun handle (env)
+				  (if (equal (getf env :path-info) "/found")
+				      (list 200 nil (list "yes"))
+				      (list 404 nil (list "no"))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		assertThat(get(port, "/found").statusCode()).isEqualTo(200);

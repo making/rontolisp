@@ -4,18 +4,18 @@ Hand-rolling HTTP over `read-line`/`write-line` (as the
 [TCP Sockets guide](tcp-sockets.md) demonstrates with `http-hello.lisp`) is
 instructive, but for a plain request/response server
 [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
-does the parsing for you. You write a handler that takes a request property
-list (`:method` / `:path` / `:query` / `:headers` / `:body`) and returns a
-response property list (`:status` / `:headers` / `:body`) — the same value
-model as
-[`rontolisp:fetch`](http-fetch.md), just incoming instead of outgoing:
+does the parsing for you. You write a handler that takes the Clack
+environment property list (`:request-method` / `:path-info` /
+`:query-string` / `:headers` / `:raw-body` / ...) and returns the Clack
+response list `(status headers body)` — the protocol of
+[Clack Web Applications](clack.md), which is why a Clack application is
+served with zero per-request conversion:
 
 ```console
-(defun handle (request)
-  (list :status 200
-        :headers '(("content-type" . "text/plain"))
-        :body (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (getf request :method) (getf request :path))))
+(defun handle (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "Hello from rontolisp!~%~a ~a~%"
+                      (getf env :request-method) (getf env :path-info)))))
 
 (rontolisp:http-handler 'handle 8080)
 ```
@@ -23,6 +23,67 @@ model as
 Save it as `app.lisp` (also shipped as
 [`examples/net/http-handler.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/http-handler.lisp)),
 then run it on any of the three supported backends below.
+
+## The handler contract
+
+The handler receives Clack's environment property list, with these keys —
+always all present:
+
+| env key | value |
+|---------|-------|
+| `:request-method` | the method as an upcased interned keyword (`:GET`, `:POST`, ...), so `(eq m :POST)` works |
+| `:script-name` | always `""` |
+| `:path-info` | the percent-decoded request path |
+| `:query-string` | the raw text after the first `?`, or `nil` when there is none |
+| `:server-name` / `:server-port` | from the `Host` header when present, otherwise the listener's |
+| `:server-protocol` | a keyword, e.g. `:HTTP/1.1` |
+| `:request-uri` | the raw request target verbatim (still percent-encoded, query included) |
+| `:url-scheme` | `"http"` or `"https"` |
+| `:remote-addr` / `:remote-port` | the real peer on the interpreter and the JVM; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
+| `:headers` | an `equal` hash table keyed by **lowercased** header names — look up with `(gethash "content-type" (getf env :headers))`; repeated headers join with `", "`; never `nil` |
+| `:content-type` / `:content-length` | from that table (`nil` when absent; `:content-length` an integer) |
+| `:raw-body` | the request body (below) |
+
+By default `:raw-body` is rontolisp's **asynchronous** stream: a handler that
+reads it drains it with
+`(rontolisp:await (rontolisp:read-all (getf env :raw-body)))` and must be an
+[`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md).
+With the optional directive argument
+`(rontolisp:http-handler 'handle 8080 :raw-body :buffered)` the body is
+instead read in full up front and handed over as a **synchronous** in-memory
+bivalent stream — readable with `read-line`/`read-char` *and*
+`read-byte`/`read-sequence`, with a real `file-position` — which is what a
+Clack application (lack-request, http-body) needs; a bodiless request then
+gets `:raw-body nil`.
+
+The handler returns Clack's positional response list `(status headers body)`:
+
+- `status` — a **required** integer; a non-integer car signals an error.
+- `headers` — a keyword plist (`'(:content-type "text/plain")`, the idiomatic
+  form) or a dotted alist — accepted so a [`rontolisp:fetch`](http-fetch.md)
+  result's `:headers` can be passed straight through. Repeated names each
+  become their own header line (repeated `:set-cookie` is correct by
+  construction); `content-length`/`transfer-encoding` are dropped (the server
+  computes them); `nil` is fine.
+- `body` — a **list of strings** (joined), `nil` or omitted (an empty body —
+  the two-element `(status headers)` form is valid), an `(unsigned-byte 8)`
+  vector, or a rontolisp stream (e.g. a proxied fetch body). A **bare string
+  signals an error** — deliberately, and faithfully to Clack: a pathname body
+  means "serve this file" there, and a rontolisp pathname *is* its
+  namestring, so accepting strings would make a static-file middleware serve
+  a file's *path* as its contents. A function response is supported in
+  Clack's delayed form only —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
+  — and the streaming-writer form is refused.
+
+One migration hazard is worth spelling out for handlers written against the
+pre-Clack contract: the response side fails loudly (the errors above), but
+the request side fails silently — `(getf env :method)` in a half-migrated
+handler just returns `nil`.
+
+The *client* side is unchanged: [`rontolisp:fetch`](http-fetch.md) still
+yields its `(:status <integer> :headers <alist> :body <stream>)` result
+plist.
 
 ## On the interpreter
 
@@ -140,20 +201,20 @@ released `wasi:http@0.3.0`, so the imports fail to link even with GC turned on
 
 ## Query strings
 
-`:path` carries the path only, so route comparisons are exact. When the
-request has a query string it arrives separately under `:query` — the raw
-text after the `?`, or `nil` when there is none. Parse it with the
-query-string functions of the URL library,
+`:path-info` carries the (percent-decoded) path only, so route comparisons
+are exact. When the request has a query string it arrives separately under
+`:query-string` — the raw text after the first `?`, or `nil` when there is
+none. Parse it with the query-string functions of the URL library,
 [`rontolisp:query-param`](../reference/functions/rontolisp-query-param.md) and
 [`rontolisp:query-params`](../reference/functions/rontolisp-query-params.md)
 (both url-decode keys and values, and both accept `nil`):
 
 ```console
-(defun handle (request)
-  (list :status 200
-        :body (format nil "Hello, ~a!~%"
-                      (or (rontolisp:query-param (getf request :query) "name")
-                          "world"))))
+(defun handle (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "Hello, ~a!~%"
+                      (or (rontolisp:query-param (getf env :query-string) "name")
+                          "world")))))
 
 (rontolisp:http-handler 'handle 8080)
 ```
@@ -174,14 +235,16 @@ is an asynchronous function, so define it with
 instead of `defun`:
 
 ```console
-(rontolisp:async-defun handle (request)
+(rontolisp:async-defun handle (env)
   (let ((res (rontolisp:await
               (rontolisp:fetch "http://127.0.0.1:9000/upstream"))))
-    (list :status (getf res :status)
-          :body (getf res :body))))
+    (list (getf res :status) (getf res :headers) (getf res :body))))
 
 (rontolisp:http-handler 'handle 8080)
 ```
+
+The fetch result's `:headers` alist goes into the response's `headers` slot
+as is, and its `:body` stream into the `body` slot — the server drains it.
 
 On the WASI component backend the outgoing-request machinery rides along in
 the same component — serve and serve+fetch are one component shape, importing
@@ -217,13 +280,13 @@ component imports it alongside its fixed `wasi:http` surface:
                       :interface "wasi:keyvalue/store@0.2.0-draft"
                       :package kv)
 
-(defun handle (request)
-  (let* ((page (getf request :path))
+(defun handle (env)
+  (let* ((page (getf env :path-info))
          (bucket (kv:open ""))
          (seen (kv:bucket-get bucket page))
          (hits (+ 1 (if seen (parse-integer seen) 0))))
     (kv:bucket-set bucket page (princ-to-string hits))
-    (list :status 200 :body (format nil "~a: ~a hits~%" page hits))))
+    (list 200 nil (list (format nil "~a: ~a hits~%" page hits)))))
 
 (rontolisp:http-handler 'handle 8080)
 ```
@@ -245,8 +308,9 @@ worked example is
 ## Limitations
 
 Request and response headers are marshalled on every backend, including the WASI
-component: the handler reads `:headers` (an alist of `(name . value)` string pairs)
-from the request and any `:headers` in the response is written back.
+component: the handler reads `:headers` (an `equal` hash table keyed by
+lowercased header names) from the environment and the response's `headers`
+element is written back.
 
 Inside a served component handler, `random`, the time built-ins and `print`
 (to the host's stdout) all work — the component bridges them to the

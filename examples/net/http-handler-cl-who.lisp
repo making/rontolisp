@@ -30,16 +30,17 @@
 
 (asdf:load-system :cl-who)
 
-(defun handle (request)
-  (let ((path (getf request :path)))
-    (list :status 200
-          :headers (list (cons "content-type" "text/html; charset=utf-8"))
-          :body (cl-who:with-html-output-to-string (s)
+;; The env plist's :path-info carries the (percent-decoded) path only; the
+;; rendered page is the single string of the response body list.
+(defun handle (env)
+  (let ((path (getf env :path-info)))
+    (list 200 '(:content-type "text/html; charset=utf-8")
+          (list (cl-who:with-html-output-to-string (s)
                   (:html
                    (:head (:title "rontolisp + cl-who"))
                    (:body
                     (:h1 "Hello, World!")
-                    (:p "You requested " (:code (cl-who:esc path)))))))))
+                    (:p "You requested " (:code (cl-who:esc path))))))))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

@@ -59,7 +59,7 @@ class HttpHandlerTest {
 		HttpServer server = HttpHandlerSupport.start(0,
 				request -> new HttpHandlerSupport.Response(201,
 						List.of(new HttpHandlerSupport.Header("content-type", "text/plain")),
-						"hello " + request.method() + " " + request.path()));
+						"hello " + request.method() + " " + request.target()));
 		int port = server.getAddress().getPort();
 		HttpResponse<String> response = get(port, "/greet");
 		assertThat(response.statusCode()).isEqualTo(201);
@@ -73,7 +73,7 @@ class HttpHandlerTest {
 		// ephemeral port with a bind address, read the port back, serve, stop -- and
 		// the stop releases a blocked joiner.
 		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
-				request -> new HttpHandlerSupport.Response(200, List.of(), "stoppable " + request.path()));
+				request -> new HttpHandlerSupport.Response(200, List.of(), "stoppable " + request.target()));
 		int port = (int) HttpHandlerSupport.serverPort(handle);
 		assertThat(port).isPositive();
 		assertThat(get(port, "/x").body()).isEqualTo("stoppable /x");
@@ -120,8 +120,8 @@ class HttpHandlerTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true));
 		for (var expr : LispReader.readAllFromString("""
-				(defun seam-handler (req)
-				  (list :status 200 :headers nil :body (getf req :path)))
+				(defun seam-handler (env)
+				  (list 200 nil (list (getf env :path-info))))
 				(defvar *server* (rontolisp::%http-server-start #'seam-handler 0 "127.0.0.1"))
 				(print (rontolisp::%http-server-port *server*))
 				""")) {
@@ -167,26 +167,24 @@ class HttpHandlerTest {
 	}
 
 	@Test
-	void requestOfSplitsPathAndQueryAtTheFirstQuestionMark() {
-		HttpHandlerSupport.Request withQuery = HttpHandlerSupport.Request.of("GET", "/get?a=1&b=?x", List.of(), "");
-		assertThat(withQuery.path()).isEqualTo("/get");
-		assertThat(withQuery.query()).isEqualTo("a=1&b=?x");
-		HttpHandlerSupport.Request without = HttpHandlerSupport.Request.of("GET", "/get", List.of(), "");
-		assertThat(without.path()).isEqualTo("/get");
-		assertThat(without.query()).isNull();
-		HttpHandlerSupport.Request emptyQuery = HttpHandlerSupport.Request.of("GET", "/get?", List.of(), "");
-		assertThat(emptyQuery.path()).isEqualTo("/get");
-		assertThat(emptyQuery.query()).isEmpty();
+	void requestKeepsTheTargetVerbatimAndTheBodyAsBytes() {
+		// The transport hands the shared library the raw facts only: the target stays
+		// unsplit and still percent-encoded (the Clack environment build owns the ?
+		// split and the decoding), and the body crosses as bytes.
+		HttpHandlerSupport.Request request = HttpHandlerSupport.Request.of("GET", "/a%20b?a=1&b=?x", List.of(), "ボディ");
+		assertThat(request.target()).isEqualTo("/a%20b?a=1&b=?x");
+		assertThat(request.bodyString()).isEqualTo("ボディ");
+		assertThat(request.body()).isEqualTo("ボディ".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 	}
 
 	@Test
-	void directiveServesRequestPlist() throws Exception {
+	void directiveServesClackEnvironment() throws Exception {
 		int port = freePort();
 		serveInBackground("""
-				(defun handle (request)
-				  (list :status 200
-				        :headers (list (cons "content-type" "text/plain"))
-				        :body (concatenate 'string "path=" (getf request :path))))
+				(defun handle (env)
+				  (list 200
+				        '(:content-type "text/plain")
+				        (list "path=" (getf env :path-info))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = get(port, "/hello");
@@ -196,13 +194,83 @@ class HttpHandlerTest {
 	}
 
 	@Test
-	void directiveSplitsPathAndQuery() throws Exception {
+	void directiveDecodesPathInfoAndKeepsRequestUriRaw() throws Exception {
 		int port = freePort();
 		serveInBackground("""
-				(defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string "path=" (getf request :path)
-				                           " query=" (if (getf request :query) (getf request :query) "none"))))
+				(defun handle (env)
+				  (list 200 '(:content-type "text/plain")
+				        (list (getf env :path-info) " uri=" (getf env :request-uri))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/a%20b").body()).isEqualTo("/a b uri=/a%20b");
+	}
+
+	@Test
+	void directiveServesBufferedRawBody() throws Exception {
+		// :raw-body :buffered -- the Java-backed bivalent octet stream: read-line and
+		// read-byte share one cursor, and file-position is a real byte index.
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (let* ((s (getf env :raw-body))
+				         (line (read-line s nil nil))
+				         (b (read-byte s nil nil))
+				         (pos (file-position s)))
+				    (file-position s 0)
+				    (list 200 nil
+				          (list (format nil "~a/~a/~a/~a" line b pos (read-char s nil nil))))))
+				(rontolisp:http-handler 'handle %d :raw-body :buffered)
+				""".formatted(port), port);
+		assertThat(post(port, "/", "first\nsecond").body()).isEqualTo("first/115/7/f");
+	}
+
+	@Test
+	void directiveGivesNilRawBodyForABodylessBufferedRequest() throws Exception {
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (list 200 nil (list (if (getf env :raw-body) "body" "none"))))
+				(rontolisp:http-handler 'handle %d :raw-body :buffered)
+				""".formatted(port), port);
+		assertThat(get(port, "/").body()).isEqualTo("none");
+	}
+
+	@Test
+	void directiveSupportsTheDelayedResponse() throws Exception {
+		// Clack's delayed form: the handler answers a function that later calls the
+		// responder with the real response.
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (lambda (responder)
+				    (funcall responder (list 200 nil (list "delayed")))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/").body()).isEqualTo("delayed");
+	}
+
+	@Test
+	void directiveRefusesABareStringBody() throws Exception {
+		// Upstream-faithful, and load-bearing here: a rontolisp pathname IS its
+		// namestring, so accepting a string would make lack's :static middleware serve
+		// a file's PATH as its contents with a 200.
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (list 200 nil "bare"))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		assertThat(get(port, "/").statusCode()).isEqualTo(500);
+	}
+
+	@Test
+	void directiveSplitsPathInfoAndQueryString() throws Exception {
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (list 200 nil
+				        (list "path=" (getf env :path-info)
+				              " query=" (if (getf env :query-string) (getf env :query-string) "none"))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		assertThat(get(port, "/hello?a=1&b=two").body()).isEqualTo("path=/hello query=a=1&b=two");
@@ -211,14 +279,15 @@ class HttpHandlerTest {
 
 	@Test
 	void directiveEchoesMethodAndBody() throws Exception {
-		// the request body is an asynchronous stream, so a handler that reads it is an
-		// async-defun draining it with read-all; the server awaits the handler's future
+		// the default :raw-body is an asynchronous stream, so a handler that reads it
+		// is an async-defun draining it with read-all; the server awaits the handler's
+		// future; :request-method is an interned keyword, (eq m :POST)-able
 		int port = freePort();
 		serveInBackground("""
-				(rontolisp:async-defun handle (request)
-				  (list :status 200
-				        :body (concatenate 'string (getf request :method) ":"
-				                           (rontolisp:await (rontolisp:read-all (getf request :body))))))
+				(rontolisp:async-defun handle (env)
+				  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+				    (list 200 nil
+				          (list (if (eq (getf env :request-method) :POST) "POST" "?") ":" body))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = post(port, "/", "payload");
@@ -226,15 +295,17 @@ class HttpHandlerTest {
 	}
 
 	@Test
-	void directiveDefaultsStatusTo200() throws Exception {
+	void directiveServesTheTwoElementBodylessResponse() throws Exception {
+		// lack's finalize-response answers (status headers) for a bodyless response --
+		// every ningle 404 has that shape.
 		int port = freePort();
 		serveInBackground("""
-				(defun handle (request) (list :body "ok"))
+				(defun handle (env) (list 204 nil))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		HttpResponse<String> response = get(port, "/");
-		assertThat(response.statusCode()).isEqualTo(200);
-		assertThat(response.body()).isEqualTo("ok");
+		assertThat(response.statusCode()).isEqualTo(204);
+		assertThat(response.body()).isEmpty();
 	}
 
 	// The wasi:keyvalue store, cut to what a page-hit counter binds. The component built
@@ -281,14 +352,14 @@ class HttpHandlerTest {
 				        (t (error 'rontolisp:wit-error :payload :other :message member))))
 				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft" #'page-store)
 
-				(defun handle (request)
-				  (let* ((page (getf request :path))
+				(defun handle (env)
+				  (let* ((page (getf env :path-info))
 				         (bucket (kv:open ""))
 				         (seen (kv:bucket-get bucket page)))
 				    (kv:bucket-set bucket page
 				                   (princ-to-string (+ 1 (if seen (parse-integer seen) 0))))
-				    (list :status 200
-				          :body (concatenate 'string page " " (kv:bucket-get bucket page)))))
+				    (list 200 nil
+				          (list page " " (kv:bucket-get bucket page)))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(wit.toString().replace("\\", "\\\\"), port), port);
 		assertThat(get(port, "/index").body()).isEqualTo("/index 1");
@@ -319,10 +390,10 @@ class HttpHandlerTest {
 	void directiveRejectsWrongArgCount() {
 		assertThatThrownBy(() -> {
 			LispEvaluator evaluator = evaluator();
-			for (var expr : LispReader.readAllFromString("(defun h (r) nil) (rontolisp:http-handler 'h 1 2)")) {
+			for (var expr : LispReader.readAllFromString("(defun h (r) nil) (rontolisp:http-handler 'h 1 2 3 4)")) {
 				evaluator.eval(expr);
 			}
-		}).isInstanceOf(LispEvalException.class).hasMessageContaining("expects 1 or 2 arguments");
+		}).isInstanceOf(LispEvalException.class).hasMessageContaining("expects 1 to 4 arguments");
 	}
 
 	@Test

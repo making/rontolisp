@@ -18,22 +18,21 @@
 ;;   curl http://127.0.0.1:8080/
 
 (defun text-response (status body)
-  (list :status status
-        :headers (list (cons "content-type" "text/plain"))
-        :body body))
+  (list status '(:content-type "text/plain") (list body)))
 
-(defun home (request)
+(defun home (env)
   (text-response 200 (format nil "Hello from wasmCloud!~%")))
 
-(defun not-found (request)
+(defun not-found (env)
   (text-response 404 (format nil "Not found~%")))
 
-;; The request plist's :path carries the path only (any query string arrives
-;; separately as :query), so the comparison is exact.
-(defun handle (request)
-  (if (string= (getf request :path) "/")
-      (home request)
-      (not-found request)))
+;; The env plist's :path-info carries the (percent-decoded) path only (any
+;; query string arrives separately as :query-string), so the comparison is
+;; exact.
+(defun handle (env)
+  (if (string= (getf env :path-info) "/")
+      (home env)
+      (not-found env)))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

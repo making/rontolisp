@@ -99,6 +99,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpServerLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http-server\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/http\\.wit"

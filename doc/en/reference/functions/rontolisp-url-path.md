@@ -13,7 +13,7 @@ whole string when there is no `?`). The counterpart
 ```
 
 Inside an [`rontolisp:http-handler`](rontolisp-http-handler.md) handler the
-request plist's `:path` already carries the path only, so this helper is
+environment plist's `:path-info` already carries the path only, so this helper is
 mainly for splitting URL strings on the
 [`rontolisp:fetch`](rontolisp-fetch.md) (client) side.
 

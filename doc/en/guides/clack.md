@@ -21,6 +21,12 @@ $ curl http://127.0.0.1:5000/hello
 Hello, Clack! GET /hello
 ```
 
+There is no adaptation layer behind this: rontolisp's own server protocol
+*is* Clack's (see [Serving HTTP](http-handler.md)), so the backend hands the
+application to the server as the handler and converts nothing per request —
+a Clack application is a valid `rontolisp:http-handler` handler, and vice
+versa.
+
 The first run downloads clack, [lack](https://github.com/fukamachi/lack) and
 their dependencies into `~/.rontolisp/quicklisp`; the dependencies resolve to
 real libraries (alexandria, the ironclad slice) and to the
@@ -48,23 +54,27 @@ standard `(status headers body)` list:
 
 | env key | value |
 |---------|-------|
-| `:request-method` | the method as a keyword (`:GET`, `:POST`, ...) |
+| `:request-method` | the method as an upcased interned keyword (`:GET`, `:POST`, ...) |
 | `:script-name` | `""` |
-| `:path-info` | the request path |
+| `:path-info` | the percent-decoded request path |
 | `:query-string` | the raw query string, or `nil` |
-| `:request-uri` | path + `?` + query |
-| `:server-name` / `:server-port` | from `clackup`'s `:address` / `:port` |
-| `:server-protocol` | `:http/1.1` |
-| `:url-scheme` | `"http"` |
-| `:headers` | a hash table (`:test 'equal`) keyed by lowercased header names; duplicate request headers keep the last value |
-| `:content-type` / `:content-length` | from that table (`nil` when absent) |
-| `:raw-body` | the request body as a readable stream (pre-drained per request) |
-| `:remote-addr` / `:remote-port` | `""` / `nil` — not carried by the server yet |
+| `:request-uri` | the raw request target verbatim (still encoded, query included) |
+| `:server-name` / `:server-port` | from the `Host` header when present, otherwise the listener's |
+| `:server-protocol` | a keyword, e.g. `:HTTP/1.1` |
+| `:url-scheme` | `"http"` or `"https"` |
+| `:headers` | a hash table (`:test 'equal`) keyed by lowercased header names; duplicate request headers join with `", "` in wire order |
+| `:content-type` / `:content-length` | from that table (`nil` when absent; `:content-length` an integer) |
+| `:raw-body` | the request body as a synchronous in-memory bivalent stream — `read-line`/`read-char` and `read-byte`/`read-sequence` both work, with a real `file-position` (what lack-request and http-body need); `nil` for a bodiless request |
+| `:remote-addr` / `:remote-port` | the real peer on the interpreter and the JVM; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
 
-The response `body` may be a list of strings, a single string, a
+The response `body` may be a list of strings, a
 `(vector (unsigned-byte 8))` (each octet becomes the character of its code
-point) or `nil`; a pathname body (static files) and a function body (the
-streaming responder protocol) signal a clear error.
+point), a rontolisp stream, or `nil`; the two-element `(status headers)` form
+is valid too. A bare string — and therefore a pathname body (a rontolisp
+pathname is its namestring) — signals a clear error, as Clack itself refuses
+strings. A function body is supported in Clack's delayed-response form (the
+responder is called with the final response list); the streaming-writer form
+signals.
 
 ## Backends
 
@@ -88,8 +98,8 @@ streaming responder protocol) signal a clear error.
   first one's application.
 - `clack.socket` (WebSocket) and `:swank-port` are unsupported (`:swank-port`
   reaches the `swank` stub, which signals).
-- Response streaming (a function body) and pathname bodies signal, as noted
-  above.
+- Streaming-writer responses and bare-string/pathname bodies signal, as noted
+  above (delayed function responses work).
 
 See also: [Serving HTTP (http-handler)](http-handler.md) for the underlying
 server, and [`examples/asdf/clack-hello.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/clack-hello.lisp)

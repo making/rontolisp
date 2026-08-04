@@ -1,27 +1,57 @@
 # rontolisp:http-handler
 
-`(rontolisp:http-handler handler &optional port)`
+`(rontolisp:http-handler handler &optional port &key raw-body)`
 
 Lisp のハンドラ関数で HTTP リクエストを処理します。`handler` は
 （[`rontolisp:wasm-export`](rontolisp-wasm-export.md) と同様に）1 引数関数の名前を
-指すクォート済みシンボルです。ハンドラはリクエストのプロパティリストを受け取り、
-レスポンスのプロパティリストを返します。形は [`rontolisp:fetch`](rontolisp-fetch.md)
-と対称で、送受信の HTTP を 1 つの値モデルで表します。
+指すクォート済みシンボルです。ハンドラは Clack の環境プロパティリストを受け取り、
+Clack のレスポンスリスト `(status headers body)` を返します — Clack
+アプリケーションはそのまま有効なハンドラです
+（[Clack Web アプリケーション](../../guides/clack.md)を参照）。
 
-- **リクエスト** — `(:method <string> :path <string> :query <string-or-nil>
-  :headers <alist> :body <stream>)`。`:path` はクエリ文字列を取り除いたパスのみ、
-  `:query` は先頭の `?` を除いた生のクエリ文字列（`/get?a=1&b=2` なら
-  `"a=1&b=2"`）で、クエリが無いリクエストでは `nil` です —
+- **環境** — ちょうど次のキーを持つプロパティリストで、常にすべて存在します:
+  `:request-method`（大文字化・intern 済みのキーワード。`:GET` / `:POST` /
+  ...。`(eq m :POST)` が動きます）、`:script-name`（常に `""`）、`:path-info`
+  （パーセントデコード済みのパス）、`:query-string`（最初の `?` より後ろの
+  生のテキスト、なければ `nil` —
   [`rontolisp:query-param`](rontolisp-query-param.md) /
-  [`rontolisp:query-params`](rontolisp-query-params.md) でパースしてください。
-  `:body` は非同期ストリームです。読むハンドラは
-  `(rontolisp:await (rontolisp:read-all (getf request :body)))` で読み尽くし、
+  [`rontolisp:query-params`](rontolisp-query-params.md) でパースして
+  ください）、`:server-name`、`:server-port`（整数）、`:server-protocol`
+  （キーワード。例: `:HTTP/1.1`）、`:request-uri`（生のリクエストターゲット
+  そのまま。エンコードされたまま、クエリ込み）、`:url-scheme`
+  （`"http"`/`"https"`）、`:remote-addr` / `:remote-port`（インタープリタ／
+  JVM では実際のピア。WASI コンポーネントでは `nil`）、`:headers`
+  （小文字化した名前をキーとする `equal` ハッシュテーブル。重複ヘッダは
+  `", "` で結合され、`nil` になることはありません —
+  `(gethash "content-type" (getf env :headers))`）、`:content-type` と
+  `:content-length`（文字列／整数、なければ `nil`）、そして `:raw-body`。
+- **`:raw-body`** — デフォルト（`:raw-body :stream`）では非同期ストリーム
+  です。読むハンドラは
+  `(rontolisp:await (rontolisp:read-all (getf env :raw-body)))` で読み尽くし、
   [`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md)
-  として定義する必要があります。
-- **レスポンス** — `(:status <integer> :headers <alist> :body
-  <string-or-stream>)`。キーが無い場合は `:status 200`、本文は空がデフォルト
-  です。ストリームのボディ（例: プロキシした fetch レスポンスの `:body`）は
-  サーバが読み尽くして送出します。
+  として定義する必要があります。ディレクティブ引数
+  `(rontolisp:http-handler 'handle 8080 :raw-body
+  :buffered)` を付けると、代わりにボディを全部読み切り、
+  `read-line`/`read-char` と `read-byte`/`read-sequence` の両方で読めて
+  本物の `file-position` を持つ、同期のインメモリな bivalent ストリーム
+  として渡します — Clack アプリケーション（lack-request、http-body）が
+  必要とする形です。ボディの無いリクエストでは
+  `:raw-body` は `nil` になります。
+- **レスポンス** — 位置引数のリスト `(status headers body)`。`status` は
+  必須の整数です（car が整数でなければエラーを送出します）。`headers` は
+  キーワード plist（`'(:content-type "text/plain")`）またはドット対の
+  alist（[`rontolisp:fetch`](rontolisp-fetch.md) の結果の `:headers` を
+  そのまま渡せます）。同名の繰り返しはそれぞれが独立したヘッダ行になり、
+  `content-length` / `transfer-encoding` は落とされ（サーバが計算します）、
+  `nil` でも構いません。`body` は文字列のリスト（連結されます）、
+  `nil`／省略（空のボディ — 2 要素の `(status headers)` 形も有効）、
+  `(unsigned-byte 8)` ベクタ、またはサーバが読み尽くす rontolisp の
+  ストリーム（例: プロキシした fetch のボディ）です。**裸の文字列はエラーを
+  送出します**（rontolisp の pathname はその namestring であり、Clack では
+  pathname のボディが「このファイルを serve せよ」を意味するため）。関数の
+  レスポンスは Clack の delayed 形のみ対応です —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
+  — streaming writer 形は拒否されます。
 
 **インタープリタ** と **JVM** バックエンドでは、`http-handler` は `port`
 （デフォルト `8080`、リクエストごとに 1 つの仮想スレッド）でブロッキングの
@@ -32,11 +62,10 @@ HTTP コンポーネントとして動作します（`port` 引数は無視さ�
 ホストが所有します）。
 
 ```console
-(defun handle (request)
-  (list :status 200
-        :headers '(("content-type" . "text/plain"))
-        :body (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (getf request :method) (getf request :path))))
+(defun handle (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "Hello from rontolisp!~%~a ~a~%"
+                      (getf env :request-method) (getf env :path-info)))))
 
 (rontolisp:http-handler 'handle 8080)
 ```
@@ -81,8 +110,8 @@ GET /hello
 （`--component`、`wasmtime serve` 用の `wasi:http/handler@0.3.0`
 コンポーネント）で動作します。リクエスト／レスポンスのヘッダは WASI
 コンポーネントを含むすべてのバックエンドで受け渡しされます。ハンドラは
-`:headers`（`(名前 . 値)` という文字列ペアの連想リスト）を読み取り、
-レスポンスに `:headers` があれば書き戻します。
+`:headers`（小文字化した名前をキーとする `equal` ハッシュテーブル）を
+読み取り、レスポンスの `headers` 要素は書き戻されます。
 serve コンポーネントのハンドラ内でも `random`、時刻系の組み込み関数、
 `print`（ホストの標準出力への出力）は動作します — すべての `wasi:http`
 ホストが提供する `wasi:random` / `wasi:clocks` / `wasi:cli` へブリッジ

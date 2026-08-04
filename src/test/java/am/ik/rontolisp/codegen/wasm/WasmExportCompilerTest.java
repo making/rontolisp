@@ -38,10 +38,12 @@ class WasmExportCompilerTest {
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source), null,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT,
 				am.ik.rontolisp.eval.SourceLoader.fileSystem());
+		boolean bufferBody = am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(loaded);
 		loaded = am.ik.rontolisp.eval.HttpLibrary.process(loaded,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
-		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
-			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
+		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
+		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
+				am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 		return new WasmLispCompiler(false, true, false, false, true).compile(program);
 	}
 
@@ -498,7 +500,7 @@ class WasmExportCompilerTest {
 		// i32.const 0x10008 (CABI_HP_BASE) ; i32.store.
 		byte[] reset = hexBytes("4180800441888004360200");
 		byte[] serve = compileServe("""
-				(defun h (r) (list :status 200 :body "ok"))
+				(defun h (env) (list 200 nil (list "ok")))
 				(rontolisp:http-handler 'h)
 				""");
 		assertThat(indexOf(serve, reset)).as("the serve handle wrapper resets the cabi bump cell").isNotNegative();
@@ -605,7 +607,7 @@ class WasmExportCompilerTest {
 	@Test
 	void serveComponentWitExportsTheIncomingHandlerOnly() {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString("""
-				(defun h (r) (list :status 200 :body "x"))
+				(defun h (env) (list 200 nil (list "x")))
 				(rontolisp:http-handler 'h)
 				"""), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary

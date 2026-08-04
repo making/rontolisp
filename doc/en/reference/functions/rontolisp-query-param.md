@@ -5,7 +5,7 @@
 Returns the url-decoded value of the first `name` match in a query string, or
 `nil` when the name does not appear. `query` may be `nil` (the result is then
 `nil` too), so the one-liner
-`(rontolisp:query-param (getf request :query) "name")` works unchanged for
+`(rontolisp:query-param (getf env :query-string) "name")` works unchanged for
 requests without a query string inside an
 [`rontolisp:http-handler`](rontolisp-http-handler.md) handler.
 

@@ -63,7 +63,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
 import am.ik.rontolisp.compiler.ConcatenateForms;
-import am.ik.rontolisp.compiler.HttpPlistShape;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -246,6 +246,47 @@ public final class Environment implements Scope {
 	 */
 	public void setDefaultInput(Supplier<@Nullable LispVal> supplier) {
 		this.defaultInput = supplier;
+	}
+
+	/**
+	 * Opens a buffered served-request body ({@link HttpRequestBodyStream}) in the stream
+	 * table and answers its handle. Installed by {@code createGlobal} (the table is local
+	 * to it); called by the evaluator when it builds a {@code :raw-body :buffered} Clack
+	 * environment -- in Java, because marshalling the body through a Lisp call was the
+	 * measured POST regression this stream exists to close.
+	 */
+	private java.util.function.@Nullable Function<byte[], Long> httpBodyStreamOpener;
+
+	/**
+	 * Removes a buffered served-request body from the stream table, quietly (absent is
+	 * fine -- the handler may have closed it). Installed beside
+	 * {@link #httpBodyStreamOpener}; the transport calls it when the request ends, which
+	 * is what keeps a long-running server's stream table from growing per request.
+	 */
+	private java.util.function.@Nullable LongConsumer httpBodyStreamCloser;
+
+	/**
+	 * Opens a buffered served-request body stream and returns its stream-table handle.
+	 * @param octets the request body bytes
+	 * @return the stream handle
+	 */
+	long openHttpBodyStream(byte[] octets) {
+		java.util.function.Function<byte[], Long> opener = this.httpBodyStreamOpener;
+		if (opener == null) {
+			throw new LispEvalException("http-handler: this environment has no stream table");
+		}
+		return opener.apply(octets);
+	}
+
+	/**
+	 * Removes a buffered served-request body from the stream table when its request ends.
+	 * @param handle the stream handle {@link #openHttpBodyStream} answered
+	 */
+	void closeHttpBodyStream(long handle) {
+		java.util.function.LongConsumer closer = this.httpBodyStreamCloser;
+		if (closer != null) {
+			closer.accept(handle);
+		}
 	}
 
 	/**
@@ -1655,7 +1696,7 @@ public final class Environment implements Scope {
 	// unmapped record field fails loudly here.
 	private static LispVal fetchResponsePlist(HttpSupport.Start start) {
 		List<LispVal> entries = new ArrayList<>();
-		for (HttpPlistShape.Field field : HttpPlistShape.responseFields()) {
+		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
 			entries.add(new LispSymbol(field.keyword()));
 			entries.add(switch (field.name()) {
 				case "status" -> new LispInteger(start.status());
@@ -3581,6 +3622,17 @@ public final class Environment implements Scope {
 		// case of its own. It writes THROUGH on every call (System.err is autoflush, and
 		// a buffered writer would reorder warnings against stdout).
 		AtomicLong nextStreamHandle = new AtomicLong(StreamDesignators.FIRST_USER_HANDLE);
+		// The buffered served-request body rides the same table (its handle IS the
+		// :raw-body value), but it is opened and closed from Java: per-request Lisp
+		// marshalling was the measured POST regression, and the transport must be able
+		// to reclaim the entry when the request ends whether or not the handler closed
+		// it.
+		env.httpBodyStreamOpener = octets -> {
+			long handle = nextStreamHandle.getAndIncrement();
+			streams.put(handle, new HttpRequestBodyStream(octets));
+			return handle;
+		};
+		env.httpBodyStreamCloser = streams::remove;
 		streams.put(StreamDesignators.STANDARD_ERROR_HANDLE, new Writer() {
 			@Override
 			public void write(char[] cbuf, int off, int len) {
@@ -3756,10 +3808,24 @@ public final class Environment implements Scope {
 			streams.put(handle, new StringWriter());
 			return new LispInteger(handle);
 		}));
-		// Lite: streams do not support repositioning; callers (which guard this with
-		// ignore-errors in portable code) take their fallback path.
-		env.defineFunction(LispNames.FILE_POSITION,
-				new LispFunction(LispNames.FILE_POSITION, args -> LispNil.INSTANCE));
+		// Lite: streams do not support repositioning -- callers (which guard this with
+		// ignore-errors in portable code) take their fallback path -- EXCEPT the
+		// buffered served-request body, whose position is a real byte index (that is
+		// what lets circular-streams rewind a body lack-request already parsed).
+		env.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
+			if (!args.isEmpty() && args.get(0) instanceof LispInteger handle
+					&& streams.get(handle.value()) instanceof HttpRequestBodyStream body) {
+				if (args.size() >= 2) {
+					if (!(args.get(1) instanceof LispInteger position)) {
+						throw new LispEvalException(LispNames.FILE_POSITION + " expects an integer position");
+					}
+					body.position((int) position.value());
+					return LispTrue.INSTANCE;
+				}
+				return new LispInteger(body.position());
+			}
+			return LispNil.INSTANCE;
+		}));
 		// file-length: real for a FILE stream, answered from the path it was opened with
 		// (streamPaths). Every other stream -- string streams, sockets, the standard
 		// streams -- has no file behind it and answers nil, which is exactly what Common
@@ -4227,6 +4293,9 @@ public final class Environment implements Scope {
 					else if (entry instanceof BufferedReader reader) {
 						line = reader.readLine();
 					}
+					else if (entry instanceof HttpRequestBodyStream body) {
+						line = body.readLine();
+					}
 					else {
 						throw new LispEvalException(LispNames.READ_LINE + " expects an input stream");
 					}
@@ -4266,9 +4335,29 @@ public final class Environment implements Scope {
 			}
 			return r;
 		};
+		// A buffered served-request body decodes its characters off its own byte cursor
+		// (UTF-8 at the cursor), so it cannot ride the Reader path below -- a Reader
+		// buffers, and the byte cursor read-byte / file-position share must not drift.
+		java.util.function.Function<List<LispVal>, @Nullable HttpRequestBodyStream> bufferedBodyArg = args -> {
+			LispVal src = resolveInputSrc.apply(args.isEmpty() ? null : args.get(0));
+			return src instanceof LispInteger handle
+					&& streams.get(handle.value()) instanceof HttpRequestBodyStream body ? body : null;
+		};
 		java.util.function.Function<List<LispVal>, LispVal> readChar = args -> {
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.READ_CHAR + " expects 0 to 3 arguments");
+			}
+			HttpRequestBodyStream bufferedBody = bufferedBodyArg.apply(args);
+			if (bufferedBody != null) {
+				int cp = bufferedBody.readCodePoint();
+				if (cp < 0) {
+					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+					if (eofError) {
+						throw endOfFile();
+					}
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				return new LispChar(cp);
 			}
 			try {
 				Reader reader = inputReader.apply(LispNames.READ_CHAR, args);
@@ -4304,6 +4393,18 @@ public final class Environment implements Scope {
 		java.util.function.Function<List<LispVal>, LispVal> peekChar = args -> {
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.PEEK_CHAR + " expects 0 to 3 arguments");
+			}
+			HttpRequestBodyStream bufferedBody = bufferedBodyArg.apply(args);
+			if (bufferedBody != null) {
+				int cp = bufferedBody.peekCodePoint();
+				if (cp < 0) {
+					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+					if (eofError) {
+						throw endOfFile();
+					}
+					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+				}
+				return new LispChar(cp);
 			}
 			try {
 				Reader reader = inputReader.apply(LispNames.PEEK_CHAR, args);
@@ -5555,7 +5656,7 @@ public final class Environment implements Scope {
 	 * Returns the text that {@code princ} would print for the value (no quotes on
 	 * strings). Mirrors the numeric special-casing of the princ builtin.
 	 */
-	private static String displayString(LispVal val) {
+	static String displayString(LispVal val) {
 		if (val instanceof LispInteger i) {
 			return Long.toString(i.value());
 		}

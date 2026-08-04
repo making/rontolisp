@@ -381,7 +381,7 @@
 | `rontolisp:then*` | `(rontolisp:then* f #'1+ #'1+)` | `rontolisp:then` の可変長チェーン糖衣。各関数は 1 つ前の段の平坦化された値を受け取ります |
 | `rontolisp:catch` | `(rontolisp:catch f (lambda (c) :fallback))` | future に対するエラー時フォールバックを値として付与します (JavaScript の `.catch`)。`cl:catch`/`throw` とは別物 |
 | `rontolisp:finally` | `(rontolisp:finally f (lambda () (cleanup)))` | 成功・エラーどちらの経路でも走る後始末 thunk。元の結末はそのまま通過します |
-| `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | ハンドラ関数でHTTPリクエストを処理します（ブロッキングサーバ。`--component` では `wasi:http` コンポーネント） |
+| `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | Clack の環境 plist を受け取り `(status headers body)` を返すハンドラ関数でHTTPリクエストを処理します（ブロッキングサーバ。`--component` では `wasi:http` コンポーネント） |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | JSON文字列をパースします（jzon互換）: オブジェクトは文字列キーのハッシュテーブル、配列はベクタになります |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | 値をJSON文字列にシリアライズします（ハッシュテーブルとCLOSインスタンスはオブジェクト、リストとベクタは配列） |
 | `rontolisp:plist-hash-table` | `(rontolisp:plist-hash-table (list :n 1))` | プロパティリストからハッシュテーブルを構築します（`alexandria:plist-hash-table` のサブセット）。JSONオブジェクトに便利です |
@@ -414,7 +414,7 @@
 [HTTPリクエストガイド](../guides/http-fetch.md)を、オプション、結果plist、バックエンドのサポート、制限については
 [fetch](functions/rontolisp-fetch.md)、
 [await](special-forms/rontolisp-await.md)、
-[futurep](functions/rontolisp-futurep.md) のリファレンスページを参照してください。`rontolisp:http-handler` は `fetch` の受信側で、同じリクエスト／レスポンスのプロパティリストを使ってハンドラ関数でHTTPリクエストを処理します。各バックエンドでの実例は
+[futurep](functions/rontolisp-futurep.md) のリファレンスページを参照してください。`rontolisp:http-handler` は `fetch` の受信側で、Clack の環境 plist と `(status headers body)` レスポンスリストを使ってハンドラ関数でHTTPリクエストを処理します。各バックエンドでの実例は
 [HTTPサーバガイド](../guides/http-handler.md)を、バックエンドのサポートと制限は
 [http-handler](functions/rontolisp-http-handler.md) のリファレンスページを参照してください。`rontolisp:json-parse` と `rontolisp:json-stringify` はJSONドキュメントとLispの値を相互変換します（`com.inuoe.jzon` 互換の軽量サブセット。fetchレスポンスボディのパースなどに使えます）。値の対応と制限については
 [json-parse](functions/rontolisp-json-parse.md) と

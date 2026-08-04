@@ -14,9 +14,8 @@
 ;; "json" is filled only when the body starts
 ;; with '{' or '[' (malformed JSON then signals an error -- rontolisp has no
 ;; condition handling to fall back to null like the real httpbin).
-;; On the JVM and WASM component backends "headers" is always {} (request
-;; headers are not marshalled there yet) and the response content-type header
-;; is ignored; only the interpreter passes headers through.
+;; "headers" echoes the request header hash table the Clack environment
+;; carries (names lowercased, repeated headers joined with ", ").
 ;;
 ;; Run (interpreter, blocking server on :8080):
 ;;   java -jar $JAR examples/net/httpbin.lisp
@@ -42,63 +41,65 @@
 ;; --- responses ------------------------------------------------------------
 
 (defun json-response (status obj)
-  (list :status status
-        :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+  (list status '(:content-type "application/json")
+        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
 ;; The common echo fields, as a JSON object. rontolisp:plist-hash-table (a
 ;; subset of alexandria:plist-hash-table) turns a keyword plist into a
 ;; string-keyed hash table, which json-stringify serializes as an object --
-;; keyword keys are down-cased, so :method becomes "method". "args" and
-;; "headers" are themselves objects: query-params and the request headers are
-;; already alists, so rontolisp:alist-hash-table (a subset of
-;; alexandria:alist-hash-table) turns each into a hash table -- an empty (or
-;; missing) query still serializes as {}.
-(defun request-info (request)
+;; keyword keys are down-cased, so :method becomes "method". "args" is itself
+;; an object: query-params gives an alist, so rontolisp:alist-hash-table (a
+;; subset of alexandria:alist-hash-table) turns it into a hash table -- an
+;; empty (or missing) query still serializes as {}. "headers" needs no
+;; conversion: the env :headers is already a string-keyed hash table.
+(defun request-info (env)
   (rontolisp:plist-hash-table
-   (list :args (rontolisp:alist-hash-table (rontolisp:query-params (getf request :query)))
-         :headers (rontolisp:alist-hash-table (getf request :headers))
-         :method (getf request :method)
-         :path (getf request :path))))
+   (list :args (rontolisp:alist-hash-table (rontolisp:query-params (getf env :query-string)))
+         :headers (getf env :headers)
+         :method (symbol-name (getf env :request-method))
+         :path (getf env :path-info))))
 
-(defun echo (request)
-  (json-response 200 (request-info request)))
+(defun echo (env)
+  (json-response 200 (request-info env)))
 
-(defun echo-with-body (request)
-  (let ((info (request-info request)))
-    (setf (gethash "data" info) (getf request :body))
-    (setf (gethash "json" info) (body-json (getf request :body)))
+(defun echo-with-body (env)
+  (let ((info (request-info env)))
+    (setf (gethash "data" info) (getf env :body))
+    (setf (gethash "json" info) (body-json (getf env :body)))
     (json-response 200 info)))
 
 ;; Echo the request (with the body fields when with-body is non-nil) only
-;; when the request used the expected method; otherwise 405.
-(defun echo-when (request expected with-body)
-  (cond ((not (string= (getf request :method) expected))
+;; when the request used the expected method; otherwise 405. :request-method
+;; is an interned keyword, so the comparison is eq.
+(defun echo-when (env expected with-body)
+  (cond ((not (eq (getf env :request-method) expected))
          (json-response 405 (rontolisp:plist-hash-table
-                             (list :error "method not allowed" :allowed expected))))
-        (with-body (echo-with-body request))
-        (t (echo request))))
+                             (list :error "method not allowed"
+                                   :allowed (symbol-name expected)))))
+        (with-body (echo-with-body env))
+        (t (echo env))))
 
 ;; --- routing --------------------------------------------------------------
 
-;; The request plist's :path carries the path only (the query string arrives
-;; separately as :query), so the comparisons are exact.
-(defun route (request)
-  (let ((path (getf request :path)))
-    (cond ((string= path "/get") (echo-when request "GET" nil))
-          ((string= path "/post") (echo-when request "POST" t))
-          ((string= path "/put") (echo-when request "PUT" t))
-          ((string= path "/patch") (echo-when request "PATCH" t))
-          ((string= path "/delete") (echo-when request "DELETE" t))
+;; The env plist's :path-info carries the (percent-decoded) path only (the
+;; query string arrives separately as :query-string), so the comparisons are
+;; exact.
+(defun route (env)
+  (let ((path (getf env :path-info)))
+    (cond ((string= path "/get") (echo-when env :GET nil))
+          ((string= path "/post") (echo-when env :POST t))
+          ((string= path "/put") (echo-when env :PUT t))
+          ((string= path "/patch") (echo-when env :PATCH t))
+          ((string= path "/delete") (echo-when env :DELETE t))
           (t (json-response 404 (rontolisp:plist-hash-table
                                  (list :error "not found" :path path)))))))
 
-;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string (getf
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string (getf
 ;; finds the prepended pair first).
-(rontolisp:async-defun handle (request)
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-    (route (append (list :body body) request))))
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

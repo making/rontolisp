@@ -18,7 +18,8 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
-import am.ik.rontolisp.compiler.HttpPlistShape;
+import am.ik.rontolisp.compiler.ClackEnv;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -82,6 +83,8 @@ public final class HttpLibrary {
 			return program;
 		}
 		boolean fetch = referencesFetch(program) && !definesFetch(program);
+		// Read the :raw-body mode BEFORE the directive forms are dropped/rewritten below.
+		boolean bufferBody = usesBufferedBody(program);
 		String handler = null;
 		List<LispVal> withoutDirective = new ArrayList<>();
 		for (LispVal form : program) {
@@ -161,12 +164,28 @@ public final class HttpLibrary {
 			// (one own<request> parameter; the response is delivered mid-task through
 			// the task-return built-in, so the core function returns nothing). Appended
 			// AFTER the program so a package-qualified nested handler name (the
-			// clack-handler-rontolisp shim's %bridge) resolves against the shim's own
+			// clack-handler-rontolisp shim's %app) resolves against the shim's own
 			// defpackage, which the program splices ahead of it.
+			// %serve-request-body is the directive's :raw-body mode, frozen at compile
+			// time: the default passes rontolisp's asynchronous request stream through
+			// untouched (nothing is buffered, the body streams from the host), while
+			// :buffered drains it and wraps the text in the synchronously readable Gray
+			// stream a Clack application needs. Synthesizing the matching body -- rather
+			// than branching on a runtime flag -- is what keeps a default-mode component
+			// free of http-server.lisp's buffered-body machinery entirely (the
+			// HttpServerLibrary splice filters on the same mode).
+			String requestBody = bufferBody ? """
+					(rontolisp:async-defun %serve-request-body (%serve-body-stream)
+					  (let ((%serve-body-drained (rontolisp:await (rontolisp::%http-drain %serve-body-stream))))
+					    (rontolisp::%http-body-stream %serve-body-drained)))
+					""" : """
+					(rontolisp:async-defun %serve-request-body (%serve-body-stream) %serve-body-stream)
+					""";
 			out.addAll(LispReader.readAllFromString("""
 					(defun %%serve-dispatch (%%serve-req) (%s %%serve-req))
+					%s
 					(rontolisp:wasm-export '%%serve-handle :as "handle" :params '(:int) :returns :void)
-					""".formatted(handler), Features.INTERPRETER));
+					""".formatted(handler, requestBody), Features.INTERPRETER));
 		}
 		return out;
 	}
@@ -233,6 +252,20 @@ public final class HttpLibrary {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
 		return qn != null && ((LispNames.CL_PKG.equals(qn.pkg()) && LispNames.DEFUN.equals(qn.member()))
 				|| (LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.ASYNC_DEFUN.equals(qn.member())));
+	}
+
+	/**
+	 * Returns whether the program asks for the buffered request body
+	 * ({@code :raw-body :buffered}); the flag decides the synthesized
+	 * {@code %serve-request-body} here and the {@code HttpServerLibrary} splice filter.
+	 * Delegates to {@link ClackEnv#usesBufferedBody} -- the walker lives in
+	 * {@code compiler} because the JVM compiler reads the same flag and
+	 * {@code codegen.jvm} must not depend on {@code eval}.
+	 * @param program the top-level forms
+	 * @return {@code true} when the buffered body was asked for
+	 */
+	public static boolean usesBufferedBody(List<LispVal> program) {
+		return ClackEnv.usesBufferedBody(program);
 	}
 
 	private static boolean isHttpHandlerForm(LispVal form) {
@@ -344,7 +377,8 @@ public final class HttpLibrary {
 					// whichever generated helpers the active half never calls.
 					List<LispVal> all = new ArrayList<>(
 							LispReader.readAllFromString(readResource("http.lisp"), Features.INTERPRETER));
-					all.addAll(LispReader.readAllFromString(HttpPlistShape.lispHelpersSource(), Features.INTERPRETER));
+					all.addAll(
+							LispReader.readAllFromString(FetchResponseShape.lispHelpersSource(), Features.INTERPRETER));
 					cached = List.copyOf(all);
 					forms = cached;
 				}

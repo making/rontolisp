@@ -186,6 +186,72 @@ class LackEcosystemE2eTest {
 			:SIGNALLED
 			""";
 
+	/**
+	 * The lack chain over a REAL served request -- what the bivalent {@code :raw-body}
+	 * unlocks: {@code lack:builder} wraps the app, {@code clackup} serves it on the
+	 * rontolisp backend, and {@code lack-request} parses the urlencoded body straight off
+	 * the served {@code :raw-body} (circular-streams over {@code read-byte} /
+	 * {@code file-position}). Before the Clack cutover the native server's
+	 * {@code :raw-body} was a character-only stream that rejected {@code read-byte}, so
+	 * this whole chain could not run on it.
+	 */
+	private static String builderOverClackupExercise(int port) {
+		return """
+				(ql:quickload "clack")
+				(ql:quickload "lack")
+				(ql:quickload "lack-request")
+				(defvar *handler*
+				  (clack:clackup
+				   (lack:builder
+				    (lambda (env)
+				      (let ((req (lack/request:make-request env)))
+				        (list 200 '(:content-type "text/plain")
+				              (list (format nil "params=~A"
+				                            (lack/request:request-body-parameters req)))))))
+				   :server :rontolisp
+				   :port %d
+				   :silent t
+				   :debug nil))
+				(defvar *post* (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/submit"
+				                                                 '(:method "POST"
+				                                                   :headers (("content-type" . "application/x-www-form-urlencoded"))
+				                                                   :body "name=ronto&lang=lisp"))))
+				(print (getf *post* :status))
+				(print (rontolisp:await (rontolisp:read-all (getf *post* :body))))
+				(print (clack:stop *handler*))
+				"""
+			.formatted(port, port);
+	}
+
+	private static final String BUILDER_OVER_CLACKUP_EXPECTED = """
+			200
+			"params=((name . ronto) (lang . lisp))"
+			T
+			""";
+
+	@Test
+	void lackBuilderParsesARealServedBodyOnTheInterpreter(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, "builder-clackup.lisp", builderOverClackupExercise(freePort()));
+		assertThat(runCli(workDir, program.getFileName().toString()))
+			.isEqualToNormalizingWhitespace(BUILDER_OVER_CLACKUP_EXPECTED);
+	}
+
+	@Test
+	void lackBuilderParsesARealServedBodyOnJvm(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, "builder-clackup.lisp", builderOverClackupExercise(freePort()));
+		runCli(workDir, program.getFileName().toString(), "-o", "BuilderClackup.class");
+		assertThat(runSuccessfully(workDir, JAVA, "-cp", CLASSPATH + java.io.File.pathSeparator + workDir,
+				"BuilderClackup"))
+			.isEqualToNormalizingWhitespace(BUILDER_OVER_CLACKUP_EXPECTED);
+	}
+
+	// A free TCP port (bound then released; a tiny race, acceptable for tests).
+	private static int freePort() throws Exception {
+		try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+			return socket.getLocalPort();
+		}
+	}
+
 	@Test
 	void lackRequestParsesBodiesAndRunsASessionOnTheInterpreter(@TempDir Path workDir) throws Exception {
 		Path program = writeProgram(workDir, "lack-exercise.lisp", LACK_EXERCISE);

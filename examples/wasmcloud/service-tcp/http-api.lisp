@@ -36,9 +36,7 @@
   (and (stringp body) (> (length body) 0) (eql (char body 0) #\{)))
 
 (defun text-response (status body)
-  (list :status status
-        :headers (list (cons "content-type" "text/plain"))
-        :body body))
+  (list status '(:content-type "text/plain") (list body)))
 
 ;; One round trip to the leet service: send the payload as a line, read the
 ;; transformed line back. A refused connection signals an error on the
@@ -55,8 +53,8 @@
             reply))
         nil)))
 
-(defun handle-task (request)
-  (let ((body (getf request :body)))
+(defun handle-task (env)
+  (let ((body (getf env :body)))
     (if (json-object-p body)
         (let ((payload (gethash "payload" (rontolisp:json-parse body))))
           (if (stringp payload)
@@ -67,26 +65,27 @@
               (text-response 400 (format nil "expected a JSON object with a string payload field~%"))))
         (text-response 400 (format nil "expected a JSON object with a string payload field~%")))))
 
-(defun home (request)
+(defun home (env)
   (text-response 200 (format nil "POST /task with {\"payload\":\"...\"} to get it back in leet speak~%")))
 
-;; The request plist's :path carries the path only (any query string arrives
-;; separately as :query), so the comparisons are exact.
-(defun route (request)
-  (let ((path (getf request :path)))
-    (cond ((string= path "/") (home request))
+;; The env plist's :path-info carries the (percent-decoded) path only (any
+;; query string arrives separately as :query-string), so the comparisons are
+;; exact; :request-method is an interned keyword, so the comparison is eq.
+(defun route (env)
+  (let ((path (getf env :path-info)))
+    (cond ((string= path "/") (home env))
           ((string= path "/task")
-           (if (string= (getf request :method) "POST")
-               (handle-task request)
+           (if (eq (getf env :request-method) :POST)
+               (handle-task env)
                (text-response 405 (format nil "Method Not Allowed~%"))))
           (t (text-response 404 (format nil "Not found~%"))))))
 
-;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string (getf
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string (getf
 ;; finds the prepended pair first).
-(rontolisp:async-defun handle (request)
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-    (route (append (list :body body) request))))
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
 
 ;; Blocks and serves on port 8080.
 (rontolisp:http-handler 'handle 8080)

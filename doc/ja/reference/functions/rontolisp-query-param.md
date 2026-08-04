@@ -7,7 +7,7 @@
 構いません(結果も `nil`)。そのため
 [`rontolisp:http-handler`](rontolisp-http-handler.md) のハンドラー内では、
 クエリ文字列のないリクエストでもワンライナー
-`(rontolisp:query-param (getf request :query) "name")` がそのまま動きます。
+`(rontolisp:query-param (getf env :query-string) "name")` がそのまま動きます。
 
 ```lisp
 (rontolisp:query-param "a=1&name=ronto%20lisp" "name")   ; => "ronto lisp"

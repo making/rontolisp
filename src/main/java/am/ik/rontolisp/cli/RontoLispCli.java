@@ -27,6 +27,7 @@ import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
+import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
@@ -327,7 +328,19 @@ public final class RontoLispCli {
 		// gate the serve half off when a wit-export world is present and let the clearer
 		// guard win.
 		boolean serveGlue = serve && !WitExportInliner.usesWitExport(loaded);
+		// The :raw-body mode must be read BEFORE HttpLibrary rewrites the directive
+		// away (the wasm path drops it); it decides both the synthesized
+		// %serve-request-body in there and the splice filter below.
+		boolean bufferBody = HttpLibrary.usesBufferedBody(loaded);
 		loaded = HttpLibrary.process(loaded, witBackend, serveGlue);
+		// The server-side HTTP value model (http-server.lisp): the Clack environment a
+		// handler receives and the Clack response it returns, written once in rontolisp
+		// so every backend agrees by construction. Spliced for EVERY backend (unlike
+		// http.lisp, which is the --component transport) whenever the program serves,
+		// and BEFORE GrayStreamsLibrary below, whose call-site rewrite the library's
+		// bivalent :raw-body stream depends on. A default-mode (:raw-body :stream)
+		// program gets the library without its buffered-body half.
+		loaded = HttpServerLibrary.process(loaded, bufferBody);
 		// rontolisp:wait-for on the --component path is the wait.lisp shim over a
 		// wit-imported wasi:clocks/monotonic-clock@0.3.0 (a pending future the
 		// scheduler settles). Spliced like http.lisp; a no-op elsewhere (the

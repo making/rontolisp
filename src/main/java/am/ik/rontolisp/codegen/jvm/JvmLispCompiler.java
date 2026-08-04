@@ -626,8 +626,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		ClassConstant objectArrayClass = cp.addClass(cp.addUtf8("[Ljava/lang/Object;"));
 		final JvmHttpHandlerRuntimeBuilder.@Nullable HttpHandlerRuntime httpHandlerRuntime = usesHttpHandler
-				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectClass, objectArrayClass, stringClass,
-						longClass, longValue, stringLength, stringSubstring, stringConcat)
+				? JvmHttpHandlerRuntimeBuilder.build(cp, thisClass, objectArrayClass, stringLength, stringConcat,
+						am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(program))
 				: null;
 		ClassConstant stringBuilderClass = cp.addClass(cp.addUtf8("java/lang/StringBuilder"));
 		MethodrefConstant longToString = cp.addMethodref(longClass,
@@ -710,7 +710,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// so a
 		// hash-free program can still reference _hashP -- and forcedGroups carries the
 		// previous run's verdict when it did (see compile(List)).
-		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH);
+		// http-handler forces the group on: the Clack environment's :headers value is a
+		// hash table (built by HttpHandlerJvmRuntime in the _hash* runtime's HashMap
+		// representation), whether or not the program's own source names a hash op.
+		boolean usesHashTables = programUsesAnyHashOp(program) || forcedGroups.contains(GROUP_HASH) || usesHttpHandler;
 		// parse-integer / read-from-string wrappers reference runtime helpers that are
 		// emitted only when the program itself uses the operator (_parseInt; the reader
 		// runtime). Exclude each wrapper unless the program references the symbol, so the

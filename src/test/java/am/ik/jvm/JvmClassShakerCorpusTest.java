@@ -90,7 +90,8 @@ class JvmClassShakerCorpusTest {
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary
 				.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UrlLibrary
 					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(inlined)))))))));
+						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
+							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))))));
 
 		byte[] plain = new JvmLispCompiler("Test", false, false).compile(program);
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool

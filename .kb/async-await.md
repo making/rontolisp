@@ -205,9 +205,10 @@ A handler that awaits (fetch inside serve) must itself be an async-defun; the
 servers await the handler's future (interpreter `invokeHttpHandler`, the JVM
 generated `handle()`, http.lisp's `%serve-handle` -- itself an async-defun,
 recognized by `HttpLibrary.defunName` for the splice reachability walk). The
-request `:body` is an asynchronous stream ON EVERY BACKEND (the component
+default `:raw-body` is an asynchronous stream ON EVERY BACKEND (the component
 wraps the wasi request body; the interpreter/JVM buffer into one settled
-chunk); a stream response `:body` is drained before sending (buffered
-transport v1; the component's `%serve-handle` drains via its private
-`%http-drain` -- http.lisp must stay self-contained, so it does NOT call the
-prelude's read-all).
+chunk); under `:raw-body :buffered` it is instead a SYNCHRONOUS bivalent
+stream and no await is involved on the request side (`.kb/http-server.md`). A
+stream response body is drained before sending (buffered transport v1) via
+http-server.lisp's `rontolisp::%http-drain` -- not the prelude's read-all,
+both libraries stay self-contained.

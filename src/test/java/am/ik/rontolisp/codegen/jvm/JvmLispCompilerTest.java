@@ -6950,8 +6950,11 @@ class JvmLispCompilerTest {
 	@Test
 	void compileHttpHandlerImplementsHandlerInterface() throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
-		byte[] classBytes = compiler
-			.compile(LispReader.readAllFromString("(defun h (r) (list :body \"ok\")) (rontolisp:http-handler 'h)"));
+		// The injected handle() calls the compiled %http-normalize-response, so this
+		// harness must splice http-server.lisp like the CLI (and every other
+		// compiler-driving serve harness) does.
+		byte[] classBytes = compiler.compile(am.ik.rontolisp.eval.HttpServerLibrary.process(LispReader
+			.readAllFromString("(defun h (env) (list 200 nil (list \"ok\"))) (rontolisp:http-handler 'h)"), false));
 		Path classFile = tempDir.resolve("Test.class");
 		Files.write(classFile, classBytes);
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },

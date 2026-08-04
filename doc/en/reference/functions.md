@@ -384,7 +384,7 @@ package system. Each name below links to its own page.
 | `rontolisp:then*` | `(rontolisp:then* f #'1+ #'1+)` | variadic chain sugar for `rontolisp:then`; each function receives the previous stage's flattened value |
 | `rontolisp:catch` | `(rontolisp:catch f (lambda (c) :fallback))` | attach an error fallback to a future as a value (JavaScript `.catch`); distinct from `cl:catch`/`throw` |
 | `rontolisp:finally` | `(rontolisp:finally f (lambda () (cleanup)))` | run a cleanup thunk on both success and error channels; the original outcome carries through |
-| `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function (a blocking server; a `wasi:http` component under `--component`) |
+| `rontolisp:http-handler` | `(rontolisp:http-handler 'handle 8080)` | serve HTTP requests with a handler function taking the Clack environment plist and returning `(status headers body)` (a blocking server; a `wasi:http` component under `--component`) |
 | `rontolisp:json-parse` | `(rontolisp:json-parse "{\"n\": 1}")` | parse a JSON string (jzon-compatible): objects become hash tables with string keys, arrays vectors |
 | `rontolisp:json-stringify` | `(rontolisp:json-stringify (vector 1 2))` | serialize a value to a JSON string (hash tables and CLOS instances become objects, lists and vectors arrays) |
 | `rontolisp:plist-hash-table` | `(rontolisp:plist-hash-table (list :n 1))` | build a hash table from a property list (subset of `alexandria:plist-hash-table`); handy for JSON objects |
@@ -420,7 +420,8 @@ starts an outgoing HTTP request and returns a future, resolved with
 [futurep](functions/rontolisp-futurep.md) reference pages for options, the
 result plist, backend support, and limitations. `rontolisp:http-handler` is
 the incoming counterpart of `fetch` -- it serves HTTP requests with a handler
-function over the same request/response property lists; see the
+function over the Clack environment plist and `(status headers body)`
+response list; see the
 [Serving HTTP guide](../guides/http-handler.md) for a worked example on every
 backend, and the [http-handler](functions/rontolisp-http-handler.md) reference
 page for backend support and limitations. `rontolisp:json-parse` and

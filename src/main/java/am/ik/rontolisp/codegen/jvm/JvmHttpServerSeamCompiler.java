@@ -48,9 +48,13 @@ final class JvmHttpServerSeamCompiler {
 				throw new IllegalStateException(
 						LispNames.HTTP_SERVER_START + " runtime was not prepared for this program");
 			}
-			if (parts.size() != 4) {
-				throw new UnsupportedOperationException(
-						LispNames.HTTP_SERVER_START + " expects (handler port address), got " + (parts.size() - 1));
+			// The optional trailing (:raw-body mode) keyword pair is compile-time only
+			// (ClackEnv.usesBufferedBody read it off the program and the injected
+			// handle(Request) was built for that mode), so it is accepted and dropped;
+			// only (handler port address) reach the runtime call.
+			if (parts.size() != 4 && parts.size() != 6) {
+				throw new UnsupportedOperationException(LispNames.HTTP_SERVER_START
+						+ " expects (handler port address [:raw-body mode]), got " + (parts.size() - 1));
 			}
 			// _httpHandlerFn = the handler function value
 			JvmExprCompiler.compileExpr(parts.get(1), ctx, className);

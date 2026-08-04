@@ -204,7 +204,8 @@ await 中の非同期関数がサスペンドする対象です。
 バックエンドに存在します。`--component` ではストリーム *操作* も動作しますが、
 ストリーム自体はホストから届きます: [`rontolisp:fetch`](http-fetch.md) の
 レスポンスの `:body` と [`rontolisp:http-handler`](http-handler.md) の
-リクエストの `:body` は、どのバックエンドでも非同期ストリームです。
+リクエストの `:raw-body` (デフォルトの `:stream` モード) は、どのバックエンド
+でも非同期ストリームです。
 
 ## 内部の仕組み: WASI Preview 3 の future と stream
 
@@ -227,7 +228,8 @@ await 中の非同期関数がサスペンドする対象です。
 - `rontolisp:wait-for` はホストタイマー、`wasi:clocks/monotonic-clock@0.3.0` の
   `wait-for` へローワリングされ、イベントループが確定させる保留 future として
   返されます — なのでコンポーネントでもタイマーは実際にオーバーラップします。
-- レスポンス/リクエストの `:body` は、rontolisp のストリームとしてラップされた
+- fetch レスポンスの `:body` / serve されるリクエストの `:raw-body` は、
+  rontolisp のストリームとしてラップされた
   コンポーネントモデルの `stream<u8>` です。ホストがまだ処理中のチャンクの
   `stream-read` は保留 future なので、遅いボディの読み取りは自分のタスクだけを
   パークさせ、その間ほかのタスクのタイマーや fetch は走り続けます。

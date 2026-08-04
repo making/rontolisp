@@ -32,18 +32,17 @@
     "Outlook not so good." "Very doubtful."))
 
 (defun json-response (status obj)
-  (list :status status
-        :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+  (list status '(:content-type "application/json")
+        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
 ;; --- pulling the question out of the request --------------------------------
 
 ;; ?question=... first (rontolisp:query-param url-decodes it, so + and %XX
 ;; become the spoken question); otherwise a JSON body's "question" field;
 ;; otherwise a non-empty raw body is the question itself.
-(defun question-of (request)
-  (let ((q (rontolisp:query-param (getf request :query) "question"))
-        (body (getf request :body)))
+(defun question-of (env)
+  (let ((q (rontolisp:query-param (getf env :query-string) "question"))
+        (body (getf env :body)))
     (cond ((and q (> (length q) 0)) q)
           ((and (stringp body) (> (length body) 0) (eql (char body 0) #\{))
            (gethash "question" (rontolisp:json-parse body)))
@@ -57,12 +56,13 @@
 (defun consult ()
   (nth (random (length *answers*)) *answers*))
 
-;; The request plist's :path carries the path only (the query string arrives
-;; separately as :query), so the comparisons are exact.
-(defun route (request)
-  (let ((path (getf request :path)))
+;; The env plist's :path-info carries the (percent-decoded) path only (the
+;; query string arrives separately as :query-string), so the comparisons are
+;; exact.
+(defun route (env)
+  (let ((path (getf env :path-info)))
     (if (or (string= path "/") (string= path "/magic-8"))
-        (let ((question (question-of request)))
+        (let ((question (question-of env)))
           (if question
               (json-response 200
                              (rontolisp:plist-hash-table
@@ -75,12 +75,12 @@
                        (rontolisp:plist-hash-table
                         (list :error "not found" :path path))))))
 
-;; The request :body is an asynchronous stream on every backend; drain it once
-;; here and hand the helpers a request whose :body is the whole string (getf
+;; The env :raw-body is an asynchronous stream on every backend; drain it once
+;; here and hand the helpers an env whose :body is the whole string (getf
 ;; finds the prepended pair first).
-(rontolisp:async-defun handle (request)
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
-    (route (append (list :body body) request))))
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (route (append (list :body body) env))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

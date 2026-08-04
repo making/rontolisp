@@ -202,7 +202,7 @@ class WitOracleE2eTest {
 		// oracle plus exactly that clause -- and, unlike the oracle, round-trips the
 		// parser.
 		byte[] component = compileServeViaCli("""
-				(defun h (r) (list :status 200 :body "x"))
+				(defun h (env) (list 200 nil (list "x")))
 				(rontolisp:http-handler 'h)
 				""");
 		String restored = "  interface handler {\n    use types.{request, response, error-code};\n\n";
@@ -237,7 +237,7 @@ class WitOracleE2eTest {
 		byte[] component = compileServeViaCli("""
 				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
 				(defun handle (request)
-				  (list :status 200 :body (kv:bucket-get (kv:open "") (getf request :path))))
+				  (list 200 nil (list (kv:bucket-get (kv:open "") (getf request :path-info)))))
 				(rontolisp:http-handler 'handle)
 				""");
 		String restored = "  interface handler {\n    use types.{request, response, error-code};\n\n";

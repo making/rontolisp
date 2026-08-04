@@ -4,8 +4,9 @@
 `query-params`, `query-param`, `url-path`, `url-query`. User-facing behavior
 lives in `doc/*/reference/functions/rontolisp-{url-decode,url-encode,
 query-params,query-param,url-path,url-query}.md`. The policy layer over the
-raw `:query` string that `rontolisp:http-handler` puts in the request plist
-(`.kb/fetch-http.md`), and equally useful for building `fetch` URLs.
+raw `:query-string` a `rontolisp:http-handler` handler finds in its Clack
+environment (`.kb/http-server.md`), and equally useful for building `fetch`
+URLs.
 
 **Single Lisp-source implementation** (the json.lisp / linalg.lisp pattern):
 `src/main/resources/am/ik/rontolisp/eval/url.lisp` -- external single-colon

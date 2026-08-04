@@ -96,12 +96,15 @@ class ClackE2eTest {
 				(ql:quickload "clack")
 				(defvar *handler*
 				  (clack:clackup
+				   ;; :raw-body is nil for a bodiless request (the upstream (when raw-body
+				   ;; ...) guard is the app's job), so the GET probe guards it.
 				   (lambda (env)
 				     (list 200 (list :content-type "text/plain")
 				           (list (format nil "clack ~A ~A q=~A ct=~A body=~A"
 				                         (getf env :request-method) (getf env :path-info)
 				                         (getf env :query-string) (getf env :content-type)
-				                         (read-line (getf env :raw-body) nil "")))))
+				                         (let ((s (getf env :raw-body)))
+				                           (if s (read-line s nil "") ""))))))
 				   :server :rontolisp
 				   :port %d
 				   ;; Keep the round-trip output deterministic: the banner embeds the

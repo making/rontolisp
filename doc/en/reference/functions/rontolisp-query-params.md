@@ -7,7 +7,7 @@ Parses a query string such as `"a=1&b=two&flag"` into an alist of
 [`rontolisp:url-decode`](rontolisp-url-decode.md); a key without `=` gets the
 value `""`; duplicate keys are preserved in order; empty segments are
 skipped. `nil` (a request without a query string) yields `nil`, so
-`(rontolisp:query-params (getf request :query))` is always safe inside an
+`(rontolisp:query-params (getf env :query-string))` is always safe inside an
 [`rontolisp:http-handler`](rontolisp-http-handler.md) handler.
 
 ```lisp

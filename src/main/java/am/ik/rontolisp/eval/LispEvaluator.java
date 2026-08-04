@@ -3,10 +3,12 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -44,7 +46,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
-import am.ik.rontolisp.compiler.HttpPlistShape;
+import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -1739,26 +1741,27 @@ public final class LispEvaluator {
 		}));
 		// http-handler lives here rather than in Environment because serving a request
 		// applies the handler function, which needs the evaluator's apply. It runs a
-		// blocking embedded HTTP server; the handler receives a request property list
-		// (:method / :path / :query / :headers / :body) and returns a response property
-		// list
-		// (:status / :headers / :body). When compiled with --component the same directive
-		// instead exports wasi:http/incoming-handler (see the WASM compiler).
+		// blocking embedded HTTP server; the handler receives a CLACK ENVIRONMENT plist
+		// and returns a CLACK RESPONSE, (status headers [body]) -- the shape is declared
+		// once, in http-server.lisp, for every backend. When compiled with --component
+		// the same directive instead exports wasi:http/handler (see the WASM compiler).
 		String httpHandlerName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.HTTP_HANDLER);
 		this.globalEnv.defineFunction(httpHandlerName, new LispFunction(httpHandlerName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
-				throw new LispEvalException(LispNames.HTTP_HANDLER + " expects 1 or 2 arguments, got " + args.size());
+			if (args.isEmpty() || args.size() > 4) {
+				throw new LispEvalException(LispNames.HTTP_HANDLER + " expects 1 to 4 arguments, got " + args.size());
 			}
 			int port = 8080;
-			if (args.size() == 2) {
+			if (args.size() >= 2 && !(args.get(1) instanceof LispSymbol)) {
 				if (!(args.get(1) instanceof LispInteger portArg)) {
 					throw new LispEvalException(
 							LispNames.HTTP_HANDLER + " expects an integer port, got: " + args.get(1).print());
 				}
 				port = (int) portArg.value();
 			}
+			boolean bufferBody = httpHandlerBufferBody(args);
 			final LispVal handler = args.get(0);
-			HttpHandlerSupport.serve(port, request -> invokeHttpHandler(handler, request));
+			ensureHttpServerLoaded();
+			HttpHandlerSupport.serve(port, request -> invokeHttpHandler(handler, request, bufferBody));
 			return LispNil.INSTANCE; // serve() blocks forever; unreachable in practice
 		}));
 		// The stoppable HTTP server seam behind the clack-handler-rontolisp shim
@@ -1770,10 +1773,11 @@ public final class LispEvaluator {
 		String httpServerStartName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
 				LispNames.HTTP_SERVER_START);
 		this.globalEnv.defineFunction(httpServerStartName, new LispFunction(httpServerStartName, args -> {
-			if (args.size() != 3) {
-				throw new LispEvalException(
-						LispNames.HTTP_SERVER_START + " expects (handler port address), got " + args.size());
+			if (args.size() < 3 || args.size() > 5) {
+				throw new LispEvalException(LispNames.HTTP_SERVER_START
+						+ " expects (handler port address [:raw-body mode]), got " + args.size());
 			}
+			boolean bufferBody = httpHandlerBufferBody(args);
 			final LispVal handler = args.get(0);
 			if (!(args.get(1) instanceof LispInteger portArg)) {
 				throw new LispEvalException(
@@ -1785,8 +1789,9 @@ public final class LispEvaluator {
 				default -> throw new LispEvalException(LispNames.HTTP_SERVER_START
 						+ " expects a string (or nil) address, got: " + args.get(2).print());
 			};
+			ensureHttpServerLoaded();
 			long handle = HttpHandlerSupport.startServer((int) portArg.value(), address,
-					request -> invokeHttpHandler(handler, request));
+					request -> invokeHttpHandler(handler, request, bufferBody));
 			return new LispInteger(handle);
 		}));
 		String httpServerJoinName = PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG,
@@ -3283,6 +3288,8 @@ public final class LispEvaluator {
 
 	private boolean grayStreamsLoaded;
 
+	private boolean httpServerLoaded;
+
 	/**
 	 * Evaluates rontolisp's Gray-stream protocol ({@code gray.lisp}) once, on the first
 	 * write to a CLOS-instance stream (or before the trivial-gray-streams shim system's
@@ -3389,6 +3396,47 @@ public final class LispEvaluator {
 
 	private static LispVal quoteValue(LispVal value) {
 		return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(value, LispNil.INSTANCE));
+	}
+
+	/**
+	 * The {@code :raw-body} mode of an {@code (rontolisp:http-handler handler [port]
+	 * [:raw-body :buffered])} call: {@code true} for the buffered, synchronously readable
+	 * body a Clack application needs, {@code false} (the default) for rontolisp's
+	 * asynchronous request stream.
+	 * @param args the directive arguments
+	 * @return whether the buffered body was asked for
+	 */
+	static boolean httpHandlerBufferBody(List<LispVal> args) {
+		for (int i = 0; i + 1 < args.size(); i++) {
+			if (args.get(i) instanceof LispSymbol key && key.isKeyword()
+					&& LispNames.RAW_BODY_KEYWORD.equalsIgnoreCase(key.name())) {
+				if (!(args.get(i + 1) instanceof LispSymbol mode) || !mode.isKeyword()
+						|| !(LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name())
+								|| LispNames.STREAM_KEYWORD.equalsIgnoreCase(mode.name()))) {
+					throw new LispEvalException(LispNames.HTTP_HANDLER
+							+ " :raw-body expects :stream or :buffered, got: " + args.get(i + 1).print());
+				}
+				return LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name());
+			}
+		}
+		return false;
+	}
+
+	private void ensureHttpServerLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.httpServerLoaded) {
+				return;
+			}
+			this.httpServerLoaded = true;
+			// The server library defines a Gray stream class, so the protocol has to be
+			// in place first. Both loads are EAGER, at server-start time: a served
+			// request runs on its own virtual thread, and a lazy first-request load
+			// races every other in-flight request (.kb/concurrent-served-requests.md).
+			ensureGrayStreamsLoaded();
+			for (LispVal form : HttpServerLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
 	}
 
 	private void ensureGrayStreamsLoaded() {
@@ -5725,6 +5773,18 @@ public final class LispEvaluator {
 					return loaded;
 				}
 			}
+			// The server-side HTTP value model (http-server.lisp) loads eagerly when a
+			// server starts; a program calling one of its functions DIRECTLY (the
+			// ci-spec shape cases exercise the environment builder and the response
+			// normalizer without serving) lazy-loads it here, the usocket/restart
+			// pattern. The prefix test keeps ordinary undefined names cheap.
+			if (!this.httpServerLoaded && name.startsWith("RONTOLISP::%HTTP-")) {
+				ensureHttpServerLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
 			if (LispNames.isCarCdrComposition(name)) {
 				// Synthesize (lambda (x) (cadr x)) so car/cdr compositions are
 				// first-class.
@@ -7025,95 +7085,292 @@ public final class LispEvaluator {
 		return handle.value();
 	}
 
-	private HttpHandlerSupport.Response invokeHttpHandler(LispVal handler, HttpHandlerSupport.Request request) {
-		LispVal headers = LispNil.INSTANCE;
-		List<HttpHandlerSupport.Header> requestHeaders = request.headers();
-		for (int i = requestHeaders.size() - 1; i >= 0; i--) {
-			HttpHandlerSupport.Header header = requestHeaders.get(i);
-			headers = new LispCons(new LispCons(new LispString(header.name()), new LispString(header.value())),
-					headers);
-		}
-		LispVal query = request.query() == null ? LispNil.INSTANCE : new LispString(request.query());
-		// The handler sees the request body as an asynchronous stream (one settled
-		// chunk here; the server buffers the body before dispatch). A bodyless request
-		// yields an already-drained stream, so its first read observes end of stream.
-		LispStream requestBody;
-		if (request.body().isEmpty()) {
-			requestBody = LispStream.open();
-			requestBody.close();
-		}
-		else {
-			requestBody = LispStream.settled(new LispString(request.body()));
-		}
-		// The plist shape (keys, order) is derived from the http-plist WIT request
-		// record; only the per-field value extraction is this backend's, so an unmapped
-		// record field fails loudly here.
-		List<LispVal> requestEntries = new ArrayList<>();
-		for (HttpPlistShape.Field field : HttpPlistShape.requestFields()) {
-			requestEntries.add(new LispSymbol(field.keyword()));
-			requestEntries.add(switch (field.name()) {
-				case "method" -> new LispString(request.method());
-				case "path" -> new LispString(request.path());
-				case "query" -> query;
-				case "headers" -> headers;
-				case "body" -> requestBody;
-				default -> throw new LispEvalException(
-						LispNames.HTTP_HANDLER + " has no extraction for request field " + field.name());
-			});
-		}
-		LispVal requestPlist = plist(requestEntries.toArray(new LispVal[0]));
-		// An async-defun handler returns a future; each request runs on its own virtual
-		// thread, so awaiting it here is the natural per-request suspension.
-		LispVal result = awaitValue(apply(handler, List.of(requestPlist), this.globalEnv));
-		// The response plist is read back per the same WIT record (its response half),
-		// with the shape's declared defaults for missing keys.
-		int status = HttpPlistShape.RESPONSE_STATUS_DEFAULT;
-		String body = HttpPlistShape.RESPONSE_BODY_DEFAULT;
-		List<HttpHandlerSupport.Header> responseHeaders = new ArrayList<>();
-		for (HttpPlistShape.Field field : HttpPlistShape.responseFields()) {
-			LispVal value = httpPlistGet(result, field.keyword());
-			switch (field.name()) {
-				case "status" -> {
-					if (value instanceof LispInteger statusVal) {
-						status = (int) statusVal.value();
-					}
-				}
-				case "body" -> {
-					if (value instanceof LispString bodyStr) {
-						body = bodyStr.value();
-					}
-					else if (value instanceof LispStream bodyStream) {
-						// A streaming response body is drained here (buffered send);
-						// true chunked transfer follows with the JVM handler-interface
-						// rework.
-						StringBuilder drained = new StringBuilder();
-						LispVal chunk = awaitValue(LispFuture.of(bodyStream.read()));
-						while (!(chunk instanceof LispNil)) {
-							if (!(chunk instanceof LispString chunkStr)) {
-								throw new LispEvalException(LispNames.HTTP_HANDLER
-										+ ": a response body stream must carry string chunks, got: " + chunk.print());
-							}
-							drained.append(chunkStr.value());
-							chunk = awaitValue(LispFuture.of(bodyStream.read()));
-						}
-						body = drained.toString();
-					}
-				}
-				case "headers" -> {
-					LispVal headerAlist = value;
-					while (headerAlist instanceof LispCons cons) {
-						if (cons.car() instanceof LispCons pair && pair.car() instanceof LispString name
-								&& pair.cdr() instanceof LispString headerValue) {
-							responseHeaders.add(new HttpHandlerSupport.Header(name.value(), headerValue.value()));
-						}
-						headerAlist = cons.cdr();
-					}
-				}
-				default -> throw new LispEvalException(
-						LispNames.HTTP_HANDLER + " has no extraction for response field " + field.name());
+	/**
+	 * Runs one served request through the SHARED server library: the transport facts go
+	 * over as a positional raw tuple, {@code rontolisp::%http-serve-request} builds the
+	 * Clack environment, applies the handler and normalizes its Clack response, and the
+	 * canonical {@code (status header-alist body-string)} triple comes back. Nothing
+	 * about the environment's or the response's shape is decided here -- that is the
+	 * point: the JVM backend and the WASI component hand the same tuple to the same
+	 * library.
+	 * @param handler the Lisp handler (a function value)
+	 * @param request the transport facts
+	 * @param bufferBody whether the handler asked for the buffered ({@code :raw-body
+	 * :buffered}, what Clack needs) request body rather than rontolisp's asynchronous
+	 * stream
+	 * @return the response to write back
+	 */
+	private HttpHandlerSupport.Response invokeHttpHandler(LispVal handler, HttpHandlerSupport.Request request,
+			boolean bufferBody) {
+		// :raw-body -- the default is rontolisp's asynchronous stream (one settled chunk;
+		// the server has already read the body), and :buffered is the Java-backed
+		// bivalent octet stream a Clack application reads with read-line / read-byte /
+		// file-position. The buffered form is a stream-table handle, so it is closed
+		// here, when the request ends -- upstream handlers never close :raw-body, and a
+		// long-running server must not grow its table per request. Only a request that
+		// HAS a body pays for it (upstream guards :raw-body with (when raw-body ...)).
+		long bodyHandle = -1;
+		final LispVal rawBody;
+		if (bufferBody) {
+			if (request.body().length == 0) {
+				rawBody = LispNil.INSTANCE;
+			}
+			else {
+				bodyHandle = this.globalEnv.openHttpBodyStream(request.body());
+				rawBody = new LispInteger(bodyHandle);
 			}
 		}
-		return new HttpHandlerSupport.Response(status, responseHeaders, body);
+		else if (request.body().length == 0) {
+			LispStream empty = LispStream.open();
+			empty.close();
+			rawBody = empty;
+		}
+		else {
+			rawBody = LispStream.settled(new LispString(request.bodyString()));
+		}
+		try {
+			LispVal env = buildClackEnv(request, rawBody);
+			// An async-defun handler returns a future; each request runs on its own
+			// virtual thread, so awaiting it here is the natural per-request suspension.
+			return normalizeClackResponse(awaitValue(apply(handler, List.of(env), this.globalEnv)));
+		}
+		finally {
+			if (bodyHandle >= 0) {
+				this.globalEnv.closeHttpBodyStream(bodyHandle);
+			}
+		}
+	}
+
+	/**
+	 * Builds the Clack environment for one served request. The KEY SET and its order are
+	 * {@link ClackEnv#FIELDS}; only the per-field value extraction is this backend's, so
+	 * an unmapped field fails loudly here -- the same drift guard every backend applies
+	 * to the same declaration.
+	 */
+	private LispVal buildClackEnv(HttpHandlerSupport.Request request, LispVal rawBody) {
+		String target = request.target();
+		int q = target.indexOf('?');
+		String path = q < 0 ? target : target.substring(0, q);
+		LispVal query = q < 0 ? LispNil.INSTANCE : new LispString(target.substring(q + 1));
+		// The header table: lowercased names, repeated headers joined with ", " in wire
+		// order (the Clack handler-backend rule), and never nil -- lack-request gethashes
+		// it unguarded.
+		LispHashTable headers = new LispHashTable(true);
+		for (HttpHandlerSupport.Header header : request.headers()) {
+			LispString name = new LispString(header.name().toLowerCase(Locale.ROOT));
+			LispVal seen = headers.get(name, LispNil.INSTANCE);
+			headers.put(name, new LispString(
+					seen instanceof LispString prev ? prev.value() + ", " + header.value() : header.value()));
+		}
+		String host = headerValue(headers, "host");
+		String contentLength = headerValue(headers, "content-length");
+		String serverName = request.localName();
+		long serverPort = request.localPort();
+		if (host != null) {
+			int colon = host.lastIndexOf(':');
+			String tail = colon < 0 ? "" : host.substring(colon + 1);
+			if (colon >= 0 && !tail.isEmpty() && tail.chars().allMatch(Character::isDigit)) {
+				serverName = host.substring(0, colon);
+				serverPort = Long.parseLong(tail);
+			}
+			else {
+				serverName = host;
+			}
+		}
+		List<LispVal> entries = new ArrayList<>(ClackEnv.FIELDS.size() * 2);
+		for (String field : ClackEnv.FIELDS) {
+			entries.add(new LispSymbol(field));
+			entries.add(switch (field) {
+				case ClackEnv.REQUEST_METHOD -> new LispSymbol(":" + request.method().toUpperCase(Locale.ROOT));
+				case ClackEnv.SCRIPT_NAME -> new LispString("");
+				case ClackEnv.PATH_INFO -> new LispString(percentDecode(path));
+				case ClackEnv.QUERY_STRING -> query;
+				case ClackEnv.SERVER_NAME -> new LispString(serverName == null ? "localhost" : serverName);
+				case ClackEnv.SERVER_PORT -> new LispInteger(serverPort == 0 ? 80 : serverPort);
+				case ClackEnv.SERVER_PROTOCOL -> new LispSymbol(":" + request.protocol().toUpperCase(Locale.ROOT));
+				case ClackEnv.REQUEST_URI -> new LispString(target);
+				case ClackEnv.URL_SCHEME -> new LispString(request.scheme());
+				case ClackEnv.REMOTE_ADDR ->
+					request.remoteAddr() == null ? LispNil.INSTANCE : new LispString(request.remoteAddr());
+				case ClackEnv.REMOTE_PORT ->
+					request.remotePort() == 0 ? LispNil.INSTANCE : new LispInteger(request.remotePort());
+				case ClackEnv.HEADERS -> headers;
+				case ClackEnv.CONTENT_TYPE -> {
+					String value = headerValue(headers, "content-type");
+					yield value == null ? LispNil.INSTANCE : new LispString(value);
+				}
+				case ClackEnv.CONTENT_LENGTH -> parseContentLength(contentLength);
+				case ClackEnv.RAW_BODY -> rawBody;
+				default -> throw new LispEvalException(
+						LispNames.HTTP_HANDLER + " has no extraction for environment field " + field);
+			});
+		}
+		return plist(entries.toArray(new LispVal[0]));
+	}
+
+	private static @Nullable String headerValue(LispHashTable headers, String name) {
+		return headers.get(new LispString(name), LispNil.INSTANCE) instanceof LispString value ? value.value() : null;
+	}
+
+	private static LispVal parseContentLength(@Nullable String value) {
+		if (value == null) {
+			return LispNil.INSTANCE;
+		}
+		int end = 0;
+		while (end < value.length() && Character.isDigit(value.charAt(end))) {
+			end++;
+		}
+		return end == 0 ? LispNil.INSTANCE : new LispInteger(Long.parseLong(value.substring(0, end)));
+	}
+
+	/**
+	 * Percent-decodes a request path. Lenient (a {@code %} not followed by two hex digits
+	 * stays literal -- a request target is attacker input) and never decodes {@code +},
+	 * which is a query-string rule; {@code http-server.lisp}'s
+	 * {@code %http-percent-decode} is the same function for the component backend.
+	 */
+	static String percentDecode(String s) {
+		if (s.indexOf('%') < 0) {
+			return s;
+		}
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(s.length());
+		int i = 0;
+		while (i < s.length()) {
+			char c = s.charAt(i);
+			int hi = i + 2 < s.length() && c == '%' ? Character.digit(s.charAt(i + 1), 16) : -1;
+			int lo = hi < 0 ? -1 : Character.digit(s.charAt(i + 2), 16);
+			if (lo >= 0) {
+				out.write((hi << 4) + lo);
+				i += 3;
+			}
+			else {
+				out.writeBytes(String.valueOf(c).getBytes(StandardCharsets.UTF_8));
+				i++;
+			}
+		}
+		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Turns the Clack response a handler returned -- {@code (status headers)},
+	 * {@code (status headers body)} or the delayed {@code (lambda (responder) ...)} form
+	 * -- into the response this server writes.
+	 */
+	private HttpHandlerSupport.Response normalizeClackResponse(LispVal response) {
+		if (!(response instanceof LispCons res)) {
+			// Clack's DELAYED response: call it with a responder that captures the real
+			// response. The streaming WRITER form -- where the responder must answer a
+			// writer closure -- is refused by the closure it gets back.
+			LispVal[] captured = new LispVal[1];
+			LispVal responder = new LispFunction(LispNames.HTTP_HANDLER, args -> {
+				captured[0] = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+				return new LispFunction(LispNames.HTTP_HANDLER, ignored -> {
+					throw new LispEvalException(
+							LispNames.HTTP_HANDLER + ": the streaming writer response protocol is not supported");
+				});
+			});
+			apply(response, List.of(responder), this.globalEnv);
+			if (captured[0] == null) {
+				throw new LispEvalException(LispNames.HTTP_HANDLER + ": a delayed response delivered no response");
+			}
+			return normalizeClackResponse(captured[0]);
+		}
+		if (!(res.car() instanceof LispInteger status)) {
+			throw new LispEvalException(LispNames.HTTP_HANDLER
+					+ ": a handler must return (status headers) or (status headers body), got: " + response.print());
+		}
+		return new HttpHandlerSupport.Response((int) status.value(), responseHeaders(second(res)),
+				responseBody(third(res)));
+	}
+
+	// The Clack response headers -- a keyword plist, or (widening, so a fetch result's
+	// :headers can be handed straight back) a dotted alist. Every pair becomes its own
+	// header line, which is what makes repeated :set-cookie correct by construction; the
+	// framing headers are dropped because the transport computes them from the body.
+	private static List<HttpHandlerSupport.Header> responseHeaders(LispVal headers) {
+		List<HttpHandlerSupport.Header> out = new ArrayList<>();
+		if (headers instanceof LispCons first && first.car() instanceof LispCons) {
+			for (LispVal cursor = headers; cursor instanceof LispCons cons; cursor = cons.cdr()) {
+				if (cons.car() instanceof LispCons pair) {
+					addResponseHeader(out, pair.car(), pair.cdr());
+				}
+			}
+			return out;
+		}
+		LispVal cursor = headers;
+		while (cursor instanceof LispCons key && key.cdr() instanceof LispCons value) {
+			addResponseHeader(out, key.car(), value.car());
+			cursor = value.cdr();
+		}
+		return out;
+	}
+
+	private static void addResponseHeader(List<HttpHandlerSupport.Header> out, LispVal key, LispVal value) {
+		String name = switch (key) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.isKeyword() ? sym.name().substring(1) : sym.name();
+			default -> null;
+		};
+		if (name == null) {
+			return;
+		}
+		name = name.toLowerCase(Locale.ROOT);
+		if ("content-length".equals(name) || "transfer-encoding".equals(name)) {
+			return;
+		}
+		out.add(new HttpHandlerSupport.Header(name,
+				value instanceof LispString str ? str.value() : Environment.displayString(value)));
+	}
+
+	// The Clack response body. A BARE STRING is refused as Clack itself refuses it:
+	// lack/app/file answers a PATHNAME body and a rontolisp pathname IS its namestring,
+	// so accepting a string would make :static serve a file's path as its contents.
+	private String responseBody(LispVal body) {
+		switch (body) {
+			case LispNil ignored -> {
+				return "";
+			}
+			case LispString ignored -> throw new LispEvalException(LispNames.HTTP_HANDLER
+					+ ": a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)");
+			case LispCons parts -> {
+				StringBuilder out = new StringBuilder();
+				for (LispVal cursor = parts; cursor instanceof LispCons cons; cursor = cons.cdr()) {
+					if (!(cons.car() instanceof LispString part)) {
+						throw new LispEvalException(
+								LispNames.HTTP_HANDLER + ": a list response body must hold strings");
+					}
+					out.append(part.value());
+				}
+				return out.toString();
+			}
+			case LispStream stream -> {
+				// A proxied fetch body: drained here (buffered send).
+				StringBuilder drained = new StringBuilder();
+				LispVal chunk = awaitValue(LispFuture.of(stream.read()));
+				while (chunk instanceof LispString chunkStr) {
+					drained.append(chunkStr.value());
+					chunk = awaitValue(LispFuture.of(stream.read()));
+				}
+				return drained.toString();
+			}
+			default -> {
+				// The cold arms (an (unsigned-byte 8) vector today) live once, in the
+				// shared library, rather than four times over.
+				LispVal text = apply(resolveFunction(
+						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, HttpServerLibrary.BODY_STRING)),
+						List.of(body), this.globalEnv);
+				return text instanceof LispString str ? str.value() : "";
+			}
+		}
+	}
+
+	private static LispVal second(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
+	}
+
+	private static LispVal third(LispCons cons) {
+		return cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispCons rest2 ? rest2.car()
+				: LispNil.INSTANCE;
 	}
 
 	// Builds a property list from alternating key/value LispVals.

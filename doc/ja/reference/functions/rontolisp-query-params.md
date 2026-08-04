@@ -8,7 +8,7 @@
 `=` のないキーは値 `""` を持ち、重複するキーは順序を保って保持され、空の
 セグメントはスキップされます。`nil`(クエリ文字列のないリクエスト)は
 `nil` を返すため、[`rontolisp:http-handler`](rontolisp-http-handler.md) の
-ハンドラー内で `(rontolisp:query-params (getf request :query))` は常に安全
+ハンドラー内で `(rontolisp:query-params (getf env :query-string))` は常に安全
 です。
 
 ```lisp

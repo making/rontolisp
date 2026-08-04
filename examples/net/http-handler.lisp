@@ -1,7 +1,8 @@
-;; An HTTP handler function. The handler receives a request property list
-;; (:method / :path / :query / :headers / :body) and returns a response property list
-;; (:status / :headers / :body). Unlike http-hello.lisp (a hand-rolled raw-TCP
-;; server), rontolisp:http-handler adapts the request/response for you.
+;; An HTTP handler function. The handler receives the Clack environment
+;; property list (:request-method / :path-info / :query-string / :headers /
+;; :raw-body / ...) and returns a Clack response list (status headers body),
+;; where body is a list of strings. Unlike http-hello.lisp (a hand-rolled
+;; raw-TCP server), rontolisp:http-handler adapts the request/response for you.
 ;;
 ;; Supported on the interpreter and JVM backends (a blocking server on :8080,
 ;; one virtual thread per request) and the WASI component backend (--component),
@@ -23,11 +24,13 @@
 ;;   cd examples/net/http-handler && spin build && spin up
 ;; Talk to it with:  curl http://127.0.0.1:8080/hello
 
-(defun handle (request)
-  (list :status 200
-        :headers (list (cons "content-type" "text/plain"))
-        :body (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (getf request :method) (getf request :path))))
+;; :request-method is a keyword (:GET, :POST, ...); symbol-name turns it back
+;; into the bare method name for the text body.
+(defun handle (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "Hello from rontolisp!~%~a ~a~%"
+                      (symbol-name (getf env :request-method))
+                      (getf env :path-info)))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

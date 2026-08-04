@@ -86,7 +86,8 @@ class WasmTreeShakerCorpusTest {
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary
 				.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UrlLibrary
 					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
-						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(inlined)))))))));
+						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
+							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))))));
 
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.

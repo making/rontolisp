@@ -10,7 +10,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
-import am.ik.rontolisp.compiler.HttpPlistShape;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 
 /**
  * Builds the JVM bytecode of the async/await runtime: the {@code %async-run} primitive
@@ -977,9 +977,9 @@ final class JvmAsyncRuntimeBuilder {
 		Map<String, Integer> responseValueSlot = Map.of("status", 7, "headers", 10, "body", 8);
 		b.aconstNull();
 		b.astore(14);
-		List<HttpPlistShape.Field> responseFields = HttpPlistShape.responseFields();
+		List<FetchResponseShape.Field> responseFields = FetchResponseShape.responseFields();
 		for (int i = responseFields.size() - 1; i >= 0; i--) {
-			HttpPlistShape.Field field = responseFields.get(i);
+			FetchResponseShape.Field field = responseFields.get(i);
 			Integer valueSlot = responseValueSlot.get(field.name());
 			if (valueSlot == null) {
 				throw new IllegalStateException(

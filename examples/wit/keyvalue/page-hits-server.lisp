@@ -74,14 +74,13 @@
 ;;; The handler: one request = one hit. Nothing in it knows where the counts live,
 ;;; and nothing in it is about a backend -- it is an ordinary rontolisp:http-handler
 ;;; whose state happens to be somebody else's.
-(defun handle (request)
-  (let* ((page (getf request :path))
+(defun handle (env)
+  (let* ((page (getf env :path-info))
          (bucket (kv:open *store*))
          (hits (record-hit bucket page)))
-    (list :status 200
-          :headers (list (cons "content-type" "text/plain"))
-          :body (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a"
-                        page hits (= hits 1) (report bucket)))))
+    (list 200 '(:content-type "text/plain")
+          (list (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a"
+                        page hits (= hits 1) (report bucket))))))
 
 ;;; On the interpreter / JVM this blocks and serves on port 8080; under --component
 ;;; the port is ignored (the host provides the socket).

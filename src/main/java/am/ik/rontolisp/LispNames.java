@@ -3203,6 +3203,18 @@ public final class LispNames {
 	/** The {@code :stream} keyword argument of {@link #WRITE}. */
 	public static final String STREAM_KEYWORD = ":STREAM";
 
+	/**
+	 * The {@code :raw-body} keyword argument of {@link #HTTP_HANDLER} (and of the
+	 * {@code %http-server-start} seam): it selects the shape of the served request body,
+	 * {@link #STREAM_KEYWORD} (the default, rontolisp's asynchronous stream) or
+	 * {@link #BUFFERED_KEYWORD} (fully read and synchronously readable -- what a Clack
+	 * application needs).
+	 */
+	public static final String RAW_BODY_KEYWORD = ":RAW-BODY";
+
+	/** The {@code :buffered} value of {@link #RAW_BODY_KEYWORD}. */
+	public static final String BUFFERED_KEYWORD = ":BUFFERED";
+
 	// Packages
 
 	/** The {@code in-package} directive that switches the current package. */

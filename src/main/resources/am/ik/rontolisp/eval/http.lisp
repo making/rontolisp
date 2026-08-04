@@ -177,79 +177,62 @@
 
 ;;; --- serve (incoming): read the request, dispatch, deliver, stream the body ---
 
-(rontolisp:async-defun %http-drain (s)
-  ;; Drain a stream response body into one string -- a private read-all:
-  ;; http.lisp must stay self-contained (the prelude splice is a separate,
-  ;; later pass, and library splices must not depend on each other's order).
-  (let ((acc "")
-        (chunk (rontolisp:await (rontolisp:stream-read s))))
-    (while chunk
-      (setq acc (concatenate 'string acc chunk))
-      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
-    acc))
-
-(defun %serve-method-string (m)
+(defun %serve-method-keyword (m)
   ;; request.get-method returns the `method` variant: a payload-less keyword for a
   ;; known method, or (:other . "FOO") for a custom one. The lifted case name reads
-  ;; UPCASED on the component backend (:GET/:POST/...), and this file's own :get
-  ;; reads :GET too under the reader's upcase premise, so one upcased arm suffices;
-  ;; the interpreter and JVM run a Java-backed server and never reach here. The
-  ;; request plist wants an upper-case method string, matching those backends.
-  (cond ((consp m) (cdr m))
-        ((eq m :get) "GET")
-        ((eq m :head) "HEAD")
-        ((eq m :post) "POST")
-        ((eq m :put) "PUT")
-        ((eq m :delete) "DELETE")
-        ((eq m :connect) "CONNECT")
-        ((eq m :options) "OPTIONS")
-        ((eq m :trace) "TRACE")
-        ((eq m :patch) "PATCH")
-        (t "GET")))
+  ;; UPCASED on the component backend (:GET/:POST/...), which is exactly the Clack
+  ;; :request-method value, so only the custom arm needs work.
+  (if (consp m)
+      (intern (string-upcase (cdr m)) :keyword)
+      m))
 
-(defun %serve-read-request (request)
-  ;; Build the request plist through %http-request-plist (generated from the
-  ;; http-plist WIT record, so the shape matches the interpreter and JVM backends by
-  ;; construction), splitting path-with-query at the first ? into :path / :query
-  ;; (nil when there is none) -- :body is a first-class stream on those backends
-  ;; too. consume-body moves the request, so everything else is read first.
-  (let* ((method (%serve-method-string (%http:request-get-method request)))
-         (pq (or (%http:request-get-path-with-query request) "/"))
-         (q (position #\? pq))
-         (path (if q (subseq pq 0 q) pq))
-         (query (if q (subseq pq (+ q 1)) nil))
-         (rheaders (%http:request-get-headers request))
-         (headers (%http-header-alist rheaders))
-         (body (%http-body-value (function %http:request-consume-body) request)))
-    (%http:fields-drop rheaders)
-    (%http-request-plist method path query headers body)))
+;; %serve-request-body -- the request body in the shape the directive asked for
+;; -- is SYNTHESIZED by the serve inliner (HttpLibrary), beside %serve-dispatch:
+;; the :raw-body mode is a compile-time constant, and synthesizing the matching
+;; body (pass the lazy stream through, or drain and wrap it) is what keeps a
+;; default-mode component free of the buffered-body machinery -- no Gray class,
+;; no UTF-8 encoder -- instead of carrying it behind a runtime flag.
 
 (rontolisp:async-defun %serve-handle (request)
-  ;; The handler.handle export body (an asynchronous task). Read the request (its
-  ;; :body stays a lazy stream), run the user handler (%serve-dispatch, synthesized
-  ;; by the serve inliner) -- awaiting its future, so the handler itself may be an
-  ;; async-defun -- drain a stream response body (a proxied fetch :body passes
-  ;; straight through), DELIVER the response through task.return -- only then can
-  ;; the host start reading the contents stream -- and stream the body after it
-  ;; (the rendezvous order verified on wasmtime 46). The request body's close
-  ;; protocol runs even when the handler never read it (stream-close is idempotent).
-  (let* ((req (%serve-read-request request))
-         (resp (rontolisp:await (%serve-dispatch req)))
-         (status (%http-response-status resp))
-         (body-val (%http-response-body resp))
-         (body (if (rontolisp:streamp body-val)
-                   (rontolisp:await (%http-drain body-val))
-                   body-val))
-         (fields (%http:fields-new)))
-    (%http-add-headers fields (%http-response-headers resp))
-    (rontolisp:stream-close (%http-request-body req))
-    (let* ((bodypair (%http:body-stream-new))
-           (trailers (%http:trailers-future-new))
-           (rpair (%http:response-new fields (car bodypair) (car trailers)))
-           (response (car rpair)))
-      (%http:response-set-status-code response status)
-      (%http:handle-result-task-return (cons :ok response))
-      (%http-write-body (cdr bodypair) body)
-      (%http:trailers-future-write (cdr trailers) (cons :ok nil))
-      (%http:transmit-future-drop-readable (car (cdr rpair)))
-      nil)))
+  ;; The handler.handle export body (an asynchronous task). Read the transport
+  ;; facts, hand them to the SHARED server model (rontolisp::%http-serve-request in
+  ;; http-server.lisp, which builds the Clack environment, runs the handler --
+  ;; awaiting its future, so the handler itself may be an async-defun -- and
+  ;; normalizes its Clack response), then DELIVER the response through task.return
+  ;; -- only then can the host start reading the contents stream -- and stream the
+  ;; body after it (the rendezvous order verified on wasmtime 46).
+  ;;
+  ;; The request body is the one thing decided at compile time: by default it stays
+  ;; a LAZY stream (nothing is buffered; the handler awaits it), and under
+  ;; :raw-body :buffered it is drained here so the environment can carry the
+  ;; synchronously readable stream a Clack application needs. Its close protocol
+  ;; runs either way, even when the handler never read it (stream-close is
+  ;; idempotent).
+  (let* ((method (%serve-method-keyword (%http:request-get-method request)))
+         (target (or (%http:request-get-path-with-query request) "/"))
+         (rheaders (%http:request-get-headers request))
+         (headers (%http-header-alist rheaders))
+         (stream (%http-body-value (function %http:request-consume-body) request)))
+    (%http:fields-drop rheaders)
+    (let* ((body (rontolisp:await (%serve-request-body stream)))
+           ;; The raw tuple %http-make-env consumes. wasi:http@0.3.0 exposes no peer
+           ;; address on the request resource at all, so :remote-addr / :remote-port
+           ;; are nil here while the interpreter and the JVM carry the real peer; the
+           ;; scheme and the protocol are likewise not readable from the pruned
+           ;; import block. See .kb/http-server.md for the re-evaluation trigger.
+           (raw (list method target headers body "HTTP/1.1" "http" nil 80 nil nil))
+           (res (rontolisp:await
+                 (rontolisp::%http-serve-request (function %serve-dispatch) raw)))
+           (fields (%http:fields-new)))
+      (%http-add-headers fields (car (cdr res)))
+      (rontolisp:stream-close stream)
+      (let* ((bodypair (%http:body-stream-new))
+             (trailers (%http:trailers-future-new))
+             (rpair (%http:response-new fields (car bodypair) (car trailers)))
+             (response (car rpair)))
+        (%http:response-set-status-code response (car res))
+        (%http:handle-result-task-return (cons :ok response))
+        (%http-write-body (cdr bodypair) (car (cdr (cdr res))))
+        (%http:trailers-future-write (cdr trailers) (cons :ok nil))
+        (%http:transmit-future-drop-readable (car (cdr rpair)))
+        nil))))

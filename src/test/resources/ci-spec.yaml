@@ -7487,3 +7487,131 @@ cases:
       "<1> [2]"
       "1, 2, 3"
       NIL
+  - name: http-clack-environment-shape
+    source: |
+      ;; The server-side HTTP value model (http-server.lisp), exercised directly:
+      ;; a served request's transport facts go over as the raw tuple and the Clack
+      ;; environment comes back. This is the shape every backend's construction
+      ;; follows (the interpreter and the JVM build it natively; the WASM
+      ;; component runs exactly this code), so the LIBRARY is the cross-backend
+      ;; pin. raw = (method target header-alist body protocol scheme
+      ;;             local-name local-port remote-addr remote-port)
+      (defvar *ci-env*
+        (rontolisp::%http-make-env
+         (list "post" "/a%20b/c?x=1&y=%202"
+               '(("Host" . "api.example.com:8443") ("Content-Type" . "text/plain")
+                 ("X-Multi" . "one") ("X-Multi" . "two") ("Content-Length" . "5"))
+               "hello" "HTTP/1.1" "https" "0.0.0.0" 8080 "203.0.113.7" 49152)))
+      (print (getf *ci-env* :request-method))
+      (print (getf *ci-env* :script-name))
+      (print (getf *ci-env* :path-info))
+      (print (getf *ci-env* :query-string))
+      (print (getf *ci-env* :server-name))
+      (print (getf *ci-env* :server-port))
+      (print (getf *ci-env* :server-protocol))
+      (print (getf *ci-env* :request-uri))
+      (print (getf *ci-env* :url-scheme))
+      (print (getf *ci-env* :remote-addr))
+      (print (getf *ci-env* :remote-port))
+      (print (gethash "x-multi" (getf *ci-env* :headers)))
+      (print (gethash "host" (getf *ci-env* :headers)))
+      (print (getf *ci-env* :content-type))
+      (print (getf *ci-env* :content-length))
+      ;; the transport hands the FINAL :raw-body value through unchanged
+      (print (getf *ci-env* :raw-body))
+    expected: |
+      :POST
+      ""
+      "/a b/c"
+      "x=1&y=%202"
+      "api.example.com"
+      8443
+      :HTTP/1.1
+      "/a%20b/c?x=1&y=%202"
+      "https"
+      "203.0.113.7"
+      49152
+      "one, two"
+      "api.example.com:8443"
+      "text/plain"
+      5
+      "hello"
+  - name: http-percent-decode
+    source: |
+      ;; Lenient by design: a malformed escape is copied verbatim, "+" is NOT a
+      ;; space (that rule belongs to query strings), and a multi-byte UTF-8 code
+      ;; point split across escapes reassembles into one character.
+      (print (rontolisp::%http-percent-decode "/plain"))
+      (print (rontolisp::%http-percent-decode "/a%20b+c"))
+      (print (rontolisp::%http-percent-decode "/%E3%81%82"))
+      (print (rontolisp::%http-percent-decode "/bad%2"))
+      (print (rontolisp::%http-percent-decode "/bad%zz"))
+    expected: |
+      "/plain"
+      "/a b+c"
+      "/あ"
+      "/bad%2"
+      "/bad%zz"
+  - name: http-response-normalizer
+    source: |
+      ;; Every accepted Clack response form -> the canonical
+      ;; (status header-alist body-string) triple, identical on all four backends.
+      ;; the 3-element form; keyword-plist headers lower to a dotted alist,
+      ;; the framing headers are dropped, a list body joins
+      (print (rontolisp::%http-normalize-response
+              (list 200 '(:content-type "text/plain" :content-length "999")
+                    (list "a" "b" "c"))))
+      ;; the 2-element (bodyless) form -- every ningle 404 has this shape
+      (print (rontolisp::%http-normalize-response (list 404 nil)))
+      ;; dotted-alist headers pass through (a proxied fetch result's :headers),
+      ;; values are stringified, repeated names stay repeated
+      (print (rontolisp::%http-normalize-response
+              (list 200 '((:x-a . 1) ("Set-Cookie" . "a=1") ("set-cookie" . "b=2")) nil)))
+      ;; an (unsigned-byte 8) vector body: one character per octet
+      (print (rontolisp::%http-normalize-response
+              (list 200 nil (make-array 2 :element-type '(unsigned-byte 8)
+                                          :initial-contents '(104 105)))))
+      ;; the DELAYED function response: called with a responder that captures
+      (print (rontolisp::%http-normalize-response
+              (lambda (responder) (funcall responder (list 201 nil (list "later"))))))
+      ;; a bare string body is refused (lack/app/file answers a PATHNAME body and
+      ;; a rontolisp pathname IS its namestring)
+      (print (handler-case (rontolisp::%http-normalize-response (list 200 nil "bare"))
+               (error (e) :refused-bare-string)))
+      ;; a non-integer status is refused
+      (print (handler-case (rontolisp::%http-normalize-response (list :ok nil nil))
+               (error (e) :refused-status)))
+    expected: |
+      (200 (("content-type" . "text/plain")) "abc")
+      (404 NIL "")
+      (200 (("x-a" . "1") ("set-cookie" . "a=1") ("set-cookie" . "b=2")) "")
+      (200 NIL "hi")
+      (201 NIL "later")
+      :REFUSED-BARE-STRING
+      :REFUSED-STATUS
+  - name: http-buffered-body-stream
+    source: |
+      ;; The buffered :raw-body construction (the Gray class on the WASM
+      ;; backends; the interpreter and the JVM read the same behavior off their
+      ;; Java-backed stream in HttpHandlerTest / HttpHandlerJvmTest): one byte
+      ;; cursor serves read-line, read-char, read-byte and a real file-position.
+      (defvar *ci-body* (rontolisp::%http-body-stream "line1
+      あline2"))
+      (print (read-line *ci-body* nil nil))
+      (print (read-char *ci-body* nil nil))
+      (print (file-position *ci-body*))
+      (print (read-byte *ci-body* nil nil))
+      (print (read-line *ci-body* nil nil))
+      (print (read-line *ci-body* nil :eof))
+      (file-position *ci-body* 0)
+      (print (read-line *ci-body* nil nil))
+      (print (rontolisp::%http-body-stream ""))
+    expected: |
+      "line1"
+      #\あ
+      9
+      108
+      "ine2"
+      :EOF
+      "line1"
+      NIL

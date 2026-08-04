@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -12,7 +11,9 @@ import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
-import am.ik.rontolisp.compiler.HttpPlistShape;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.ClackEnv;
 
 /**
  * Builds the JVM-backend runtime for the {@code rontolisp:http-handler} directive. The
@@ -21,20 +22,39 @@ import am.ik.rontolisp.compiler.HttpPlistShape;
  * tls-connect trust-all {@code X509TrustManager}: the backend cannot emit an anonymous
  * class, so the program class takes on the interface), the directive stores the compiled
  * handler funcref in the {@code _httpHandlerFn} static field and calls
- * {@code HttpHandlerSupport.serve(port, new Prog())}, and the injected public
- * {@code handle(Request)} method adapts each incoming request: it builds the request
- * property list (its shape — keys, order, defaults — derived from the
- * {@code HttpPlistShape} WIT records, like every backend's) in the shared runtime value
- * representation (quote-wrapped strings, cons cells as {@code Object[2]}), applies the
- * handler through the {@code _invoke_1} dispatcher, and reads {@code :status},
- * {@code :headers} (an alist of {@code (name . value)} string pairs; malformed entries
- * are skipped like the interpreter's) and {@code :body} back from the response property
- * list.
+ * {@code HttpHandlerSupport.serve(port, new Prog())}.
+ *
+ * <p>
+ * Since the Clack cutover the injected {@code handle(Request)} method is thin glue: a
+ * compiled http-handler class is not standalone anyway (it needs the rontolisp jar on the
+ * runtime classpath), so the Clack environment is built by
+ * {@code HttpHandlerJvmRuntime.buildEnv} -- real Java, the backend's host language -- and
+ * the response marshalled back by its {@code toResponse}. The emitted bytecode keeps only
+ * what must be bytecode, because it calls into the generated class itself:
+ *
+ * <ul>
+ * <li>the {@code :raw-body} construction -- the default asynchronous stream via the async
+ * runtime helpers, or (under {@code :raw-body :buffered}, a compile-time constant scanned
+ * off the program by {@code ClackEnv.usesBufferedBody}) the COMPILED
+ * {@code %http-body-stream} Gray instance, the same construction the WASM component
+ * uses;</li>
+ * <li>the handler dispatch through {@code _invoke_1} + {@code _await} (an async-defun
+ * handler returns a future; each request runs on its own virtual thread);</li>
+ * <li>the direct call to the compiled {@code %http-normalize-response}
+ * (http-server.lisp), whose delayed-response arm must {@code funcall} back into compiled
+ * code -- a direct INVOKESTATIC, so the {@code --optimize} class shaker sees the edge
+ * from its {@code handle} root and keeps the normalizer chain;</li>
+ * <li>the {@code _drain_body} pass over the triple's body (a proxied fetch stream body
+ * drains to its quoted concatenation).</li>
+ * </ul>
  */
 final class JvmHttpHandlerRuntimeBuilder {
 
 	/** The internal name of the interpreter-shared HTTP server support class. */
 	private static final String SUPPORT_CLASS = "am/ik/rontolisp/eval/HttpHandlerSupport";
+
+	/** The internal name of the JVM-backend Clack glue class. */
+	private static final String RUNTIME_CLASS = "am/ik/rontolisp/eval/HttpHandlerJvmRuntime";
 
 	private JvmHttpHandlerRuntimeBuilder() {
 	}
@@ -57,30 +77,25 @@ final class JvmHttpHandlerRuntimeBuilder {
 	 * Builds the constant-pool entries and the {@code handle} method body.
 	 * @param cp the constant pool
 	 * @param thisClass the generated class
-	 * @param objectClass {@code java/lang/Object}
 	 * @param objectArrayClass {@code [Ljava/lang/Object;}
-	 * @param stringClass {@code java/lang/String}
-	 * @param longClass {@code java/lang/Long}
-	 * @param longValue {@code Long.longValue()}
 	 * @param stringLength {@code String.length()}
-	 * @param stringSubstring {@code String.substring(II)}
 	 * @param stringConcat {@code String.concat(String)}
+	 * @param bufferBody the program's {@code :raw-body} mode (a compile-time constant --
+	 * one handler slot, one mode)
 	 * @return the runtime refs and method body
 	 */
-	static HttpHandlerRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
-			ClassConstant objectArrayClass, ClassConstant stringClass, ClassConstant longClass,
-			MethodrefConstant longValue, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat) {
+	static HttpHandlerRuntime build(ConstantPool cp, ClassConstant thisClass, ClassConstant objectArrayClass,
+			MethodrefConstant stringLength, MethodrefConstant stringConcat, boolean bufferBody) {
 		ClassConstant handlerInterface = cp.addClass(cp.addUtf8(SUPPORT_CLASS + "$Handler"));
 		ClassConstant requestClass = cp.addClass(cp.addUtf8(SUPPORT_CLASS + "$Request"));
-		ClassConstant responseClass = cp.addClass(cp.addUtf8(SUPPORT_CLASS + "$Response"));
 		ClassConstant supportClass = cp.addClass(cp.addUtf8(SUPPORT_CLASS));
+		ClassConstant runtimeClass = cp.addClass(cp.addUtf8(RUNTIME_CLASS));
 		MethodrefConstant serve = cp.addMethodref(supportClass,
 				cp.addNameAndType(cp.addUtf8("serve"), cp.addUtf8("(IL" + SUPPORT_CLASS + "$Handler;)V")));
 
 		// The async runtime helpers (forced on whenever http-handler is used): the
-		// request body streams in, the handler's future is awaited, a stream response
-		// body drains out.
+		// default request body streams in, the handler's future is awaited, a stream
+		// response body drains out.
 		MethodrefConstant makeStream = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD),
 						cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC)));
@@ -94,36 +109,22 @@ final class JvmHttpHandlerRuntimeBuilder {
 		MethodrefConstant drainBody = cp.addMethodref(thisClass, cp.addNameAndType(
 				cp.addUtf8(JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD), cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC)));
 
-		Utf8Constant stringGetterDesc = cp.addUtf8("()Ljava/lang/String;");
-		MethodrefConstant requestMethod = cp.addMethodref(requestClass,
-				cp.addNameAndType(cp.addUtf8("method"), stringGetterDesc));
-		MethodrefConstant requestPath = cp.addMethodref(requestClass,
-				cp.addNameAndType(cp.addUtf8("path"), stringGetterDesc));
-		MethodrefConstant requestQuery = cp.addMethodref(requestClass,
-				cp.addNameAndType(cp.addUtf8("query"), stringGetterDesc));
-		MethodrefConstant requestBody = cp.addMethodref(requestClass,
-				cp.addNameAndType(cp.addUtf8("body"), stringGetterDesc));
-		MethodrefConstant requestHeaders = cp.addMethodref(requestClass,
-				cp.addNameAndType(cp.addUtf8("headers"), cp.addUtf8("()Ljava/util/List;")));
-		MethodrefConstant responseInit = cp.addMethodref(responseClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(ILjava/util/List;Ljava/lang/String;)V")));
-		ClassConstant headerClass = cp.addClass(cp.addUtf8(SUPPORT_CLASS + "$Header"));
-		MethodrefConstant headerInit = cp.addMethodref(headerClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Ljava/lang/String;)V")));
-		MethodrefConstant headerName = cp.addMethodref(headerClass,
-				cp.addNameAndType(cp.addUtf8("name"), stringGetterDesc));
-		MethodrefConstant headerValue = cp.addMethodref(headerClass,
-				cp.addNameAndType(cp.addUtf8("value"), stringGetterDesc));
-		ClassConstant listClass = cp.addClass(cp.addUtf8("java/util/List"));
-		MethodrefConstant listSize = cp.addInterfaceMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("size"), cp.addUtf8("()I")));
-		MethodrefConstant listGet = cp.addInterfaceMethodref(listClass,
-				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
-		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
-		MethodrefConstant arrayListInit = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
-		MethodrefConstant arrayListAdd = cp.addMethodref(arrayListClass,
-				cp.addNameAndType(cp.addUtf8("add"), cp.addUtf8("(Ljava/lang/Object;)Z")));
+		Utf8Constant unaryDesc = cp.addUtf8(JvmAsyncRuntimeBuilder.UNARY_DESC);
+		// The compiled http-server.lisp entry points, called directly by their mangled
+		// method names (they are methods of this same generated class; the splice
+		// guarantees their presence in every serving program, and the direct call is
+		// the shaker-visible edge).
+		MethodrefConstant normalizeResponse = cp.addMethodref(thisClass,
+				cp.addNameAndType(
+						cp.addUtf8(JvmLispCompiler.mangleMethodName(
+								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
+						unaryDesc));
+		MethodrefConstant requestBodyString = cp.addMethodref(requestClass,
+				cp.addNameAndType(cp.addUtf8("bodyString"), cp.addUtf8("()Ljava/lang/String;")));
+		MethodrefConstant buildEnv = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("buildEnv"),
+				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;Ljava/lang/Object;)Ljava/lang/Object;")));
+		MethodrefConstant toResponse = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("toResponse"),
+				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)L" + SUPPORT_CLASS + "$Response;")));
 
 		Utf8Constant handlerFieldName = cp.addUtf8("_httpHandlerFn");
 		Utf8Constant handlerFieldDesc = cp.addUtf8("Ljava/lang/Object;");
@@ -135,382 +136,97 @@ final class JvmHttpHandlerRuntimeBuilder {
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
 
 		ConstantPool.StringConstant quote = cp.addString("\"");
-		// Every plist keyword and response default comes from the http-plist WIT
-		// records. The by-key response reads below cannot loop (each field's code is
-		// structurally different), so the handled set is asserted against the record —
-		// a record change fails the compile loudly.
-		HttpPlistShape.requireResponseHandled(Set.of("status", "headers", "body"));
-		ConstantPool.StringConstant bodyDefault = cp.addString(HttpPlistShape.RESPONSE_BODY_DEFAULT);
-		ConstantPool.StringConstant statusKey = cp.addString(HttpPlistShape.responseField("status").keyword());
-		ConstantPool.StringConstant responseHeadersKey = cp
-			.addString(HttpPlistShape.responseField("headers").keyword());
-		ConstantPool.StringConstant responseBodyKey = cp.addString(HttpPlistShape.responseField("body").keyword());
-		MethodrefConstant stringEquals = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("equals"), cp.addUtf8("(Ljava/lang/Object;)Z")));
 
-		// handle(Request): slots 0 this, 1 request, 2 method, 3 path, 4 body (all
-		// quote-wrapped), 5 request plist / response cursor base, 6 handler result,
-		// 7 plist-get cursor, 8 plist-get value, 9 status (int), 10 response body,
-		// 11 request-header List, 12 header loop index (int), 13 Header / pair scratch,
-		// 14 request-header alist, 15 response-header ArrayList, 16 response alist
-		// cursor, 17 query (quote-wrapped, or null = nil when the request has none).
+		// handle(Request): slots 0 this, 1 request, 2 rawBody, 3 body text scratch /
+		// env, 4 result / triple, 5 drained body.
 		Asm a = new Asm();
-		a.aload(1);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(requestMethod.index());
-		quoteWrap(a, quote, stringConcat);
-		a.astore(2);
-		a.aload(1);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(requestPath.index());
-		quoteWrap(a, quote, stringConcat);
-		a.astore(3);
-		a.aload(1);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(requestBody.index());
-		quoteWrap(a, quote, stringConcat);
-		a.astore(4);
-		// The handler sees the request body as an asynchronous stream: one settled
-		// quoted chunk when the request carries a body, an already-closed empty
-		// stream otherwise (its first read observes end of stream) -- interpreter
-		// parity.
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(makeStream.index());
-		a.astore(18);
-		int bodyEmpty = a.label();
-		a.aload(1);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(requestBody.index());
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringLength.index());
-		a.branch(Opcode.IFEQ, bodyEmpty);
-		a.aload(18);
-		a.aload(4);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(streamWrite.index());
-		a.op(Opcode.POP);
-		a.bind(bodyEmpty);
-		a.aload(18);
-		a.op(Opcode.INVOKESTATIC);
-		a.u2(streamClose.index());
-		a.op(Opcode.POP);
-		a.aload(18);
-		a.astore(4);
-		// query = request.query() quote-wrapped, or null (Lisp nil) when absent.
-		a.aload(1);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(requestQuery.index());
-		a.astore(17);
-		int queryDone = a.label();
-		a.aload(17);
-		a.branch(Opcode.IFNULL, queryDone);
-		a.aload(17);
-		quoteWrap(a, quote, stringConcat);
-		a.astore(17);
-		a.bind(queryDone);
-
-		// alist = request.headers() as ((name . value) ...), built back-to-front in
-		// slot 14 so the plist below sees it in request order.
-		a.aload(1);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(requestHeaders.index());
-		a.astore(11);
-		a.aconstNull();
-		a.astore(14);
-		a.aload(11);
-		a.invokeInterface(listSize, 1);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.istore(12);
-		int hLoop = a.label();
-		int hEnd = a.label();
-		a.bind(hLoop);
-		a.iload(12);
-		a.branch(Opcode.IFLT, hEnd);
-		// h = (Header) headers.get(i)
-		a.aload(11);
-		a.iload(12);
-		a.invokeInterface(listGet, 2);
-		a.checkcast(headerClass);
-		a.astore(13);
-		// pair = new Object[]{ quoted(h.name()), quoted(h.value()) }
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.aload(13);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(headerName.index());
-		quoteWrap(a, quote, stringConcat);
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(13);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(headerValue.index());
-		quoteWrap(a, quote, stringConcat);
-		a.aastore();
-		a.astore(13);
-		consSlots(a, objectClass, 13, 14); // (pair . alist)
-		a.astore(14);
-		a.iload(12);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.istore(12);
-		a.branch(Opcode.GOTO, hLoop);
-		a.bind(hEnd);
-
-		// The request plist, built tail-first in slot 5. The shape (keys, order) is
-		// derived from the http-plist WIT request record; only the per-field value slot
-		// is this backend's, so an unmapped record field fails the compile loudly.
-		Map<String, Integer> requestValueSlot = Map.of("method", 2, "path", 3, "query", 17, "headers", 14, "body", 4);
-		a.aconstNull();
-		a.astore(5);
-		List<HttpPlistShape.Field> requestFields = HttpPlistShape.requestFields();
-		for (int i = requestFields.size() - 1; i >= 0; i--) {
-			HttpPlistShape.Field field = requestFields.get(i);
-			Integer valueSlot = requestValueSlot.get(field.name());
-			if (valueSlot == null) {
-				throw new IllegalStateException(
-						"The http-handler JVM runtime has no value slot for request field " + field.name());
-			}
-			consSlots(a, objectClass, valueSlot, 5);
-			a.astore(5);
-			consLdcCdr(a, objectClass, cp.addString(field.keyword()), 5);
-			a.astore(5);
+		if (bufferBody) {
+			// rawBody = %http-body-stream(quoted(request.bodyString())) -- the compiled
+			// Gray instance; the defun itself answers nil for an empty body.
+			MethodrefConstant bodyStream = cp.addMethodref(thisClass,
+					cp.addNameAndType(
+							cp.addUtf8(JvmLispCompiler.mangleMethodName(
+									PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.BODY_STREAM))),
+							unaryDesc));
+			a.aload(1);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(requestBodyString.index());
+			quoteWrap(a, quote, stringConcat);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(bodyStream.index());
+			a.astore(2);
 		}
-
-		// result = _await(_invoke_1(_httpHandlerFn, plist)) -- an async-defun handler
-		// returns a future; each request runs on its own virtual thread, so awaiting
-		// it here is the natural per-request suspension.
+		else {
+			// rawBody = the asynchronous stream: one settled quoted chunk when the
+			// request carries a body, an already-closed empty stream otherwise (its
+			// first read observes end of stream) -- interpreter parity.
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(makeStream.index());
+			a.astore(2);
+			a.aload(1);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(requestBodyString.index());
+			a.astore(3);
+			int bodyEmpty = a.label();
+			a.aload(3);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(stringLength.index());
+			a.branch(Opcode.IFEQ, bodyEmpty);
+			a.aload(2);
+			a.aload(3);
+			quoteWrap(a, quote, stringConcat);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(streamWrite.index());
+			a.op(Opcode.POP);
+			a.bind(bodyEmpty);
+			a.aload(2);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(streamClose.index());
+			a.op(Opcode.POP);
+		}
+		// env = HttpHandlerJvmRuntime.buildEnv(request, rawBody)
+		a.aload(1);
+		a.aload(2);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(buildEnv.index());
+		a.astore(3);
+		// result = _await(_invoke_1(_httpHandlerFn, env))
 		a.op(Opcode.GETSTATIC);
 		a.u2(handlerField.index());
-		a.aload(5);
+		a.aload(3);
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(invoke1.index());
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(awaitHelper.index());
-		a.astore(6);
-
-		// status = (:status is a Long) ? (int) it : the shape's default
-		emitPlistGet(a, statusKey, 6, 7, 8, objectArrayClass, stringEquals);
-		a.iconst(HttpPlistShape.RESPONSE_STATUS_DEFAULT);
-		a.istore(9);
-		int statusDone = a.label();
-		a.aload(8);
-		a.op(Opcode.INSTANCEOF);
-		a.u2(longClass.index());
-		a.branch(Opcode.IFEQ, statusDone);
-		a.aload(8);
-		a.checkcast(longClass);
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(longValue.index());
-		a.op(Opcode.L2I);
-		a.istore(9);
-		a.bind(statusDone);
-
-		// body = (:body is a quoted String) ? stripQuotes(it) : the shape's default --
-		// a stream body drains to its quoted concatenation first (buffered send)
-		emitPlistGet(a, responseBodyKey, 6, 7, 8, objectArrayClass, stringEquals);
-		a.aload(8);
+		// triple = %http-normalize-response(result)
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(normalizeResponse.index());
+		a.astore(4);
+		// drained = _drain_body(third(triple))
+		a.aload(4);
+		a.checkcast(objectArrayClass);
+		a.iconst(1);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.iconst(1);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload();
 		a.op(Opcode.INVOKESTATIC);
 		a.u2(drainBody.index());
-		a.astore(8);
-		a.ldc(bodyDefault.index());
-		a.astore(10);
-		int bodyDone = a.label();
-		a.aload(8);
-		a.op(Opcode.INSTANCEOF);
-		a.u2(stringClass.index());
-		a.branch(Opcode.IFEQ, bodyDone);
-		a.aload(8);
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring);
-		a.astore(10);
-		a.bind(bodyDone);
-
-		// hdrs = new ArrayList(); walk the :headers alist, adding each well-formed
-		// (name . value) string pair and skipping anything else (the interpreter's
-		// leniency).
-		a.op(Opcode.NEW);
-		a.u2(arrayListClass.index());
-		a.op(Opcode.DUP);
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(arrayListInit.index());
-		a.astore(15);
-		emitPlistGet(a, responseHeadersKey, 6, 7, 8, objectArrayClass, stringEquals);
-		a.aload(8);
-		a.astore(16);
-		int rLoop = a.label();
-		int rEnd = a.label();
-		int rSkip = a.label();
-		a.bind(rLoop);
-		a.aload(16);
-		a.op(Opcode.INSTANCEOF);
-		a.u2(objectArrayClass.index());
-		a.branch(Opcode.IFEQ, rEnd);
-		// pair = car(cursor); cursor = cdr(cursor)
-		a.aload(16);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload();
-		a.astore(13);
-		a.aload(16);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		a.astore(16);
-		// pair must be a cons whose car and cdr are (quoted) strings
-		a.aload(13);
-		a.op(Opcode.INSTANCEOF);
-		a.u2(objectArrayClass.index());
-		a.branch(Opcode.IFEQ, rSkip);
-		a.aload(13);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload();
-		a.op(Opcode.INSTANCEOF);
-		a.u2(stringClass.index());
-		a.branch(Opcode.IFEQ, rSkip);
-		a.aload(13);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		a.op(Opcode.INSTANCEOF);
-		a.u2(stringClass.index());
-		a.branch(Opcode.IFEQ, rSkip);
-		// hdrs.add(new Header(strip(car(pair)), strip(cdr(pair))))
-		a.aload(15);
-		a.op(Opcode.NEW);
-		a.u2(headerClass.index());
-		a.op(Opcode.DUP);
-		a.aload(13);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload();
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring);
-		a.aload(13);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		stripQuotesValue(a, stringClass, stringLength, stringSubstring);
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(headerInit.index());
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(arrayListAdd.index());
-		a.op(Opcode.POP);
-		a.bind(rSkip);
-		a.branch(Opcode.GOTO, rLoop);
-		a.bind(rEnd);
-
-		// return new Response(status, hdrs, body)
-		a.op(Opcode.NEW);
-		a.u2(responseClass.index());
-		a.op(Opcode.DUP);
-		a.iload(9);
-		a.aload(15);
-		a.aload(10);
-		a.op(Opcode.INVOKESPECIAL);
-		a.u2(responseInit.index());
+		a.astore(5);
+		// return HttpHandlerJvmRuntime.toResponse(triple, drained)
+		a.aload(4);
+		a.aload(5);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(toResponse.index());
 		a.areturn();
 
 		HandleMethod handle = new HandleMethod(cp.addUtf8("handle"),
-				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 8, 19, a.finish());
+				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 6, 6, a.finish());
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
-	}
-
-	/**
-	 * Emits a property-list lookup over the list held in {@code srcSlot}, comparing each
-	 * key against the string constant {@code key} (called on the constant, so a
-	 * non-string key never throws); stores the matching value (or null) into
-	 * {@code resultSlot}, using {@code cursorSlot} as scratch.
-	 */
-	private static void emitPlistGet(Asm a, ConstantPool.StringConstant key, int srcSlot, int cursorSlot,
-			int resultSlot, ClassConstant objectArrayClass, MethodrefConstant stringEquals) {
-		a.aload(srcSlot);
-		a.astore(cursorSlot);
-		a.aconstNull();
-		a.astore(resultSlot);
-		int loop = a.label();
-		int end = a.label();
-		a.bind(loop);
-		a.aload(cursorSlot);
-		a.branch(Opcode.IFNULL, end);
-		// key.equals(car(cursor))
-		a.ldc(key.index());
-		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload();
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringEquals.index()); // [bool]
-		int notMatch = a.label();
-		a.branch(Opcode.IFEQ, notMatch);
-		// value = car(cdr(cursor))
-		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		a.checkcast(objectArrayClass);
-		a.iconst(0);
-		a.aaload();
-		a.astore(resultSlot);
-		a.branch(Opcode.GOTO, end);
-		a.bind(notMatch);
-		// cursor = cdr(cdr(cursor))
-		a.aload(cursorSlot);
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		a.checkcast(objectArrayClass);
-		a.iconst(1);
-		a.aaload();
-		a.astore(cursorSlot);
-		a.branch(Opcode.GOTO, loop);
-		a.bind(end);
-	}
-
-	/** Pushes {@code new Object[]{ aload(carSlot), aload(cdrSlot) }}. */
-	private static void consSlots(Asm a, ClassConstant objectClass, int carSlot, int cdrSlot) {
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.aload(carSlot);
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(cdrSlot);
-		a.aastore();
-	}
-
-	/** Pushes {@code new Object[]{ <keyword symbol string>, aload(cdrSlot) }}. */
-	private static void consLdcCdr(Asm a, ClassConstant objectClass, ConstantPool.StringConstant sym, int cdrSlot) {
-		a.iconst(2);
-		a.anewarray(objectClass);
-		a.op(Opcode.DUP);
-		a.iconst(0);
-		a.ldc(sym.index());
-		a.aastore();
-		a.op(Opcode.DUP);
-		a.iconst(1);
-		a.aload(cdrSlot);
-		a.aastore();
-	}
-
-	/** Strips the surrounding quotes off the String on top of the stack. */
-	private static void stripQuotesValue(Asm a, ClassConstant stringClass, MethodrefConstant stringLength,
-			MethodrefConstant stringSubstring) {
-		a.checkcast(stringClass); // [s]
-		a.op(Opcode.DUP); // [s, s]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringLength.index()); // [s, len]
-		a.iconst(1);
-		a.op(Opcode.ISUB); // [s, len-1]
-		a.iconst(1);
-		a.op(Opcode.SWAP); // [s, 1, len-1]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringSubstring.index()); // [inner]
 	}
 
 	/** Wraps the String on top of the stack in surrounding quotes. */
@@ -581,26 +297,8 @@ final class JvmHttpHandlerRuntimeBuilder {
 			this.code.add(slot);
 		}
 
-		void iload(int slot) {
-			this.code.add(Opcode.ILOAD);
-			this.code.add(slot);
-		}
-
-		void istore(int slot) {
-			this.code.add(Opcode.ISTORE);
-			this.code.add(slot);
-		}
-
 		void aaload() {
 			this.code.add(Opcode.AALOAD);
-		}
-
-		void aastore() {
-			this.code.add(Opcode.AASTORE);
-		}
-
-		void aconstNull() {
-			this.code.add(Opcode.ACONST_NULL);
 		}
 
 		void iconst(int n) {
@@ -633,20 +331,6 @@ final class JvmHttpHandlerRuntimeBuilder {
 
 		void checkcast(ClassConstant c) {
 			this.code.add(Opcode.CHECKCAST);
-			JvmRuntimeBuilder.emitU2(this.code, c.index());
-		}
-
-		// count = argument slot count including the receiver (the JVM recomputes it,
-		// but the bytes must be present).
-		void invokeInterface(MethodrefConstant m, int count) {
-			this.code.add(Opcode.INVOKEINTERFACE);
-			JvmRuntimeBuilder.emitU2(this.code, m.index());
-			this.code.add(count);
-			this.code.add(0);
-		}
-
-		void anewarray(ClassConstant c) {
-			this.code.add(Opcode.ANEWARRAY);
 			JvmRuntimeBuilder.emitU2(this.code, c.index());
 		}
 

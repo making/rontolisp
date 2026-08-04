@@ -33,31 +33,28 @@
 ;; --- responses ---------------------------------------------------------------
 
 (defun text-response (status body)
-  (list :status status
-        :headers (list (cons "content-type" "text/plain"))
-        :body body))
+  (list status '(:content-type "text/plain") (list body)))
 
 (defun json-response (status obj)
-  (list :status status
-        :headers (list (cons "content-type" "application/json"))
-        :body (format nil "~a~%" (rontolisp:json-stringify obj))))
+  (list status '(:content-type "application/json")
+        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
 ;; --- handlers ----------------------------------------------------------------
 
-(defun hello (request)
+(defun hello (env)
   (text-response 200 (format nil "Hello from wasmCloud!~%")))
 
-;; The raw query string arrives as :query; rontolisp:query-param url-decodes
-;; the value.
-(defun greet (request)
-  (let ((name (rontolisp:query-param (getf request :query) "name")))
+;; The raw query string arrives as :query-string; rontolisp:query-param
+;; url-decodes the value.
+(defun greet (env)
+  (let ((name (rontolisp:query-param (getf env :query-string) "name")))
     (text-response 200 (format nil "Hello, ~a!~%" (if name name "world")))))
 
-(rontolisp:async-defun echo (request)
-  ;; The request :body is an asynchronous stream on every backend; drain it
+(rontolisp:async-defun echo (env)
+  ;; The env :raw-body is an asynchronous stream on every backend; drain it
   ;; first. The router stays a plain defun: the served dispatch awaits the
   ;; handler's result, and await flattens the future echo returns.
-  (let ((body (rontolisp:await (rontolisp:read-all (getf request :body)))))
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
     (if (json-object-p body)
         (let ((message (gethash "message" (rontolisp:json-parse body))))
           (if (stringp message)
@@ -70,27 +67,28 @@
                        (rontolisp:plist-hash-table
                         (list :error "expected a JSON object with a string message field"))))))
 
-(defun not-found (request)
+(defun not-found (env)
   (text-response 404 (format nil "Not found~%")))
 
-(defun method-not-allowed (request)
+(defun method-not-allowed (env)
   (text-response 405 (format nil "Method Not Allowed~%")))
 
 ;; --- routing -----------------------------------------------------------------
 
 ;; Dispatch on (path, method), answering 405 when the path exists but the
-;; method does not match -- the same behavior as the axum Router. The request
-;; plist's :path carries the path only, so the comparisons are exact.
-(defun handle (request)
-  (let ((path (getf request :path))
-        (method (getf request :method)))
+;; method does not match -- the same behavior as the axum Router. The env
+;; plist's :path-info carries the path only, so the comparisons are exact;
+;; :request-method is an interned keyword, so the comparisons are eq.
+(defun handle (env)
+  (let ((path (getf env :path-info))
+        (method (getf env :request-method)))
     (cond ((string= path "/")
-           (if (string= method "GET") (hello request) (method-not-allowed request)))
+           (if (eq method :GET) (hello env) (method-not-allowed env)))
           ((string= path "/api/greet")
-           (if (string= method "GET") (greet request) (method-not-allowed request)))
+           (if (eq method :GET) (greet env) (method-not-allowed env)))
           ((string= path "/api/echo")
-           (if (string= method "POST") (echo request) (method-not-allowed request)))
-          (t (not-found request)))))
+           (if (eq method :POST) (echo env) (method-not-allowed env)))
+          (t (not-found env)))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

@@ -374,12 +374,16 @@ class WasmLispCompilerTest {
 	// the
 	// macro expansion serve.lisp's cond/handler-case bodies need.
 	private static List<LispVal> serveProgram(String source) {
-		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
+		List<LispVal> read = LispReader.readAllFromString(source);
+		boolean bufferBody = am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(read);
+		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(read,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
+		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
 		loaded = SocketsLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		loaded = StdinLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT, true);
 		loaded = am.ik.rontolisp.eval.EnvironmentLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
-		return am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
+		return am.ik.rontolisp.eval.WitLibrary.process(
+				am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 	}
 
 	@Test
@@ -392,8 +396,8 @@ class WasmLispCompilerTest {
 		// `wasmtime serve --env` round trip is
 		// WasmLispCompilerIntegrationTest#httpHandlerReadsTheEnvironmentUnderWasmtimeServe.
 		List<LispVal> program = serveProgram("""
-				(defun handle (r)
-				  (list :status 200 :body (or (uiop:getenv "RLENV") "unset")))
+				(defun handle (env)
+				  (list 200 nil (list (or (uiop:getenv "RLENV") "unset"))))
 				(rontolisp:http-handler 'handle)
 				""");
 		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
@@ -430,9 +434,9 @@ class WasmLispCompilerTest {
 		// under `wasmtime serve -W exceptions=y -S http=y` is exercised in
 		// WasmLispCompilerIntegrationTest.
 		List<LispVal> program = serveProgram("""
-				(rontolisp:async-defun h (r)
-				  (list :status 200
-				        :body (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
+				(rontolisp:async-defun h (env)
+				  (list 200 nil
+				        (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
 				(rontolisp:http-handler 'h)
 				""");
 		assertThat(new WasmLispCompiler(false, true, false, false, true).compile(program)).isNotEmpty();
@@ -444,7 +448,7 @@ class WasmLispCompilerTest {
 		// import beside the fixed wasi:http surface (the dedicated sockets blob
 		// variant and its adapter are gone).
 		List<LispVal> program = serveProgram("""
-				(defun h (r) (list :status 200 :body "x"))
+				(defun h (env) (list 200 nil (list "x")))
 				(rontolisp:http-handler 'h)
 				(rontolisp:tcp-listen 7777)
 				""");

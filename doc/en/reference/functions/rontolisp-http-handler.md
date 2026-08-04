@@ -1,26 +1,52 @@
 # rontolisp:http-handler
 
-`(rontolisp:http-handler handler &optional port)`
+`(rontolisp:http-handler handler &optional port &key raw-body)`
 
 Serves HTTP requests with a Lisp handler function. `handler` is a quoted symbol
 naming a one-argument function (like [`rontolisp:wasm-export`](rontolisp-wasm-export.md)).
-The handler receives a request property list and returns a response property
-list, mirroring the shape of [`rontolisp:fetch`](rontolisp-fetch.md) so one HTTP
-value model spans incoming and outgoing requests:
+The handler receives the Clack environment property list and returns the Clack
+response list `(status headers body)` — a Clack application is a valid handler
+as is (see [Clack Web Applications](../../guides/clack.md)):
 
-- **request** — `(:method <string> :path <string> :query <string-or-nil>
-  :headers <alist> :body <stream>)`. `:path` is the path only, with the query
-  string stripped; `:query` is the raw query string without the leading `?`
-  (`"a=1&b=2"` for `/get?a=1&b=2`), or `nil` when the request has none — parse
-  it with [`rontolisp:query-param`](rontolisp-query-param.md) /
-  [`rontolisp:query-params`](rontolisp-query-params.md). `:body` is an
-  asynchronous stream; a handler that reads it drains it with
-  `(rontolisp:await (rontolisp:read-all (getf request :body)))` and must be an
-  [`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md).
-- **response** — `(:status <integer> :headers <alist> :body
-  <string-or-stream>)`. Missing keys default to `:status 200` and an empty
-  body; a stream body (e.g. a proxied fetch response's `:body`) is drained by
-  the server.
+- **environment** — a property list with exactly these keys, always all
+  present: `:request-method` (an upcased interned keyword, `:GET` / `:POST` /
+  ..., so `(eq m :POST)` works), `:script-name` (always `""`), `:path-info`
+  (the percent-decoded path), `:query-string` (the raw text after the first
+  `?`, or `nil` — parse it with
+  [`rontolisp:query-param`](rontolisp-query-param.md) /
+  [`rontolisp:query-params`](rontolisp-query-params.md)), `:server-name`,
+  `:server-port` (an integer), `:server-protocol` (a keyword, e.g.
+  `:HTTP/1.1`), `:request-uri` (the raw request target verbatim, still
+  encoded, query included), `:url-scheme` (`"http"`/`"https"`),
+  `:remote-addr` / `:remote-port` (the real peer on the interpreter/JVM;
+  `nil` on the WASI component), `:headers` (an `equal` hash table keyed by
+  lowercased names, repeated headers joined with `", "`, never `nil` —
+  `(gethash "content-type" (getf env :headers))`), `:content-type` and
+  `:content-length` (string / integer, or `nil`), and `:raw-body`.
+- **`:raw-body`** — by default (`:raw-body :stream`) an asynchronous stream;
+  a handler that reads it drains it with
+  `(rontolisp:await (rontolisp:read-all (getf env :raw-body)))` and must be an
+  [`rontolisp:async-defun`](../special-forms/rontolisp-async-defun.md). With
+  the directive argument `(rontolisp:http-handler 'handle 8080 :raw-body
+  :buffered)` the body is instead read in full and handed over as a
+  synchronous in-memory bivalent stream readable with `read-line`/`read-char`
+  and `read-byte`/`read-sequence`, with a real `file-position` — what a Clack
+  application (lack-request, http-body) needs; a bodiless request then gets
+  `:raw-body nil`.
+- **response** — the positional list `(status headers body)`. `status` is a
+  required integer (a non-integer car signals an error). `headers` is a
+  keyword plist (`'(:content-type "text/plain")`) or a dotted alist (so a
+  [`rontolisp:fetch`](rontolisp-fetch.md) result's `:headers` passes straight
+  through); repeated names each become their own header line, `content-length`
+  / `transfer-encoding` are dropped (the server computes them), and `nil` is
+  fine. `body` is a list of strings (joined), `nil`/omitted (an empty body —
+  the two-element `(status headers)` form is valid), an `(unsigned-byte 8)`
+  vector, or a rontolisp stream (e.g. a proxied fetch body) drained by the
+  server; a **bare string signals an error** (a rontolisp pathname is its
+  namestring, and in Clack a pathname body means "serve this file"). A
+  function response is supported in Clack's delayed form only —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
+  — and the streaming-writer form is refused.
 
 On the **interpreter** and **JVM** backends `http-handler` starts a blocking
 embedded HTTP server on `port` (default `8080`, one virtual thread per request)
@@ -30,11 +56,10 @@ the module runs as a serverless HTTP component under `wasmtime serve` (the
 `port` argument is ignored — the host owns the socket).
 
 ```console
-(defun handle (request)
-  (list :status 200
-        :headers '(("content-type" . "text/plain"))
-        :body (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (getf request :method) (getf request :path))))
+(defun handle (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "Hello from rontolisp!~%~a ~a~%"
+                      (getf env :request-method) (getf env :path-info)))))
 
 (rontolisp:http-handler 'handle 8080)
 ```
@@ -79,8 +104,8 @@ rontolisp executable JAR, `rontolisp-0.1.0-SNAPSHOT-exec.jar`, on the
 classpath) and the **WASI component** backend
 (`--component`, a `wasi:http/handler@0.3.0` component for `wasmtime serve`).
 Request and response headers are marshalled on every backend, the WASI component
-included: the handler reads `:headers` (an alist of `(name . value)` string pairs)
-and any `:headers` in the response is written back. Inside a served
+included: the handler reads `:headers` (an `equal` hash table keyed by
+lowercased names) and the response's `headers` element is written back. Inside a served
 handler `random`, the time built-ins and `print` (to the host's stdout) work —
 they are bridged to `wasi:random` / `wasi:clocks` / `wasi:cli`, which every
 `wasi:http` host provides; `uiop:getenv` reads the host environment through the

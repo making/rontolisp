@@ -89,9 +89,11 @@ args; keep them):
   **Re-evaluation trigger**: if `WitImportDirective` ever starts upcasing its own
   synthesized names (matching the reader instead of relying on this retry), this
   symmetric branch becomes dead code, not wrong -- safe to delete once confirmed unused.
-- HTTP plist keys are UPPERCASE (`compiler/HttpPlistShape`: keyword = `:` + upcased field):
-  all four backends emit/read `:STATUS`/`:HEADERS`/`:BODY`..., a host-ABI decision (see
-  `http-plist-shape` in the kb index), kept.
+- HTTP keys are UPPERCASE: the fetch result plist (`compiler/FetchResponseShape`:
+  keyword = `:` + upcased field, `:STATUS`/`:HEADERS`/`:BODY`) and the Clack
+  environment (`compiler/ClackEnv`, `:REQUEST-METHOD`/`:PATH-INFO`/...) are emitted
+  and read upcased on all four backends, a host-ABI decision
+  (`.kb/fetch-http.md`, `.kb/http-server.md`), kept.
 
 **Removed seam (2026-07-22, `LispNames.keywordMatches` + `foldKeyword` + the WIT/CLOS
 lowercase designator system).** Both helpers are DELETED. Every keyword-argument matcher is

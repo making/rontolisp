@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsExchange;
 
 import am.ik.rontolisp.LispNames;
 import org.jspecify.annotations.Nullable;
@@ -47,33 +48,50 @@ public final class HttpHandlerSupport {
 	}
 
 	/**
-	 * An incoming HTTP request handed to the Lisp handler.
+	 * The transport facts of one incoming HTTP request -- everything only this server can
+	 * know. It is NOT the value the handler sees: the shared {@code http-server.lisp}
+	 * library turns it into the Clack environment (splitting the target, percent-decoding
+	 * the path, building the header table, ...), so that shape is written once for every
+	 * backend instead of once here.
 	 *
 	 * @param method the HTTP method (e.g. {@code GET})
-	 * @param path the request path with the query string stripped
-	 * @param query the raw query string without the leading {@code ?}, or {@code null}
-	 * when the request has none
-	 * @param headers the request headers
-	 * @param body the request body (empty string if none)
+	 * @param target the request target exactly as sent, query included and still
+	 * percent-encoded (e.g. {@code /get?a=1})
+	 * @param headers the request headers in wire order, duplicates kept
+	 * @param body the request body octets, exactly as received (empty if none) -- bytes,
+	 * not a string, so a binary body (a multipart file part) survives the trip into the
+	 * buffered {@code :raw-body}
+	 * @param protocol the HTTP version token (e.g. {@code HTTP/1.1})
+	 * @param scheme {@code http} or {@code https}
+	 * @param localName the address this server is bound to, or {@code null}
+	 * @param localPort the port this server is bound to
+	 * @param remoteAddr the peer address, or {@code null} when unknown
+	 * @param remotePort the peer port, or {@code 0} when unknown
 	 */
-	public record Request(String method, String path, @Nullable String query, List<Header> headers, String body) {
+	public record Request(String method, String target, List<Header> headers, byte[] body, String protocol,
+			String scheme, @Nullable String localName, int localPort, @Nullable String remoteAddr, int remotePort) {
 
 		/**
-		 * Creates a request from a path-with-query target, splitting at the first
-		 * {@code ?}: everything before it is the path, everything after it the query
-		 * (possibly empty); no {@code ?} means no query ({@code null}).
+		 * Creates a request carrying only what a test needs, defaulting the transport
+		 * facts (HTTP/1.1 over http, no known peer).
 		 * @param method the HTTP method
-		 * @param pathWithQuery the request target as sent (e.g. {@code /get?a=1})
+		 * @param target the request target as sent
 		 * @param headers the request headers
-		 * @param body the request body
-		 * @return the request with path and query split
+		 * @param body the request body text (encoded as UTF-8)
+		 * @return the request
 		 */
-		public static Request of(String method, String pathWithQuery, List<Header> headers, String body) {
-			int q = pathWithQuery.indexOf('?');
-			if (q < 0) {
-				return new Request(method, pathWithQuery, null, headers, body);
-			}
-			return new Request(method, pathWithQuery.substring(0, q), pathWithQuery.substring(q + 1), headers, body);
+		public static Request of(String method, String target, List<Header> headers, String body) {
+			return new Request(method, target, headers, body.getBytes(StandardCharsets.UTF_8), "HTTP/1.1", "http", null,
+					0, null, 0);
+		}
+
+		/**
+		 * Returns the body octets decoded as UTF-8 -- what the default asynchronous
+		 * {@code :raw-body} stream carries.
+		 * @return the body as text
+		 */
+		public String bodyString() {
+			return new String(this.body, StandardCharsets.UTF_8);
 		}
 
 	}
@@ -270,7 +288,12 @@ public final class HttpHandlerSupport {
 				response = handler.handle(request);
 			}
 			catch (RuntimeException ex) {
-				writeResponse(exchange, new Response(500, List.of(), "Internal Server Error"));
+				// A handler that dies must not take the server down -- but it must not
+				// vanish either: without this the only trace of a broken handler (or of a
+				// response the shared normalizer rejected) was a bare 500.
+				System.err.println(LispNames.HTTP_HANDLER + ": handler failed: " + ex);
+				writeResponse(exchange,
+						new Response(500, List.of(new Header("content-type", "text/plain")), "Internal Server Error"));
 				return;
 			}
 			writeResponse(exchange, response);
@@ -279,7 +302,7 @@ public final class HttpHandlerSupport {
 
 	private static Request readRequest(HttpExchange exchange) throws IOException {
 		final String method = exchange.getRequestMethod();
-		final String path = exchange.getRequestURI().toString();
+		final String target = exchange.getRequestURI().toString();
 		final List<Header> headers = new ArrayList<>();
 		for (Map.Entry<String, List<String>> entry : exchange.getRequestHeaders().entrySet()) {
 			for (String value : entry.getValue()) {
@@ -287,7 +310,13 @@ public final class HttpHandlerSupport {
 			}
 		}
 		final byte[] body = exchange.getRequestBody().readAllBytes();
-		return Request.of(method, path, headers, new String(body, StandardCharsets.UTF_8));
+		final InetSocketAddress local = exchange.getLocalAddress();
+		final InetSocketAddress remote = exchange.getRemoteAddress();
+		return new Request(method, target, headers, body, exchange.getProtocol(),
+				exchange instanceof HttpsExchange ? "https" : "http", local == null ? null : local.getHostString(),
+				local == null ? 0 : local.getPort(),
+				remote == null || remote.getAddress() == null ? null : remote.getAddress().getHostAddress(),
+				remote == null ? 0 : remote.getPort());
 	}
 
 	private static void writeResponse(HttpExchange exchange, Response response) throws IOException {
