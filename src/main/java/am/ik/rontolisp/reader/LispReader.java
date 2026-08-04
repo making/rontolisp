@@ -29,7 +29,7 @@ public final class LispReader {
 	private final List<Token> tokens;
 
 	/** The source offset where each {@link #tokens} entry starts, aligned by index. */
-	private final List<Integer> offsets;
+	private final int[] offsets;
 
 	private final Features features;
 
@@ -43,7 +43,7 @@ public final class LispReader {
 
 	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file) {
 		this.tokens = tokens.stream().map(LocatedToken::token).toList();
-		this.offsets = tokens.stream().map(LocatedToken::offset).toList();
+		this.offsets = tokens.stream().mapToInt(LocatedToken::offset).toArray();
 		this.features = features;
 		this.input = input;
 		this.file = file;
@@ -57,8 +57,22 @@ public final class LispReader {
 	 * @return the positioned exception
 	 */
 	private LispReadException err(String message) {
-		SourceLocation location = this.pos < this.tokens.size()
-				? SourceLocation.at(this.file, this.offsets.get(this.pos), this.input)
+		return errAtToken(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} positioned at the given token index (or at the end of
+	 * input when the index is past the last token). A list that is never closed is only
+	 * detected at end of input, so it reports the index of its OPENING token instead: in
+	 * a big spliced library the last line of the file says nothing about which paren is
+	 * unbalanced.
+	 * @param tokenIndex the index into {@link #tokens} to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException errAtToken(int tokenIndex, String message) {
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.offsets.length
+				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
 				: SourceLocation.at(this.file, this.input.length(), this.input);
 		return new LispReadException(message, location);
 	}
@@ -363,8 +377,11 @@ public final class LispReader {
 	}
 
 	private LispVal readList() {
+		// The '(' was consumed by the caller, so it is the token just behind us -- the
+		// position an unclosed list must report.
+		int open = this.pos - 1;
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		if (this.tokens.get(this.pos) instanceof Token.RightParen) {
 			this.pos++; // consume ')'
@@ -388,7 +405,7 @@ public final class LispReader {
 			elements.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		// Build cons chain from right to left
@@ -516,12 +533,13 @@ public final class LispReader {
 
 	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.
 	private List<LispVal> readGroupedElements() {
+		int open = this.pos - 1;
 		List<LispVal> rows = new ArrayList<>();
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
 			rows.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		return rows;
@@ -726,6 +744,7 @@ public final class LispReader {
 	}
 
 	private LispVal readTemplateList() {
+		int open = this.pos - 1;
 		List<TemplateElement> elements = new ArrayList<>();
 		TemplateElement tail = null;
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
@@ -747,7 +766,7 @@ public final class LispReader {
 			elements.add(readTemplateElement());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		return buildTemplateList(elements, tail);
@@ -891,6 +910,7 @@ public final class LispReader {
 
 	// Reads the elements of a raw template list, preserving a dotted tail.
 	private LispVal readRawList() {
+		int open = this.pos - 1;
 		List<LispVal> elements = new ArrayList<>();
 		LispVal tail = LispNil.INSTANCE;
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
@@ -908,7 +928,7 @@ public final class LispReader {
 			elements.add(readRawTemplate());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw err("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		LispVal result = tail;

@@ -108,13 +108,45 @@ class LispReaderTest {
 
 	@Test
 	void readerErrorOnALaterLineReportsTheRightLine() {
-		// Line/column are counted by newline, so an error on the second line names line
-		// 2,
-		// not a flattened single line.
+		// Line/column are counted by newline, so an error on the second line names
+		// line 2, not a flattened single line.
 		assertThatThrownBy(() -> LispReader.readAllFromString("(foo\n  #\\Nope)", Features.INTERPRETER, "lib.lisp"))
 			.isInstanceOf(LispReadException.class)
-			.hasMessageContaining("lib.lisp:2:")
+			.hasMessageContaining("lib.lisp:2:3: ")
 			.hasMessageContaining("Unknown character name: #\\Nope");
+	}
+
+	@Test
+	void unterminatedConstructsPointAtTheirOpeningDelimiter() {
+		// A construct that only fails once the input runs out (string, block comment,
+		// |...| escape) must report where it OPENED: end-of-file names the last line of a
+		// spliced library, which says nothing about which quote or comment is unbalanced.
+		assertThatThrownBy(() -> LispReader.readAllFromString("(a)\n(print \"never closed)\n(b)\n(c)\n",
+				Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:8: ")
+			.hasMessageContaining("Unterminated string literal");
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(a)\n#| open\n(b)\n(c)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:1: ")
+			.hasMessageContaining("Unterminated block comment");
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(a)\n(foo |never closed\n(b)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:6: ")
+			.hasMessageContaining("Unterminated |...| symbol escape");
+	}
+
+	@Test
+	void anUnclosedListPointsAtItsOpeningParen() {
+		// Same for a list: the reader only notices at end of input, so it reports the '('
+		// that was never closed rather than the far-away last line.
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(a)\n(defun f (x)\n  (+ x 1)\n", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:1: ")
+			.hasMessageContaining("Unexpected end of input, expected ')'");
 	}
 
 	@Test

@@ -2385,13 +2385,15 @@ public final class LispEvaluator {
 		try {
 			// Only a file that textually contains #. pays for the marker read + the
 			// per-form substitution walk; every other file keeps the plain read.
+			// The resolved path rides along so a reader error inside a loaded file names
+			// that file and line, exactly like the compile path's LoadInliner splice.
 			if (source.contains("#.")) {
-				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, features)) {
+				for (LispVal form : LispReader.readAllWithReadEvalMarkers(source, features, resolved)) {
 					eval(resolveReadTimeEvalInCode(form));
 				}
 			}
 			else {
-				for (LispVal form : LispReader.readAllFromString(source, features)) {
+				for (LispVal form : LispReader.readAllFromString(source, features, resolved)) {
 					eval(form);
 				}
 			}

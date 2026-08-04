@@ -26,14 +26,16 @@ public record SourceLocation(@Nullable String file, int line, int column) {
 	public static SourceLocation at(@Nullable String file, int offset, String input) {
 		int line = 1;
 		int lineStart = 0;
-		int limit = Math.min(offset, input.length());
+		// A caller may hand over an offset past the end (a scan that ran off the input);
+		// clamp it so the column stays inside the last line instead of overshooting it.
+		int limit = Math.max(0, Math.min(offset, input.length()));
 		for (int i = 0; i < limit; i++) {
 			if (input.charAt(i) == '\n') {
 				line++;
 				lineStart = i + 1;
 			}
 		}
-		return new SourceLocation(file, line, offset - lineStart + 1);
+		return new SourceLocation(file, line, limit - lineStart + 1);
 	}
 
 	/**

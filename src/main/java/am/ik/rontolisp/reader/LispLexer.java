@@ -98,13 +98,28 @@ public final class LispLexer {
 
 	/**
 	 * A {@link LispReadException} whose message is prefixed with the current position in
-	 * this input. The lexer scans character-by-character, so {@code pos} is always the
-	 * failing (or last-consumed) offset -- good enough to point at the malformed input.
+	 * this input. The lexer scans character-by-character, so {@code pos} is the failing
+	 * (or last-consumed) offset -- right for every error the scan detects AT the bad
+	 * input. A construct that only fails at end of input uses {@link #errAt} instead.
 	 * @param message the error message
 	 * @return the positioned exception
 	 */
 	private LispReadException err(String message) {
-		return new LispReadException(message, SourceLocation.at(this.file, this.pos, this.input));
+		return errAt(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} positioned at an explicit offset rather than at the
+	 * scan position. Used by every construct that fails only once it runs out of input
+	 * (an unterminated string, block comment, {@code |...|} escape or skipped list): the
+	 * scan position is then end-of-file, which in a big spliced library names the last
+	 * line of the file instead of the opening delimiter that actually needs fixing.
+	 * @param offset the character offset to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException errAt(int offset, String message) {
+		return new LispReadException(message, SourceLocation.at(this.file, offset, this.input));
 	}
 
 	private static void add(List<LocatedToken> tokens, Token token, int offset) {
@@ -128,9 +143,8 @@ public final class LispLexer {
 		List<LocatedToken> tokens = new ArrayList<>();
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
-			// Whitespace, comments and feature conditionals produce no token; consume
-			// them
-			// at the top so the token branches below all begin at a real token start.
+			// Whitespace, comments and feature conditionals produce no token; consuming
+			// them here lets every token branch below start at a real token start.
 			if (Character.isWhitespace(c)) {
 				this.pos++;
 				continue;
@@ -297,14 +311,13 @@ public final class LispLexer {
 				}
 				else if (probe + 1 < this.input.length() && this.input.charAt(probe) == '@'
 						&& this.input.charAt(probe + 1) == '(') {
-					// #N@( is ironclad's s-box literal (its array-reader dispatch macro):
-					// a (make-array LEN :element-type '(unsigned-byte N)
-					// :initial-contents '(...)) form. For the packed widths (8/16/32) it
-					// reads into the packed integer-vector representation -- the same
-					// value
-					// the ironclad form evaluates to now that make-array packs those
-					// element
-					// types; any other width reads as a plain vector literal.
+					// #N@( is ironclad's s-box literal (its array-reader dispatch
+					// macro): a (make-array LEN :element-type '(unsigned-byte N)
+					// :initial-contents '(...)) form. For the packed widths (8/16/32)
+					// it reads into the packed integer-vector representation -- the
+					// same value the ironclad form evaluates to now that make-array
+					// packs those element types; any other width reads as a plain
+					// vector literal.
 					int width;
 					try {
 						width = Integer.parseInt(this.input.substring(this.pos + 1, probe));
@@ -543,9 +556,10 @@ public final class LispLexer {
 	// name (#\Space, #\Newline, ...). The first character after #\ is always taken
 	// literally even if it is whitespace or a delimiter.
 	private Token.CharToken readChar() {
+		int literalStart = this.pos;
 		this.pos += 2; // skip "#\"
 		if (this.pos >= this.input.length()) {
-			throw err("Unexpected end of input after #\\");
+			throw errAt(literalStart, "Unexpected end of input after #\\");
 		}
 		int start = this.pos;
 		char first = this.input.charAt(this.pos);
@@ -560,10 +574,10 @@ public final class LispLexer {
 		if (token.length() == 1) {
 			return new Token.CharToken(first);
 		}
-		return new Token.CharToken(charByName(token));
+		return new Token.CharToken(charByName(token, literalStart));
 	}
 
-	private int charByName(String name) {
+	private int charByName(String name, int literalStart) {
 		return switch (name.toLowerCase(java.util.Locale.ROOT)) {
 			case "space" -> ' ';
 			case "newline", "linefeed", "lf" -> '\n';
@@ -574,7 +588,7 @@ public final class LispLexer {
 			case "nul", "null" -> 0;
 			case "rubout", "delete", "del" -> 127;
 			case "escape", "altmode", "esc" -> 27;
-			default -> throw err("Unknown character name: #\\" + name);
+			default -> throw errAt(literalStart, "Unknown character name: #\\" + name);
 		};
 	}
 
@@ -597,6 +611,7 @@ public final class LispLexer {
 				continue;
 			}
 			if (c == '|') {
+				int escapeStart = this.pos;
 				this.pos++;
 				while (this.pos < this.input.length() && this.input.charAt(this.pos) != '|') {
 					char e = this.input.charAt(this.pos);
@@ -609,7 +624,7 @@ public final class LispLexer {
 					this.pos++;
 				}
 				if (this.pos >= this.input.length()) {
-					throw err("Unterminated |...| symbol escape");
+					throw errAt(escapeStart, "Unterminated |...| symbol escape");
 				}
 				this.pos++; // closing |
 				continue;
@@ -631,6 +646,7 @@ public final class LispLexer {
 	}
 
 	private Token.StringToken readString() {
+		int start = this.pos;
 		this.pos++; // skip opening "
 		StringBuilder sb = new StringBuilder();
 		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '"') {
@@ -655,7 +671,7 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos >= this.input.length()) {
-			throw err("Unterminated string literal");
+			throw errAt(start, "Unterminated string literal");
 		}
 		this.pos++; // skip closing "
 		return new Token.StringToken(sb.toString());
@@ -736,6 +752,7 @@ public final class LispLexer {
 
 	// Skips a #| ... |# block comment, honoring nesting like Common Lisp.
 	private void skipBlockComment() {
+		int start = this.pos;
 		this.pos += 2; // skip "#|"
 		int depth = 1;
 		while (this.pos < this.input.length()) {
@@ -754,7 +771,7 @@ public final class LispLexer {
 				this.pos++;
 			}
 		}
-		throw err("Unterminated block comment");
+		throw errAt(start, "Unterminated block comment");
 	}
 
 	// Re-lexes a #. datum that was skipped at the raw character level. Returns null when
@@ -884,6 +901,7 @@ public final class LispLexer {
 	// Skips a balanced (...) list at the raw character level, honoring strings,
 	// comments and character literals (so #\( and "..." do not confuse the depth).
 	private void skipDelimitedList() {
+		int start = this.pos;
 		int depth = 0;
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
@@ -914,10 +932,11 @@ public final class LispLexer {
 				this.pos++;
 			}
 		}
-		throw err("Unexpected end of input in a skipped form, expected ')'");
+		throw errAt(start, "Unexpected end of input in a skipped form, expected ')'");
 	}
 
 	private void skipStringRaw() {
+		int start = this.pos;
 		this.pos++; // skip opening "
 		while (this.pos < this.input.length() && this.input.charAt(this.pos) != '"') {
 			if (this.input.charAt(this.pos) == '\\' && this.pos + 1 < this.input.length()) {
@@ -926,15 +945,16 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos >= this.input.length()) {
-			throw err("Unterminated string literal");
+			throw errAt(start, "Unterminated string literal");
 		}
 		this.pos++; // skip closing "
 	}
 
 	private void skipCharLiteralRaw() {
+		int start = this.pos;
 		this.pos += 2; // skip "#\"
 		if (this.pos >= this.input.length()) {
-			throw err("Unexpected end of input after #\\");
+			throw errAt(start, "Unexpected end of input after #\\");
 		}
 		char first = this.input.charAt(this.pos);
 		this.pos++;

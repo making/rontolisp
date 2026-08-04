@@ -25,8 +25,14 @@ parallel list so existing token access is untouched. The prefix is
 `file:line:column: ` only when an origin file is known; a read without one
 (a runtime `read`/`read-from-string` of a string, a REPL buffer) keeps its
 bare message so runtime error text is byte-identical. `LoadInliner.spliceFile`
-/ `AsdfSystems` / `RontoLispCli` pass the origin file through. Verified by
-`LispReaderTest` (lexer + later-line errors) and `LoadInlinerTest` (errors
+/ `AsdfSystems` / `RontoLispCli` pass the origin file through, and so does the
+interpreter's own runtime `load` (`LispEvaluator.loadFile`), which does not go
+through the inliner — otherwise the same error names its file when compiled and
+nothing when interpreted. An error that is only detected at end of input (an
+unterminated string / block comment / `|...|` escape, an unclosed list) reports
+its OPENING delimiter, not EOF. Verified by `LispReaderTest` (lexer, later-line,
+opening-delimiter and unclosed-list errors), `LispEvaluatorTest`
+(`readerErrorInARuntimeLoadNamesTheLoadedFile`) and `LoadInlinerTest` (errors
 inside a `load`ed file and a `ql:quickload`ed system name the origin file).
 See `.kb/load-inliner.md`.
 

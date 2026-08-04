@@ -306,10 +306,9 @@ public final class LoadInliner {
 		}
 		ctx.loading().addLast(path);
 		// #. in a loaded file rides the same marker read as the main source; the markers
-		// resolve later in UserMacroExpander against the macro-time evaluator. Read
-		// errors
-		// are prefixed with the file's path so a spliced library's stray paren names its
-		// own line, not a line of the flattened entry program.
+		// resolve later in UserMacroExpander against the macro-time evaluator. A read
+		// error is prefixed with this file's path, so a spliced library's stray paren
+		// names its own line, not a line of the flattened entry program.
 		List<LispVal> forms = source.contains("#.")
 				? LispReader.readAllWithReadEvalMarkers(source, ctx.features(), path)
 				: LispReader.readAllFromString(source, ctx.features(), path);

@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -4986,6 +4987,21 @@ class LispEvaluatorTest {
 		assertThat(loadResult).isEqualTo(LispTrue.INSTANCE);
 		// Definitions from the loaded file are reusable afterwards.
 		assertThat(evaluator.eval(LispReader.readFromString("(square base)"))).isEqualTo(new LispInteger(100));
+	}
+
+	@Test
+	void readerErrorInARuntimeLoadNamesTheLoadedFile(@TempDir Path tempDir) throws Exception {
+		// The interpreter keeps its own runtime load (no LoadInliner), so it has to pass
+		// the origin file to the reader itself: without it a stray token in a loaded
+		// library reports a bare message, while the compile path names file:line:column.
+		Path dir = Files.createDirectories(tempDir.resolve("proj"));
+		Files.writeString(dir.resolve("core.lisp"), "(defun f (x)\n  #\\Nope)\n");
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		evaluator.setLoadBaseDir(dir.toString());
+		assertThatThrownBy(() -> evaluator.eval(LispReader.readFromString("(load \"core.lisp\")")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("core.lisp:2:3: ")
+			.hasMessageContaining("Unknown character name: #\\Nope");
 	}
 
 	@Test
