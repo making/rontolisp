@@ -63,7 +63,9 @@ import org.jspecify.annotations.Nullable;
  * A third, lighter form of substitution rewrites INDIVIDUAL FORMS of a real component and
  * leaves the rest of the file verbatim: {@link #rewriteComponentSource} hands uax-15's
  * table-building forms to {@link Uax15Tables}, which derives the same tables from the
- * same bundled Unicode data at compile time and emits them as data.
+ * same bundled Unicode data at compile time and emits them as data, and alexandria's
+ * {@code maybe-intern} to {@link AlexandriaSymbols}, which restores CL's "the CURRENT
+ * package" reading of a {@code *package*} that rontolisp folds at resolution time.
  */
 public final class ShimLibraries {
 
@@ -197,6 +199,9 @@ public final class ShimLibraries {
 		}
 		else if (QuriEtldTables.SYSTEM.equals(systemName)) {
 			rewritten = QuriEtldTables.rewrite(componentFile, source, baseDir);
+		}
+		else if (AlexandriaSymbols.SYSTEM.equals(systemName)) {
+			rewritten = AlexandriaSymbols.rewrite(componentFile, source);
 		}
 		return rewritten == null ? source : rewritten;
 	}

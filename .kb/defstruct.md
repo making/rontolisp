@@ -195,3 +195,13 @@ Pinning tests: `LispEvaluatorTest#defstruct*`,
 `defstruct-constructor-accessors-predicate-copier` and
 `defstruct-setf-places-and-first-class-accessors` (all four backends), and the
 `doc/*/reference/special-forms/defstruct.md` examples via `DocExamplesTest`.
+
+**`:conc-name` takes a STRING DESIGNATOR, so a KEYWORD designates its name without
+the colon**: `(defstruct (http (:conc-name :http-)) ... state)` defines
+`http-state`, not `:http-state`. Keeping the colon produced accessors no call site
+could name, and the failure surfaced far away as "setf does not support place:
+FAST-HTTP.HTTP:HTTP-STATE" -- the accessor defuns existed under an unreachable
+spelling and the setf registry never learned them. `LispMacroExpander`'s
+`:CONC-NAME` arm strips a leading colon. Pinned by
+`LispEvaluatorTest#evalDefstructAcceptsAKeywordConcName` and the ci-spec case
+`defstruct-keyword-conc-name`.

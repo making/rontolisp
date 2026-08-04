@@ -180,3 +180,35 @@ class shape), `JvmLispCompilerTest#compileAndRunGrayStreamInstanceDispatch`,
 `#grayBinaryStreamDispatchAndFilePosition`, ci-spec
 `gray-stream-instance-dispatch` and
 `gray-stream-binary-round-trip-and-file-position`.
+
+## flexi-streams' in-memory octet streams are REAL Gray streams (todo-231)
+
+`flexi-streams.lisp` is otherwise a lite shim (a flexi WRAPPER is the underlying
+stream), but `flex:make-in-memory-input-stream` is not: an octet vector is not a
+stream on any backend, and smart-buffer's `finalize-buffer` hands one to the
+multipart parser for every request body that stayed under the memory limit. The
+shim therefore defines
+
+- `flexi-streams:vector-stream` -- a `rontolisp:fundamental-binary-input-stream`
+  subclass with `vec`/`index`/`end` slots. It extends rontolisp's OWN protocol
+  rather than trivial-gray-streams: the two shims are independent ASDF systems,
+  and a program naming only flexi-streams must not drag the portability adapter
+  in. The CLASS is external (http-body spells `(typep s 'flex:vector-stream)`
+  with a single colon to take its no-copy fast path); the three accessors stay
+  INTERNAL, as upstream, which is why the same file reaches for
+  `flex::vector-stream-vector` with a double one.
+- `rontolisp:stream-read-byte` (`:eof` at the end, the read-side convention),
+  `stream-listen`, and a REAL `stream-file-position` pair -- an index into a
+  vector -- which is what lets circular-streams rewind a body it already read.
+- the `FLEX` nickname (`PackageRegistry.BUILTIN_NICKNAMES`), the spelling
+  smart-buffer and http-body use.
+
+Ordering consequence: `BuiltinSystems.DEPENDENCIES` records
+`flexi-streams -> trivial-gray-streams`, the same edge real flexi-streams'
+`.asd` declares. Both loaders honour it (`LispEvaluator.loadSystem`,
+`cli.LoadInliner.spliceSystem`), because the Gray protocol must be DEFINED
+before the `vector-stream` defclass runs -- the eagerly compiling backends
+otherwise fail with "unknown superclass
+RONTOLISP:FUNDAMENTAL-BINARY-INPUT-STREAM". Pinned by
+`LispEvaluatorTest#evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream` and
+`LackEcosystemE2eTest` (all four backends).

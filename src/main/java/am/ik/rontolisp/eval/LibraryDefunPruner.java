@@ -171,8 +171,13 @@ public final class LibraryDefunPruner {
 		// reference this walk looks for does not exist yet. Root it on the same surface
 		// form LispPreludeLibrary selects it by, or the tree-shaker drops the very entry
 		// that pass just spliced.
-		if (LispPreludeLibrary.referencedBySurfaceForm(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, resolved, true)) {
-			roots.add(LispNames.MAKE_BROADCAST_STREAM_INTERNAL);
+		// uiop:with-temporary-file's two expansion callees are the same case: the macro
+		// expands inside the expression compilers, after this walk.
+		for (String synthesized : List.of(LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.TEMP_FILE_NAME,
+				LispNames.DELETE_FILE_IF_EXISTS)) {
+			if (LispPreludeLibrary.referencedBySurfaceForm(synthesized, resolved, true)) {
+				roots.add(LispPreludeLibrary.definedName(synthesized));
+			}
 		}
 		for (String name : roots) {
 			if (live.add(name)) {

@@ -40,7 +40,7 @@ final class WasmOpenCompiler {
 		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.I32_CONST);
-		ctx.writer.writeSignedLeb128(OpenModes.staticMode(parts) & OpenModes.OUTPUT_BIT);
+		ctx.writer.writeSignedLeb128(wasmMode(OpenModes.staticMode(parts)));
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_OPEN);
 		int fd = ctx.allocTemp();
@@ -57,6 +57,21 @@ final class WasmOpenCompiler {
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(fd);
+	}
+
+	/**
+	 * The {@code _open} mode a WASI descriptor actually distinguishes: {@code 0} = read,
+	 * {@code 1} = write (CREAT|TRUNC), {@code 2} = APPEND (CREAT, fdflags APPEND). The
+	 * element type is dropped -- a WASI fd is element-type-agnostic, and passing the raw
+	 * {@link OpenModes#BINARY_BIT} would mis-select the write oflags/rights.
+	 * @param staticMode the {@link OpenModes} mode
+	 * @return 0, 1 or 2
+	 */
+	static int wasmMode(int staticMode) {
+		if ((staticMode & OpenModes.OUTPUT_BIT) == 0) {
+			return 0;
+		}
+		return (staticMode & OpenModes.APPEND_BIT) != 0 ? 2 : 1;
 	}
 
 }

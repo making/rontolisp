@@ -375,6 +375,13 @@ public final class LoadInliner {
 			// socket-close/%usock-guard calls after the pruner runs), and the bracket is
 			// what stops it inheriting the provenance of a third-party system that
 			// :depends-on it.
+			// Its own built-in :depends-on edges first, like a third-party system's:
+			// flexi-streams' vector-stream defclass needs the Gray protocol that
+			// trivial-gray-streams splices, and the splice ORDER is what makes the
+			// superclass resolvable on the eagerly compiling backends.
+			for (String dependency : BuiltinSystems.dependencies(name)) {
+				spliceSystem(dependency, out, ctx, requestBaseDir);
+			}
 			out.add(beginSystem(name));
 			out.addAll(BuiltinSystems.forms(name, ctx.features()));
 			out.add(marker(LispNames.END_SYSTEM));

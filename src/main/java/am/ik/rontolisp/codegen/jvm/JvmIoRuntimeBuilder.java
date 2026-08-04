@@ -245,6 +245,12 @@ final class JvmIoRuntimeBuilder {
 
 	private final MethodrefConstant fileWriterInit;
 
+	/**
+	 * {@code FileWriter(String, boolean append)} -- the append arm of the {@code _open}
+	 * mode branch ({@code :if-exists :append}, mode 5).
+	 */
+	private final MethodrefConstant fileWriterAppendInit;
+
 	private final MethodrefConstant bufferedReaderInit;
 
 	private final MethodrefConstant bufferedWriterInit;
@@ -264,6 +270,12 @@ final class JvmIoRuntimeBuilder {
 	private final MethodrefConstant fileInputStreamInit;
 
 	private final MethodrefConstant fileOutputStreamInit;
+
+	/**
+	 * {@code FileOutputStream(String, boolean append)} -- the binary append arm of the
+	 * {@code _open} mode branch (mode 7).
+	 */
+	private final MethodrefConstant fileOutputStreamAppendInit;
 
 	private final MethodrefConstant inputStreamRead;
 
@@ -453,6 +465,8 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		this.fileWriterInit = cp.addMethodref(this.fileWriterClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.fileWriterAppendInit = cp.addMethodref(this.fileWriterClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Z)V")));
 		this.bufferedReaderInit = cp.addMethodref(this.bufferedReaderClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/io/Reader;)V")));
 		this.bufferedWriterInit = cp.addMethodref(this.bufferedWriterClass,
@@ -479,6 +493,8 @@ final class JvmIoRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 		this.fileOutputStreamInit = cp.addMethodref(this.fileOutputStreamClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
+		this.fileOutputStreamAppendInit = cp.addMethodref(this.fileOutputStreamClass,
+				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;Z)V")));
 		this.inputStreamRead = cp.addMethodref(this.inputStreamClass,
 				cp.addNameAndType(cp.addUtf8("read"), cp.addUtf8("()I")));
 		this.inputStreamClose = cp.addMethodref(this.inputStreamClass,
@@ -1180,44 +1196,44 @@ final class JvmIoRuntimeBuilder {
 		// stream = switch (mode) { case 0 -> new BufferedReader(new FileReader(p));
 		// case 1 -> new BufferedWriter(new FileWriter(p));
 		// case 2 -> new BufferedInputStream(new FileInputStream(p));
-		// default -> new BufferedOutputStream(new FileOutputStream(p)); };
-		code.add(Opcode.ILOAD_1);
-		int ifModePos = code.size();
-		code.add(Opcode.IFNE);
-		emitU2(code, 0);
-		emitOpenStream(code, this.bufferedReaderClass, this.fileReaderClass, this.fileReaderInit,
-				this.bufferedReaderInit);
-		int gotoStorePos = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifModePos, code.size());
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.ICONST_1);
-		int ifMode1Pos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterInit,
-				this.bufferedWriterInit);
-		int gotoStorePos1 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifMode1Pos, code.size());
-		code.add(Opcode.ILOAD_1);
-		code.add(Opcode.ICONST_2);
-		int ifMode2Pos = code.size();
-		code.add(Opcode.IF_ICMPNE);
-		emitU2(code, 0);
-		emitOpenStream(code, this.bufferedInputStreamClass, this.fileInputStreamClass, this.fileInputStreamInit,
-				this.bufferedInputStreamInit);
-		int gotoStorePos2 = code.size();
-		code.add(Opcode.GOTO);
-		emitU2(code, 0);
-		patchBranch(code, ifMode2Pos, code.size());
-		emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass, this.fileOutputStreamInit,
-				this.bufferedOutputStreamInit);
-		patchBranch(code, gotoStorePos, code.size());
-		patchBranch(code, gotoStorePos1, code.size());
-		patchBranch(code, gotoStorePos2, code.size());
+		// case 3 -> new BufferedOutputStream(new FileOutputStream(p));
+		// case 5 -> new BufferedWriter(new FileWriter(p, true));
+		// default -> new BufferedOutputStream(new FileOutputStream(p, true)); };
+		// (5 and 7 are the OpenModes.APPEND_BIT arms -- :if-exists :append.)
+		int[] modes = { 0, 1, 2, 3, 5 };
+		List<Integer> gotoStorePositions = new ArrayList<>();
+		int nextTestPos = -1;
+		for (int mode : modes) {
+			if (nextTestPos >= 0) {
+				patchBranch(code, nextTestPos, code.size());
+			}
+			code.add(Opcode.ILOAD_1);
+			emitIntConst(code, mode);
+			nextTestPos = code.size();
+			code.add(Opcode.IF_ICMPNE);
+			emitU2(code, 0);
+			switch (mode) {
+				case 0 -> emitOpenStream(code, this.bufferedReaderClass, this.fileReaderClass, this.fileReaderInit,
+						this.bufferedReaderInit, false);
+				case 1 -> emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass, this.fileWriterInit,
+						this.bufferedWriterInit, false);
+				case 2 -> emitOpenStream(code, this.bufferedInputStreamClass, this.fileInputStreamClass,
+						this.fileInputStreamInit, this.bufferedInputStreamInit, false);
+				case 3 -> emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass,
+						this.fileOutputStreamInit, this.bufferedOutputStreamInit, false);
+				default -> emitOpenStream(code, this.bufferedWriterClass, this.fileWriterClass,
+						this.fileWriterAppendInit, this.bufferedWriterInit, true);
+			}
+			gotoStorePositions.add(code.size());
+			code.add(Opcode.GOTO);
+			emitU2(code, 0);
+		}
+		patchBranch(code, nextTestPos, code.size());
+		emitOpenStream(code, this.bufferedOutputStreamClass, this.fileOutputStreamClass,
+				this.fileOutputStreamAppendInit, this.bufferedOutputStreamInit, true);
+		for (int pos : gotoStorePositions) {
+			patchBranch(code, pos, code.size());
+		}
 		// return _addStream(stream); -- or, for a program that asks for file-length,
 		// return _setStreamPath(_addStream(stream), p), which records the namestring the
 		// Reader/Writer itself does not remember.
@@ -1667,7 +1683,7 @@ final class JvmIoRuntimeBuilder {
 	 * slot 2 -- one arm of the {@code _open} mode branch.
 	 */
 	private void emitOpenStream(List<Integer> code, ClassConstant bufferedClass, ClassConstant fileClass,
-			MethodrefConstant fileInit, MethodrefConstant bufferedInit) {
+			MethodrefConstant fileInit, MethodrefConstant bufferedInit, boolean append) {
 		code.add(Opcode.NEW);
 		emitU2(code, bufferedClass.index());
 		code.add(Opcode.DUP);
@@ -1675,6 +1691,11 @@ final class JvmIoRuntimeBuilder {
 		emitU2(code, fileClass.index());
 		code.add(Opcode.DUP);
 		code.add(Opcode.ALOAD_2);
+		if (append) {
+			// FileWriter(String, boolean) / FileOutputStream(String, boolean): the
+			// append flag keeps an existing file's content and writes past its end.
+			code.add(Opcode.ICONST_1);
+		}
 		code.add(Opcode.INVOKESPECIAL);
 		emitU2(code, fileInit.index());
 		code.add(Opcode.INVOKESPECIAL);
@@ -2749,6 +2770,10 @@ final class JvmIoRuntimeBuilder {
 
 	private static void patchBranch(List<Integer> code, int branchPos, int targetPos) {
 		JvmRuntimeBuilder.patchBranch(code, branchPos, targetPos);
+	}
+
+	private static void emitIntConst(List<Integer> code, int value) {
+		JvmRuntimeBuilder.emitIntConstStatic(code, value);
 	}
 
 }

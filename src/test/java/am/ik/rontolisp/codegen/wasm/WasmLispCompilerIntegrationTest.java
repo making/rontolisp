@@ -13501,4 +13501,23 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("NIL\n:NOT-A-THREAD\n:SPAWN-ERROR\nNIL");
 	}
 
+	@Test
+	void shortFormMethodCombination() throws Exception {
+		// yason's encode-slots hook: the operator over EVERY applicable qualified
+		// method, in specificity order, with :most-specific-last reversing it.
+		assertThat(compileAndRun("""
+				(defclass mc-base () ())
+				(defclass mc-leaf (mc-base) ())
+				(defgeneric mc-trace (x) (:method-combination progn :most-specific-last))
+				(defmethod mc-trace progn ((x mc-base)) (print :base))
+				(defmethod mc-trace progn ((x mc-leaf)) (print :leaf))
+				(defgeneric mc-sum (x) (:method-combination +))
+				(defmethod mc-sum + ((x mc-base)) 1)
+				(defmethod mc-sum + ((x mc-leaf)) 100)
+				(mc-trace (make-instance 'mc-leaf))
+				(print (mc-sum (make-instance 'mc-leaf)))
+				(print (mc-sum (make-instance 'mc-base)))
+				""")).isEqualTo(":BASE\n:LEAF\n101\n1");
+	}
+
 }

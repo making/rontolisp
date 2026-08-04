@@ -350,14 +350,6 @@ public final class RontoLispCli {
 		// preview1 adapter's stdin branch, byte-identical. Must run AFTER
 		// SocketsLibrary (it keys on sockets.lisp's dispatchers being present).
 		loaded = StdinLibrary.process(loaded, witBackend, serve);
-		// uiop:getenv on the --component path is environment.lisp over a wit-imported
-		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
-		// sockets variants and as an appended user import under serve, whose service
-		// world declares no environment interface. Spliced like the libraries above; a
-		// no-op elsewhere (the interpreter/JVM keep System.getenv, Preview 1 keeps the
-		// host-filled environ buffer scan). Runs after them so a getenv call any of them
-		// spliced in would be seen too.
-		loaded = EnvironmentLibrary.process(loaded, witBackend);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any
@@ -372,6 +364,17 @@ public final class RontoLispCli {
 		List<LispVal> program = WitLibrary
 			.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(UrlLibrary
 				.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))));
+		// uiop:getenv on the --component path is environment.lisp over a wit-imported
+		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
+		// sockets variants and as an appended user import under serve, whose service
+		// world declares no environment interface. Spliced like the libraries above; a
+		// no-op elsewhere (the interpreter/JVM keep System.getenv, Preview 1 keeps the
+		// host-filled environ buffer scan). It runs AFTER the whole splice chain (and
+		// after user-macro expansion) because a getenv call any of them introduces has
+		// to be seen too: the prelude's uiop:default-temporary-directory reads TMPDIR,
+		// and with this pass upstream of the splice a smart-buffer program failed the
+		// component compile with "compiled without EnvironmentLibrary.process".
+		program = EnvironmentLibrary.process(program, witBackend);
 		// Splice the Lisp-source vec library (the scalar reference over the packed
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and

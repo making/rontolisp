@@ -35,3 +35,49 @@ A small namespace system with three built-in packages — `cl` (standard symbols
 **A COMPUTED `(find-package x)` is answered from a table baked at compile time (2026-07-28, todo-198)**: a literal designator still folds in `resolveCons` (the one pass with the registry); a computed one used to be an undefined-function stub on the compiled backends and is now `(cdr (assoc (string x) '(("CL" . :CL) ...) :test #'string=))` over `PackageResolver.runtimePackageTable()` — the designator table (`PackageRegistry.designatorTable()`: canonical names plus every nickname resolving to one, each also under its uppercase spelling, since `findPackageName` matches verbatim or after lowercasing) read AFTER `resolveProgram` so it covers every `defpackage` in the program, threaded into `Ctx.packageTable` at the single `new PackageResolver()` site of each compiler. Mechanics, the frozen-at-compile-time divergence and the sibling `find-symbol`/`fmakunbound` work: `.kb/symbol-runtime-api.md`.
 
 `cl`'s symbol set is `PackageRegistry.CL_SYMBOLS` = union of `CL_SPECIAL_FORMS`/`CL_MACROS`/`CL_FUNCTIONS`/`CL_VARIABLES`/`CL_INTERNALS` (single source of truth). Introspection: runtime in `Environment.registerPackages`, compile-time constants in `Jvm/WasmIntrospectionCompiler` (`cl-user` = Pass-1 user defun names via `Ctx.userDefunNames`); shared logic in `PackageIntrospection`. `listNames`'s default case treats any non-built-in package as a user package: `list-functions` filters the candidates (runtime global function names / Pass-1 defun names) by the `pkg:` prefix and keeps the qualified spellings; `list-macros`/`list-special-forms` are empty. Consequence: the runtime cannot validate a designator (user packages live in the resolver registry), so a computed designator via `funcall` with an unknown package yields nil instead of an error. Adding a package is a registry change, not a resolver change. Limitations (README). Tests: `PackageResolverTest` (incl. the `::` cases, the defpackage clause/error cases and the json.lisp fixed-point pin) + package cases in the per-backend tests + the `defpackage-use-export` ci-spec case.
+
+## `*package*` is folded at RESOLUTION time -- and what that costs
+
+`*package*` in a value position resolves to the quoted CURRENT package
+(`resolveUnqualified` / `resolveQualified`), which is the canonical shape every
+backend consumes. It is a **lite deviation from CL, where `*package*` is
+dynamic**, and it is invisible until a folded value crosses a FUNCTION boundary:
+inside a defun of alexandria's own file the constant is `ALEXANDRIA` forever, so
+`(alexandria:format-symbol t ...)` -- documented as "intern in the current
+package" -- interned into ALEXANDRIA for every caller. The failure is silent
+until something reads the symbol back by name: fast-http's `multipart-parser.lisp`
+generates its 14 state constants that way inside a `#.` and then references them
+by its own package's spelling ("The variable
+FAST-HTTP.MULTIPART-PARSER::+PARSING-DELIMITER-DASH-START+ is unbound").
+
+Two narrow adaptations exist; the general fix (a genuinely dynamic `*package*`)
+is a substrate change, `.todo/255`.
+
+- `eval.AlexandriaSymbols` rewrites the ONE `maybe-intern` form of alexandria's
+  `alexandria-1/symbols.lisp` so the `t` branch goes through the ONE-argument
+  `intern`, whose contract already is "the current package" and which rontolisp
+  answers from the LIVE resolver state rather than from a fold. Everything else
+  in the file stays verbatim (the `ShimLibraries.rewriteComponentSource` tier --
+  `.kb/asdf.md`).
+- **A user macro called from inside a FUNCTION BODY expands with the macro's
+  DEFINING package current** (`LispEvaluator.UserMacro.definitionPackage`,
+  swapped in `expandMacroCall`, restored in the `finally`); a TOP-LEVEL macro
+  call keeps the current package. CL expands a macro while COMPILING the calling
+  file, so `*package*` is that file's; the interpreter expands LAZILY, at call
+  time, and only a top-level call site still has its file's package current. The
+  `functionBodyDepth` counter (incremented around every user-lambda body in
+  `apply`) is what tells the two apart. Both halves are load-bearing: fast-http's
+  `callback-data` is used inside a defun of its own file and expands
+  `(alexandria:format-symbol t "~A-~A" :callbacks name)` into an accessor call
+  (a `cl-user` caller got a bare `CALLBACKS-HEADER-FIELD`), while trivia's
+  top-level `(lispn:define-namespace pattern function)` must generate
+  `TRIVIA.LEVEL2.IMPL::SYMBOL-PATTERN` -- the CALLING file's package, not
+  lisp-namespace's. Known approximation: a macro defined in P and called inside a
+  function of a DIFFERENT file Q gets P where CL would use Q. Pinned by
+  `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+  `TriviaE2eTest` and `SxqlE2eTest`.
+
+**Re-evaluation trigger**: when `.todo/255` gives `*package*` a real dynamic
+value, both adaptations become dead weight -- delete `AlexandriaSymbols` and
+re-check whether the macro-expansion package swap is still the right default
+(it is what a file-at-a-time compile does, so it probably stays).

@@ -6,7 +6,18 @@
 
 ラムダリストは必須引数の後に `&optional`/`&rest` を続けられ（ディスパッチャは末尾を選択されたメソッドへ転送します）、インラインの `(:method [qualifier] (param...) body...)` 節で `defgeneric` 内にメソッドを定義できます。`(:documentation "...")` は記録して無視されます。
 
-ライトサブセット: 総称関数のラムダリストの `&key`、`:method-combination` と残りのオプションはエラーです。
+`(:method-combination NAME [:most-specific-first | :most-specific-last])` は CLHS の**短形式**メソッド結合 — `progn`、`and`、`or`、`+`、`list`、`nconc`、`append`、`max`、`min` — を選択します。この場合、有効メソッドは「結合名を修飾子に持つ適用可能なすべてのメソッド」をその演算子で結合したものになり、順序は特定的なものから先（`:most-specific-last` を指定すると逆順）です。`:around` メソッドは通常どおり結合結果全体を包みますが、`:before`/`:after` は CLHS の規定どおり拒否されます。プライマリメソッドは結合名を修飾子として持たなければなりません: `(defmethod encode-slots progn ((o point)) ...)`。
+
+```lisp
+(defclass shape () ())
+(defclass square (shape) ())
+(defgeneric describe-parts (x) (:method-combination list))
+(defmethod describe-parts list ((x shape)) 'shape)
+(defmethod describe-parts list ((x square)) 'square)
+(describe-parts (make-instance 'square)) ; => (SQUARE SHAPE)
+```
+
+ライトサブセット: 総称関数のラムダリストの `&key`、`define-method-combination`（長形式）と残りのオプションはエラーです。
 
 ```lisp
 (defgeneric area (shape)

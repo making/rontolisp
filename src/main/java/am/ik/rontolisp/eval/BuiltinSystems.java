@@ -52,7 +52,27 @@ public final class BuiltinSystems {
 			// no forms (real libraries only name it so its symbols resolve).
 			Map.entry("uiop", features -> List.of()));
 
+	/**
+	 * The {@code :depends-on} edges BETWEEN built-in systems. Only one exists: the
+	 * flexi-streams shim's in-memory octet streams are real Gray streams, so rontolisp's
+	 * Gray protocol has to be defined before its {@code defclass} runs -- and
+	 * {@code trivial-gray-streams} is what splices the protocol (see
+	 * {@link ShimLibraries#forms}). Real flexi-streams declares exactly this dependency
+	 * in its own {@code .asd}, for the same reason.
+	 */
+	private static final Map<String, List<String>> DEPENDENCIES = Map.of("flexi-streams",
+			List.of("trivial-gray-streams"));
+
 	private BuiltinSystems() {
+	}
+
+	/**
+	 * The built-in systems the named one depends on, to be loaded (or spliced) first.
+	 * @param name a name for which {@link #isBuiltin} is true
+	 * @return the dependency names, possibly empty
+	 */
+	public static List<String> dependencies(String name) {
+		return DEPENDENCIES.getOrDefault(name, List.of());
 	}
 
 	/**

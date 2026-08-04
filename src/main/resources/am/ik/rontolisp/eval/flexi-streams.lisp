@@ -1,8 +1,10 @@
 ;; The flexi-streams package: a lite shim satisfying the built-in ASDF system
-;; "flexi-streams". rontolisp streams carry no element type (every stream is a
-;; character stream), so a flexi stream wrapper is the underlying stream
-;; itself. Written in canonical shape; the package is seeded in
-;; PackageRegistry.
+;; "flexi-streams". A flexi stream WRAPPER is the underlying stream itself
+;; (rontolisp picks the element type at open time, not per wrapper), but the
+;; IN-MEMORY streams below are real: an octet vector is not a stream on any
+;; backend, and smart-buffer hands one to the multipart parser for every
+;; request body that stayed under the memory limit. Written in canonical
+;; shape; the package is seeded in PackageRegistry.
 
 (defun flexi-streams:make-flexi-stream (stream &rest args)
   (declare (ignore args))
@@ -71,3 +73,51 @@
                                                 (logand (aref octets (+ i 3)) #x3F)))
                              s)
                  (setq i (+ i 4)))))))))
+
+;; The in-memory octet streams, over rontolisp's own Gray protocol
+;; (gray.lisp) rather than over trivial-gray-streams: the two shims are
+;; independent ASDF systems, and a program naming only flexi-streams must not
+;; drag the portability adapter in. vector-stream is the class http-body's
+;; slurp-stream type-tests against to take its no-copy fast path; the slot
+;; accessors are internal, as upstream.
+
+(defclass flexi-streams:vector-stream (rontolisp:fundamental-binary-input-stream)
+  ((flexi-streams::vec :initarg :vec :initform nil
+                       :accessor flexi-streams::vector-stream-vector)
+   (flexi-streams::index :initarg :index :initform 0
+                         :accessor flexi-streams::vector-stream-index)
+   (flexi-streams::end :initarg :end :initform 0
+                       :accessor flexi-streams::vector-stream-end)))
+
+(defclass flexi-streams::vector-input-stream (flexi-streams:vector-stream) ())
+
+;; :transformer is accepted and ignored: it exists upstream to re-map each
+;; element on the way out, and no caller in the lack/http-body chain passes
+;; one.
+(defun flexi-streams:make-in-memory-input-stream (vector &key (start 0) end transformer)
+  (declare (ignore transformer))
+  (make-instance 'flexi-streams::vector-input-stream
+                 :vec vector
+                 :index start
+                 :end (or end (length vector))))
+
+(defmethod rontolisp:stream-read-byte ((stream flexi-streams:vector-stream))
+  (let ((i (flexi-streams::vector-stream-index stream)))
+    (if (>= i (flexi-streams::vector-stream-end stream))
+        :eof
+        (progn
+          (setf (flexi-streams::vector-stream-index stream) (+ i 1))
+          (aref (flexi-streams::vector-stream-vector stream) i)))))
+
+(defmethod rontolisp:stream-listen ((stream flexi-streams:vector-stream))
+  (< (flexi-streams::vector-stream-index stream)
+     (flexi-streams::vector-stream-end stream)))
+
+;; file-position is real here (an index into a vector), which is what lets
+;; circular-streams rewind a body it has already read.
+
+(defmethod rontolisp:stream-file-position ((stream flexi-streams:vector-stream))
+  (flexi-streams::vector-stream-index stream))
+
+(defmethod (setf rontolisp:stream-file-position) (position (stream flexi-streams:vector-stream))
+  (setf (flexi-streams::vector-stream-index stream) position))

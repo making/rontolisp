@@ -511,6 +511,15 @@ final class WasmExprCompiler {
 							+ " under --component is the spliced environment.lisp binding, but the program was compiled without it (eval/EnvironmentLibrary.process must run on the compile path)");
 				}
 			}
+			// uiop:with-temporary-file is a MACRO, so it cannot reach the uiop stub
+			// lowering (which only sees function-call shapes) -- and it has a real
+			// expansion, not a stub. unwindProtect = ctx.ehMode, like the usocket
+			// with-*s below: outside EH mode the cleanup runs on normal exit only.
+			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())
+					&& LispNames.WITH_TEMPORARY_FILE.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, ctx.ehMode), ctx);
+				return;
+			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {

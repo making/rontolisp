@@ -1219,3 +1219,44 @@ callNextMethodChainsPrimariesAndNextMethodP,aroundMethodWrapsAndCallNextMethodIn
 callNextMethodWithNewArguments,callNextMethodWithNoNextMethodSignals}` and the
 `compileAndRun{MethodQualifiersAndCallNextMethod,AroundMethodAndNextMethodP}`
 tests in the JVM/WASM suites.
+
+## Short-form `:method-combination` (todo-234)
+
+`(defgeneric g (x) (:method-combination NAME [:most-specific-first |
+:most-specific-last]))` where NAME is one of `ClosRegistry.SHORT_FORM_COMBINATIONS`
+-- `progn`/`and`/`or`/`+`/`list`/`nconc`/`append`/`max`/`min`. The CLHS **long**
+form (`define-method-combination`) is out of scope and a NAME outside the set is
+rejected at `defgeneric` time, not silently ignored.
+
+The whole family is ONE mechanism, which is why it is implemented once:
+
+- `ClosRegistry.GenericInfo` gains `methodCombination` + `mostSpecificLast`.
+  `LispMacroExpander.registerDefgeneric` parses the option and records it BEFORE
+  the inline `(:method ...)` clauses expand -- an inline `(:method progn ...)`
+  is a plain `defmethod` and must already see the combination.
+- `expandDefmethod` reads the generic's combination to decide the legal qualifier
+  set: the combination NAME becomes a primary qualifier, `:around` stays legal,
+  and `:before`/`:after` are REJECTED (CLHS). A combination generic whose
+  `defmethod` carries no qualifier is rejected too -- an unqualified method has
+  no role there, and accepting it would silently never run.
+- `LispMacroExpander.shortFormEffectiveMethod` builds the effective method:
+  `(NAME (m1 nil args...) (m2 nil args...) ...)` over EVERY applicable method of
+  that qualifier in branch-specificity order, reversed under
+  `:most-specific-last`. The `next` argument is nil throughout -- CLHS gives
+  short-form primaries no `call-next-method`; only an `:around` has one, and its
+  next is the combined form (built exactly as in the standard combination, so
+  `buildNextChain`/`callWithNext` are shared).
+- No applicable method is the ordinary `noApplicableMethod` error, NOT an empty
+  `(progn)`: an empty `(and)` answers `t` and an empty `(+)` zero, which would
+  hide a missing method behind a plausible value.
+
+Because the effective method is built by the SHARED expander and emitted as
+ordinary Lisp, all four backends get it from the one implementation. Pinned by
+`LispEvaluatorTest#evalShortFormMethodCombination*`,
+`JvmLispCompilerTest#compileAndRunShortFormMethodCombination`,
+`WasmLispCompilerIntegrationTest#shortFormMethodCombination` and the ci-spec case
+`defgeneric-short-form-method-combination`.
+
+Why it exists: yason's `(defgeneric encode-slots (object) (:method-combination
+progn :most-specific-last))` was yason's ONLY blocker, and yason gates http-body
+-> lack-request (`.kb/lack.md`).

@@ -3004,6 +3004,15 @@ public final class LispNames {
 	public static final String OUTPUT_KEYWORD = ":OUTPUT";
 
 	/**
+	 * The {@code :append} pseudo-direction: the NORMALIZED spelling of
+	 * {@code :direction :output :if-exists :append}, not a Common Lisp direction of its
+	 * own. {@code compiler.OpenModes.normalizeKeywordForm} and
+	 * {@code LispMacroExpander.expandWithOpenFile} both produce it so that every backend
+	 * reads one literal token where the source wrote an option pair.
+	 */
+	public static final String APPEND_KEYWORD = ":APPEND";
+
+	/**
 	 * The {@code :element-type} keyword recognized by {@code with-open-file} (and as the
 	 * optional third {@code open} argument): the literal {@code '(unsigned-byte 8)}
 	 * selects a binary stream, the literal {@code 'character} the default text stream.
@@ -5699,6 +5708,41 @@ public final class LispNames {
 	public static final String OCTETS_TO_STRING = "OCTETS-TO-STRING";
 
 	/**
+	 * {@code flexi-streams:vector-stream} -- the base class of the shim's in-memory octet
+	 * streams. Not a wrapper like {@link #MAKE_FLEXI_STREAM}: an in-memory stream is a
+	 * real Gray stream over an octet vector, because http-body's {@code slurp-stream}
+	 * TYPE-TESTS a body stream against this class to take its no-copy fast path.
+	 */
+	public static final String VECTOR_STREAM = "VECTOR-STREAM";
+
+	/**
+	 * {@code flexi-streams::vector-input-stream} -- the readable {@link #VECTOR_STREAM}.
+	 * Internal, as upstream: the constructor is the whole public surface.
+	 */
+	public static final String VECTOR_INPUT_STREAM = "VECTOR-INPUT-STREAM";
+
+	/**
+	 * {@code flexi-streams::vector-stream-vector} -- the backing octet vector. INTERNAL,
+	 * as upstream, which is why http-body spells it with a double colon; its
+	 * {@code (:import-from :flexi-streams :vector-stream-vector)} names the same symbol.
+	 */
+	public static final String VECTOR_STREAM_VECTOR = "VECTOR-STREAM-VECTOR";
+
+	/** {@code flexi-streams::vector-stream-index} -- the read cursor (internal). */
+	public static final String VECTOR_STREAM_INDEX = "VECTOR-STREAM-INDEX";
+
+	/** {@code flexi-streams::vector-stream-end} -- the end bound (internal). */
+	public static final String VECTOR_STREAM_END = "VECTOR-STREAM-END";
+
+	/**
+	 * {@code flexi-streams:make-in-memory-input-stream} -- an octet vector as a binary
+	 * input stream. smart-buffer's {@code finalize-buffer} hands one back for every
+	 * request body that stayed under the memory limit, so it is on the LIVE multipart
+	 * path, not a stub.
+	 */
+	public static final String MAKE_IN_MEMORY_INPUT_STREAM = "MAKE-IN-MEMORY-INPUT-STREAM";
+
+	/**
 	 * The {@code org.shirakumo.float-features} shim package name ({@code float-features}
 	 * is its built-in nickname and the built-in ASDF system name).
 	 */
@@ -5932,6 +5976,56 @@ public final class LispNames {
 	 * {@link #DIRECTORY}, and what {@link #COLLECT_SUB_DIRECTORIES} recurses through.
 	 */
 	public static final String SUBDIRECTORIES = "SUBDIRECTORIES";
+
+	/**
+	 * {@code uiop:ensure-directory-pathname} -- the pathname in DIRECTORY form: a
+	 * namestring that already ends in {@code /} is itself, anything else gains one. A
+	 * rontolisp pathname IS its namestring, so this is the whole of real UIOP's
+	 * name/type-to-directory-component promotion. Prelude Lisp, every backend.
+	 */
+	public static final String ENSURE_DIRECTORY_PATHNAME = "ENSURE-DIRECTORY-PATHNAME";
+
+	/**
+	 * {@code uiop:default-temporary-directory} -- the host's temporary directory in
+	 * {@link #ENSURE_DIRECTORY_PATHNAME} form: {@code $TMPDIR} when the environment
+	 * carries one, {@code /tmp/} otherwise. Prelude Lisp over {@link #GETENV}, so a
+	 * backend whose environment is empty (both WASM ones, unless the host passes
+	 * {@code --env}) answers the fallback rather than failing.
+	 */
+	public static final String DEFAULT_TEMPORARY_DIRECTORY = "DEFAULT-TEMPORARY-DIRECTORY";
+
+	/**
+	 * {@code uiop:delete-file-if-exists} -- {@link #DELETE_FILE} with the missing-file
+	 * {@code file-error} swallowed (nil), which is the whole reason real UIOP exports it.
+	 * Prelude Lisp over {@link #DELETE_FILE_INTERNAL}, so it inherits that primitive's
+	 * WASM divergence: both WASM backends signal at CALL time (no WASI unlink import).
+	 */
+	public static final String DELETE_FILE_IF_EXISTS = "DELETE-FILE-IF-EXISTS";
+
+	/**
+	 * {@code uiop:with-temporary-file} -- a built-in {@code LispMacroExpander} expansion
+	 * (the {@code usocket:with-*} pattern), not a stub: it is on smart-buffer's LIVE
+	 * disk-spill path, where a multipart body larger than the memory limit is written to
+	 * a temporary file and the pathname handed back. The option list is UIOP's keyword
+	 * plist -- {@code :stream}, {@code :pathname}, {@code :directory}, {@code :prefix},
+	 * {@code :type}, {@code :keep}, {@code :direction}, {@code :element-type} -- and the
+	 * expansion creates the file through {@link #TEMP_FILE_NAME}, opens it, runs the
+	 * body, closes, and deletes unless {@code :keep} is true.
+	 */
+	public static final String WITH_TEMPORARY_FILE = "WITH-TEMPORARY-FILE";
+
+	/** The canonical package-qualified spelling of {@link #WITH_TEMPORARY_FILE}. */
+	public static final String UIOP_WITH_TEMPORARY_FILE_QUALIFIED = UIOP_PKG + ":" + WITH_TEMPORARY_FILE;
+
+	/**
+	 * The {@code %temp-file-name} internal helper: a namestring naming a file that does
+	 * NOT exist yet, inside the given directory (which it creates), built from the prefix
+	 * and type plus a random suffix and retried until it misses. The one place
+	 * {@link #WITH_TEMPORARY_FILE}'s uniqueness rule is written down; keeping it out of
+	 * the expansion means the retry loop is compiled once per program rather than once
+	 * per call site.
+	 */
+	public static final String TEMP_FILE_NAME = "%TEMP-FILE-NAME";
 
 	/**
 	 * {@code uiop::get-pathname-defaults} (internal in real UIOP too, hence the double

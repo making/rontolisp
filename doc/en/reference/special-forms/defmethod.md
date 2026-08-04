@@ -46,6 +46,8 @@ An optional `:before`, `:after`, or `:around` **qualifier** before the lambda li
 - then the most specific applicable primary (unqualified) method runs — its value is the result;
 - then every `:after` method runs for effect, **least** specific first.
 
+Under a short-form [`:method-combination`](defgeneric.md) the qualifier set is different: a primary method carries the COMBINATION NAME instead (`(defmethod total + ((x account)) ...)`), `:around` still wraps, and `:before`/`:after` are rejected.
+
 Inside a primary or `:around` method, `(call-next-method)` invokes the next less specific method (passing the current arguments, or new ones if given as `(call-next-method arg...)`), and `(next-method-p)` returns whether such a method exists. Calling `call-next-method` with no next method signals an error.
 
 ```lisp

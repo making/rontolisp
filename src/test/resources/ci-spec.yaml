@@ -4221,6 +4221,59 @@ cases:
       34
       255
       -1
+  - name: open-if-exists-append-keeps-the-existing-content
+    # smart-buffer's disk-spill path writes every chunk past the memory limit
+    # this way, so the option is real on all four backends: :direction :output
+    # :if-exists :append normalizes to the :append pseudo-direction (mode 5/7,
+    # compiler/OpenModes) -- O_CREAT without O_TRUNC plus FDFLAGS_APPEND on WASI.
+    source: |
+      (with-open-file (out "app.dat" :direction :output) (write-string "one" out))
+      (with-open-file (out "app.dat" :direction :output :if-exists :append)
+        (write-string "two" out))
+      (with-open-file (in "app.dat") (print (read-line in)))
+      (with-open-file (out "app.dat" :direction :output :if-exists :append
+                            :element-type '(unsigned-byte 8))
+        (write-byte 33 out))
+      (with-open-file (in "app.dat") (print (read-line in)))
+    expected: |
+      "onetwo"
+      "onetwo!"
+  - name: defgeneric-short-form-method-combination
+    # yason's encode-slots hook (the .todo/234 blocker in front of http-body):
+    # the operator applied to EVERY applicable method carrying the combination
+    # name as its qualifier, most specific first unless :most-specific-last.
+    source: |
+      (defclass ci-mc-base () ())
+      (defclass ci-mc-leaf (ci-mc-base) ())
+      (defgeneric ci-mc-trace (x) (:method-combination progn :most-specific-last))
+      (defmethod ci-mc-trace progn ((x ci-mc-base)) (print :base))
+      (defmethod ci-mc-trace progn ((x ci-mc-leaf)) (print :leaf))
+      (defgeneric ci-mc-sum (x) (:method-combination +))
+      (defmethod ci-mc-sum + ((x ci-mc-base)) 1)
+      (defmethod ci-mc-sum + ((x ci-mc-leaf)) 100)
+      (defgeneric ci-mc-names (x) (:method-combination list))
+      (defmethod ci-mc-names list ((x ci-mc-base)) 'base)
+      (defmethod ci-mc-names list ((x ci-mc-leaf)) 'leaf)
+      (ci-mc-trace (make-instance 'ci-mc-leaf))
+      (print (ci-mc-sum (make-instance 'ci-mc-leaf)))
+      (print (ci-mc-sum (make-instance 'ci-mc-base)))
+      (print (ci-mc-names (make-instance 'ci-mc-leaf)))
+    expected: |
+      :BASE
+      :LEAF
+      101
+      1
+      (LEAF BASE)
+  - name: defstruct-keyword-conc-name
+    # :conc-name is a STRING DESIGNATOR, so a keyword designates its name WITHOUT
+    # the colon -- fast-http's (defstruct (http (:conc-name :http-))).
+    source: |
+      (defstruct (ci-kw-thing (:conc-name :ci-kw-thing-)) (state 0))
+      (let ((it (make-ci-kw-thing)))
+        (setf (ci-kw-thing-state it) 5)
+        (print (ci-kw-thing-state it)))
+    expected: |
+      5
   - name: read-line-strips-one-trailing-carriage-return
     source: |
       (with-open-file (out "crlf.dat" :direction :output :element-type '(unsigned-byte 8))

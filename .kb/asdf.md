@@ -4,7 +4,7 @@
 
 **Compile path**: handled *inside* `LoadInliner`'s recursion (not a separate pass — a loaded file can call `load-system`, and a spliced component can `load`/`require`); the `Ctx` record threads the system registry, loaded set, cycle stack and search path. Top-level `(asdf:defsystem ...)` registers + is consumed (quoted symbol, like `provide`); top-level literal `(asdf:load-system NAME)` splices deps then component files (dedup like `require`). Non-literal name = hard error at inline time; a *nested* asdf form survives to the compilers, which reject it in the same `case` as `REQUIRE`/`PROVIDE` (`Jvm/WasmExprCompiler`).
 
-**Compile-time pathname folding (`cli.CompileTimePathnameFolder`)**: after `LoadInliner.inline` returns the flattened program, a walker folds the four ASDF/UIOP pathname primitives real libraries call at load time to build a bundled-data-file path: `(asdf:find-system 'NAME [nil])` → the literal `"name"` (or `nil` when unknown + `error-p` nil), `(asdf:system-source-directory X)` → the recorded `LispSystem.baseDir` + trailing `/`, `(asdf:system-relative-pathname X REL)` → that base with `REL` merged onto it (the one-call form; quri's `etld.lisp` names its bundled effective-TLD list this way, and this fold is what lets the `#.` marker resolve on the compile path at all -- `UserMacroExpander`'s macro-time evaluator has no system registry of its own), `(make-pathname ...)` → the composed namestring (via `eval/PathnameOps.makePathname`), and `(uiop:merge-pathnames* A [B])` → the merged namestring (`PathnameOps.mergePathnames`). A top-level `(defparameter *X* <folded string>)` is recorded so a later primitive whose argument is a reference to `*X*` reduces too — the uax-15 seed shape `(uiop:merge-pathnames* *data-directory* "UnicodeData.txt")` is exactly this case. Quoted data is opaque (`(quote DATUM)` passes through), and a `let`/`lambda` rebinding never triggers the substitution — the reduction only fires inside a foldable primitive's argument position, so the walk stays sound without full lexical-scope tracking. Same pass also rewrites `(with-open-file (var <literal utf-8 path> [:external-format :UTF-8]) BODY...)` into `(with-input-from-string (var <inlined contents>) BODY...)` when the path names a UTF-8 file on disk, chunked at 20k Java-char boundaries and reassembled at runtime via `(concatenate 'string CHUNK1 ...)` so the JVM 65535 UTF-8 byte per-string ceiling is never crossed — a 1.9 MB UnicodeData.txt splits into ~64 chunks. Interpreter path is unaffected: `LoadInliner` runs only on the compile-to-file entry, and the interpreter keeps its runtime pathname/asdf functions in `LispEvaluator`. Coverage: `LoadInlinerTest` (per-pattern fold cases + a bundling case + a chunking case + a missing-file passthrough case).
+**Compile-time pathname folding (`cli.CompileTimePathnameFolder`)**: after `LoadInliner.inline` returns the flattened program, a walker folds the four ASDF/UIOP pathname primitives real libraries call at load time to build a bundled-data-file path: `(asdf:find-system 'NAME [nil])` → the literal `"name"` (or `nil` when unknown + `error-p` nil), `(asdf:system-source-directory X)` → the recorded `LispSystem.baseDir` + trailing `/`, `(asdf:system-relative-pathname X REL)` → that base with `REL` merged onto it (the one-call form; quri's `etld.lisp` names its bundled effective-TLD list this way, and this fold is what lets the `#.` marker resolve on the compile path at all -- `UserMacroExpander`'s macro-time evaluator has no system registry of its own), `(make-pathname ...)` → the composed namestring (via `eval/PathnameOps.makePathname`), and `(uiop:merge-pathnames* A [B])` → the merged namestring (`PathnameOps.mergePathnames`). A top-level `(defparameter *X* <folded string>)` is recorded so a later primitive whose argument is a reference to `*X*` reduces too — the uax-15 seed shape `(uiop:merge-pathnames* *data-directory* "UnicodeData.txt")` is exactly this case. Quoted data is opaque (`(quote DATUM)` passes through), and a `let`/`lambda` rebinding never triggers the substitution — the reduction only fires inside a foldable primitive's argument position, so the walk stays sound without full lexical-scope tracking. Same pass also rewrites `(with-open-file (var <literal utf-8 path> [:external-format :UTF-8]) BODY...)` into `(with-input-from-string (var <inlined contents>) BODY...)` when the path names a UTF-8 file on disk, chunked at 20k Java-char boundaries and reassembled at runtime via `(concatenate 'string CHUNK1 ...)` so the JVM 65535 UTF-8 byte per-string ceiling is never crossed — a 1.9 MB UnicodeData.txt splits into ~64 chunks. **The bundling rewrite skips a path the program itself opens for OUTPUT** (`collectWrittenPaths`, a pre-pass over the whole program collecting literal namestrings behind `:output`/`:append`): baking the compile-time contents of a file the program then WRITES would make it read stale data — an append-then-read round trip would answer whatever was on disk when it was compiled. This is the only shape where the rewrite is not conservative, and it fails SILENTLY, which is why the guard is a pre-pass rather than a local check. Interpreter path is unaffected: `LoadInliner` runs only on the compile-to-file entry, and the interpreter keeps its runtime pathname/asdf functions in `LispEvaluator`. Coverage: `LoadInlinerTest` (per-pattern fold cases + a bundling case + a chunking case + a missing-file passthrough case + `doesNotBundleAFileTheProgramItselfWrites`) and the ci-spec case `open-if-exists-append-keeps-the-existing-content`.
 
 **Interpreter**: `asdf:defsystem` is an `evalCons` case on the constant `LispNames.ASDF_DEFSYSTEM` (special form — options are data); `asdf:load-system` is a global function registered next to `load`/`require` in `LispEvaluator`, accepts computed names, drives `loadFile` with the system's `baseDir` pushed onto `loadDirStack` (so components and dep-`.asd` lookups resolve against the `.asd` dir). Per-evaluator state: `asdfSystems`/`loadedSystems`/`loadingSystems` + `systemPath`.
 
@@ -188,3 +188,41 @@ What alexandria still does NOT get (the list is user-visible in `doc/*/guides/as
 Residue, both dead in esrap and warned about at compile time: `set` and `break` are undefined (a swank-hook branch and the rule-tracing debugger entry). `char-name` answers nil for a graphic character, which is CL; SBCL's Unicode NAME (`DIGIT_ZERO`) is an extension, and it is the only difference between esrap's parse-error report here and on SBCL.
 
 Docs: `doc/*/guides/asdf-systems.md` + `reference/functions/asdf-{defsystem,load-system}.md` (+ catalog/nav/packages.md); phased roadmap in `.todo/054-asdf-support.md`.
+
+## Built-in systems have `:depends-on` edges of their own (todo-231)
+
+`BuiltinSystems.DEPENDENCIES` records the edges BETWEEN shim systems; both
+loaders (`LispEvaluator.loadSystem`, `cli.LoadInliner.spliceSystem`) load/splice
+them first, exactly like a third-party `.asd`'s. One edge exists:
+`flexi-streams -> trivial-gray-streams`, because the flexi shim's in-memory
+octet streams are real Gray streams and the protocol must be defined before
+their `defclass` runs (`.kb/gray-streams.md`). Real flexi-streams declares the
+same dependency for the same reason.
+
+The uiop stub also grew a temporary-file quartet on this path --
+`ensure-directory-pathname`, `default-temporary-directory`,
+`delete-file-if-exists` (prelude Lisp) and `with-temporary-file`, which is a
+MACRO and therefore cannot reach `expandUiopStubCall` (that only sees
+function-call shapes). It is a real built-in expansion, the `usocket:with-*`
+pattern: dispatched in `LispEvaluator.evalCons` and in both expression
+compilers, and expanding into `%temp-file-name` + `open` + a cleanup. Two
+consequences worth knowing:
+
+- a LITERALLY true `:keep` drops the delete from the expansion entirely rather
+  than emitting a never-taken `delete-file`, which is what keeps smart-buffer's
+  spill path clear of the WASM backends' unlink-shaped call-time error;
+- `%temp-file-name` and `uiop:delete-file-if-exists` are reached only from that
+  expansion, which runs INSIDE the expression compilers -- so both are selected
+  by `LispPreludeLibrary.referencedBySurfaceForm` and rooted in
+  `LibraryDefunPruner` the way `%make-broadcast-stream` is. Without that the
+  compile paths emitted "%TEMP-FILE-NAME is undefined".
+
+`EnvironmentLibrary.process` moved to AFTER the whole library-splice chain in
+`RontoLispCli` for the same reason: `uiop:default-temporary-directory` reads
+`TMPDIR` through `uiop:getenv`, and with the pass upstream of the splice a
+smart-buffer program failed the `--component` compile with "compiled without
+EnvironmentLibrary.process".
+
+Finally, the individual-form substitution tier gained `eval.AlexandriaSymbols`
+(alexandria's `maybe-intern`) next to `Uax15Tables` and `QuriEtldTables` -- see
+`.kb/packages.md` for what it fixes and when it can be deleted.

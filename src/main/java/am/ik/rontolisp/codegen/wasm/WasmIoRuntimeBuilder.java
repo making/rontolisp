@@ -71,9 +71,11 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// path_open(dirfd=3, dirflags=0, path_ptr=off+1, path_len=plen,
-		// oflags=(read: 0, write: CREAT|TRUNC=9),
+		// oflags=(read: 0, write: CREAT|TRUNC=9, append: CREAT=1),
 		// fs_rights_base=(read: FD_READ=2, write: FD_WRITE|FD_SEEK|FD_TELL=100),
-		// fs_rights_inheriting=0, fdflags=0, fd_out=OPEN_FD_ADDR)
+		// fs_rights_inheriting=0, fdflags=(append: APPEND=1, else 0),
+		// fd_out=OPEN_FD_ADDR).
+		// MODE here is WasmOpenCompiler.wasmMode: 0 read / 1 write / 2 append.
 		i32(w, 3);
 		i32(w, 0);
 		getLocal(w, OFF);
@@ -86,7 +88,17 @@ final class WasmIoRuntimeBuilder {
 		w.write(Type.I32);
 		i32(w, 0);
 		w.write(Instruction.ELSE);
+		// mode 2 = :append -- O_CREAT alone, because O_TRUNC would discard exactly the
+		// content the append is there to keep.
+		getLocal(w, MODE);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		i32(w, 1);
+		w.write(Instruction.ELSE);
 		i32(w, 9);
+		w.write(Instruction.END);
 		w.write(Instruction.END);
 		getLocal(w, MODE);
 		w.write(Instruction.I32_EQZ);
@@ -100,7 +112,11 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(0);
-		i32(w, 0);
+		// fdflags = FDFLAGS_APPEND (1) for mode 2, 0 otherwise -- the i32.eq result IS
+		// the flag value.
+		getLocal(w, MODE);
+		i32(w, 2);
+		w.write(Instruction.I32_EQ);
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);

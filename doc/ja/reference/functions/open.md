@@ -2,7 +2,7 @@
 
 `(open filename &optional direction element-type)`
 
-ファイルを開いてストリームを返します。省略可能な direction はリテラルのキーワード `:input`（デフォルト。読み込み用に開く）または `:output`（作成または切り詰めて書き込み用に開く）でなければなりません。コンパイラがファイルモードを静的に決定できるよう、これはリテラルである必要があります。省略可能な element type（これもリテラル）はストリームの種類を選択します。`'character`（デフォルト）は `read`/`read-line`/`write-line` 用のテキストストリームを、`'(unsigned-byte 8)` は `read-byte`/`write-byte`/`read-sequence`/`write-sequence` 用のバイナリストリームを開きます。返されるストリームは不透明なハンドル（インタプリタ/JVM ではストリームテーブルへのインデックス、WASM では WASI ファイルディスクリプタ）で、その実行内でのみ有効です。対応する読み書き関数に渡したうえで `close` してください。WASM ではパスは最初の preopen ディレクトリを基準に解決されるため、`--dir` を付けて実行してください。ストリームを自動的にクローズする `with-open-file` の利用を推奨します。
+ファイルを開いてストリームを返します。省略可能な direction はリテラルのキーワード `:input`（デフォルト。読み込み用に開く）または `:output`（作成または切り詰めて書き込み用に開く）でなければなりません。コンパイラがファイルモードを静的に決定できるよう、これはリテラルである必要があります。キーワード引数形式 `(open filename :direction :output :if-exists :append)` は既存ファイルを切り詰めずに書き込み用に開き、すべての書き込みが末尾に追加されます。`:if-exists`/`:if-does-not-exist`/`:external-format` のそれ以外の値は、ネイティブの挙動と一致するものだけを受け付けます。省略可能な element type（これもリテラル）はストリームの種類を選択します。`'character`（デフォルト）は `read`/`read-line`/`write-line` 用のテキストストリームを、`'(unsigned-byte 8)` は `read-byte`/`write-byte`/`read-sequence`/`write-sequence` 用のバイナリストリームを開きます。返されるストリームは不透明なハンドル（インタプリタ/JVM ではストリームテーブルへのインデックス、WASM では WASI ファイルディスクリプタ）で、その実行内でのみ有効です。対応する読み書き関数に渡したうえで `close` してください。WASM ではパスは最初の preopen ディレクトリを基準に解決されるため、`--dir` を付けて実行してください。ストリームを自動的にクローズする `with-open-file` の利用を推奨します。
 
 ```console
 (let ((s (open "data.txt")))

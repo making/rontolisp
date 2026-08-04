@@ -5817,6 +5817,7 @@ public final class LispMacroExpander {
 		LispVal filename = specParts.get(1);
 		String direction = LispNames.INPUT_KEYWORD;
 		boolean binary = false;
+		boolean append = false;
 		for (int i = 2; i < specParts.size(); i += 2) {
 			if (specParts.get(i) instanceof LispSymbol key && LispNames.DIRECTION_KEYWORD.equals(key.name())) {
 				if (i + 1 >= specParts.size() || !(specParts.get(i + 1) instanceof LispSymbol dir)
@@ -5833,6 +5834,13 @@ public final class LispMacroExpander {
 							+ " :element-type must be the literal 'character or '(unsigned-byte 8)");
 				}
 				binary = isBinaryElementTypeLiteral(specParts.get(i + 1));
+			}
+			else if (specParts.get(i) instanceof LispSymbol key && i + 1 < specParts.size()
+					&& isAppendIfExists(key.name(), specParts.get(i + 1))) {
+				// :if-exists :append is REAL (smart-buffer's disk-spill path writes
+				// every chunk past the memory limit with it): it normalizes into the
+				// :append pseudo-direction every backend's open understands.
+				append = true;
 			}
 			else if (specParts.get(i) instanceof LispSymbol key && (":EXTERNAL-FORMAT".equals(key.name())
 					|| ":IF-EXISTS".equals(key.name()) || ":IF-DOES-NOT-EXIST".equals(key.name()))) {
@@ -5856,10 +5864,27 @@ public final class LispMacroExpander {
 						LispNames.WITH_OPEN_FILE + " supports only the :direction and :element-type options");
 			}
 		}
+		if (append && LispNames.OUTPUT_KEYWORD.equals(direction)) {
+			direction = LispNames.APPEND_KEYWORD;
+		}
 		List<LispVal> body = parts.subList(2, parts.size());
 		List<LispVal> openParts = new java.util.ArrayList<>(
 				List.of(new LispSymbol(LispNames.OPEN), filename, new LispSymbol(direction)));
 		return buildWithOpenFile(var, openParts, binary, body, unwindProtect);
+	}
+
+	/**
+	 * Whether an {@code open}/{@code with-open-file} option pair is {@code :if-exists
+	 * :append} -- the ONE non-default value of the three ignorable options that is
+	 * implemented rather than rejected. It normalizes into the
+	 * {@link LispNames#APPEND_KEYWORD} pseudo-direction (see {@code compiler.OpenModes}).
+	 * @param option the option keyword name
+	 * @param value the option value as written
+	 * @return true for {@code :if-exists :append}
+	 */
+	public static boolean isAppendIfExists(String option, LispVal value) {
+		return ":IF-EXISTS".equals(option) && value instanceof LispSymbol sym
+				&& LispNames.APPEND_KEYWORD.equals(sym.name());
 	}
 
 	/**
@@ -7327,6 +7352,123 @@ public final class LispMacroExpander {
 		return expr instanceof LispNil || (expr instanceof LispSymbol sym && "NIL".equals(sym.name()));
 	}
 
+	private static boolean isLiteralTrue(LispVal expr) {
+		return expr instanceof LispTrue || (expr instanceof LispSymbol sym && "T".equals(sym.name()));
+	}
+
+	private static final String WTF_RESULT_VAR = "__wtf_result";
+
+	private static final String WTF_PATH_VAR = "__wtf_path";
+
+	private static final String WTF_STREAM_VAR = "__wtf_stream";
+
+	/**
+	 * Expands {@code (uiop:with-temporary-file (:stream S :pathname P ...) body...)}: the
+	 * one uiop {@code with-*} macro rontolisp implements for real instead of stubbing,
+	 * because smart-buffer's disk-spill path RUNS it (a multipart body past the memory
+	 * limit is written to the temporary file and its pathname handed back).
+	 *
+	 * <pre>
+	 * (uiop:with-temporary-file (:stream s :pathname p :directory d :keep t) body...) -&gt;
+	 *   (let* ((p (%temp-file-name d nil nil))
+	 *          (s (open p :output)))
+	 *     (unwind-protect (progn body...) (progn (close s))))
+	 * </pre>
+	 *
+	 * The option list is UIOP's keyword plist and every option keyword must be literal:
+	 * {@code :stream} / {@code :pathname} name the variables (a fixed internal name
+	 * stands in for an omitted one, so a body may use either, both or neither),
+	 * {@code :directory} / {@code :prefix} / {@code :type} are ordinary expressions
+	 * feeding {@link LispNames#TEMP_FILE_NAME}, {@code :direction} and
+	 * {@code :element-type} are the {@code open} literals, and {@code :keep} decides the
+	 * delete. A LITERALLY true {@code :keep} (smart-buffer's) drops the delete from the
+	 * expansion altogether rather than emitting a never-taken {@code delete-file} -- that
+	 * is what keeps the spill path clear of the WASM backends' unlink-shaped call-time
+	 * error. UIOP's remaining options ({@code :suffix}, {@code :after},
+	 * {@code :want-*-p}, {@code :external-format}) are rejected rather than silently
+	 * dropped: each one changes what the body sees.
+	 * @param cons the with-temporary-file expression
+	 * @param unwindProtect whether the expansion may use {@code unwind-protect}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithTemporaryFile(LispCons cons, boolean unwindProtect) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + " expects an option plist as the first argument");
+		}
+		List<LispVal> options = parts.get(1) instanceof LispCons spec ? spec.toList() : List.of();
+		LispVal streamVar = null;
+		LispVal pathVar = null;
+		LispVal directory = LispNil.INSTANCE;
+		LispVal prefix = LispNil.INSTANCE;
+		LispVal type = LispNil.INSTANCE;
+		LispVal keep = LispNil.INSTANCE;
+		String direction = LispNames.OUTPUT_KEYWORD;
+		boolean binary = false;
+		for (int i = 0; i < options.size(); i += 2) {
+			if (i + 1 >= options.size() || !(options.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
+				throw new UnsupportedOperationException(
+						LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + " expects :option value pairs: " + cons.print());
+			}
+			LispVal value = options.get(i + 1);
+			switch (key.name()) {
+				case ":STREAM" -> streamVar = value;
+				case ":PATHNAME" -> pathVar = value;
+				case ":DIRECTORY" -> directory = value;
+				case ":PREFIX" -> prefix = value;
+				case ":TYPE" -> type = value;
+				case ":KEEP" -> keep = value;
+				case ":DIRECTION" -> {
+					if (!(value instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
+							|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+						throw new UnsupportedOperationException(LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED
+								+ " :direction must be the literal :input or :output");
+					}
+					direction = dir.name();
+				}
+				case ":ELEMENT-TYPE" -> binary = isBinaryElementTypeLiteral(value);
+				default -> throw new UnsupportedOperationException(
+						LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + ": unsupported option " + key.name());
+			}
+		}
+		if ((streamVar != null && !(streamVar instanceof LispSymbol))
+				|| (pathVar != null && !(pathVar instanceof LispSymbol))) {
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED + " :stream and :pathname must be variable names");
+		}
+		LispSymbol path = pathVar instanceof LispSymbol p ? p : new LispSymbol(WTF_PATH_VAR);
+		LispSymbol stream = streamVar instanceof LispSymbol s ? s : new LispSymbol(WTF_STREAM_VAR);
+		List<LispVal> openParts = new java.util.ArrayList<>(
+				List.of(new LispSymbol(LispNames.OPEN), path, new LispSymbol(direction)));
+		if (binary) {
+			openParts.add(unsignedByte8Literal());
+		}
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(path, fmtCall(LispNames.TEMP_FILE_NAME, directory, prefix, type))),
+						listToCons(List.of(stream, listToCons(openParts)))));
+		LispVal bodyExpr = prognOrNil(parts.subList(2, parts.size()));
+		List<LispVal> cleanup = new java.util.ArrayList<>();
+		cleanup.add(new LispSymbol(LispNames.PROGN));
+		cleanup.add(callOf(LispNames.CLOSE, stream));
+		LispVal delete = fmtCall(LispNames.UIOP_PKG + ":" + LispNames.DELETE_FILE_IF_EXISTS, path);
+		if (isLiteralNil(keep)) {
+			cleanup.add(delete);
+		}
+		else if (!isLiteralTrue(keep)) {
+			cleanup.add(listToCons(List.of(new LispSymbol(LispNames.UNLESS), keep, delete)));
+		}
+		LispVal cleanupExpr = listToCons(cleanup);
+		if (unwindProtect) {
+			return listToCons(
+					List.of(new LispSymbol(LispNames.LET_STAR), bindings, unwindProtectAround(bodyExpr, cleanupExpr)));
+		}
+		LispSymbol result = new LispSymbol(WTF_RESULT_VAR);
+		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET),
+				new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE), cleanupExpr, result));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, innerLet));
+	}
+
 	/**
 	 * If {@code cons} is a two-argument {@code (find-symbol NAME PKG)} whose package
 	 * designator is a literal, returns the equivalent {@code intern} of the canonical
@@ -8102,7 +8244,15 @@ public final class LispMacroExpander {
 						concNameGiven = true;
 						if (optValue instanceof LispSymbol s) {
 							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
-							concNameOverride = cqn == null ? s.name() : cqn.member();
+							String raw = cqn == null ? s.name() : cqn.member();
+							// :conc-name takes a STRING DESIGNATOR, and a keyword
+							// designates its name WITHOUT the colon -- fast-http's
+							// (defstruct (http (:conc-name :http-)) ... state) must
+							// define http-state, not :http-state. Keeping the colon
+							// produced accessors no call site could name, and the
+							// failure surfaced far away as "setf does not support
+							// place: FAST-HTTP.HTTP:HTTP-STATE".
+							concNameOverride = raw.startsWith(":") ? raw.substring(1) : raw;
 						}
 						else if (optValue instanceof LispString s) {
 							concNameOverride = s.value();
@@ -11808,8 +11958,38 @@ public final class LispMacroExpander {
 		GfLambdaList ll = parseGfLambdaList(parts.get(2), LispNames.DEFGENERIC, cons);
 		List<String> paramNames = ll.requiredNames();
 		String documentation = null;
+		String combination = null;
+		boolean mostSpecificLast = false;
 		List<LispCons> inlineMethods = new java.util.ArrayList<>();
 		for (int i = 3; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
+					&& ":METHOD-COMBINATION".equals(plainTypeName(optSym))) {
+				// (:method-combination NAME [:most-specific-first | :most-specific-last])
+				// -- the CLHS SHORT forms only; see ClosRegistry.SHORT_FORM_COMBINATIONS.
+				List<LispVal> option = optCons.toList();
+				if (option.size() < 2 || option.size() > 3 || !(option.get(1) instanceof LispSymbol nameArg)) {
+					throw new UnsupportedOperationException(LispNames.DEFGENERIC
+							+ " :method-combination expects a name and an optional order: " + parts.get(i).print());
+				}
+				combination = plainTypeName(nameArg);
+				if (!ClosRegistry.SHORT_FORM_COMBINATIONS.contains(combination)) {
+					throw new UnsupportedOperationException(LispNames.DEFGENERIC
+							+ " :method-combination supports the CLHS short forms only (progn/and/or/+/list/nconc/append/max/min), got "
+							+ combination);
+				}
+				if (option.size() == 3) {
+					String order = option.get(2) instanceof LispSymbol orderSym ? plainTypeName(orderSym) : "";
+					if (":MOST-SPECIFIC-LAST".equals(order)) {
+						mostSpecificLast = true;
+					}
+					else if (!":MOST-SPECIFIC-FIRST".equals(order)) {
+						throw new UnsupportedOperationException(LispNames.DEFGENERIC
+								+ " :method-combination order must be :most-specific-first or :most-specific-last, got "
+								+ option.get(2).print());
+					}
+				}
+				continue;
+			}
 			if (parts.get(i) instanceof LispCons optCons && optCons.car() instanceof LispSymbol optSym
 					&& ":DOCUMENTATION".equals(plainTypeName(optSym)) && optCons.cdr() instanceof LispCons docCons
 					&& docCons.car() instanceof LispString doc) {
@@ -11856,6 +12036,9 @@ public final class LispMacroExpander {
 			info.documentation(documentation);
 			closRegistry.registerGeneric(info);
 		}
+		// Recorded BEFORE the inline (:method progn ...) clauses expand: expandDefmethod
+		// accepts the combination name as a qualifier only once the generic carries it.
+		info.methodCombination(combination, mostSpecificLast);
 		if (ll.variadic()) {
 			info.markVariadic();
 		}
@@ -11921,20 +12104,41 @@ public final class LispMacroExpander {
 			throw new IllegalArgumentException(
 					LispNames.DEFMETHOD + " expects a name and a lambda list: " + cons.print());
 		}
-		// An optional qualifier (:before/:after/:around) precedes the lambda list.
+		// An optional qualifier (:before/:after/:around) precedes the lambda list. Under
+		// a short-form :method-combination the COMBINATION NAME is a qualifier too --
+		// (defmethod encode-slots progn ((o foo)) ...) -- and it is the only way to
+		// write a primary there; :before/:after are illegal in that case (CLHS), so
+		// they are rejected rather than silently ignored by the combined dispatcher.
+		ClosRegistry.GenericInfo declared = closRegistry.findGeneric(nameSym.name());
+		String combination = declared == null ? null : declared.methodCombination();
 		String qualifier = "";
 		int llIndex = 2;
 		if (parts.get(2) instanceof LispSymbol qSym) {
 			String qName = plainTypeName(qSym);
-			if (":BEFORE".equals(qName) || ":AFTER".equals(qName) || ":AROUND".equals(qName)) {
+			if (combination != null && combination.equals(qName)) {
+				qualifier = qName;
+				llIndex = 3;
+			}
+			else if (combination != null && (":BEFORE".equals(qName) || ":AFTER".equals(qName))) {
+				throw new UnsupportedOperationException(LispNames.DEFMETHOD + " " + nameSym.name() + ": " + qName
+						+ " is not allowed under the " + combination + " method combination (only "
+						+ combination.toLowerCase(java.util.Locale.ROOT) + " and :around)");
+			}
+			else if (":BEFORE".equals(qName) || ":AFTER".equals(qName) || ":AROUND".equals(qName)) {
 				qualifier = qName;
 				llIndex = 3;
 			}
 			else {
 				throw new UnsupportedOperationException(
-						LispNames.DEFMETHOD + " qualifier is not supported (only :before/:after/:around): " + qName
-								+ " in " + cons.print());
+						LispNames.DEFMETHOD + " qualifier is not supported (only :before/:after/:around"
+								+ (combination == null ? "" : "/" + combination.toLowerCase(java.util.Locale.ROOT))
+								+ "): " + qName + " in " + cons.print());
 			}
+		}
+		else if (combination != null) {
+			throw new UnsupportedOperationException(LispNames.DEFMETHOD + " " + nameSym.name()
+					+ ": a primary method under the " + combination + " method combination must carry "
+					+ combination.toLowerCase(java.util.Locale.ROOT) + " as its qualifier");
 		}
 		if (parts.size() <= llIndex) {
 			throw new IllegalArgumentException(LispNames.DEFMETHOD + " expects a lambda list: " + cons.print());
@@ -12959,6 +13163,10 @@ public final class LispMacroExpander {
 			@Nullable String builtinFallback) {
 		boolean variadic = generic.variadic();
 		List<ClosRegistry.MethodInfo> arounds = applicableMethods(generic, branchRep, ":AROUND", closRegistry);
+		String combination = generic.methodCombination();
+		if (combination != null) {
+			return shortFormEffectiveMethod(combination, generic, branchRep, arounds, params, closRegistry);
+		}
 		List<ClosRegistry.MethodInfo> befores = applicableMethods(generic, branchRep, ":BEFORE", closRegistry);
 		List<ClosRegistry.MethodInfo> primaries = applicableMethods(generic, branchRep, "", closRegistry);
 		List<ClosRegistry.MethodInfo> afters = applicableMethods(generic, branchRep, ":AFTER", closRegistry);
@@ -12969,6 +13177,53 @@ public final class LispMacroExpander {
 			return noApplicableMethod(generic.name(), params);
 		}
 		LispVal core = buildCore(befores, primaries, afters, params, generic.name(), variadic, builtinFallback);
+		if (arounds.isEmpty()) {
+			return core;
+		}
+		LispVal coreThunk = lambdaOf(params, core, variadic);
+		LispVal next = buildNextChain(arounds, 1, coreThunk, params, variadic);
+		return callWithNext(arounds.get(0).functionName(), next, params, variadic);
+	}
+
+	/**
+	 * The effective method under a short-form {@code :method-combination}: the operator
+	 * applied to EVERY applicable method carrying the combination name as its qualifier,
+	 * most specific first ({@code :most-specific-last} reverses), with {@code :around}
+	 * methods wrapping the whole thing exactly as in the standard combination.
+	 *
+	 * <pre>
+	 * (defgeneric g (x) (:method-combination progn :most-specific-last))
+	 * -&gt; (progn (m-least-specific nil x) ... (m-most-specific nil x))
+	 * </pre>
+	 *
+	 * The {@code next} argument of each call is nil: CLHS gives short-form primaries no
+	 * {@code call-next-method} (only an {@code :around} has one, and its next is this
+	 * combined form). No applicable method is the standard no-applicable-method error,
+	 * not a silently empty {@code (progn)} -- an empty {@code (and)} would answer t and
+	 * an empty {@code (+)} zero, which would hide a missing method.
+	 */
+	private static LispVal shortFormEffectiveMethod(String combination, ClosRegistry.GenericInfo generic,
+			ClosRegistry.@Nullable MethodInfo branchRep, List<ClosRegistry.MethodInfo> arounds, List<LispVal> params,
+			ClosRegistry closRegistry) {
+		boolean variadic = generic.variadic();
+		List<ClosRegistry.MethodInfo> primaries = applicableMethods(generic, branchRep, combination, closRegistry);
+		if (primaries.isEmpty() && arounds.isEmpty()) {
+			return noApplicableMethod(generic.name(), params);
+		}
+		LispVal core;
+		if (primaries.isEmpty()) {
+			core = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+					new LispString("No applicable primary method: " + generic.name())));
+		}
+		else {
+			List<ClosRegistry.MethodInfo> ordered = generic.mostSpecificLast() ? primaries.reversed() : primaries;
+			List<LispVal> combined = new java.util.ArrayList<>();
+			combined.add(new LispSymbol(combination));
+			for (ClosRegistry.MethodInfo m : ordered) {
+				combined.add(callWithNext(m.functionName(), LispNil.INSTANCE, params, variadic));
+			}
+			core = listToCons(combined);
+		}
 		if (arounds.isEmpty()) {
 			return core;
 		}

@@ -223,9 +223,17 @@ public final class LispEvaluator {
 	 * A user macro: required parameters, an optional {@code &rest}/{@code &body}
 	 * parameter, the body forms, and the environment captured at definition time.
 	 */
-	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body,
-			Environment env) {
+	private record UserMacro(List<LispSymbol> required, @Nullable LispSymbol rest, List<LispVal> body, Environment env,
+			String definitionPackage) {
 	}
+
+	/**
+	 * How many user-defined function bodies are currently on the stack. Zero means the
+	 * form being evaluated is a TOP-LEVEL one, whose file's package the resolver still
+	 * has current -- which is what decides the package a user macro expands in (see
+	 * {@code expandMacroCall}).
+	 */
+	private int functionBodyDepth;
 
 	private SourceLoader sourceLoader = SourceLoader.fileSystem();
 
@@ -2851,7 +2859,13 @@ public final class LispEvaluator {
 		}
 		if (BuiltinSystems.isBuiltin(name)) {
 			// A system rontolisp provides itself (e.g. "usocket" or a dependency shim):
-			// evaluate the embedded library instead of locating a NAME.asd.
+			// evaluate the embedded library instead of locating a NAME.asd. Its own
+			// built-in :depends-on edges come first, exactly like a third-party
+			// system's (flexi-streams needs the Gray protocol trivial-gray-streams
+			// splices before its vector-stream defclass runs).
+			for (String dependency : BuiltinSystems.dependencies(name)) {
+				loadSystem(dependency);
+			}
 			if (LispNames.USOCKET_PKG.equals(name)) {
 				ensureUsocketLoaded();
 			}
@@ -3700,6 +3714,10 @@ public final class LispEvaluator {
 					return evalWitExport(cons);
 				case LispNames.WIT_IMPORT_QUALIFIED:
 					return evalWitImport(cons);
+				case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED:
+					// The one uiop with-* macro with a real expansion (smart-buffer's
+					// disk-spill path runs it), the usocket:with-* pattern.
+					return eval(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), env);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
@@ -4689,7 +4707,7 @@ public final class LispEvaluator {
 			catch (IllegalArgumentException ex) {
 				throw new LispEvalException(op + " " + name.name() + ": " + ex.getMessage());
 			}
-			return new UserMacro(List.of(), argsVar, List.of(wrapped), env);
+			return new UserMacro(List.of(), argsVar, List.of(wrapped), env, this.packageResolver.currentPackageName());
 		}
 		if (!isSimpleMacroLambdaList(paramList)) {
 			LispSymbol argsVar = new LispSymbol(MACRO_ARGS_VAR);
@@ -4711,7 +4729,7 @@ public final class LispEvaluator {
 			catch (IllegalArgumentException ex) {
 				throw new LispEvalException(op + " " + name.name() + ": " + ex.getMessage());
 			}
-			return new UserMacro(List.of(), argsVar, List.of(wrapped), env);
+			return new UserMacro(List.of(), argsVar, List.of(wrapped), env, this.packageResolver.currentPackageName());
 		}
 		List<LispSymbol> required = new ArrayList<>();
 		LispSymbol rest = null;
@@ -4723,7 +4741,7 @@ public final class LispEvaluator {
 			}
 			required.add(param);
 		}
-		return new UserMacro(required, rest, body, env);
+		return new UserMacro(required, rest, body, env, this.packageResolver.currentPackageName());
 	}
 
 	/**
@@ -5319,6 +5337,23 @@ public final class LispEvaluator {
 				dynamicParams.add(restName);
 			}
 		}
+		// Common Lisp expands a macro while COMPILING the calling file, so *package* is
+		// that file's. The interpreter expands lazily instead, at call time, and only a
+		// TOP-LEVEL call site still has its file's package current -- a call buried in a
+		// function body is expanded long after the file was read, with whatever package
+		// the caller happens to be in. For those the macro's own DEFINING package is the
+		// closest available answer (and the exact one for the overwhelmingly common case
+		// of a macro used in the file that defines it): fast-http's callback-data
+		// expands (alexandria:format-symbol t "~A-~A" :callbacks name) into an accessor
+		// call, and a cl-user caller got a bare CALLBACKS-HEADER-FIELD instead of the
+		// fast-http.parser one. A top-level call site KEEPS the current package, which
+		// is both correct and what a macro generating names for the file that calls it
+		// needs (trivia's lispn:define-namespace).
+		String callerPackage = this.packageResolver.currentPackageName();
+		boolean swapPackage = this.functionBodyDepth > 0 && !callerPackage.equals(macro.definitionPackage());
+		if (swapPackage) {
+			this.packageResolver.setCurrentPackage(macro.definitionPackage());
+		}
 		try {
 			LispVal expansion = LispNil.INSTANCE;
 			for (LispVal bodyExpr : macro.body()) {
@@ -5327,6 +5362,9 @@ public final class LispEvaluator {
 			return expansion;
 		}
 		finally {
+			if (swapPackage) {
+				this.packageResolver.setCurrentPackage(callerPackage);
+			}
 			if (dynamicParams != null) {
 				for (int i = dynamicParams.size() - 1; i >= 0; i--) {
 					this.dynamicBindings.pop(dynamicParams.get(i));
@@ -7173,6 +7211,10 @@ public final class LispEvaluator {
 					dynamicParams.add(restName);
 				}
 			}
+			// See expandMacroCall: the depth tells a macro expansion whether its call
+			// site is a TOP-LEVEL form (whose file's package is still current) or one
+			// buried in a function body evaluated long after its file was read.
+			this.functionBodyDepth++;
 			try {
 				LispVal result = LispNil.INSTANCE;
 				for (LispVal bodyExpr : lambda.body()) {
@@ -7181,6 +7223,7 @@ public final class LispEvaluator {
 				return result;
 			}
 			finally {
+				this.functionBodyDepth--;
 				if (dynamicParams != null) {
 					for (int i = dynamicParams.size() - 1; i >= 0; i--) {
 						this.dynamicBindings.pop(dynamicParams.get(i));

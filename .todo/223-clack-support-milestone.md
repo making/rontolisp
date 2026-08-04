@@ -106,7 +106,19 @@ JVM and component legs are green too (or their divergence is recorded).
 7. `.todo/230` `subtypep` on class metaobjects (old-Clack middleware detection)
    — 低〜中, optional
 8. `.todo/231` lack-request/lack-response + middleware ecosystem (quri lineage)
-   — 高, stretch/survey
+   — 高, stretch/survey — **DONE 2026-08-04** (see `.kb/lack.md`). The whole set
+   loads verbatim — lack-request/-response/-util, the accesslog / auth-basic /
+   mount / static / when / session / csrf middleware, lack-app-file, plus
+   http-body, fast-http, yason, smart-buffer, circular-streams — and body
+   parsing (urlencoded AND multipart) plus a session round trip run for real,
+   pinned by `LackEcosystemE2eTest`. Six GENERAL gaps closed on the way:
+   short-form `:method-combination` (`.todo/234`, closed with it),
+   `:if-exists :append`, `uiop:with-temporary-file` + the temporary-file trio,
+   flexi-streams' in-memory octet streams as real Gray streams, a keyword
+   `:conc-name`, and two `*package*`-derived symbol-construction bugs
+   (`.kb/packages.md`; the general fix is `.todo/255`). The lack chain itself is
+   INTERPRETER-ONLY, blocked by two PRE-EXISTING compile-backend ceilings now
+   tracked as `.todo/256`.
 
 ## Acceptance (interpreter + JVM + WASM component; P1 = call-time error)
 

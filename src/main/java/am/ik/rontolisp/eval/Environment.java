@@ -3994,10 +3994,11 @@ public final class Environment implements Scope {
 			// (UTF-8 is the native format), :if-exists and :if-does-not-exist (the
 			// create/supersede defaults already match) are accepted and dropped.
 			if (args.size() > 2 && args.get(1) instanceof LispSymbol first && first.name().startsWith(":")
-					&& !LispNames.INPUT_KEYWORD.equals(first.name())
-					&& !LispNames.OUTPUT_KEYWORD.equals(first.name())) {
+					&& !LispNames.INPUT_KEYWORD.equals(first.name()) && !LispNames.OUTPUT_KEYWORD.equals(first.name())
+					&& !LispNames.APPEND_KEYWORD.equals(first.name())) {
 				LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 				LispVal elementType = null;
+				boolean appendOption = false;
 				for (int i = 1; i < args.size(); i += 2) {
 					if (i + 1 >= args.size() || !(args.get(i) instanceof LispSymbol key)
 							|| !key.name().startsWith(":")) {
@@ -4007,13 +4008,20 @@ public final class Environment implements Scope {
 						case ":DIRECTION" -> direction = args.get(i + 1);
 						case ":ELEMENT-TYPE" -> elementType = args.get(i + 1);
 						case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
-							if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), args.get(i + 1))) {
+							if (LispMacroExpander.isAppendIfExists(key.name(), args.get(i + 1))) {
+								appendOption = true;
+							}
+							else if (!LispMacroExpander.ignorableOpenOptionValue(key.name(), args.get(i + 1))) {
 								throw new LispEvalException(
 										LispNames.OPEN + ": " + key.name() + " supports only the native default value");
 							}
 						}
 						default -> throw new LispEvalException(LispNames.OPEN + ": unsupported option " + key.name());
 					}
+				}
+				if (appendOption && direction instanceof LispSymbol dirSym
+						&& LispNames.OUTPUT_KEYWORD.equals(dirSym.name())) {
+					direction = new LispSymbol(LispNames.APPEND_KEYWORD);
 				}
 				List<LispVal> positional = new ArrayList<>(List.of(args.get(0), direction));
 				if (elementType != null) {
@@ -4022,12 +4030,15 @@ public final class Environment implements Scope {
 				args = positional;
 			}
 			boolean output = false;
+			boolean append = false;
 			if (args.size() > 1) {
-				if (!(args.get(1) instanceof LispSymbol dir) || !(LispNames.INPUT_KEYWORD.equals(dir.name())
-						|| LispNames.OUTPUT_KEYWORD.equals(dir.name()))) {
+				if (!(args.get(1) instanceof LispSymbol dir)
+						|| !(LispNames.INPUT_KEYWORD.equals(dir.name()) || LispNames.OUTPUT_KEYWORD.equals(dir.name())
+								|| LispNames.APPEND_KEYWORD.equals(dir.name()))) {
 					throw new LispEvalException(LispNames.OPEN + " supports :input and :output directions");
 				}
-				output = LispNames.OUTPUT_KEYWORD.equals(dir.name());
+				append = LispNames.APPEND_KEYWORD.equals(dir.name());
+				output = append || LispNames.OUTPUT_KEYWORD.equals(dir.name());
 			}
 			// The optional third argument is the element type: '(unsigned-byte 8) opens a
 			// binary stream, 'character (the default) a text stream.
@@ -4037,12 +4048,20 @@ public final class Environment implements Scope {
 			}
 			try {
 				Closeable stream;
+				// :append opens CREATE + APPEND instead of the default
+				// CREATE + TRUNCATE_EXISTING, so an existing file keeps its content and
+				// every write lands at the end.
+				java.nio.file.OpenOption[] writeOptions = append
+						? new java.nio.file.OpenOption[] { java.nio.file.StandardOpenOption.CREATE,
+								java.nio.file.StandardOpenOption.WRITE, java.nio.file.StandardOpenOption.APPEND }
+						: new java.nio.file.OpenOption[0];
 				if (binary) {
-					stream = output ? new BufferedOutputStream(Files.newOutputStream(Path.of(path.value())))
+					stream = output
+							? new BufferedOutputStream(Files.newOutputStream(Path.of(path.value()), writeOptions))
 							: new BufferedInputStream(Files.newInputStream(Path.of(path.value())));
 				}
 				else {
-					stream = output ? Files.newBufferedWriter(Path.of(path.value()))
+					stream = output ? Files.newBufferedWriter(Path.of(path.value()), writeOptions)
 							: Files.newBufferedReader(Path.of(path.value()));
 				}
 				long handle = nextStreamHandle.getAndIncrement();

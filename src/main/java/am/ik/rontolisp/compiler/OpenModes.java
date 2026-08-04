@@ -12,10 +12,20 @@ import am.ik.rontolisp.LispVal;
 /**
  * Resolves the literal {@code open} arguments to a compile-time file mode shared by the
  * JVM and WASM compilers. The form is {@code (open path [direction [element-type]])}
- * where the direction must be the literal {@code :input} (default) or {@code :output}
- * keyword and the element type must be the literal {@code '(unsigned-byte 8)} (binary) or
- * {@code 'character} (text, default). The mode encoding is {@code 0} = text input,
- * {@code 1} = text output, {@code 2} = binary input, {@code 3} = binary output.
+ * where the direction must be the literal {@code :input} (default), {@code :output} or
+ * {@code :append} keyword and the element type must be the literal
+ * {@code '(unsigned-byte 8)} (binary) or {@code 'character} (text, default). The mode
+ * encoding is {@code 0} = text input, {@code 1} = text output, {@code 2} = binary input,
+ * {@code 3} = binary output, {@code 5} = text output APPENDING, {@code 7} = binary output
+ * appending.
+ *
+ * <p>
+ * {@code :append} is NOT a Common Lisp direction: it is the normalized spelling of
+ * {@code :direction :output :if-exists :append}, produced here and by
+ * {@code LispMacroExpander.expandWithOpenFile} so that every backend reads one literal
+ * token instead of re-deriving the option pair. smart-buffer's disk-spill path is the
+ * caller that made it real -- every chunk past the memory limit appends to the temporary
+ * file.
  */
 public final class OpenModes {
 
@@ -24,6 +34,12 @@ public final class OpenModes {
 
 	/** Bit set in the mode when the stream is binary ({@code '(unsigned-byte 8)}). */
 	public static final int BINARY_BIT = 2;
+
+	/**
+	 * Bit set in the mode when an output stream APPENDS instead of truncating
+	 * ({@code :if-exists :append}). Never set without {@link #OUTPUT_BIT}.
+	 */
+	public static final int APPEND_BIT = 4;
 
 	private OpenModes() {
 	}
@@ -41,11 +57,13 @@ public final class OpenModes {
 	public static LispCons normalizeKeywordForm(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || !(parts.get(2) instanceof LispSymbol first) || !first.name().startsWith(":")
-				|| LispNames.INPUT_KEYWORD.equals(first.name()) || LispNames.OUTPUT_KEYWORD.equals(first.name())) {
+				|| LispNames.INPUT_KEYWORD.equals(first.name()) || LispNames.OUTPUT_KEYWORD.equals(first.name())
+				|| LispNames.APPEND_KEYWORD.equals(first.name())) {
 			return cons;
 		}
 		LispVal direction = new LispSymbol(LispNames.INPUT_KEYWORD);
 		LispVal elementType = null;
+		boolean append = false;
 		for (int i = 2; i < parts.size(); i += 2) {
 			if (i + 1 >= parts.size() || !(parts.get(i) instanceof LispSymbol key) || !key.name().startsWith(":")) {
 				throw new UnsupportedOperationException("open expects :option value pairs: " + cons.print());
@@ -54,13 +72,24 @@ public final class OpenModes {
 				case ":DIRECTION" -> direction = parts.get(i + 1);
 				case ":ELEMENT-TYPE" -> elementType = parts.get(i + 1);
 				case ":EXTERNAL-FORMAT", ":IF-EXISTS", ":IF-DOES-NOT-EXIST" -> {
-					if (!am.ik.rontolisp.macro.LispMacroExpander.ignorableOpenOptionValue(key.name(),
+					if (am.ik.rontolisp.macro.LispMacroExpander.isAppendIfExists(key.name(), parts.get(i + 1))) {
+						append = true;
+					}
+					else if (!am.ik.rontolisp.macro.LispMacroExpander.ignorableOpenOptionValue(key.name(),
 							parts.get(i + 1))) {
 						throw new UnsupportedOperationException(
 								"open: " + key.name() + " supports only the native default value");
 					}
 				}
 				default -> throw new UnsupportedOperationException("open: unsupported option " + key.name());
+			}
+		}
+		if (append) {
+			// :if-exists :append implies output; a source that spelled :direction :input
+			// alongside it is contradictory, and CL ignores :if-exists on an input
+			// stream -- so the append only takes effect on an output direction.
+			if (direction instanceof LispSymbol dir && LispNames.OUTPUT_KEYWORD.equals(dir.name())) {
+				direction = new LispSymbol(LispNames.APPEND_KEYWORD);
 			}
 		}
 		List<LispVal> positional = new java.util.ArrayList<>(List.of(parts.get(0), parts.get(1), direction));
@@ -91,8 +120,11 @@ public final class OpenModes {
 		else if (parts.get(2) instanceof LispSymbol dir && LispNames.OUTPUT_KEYWORD.equals(dir.name())) {
 			mode = OUTPUT_BIT;
 		}
+		else if (parts.get(2) instanceof LispSymbol dir && LispNames.APPEND_KEYWORD.equals(dir.name())) {
+			mode = OUTPUT_BIT | APPEND_BIT;
+		}
 		else {
-			throw new UnsupportedOperationException("open requires a literal :input or :output direction");
+			throw new UnsupportedOperationException("open requires a literal :input, :output or :append direction");
 		}
 		if (parts.size() > 3) {
 			if (isBinaryElementType(unquote(parts.get(3)))) {

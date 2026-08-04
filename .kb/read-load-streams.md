@@ -210,3 +210,24 @@ that loop are load-bearing rather than stylistic:
   pre-existing component divergence -- any slurp loop hits it -- and the
   **re-evaluation trigger** is the adapter learning to answer 0 bytes/EOF idempotently;
   until then, read-loops here must not read past EOF twice.
+
+**`:if-exists :append` (todo-231, smart-buffer's disk spill)**: the ONE non-default
+value of the three otherwise-ignorable `open`/`with-open-file` options that is
+implemented rather than rejected. `:direction :output :if-exists :append`
+normalizes into the `:append` PSEUDO-DIRECTION -- not a CL direction, produced only
+by `compiler.OpenModes.normalizeKeywordForm` and
+`LispMacroExpander.expandWithOpenFile` (`LispMacroExpander.isAppendIfExists` is the
+shared predicate) -- so every backend reads ONE literal token where the source
+wrote an option pair. `OpenModes.APPEND_BIT` (4) extends the mode encoding to
+`5` = text output appending and `7` = binary output appending. Per backend:
+interpreter `Files.newBufferedWriter`/`newOutputStream` with
+`CREATE + WRITE + APPEND`; JVM two extra `_open` arms over
+`FileWriter(String,boolean)` / `FileOutputStream(String,boolean)` (the mode
+constant no longer fits `ICONST_0..3`, hence `emitIntConst`); WASM
+`WasmOpenCompiler.wasmMode` collapses the mode to 0 read / 1 write / 2 append and
+`_open` answers `oflags = O_CREAT` alone (O_TRUNC would discard exactly what the
+append is there to keep) plus `fdflags = FDFLAGS_APPEND` -- the `i32.eq` result IS
+the flag value. An `:if-exists :append` alongside `:direction :input` is ignored,
+as in CL. Pinned by `LispEvaluatorTest#evalOpenAppendKeepsTheExistingContent`,
+`JvmLispCompilerTest#compileAndRunOpenAppend` and the ci-spec case
+`open-if-exists-append-keeps-the-existing-content` (all four backends).

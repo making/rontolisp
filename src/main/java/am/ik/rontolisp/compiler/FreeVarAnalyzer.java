@@ -345,6 +345,13 @@ public final class FreeVarAnalyzer {
 						case LispNames.WITH_OPEN_STREAM ->
 							collectFreeVars(LispMacroExpander.expandWithOpenStream(cons, true), boundVars,
 									knownFunctions, globals, specialNames, freeVars);
+						// uiop:with-temporary-file BINDS its :stream / :pathname
+						// variables, and they sit in a keyword plist the default walk
+						// would read as ordinary arguments -- smart-buffer's check-limit
+						// closes over exactly those.
+						case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED ->
+							collectFreeVars(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), boundVars,
+									knownFunctions, globals, specialNames, freeVars);
 						// with-mutex / with-lock-held is the OPPOSITE shape of the with-*
 						// stream macros: its one-element spec holds a VALUE, not a
 						// binding, so the default walk would read (lock) as a call and
@@ -506,6 +513,11 @@ public final class FreeVarAnalyzer {
 								localVars, knownFunctions, captured, insideLambda);
 						case LispNames.WITH_OPEN_STREAM ->
 							collectCapturedVars(LispMacroExpander.expandWithOpenStream(cons, true), localVars,
+									knownFunctions, captured, insideLambda);
+						// The :stream / :pathname plist entries are BINDINGS (same
+						// reason as in collectFreeVars).
+						case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED ->
+							collectCapturedVars(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), localVars,
 									knownFunctions, captured, insideLambda);
 						// The lock spec holds a VALUE, not a binding (same reason as in
 						// collectFreeVars).

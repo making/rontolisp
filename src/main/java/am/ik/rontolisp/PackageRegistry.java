@@ -239,7 +239,7 @@ public final class PackageRegistry {
 			LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.BROADCAST_STREAM_CLASS,
 			LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.PATHNAME_DIRECTORY_STRING,
 			LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL, LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
-			LispNames.FENV_FUNCTION_INTERNAL);
+			LispNames.FENV_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of
@@ -373,10 +373,12 @@ public final class PackageRegistry {
 	 * name: the standard Common Lisp names ({@code common-lisp} for {@code cl},
 	 * {@code common-lisp-user} for {@code cl-user}) so portable {@code (:use
 	 * #:common-lisp)} clauses resolve, plus the shorthands {@code rl} for
-	 * {@code rontolisp}, {@code la} for {@code linalg} and {@code quicklisp} for
-	 * {@code ql}. Static (unlike user {@code defpackage :nicknames}) so
-	 * {@link #splitQualified} can normalize built-in qualifiers for the compile-path
-	 * pre-passes that scan the program before package resolution runs.
+	 * {@code rontolisp}, {@code la} for {@code linalg}, {@code flex} for
+	 * {@code flexi-streams} (the spelling smart-buffer and http-body use) and
+	 * {@code quicklisp} for {@code ql}. Static (unlike user
+	 * {@code defpackage :nicknames}) so {@link #splitQualified} can normalize built-in
+	 * qualifiers for the compile-path pre-passes that scan the program before package
+	 * resolution runs.
 	 */
 	private static final Map<String, String> BUILTIN_NICKNAMES = Map.ofEntries(
 			Map.entry("COMMON-LISP", LispNames.CL_PKG), Map.entry("COMMON-LISP-USER", LispNames.CL_USER_PKG),
@@ -385,7 +387,8 @@ public final class PackageRegistry {
 			Map.entry("C2CL", LispNames.CLOSER_COMMON_LISP_PKG),
 			Map.entry("FLOAT-FEATURES", LispNames.FLOAT_FEATURES_PKG), Map.entry("BT", LispNames.BORDEAUX_THREADS_PKG),
 			Map.entry("BORDEAUX-THREADS-2", LispNames.BT2_PKG), Map.entry("CLTL2", LispNames.TRIVIAL_CLTL2_PKG),
-			Map.entry("PAX", LispNames.MGL_PAX_PKG), Map.entry("TG", LispNames.TRIVIAL_GARBAGE_PKG));
+			Map.entry("PAX", LispNames.MGL_PAX_PKG), Map.entry("TG", LispNames.TRIVIAL_GARBAGE_PKG),
+			Map.entry("FLEX", LispNames.FLEXI_STREAMS_PKG));
 
 	/**
 	 * Package nicknames, mapping each nickname to the canonical package name. Seeded with
@@ -517,6 +520,10 @@ public final class PackageRegistry {
 				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.SPLIT_STRING, LispNames.DIRECTORY_EXISTS_P,
 				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES,
 				LispNames.READ_FILE_STRING, LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE,
+				// The temporary-file quartet smart-buffer's disk-spill path spells (the
+				// with-temporary-file one is a macro, expanded like usocket:with-*).
+				LispNames.ENSURE_DIRECTORY_PATHNAME, LispNames.DEFAULT_TEMPORARY_DIRECTORY,
+				LispNames.DELETE_FILE_IF_EXISTS, LispNames.WITH_TEMPORARY_FILE,
 				// define-package is external in real uiop too; a literal top-level call
 				// is consumed by PackageResolver.resolve like defpackage (dbi's package
 				// headers spell it uiop:define-package).
@@ -553,8 +560,17 @@ public final class PackageRegistry {
 		}
 		define(new LispPackage(LispNames.CLOSER_COMMON_LISP_PKG, List.of(LispNames.CL_PKG),
 				Set.copyOf(c2clImports.keySet()), Set.copyOf(c2clImports.keySet()), Map.copyOf(c2clImports)));
-		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), new HashSet<>(
-				Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS, LispNames.OCTETS_TO_STRING))));
+		// flexi-streams: the encoder/decoder pair and the wrapper are external, and so
+		// is the in-memory input constructor plus the vector-stream CLASS -- http-body
+		// spells (typep s 'flex:vector-stream) with a single colon. The three slot
+		// accessors stay INTERNAL, as upstream, which is why the same file reaches for
+		// flex::vector-stream-vector with a double one.
+		Set<String> flexiExternals = Set.of(LispNames.MAKE_FLEXI_STREAM, LispNames.STRING_TO_OCTETS,
+				LispNames.OCTETS_TO_STRING, LispNames.VECTOR_STREAM, LispNames.MAKE_IN_MEMORY_INPUT_STREAM);
+		Set<String> flexiSymbols = new HashSet<>(flexiExternals);
+		flexiSymbols.addAll(Set.of(LispNames.VECTOR_INPUT_STREAM, LispNames.VECTOR_STREAM_VECTOR,
+				LispNames.VECTOR_STREAM_INDEX, LispNames.VECTOR_STREAM_END));
+		define(new LispPackage(LispNames.FLEXI_STREAMS_PKG, List.of(), flexiSymbols, flexiExternals));
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
 						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT))));

@@ -307,6 +307,14 @@ final class JvmExprCompiler {
 				JvmGetenvCompiler.compile(cons, ctx, className);
 				return;
 			}
+			// uiop:with-temporary-file is a MACRO, so it cannot reach the uiop stub
+			// lowering (which only sees function-call shapes) -- and it has a real
+			// expansion, not a stub: smart-buffer's disk-spill path runs it.
+			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())
+					&& LispNames.WITH_TEMPORARY_FILE.equals(qn.member())) {
+				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), ctx, className);
+				return;
+			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {

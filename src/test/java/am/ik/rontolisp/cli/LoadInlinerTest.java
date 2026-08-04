@@ -578,6 +578,21 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void doesNotBundleAFileTheProgramItselfWrites(@TempDir Path tempDir) throws Exception {
+		// The one shape where bundling is NOT conservative: a program that opens the
+		// same literal path for OUTPUT would otherwise read what was on disk when it
+		// was COMPILED instead of what it just wrote (the append-then-read round trip).
+		Path dataFile = tempDir.resolve("roundtrip.txt");
+		java.nio.file.Files.writeString(dataFile, "stale\n");
+		String path = dataFile.toAbsolutePath().toString();
+		String source = "(with-open-file (out \"" + path + "\" :direction :output) (write-string \"fresh\" out))"
+				+ "(with-open-file (in \"" + path + "\" :external-format :utf-8) (read-line in nil nil))";
+		List<LispVal> result = LoadInliner.inline(LispReader.readAllFromString(source), loaderOf(Map.of()));
+		assertThat(result.stream().map(LispVal::print))
+			.allSatisfy(form -> assertThat(form).doesNotContain("WITH-INPUT-FROM-STRING").doesNotContain("stale"));
+	}
+
+	@Test
 	void leavesWithOpenFileUnchangedForMissingLiteralPath() {
 		// Path is a literal but the file does not exist: pass through so the JVM path
 		// still opens the file at run time with the folded literal.

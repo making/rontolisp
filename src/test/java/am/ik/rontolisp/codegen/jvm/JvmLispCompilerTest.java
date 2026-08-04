@@ -9757,4 +9757,33 @@ class JvmLispCompilerTest {
 			.hasMessageContaining("packed integer vector");
 	}
 
+	@Test
+	void compileAndRunShortFormMethodCombination() throws Exception {
+		// yason's encode-slots hook: the operator over EVERY applicable qualified
+		// method, in specificity order, with :most-specific-last reversing it.
+		assertThat(compileAndRun("""
+				(defclass mc-base () ())
+				(defclass mc-leaf (mc-base) ())
+				(defgeneric mc-trace (x) (:method-combination progn :most-specific-last))
+				(defmethod mc-trace progn ((x mc-base)) (print :base))
+				(defmethod mc-trace progn ((x mc-leaf)) (print :leaf))
+				(defgeneric mc-sum (x) (:method-combination +))
+				(defmethod mc-sum + ((x mc-base)) 1)
+				(defmethod mc-sum + ((x mc-leaf)) 100)
+				(mc-trace (make-instance 'mc-leaf))
+				(print (mc-sum (make-instance 'mc-leaf)))
+				(print (mc-sum (make-instance 'mc-base)))
+				""")).isEqualTo(":BASE\n:LEAF\n101\n1");
+	}
+
+	@Test
+	void compileAndRunOpenAppend(@TempDir Path tempDir) throws Exception {
+		String file = tempDir.resolve("append.txt").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(with-open-file (out "%s" :direction :output) (write-string "one" out))
+				(with-open-file (out "%s" :direction :output :if-exists :append) (write-string "two" out))
+				(with-open-file (in "%s") (print (read-line in)))
+				""".formatted(file, file, file))).isEqualTo("\"onetwo\"");
+	}
+
 }

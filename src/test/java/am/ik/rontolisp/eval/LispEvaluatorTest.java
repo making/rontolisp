@@ -5058,12 +5058,12 @@ class LispEvaluatorTest {
 	@Test
 	void withOpenFileUnsupportedOptionThrows(@TempDir Path tempDir) {
 		String file = tempDir.resolve("opt.txt").toString().replace("\\", "\\\\");
-		// :if-exists is accepted only with the value the native behavior already
-		// implements (:supersede); :append must not be silently reinterpreted. It
-		// signals at CALL time as a Lisp condition (was an expansion-time throw):
-		// the eager compile paths expand every branch of a spliced library, and
-		// lack-middleware-backtrace's :append branch is dead code by default.
-		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :append) s)"))
+		// :if-exists is accepted with the value the native behavior already implements
+		// (:supersede) and with :append, which is real (.kb/read-load-streams.md);
+		// anything else must not be silently reinterpreted. It signals at CALL time as
+		// a Lisp condition (was an expansion-time throw): the eager compile paths
+		// expand every branch of a spliced library.
+		assertThatThrownBy(() -> eval("(with-open-file (s \"" + file + "\" :if-exists :rename) s)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining(":IF-EXISTS supports only the native default value");
 	}
@@ -11589,6 +11589,170 @@ class LispEvaluatorTest {
 			}
 		}
 		assertThat(results).allSatisfy(value -> assertThat(value).isEqualTo("\"tok\""));
+	}
+
+	@Test
+	void evalShortFormMethodCombinationProgn() {
+		// Every applicable progn-qualified method runs, most specific first; the value
+		// is the LAST one's, as CL's progn combination says.
+		assertThat(evalMulti("""
+				(defclass mc-base () ())
+				(defclass mc-leaf (mc-base) ())
+				(defgeneric mc-trace (x) (:method-combination progn))
+				(defmethod mc-trace progn ((x mc-base)) (push :base *mc-log*) :base)
+				(defmethod mc-trace progn ((x mc-leaf)) (push :leaf *mc-log*) :leaf)
+				(defvar *mc-log* nil)
+				(list (mc-trace (make-instance 'mc-leaf)) (reverse *mc-log*))
+				""").print()).isEqualTo("(:BASE (:LEAF :BASE))");
+	}
+
+	@Test
+	void evalShortFormMethodCombinationMostSpecificLast() {
+		// yason's encode-slots order: the LEAST specific method runs first, so a
+		// subclass's slots are written after its superclass's.
+		assertThat(evalMulti("""
+				(defvar *mc-log* nil)
+				(defclass mc-base () ())
+				(defclass mc-leaf (mc-base) ())
+				(defgeneric mc-trace (x) (:method-combination progn :most-specific-last))
+				(defmethod mc-trace progn ((x mc-base)) (push :base *mc-log*))
+				(defmethod mc-trace progn ((x mc-leaf)) (push :leaf *mc-log*))
+				(mc-trace (make-instance 'mc-leaf))
+				(reverse *mc-log*)
+				""").print()).isEqualTo("(:BASE :LEAF)");
+	}
+
+	@Test
+	void evalShortFormMethodCombinationOperators() {
+		// The rest of the CLHS short-form family over the same mechanism.
+		assertThat(evalMulti("""
+				(defclass mc-base () ())
+				(defclass mc-leaf (mc-base) ())
+				(defgeneric mc-sum (x) (:method-combination +))
+				(defmethod mc-sum + ((x mc-base)) 1)
+				(defmethod mc-sum + ((x mc-leaf)) 100)
+				(defgeneric mc-names (x) (:method-combination list))
+				(defmethod mc-names list ((x mc-base)) 'base)
+				(defmethod mc-names list ((x mc-leaf)) 'leaf)
+				(defgeneric mc-all (x) (:method-combination and))
+				(defmethod mc-all and ((x mc-base)) t)
+				(defmethod mc-all and ((x mc-leaf)) nil)
+				(defgeneric mc-app (x) (:method-combination append))
+				(defmethod mc-app append ((x mc-base)) (list 'b))
+				(defmethod mc-app append ((x mc-leaf)) (list 'l))
+				(let ((it (make-instance 'mc-leaf)))
+				  (list (mc-sum it) (mc-names it) (mc-all it) (mc-app it)))
+				""").print()).isEqualTo("(101 (LEAF BASE) NIL (L B))");
+	}
+
+	@Test
+	void evalShortFormMethodCombinationWrapsInAround() {
+		// :around is the one other legal qualifier: its call-next-method reaches the
+		// COMBINED form, not the most specific primary.
+		assertThat(evalMulti("""
+				(defvar *mc-log* nil)
+				(defclass mc-base () ())
+				(defgeneric mc-trace (x) (:method-combination progn))
+				(defmethod mc-trace progn ((x mc-base)) (push :inner *mc-log*))
+				(defmethod mc-trace :around ((x mc-base))
+				  (push :in *mc-log*) (call-next-method) (push :out *mc-log*))
+				(mc-trace (make-instance 'mc-base))
+				(reverse *mc-log*)
+				""").print()).isEqualTo("(:IN :INNER :OUT)");
+	}
+
+	@Test
+	void evalShortFormMethodCombinationRejectsBeforeAndAfter() {
+		// CLHS: only the combination name and :around are legal qualifiers there.
+		assertThatThrownBy(() -> evalMulti("""
+				(defclass mc-base () ())
+				(defgeneric mc-trace (x) (:method-combination progn))
+				(defmethod mc-trace :before ((x mc-base)) nil)
+				""")).hasMessageContaining("not allowed under the PROGN method combination");
+	}
+
+	@Test
+	void evalOpenAppendKeepsTheExistingContent(@TempDir Path tempDir) {
+		String file = tempDir.resolve("append.txt").toString().replace("\\", "\\\\");
+		assertThat(evalMulti("""
+				(with-open-file (out "%s" :direction :output) (write-string "one" out))
+				(with-open-file (out "%s" :direction :output :if-exists :append) (write-string "two" out))
+				(with-open-file (in "%s") (read-line in))
+				""".formatted(file, file, file)).print()).isEqualTo("\"onetwo\"");
+	}
+
+	@Test
+	void evalUiopWithTemporaryFileWritesAndCleansUp(@TempDir Path tempDir) {
+		String dir = (tempDir.toString() + "/wtf/").replace("\\", "\\\\");
+		// :keep t hands the pathname back with the file still there; the default
+		// deletes it on the way out.
+		assertThat(evalMulti("""
+				(list (let ((kept (uiop:with-temporary-file (:stream s :pathname p :directory "%s" :keep t)
+				                    (write-string "kept" s)
+				                    p)))
+				        (and (probe-file kept) t))
+				      (let ((gone (uiop:with-temporary-file (:stream s :pathname p :directory "%s")
+				                    (write-string "gone" s)
+				                    p)))
+				        (and (probe-file gone) t)))
+				""".formatted(dir, dir)).print()).isEqualTo("(T NIL)");
+	}
+
+	@Test
+	void evalUiopEnsureDirectoryPathnameAndDeleteFileIfExists() {
+		assertThat(evalMulti("""
+				(list (uiop:ensure-directory-pathname "/tmp/x")
+				      (uiop:ensure-directory-pathname "/tmp/x/")
+				      (uiop:delete-file-if-exists "/tmp/rontolisp-no-such-file-9f3a"))
+				""").print()).isEqualTo("(\"/tmp/x/\" \"/tmp/x/\" NIL)");
+	}
+
+	@Test
+	void evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream() {
+		// smart-buffer's finalize-buffer hands one of these to the multipart parser,
+		// and http-body type-tests it against flex:vector-stream for its fast path.
+		assertThat(evalMulti("""
+				(asdf:load-system "flexi-streams")
+				(let* ((v (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(7 8 9)))
+				       (s (flex:make-in-memory-input-stream v))
+				       (first-byte (read-byte s))
+				       (buf (make-array 2 :element-type '(unsigned-byte 8))))
+				  (list (and (typep s 'flex:vector-stream) t)
+				        first-byte
+				        (read-sequence buf s)
+				        (read-byte s nil :eof)
+				        (progn (file-position s 0) (read-byte s))))
+				""").print()).isEqualTo("(T 7 2 :EOF 7)");
+	}
+
+	@Test
+	void evalDefstructAcceptsAKeywordConcName() {
+		// :conc-name takes a STRING DESIGNATOR, so a keyword designates its name
+		// WITHOUT the colon -- fast-http's (defstruct (http (:conc-name :http-))).
+		assertThat(evalMulti("""
+				(defstruct (kw-thing (:conc-name :kw-thing-)) (state 0))
+				(let ((it (make-kw-thing)))
+				  (setf (kw-thing-state it) 5)
+				  (kw-thing-state it))
+				""").print()).isEqualTo("5");
+	}
+
+	@Test
+	void evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage() {
+		// fast-http's callback-data shape: a macro that COMPUTES a symbol name, used
+		// inside a function body of its OWN file and called from another package. The
+		// interpreter expands it lazily, at call time, so without the definition-package
+		// swap the (intern "SECRET") landed in the caller's package. A TOP-LEVEL macro
+		// call keeps the current package (trivia's lispn:define-namespace needs that).
+		assertThat(evalMulti("""
+				(defpackage :mp-lib (:use :cl) (:export :call-it))
+				(in-package :mp-lib)
+				(defun mp-lib::secret (x) (* x 2))
+				(defmacro mp-lib::name-of (x) (list (intern "SECRET") x))
+				(defun mp-lib:call-it (x) (mp-lib::name-of x))
+				(in-package :cl-user)
+				(mp-lib:call-it 21)
+				""").print()).isEqualTo("42");
 	}
 
 }

@@ -25,6 +25,17 @@ import org.jspecify.annotations.Nullable;
 public final class ClosRegistry {
 
 	/**
+	 * The CLHS short-form {@code :method-combination} operators. Each names ONE uniform
+	 * mechanism -- "call every applicable method carrying this name as its qualifier, in
+	 * specificity order, and combine the results with the operator" -- so the family is
+	 * implemented once rather than per operator. The long form
+	 * ({@code define-method-combination}) is out of scope; a {@code :method-combination}
+	 * naming anything else is rejected at {@code defgeneric} time.
+	 */
+	public static final Set<String> SHORT_FORM_COMBINATIONS = Set.of(LispNames.PROGN, LispNames.AND, LispNames.OR,
+			LispNames.ADD, LispNames.LIST, LispNames.NCONC, LispNames.APPEND, LispNames.MAX, LispNames.MIN);
+
+	/**
 	 * Creates a registry pre-seeded with the built-in condition hierarchy:
 	 * {@code condition} &gt; {@code serious-condition} &gt; {@code error} (&gt;
 	 * {@code simple-error} and the standard error subtypes) plus {@code warning}/
@@ -449,6 +460,10 @@ public final class ClosRegistry {
 
 		private int methodCounter = 0;
 
+		@Nullable private String methodCombination;
+
+		private boolean mostSpecificLast;
+
 		/**
 		 * Creates a generic-function record.
 		 * @param name the generic function name
@@ -513,6 +528,39 @@ public final class ClosRegistry {
 		 */
 		public void documentation(@Nullable String documentation) {
 			this.documentation = documentation;
+		}
+
+		/**
+		 * The {@code (:method-combination NAME [order])} operator, or null for the
+		 * STANDARD combination. One of {@link #SHORT_FORM_COMBINATIONS}: the effective
+		 * method is then "that operator over EVERY applicable method carrying the
+		 * combination name as its qualifier", not "the most specific primary plus a next
+		 * chain".
+		 * @return the combination operator name, or null
+		 */
+		@Nullable public String methodCombination() {
+			return this.methodCombination;
+		}
+
+		/**
+		 * Whether the combination's optional order argument was
+		 * {@code :most-specific-last} (the operator sees the LEAST specific method
+		 * first). Meaningless for the standard combination.
+		 * @return true for {@code :most-specific-last}
+		 */
+		public boolean mostSpecificLast() {
+			return this.mostSpecificLast;
+		}
+
+		/**
+		 * Records the short-form method combination.
+		 * @param name the combination operator name, or null for the standard one
+		 * @param mostSpecificLast whether the order argument was
+		 * {@code :most-specific-last}
+		 */
+		public void methodCombination(@Nullable String name, boolean mostSpecificLast) {
+			this.methodCombination = name;
+			this.mostSpecificLast = mostSpecificLast;
 		}
 
 		/**

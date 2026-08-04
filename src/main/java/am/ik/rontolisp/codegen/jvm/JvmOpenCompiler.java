@@ -28,12 +28,9 @@ final class JvmOpenCompiler {
 			throw new UnsupportedOperationException("open expects 1 to 3 arguments, got " + (parts.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-		ctx.emit(switch (OpenModes.staticMode(parts)) {
-			case 0 -> Opcode.ICONST_0;
-			case 1 -> Opcode.ICONST_1;
-			case 2 -> Opcode.ICONST_2;
-			default -> Opcode.ICONST_3;
-		});
+		// 5 and 7 are the OpenModes.APPEND_BIT arms, so the constant no longer fits
+		// ICONST_0..3.
+		JvmEmitHelper.emitIntConst(ctx, OpenModes.staticMode(parts));
 		Utf8Constant nameUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.OPEN_METHOD);
 		Utf8Constant descUtf8 = ctx.cp.addUtf8(JvmIoRuntimeBuilder.OPEN_DESC);
 		MethodrefConstant openRef = ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),

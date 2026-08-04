@@ -62,6 +62,10 @@ import org.jspecify.annotations.Nullable;
  * {@code uiop:collect-sub*directories} -- the directory-LISTING family, one rendering of
  * the pattern / prefix / kind / ordering rules over the single {@code %list-directory}
  * primitive each backend implements.</li>
+ * <li>{@code uiop:ensure-directory-pathname} / {@code uiop:default-temporary-directory} /
+ * {@code uiop:delete-file-if-exists} plus the {@code %temp-file-name} helper -- the
+ * temporary-file trio {@code uiop:with-temporary-file} expands over (smart-buffer's
+ * disk-spill path).</li>
  * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
@@ -643,6 +647,51 @@ public final class LispPreludeLibrary {
 				      (when (funcall %cd-recursep %cd-sub)
 				        (uiop:collect-sub*directories %cd-sub %cd-collectp %cd-recursep %cd-collector))))
 				  nil)
+				""");
+		// The temporary-file trio. A rontolisp pathname IS its namestring, so
+		// "the pathname in directory form" is "the namestring with a trailing slash":
+		// merge-pathnames against one of these appends, which is exactly what
+		// smart-buffer's *temporary-directory* is built by.
+		SOURCES.put(LispNames.ENSURE_DIRECTORY_PATHNAME, """
+				(defun uiop:ensure-directory-pathname (%edp-path)
+				  (let ((%edp-s (if (stringp %edp-path) %edp-path (namestring %edp-path))))
+				    (if (or (string= %edp-s "")
+				            (char= (char %edp-s (- (length %edp-s) 1)) #\\/))
+				        %edp-s
+				        (concatenate 'string %edp-s "/"))))
+				""");
+		// $TMPDIR or /tmp/: getenv is the one environment reader every backend has, and
+		// a backend whose environment is empty (both WASM ones without --env) takes the
+		// fallback rather than failing.
+		SOURCES.put(LispNames.DEFAULT_TEMPORARY_DIRECTORY, """
+				(defun uiop:default-temporary-directory ()
+				  (let ((%dtd-e (uiop:getenv "TMPDIR")))
+				    (uiop:ensure-directory-pathname
+				      (if (and %dtd-e (string/= %dtd-e "")) %dtd-e "/tmp"))))
+				""");
+		// delete-file with the missing-file file-error swallowed -- the whole reason
+		// real UIOP exports it. Over the %delete-file primitive rather than over
+		// delete-file, so the "missing file" answer is nil in one step.
+		SOURCES.put(LispNames.DELETE_FILE_IF_EXISTS, """
+				(defun uiop:delete-file-if-exists (%dfe-path)
+				  (if (and %dfe-path (%delete-file %dfe-path)) t nil))
+				""");
+		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
+		// then draw random names until one names nothing. Deliberately NOT seeded from
+		// the clock -- (random n) is the one entropy source every backend shares.
+		SOURCES.put(LispNames.TEMP_FILE_NAME, """
+				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-type)
+				  (let ((%tfn-d (uiop:ensure-directory-pathname
+				                  (or %tfn-dir (uiop:default-temporary-directory))))
+				        (%tfn-p (or %tfn-prefix "tmp"))
+				        (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
+				        (%tfn-n nil))
+				    (ensure-directories-exist %tfn-d)
+				    (do () (%tfn-n %tfn-n)
+				      (let ((%tfn-c (concatenate 'string %tfn-d %tfn-p
+				                                 (write-to-string (random 1000000000))
+				                                 %tfn-t)))
+				        (unless (probe-file %tfn-c) (setq %tfn-n %tfn-c))))))
 				""");
 		SOURCES.put(LispNames.CHAR_NAME, """
 				(defun char-name (c)
@@ -1295,8 +1344,19 @@ public final class LispPreludeLibrary {
 	 * @return whether the entry must be spliced
 	 */
 	static boolean referencedBySurfaceForm(String entry, List<LispVal> program, boolean canonical) {
-		return LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)
-				&& callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
+		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
+			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
+		}
+		// The two entries uiop:with-temporary-file's EXPANSION calls. Same timing
+		// problem as %make-broadcast-stream: the expansion runs inside the expression
+		// compilers, long after this pass, so the reference this selection would look
+		// for does not exist yet -- without the rule smart-buffer's disk spill compiled
+		// to "%TEMP-FILE-NAME is undefined". The delete is spliced whatever :keep says,
+		// because reading that option here would duplicate the expansion's rule.
+		if (LispNames.TEMP_FILE_NAME.equals(entry) || LispNames.DELETE_FILE_IF_EXISTS.equals(entry)) {
+			return referencesName(program, LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED, canonical);
+		}
+		return false;
 	}
 
 	private static boolean callsWithArguments(List<LispVal> program, String name, boolean canonical) {
@@ -1322,7 +1382,14 @@ public final class LispPreludeLibrary {
 	/**
 	 * The name an entry's own {@code defun} defines, cached per entry.
 	 */
-	private static String definedName(String key) {
+	/**
+	 * The name an entry's own {@code defun} defines, in the program's canonical spelling
+	 * ({@code UIOP:DELETE-FILE-IF-EXISTS} for the {@code DELETE-FILE-IF-EXISTS} key).
+	 * {@link LibraryDefunPruner} roots the synthesized-call entries by it.
+	 * @param key the entry key
+	 * @return the defined name
+	 */
+	static String definedName(String key) {
 		return DEFINED_NAMES.computeIfAbsent(key, k -> {
 			for (LispVal form : formsFor(k)) {
 				String name = defunName(form);
