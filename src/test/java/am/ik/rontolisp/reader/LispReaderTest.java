@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 class LispReaderTest {
 
@@ -85,6 +86,35 @@ class LispReaderTest {
 	void readUnterminatedPipeEscapeFails() {
 		assertThatThrownBy(() -> LispReader.readFromString("|never closed"))
 			.hasMessageContaining("Unterminated |...| symbol escape");
+	}
+
+	@Test
+	void lexerErrorNamesFileAndLineColumn() {
+		// An unterminated string is a lexer-level error; with a known origin file the
+		// message is prefixed file:line:column and the position is exposed structurally.
+		assertThatThrownBy(
+				() -> LispReader.readAllFromString("(print \"never closed)", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:1:")
+			.hasMessageContaining("Unterminated string literal");
+		LispReadException ex = catchThrowableOfType(
+				() -> LispReader.readAllFromString("(print \"never closed)", Features.INTERPRETER, "lib.lisp"),
+				LispReadException.class);
+		assertThat(ex.location()).isNotNull();
+		assertThat(ex.location().line()).isEqualTo(1);
+		assertThat(ex.location().column()).isGreaterThan(1);
+		assertThat(ex.location().file()).isEqualTo("lib.lisp");
+	}
+
+	@Test
+	void readerErrorOnALaterLineReportsTheRightLine() {
+		// Line/column are counted by newline, so an error on the second line names line
+		// 2,
+		// not a flattened single line.
+		assertThatThrownBy(() -> LispReader.readAllFromString("(foo\n  #\\Nope)", Features.INTERPRETER, "lib.lisp"))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("lib.lisp:2:")
+			.hasMessageContaining("Unknown character name: #\\Nope");
 	}
 
 	@Test

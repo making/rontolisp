@@ -47,6 +47,9 @@ public final class LispLexer {
 
 	private final ReadEvalMode readEvalMode;
 
+	/** The origin file, or {@code null} when unknown; used to prefix read errors. */
+	private final @Nullable String file;
+
 	private int pos;
 
 	/**
@@ -75,10 +78,37 @@ public final class LispLexer {
 	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
 	 */
 	public LispLexer(String input, Features features, ReadEvalMode readEvalMode) {
+		this(input, features, readEvalMode, null);
+	}
+
+	/**
+	 * Create a new lexer for the given input.
+	 * @param input the source code string
+	 * @param features the features the {@code #+}/{@code #-} conditionals test
+	 * @param readEvalMode how a {@code #.} read-time-eval form is handled
+	 * @param file the origin file, or {@code null} when unknown
+	 */
+	public LispLexer(String input, Features features, ReadEvalMode readEvalMode, @Nullable String file) {
 		this.input = input;
 		this.features = features;
 		this.readEvalMode = readEvalMode;
+		this.file = file;
 		this.pos = 0;
+	}
+
+	/**
+	 * A {@link LispReadException} whose message is prefixed with the current position in
+	 * this input. The lexer scans character-by-character, so {@code pos} is always the
+	 * failing (or last-consumed) offset -- good enough to point at the malformed input.
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException err(String message) {
+		return new LispReadException(message, SourceLocation.at(this.file, this.pos, this.input));
+	}
+
+	private static void add(List<LocatedToken> tokens, Token token, int offset) {
+		tokens.add(new LocatedToken(token, offset));
 	}
 
 	/**
@@ -86,29 +116,53 @@ public final class LispLexer {
 	 * @return the tokens
 	 */
 	public List<Token> tokenize() {
-		List<Token> tokens = new ArrayList<>();
+		return tokenizeWithPositions().stream().map(LocatedToken::token).toList();
+	}
+
+	/**
+	 * Tokenize the input into a list of tokens, each paired with the character offset at
+	 * which it starts in the input -- the position the parser reports on a read error.
+	 * @return the positioned tokens
+	 */
+	public List<LocatedToken> tokenizeWithPositions() {
+		List<LocatedToken> tokens = new ArrayList<>();
 		while (this.pos < this.input.length()) {
 			char c = this.input.charAt(this.pos);
+			// Whitespace, comments and feature conditionals produce no token; consume
+			// them
+			// at the top so the token branches below all begin at a real token start.
 			if (Character.isWhitespace(c)) {
 				this.pos++;
+				continue;
 			}
-			else if (c == ';') {
+			if (c == ';') {
 				skipComment();
+				continue;
 			}
-			else if (c == '(') {
-				tokens.add(new Token.LeftParen());
+			if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
+				skipBlockComment();
+				continue;
+			}
+			if (c == '#' && this.pos + 1 < this.input.length()
+					&& (this.input.charAt(this.pos + 1) == '+' || this.input.charAt(this.pos + 1) == '-')) {
+				readFeatureConditional();
+				continue;
+			}
+			int tokenStart = this.pos;
+			if (c == '(') {
+				add(tokens, new Token.LeftParen(), tokenStart);
 				this.pos++;
 			}
 			else if (c == ')') {
-				tokens.add(new Token.RightParen());
+				add(tokens, new Token.RightParen(), tokenStart);
 				this.pos++;
 			}
 			else if (c == '\'') {
-				tokens.add(new Token.Quote());
+				add(tokens, new Token.Quote(), tokenStart);
 				this.pos++;
 			}
 			else if (c == '`') {
-				tokens.add(new Token.Backquote());
+				add(tokens, new Token.Backquote(), tokenStart);
 				this.pos++;
 			}
 			else if (c == ',') {
@@ -116,28 +170,21 @@ public final class LispLexer {
 				// readNumber (e.g. "1,000"), so a comma reaching here starts a token:
 				// unquote (,x) or unquote-splicing (,@x) inside a backquote template.
 				if (this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '@') {
-					tokens.add(new Token.UnquoteSplicing());
+					add(tokens, new Token.UnquoteSplicing(), tokenStart);
 					this.pos += 2;
 				}
 				else {
-					tokens.add(new Token.Unquote());
+					add(tokens, new Token.Unquote(), tokenStart);
 					this.pos++;
 				}
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\'') {
-				tokens.add(new Token.FunctionQuote());
+				add(tokens, new Token.FunctionQuote(), tokenStart);
 				this.pos += 2;
-			}
-			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '|') {
-				skipBlockComment();
-			}
-			else if (c == '#' && this.pos + 1 < this.input.length()
-					&& (this.input.charAt(this.pos + 1) == '+' || this.input.charAt(this.pos + 1) == '-')) {
-				readFeatureConditional();
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '.') {
 				if (this.readEvalMode == ReadEvalMode.ERROR) {
-					throw new LispReadException("#. read-time evaluation is not supported");
+					throw err("#. read-time evaluation is not supported");
 				}
 				this.pos += 2;
 				int datumStart = this.pos;
@@ -149,27 +196,30 @@ public final class LispLexer {
 				// falls back to a nil placeholder, preserving the surrounding structure
 				// (a skipped #. inside a plist/alist must not shift the remaining
 				// key/value pairing).
-				List<Token> datumTokens = tryTokenizeReadEvalDatum(this.input.substring(datumStart, this.pos));
+				List<LocatedToken> datumTokens = tryTokenizeReadEvalDatum(this.input.substring(datumStart, this.pos));
 				if (datumTokens == null) {
 					if (this.readEvalMode == ReadEvalMode.MARKER) {
-						throw new LispReadException(
-								"#. datum could not be read: " + this.input.substring(datumStart, this.pos));
+						throw err("#. datum could not be read: " + this.input.substring(datumStart, this.pos));
 					}
 					System.err.println("warning: skipping unsupported #. read-time-eval form");
-					tokens.add(new Token.SymbolToken("NIL"));
+					add(tokens, new Token.SymbolToken("NIL"), tokenStart);
 				}
 				else {
-					tokens.add(new Token.LeftParen());
-					tokens.add(new Token.SymbolToken(LispNames.READ_EVAL));
-					tokens.addAll(datumTokens);
-					tokens.add(new Token.RightParen());
+					// The marker's tokens all sit at (or just after) the #.; the datum's
+					// own tokens are rebased onto their real offset in this input.
+					add(tokens, new Token.LeftParen(), tokenStart);
+					add(tokens, new Token.SymbolToken(LispNames.READ_EVAL), tokenStart);
+					for (LocatedToken datumToken : datumTokens) {
+						tokens.add(new LocatedToken(datumToken.token(), datumStart + datumToken.offset()));
+					}
+					add(tokens, new Token.RightParen(), this.pos);
 				}
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '\\') {
-				tokens.add(readChar());
+				add(tokens, readChar(), tokenStart);
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '(') {
-				tokens.add(new Token.VectorOpen());
+				add(tokens, new Token.VectorOpen(), tokenStart);
 				this.pos += 2;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
@@ -180,7 +230,7 @@ public final class LispLexer {
 				// available. #S not followed by '(' falls through to symbol reading
 				// below,
 				// which is what it did before this branch existed.
-				tokens.add(new Token.StructOpen());
+				add(tokens, new Token.StructOpen(), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
@@ -201,7 +251,7 @@ public final class LispLexer {
 						&& (this.input.charAt(probe) == '0' || this.input.charAt(probe) == '1')) {
 					probe++;
 				}
-				tokens.add(new Token.BitVectorToken(this.input.substring(this.pos + 2, probe)));
+				add(tokens, new Token.BitVectorToken(this.input.substring(this.pos + 2, probe)), tokenStart);
 				this.pos = probe;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
@@ -212,17 +262,16 @@ public final class LispLexer {
 				// at
 				// read time. #f not followed by '(' falls through to symbol reading
 				// below.
-				tokens.add(new Token.FloatArrayOpen(true));
+				add(tokens, new Token.FloatArrayOpen(true), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 2 < this.input.length()
 					&& (this.input.charAt(this.pos + 1) == 'd' || this.input.charAt(this.pos + 1) == 'D')
 					&& this.input.charAt(this.pos + 2) == '(') {
 				// #d( opens a packed double-float array literal (e.g., #d(1.0 2.0 3.0));
-				// same nested-list contents and inferred rank as #f(, but the wider
-				// (f64) backing. #d not followed by '(' falls through to symbol reading
-				// below.
-				tokens.add(new Token.FloatArrayOpen(false));
+				// same nested-list contents and inferred rank as #f(, but the wider (f64)
+				// backing. #d not followed by '(' falls through to symbol reading below.
+				add(tokens, new Token.FloatArrayOpen(false), tokenStart);
 				this.pos += 3;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
@@ -241,30 +290,30 @@ public final class LispLexer {
 						rank = Integer.parseInt(this.input.substring(this.pos + 1, probe));
 					}
 					catch (NumberFormatException overflow) {
-						throw new LispReadException("Invalid array rank: " + this.input.substring(this.pos, probe));
+						throw err("Invalid array rank: " + this.input.substring(this.pos, probe));
 					}
-					tokens.add(new Token.ArrayOpen(rank));
+					add(tokens, new Token.ArrayOpen(rank), tokenStart);
 					this.pos = probe + 2;
 				}
 				else if (probe + 1 < this.input.length() && this.input.charAt(probe) == '@'
 						&& this.input.charAt(probe + 1) == '(') {
 					// #N@( is ironclad's s-box literal (its array-reader dispatch macro):
 					// a (make-array LEN :element-type '(unsigned-byte N)
-					// :initial-contents
-					// '(...)) form. For the packed widths (8/16/32) it reads into the
-					// packed integer-vector representation -- the same value the ironclad
-					// form evaluates to now that make-array packs those element types;
-					// any
-					// other width reads as a plain vector literal.
+					// :initial-contents '(...)) form. For the packed widths (8/16/32) it
+					// reads into the packed integer-vector representation -- the same
+					// value
+					// the ironclad form evaluates to now that make-array packs those
+					// element
+					// types; any other width reads as a plain vector literal.
 					int width;
 					try {
 						width = Integer.parseInt(this.input.substring(this.pos + 1, probe));
 					}
 					catch (NumberFormatException overflow) {
-						throw new LispReadException("Invalid packed width: " + this.input.substring(this.pos, probe));
+						throw err("Invalid packed width: " + this.input.substring(this.pos, probe));
 					}
-					tokens.add(width == 8 || width == 16 || width == 32 ? new Token.IntVectorOpen(width)
-							: new Token.VectorOpen());
+					add(tokens, width == 8 || width == 16 || width == 32 ? new Token.IntVectorOpen(width)
+							: new Token.VectorOpen(), tokenStart);
 					this.pos = probe + 2;
 				}
 				else if (probe < this.input.length()
@@ -275,45 +324,46 @@ public final class LispLexer {
 						label = Integer.parseInt(this.input.substring(this.pos + 1, probe));
 					}
 					catch (NumberFormatException overflow) {
-						throw new LispReadException("Invalid reader label: " + this.input.substring(this.pos, probe));
+						throw err("Invalid reader label: " + this.input.substring(this.pos, probe));
 					}
-					tokens.add(this.input.charAt(probe) == '=' ? new Token.LabelDef(label) : new Token.LabelRef(label));
+					add(tokens, this.input.charAt(probe) == '=' ? new Token.LabelDef(label) : new Token.LabelRef(label),
+							tokenStart);
 					this.pos = probe + 1;
 				}
 				else {
-					tokens.add(readSymbol());
+					add(tokens, readSymbol(), tokenStart);
 				}
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && isRadixMarker(this.input.charAt(this.pos + 1))) {
-				tokens.add(readRadixNumber());
+				add(tokens, readRadixNumber(), tokenStart);
 			}
 			else if (c == '.') {
 				if (this.pos + 1 >= this.input.length() || !isSymbolChar(this.input.charAt(this.pos + 1))) {
-					tokens.add(new Token.Dot());
+					add(tokens, new Token.Dot(), tokenStart);
 					this.pos++;
 				}
 				else {
-					tokens.add(readSymbol());
+					add(tokens, readSymbol(), tokenStart);
 				}
 			}
 			else if (c == '"') {
-				tokens.add(readString());
+				add(tokens, readString(), tokenStart);
 			}
 			else if (isDigit(c)) {
-				tokens.add(readNumber());
+				add(tokens, readNumber(), tokenStart);
 			}
 			else if (c == '-' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
-				tokens.add(readNumber());
+				add(tokens, readNumber(), tokenStart);
 			}
 			else if (c == '+' && this.pos + 1 < this.input.length() && isDigit(this.input.charAt(this.pos + 1))) {
 				// An explicitly positive number literal (+347): the sign is consumed and
 				// the digits parse as usual. A '+' followed by anything else (a symbol
 				// like +limit+ or the function +) stays a symbol.
 				this.pos++;
-				tokens.add(readNumber());
+				add(tokens, readNumber(), tokenStart);
 			}
 			else {
-				tokens.add(readSymbol());
+				add(tokens, readSymbol(), tokenStart);
 			}
 		}
 		return tokens;
@@ -418,7 +468,7 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos == digitsStart || (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos)))) {
-			throw new LispReadException("Invalid digits after #" + marker + ": "
+			throw err("Invalid digits after #" + marker + ": "
 					+ this.input.substring(start, Math.min(this.pos + 1, this.input.length())));
 		}
 		String digits = this.input.substring(start, this.pos);
@@ -495,7 +545,7 @@ public final class LispLexer {
 	private Token.CharToken readChar() {
 		this.pos += 2; // skip "#\"
 		if (this.pos >= this.input.length()) {
-			throw new LispReadException("Unexpected end of input after #\\");
+			throw err("Unexpected end of input after #\\");
 		}
 		int start = this.pos;
 		char first = this.input.charAt(this.pos);
@@ -513,7 +563,7 @@ public final class LispLexer {
 		return new Token.CharToken(charByName(token));
 	}
 
-	private static int charByName(String name) {
+	private int charByName(String name) {
 		return switch (name.toLowerCase(java.util.Locale.ROOT)) {
 			case "space" -> ' ';
 			case "newline", "linefeed", "lf" -> '\n';
@@ -524,7 +574,7 @@ public final class LispLexer {
 			case "nul", "null" -> 0;
 			case "rubout", "delete", "del" -> 127;
 			case "escape", "altmode", "esc" -> 27;
-			default -> throw new LispReadException("Unknown character name: #\\" + name);
+			default -> throw err("Unknown character name: #\\" + name);
 		};
 	}
 
@@ -559,7 +609,7 @@ public final class LispLexer {
 					this.pos++;
 				}
 				if (this.pos >= this.input.length()) {
-					throw new LispReadException("Unterminated |...| symbol escape");
+					throw err("Unterminated |...| symbol escape");
 				}
 				this.pos++; // closing |
 				continue;
@@ -605,7 +655,7 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos >= this.input.length()) {
-			throw new LispReadException("Unterminated string literal");
+			throw err("Unterminated string literal");
 		}
 		this.pos++; // skip closing "
 		return new Token.StringToken(sb.toString());
@@ -632,7 +682,7 @@ public final class LispLexer {
 	private LispVal readFeatureExpr() {
 		skipInterTokenSpace();
 		if (this.pos >= this.input.length()) {
-			throw new LispReadException("Unexpected end of input in feature expression");
+			throw err("Unexpected end of input in feature expression");
 		}
 		char c = this.input.charAt(this.pos);
 		if (c == '(') {
@@ -641,7 +691,7 @@ public final class LispLexer {
 			while (true) {
 				skipInterTokenSpace();
 				if (this.pos >= this.input.length()) {
-					throw new LispReadException("Unexpected end of input in feature expression, expected ')'");
+					throw err("Unexpected end of input in feature expression, expected ')'");
 				}
 				if (this.input.charAt(this.pos) == ')') {
 					this.pos++;
@@ -662,7 +712,7 @@ public final class LispLexer {
 			}
 			return new LispSymbol(this.input.substring(start, this.pos));
 		}
-		throw new LispReadException("Invalid feature expression starting with '" + c + "'");
+		throw err("Invalid feature expression starting with '" + c + "'");
 	}
 
 	// Skips whitespace and comments (line and block) between tokens.
@@ -704,15 +754,16 @@ public final class LispLexer {
 				this.pos++;
 			}
 		}
-		throw new LispReadException("Unterminated block comment");
+		throw err("Unterminated block comment");
 	}
 
 	// Re-lexes a #. datum that was skipped at the raw character level. Returns null when
 	// the datum uses syntax the lexer does not support (the caller falls back to the nil
 	// placeholder) or lexes to nothing (a fully #+/#- suppressed datum).
-	@Nullable private List<Token> tryTokenizeReadEvalDatum(String datum) {
+	@Nullable private List<LocatedToken> tryTokenizeReadEvalDatum(String datum) {
 		try {
-			List<Token> datumTokens = new LispLexer(datum, this.features, this.readEvalMode).tokenize();
+			List<LocatedToken> datumTokens = new LispLexer(datum, this.features, this.readEvalMode)
+				.tokenizeWithPositions();
 			if (datumTokens.isEmpty() || !LispReader.parsesAsExpressions(datumTokens, this.features)) {
 				return null;
 			}
@@ -738,7 +789,7 @@ public final class LispLexer {
 				if (consumedConditional) {
 					return;
 				}
-				throw new LispReadException("Unexpected end of input, expected a form to skip");
+				throw err("Unexpected end of input, expected a form to skip");
 			}
 			if (this.input.charAt(this.pos) == ')') {
 				// A failing conditional guarded the last form(s) before ')': the nested
@@ -746,7 +797,7 @@ public final class LispLexer {
 				if (consumedConditional) {
 					return;
 				}
-				throw new LispReadException("Unexpected ')' where a form to skip was expected");
+				throw err("Unexpected ')' where a form to skip was expected");
 			}
 			if (skipDatumOrConditional()) {
 				return;
@@ -863,7 +914,7 @@ public final class LispLexer {
 				this.pos++;
 			}
 		}
-		throw new LispReadException("Unexpected end of input in a skipped form, expected ')'");
+		throw err("Unexpected end of input in a skipped form, expected ')'");
 	}
 
 	private void skipStringRaw() {
@@ -875,7 +926,7 @@ public final class LispLexer {
 			this.pos++;
 		}
 		if (this.pos >= this.input.length()) {
-			throw new LispReadException("Unterminated string literal");
+			throw err("Unterminated string literal");
 		}
 		this.pos++; // skip closing "
 	}
@@ -883,7 +934,7 @@ public final class LispLexer {
 	private void skipCharLiteralRaw() {
 		this.pos += 2; // skip "#\"
 		if (this.pos >= this.input.length()) {
-			throw new LispReadException("Unexpected end of input after #\\");
+			throw err("Unexpected end of input after #\\");
 		}
 		char first = this.input.charAt(this.pos);
 		this.pos++;

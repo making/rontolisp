@@ -113,10 +113,10 @@ public final class RontoLispCli {
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
 					options.contains("--no-gc"), options.contains("--simd"), options.contains("--no-prune"),
-					options.contains("--emit-wit"));
+					options.contains("--emit-wit"), inputFile);
 		}
 		else {
-			interpret(source, baseDir, systemPath, options.contains("--simd"));
+			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
 		}
 	}
 
@@ -238,7 +238,8 @@ public final class RontoLispCli {
 		}
 	}
 
-	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, boolean simd) {
+	private void interpret(String source, @Nullable String baseDir, List<String> systemPath, boolean simd,
+			@Nullable String entryFile) {
 		LispEvaluator evaluator = new LispEvaluator(this.out, this.in);
 		evaluator.setLoadBaseDir(baseDir);
 		evaluator.setSystemPath(systemPath);
@@ -249,12 +250,12 @@ public final class RontoLispCli {
 		// read; each top-level form's markers resolve just before it evaluates, the
 		// same timing the runtime loadFile uses.
 		if (source.contains("#.")) {
-			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER)) {
+			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER, entryFile)) {
 				evaluator.eval(evaluator.resolveReadTimeEvalInCode(expr));
 			}
 			return;
 		}
-		List<LispVal> exprs = LispReader.readAllFromString(source);
+		List<LispVal> exprs = LispReader.readAllFromString(source, Features.INTERPRETER, entryFile);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
 		}
@@ -262,7 +263,7 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit) {
+			boolean noPrune, boolean wit, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -300,8 +301,8 @@ public final class RontoLispCli {
 		// #. read-time eval on the compile path: the marker read wraps each datum in a
 		// (%read-eval datum) marker that UserMacroExpander later resolves against the
 		// macro-time evaluator, per top-level form (the interpreter's loadFile timing).
-		List<LispVal> read = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, features)
-				: LispReader.readAllFromString(source, features);
+		List<LispVal> read = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, features, entryFile)
+				: LispReader.readAllFromString(source, features, entryFile);
 		List<LispVal> loaded = LoadInliner.inline(read, SourceLoader.fileSystem(), baseDir, systemPath, features);
 		// Expand the (rontolisp:async (defun ...)) wrapper before anything scans for
 		// definitions: HttpLibrary's handler reachability, WitExportInliner's defun

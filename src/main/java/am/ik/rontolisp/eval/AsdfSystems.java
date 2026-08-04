@@ -178,7 +178,7 @@ public final class AsdfSystems {
 		// Component-class names a tolerated doc-file defclass declared, in file order
 		// like the feature pushes: they reach only the systems defined after them.
 		Set<String> docComponentTypes = new HashSet<>();
-		for (LispVal form : LispReader.readAllSkippingReadEval(source, features)) {
+		for (LispVal form : LispReader.readAllSkippingReadEval(source, features, asdPath)) {
 			// A #. datum the lexer could not re-lex leaves a nil placeholder (so it does
 			// not shift plist/alist pairing inside a defsystem option); a top-level one
 			// is an ASDF version guard and is simply ignored.

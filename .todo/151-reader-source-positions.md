@@ -9,7 +9,7 @@ currently produces an error with no indication of WHERE — this is the
 single biggest debugging bottleneck when bringing up a new community
 library.
 
-## Phase 1 — positions in reader errors (small, standalone win)
+## Phase 1 — positions in reader errors (small, standalone win) — DONE 2026-08-04
 
 Add line/column counters to `LispLexer`; include position in every
 `LispReadException` (and reader-level errors like unterminated strings /
@@ -17,6 +17,18 @@ unknown `#` dispatch). When the source came through `LoadInliner` / the
 ASDF splice, prefix the origin file (the loader knows it via
 `SourceLoader`). Zero backend or AST changes; improves every parse error
 immediately.
+
+Implemented via `reader.SourceLocation` (line/column computed lazily on
+error, never stored on the AST) + `reader.LocatedToken`; `LispLexer`
+tokenizes to `List<LocatedToken>`; `LispReader` unpacks offsets into a
+parallel list so existing token access is untouched. The prefix is
+`file:line:column: ` only when an origin file is known; a read without one
+(a runtime `read`/`read-from-string` of a string, a REPL buffer) keeps its
+bare message so runtime error text is byte-identical. `LoadInliner.spliceFile`
+/ `AsdfSystems` / `RontoLispCli` pass the origin file through. Verified by
+`LispReaderTest` (lexer + later-line errors) and `LoadInlinerTest` (errors
+inside a `load`ed file and a `ql:quickload`ed system name the origin file).
+See `.kb/load-inliner.md`.
 
 ## Phase 2 — per-form provenance for frontend passes (follow-up)
 

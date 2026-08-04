@@ -11,6 +11,7 @@ import am.ik.rontolisp.eval.UserMacroExpander;
 import am.ik.rontolisp.eval.QuicklispTestSupport;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -96,6 +97,28 @@ class LoadInlinerTest {
 		List<LispVal> result = inline("(load (concatenate 'string \"a\" \".lisp\"))", Map.of());
 		assertThat(result).hasSize(1);
 		assertThat(result.get(0).print()).startsWith("(LOAD");
+	}
+
+	@Test
+	void readerErrorInALoadedFileNamesTheOriginFile() {
+		// A stray token in a spliced file must name the FILE it came from plus its
+		// line/column -- not a line of the flattened entry program.
+		assertThatThrownBy(() -> inline("(load \"core.lisp\")", Map.of("core.lisp", "(defun f (x)\n  #\\Nope)")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("core.lisp:2:")
+			.hasMessageContaining("Unknown character name: #\\Nope");
+	}
+
+	@Test
+	void readerErrorInAQuickloadedSystemNamesTheOriginFile(@TempDir Path home) {
+		// The ql:quickload download splices the system's component file through the same
+		// path as load, so a reader error inside it names the downloaded component file.
+		assertThatThrownBy(() -> LoadInliner.inline(LispReader.readAllFromString("(ql:quickload \"mylib\")"),
+				SourceLoader.fileSystem(), null, List.of(), Features.INTERPRETER,
+				quicklispClient(home, "(defun mylib-answer () 42)\n  #\\Nope)")))
+			.isInstanceOf(LispReadException.class)
+			.hasMessageContaining("mylib.lisp:")
+			.hasMessageContaining("Unknown character name: #\\Nope");
 	}
 
 	@Test
