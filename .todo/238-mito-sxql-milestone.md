@@ -93,7 +93,7 @@ Library chain (each blocked by the listed units):
     245, 246
 11. `.todo/249` mito-migration + chipz slice + full `mito` + lack-middleware-mito
     — 中〜高 — needs 247, 248 — **DONE 2026-08-03**
-12. `.todo/250` MitoE2eTest + docs — 中 — needs 249
+12. `.todo/250` MitoE2eTest + docs — 中 — needs 249 — **DONE 2026-08-04**
 
 Interpreter leg lands first inside each unit, but a unit is DONE only when the
 JVM and component legs are green too (or the divergence is recorded with its
@@ -119,6 +119,32 @@ qualifier on the compiled backends, and the Gray-streams rewrite treating a
 binding form's lambda list as a call. Follow-ups: `.todo/251` (DAO accessors,
 relational `:col-type`), `.todo/252` (Gray output protocol), `.todo/253` (SCRAM
 cost, cached-connection lifetime).
+
+## MILESTONE COMPLETE (2026-08-04, `.todo/250` closed the last unit)
+
+Every acceptance item below is met and every unit's divergence carries its
+reason + re-evaluation trigger in a `.kb` file: `.kb/mito.md` (the chipz CRC32
+slice, the `generate-migrations` filesystem scoping, the three upstream defects,
+the SCRAM caveat), `.kb/asdf.md` (the trivia `trivia.trivial` route from
+`.todo/243`, the `dbi-deps.asd` per-backend cache choice from `.todo/245`,
+sxql), `.kb/clos.md` (the MOP widening and the redefinition scope from
+`.todo/246`) and `.kb/packages.md` (`uiop:define-package` + `:use-reexport`).
+
+Coverage landed with `.todo/250`: **`MitoE2eTest`** (three live backends,
+byte-identical, plus the Preview 1 compile-error pin) and the bilingual
+`doc/{en,ja}/guides/mito.md` + the rewritten `asdf-systems.md` row.
+
+ONE gap was found while writing that E2E and is filed rather than fixed here:
+sxql's SQL FUNCTION operators (`(:count ...)` and friends, hence
+`mito:count-dao`) are interpreter-only because 2-argument `find-symbol` answers
+a SYMBOL for an unknown name on the compiled backends — `.todo/254`, which is
+also the counter-example `.todo/156` was waiting for before deciding its A1
+intern-table axis. It is a pre-existing symbol-model deviation that mito is the
+first consumer to make visible, not a mito defect.
+
+Remaining follow-ups, all filed: `.todo/251` (DAO accessors, relational
+`:col-type`), `.todo/252` (Gray output protocol), `.todo/253` (SCRAM cost,
+cached-connection lifetime), `.todo/254` (the `find-symbol` gap above).
 
 ## Acceptance (interpreter + JVM + WASM component; P1 = out of scope)
 

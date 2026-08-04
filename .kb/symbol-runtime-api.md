@@ -52,7 +52,18 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
   value). Two deviations there: an unknown name yields a symbol instead of nil
   (harmless where find-symbol feeds a plist lookup that then answers nil anyway),
   and the qualifier is the single-colon EXTERNAL spelling — right for a library's
-  exported API, wrong for an internal symbol. A bare non-keyword symbol in the
+  exported API, wrong for an internal symbol.
+  **The first deviation is NOT harmless in the `find-symbol` ->
+  `symbol-function` idiom, and a real library uses it** (`.todo/254`, found
+  2026-08-04 writing `MitoE2eTest`): sxql's `find-make-op` probes for an
+  operator constructor with `:errorp nil`, expecting nil for an operator it has
+  no struct for and falling back to a generic function-op. We answer a symbol,
+  so `symbol-function` signals and every sxql SQL FUNCTION operator
+  (`:count`/`:sum`/`:max`/...) — `mito:count-dao` with them — dies on the JVM
+  and WASM backends while the interpreter answers correctly. The honest fix is
+  symbol IDENTITY (does this package OWN this name?), i.e. the A1 axis
+  `.todo/156` deferred for want of a consumer; this is the consumer. Tripwire:
+  `MitoE2eTest#countDaoIsUndefinedOnTheCompiledBackends`. A bare non-keyword symbol in the
   package-argument position is a VARIABLE REFERENCE, never a designator literal:
   reading its name as the package is how this once built the doubly-qualified
   `IRONCLAD::IRONCLAD:SHA256`.

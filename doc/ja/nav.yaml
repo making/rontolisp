@@ -55,6 +55,10 @@ sections:
         title: Gray ストリーム
       - file: guides/asdf-systems.md
         title: システム（asdf）
+      - file: guides/clack.md
+        title: Clack Web アプリケーション
+      - file: guides/mito.md
+        title: O/R マッピング（mito, sxql）
       - file: guides/reader-case.md
         title: リーダーのケース（大文字化）
       - file: guides/math-backends.md

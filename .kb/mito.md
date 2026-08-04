@@ -143,6 +143,20 @@ All three are `.todo/251`; `.todo/253` carries the SCRAM cost and the
 cached-connection lifetime, and `.todo/252` the Gray output-protocol widening a
 broadcast stream would inherit.
 
+**`count-dao` -- and every sxql SQL FUNCTION operator -- is interpreter-only**
+(found while writing `MitoE2eTest`, `.todo/254`). `count-dao` builds
+`(:count :*)`, and sxql resolves an operator it has no op-struct for through
+`find-make-op` -> `(find-symbol "MAKE-COUNT-OP" pkg)` with `:errorp nil`,
+expecting `nil` and falling back to a generic `make-function-op`. The compiled
+backends answer a SYMBOL for an unknown name
+(`.kb/symbol-runtime-api.md` -- they BUILD the canonical spelling instead of
+asking what the package owns), so the fallback never runs and `symbol-function`
+signals. It reaches `:count` / `:sum` / `:max` / any `(:some-function ...)`, not
+just `count-dao`; the comparison and logic operators are unaffected because they
+DO have op-structs. **Re-evaluation trigger**: `.todo/254` is the item, and
+`MitoE2eTest#countDaoIsUndefinedOnTheCompiledBackends` is the tripwire -- it
+asserts the failure, so closing the gap turns it red.
+
 ## Verified capabilities worth knowing
 
 - `(:auto-pk :uuid)` works end to end (the second item `.todo/247` handed over
@@ -157,7 +171,16 @@ broadcast stream would inherit.
 
 ## Coverage
 
-- `MitoE2eTest` + the docs are `.todo/250`.
+- **`MitoE2eTest`** (`.todo/250`, opt-in via `RONTOLISP_POSTGRES_E2E=1`,
+  Testcontainers `postgres:17-alpine`, the `PostmodernE2eTest` shape): the DAO
+  round trip and the DB-side migration diff cycle, each asserted BYTE-IDENTICAL
+  on the interpreter, the JVM and the WASM component, plus the Preview 1
+  compile-error pin and the `count-dao` tripwire above. Its container takes
+  `POSTGRES_HOST_AUTH_METHOD=trust` for the SCRAM reason below.
+- The user-facing docs are `doc/{en,ja}/guides/mito.md` (mito AND sxql on one
+  page -- mito's query clauses ARE sxql, so a second page would duplicate), the
+  rewritten mito row in `guides/asdf-systems.md`, and the nav entry in both
+  languages.
 - The lack middleware (`lack-middleware-mito`) loads verbatim and its three
   branches (cached / `:no-cache t` / nil config) run on all three in-scope
   backends; `.kb/clack.md` owns the lack/clack machinery it rides.
