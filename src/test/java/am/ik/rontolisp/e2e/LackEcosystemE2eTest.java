@@ -23,26 +23,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  * rontolisp -- the {@code .todo/231} half of the Clack milestone.
  *
  * <p>
- * Two exercises, at the two coverage levels the backends allow:
+ * Two exercises, both on ALL FOUR backends:
  *
  * <ol>
- * <li><b>the lack chain</b> ({@link #lackRequestParsesBodiesAndRunsASession}) --
- * INTERPRETER ONLY, and deliberately so. {@code lack-request} pulls in http-body ->
- * fast-http, and fast-http's generated state machines exceed two independent, documented
- * compile-backend ceilings: {@code parse-header-field-and-value} outgrows the JVM's
- * signed 16-bit branch offset ({@code .kb/jvm-method-size-limits.md}) and http-body's
- * {@code (concatenate '(simple-array (unsigned-byte 8) (*)) ...)} is outside the WASM
- * backends' literal result-type family ({@code .kb/concatenate-result-families.md}).
- * Neither is caused by this milestone and both fail LOUDLY at compile time, never
- * silently at run time. See {@code .kb/lack.md}.</li>
+ * <li><b>the lack chain</b> ({@code lackRequest*}) -- body parsing and the session round
+ * trip, identical output everywhere. It used to be interpreter-only behind two
+ * compile-backend ceilings (fast-http's {@code parse-header-field-and-value} past the
+ * JVM's signed 16-bit branch offset; a {@code concatenate 'simple-byte-vector} deftype
+ * alias outside the WASM result-type family); both lifted by {@code .todo/256} --
+ * {@code am.ik.jvm.BranchRelaxer} and the registry-aware
+ * {@code ConcatenateForms.resultFamily} -- along with the two latent bugs the enablement
+ * exposed (the babel package redirect, the redefined-defun duplicate emission). See
+ * {@code .kb/lack.md}.</li>
  * <li><b>the substrate the chain rides on</b> ({@code smart-buffer} +
- * {@code flexi-streams}) -- ALL FOUR backends: an in-memory octet stream read back
- * through {@code read-byte}/{@code read-sequence}/{@code file-position}, and the
- * disk-spill path (a payload past the memory limit lands in a
- * {@code uiop:with-temporary-file} temporary and every further chunk APPENDS to it). The
- * spill is interpreter/JVM only: both WASM backends signal the standard
- * {@code ensure-directories-exist} message at CALL time, the documented divergence
- * ({@code .kb/directory-listing.md}), which the program catches and prints.</li>
+ * {@code flexi-streams}): an in-memory octet stream read back through
+ * {@code read-byte}/{@code read-sequence}/{@code file-position}, and the disk-spill path
+ * (a payload past the memory limit lands in a {@code uiop:with-temporary-file} temporary
+ * and every further chunk APPENDS to it). The spill is interpreter/JVM only: both WASM
+ * backends signal the standard {@code ensure-directories-exist} message at CALL time, the
+ * documented divergence ({@code .kb/directory-listing.md}), which the program catches and
+ * prints.</li>
  * </ol>
  *
  * Opt-in ({@code RONTOLISP_LACK_E2E=1}): it needs Docker (the pinned wasmtime image) and,
@@ -187,9 +187,29 @@ class LackEcosystemE2eTest {
 			""";
 
 	@Test
-	void lackRequestParsesBodiesAndRunsASession(@TempDir Path workDir) throws Exception {
+	void lackRequestParsesBodiesAndRunsASessionOnTheInterpreter(@TempDir Path workDir) throws Exception {
 		Path program = writeProgram(workDir, "lack-exercise.lisp", LACK_EXERCISE);
 		assertThat(runCli(workDir, program.getFileName().toString())).isEqualToNormalizingWhitespace(LACK_EXPECTED);
+	}
+
+	@Test
+	void lackRequestParsesBodiesAndRunsASessionOnJvm(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, "lack-exercise.lisp", LACK_EXERCISE);
+		runCli(workDir, program.getFileName().toString(), "-o", "LackChain.class");
+		assertThat(runSuccessfully(workDir, JAVA, "-cp", CLASSPATH + java.io.File.pathSeparator + workDir, "LackChain"))
+			.isEqualToNormalizingWhitespace(LACK_EXPECTED);
+	}
+
+	@Test
+	void lackRequestParsesBodiesAndRunsASessionOnWasmPreview1(@TempDir Path workDir) throws Exception {
+		assertThat(runWasm(workDir, LACK_EXERCISE, "lack-p1.wasm", List.of()))
+			.isEqualToNormalizingWhitespace(LACK_EXPECTED);
+	}
+
+	@Test
+	void lackRequestParsesBodiesAndRunsASessionOnWasmComponent(@TempDir Path workDir) throws Exception {
+		assertThat(runWasm(workDir, LACK_EXERCISE, "lack-comp.wasm", List.of("--component")))
+			.isEqualToNormalizingWhitespace(LACK_EXPECTED);
 	}
 
 	@Test
@@ -209,21 +229,22 @@ class LackEcosystemE2eTest {
 
 	@Test
 	void smartBufferSubstrateOnWasmPreview1(@TempDir Path workDir) throws Exception {
-		assertThat(runWasm(workDir, "substrate-p1.wasm", List.of()))
+		assertThat(runWasm(workDir, SUBSTRATE_EXERCISE, "substrate-p1.wasm", List.of()))
 			.isEqualToNormalizingWhitespace(SUBSTRATE_EXPECTED_NO_FILESYSTEM);
 	}
 
 	@Test
 	void smartBufferSubstrateOnWasmComponent(@TempDir Path workDir) throws Exception {
-		assertThat(runWasm(workDir, "substrate-comp.wasm", List.of("--component")))
+		assertThat(runWasm(workDir, SUBSTRATE_EXERCISE, "substrate-comp.wasm", List.of("--component")))
 			.isEqualToNormalizingWhitespace(SUBSTRATE_EXPECTED_NO_FILESYSTEM);
 	}
 
-	// Compiles the substrate exercise to WASM and runs it in the pinned wasmtime
-	// container. -W exceptions=y: the handler-case around the spill puts the module in
-	// EH mode.
-	private String runWasm(Path workDir, String output, List<String> extraFlags) throws Exception {
-		Path program = writeProgram(workDir, "substrate.lisp", SUBSTRATE_EXERCISE);
+	// Compiles the given exercise to WASM and runs it in the pinned wasmtime
+	// container. -W exceptions=y: both exercises compile in EH mode (the substrate's
+	// handler-case around the spill; the lack chain's handler-case/unwind-protect
+	// sites inside the loaded libraries).
+	private String runWasm(Path workDir, String source, String output, List<String> extraFlags) throws Exception {
+		Path program = writeProgram(workDir, "exercise.lisp", source);
 		List<String> args = new ArrayList<>(List.of(program.getFileName().toString(), "-o", output));
 		args.addAll(extraFlags);
 		runCli(workDir, args.toArray(String[]::new));

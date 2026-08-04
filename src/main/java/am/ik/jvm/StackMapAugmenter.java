@@ -842,7 +842,7 @@ public final class StackMapAugmenter {
 		private void interpret(Frame frame, int pc, int op) {
 			switch (op) {
 				case Opcode.NOP, Opcode.INEG, Opcode.LNEG, Opcode.FNEG, Opcode.DNEG, Opcode.IINC, Opcode.I2B,
-						Opcode.I2C, Opcode.I2S, Opcode.GOTO, Opcode.RETURN ->
+						Opcode.I2C, Opcode.I2S, Opcode.GOTO, Opcode.GOTO_W, Opcode.RETURN ->
 					{
 					}
 				case Opcode.ACONST_NULL -> push(frame, VType.NULL);

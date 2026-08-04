@@ -70,6 +70,29 @@ Cons cells and function references are both `Object[]`, distinguished by
 Pass 1 collects defuns; 2a compiles defun bodies, 2b top-level, 2c iteratively
 compiles lambda bodies (top-level must compile before lambda iteration).
 
+## A redefined defun binds every call to its LAST definition (todo-256)
+
+Both compile backends resolve a defun call site through the per-NAME map built
+in Pass 1, where a later `put` of the same name wins — so a call between the
+two definitions already gets the LAST body, unlike the interpreter's
+sequential redefinition (fast-http redefines 11 struct readers as plain defuns
+at load time, before any call, so nothing observes the difference). The
+emission-side invariants that follow from real duplicate entries:
+
+- **JVM**: a class may not hold two methods of one name and descriptor
+  (`ClassFormatError: Duplicate method name` at LOAD time), so
+  `JvmLispCompiler` drops every non-last duplicate from the defuns list before
+  funcId assignment. Pinned by
+  `JvmLispCompilerTest#compileAndRunARedefinedDefunKeepsTheLastDefinition`.
+- **WASM**: all bodies are emitted (one module function per defuns-LIST entry),
+  so any function index reserved from `functions.size()` — the deduplicating
+  name map — sat below the real lambda region by the duplicate count, and
+  `_start`'s top-level-chunk calls landed on arbitrary lambdas (an invalid
+  module when arities differed). Reservation goes through `Ctx.numDefuns`
+  (= the defuns list size; `WasmToplevelEmit.openChunk`, `WasmLambdaCompiler`,
+  `WasmAsyncEmit` x2, copied by `freshCtx`). Pinned by
+  `WasmLispCompilerIntegrationTest#redefinedDefunKeepsTheTopLevelChunkIndicesRight`.
+
 ## `%` prefix convention
 
 Internal helpers outside the public API are `%`-prefixed (e.g. `%remf-tail`).

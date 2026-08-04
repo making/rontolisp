@@ -672,6 +672,28 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 
+		// A redefined defun keeps only its LAST definition: a class may not hold two
+		// methods of the same name and descriptor (fast-http redefines 11 struct
+		// readers as plain defuns, which loaded as a ClassFormatError). Dropping the
+		// earlier bodies loses nothing the backend could reach -- every by-name call
+		// site and #'reference resolves through the name map, which the last
+		// definition wins even BETWEEN the two defuns (whole-program static
+		// resolution, same as the WASM backend's).
+		Map<String, Integer> lastDefinition = new HashMap<>();
+		for (int i = 0; i < defuns.size(); i++) {
+			lastDefinition.put(defuns.get(i).name, i);
+		}
+		if (lastDefinition.size() < defuns.size()) {
+			List<DefunDecl> lastOnly = new ArrayList<>(lastDefinition.size());
+			for (int i = 0; i < defuns.size(); i++) {
+				if (lastDefinition.getOrDefault(defuns.get(i).name, -1) == i) {
+					lastOnly.add(defuns.get(i));
+				}
+			}
+			defuns.clear();
+			defuns.addAll(lastOnly);
+		}
+
 		// Inject built-in function wrappers (user defuns take priority)
 		Set<String> userDefinedNames = new HashSet<>();
 		for (DefunDecl defun : defuns) {
@@ -679,8 +701,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer:
 		// computed here, before the wrappers are generated, and threaded into Ctx so the
-		// lowering only emits calls to a helper that is actually present.
-		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
+		// lowering only emits calls to a helper that is actually present. The registry
+		// resolves a user deftype alias of the string family the same way the
+		// CONCATENATE lowering itself will.
+		boolean usesSeqString = ConcatenateForms.needsSeqString(program, closRegistry);
 		// The hash-table runtime gate. Like the array gate it is a source scan that a
 		// lowering can outrun -- (%class-designator x) expands into a hash-table-p test,
 		// so a
@@ -1709,6 +1733,23 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| standardInputGlobalField != null) ? cp.addString("T") : null;
 		final Utf8Constant standardOutputClinitName = seedsStandardStream ? cp.addUtf8("<clinit>") : null;
 		final Utf8Constant standardOutputClinitDesc = seedsStandardStream ? cp.addUtf8("()V") : null;
+
+		// Branch relaxation: any Ctx-compiled body whose patchBranch overflowed the
+		// signed 16-bit encoding is rewritten over goto_w here, before assembly
+		// (fast-http's generated parse-header-field-and-value state machine is the
+		// real-world trigger). A method with no deferred branch is untouched, byte for
+		// byte. The runtime-builder methods never defer: their raw-list patchBranch
+		// still throws, and they stay under budget by construction.
+		am.ik.jvm.BranchRelaxer.relax(mainCtx.code, mainCtx.deferredBranches, mainCtx.exceptionTable);
+		for (Ctx chunk : topChunks) {
+			am.ik.jvm.BranchRelaxer.relax(chunk.code, chunk.deferredBranches, chunk.exceptionTable);
+		}
+		for (Ctx funcCtx : funcCtxs) {
+			am.ik.jvm.BranchRelaxer.relax(funcCtx.code, funcCtx.deferredBranches, funcCtx.exceptionTable);
+		}
+		for (Ctx lambdaCtx : lambdaCtxs) {
+			am.ik.jvm.BranchRelaxer.relax(lambdaCtx.code, lambdaCtx.deferredBranches, lambdaCtx.exceptionTable);
+		}
 
 		ByteArrayOutputStream classOut = new ByteArrayOutputStream();
 		new ByteCodeWriter(classOut) //
@@ -3648,6 +3689,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * (class version 50 verifies handlers without a StackMapTable).
 		 */
 		final List<ByteCodeWriter.ExceptionTableEntry> exceptionTable = new ArrayList<>();
+
+		/**
+		 * Branches whose patch overflowed the signed 16-bit encoding, as
+		 * {@code {branchPos, targetPos}} pairs: {@code JvmEmitHelper.patchBranch} defers
+		 * them here instead of throwing, and {@link am.ik.jvm.BranchRelaxer} rewrites
+		 * each over a {@code goto_w} once the body is complete. Empty for every method
+		 * whose branches fit, which keeps those bodies byte-identical.
+		 */
+		final List<int[]> deferredBranches = new ArrayList<>();
 
 		/**
 		 * The compilation-wide condition-channel state (the {@code _condTl} ThreadLocal

@@ -3883,52 +3883,11 @@ public final class Environment implements Scope {
 			return new LispString(printString(args.get(0)));
 		}));
 		// concatenate: the string, list and vector result families (ConcatenateForms is
-		// the shared contract the compilers lower through as well).
-		env.defineFunction(LispNames.CONCATENATE, new LispFunction(LispNames.CONCATENATE, args -> {
-			requireMinArgCount(LispNames.CONCATENATE, args, 1);
-			ConcatenateForms.ResultFamily family = ConcatenateForms.resultFamily(args.get(0));
-			if (family == null) {
-				throw new LispEvalException(
-						"concatenate supports the string, list and vector result types, got: " + args.get(0).print());
-			}
-			List<LispVal> rest = args.subList(1, args.size());
-			if (family == ConcatenateForms.ResultFamily.STRING) {
-				// Like the other two families, the string family takes any character
-				// SEQUENCE -- a string, a cons list, a vector, or nil, the empty list.
-				// The compile paths reach the same contract by sending each non-literal
-				// argument through %seq-string before the %string-concat fold.
-				StringBuilder sb = new StringBuilder();
-				for (LispVal arg : rest) {
-					if (arg instanceof LispString str) {
-						sb.append(str.value());
-						continue;
-					}
-					List<LispVal> chars = new ArrayList<>();
-					appendSequenceElements(arg, chars);
-					for (LispVal element : chars) {
-						if (!(element instanceof LispChar ch)) {
-							throw new LispEvalException(
-									"concatenate: a 'string result needs characters, got: " + element.print());
-						}
-						sb.appendCodePoint(ch.codePoint());
-					}
-				}
-				return new LispString(sb.toString());
-			}
-			// The list / vector families walk elements, so any sequence argument works.
-			List<LispVal> elements = new ArrayList<>();
-			for (LispVal arg : rest) {
-				appendSequenceElements(arg, elements);
-			}
-			if (family == ConcatenateForms.ResultFamily.VECTOR) {
-				return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
-			}
-			LispVal list = LispNil.INSTANCE;
-			for (int i = elements.size() - 1; i >= 0; i--) {
-				list = new LispCons(elements.get(i), list);
-			}
-			return list;
-		}));
+		// the shared contract the compilers lower through as well). The registry-less
+		// registration here cannot resolve user deftype aliases; LispEvaluator overrides
+		// it with concatenateBuiltin(closRegistry) so 'simple-byte-vector-style alias
+		// designators resolve exactly as they do on the compile paths.
+		env.defineFunction(LispNames.CONCATENATE, concatenateBuiltin(null));
 		// %string-concat: internal binary string concatenation used by
 		// format/concatenate.
 		env.defineFunction(LispNames.STRING_CONCAT, new LispFunction(LispNames.STRING_CONCAT, args -> {
@@ -4838,6 +4797,65 @@ public final class Environment implements Scope {
 		LispChar c = requireChar(op, value);
 		str.setCharAt(index, c.codePoint());
 		return c;
+	}
+
+	/**
+	 * The {@code concatenate} builtin: the string, list and vector result families over
+	 * any sequence arguments, with the result-type designator resolved through
+	 * {@link ConcatenateForms#resultFamily(LispVal, ClosRegistry)}. Registered
+	 * registry-less by {@link #createGlobal}; the evaluator re-registers it with its
+	 * class registry so a user {@code deftype} alias (fast-http's
+	 * {@code simple-byte-vector}) resolves exactly as it does on the compile paths.
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in family members only
+	 * @return the builtin function
+	 */
+	public static LispFunction concatenateBuiltin(@Nullable ClosRegistry closRegistry) {
+		return new LispFunction(LispNames.CONCATENATE, args -> {
+			requireMinArgCount(LispNames.CONCATENATE, args, 1);
+			ConcatenateForms.ResultFamily family = ConcatenateForms.resultFamily(args.get(0), closRegistry);
+			if (family == null) {
+				throw new LispEvalException(
+						"concatenate supports the string, list and vector result types, got: " + args.get(0).print());
+			}
+			List<LispVal> rest = args.subList(1, args.size());
+			if (family == ConcatenateForms.ResultFamily.STRING) {
+				// Like the other two families, the string family takes any character
+				// SEQUENCE -- a string, a cons list, a vector, or nil, the empty list.
+				// The compile paths reach the same contract by sending each non-literal
+				// argument through %seq-string before the %string-concat fold.
+				StringBuilder sb = new StringBuilder();
+				for (LispVal arg : rest) {
+					if (arg instanceof LispString str) {
+						sb.append(str.value());
+						continue;
+					}
+					List<LispVal> chars = new ArrayList<>();
+					appendSequenceElements(arg, chars);
+					for (LispVal element : chars) {
+						if (!(element instanceof LispChar ch)) {
+							throw new LispEvalException(
+									"concatenate: a 'string result needs characters, got: " + element.print());
+						}
+						sb.appendCodePoint(ch.codePoint());
+					}
+				}
+				return new LispString(sb.toString());
+			}
+			// The list / vector families walk elements, so any sequence argument works.
+			List<LispVal> elements = new ArrayList<>();
+			for (LispVal arg : rest) {
+				appendSequenceElements(arg, elements);
+			}
+			if (family == ConcatenateForms.ResultFamily.VECTOR) {
+				return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
+			}
+			LispVal list = LispNil.INSTANCE;
+			for (int i = elements.size() - 1; i >= 0; i--) {
+				list = new LispCons(elements.get(i), list);
+			}
+			return list;
+		});
 	}
 
 	private static void registerCharacters(Environment env) {

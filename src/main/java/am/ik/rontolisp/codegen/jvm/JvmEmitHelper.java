@@ -314,7 +314,17 @@ final class JvmEmitHelper {
 	 * points of {@code if}/{@code %block}/the predicate guards stay tracked.
 	 */
 	static void patchBranch(JvmLispCompiler.Ctx ctx, int branchPos, int targetPos) {
-		JvmRuntimeBuilder.patchBranch(ctx.code, branchPos, targetPos);
+		int offset = targetPos - branchPos;
+		if (offset < Short.MIN_VALUE || offset > Short.MAX_VALUE) {
+			// Past the signed 16-bit encoding: leave the placeholder bytes and let the
+			// per-method BranchRelaxer pass rewrite this branch over a goto_w
+			// (.kb/jvm-method-size-limits.md). Only the raw-list patchBranch of the
+			// self-budgeted runtime builders still throws.
+			ctx.deferredBranches.add(new int[] { branchPos, targetPos });
+		}
+		else {
+			JvmRuntimeBuilder.patchBranch(ctx.code, branchPos, targetPos);
+		}
 		ctx.stack.reconcile(branchPos, targetPos, ctx.code.size());
 	}
 

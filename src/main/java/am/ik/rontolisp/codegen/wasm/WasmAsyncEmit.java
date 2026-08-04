@@ -80,7 +80,7 @@ final class WasmAsyncEmit {
 	static Resume compileResume(WasmLispCompiler.Ctx proto, List<String> paramNames, List<LispVal> bodyExprs,
 			List<String> freeVarNames, boolean topLevel, boolean usesEval) {
 		int funcId = proto.nextFuncId[0]++;
-		int funcIndex = proto.userFuncBase + proto.functions.size() + proto.lambdaDecls.size();
+		int funcIndex = proto.userFuncBase + proto.numDefuns + proto.lambdaDecls.size();
 		int lambdaIdx = proto.lambdaDecls.size();
 		// Reserve the slot first: lambdas discovered while compiling the body append
 		// after it, keeping every funcIndex consistent.
@@ -693,7 +693,7 @@ final class WasmAsyncEmit {
 				ctx.functions.keySet(), ctx.globals, enclosingLexicals));
 		Resume resume = compileResume(ctx, paramNames, bodyExprs, freeVars, false, false);
 		int entryFuncId = ctx.nextFuncId[0]++;
-		int entryFuncIndex = ctx.userFuncBase + ctx.functions.size() + ctx.lambdaDecls.size();
+		int entryFuncIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
 		byte[] entryBody = buildEntryBody(ctx, paramNames.size(), true, resume);
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(entryFuncId, "_async_entry_" + entryFuncId, paramNames,
 				nf.variadic(), List.of(), freeVars, entryFuncIndex, entryBody));
@@ -757,6 +757,7 @@ final class WasmAsyncEmit {
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			.simd(proto.simd)
 			.userFuncBase(proto.userFuncBase)
+			.numDefuns(proto.numDefuns)
 			.userDefunNames(proto.userDefunNames)
 			.usesFmakunbound(proto.usesFmakunbound)
 			.packageTable(proto.packageTable)

@@ -3028,6 +3028,30 @@ cases:
       "abcde"
       "person"
       "xy"
+  # A result-type naming a user deftype resolves through its registered expansion
+  # to the family (fast-http's simple-byte-vector alias of the packed octet
+  # vector; the parameterized shape is folded to a zero-parameter deftype by the
+  # interpreter's foldDeftype / the compile paths' UserMacroExpander).
+  # .kb/concatenate-result-families.md, todo-256.
+  - name: concatenate-deftype-alias-result-type
+    source: |
+      (deftype ci-octet-vector (&optional (len '*))
+        `(simple-array (unsigned-byte 8) (,len)))
+      (print (concatenate 'ci-octet-vector #(1) #(2 3)))
+    expected: |
+      #(1 2 3)
+  # A redefined defun binds every call to its LAST definition on the compile
+  # backends (whole-program static resolution through the per-name map); the
+  # JVM emits only that definition (a class cannot hold duplicate methods), the
+  # WASM backends emit every body but reserve chunk/lambda indices off the
+  # defuns LIST, not the deduplicating map. .kb/core-representation.md, todo-256.
+  - name: redefined-defun-keeps-the-last-definition
+    source: |
+      (defun ci-redefined (x) x)
+      (defun ci-redefined (x) (+ x 1))
+      (print (ci-redefined 41))
+    expected: |
+      42
   # The linalg package is a Lisp-source library (linalg.lisp) spliced by
   # LinalgLibrary.process on the compile path and loaded lazily by the interpreter,
   # so one implementation must behave identically on every backend. linalg computes in

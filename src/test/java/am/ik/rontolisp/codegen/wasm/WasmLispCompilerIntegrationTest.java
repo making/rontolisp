@@ -454,6 +454,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void redefinedDefunKeepsTheTopLevelChunkIndicesRight() throws Exception {
+		// A redefined defun emits one module function PER DEFINITION (the defuns list),
+		// but the name->info map holds one entry per NAME -- so any funcIndex reserved
+		// from functions.size() (top-level chunks, lambdas, async entries) was off by
+		// the number of redefined entries and _start called into the wrong function
+		// (an invalid module when the arities differ). fast-http redefines 11 struct
+		// readers this way. The reservation must count the defuns LIST.
+		String program = """
+				(defun f (x) x)
+				(defun f (x) (+ x 1))
+				(print (f 41))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("42");
+	}
+
+	@Test
+	void concatenateResolvesADeftypeAliasResultType() throws Exception {
+		// fast-http's multipart parser concatenates into 'simple-byte-vector, its own
+		// deftype alias of the packed octet vector: the registered deftype expansion
+		// resolves the designator to the vector family at compile time.
+		String program = """
+				(deftype octet-vector () '(simple-array (unsigned-byte 8) (*)))
+				(print (concatenate 'octet-vector #(1) #(2 3)))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
 	void concatenateStringTakesAnySequence() throws Exception {
 		// The string family walks any character sequence, nil (the empty list) included:
 		// s-sql builds "CREATE TABLE x" as

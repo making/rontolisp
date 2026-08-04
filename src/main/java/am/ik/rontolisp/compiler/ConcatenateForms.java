@@ -4,6 +4,7 @@ import java.util.List;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -70,18 +71,51 @@ public final class ConcatenateForms {
 	 * @return the family, or {@code null} when the designator names none of them
 	 */
 	public static @Nullable ResultFamily resultFamily(LispVal designator) {
-		LispVal head = (designator instanceof LispCons spec) ? spec.car() : designator;
-		if (!(head instanceof LispSymbol sym)) {
-			return null;
+		return resultFamily(designator, null);
+	}
+
+	/**
+	 * {@link #resultFamily(LispVal)} with a class registry to resolve user
+	 * {@code deftype} aliases through: a designator (or compound-spec head) that names
+	 * none of the built-in family members but is a registered {@code deftype} resolves
+	 * through its expansion, transitively -- fast-http's multipart parser concatenates
+	 * into {@code 'simple-byte-vector}, its own alias of
+	 * {@code (simple-array (unsigned-byte 8) (*))}.
+	 * @param designator the result-type designator
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the family, or {@code null} when the designator names none of them
+	 */
+	public static @Nullable ResultFamily resultFamily(LispVal designator, @Nullable ClosRegistry closRegistry) {
+		LispVal current = designator;
+		// A deftype expansion may itself be an alias; cap the chain so a (registered)
+		// self-referential alias cannot loop.
+		for (int depth = 0; depth < 8; depth++) {
+			LispVal head = (current instanceof LispCons spec) ? spec.car() : current;
+			if (!(head instanceof LispSymbol sym)) {
+				return null;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+			switch (qn == null ? sym.name() : qn.member()) {
+				case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> {
+					return ResultFamily.STRING;
+				}
+				case "LIST", "CONS" -> {
+					return ResultFamily.LIST;
+				}
+				case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR" -> {
+					return ResultFamily.VECTOR;
+				}
+				default -> {
+					LispVal expansion = (closRegistry == null) ? null : closRegistry.findDeftype(sym.name());
+					if (expansion == null) {
+						return null;
+					}
+					current = expansion;
+				}
+			}
 		}
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-		return switch (qn == null ? sym.name() : qn.member()) {
-			case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> ResultFamily.STRING;
-			case "LIST", "CONS" -> ResultFamily.LIST;
-			case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR" ->
-				ResultFamily.VECTOR;
-			default -> null;
-		};
+		return null;
 	}
 
 	/**
@@ -93,8 +127,21 @@ public final class ConcatenateForms {
 	 * supported family
 	 */
 	public static @Nullable ResultFamily literalResultFamily(LispVal typeForm) {
+		return literalResultFamily(typeForm, null);
+	}
+
+	/**
+	 * {@link #literalResultFamily(LispVal)} with a class registry to resolve user
+	 * {@code deftype} aliases through (see {@link #resultFamily(LispVal, ClosRegistry)}).
+	 * @param typeForm the result-type argument as written
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the family, or {@code null} when the form is not a literal designator of a
+	 * supported family
+	 */
+	public static @Nullable ResultFamily literalResultFamily(LispVal typeForm, @Nullable ClosRegistry closRegistry) {
 		LispVal designator = unquoted(typeForm);
-		return (designator == null) ? null : resultFamily(designator);
+		return (designator == null) ? null : resultFamily(designator, closRegistry);
 	}
 
 	/**
@@ -132,8 +179,23 @@ public final class ConcatenateForms {
 	 * @return the expanded expression
 	 */
 	public static LispVal expand(LispCons cons, boolean normalizeArguments) {
+		return expand(cons, normalizeArguments, null);
+	}
+
+	/**
+	 * {@link #expand(LispCons, boolean)} with a class registry to resolve user
+	 * {@code deftype} alias designators through (see
+	 * {@link #resultFamily(LispVal, ClosRegistry)}).
+	 * @param cons the concatenate expression
+	 * @param normalizeArguments whether each string-family argument goes through
+	 * {@code %seq-string} first
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the expanded expression
+	 */
+	public static LispVal expand(LispCons cons, boolean normalizeArguments, @Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
-		ResultFamily family = (parts.size() >= 2) ? literalResultFamily(parts.get(1)) : null;
+		ResultFamily family = (parts.size() >= 2) ? literalResultFamily(parts.get(1), closRegistry) : null;
 		if (family == null) {
 			throw new UnsupportedOperationException(
 					"Cannot compile concatenate: the result type must be a literal quoted 'list, 'vector or 'string "
@@ -166,28 +228,42 @@ public final class ConcatenateForms {
 	 * @return {@code true} when at least one argument has to be normalized at run time
 	 */
 	public static boolean needsSeqString(List<LispVal> program) {
+		return needsSeqString(program, null);
+	}
+
+	/**
+	 * {@link #needsSeqString(List)} with a class registry, so a
+	 * {@code (concatenate 'alias ...)} whose alias is a user {@code deftype} of the
+	 * string family gates the helper in too (see
+	 * {@link #resultFamily(LispVal, ClosRegistry)}).
+	 * @param program the top-level forms
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return {@code true} when at least one argument has to be normalized at run time
+	 */
+	public static boolean needsSeqString(List<LispVal> program, @Nullable ClosRegistry closRegistry) {
 		for (LispVal form : program) {
-			if (needsSeqString(form)) {
+			if (needsSeqString(form, closRegistry)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean needsSeqString(LispVal form) {
+	private static boolean needsSeqString(LispVal form, @Nullable ClosRegistry closRegistry) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
 		if (parts.size() >= 3 && parts.get(0) instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())
-				&& literalResultFamily(parts.get(1)) == ResultFamily.STRING) {
+				&& literalResultFamily(parts.get(1), closRegistry) == ResultFamily.STRING) {
 			for (LispVal arg : parts.subList(2, parts.size())) {
 				if (!isKnownString(arg)) {
 					return true;
 				}
 			}
 		}
-		return needsSeqString(cons.car()) || needsSeqString(cons.cdr());
+		return needsSeqString(cons.car(), closRegistry) || needsSeqString(cons.cdr(), closRegistry);
 	}
 
 	// Nested binary %string-concat calls; a lone argument is concatenated with "" so the

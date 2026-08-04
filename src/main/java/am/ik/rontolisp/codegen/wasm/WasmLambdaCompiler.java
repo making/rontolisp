@@ -44,7 +44,7 @@ final class WasmLambdaCompiler {
 
 		int funcId = ctx.nextFuncId[0]++;
 		String methodName = "_lambda_" + funcId;
-		int funcIndex = ctx.userFuncBase + ctx.functions.size() + ctx.lambdaDecls.size();
+		int funcIndex = ctx.userFuncBase + ctx.numDefuns + ctx.lambdaDecls.size();
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
 				new ArrayList<>(freeVars), funcIndex));
 

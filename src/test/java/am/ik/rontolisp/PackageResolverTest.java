@@ -450,6 +450,20 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void babelSpellingsOfTheBabelEncodingsMembersResolveToTheirHome() {
+		// Real babel's package :uses babel-encodings and re-exports
+		// *default-character-encoding* / list-character-encodings, so both spellings
+		// are ONE symbol. The shim's defvar spells babel-encodings:, http-body's
+		// detect-charset defaults from babel: -- without the import redirect the
+		// babel: spelling minted a distinct global nothing binds (a loud undefined
+		// symbol on the compile paths, an unbound-variable landmine on the
+		// interpreter).
+		assertThat(resolve("babel:*default-character-encoding*"))
+			.isEqualTo("BABEL-ENCODINGS:*DEFAULT-CHARACTER-ENCODING*");
+		assertThat(resolve("(babel:list-character-encodings)")).isEqualTo("(BABEL-ENCODINGS:LIST-CHARACTER-ENCODINGS)");
+	}
+
+	@Test
 	void closerCommonLispQualifiedMembersResolveToTheirHomePackages() {
 		// closer-common-lisp (nickname c2cl) is the flat re-export of the cl externals
 		// overlaid with the closer-mop externals: each member resolves to its HOME

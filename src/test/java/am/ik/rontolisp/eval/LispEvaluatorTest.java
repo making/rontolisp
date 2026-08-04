@@ -1236,6 +1236,24 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalConcatenateResolvesADeftypeAliasResultType() {
+		// fast-http's multipart parser concatenates into 'simple-byte-vector, its own
+		// (deftype simple-byte-vector (&optional (len '*)) `(simple-array (unsigned-byte
+		// 8) (,len))): a result-type designator naming a registered deftype resolves
+		// through its expansion to the family, for the zero-parameter and the
+		// defaulted-parameter shapes alike.
+		assertThat(eval("""
+				(progn (deftype octet-vector () '(simple-array (unsigned-byte 8) (*)))
+				       (princ-to-string (concatenate 'octet-vector #(1) #(2 3))))"""))
+			.isEqualTo(new LispString("#(1 2 3)"));
+		assertThat(eval("""
+				(progn (deftype simple-byte-vector (&optional (len '*))
+				         `(simple-array (unsigned-byte 8) (,len)))
+				       (princ-to-string (concatenate 'simple-byte-vector #(1 2) #(3))))"""))
+			.isEqualTo(new LispString("#(1 2 3)"));
+	}
+
+	@Test
 	void evalConcatenateRejectsUnsupportedResultType() {
 		assertThatThrownBy(() -> eval("(concatenate 'hash-table \"a\" \"b\")")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("string, list and vector result types");

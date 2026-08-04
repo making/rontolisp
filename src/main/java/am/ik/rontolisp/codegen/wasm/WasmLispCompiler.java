@@ -1524,13 +1524,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Computed before expandTopLevelDefinitions, which runs the same scan to
 		// inject the restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
-		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
-		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
-		// calls
-		// a helper that is actually injected.
-		boolean usesSeqString = ConcatenateForms.needsSeqString(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
 				packageResolver::spellsAsExternal);
+		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
+		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
+		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --
+		// the same slot the JVM compiler scans in -- so the registry can resolve a user
+		// deftype alias of the string family the way the CONCATENATE lowering will.
+		boolean usesSeqString = ConcatenateForms.needsSeqString(program, closRegistry);
 		// A generic function whose name is a compiler-lowered built-in (fast-io's close
 		// methods): rename its dispatcher, keep the built-in as the default method, and
 		// route the program's call sites through it. No-op without such a generic.
@@ -2057,6 +2058,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
+			.numDefuns(defuns.size())
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.packageTable(packageResolver.runtimePackageTable())
@@ -4963,6 +4965,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		int userFuncBase = FUNC_USER_BASE;
 
 		/**
+		 * The number of emitted defun bodies -- the defuns LIST size, one module function
+		 * per definition. NOT {@link #functions}{@code .size()}: that map holds one entry
+		 * per NAME, so a redefined defun (fast-http redefines 11 struct readers) makes it
+		 * smaller, and any function index reserved from it (a top-level chunk, a lambda,
+		 * an async entry/resume) points below the real lambda region by the number of
+		 * redefined entries.
+		 */
+		int numDefuns = 0;
+
+		/**
 		 * True for the single context that compiles top-level forms (the {@code _start}
 		 * body), false for defun/lambda bodies. When {@link #usesEval} is also set, a
 		 * top-level global variable binding is mirrored into the eval runtime's global
@@ -5184,6 +5196,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
+			this.numDefuns = builder.numDefuns;
 			this.userDefunNames = builder.userDefunNames;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.packageTable = builder.packageTable;
@@ -5248,6 +5261,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean simd = false;
 
 			private int userFuncBase = FUNC_USER_BASE;
+
+			private int numDefuns = 0;
 
 			private Set<String> userDefunNames = Set.of();
 
@@ -5377,6 +5392,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userFuncBase(int userFuncBase) {
 				this.userFuncBase = userFuncBase;
+				return this;
+			}
+
+			Builder numDefuns(int numDefuns) {
+				this.numDefuns = numDefuns;
 				return this;
 			}
 

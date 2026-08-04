@@ -108,7 +108,7 @@ final class WasmToplevelEmit {
 	 */
 	private static Chunk openChunk(WasmLispCompiler.Ctx start, @Nullable Set<String> boxedVars) {
 		int funcId = start.nextFuncId[0]++;
-		int funcIndex = start.userFuncBase + start.functions.size() + start.lambdaDecls.size();
+		int funcIndex = start.userFuncBase + start.numDefuns + start.lambdaDecls.size();
 		int lambdaIdx = start.lambdaDecls.size();
 		start.lambdaDecls.add(placeholder(funcId, funcIndex));
 		ByteArrayOutputStream body = new ByteArrayOutputStream();

@@ -26,28 +26,37 @@ is a lack-shaped special case:
 | a KEYWORD `:conc-name` (fast-http's `(defstruct (http (:conc-name :http-)))`) | `.kb/defstruct.md` |
 | `*package*`-derived symbol construction (alexandria `format-symbol t`, macro expansion package) | `.kb/packages.md` |
 
-## The chain is INTERPRETER-ONLY, and the two reasons are pre-existing ceilings
+## The chain runs on ALL FOUR backends (todo-256, 2026-08-04)
 
-`lack-request` compiles on neither compile backend today, and both failures are
-LOUD compile-time errors of documented invariants -- not silent run-time
-divergence, and not caused by this work:
+The two compile-backend ceilings that kept the chain interpreter-only are
+lifted, and enabling the compile exposed two further latent bugs that this
+work fixed -- all four fixes are general, none lack-shaped:
 
-- **JVM**: fast-http's `parse-header-field-and-value` is a generated state
-  machine whose body outgrows the signed 16-bit branch offset
-  (`.kb/jvm-method-size-limits.md`; `GOTO_W` exists in `am.ik.jvm.Opcode` but no
-  emitter uses it and there is no relaxation pass).
-- **both WASM backends**: http-body's `slurp-stream` spells
-  `(apply #'concatenate '(simple-array (unsigned-byte 8) (*)) ...)`, outside the
-  literal result-type family the compilers accept
+- **JVM branch relaxation**: fast-http's `parse-header-field-and-value` (36.7 KB
+  body, generated `tagcasev` state machine) outgrew the signed 16-bit branch
+  offset. `am.ik.jvm.BranchRelaxer` now rewrites the out-of-range branches over
+  `goto_w` (`.kb/jvm-method-size-limits.md`). The body clears the 65535-byte
+  code cap with room (the chain's largest is `http-multipart-parse` at 49.7 KB).
+- **`concatenate` deftype-alias result types**: the actual blocker was
+  fast-http's `(concatenate 'simple-byte-vector ...)` -- a parameterized user
+  deftype alias of the packed octet vector; the compound
+  `'(simple-array (unsigned-byte 8) (*))` spelling was already in the vector
+  family. `ConcatenateForms.resultFamily` now resolves a designator naming a
+  registered deftype through its expansion, on every backend
   (`.kb/concatenate-result-families.md`).
-
-The tree-shaker cannot rescue either: `http-body:parse` dispatches to the
-multipart parser, so the giant defun is reachable from any `lack-request` program.
-Tracked in `.todo/256`.
-
-**Re-evaluation trigger**: when either ceiling lifts, re-run
-`LackEcosystemE2eTest`'s lack leg on that backend and promote it from the
-interpreter-only test to the four-backend shape.
+- **babel package redirect** (latent on the interpreter too): http-body's
+  `detect-charset` defaults from `babel:*default-character-encoding*` while the
+  shim's defvar spells `babel-encodings:` -- two distinct textual symbols until
+  the babel package records the two babel-encodings members as import redirects
+  (`.kb/packages.md`; `PackageResolverTest#babelSpellingsOfTheBabelEncodingsMembersResolveToTheirHome`).
+- **redefined-defun duplicate emission** (latent on BOTH compile backends for
+  ANY program): fast-http redefines 11 struct readers as plain defuns. On the
+  JVM two methods of one name/descriptor are a load-time `ClassFormatError`
+  (now: only the LAST definition is emitted); on WASM the funcIndex reservation
+  counted the deduplicating name map instead of the defuns list, shifting every
+  top-level-chunk/lambda index (now: `Ctx.numDefuns`;
+  `WasmLispCompilerIntegrationTest#redefinedDefunKeepsTheTopLevelChunkIndicesRight`,
+  `JvmLispCompilerTest#compileAndRunARedefinedDefunKeepsTheLastDefinition`).
 
 ## The substrate DOES run on all four backends
 
@@ -68,8 +77,8 @@ run on every backend by `LackEcosystemE2eTest`:
 ## Tests
 
 `LackEcosystemE2eTest` (opt-in `RONTOLISP_LACK_E2E=1`: Docker for the pinned
-wasmtime, network for the first quickload). Five legs -- the lack chain on the
-interpreter, the substrate on all four backends. The language-level pins live
+wasmtime, network for the first quickload). Eight legs -- the lack chain AND the
+substrate, each on all four backends. The language-level pins live
 with their own topics (see the table above) and in `ci-spec.yaml`
 (`open-if-exists-append-keeps-the-existing-content`,
 `defgeneric-short-form-method-combination`, `defstruct-keyword-conc-name`).

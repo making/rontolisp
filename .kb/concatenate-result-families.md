@@ -32,6 +32,37 @@ COMPUTED result type — the one deliberate interpreter-only extra (a compiler h
 to resolve the family statically; `coerce` has the same split and the reference
 pages say so).
 
+## A user deftype alias resolves through the class registry (todo-256)
+
+fast-http's multipart parser concatenates into `'simple-byte-vector`, its own
+`(deftype simple-byte-vector (&optional (len '*)) `(simple-array (unsigned-byte
+8) (,len)))`. `resultFamily(designator, closRegistry)` therefore resolves a
+designator (or compound-spec head) that names none of the built-in members
+through `ClosRegistry.findDeftype`, transitively (alias-of-alias, depth-capped).
+Every entry point grew the registry parameter: `literalResultFamily`, `expand`
+(both compilers pass `ctx.closRegistry` at their CONCATENATE case) and
+`needsSeqString` (so a deftype alias of the STRING family gates `%seq-string`
+in too — the WASM compiler now runs that scan AFTER `expandTopLevelDefinitions`,
+the same slot the JVM always used, so the registry is populated). The
+registry-less overloads remain for the codegen-time expansions (`format`,
+`with-output-to-string`), which only ever build the built-in spellings.
+
+What makes the parameterized deftype resolvable at all: the interpreter's
+`foldDeftype` registers the body evaluated with defaulted parameters, and on
+the compile paths `UserMacroExpander` replaces the form with the equivalent
+zero-parameter deftype that `expandTopLevelDefinitions` registers — both
+pre-existed this work. The interpreter's builtin is re-registered WITH the
+evaluator's registry (`Environment.concatenateBuiltin(closRegistry)` in the
+`LispEvaluator` constructor); the `createGlobal` default stays registry-less.
+
+The `#'concatenate` wrapper is deliberately NOT alias-aware: its dispatch is a
+runtime `member` over the designator with no registry at run time, and every
+real call site that goes through it (http-body's
+`(apply #'concatenate '(simple-array (unsigned-byte 8) (*)) ...)`) spells a
+built-in family head. Re-evaluation trigger: a library `apply`-ing
+`#'concatenate` onto a deftype-alias designator would need the alias table
+baked into the wrapper at injection time.
+
 ## The string family takes any character sequence (`%seq-string`, todo-202)
 
 `(concatenate 'string "a" '(#\b #\c) #(#\d) nil "e")` is `"abcde"` on every
@@ -107,8 +138,13 @@ producing a string (`.kb/no-gc-scalar-wasm.md`).
 
 `ci-spec.yaml` `concatenate-result-families` (all four backends, including the
 mixed-sequence string family),
-`LispEvaluatorTest#evalConcatenate*`,
-`JvmLispCompilerTest#compileAndRunConcatenate*` +
+`LispEvaluatorTest#evalConcatenate*` (incl.
+`evalConcatenateResolvesADeftypeAliasResultType`, both deftype shapes),
+`JvmLispCompilerTest#compileAndRunConcatenate*` (incl.
+`compileAndRunConcatenateWithADeftypeAliasResultType`) +
 `compileConcatenateWithComputedResultTypeFails`,
-`WasmLispCompilerIntegrationTest#concatenateBuildsListAndVectorResultTypes`, and
-`IroncladE2eTest` (the HKDF vector, end to end on four backends).
+`WasmLispCompilerIntegrationTest#concatenateBuildsListAndVectorResultTypes` +
+`#concatenateResolvesADeftypeAliasResultType`,
+`IroncladE2eTest` (the HKDF vector, end to end on four backends), and the
+`LackEcosystemE2eTest` lack legs (fast-http's `'simple-byte-vector`, the
+parameterized shape end to end).

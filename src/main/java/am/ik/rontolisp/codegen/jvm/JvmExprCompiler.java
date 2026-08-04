@@ -425,8 +425,8 @@ final class JvmExprCompiler {
 				case LispNames.FIND_PACKAGE -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandRuntimeFindPackage(cons.toList().get(1), ctx.packageTable), ctx,
 						className);
-				case LispNames.CONCATENATE ->
-					JvmExprCompiler.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString), ctx, className);
+				case LispNames.CONCATENATE -> JvmExprCompiler
+					.compileExpr(ConcatenateForms.expand(cons, ctx.usesSeqString, ctx.closRegistry), ctx, className);
 				case LispNames.READ_LINE -> {
 					LispVal typed = LispMacroExpander.expandReadEofSignal(cons, false);
 					if (typed != null) {

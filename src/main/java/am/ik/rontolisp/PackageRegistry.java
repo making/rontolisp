@@ -634,7 +634,16 @@ public final class PackageRegistry {
 		// babel::normalize-encoding by its two call sites. Owned by the package rather
 		// than left to the resolver's tolerance for an unknown :: member.
 		babelSymbols.add(LispNames.NORMALIZE_ENCODING);
-		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals));
+		// The two babel-encodings members are IMPORT REDIRECTS, not owned symbols:
+		// real babel re-exports babel-encodings' symbols, so babel:X and
+		// babel-encodings:X must canonicalize to the SAME spelling (the home
+		// package's). http-body's detect-charset defaults from
+		// babel:*default-character-encoding*; the shim's defvar spells
+		// babel-encodings: -- without the redirect the babel: spelling is a distinct
+		// global nothing binds.
+		define(new LispPackage(LispNames.BABEL_PKG, List.of(), babelSymbols, babelExternals,
+				Map.of(LispNames.DEFAULT_CHARACTER_ENCODING, LispNames.BABEL_ENCODINGS_PKG,
+						LispNames.LIST_CHARACTER_ENCODINGS, LispNames.BABEL_ENCODINGS_PKG)));
 		// swank: the STUB behind the built-in ASDF system of the same name
 		// (swank.lisp, eval.ShimLibraries). The real swank is SLIME's server half --
 		// a remote REPL attached to a running image, which no backend can offer, and

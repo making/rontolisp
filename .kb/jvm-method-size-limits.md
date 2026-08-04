@@ -1,4 +1,4 @@
-# JVM backend: no emitted method may outgrow the 16-bit branch / 64 KB code limits, and no class its 65534-entry constant pool
+# JVM backend: no emitted method may outgrow the 64 KB code limit (branches past the 16-bit offset relax to goto_w), and no class its 65534-entry constant pool
 
 Scope: the **JVM backend** (`codegen.jvm`). The WASM sibling constraint (one
 function body's superlinear compile cost) is
@@ -9,21 +9,28 @@ HARD format limits, not performance.
 
 Two JVM class-file ceilings bound every emitted method:
 
-- **A branch offset is a signed 16 bits** (`goto`/`if*`): any single branch
-  spanning more than 32767 bytes cannot be encoded. `GOTO_W` exists in
-  `am.ik.jvm.Opcode` but no emitter uses it and there is no relaxation pass.
+- **A branch offset is a signed 16 bits** (`goto`/`if*`) — but since todo-256
+  this is RELAXED, not a hard limit: `am.ik.jvm.BranchRelaxer` rewrites each
+  out-of-range branch as a `goto_w` (an unconditional `goto`) or as its
+  inverted-condition short branch over a `goto_w` (a conditional), iterating
+  the sizing to a fixpoint because widening moves every later offset, then
+  remapping the exception table. The mechanics: an out-of-range
+  `JvmEmitHelper.patchBranch` records the pair in `Ctx.deferredBranches`
+  instead of throwing, and `JvmLispCompiler` runs the relaxer over every
+  Ctx-compiled body (main, top chunks, defuns, lambdas) just before assembly.
+  A method with no deferred branch is untouched, byte for byte. The raw-list
+  `JvmRuntimeBuilder.patchBranch` still throws: the runtime builders
+  (dispatch/lookup segments) stay under budget by construction and never
+  defer. `StackMapAugmenter` decodes `goto_w` (its `interpret` treats it like
+  `goto`). fast-http's generated `parse-header-field-and-value` (36.7 KB body)
+  is the real-world trigger.
 - **A method's code array is at most 65535 bytes** (JVMS 4.7.3): nothing can
-  rescue a larger body — not even `GOTO_W`.
+  rescue a larger body — not even `goto_w`. This one remains hard:
+  `am.ik.jvm.ByteCodeWriter.writeCode` rejects an over-limit body loudly.
 
-Both used to fail SILENTLY: `JvmRuntimeBuilder.patchBranch` truncated the
-offset to a short (surfacing later as a bewildering
-`StackMapAugmenter: Index -31123 out of bounds`), and an over-64 KB body
-surfaced only at class-load time as `ClassFormatError: Invalid method Code
-length`. Both now throw AT THE SOURCE: `patchBranch` rejects an overflowing
-offset, and `am.ik.jvm.ByteCodeWriter.writeCode` rejects an over-limit body.
 `-Drontolisp.jvm.debug-method-sizes=true` prints the 40 largest emitted
 defun/lambda bodies plus every computed-typep expansion — run that first when a
-large program trips either guard.
+large program trips the 64 KB guard.
 
 ## What is kept bounded, and how
 
@@ -74,9 +81,10 @@ Per-arm branches inside a dispatch chain are LOCAL (each case's `if` skips only
 its own case), so a chain can legally approach 64 KB without any branch
 overflowing — the segmentation budgets (24 KB) leave slack for both limits.
 
-A single enormous USER defun still hits the guards — same stance as the WASM
-sibling: there is no way to outline what the user wrote as one function. The
-loudly-thrown error now names the real cause.
+A single enormous USER defun still hits the 64 KB guard — same stance as the
+WASM sibling: there is no way to outline what the user wrote as one function.
+The loudly-thrown error names the real cause; only the BRANCH ceiling inside a
+sub-64 KB body relaxes away silently.
 
 ## The third ceiling: 65534 constant pool entries per class
 
@@ -130,6 +138,8 @@ calling the neighboring runtime helper (which produced an invalid module).
 
 ## Pinning tests
 
+`JvmLispCompilerTest#compileAndRunABranchSpanningPastTheSigned16BitOffset`
+(the relaxer end to end: a 36 KB then-branch),
 `JvmLispCompilerTest#compileAndRunTypepWithComputedSpecifier` /
 `#compileAndRunErrorWithComputedConditionType` /
 `#compileAndRunEmptyPrognIsNilInValuePosition`, the

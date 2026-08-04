@@ -3231,6 +3231,51 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunARedefinedDefunKeepsTheLastDefinition() throws Exception {
+		// A class may not hold two methods of the same name and descriptor, so a
+		// redefined defun (fast-http redefines 11 struct readers as plain defuns)
+		// emits only its LAST definition -- which every by-name call resolves to
+		// anyway on the compile backends.
+		assertThat(compileAndRun("""
+				(defun f (x) x)
+				(defun f (x) (+ x 1))
+				(print (f 41))
+				""")).isEqualTo("42");
+	}
+
+	@Test
+	void compileAndRunABranchSpanningPastTheSigned16BitOffset() throws Exception {
+		// A single if whose then-branch outgrows the signed 16-bit branch offset:
+		// fast-http's generated parse-header-field-and-value state machine is the
+		// real-world shape (36 KB body). The relaxation pass rewrites each
+		// out-of-range branch as an inverted-condition short branch over a goto_w
+		// (.kb/jvm-method-size-limits.md); a method with only in-range branches keeps
+		// byte-identical output.
+		StringBuilder wide = new StringBuilder();
+		for (int i = 0; i < 2800; i++) {
+			wide.append("(setq acc (+ acc 1))");
+		}
+		String program = """
+				(defun big (flag)
+				  (let ((acc 0))
+				    (if flag (progn %s acc) -1)))
+				(print (list (big t) (big nil)))
+				""".formatted(wide);
+		assertThat(compileAndRun(program)).isEqualTo("(2800 -1)");
+	}
+
+	@Test
+	void compileAndRunConcatenateWithADeftypeAliasResultType() throws Exception {
+		// fast-http's multipart parser concatenates into 'simple-byte-vector, its own
+		// deftype alias of the packed octet vector: the registered deftype expansion
+		// resolves the designator to the vector family at compile time.
+		assertThat(compileAndRun("""
+				(deftype octet-vector () '(simple-array (unsigned-byte 8) (*)))
+				(print (concatenate 'octet-vector #(1) #(2 3)))
+				""")).isEqualTo("#(1 2 3)");
+	}
+
+	@Test
 	void compileConcatenateWithComputedResultTypeFails() {
 		assertThatThrownBy(() -> compileAndRun("(let ((ty 'string)) (princ (concatenate ty \"a\" \"b\")))"))
 			.isInstanceOf(UnsupportedOperationException.class)
