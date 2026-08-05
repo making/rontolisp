@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.wasm.Instruction;
@@ -209,6 +210,18 @@ final class WasmExprCompiler {
 	}
 
 	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		try {
+			compileConsLocated(cons, ctx);
+		}
+		catch (RuntimeException ex) {
+			// The innermost cons that came from source names the position; the exception
+			// itself is rethrown untouched, since passes above catch it by type
+			// (.todo/151 phase 2).
+			throw SourceProvenance.noteFailure(cons, ex);
+		}
+	}
+
+	private static void compileConsLocated(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
 		// would otherwise be silently dropped by the toList() walks below.

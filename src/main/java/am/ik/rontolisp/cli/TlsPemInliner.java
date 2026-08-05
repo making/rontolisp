@@ -61,7 +61,12 @@ public final class TlsPemInliner {
 		if (cons.car() instanceof LispSymbol op && LispNames.TLS_LISTEN_PEM.equals(member(op.name()))) {
 			return rewriteCall(cons.toList(), baseDir);
 		}
-		return new LispCons(rewrite(cons.car(), baseDir), rewrite(cons.cdr(), baseDir));
+		LispVal car = rewrite(cons.car(), baseDir);
+		LispVal cdr = rewrite(cons.cdr(), baseDir);
+		// Almost no program contains a tls-listen-pem at all: hand the form back as it
+		// was, so its SourceProvenance position (keyed on cons identity) survives this
+		// pass and the whole AST is not copied for nothing.
+		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
 	}
 
 	private static LispVal rewriteCall(List<LispVal> elements, @Nullable String baseDir) {

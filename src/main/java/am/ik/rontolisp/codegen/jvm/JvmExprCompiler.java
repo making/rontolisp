@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -177,6 +178,18 @@ final class JvmExprCompiler {
 	}
 
 	private static void compileCons(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		try {
+			compileConsLocated(cons, ctx, className);
+		}
+		catch (RuntimeException ex) {
+			// The innermost cons that came from source names the position; the exception
+			// itself is rethrown untouched, since passes above catch it by type
+			// (.todo/151 phase 2).
+			throw SourceProvenance.noteFailure(cons, ex);
+		}
+	}
+
+	private static void compileConsLocated(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
 		// would otherwise be silently dropped by the toList() walks below.

@@ -20,6 +20,8 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
+import am.ik.rontolisp.SourceProvenance;
 
 /**
  * Parser for Lisp expressions. Converts a list of tokens into LispVal AST nodes.
@@ -39,14 +41,24 @@ public final class LispReader {
 	/** The origin file, or {@code null} when unknown; used to prefix read errors. */
 	private final @Nullable String file;
 
+	/**
+	 * The source unit every cons of this read is recorded against, or {@code null} when
+	 * the thread is not recording provenance (the interpreter, a runtime {@code read}).
+	 * Built once per read: recording is compile-path only, so a non-recording read never
+	 * even allocates it.
+	 */
+	private final SourceProvenance.@Nullable Unit unit;
+
 	private int pos;
 
-	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file) {
+	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file,
+			boolean recordProvenance) {
 		this.tokens = tokens.stream().map(LocatedToken::token).toList();
 		this.offsets = tokens.stream().mapToInt(LocatedToken::offset).toArray();
 		this.features = features;
 		this.input = input;
 		this.file = file;
+		this.unit = recordProvenance && SourceProvenance.isRecording() ? new SourceProvenance.Unit(file, input) : null;
 		this.pos = 0;
 	}
 
@@ -218,7 +230,7 @@ public final class LispReader {
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file) {
 		List<LocatedToken> tokens = new LispLexer(input, features, readEvalMode, file).tokenizeWithPositions();
-		LispReader reader = new LispReader(tokens, features, input, file);
+		LispReader reader = new LispReader(tokens, features, input, file, true);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
 			result.add(reader.readExpr());
@@ -238,7 +250,10 @@ public final class LispReader {
 	 */
 	static boolean parsesAsExpressions(List<LocatedToken> tokens, Features features) {
 		try {
-			LispReader reader = new LispReader(tokens, features, "", null);
+			// A validation-only parse: it holds no source text of its own and its
+			// conses are thrown away, so it must not put a bogus position in the
+			// provenance table (an entry there is first-write-wins).
+			LispReader reader = new LispReader(tokens, features, "", null, false);
 			while (reader.pos < reader.tokens.size()) {
 				reader.readExpr();
 			}
@@ -249,7 +264,32 @@ public final class LispReader {
 		}
 	}
 
+	/**
+	 * Reads one datum and, when this thread is recording provenance, records the cons it
+	 * produced against the offset the datum STARTS at. Only the outermost cons of a datum
+	 * is recorded here -- every nested one is produced by its own {@code readExpr} call,
+	 * so a list's elements each get their own position while the cells that merely chain
+	 * them share their element's line, which is where an error about that element points
+	 * anyway.
+	 * @return the datum
+	 */
 	private LispVal readExpr() {
+		if (this.unit == null) {
+			return readDatum();
+		}
+		int start = this.pos;
+		LispVal datum = readDatum();
+		if (datum instanceof LispCons cons) {
+			// A datum that returns has consumed at least one token, so `start` indexes a
+			// real one; the end-of-input fallback only exists so a future caller cannot
+			// turn a diagnostic into an AIOOBE.
+			SourceProvenance.record(cons, this.unit,
+					start < this.offsets.length ? this.offsets[start] : this.input.length());
+		}
+		return datum;
+	}
+
+	private LispVal readDatum() {
 		if (this.pos >= this.tokens.size()) {
 			throw err("Unexpected end of input");
 		}

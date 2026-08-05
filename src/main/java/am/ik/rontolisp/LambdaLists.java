@@ -213,7 +213,14 @@ public final class LambdaLists {
 				return rebuildFunction(sym, parts.get(1), e);
 			}
 		}
-		return new LispCons(desugar(cons.car()), desugar(cons.cdr()));
+		LispVal car = desugar(cons.car());
+		LispVal cdr = desugar(cons.cdr());
+		// A form with no lambda-list keyword and no return-from anywhere under it -- most
+		// of every program -- comes back AS IT WAS READ. Cons identity is what
+		// {@link SourceProvenance} keys a form's source position on, so a rebuild here
+		// would drop every position below the top level of a program that has nothing to
+		// desugar.
+		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
 	}
 
 	/**

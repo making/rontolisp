@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -83,6 +84,10 @@ public final class UserMacroExpander {
 		// else runs.
 		int systemDepth = 0;
 		for (LispVal rawForm : program) {
+			// The fallback position for anything in this iteration that fails outside
+			// expandAll's own hook (a defmacro whose registration signals, a package
+			// directive naming a package that does not exist).
+			SourceProvenance.enterTopLevelForm(rawForm);
 			if (isProvenanceMarker(rawForm, LispNames.BEGIN_SYSTEM)) {
 				systemDepth++;
 			}
@@ -857,6 +862,19 @@ public final class UserMacroExpander {
 	 * lists, case keys), so a macro name reused there is left alone.
 	 */
 	static LispVal expandAll(LispVal form, LispEvaluator macroEval) {
+		try {
+			return expandAllLocated(form, macroEval);
+		}
+		catch (RuntimeException ex) {
+			// A macro body that signals, or a malformed call the expansion casts and
+			// fails on, has no position of its own: the exception comes from the
+			// macro-time evaluator, whose forms were built by the macro. The innermost
+			// frame here that IS a read cons names the call site (.todo/151 phase 2).
+			throw SourceProvenance.noteFailure(form, ex);
+		}
+	}
+
+	private static LispVal expandAllLocated(LispVal form, LispEvaluator macroEval) {
 		// Expand head-position user macros repeatedly; the expansion may itself be a
 		// macro call (or an atom, which needs no further walking).
 		while (form instanceof LispCons cons && cons.car() instanceof LispSymbol sym

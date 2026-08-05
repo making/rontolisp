@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import am.ik.rontolisp.SourceProvenance;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -154,6 +155,99 @@ class RontoLispCliTest {
 				""");
 		String output = runCli("", file.toString());
 		assertThat(output).contains("CL-USER").contains(":VERSION");
+	}
+
+	// -- frontend source positions (.todo/151 phase 2) ------------------------
+
+	@Test
+	void aMacroThatSignalsWhileExpandingNamesItsCallSiteInTheLoadedFile() throws Exception {
+		// The error comes out of the macro-time evaluator, whose forms the macro BUILT:
+		// nothing in the exception knows a file. The nearest enclosing form that WAS read
+		// is the call site, and that is what has to be reported -- in the spliced file's
+		// own coordinates, not the flattened entry program's.
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defmacro twice (x)
+				  (error "twice: bad argument ~a" x))
+
+				(defun f (n)
+				  (twice n))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, "(load \"lib.lisp\")\n(print (f 1))\n");
+		assertThatThrownBy(() -> runCli("", main.toString(), "-o", this.tempDir.resolve("Main.class").toString()))
+			.isInstanceOf(LispCompileException.class)
+			.hasMessageContaining("lib.lisp:5:3: twice: bad argument N")
+			.hasCauseInstanceOf(RuntimeException.class);
+	}
+
+	@Test
+	void aMalformedFormDeepInsideADefunNamesItsOwnLineOnBothCompileBackends() throws Exception {
+		// The position must survive the whole pipeline -- inliner, resolver, expander,
+		// lambda-list desugaring, the cross-lambda exit lowering -- down to the form that
+		// actually fails, on the JVM and the WASM backend alike.
+		Path file = this.tempDir.resolve("bad.lisp");
+		Files.writeString(file, """
+				(defun g (x)
+				  (let ((a 1) 2)
+				    a))
+				(print (g 1))
+				""");
+		for (String output : new String[] { "Bad.class", "bad.wasm" }) {
+			assertThatThrownBy(() -> runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString()))
+				.isInstanceOf(LispCompileException.class)
+				.hasMessageContaining("bad.lisp:2:3:");
+		}
+	}
+
+	@Test
+	void aCallToAnUndefinedFunctionWarnsAtItsCallSite() throws Exception {
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defun broken (y)
+				  (no-such-function y))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, "(load \"lib.lisp\")\n(print (broken 1))\n");
+		PrintStream savedErr = System.err;
+		ByteArrayOutputStream captured = new ByteArrayOutputStream();
+		try {
+			System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+			runCli("", main.toString(), "-o", this.tempDir.resolve("Main.class").toString());
+		}
+		finally {
+			System.setErr(savedErr);
+		}
+		assertThat(captured.toString(StandardCharsets.UTF_8))
+			.contains("lib.lisp:2:3: warning: the function NO-SUCH-FUNCTION is undefined");
+	}
+
+	@Test
+	void theRecordingScopeIsClosedEvenWhenTheCompileFails() throws Exception {
+		// The table holds the whole program's conses alive; a scope left open on a failed
+		// compile would keep them for the life of the thread.
+		Path file = this.tempDir.resolve("bad.lisp");
+		Files.writeString(file, "(defun g (x) (let ((a 1) 2) a))\n");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", this.tempDir.resolve("Bad.class").toString()))
+			.isInstanceOf(LispCompileException.class);
+		assertThat(SourceProvenance.isRecording()).isFalse();
+	}
+
+	@Test
+	void theInterpreterKeepsItsBareErrorText() throws Exception {
+		// The deliberate divergence: the interpreter reaches the same expander at
+		// EVALUATION time, so a position prefix there would land on ordinary runtime
+		// error text (which ci-spec.yaml and the doc examples pin byte for byte). It
+		// records nothing, and its message stays exactly as it was.
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defmacro twice (x)
+				  (error "twice: bad argument ~a" x))
+
+				(defun f (n)
+				  (twice n))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, "(load \"lib.lisp\")\n(print (f 1))\n");
+		assertThatThrownBy(() -> runCli("", main.toString())).hasMessage("twice: bad argument N");
+		assertThat(SourceProvenance.isRecording()).isFalse();
 	}
 
 }

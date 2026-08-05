@@ -2,6 +2,8 @@ package am.ik.rontolisp.reader;
 
 import org.jspecify.annotations.Nullable;
 
+import am.ik.rontolisp.SourceLocation;
+
 /**
  * Exception thrown during Lisp expression reading/parsing. When the failing read had a
  * known origin file, the message is prefixed with {@code file:line:column: } and the

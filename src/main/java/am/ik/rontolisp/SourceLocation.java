@@ -1,11 +1,18 @@
-package am.ik.rontolisp.reader;
+package am.ik.rontolisp;
 
 import org.jspecify.annotations.Nullable;
 
 /**
  * A position in a Lisp source file: an optional origin file and a 1-based line/column
- * pair. Positions are computed only when a read error is raised (they are never stored on
- * the AST), so an error can name exactly where the malformed input is.
+ * pair. Positions are computed only when an error is raised (they are never stored on the
+ * AST), so an error can name exactly where the malformed input is: by the reader for a
+ * read error, and by {@link SourceProvenance} for a frontend-pass error against the cons
+ * the failing form was read into.
+ *
+ * <p>
+ * It lives in the AST's own package rather than in {@code reader} because both consumers
+ * need it and the frontend passes ({@code compiler}, {@code codegen.*}) may not import
+ * {@code reader} -- see the package-dependency rules in {@code CLAUDE.md}.
  *
  * @param file the origin file, or {@code null} when unknown (a REPL buffer, a runtime
  * {@code read} of a string, ...)

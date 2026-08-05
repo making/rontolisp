@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -440,6 +441,20 @@ public final class FreeVarAnalyzer {
 	}
 
 	private static void collectCapturedVars(LispVal expr, Set<String> localVars, Set<String> knownFunctions,
+			Set<String> captured, boolean insideLambda) {
+		try {
+			collectCapturedVarsLocated(expr, localVars, knownFunctions, captured, insideLambda);
+		}
+		catch (RuntimeException ex) {
+			// This walk casts binding lists and parameter lists to their expected shapes,
+			// so a malformed form surfaces here as a ClassCastException long before any
+			// backend gets to reject it by name -- worth a position more than most
+			// (.todo/151 phase 2).
+			throw SourceProvenance.noteFailure(expr, ex);
+		}
+	}
+
+	private static void collectCapturedVarsLocated(LispVal expr, Set<String> localVars, Set<String> knownFunctions,
 			Set<String> captured, boolean insideLambda) {
 		switch (expr) {
 			case LispSymbol sym -> {

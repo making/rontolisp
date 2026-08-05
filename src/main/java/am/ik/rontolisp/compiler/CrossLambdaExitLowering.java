@@ -255,7 +255,13 @@ public final class CrossLambdaExitLowering {
 		// whose variable happens to be named `block` -- so those are traversed, not
 		// mis-parsed as the special form (md5 binds a variable named `block`).
 		private LispVal structural(LispCons cons, int lambdaDepth) {
-			return new LispCons(transform(cons.car(), lambdaDepth), transform(cons.cdr(), lambdaDepth));
+			LispVal car = transform(cons.car(), lambdaDepth);
+			LispVal cdr = transform(cons.cdr(), lambdaDepth);
+			// Nothing lowered means nothing rebuilt: a program with no cross-lambda exit
+			// (nearly every program) must come out of this pass with the cons identity it
+			// went in with, since that is what SourceProvenance keys a form's source
+			// position on.
+			return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
 		}
 
 		// A well-formed block/return-from name: a non-keyword symbol or nil. Anything

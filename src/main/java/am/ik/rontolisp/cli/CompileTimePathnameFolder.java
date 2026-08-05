@@ -157,7 +157,7 @@ final class CompileTimePathnameFolder {
 		}
 		List<LispVal> items = cons.toList();
 		if (items.isEmpty() || !(items.get(0) instanceof LispSymbol op)) {
-			return recurseCons(items, systems, parameters, writtenPaths);
+			return recurseCons(cons, items, systems, parameters, writtenPaths);
 		}
 		String opName = op.name();
 		// Quoted data is opaque: never recurse into a datum, otherwise we would
@@ -166,10 +166,10 @@ final class CompileTimePathnameFolder {
 			return form;
 		}
 		if (LispNames.DEFPARAMETER.equals(opName) || LispNames.DEFVAR.equals(opName)) {
-			return foldDefParam(items, systems, parameters, writtenPaths);
+			return foldDefParam(cons, items, systems, parameters, writtenPaths);
 		}
 		if (LispNames.WITH_OPEN_FILE.equals(opName)) {
-			return foldWithOpenFile(items, systems, parameters, writtenPaths);
+			return foldWithOpenFile(cons, items, systems, parameters, writtenPaths);
 		}
 		if (isFoldablePrimitiveHead(op)) {
 			LispVal reduced = reduce(form, systems, parameters, writtenPaths);
@@ -177,7 +177,7 @@ final class CompileTimePathnameFolder {
 				return reduced;
 			}
 		}
-		return recurseCons(items, systems, parameters, writtenPaths);
+		return recurseCons(cons, items, systems, parameters, writtenPaths);
 	}
 
 	/**
@@ -185,29 +185,37 @@ final class CompileTimePathnameFolder {
 	 * [DOC]])}: folds VALUE, records NAME to the folded value if it reduced to a literal
 	 * string.
 	 */
-	private static LispVal foldDefParam(List<LispVal> items, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, java.util.Set<String> writtenPaths) {
+	private static LispVal foldDefParam(LispCons original, List<LispVal> items,
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters,
+			java.util.Set<String> writtenPaths) {
 		if (items.size() < 2 || !(items.get(1) instanceof LispSymbol nameSym)) {
-			return recurseCons(items, systems, parameters, writtenPaths);
+			return recurseCons(original, items, systems, parameters, writtenPaths);
 		}
 		List<LispVal> out = new ArrayList<>(items.size());
 		out.add(items.get(0));
 		out.add(nameSym);
+		boolean changed = false;
 		if (items.size() >= 3) {
 			LispVal valueExpr = items.get(2);
 			LispVal reduced = reduce(valueExpr, systems, parameters, writtenPaths);
 			if (reduced instanceof LispString folded) {
 				parameters.put(nameSym.name(), folded);
 				out.add(folded);
+				changed |= folded != valueExpr;
 			}
 			else {
-				out.add(foldForm(valueExpr, systems, parameters, writtenPaths));
+				LispVal foldedValue = foldForm(valueExpr, systems, parameters, writtenPaths);
+				out.add(foldedValue);
+				changed |= foldedValue != valueExpr;
 			}
 			for (int i = 3; i < items.size(); i++) {
-				out.add(foldForm(items.get(i), systems, parameters, writtenPaths));
+				LispVal foldedDoc = foldForm(items.get(i), systems, parameters, writtenPaths);
+				out.add(foldedDoc);
+				changed |= foldedDoc != items.get(i);
 			}
 		}
-		return listToCons(out);
+		// Unchanged means unchanged, cons identity included -- see recurseCons.
+		return changed ? listToCons(out) : original;
 	}
 
 	/**
@@ -218,23 +226,27 @@ final class CompileTimePathnameFolder {
 	 * body recursively folded, so a downstream backend that DOES have filesystem access
 	 * (the JVM) still sees a literal namestring.
 	 */
-	private static LispVal foldWithOpenFile(List<LispVal> items, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, java.util.Set<String> writtenPaths) {
+	private static LispVal foldWithOpenFile(LispCons original, List<LispVal> items,
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters,
+			java.util.Set<String> writtenPaths) {
 		if (items.size() < 2 || !(items.get(1) instanceof LispCons spec) || !spec.isProperList()) {
-			return recurseCons(items, systems, parameters, writtenPaths);
+			return recurseCons(original, items, systems, parameters, writtenPaths);
 		}
 		List<LispVal> specParts = spec.toList();
 		if (specParts.size() < 2 || !(specParts.get(0) instanceof LispSymbol var)) {
-			return recurseCons(items, systems, parameters, writtenPaths);
+			return recurseCons(original, items, systems, parameters, writtenPaths);
 		}
 		LispVal pathExpr = specParts.get(1);
 		LispVal reducedPath = reduce(pathExpr, systems, parameters, writtenPaths);
 		LispVal foldedPathExpr = reducedPath != null ? reducedPath
 				: foldForm(pathExpr, systems, parameters, writtenPaths);
+		boolean changed = foldedPathExpr != pathExpr;
 		List<LispVal> options = specParts.subList(2, specParts.size());
 		List<LispVal> body = new ArrayList<>();
 		for (int i = 2; i < items.size(); i++) {
-			body.add(foldForm(items.get(i), systems, parameters, writtenPaths));
+			LispVal foldedBody = foldForm(items.get(i), systems, parameters, writtenPaths);
+			changed |= foldedBody != items.get(i);
+			body.add(foldedBody);
 		}
 		if (reducedPath instanceof LispString pathStr && supportsInputBundling(options)
 				&& !writtenPaths.contains(pathStr.value())) {
@@ -247,7 +259,13 @@ final class CompileTimePathnameFolder {
 		newSpec.add(var);
 		newSpec.add(foldedPathExpr);
 		for (LispVal opt : options) {
-			newSpec.add(foldForm(opt, systems, parameters, writtenPaths));
+			LispVal foldedOpt = foldForm(opt, systems, parameters, writtenPaths);
+			changed |= foldedOpt != opt;
+			newSpec.add(foldedOpt);
+		}
+		// Unchanged means unchanged, cons identity included -- see recurseCons.
+		if (!changed) {
+			return original;
 		}
 		List<LispVal> out = new ArrayList<>(items.size());
 		out.add(items.get(0));
@@ -394,13 +412,25 @@ final class CompileTimePathnameFolder {
 	 * child changed, the input list is still copied -- the cost is small next to the deep
 	 * walk this pass does anyway.
 	 */
-	private static LispVal recurseCons(List<LispVal> items, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, java.util.Set<String> writtenPaths) {
+	/**
+	 * Folds every element of a form and rebuilds it -- but returns {@code original}
+	 * untouched when nothing folded. A pass that changes nothing must hand back what it
+	 * was given: {@link am.ik.rontolisp.SourceProvenance} is keyed by cons IDENTITY, so a
+	 * gratuitous rebuild silently erases the source position of every form that flows
+	 * through it (and allocates a copy of the whole program for nothing). Almost every
+	 * program reaches this folder with nothing to fold.
+	 */
+	private static LispVal recurseCons(LispCons original, List<LispVal> items,
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, LispVal> parameters,
+			java.util.Set<String> writtenPaths) {
 		List<LispVal> out = new ArrayList<>(items.size());
+		boolean changed = false;
 		for (LispVal item : items) {
-			out.add(foldForm(item, systems, parameters, writtenPaths));
+			LispVal folded = foldForm(item, systems, parameters, writtenPaths);
+			changed |= folded != item;
+			out.add(folded);
 		}
-		return listToCons(out);
+		return changed ? listToCons(out) : original;
 	}
 
 	// -- expression reduction ------------------------------------------------

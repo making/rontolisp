@@ -856,6 +856,11 @@ public final class PackageResolver {
 			if (this.inMacroDefinition || !this.inHostFacingData) {
 				datum = resolveQuotedData(datum);
 			}
+			// Identity-preserving when neither the datum nor the operator's spelling
+			// changed (see the generic walk below for why that matters).
+			if (datum == datumCons.car() && LispNames.QUOTE.equals(op.name())) {
+				return cons;
+			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
 		}
 		if (cons.car() instanceof LispSymbol rawOp && LispNames.DEFPACKAGE.equals(operatorMember(rawOp))) {
@@ -975,12 +980,26 @@ public final class PackageResolver {
 		// ...)) -- would otherwise make the tail look like (quote DATUM) and leave the
 		// following argument unresolved.
 		List<LispVal> rest = new ArrayList<>();
+		boolean changed = car != cons.car();
 		LispVal tail = cons.cdr();
 		while (tail instanceof LispCons tailCons) {
-			rest.add(resolveForm(tailCons.car()));
+			LispVal element = resolveForm(tailCons.car());
+			changed |= element != tailCons.car();
+			rest.add(element);
 			tail = tailCons.cdr();
 		}
 		LispVal result = tail instanceof LispNil ? LispNil.INSTANCE : resolveForm(tail);
+		changed |= result != tail;
+		// A form nothing resolved differently is handed back AS IT WAS READ, cons
+		// identity included: this resolver runs over every form of every program, and
+		// SourceProvenance keys a form's source position on that identity, so rebuilding
+		// an unchanged form would erase the position of the entire program in the one
+		// case (a file with no package qualification anywhere) where every position is
+		// otherwise known. It also stops the pass allocating a copy of the whole AST for
+		// nothing.
+		if (!changed) {
+			return cons;
+		}
 		for (int i = rest.size() - 1; i >= 0; i--) {
 			result = new LispCons(rest.get(i), result);
 		}
@@ -1081,6 +1100,16 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveSymbol(LispSymbol sym) {
+		LispVal resolved = resolveSymbolName(sym);
+		// A name that resolves to itself hands back the symbol AS READ. Symbols carry no
+		// identity in this implementation (there is no intern table -- see
+		// .kb/symbol-runtime-api.md), so a fresh copy is indistinguishable in behavior;
+		// what it is NOT indistinguishable in is the cons rebuild it forces on the
+		// enclosing form, which erases that form's SourceProvenance position.
+		return resolved instanceof LispSymbol out && out.name().equals(sym.name()) ? sym : resolved;
+	}
+
+	private LispVal resolveSymbolName(LispSymbol sym) {
 		if (sym.isKeyword()) {
 			return sym;
 		}

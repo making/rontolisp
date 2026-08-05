@@ -36,18 +36,40 @@ opening-delimiter and unclosed-list errors), `LispEvaluatorTest`
 inside a `load`ed file and a `ql:quickload`ed system name the origin file).
 See `.kb/load-inliner.md`.
 
-## Phase 2 — per-form provenance for frontend passes (follow-up)
+## Phase 2 — per-form provenance for frontend passes — DONE 2026-08-05
 
-A side table `IdentityHashMap<LispCons, SourceLocation>` populated by the
-reader — do NOT add a field to the sealed `LispVal` (leaf values are
-shared/interned; cons identity survives because backquote is read-time but
-the cells it builds are fresh per read). `LoadInliner` and the ASDF splice
-stamp each spliced top-level form with its origin file. Frontend passes
-that today throw bare messages (macro-expansion errors, the
-`check-type`/`assert` expansions in `LispMacroExpander`, unknown-symbol
-compile errors in `Jvm/WasmExprCompiler`) can then look up the nearest
-enclosing located cons and prefix `file:line`. Positions stay
-frontend-only: compiled output is byte-identical.
+A side table `IdentityHashMap<LispCons, (unit, offset)>` populated by the
+reader — no field on the sealed `LispVal`. Implemented as
+`am.ik.rontolisp.SourceProvenance` (`SourceLocation` moved down to the same
+package so `compiler`/`codegen.*` can use it without importing `reader`).
+Recording is opt-in per thread and only `RontoLispCli.compileToFile` opts
+in; the interpreter keeps its byte-identical runtime error text. A failure
+picks up the nearest enclosing recorded cons via
+`SourceProvenance.noteFailure(cons, ex)`, which returns the SAME exception
+(a pass may catch its own types to fall back), and the compile boundary
+re-reports it as `cli.LispCompileException` with the prefix. Warnings use
+`SourceProvenance.prefix(form)`.
+
+The unplanned half — and the reason this took a pipeline audit rather than
+a reader change — is that the frontend REBUILT the AST: half a dozen passes
+copied every cons whether or not they changed anything, which erased the
+positions of everything below the top level. Made identity-preserving:
+`CompileTimePathnameFolder`, `PackageResolver` (incl. `resolveSymbol`),
+`TlsPemInliner`, `LambdaLists.desugar`, `CrossLambdaExitLowering`. That is
+now a standing rule for any AST pass — see `.kb/source-positions.md`.
+
+Follow-ups this left behind (small, independent):
+
+- The passes a given program actually triggers (library splices, the defun
+  pruner, the `--component` rewrites) still rebuild unconditionally, so a
+  position inside such a program degrades to the enclosing recorded form.
+  Add the unchanged check as each is touched.
+- `Jvm/WasmFunctionCallCompiler` prints the undefined-function warning
+  TWICE for one call site (two compiler passes reach it). Pre-existing,
+  more visible now that the line carries a position.
+- `LispMacroExpander`'s own `check-type`/`assert` expansion errors are
+  covered only through the enclosing pass hooks; a direct hook would make
+  them exact.
 
 ## Phase 3 — optional, only if a use case appears
 
@@ -63,4 +85,6 @@ the no-new-CL-surface rule.
   including one inside a `load`ed file and one inside a `ql:quickload`ed
   system (origin file named).
 - Phase 2: a macro-expansion error inside a spliced library names
-  `file:line`; ci-spec output unchanged (frontend-only).
+  `file:line`; ci-spec output unchanged (frontend-only). Done —
+  `SourceProvenanceTest` + the five `RontoLispCliTest` cases listed in
+  `.kb/source-positions.md`.

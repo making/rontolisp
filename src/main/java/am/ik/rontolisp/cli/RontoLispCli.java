@@ -19,6 +19,8 @@ import java.util.Objects;
 
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.SourceLocation;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
@@ -46,6 +48,7 @@ import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.WitImportInliner;
 import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
@@ -263,6 +266,47 @@ public final class RontoLispCli {
 	}
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
+			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
+			boolean noPrune, boolean wit, @Nullable String entryFile) {
+		// The frontend records where every cons was read from, so a pass that fails long
+		// after the read -- a macro body that signals, an operator no backend knows, a
+		// malformed binding list a walker casts and fails on -- can still name
+		// file:line:column instead of leaving the user a bare message about a program
+		// that may be a hundred spliced files (.todo/151 phase 2). Compile path only:
+		// see SourceProvenance for why the interpreter deliberately does not record.
+		SourceProvenance.startRecording();
+		try {
+			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
+					noPrune, wit, entryFile);
+		}
+		catch (RuntimeException ex) {
+			throw locateCompileFailure(ex);
+		}
+		finally {
+			SourceProvenance.stopRecording();
+		}
+	}
+
+	/**
+	 * Re-reports a frontend failure at the position of the form that failed. The original
+	 * exception becomes the cause, so nothing about it is lost; a read error is left
+	 * alone because {@link LispReadException} already carries its own prefix, and so is a
+	 * failure whose position is unknown (nothing was recorded, or the failing form was
+	 * entirely macro-generated) -- prefixing nothing would only add noise.
+	 */
+	private static RuntimeException locateCompileFailure(RuntimeException ex) {
+		if (ex instanceof LispReadException) {
+			return ex;
+		}
+		SourceLocation location = SourceProvenance.failureLocation(ex);
+		String prefix = location == null ? "" : location.prefix();
+		if (prefix.isEmpty()) {
+			return ex;
+		}
+		return new LispCompileException(prefix + ex.getMessage(), ex);
+	}
+
+	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
 			boolean noPrune, boolean wit, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any

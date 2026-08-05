@@ -78,6 +78,8 @@ the "grep before you change behavior" rule:
 - Loading, libraries, I/O -- `load`/ASDF/`ql:quickload`, the Lisp-source libraries
   (`json`/`url`/`linalg`/`vec`/`usocket`/prelude), the dependency shim systems, `read`/streams,
   `fetch`/`http-handler`, TCP/TLS sockets, `java:` interop, time/environment.
+- Frontend source positions -- `file:line:column` in reader AND post-read errors, and the
+  cons-identity rule an AST pass must honour to keep them -> `.kb/source-positions.md`
 - Backends & flags -- `--dynamic`, `--optimize`, `--component` (WASI 0.3), `--no-gc`, `--simd`,
   `wit-import`/`wit-export`/`wasm-export`, WASM GC strings.
 
