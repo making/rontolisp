@@ -10,7 +10,6 @@ import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.testsupport.WasmtimeSupport;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.testcontainers.containers.Container.ExecResult;
@@ -86,10 +85,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * }</pre>
  *
  * <p>
- * The four {@code --component} legs are {@code @Disabled} on {@code .todo/263}: a
- * component socket write dies mid-message with {@code unknown handle index 0}. That is
- * PRE-EXISTING and independent of todo-262 -- the interpreter and JVM legs of the same
- * exercises pass, and the identical backtrace reproduces on unmodified {@code develop}.
+ * The four {@code --component} legs were {@code @Disabled} for a while: a socket write
+ * died mid-message with {@code unknown handle index 0}, because the Gray-streams
+ * fall-through arm re-spells {@code (write-sequence bytes socket)} with its
+ * {@code :start} / {@code :end} keywords filled in and that shape fell out of the
+ * component socket rewrite onto the NATIVE built-in. All four run now; see
+ * {@code .kb/tcp-sockets.md}.
  */
 @Testcontainers(disabledWithoutDocker = true)
 class ClPostgresE2eTest {
@@ -240,7 +241,6 @@ class ClPostgresE2eTest {
 			.isEqualToNormalizingWhitespace(AUTH_LADDER_EXPECTED);
 	}
 
-	@Disabled(".todo/263: --component socket write loses its stream handle")
 	@Test
 	void authLadderOnWasmComponent(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.COMPONENT, workDir, ClPostgresE2eTest::authLadder))
@@ -259,7 +259,6 @@ class ClPostgresE2eTest {
 			.isEqualToNormalizingWhitespace(SCRAM_EXPECTED);
 	}
 
-	@Disabled(".todo/263: --component socket write loses its stream handle")
 	@Test
 	void scramAuthOnWasmComponent(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.COMPONENT, workDir, ClPostgresE2eTest::scram))
@@ -277,7 +276,6 @@ class ClPostgresE2eTest {
 		assertThat(runOn(Backend.JVM, workDir, crud(Backend.JVM))).isEqualToNormalizingWhitespace(CRUD_EXPECTED);
 	}
 
-	@Disabled(".todo/263: --component socket write loses its stream handle")
 	@Test
 	void crudOnWasmComponent(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.COMPONENT, workDir, crud(Backend.COMPONENT)))
@@ -296,7 +294,6 @@ class ClPostgresE2eTest {
 			.isEqualToNormalizingWhitespace(UNICODE_EXPECTED);
 	}
 
-	@Disabled(".todo/263: --component socket write loses its stream handle")
 	@Test
 	void unicodeTextOnWasmComponent(@TempDir Path workDir) throws Exception {
 		assertThat(runOn(Backend.COMPONENT, workDir, unicodeText(Backend.COMPONENT)))

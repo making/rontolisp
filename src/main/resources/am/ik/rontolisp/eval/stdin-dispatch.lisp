@@ -52,18 +52,30 @@
 (defun rontolisp::%io-close (stream)
   (rontolisp::%close-raw stream))
 
-;;; open-stream-p is redirected by the same rewrite, so it needs a definition
-;;; here too or the call compiles to a call-time error and TRAPS -- which is what
-;;; (open-stream-p *error-output*) used to do in a socket-free component. No
-;;; socket can exist in this splice, so every non-nil designator answers t: the
-;;; exact answer sockets.lisp's dispatcher gives a file/stdin handle.
+;;; open-stream-p and listen are redirected by the same rewrite, so they need
+;;; definitions here too or the call compiles to a call-time error and TRAPS --
+;;; which is what (open-stream-p *error-output*) used to do in a socket-free
+;;; component. No socket can exist in this splice, so each answers exactly what
+;;; sockets.lisp's dispatcher gives a file/stdin handle: t for any non-nil
+;;; designator, and nil for the immediately-available probe (the host receive
+;;; buffer is not observable without blocking on this backend -- the same
+;;; documented divergence, see .kb/tcp-sockets.md).
 (defun rontolisp::%io-open-stream-p (s)
   (if s t nil))
 
-;;; The sequence ops and the eof-tolerant read-byte the rewrite also redirects:
-;;; raw passthroughs here (no socket can exist). The %...-future twins are plain
-;;; defuns -- rontolisp:await passes a settled plain value through -- so a
-;;; top-level (read-byte f nil -1) keeps the native built-in's exact semantics.
+(defun rontolisp::%io-listen (&optional s)
+  (if s nil nil))
+
+;;; The bounded sequence ops and the eof-tolerant reads the rewrite also
+;;; redirects: raw passthroughs here (no socket can exist). The %...-future twins
+;;; are plain defuns -- rontolisp:await passes a settled plain value through -- so
+;;; a top-level (read-byte f nil -1) keeps the native built-in's exact semantics.
+;;;
+;;; This name set must stay IDENTICAL to sockets.lisp's, every argument shape
+;;; included: the rewrite picks its target by call shape and does not know which of
+;;; the two files got spliced, so a shape defined in only one of them compiles to
+;;; "the function RONTOLISP::%IO-... is undefined" (or an arity error) in the other
+;;; splice. Pinned by StdinLibraryTest.
 
 (defun rontolisp::%io-read-byte-eof (s eof-error-p &optional eof-value)
   (rontolisp::%read-byte-raw s eof-error-p eof-value))
@@ -71,11 +83,26 @@
 (defun rontolisp::%read-byte-eof-future (s eof-error-p &optional eof-value)
   (rontolisp::%read-byte-raw s eof-error-p eof-value))
 
-(defun rontolisp::%io-read-sequence (seq s)
-  (rontolisp::%read-sequence-raw seq s))
+(defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
+  (rontolisp::%read-char-raw s eof-error-p eof-value))
 
-(defun rontolisp::%read-sequence-future (seq s)
-  (rontolisp::%read-sequence-raw seq s))
+(defun rontolisp::%read-char-eof-future (s eof-error-p &optional eof-value)
+  (rontolisp::%read-char-raw s eof-error-p eof-value))
 
-(defun rontolisp::%io-write-sequence (seq s)
-  (rontolisp::%write-sequence-raw seq s))
+(defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
+  (rontolisp::%read-line-raw s eof-error-p eof-value))
+
+(defun rontolisp::%read-line-eof-future (s eof-error-p &optional eof-value)
+  (rontolisp::%read-line-raw s eof-error-p eof-value))
+
+(defun rontolisp::%io-read-sequence (seq s &optional start end)
+  (rontolisp::%read-sequence-raw seq s :start (if start start 0)
+                                :end (if end end (length seq))))
+
+(defun rontolisp::%read-sequence-future (seq s &optional start end)
+  (rontolisp::%read-sequence-raw seq s :start (if start start 0)
+                                :end (if end end (length seq))))
+
+(defun rontolisp::%io-write-sequence (seq s &optional start end)
+  (rontolisp::%write-sequence-raw seq s :start (if start start 0)
+                                 :end (if end end (length seq))))

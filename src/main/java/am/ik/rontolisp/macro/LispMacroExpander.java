@@ -7325,11 +7325,24 @@ public final class LispMacroExpander {
 	 *
 	 * The runtime stream helpers on all backends already return {@code nil} at EOF, so
 	 * the "swallow" branch collapses to the 1-arg call without behavior change.
+	 *
+	 * <p>
+	 * The {@code rontolisp::%read-line-raw} alias (the {@code --component} internal name
+	 * for the same built-in, which sockets.lisp's dispatch defuns fall back through) is
+	 * accepted under its own spelling and lowers to itself: an alias that did NOT accept
+	 * every shape the public name does would make the socket dispatch a compile error for
+	 * exactly the eof-carrying shapes the Gray-streams fall-through emits.
 	 * @param cons the call expression
 	 * @return the lowered expression, or {@code null} when the shape is not handled here
 	 */
 	@Nullable public static LispVal expandReadLineCompat(LispCons cons) {
-		if (!(cons.car() instanceof LispSymbol op) || !LispNames.READ_LINE.equals(op.name())) {
+		if (!(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		String head = LispNames.READ_LINE.equals(op.name()) ? LispNames.READ_LINE
+				: PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.READ_LINE_RAW_INTERNAL)
+					.equals(op.name()) ? op.name() : null;
+		if (head == null) {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
@@ -7341,7 +7354,7 @@ public final class LispMacroExpander {
 			return null;
 		}
 		LispVal stream = parts.get(1);
-		LispVal readLineOnly = listToCons(List.of(new LispSymbol(LispNames.READ_LINE), stream));
+		LispVal readLineOnly = listToCons(List.of(new LispSymbol(head), stream));
 		if (parts.size() == 3 || isLiteralNil(parts.get(3))) {
 			return readLineOnly;
 		}

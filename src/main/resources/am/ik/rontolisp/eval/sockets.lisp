@@ -335,15 +335,19 @@
       (rontolisp::%future-force (rontolisp::%read-byte-future s))
       (rontolisp::%read-byte-raw s)))
 
-;;; --- the eof-tolerant read-byte and the sequence ops (what cl-postgres'
-;;; read-bytes / write-bytes / read-simple-str need on a socket handle). A
-;;; non-socket designator falls through to the native built-in / its expansion
-;;; under the %...-raw alias, byte-identical semantics to the unrewritten form. ---
+;;; --- the eof-tolerant reads and the bounded sequence ops (what cl-postgres'
+;;; read-bytes / write-bytes / read-simple-str need on a socket handle, and what
+;;; the Gray-streams dispatch helpers' fall-through arms spell -- ALWAYS with the
+;;; eof / :start / :end arguments filled in, which is why every one of these
+;;; shapes has to have a dispatch target). A non-socket designator falls through
+;;; to the native built-in / its expansion under the %...-raw alias,
+;;; byte-identical semantics to the unrewritten form. ---
 
-(rontolisp:async-defun rontolisp::%sock-read-seq-f (e seq)
-  ;; Fill seq with wire bytes; returns the count read (short at EOF).
-  (let ((n (length seq)) (i 0) (stop nil))
-    (while (and (< i n) (not stop))
+(rontolisp:async-defun rontolisp::%sock-read-seq-f (e seq start end)
+  ;; Fill seq[start,end) with wire bytes; returns the index of the first element
+  ;; NOT updated (CL read-sequence's value), so a short read at EOF stays visible.
+  (let ((i start) (stop nil))
+    (while (and (< i end) (not stop))
       (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
         (if (null b)
             (setq stop t)
@@ -352,14 +356,18 @@
               (setq i (+ i 1))))))
     i))
 
-(defun rontolisp::%sock-seq-string (seq)
-  ;; One write payload from a byte sequence (socket write-sequence elements are
+(defun rontolisp::%sock-seq-string (seq start end)
+  ;; One write payload from seq[start,end). A STRING sequence goes out as its own
+  ;; characters (what the native write-sequence expansion does for a string), a
+  ;; byte vector one raw wire byte per element (socket write-sequence elements are
   ;; bytes, like the interpreter's socket branch).
-  (let ((acc "") (n (length seq)) (i 0))
-    (while (< i n)
-      (setq acc (concatenate 'string acc (rontolisp::%str-from-byte (aref seq i))))
-      (setq i (+ i 1)))
-    acc))
+  (if (stringp seq)
+      (subseq seq start end)
+      (let ((acc "") (i start))
+        (while (< i end)
+          (setq acc (concatenate 'string acc (rontolisp::%str-from-byte (aref seq i))))
+          (setq i (+ i 1)))
+        acc)))
 
 (rontolisp:async-defun rontolisp::%read-byte-eof-future (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
@@ -367,7 +375,7 @@
         (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
           (if b
               b
-              (if eof-error-p (error "READ-BYTE: end of file") eof-value)))
+              (if eof-error-p (error 'end-of-file) eof-value)))
         (rontolisp::%read-byte-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-byte-eof (s eof-error-p &optional eof-value)
@@ -375,24 +383,65 @@
       (rontolisp::%future-force (rontolisp::%read-byte-eof-future s eof-error-p eof-value))
       (rontolisp::%read-byte-raw s eof-error-p eof-value)))
 
-(rontolisp:async-defun rontolisp::%read-sequence-future (seq s)
+;;; read-char / read-line with the eof parameters, the %io-read-byte-eof shape: the
+;;; socket reads answer nil at EOF, so the eof contract is one test on top of them.
+;;; The signalled condition is the SAME end-of-file class the native lowering uses
+;;; (LispMacroExpander.endOfFileSignal), so handler-case behaves identically whether
+;;; or not the designator turned out to be a socket.
+(rontolisp:async-defun rontolisp::%read-char-eof-future (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (rontolisp:await (rontolisp::%sock-read-seq-f e seq))
-        (rontolisp::%read-sequence-raw seq s))))
+        (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
+          (if c
+              c
+              (if eof-error-p (error 'end-of-file) eof-value)))
+        (rontolisp::%read-char-raw s eof-error-p eof-value))))
 
-(defun rontolisp::%io-read-sequence (seq s)
-  (if (rontolisp::%sock-entry s)
-      (rontolisp::%future-force (rontolisp::%read-sequence-future seq s))
-      (rontolisp::%read-sequence-raw seq s)))
+(defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
+  (let ((in (or s *standard-input*)))
+    (if (or (rontolisp::%sock-entry in) (not (integerp in)))
+        (rontolisp::%future-force (rontolisp::%read-char-eof-future in eof-error-p eof-value))
+        (rontolisp::%read-char-raw in eof-error-p eof-value))))
 
-(defun rontolisp::%io-write-sequence (seq s)
+(rontolisp:async-defun rontolisp::%read-line-eof-future (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (progn
-          (rontolisp::%sock-write-string e (rontolisp::%sock-seq-string seq))
-          seq)
-        (rontolisp::%write-sequence-raw seq s))))
+        (let ((l (rontolisp:await (rontolisp::%sock-read-line-f e))))
+          (if l
+              l
+              (if eof-error-p (error 'end-of-file) eof-value)))
+        (rontolisp::%read-line-raw s eof-error-p eof-value))))
+
+(defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
+  (let ((in (or s *standard-input*)))
+    (if (or (rontolisp::%sock-entry in) (not (integerp in)))
+        (rontolisp::%future-force (rontolisp::%read-line-eof-future in eof-error-p eof-value))
+        (rontolisp::%read-line-raw in eof-error-p eof-value))))
+
+;;; The sequence ops carry :start / :end all the way down: the bounds are NOT a
+;;; caller convenience here, they are the shape the Gray-streams fall-through arm
+;;; emits, and an unbounded-only dispatch left that arm on the native built-in.
+(rontolisp:async-defun rontolisp::%read-sequence-future (seq s &optional start end)
+  (let ((a (if start start 0)) (b (if end end (length seq))))
+    (let ((e (rontolisp::%sock-entry s)))
+      (if e
+          (rontolisp:await (rontolisp::%sock-read-seq-f e seq a b))
+          (rontolisp::%read-sequence-raw seq s :start a :end b)))))
+
+(defun rontolisp::%io-read-sequence (seq s &optional start end)
+  (let ((a (if start start 0)) (b (if end end (length seq))))
+    (if (rontolisp::%sock-entry s)
+        (rontolisp::%future-force (rontolisp::%read-sequence-future seq s a b))
+        (rontolisp::%read-sequence-raw seq s :start a :end b))))
+
+(defun rontolisp::%io-write-sequence (seq s &optional start end)
+  (let ((a (if start start 0)) (b (if end end (length seq))))
+    (let ((e (rontolisp::%sock-entry s)))
+      (if e
+          (progn
+            (rontolisp::%sock-write-string e (rontolisp::%sock-seq-string seq a b))
+            seq)
+          (rontolisp::%write-sequence-raw seq s :start a :end b)))))
 
 ;;; --- writes (the synchronous stream.write built-in blocks until the peer has
 ;;; taken the bytes; FIN = dropping the write end at close) ---

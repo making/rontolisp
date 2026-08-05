@@ -10,6 +10,7 @@ import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * The {@code --component} socket-I/O rewrite: when sockets.lisp is spliced (the program
@@ -40,6 +41,14 @@ import am.ik.rontolisp.PackageRegistry;
  * Writes and {@code close} are never promoted (the write built-ins keep the blocking
  * park; drops are synchronous). {@code #'read-line} keeps the native wrapper -- a
  * first-class read applied to a socket is out of contract, like {@code eval}.
+ *
+ * <p>
+ * The rewrite is SHAPE-driven, and it has to cover every shape a socket-capable built-in
+ * accepts -- the eof-carrying reads and the {@code :start}/{@code :end} sequence ops
+ * included -- because {@code GrayStreamsLibrary} runs before it and re-spells the
+ * built-ins with all their optional arguments filled in. See the comment on the shape
+ * constants below for why an incomplete table is a runtime trap and not merely a missed
+ * optimization.
  */
 final class WasmSocketsRewrite {
 
@@ -69,7 +78,7 @@ final class WasmSocketsRewrite {
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 }),
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 }));
 
-	// The sequence ops and the eof-tolerant read-byte, dispatched by arity (they need
+	// The sequence ops and the eof-tolerant reads, dispatched by SHAPE (they need
 	// per-shape targets, so they stay out of the 1:1 maps above): cl-postgres' socket
 	// layer reads/writes byte arrays with (read-sequence result socket) /
 	// (write-sequence bytes socket) and probes with (read-byte socket nil 0), none of
@@ -77,9 +86,29 @@ final class WasmSocketsRewrite {
 	// built-ins, whose fd_read/fd_write on a socket fd (>= 200) walks off the preview1
 	// adapter's 64-slot fd table. A non-socket designator still reaches the native
 	// expansion through the %...-raw aliases inside the dispatch defuns.
+	//
+	// EVERY shape a socket-capable built-in accepts needs an entry here, not just the
+	// shapes user code tends to write: GrayStreamsLibrary.process runs BEFORE this pass
+	// and normalizes every possibly-CLOS-instance stream call site onto its
+	// %gray-*-dispatch helper, whose non-instance fall-through arm re-spells the
+	// built-in with EVERY optional argument filled in -- (read-line s eof-error-p
+	// eof-value), (read-sequence seq s :start a :end b), ... So a shape this pass does
+	// not recognize is not merely "unusual"; it is what a Gray-streams program (any
+	// (ql:quickload "cl-postgres") program) actually compiles to. That gap is what kept
+	// the cl-postgres component legs red for a while: the driver's
+	// (write-sequence bytes socket) became the keyworded fall-through arm, which had no
+	// dispatch target, and the write trapped mid-message with "unknown handle index 0".
 	private static final String IO_READ_BYTE_EOF = "%IO-READ-BYTE-EOF";
 
 	private static final String READ_BYTE_EOF_FUTURE = "%READ-BYTE-EOF-FUTURE";
+
+	private static final String IO_READ_CHAR_EOF = "%IO-READ-CHAR-EOF";
+
+	private static final String READ_CHAR_EOF_FUTURE = "%READ-CHAR-EOF-FUTURE";
+
+	private static final String IO_READ_LINE_EOF = "%IO-READ-LINE-EOF";
+
+	private static final String READ_LINE_EOF_FUTURE = "%READ-LINE-EOF-FUTURE";
 
 	private static final String IO_READ_SEQUENCE = "%IO-READ-SEQUENCE";
 
@@ -105,6 +134,8 @@ final class WasmSocketsRewrite {
 	static Set<String> strictDispatchMembers() {
 		Set<String> members = new java.util.HashSet<>(SYNC_DISPATCH.values());
 		members.add(IO_READ_BYTE_EOF);
+		members.add(IO_READ_CHAR_EOF);
+		members.add(IO_READ_LINE_EOF);
 		members.add(IO_READ_SEQUENCE);
 		members.add(IO_WRITE_SEQUENCE);
 		return Set.copyOf(members);
@@ -258,19 +289,44 @@ final class WasmSocketsRewrite {
 				&& ":ABORT".equals(kw.name())) {
 			parts = List.of(parts.get(0), parts.get(1));
 		}
-		// The eof-tolerant read-byte (2-3 args) and the 2-arg sequence ops take their
-		// own dispatch targets; reads promote in async context like the 1-arg reads,
-		// writes never do.
+		// (write-char c [stream]) and a BOUNDED (write-string s stream :start a :end b)
+		// have no dispatch defun of their own: both already have a shared lowering onto
+		// the plain write-string this pass DOES cover, so lowering them HERE -- before
+		// the substitution instead of at WasmExprCompiler time, which is after it -- is
+		// what puts them on the socket path at all.
+		if (LispNames.WRITE_CHAR.equals(head) && (parts.size() == 2 || parts.size() == 3)) {
+			return rewriteForm(LispMacroExpander.expandWriteChar(consOf(parts)), asyncContext);
+		}
+		if (LispNames.WRITE_STRING.equals(head) && hasLiteralBounds(parts)) {
+			LispVal bounded = LispMacroExpander.lowerWriteStringBounds(consOf(parts));
+			if (bounded != null) {
+				return rewriteForm(bounded, asyncContext);
+			}
+		}
+		// The eof-tolerant reads (2-3 args) and the sequence ops (bounded or not) take
+		// their own dispatch targets; reads promote in async context like the 1-arg
+		// reads, writes never do.
 		if (LispNames.READ_BYTE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
 			return asyncContext ? awaitOf(replaceHead(parts, READ_BYTE_EOF_FUTURE, true))
 					: replaceHead(parts, IO_READ_BYTE_EOF, false);
 		}
-		if (LispNames.READ_SEQUENCE.equals(head) && parts.size() == 3) {
-			return asyncContext ? awaitOf(replaceHead(parts, READ_SEQUENCE_FUTURE, true))
-					: replaceHead(parts, IO_READ_SEQUENCE, false);
+		if (LispNames.READ_CHAR.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_CHAR_EOF_FUTURE, true))
+					: replaceHead(parts, IO_READ_CHAR_EOF, false);
 		}
-		if (LispNames.WRITE_SEQUENCE.equals(head) && parts.size() == 3) {
-			return replaceHead(parts, IO_WRITE_SEQUENCE, asyncContext);
+		if (LispNames.READ_LINE.equals(head) && (parts.size() == 3 || parts.size() == 4)) {
+			return asyncContext ? awaitOf(replaceHead(parts, READ_LINE_EOF_FUTURE, true))
+					: replaceHead(parts, IO_READ_LINE_EOF, false);
+		}
+		if (LispNames.READ_SEQUENCE.equals(head) || LispNames.WRITE_SEQUENCE.equals(head)) {
+			List<LispVal> bounded = boundedSequenceArgs(parts);
+			if (bounded != null) {
+				if (LispNames.WRITE_SEQUENCE.equals(head)) {
+					return replaceHead(bounded, IO_WRITE_SEQUENCE, asyncContext);
+				}
+				return asyncContext ? awaitOf(replaceHead(bounded, READ_SEQUENCE_FUTURE, true))
+						: replaceHead(bounded, IO_READ_SEQUENCE, false);
+			}
 		}
 		int[] arity = ARITIES.get(head);
 		if (arity != null && (parts.size() - 1 < arity[0] || parts.size() - 1 > arity[1])) {
@@ -312,6 +368,53 @@ final class WasmSocketsRewrite {
 		return null;
 	}
 
+	// True when a write-string call carries a literal :start / :end keyword tail (the
+	// only tail LispMacroExpander.lowerWriteStringBounds accepts -- a non-literal keyword
+	// is left alone so the unrewritten call reports it under the public name).
+	private static boolean hasLiteralBounds(List<LispVal> parts) {
+		int i = parts.size() > 2 && !isBoundsKeyword(parts.get(2)) ? 3 : 2;
+		if (parts.size() <= i || (parts.size() - i) % 2 != 0) {
+			return false;
+		}
+		for (; i < parts.size(); i += 2) {
+			if (!isBoundsKeyword(parts.get(i))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static boolean isBoundsKeyword(LispVal val) {
+		return val instanceof LispSymbol key && (":START".equals(key.name()) || ":END".equals(key.name()));
+	}
+
+	// (op seq stream [:start a] [:end b]) -> the POSITIONAL argument list the %io-*
+	// sequence dispatch defuns take, (op seq stream start end). A missing bound becomes
+	// nil (the defuns normalize it to 0 / (length seq), so the bound is computed on the
+	// same value the socket arm and the native fall-through both see). Returns null for
+	// any other shape -- a non-literal keyword or a stray positional argument -- leaving
+	// the call unrewritten so it errors under its public name.
+	private static @org.jspecify.annotations.Nullable List<LispVal> boundedSequenceArgs(List<LispVal> parts) {
+		if (parts.size() < 3 || (parts.size() - 3) % 2 != 0) {
+			return null;
+		}
+		LispVal start = LispNil.INSTANCE;
+		LispVal end = LispNil.INSTANCE;
+		for (int i = 3; i < parts.size(); i += 2) {
+			if (!(parts.get(i) instanceof LispSymbol key)) {
+				return null;
+			}
+			switch (key.name()) {
+				case ":START" -> start = parts.get(i + 1);
+				case ":END" -> end = parts.get(i + 1);
+				default -> {
+					return null;
+				}
+			}
+		}
+		return List.of(parts.get(0), parts.get(1), parts.get(2), start, end);
+	}
+
 	private static LispVal replaceHead(List<LispVal> parts, String internalName, boolean asyncContext) {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size());
 		out.add(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, internalName)));
@@ -324,6 +427,12 @@ final class WasmSocketsRewrite {
 	private static LispVal awaitOf(LispVal call) {
 		return properList(
 				List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.AWAIT)), call));
+	}
+
+	// The call parts back as the cons the LispMacroExpander lowerings take. Only ever
+	// called on a non-empty argument list (a call always has a head).
+	private static LispCons consOf(List<LispVal> parts) {
+		return (LispCons) properList(parts);
 	}
 
 	private static LispVal properList(List<LispVal> parts) {

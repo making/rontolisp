@@ -1,6 +1,7 @@
 package am.ik.rontolisp.eval;
 
 import java.util.List;
+import java.util.Map;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
@@ -94,6 +95,65 @@ class StdinLibraryTest {
 		List<LispVal> out = StdinLibrary.process(program, COMPONENT, true);
 		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-OR-RAW-F")).isTrue();
 		assertThat(definesInternal(out, "RONTOLISP::%STDIN-READ-LINE-F")).isFalse();
+	}
+
+	@Test
+	void theTwoDispatchSplicesDefineTheSameNamesAndShapes() {
+		// stdin-dispatch.lisp and sockets.lisp are ALTERNATIVE providers of the same
+		// %io-* / %*-future dispatch names -- exactly one of them is spliced. The WASM
+		// socket/stdin I/O rewrite picks its target by CALL SHAPE and cannot know which
+		// file it got, so a name or an argument shape that only one file defines is a
+		// compile failure ("the function RONTOLISP::%IO-... is undefined", or an arity
+		// error) for every program on the other splice. That is not hypothetical: the
+		// bounded sequence ops and the eof-carrying read-char/read-line landed in
+		// sockets.lisp first and broke every async stdin component until this file
+		// caught up. Compare the name -> (required, optional) shape maps, not just the
+		// names.
+		Map<String, String> sockets = dispatchShapes(
+				SocketsLibrary.process(LispReader.readAllFromString("(close (rontolisp:tcp-listen 7777))"), COMPONENT));
+		Map<String, String> stdin = dispatchShapes(StdinLibrary.process(
+				LispReader.readAllFromString(
+						"(rontolisp:async-defun main () (print (read-line)))\n" + "(rontolisp:await (main))"),
+				COMPONENT, false));
+		assertThat(stdin).isNotEmpty();
+		assertThat(stdin).containsAllEntriesOf(sockets);
+	}
+
+	// name -> "required/optional" for every dispatch defun a splice provides. Only the
+	// names the rewrite can target are compared; each file is free to carry its own
+	// internals (sockets.lisp's %sock-* helpers) beside them.
+	private static Map<String, String> dispatchShapes(List<LispVal> forms) {
+		Map<String, String> shapes = new java.util.LinkedHashMap<>();
+		for (LispVal form : forms) {
+			if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !("DEFUN".equals(head.name()) || "RONTOLISP:ASYNC-DEFUN".equals(head.name()))
+					|| !(cons.cdr() instanceof LispCons rest) || !(rest.car() instanceof LispSymbol name)
+					|| !(rest.cdr() instanceof LispCons afterName)) {
+				continue;
+			}
+			String member = name.name();
+			if (!member.startsWith("RONTOLISP::%IO-") && !member.endsWith("-FUTURE")) {
+				continue;
+			}
+			int required = 0;
+			int optional = 0;
+			boolean seenOptional = false;
+			if (afterName.car() instanceof LispCons params && params.isProperList()) {
+				for (LispVal param : params.toList()) {
+					if (param instanceof LispSymbol p && "&OPTIONAL".equals(p.name())) {
+						seenOptional = true;
+					}
+					else if (seenOptional) {
+						optional++;
+					}
+					else {
+						required++;
+					}
+				}
+			}
+			shapes.put(member, required + "/" + optional);
+		}
+		return shapes;
 	}
 
 	@Test

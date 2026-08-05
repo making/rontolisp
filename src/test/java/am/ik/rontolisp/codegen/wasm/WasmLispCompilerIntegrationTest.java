@@ -347,6 +347,21 @@ class WasmLispCompilerIntegrationTest {
 		return new WasmLispCompiler(false, true).compile(forms);
 	}
 
+	// The same component pipeline with GrayStreamsLibrary in it, in the CLI's order (the
+	// Gray call-site rewrite runs AFTER the socket/stdin splices, so its fall-through
+	// arms
+	// are what the socket rewrite then has to recognize).
+	private static byte[] compileGrayFetchComponent(String program) {
+		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
+		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.WitLibrary
+				.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.StdinLibrary.process(
+						am.ik.rontolisp.eval.SocketsLibrary.process(am.ik.rontolisp.eval.WaitForLibrary
+							.process(LispReader.readAllFromString(program), witBackend), witBackend),
+						witBackend, false))));
+		return new WasmLispCompiler(false, true).compile(forms);
+	}
+
 	@Test
 	void exportScalarFunctionsCallableViaInvoke() throws Exception {
 		String program = """
@@ -9060,6 +9075,57 @@ class WasmLispCompilerIntegrationTest {
 				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-seq.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("(1 2 250 4)\n65\n:EOF\n(7 200)\n:EOF");
+	}
+
+	@Test
+	void componentTcpGrayStreamsFallThroughShapesReachTheSocketDispatch() throws Exception {
+		// GrayStreamsLibrary.process runs BEFORE the component socket rewrite
+		// and normalizes every possibly-CLOS-instance stream call site onto its
+		// %gray-*-dispatch helper, whose non-instance fall-through arm re-spells the
+		// built-in with EVERY optional argument filled in:
+		// (write-sequence seq s :start a :end b), (read-line s eof-error-p eof-value),
+		// ... None of those shapes was in the socket rewrite's table, so on a socket
+		// handle they compiled to the NATIVE built-ins, whose fd_read/fd_write on a
+		// socket fd (>= 200) walks off the preview1 adapter's 64-slot fd table --
+		// cl-postgres' (write-sequence bytes socket) died mid-message with "unknown
+		// handle index 0". The `defclass ... fundamental-character-output-stream` here is
+		// what makes the program a Gray-protocol one, so the socket calls below all
+		// arrive at the dispatch helpers exactly as they do in a quickloaded driver.
+		String program = """
+				(defclass sink (rontolisp:fundamental-character-output-stream) ())
+				(defmethod rontolisp:stream-write-string ((s sink) str) str)
+				(defun run-sync (client server)
+				  (write-sequence (vector 1 2 250 4) client)
+				  (let ((buf (make-array 4 :initial-element 0)))
+				    (read-sequence buf server)
+				    (print (list (aref buf 0) (aref buf 1) (aref buf 2) (aref buf 3))))
+				  (write-sequence (vector 9 8 7 6) client :start 1 :end 3)
+				  (let ((buf (make-array 4 :initial-element 0)))
+				    (read-sequence buf server :start 1 :end 3)
+				    (print (list (aref buf 0) (aref buf 1) (aref buf 2) (aref buf 3))))
+				  (write-char #\\Z client)
+				  (print (read-char server nil :eof))
+				  (write-string "0123456789" client :start 2 :end 5)
+				  (write-line "" client)
+				  (print (read-line server nil :eof))
+				  (print (write-string "instance" (make-instance 'sink))))
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (client (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port listener)))
+				       (server (rontolisp:tcp-accept listener)))
+				  (run-sync client server)
+				  (close client)
+				  (print (read-line server nil :eof))
+				  (print (read-char server nil :eof))
+				  (close server)
+				  (close listener))
+				""";
+		byte[] componentBytes = compileGrayFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-gray.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-gray.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim())
+			.isEqualTo("(1 2 250 4)\n(0 8 7 0)\n#\\Z\n\"234\"\n\"instance\"\n:EOF\n:EOF");
 	}
 
 	@Test

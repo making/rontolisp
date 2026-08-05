@@ -9,7 +9,10 @@ password port &optional host) and `tls-listen-pem` (cert-file key-file port
 &optional host; all three interpreter/JVM only, see below), that return
 **bidirectional stream handles in the same handle space as file streams**, so
 the standard stream built-ins (`read-line`, `write-line`, `read-byte`,
-`write-byte`, `write-string`, `close`) work on sockets unchanged. Blocking,
+`write-byte`, `close`) work on sockets unchanged on every backend --
+`write-string` / `write-char` / `read-char` on a socket answer on the
+`--component` backend ONLY (`.todo/264`; the bullet near the end of "The
+component mechanics" has the mechanism). Blocking,
 synchronous API (no promises) -- except that on `--component` a read inside an
 ASYNC body is promoted to a real suspension point (below). Reads are
 byte-at-a-time (no readahead buffer is held between calls) on the
@@ -316,22 +319,87 @@ External state (a PostgreSQL row) survives; a defvar does not.
   chunk boundaries included); `read-char` assembles one UTF-8 sequence
   byte-wise (refills mid-sequence work). Pinned by
   `componentTcpBinaryBytesAreWireTransparent`.
-- **Sequence ops and the eof-tolerant read-byte dispatch (cl-postgres'
-  surface)**: `(read-sequence seq s)` / `(write-sequence seq s)` (2-arg forms)
-  and `(read-byte s eof-error-p [eof-value])` are rewritten onto
-  `%io-read-sequence` / `%io-write-sequence` / `%io-read-byte-eof` (sync
-  context) or promoted onto `%read-sequence-future` / `%read-byte-eof-future`
-  (async context; writes never promote). A non-socket designator falls through
-  to the native expansions via the `%read-sequence-raw`/`%write-sequence-raw`
-  aliases and the 3-arg `%read-byte-raw`, byte-identical semantics to the
-  unrewritten forms -- this is what the earlier reverted attempt got wrong (it
-  widened `%io-read-byte` itself and broke a top-level file read at EOF in the
-  ci-spec corpus). Unrewritten, these calls compile to the NATIVE stream
-  built-ins whose `fd_read`/`fd_write` on a socket fd (>= 200) walks off the
-  preview1 adapter's 64-slot fd table -- the "unknown handle index" crash.
-  Socket write-sequence elements are BYTES (integers), like the interpreter's
-  per-element `write-byte` expansion. Pinned by
-  `componentTcpSequenceOpsReachTheSocketDispatch`.
+- **Sequence ops and the eof-tolerant reads (cl-postgres' surface)**:
+  `(read-sequence seq s [:start a] [:end b])` / `(write-sequence seq s [:start
+  a] [:end b])` and `(read-byte|read-char|read-line s eof-error-p [eof-value])`
+  are rewritten onto `%io-read-sequence` / `%io-write-sequence` /
+  `%io-read-byte-eof` / `%io-read-char-eof` / `%io-read-line-eof` (sync context)
+  or promoted onto the matching `%...-future` (async context; writes never
+  promote). The bounds travel as POSITIONAL arguments (`nil` = "unspecified",
+  normalized to `0` / `(length seq)` inside the dispatch defun, against the same
+  sequence both arms see). A non-socket designator falls through to the native
+  expansions via the `%read-sequence-raw`/`%write-sequence-raw` aliases and the
+  3-arg `%read-byte-raw`/`%read-char-raw`/`%read-line-raw`, byte-identical
+  semantics to the unrewritten forms -- this is what the earlier reverted attempt
+  got wrong (it widened `%io-read-byte` itself and broke a top-level file read at
+  EOF in the ci-spec corpus). The eof arms signal the same `end-of-file` class
+  the native lowering does (`LispMacroExpander.endOfFileSignal`), so
+  `handler-case` behaves identically whether or not the designator turned out to
+  be a socket. Socket write-sequence elements are BYTES (integers), like the
+  interpreter's per-element `write-byte` expansion -- except for a STRING
+  sequence, which goes out as its own characters (what the native
+  `write-sequence` expansion does for a string). Pinned by
+  `componentTcpSequenceOpsReachTheSocketDispatch` and
+  `componentTcpGrayStreamsFallThroughShapesReachTheSocketDispatch`.
+- **EVERY shape a socket-capable built-in accepts needs an entry in
+  `WasmSocketsRewrite`, not just the shapes user code tends to write (todo-263)**:
+  unrewritten, these calls compile to the NATIVE stream built-ins whose
+  `fd_read`/`fd_write` on a socket fd (>= 200) walks off the preview1 adapter's
+  64-slot fd table -- the `unknown handle index 0` trap, and it fires MID-MESSAGE
+  (the server logs `incomplete message from client`), so it reads like a dropped
+  `wasi:io` stream resource rather than a missing rewrite. The reason the exotic
+  shapes are load-bearing is pass ORDER: `GrayStreamsLibrary.process` runs BEFORE
+  this rewrite and normalizes every possibly-CLOS-instance stream call site onto
+  its `%gray-*-dispatch` helper, whose non-instance fall-through arm re-spells
+  the built-in with EVERY optional argument filled in -- `(write-sequence seq s
+  :start start :end (if end end (length sequence)))`, `(read-line s eof-error-p
+  eof-value)`, ... So in any Gray-protocol program -- which is every
+  `(ql:quickload "cl-postgres")` program -- the keyworded / eof-carrying shape is
+  what the socket call ACTUALLY is. That gap kept the four `--component` legs of
+  `ClPostgresE2eTest` `@Disabled`: cl-postgres' `write-bytes` does
+  `(write-sequence bytes socket)`, the Gray arm turned it into the keyworded
+  form, and only the 2-arg form had a dispatch target. Two shapes have no
+  dispatch defun of their own and are LOWERED inside the rewrite instead, onto
+  the plain `write-string` it does cover: `(write-char c [s])`
+  (`LispMacroExpander.expandWriteChar`) and a bounded `(write-string s stream
+  :start a :end b)` (`lowerWriteStringBounds`) -- both already had that lowering,
+  but it ran at `WasmExprCompiler` time, i.e. AFTER this pass, which is exactly
+  why they reached the native built-in. An unrecognized shape (a non-literal
+  keyword, a stray positional) is deliberately left UNREWRITTEN so the error
+  names the built-in the program wrote. Shape table pinned by
+  `WasmSocketsRewriteTest`; `expandReadLineCompat` accepts the
+  `rontolisp::%read-line-raw` alias for the same reason (the alias has to admit
+  every shape the public name does, or the fall-through arm is a compile error).
+- **The rewrite has TWO alternative dispatch providers, and widening one without
+  the other breaks every program on the other** -- sockets.lisp, and
+  `stdin-dispatch.lisp` for an async component that reads stdin but never touches
+  a socket (`StdinLibrary`, `.kb/read-load-streams.md`). Exactly one is spliced,
+  the rewrite keys on the same `%io-read-line` marker either way, and it picks its
+  target by call SHAPE without knowing which file it got -- so a name or an
+  argument shape only one file defines is `the function RONTOLISP::%IO-... is
+  undefined` (or an arity error) for the other splice. The bounded sequence ops
+  and the eof-carrying read-char/read-line landed in sockets.lisp first and broke
+  the whole `ci-spec.yaml` corpus's `--component` leg, which `./mvnw test` does
+  NOT catch (`CiSpecE2eTest` needs `-Drontolisp.binary`); the same omission had
+  already cost `%io-listen`, missing from stdin-dispatch.lisp since it was
+  written. `StdinLibraryTest#theTwoDispatchSplicesDefineTheSameNamesAndShapes`
+  compares the two name -> (required/optional) maps so the next widening cannot
+  land in one file only.
+- **`write-string` / `write-char` / `read-char` on a socket work on the
+  component and NOT on the interpreter or the JVM** (measured 2026-08-05): the
+  interpreter's `write-string` destination resolver signals `not an output stream`
+  and the JVM's `_writeStr` casts the table entry to `java.io.Writer` (the
+  `instanceof Socket` branches `JvmIoRuntimeBuilder` grows cover
+  `_writeLine`/`_readLineStream`/`_readByte`/`_writeByte`/`_closeStream` only),
+  while `read-char` needs a `BufferedReader` the socket table entry is not. The
+  component reaches all three through `%io-write-string` / `%io-read-char`. The
+  divergence is PRE-EXISTING and points the safe way (the component works; the
+  other two error rather than corrupt), which is why todo-263 widened the
+  component side anyway instead of narrowing it. Re-evaluation trigger and the
+  fix sketch: `.todo/264`. Until then the socket surface that is real on all four
+  backends is the one listed at the top of this file
+  (`read-line`/`write-line`/`read-byte`/`write-byte`/`close`, plus the sequence
+  ops).
 - **The two rewrites MEET in an async body, and the `%` prefix is a naming
   convention there, not a marker of specialness**: a write is never promoted,
   so it takes the `%io-*` dispatch head even in async context, while a read in
@@ -466,11 +534,13 @@ splice). Key mechanics:
 `#fetchAndTcpInOneComponentProgramCompiles` / `#httpHandlerWithTcpCompilesInServeMode`,
 `WasmLispCompilerIntegrationTest#componentTcp*` / `#componentUsocket*` (a full
 loopback echo runs deterministically inside the wasmtime container — no opt-in
-env var needed), `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`,
+env var needed), `WasmSocketsRewriteTest` (the socket rewrite's SHAPE table, the
+todo-263 gate — a shape with no dispatch target compiles to the native built-in
+and traps on a socket fd), `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`,
 `LoadInlinerTest` (built-in system splice/dedup/quickload-skip) and
 `LispEvaluatorAsdfTest` (built-in system on the interpreter). The one test that
 takes the shim all the way to a real server is `ClPostgresE2eTest` (runs by
-DEFAULT since todo-262; Docker is its only gate): the verbatim cl-postgres over the usocket shim
+DEFAULT since todo-262, all 13 legs since todo-263; Docker is its only gate): the verbatim cl-postgres over the usocket shim
 against a Testcontainers PostgreSQL, on the interpreter, the JVM and a
 component, with the Preview 1 behavior (call-time errors since todo-195) pinned alongside in `WasmLispCompilerTest`. The
 self-contained single-threaded echo choreography (listen 0 → tcp-local-port →
