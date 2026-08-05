@@ -28,14 +28,53 @@ public final class LispReader {
 
 	private final List<Token> tokens;
 
+	/** The source offset where each {@link #tokens} entry starts, aligned by index. */
+	private final int[] offsets;
+
 	private final Features features;
+
+	/** The full source text, used to resolve an offset to a line/column on an error. */
+	private final String input;
+
+	/** The origin file, or {@code null} when unknown; used to prefix read errors. */
+	private final @Nullable String file;
 
 	private int pos;
 
-	private LispReader(List<Token> tokens, Features features) {
-		this.tokens = tokens;
+	private LispReader(List<LocatedToken> tokens, Features features, String input, @Nullable String file) {
+		this.tokens = tokens.stream().map(LocatedToken::token).toList();
+		this.offsets = tokens.stream().mapToInt(LocatedToken::offset).toArray();
 		this.features = features;
+		this.input = input;
+		this.file = file;
 		this.pos = 0;
+	}
+
+	/**
+	 * A {@link LispReadException} whose message is prefixed with the position of the
+	 * current token (or the end of input when the reader has run past it).
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException err(String message) {
+		return errAtToken(this.pos, message);
+	}
+
+	/**
+	 * A {@link LispReadException} positioned at the given token index (or at the end of
+	 * input when the index is past the last token). A list that is never closed is only
+	 * detected at end of input, so it reports the index of its OPENING token instead: in
+	 * a big spliced library the last line of the file says nothing about which paren is
+	 * unbalanced.
+	 * @param tokenIndex the index into {@link #tokens} to report
+	 * @param message the error message
+	 * @return the positioned exception
+	 */
+	private LispReadException errAtToken(int tokenIndex, String message) {
+		SourceLocation location = tokenIndex >= 0 && tokenIndex < this.offsets.length
+				? SourceLocation.at(this.file, this.offsets[tokenIndex], this.input)
+				: SourceLocation.at(this.file, this.input.length(), this.input);
+		return new LispReadException(message, location);
 	}
 
 	/**
@@ -104,7 +143,20 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllFromString(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.ERROR);
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, null);
+	}
+
+	/**
+	 * Read all expressions from the input string, prefixing any read error with the given
+	 * origin file (the entry source or a loaded file). The feature set drives the
+	 * {@code #+}/{@code #-} conditionals and the {@code *features*} substitution.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllFromString(String input, Features features, @Nullable String file) {
+		return readAll(input, features, LispLexer.ReadEvalMode.ERROR, file);
 	}
 
 	/**
@@ -116,7 +168,20 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllSkippingReadEval(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE);
+		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, null);
+	}
+
+	/**
+	 * Read all expressions from the input string, skipping {@code #.} read-time-eval
+	 * forms with a warning instead of erroring. Used for {@code .asd} files, whose
+	 * leading {@code #.} version guards would otherwise make the whole file unreadable.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllSkippingReadEval(String input, Features features, @Nullable String file) {
+		return readAll(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file);
 	}
 
 	/**
@@ -131,12 +196,29 @@ public final class LispReader {
 	 * @return the list of parsed expressions
 	 */
 	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features) {
-		return readAll(input, features, LispLexer.ReadEvalMode.MARKER);
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, null);
 	}
 
-	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode) {
-		List<Token> tokens = new LispLexer(input, features, readEvalMode).tokenize();
-		LispReader reader = new LispReader(tokens, features);
+	/**
+	 * Read all expressions from the input string, wrapping each {@code #.} read-time-eval
+	 * datum in a {@code (%read-eval datum)} marker instead of erroring. The consumer (the
+	 * evaluator's {@code load}) resolves each marker by evaluating the datum just before
+	 * the top-level form containing it is evaluated, so a marker sees the definitions of
+	 * every preceding top-level form -- CL's read-eval timing for a form-at-a-time load.
+	 * An unreadable datum is a read error.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the list of parsed expressions
+	 */
+	public static List<LispVal> readAllWithReadEvalMarkers(String input, Features features, @Nullable String file) {
+		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, file);
+	}
+
+	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
+			@Nullable String file) {
+		List<LocatedToken> tokens = new LispLexer(input, features, readEvalMode, file).tokenizeWithPositions();
+		LispReader reader = new LispReader(tokens, features, input, file);
 		List<LispVal> result = new ArrayList<>();
 		while (reader.pos < reader.tokens.size()) {
 			result.add(reader.readExpr());
@@ -154,9 +236,9 @@ public final class LispReader {
 	 * @param features the active reader features
 	 * @return {@code true} if the tokens parse as complete expressions
 	 */
-	static boolean parsesAsExpressions(List<Token> tokens, Features features) {
+	static boolean parsesAsExpressions(List<LocatedToken> tokens, Features features) {
 		try {
-			LispReader reader = new LispReader(tokens, features);
+			LispReader reader = new LispReader(tokens, features, "", null);
 			while (reader.pos < reader.tokens.size()) {
 				reader.readExpr();
 			}
@@ -169,7 +251,7 @@ public final class LispReader {
 
 	private LispVal readExpr() {
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input");
+			throw err("Unexpected end of input");
 		}
 		Token token = this.tokens.get(this.pos);
 		this.pos++;
@@ -191,11 +273,11 @@ public final class LispReader {
 			case Token.Quote ignored -> readQuote();
 			case Token.FunctionQuote ignored -> readFunctionQuote();
 			case Token.Backquote ignored -> readBackquote();
-			case Token.Unquote ignored -> throw new LispReadException("Comma is illegal outside of backquote");
-			case Token.UnquoteSplicing ignored -> throw new LispReadException(",@ is illegal outside of backquote");
-			case Token.RightParen ignored -> throw new LispReadException("Unexpected ')'");
-			case Token.Dot ignored -> throw new LispReadException("Unexpected '.'");
-			case Token.Eof ignored -> throw new LispReadException("Unexpected end of input");
+			case Token.Unquote ignored -> throw err("Comma is illegal outside of backquote");
+			case Token.UnquoteSplicing ignored -> throw err(",@ is illegal outside of backquote");
+			case Token.RightParen ignored -> throw err("Unexpected ')'");
+			case Token.Dot ignored -> throw err("Unexpected '.'");
+			case Token.Eof ignored -> throw err("Unexpected end of input");
 			case Token.LabelDef def -> {
 				// #n=: record the next datum under the label. Lite: no circular
 				// structures -- a #n# inside the labeled datum itself is unresolvable.
@@ -206,8 +288,7 @@ public final class LispReader {
 			case Token.LabelRef ref -> {
 				LispVal datum = this.labels.get(ref.label());
 				if (datum == null) {
-					throw new LispReadException(
-							"#" + ref.label() + "# references an undefined (or circular) reader label");
+					throw err("#" + ref.label() + "# references an undefined (or circular) reader label");
 				}
 				yield datum;
 			}
@@ -217,9 +298,9 @@ public final class LispReader {
 	/** The datums recorded by {@code #n=} reader labels, shared across the read. */
 	private final java.util.Map<Integer, LispVal> labels = new java.util.HashMap<>();
 
-	private static LispVal readRatio(Token.RatioToken ratio) {
+	private LispVal readRatio(Token.RatioToken ratio) {
 		if (ratio.denominator().signum() == 0) {
-			throw new LispReadException("Division by zero in ratio literal: " + ratio.numerator() + "/0");
+			throw err("Division by zero in ratio literal: " + ratio.numerator() + "/0");
 		}
 		// Normalization may demote to an integer (e.g., "4/2" reads as 2).
 		return LispRatio.valueOf(ratio.numerator(), ratio.denominator());
@@ -296,8 +377,11 @@ public final class LispReader {
 	}
 
 	private LispVal readList() {
+		// The '(' was consumed by the caller, so it is the token just behind us -- the
+		// position an unclosed list must report.
+		int open = this.pos - 1;
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		if (this.tokens.get(this.pos) instanceof Token.RightParen) {
 			this.pos++; // consume ')'
@@ -309,19 +393,19 @@ public final class LispReader {
 			if (this.tokens.get(this.pos) instanceof Token.Dot) {
 				// Dotted pair: (a . b) puts b directly in the final cdr.
 				if (elements.isEmpty()) {
-					throw new LispReadException("Nothing appears before '.' in list");
+					throw err("Nothing appears before '.' in list");
 				}
 				this.pos++; // consume '.'
 				tail = readExpr();
 				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
-					throw new LispReadException("More than one object follows '.' in list");
+					throw err("More than one object follows '.' in list");
 				}
 				break;
 			}
 			elements.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		// Build cons chain from right to left
@@ -355,7 +439,7 @@ public final class LispReader {
 	// (ragged contents are a read error), matching Common Lisp.
 	private LispVal readArray(int rank) {
 		if (rank < 1) {
-			throw new LispReadException("#" + rank + "A: array rank must be >= 1");
+			throw err("#" + rank + "A: array rank must be >= 1");
 		}
 		List<LispVal> rows = readGroupedElements();
 		String label = "#" + rank + "A";
@@ -407,8 +491,7 @@ public final class LispReader {
 			data[i] = switch (leaf) {
 				case LispInteger n -> n.value();
 				case am.ik.rontolisp.LispBigInteger b -> b.value().longValue();
-				default ->
-					throw new LispReadException("#" + width + "@: expected an integer element, got " + leaf.print());
+				default -> throw err("#" + width + "@: expected an integer element, got " + leaf.print());
 			};
 		}
 		return new am.ik.rontolisp.LispIntVector(width, data);
@@ -427,22 +510,20 @@ public final class LispReader {
 	private LispVal readStruct() {
 		List<LispVal> items = readGroupedElements();
 		if (items.isEmpty()) {
-			throw new LispReadException("#S(): a structure literal needs a type name");
+			throw err("#S(): a structure literal needs a type name");
 		}
 		if (!(items.get(0) instanceof LispSymbol nameSym)) {
-			throw new LispReadException("#S: expected a structure type name, got " + items.get(0).print());
+			throw err("#S: expected a structure type name, got " + items.get(0).print());
 		}
 		String typeName = nameSym.name();
 		if ((items.size() - 1) % 2 != 0) {
-			throw new LispReadException(
-					"#S(" + typeName + " ...): odd number of slot name/value items in a structure literal");
+			throw err("#S(" + typeName + " ...): odd number of slot name/value items in a structure literal");
 		}
 		List<String> slotNames = new ArrayList<>();
 		List<LispVal> slotValues = new ArrayList<>();
 		for (int i = 1; i < items.size(); i += 2) {
 			if (!(items.get(i) instanceof LispSymbol slotSym)) {
-				throw new LispReadException(
-						"#S(" + typeName + " ...): expected a slot name, got " + items.get(i).print());
+				throw err("#S(" + typeName + " ...): expected a slot name, got " + items.get(i).print());
 			}
 			slotNames.add(slotSym.name());
 			slotValues.add(items.get(i + 1));
@@ -452,12 +533,13 @@ public final class LispReader {
 
 	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.
 	private List<LispVal> readGroupedElements() {
+		int open = this.pos - 1;
 		List<LispVal> rows = new ArrayList<>();
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
 			rows.add(readExpr());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		return rows;
@@ -465,7 +547,7 @@ public final class LispReader {
 
 	// The dimension sizes for a rank-n literal, taken from the first-element chain; an
 	// empty level makes every remaining dimension 0 (e.g., #2A() has dimensions (0 0)).
-	private static int[] arrayDimensions(List<LispVal> rows, int rank, String label) {
+	private int[] arrayDimensions(List<LispVal> rows, int rank, String label) {
 		int[] dims = new int[rank];
 		dims[0] = rows.size();
 		List<LispVal> level = rows;
@@ -497,13 +579,13 @@ public final class LispReader {
 	}
 
 	// Coerces a #f/#d leaf to a double, or a read error when it is not a real number.
-	private static double coerceFloatLeaf(LispVal leaf) {
+	private double coerceFloatLeaf(LispVal leaf) {
 		return switch (leaf) {
 			case LispDouble d -> d.value();
 			case LispInteger i -> (double) i.value();
 			case LispBigInteger b -> b.value().doubleValue();
 			case LispRatio r -> r.doubleValue();
-			default -> throw new LispReadException("packed float array: expected a number, got " + leaf.print());
+			default -> throw err("packed float array: expected a number, got " + leaf.print());
 		};
 	}
 
@@ -511,8 +593,7 @@ public final class LispReader {
 	// the elements to `out` in row-major order.
 	private void flattenArrayContents(List<LispVal> items, int depth, int[] dims, String label, List<LispVal> out) {
 		if (items.size() != dims[depth]) {
-			throw new LispReadException(
-					label + ": ragged contents, expected " + dims[depth] + " elements, got " + items.size());
+			throw err(label + ": ragged contents, expected " + dims[depth] + " elements, got " + items.size());
 		}
 		if (depth == dims.length - 1) {
 			out.addAll(items);
@@ -525,12 +606,12 @@ public final class LispReader {
 
 	// Converts one nested level of #nA/#f contents (a proper list or nil) to its
 	// elements.
-	private static List<LispVal> arrayLevelContents(LispVal level, String label) {
+	private List<LispVal> arrayLevelContents(LispVal level, String label) {
 		if (level instanceof LispNil) {
 			return List.of();
 		}
 		if (!(level instanceof LispCons)) {
-			throw new LispReadException(label + ": expected a nested list, got " + level.print());
+			throw err(label + ": expected a nested list, got " + level.print());
 		}
 		List<LispVal> items = new ArrayList<>();
 		LispVal tail = level;
@@ -539,7 +620,7 @@ public final class LispReader {
 			tail = cons.cdr();
 		}
 		if (!(tail instanceof LispNil)) {
-			throw new LispReadException(label + ": contents must be proper lists");
+			throw err(label + ": contents must be proper lists");
 		}
 		return items;
 	}
@@ -591,14 +672,14 @@ public final class LispReader {
 		this.pos = save;
 		TemplateElement element = readTemplateElement();
 		if (element.splicing()) {
-			throw new LispReadException(",@ must appear inside a list in a backquote template");
+			throw err(",@ must appear inside a list in a backquote template");
 		}
 		return element.form();
 	}
 
 	private TemplateElement readTemplateElement() {
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input in backquote template");
+			throw err("Unexpected end of input in backquote template");
 		}
 		Token token = this.tokens.get(this.pos);
 		return switch (token) {
@@ -610,7 +691,7 @@ public final class LispReader {
 				this.pos++;
 				yield new TemplateElement(readExpr(), true);
 			}
-			case Token.Backquote ignored -> throw new LispReadException("Nested backquote is not supported");
+			case Token.Backquote ignored -> throw err("Nested backquote is not supported");
 			case Token.LeftParen ignored -> {
 				// A (%read-eval datum) marker (the #. wrapping in marker read mode) must
 				// not be split into template list-construction code: keep it whole as a
@@ -663,28 +744,29 @@ public final class LispReader {
 	}
 
 	private LispVal readTemplateList() {
+		int open = this.pos - 1;
 		List<TemplateElement> elements = new ArrayList<>();
 		TemplateElement tail = null;
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
 			if (this.tokens.get(this.pos) instanceof Token.Dot) {
 				// Dotted tail: `(a . ,b) lowers to nested cons forms.
 				if (elements.isEmpty()) {
-					throw new LispReadException("Nothing appears before '.' in backquote template");
+					throw err("Nothing appears before '.' in backquote template");
 				}
 				this.pos++; // consume '.'
 				tail = readTemplateElement();
 				if (tail.splicing()) {
-					throw new LispReadException(",@ cannot follow '.' in a backquote template");
+					throw err(",@ cannot follow '.' in a backquote template");
 				}
 				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
-					throw new LispReadException("More than one object follows '.' in backquote template");
+					throw err("More than one object follows '.' in backquote template");
 				}
 				break;
 			}
 			elements.add(readTemplateElement());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		return buildTemplateList(elements, tail);
@@ -788,7 +870,7 @@ public final class LispReader {
 	// inner backquote (the signal that the optimized path cannot be used).
 	private LispVal readRawTemplate() {
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input in backquote template");
+			throw err("Unexpected end of input in backquote template");
 		}
 		Token token = this.tokens.get(this.pos);
 		switch (token) {
@@ -828,24 +910,25 @@ public final class LispReader {
 
 	// Reads the elements of a raw template list, preserving a dotted tail.
 	private LispVal readRawList() {
+		int open = this.pos - 1;
 		List<LispVal> elements = new ArrayList<>();
 		LispVal tail = LispNil.INSTANCE;
 		while (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
 			if (this.tokens.get(this.pos) instanceof Token.Dot) {
 				if (elements.isEmpty()) {
-					throw new LispReadException("Nothing appears before '.' in backquote template");
+					throw err("Nothing appears before '.' in backquote template");
 				}
 				this.pos++; // consume '.'
 				tail = readRawTemplate();
 				if (this.pos < this.tokens.size() && !(this.tokens.get(this.pos) instanceof Token.RightParen)) {
-					throw new LispReadException("More than one object follows '.' in backquote template");
+					throw err("More than one object follows '.' in backquote template");
 				}
 				break;
 			}
 			elements.add(readRawTemplate());
 		}
 		if (this.pos >= this.tokens.size()) {
-			throw new LispReadException("Unexpected end of input, expected ')'");
+			throw errAtToken(open, "Unexpected end of input, expected ')'");
 		}
 		this.pos++; // consume ')'
 		LispVal result = tail;
@@ -876,10 +959,10 @@ public final class LispReader {
 			return bqExpandEscaped(cadr(x));
 		}
 		if (head == BQ_COMMA_AT) {
-			throw new LispReadException(",@ has no enclosing list in a backquote template");
+			throw err(",@ has no enclosing list in a backquote template");
 		}
 		if (head == BQ_COMMA_DOT) {
-			throw new LispReadException(",. has no enclosing list in a backquote template");
+			throw err(",. has no enclosing list in a backquote template");
 		}
 		List<LispVal> segments = new ArrayList<>();
 		LispVal p = x;
@@ -891,16 +974,16 @@ public final class LispReader {
 			LispVal ph = car(p);
 			if (ph == BQ_COMMA) {
 				if (!(cddr(p) instanceof LispNil)) {
-					throw new LispReadException("Malformed ,");
+					throw err("Malformed ,");
 				}
 				segments.add(bqExpandEscaped(cadr(p)));
 				return cons(BQ_APPEND, fromList(segments));
 			}
 			if (ph == BQ_COMMA_AT) {
-				throw new LispReadException("Dotted ,@ in a backquote template");
+				throw err("Dotted ,@ in a backquote template");
 			}
 			if (ph == BQ_COMMA_DOT) {
-				throw new LispReadException("Dotted ,. in a backquote template");
+				throw err("Dotted ,. in a backquote template");
 			}
 			segments.add(bracket(car(p)));
 			p = cdr(p);

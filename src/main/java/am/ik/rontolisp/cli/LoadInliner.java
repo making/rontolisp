@@ -306,9 +306,12 @@ public final class LoadInliner {
 		}
 		ctx.loading().addLast(path);
 		// #. in a loaded file rides the same marker read as the main source; the markers
-		// resolve later in UserMacroExpander against the macro-time evaluator.
-		List<LispVal> forms = source.contains("#.") ? LispReader.readAllWithReadEvalMarkers(source, ctx.features())
-				: LispReader.readAllFromString(source, ctx.features());
+		// resolve later in UserMacroExpander against the macro-time evaluator. A read
+		// error is prefixed with this file's path, so a spliced library's stray paren
+		// names its own line, not a line of the flattened entry program.
+		List<LispVal> forms = source.contains("#.")
+				? LispReader.readAllWithReadEvalMarkers(source, ctx.features(), path)
+				: LispReader.readAllFromString(source, ctx.features(), path);
 		// A file that selects a package with a top-level (in-package ...) must not leak
 		// it
 		// past the load: bracket the spliced forms with package save/restore markers so
