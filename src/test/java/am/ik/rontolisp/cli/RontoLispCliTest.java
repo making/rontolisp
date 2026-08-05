@@ -221,6 +221,121 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice() throws Exception {
+		// The cons-identity rule, end to end: a program that pulls in a spliced library
+		// runs the whole rewrite chain over EVERY form, and a pass that rebuilt an
+		// untouched form used to erase the position of everything below the top level --
+		// which is exactly the multi-library program the feature exists for. One case per
+		// pass that used to rebuild unconditionally: the JSON call-site rewrite, the Gray
+		// binding-form walk, the component sockets/async rewrite (which also runs
+		// ShadowedBuiltins with a non-empty alias map, the arity bundler and the
+		// cross-lambda lowering over the spliced library).
+		record Case(String trigger, String output, String[] flags) {
+		}
+		Case[] cases = { new Case("(print (rontolisp:json-parse \"{}\"))", "Json.class", new String[0]),
+				new Case("(defclass s (rontolisp:fundamental-character-output-stream) ())", "Gray.class",
+						new String[0]),
+				new Case("(print (rontolisp:tcp-connect \"localhost\" 80))", "tcp.wasm",
+						new String[] { "--component" }),
+				new Case("(print (rontolisp:fetch \"http://example.com/\"))", "fetch.wasm",
+						new String[] { "--component" }) };
+		for (Case testCase : cases) {
+			Path file = this.tempDir.resolve("bad.lisp");
+			Files.writeString(file, """
+					(defun g (x)
+					  (let ((a 1) 2)
+					    a))
+					%s
+					(print (g 1))
+					""".formatted(testCase.trigger()));
+			String[] args = new String[3 + testCase.flags().length];
+			args[0] = file.toString();
+			args[1] = "-o";
+			args[2] = this.tempDir.resolve(testCase.output()).toString();
+			System.arraycopy(testCase.flags(), 0, args, 3, testCase.flags().length);
+			assertThatThrownBy(() -> runCli("", args)).as("%s", testCase.trigger())
+				.isInstanceOf(LispCompileException.class)
+				.hasMessageContaining("bad.lisp:2:3:");
+		}
+	}
+
+	@Test
+	void aMalformedTopLevelCheckTypeNamesItsOwnLine() throws Exception {
+		// A top-level check-type/assert is expanded by the free-variable walk, before any
+		// pass with a position hook has looked at it, so its complaint used to arrive
+		// with
+		// no position at all.
+		Path file = this.tempDir.resolve("ct.lisp");
+		Files.writeString(file, """
+				(print 1)
+				(check-type 1)
+				""");
+		for (String output : new String[] { "Ct.class", "ct.wasm" }) {
+			assertThatThrownBy(() -> runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString()))
+				.isInstanceOf(LispCompileException.class)
+				.hasMessageContaining("ct.lisp:2:1: check-type expects a place");
+		}
+	}
+
+	@Test
+	void anUndefinedFunctionWarnsExactlyOncePerCallSite() throws Exception {
+		// The JVM backend re-runs the whole compile when a runtime-helper gate was
+		// under-predicted, and the discarded attempt used to have printed its warnings
+		// already -- two identical lines for one call site. (An undefined function pulls
+		// in the eval group, so this program takes the retry.)
+		Path file = this.tempDir.resolve("warn.lisp");
+		Files.writeString(file, """
+				(defun broken (y)
+				  (no-such-function y))
+				(print (broken 1))
+				""");
+		PrintStream savedErr = System.err;
+		ByteArrayOutputStream captured = new ByteArrayOutputStream();
+		try {
+			System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+			runCli("", file.toString(), "-o", this.tempDir.resolve("Warn.class").toString());
+		}
+		finally {
+			System.setErr(savedErr);
+		}
+		assertThat(captured.toString(StandardCharsets.UTF_8)
+			.lines()
+			.filter(line -> line.contains("the function NO-SUCH-FUNCTION is undefined"))
+			.count()).isEqualTo(1);
+	}
+
+	@Test
+	void theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile() throws Exception {
+		// .todo/151 phase 3. A file pulled in by load names ITSELF -- the reason these
+		// exist at all is a program assembled from many files -- and the interpreter and
+		// the compile path must agree, which they do by construction (one reader).
+		Files.writeString(this.tempDir.resolve("lib.lisp"), """
+				(defun where ()
+				  (list rontolisp:current-file rontolisp:current-line))
+				""");
+		Path main = this.tempDir.resolve("main.lisp");
+		Files.writeString(main, """
+				(load "lib.lisp")
+				(print (where))
+				(print (list rontolisp:current-file rontolisp:current-line))
+				""");
+		// The file is spelled exactly as the frontend saw it (the path load resolved
+		// here), which is also how the reader's own error prefixes spell it.
+		assertThat(runCli("", main.toString()).strip().lines()).satisfiesExactly(
+				first -> assertThat(first).endsWith("lib.lisp\" 2)"),
+				second -> assertThat(second).endsWith("main.lisp\" 3)"));
+		// The compile path splices lib.lisp into main.lisp but reads it under its OWN
+		// name, so both literals are baked into the class. (That the backends agree on
+		// the VALUES is pinned end-to-end by ci-spec.yaml's source-position-literals
+		// case; here the point is that the load splice does not relabel them.)
+		Path classFile = this.tempDir.resolve("Main.class");
+		runCli("", main.toString(), "-o", classFile.toString());
+		String constants = new String(Files.readAllBytes(classFile), StandardCharsets.ISO_8859_1);
+		assertThat(constants).contains(this.tempDir.resolve("lib.lisp").toString())
+			.contains(this.tempDir.resolve("main.lisp").toString());
+	}
+
+	@Test
 	void theRecordingScopeIsClosedEvenWhenTheCompileFails() throws Exception {
 		// The table holds the whole program's conses alive; a scope left open on a failed
 		// compile would keep them for the life of the thread.

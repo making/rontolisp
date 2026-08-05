@@ -207,7 +207,9 @@ public final class JsonLibrary {
 			}
 			LispVal car = rewrite(cons.car());
 			LispVal cdr = rewrite(cons.cdr());
-			return new LispCons(car, cdr);
+			// Identity-preserving: a form this walk did not rewrite is handed back as it
+			// came in, so its SourceProvenance position survives (see LispCons.rebuilt).
+			return LispCons.rebuilt(cons, car, cdr);
 		}
 
 		private LispVal rewriteCall(LispCons cons, String publicName, String helperName, int minArgs, int maxArgs,

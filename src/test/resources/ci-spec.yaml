@@ -7615,3 +7615,23 @@ cases:
       :EOF
       "line1"
       NIL
+  - name: source-position-literals
+    source: |
+      ;; rontolisp:current-file / rontolisp:current-line are substituted by the
+      ;; READER, so every backend receives a plain string and a plain integer and
+      ;; must agree by construction (.todo/151 phase 3). The concrete values are
+      ;; this driver's temp file and the case's own offset in the concatenated
+      ;; program, so the case asserts their TYPES -- and that two occurrences one
+      ;; line apart differ by exactly one.
+      (print (stringp rontolisp:current-file))
+      (print (equal rontolisp:current-file rl:current-file))
+      (defvar *ci-line-a* rontolisp:current-line)
+      (defvar *ci-line-b* rontolisp:current-line)
+      (print (- *ci-line-b* *ci-line-a*))
+      ;; Read-time means quoted data is substituted too: this is a number.
+      (print (integerp (quote rontolisp:current-line)))
+    expected: |
+      T
+      T
+      1
+      T

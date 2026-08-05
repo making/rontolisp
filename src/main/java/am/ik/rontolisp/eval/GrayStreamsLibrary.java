@@ -371,6 +371,13 @@ public final class GrayStreamsLibrary {
 	 * <li>{@code flet} / {@code labels} / {@code macrolet}: each local function's lambda
 	 * list is left alone and its body rewritten.</li>
 	 * </ul>
+	 *
+	 * <p>
+	 * Identity-preserving: a binding form with nothing to rewrite -- which is nearly
+	 * every {@code defun} of a program that merely touches the protocol somewhere -- is
+	 * handed back as it came in, so its {@link am.ik.rontolisp.SourceProvenance} position
+	 * (and every position below it) survives the pass. See
+	 * {@link am.ik.rontolisp.LispCons#rebuilt}.
 	 */
 	@org.jspecify.annotations.Nullable
 	private static LispVal rewriteBindingForm(am.ik.rontolisp.LispCons cons, String opName,
@@ -394,7 +401,7 @@ public final class GrayStreamsLibrary {
 			for (int i = lambdaListAt + 1; i < parts.size(); i++) {
 				out.add(rewrite(parts.get(i), used));
 			}
-			return listOf(out.toArray(LispVal[]::new));
+			return am.ik.rontolisp.LispCons.rebuiltList(cons, out);
 		}
 		boolean valueBindings = LispNames.LET.equals(opName) || LispNames.LET_STAR.equals(opName);
 		boolean functionBindings = LispNames.FLET.equals(opName) || LispNames.LABELS.equals(opName)
@@ -417,15 +424,15 @@ public final class GrayStreamsLibrary {
 			for (int i = bodyFrom; i < bindingParts.size(); i++) {
 				out.add(rewrite(bindingParts.get(i), used));
 			}
-			rewrittenBindings.add(listOf(out.toArray(LispVal[]::new)));
+			rewrittenBindings.add(am.ik.rontolisp.LispCons.rebuiltList(bindingCons, out));
 		}
 		List<LispVal> out = new java.util.ArrayList<>();
 		out.add(parts.get(0));
-		out.add(listOf(rewrittenBindings.toArray(LispVal[]::new)));
+		out.add(am.ik.rontolisp.LispCons.rebuiltList(bindings, rewrittenBindings));
 		for (int i = 2; i < parts.size(); i++) {
 			out.add(rewrite(parts.get(i), used));
 		}
-		return listOf(out.toArray(LispVal[]::new));
+		return am.ik.rontolisp.LispCons.rebuiltList(cons, out);
 	}
 
 	private static LispVal rewriteTail(LispVal tail, java.util.Set<String> used) {

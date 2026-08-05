@@ -56,6 +56,55 @@ public final class LispCons implements LispVal {
 	}
 
 	/**
+	 * The cons an AST pass should return after walking {@code original}: {@code original}
+	 * itself when the walk produced the very same car and cdr, a fresh cell otherwise.
+	 *
+	 * <p>
+	 * <b>Every frontend AST pass must go through this (or the same check by hand).</b>
+	 * {@link SourceProvenance} keys a form's source position on cons IDENTITY, so
+	 * rebuilding a cons the pass did not actually change erases its position -- and
+	 * because a rebuilt parent forces rebuilt children, one gratuitous copy in the middle
+	 * of the pipeline drops the position of the whole program below the top level. It is
+	 * also free performance: a pass that changes nothing then allocates nothing. See
+	 * {@code .kb/source-positions.md}.
+	 * @param original the cons that was walked
+	 * @param car the walked car
+	 * @param cdr the walked cdr
+	 * @return {@code original} when nothing changed, otherwise a new cons of the two
+	 */
+	public static LispCons rebuilt(LispCons original, LispVal car, LispVal cdr) {
+		return car == original.car() && cdr == original.cdr() ? original : new LispCons(car, cdr);
+	}
+
+	/**
+	 * The proper list an AST pass should return after walking {@code original}
+	 * element-wise: {@code original} itself when {@code elements} is exactly what it
+	 * already held, a fresh list otherwise. The identity rule of {@link #rebuilt} applies
+	 * to a pass that walks through {@link #toList()} just as much.
+	 * @param original the proper list that was walked
+	 * @param elements the walked elements
+	 * @return {@code original} when nothing changed, otherwise a new proper list
+	 */
+	public static LispVal rebuiltList(LispCons original, List<LispVal> elements) {
+		LispVal current = original;
+		int i = 0;
+		while (current instanceof LispCons cons && i < elements.size()) {
+			if (cons.car() != elements.get(i++)) {
+				break;
+			}
+			current = cons.cdr();
+		}
+		if (i == elements.size() && current instanceof LispNil) {
+			return original;
+		}
+		LispVal result = LispNil.INSTANCE;
+		for (int k = elements.size() - 1; k >= 0; k--) {
+			result = new LispCons(elements.get(k), result);
+		}
+		return result;
+	}
+
+	/**
 	 * Returns whether this cons cell chain is a proper list, i.e. the chain of cdrs ends
 	 * in nil rather than a dotted tail.
 	 * @return true when the list is nil-terminated

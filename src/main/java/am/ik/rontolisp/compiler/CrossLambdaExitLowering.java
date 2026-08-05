@@ -282,7 +282,9 @@ public final class CrossLambdaExitLowering {
 			for (int i = 2; i < parts.size(); i++) {
 				out.add(transform(parts.get(i), lambdaDepth + 1));
 			}
-			return list(out);
+			// Identity-preserving, like structural(): a lambda with no cross-lambda exit
+			// in it keeps the cons SourceProvenance keyed its position on.
+			return LispCons.rebuiltList(cons, out);
 		}
 
 		private LispVal transformFunction(LispCons cons, int lambdaDepth) {
@@ -292,7 +294,7 @@ public final class CrossLambdaExitLowering {
 			// form to descend into (name is in the function namespace).
 			if (parts.size() == 2 && parts.get(1) instanceof LispCons inner && inner.car() instanceof LispSymbol s
 					&& LispNames.LAMBDA.equals(s.name())) {
-				return list(List.of(parts.get(0), transform(inner, lambdaDepth)));
+				return LispCons.rebuiltList(cons, List.of(parts.get(0), transform(inner, lambdaDepth)));
 			}
 			return cons;
 		}
@@ -321,7 +323,9 @@ public final class CrossLambdaExitLowering {
 			else {
 				out.addAll(body);
 			}
-			return list(out);
+			// Identity-preserving, like structural(): a defun with no cross-lambda exit
+			// in it keeps the cons SourceProvenance keyed its position on.
+			return LispCons.rebuiltList(cons, out);
 		}
 
 		private LispVal transformBlock(LispCons cons, int lambdaDepth) {

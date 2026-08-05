@@ -237,8 +237,11 @@ public final class UserMacroExpander {
 			// SHADOWS would re-resolve to the shadowing package's own symbol, so it is
 			// re-spelled explicitly cl:-qualified (cl-ppcre's defconstant macro expands
 			// to cl:defconstant under a package shadowing defconstant).
-			result
-				.add(expanded.print().equals(resolved.print()) ? form : requalifyShadowedClNames(expanded, macroEval));
+			// The walk is identity-preserving (see rebuild), so an untouched form is the
+			// SAME object and needs no printing to recognize; the print comparison stays
+			// for a walk that rebuilt an equal form (a macro that expands to itself).
+			result.add(expanded == resolved || expanded.print().equals(resolved.print()) ? form
+					: requalifyShadowedClNames(expanded, macroEval));
 			// Drain the definition-time method constructions the form's macro-time
 			// evaluation captured (a :metaclass defclass whose finalize-inheritance hook
 			// ran a build-dao-methods-style compile): the folded forms join the program
@@ -917,11 +920,11 @@ public final class UserMacroExpander {
 					// (let ((name init)...) body...) / (do ((var init step)...) (end
 					// result...) body...): binding names stay, init/step/end/result and
 					// the body are expressions.
-					return rebuild(parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
+					return rebuild(cons, parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
 				case LispNames.LAMBDA:
-					return rebuild(parts, 2, macroEval, parts.get(1));
+					return rebuild(cons, parts, 2, macroEval, parts.get(1));
 				case LispNames.DEFUN:
-					return rebuild(parts, 3, macroEval, parts.get(1), parts.get(2));
+					return rebuild(cons, parts, 3, macroEval, parts.get(1), parts.get(2));
 				case LispNames.DEFMETHOD: {
 					// (defmethod name [qualifier] (params...) body...): the name,
 					// optional
@@ -941,7 +944,7 @@ public final class UserMacroExpander {
 					for (int k = 1; k <= llIndex; k++) {
 						kept[k - 1] = parts.get(k);
 					}
-					return rebuild(parts, llIndex + 1, macroEval, kept);
+					return rebuild(cons, parts, llIndex + 1, macroEval, kept);
 				}
 				case LispNames.DEFGENERIC: {
 					// (defgeneric name (params...) options...): names, lambda lists, and
@@ -1027,7 +1030,7 @@ public final class UserMacroExpander {
 						return form; // malformed; the expansion reports it
 					}
 					if (!(parts.get(1) instanceof LispCons defsCons)) {
-						return rebuild(parts, 2, macroEval, parts.get(1));
+						return rebuild(cons, parts, 2, macroEval, parts.get(1));
 					}
 					List<LispVal> newDefs = new ArrayList<>();
 					for (LispVal def : defsCons.toList()) {
@@ -1045,7 +1048,7 @@ public final class UserMacroExpander {
 							newDefs.add(def);
 						}
 					}
-					return rebuild(parts, 2, macroEval, properList(newDefs));
+					return rebuild(cons, parts, 2, macroEval, properList(newDefs));
 				}
 				case LispNames.MACROLET: {
 					// (macrolet ((name lambda-list body...)...) body...): register the
@@ -1072,7 +1075,7 @@ public final class UserMacroExpander {
 					if (parts.size() < 2) {
 						return form; // malformed; the expansion reports it
 					}
-					return rebuild(parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
+					return rebuild(cons, parts, 2, macroEval, expandBindings(parts.get(1), macroEval));
 				}
 				case LispNames.MULTIPLE_VALUE_BIND: {
 					// (multiple-value-bind (vars...) values-form body...): the variable
@@ -1080,7 +1083,7 @@ public final class UserMacroExpander {
 					if (parts.size() < 2) {
 						return form; // malformed; the expansion reports it
 					}
-					return rebuild(parts, 2, macroEval, parts.get(1));
+					return rebuild(cons, parts, 2, macroEval, parts.get(1));
 				}
 				case LispNames.MULTIPLE_VALUE_SETQ: {
 					// (multiple-value-setq (vars...) values-form): the variable list
@@ -1089,7 +1092,7 @@ public final class UserMacroExpander {
 					if (parts.size() < 2) {
 						return form; // malformed; the expansion reports it
 					}
-					return rebuild(parts, 2, macroEval, parts.get(1));
+					return rebuild(cons, parts, 2, macroEval, parts.get(1));
 				}
 				case LispNames.DESTRUCTURING_BIND: {
 					// (destructuring-bind pattern form body...): the pattern stays (like
@@ -1097,7 +1100,7 @@ public final class UserMacroExpander {
 					if (parts.size() < 2) {
 						return form; // malformed; the expansion reports it
 					}
-					return rebuild(parts, 2, macroEval, parts.get(1));
+					return rebuild(cons, parts, 2, macroEval, parts.get(1));
 				}
 				case LispNames.LOOP: {
 					// (loop clause...): clause keywords and expressions are walked, but a
@@ -1126,7 +1129,7 @@ public final class UserMacroExpander {
 						}
 						spec = properList(newSpec);
 					}
-					return rebuild(parts, 2, macroEval, spec);
+					return rebuild(cons, parts, 2, macroEval, spec);
 				}
 				case LispNames.MACROEXPAND, LispNames.MACROEXPAND_1: {
 					// Fold a literal quoted argument to its expansion at compile time
@@ -1145,7 +1148,7 @@ public final class UserMacroExpander {
 								: macroEval.macroexpand1(target);
 						return properList(List.of(new LispSymbol(LispNames.QUOTE), expanded));
 					}
-					return rebuild(parts, 1, macroEval);
+					return rebuild(cons, parts, 1, macroEval);
 				}
 				case LispNames.CASE, LispNames.ECASE, LispNames.CCASE, LispNames.TYPECASE, LispNames.ETYPECASE: {
 					// (case keyform (keys body...)...): keys are unevaluated data.
@@ -1160,19 +1163,19 @@ public final class UserMacroExpander {
 							for (int j = 1; j < clauseParts.size(); j++) {
 								newClause.add(expandAll(clauseParts.get(j), macroEval));
 							}
-							newParts.add(properList(newClause));
+							newParts.add(LispCons.rebuiltList(clause, newClause));
 						}
 						else {
 							newParts.add(parts.get(i));
 						}
 					}
-					return properList(newParts);
+					return LispCons.rebuiltList(cons, newParts);
 				}
 				case LispNames.SETF: {
 					// Walk the subforms first, then, if any place is a registered user
 					// setf-expander place, rewrite the whole setf through the macro-time
 					// evaluator (the compilers cannot run the expander themselves).
-					LispVal walked = rebuild(parts, 1, macroEval);
+					LispVal walked = rebuild(cons, parts, 1, macroEval);
 					if (walked instanceof LispCons wc && hasUserSetfPlace(wc, macroEval)) {
 						return macroEval.expandSetfMaybeUserExpander(wc);
 					}
@@ -1188,11 +1191,11 @@ public final class UserMacroExpander {
 								: LispMacroExpander.expandDecf(cons);
 						return expandAll(setfForm, macroEval);
 					}
-					return rebuild(parts, 1, macroEval);
+					return rebuild(cons, parts, 1, macroEval);
 				}
 				default:
 					// Every other operator: the head stays, all arguments are walked.
-					return rebuild(parts, 1, macroEval);
+					return rebuild(cons, parts, 1, macroEval);
 			}
 		}
 		// Non-symbol head, e.g. ((lambda (x) ...) arg...): walk every element.
@@ -1202,7 +1205,7 @@ public final class UserMacroExpander {
 		for (LispVal part : parts) {
 			newParts.add(expandAll(part, macroEval));
 		}
-		return properList(newParts);
+		return LispCons.rebuiltList(cons, newParts);
 	}
 
 	// Expands a macrolet: installs each local macro into the macro-time evaluator, walks
@@ -1255,15 +1258,19 @@ public final class UserMacroExpander {
 	}
 
 	// Rebuilds a form keeping parts[0] and the given fixed subforms verbatim, walking
-	// parts[from..] as expressions.
-	private static LispVal rebuild(List<LispVal> parts, int from, LispEvaluator macroEval, LispVal... fixed) {
+	// parts[from..] as expressions. Identity-preserving: a form containing no macro call
+	// is handed back as `original`, so its SourceProvenance position -- and the position
+	// of every subform of the defun that merely CONTAINS a macro call somewhere -- is not
+	// erased by the walk (LispCons.rebuilt).
+	private static LispVal rebuild(LispCons original, List<LispVal> parts, int from, LispEvaluator macroEval,
+			LispVal... fixed) {
 		List<LispVal> newParts = new ArrayList<>();
 		newParts.add(parts.get(0));
 		newParts.addAll(List.of(fixed));
 		for (int i = from; i < parts.size(); i++) {
 			newParts.add(expandAll(parts.get(i), macroEval));
 		}
-		return properList(newParts);
+		return LispCons.rebuiltList(original, newParts);
 	}
 
 	// Expands the init/step forms of a let/do binding list, keeping the bound names.
@@ -1280,13 +1287,13 @@ public final class UserMacroExpander {
 				for (int i = 1; i < pair.size(); i++) {
 					newPair.add(expandAll(pair.get(i), macroEval));
 				}
-				newBindings.add(properList(newPair));
+				newBindings.add(LispCons.rebuiltList(bindingCons, newPair));
 			}
 			else {
 				newBindings.add(binding);
 			}
 		}
-		return properList(newBindings);
+		return LispCons.rebuiltList(bindingsCons, newBindings);
 	}
 
 	private static LispVal properList(List<LispVal> elements) {

@@ -200,3 +200,8 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](special-forms/rontolisp-await.md) /
 [`rontolisp:futurep`](functions/rontolisp-futurep.md) ドキュメントも含まれます。
+
+このパッケージのメンバーのうち2つは関数でもマクロでもなく、read 時リテラルです:
+`rontolisp:current-file` と `rontolisp:current-line` で、リーダがそのシンボルの位置に置換します。`in-package`
+ディレクティブの解釈より前に解決されるため、これらは上記の規則の例外で、常に修飾付きで書く必要があります。
+[ソース位置リテラル](data-types.md#ソース位置リテラルrontolispcurrent-filerontolispcurrent-line)を参照してください。

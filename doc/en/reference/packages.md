@@ -171,3 +171,10 @@ pages in the [Functions](functions.md#rontolisp-package-functions) reference,
 including the full [`rontolisp:fetch`](functions/rontolisp-fetch.md) /
 [`rontolisp:await`](special-forms/rontolisp-await.md) /
 [`rontolisp:futurep`](functions/rontolisp-futurep.md) documentation.
+
+Two members of the package are neither functions nor macros but read-time
+literals: `rontolisp:current-file` and `rontolisp:current-line`, which the
+reader replaces with the position they stand on. Because they are resolved
+before any `in-package` directive is interpreted, they are the exception to the
+rule above — they must always be written qualified. See
+[Source position literals](data-types.md#source-position-literals-rontolispcurrent-file-rontolispcurrent-line).

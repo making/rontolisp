@@ -14,6 +14,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.macro.LispAsync;
 import am.ik.rontolisp.LispCons;
@@ -195,14 +196,28 @@ public final class JvmLispCompiler implements LispCompiler {
 		// prediction").
 		Set<String> forced = new LinkedHashSet<>();
 		while (true) {
+			// A retried attempt's bytecode is thrown away, and so are its warnings: a
+			// warning printed as it was emitted said the same thing twice for one compile
+			// (.todo/151 phase 2 follow-up). CompileWarnings buffers this attempt's and
+			// only the attempt that SHIPS gets to print.
+			CompileWarnings.startAttempt();
 			try {
-				return compile(program, forced);
+				byte[] bytes = compile(program, forced);
+				CompileWarnings.flushAttempt();
+				return bytes;
 			}
 			catch (GateUnderpredicted signal) {
+				CompileWarnings.discardAttempt();
 				if (!forced.addAll(signal.groups)) {
 					throw new IllegalStateException(
 							"JvmLispCompiler: runtime helper gate " + signal.groups + " stayed under-predicted");
 				}
+			}
+			catch (RuntimeException ex) {
+				// A real failure: this attempt is the last one, so its warnings still
+				// describe the program the user is being told about.
+				CompileWarnings.flushAttempt();
+				throw ex;
 			}
 		}
 	}

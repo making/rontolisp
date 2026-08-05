@@ -9,5 +9,5 @@
 ```lisp
 (let ((names nil))
   (do-external-symbols (s :rontolisp names) (push (symbol-name s) names))
-  (length names)) ; => 84
+  (length names)) ; => 86
 ```

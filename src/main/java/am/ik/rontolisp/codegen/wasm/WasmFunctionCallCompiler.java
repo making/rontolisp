@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FunctionDesignators;
@@ -124,7 +125,7 @@ final class WasmFunctionCallCompiler {
 			// An undefined function: keep the interpreter's late binding -- signal
 			// when the call is EXECUTED, so a library whose error path references a
 			// function rontolisp does not provide stays compilable.
-			System.err.println(SourceProvenance.prefix(cons) + "warning: the function " + name
+			CompileWarnings.warn(SourceProvenance.prefix(cons) + "warning: the function " + name
 					+ " is undefined; compiled as a call-time error");
 			WasmExprCompiler.compileExpr(LispMacroExpander.undefinedFunctionCallStub(name), ctx);
 		}

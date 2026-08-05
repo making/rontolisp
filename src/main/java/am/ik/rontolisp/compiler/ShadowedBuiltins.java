@@ -254,7 +254,7 @@ public final class ShadowedBuiltins {
 						for (int i = 3; i < parts.size(); i++) {
 							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -266,7 +266,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -278,7 +278,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -291,7 +291,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -308,7 +308,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -320,7 +320,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewrite(parts.get(i), shadowed, closeShadowed));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -332,7 +332,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewriteClause(parts.get(i), shadowed, closeShadowed, 1));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -346,7 +346,7 @@ public final class ShadowedBuiltins {
 						for (int i = 2; i < parts.size(); i++) {
 							rebuilt.add(rewriteClause(parts.get(i), shadowed, closeShadowed, 2));
 						}
-						return listToCons(rebuilt);
+						return LispCons.rebuiltList(cons, rebuilt);
 					}
 					break;
 				}
@@ -389,7 +389,7 @@ public final class ShadowedBuiltins {
 		for (LispVal param : cons.toList()) {
 			rebuilt.add(rewriteClause(param, shadowed, closeShadowed, 1));
 		}
-		return listToCons(rebuilt);
+		return LispCons.rebuiltList(cons, rebuilt);
 	}
 
 	/** A let-style binding list: each binding's var stays, its init forms evaluate. */
@@ -401,7 +401,7 @@ public final class ShadowedBuiltins {
 		for (LispVal binding : cons.toList()) {
 			rebuilt.add(rewriteClause(binding, shadowed, closeShadowed, 1));
 		}
-		return listToCons(rebuilt);
+		return LispCons.rebuiltList(cons, rebuilt);
 	}
 
 	/** A single (var expr...) spec: the var stays, the rest evaluates. */
@@ -424,13 +424,13 @@ public final class ShadowedBuiltins {
 				for (int i = 2; i < defParts.size(); i++) {
 					newDef.add(rewrite(defParts.get(i), shadowed, closeShadowed));
 				}
-				rebuilt.add(listToCons(newDef));
+				rebuilt.add(LispCons.rebuiltList(defCons, newDef));
 			}
 			else {
 				rebuilt.add(def);
 			}
 		}
-		return listToCons(rebuilt);
+		return LispCons.rebuiltList(cons, rebuilt);
 	}
 
 	/**
@@ -448,21 +448,13 @@ public final class ShadowedBuiltins {
 		for (int i = 0; i < parts.size(); i++) {
 			rebuilt.add(i < keep ? parts.get(i) : rewrite(parts.get(i), shadowed, closeShadowed));
 		}
-		return listToCons(rebuilt);
+		return LispCons.rebuiltList(cons, rebuilt);
 	}
 
 	private static LispVal listOf(LispVal... items) {
 		LispVal result = am.ik.rontolisp.LispNil.INSTANCE;
 		for (int i = items.length - 1; i >= 0; i--) {
 			result = new LispCons(items[i], result);
-		}
-		return result;
-	}
-
-	private static LispVal listToCons(List<LispVal> elements) {
-		LispVal result = am.ik.rontolisp.LispNil.INSTANCE;
-		for (int i = elements.size() - 1; i >= 0; i--) {
-			result = new LispCons(elements.get(i), result);
 		}
 		return result;
 	}

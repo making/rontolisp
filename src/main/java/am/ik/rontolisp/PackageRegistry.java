@@ -436,6 +436,8 @@ public final class PackageRegistry {
 				LispNames.TCP_PEER_PORT, LispNames.TLS_CONNECT, LispNames.TLS_LISTEN, LispNames.TLS_LISTEN_PEM,
 				LispNames.TLS_LISTEN_P12, LispNames.RANDOM_BYTES, LispNames.MAKE_THREAD, LispNames.JOIN_THREAD,
 				LispNames.THREADP, LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.CURRENT_THREAD,
+				// Read-time source literals (reader.LispReader), not functions.
+				LispNames.CURRENT_FILE, LispNames.CURRENT_LINE,
 				// rontolisp's own Gray-stream extension
 				// (eval.GrayStreamsLibrary).
 				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,

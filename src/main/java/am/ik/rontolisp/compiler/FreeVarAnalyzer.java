@@ -123,6 +123,21 @@ public final class FreeVarAnalyzer {
 
 	private static void collectFreeVars(LispVal expr, Set<String> boundVars, Set<String> knownFunctions,
 			Set<String> globals, Set<String> specialNames, LinkedHashSet<String> freeVars) {
+		try {
+			collectFreeVarsLocated(expr, boundVars, knownFunctions, globals, specialNames, freeVars);
+		}
+		catch (RuntimeException ex) {
+			// The twin of collectCapturedVars' hook: this walk EXPANDS the macros whose
+			// raw shape it would misread (check-type/assert/do/loop/...), so a malformed
+			// one signals here -- for a TOP-LEVEL such form, before any hooked pass has
+			// seen it, which used to leave the message with no position at all
+			// (.todo/151 phase 2 follow-up).
+			throw SourceProvenance.noteFailure(expr, ex);
+		}
+	}
+
+	private static void collectFreeVarsLocated(LispVal expr, Set<String> boundVars, Set<String> knownFunctions,
+			Set<String> globals, Set<String> specialNames, LinkedHashSet<String> freeVars) {
 		switch (expr) {
 			case LispSymbol sym -> {
 				String name = sym.name();

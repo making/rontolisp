@@ -113,6 +113,52 @@ UTF-8 のパスを選びます。変数
 - `:common-lisp` は意図的に `*features*` に **含まれません**: rontolisp
   はサブセットであり、準拠実装ではないからです。
 
+## ソース位置リテラル(`rontolisp:current-file`、`rontolisp:current-line`)
+
+リーダが、そのシンボルが置かれている位置に置換する2つのシンボルです。`pi` や
+`*features*` の置換と同じ仕組みで、`rontolisp:current-file` は元ファイル名の文字列
+(存在しない場合 — REPL の1行や `read-from-string` — は `nil`)に、
+`rontolisp:current-line` はそのシンボル自身が乗っている1始まりの行番号になります。置換後はただのリテラルなので実行時コストはゼロで、インタープリタと全コンパイルバックエンドで同じ値になります。
+
+`load` / `require` / `asdf:load-system` で取り込まれたファイルは、スプライス先のエントリファイルではなく
+**自分自身** を名乗ります。これが要点です:
+多数のファイルから組み上げられたプログラムでも、メッセージが本当の出所を言えます。ファイル名はフロントエンドが見たままの綴り(コマンドラインで与えたパス、または
+`load` が解決したパス)で、read エラーの綴り方と同じです。
+
+```console
+$ cat lib.lisp
+(defun where ()
+  (list rontolisp:current-file rontolisp:current-line))
+$ cat main.lisp
+(load "lib.lisp")
+(print (where))
+(print (list rontolisp:current-file rontolisp:current-line))
+$ rontolisp main.lisp
+("lib.lisp" 2)
+("main.lisp" 3)
+```
+
+注意点:
+
+- 置換は **read 時** に行われるため、`defmacro` のテンプレート内ではマクロの呼び出し側ではなくマクロ自身の定義位置を指します。したがってロギングマクロは、C
+  で `__FILE__` / `__LINE__` を渡すのと同じように、呼び出し側で引数として渡します:
+
+  ```console
+  (defmacro log-at (file line msg)
+    `(format t "~a:~a: ~a~%" ,file ,line ,msg))
+
+  (log-at rontolisp:current-file rontolisp:current-line "started")
+  ; app.lisp:12: started のように出力される
+  ```
+
+- 認識されるのは修飾付きの綴りのみです(`rontolisp:current-file`、
+  `rontolisp::current-file`、`rl:current-file`)。`rontolisp`
+  パッケージの他のシンボルと異なり、`(in-package rontolisp)` 後の非修飾での使用は
+  **できません**: read は `in-package` ディレクティブの解釈より前に行われるためです。
+- read 時であるため、クォートされたデータ内も含めて出現箇所すべてが置換されます —
+  `'rontolisp:current-line` はシンボルではなく数値です。`#+`/`#-` や `#.`
+  と同じ規則です。
+
 ## ドット対・連想リスト・属性リスト
 
 リーダはCommon Lispのドット対記法をサポートします。`(a . b)` は car が `a`、cdr が

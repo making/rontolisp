@@ -58,26 +58,48 @@ positions of everything below the top level. Made identity-preserving:
 `TlsPemInliner`, `LambdaLists.desugar`, `CrossLambdaExitLowering`. That is
 now a standing rule for any AST pass — see `.kb/source-positions.md`.
 
-Follow-ups this left behind (small, independent):
+The three follow-ups it left behind are DONE 2026-08-05:
 
-- The passes a given program actually triggers (library splices, the defun
-  pruner, the `--component` rewrites) still rebuild unconditionally, so a
-  position inside such a program degrades to the enclosing recorded form.
-  Add the unchanged check as each is touched.
-- `Jvm/WasmFunctionCallCompiler` prints the undefined-function warning
-  TWICE for one call site (two compiler passes reach it). Pre-existing,
-  more visible now that the line carries a position.
-- `LispMacroExpander`'s own `check-type`/`assert` expansion errors are
-  covered only through the enclosing pass hooks; a direct hook would make
-  them exact.
+- The remaining unconditional rebuilds are gone, and the check now goes
+  through two shared helpers (`LispCons.rebuilt` / `rebuiltList`) instead of
+  being spelled out per pass. The real offenders were not the ones listed
+  here: `UserMacroExpander` rebuilt the whole AST of any program containing a
+  single `defmacro` (masked by a `print()`-equality check that restored the
+  original TOP-LEVEL form), and three passes that run inside
+  `Jvm/WasmLispCompiler.compile` -- `ShadowedBuiltins`, `WasmSocketsRewrite`,
+  `WasmArityBundler` -- which a probe of the CLI pipeline alone cannot see.
+  Also `JsonLibrary`, `GrayStreamsLibrary.rewriteBindingForm` and
+  `CrossLambdaExitLowering`'s lambda/defun/function branches. Verified over 20
+  trigger programs (every library splice, both compile backends, `--component`,
+  `--dynamic`, `--no-prune`); the pinning test is
+  `aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice`.
+- The double undefined-function warning was the JVM backend's gate-retry loop
+  re-running the whole compile after the first attempt had already printed.
+  Warnings now go through `compiler.CompileWarnings`: an attempt buffers, only
+  the attempt that ships prints. The WASM backends never retry and print
+  straight through, so their output is unchanged.
+- The `check-type`/`assert` expansion errors were already exact everywhere
+  except at TOP LEVEL, where `FreeVarAnalyzer.collectFreeVars` -- which expands
+  them itself -- reached them before any hooked pass. That walk now has the
+  same hook its `collectCapturedVars` twin had.
 
-## Phase 3 — optional, only if a use case appears
+## Phase 3 — the literals a program can read — DONE 2026-08-05
 
-Expansion-time literals `rontolisp:current-file` / `rontolisp:current-line`
-resolved in the shared frontend (like `#+`/`#-` against `reader.Features`),
-usable in user error messages and logging macros. Avoid a `#`-dispatch
-syntax: `#f` already means single-float arrays. Namespaced symbols satisfy
-the no-new-CL-surface rule.
+`rontolisp:current-file` / `rontolisp:current-line`, substituted by
+`LispReader` beside `pi` and `*features*`. READ-time, not expansion-time as
+this item first sketched: the reader is the only place that knows where each
+occurrence stands AND is shared by the interpreter and all four backends, so
+they agree by construction and no emitter is touched. Resolving during macro
+expansion instead would have required the interpreter to record provenance —
+the divergence phase 2 deliberately kept — and would still answer only
+approximately for macro-generated forms.
+
+The price is the `__FILE__` / `__LINE__` one: inside a `defmacro` template the
+literals name the macro's own definition site, so a logging macro takes them as
+arguments at its call site (documented, with the pattern). Only the qualified
+spellings are recognized, since the reader runs before `in-package` is
+interpreted. A `load`ed / ASDF-spliced file names itself, which is what makes
+them worth having. Mechanics: `.kb/source-positions.md`.
 
 ## Verification
 
@@ -86,5 +108,11 @@ the no-new-CL-surface rule.
   system (origin file named).
 - Phase 2: a macro-expansion error inside a spliced library names
   `file:line`; ci-spec output unchanged (frontend-only). Done —
-  `SourceProvenanceTest` + the five `RontoLispCliTest` cases listed in
-  `.kb/source-positions.md`.
+  `SourceProvenanceTest`, `LispConsTest` and the seven `RontoLispCliTest`
+  cases listed in `.kb/source-positions.md`.
+- Phase 3: the two literals read the same on the interpreter and all four
+  backends, and a `load`ed file names itself. Done — four `LispReaderTest`
+  cases, `RontoLispCliTest#theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile`,
+  and `ci-spec.yaml`'s `source-position-literals` case.
+
+Every phase of this item is complete; the file can be dropped.

@@ -177,10 +177,10 @@ final class WasmSocketsRewrite {
 					return form;
 				}
 				case LispNames.ASYNC_DEFUN_QUALIFIED -> {
-					return rebuildFrom(parts, 3, true);
+					return rebuildFrom(cons, parts, 3, true);
 				}
 				case LispNames.ASYNC_LAMBDA_QUALIFIED -> {
-					return rebuildFrom(parts, 2, true);
+					return rebuildFrom(cons, parts, 2, true);
 				}
 				case LispNames.ASYNC_RUN_QUALIFIED -> {
 					// the thunk handed to the async primitive IS the asynchronous body
@@ -190,19 +190,19 @@ final class WasmSocketsRewrite {
 						LispVal arg = parts.get(i);
 						if (arg instanceof LispCons argCons && argCons.isProperList()
 								&& argCons.car() instanceof LispSymbol head && LispNames.LAMBDA.equals(head.name())) {
-							out.add(rebuildFrom(argCons.toList(), 2, true));
+							out.add(rebuildFrom(argCons, argCons.toList(), 2, true));
 						}
 						else {
 							out.add(rewriteForm(arg, true));
 						}
 					}
-					return properList(out);
+					return LispCons.rebuiltList(cons, out);
 				}
 				case LispNames.DEFUN, LispNames.DEFMETHOD -> {
-					return rebuildFrom(parts, 3, false);
+					return rebuildFrom(cons, parts, 3, false);
 				}
 				case LispNames.LAMBDA -> {
-					return rebuildFrom(parts, 2, false);
+					return rebuildFrom(cons, parts, 2, false);
 				}
 				case LispNames.FLET, LispNames.LABELS -> {
 					List<LispVal> out = new java.util.ArrayList<>(parts.size());
@@ -211,9 +211,9 @@ final class WasmSocketsRewrite {
 						List<LispVal> newDefs = new java.util.ArrayList<>();
 						for (LispVal def : defs.toList()) {
 							newDefs.add(def instanceof LispCons defCons && defCons.isProperList()
-									? rebuildFrom(defCons.toList(), 2, false) : def);
+									? rebuildFrom(defCons, defCons.toList(), 2, false) : def);
 						}
-						out.add(properList(newDefs));
+						out.add(LispCons.rebuiltList(defs, newDefs));
 					}
 					else if (parts.size() > 1) {
 						out.add(parts.get(1));
@@ -221,7 +221,7 @@ final class WasmSocketsRewrite {
 					for (int i = 2; i < parts.size(); i++) {
 						out.add(rewriteForm(parts.get(i), asyncContext));
 					}
-					return properList(out);
+					return LispCons.rebuiltList(cons, out);
 				}
 				default -> {
 					// fall through to the generic call rewrite
@@ -236,17 +236,17 @@ final class WasmSocketsRewrite {
 		for (LispVal part : parts) {
 			out.add(rewriteForm(part, asyncContext));
 		}
-		return properList(out);
+		return LispCons.rebuiltList(cons, out);
 	}
 
 	// Rebuild parts keeping [0, from) verbatim (head, name, lambda list) and rewriting
 	// the rest in the given context.
-	private static LispVal rebuildFrom(List<LispVal> parts, int from, boolean asyncContext) {
+	private static LispVal rebuildFrom(LispCons original, List<LispVal> parts, int from, boolean asyncContext) {
 		List<LispVal> out = new java.util.ArrayList<>(parts.size());
 		for (int i = 0; i < parts.size(); i++) {
 			out.add(i < from ? parts.get(i) : rewriteForm(parts.get(i), asyncContext));
 		}
-		return properList(out);
+		return LispCons.rebuiltList(original, out);
 	}
 
 	// The call substitution, or null when the head is not a target.

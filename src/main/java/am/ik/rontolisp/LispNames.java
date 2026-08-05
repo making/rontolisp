@@ -4537,6 +4537,22 @@ public final class LispNames {
 	public static final String CURRENT_THREAD = "CURRENT-THREAD";
 
 	/**
+	 * The {@code rontolisp:current-file} read-time literal: the origin file of the source
+	 * being read, as a string, or {@code nil} when there is none (a REPL line, a runtime
+	 * {@code read-from-string}). Substituted by {@code LispReader} where the symbol
+	 * appears, like {@code pi} and {@code *features*} -- see
+	 * {@code .kb/source-positions.md} for why a READ-time literal and not an
+	 * expansion-time one.
+	 */
+	public static final String CURRENT_FILE = "CURRENT-FILE";
+
+	/**
+	 * The {@code rontolisp:current-line} read-time literal: the 1-based line the symbol
+	 * itself stands on. The twin of {@link #CURRENT_FILE}.
+	 */
+	public static final String CURRENT_LINE = "CURRENT-LINE";
+
+	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:async}, as it appears
 	 * in call position after {@code PackageResolver} resolution.
 	 */

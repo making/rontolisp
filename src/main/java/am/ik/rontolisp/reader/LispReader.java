@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.SourceProvenance;
 
@@ -413,7 +414,48 @@ public final class LispReader {
 			}
 			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(list, LispNil.INSTANCE));
 		}
+		LispVal sourceLiteral = sourceLiteral(name);
+		if (sourceLiteral != null) {
+			return sourceLiteral;
+		}
 		return new LispSymbol(name);
+	}
+
+	/**
+	 * The value of {@code rontolisp:current-file} / {@code rontolisp:current-line} at
+	 * THIS symbol's own position, or {@code null} when the name is neither.
+	 *
+	 * <p>
+	 * Substituted here, next to {@code pi} and {@code *features*}, because the reader is
+	 * the only place that knows where each occurrence stands AND is shared by the
+	 * interpreter and all four backends -- so one implementation gives them identical
+	 * values by construction, and no backend sees anything but a string and an integer.
+	 * The consequence is that these are READ-time literals: inside a {@code defmacro}
+	 * template they name the macro's own definition site, not its call site, so a logging
+	 * macro takes them as arguments at the call site (see
+	 * {@code .kb/source-positions.md}).
+	 * @param name the symbol name as read (upcased, package prefix intact)
+	 * @return the literal, or {@code null} when the symbol is not one of the two
+	 */
+	private @Nullable LispVal sourceLiteral(String name) {
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		// Qualified spellings only (rontolisp: / rontolisp:: / the rl: nickname): the
+		// reader runs before any in-package tracking, so a bare CURRENT-FILE cannot be
+		// known to mean this one -- and a namespaced symbol is the point (no new CL
+		// surface).
+		if (qualified == null
+				|| !LispNames.RONTOLISP_PKG.equals(PackageRegistry.canonicalBuiltinName(qualified.pkg()))) {
+			return null;
+		}
+		if (LispNames.CURRENT_FILE.equals(qualified.member())) {
+			return this.file == null ? LispNil.INSTANCE : new LispString(this.file);
+		}
+		if (LispNames.CURRENT_LINE.equals(qualified.member())) {
+			// pos - 1 is this symbol's own token: readDatum consumed it before
+			// dispatching.
+			return new LispInteger(SourceLocation.at(this.file, this.offsets[this.pos - 1], this.input).line());
+		}
+		return null;
 	}
 
 	private LispVal readList() {

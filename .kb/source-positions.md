@@ -1,4 +1,4 @@
-# Source positions: `file:line:column` in reader AND frontend errors
+# Source positions: `file:line:column` in reader AND frontend errors, and the two literals a program can read
 
 An error the frontend raises must say WHERE. With ASDF/Quicklisp splicing a
 multi-file library into one flattened program (`LoadInliner`), a bare message
@@ -81,7 +81,13 @@ merely walks top-level forms calls `enterTopLevelForm(form)` once per form
 instead (no `try`/`finally`, since it is only ever read while a failure unwinds);
 that is the fallback when no frame had a hook. Hooked today:
 `UserMacroExpander.expandAll` + its top-level loop, `Jvm/WasmExprCompiler`'s cons
-dispatch, `FreeVarAnalyzer.collectCapturedVars`.
+dispatch, `FreeVarAnalyzer.collectCapturedVars` AND `collectFreeVars`.
+
+The free-var walk needs its own hook because it EXPANDS the macros whose raw shape it
+would otherwise misread (`check-type`, `assert`, `do`, `loop`, ...) -- and it is the
+first pass to touch a TOP-LEVEL one, before `Jvm/WasmExprCompiler`'s dispatch has seen
+it. A malformed top-level `(check-type 1)` therefore used to report with no position at
+all while the same form one line inside a `defun` reported exactly.
 
 `RontoLispCli.compileToFile` opens the recording scope, and on the way out
 re-reports the failure as `cli.LispCompileException` with the prefix prepended and
@@ -90,6 +96,16 @@ itself), and so is a failure with no known position -- prefixing nothing is nois
 For a WARNING, which is printed rather than thrown, `SourceProvenance.prefix(form)`
 gives the same string (`Jvm/WasmFunctionCallCompiler`'s undefined-function
 warning).
+
+**A warning goes through `compiler.CompileWarnings.warn`, never `System.err`
+directly.** `JvmLispCompiler` may compile the same program TWICE -- its runtime-helper
+gate is a prediction checked against the emitted bytecode, and a mispredicted gate
+re-runs the whole compile -- and the discarded attempt had already printed, so one
+undefined-function call site said it twice. An attempt buffers its warnings
+(`startAttempt`) and only the one that SHIPS prints them (`flushAttempt`); a retried
+attempt drops its own (`discardAttempt`). With no attempt open -- the WASM backends,
+which never re-run -- `warn` prints straight through, so their output is unchanged.
+Pinned by `RontoLispCliTest#anUndefinedFunctionWarnsExactlyOncePerCallSite`.
 
 ### The cons-identity rule every AST pass must honour
 
@@ -100,21 +116,74 @@ middle of the pipeline drops the position of the entire program below the top
 level. It is also free performance -- the passes below rebuilt a copy of every
 program's whole AST for nothing.
 
+Go through the shared helpers rather than writing the check by hand:
+`LispCons.rebuilt(original, car, cdr)` for a car/cdr walk,
+`LispCons.rebuiltList(original, elements)` for a `toList()`-style one. Each returns
+`original` when nothing actually changed; `rebuiltList` also refuses to hand back a
+DOTTED original, whose proper-list rebuild would have dropped the tail
+(`LispConsTest`).
+
 Made identity-preserving for this (each has a comment saying so at the rebuild
 site): `CompileTimePathnameFolder.recurseCons`/`foldDefParam`/`foldWithOpenFile`,
 `PackageResolver.resolveCons` (generic walk + the `quote` branch) and
 `resolveSymbol` (a name that resolves to itself hands back the symbol as read --
 symbols carry no identity here, there is no intern table, so a fresh copy is
 indistinguishable in behavior but forces the enclosing cons to be rebuilt),
-`TlsPemInliner.rewrite`, `LambdaLists.desugar`,
-`CrossLambdaExitLowering.structural`. `StructLiteralFolder` already did.
+`TlsPemInliner.rewrite`, `LambdaLists.desugar`, `CrossLambdaExitLowering`
+(`structural` plus `transformLambda`/`transformDefun`/`transformFunction`),
+`JsonLibrary`'s call-site walk, `GrayStreamsLibrary.rewriteBindingForm`,
+`UserMacroExpander.rebuild`/`expandBindings` and its `case`/non-symbol-head branches,
+`ShadowedBuiltins`, `WasmSocketsRewrite`, `WasmArityBundler.rewriteElements`.
+`StructLiteralFolder` already did.
 
-Not yet identity-preserving, and the reason positions can still be coarse: any
-pass a given program actually triggers (a library splice, the defun pruner, the
-`--component` rewrites). Those degrade gracefully -- the failure falls back to the
-enclosing recorded form, or to no prefix at all -- so this is a quality ladder,
-not a correctness cliff. **When you add or touch an AST pass, add the unchanged
-check.**
+The two worst were not the obvious ones. `UserMacroExpander` rebuilt the whole AST of
+any program containing a single `defmacro` -- and hid behind a `print()`-equality check
+that restored the ORIGINAL top-level form, so top-level positions looked right while
+everything below them was gone. And `WasmArityBundler` / `ShadowedBuiltins` /
+`WasmSocketsRewrite` run INSIDE `Jvm/WasmLispCompiler.compile`, so a probe of the CLI's
+own pipeline shows nothing wrong.
+
+**When you add or touch an AST pass, add the unchanged check.** The way to tell whether
+a pass still needs it: compile a program that triggers it with a malformed form deep
+inside a `defun` (`aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice`
+is exactly that, one case per pass) and check that the reported line is the malformed
+form's own -- not the top-level one, and not absent. What legitimately stays coarse is
+a form the frontend genuinely REWROTE: a macro expansion's products were never read, so
+a failure inside one falls back to the nearest enclosing form that was.
+
+## Phase 3 -- the source position literals a PROGRAM can read
+
+`rontolisp:current-file` and `rontolisp:current-line` (`LispNames.CURRENT_FILE` /
+`CURRENT_LINE`) are substituted by `LispReader.sourceLiteral`, next to `pi`,
+`most-positive-fixnum` and `*features*`: the first becomes a `LispString` of the origin
+file (or `nil` when the read has none -- a REPL line, a `read-from-string`), the second a
+`LispInteger` of the 1-based line the SYMBOL itself stands on.
+
+**In the reader, not at expansion time.** It is the only place that knows where each
+occurrence stands and is shared by the interpreter and all four backends, so they agree
+by construction and no backend sees anything but a string and an integer -- the emitters
+are untouched, like the rest of this file. The alternative (resolving during macro
+expansion, off `SourceProvenance`) would need the interpreter to record provenance too,
+which is exactly the divergence below, and would still answer approximately for
+macro-generated forms.
+
+The consequence is the `__FILE__` / `__LINE__` one: inside a `defmacro` template these
+name the macro's own definition site, so a logging macro takes them as ARGUMENTS at its
+call site. Two more consequences worth knowing before changing anything here:
+
+- Only the qualified spellings are recognized (`rontolisp:`, `rontolisp::`, the `rl:`
+  nickname), because the reader runs before any `in-package` directive is interpreted. A
+  bare `current-file` must stay an ordinary symbol -- a user may have defined one.
+- Substitution is unconditional, quoted data included, like `#+`/`#-` and `#.`.
+
+A `load`ed / ASDF-spliced file names ITSELF: phase 1 already hands every reader its own
+origin file, and that is what makes these useful in a multi-file program at all.
+
+Tests: `LispReaderTest#currentFileAndCurrentLineReadAsTheirOwnPosition` and its three
+neighbours, `RontoLispCliTest#theSourcePositionLiteralsNameTheLoadedFileNotTheEntryFile`,
+and `ci-spec.yaml`'s `source-position-literals` case (all four backends; it asserts the
+TYPES and a one-line delta, since the concrete values are the driver's own temp file and
+offsets).
 
 ### The compile-path-only divergence (with its re-evaluation trigger)
 
@@ -136,9 +205,13 @@ holding and the divergence should be retired. Phase 1's positions already cover
 the interpreter, so only post-read errors are affected.
 
 Tests: `SourceProvenanceTest` (recording, innermost-wins, the macro-generated
-gap, the top-level fallback, scope teardown), `RontoLispCliTest`
+gap, the top-level fallback, scope teardown), `LispConsTest` (the two rebuild
+helpers), `RontoLispCliTest`
 (`aMacroThatSignalsWhileExpandingNamesItsCallSiteInTheLoadedFile`,
 `aMalformedFormDeepInsideADefunNamesItsOwnLineOnBothCompileBackends`,
+`aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice`,
+`aMalformedTopLevelCheckTypeNamesItsOwnLine`,
 `aCallToAnUndefinedFunctionWarnsAtItsCallSite`,
+`anUndefinedFunctionWarnsExactlyOncePerCallSite`,
 `theRecordingScopeIsClosedEvenWhenTheCompileFails`,
 `theInterpreterKeepsItsBareErrorText`).

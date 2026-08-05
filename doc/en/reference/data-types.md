@@ -139,6 +139,59 @@ Notes:
 - `:common-lisp` is deliberately **not** in `*features*`: rontolisp is a
   subset, not a conforming implementation.
 
+## Source position literals (`rontolisp:current-file`, `rontolisp:current-line`)
+
+Two symbols the reader substitutes with the position they stand on, the way
+`pi` and `*features*` are substituted: `rontolisp:current-file` becomes the
+origin file as a string (or `nil` when there is none — a REPL line, a
+`read-from-string`), and `rontolisp:current-line` becomes the 1-based line the
+symbol itself is on. They are ordinary literals afterwards, so they cost
+nothing at run time and read the same on the interpreter and on every compile
+backend.
+
+A file pulled in by `load` / `require` / `asdf:load-system` names **itself**,
+not the entry file it was spliced into — which is the point: in a program
+assembled from many files, a message can say where it really came from. The
+file is spelled exactly as the frontend saw it (the path given on the command
+line, or the one `load` resolved), which is also how a read error spells it.
+
+```console
+$ cat lib.lisp
+(defun where ()
+  (list rontolisp:current-file rontolisp:current-line))
+$ cat main.lisp
+(load "lib.lisp")
+(print (where))
+(print (list rontolisp:current-file rontolisp:current-line))
+$ rontolisp main.lisp
+("lib.lisp" 2)
+("main.lisp" 3)
+```
+
+Notes:
+
+- Substitution happens at **read** time, so inside a `defmacro` template these
+  name the macro's own definition site, not its call site. A logging macro
+  therefore takes them as arguments at the call site, the way C code passes
+  `__FILE__` / `__LINE__`:
+
+  ```console
+  (defmacro log-at (file line msg)
+    `(format t "~a:~a: ~a~%" ,file ,line ,msg))
+
+  (log-at rontolisp:current-file rontolisp:current-line "started")
+  ; prints e.g. app.lisp:12: started
+  ```
+
+- Only the qualified spellings are recognized (`rontolisp:current-file`,
+  `rontolisp::current-file`, `rl:current-file`). Unlike the rest of the
+  `rontolisp` package these are **not** available unqualified after
+  `(in-package rontolisp)`: reading happens before any `in-package` directive
+  is interpreted.
+- Being read-time, they are substituted wherever they appear, quoted data
+  included — `'rontolisp:current-line` is the number, not the symbol. This is
+  the same rule `#+`/`#-` and `#.` follow.
+
 ## Dotted pairs, association lists and property lists
 
 The reader supports Common Lisp dotted-pair notation: `(a . b)` denotes a

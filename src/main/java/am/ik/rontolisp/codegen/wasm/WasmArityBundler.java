@@ -90,7 +90,7 @@ final class WasmArityBundler {
 			return form;
 		}
 		if (!(cons.car() instanceof LispSymbol op)) {
-			return rewriteElements(cons.toList(), 0, wide);
+			return rewriteElements(cons, cons.toList(), 0, wide);
 		}
 		String name = op.name();
 		if (LispNames.QUOTE.equals(name)) {
@@ -101,7 +101,7 @@ final class WasmArityBundler {
 			if (parts.size() >= 3 && parts.get(1) instanceof LispSymbol defName && wide.containsKey(defName.name())) {
 				return bundleDefun(parts, wide);
 			}
-			return rewriteElements(parts, 3, wide);
+			return rewriteElements(cons, parts, 3, wide);
 		}
 		if ((LispNames.FLET.equals(name) || LispNames.LABELS.equals(name)) && cons.toList().size() >= 2) {
 			// A local function shadows a bundled global of the same name for the
@@ -120,7 +120,7 @@ final class WasmArityBundler {
 				visible.keySet().removeAll(shadowed);
 				return visible.isEmpty() ? form : rewrite(form, visible);
 			}
-			return rewriteElements(parts, 1, wide);
+			return rewriteElements(cons, parts, 1, wide);
 		}
 		if (LispNames.FUNCTION.equals(name) || LispNames.SYMBOL_FUNCTION.equals(name)) {
 			List<LispVal> parts = cons.toList();
@@ -131,7 +131,7 @@ final class WasmArityBundler {
 						+ wide.get(referenced) + "-parameter signature exceeds the WASM limit of "
 						+ WasmLispCompiler.MAX_CALLABLE_ARITY + " and was bundled, which only direct calls support");
 			}
-			return rewriteElements(parts, 1, wide);
+			return rewriteElements(cons, parts, 1, wide);
 		}
 		Integer arity = wide.get(name);
 		List<LispVal> parts = cons.toList();
@@ -150,7 +150,7 @@ final class WasmArityBundler {
 			out.add(listToCons(bundleParts));
 			return listToCons(out);
 		}
-		return rewriteElements(parts, 1, wide);
+		return rewriteElements(cons, parts, 1, wide);
 	}
 
 	private static LispVal bundleDefun(List<LispVal> parts, Map<String, Integer> wide) {
@@ -173,12 +173,15 @@ final class WasmArityBundler {
 		return listToCons(List.of(parts.get(0), parts.get(1), listToCons(newParams), listToCons(letParts)));
 	}
 
-	private static LispVal rewriteElements(List<LispVal> parts, int from, Map<String, Integer> wide) {
+	// Identity-preserving (LispCons.rebuilt): a form with no bundled call in it is
+	// handed back as it came in, so its SourceProvenance position survives the pass.
+	private static LispVal rewriteElements(LispCons original, List<LispVal> parts, int from,
+			Map<String, Integer> wide) {
 		List<LispVal> out = new ArrayList<>(parts.size());
 		for (int i = 0; i < parts.size(); i++) {
 			out.add(i < from ? parts.get(i) : rewrite(parts.get(i), wide));
 		}
-		return listToCons(out);
+		return LispCons.rebuiltList(original, out);
 	}
 
 	private static LispVal listToCons(List<LispVal> items) {

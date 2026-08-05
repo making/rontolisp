@@ -791,4 +791,53 @@ class LispReaderTest {
 			.isEqualTo(new LispSymbol("MY-PKG:FROB"));
 	}
 
+	// -- source position literals (.todo/151 phase 3) -------------------------
+
+	@Test
+	void currentFileAndCurrentLineReadAsTheirOwnPosition() {
+		List<LispVal> forms = LispReader.readAllFromString("""
+				(print rontolisp:current-file)
+				(print rontolisp:current-line)
+				""", Features.INTERPRETER, "app.lisp");
+		assertThat(forms.get(0)).isEqualTo(list(new LispSymbol("PRINT"), new LispString("app.lisp")));
+		// The line of the SYMBOL, not of the form containing it.
+		assertThat(forms.get(1)).isEqualTo(list(new LispSymbol("PRINT"), new LispInteger(2)));
+	}
+
+	@Test
+	void currentFileIsNilWhenTheReadHasNoOriginFile() {
+		// A REPL line or a runtime read-from-string: there is no file to name, and the
+		// line is still meaningful within the string that was read.
+		List<LispVal> forms = LispReader.readAllFromString("\n(list rontolisp:current-file rontolisp:current-line)",
+				Features.INTERPRETER);
+		assertThat(forms.get(0)).isEqualTo(list(new LispSymbol("LIST"), LispNil.INSTANCE, new LispInteger(2)));
+	}
+
+	@Test
+	void everyQualifiedSpellingOfTheSourceLiteralsIsRecognized() {
+		// rontolisp: / rontolisp:: / the rl: nickname all name the same two literals.
+		assertThat(LispReader
+			.readAllFromString("(rontolisp::current-line rl:current-line)", Features.INTERPRETER, "app.lisp")
+			.get(0)).isEqualTo(list(new LispInteger(1), new LispInteger(1)));
+	}
+
+	@Test
+	void anUnqualifiedCurrentFileStaysAnOrdinarySymbol() {
+		// Reading happens before any in-package directive is interpreted, so a bare name
+		// cannot be known to mean the rontolisp one -- and must not be stolen from a user
+		// who defined their own.
+		assertThat(LispReader.readAllFromString("current-file", Features.INTERPRETER, "app.lisp").get(0))
+			.isEqualTo(new LispSymbol("CURRENT-FILE"));
+		assertThat(LispReader.readAllFromString("other:current-file", Features.INTERPRETER, "app.lisp").get(0))
+			.isEqualTo(new LispSymbol("OTHER:CURRENT-FILE"));
+	}
+
+	private static LispVal list(LispVal... items) {
+		LispVal result = LispNil.INSTANCE;
+		for (int i = items.length - 1; i >= 0; i--) {
+			result = new LispCons(items[i], result);
+		}
+		return result;
+	}
+
 }
