@@ -1561,6 +1561,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the same slot the JVM compiler scans in -- so the registry can resolve a user
 		// deftype alias of the string family the way the CONCATENATE lowering will.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program, closRegistry);
+		// Whether the packed (unsigned-byte 8|16|32) vector builder is reachable: a
+		// concatenate whose result type spells a packed element type lowers to a call to
+		// it, and so does the #'concatenate wrapper's own vector arm (its designator is a
+		// runtime value, so it re-does the width dispatch there). No array gate to force
+		// here -- the packed array types and _iv_set are unconditional on wasm-GC.
+		boolean usesSeqIntVector = ConcatenateForms.needsSeqIntVector(program, closRegistry) || program.stream()
+			.anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.CONCATENATE));
 		// A generic function whose name is a compiler-lowered built-in (fast-io's close
 		// methods): rename its dispatcher, keep the built-in as the default method, and
 		// route the program's call sites through it. No-op without such a generic.
@@ -1912,6 +1919,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (.kb/concatenate-result-families.md).
 		if (!usesSeqString) {
 			wrapperExcludes.add(LispNames.SEQ_STRING);
+		}
+		// %seq-int-vector is the concatenate packed-vector builder, gated the same way.
+		if (!usesSeqIntVector) {
+			wrapperExcludes.add(LispNames.SEQ_INT_VECTOR);
 		}
 		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite), and
 		// #'format renders via the runtime control renderer; inject each only when the

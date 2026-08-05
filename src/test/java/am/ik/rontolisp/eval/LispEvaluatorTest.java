@@ -1223,8 +1223,7 @@ class LispEvaluatorTest {
 	@Test
 	void evalConcatenateListAndVectorResultTypes() {
 		// The list / vector families walk elements, so the arguments may be any mix of
-		// sequences; the compound spellings normalize to the same families (the element
-		// type is dropped -- rontolisp vectors are generic).
+		// sequences; the compound spellings normalize to the same families.
 		assertThat(eval("(princ-to-string (concatenate 'list '(1 2) \"ab\" #(3)))"))
 			.isEqualTo(new LispString("(1 2 a b 3)"));
 		assertThat(eval("(princ-to-string (concatenate 'vector '(1 2) #(3)))")).isEqualTo(new LispString("#(1 2 3)"));
@@ -1234,6 +1233,56 @@ class LispEvaluatorTest {
 		assertThat(eval("(princ-to-string (concatenate 'vector))")).isEqualTo(new LispString("#()"));
 		// The result is always fresh: the last argument is copied, not shared.
 		assertThat(eval("(let ((a (list 1 2))) (eq a (concatenate 'list a)))")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalConcatenateKeepsThePackedElementType() {
+		// An (unsigned-byte 8|16|32) element type asks for the PACKED representation
+		// make-array builds, not a general vector: ANSI requires the result to BE of the
+		// requested type, and md5:md5sum-sequence's etypecase has a
+		// (simple-array (unsigned-byte 8) (*)) arm and no general-vector one, which is
+		// what cl-postgres' md5 authentication rides on (.todo/262).
+		assertThat(eval("""
+				(let ((v (concatenate '(vector (unsigned-byte 8)) #(1) '(2 3))))
+				  (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*)))))""").print())
+			.isEqualTo("((UNSIGNED-BYTE 8) T)");
+		// The trailing * of (vector (unsigned-byte 8) *) is not part of the element type.
+		assertThat(eval("(array-element-type (concatenate '(vector (unsigned-byte 8) *) #(1)))").print())
+			.isEqualTo("(UNSIGNED-BYTE 8)");
+		assertThat(eval("(array-element-type (concatenate '(simple-array (unsigned-byte 16) (*)) #(1)))").print())
+			.isEqualTo("(UNSIGNED-BYTE 16)");
+		assertThat(eval("(array-element-type (concatenate '(array (unsigned-byte 32) (*))))").print())
+			.isEqualTo("(UNSIGNED-BYTE 32)");
+		// Stores mask to the element width, exactly like make-array's.
+		assertThat(eval("(princ-to-string (concatenate '(vector (unsigned-byte 8)) '(260 -1)))"))
+			.isEqualTo(new LispString("#(4 255)"));
+		// Any other element type -- and the spellings that carry a SIZE rather than an
+		// element type -- stay the general vector.
+		assertThat(eval("(array-element-type (concatenate '(vector character) \"ab\"))").print()).isEqualTo("T");
+		assertThat(eval("(array-element-type (concatenate '(simple-vector 3) '(1 2 3)))").print()).isEqualTo("T");
+		assertThat(eval("(array-element-type (concatenate '(vector (unsigned-byte 4)) '(1)))").print()).isEqualTo("T");
+		assertThat(eval("(array-element-type (concatenate 'vector '(1)))").print()).isEqualTo("T");
+	}
+
+	@Test
+	void evalConcatenateAliasResultTypeKeepsThePackedElementType() {
+		// The deftype chain carries the element type too, so fast-http's
+		// 'simple-byte-vector is a packed result and not merely a vector one.
+		assertThat(eval("""
+				(progn (deftype simple-byte-vector (&optional (len '*))
+				         `(simple-array (unsigned-byte 8) (,len)))
+				       (array-element-type (concatenate 'simple-byte-vector #(1 2) #(3))))""").print())
+			.isEqualTo("(UNSIGNED-BYTE 8)");
+	}
+
+	@Test
+	void evalSeqIntVectorHelper() {
+		// The internal helper the compile paths call: any sequence of integers, one
+		// packed vector. The interpreter answers it too (it is a cl internal name).
+		assertThat(eval("(array-element-type (%seq-int-vector '(1 2) 16))").print()).isEqualTo("(UNSIGNED-BYTE 16)");
+		assertThat(eval("(princ-to-string (%seq-int-vector #(1 260) 8))")).isEqualTo(new LispString("#(1 4)"));
+		assertThatThrownBy(() -> eval("(%seq-int-vector '(1) 12)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("unsupported element width");
 	}
 
 	@Test

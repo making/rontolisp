@@ -3276,6 +3276,54 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunConcatenateKeepsThePackedElementType() throws Exception {
+		// An (unsigned-byte 8|16|32) result element type builds the PACKED vector, on the
+		// compile paths through the injected %seq-int-vector helper (.todo/262). The
+		// deftype alias carries the element type through as well, and any other element
+		// type -- or a spelling whose second element is a SIZE -- stays general.
+		// The zero-parameter deftype shape, like
+		// compileAndRunConcatenateWithADeftypeAlias
+		// ResultType: this harness does not run the CLI's UserMacroExpander, which is
+		// what folds a parameterized deftype into the registrable form (the parameterized
+		// shape is pinned end to end by the ci-spec case and LackEcosystemE2eTest).
+		assertThat(compileAndRun("""
+				(deftype simple-byte-vector () '(simple-array (unsigned-byte 8) (*)))
+				(let ((v (concatenate '(vector (unsigned-byte 8)) #(1) '(2 260))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(print (array-element-type (concatenate '(simple-array (unsigned-byte 16) (*)) #(1))))
+				(print (array-element-type (concatenate '(vector (unsigned-byte 32) *))))
+				(print (array-element-type (concatenate 'simple-byte-vector #(1 2))))
+				(print (array-element-type (concatenate '(simple-vector 2) '(1 2))))
+				(print (array-element-type (concatenate '(vector character) "ab")))
+				""")).isEqualTo("""
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				(UNSIGNED-BYTE 16)
+				(UNSIGNED-BYTE 32)
+				(UNSIGNED-BYTE 8)
+				T
+				T""");
+	}
+
+	@Test
+	void compileAndRunConcatenateAsAFunctionValueKeepsThePackedElementType() throws Exception {
+		// The #'concatenate wrapper's designator is a RUNTIME value, so it re-does the
+		// width dispatch there -- http-body spells exactly this
+		// (apply #'concatenate '(simple-array (unsigned-byte 8) (*)) ...), and a
+		// designator must not mean two different things depending on the call form.
+		assertThat(compileAndRun("""
+				(print (array-element-type (apply #'concatenate '(simple-array (unsigned-byte 8) (*))
+				                                  (list '(1 2) #(3)))))
+				(print (funcall #'concatenate '(vector (unsigned-byte 8)) '(1 260)))
+				(print (array-element-type (funcall #'concatenate 'vector '(1))))
+				(print (array-element-type (funcall #'concatenate '(simple-vector 1) '(1))))
+				""")).isEqualTo("""
+				(UNSIGNED-BYTE 8)
+				#(1 4)
+				T
+				T""");
+	}
+
+	@Test
 	void compileConcatenateWithComputedResultTypeFails() {
 		assertThatThrownBy(() -> compileAndRun("(let ((ty 'string)) (princ (concatenate ty \"a\" \"b\")))"))
 			.isInstanceOf(UnsupportedOperationException.class)

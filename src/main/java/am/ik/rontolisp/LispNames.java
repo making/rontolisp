@@ -2144,6 +2144,16 @@ public final class LispNames {
 	 */
 	public static final String SEQ_STRING = "%SEQ-STRING";
 
+	/**
+	 * The {@code %seq-int-vector} internal helper: one sequence of integers as a PACKED
+	 * unsigned-integer vector of a given element width ({@code (%seq-int-vector seq 8)}).
+	 * It is what lets the {@code concatenate} vector family honour an
+	 * {@code (unsigned-byte 8|16|32)} element type without planting an allocate-and-fill
+	 * loop at every call site (see {@code compiler/ConcatenateForms} and
+	 * {@code .kb/packed-integer-vectors.md}).
+	 */
+	public static final String SEQ_INT_VECTOR = "%SEQ-INT-VECTOR";
+
 	/** The {@code read-line} built-in function. */
 	public static final String READ_LINE = "READ-LINE";
 

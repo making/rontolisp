@@ -735,7 +735,7 @@ public final class LispEvaluator {
 		// concatenate re-registered WITH the class registry, so a result-type designator
 		// naming a user deftype (fast-http's simple-byte-vector) resolves through its
 		// registered expansion to the family -- the same resolution the compile paths
-		// get from ConcatenateForms.resultFamily(designator, closRegistry).
+		// get from ConcatenateForms.resultSpec(designator, closRegistry).
 		this.globalEnv.defineFunction(LispNames.CONCATENATE, Environment.concatenateBuiltin(this.closRegistry));
 		// subtypep over the built-in type lattice + the CLOS class registry. A single
 		// primary value: t when sub is known to be a subtype of super, nil otherwise.

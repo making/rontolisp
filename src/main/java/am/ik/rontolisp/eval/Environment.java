@@ -1361,6 +1361,20 @@ public final class Environment implements Scope {
 	// The packed integer-vector element width a make-array :element-type argument
 	// designates: 8/16/32 for the literal list (unsigned-byte 8|16|32), else 0. The
 	// symbol name is matched ignoring any package qualifier, like the float widths.
+	/**
+	 * Builds a packed unsigned-integer vector from already-collected elements: the shared
+	 * tail of {@code concatenate}'s packed vector family and of {@code %seq-int-vector}.
+	 * Each element must be an integer (the same type error {@code make-array
+	 * :initial-contents} signals) and is masked to the width by {@link LispIntVector}.
+	 */
+	private static LispVal packedIntVector(String fn, int width, List<LispVal> elements) {
+		long[] data = new long[elements.size()];
+		for (int i = 0; i < data.length; i++) {
+			data[i] = exactIntElement(fn, elements.get(i));
+		}
+		return new LispIntVector(width, data);
+	}
+
 	private static int packedIntElementWidth(@Nullable LispVal elementType) {
 		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
 				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
@@ -3984,6 +3998,21 @@ public final class Environment implements Scope {
 			}
 			return new LispString(sb.toString());
 		}));
+		// %seq-int-vector: one sequence of integers as a packed (unsigned-byte 8|16|32)
+		// vector. The compile paths call it from the concatenate vector family's lowering
+		// whenever the result type spells a packed element type; the interpreter's own
+		// concatenate builds the same value directly, but the name is a cl internal, so
+		// it answers here too.
+		env.defineFunction(LispNames.SEQ_INT_VECTOR, new LispFunction(LispNames.SEQ_INT_VECTOR, args -> {
+			requireArgCount(LispNames.SEQ_INT_VECTOR, args, 2);
+			int width = (int) asLong(args.get(1));
+			if (width != 8 && width != 16 && width != 32) {
+				throw new LispEvalException(LispNames.SEQ_INT_VECTOR + ": unsupported element width " + width);
+			}
+			List<LispVal> elements = new ArrayList<>();
+			appendSequenceElements(args.get(0), elements);
+			return packedIntVector(LispNames.SEQ_INT_VECTOR, width, elements);
+		}));
 		// %error: internal single-argument primitive that signals an error with a
 		// pre-built message string. Produced by the error macro expansion.
 		env.defineFunction(LispNames.ERROR_INTERNAL, new LispFunction(LispNames.ERROR_INTERNAL, args -> {
@@ -4914,11 +4943,12 @@ public final class Environment implements Scope {
 	public static LispFunction concatenateBuiltin(@Nullable ClosRegistry closRegistry) {
 		return new LispFunction(LispNames.CONCATENATE, args -> {
 			requireMinArgCount(LispNames.CONCATENATE, args, 1);
-			ConcatenateForms.ResultFamily family = ConcatenateForms.resultFamily(args.get(0), closRegistry);
-			if (family == null) {
+			ConcatenateForms.ResultSpec spec = ConcatenateForms.resultSpec(args.get(0), closRegistry);
+			if (spec == null) {
 				throw new LispEvalException(
 						"concatenate supports the string, list and vector result types, got: " + args.get(0).print());
 			}
+			ConcatenateForms.ResultFamily family = spec.family();
 			List<LispVal> rest = args.subList(1, args.size());
 			if (family == ConcatenateForms.ResultFamily.STRING) {
 				// Like the other two families, the string family takes any character
@@ -4949,6 +4979,12 @@ public final class Environment implements Scope {
 				appendSequenceElements(arg, elements);
 			}
 			if (family == ConcatenateForms.ResultFamily.VECTOR) {
+				// An (unsigned-byte 8|16|32) element type asks for the PACKED
+				// representation make-array already builds; the compile paths reach the
+				// same result through %seq-int-vector.
+				if (spec.intWidth() != 0) {
+					return packedIntVector(LispNames.CONCATENATE, spec.intWidth(), elements);
+				}
 				return new LispArray(new int[] { elements.size() }, elements.toArray(new LispVal[0]));
 			}
 			LispVal list = LispNil.INSTANCE;

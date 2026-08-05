@@ -658,8 +658,34 @@ public final class BuiltinFunctionWrappers {
 										new LispSymbol("x"), coerceTo("x", "STRING"))))));
 		LispVal strings = listToCons(List.of(new LispSymbol(LispNames.REDUCE), step, new LispSymbol("seqs"),
 				new LispSymbol(LispNames.INITIAL_VALUE_KEYWORD), new LispString("")));
-		LispVal vector = listToCons(List.of(new LispSymbol(LispNames.COERCE), concatenatedElements(),
-				listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR")))));
+		// The vector arm honours an (unsigned-byte 8|16|32) element type, exactly like
+		// the
+		// call-position lowering: (apply #'concatenate '(simple-array (unsigned-byte 8)
+		// (*)) ...) is http-body's own spelling and ironclad's HKDF, and a designator
+		// must not mean two different things depending on the call form. The element type
+		// sits in position 1 of (vector T ...) / (array T ...) / (simple-array T ...);
+		// (simple-vector SIZE) carries a SIZE there, which no (unsigned-byte N) list can
+		// be equal to, so one test per width covers every head without reading the shape.
+		LispSymbol elements = new LispSymbol("__cc_elts");
+		LispSymbol elementType = new LispSymbol("__cc_elt");
+		LispSymbol width = new LispSymbol("__cc_w");
+		LispVal widthOfElementType = new LispInteger(0);
+		for (int bits : new int[] { 32, 16, 8 }) {
+			LispVal unsignedByte = listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+					listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(bits)))));
+			widthOfElementType = listToCons(List.of(new LispSymbol(LispNames.IF),
+					callV(LispNames.EQUAL, elementType, unsignedByte), new LispInteger(bits), widthOfElementType));
+		}
+		LispVal vectorBindings = listToCons(List.of(listToCons(List.of(elements, concatenatedElements())),
+				listToCons(List.of(elementType,
+						listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.CONSP, "type"),
+								callV(LispNames.CAR, call(LispNames.CDR, "type")), LispNil.INSTANCE)))),
+				listToCons(List.of(width, widthOfElementType))));
+		LispVal vector = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), vectorBindings,
+				listToCons(List.of(new LispSymbol(LispNames.IF), callV(LispNames.EQ, width, new LispInteger(0)),
+						listToCons(List.of(new LispSymbol(LispNames.COERCE), elements,
+								listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR"))))),
+						callV(LispNames.SEQ_INT_VECTOR, elements, width)))));
 		LispVal unsupported = listToCons(
 				List.of(new LispSymbol(LispNames.ERROR), new LispString("concatenate: unsupported result type")));
 		LispVal dispatch = listToCons(
@@ -687,6 +713,57 @@ public final class BuiltinFunctionWrappers {
 		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), call(LispNames.STRINGP, "x"),
 				new LispSymbol("x"), coerceTo("x", "STRING")));
 		return new WrapperDef(LispNames.SEQ_STRING, List.of("x"), List.of(body));
+	}
+
+	// %seq-int-vector (gated by ConcatenateForms.needsSeqIntVector, plus a #'concatenate
+	// reference -- the wrapper above calls it): one sequence of integers as a PACKED
+	// (unsigned-byte 8|16|32) vector. It exists for the same reason %seq-string does --
+	// the concatenate lowering must not plant an allocate-and-fill loop at every call
+	// site (.kb/wasm-function-body-size.md) -- and it additionally walks the element list
+	// LINEARLY, which the equivalent inline (make-array n :element-type '(unsigned-byte
+	// 8) :initial-contents list) would not: that lowering indexes its contents with elt,
+	// which is O(n) on a list.
+	//
+	// (lambda (seq w)
+	// (let* ((l (coerce seq 'list))
+	// (v (if (= w 8) (make-array (length l) :element-type '(unsigned-byte 8))
+	// (if (= w 16) (make-array (length l) :element-type '(unsigned-byte 16))
+	// (make-array (length l) :element-type '(unsigned-byte 32))))))
+	// (do ((tail l (cdr tail)) (i 0 (+ i 1))) ((null tail) v)
+	// (%aset v i (car tail)))))
+	//
+	// The three make-array calls are what makes the representation packed at all: the
+	// element type has to be a LITERAL for every backend's recognizer to pick the packed
+	// representation, so the runtime width dispatches onto three literal allocations
+	// rather than passing the designator along.
+	private static WrapperDef seqIntVectorWrapper() {
+		LispSymbol list = new LispSymbol("__iv_l");
+		LispSymbol vec = new LispSymbol("__iv_v");
+		LispSymbol tail = new LispSymbol("__iv_tail");
+		LispSymbol index = new LispSymbol("__iv_i");
+		LispVal alloc = makeIntVectorAlloc(list, 32);
+		for (int bits : new int[] { 16, 8 }) {
+			alloc = listToCons(List.of(new LispSymbol(LispNames.IF),
+					callV(LispNames.EQ, new LispSymbol("w"), new LispInteger(bits)), makeIntVectorAlloc(list, bits),
+					alloc));
+		}
+		LispVal fill = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(listToCons(List.of(tail, list, callV(LispNames.CDR, tail))),
+						listToCons(
+								List.of(index, new LispInteger(0), callV(LispNames.ADD, index, new LispInteger(1)))))),
+				listToCons(List.of(callV(LispNames.NULL, tail), vec)),
+				callV(LispNames.ASET, vec, index, callV(LispNames.CAR, tail))));
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(list, coerceTo("seq", "LIST"))), listToCons(List.of(vec, alloc))));
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, fill));
+		return new WrapperDef(LispNames.SEQ_INT_VECTOR, List.of("seq", "w"), List.of(body));
+	}
+
+	// (make-array (length l) :element-type '(unsigned-byte BITS))
+	private static LispVal makeIntVectorAlloc(LispSymbol list, int bits) {
+		return listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY), callV(LispNames.LENGTH, list),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+						listToCons(List.of(new LispSymbol(LispNames.UNSIGNED_BYTE), new LispInteger(bits)))))));
 	}
 
 	// Every argument's elements, in order, in a FRESH list:
@@ -762,6 +839,11 @@ public final class BuiltinFunctionWrappers {
 			// %seq-string: injected only when a concatenate 'string lowering needs it
 			// (gated on ConcatenateForms.needsSeqString, not on a #'name reference).
 			seqStringWrapper(),
+			// %seq-int-vector: the packed (unsigned-byte 8|16|32) vector builder the
+			// concatenate vector family calls (gated on
+			// ConcatenateForms.needsSeqIntVector OR a #'concatenate reference, since the
+			// wrapper above calls it too).
+			seqIntVectorWrapper(),
 			// #'open (reference-gated): dispatches an option plist onto the four literal
 			// direction/element-type shapes the compiled open needs.
 			openWrapper(),

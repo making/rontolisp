@@ -721,6 +721,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// resolves a user deftype alias of the string family the same way the
 		// CONCATENATE lowering itself will.
 		boolean usesSeqString = ConcatenateForms.needsSeqString(program, closRegistry);
+		// Whether the packed (unsigned-byte 8|16|32) vector builder is reachable: a
+		// concatenate whose result type spells a packed element type lowers to a call to
+		// it, and so does the #'concatenate wrapper's own vector arm (its designator is a
+		// runtime value, so it re-does the width dispatch there). Forces usesIntArray
+		// below -- the helper's make-array calls are in the WRAPPER, which the source
+		// scans below never see.
+		boolean usesSeqIntVector = ConcatenateForms.needsSeqIntVector(program, closRegistry) || program.stream()
+			.anyMatch(expr -> BuiltinFunctionWrappers.referencesFunctionValue(expr, LispNames.CONCATENATE));
 		// The hash-table runtime gate. Like the array gate it is a source scan that a
 		// lowering can outrun -- (%class-designator x) expands into a hash-table-p test,
 		// so a
@@ -769,6 +777,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// (.kb/concatenate-result-families.md).
 		if (!usesSeqString) {
 			wrapperExcludes.add(LispNames.SEQ_STRING);
+		}
+		// %seq-int-vector is the concatenate packed-vector builder, gated the same way.
+		if (!usesSeqIntVector) {
+			wrapperExcludes.add(LispNames.SEQ_INT_VECTOR);
 		}
 		// #'error/#'cerror/#'signal/#'warn wrappers forward the datum only (lite), and
 		// #'format renders via the runtime control renderer; inject each only when the
@@ -943,8 +955,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// array op compilers route through the _iv* dispatch helpers (which handle the
 		// packed long[] and delegate any other shape down the fv/general chain); when
 		// false the default build is byte-identical. The runtime reader does not read
-		// #N@(...), so usesRead does not force this gate.
-		boolean usesIntArray = programUsesIntArray(program);
+		// #N@(...), so usesRead does not force this gate. The injected %seq-int-vector
+		// wrapper allocates one, and it is not part of the scanned program, so its own
+		// gate forces this one on.
+		boolean usesIntArray = programUsesIntArray(program) || usesSeqIntVector;
 
 		// Whether the array runtime helper group is emitted (the same test that gates
 		// its emission below). The mutable-character-vector consumers -- the _eqv

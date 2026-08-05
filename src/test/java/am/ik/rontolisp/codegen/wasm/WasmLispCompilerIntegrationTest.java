@@ -494,6 +494,42 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void concatenateKeepsThePackedElementType() throws Exception {
+		// An (unsigned-byte 8|16|32) result element type builds the PACKED vector, in
+		// call position and through the #'concatenate wrapper's runtime width dispatch
+		// alike (.todo/262). Any other element type -- and the spellings whose second
+		// element is a SIZE -- stay the general vector.
+		// The zero-parameter deftype shape, like concatenateResolvesADeftypeAliasResult
+		// Type: this harness does not run the CLI's UserMacroExpander, which is what
+		// folds a parameterized deftype into the registrable form (the parameterized
+		// shape is pinned end to end by the ci-spec case and LackEcosystemE2eTest).
+		String program = """
+				(deftype simple-byte-vector () '(simple-array (unsigned-byte 8) (*)))
+				(let ((v (concatenate '(vector (unsigned-byte 8)) #(1) '(2 260))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(print (array-element-type (concatenate '(simple-array (unsigned-byte 16) (*)) #(1))))
+				(print (array-element-type (concatenate '(vector (unsigned-byte 32) *))))
+				(print (array-element-type (concatenate 'simple-byte-vector #(1 2))))
+				(print (array-element-type (concatenate '(simple-vector 2) '(1 2))))
+				(print (array-element-type (concatenate '(vector character) "ab")))
+				(print (array-element-type (apply #'concatenate '(simple-array (unsigned-byte 8) (*))
+				                                  (list '(1 2) #(3)))))
+				(print (funcall #'concatenate '(vector (unsigned-byte 8)) '(1 260)))
+				(print (array-element-type (funcall #'concatenate 'vector '(1))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				(UNSIGNED-BYTE 16)
+				(UNSIGNED-BYTE 32)
+				(UNSIGNED-BYTE 8)
+				T
+				T
+				(UNSIGNED-BYTE 8)
+				#(1 4)
+				T""");
+	}
+
+	@Test
 	void concatenateStringTakesAnySequence() throws Exception {
 		// The string family walks any character sequence, nil (the empty list) included:
 		// s-sql builds "CREATE TABLE x" as

@@ -6,6 +6,7 @@ import org.jspecify.annotations.Nullable;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -21,12 +22,21 @@ import am.ik.rontolisp.PackageRegistry;
  *
  * <p>
  * Three result families are supported -- {@code list}, {@code vector} and {@code string},
- * each with its "simple" / compound spellings, so
- * {@code (concatenate '(vector (unsigned-byte 8)) a b)} is the vector family (element
- * types are dropped: rontolisp vectors are generic). Every family accepts any sequence
+ * each with its "simple" / compound spellings. Every family accepts any sequence
  * arguments, mixed freely: the list and vector families walk elements, and the string
  * family sends each argument that is not a literal string through {@code %seq-string}
  * (one call, never an inlined loop) before the binary {@code %string-concat} fold.
+ *
+ * <p>
+ * The vector family carries its ELEMENT TYPE as well: an {@code (unsigned-byte 8|16|32)}
+ * element type ({@code '(vector (unsigned-byte 8))},
+ * {@code '(simple-array (unsigned-byte 8) (*))}) selects the packed integer-vector
+ * representation {@code make-array} already builds
+ * ({@code .kb/packed-integer-vectors.md}), through the {@code %seq-int-vector} helper;
+ * every other element type is the general vector. ANSI requires the result to be of the
+ * requested type, and real code checks: {@code md5:md5sum-sequence}'s {@code etypecase}
+ * has a {@code (simple-array (unsigned-byte 8) (*))} arm and no general-vector one, so
+ * cl-postgres' md5 authentication depends on it.
  *
  * <p>
  * The compilers additionally require the result type to be written as a literal quoted
@@ -53,6 +63,18 @@ public final class ConcatenateForms {
 		 */
 		VECTOR
 
+	}
+
+	/**
+	 * A normalized result-type designator: its {@link ResultFamily} plus, for the vector
+	 * family, the packed unsigned-integer element width the designator asks for.
+	 *
+	 * @param family the sequence family the result belongs to
+	 * @param intWidth 8, 16 or 32 when the designator spells an {@code (unsigned-byte N)}
+	 * element type the packed representation supports, 0 for a general
+	 * (element-type-free) result
+	 */
+	public record ResultSpec(ResultFamily family, int intWidth) {
 	}
 
 	private ConcatenateForms() {
@@ -87,6 +109,19 @@ public final class ConcatenateForms {
 	 * @return the family, or {@code null} when the designator names none of them
 	 */
 	public static @Nullable ResultFamily resultFamily(LispVal designator, @Nullable ClosRegistry closRegistry) {
+		ResultSpec spec = resultSpec(designator, closRegistry);
+		return (spec == null) ? null : spec.family();
+	}
+
+	/**
+	 * {@link #resultFamily(LispVal, ClosRegistry)} keeping the vector family's packed
+	 * element width: the full normalization of an EVALUATED result-type designator.
+	 * @param designator the result-type designator
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the spec, or {@code null} when the designator names no supported family
+	 */
+	public static @Nullable ResultSpec resultSpec(LispVal designator, @Nullable ClosRegistry closRegistry) {
 		LispVal current = designator;
 		// A deftype expansion may itself be an alias; cap the chain so a (registered)
 		// self-referential alias cannot loop.
@@ -96,15 +131,16 @@ public final class ConcatenateForms {
 				return null;
 			}
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
-			switch (qn == null ? sym.name() : qn.member()) {
+			String member = qn == null ? sym.name() : qn.member();
+			switch (member) {
 				case "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING" -> {
-					return ResultFamily.STRING;
+					return new ResultSpec(ResultFamily.STRING, 0);
 				}
 				case "LIST", "CONS" -> {
-					return ResultFamily.LIST;
+					return new ResultSpec(ResultFamily.LIST, 0);
 				}
 				case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR" -> {
-					return ResultFamily.VECTOR;
+					return new ResultSpec(ResultFamily.VECTOR, packedElementWidth(member, current));
 				}
 				default -> {
 					LispVal expansion = (closRegistry == null) ? null : closRegistry.findDeftype(sym.name());
@@ -116,6 +152,47 @@ public final class ConcatenateForms {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The packed unsigned-integer element width a vector-family designator asks for, or 0
+	 * for a general result. Only {@code (vector ELEMENT-TYPE ...)},
+	 * {@code (array ELEMENT-TYPE ...)} and {@code (simple-array ELEMENT-TYPE ...)} carry
+	 * an element type in the second position -- {@code (simple-vector SIZE)} carries a
+	 * SIZE there (its element type is always {@code t}) and the bit-vector spellings a
+	 * size too, so reading position 1 unconditionally would turn {@code (simple-vector
+	 * 41)} into a specialized request. Same shape rule as {@code typep}'s array arm.
+	 */
+	private static int packedElementWidth(String member, LispVal designator) {
+		boolean carriesElementType = switch (member) {
+			case "VECTOR", "ARRAY", "SIMPLE-ARRAY" -> true;
+			default -> false;
+		};
+		if (!carriesElementType || !(designator instanceof LispCons spec) || !(spec.cdr() instanceof LispCons rest)) {
+			return 0;
+		}
+		return unsignedByteWidth(rest.car());
+	}
+
+	/**
+	 * The width of an {@code (unsigned-byte 8|16|32)} element-type specifier -- the three
+	 * widths the packed representation supports -- or 0 for anything else (including
+	 * {@code *}, {@code t}, {@code character} and the unsupported widths, which all mean
+	 * a general vector here).
+	 * @param elementType the element-type specifier
+	 * @return 8, 16, 32, or 0
+	 */
+	public static int unsignedByteWidth(LispVal elementType) {
+		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
+				&& widthCell.cdr() instanceof LispNil) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+			if (LispNames.UNSIGNED_BYTE.equals(qn == null ? head.name() : qn.member())
+					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
+				return (int) width.value();
+			}
+		}
+		return 0;
 	}
 
 	/**
@@ -140,8 +217,22 @@ public final class ConcatenateForms {
 	 * supported family
 	 */
 	public static @Nullable ResultFamily literalResultFamily(LispVal typeForm, @Nullable ClosRegistry closRegistry) {
+		ResultSpec spec = literalResultSpec(typeForm, closRegistry);
+		return (spec == null) ? null : spec.family();
+	}
+
+	/**
+	 * {@link #literalResultFamily(LispVal, ClosRegistry)} keeping the vector family's
+	 * packed element width.
+	 * @param typeForm the result-type argument as written
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the spec, or {@code null} when the form is not a literal designator of a
+	 * supported family
+	 */
+	public static @Nullable ResultSpec literalResultSpec(LispVal typeForm, @Nullable ClosRegistry closRegistry) {
 		LispVal designator = unquoted(typeForm);
-		return (designator == null) ? null : resultFamily(designator, closRegistry);
+		return (designator == null) ? null : resultSpec(designator, closRegistry);
 	}
 
 	/**
@@ -195,17 +286,18 @@ public final class ConcatenateForms {
 	 */
 	public static LispVal expand(LispCons cons, boolean normalizeArguments, @Nullable ClosRegistry closRegistry) {
 		List<LispVal> parts = cons.toList();
-		ResultFamily family = (parts.size() >= 2) ? literalResultFamily(parts.get(1), closRegistry) : null;
-		if (family == null) {
+		ResultSpec spec = (parts.size() >= 2) ? literalResultSpec(parts.get(1), closRegistry) : null;
+		if (spec == null) {
 			throw new UnsupportedOperationException(
 					"Cannot compile concatenate: the result type must be a literal quoted 'list, 'vector or 'string "
 							+ "designator");
 		}
 		List<LispVal> args = parts.subList(2, parts.size());
-		return switch (family) {
+		return switch (spec.family()) {
 			case STRING -> stringChain(args, normalizeArguments);
 			case LIST -> appendedElements(args);
-			case VECTOR -> coerceCall(appendedElements(args), "VECTOR");
+			case VECTOR -> (spec.intWidth() == 0) ? coerceCall(appendedElements(args), "VECTOR")
+					: intVectorCall(appendedElements(args), spec.intWidth());
 		};
 	}
 
@@ -266,6 +358,46 @@ public final class ConcatenateForms {
 		return needsSeqString(cons.car(), closRegistry) || needsSeqString(cons.cdr(), closRegistry);
 	}
 
+	/**
+	 * Whether the program writes a {@code concatenate} whose result type asks for a
+	 * PACKED unsigned-integer vector, i.e. whose lowering will call
+	 * {@code %seq-int-vector}. The backends gate the helper's injection on this (plus a
+	 * {@code #'concatenate} reference, whose wrapper spells the same dispatch at run
+	 * time), so a program that never asks for one stays byte-identical.
+	 *
+	 * <p>
+	 * Unlike {@link #needsSeqString} this gate cannot be outrun by a codegen-time
+	 * expansion: nothing this compiler generates concatenates into a packed element type
+	 * -- {@code format}, {@code with-output-to-string} and the string-stream builders all
+	 * emit the {@code 'string} family.
+	 * @param program the top-level forms
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return {@code true} when at least one call builds a packed vector
+	 */
+	public static boolean needsSeqIntVector(List<LispVal> program, @Nullable ClosRegistry closRegistry) {
+		for (LispVal form : program) {
+			if (needsSeqIntVector(form, closRegistry)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean needsSeqIntVector(LispVal form, @Nullable ClosRegistry closRegistry) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() >= 2 && parts.get(0) instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())) {
+			ResultSpec spec = literalResultSpec(parts.get(1), closRegistry);
+			if (spec != null && spec.intWidth() != 0) {
+				return true;
+			}
+		}
+		return needsSeqIntVector(cons.car(), closRegistry) || needsSeqIntVector(cons.cdr(), closRegistry);
+	}
+
 	// Nested binary %string-concat calls; a lone argument is concatenated with "" so the
 	// result is always a fresh string. Every argument that is not already a string
 	// literal goes through %seq-string first: Common Lisp's string family takes any
@@ -309,6 +441,16 @@ public final class ConcatenateForms {
 		}
 		call.add(LispNil.INSTANCE);
 		return listToCons(call);
+	}
+
+	// (%seq-int-vector <elements> width) -- the packed vector family. A CALL, never an
+	// inlined allocate-and-fill loop, for the reason the string family calls
+	// %seq-string: one emitted body must not grow with the number of concatenate sites
+	// (.kb/wasm-function-body-size.md). The helper also walks its list linearly, which
+	// an inlined (make-array n :initial-contents list) would not (that fill indexes with
+	// elt).
+	private static LispVal intVectorCall(LispVal elements, int width) {
+		return listToCons(List.of(new LispSymbol(LispNames.SEQ_INT_VECTOR), elements, new LispInteger(width)));
 	}
 
 	private static LispVal coerceCall(LispVal value, String type) {

@@ -3040,6 +3040,47 @@ cases:
       (print (concatenate 'ci-octet-vector #(1) #(2 3)))
     expected: |
       #(1 2 3)
+  # An (unsigned-byte 8|16|32) result element type asks for the PACKED
+  # representation (.kb/packed-integer-vectors.md), not a general vector: ANSI
+  # requires the result to BE of the requested type, and md5:md5sum-sequence's
+  # etypecase has a (simple-array (unsigned-byte 8) (*)) arm and no
+  # general-vector one -- cl-postgres' md5 authentication rides on it. The
+  # #'concatenate wrapper's designator is a runtime value, so it re-does the
+  # width dispatch; the deftype alias carries the element type through too.
+  # .kb/concatenate-result-families.md, todo-262.
+  - name: concatenate-packed-element-type
+    source: |
+      (deftype ci-byte-vector (&optional (len '*))
+        `(simple-array (unsigned-byte 8) (,len)))
+      (defun ci-concat-packed ()
+        (let ((v (concatenate '(vector (unsigned-byte 8)) #(1) '(2 260))))
+          (print (list (array-element-type v)
+                       (typep v '(simple-array (unsigned-byte 8) (*)))
+                       v)))
+        (print (array-element-type (concatenate '(simple-array (unsigned-byte 16) (*)) #(1))))
+        (print (array-element-type (concatenate '(vector (unsigned-byte 32) *))))
+        (print (array-element-type (concatenate 'ci-byte-vector #(1 2))))
+        ;; A spelling whose second element is a SIZE, and any other element
+        ;; type, stay the general vector.
+        (print (array-element-type (concatenate '(simple-vector 2) '(1 2))))
+        (print (array-element-type (concatenate '(vector character) "ab")))
+        (print (array-element-type (concatenate 'vector '(1))))
+        (print (array-element-type (apply #'concatenate '(simple-array (unsigned-byte 8) (*))
+                                          (list '(1 2) #(3)))))
+        (print (funcall #'concatenate '(vector (unsigned-byte 8)) '(1 260)))
+        (print (array-element-type (funcall #'concatenate 'vector '(1)))))
+      (ci-concat-packed)
+    expected: |
+      ((UNSIGNED-BYTE 8) T #(1 2 4))
+      (UNSIGNED-BYTE 16)
+      (UNSIGNED-BYTE 32)
+      (UNSIGNED-BYTE 8)
+      T
+      T
+      T
+      (UNSIGNED-BYTE 8)
+      #(1 4)
+      T
   # A redefined defun binds every call to its LAST definition on the compile
   # backends (whole-program static resolution through the per-name map); the
   # JVM emits only that definition (a class cannot hold duplicate methods), the

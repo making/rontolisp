@@ -5,32 +5,90 @@ User-facing behavior: `doc/{en,ja}/reference/functions/concatenate.md`.
 `compiler/ConcatenateForms` is the ONE home of the contract. Both halves live
 there so the interpreter and the compilers cannot drift:
 
-- `resultFamily(designator)` — the shared normalizer over an EVALUATED
-  result-type designator (quote already stripped). A symbol or a compound spec's
-  head maps to `STRING` (`string`/`simple-string`/`base-string`/
-  `simple-base-string`), `LIST` (`list`/`cons`) or `VECTOR` (`vector`/
-  `simple-vector`/`array`/`simple-array`/`bit-vector`/`simple-bit-vector`), with
-  package-qualified spellings normalized through their member name. Element types
-  are DROPPED, so `'(vector (unsigned-byte 8))` is just the vector family
-  (rontolisp vectors are generic) — the same rule `expandCoerce` follows for
-  `coerce`/`map`.
+- `resultSpec(designator, closRegistry)` — the shared normalizer over an
+  EVALUATED result-type designator (quote already stripped), returning a
+  `ResultSpec(family, intWidth)`. A symbol or a compound spec's head maps to
+  `STRING` (`string`/`simple-string`/`base-string`/`simple-base-string`), `LIST`
+  (`list`/`cons`) or `VECTOR` (`vector`/`simple-vector`/`array`/`simple-array`/
+  `bit-vector`/`simple-bit-vector`), with package-qualified spellings normalized
+  through their member name. `resultFamily` is the family-only view of the same
+  call, kept for the callers that do not care about the element type.
+- `intWidth` is the PACKED result family (see below): 8/16/32 when the vector
+  designator spells `(unsigned-byte 8|16|32)`, 0 otherwise.
 - `expand(cons, normalizeArguments)` — the compile-path lowering, called from the
   `CONCATENATE` case of `Jvm/WasmExprCompiler`. String family → the nested binary
   `%string-concat` chain (a lone argument concatenates with `""`, so the result is
   always fresh), each argument that is not a literal string wrapped in
   `(%seq-string arg)` when `normalizeArguments` is set (see below). List family →
   `(append (coerce a 'list) (coerce b 'list) ... nil)`; the trailing `nil` is what
-  makes `append` copy the LAST argument too. Vector family → that same list,
-  wrapped in `(coerce ... 'vector)`. Nothing new is emitted per backend: the
-  lowering is entirely over primitives both compilers already have.
-- `literalResultFamily(typeForm)` — `expand`'s entry (and `--no-gc`'s check):
-  normalizes the type argument AS WRITTEN, i.e. only a literal `(quote ...)`.
+  makes `append` copy the LAST argument too. General vector family → that same
+  list, wrapped in `(coerce ... 'vector)`; packed vector family → that same list,
+  wrapped in `(%seq-int-vector ... width)`. Nothing new is emitted per backend:
+  the lowering is entirely over primitives both compilers already have.
+- `literalResultSpec(typeForm)` / `literalResultFamily(typeForm)` — `expand`'s
+  entry (and `--no-gc`'s check): normalizes the type argument AS WRITTEN, i.e.
+  only a literal `(quote ...)`.
 
 The interpreter keeps its Java builtin (`Environment`, `LispNames.CONCATENATE`)
-and resolves the family through the same `resultFamily`, so it also accepts a
+and resolves the designator through the same `resultSpec`, so it also accepts a
 COMPUTED result type — the one deliberate interpreter-only extra (a compiler has
 to resolve the family statically; `coerce` has the same split and the reference
 pages say so).
+
+## The vector family keeps an `(unsigned-byte 8|16|32)` element type (todo-262)
+
+`'(vector (unsigned-byte 8))` / `'(simple-array (unsigned-byte 8) (*))` builds
+the PACKED representation `make-array` already gives
+(`.kb/packed-integer-vectors.md`), NOT a general vector. Element types used to be
+dropped here on the grounds that "rontolisp vectors are generic"; that stopped
+being true when todo-194 added packed integer vectors, and the gap was a wrong
+answer rather than a lite approximation — ANSI requires the result to BE of the
+requested type, `md5:md5sum-sequence`'s `etypecase` has a
+`(simple-array (unsigned-byte 8) (*))` arm and no general-vector one, and
+cl-postgres' `md5-password` feeds it exactly this `concatenate`. That is what
+made 7 of 13 `ClPostgresE2eTest` legs fail with `ETYPECASE: no clause matches
+#(...)`.
+
+- **`%seq-int-vector`** (`LispNames.SEQ_INT_VECTOR`, a `cl` internal) is
+  `(lambda (seq w) ...)`: `(coerce seq 'list)`, then one of three literal
+  `(make-array (length l) :element-type '(unsigned-byte 8|16|32))` allocations
+  (the element type has to be a LITERAL for every backend's recognizer to pick
+  the packed representation, so a runtime width dispatches onto three
+  allocations rather than passing the designator along), then a `do` loop
+  filling with `%aset`. A `BuiltinFunctionWrappers` entry, i.e. an ordinary
+  injected defun, so NO backend needed a new primitive. It is a CALL for the
+  reason `%seq-string` is (`.kb/wasm-function-body-size.md`), and it additionally
+  walks the element list LINEARLY — the equivalent inline
+  `(make-array n :element-type ... :initial-contents list)` indexes its contents
+  with `elt`, which is O(n) on a list.
+- **The injection is gated** on `ConcatenateForms.needsSeqIntVector(program)` OR
+  a `#'concatenate` reference (the wrapper calls it too). Unlike the
+  `%seq-string` gate this one cannot be outrun by a codegen-time expansion:
+  nothing the compiler generates concatenates into a packed element type
+  (`format`, `with-output-to-string` and the string-stream builders all emit the
+  `'string` family), so `expand` needs no "helper available" flag.
+- **The JVM's `usesIntArray` gate is forced on** by the same flag: that gate is a
+  source scan over the PROGRAM, and the helper's `make-array` calls live in the
+  wrapper, which the scan never sees. wasm-GC needs no such forcing — its packed
+  array types and `_iv_set` are unconditional.
+- Which spellings carry an element type is a SHAPE rule, not a position rule:
+  `(vector T ...)`, `(array T ...)` and `(simple-array T ...)` lead with the
+  element type, while `(simple-vector SIZE)` and the bit-vector spellings carry a
+  SIZE there. Reading position 1 unconditionally would turn esrap's
+  `(simple-vector 41)` into a specialized request — the same trap
+  `LispMacroExpander`'s `typep` array arm documents.
+- An unsupported width (`(unsigned-byte 4)`, `(signed-byte 8)`) and every
+  non-integer element type stay the general vector, so nothing that used to work
+  changes shape.
+- The interpreter's builtin builds the `LispIntVector` directly (it never goes
+  through `expand`), sharing `Environment.packedIntVector` with its own
+  `%seq-int-vector`.
+
+Re-evaluation trigger: `coerce` and `map` still DROP the element type
+(`expandCoerce` collapses a compound spec to its head), so
+`(coerce list '(vector (unsigned-byte 8)))` is a general vector. That is a
+divergence from `concatenate` and it survives only because no library exercised
+it — the shared builder to reuse when one does is `%seq-int-vector`.
 
 ## A user deftype alias resolves through the class registry (todo-256)
 
@@ -116,6 +174,17 @@ This is what makes ironclad's HKDF
 `(apply #'concatenate '(vector (unsigned-byte 8)) blocks)` work
 (`.kb/asdf.md`).
 
+Its vector arm honours the PACKED element type too (todo-262): `(cadr type)` is
+compared to each of the three `(unsigned-byte N)` lists with `equal`, and a hit
+calls `%seq-int-vector` instead of `(coerce ... 'vector)`. One test per width
+covers every head without reading the spec's shape — a `(simple-vector 41)` size
+sits in the same slot but can never be `equal` to a two-element list. This is
+deliberately NOT the alias-awareness gap above: an element type is spelled
+literally at the call site (http-body's own
+`(apply #'concatenate '(simple-array (unsigned-byte 8) (*)) ...)`), and a
+designator that means a packed vector in call position must not mean a general
+one through `apply`.
+
 ## `coerce` re-uses the same runtime dispatch
 
 `coerce`'s own result type may be computed too (`(coerce seq type)` with `type`
@@ -137,14 +206,20 @@ producing a string (`.kb/no-gc-scalar-wasm.md`).
 ## Pinning
 
 `ci-spec.yaml` `concatenate-result-families` (all four backends, including the
-mixed-sequence string family),
+mixed-sequence string family) and `concatenate-packed-element-type`,
 `LispEvaluatorTest#evalConcatenate*` (incl.
-`evalConcatenateResolvesADeftypeAliasResultType`, both deftype shapes),
+`evalConcatenateResolvesADeftypeAliasResultType`, both deftype shapes,
+`evalConcatenateKeepsThePackedElementType`,
+`evalConcatenateAliasResultTypeKeepsThePackedElementType` and
+`evalSeqIntVectorHelper`),
 `JvmLispCompilerTest#compileAndRunConcatenate*` (incl.
-`compileAndRunConcatenateWithADeftypeAliasResultType`) +
+`compileAndRunConcatenateWithADeftypeAliasResultType`,
+`compileAndRunConcatenateKeepsThePackedElementType` and
+`compileAndRunConcatenateAsAFunctionValueKeepsThePackedElementType`) +
 `compileConcatenateWithComputedResultTypeFails`,
 `WasmLispCompilerIntegrationTest#concatenateBuildsListAndVectorResultTypes` +
-`#concatenateResolvesADeftypeAliasResultType`,
+`#concatenateResolvesADeftypeAliasResultType` +
+`#concatenateKeepsThePackedElementType`,
 `IroncladE2eTest` (the HKDF vector, end to end on four backends), and the
 `LackEcosystemE2eTest` lack legs (fast-http's `'simple-byte-vector`, the
 parameterized shape end to end).

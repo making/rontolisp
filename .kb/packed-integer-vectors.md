@@ -50,9 +50,12 @@ SHA-256 working buffers stay unboxed on the wasm-GC backend.
 - `length`, `array-dimensions` (= `(n)`), `arrayp`/`vectorp`/`%arrayp` true,
   `array-element-type` returns the REAL `(unsigned-byte N)` list (general
   arrays still answer `t`).
-- `typep` for `(simple-array (unsigned-byte 8) (*))`-style specs keeps
-  answering through `%arrayp` (element type not checked), so ironclad's
-  `check-type`/`typep` guards pass unchanged.
+- `typep` for `(simple-array (unsigned-byte 8) (*))`-style specs tests
+  `%arrayp` AND `(equal (array-element-type x) '(unsigned-byte N))`, so a
+  general `#(...)` is never a `(vector (unsigned-byte 8))` (s-sql's `sql-escape`
+  dispatches on exactly that). The dimensions are not checked. This is why a
+  `concatenate` that dropped the element type produced a value its own result
+  type rejected (todo-262).
 - Printing: a plain `#(1 2 3)` vector at every width (CL prints specialized
   vectors this way; reading it back yields a general vector, which is
   conformant). WASM printer converts to a boxed general array in place and
@@ -62,7 +65,11 @@ SHA-256 working buffers stay unboxed on the wasm-GC backend.
   the new internal `%array-alike` (fresh zero-filled array with the SAME
   representation as its first argument; `LispNames.ARRAY_ALIKE`, in
   `CL_INTERNALS`). `replace` mask-stores element-wise into a packed target.
-  Other sequence functions (`reverse`, `remove`, `coerce`, `concatenate`, `map
+  `concatenate` packs when its RESULT TYPE asks for it -- an
+  `(unsigned-byte 8|16|32)` element type in the designator, not the arguments'
+  representation (todo-262, `.kb/concatenate-result-families.md`); the compile
+  paths build it through the injected `%seq-int-vector` helper, the interpreter
+  directly. The other sequence functions (`reverse`, `remove`, `coerce`, `map
   'vector`) return GENERAL vectors on every backend -- "vector in, vector out"
   with packing preserved only by the dedicated arms; the interpreter's
   `seqResult` deliberately rebuilds general to match the compile backends.
