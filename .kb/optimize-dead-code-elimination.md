@@ -18,7 +18,38 @@ Every core <-> component linkage is **by name**, in both directions, so renumber
 
 `WasmComponentBuilder.memModuleFor` reads the core's `mem`/`memory` **memory** import, which the shaker keeps verbatim along with every other non-function import.
 
-Effect: a non-serve component is where the shaker earns its keep (`(print "hi")`: 357 KB -> 29 KB), because such a program never reaches the arity dispatch. A **serve** component drops only ~4% (714 KB -> 686 KB, 589 -> 543 functions): the Clack model `funcall`s the handler, so the dispatch bodies are live and they `call` every registered builtin wrapper. Cutting THAT is a source-level problem, not a shaker one — see `.todo/260`.
+Effect: a non-serve component is where the shaker earns its keep (`(print "hi")`: 357 KB -> 29 KB), because such a program never reaches the arity dispatch. A **serve** component drops only ~4% (714 KB -> 686 KB, 589 -> 543 functions): the Clack model `funcall`s the handler, so the dispatch bodies are live and they `call` every registered builtin wrapper. Cutting THAT is a source-level problem, not a shaker one — see `.todo/260` and the gate below.
+
+## The funcall-dispatch gate (what makes `--optimize` reach library code)
+
+**A function gets an arity-dispatch case, and a `_lookup` registry row, only when the program can actually reach it as a function VALUE.** Without this the shakers are nearly inert on any program that loads a library: the ladders `call` every registered function, so everything is reachable and `--optimize` on a `(ql:quickload "cl-postgres")` component dropped **22 of 2618 functions (-1.5%)**. With it, an `md5` program drops **-49.3%** (1,177,653 -> 597,641).
+
+`WasmLispCompiler.dispatchableFuncIds` / `JvmLispCompiler.dispatchableFuncIds` compute the set; `WasmRuntimeBuilder.buildDispatchBody` and `JvmRuntimeBuilder.buildDispatchMethods` filter their targets by it, and the registry (the WASM data blob / `JvmEvalRuntimeBuilder.lookupSegments`) filters its rows by the SAME set — they are computed together precisely so they cannot drift: a row whose funcId has no case would resolve and then fall through to the ladder's default arm.
+
+Two sources, both EXACT rather than heuristic:
+
+- **`Ctx.valueFuncIds`** — the funcIds Pass 2 actually materialized as a closure: `WasmFunctionFormCompiler.compileNamed` / `JvmFunctionFormCompiler` (`#'name`), `WasmLambdaCompiler.emitClosureValue` / `JvmLambdaCompiler` (every `(lambda ...)` value), and `WasmAsyncEmit`'s waiter closure over a resume function. Collected DURING emission, not from a pre-scan, which is the whole point: a `#'identity` or `%seq-string` reference a macro synthesizes during Pass 2 is invisible to any scan of the source program, and that is exactly what `.todo/260` recorded a naive attempt dying on. Every body is emitted before the ladders are built, so the set is complete when it is read.
+  **Trap, and it bit once:** `WasmAsyncEmit.freshCtx` rebuilds a `Ctx` field by field and also builds the SYNCHRONOUS top level. Omitting `valueFuncIds` there silently lost every closure the top level makes, and `(funcall f 1)` trapped. Any module-wide MUTABLE `Ctx` field must be listed there.
+- **the names a runtime SYMBOL designator can resolve.** `_lookup` matches interned offsets (WASM) / string constants (JVM), so a registry row is reachable only when the program already put that exact name there for another reason — a quoted symbol, a string literal, an `intern` of a literal. `StringTable.isInterned` and `ConstantPool.hasStringConstant` are the two probes, and the name is tried three ways: canonical, the `::`->`:` alias row's spelling, and the bare member name after the last colon.
+
+**The gate turns itself off entirely** (every function stays dispatchable) under `--dynamic` and whenever `compiler/RuntimeNameProducers.anyNameResolvable` holds — the program contains `eval`/`read`/`read-from-string`/`load` (it can evaluate data) or `intern`/`find-symbol`/`make-symbol`/`symbol-function`/`fdefinition`/`fboundp`/`uiop:symbol-call` (it can build a name). That class is shared by both backends on purpose: a name that stops resolving on one has to stop resolving on the other. Compile with `-Drontolisp.debug.dispatchgate=true` to have the offending operator NAMED, and to see how many functions stayed dispatchable.
+
+Without the bail the gate is not sound, and the failure is a trap rather than a diagnosis — measured: 32 tests across both backends, every one of them a name assembled at run time (`(eval (read))`, `(intern "EX-FN" :pkg)`, `uiop:symbol-call`).
+
+**What the bail costs, measured 2026-08-05** (`--optimize`, wasm-GC):
+
+| program | before | after | gate |
+| --- | --- | --- | --- |
+| `md5` via `ql:quickload` | 1,177,653 | **597,641 (-49.3%)** | applies |
+| pure compute (no library) | 26,159 | 26,097 | applies |
+| `split-sequence` | 645,453 | 619,722 (-4.0%) | bails |
+| `com.inuoe.jzon` | 1,158,253 | 1,118,502 (-3.4%) | bails |
+| `cl-ppcre` | 2,513,244 | 2,419,251 (-3.7%) | bails |
+| `examples/db/postgres-hello` (`--component`) | 8,392,789 | 8,085,309 (-3.7%) | bails |
+
+The bailing rows keep only the unrelated `_ub_read` saving. **The measured blocker is rontolisp's own spliced runtime `format` renderer**: `format-render.lisp`'s `%fmt-function-designator` resolves the `~/name/` directive's target out of the control string and then funcalls it, so any program carrying the runtime renderer can reach any function by name. `postgres-hello` additionally trips `read`. Narrowing this is `.todo/261`.
+
+Two refinements were tried and REJECTED on measurement (do not re-propose without new numbers): judging the `intern` ARGUMENT shape (shrank nothing — every real program reaching there computes the name anyway — and broke `internIntoALiteralPackage` on both backends, because the two-argument lowering folds the literal into the qualified symbol before either probe can see it), and exempting the generated slot-name normalizer's `(intern (symbol-name n))` (harmless, but not what holds the gate open).
 
 Tests: `componentCoreIsTreeShakenUnderOptimize` (shrinkage + a scalar and a string-returning export invoked under wasmtime, i.e. the canonical-ABI helpers survived) and `optimizedServeComponentStillServesUnderWasmtimeServe` (a shaken serve component actually answers a request), both in `WasmLispCompilerIntegrationTest`.
 

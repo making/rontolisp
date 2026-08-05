@@ -101,12 +101,34 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~18 KB module
 For the `fact` example the module drops from ~170 KB to ~18 KB.
 `--optimize` is opt-in and behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
-embedded `eval`/`load` dispatches to) is kept. On the **GC `--component`** path
-it is a no-op (the WASI 0.3 adapter relies on the core's fixed import/index
-layout, so the component is emitted unchanged); under
-[`--no-gc --component`](../guides/wasm-nogc.md#compact-component-output---no-gc---component)
-it works — the core module is shaken before the wrap. The same flag also
-dead-code-eliminates the [JVM output](jvm.md).
+embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
+shape, `--component` included — the core module is shaken before the wrap. The
+same flag also dead-code-eliminates the [JVM output](jvm.md).
+
+`--optimize` also decides how much of a **loaded library** it can reach. A
+compiled program calls most functions directly, but a `funcall` needs a dispatch
+table, and a function listed there counts as reachable whether or not anything
+ever calls it that way. So a function is listed only when your program can
+actually obtain it as a value — `#'name`, a quoted `'name` designator, a
+`lambda` — and everything else becomes ordinary dead code that `--optimize`
+removes. On a program that loads `md5` and calls one function, that is the
+difference between 1.18 MB and 598 KB.
+
+The listing is all-or-nothing, and one thing switches it off: if the program can
+name a function at run time, every function has to stay reachable. That is any
+use of `eval`, `read`, `read-from-string`, a runtime `load`, `intern`,
+`find-symbol`, `make-symbol`, `symbol-function`, `fdefinition`, `fboundp` or
+`uiop:symbol-call` — including one inside a library you loaded. When
+`--optimize` does not shrink a program as much as you expected, ask the compiler
+which operator it was:
+
+```bash
+rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm --optimize
+# => [dispatch-gate] every function stays dispatchable because of: INTERN
+```
+
+`--dynamic` switches it off too, by design: late binding resolves any name at
+run time.
 
 For a much smaller module still, the same `fact.lisp` compiled with
 [`--no-gc`](../guides/wasm-nogc.md) lowers `fact` to unboxed `i32` and drops

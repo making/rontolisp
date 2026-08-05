@@ -560,20 +560,28 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
-	 * Reads an unboxed local as an ordinary boxed value: the shadow when non-null, else
-	 * the raw i64 through {@code _int_new} (an i31 in the fixnum range, so a loop-counter
+	 * Reads an unboxed local as an ordinary boxed value: the shadow when it is not the
+	 * sentinel, else the raw i64 boxed (an i31 in the fixnum range, so a loop-counter
 	 * read allocates nothing).
+	 *
+	 * <p>
+	 * The whole sequence lives in the shared {@code _ub_read} helper
+	 * ({@link WasmFxRuntimeBuilder#buildUbReadBody}) rather than inline, so an occurrence
+	 * costs three instructions instead of ~42 bytes. It used to inline because
+	 * {@code _int_new}'s call overhead dominated for loop counters -- but stage 4's fused
+	 * comparisons took every hot counter read onto the RAW path, which never reaches
+	 * here, and the sites that remain are cold generic readers in library code: 19,392 of
+	 * them in a cl-postgres component, 9.5% of the module. That is exactly the
+	 * "re-measure before restructuring" trigger {@code .kb/wasm-unboxed-locals.md}
+	 * recorded.
 	 */
 	static void emitRawLocalBoxedRead(RawLocal raw, WasmLispCompiler.Ctx ctx) {
-		emitShadowIsSentinel(raw.shadowSlot(), ctx);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
-		emitBoxI64FromSlot(raw.i64Slot(), ctx);
-		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeSignedLeb128(raw.shadowSlot());
-		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(raw.i64Slot());
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_UB_READ);
 	}
 
 	/**

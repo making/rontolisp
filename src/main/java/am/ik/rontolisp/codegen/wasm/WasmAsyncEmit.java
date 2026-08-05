@@ -652,6 +652,11 @@ final class WasmAsyncEmit {
 		}
 		w.write(Instruction.GET_LOCAL);
 		w.writeSignedLeb128(futSlot);
+		// The waiter closure over the resume function: a third place a funcId becomes a
+		// callable value (Ctx.valueFuncIds), and the only one outside
+		// WasmFunctionFormCompiler/WasmLambdaCompiler -- the future runtime calls the
+		// waiter back through the arity-1 dispatcher, so its case must survive.
+		ctx.valueFuncIds.add(ar.resumeFuncId);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(ar.resumeFuncId);
 		w.write(Instruction.GET_LOCAL);
@@ -746,6 +751,11 @@ final class WasmAsyncEmit {
 			.functions(proto.functions)
 			.lambdaDecls(proto.lambdaDecls)
 			.indirectCallArities(proto.indirectCallArities)
+			// Module-wide and MUTATED during emission, like indirectCallArities above:
+			// freshCtx also builds the synchronous top level, so dropping it here loses
+			// every closure the top level materializes and the dispatch ladders lose
+			// their cases for them (a trap at the first (funcall f ...)).
+			.valueFuncIds(proto.valueFuncIds)
 			.nextFuncId(proto.nextFuncId)
 			.dynamic(proto.dynamic)
 			.component(proto.component)

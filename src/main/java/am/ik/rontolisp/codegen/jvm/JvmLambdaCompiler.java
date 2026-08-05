@@ -40,6 +40,9 @@ final class JvmLambdaCompiler {
 		LinkedHashSet<String> freeVars = FreeVarAnalyzer.findFreeVars(bodyExprs, boundVars, ctx.functions.keySet(),
 				ctx.globals, enclosingLexicals);
 		int funcId = ctx.nextFuncId[0]++;
+		// The other place a funcId becomes a callable VALUE (see Ctx.valueFuncIds): a
+		// lambda is only ever reached through a dispatcher, so its case must stay.
+		ctx.valueFuncIds.add(funcId);
 		String methodName = "_lambda_" + funcId;
 		ctx.lambdaDecls.add(new JvmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(), bodyExprs,
 				new ArrayList<>(freeVars)));

@@ -15,6 +15,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.macro.LispAsync;
 import am.ik.rontolisp.LispCons;
@@ -876,6 +877,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Shared state for lambda discovery
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
+		// Every funcId Pass 2 materializes as a first-class function value (see
+		// Ctx.valueFuncIds), filled while the bodies are emitted and read below to size
+		// the dispatchers and the name registry.
+		Set<Integer> valueFuncIds = new HashSet<>();
 
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
@@ -996,6 +1001,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.functions(functions)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
+			.valueFuncIds(valueFuncIds)
 			.nextFuncId(nextFuncId)
 			.appendMethod(appendMethod)
 			.mathAbsLong(mathAbsLong)
@@ -1310,6 +1316,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// actually having such a call so a program without one keeps its previous
 		// output (the registry names every defun, so it is not size-neutral).
 		boolean needsLookup = usesEval || LispMacroExpander.usesRuntimeFunctionDesignator(program);
+		// Which funcIds the _invoke_N dispatchers (and the _lookup registry) must be
+		// able to reach. Every method body has been emitted by now, so valueFuncIds is
+		// exactly the set of funcIds this program turns into function VALUES -- macro
+		// expansions that ran during Pass 2 included. Everything else is only ever
+		// called directly, and dropping its dispatcher case is what lets
+		// JvmClassShaker reach the library code an ASDF system splices.
+		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, cp, needsLookup,
+				anyNameResolvable(program, usesRead, usesLoad));
 		if (needsLookup) {
 			MethodrefConstant evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc));
 			MethodrefConstant applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc));
@@ -1362,7 +1376,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				storeCode = JvmEvalRuntimeBuilder.buildStore(ec);
 				envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
 			}
-			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass);
+			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds);
 			for (int g = 1; g < lookupSegments.size(); g++) {
 				lookupSegmentNames.add(cp.addUtf8("_lookup$" + g));
 			}
@@ -1382,7 +1396,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		for (int arity : indirectCallArities) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(arity, functions, lambdaDecls,
 					lambdaFuncInfos, cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass,
-					stringClass, applyRefForDispatch, lookupRefForDispatch));
+					stringClass, applyRefForDispatch, lookupRefForDispatch, dispatchableFuncIds));
 		}
 		// The spread dispatcher _apply calls: it takes the argument list whole, so an
 		// apply through a COMPUTED designator has no arity ceiling. Emitted with the eval
@@ -1390,7 +1404,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (usesEval) {
 			dispatchMethods.addAll(JvmRuntimeBuilder.buildDispatchMethods(0, functions, lambdaDecls, lambdaFuncInfos,
 					cp, thisClass, objectArrayClass, integerClass, integerValue, objectClass, stringClass,
-					applyRefForDispatch, lookupRefForDispatch, true));
+					applyRefForDispatch, lookupRefForDispatch, true, dispatchableFuncIds));
 		}
 
 		// Build the runtime reader methods (read/load), only when used
@@ -2559,6 +2573,98 @@ public final class JvmLispCompiler implements LispCompiler {
 		return StackMapAugmenter.augment(classBytes, CLASS_MAJOR_VERSION);
 	}
 
+	/**
+	 * The funcIds the {@code _invoke_N}/{@code _invoke_v} dispatchers and the
+	 * {@code _lookup} name registry must be able to reach -- everything else in
+	 * {@code functions} is called only through a direct {@code invokestatic}, so naming
+	 * it in a dispatcher would do nothing except keep it alive for
+	 * {@link am.ik.jvm.JvmClassShaker} ({@code .kb/optimize-dead-code-elimination.md}).
+	 * The WASM twin is {@code WasmLispCompiler.dispatchableFuncIds}, and the two must
+	 * agree: a name that stops resolving here has to stop resolving there too, or the
+	 * backends disagree about which forged designator still works.
+	 *
+	 * <p>
+	 * Two sources, both EXACT rather than heuristic:
+	 * <ul>
+	 * <li>{@code valueFuncIds} -- what Pass 2 actually materialized as a closure, so a
+	 * {@code #'name} a macro synthesized during Pass 2 counts (a pre-scan of the source
+	 * program would have missed exactly those);</li>
+	 * <li>the names a runtime SYMBOL designator can resolve. {@code _lookup} compares the
+	 * designator against string CONSTANTS, so a registry row is reachable only when the
+	 * program already put that name in the pool as a loadable string -- a quoted symbol,
+	 * a string literal, an {@code intern} of a literal. This is the constant-pool
+	 * counterpart of the WASM side's interned-offset test.</li>
+	 * </ul>
+	 *
+	 * <p>
+	 * The carve-out is {@link am.ik.rontolisp.eval.LibraryDefunPruner}'s, verbatim: a
+	 * program that FORGES a function name at run time out of computed strings loses it
+	 * (compile with {@code --dynamic}, which turns this gate off, to keep every function
+	 * dispatchable).
+	 * @param functions the program's functions by name
+	 * @param valueFuncIds the funcIds Pass 2 materialized as function values
+	 * @param cp the constant pool, holding every string the emitted code can load
+	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
+	 * @return the funcIds that need a dispatcher case (and a registry row)
+	 */
+	private Set<Integer> dispatchableFuncIds(Map<String, FunctionInfo> functions, Set<Integer> valueFuncIds,
+			ConstantPool cp, boolean registryLive, boolean anyNameResolvable) {
+		if (this.dynamic || anyNameResolvable) {
+			// Late binding, or an operator that can produce a name this compile never
+			// sees spelled: any name can be resolved at run time.
+			Set<Integer> all = new HashSet<>(valueFuncIds);
+			for (FunctionInfo fi : functions.values()) {
+				all.add(fi.funcId());
+			}
+			return all;
+		}
+		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
+		if (registryLive) {
+			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
+				String name = entry.getKey();
+				int q = name.indexOf("::");
+				// The registry's alias row spells an internal name with one colon, and a
+				// runtime-interned symbol carries that spelling, so an interned ALIAS
+				// reaches the function just as its canonical name does.
+				int colon = name.lastIndexOf(':');
+				if (cp.hasStringConstant(name)
+						|| (q > 0 && cp.hasStringConstant(name.substring(0, q) + name.substring(q + 1)))
+						// (intern "EX-FN" :pkg) spells only the MEMBER name at compile
+						// time; the run time assembles the qualified one.
+						|| (colon >= 0 && cp.hasStringConstant(name.substring(colon + 1)))) {
+					dispatchable.add(entry.getValue().funcId());
+				}
+			}
+		}
+		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			System.err.println("[dispatch-gate] " + dispatchable.size() + " of " + functions.size()
+					+ " functions dispatchable (" + valueFuncIds.size() + " funcIds materialized as values)");
+		}
+		return dispatchable;
+	}
+
+	/**
+	 * Whether the program can produce a function NAME this compile never sees spelled out
+	 * -- in which case {@link #dispatchableFuncIds} must keep every function
+	 * dispatchable. The WASM twin is {@code WasmLispCompiler.anyNameResolvable} and the
+	 * two lists must stay identical, or the backends disagree about which program still
+	 * resolves a run-time-built designator.
+	 * @param program the program, after every AST pass
+	 * @param usesRead whether the reader runtime is emitted
+	 * @param usesLoad whether a runtime load survived the inliner
+	 * @return true when the gate must keep every function dispatchable
+	 */
+	private static boolean anyNameResolvable(List<LispVal> program, boolean usesRead, boolean usesLoad) {
+		// RuntimeNameProducers first, so the -Drontolisp.debug.dispatchgate report names
+		// every operator holding the gate open rather than only the first one.
+		boolean producer = RuntimeNameProducers.anyNameResolvable(program);
+		if ((usesRead || usesLoad) && Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			System.err.println("[dispatch-gate] every function stays dispatchable because of: "
+					+ (usesRead ? "read/read-from-string" : "load"));
+		}
+		return producer || usesRead || usesLoad;
+	}
+
 	private static boolean programUsesEval(List<LispVal> program) {
 		for (LispVal expr : program) {
 			if (usesEval(expr)) {
@@ -3493,6 +3599,18 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		Set<Integer> indirectCallArities;
 
+		/**
+		 * The funcIds this program can reach as a first-class FUNCTION VALUE, recorded as
+		 * Pass 2 emits them: every {@code (function name)} closure
+		 * ({@link JvmFunctionFormCompiler}) and every {@code (lambda ...)} value
+		 * ({@link JvmLambdaCompiler}). One mutable set shared by every {@code Ctx}, like
+		 * {@link #indirectCallArities}; read once the bodies are done to size the
+		 * {@code _invoke_N} dispatchers and the {@code _lookup} registry -- a funcId
+		 * absent from it is only ever called DIRECTLY, and naming it in a dispatcher
+		 * would keep it alive for {@link am.ik.jvm.JvmClassShaker}.
+		 */
+		Set<Integer> valueFuncIds;
+
 		int[] nextFuncId;
 
 		int nextLocal = 1;
@@ -3815,6 +3933,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
+			this.valueFuncIds = builder.valueFuncIds;
 			this.nextFuncId = builder.nextFuncId;
 			this.numOps = builder.numOps;
 			this.mathOps = builder.mathOps;
@@ -3958,6 +4077,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
 			private Set<Integer> indirectCallArities = new HashSet<>();
+
+			private Set<Integer> valueFuncIds = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
 
@@ -4302,6 +4423,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder indirectCallArities(Set<Integer> indirectCallArities) {
 				this.indirectCallArities = indirectCallArities;
+				return this;
+			}
+
+			Builder valueFuncIds(Set<Integer> valueFuncIds) {
+				this.valueFuncIds = valueFuncIds;
 				return this;
 			}
 

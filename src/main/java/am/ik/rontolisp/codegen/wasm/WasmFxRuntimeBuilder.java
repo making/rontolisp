@@ -354,6 +354,60 @@ final class WasmFxRuntimeBuilder {
 		return b.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _ub_read(shadow, raw) -> eqref}: the boxed read of an unboxed
+	 * dual-representation local ({@code .kb/wasm-unboxed-locals.md}). The shadow holds
+	 * the raw-local sentinel exactly while the i64 slot is authoritative, so this answers
+	 * the shadow whenever it is anything else (INCLUDING nil) and otherwise boxes the raw
+	 * value -- inline {@code ref.i31} in the fixnum range, {@code _int_new} outside it.
+	 *
+	 * <p>
+	 * Byte-for-byte the sequence {@code emitRawLocalBoxedRead} used to inline at every
+	 * occurrence; only the placement changed. A module that never reads an unboxed local
+	 * boxed still carries the body (the fixed helper block has fixed indices), and
+	 * {@code --optimize} shakes it out of such a module.
+	 * @param rawSentinelGlobalIndex the module global holding the raw-local sentinel
+	 * @return the encoded function body
+	 */
+	static byte[] buildUbReadBody(int rawSentinelGlobalIndex) {
+		BodyWriter b = new BodyWriter();
+		WasmWriter w = b.w;
+		w.write(0); // no extra locals
+
+		// shadow == sentinel ? box(raw) : shadow
+		b.get(0);
+		w.write(Instruction.GET_GLOBAL);
+		w.writeUnsignedLeb128(rawSentinelGlobalIndex);
+		w.write(Instruction.REF_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		// (raw << 33) >> 33 == raw -- the i31 signed range test
+		b.get(1);
+		b.i64c(33);
+		w.write(Instruction.I64_SHL);
+		b.i64c(33);
+		w.write(Instruction.I64_SHR_S);
+		b.get(1);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.REFNULL.code());
+		w.writeHeapType(Type.EQ.code());
+		b.get(1);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		b.els();
+		b.get(1);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		b.end();
+		b.els();
+		b.get(0);
+		b.end();
+		b.end();
+		return b.toByteArray();
+	}
+
 	private static final class BodyWriter {
 
 		final ByteArrayOutputStream out = new ByteArrayOutputStream();

@@ -70,6 +70,9 @@ final class JvmFunctionFormCompiler {
 		}
 		JvmLispCompiler.FunctionInfo fi = ctx.functions.get(name);
 		if (fi != null) {
+			// One of the two places a funcId becomes a callable VALUE, so it is where
+			// the _invoke_N dispatchers learn they must carry a case for it.
+			ctx.valueFuncIds.add(fi.funcId());
 			ctx.emit(Opcode.ICONST_1);
 			ctx.emit(Opcode.ANEWARRAY);
 			ctx.emitU2(ctx.objectClass.index());

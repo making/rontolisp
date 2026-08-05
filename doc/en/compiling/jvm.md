@@ -45,10 +45,20 @@ java Fact
 For a small program like `fact` the class shrinks from ~46 KB to ~4.6 KB. The flag is
 opt-in and behavior-preserving: reachability follows the actual `invoke` instructions
 in the bytecode, so anything a first-class function value, `funcall`, or an embedded
-`eval`/`load` can dispatch to is kept (the dispatch methods call every registered
-function directly), and the `java:` interop bridge's reflective entry point survives
-as an explicit root. The same flag also tree-shakes the
+`eval`/`load` can dispatch to is kept, and the `java:` interop bridge's reflective
+entry point survives as an explicit root. The same flag also tree-shakes the
 [WASM output](wasm.md).
+
+The dispatch methods `funcall` goes through list only the functions your program
+can actually obtain as a value — `#'name`, a quoted `'name` designator, a
+`lambda` — so everything else becomes ordinary dead code the flag removes. That
+listing switches off, and every function stays reachable, as soon as the program
+can name a function at run time: any use of `eval`, `read`, `read-from-string`, a
+runtime `load`, `intern`, `find-symbol`, `make-symbol`, `symbol-function`,
+`fdefinition`, `fboundp` or `uiop:symbol-call` — including one inside a library
+you loaded — as does `--dynamic`. Compile with
+`-Drontolisp.debug.dispatchgate=true` to have the compiler name the operator
+responsible.
 
 Independently of `--optimize`, compilation always tree-shakes the libraries it
 splices in: the bundled Lisp-source ones (`linalg:`, `vec:`, JSON, URL,

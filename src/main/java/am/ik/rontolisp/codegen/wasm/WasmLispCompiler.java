@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
@@ -850,7 +851,19 @@ public final class WasmLispCompiler implements LispCompiler {
 	// order; `directory` sorts, so every backend prints the same listing.
 	static final int FUNC_LIST_DIRECTORY = FUNC_PEEK_CHAR + 1;
 
-	static final int FX_FUNC_LAST = FUNC_LIST_DIRECTORY;
+	// _ub_read ((ref null eq) shadow, i64 raw) -> (ref null eq): the boxed read of an
+	// unboxed dual-representation local (.kb/wasm-unboxed-locals.md) -- the shadow when
+	// it is not the sentinel, else the raw i64 boxed (i31 in range, _int_new outside).
+	// It is the SAME code the read used to inline at every occurrence; moving it out of
+	// line is what the file's "if call sites ever bloat, re-measure before
+	// restructuring" trigger asked for, and the measurement that fired it was a
+	// cl-postgres component: 19,392 sites x ~42 bytes = 9.5% of the module. The fused
+	// fast path never comes here (it reads the pair raw through a RawLeaf), so the call
+	// is paid only by a NON-fused reader, and the out-of-i31 arm was already a call.
+	// Appended after the last fixed helper so no index above shifts.
+	static final int FUNC_UB_READ = FUNC_LIST_DIRECTORY + 1;
+
+	static final int FX_FUNC_LAST = FUNC_UB_READ;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1136,7 +1149,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// conditional --simd / async / instance blocks follow it through IARR_TYPE_LAST.
 	static final int TYPE_FD_READDIR = TYPE_T_SYM + 1; // 62
 
-	static final int IARR_TYPE_LAST = TYPE_FD_READDIR;
+	// _ub_read ((ref null eq) shadow, i64 raw) -> (ref null eq): the unboxed-local
+	// boxed-read helper's signature. Appended after the last fixed type, like
+	// TYPE_FD_READDIR above, so every type index keeps its value.
+	static final int TYPE_UB_READ = TYPE_FD_READDIR + 1; // 63
+
+	static final int IARR_TYPE_LAST = TYPE_UB_READ;
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -2022,6 +2040,10 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// Shared state for lambda discovery
 		List<LambdaInfo> lambdaDecls = new ArrayList<>();
+		// Every funcId Pass 2 materializes as a first-class function value (see
+		// Ctx.valueFuncIds). Filled while the bodies are emitted, read below to size the
+		// dispatch ladders.
+		Set<Integer> valueFuncIds = new HashSet<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 		// The async waiter wake-up goes through the arity-1 dispatch (the resume
 		// functions are arity-1 lambdas), and the wasi-stream read/close thunks
@@ -2063,6 +2085,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.inlinableDefuns(inlinableDefuns)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
+			.valueFuncIds(valueFuncIds)
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.component(this.component)
@@ -2678,11 +2701,28 @@ public final class WasmLispCompiler implements LispCompiler {
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(slot.module(), slot.field(), importTypeIndex++));
 		}
 
+		// Which funcIds the arity ladders (and the name registry below) must carry a case
+		// for. Every emitted body has been compiled by now, so ctx.valueFuncIds holds
+		// EXACTLY the funcIds this program turns into callable values -- including the
+		// ones a lazily-expanded macro synthesized during Pass 2, which no pre-scan of
+		// the source program can see. A defun that is only ever CALLED DIRECTLY needs no
+		// case, and without one the tree shaker stops seeing the ladder's call edge to
+		// it: that is what makes --optimize reach the library code an ASDF system
+		// splices (.kb/optimize-dead-code-elimination.md; the ladders' edges used to
+		// keep every spliced defun reachable, so --optimize dropped 22 of 2618 functions
+		// on a cl-postgres component).
+		//
+		// The second source is the name registry: a SYMBOL designator resolves late
+		// through _lookup, so any defun whose name the program interned must stay
+		// callable. See buildNameRegistrySet -- and note it runs BEFORE the registry
+		// blob is built, since building it interns every surviving name.
+		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, stringTable,
+				usesEval || usesRuntimeDesignator, anyNameResolvable(program, usesRead, usesLoad));
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
 				dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns,
-						stringTable, usesEval, userFuncBase()));
+						stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds));
 			}
 			else {
 				// Unused arity: unreachable body
@@ -2699,7 +2739,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// unused arity's.
 		if (usesEval) {
 			dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(0, defuns, lambdaDecls, numDefuns, stringTable,
-					usesEval, userFuncBase(), true));
+					usesEval, userFuncBase(), true, dispatchableFuncIds));
 		}
 		else {
 			ByteArrayOutputStream db = new ByteArrayOutputStream();
@@ -2744,6 +2784,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
+				// Only the rows dispatchableFuncIds kept: a row whose name the program
+				// never interned cannot be hit (see StringTable.isInterned), and a row
+				// whose funcId has no ladder case would resolve to a br_table default.
+				// The two sets are computed together so they cannot drift apart.
+				if (!dispatchableFuncIds.contains(i)) {
+					continue;
+				}
 				int nameOffset = stringTable.addString(defun.name).offset();
 				writeLittleEndian32(registry, nameOffset);
 				writeLittleEndian32(registry, i); // funcId == defun index
@@ -2765,6 +2812,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
+				if (!dispatchableFuncIds.contains(i)) {
+					continue;
+				}
 				int q = defun.name.indexOf("::");
 				if (q > 0) {
 					String alias = defun.name.substring(0, q) + defun.name.substring(q + 1);
@@ -3407,6 +3457,18 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 				});
+				// type 63 (TYPE_UB_READ): _ub_read
+				// ((ref null eq) shadow, i64 raw) -> (ref null eq)
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(2);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+					w.write(Type.I64);
+					w.write(1);
+					w.write(Type.REFNULL.code());
+					w.writeHeapType(Type.EQ.code());
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3819,6 +3881,7 @@ public final class WasmLispCompiler implements LispCompiler {
 															// eof-error-p, eof-value) ->
 															// (ref null eq)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _list_directory
+				fnDef.addFunction(TYPE_UB_READ); // _ub_read
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4315,6 +4378,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmIoRuntimeBuilder.buildPeekCharBody());
 				// %list-directory runtime helper body (FUNC_LIST_DIRECTORY)
 				code.addFunction(WasmIoRuntimeBuilder.buildListDirectoryBody());
+				// unboxed-local boxed-read helper body (FUNC_UB_READ)
+				code.addFunction(WasmFxRuntimeBuilder.buildUbReadBody(rawSentinelGlobalIndex));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
@@ -4486,6 +4551,117 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * The funcIds the arity/spread dispatch ladders and the {@code _lookup} name registry
+	 * must be able to reach -- everything else in {@code defuns} is called only through a
+	 * direct {@code call}, so naming it in a ladder would do nothing except keep it alive
+	 * for {@code --optimize} ({@code .kb/optimize-dead-code-elimination.md}).
+	 *
+	 * <p>
+	 * Two sources, and both are EXACT rather than heuristic:
+	 * <ul>
+	 * <li>{@code valueFuncIds} -- what Pass 2 actually materialized as a closure. Every
+	 * body is emitted by the time this runs, so a {@code #'name} a macro synthesized
+	 * during Pass 2 is in it, which is precisely what a pre-scan of the source program
+	 * would have missed;</li>
+	 * <li>the names a runtime SYMBOL designator can resolve. {@code _lookup} matches
+	 * INTERNED OFFSETS, so a registry row is reachable only when the program interned
+	 * that name for some other reason -- a quoted symbol, a string literal, an
+	 * {@code intern} of a literal. A name nothing spells gets a runtime-interned offset
+	 * that matches no static row.</li>
+	 * </ul>
+	 *
+	 * <p>
+	 * The carve-out is {@link am.ik.rontolisp.eval.LibraryDefunPruner}'s, verbatim: a
+	 * program that FORGES a function name at run time out of computed strings loses it.
+	 * The pruner has already removed such a defun outright in that case (the error is the
+	 * ordinary undefined-function one); here the name simply stops resolving. Compile
+	 * with {@code --dynamic} -- which turns this gate off entirely, since late binding
+	 * resolves any name at run time -- to keep every function dispatchable.
+	 * @param defuns the program's defuns, index = funcId
+	 * @param valueFuncIds the funcIds Pass 2 materialized as closures
+	 * @param stringTable the interned strings, BEFORE the registry adds its own names
+	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
+	 * @return the funcIds that need a ladder case (and a registry row)
+	 */
+	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds, StringTable stringTable,
+			boolean registryLive, boolean anyNameResolvable) {
+		if (this.dynamic || anyNameResolvable) {
+			// Late binding, or an operator that can produce a name this compile never
+			// sees spelled: any name can be resolved at run time, so nothing is provably
+			// call-only.
+			Set<Integer> all = new HashSet<>(valueFuncIds);
+			for (int i = 0; i < defuns.size(); i++) {
+				all.add(i);
+			}
+			return all;
+		}
+		Set<Integer> dispatchable = new HashSet<>(valueFuncIds);
+		if (registryLive) {
+			for (int i = 0; i < defuns.size(); i++) {
+				String name = defuns.get(i).name;
+				int q = name.indexOf("::");
+				// The registry's alias row spells an internal name with one colon, and a
+				// runtime-interned symbol carries that spelling -- so an interned ALIAS
+				// reaches the defun just as its canonical name does.
+				int colon = name.lastIndexOf(':');
+				if (stringTable.isInterned(name)
+						|| (q > 0 && stringTable.isInterned(name.substring(0, q) + name.substring(q + 1)))
+						// (intern "EX-FN" :pkg) spells only the MEMBER name at compile
+						// time; the run time assembles the qualified one.
+						|| (colon >= 0 && stringTable.isInterned(name.substring(colon + 1)))) {
+					dispatchable.add(i);
+				}
+			}
+		}
+		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			// Sizing aid: how much of the program the ladders still name. A defun listed
+			// as neither VALUE nor INTERNED is one --optimize can now reach.
+			System.err.println("[dispatch-gate] " + dispatchable.size() + " of " + defuns.size()
+					+ " defuns dispatchable (" + valueFuncIds.size() + " funcIds materialized as values)");
+			for (int i = 0; i < defuns.size(); i++) {
+				if (!dispatchable.contains(i)) {
+					System.err.println("[dispatch-gate] call-only\t" + defuns.get(i).name);
+				}
+			}
+		}
+		return dispatchable;
+	}
+
+	/**
+	 * Whether the program can produce a function NAME this compile never sees spelled out
+	 * -- in which case {@link #dispatchableFuncIds} must keep every function
+	 * dispatchable, because {@code _lookup} may be asked for any of them.
+	 *
+	 * <p>
+	 * Two ways that happens, and both are TRIGGER-shaped rather than dataflow-shaped on
+	 * purpose: a dataflow answer would have to prove that no symbol out of one of these
+	 * reaches a funcall, and being wrong is a trap rather than a diagnosis.
+	 * <ul>
+	 * <li>the program evaluates data -- {@code eval}, {@code read},
+	 * {@code read-from-string}, a runtime {@code load}: {@code (eval (read))} calls a
+	 * function whose name exists only in the input;</li>
+	 * <li>the program builds a symbol -- {@code intern}, {@code find-symbol},
+	 * {@code make-symbol}, {@code symbol-function}, {@code fdefinition}, {@code fboundp},
+	 * {@code uiop:symbol-call}: the qualified name is assembled at run time out of a
+	 * package part and a member part, so neither half spells it.</li>
+	 * </ul>
+	 * @param program the program, after every AST pass
+	 * @param usesRead whether the reader runtime is emitted
+	 * @param usesLoad whether a runtime load survived the inliner
+	 * @return true when the gate must keep every function dispatchable
+	 */
+	private static boolean anyNameResolvable(List<LispVal> program, boolean usesRead, boolean usesLoad) {
+		// RuntimeNameProducers first, so the -Drontolisp.debug.dispatchgate report names
+		// every operator holding the gate open rather than only the first one.
+		boolean producer = RuntimeNameProducers.anyNameResolvable(program);
+		if ((usesRead || usesLoad) && Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
+			System.err.println("[dispatch-gate] every function stays dispatchable because of: "
+					+ (usesRead ? "read/read-from-string" : "load"));
+		}
+		return producer || usesRead || usesLoad;
 	}
 
 	private static boolean programUsesEval(List<LispVal> program) {
@@ -4902,6 +5078,19 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		Set<Integer> indirectCallArities;
 
+		/**
+		 * The funcIds this program can reach as a first-class FUNCTION VALUE, recorded as
+		 * Pass 2 emits them: every {@code (function name)} closure
+		 * ({@link WasmFunctionFormCompiler#compileNamed}) and every {@code (lambda ...)}
+		 * value ({@link WasmLambdaCompiler#emitClosureValue}). Shared by every
+		 * {@code Ctx} (one mutable set, like {@link #indirectCallArities}) and read after
+		 * the last body is emitted to decide which targets need a
+		 * {@code buildDispatchBody} case -- see {@code dispatchableFuncIds} in
+		 * {@code compile}. A funcId absent here is called only DIRECTLY, so the arity
+		 * dispatchers have no reason to name it and {@code --optimize} can shake it out.
+		 */
+		Set<Integer> valueFuncIds;
+
 		int[] nextFuncId;
 
 		int nextLocal = 0;
@@ -5196,6 +5385,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.functions = builder.functions;
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
+			this.valueFuncIds = builder.valueFuncIds;
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
 			this.component = builder.component;
@@ -5249,6 +5439,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
 			private Set<Integer> indirectCallArities = new HashSet<>();
+
+			private Set<Integer> valueFuncIds = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
 
@@ -5344,6 +5536,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder indirectCallArities(Set<Integer> indirectCallArities) {
 				this.indirectCallArities = indirectCallArities;
+				return this;
+			}
+
+			Builder valueFuncIds(Set<Integer> valueFuncIds) {
+				this.valueFuncIds = valueFuncIds;
 				return this;
 			}
 
@@ -5657,6 +5854,21 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.charBackspace = addString("Backspace");
 			this.charNul = addString("Nul");
 			this.charRubout = addString("Rubout");
+		}
+
+		/**
+		 * Whether this string has already been interned. The name-registry gate asks it:
+		 * a runtime symbol designator resolves through {@code _lookup}, which compares
+		 * INTERNED OFFSETS, so a defun's registry row can only ever be hit when the
+		 * program interned that exact name for some other reason (a quoted symbol, a
+		 * string literal, an {@code intern} of a literal). A name the program never
+		 * spells cannot reach the row -- {@code _intern} would hand a runtime-interned
+		 * offset, which no static row carries.
+		 * @param s the string to probe
+		 * @return true when it is already in the table
+		 */
+		boolean isInterned(String s) {
+			return this.cache.containsKey(s);
 		}
 
 		StringEntry addString(String s) {

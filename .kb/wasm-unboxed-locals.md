@@ -43,9 +43,29 @@ Reads:
   back). A local never assigned inside the site shares ONE snapshot across its
   occurrences.
 - anywhere else (`WasmExprCompiler.compileSymbolRef` ->
-  `emitRawLocalBoxedRead`): box on demand -- the i31 range boxes INLINE with
-  `ref.i31` (allocation- and call-free; a loop counter's `(< i 64)` read costs
-  a few instructions), only out-of-i31 raw values call `_int_new`.
+  `emitRawLocalBoxedRead`): box on demand, through the shared **`_ub_read`**
+  helper (`FUNC_UB_READ` / `TYPE_UB_READ`, both appended after the last fixed
+  helper and type so no index above them shifts;
+  `WasmFxRuntimeBuilder.buildUbReadBody`). Three instructions at the site --
+  `local.get shadow`, the i64 slot, `call _ub_read` -- against the ~42 bytes the
+  same sequence used to inline; the helper body IS that sequence, unchanged
+  (sentinel test, then the i31-range `ref.i31` with `_int_new` outside it).
+
+  This is the file's own "if call sites ever bloat, re-measure before
+  restructuring" trigger, fired and acted on (2026-08-05). What fired it: a
+  cl-postgres `--component` carried **19,392** of these reads, 9.5% of an 8.5 MB
+  module. What made the inline version obsolete: stage 4's fused comparisons
+  took the hot loop-counter read -- the case the inlining was FOR -- onto the
+  raw `RawLeaf` path, which never reaches here; what is left is cold generic
+  readers in library code, and their out-of-i31 arm was already a call.
+  Measured, `--component` cl-postgres 8,519,343 -> 8,212,025 bytes (-3.6%, 7,976
+  sites moved out of line), ironclad PBKDF2-HMAC-SHA256 4096 rounds unchanged at
+  ~0.82 s under wasmtime 47 (three runs each, byte-identical output).
+
+  The fused-site FALLBACK's boxed read of a snapshot (11,417 sites) is a
+  DIFFERENT, already-compact shape -- a bare `_int_new` call with no inline i31
+  test, ~14 bytes -- and stays inline: routing it through `_ub_read` too would
+  save ~68 KB (0.8%) and is not worth a second shape to reason about.
 
 ## Eligibility (WasmLetCompiler)
 
@@ -105,6 +125,9 @@ exactness, side-effects-once under a failed substitution) and the
 - Params are NOT eligible (they arrive as eqref by signature). A raw COPY of a
   hot integer param would extend the win to defun bodies whose temps are
   parameters -- profile first.
-- `emitRawLocalBoxedRead` inlines the i31-range box because `_int_new`'s call
-  overhead dominated for loop counters; if call sites ever bloat, re-measure
-  before restructuring.
+- `emitRawLocalBoxedRead` is now a `_ub_read` call (see Reads above). The
+  reverse trigger: if a profile ever shows the call itself in a hot path, the
+  helper body is the exact byte sequence to inline back, and the decision should
+  be re-taken against a measurement rather than restored wholesale -- the reason
+  it went out of line (thousands of cold library sites) is orthogonal to the
+  reason it was inline (one hot counter read per loop iteration).

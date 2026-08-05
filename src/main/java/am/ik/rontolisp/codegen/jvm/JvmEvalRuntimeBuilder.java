@@ -944,8 +944,9 @@ final class JvmEvalRuntimeBuilder {
 	 * method-code limit (60 KB at cl-postgres scale). Each segment falls through to the
 	 * next; the last answers null.
 	 */
-	static List<List<Integer>> buildLookupSegments(EvalConstants k, ConstantPool.ClassConstant thisClass) {
-		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass);
+	static List<List<Integer>> buildLookupSegments(EvalConstants k, ConstantPool.ClassConstant thisClass,
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable) {
+		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
@@ -973,11 +974,16 @@ final class JvmEvalRuntimeBuilder {
 	/** Segment budget in code bytes; see {@link #buildLookupSegments}. */
 	private static final int LOOKUP_SEGMENT_BUDGET = 24_000;
 
-	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass) {
+	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass,
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable) {
+		// Only the rows the dispatchers kept a case for: a name whose funcId has no case
+		// would resolve here and then fall through the dispatcher's search tree
+		// (JvmLispCompiler.dispatchableFuncIds decides both together).
 		List<Map.Entry<String, JvmLispCompiler.FunctionInfo>> entries = new ArrayList<>(this.k.functions()
 			.entrySet()
 			.stream()
 			.filter(e -> e.getValue().paramCount() <= MAX_CALLABLE_ARITY)
+			.filter(e -> dispatchable == null || dispatchable.contains(e.getValue().funcId()))
 			.toList());
 		// Alias rows for INTERNAL names (todo-229): a runtime-interned symbol carries
 		// the single-colon external spelling (the 2-arg intern/find-symbol lowerings

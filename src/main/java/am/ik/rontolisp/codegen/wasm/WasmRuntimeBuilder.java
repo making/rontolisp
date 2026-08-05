@@ -5,10 +5,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds WASM bytecode for runtime helper functions: dispatch, print_i32, write_str,
@@ -1051,7 +1053,7 @@ final class WasmRuntimeBuilder {
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
 			boolean usesEval, int userFuncBase) {
-		return buildDispatchBody(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase, false);
+		return buildDispatchBody(arity, defuns, lambdaDecls, numDefuns, st, usesEval, userFuncBase, false, null);
 	}
 
 	/**
@@ -1070,11 +1072,16 @@ final class WasmRuntimeBuilder {
 	 * variadic target the remaining TAIL, which is the callee's physical rest parameter.
 	 * @param arity ignored when {@code spread} is true
 	 * @param spread whether to build the spread dispatcher instead of an arity one
+	 * @param dispatchable the funcIds this program can reach as a function VALUE, or
+	 * {@code null} for "every one of them". A funcId outside the set is called only
+	 * directly, so giving it a case would only pin it for {@code --optimize}
+	 * ({@code WasmLispCompiler.dispatchableFuncIds}); its {@code br_table} slot points at
+	 * the default arm, which is where an unresolvable designator already went.
 	 * @return the encoded function body
 	 */
 	static byte[] buildDispatchBody(int arity, List<WasmLispCompiler.DefunDecl> defuns,
 			List<WasmLispCompiler.LambdaInfo> lambdaDecls, int numDefuns, WasmLispCompiler.StringTable st,
-			boolean usesEval, int userFuncBase, boolean spread) {
+			boolean usesEval, int userFuncBase, boolean spread, @Nullable Set<Integer> dispatchable) {
 		// Collect all functions with matching arity. A variadic function (physical
 		// params = required + rest list) matches every dispatch arity >= required; its
 		// case links the surplus args into a cons list before the call. The spread
@@ -1086,6 +1093,9 @@ final class WasmRuntimeBuilder {
 		for (int i = 0; i < defuns.size(); i++) {
 			WasmLispCompiler.DefunDecl defun = defuns.get(i);
 			int paramCount = defun.paramNames().size();
+			if (dispatchable != null && !dispatchable.contains(i)) {
+				continue;
+			}
 			if (spread || (defun.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
 				targets.add(new Target(i, userFuncBase + i, defun.variadic() ? paramCount - 1 : paramCount,
 						defun.variadic()));
@@ -1094,6 +1104,9 @@ final class WasmRuntimeBuilder {
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			WasmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
 			int paramCount = lambda.paramNames().size();
+			if (dispatchable != null && !dispatchable.contains(lambda.funcId())) {
+				continue;
+			}
 			if (spread || (lambda.variadic() ? arity >= paramCount - 1 : paramCount == arity)) {
 				targets.add(new Target(lambda.funcId(), lambda.funcIndex(),
 						lambda.variadic() ? paramCount - 1 : paramCount, lambda.variadic()));

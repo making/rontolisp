@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.ConstantPool.ClassConstant;
@@ -54,9 +55,10 @@ final class JvmRuntimeBuilder {
 			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant integerValue,
 			ClassConstant objectClass, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
-			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef) {
+			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef,
+			@org.jspecify.annotations.Nullable Set<Integer> dispatchable) {
 		return buildDispatchMethods(arity, functions, lambdaDecls, lambdaFuncInfos, cp, thisClass, objectArrayClass,
-				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false);
+				integerClass, integerValue, objectClass, stringClass, applyRef, lookupRef, false, dispatchable);
 	}
 
 	/**
@@ -86,7 +88,8 @@ final class JvmRuntimeBuilder {
 			ClassConstant objectArrayClass, ClassConstant integerClass, MethodrefConstant integerValue,
 			ClassConstant objectClass, ClassConstant stringClass,
 			@org.jspecify.annotations.Nullable MethodrefConstant applyRef,
-			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef, boolean spread) {
+			@org.jspecify.annotations.Nullable MethodrefConstant lookupRef, boolean spread,
+			@org.jspecify.annotations.Nullable Set<Integer> dispatchable) {
 		// Descriptor: (Object funcval, Object a0, ..., Object aN-1) -> Object, or
 		// (Object funcval, Object argList) -> Object for the spread dispatcher.
 		int dispatchArgs = spread ? 1 : arity;
@@ -112,6 +115,12 @@ final class JvmRuntimeBuilder {
 			if (fi.isClosure()) {
 				continue;
 			}
+			// A funcId the program never turns into a function VALUE is only ever
+			// called directly, so a case for it would do nothing except keep the
+			// method reachable for JvmClassShaker (JvmLispCompiler.dispatchableFuncIds).
+			if (dispatchable != null && !dispatchable.contains(fi.funcId())) {
+				continue;
+			}
 			// The spread dispatcher takes EVERY callable: its case reads the parameters
 			// out of the list, so no arity has to match and no ceiling applies.
 			if (spread) {
@@ -123,6 +132,9 @@ final class JvmRuntimeBuilder {
 		}
 		for (int i = 0; i < lambdaDecls.size(); i++) {
 			JvmLispCompiler.LambdaInfo lambda = lambdaDecls.get(i);
+			if (dispatchable != null && !dispatchable.contains(lambda.funcId())) {
+				continue;
+			}
 			if (spread) {
 				cases.add(renderSpreadCase(lambdaFuncInfos.get(i), fvSlot, objectArrayClass));
 			}

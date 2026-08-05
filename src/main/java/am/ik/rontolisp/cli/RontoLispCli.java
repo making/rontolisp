@@ -629,9 +629,13 @@ public final class RontoLispCli {
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");
 		this.out.println("                     rontolisp:wasm-export functions work (I/O traps)");
 		this.out.println("  --optimize         Dead-code-eliminate the compiled output");
-		this.out.println("                     WASM: drop functions unreachable from the exports/_start; great");
-		this.out.println("                     with --no-wasi. No effect in --component mode.");
+		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
+		this.out.println("                     --component mode too; great with --no-wasi");
 		this.out.println("                     JVM: drop methods unreachable from main + compact the constant pool");
+		this.out.println("                     A function the program never takes as a value gets no funcall");
+		this.out.println("                     dispatch case, so library code goes too -- unless the program");
+		this.out.println("                     can name a function at run time (eval/read/intern/...), which");
+		this.out.println("                     keeps everything. -Drontolisp.debug.dispatchgate=true says which");
 		this.out.println("  --no-gc            Emit a plain (non-wasm-GC) WASM module for pure-numeric exports");
 		this.out.println("                     Runs on any MVP runtime (no -W gc, no import object). Only");
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");

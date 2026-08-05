@@ -38,6 +38,25 @@ what is left: at `--max-instance-reuse-count 1` the 714 KB native component serv
 2.6 ms per instantiation. It is also the whole cold-start story on a
 one-instance-per-request host (wasmCloud).
 
+## Status (2026-08-05): the mechanism landed, this program still does not benefit
+
+The generalized gate exists -- `.kb/optimize-dead-code-elimination.md`, "The
+funcall-dispatch gate". It works at the DISPATCH level rather than by suppressing
+wrapper emission, which reaches the same end: a wrapper the program never takes as a
+value gets no ladder case, so `--optimize` shakes it out along with every other
+call-only function. Measured **-49.3%** on an `md5` program.
+
+It does NOT yet help the serve component this item is about: **685,933 -> 660,153
+(-3.8%)**, and all of that is the unrelated `_ub_read` change. The gate bails there,
+for the reason `.todo/261` documents (the spliced runtime `format` renderer resolves
+the `~/name/` directive's target by name and funcalls it, so any function may be
+reached). Finish 261 and this item's numbers should follow; keep this file until the
+serve figure is actually re-measured.
+
+The prediction below about a naive scan was right, and the way out was the third
+bullet rather than the first: collect the materialized funcIds DURING Pass 2 instead
+of scanning the source program at all.
+
 ## The shape of the fix
 
 The seam already exists: `wrapperExcludes` in `WasmLispCompiler` (~line 1866) and

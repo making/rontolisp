@@ -34,6 +34,8 @@ public final class ConstantPool {
 
 	private final Map<Integer, String> utf8Values = new HashMap<>();
 
+	private final java.util.Set<String> stringValues = new java.util.HashSet<>();
+
 	private final Map<Integer, String> descriptors = new HashMap<>();
 
 	private int size = 0;
@@ -183,7 +185,23 @@ public final class ConstantPool {
 	public StringConstant addString(Utf8Constant utf8) {
 		StringConstant string = new StringConstant(this.add(ConstantType.STRING, o -> o.writeU2(utf8)));
 		this.descriptors.put(string.index(), "Ljava/lang/String;");
+		String value = this.utf8Values.get(utf8.index());
+		if (value != null) {
+			this.stringValues.add(value);
+		}
 		return string;
+	}
+
+	/**
+	 * Whether a {@code CONSTANT_String} with this value has been added. Deliberately NOT
+	 * a Utf8 probe: every method and field name is a Utf8, but only a value the emitted
+	 * code can actually LOAD ({@code ldc}) is a String constant. A generator that has to
+	 * know which of its own names the compiled program can produce at run time asks this.
+	 * @param s the string value to probe
+	 * @return true when the pool holds a string constant with that value
+	 */
+	public boolean hasStringConstant(String s) {
+		return this.stringValues.contains(s);
 	}
 
 	/**
