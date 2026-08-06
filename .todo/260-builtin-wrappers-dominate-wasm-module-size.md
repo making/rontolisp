@@ -57,6 +57,47 @@ The prediction below about a naive scan was right, and the way out was the third
 bullet rather than the first: collect the materialized funcIds DURING Pass 2 instead
 of scanning the source program at all.
 
+## Status (2026-08-06): 261 is done, and the numbers did NOT follow
+
+The re-measurement this file was being kept open for, same program, `--component`:
+
+| flag | bytes | vs previous row |
+| --- | --- | --- |
+| (none) | 669,572 | — |
+| `--optimize` | 641,599 | **-4.2%** |
+| `--optimize=size` | 530,637 | -17.3% vs no flag |
+
+So the serve figure moved 660,153 -> 641,599 since the row above, i.e. by 2.8% and
+not by the -49.3% the gate gives when it applies. **The gate still bails**, and
+`-Drontolisp.debug.dispatchgate=true` now names a different operator:
+
+```
+[dispatch-gate] every function stays dispatchable because of: INTERN
+```
+
+The blocker is again rontolisp's OWN spliced code, one layer down from the renderer
+261 retired -- three sites that intern a runtime string into the KEYWORD package:
+
+- `http-server.lisp` `%http-method-keyword` / `%http-protocol-keyword`
+  (`(intern (string-upcase m) :keyword)`, so `(eq method :POST)` works in a router);
+- `http.lisp` `%serve-method-keyword`, the component arm of the same idea.
+
+A keyword can never name a function, so an exemption LOOKS obviously available -- and
+that is exactly the shape of claim 261 got wrong once. It has to be checked against
+`_lookup`'s three-way probe (`.kb/optimize-dead-code-elimination.md`): the third
+spelling it tries is the bare member name after the last colon, which is precisely
+what a keyword's name is. Decide against that code, not against the intuition, and
+note that this makes the serve component the THIRD program whose gate rontolisp's own
+libraries hold open -- the pattern (`format`'s renderer, the slot-name fold, now the
+HTTP keyword interning) is worth a look as one problem.
+
+`--optimize=size` (the level added 2026-08-06) is an independent -20.7% on this exact
+program and costs a serve handler almost nothing, since the price is paid by integer
+arithmetic and a request handler is not an integer kernel. It does not overlap with
+the fix below -- it shrinks every function, wrappers included -- but it means **every
+size number for this item must now say which level it was taken at**, including the
+714,633 / 685,933 / 660,153 figures above, which are all at the bare `--optimize`.
+
 ## The shape of the fix
 
 The seam already exists: `wrapperExcludes` in `WasmLispCompiler` (~line 1866) and
@@ -90,5 +131,6 @@ one more prunable set) is likelier to stay correct than a second scanner.
   corpus stay green -- that corpus is the feature catalogue and WILL exercise the
   dynamic paths the bail-out has to cover.
 - Report the new size for the trivial serve component and for
-  `examples/asdf/clack-hello.lisp`; re-run 259's serve benchmark at
-  `--max-instance-reuse-count` 1 / 128 to show the instantiation saving.
+  `examples/asdf/clack-hello.lisp`, **naming the `--optimize` level each figure was
+  taken at**; re-run 259's serve benchmark at `--max-instance-reuse-count` 1 / 128 to
+  show the instantiation saving.
