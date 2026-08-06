@@ -7071,7 +7071,7 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunTcpCharacterOpsOnSocket() throws Exception {
-		// write-string / write-char / read-char on a socket handle (.todo/264): the
+		// write-string / write-char / read-char on a socket handle: the
 		// _writeString / _readChar stream helpers grow the socket arm the byte and line
 		// ops always had. Same program and same answers as
 		// LispEvaluatorTest#tcpCharacterOpsOnSocket and the component's

@@ -2612,7 +2612,7 @@ final class JvmIoRuntimeBuilder {
 			// The arm sits HERE and not in _writeStr, which the print family shares:
 			// print/princ to a socket has no dispatch on the --component backend, so
 			// widening it here only would ship a program that works on two backends and
-			// traps on the third (.kb/tcp-sockets.md, .todo/264).
+			// traps on the third (see .kb/tcp-sockets.md).
 			code.add(Opcode.ALOAD_1);
 			code.add(Opcode.INSTANCEOF);
 			emitU2(code, this.longClass.index());

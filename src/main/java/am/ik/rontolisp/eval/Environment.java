@@ -3696,8 +3696,8 @@ public final class Environment implements Scope {
 			return src;
 		};
 		// The socket arm of the character built-ins: a RESOLVED designator whose table
-		// entry is a raw Socket. write-string / write-char / read-char take it
-		// (.todo/264) exactly as write-line / read-line / the byte ops already did; the
+		// entry is a raw Socket. write-string / write-char / read-char take it exactly
+		// as write-line / read-line / the byte ops already did; the
 		// print family deliberately does NOT, because it has no socket dispatch on the
 		// --component backend either and a program that wrote through it here would trap
 		// there (see .kb/tcp-sockets.md).

@@ -5933,7 +5933,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void tcpCharacterOpsOnSocket() {
-		// write-string / write-char / read-char on a socket handle (.todo/264): the
+		// write-string / write-char / read-char on a socket handle: the
 		// write side puts the string's UTF-8 bytes on the wire (read back one by one
 		// through read-byte), and read-char assembles ONE code point from the raw
 		// bytes -- 199 184 is U+01F8, which a per-byte decode would have split. The
