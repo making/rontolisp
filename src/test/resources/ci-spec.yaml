@@ -7685,3 +7685,21 @@ cases:
       T
       1
       T
+  - name: literal-print-specialization-edges
+    source: |
+      ;; (print <literal>) is lowered to a pre-rendered static write on the wasm
+      ;; backend (the readable form of a literal is a compile-time constant), so
+      ;; these pin: escaping parity, the i31/bignum decimal parity, that the fold
+      ;; still honours a *standard-output* redirect, and that the returned value
+      ;; is the argument itself.
+      (print "esc \" and \\ stay readable")
+      (print 1234567890123456789)
+      (print (with-output-to-string (*standard-output*) (print "folded-redirect")))
+      (print (length (print "returned")))
+    expected: |
+      "esc \" and \\ stay readable"
+      1234567890123456789
+      "\"folded-redirect\"
+      "
+      "returned"
+      8

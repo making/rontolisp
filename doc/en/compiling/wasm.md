@@ -95,10 +95,10 @@ to a handful of functions:
 echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~18 KB module
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~5 KB module
 ```
 
-For the `fact` example the module drops from ~170 KB to ~18 KB.
+For the `fact` example the module drops from ~330 KB to ~5 KB.
 `--optimize` is opt-in and behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
 embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
@@ -142,8 +142,8 @@ run time.
 
 For a much smaller module still, the same `fact.lisp` compiled with
 [`--no-gc`](../guides/wasm-nogc.md) lowers `fact` to unboxed `i32` and drops
-the whole GC runtime that made the 18 KB (the reader's case-fold table, the
-condition hierarchy, cons cells, the printer):
+the whole GC runtime that made the 5 KB (the condition hierarchy, cons cells,
+the printer):
 
 ```bash
 rontolisp fact.lisp --no-gc --optimize -o fact.wasm

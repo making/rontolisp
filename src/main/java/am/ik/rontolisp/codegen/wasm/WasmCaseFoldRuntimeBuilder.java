@@ -17,8 +17,10 @@ import am.ik.wasm.WasmWriter;
  * {@link Character#toUpperCase(int)} / {@link Character#toLowerCase(int)} at compile time
  * so the helper's behavior is byte-for-byte identical to the interpreter's
  * {@code Character.toUpperCase(int)} on the same JVM Unicode baseline. The compressed
- * form uses ~16 KB of combined static data (well under the module budget) and depth-10
- * binary search per call.
+ * form uses ~16 KB of combined static data and depth-10 binary search per call. Each
+ * table is emitted as its OWN active data segment owned by its sole reader
+ * ({@code WasmTreeShaker.OwnedDataSegment}), so {@code --optimize} drops the ~16 KB
+ * together with the helpers when the program never case-folds.
  *
  * <p>
  * Widens the previous ASCII-only case fold (a-z {@literal <->} A-Z with fixed {@code +/-
@@ -77,8 +79,8 @@ final class WasmCaseFoldRuntimeBuilder {
 	 * (FUNC_CHAR_DOWNCASE): a single code point in, the case-folded code point out. Both
 	 * helpers share this body shape with different (offset, count) parameters.
 	 * @param tableOffset absolute offset in linear memory where the sorted
-	 * {@code (from, to, delta)} triples begin (returned by
-	 * {@link WasmLispCompiler.StringTable#appendBlob(byte[])})
+	 * {@code (from, to, delta)} triples begin (the table's own data segment offset,
+	 * placed right after the string data in {@code WasmLispCompiler.compile})
 	 * @param rangeCount number of triples in the table (upper 690, lower 674 at Unicode
 	 * 15)
 	 * @return the function body (signature {@code (i32) -> i32}, {@code TYPE_LOOKUP})

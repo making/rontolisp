@@ -3020,23 +3020,29 @@ public final class WasmLispCompiler implements LispCompiler {
 		// from Character.toUpperCase(int) / toLowerCase(int) so char-upcase /
 		// char-downcase
 		// fold every Unicode letter (Latin-1 supplement, Greek, Cyrillic, ...) the same
-		// way the interpreter and the JVM compile path already do. Appended to the static
-		// data segment BEFORE it is snapshotted below; each blob's absolute offset feeds
-		// straight into the helper's binary-search head. See WasmCaseFoldRuntimeBuilder.
-		int upperFoldOffset = stringTable.appendBlob(WasmCaseFoldRuntimeBuilder.upperTableBytes());
-		int lowerFoldOffset = stringTable.appendBlob(WasmCaseFoldRuntimeBuilder.lowerTableBytes());
+		// way the interpreter and the JVM compile path already do. Placed right after the
+		// string data at the same addresses appendBlob would have given them, but emitted
+		// as their OWN active data segments (see writeDataSection below): their ~16 KB is
+		// referenced only from the two helper bodies, so the tree shaker can drop the
+		// segments together with the helpers when the program never case-folds. See
+		// WasmCaseFoldRuntimeBuilder.
+		byte[] stringData = stringTable.toByteArray();
+		final byte[] upperFoldBytes = WasmCaseFoldRuntimeBuilder.upperTableBytes();
+		final byte[] lowerFoldBytes = WasmCaseFoldRuntimeBuilder.lowerTableBytes();
+		final int upperFoldOffset = (dataBase + stringData.length + 3) & ~3;
+		// 12-byte triples keep the 4-alignment for the second table.
+		final int lowerFoldOffset = upperFoldOffset + upperFoldBytes.length;
 		final byte[] charUpcaseBody = WasmCaseFoldRuntimeBuilder.buildBody(upperFoldOffset,
 				WasmCaseFoldRuntimeBuilder.upperTableCount());
 		final byte[] charDowncaseBody = WasmCaseFoldRuntimeBuilder.buildBody(lowerFoldOffset,
 				WasmCaseFoldRuntimeBuilder.lowerTableCount());
 
-		// Final static-data layout. The string table is complete here (its last append
-		// was the two case-fold tables just above), so the runtime intern table's base
-		// and the bump-allocator heap base can be derived from its size; both are seeded
-		// into fixed cells by active data segments below. This keeps runtime interning
-		// and heap allocation above the static data no matter how large the program is.
-		byte[] stringData = stringTable.toByteArray();
-		int staticEnd = dataBase + stringData.length;
+		// Final static-data layout. The static data ends after the case-fold tables, so
+		// the runtime intern table's base and the bump-allocator heap base can be derived
+		// from that end; both are seeded into fixed cells by active data segments below.
+		// This keeps runtime interning and heap allocation above the static data no
+		// matter how large the program is.
+		int staticEnd = lowerFoldOffset + lowerFoldBytes.length;
 		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (staticEnd + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
@@ -4469,6 +4475,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (stringData.length > 0) {
 					data.addActiveData(0, dataBase, stringData);
 				}
+				// Own segments so the shaker can drop each with its sole reader
+				// (_char_upcase / _char_downcase) -- see caseFoldSegments below.
+				data.addActiveData(0, upperFoldOffset, upperFoldBytes);
+				data.addActiveData(0, lowerFoldOffset, lowerFoldBytes);
 			});
 		byte[] coreModule = out.toByteArray();
 		// Resolve (rontolisp:wasm-import ...) directives: prepend the host imports and
@@ -4483,9 +4493,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			// the raw core module.
 			return coreModule;
 		}
+		// The case-fold tables' segments are owned by their sole readers; the injector
+		// (just above) shifted every defined function index up by the injected import
+		// count, so the owners' indices shift with them. Segments 0-2 are the fixed
+		// seed cells, then the string data (when present), then the two tables.
+		int upperFoldSegIndex = stringData.length > 0 ? 4 : 3;
+		List<am.ik.wasm.WasmTreeShaker.OwnedDataSegment> caseFoldSegments = List.of(
+				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex,
+						new int[] { FUNC_CHAR_UPCASE + hostImports.size() }),
+				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex + 1,
+						new int[] { FUNC_CHAR_DOWNCASE + hostImports.size() }));
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
-				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule);
+				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments);
 			}
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
@@ -4529,7 +4549,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmComponentBuilder.additionalImports(componentImports));
 			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports);
 		}
-		return this.optimize.eliminatesDeadCode() ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
+		return this.optimize.eliminatesDeadCode() ? am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments)
+				: coreModule;
 	}
 
 	// The import-slot ordinal of a $sched builtin field.

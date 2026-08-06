@@ -103,6 +103,37 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void orphanedCaseFoldTableSegmentsAreDropped() {
+		// The ~16 KB Unicode case-fold tables ride in their own data segments owned by
+		// _char_upcase/_char_downcase. A program that never case-folds loses both
+		// segments with the helpers; one that folds keeps them and still works (behavior
+		// pinned by WasmLispCompilerIntegrationTest).
+		byte[] hello = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
+		byte[] folding = compile("(print (char-upcase (char-downcase #\\A)))", false, OptimizeLevel.DEFAULT);
+		Module.parse(hello).assertWellFormed();
+		Module.parse(folding).assertWellFormed();
+		assertThat(dataSectionSize(hello)).isLessThan(2048);
+		assertThat(dataSectionSize(folding)).isGreaterThan(16000);
+		// 4096 also pins the literal-print specialization (WasmPrintCompiler): without
+		// it the generic printer family alone puts the module near 6 KB.
+		assertThat(hello.length).isLessThan(4096);
+	}
+
+	// Total payload size of the data section (0 when absent).
+	private static int dataSectionSize(byte[] module) {
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = WasmTreeShaker.readU(module, p);
+			if (id == 11) {
+				return size;
+			}
+			p[0] += size;
+		}
+		return 0;
+	}
+
+	@Test
 	void isIdempotent() {
 		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, OptimizeLevel.NONE));
 		byte[] twice = WasmTreeShaker.shake(once);

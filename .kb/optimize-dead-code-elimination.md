@@ -50,7 +50,45 @@ The separate savings sum to 24.9 points against 20.2 combined, so they overlap �
 
 ## WASM
 
-A **post-pass relocating tree-shaker** (`am.ik.wasm.WasmTreeShaker`, language-independent) runs on the finished **core module** bytes in `WasmLispCompiler.compile` just before returning — **including under `--component`**, where it runs right after `WasmImportInjector.inject` and before the component wrapper is built (see "Why the component path is safe" below; it was skipped there until todo-259, on a constraint that turned out not to exist). It parses the module sections, builds a call graph from the actual `call` (and `ref.func`) immediates in every body, computes the functions reachable from the roots (exported functions + `_start`/start section), drops the rest **including unused WASI function imports**, and renumbers every surviving function reference. Reachability is exact, not a manual table: when `eval`/`load`/`apply` is used, the dispatch bodies contain real `call`s to every registered function, so nothing dynamically-reached is pruned. It only renumbers **function** indices — type/memory/global/data sections are copied verbatim, so type indices (and the GC rec-group layout) stay stable. This is the one place the fixed-index invariant is deliberately broken, and only because every `call` site is rewritten in lockstep.
+A **post-pass relocating tree-shaker** (`am.ik.wasm.WasmTreeShaker`, language-independent) runs on the finished **core module** bytes in `WasmLispCompiler.compile` just before returning — **including under `--component`**, where it runs right after `WasmImportInjector.inject` and before the component wrapper is built (see "Why the component path is safe" below; it was skipped there until todo-259, on a constraint that turned out not to exist). It parses the module sections, builds a call graph from the actual `call` (and `ref.func`) immediates in every body, computes the functions reachable from the roots (exported functions + `_start`/start section), drops the rest **including unused WASI function imports**, and renumbers every surviving function reference. Reachability is exact, not a manual table: when `eval`/`load`/`apply` is used, the dispatch bodies contain real `call`s to every registered function, so nothing dynamically-reached is pruned. It only renumbers **function** indices — type/memory/global sections are copied verbatim, so type indices (and the GC rec-group layout) stay stable. This is the one place the fixed-index invariant is deliberately broken, and only because every `call` site is rewritten in lockstep.
+
+### Owned data segments (todo-268 groundwork, landed 2026-08-06)
+
+The data section is copied verbatim EXCEPT for segments the compiler declares as owned:
+`WasmTreeShaker.OwnedDataSegment(segmentIndex, ownerFuncIndices)` names a segment whose
+bytes are referenced exclusively by the given functions, and `shake(module, owned)` drops
+the segment when every owner is unreachable. The shaker cannot verify the exclusivity
+claim (a linear-memory reference is an indistinguishable `i32.const`), so the claim is
+the CALLER's invariant — today's only claimants are the two Unicode case-fold range
+tables (~16.4 KB combined, `WasmCaseFoldRuntimeBuilder`), each emitted as its own active
+segment at the same addresses `appendBlob` used to give them, owned by `_char_upcase` /
+`_char_downcase` respectively (`WasmLispCompiler.compile`, "caseFoldSegments"; owner
+indices are shifted by the injected host-import count because the shake runs after
+`WasmImportInjector`). Dropping leaves an all-zero hole in linear memory that nothing
+reachable reads; segment indices carry no other references because the backend emits no
+bulk-memory ops. Pinned by `WasmTreeShakerTest.orphanedCaseFoldTableSegmentsAreDropped`.
+
+### Literal print specialization (same session)
+
+`(print <string-literal|integer-literal>)` (no stream argument) does not call
+`FUNC_PRINT_VAL`: the readable form is a compile-time constant (`print` always escapes;
+every printer-control variable that could change the text is inert —
+`.kb/pretty-printer.md`), so `WasmPrintCompiler.compileLiteralPrint` interns the
+pre-rendered form and writes it through `FUNC_WRITE_STR`, which keeps the
+`*standard-output*` redirect semantics. The `print-object` hook cannot fire on this path
+(it is inside `compilePrintOperator`'s print-object-free gate). The point is
+reachability: the generic printer's integer arm alone pins the whole bignum print chain
+(9 functions), plus the f64 renderer and ratio accessors — for a program that only
+prints literals, all of it now shakes out. An escape-free string literal's rendered form
+re-uses the literal's own interned bytes, so the fold costs no data.
+
+**Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47):
+Preview 1 `--optimize` 22,355 -> **1,886 bytes** (the two changes: -16,368 data,
+-4,078 code); `--component` 29,430 -> **8,930** (shaken core 1,893 + the P1 adapter
+module 3,624 + component metadata — the adapter/surface half is `.todo/268`'s third
+section). What remains in the P1 module is dominated by the verbatim-copied type section
+(578 B) and the string blob (871 B, ~78% of it the FIND-PACKAGE wrapper's package-alias
+table interned by Pass 2a before the wrapper dies) — both are `.todo/268`.
 
 **Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops ~26 KB -> ~1.3 KB. Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
 

@@ -56,10 +56,10 @@ wasmtime run -W gc hello.wasm
 echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~18 KB module
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~5 KB module
 ```
 
-この `fact` の例では、モジュールは約 170 KB から約 18 KB まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。`--component` を含む**すべての**出力形状で有効です — コアモジュールはラップの前にシェイクされます。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
+この `fact` の例では、モジュールは約 330 KB から約 5 KB まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。`--component` を含む**すべての**出力形状で有効です — コアモジュールはラップの前にシェイクされます。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
 
 `--optimize` は、読み込んだ**ライブラリ**にどこまで手が届くかも左右します。コンパイル済みプログラムはほとんどの関数を直接呼びますが、`funcall` にはディスパッチ表が必要で、そこに載った関数は実際にその経路で呼ばれるかどうかに関わらず到達可能扱いになります。そこで、表に載るのはプログラムが実際に値として取得しうる関数だけ — `#'name`、クォートされた `'name` の指定子、`lambda` — で、それ以外は普通のデッドコードとなり `--optimize` が除去します。`md5` を読み込んで関数を 1 つ呼ぶだけのプログラムでは、これが 1.18 MB と 598 KB の差になります。
 
@@ -76,7 +76,7 @@ format の制御文字列に含まれる `~/name/` ディレクティブも該�
 
 `--dynamic` でも同様に無効になります。遅延束縛は実行時に任意の名前を解決するためです。
 
-さらに小さく仕上げたい場合は、同じ `fact.lisp` を [`--no-gc`](../guides/wasm-nogc.md) でコンパイルすると `fact` は unboxed な `i32` にローワリングされ、18 KB を占めていた GC ランタイム一式（リーダーの大文字化テーブル、条件クラス階層、cons セル、プリンタ）が丸ごと落ちます:
+さらに小さく仕上げたい場合は、同じ `fact.lisp` を [`--no-gc`](../guides/wasm-nogc.md) でコンパイルすると `fact` は unboxed な `i32` にローワリングされ、5 KB を占めていた GC ランタイム一式（条件クラス階層、cons セル、プリンタ）が丸ごと落ちます:
 
 ```bash
 rontolisp fact.lisp --no-gc --optimize -o fact.wasm

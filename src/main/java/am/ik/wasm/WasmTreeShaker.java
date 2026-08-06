@@ -48,6 +48,8 @@ public final class WasmTreeShaker {
 
 	private static final int SEC_CODE = 10;
 
+	private static final int SEC_DATA = 11;
+
 	// Import / export descriptor kinds.
 	private static final int KIND_FUNC = 0x00;
 
@@ -68,12 +70,42 @@ public final class WasmTreeShaker {
 	}
 
 	/**
+	 * A data segment whose bytes are referenced EXCLUSIVELY by the given functions, so it
+	 * may be dropped whenever every one of those functions is unreachable. The claim of
+	 * exclusivity is the caller's: this pass cannot see linear-memory references (they
+	 * are indistinguishable {@code i32.const} immediates), so it drops the segment purely
+	 * on the owners' reachability. Dropping leaves an uninitialized (all-zero) hole in
+	 * linear memory at the segment's offset -- sound precisely because nothing reachable
+	 * reads it. Segment indices are the positions in the data section; the backend emits
+	 * no bulk-memory instructions ({@code memory.init}/{@code data.drop}), so removing a
+	 * segment never breaks a {@code dataidx} reference.
+	 *
+	 * @param segmentIndex index of the segment within the data section
+	 * @param ownerFuncIndices global function indices (pre-shake) that own the segment
+	 */
+	public record OwnedDataSegment(int segmentIndex, int[] ownerFuncIndices) {
+	}
+
+	/**
 	 * Removes functions unreachable from the module's roots and renumbers the survivors.
 	 * @param module a core WASM module (the 8-byte header followed by sections)
 	 * @return an equivalent module with dead functions removed; the input is returned
 	 * unchanged when nothing is dropped
 	 */
 	public static byte[] shake(byte[] module) {
+		return shake(module, List.of());
+	}
+
+	/**
+	 * Removes functions unreachable from the module's roots and renumbers the survivors,
+	 * then drops every {@link OwnedDataSegment} whose owners all died with them.
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @param ownedDataSegments data segments to drop when their owning functions are all
+	 * unreachable
+	 * @return an equivalent module with dead functions and orphaned data segments
+	 * removed; the input is returned unchanged when nothing is dropped
+	 */
+	public static byte[] shake(byte[] module, List<OwnedDataSegment> ownedDataSegments) {
 		List<Section> sections = parseSections(module);
 
 		@Nullable Section importSec = find(sections, SEC_IMPORT);
@@ -142,7 +174,23 @@ public final class WasmTreeShaker {
 		for (int i = 0; i < totalFuncs; i++) {
 			remap[i] = reachable[i] ? next++ : -1;
 		}
-		if (next == totalFuncs) {
+
+		// Data segments whose owners all died go with them.
+		List<Integer> deadSegments = new ArrayList<>();
+		for (OwnedDataSegment owned : ownedDataSegments) {
+			boolean anyOwnerAlive = false;
+			for (int owner : owned.ownerFuncIndices()) {
+				if (owner >= 0 && owner < totalFuncs && reachable[owner]) {
+					anyOwnerAlive = true;
+					break;
+				}
+			}
+			if (!anyOwnerAlive) {
+				deadSegments.add(owned.segmentIndex());
+			}
+		}
+
+		if (next == totalFuncs && deadSegments.isEmpty()) {
 			return module; // nothing to drop
 		}
 
@@ -158,6 +206,8 @@ public final class WasmTreeShaker {
 						rebuildCodeSection(codeEntries, callSites, numImportedFuncs, reachable, remap)));
 				case SEC_EXPORT -> rebuilt.add(new Section(SEC_EXPORT, rebuildExportSection(s.payload(), remap)));
 				case SEC_START -> rebuilt.add(new Section(SEC_START, rebuildStartSection(s.payload(), remap)));
+				case SEC_DATA -> rebuilt.add(deadSegments.isEmpty() ? s
+						: new Section(SEC_DATA, rebuildDataSection(s.payload(), deadSegments)));
 				default -> rebuilt.add(s);
 			}
 		}
@@ -327,6 +377,42 @@ public final class WasmTreeShaker {
 		}
 		writeRaw(out, slice(entry, cursor, entry.length));
 		return out.toByteArray();
+	}
+
+	// --- Data section ---
+
+	// Rebuilds the data section without the segments listed in deadSegments. Only
+	// active mode-0 segments (flags 0: memory 0, i32.const offset expression) are
+	// understood; anything else throws rather than risk mis-framing a segment.
+	private static byte[] rebuildDataSection(byte[] payload, List<Integer> deadSegments) {
+		int[] p = { 0 };
+		int count = readU(payload, p);
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		writeU(body, count - deadSegments.size());
+		for (int i = 0; i < count; i++) {
+			int start = p[0];
+			int flags = readU(payload, p);
+			if (flags != 0) {
+				throw new IllegalStateException("WasmTreeShaker: unhandled data segment flags " + flags);
+			}
+			int op = payload[p[0]++] & 0xff;
+			if (op != 0x41) { // i32.const
+				throw new IllegalStateException(
+						String.format("WasmTreeShaker: unhandled data offset opcode 0x%02X", op));
+			}
+			skipLeb(payload, p); // offset value
+			int end = payload[p[0]++] & 0xff;
+			if (end != 0x0B) {
+				throw new IllegalStateException(
+						String.format("WasmTreeShaker: unterminated data offset expression 0x%02X", end));
+			}
+			int len = readU(payload, p);
+			p[0] += len;
+			if (!deadSegments.contains(i)) {
+				writeRaw(body, slice(payload, start, p[0]));
+			}
+		}
+		return body.toByteArray();
 	}
 
 	// --- Export / start sections ---
