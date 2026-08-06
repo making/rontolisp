@@ -170,15 +170,113 @@ reachability: the generic printer's integer arm alone pins the whole bignum prin
 prints literals, all of it now shakes out. An escape-free string literal's rendered form
 re-uses the literal's own interned bytes, so the fold costs no data.
 
-**Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47), the four
-changes above in the order they landed — the case-fold segment split and the literal-print
-fold, then the type section and the string blob:
+### The `name` section is DROPPED, not copied (todo-270, 2026-08-06)
+
+A `name` custom section maps **function and type indices** to names, and this pass has just
+renumbered both — copying it through described the module's old shape. It is now dropped
+(`WasmTreeShaker`, `SEC_CUSTOM`); every other custom section is index-free and still copied.
+The rontolisp backend emits none, so this is invisible on a compiled core module and decisive
+on the hand-written WAT blobs the component wrapper embeds: the base adapter's name section
+alone is 1,438 B of its 3,953. Pinned by `WasmTreeShakerTest.dropsTheNameSectionRenumberingHasInvalidated`.
+
+### The component WRAPPER: adapter + WASI surface (todo-270, 2026-08-06)
+
+Until this pass the wrapper was fixed cost: whatever the core shrank to, a component carried
+the whole 9-shim preview1 adapter and all eleven `wasi:*` interface declarations. Both now
+follow the core, through one chain in which every link is exact and every step is *observed*
+rather than declared (`WasmComponentBuilder.fixedSurface`, the base variant only):
+
+1. the core's surviving `wasi_snapshot_preview1` imports (`WasmImports.functionFields`) are
+   the adapter entry points that still have a caller;
+2. `WasmExports.retain` makes exactly those the adapter's exports, and `WasmTreeShaker.shake`
+   then deletes everything unreachable from them — **including the adapter's own `"w"`
+   imports**, which is the measurement the rest reads;
+3. the surviving `"w"` names select their `canon lower` / built-in entries out of one
+   declarative table (`W_MEMBERS`), which names the WASI functions to alias (`BLOCK_FUNCS`)
+   and the component types to declare (`PROJECTED_TYPES` / `DEFINED_TYPES`, closed over their
+   own dependencies);
+4. those name the interfaces, and `ComponentImportBlock.prune` cuts the import blob down to
+   them — closing over the projection edges (`preopens` aliases `filesystem/types`'
+   `descriptor`, so it cannot outlive it) and renumbering what is left.
+
+**Nothing downstream may hold a fixed index any more.** The old `INST_*` / `T_*` constants are
+gone: the block's instance indices, the first free component type, and the count the user
+imports and the `run`/export wiring shift by all come back from the prune. That is the one
+real hazard here — a stale constant yields a component that *validates* while binding the
+wrong interface — so `ComponentImportBlock.Pruned` returns the maps rather than the bytes alone.
+
+**The adapter needed splitting to make the filesystem droppable.** `fd_write` dispatches on a
+runtime fd (1 stdout, 2 stderr, else a file), so the call graph reaches `append-via-stream`
+from *any* printing program and `wasi:filesystem` — the block's single biggest group, 1,229 B
+— never left. `adapter.wat` now factors the two fd-polymorphic shims into
+`$fd_write_stdio`/`$fd_write_file` and `$fd_read_stdin`/`$fd_read_file` over shared helpers,
+and exports the narrow halves as well. **`path_open` is the only writer of the adapter's fd
+table**, so a core that does not import it can never present a file fd: the wrapper then
+retains `fd_write_stdio` UNDER THE NAME `fd_write` (`WasmExports.retain` renames) and the
+whole filesystem surface goes. This is the one place the component reads an adapter export
+whose name differs from `adapter.wat`'s — deliberately, because the alternative (a
+`from-exports` renaming instance) costs bytes and index churn in exactly the case being
+optimized. `wasi:cli/stderr` stays for every printing program: fd 2 is a value, not an edge.
+
+**A narrow half must be no more PERMISSIVE than the wide one.** `$fd_write_stdio` answers fd 1
+and 2 and TRAPS (`unreachable`) on anything else; `$fd_read_stdin` traps on any fd but 0.
+Without those arms the pruning would have converted a loud failure into a silent one: a SOCKET
+fd (>= 200) also reaches `fd_write` whenever a write form escapes `WasmSocketsRewrite`'s
+dispatch table (`format` is one such form today), and under the wide adapter that walked off
+the fd table and trapped inside the host — which is how that class of gap has always been
+found. A guard-less narrow `fd_write` would instead have written those bytes to STDERR and
+returned success, so `--optimize` alone would have turned a crash into a protocol desync.
+Pinned by `WasmLispCompilerIntegrationTest
+.anOptimizedComponentFailsAsLoudlyAsAPlainOneOnAnFdItCannotServe`, which runs one socket
+program at both levels and requires both to fail. The rule for any future narrow/wide pair:
+the narrow one rejects what it does not implement, it never approximates it.
+
+**The blob grammar is decoded, not pattern-matched.** `ComponentImportBlock` classifies every
+byte of the block (instance-type declarators, the whole defvaltype set, extern descriptors,
+aliases) and throws on anything else; only three immediates in it point outside their own
+entry (an alias section's instance index, an `alias outer` type index, an import's
+instance-type index) and only those are rewritten. Checked against `wasm-tools` itself rather
+than against its own idea of the grammar: pruning `import-block.bin` to `{wasi:cli/types,
+wasi:cli/stdout}` is **byte-identical to `import-block-nogc-print.bin`**, which that tool
+generated independently for exactly that world (`ComponentImportBlockTest`, which also runs
+all 2,047 non-empty subsets back through the parser).
+
+**`--emit-wit` moves with it.** A pruned surface means the world names fewer interfaces, so
+`WitEmitter` filters the variant document's world imports and drops the package definitions
+nothing references — from the SAME set the builder prunes to (`WasmComponentBuilder
+.wasiInterfaces`). `WitOracleE2eTest` gained its first `--optimize` legs here; every case in
+it compiled at `OptimizeLevel.NONE` before, so this whole path had no oracle.
+Pruning also exposed an ordering rule that had been true by accident: `wasm-tools component
+wit` prints package DEFINITIONS in the order the world first names them (imports in order,
+then exports), and the templates matched only because `wasi:cli/types` is always the first
+import. Drop every `wasi:cli` import — a program that reaches no stdio at all — and the
+package survives only through the fixed `export wasi:cli/run`, which the tool then prints
+LAST. `WitEmitter.orderPackagesByFirstReference` now derives the order from the world instead
+of from the template, which also covers the appended user-import and exported-interface
+blocks (`aPrunedWorldWithNoWasiCliImportStillOrdersItsPackagesLikeWasmTools`).
+
+**Serve is deliberately NOT pruned** (`WasmServeComponentBuilder` keeps its fixed block
+constants and embeds the preview1 bridge whole). Its block declares nine interfaces that
+http.lisp's own glue reaches anyway, and its floor is the ~280 KB core, so the measurable win
+is the bridge's ~0.7 KB — under 0.3%. Re-evaluation trigger: if the serve core ever stops
+reaching the `wasi:cli`/`wasi:clocks`/`wasi:random` halves (a handler that neither prints nor
+times nor randomises), or if the serve floor drops by an order of magnitude, the same three
+steps apply unchanged — the machinery is variant-independent.
+
+**Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47), the changes
+above in the order they landed — the case-fold segment split and the literal-print fold, then
+the type section and the string blob, then the wrapper:
 Preview 1 `--optimize` 22,355 -> 1,886 -> **645 bytes** (the first two: -16,368 data,
 -4,078 code; the last two: the type section 578 -> 79 B and the data section 909 -> 168 B);
-`--component` 29,430 -> 8,930 -> **7,690**
-(shaken core 653 + the P1 adapter module 3,624 + the shared-memory module 158 + ~3.2 KB of
-component types/imports/aliases). The component floor is now almost entirely the adapter
-and the fixed WASI surface, which is `.todo/270`.
+`--component` 29,430 -> 8,930 -> 7,690 -> **2,138**.
+The component is now shaken core 653 + adapter 568 (from 3,624) + the shared-memory module 158
++ 742 B of component types/imports/aliases/canonical functions (from ~3,255). The core was 8%
+of the component and is 31% of it now -- the wrapper is still the majority of a HELLO
+component, but it is no longer fixed cost: it shrinks with the program instead of standing
+under it. Two ends of the same measurement: a component with no I/O at all (only
+`wasm-export`s) imports ZERO interfaces and is 2,072 B; a program that opens a file, lists a
+directory, reads the clock, draws random bytes and reads the environment keeps the whole
+eleven-interface surface and lands where it always did.
 
 **Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops 337,744 -> 3,804 bytes (2026-08-06). Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
 
@@ -189,6 +287,8 @@ Every core <-> component linkage is **by name**, in both directions, so renumber
 - the wrapper reaches into the core only through `alias core func (instance N) "name"` (`ComponentWriter.aliasCoreFunc`, encoded as `sort=core func, target=0x01 <instance> <name>`) — `run`, `handle`, `async_cb`, each `wasm-export` wrapper, `cabi_realloc`, `cabi_post_*`. **All of them are core EXPORTS, hence already shaker roots**, including the two the core never `call`s itself (the serve `handle` and its callback `async_cb`, reached only from the `canon lift ... async (callback ...)` declaration);
 - the core's imports are satisfied by `core:instantiate <module> vec((name, instanceidx))` with per-interface instances built `from-exports` as `(field name -> func)` maps, so a dropped function import just leaves one unused name in the map — nothing is positional;
 - the Preview-1 adapters (`adapter.wat`, `adapter-http-server-p1.wat`) never reference the core at all: they are instantiated BEFORE it and the core binds them by name. (The retired claim in this file said the opposite.)
+
+The same by-name linkage is what lets todo-270 run the shaker on the ADAPTER too, and read the answer back off its import section — see "The component WRAPPER" above. The one thing that is NOT by name is the component's own index spaces, which is why the wrapper's fixed instance/type constants had to go with it.
 
 `WasmComponentBuilder.memModuleFor` reads the core's `mem`/`memory` **memory** import, which the shaker keeps verbatim along with every other non-function import.
 

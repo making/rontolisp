@@ -22,7 +22,7 @@ carries no `wasi:cli/environment`, so `adapter-http-server-p1.wat` answers `envi
 a zero-entry environment and `import-block-http-server.bin` declares no such interface. The
 fix is deliberately NOT a second copy of the base adapter's environ decode: the base /
 sockets blocks already declare the interface, so `WasmComponentBuilder` binds
-`get-environment` FROM the block (`FIXED_BLOCK_IFACES` + the `INST_ENVIRON` entry in
+`get-environment` FROM the block (`FIXED_BLOCK_IFACES` + the block's own instance index for
 `lowerFixedFromBlock`'s `instanceOf` map -- a user's own `rontolisp:wit-import` of the
 interface now rides the same path instead of being rejected), while serve, whose block has
 none, gets the same binding as an appended `appendUserImports` instance. Two consequences to

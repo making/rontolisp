@@ -55,6 +55,57 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void dropsTheNameSectionRenumberingHasInvalidated() {
+		// A `name` section maps FUNCTION AND TYPE indices to names, and the pass has just
+		// renumbered both -- keeping it would describe the module's old shape. The
+		// rontolisp backend emits none, so the module that shows this is the hand-written
+		// WASI adapter, where the name section is most of the bytes.
+		byte[] adapter;
+		try (java.io.InputStream in = WasmTreeShakerTest.class
+			.getResourceAsStream("/am/ik/rontolisp/codegen/wasm/component/adapter.wasm")) {
+			adapter = java.util.Objects.requireNonNull(in, "adapter.wasm").readAllBytes();
+		}
+		catch (java.io.IOException ex) {
+			throw new java.io.UncheckedIOException(ex);
+		}
+		assertThat(customSectionNames(adapter)).contains("name");
+
+		byte[] shaken = WasmTreeShaker.shake(
+				WasmExports.retain(adapter, new java.util.LinkedHashMap<>(java.util.Map.of("fd_write", "fd_write"))));
+
+		assertThat(customSectionNames(shaken)).isEmpty();
+	}
+
+	private static List<String> customSectionNames(byte[] module) {
+		List<String> names = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = leb(module, p);
+			int end = p[0] + size;
+			if (id == 0) {
+				int len = leb(module, p);
+				names.add(new String(module, p[0], len, java.nio.charset.StandardCharsets.UTF_8));
+			}
+			p[0] = end;
+		}
+		return names;
+	}
+
+	private static int leb(byte[] buf, int[] p) {
+		int value = 0;
+		int shift = 0;
+		while (true) {
+			int b = buf[p[0]++] & 0xff;
+			value |= (b & 0x7f) << shift;
+			if ((b & 0x80) == 0) {
+				return value;
+			}
+			shift += 7;
+		}
+	}
+
+	@Test
 	void keepsTransitivelyReachableRuntime() {
 		// Ratio arithmetic reaches the rational runtime helpers; they must survive.
 		byte[] optimized = compile("(print (+ 1/3 1/6))", false, OptimizeLevel.DEFAULT);

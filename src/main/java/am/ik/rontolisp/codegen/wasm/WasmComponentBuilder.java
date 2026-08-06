@@ -6,7 +6,11 @@ import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Objects;
 
+import am.ik.wasm.ComponentImportBlock;
 import am.ik.wasm.ComponentWriter;
+import am.ik.wasm.WasmExports;
+import am.ik.wasm.WasmImports;
+import am.ik.wasm.WasmTreeShaker;
 import am.ik.wit.WitItem;
 import org.jspecify.annotations.Nullable;
 
@@ -67,7 +71,12 @@ public final class WasmComponentBuilder {
 	 * {@code now} and the async {@code wait-for}), {@code wasi:filesystem/types},
 	 * {@code wasi:filesystem/preopens}, {@code wasi:random/random} and
 	 * {@code wasi:cli/stderr} (appended last, for {@code warn} on fd&nbsp;2). The block
-	 * defines component types 0-15, so the next free component type index is 16.
+	 * defines component types 0-15.
+	 * <p>
+	 * Those numbers describe the blob, NOT the emitted component: {@link #buildBase}
+	 * prunes it to the interfaces the program reaches
+	 * ({@link ComponentImportBlock#prune}) and reads every instance index, and the first
+	 * free type index, back off the result.
 	 */
 	private static final byte[] IMPORT_BLOCK = resource("import-block.bin");
 
@@ -81,65 +90,243 @@ public final class WasmComponentBuilder {
 	/**
 	 * The preview1-to-WASI-0.3 adapter core module: it imports the shared memory, the
 	 * lowered WASI 0.3 functions and the async canonical built-ins (under {@code "w"})
-	 * and exports the eight preview1-style functions rontolisp imports. Source:
+	 * and exports the nine preview1-style functions rontolisp imports -- plus the
+	 * STDIO-ONLY halves of the two fd-polymorphic ones ({@code fd_write_stdio} /
+	 * {@code fd_read_stdin}), which {@link #fixedSurface} retains under the preview1
+	 * names for a core module that imports no {@code path_open}. Source:
 	 * {@code src/wasm-component/adapter.wat}.
 	 */
 	private static final byte[] ADAPTER_MODULE = resource("adapter.wasm");
 
-	// Component import-instance indices (from import-block.bin; see IMPORT_BLOCK).
-	// wasi:clocks/types (instance 4) is dependency-hoisted by wait-for's `use
-	// types.{duration}`, shifting everything after wasi:cli/environment by one.
-	private static final int INST_CLI_TYPES = 0;
+	// The base block's interface ids, referenced by the fixed wiring below. Their
+	// component instance indices are NOT constants: the block is pruned to what the
+	// program's core module still reaches, so every index comes from
+	// ComponentImportBlock.Pruned.instanceOf().
+	private static final String IFACE_CLI_TYPES = "wasi:cli/types@0.3.0";
 
-	private static final int INST_STDOUT = 1;
+	private static final String IFACE_STDOUT = "wasi:cli/stdout@0.3.0";
 
-	private static final int INST_STDIN = 2;
+	private static final String IFACE_STDIN = "wasi:cli/stdin@0.3.0";
 
-	private static final int INST_ENVIRON = 3;
+	private static final String IFACE_ENVIRON = "wasi:cli/environment@0.3.0";
 
-	private static final int INST_SYS_CLOCK = 5;
+	private static final String IFACE_SYS_CLOCK = "wasi:clocks/system-clock@0.3.0";
 
-	private static final int INST_MONO_CLOCK = 6;
+	private static final String IFACE_MONO_CLOCK = "wasi:clocks/monotonic-clock@0.3.0";
 
-	private static final int INST_FS_TYPES = 7;
+	private static final String IFACE_FS_TYPES = "wasi:filesystem/types@0.3.0";
 
-	private static final int INST_FS_PREOPENS = 8;
+	private static final String IFACE_FS_PREOPENS = "wasi:filesystem/preopens@0.3.0";
 
-	private static final int INST_RANDOM = 9;
+	private static final String IFACE_RANDOM = "wasi:random/random@0.3.0";
 
-	private static final int INST_STDERR = 10;
+	private static final String IFACE_STDERR = "wasi:cli/stderr@0.3.0";
 
-	// First free component type index after the import block: the block defines types
-	// 0-15 (the wasi:clocks/types instance type and the aliased `duration` joined with
-	// the wait-for declaration), so the aliased resource/enum types start at 16.
-	private static final int T_CLI_ERRCODE = 16;
+	/**
+	 * The nine {@code wasi_snapshot_preview1} functions the adapter implements, in its
+	 * own export order. A core module imports a subset of them (after {@code --optimize},
+	 * only what it reaches), and that subset drives everything below.
+	 */
+	private static final List<String> PREVIEW1_FUNCS = List.of("fd_write", "fd_read", "path_open", "fd_readdir",
+			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get");
 
-	private static final int T_FS_ERRCODE = 17;
+	/**
+	 * The adapter's NARROW implementation of the two fd-polymorphic entry points,
+	 * retained under the preview1 name when the core module imports no {@code path_open}.
+	 * <p>
+	 * {@code path_open} is the only writer of the adapter's fd table, so a core module
+	 * that does not import it can never present a file fd: {@code fd_write}'s file arm
+	 * and {@code fd_read}'s file arm are dead, and with them the whole
+	 * {@code wasi:filesystem} surface -- which the shaker cannot see for itself, because
+	 * a runtime fd is a value, not an edge. Naming the narrow implementation instead is
+	 * what makes the reachability visible.
+	 */
+	private static final java.util.Map<String, String> NARROW_PREVIEW1_IMPL = java.util.Map.of("fd_write",
+			"fd_write_stdio", "fd_read", "fd_read_stdin");
 
-	private static final int T_DESCRIPTOR = 18;
+	/** A WASI function the fixed wiring aliases out of one of the block's instances. */
+	private record BlockFunc(String iface, String member) {
+	}
 
-	// wasi:filesystem's directory-entry record ({descriptor-type type, string name}),
-	// the element of the read-directory stream behind %list-directory.
-	private static final int T_DIRENT = 19;
+	/**
+	 * The WASI functions the fixed wiring may alias, in the order the alias section
+	 * declares them (which fixes their component function indices). Keyed by the name the
+	 * {@code w} import below refers to them by.
+	 */
+	private static final java.util.LinkedHashMap<String, BlockFunc> BLOCK_FUNCS = blockFuncs();
 
-	private static final int T_STREAM = 20;
+	private static java.util.LinkedHashMap<String, BlockFunc> blockFuncs() {
+		final java.util.LinkedHashMap<String, BlockFunc> funcs = new java.util.LinkedHashMap<>();
+		funcs.put("stdout-write", new BlockFunc(IFACE_STDOUT, "write-via-stream"));
+		funcs.put("stdin-read", new BlockFunc(IFACE_STDIN, "read-via-stream"));
+		funcs.put("get-environment", new BlockFunc(IFACE_ENVIRON, "get-environment"));
+		funcs.put("sys-now", new BlockFunc(IFACE_SYS_CLOCK, "now"));
+		funcs.put("mono-now", new BlockFunc(IFACE_MONO_CLOCK, "now"));
+		funcs.put("file-read", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.read-via-stream"));
+		funcs.put("file-append", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.append-via-stream"));
+		funcs.put("open-at", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.open-at"));
+		funcs.put("get-directories", new BlockFunc(IFACE_FS_PREOPENS, "get-directories"));
+		funcs.put("get-random-u64", new BlockFunc(IFACE_RANDOM, "get-random-u64"));
+		funcs.put("stderr-write", new BlockFunc(IFACE_STDERR, "write-via-stream"));
+		funcs.put("read-dir", new BlockFunc(IFACE_FS_TYPES, "[method]descriptor.read-directory"));
+		return funcs;
+	}
 
-	// stream<directory-entry>: structurally distinct from the u8 byte stream, so it
-	// needs its own read / drop built-ins -- and its elements own a string, so the read
-	// carries the realloc option the byte-stream read does not.
-	private static final int T_DE_STREAM = 21;
+	// Type keys of the fixed wiring. The four PROJECTED ones are aliased out of a block
+	// instance; the rest are defined over them. Emission order fixes their component type
+	// indices: the projections join the alias section, the definitions the type section
+	// after it.
+	private static final String T_CLI_ERRCODE = "cli-error-code";
 
-	private static final int T_CLI_RESULT = 22;
+	private static final String T_FS_ERRCODE = "fs-error-code";
 
-	private static final int T_CLI_FUTURE = 23;
+	private static final String T_DESCRIPTOR = "descriptor";
 
-	private static final int T_FS_RESULT = 24;
+	private static final String T_DIRENT = "directory-entry";
 
-	private static final int T_FS_FUTURE = 25;
+	private static final String T_STREAM = "stream<u8>";
 
-	private static final int T_RUN_RESULT = 26;
+	private static final String T_DE_STREAM = "stream<directory-entry>";
 
-	private static final int T_RUN_FUNC = 27;
+	private static final String T_CLI_RESULT = "result<_,cli-error-code>";
+
+	private static final String T_CLI_FUTURE = "future<result<_,cli-error-code>>";
+
+	private static final String T_FS_RESULT = "result<_,fs-error-code>";
+
+	private static final String T_FS_FUTURE = "future<result<_,fs-error-code>>";
+
+	private static final String T_RUN_RESULT = "result";
+
+	private static final String T_RUN_FUNC = "async func() -> result";
+
+	/** A type the fixed wiring projects out of one of the block's instances. */
+	private static final java.util.LinkedHashMap<String, BlockFunc> PROJECTED_TYPES = projectedTypes();
+
+	private static java.util.LinkedHashMap<String, BlockFunc> projectedTypes() {
+		final java.util.LinkedHashMap<String, BlockFunc> types = new java.util.LinkedHashMap<>();
+		types.put(T_CLI_ERRCODE, new BlockFunc(IFACE_CLI_TYPES, "error-code"));
+		types.put(T_FS_ERRCODE, new BlockFunc(IFACE_FS_TYPES, "error-code"));
+		types.put(T_DESCRIPTOR, new BlockFunc(IFACE_FS_TYPES, "descriptor"));
+		types.put(T_DIRENT, new BlockFunc(IFACE_FS_TYPES, "directory-entry"));
+		return types;
+	}
+
+	/**
+	 * A type the fixed wiring DEFINES: what it is built over, and how to encode it once
+	 * those have indices.
+	 *
+	 * @param needs the type keys the encoding names
+	 * @param encode the encoder, given the assigned component type indices
+	 */
+	private record DefinedType(List<String> needs,
+			java.util.function.Function<java.util.Map<String, Integer>, byte[]> encode) {
+	}
+
+	/** The defined types, in the order the type section declares them. */
+	private static final java.util.LinkedHashMap<String, DefinedType> DEFINED_TYPES = definedTypes();
+
+	private static java.util.LinkedHashMap<String, DefinedType> definedTypes() {
+		final java.util.LinkedHashMap<String, DefinedType> types = new java.util.LinkedHashMap<>();
+		types.put(T_STREAM, new DefinedType(List.of(), t -> ComponentWriter.definedStream(ComponentWriter.VT_U8)));
+		types.put(T_DE_STREAM,
+				new DefinedType(List.of(T_DIRENT), t -> ComponentWriter.definedStreamOfType(at(t, T_DIRENT))));
+		types.put(T_CLI_RESULT,
+				new DefinedType(List.of(T_CLI_ERRCODE), t -> ComponentWriter.definedResultErr(at(t, T_CLI_ERRCODE))));
+		types.put(T_CLI_FUTURE,
+				new DefinedType(List.of(T_CLI_RESULT), t -> ComponentWriter.definedFuture(at(t, T_CLI_RESULT))));
+		types.put(T_FS_RESULT,
+				new DefinedType(List.of(T_FS_ERRCODE), t -> ComponentWriter.definedResultErr(at(t, T_FS_ERRCODE))));
+		types.put(T_FS_FUTURE,
+				new DefinedType(List.of(T_FS_RESULT), t -> ComponentWriter.definedFuture(at(t, T_FS_RESULT))));
+		types.put(T_RUN_RESULT, new DefinedType(List.of(), t -> ComponentWriter.definedResultVoid()));
+		types.put(T_RUN_FUNC, new DefinedType(List.of(T_RUN_RESULT),
+				t -> ComponentWriter.asyncFuncTypeResultType(at(t, T_RUN_RESULT))));
+		return types;
+	}
+
+	/**
+	 * One member of the adapter's {@code "w"} import: the lowered WASI function or
+	 * canonical built-in it binds, what that needs, and how to encode its {@code canon}
+	 * entry.
+	 *
+	 * @param func the {@link #BLOCK_FUNCS} key this member lowers, or {@code null} for a
+	 * canonical built-in
+	 * @param types the type keys the encoding names
+	 * @param encode the encoder, given the assigned component function and type indices
+	 */
+	private record WMember(@Nullable String func, List<String> types,
+			java.util.function.BiFunction<java.util.Map<String, Integer>, java.util.Map<String, Integer>, byte[]> encode) {
+	}
+
+	/**
+	 * The adapter's whole {@code "w"} import, in the order the canon section declares it
+	 * (which fixes the core function indices). A member survives exactly when the shaken
+	 * adapter still imports its name -- and what survives decides which WASI functions
+	 * are aliased, which types are declared, and finally which interfaces the block still
+	 * has to import.
+	 */
+	private static final java.util.LinkedHashMap<String, WMember> W_MEMBERS = wMembers();
+
+	private static java.util.LinkedHashMap<String, WMember> wMembers() {
+		final java.util.LinkedHashMap<String, WMember> w = new java.util.LinkedHashMap<>();
+		w.put("stdout-write", lower("stdout-write", ComponentWriter::canonLower));
+		w.put("stdin-read", lower("stdin-read", f -> ComponentWriter.canonLowerMemory(f, 0)));
+		w.put("get-environment", lower("get-environment", f -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, 0)));
+		w.put("sys-now", lower("sys-now", f -> ComponentWriter.canonLowerMemory(f, 0)));
+		w.put("mono-now", lower("mono-now", ComponentWriter::canonLower));
+		w.put("file-read", lower("file-read", f -> ComponentWriter.canonLowerMemory(f, 0)));
+		w.put("file-append", lower("file-append", ComponentWriter::canonLower));
+		w.put("open-at", lower("open-at", f -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, 0)));
+		w.put("get-directories", lower("get-directories", f -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, 0)));
+		w.put("get-random-u64", lower("get-random-u64", ComponentWriter::canonLower));
+		w.put("drop-desc", builtin(T_DESCRIPTOR, ComponentWriter::canonResourceDrop));
+		w.put("stream-new", builtin(T_STREAM, ComponentWriter::canonStreamNew));
+		// The ASYNC (non-blocking) built-in variants of base component-model-async: a
+		// BLOCKED result completes through the waitable trio below (the adapter's
+		// blocking
+		// wrappers), so no gated feature is needed (neither more-async-builtins nor
+		// stackful).
+		w.put("stream-read", builtin(T_STREAM, t -> ComponentWriter.canonStreamReadAsync(t, 0)));
+		w.put("stream-write", builtin(T_STREAM, t -> ComponentWriter.canonStreamWriteAsync(t, 0)));
+		w.put("stream-drop-r", builtin(T_STREAM, ComponentWriter::canonStreamDropReadable));
+		w.put("stream-drop-w", builtin(T_STREAM, ComponentWriter::canonStreamDropWritable));
+		w.put("future-read-cli", builtin(T_CLI_FUTURE, t -> ComponentWriter.canonFutureReadAsync(t, 0)));
+		w.put("future-drop-cli", builtin(T_CLI_FUTURE, ComponentWriter::canonFutureDropReadable));
+		// the filesystem error-code is a variant with a string-bearing case, so its
+		// future
+		// payload needs realloc (cabi_realloc = core func 0)
+		w.put("future-read-fs", builtin(T_FS_FUTURE, t -> ComponentWriter.canonFutureReadAsync(t, 0, 0)));
+		w.put("future-drop-fs", builtin(T_FS_FUTURE, ComponentWriter::canonFutureDropReadable));
+		w.put("stderr-write", lower("stderr-write", ComponentWriter::canonLower));
+		w.put("waitable-set-new", new WMember(null, List.of(), (f, t) -> ComponentWriter.canonWaitableSetNew()));
+		w.put("waitable-join", new WMember(null, List.of(), (f, t) -> ComponentWriter.canonWaitableJoin()));
+		w.put("waitable-set-wait", new WMember(null, List.of(), (f, t) -> ComponentWriter.canonWaitableSetWait(0)));
+		// descriptor.read-directory: the result is a (stream, future) handle pair, two
+		// flat
+		// values, so it returns through a memory retptr.
+		w.put("read-dir", lower("read-dir", f -> ComponentWriter.canonLowerMemory(f, 0)));
+		// The directory-entry stream's own read / drop. The read needs realloc: each
+		// element owns its name string.
+		w.put("stream-read-de", builtin(T_DE_STREAM, t -> ComponentWriter.canonStreamReadAsync(t, 0, 0)));
+		w.put("stream-drop-r-de", builtin(T_DE_STREAM, ComponentWriter::canonStreamDropReadable));
+		return w;
+	}
+
+	// Every lookup below is total by construction (the tables and the surface are
+	// computed
+	// from each other), so a miss is a wiring bug, not a case to handle.
+	private static <K, V> V at(java.util.Map<K, V> table, K key) {
+		return Objects.requireNonNull(table.get(key), () -> "the fixed WASI wiring has no entry for " + key);
+	}
+
+	private static WMember lower(String func, java.util.function.IntFunction<byte[]> encode) {
+		return new WMember(func, List.of(), (f, t) -> encode.apply(at(f, func)));
+	}
+
+	private static WMember builtin(String type, java.util.function.IntFunction<byte[]> encode) {
+		return new WMember(null, List.of(type), (f, t) -> encode.apply(at(t, type)));
+	}
 
 	/**
 	 * The interfaces of the base/sockets blocks a {@code %component-import} may bind FROM
@@ -333,7 +520,7 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	public static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
-		return build(coreModule, funcExports, List.of());
+		return build(coreModule, funcExports, List.of(), false);
 	}
 
 	/**
@@ -352,7 +539,7 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
-			List<WasmComponentImportCompiler.Import> imports) {
+			List<WasmComponentImportCompiler.Import> imports, boolean shake) {
 		// rontolisp:fetch off serve is the http.lisp library over canon-lowered
 		// wasi:http@0.3 user imports (the base variant); a serving program goes through
 		// buildServe instead.
@@ -366,7 +553,33 @@ public final class WasmComponentBuilder {
 		validateFixedMembers(fixed);
 		rejectAdapterImportCollisions(user, WitEmitter.VARIANT_BASE);
 		rejectDuplicateUserImports(user);
-		return buildBase(coreModule, funcExports, fixed, user);
+		return buildBase(coreModule, funcExports, fixed, user, shake);
+	}
+
+	/**
+	 * The fixed WASI interfaces the base variant's component will actually import for
+	 * this core module -- what {@code --emit-wit} must describe, since a pruned block
+	 * declares fewer of them than the variant's full world.
+	 * <p>
+	 * The emitted WIT and the emitted bytes have to say the same thing, so this is the
+	 * same computation {@link #build} runs, not a parallel one.
+	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param imports the interface imports the program declares
+	 * @param shake whether the fixed surface is narrowed at all ({@code --optimize})
+	 * @return the interface ids the component imports from the block
+	 */
+	static java.util.Set<String> wasiInterfaces(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports,
+			boolean shake) {
+		final List<WasmComponentImportCompiler.Import> fixed = new java.util.ArrayList<>();
+		for (WasmComponentImportCompiler.Import imported : imports) {
+			if (FIXED_BLOCK_IFACES.containsKey(imported.ifaceId())) {
+				fixed.add(imported);
+			}
+		}
+		return ComponentImportBlock.parse(IMPORT_BLOCK)
+			.prune(fixedSurface(coreModule, fixed, shake).interfaces())
+			.instanceOf()
+			.keySet();
 	}
 
 	// Two user imports of ONE interface id (a program's own wit-import of
@@ -1067,28 +1280,148 @@ public final class WasmComponentBuilder {
 	}
 
 	/**
+	 * What a program's core module still needs of the fixed WASI surface, once
+	 * {@code --optimize} has told the truth about which {@code wasi_snapshot_preview1}
+	 * functions it imports. Everything the base wrapper emits follows from this, and so
+	 * does the world {@code --emit-wit} prints -- which is why it is computed once, by a
+	 * pure function both callers run.
+	 *
+	 * @param adapter the adapter core module, narrowed to the entry points the core binds
+	 * and shaken
+	 * @param members the {@link #W_MEMBERS} keys the shaken adapter still imports, in
+	 * declaration order
+	 * @param funcs the {@link #BLOCK_FUNCS} keys those members lower
+	 * @param types the type keys those members name, closed over the definitions' own
+	 * dependencies
+	 * @param interfaces the block interfaces all of that reaches, in block order
+	 */
+	record FixedSurface(byte[] adapter, java.util.LinkedHashSet<String> members, java.util.LinkedHashSet<String> funcs,
+			java.util.LinkedHashSet<String> types, java.util.LinkedHashSet<String> interfaces) {
+	}
+
+	/**
+	 * Narrows the fixed WASI surface to what the core module reaches.
+	 * <p>
+	 * The chain is one-directional and every link is exact. The core's surviving
+	 * {@code wasi_snapshot_preview1} imports name the adapter entry points that still
+	 * have a caller; {@link WasmExports#retain} makes them the adapter's only exports
+	 * (choosing the narrow implementation of {@code fd_write} / {@code fd_read} when no
+	 * {@code path_open} survives, see {@link #NARROW_PREVIEW1_IMPL}) and
+	 * {@link WasmTreeShaker#shake} then deletes everything unreachable from them --
+	 * including the adapter's own {@code "w"} imports. What is left of {@code "w"}
+	 * decides which WASI functions are lowered, which component types are declared, and
+	 * finally which interfaces the import block still has to declare.
+	 * <p>
+	 * Without {@code shake} the core keeps all nine imports, so every step is the
+	 * identity and the component is the one this builder always emitted.
+	 * @param coreModule the rontolisp core module compiled in component mode
+	 * @param blockBound the block-declared interfaces the program binds directly
+	 * (wait.lisp's monotonic-clock &c) -- they are reached by the Lisp library rather
+	 * than by the adapter, so they join the interface set here
+	 * @param shake whether to narrow at all ({@code --optimize}); {@code false} keeps the
+	 * whole surface
+	 * @return the narrowed surface
+	 */
+	static FixedSurface fixedSurface(byte[] coreModule, List<WasmComponentImportCompiler.Import> blockBound,
+			boolean shake) {
+		final java.util.LinkedHashSet<String> corePreview1 = WasmImports.functionFields(coreModule,
+				"wasi_snapshot_preview1");
+		byte[] adapter = ADAPTER_MODULE;
+		if (shake) {
+			final boolean narrow = !corePreview1.contains("path_open");
+			final java.util.LinkedHashMap<String, String> keep = new java.util.LinkedHashMap<>();
+			for (String preview1 : PREVIEW1_FUNCS) {
+				if (corePreview1.contains(preview1)) {
+					keep.put(narrow ? NARROW_PREVIEW1_IMPL.getOrDefault(preview1, preview1) : preview1, preview1);
+				}
+			}
+			adapter = WasmTreeShaker.shake(WasmExports.retain(ADAPTER_MODULE, keep));
+		}
+		final java.util.LinkedHashSet<String> bound = WasmImports.functionFields(adapter, "w");
+		final java.util.LinkedHashSet<String> members = new java.util.LinkedHashSet<>();
+		final java.util.LinkedHashSet<String> funcs = new java.util.LinkedHashSet<>();
+		final java.util.LinkedHashSet<String> types = new java.util.LinkedHashSet<>();
+		for (java.util.Map.Entry<String, WMember> entry : W_MEMBERS.entrySet()) {
+			if (!bound.contains(entry.getKey())) {
+				continue;
+			}
+			members.add(entry.getKey());
+			if (entry.getValue().func() != null) {
+				funcs.add(entry.getValue().func());
+			}
+			types.addAll(entry.getValue().types());
+		}
+		if (!bound.equals(members)) {
+			final java.util.LinkedHashSet<String> unknown = new java.util.LinkedHashSet<>(bound);
+			unknown.removeAll(members);
+			throw new IllegalStateException(
+					"the component adapter imports w." + unknown + ", which the fixed WASI wiring does not declare");
+		}
+		// The run export's own types are always needed: the lift names them whatever the
+		// program does.
+		types.add(T_RUN_FUNC);
+		closeOverTypeDependencies(types);
+		final java.util.LinkedHashSet<String> interfaces = new java.util.LinkedHashSet<>();
+		for (String func : funcs) {
+			interfaces.add(at(BLOCK_FUNCS, func).iface());
+		}
+		for (String type : types) {
+			BlockFunc projection = PROJECTED_TYPES.get(type);
+			if (projection != null) {
+				interfaces.add(projection.iface());
+			}
+		}
+		for (WasmComponentImportCompiler.Import imported : blockBound) {
+			interfaces.add(imported.ifaceId());
+		}
+		return new FixedSurface(adapter, members, funcs, types, interfaces);
+	}
+
+	// A defined type names other types; a type kept for one member keeps those too.
+	private static void closeOverTypeDependencies(java.util.LinkedHashSet<String> types) {
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (String type : List.copyOf(types)) {
+				DefinedType defined = DEFINED_TYPES.get(type);
+				if (defined != null && types.addAll(defined.needs())) {
+					grew = true;
+				}
+			}
+		}
+	}
+
+	/**
 	 * Assemble the base WASI 0.3 component (no {@code rontolisp:fetch}).
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param funcExports the {@code wasm-export} directives to lift and export
 	 * @param fixed the block-declared interfaces to bind FROM the block (wait.lisp's
 	 * wasi:clocks/monotonic-clock; empty for none)
 	 * @param imports the genuine user interface imports
+	 * @param shake whether to narrow the fixed surface to what the core reaches
+	 * ({@code --optimize})
 	 * @return the WASI 0.3 component binary
 	 */
 	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
-			List<WasmComponentImportCompiler.Import> fixed, List<WasmComponentImportCompiler.Import> imports) {
+			List<WasmComponentImportCompiler.Import> fixed, List<WasmComponentImportCompiler.Import> imports,
+			boolean shake) {
 		final int userIfaces = imports.size();
 		final ComponentWriter c = new ComponentWriter();
-		// All imported WASI 0.3 interfaces in one block: import instances 0-8, types
-		// 0-11.
-		c.writeRaw(IMPORT_BLOCK);
+		final FixedSurface surface = fixedSurface(coreModule, fixed, shake);
+		// The imported WASI 0.3 interfaces, pruned to the ones the surface above still
+		// reaches. Their component instance indices, and the first free component type
+		// index after the block, come back from the prune -- nothing here may assume
+		// them.
+		final ComponentImportBlock.Pruned block = ComponentImportBlock.parse(IMPORT_BLOCK).prune(surface.interfaces());
+		final java.util.Map<String, Integer> instanceOf = block.instanceOf();
+		c.writeRaw(block.bytes());
 		// Core modules: 0 = shared memory, 1 = adapter, 2 = rontolisp. The shared
 		// memory module is sized to fit the rontolisp module's static data / intern
 		// pool (its memory-import min-pages declaration), so a program with a large
 		// data segment does not trap on the very first data-segment write when the
 		// mem module is instantiated with only its default six pages.
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, memModuleFor(coreModule));
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, ADAPTER_MODULE);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, surface.adapter());
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
@@ -1096,123 +1429,96 @@ public final class WasmComponentBuilder {
 		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
 		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
 			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
-		// Alias the resource/record types we need (component types 16-19) and the WASI
-		// functions (component funcs 0-11), all in one alias section.
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List.of(
-				// types 14 cli error-code, 15 fs error-code, 16 descriptor
-				ComponentWriter.aliasInstanceType(INST_CLI_TYPES, "error-code"),
-				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "error-code"),
-				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "descriptor"),
-				// type 19 directory-entry (the read-directory stream's element)
-				ComponentWriter.aliasInstanceType(INST_FS_TYPES, "directory-entry"),
-				// funcs 0 write-via-stream, 1 read-via-stream(stdin), 2 get-environment,
-				// 3 system-clock.now, 4 monotonic.now
-				ComponentWriter.aliasInstanceFunc(INST_STDOUT, "write-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_STDIN, "read-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_ENVIRON, "get-environment"),
-				ComponentWriter.aliasInstanceFunc(INST_SYS_CLOCK, "now"),
-				ComponentWriter.aliasInstanceFunc(INST_MONO_CLOCK, "now"),
-				// funcs 5 read-via-stream(file), 6 append-via-stream, 7 open-at,
-				// 8 get-directories, 9 get-random-u64
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.read-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.append-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.open-at"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_PREOPENS, "get-directories"),
-				ComponentWriter.aliasInstanceFunc(INST_RANDOM, "get-random-u64"),
-				// func 10 stderr write-via-stream, func 11 descriptor.read-directory
-				// (both appended last, so every index above keeps its value)
-				ComponentWriter.aliasInstanceFunc(INST_STDERR, "write-via-stream"),
-				ComponentWriter.aliasInstanceFunc(INST_FS_TYPES, "[method]descriptor.read-directory"))));
-		// Define the async value/function types (component types 20-27). The two streams
-		// are structural; the futures differ by their error-code (cli vs filesystem).
-		c.rawSection(ComponentWriter.SEC_TYPE,
-				ComponentWriter.vec(List.of(ComponentWriter.definedStream(ComponentWriter.VT_U8), // 20
-						ComponentWriter.definedStreamOfType(T_DIRENT), // 21
-						ComponentWriter.definedResultErr(T_CLI_ERRCODE), // 22
-						ComponentWriter.definedFuture(T_CLI_RESULT), // 23
-						ComponentWriter.definedResultErr(T_FS_ERRCODE), // 24
-						ComponentWriter.definedFuture(T_FS_RESULT), // 25
-						ComponentWriter.definedResultVoid(), // 26 result<_,_> (run
-																// result)
-						ComponentWriter.asyncFuncTypeResultType(T_RUN_RESULT)))); // 27
-		// Lower the WASI functions (component funcs 0-9) to core funcs 1-10 and drop the
-		// descriptor resource (core func 11); canonical options mirror wasm-tools'
-		// choices.
-		// Then the async built-ins: stream (core funcs 12-16), futures (core funcs
-		// 17-20), stderr write-via-stream (component func 10 -> core func 21), the
-		// waitable trio (22-24) and finally the directory-listing trio (25-27).
-		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLower(0), // 1
-																											// write-via-stream
-				ComponentWriter.canonLowerMemory(1, 0), // 2 read-via-stream (stdin)
-				ComponentWriter.canonLowerMemoryReallocUtf8(2, 0, 0), // 3 get-environment
-				ComponentWriter.canonLowerMemory(3, 0), // 4 system-clock.now
-				ComponentWriter.canonLower(4), // 5 monotonic.now
-				ComponentWriter.canonLowerMemory(5, 0), // 6 descriptor.read-via-stream
-				ComponentWriter.canonLower(6), // 7 descriptor.append-via-stream
-				ComponentWriter.canonLowerMemoryReallocUtf8(7, 0, 0), // 8 open-at
-				ComponentWriter.canonLowerMemoryReallocUtf8(8, 0, 0), // 9 get-directories
-				ComponentWriter.canonLower(9), // 10 get-random-u64
-				ComponentWriter.canonResourceDrop(T_DESCRIPTOR), // 11 drop descriptor
-				ComponentWriter.canonStreamNew(T_STREAM), // 12
-				// The ASYNC (non-blocking) built-in variants of base
-				// component-model-async: a BLOCKED result completes through the
-				// waitable-set trio below (the adapter's blocking wrappers), so no
-				// gated feature is needed (neither more-async-builtins nor stackful).
-				ComponentWriter.canonStreamReadAsync(T_STREAM, 0), // 13
-				ComponentWriter.canonStreamWriteAsync(T_STREAM, 0), // 14
-				ComponentWriter.canonStreamDropReadable(T_STREAM), // 15
-				ComponentWriter.canonStreamDropWritable(T_STREAM), // 16
-				ComponentWriter.canonFutureReadAsync(T_CLI_FUTURE, 0), // 17
-																		// future-read-cli
-				ComponentWriter.canonFutureDropReadable(T_CLI_FUTURE), // 18
-																		// future-drop-cli
-				// the filesystem error-code is a variant with a string-bearing case, so
-				// its
-				// future payload needs realloc (cabi_realloc = core func 0)
-				ComponentWriter.canonFutureReadAsync(T_FS_FUTURE, 0, 0), // 19
-																			// future-read-fs
-				ComponentWriter.canonFutureDropReadable(T_FS_FUTURE), // 20
-																		// future-drop-fs
-				ComponentWriter.canonLower(10), // 21 stderr write-via-stream
-				ComponentWriter.canonWaitableSetNew(), // 22
-				ComponentWriter.canonWaitableJoin(), // 23
-				ComponentWriter.canonWaitableSetWait(0), // 24
-				// 25 descriptor.read-directory: the result is a (stream, future) handle
-				// pair, two flat values, so it returns through a memory retptr.
-				ComponentWriter.canonLowerMemory(11, 0), // 25 read-directory
-				// 26/27 the directory-entry stream's own read / drop. The read needs
-				// realloc: each element owns its name string.
-				ComponentWriter.canonStreamReadAsync(T_DE_STREAM, 0, 0), // 26
-				ComponentWriter.canonStreamDropReadable(T_DE_STREAM)))); // 27
-		// Group the 27 lowered/built-in core funcs (1-27) for the adapter's "w" import
-		// (core instance 1). Names match adapter.wat's imports.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceFromFuncs(
-					List.of("stdout-write", "stdin-read", "get-environment", "sys-now", "mono-now", "file-read",
-							"file-append", "open-at", "get-directories", "get-random-u64", "drop-desc", "stream-new",
-							"stream-read", "stream-write", "stream-drop-r", "stream-drop-w", "future-read-cli",
-							"future-drop-cli", "future-read-fs", "future-drop-fs", "stderr-write", "waitable-set-new",
-							"waitable-join", "waitable-set-wait", "read-dir", "stream-read-de", "stream-drop-r-de"),
-					List.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-							26, 27)))));
+		// One alias section: the projected types first (continuing the block's component
+		// type space), then the WASI functions (component funcs from 0). Both index
+		// spaces
+		// advance in declaration order, so a member that shook out simply leaves a gap
+		// nobody names.
+		final java.util.Map<String, Integer> typeIndex = new java.util.LinkedHashMap<>();
+		final java.util.Map<String, Integer> funcIndex = new java.util.LinkedHashMap<>();
+		final List<byte[]> aliases = new java.util.ArrayList<>();
+		int nextType = block.typeCount();
+		for (java.util.Map.Entry<String, BlockFunc> projection : PROJECTED_TYPES.entrySet()) {
+			if (!surface.types().contains(projection.getKey())) {
+				continue;
+			}
+			aliases.add(ComponentWriter.aliasInstanceType(at(instanceOf, projection.getValue().iface()),
+					projection.getValue().member()));
+			typeIndex.put(projection.getKey(), nextType++);
+		}
+		int nextComponentFunc = 0;
+		for (java.util.Map.Entry<String, BlockFunc> func : BLOCK_FUNCS.entrySet()) {
+			if (!surface.funcs().contains(func.getKey())) {
+				continue;
+			}
+			aliases.add(ComponentWriter.aliasInstanceFunc(at(instanceOf, func.getValue().iface()),
+					func.getValue().member()));
+			funcIndex.put(func.getKey(), nextComponentFunc++);
+		}
+		if (!aliases.isEmpty()) {
+			// A program that reaches no WASI function at all (a pure-compute component
+			// with
+			// only wasm-exports) aliases nothing, and emits no section rather than an
+			// empty
+			// one -- the same rule the user-import and block-bound emissions follow.
+			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
+		}
+		// The async value/function types the surviving members (and the run lift) name.
+		final List<byte[]> types = new java.util.ArrayList<>();
+		for (java.util.Map.Entry<String, DefinedType> defined : DEFINED_TYPES.entrySet()) {
+			if (!surface.types().contains(defined.getKey())) {
+				continue;
+			}
+			types.add(defined.getValue().encode().apply(typeIndex));
+			typeIndex.put(defined.getKey(), nextType++);
+		}
+		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
+		// Lower the WASI functions and emit the canonical built-ins, in W_MEMBERS order:
+		// core funcs 1.. (0 is the shared memory module's cabi_realloc, aliased above).
+		final List<byte[]> canons = new java.util.ArrayList<>();
+		final List<String> wNames = new java.util.ArrayList<>();
+		final List<Integer> wCoreFuncs = new java.util.ArrayList<>();
+		int nextCoreFunc = 1;
+		for (java.util.Map.Entry<String, WMember> member : W_MEMBERS.entrySet()) {
+			if (!surface.members().contains(member.getKey())) {
+				continue;
+			}
+			canons.add(member.getValue().encode().apply(funcIndex, typeIndex));
+			wNames.add(member.getKey());
+			wCoreFuncs.add(nextCoreFunc++);
+		}
+		if (!canons.isEmpty()) {
+			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(canons));
+		}
+		// Group them for the adapter's "w" import (core instance 1). Names match
+		// adapter.wat's imports.
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(wNames, wCoreFuncs))));
 		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
+		final int runFuncType = at(typeIndex, T_RUN_FUNC);
 		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock,
 		// stdin.lisp's wasi:cli/stdin, environment.lisp's wasi:cli/environment): lowered
-		// FROM the block's own import instances (component funcs 12.., core funcs 28..,
-		// core instances 3..). Emits nothing when there are none.
-		final FixedIo io = lowerFixedFromBlock(c, fixed,
-				java.util.Map.of("wasi:clocks/monotonic-clock@0.3.0", INST_MONO_CLOCK, "wasi:cli/stdin@0.3.0",
-						INST_STDIN, "wasi:cli/environment@0.3.0", INST_ENVIRON),
-				new java.util.LinkedHashMap<>(), 12, 28, T_RUN_FUNC + 1, 3);
+		// FROM the block's own import instances, continuing every index space. Emits
+		// nothing when there are none.
+		final java.util.Map<String, Integer> blockBound = new java.util.LinkedHashMap<>();
+		FIXED_BLOCK_IFACES.keySet().forEach(iface -> {
+			Integer instance = instanceOf.get(iface);
+			if (instance != null) {
+				blockBound.put(iface, instance);
+			}
+		});
+		final FixedIo io = lowerFixedFromBlock(c, fixed, blockBound, new java.util.LinkedHashMap<>(), nextComponentFunc,
+				nextCoreFunc, nextType, 3);
 		// User WIT-interface imports (rontolisp:wit-import): instance types, import
-		// instances (from 11, right after the block's 0-10), function aliases and
-		// lowered core funcs continue after the fixed surface. Emits nothing when there
-		// are none, so every fixed index below shifts by zero -- and what it DID consume
-		// of each index space comes back as `user`, the single source every downstream
-		// fixed index shifts by.
-		final Appended user = appendUserImports(c, imports, io.nextType(), 11, io.nextComponentFunc(),
+		// instances (right after the block's own), function aliases and lowered core
+		// funcs
+		// continue after the fixed surface. Emits nothing when there are none, so every
+		// fixed index below shifts by zero -- and what it DID consume of each index space
+		// comes back as `user`, the single source every downstream fixed index shifts by.
+		final int blockInstances = instanceOf.size();
+		final Appended user = appendUserImports(c, imports, io.nextType(), blockInstances, io.nextComponentFunc(),
 				io.nextCoreFunc());
 		// Instantiate rontolisp (core instance 3 + one per fixed/user interface): mem =
 		// instance 0, wasi_snapshot_preview1 = adapter instance 2, plus each fixed
@@ -1227,31 +1533,27 @@ public final class WasmComponentBuilder {
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
 			.vec(List.of(rontolispInstantiate(2, coreNames, coreInstances, imports, io.nextCoreInstance()))));
 		final int rontolisp = io.nextCoreInstance() + userIfaces;
-		// Alias rontolisp's run (core func 28 = cabi_realloc + 27 lowered/built-in
-		// funcs, + the fixed and user-import lowers).
+		// Alias rontolisp's run, then lift it with the async function type (an
+		// async-typed
+		// sync-ABI lift: the task may block, no gated feature involved).
 		c.rawSection(ComponentWriter.SEC_ALIAS,
 				ComponentWriter.vec(List.of(ComponentWriter.aliasCoreFunc(rontolisp, "run"))));
-		// Lift run into component func 12 (+ the fixed/user-import aliases) with the
-		// async function type 27 (an async-typed sync-ABI lift: the task may block, no
-		// gated feature involved). Component func 12 follows the 12 aliased WASI funcs
-		// (0-11).
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter
-			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), T_RUN_FUNC))));
-		// Component instance 11 (after import instances 0-10 + the user imports)
+			.vec(List.of(ComponentWriter.canonLift(io.nextCoreFunc() + user.coreFuncs(), runFuncType))));
+		// A component instance (after the block's import instances and the user imports)
 		// exporting run, exported as the wasi:cli/run@0.3.0 interface.
 		c.rawSection(ComponentWriter.SEC_INSTANCE, ComponentWriter.vec(List
 			.of(ComponentWriter.componentInstanceFromFunc("run", io.nextComponentFunc() + user.componentFuncs()))));
-		c.rawSection(ComponentWriter.SEC_EXPORT,
-				ComponentWriter.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", 11 + userIfaces))));
+		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter
+			.vec(List.of(ComponentWriter.exportInstance("wasi:cli/run@0.3.0", blockInstances + userIfaces))));
 		// Scalar wasm-export functions: next free indices after the run wiring, each
 		// shifted by the fixed and user-import counts. The component instance index space
-		// at this point holds the run from-exports instance (11 + userIfaces) AND the
-		// instance its `export wasi:cli/run` statement itself introduces (12 +
-		// userIfaces)
-		// -- an instance export consumes an index -- so the next free instance is
-		// 13 + userIfaces.
+		// at this point holds the run from-exports instance AND the instance its
+		// `export wasi:cli/run` statement itself introduces -- an instance export
+		// consumes
+		// an index -- so the next free instance is two past the import instances.
 		appendFuncExports(c, funcExports, io.nextCoreFunc() + user.coreFuncs() + 1, io.nextType() + user.types(),
-				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp, 13 + userIfaces);
+				io.nextComponentFunc() + user.componentFuncs() + 1, rontolisp, blockInstances + 2 + userIfaces);
 		return c.toByteArray();
 	}
 
@@ -1304,74 +1606,7 @@ public final class WasmComponentBuilder {
 	 * @return the requested min pages, or six when the import is absent
 	 */
 	private static int requiredMemPagesFromCore(byte[] coreModule) {
-		// Walk the sections: skip \0asm + version, then each (id, size, body).
-		int pos = 8;
-		while (pos < coreModule.length) {
-			int id = coreModule[pos++] & 0xFF;
-			long[] sz = readLeb128(coreModule, pos);
-			pos = (int) sz[1];
-			int bodyEnd = pos + (int) sz[0];
-			if (id != 2) { // 2 = import section
-				pos = bodyEnd;
-				continue;
-			}
-			// Import section body: vec of imports. Each import is
-			// module-name (leb len + utf-8), field-name (leb len + utf-8), kind byte,
-			// then kind-specific descriptor.
-			long[] count = readLeb128(coreModule, pos);
-			pos = (int) count[1];
-			for (int i = 0; i < count[0]; i++) {
-				long[] modLen = readLeb128(coreModule, pos);
-				pos = (int) modLen[1];
-				String modName = new String(coreModule, pos, (int) modLen[0]);
-				pos += (int) modLen[0];
-				long[] fldLen = readLeb128(coreModule, pos);
-				pos = (int) fldLen[1];
-				String fldName = new String(coreModule, pos, (int) fldLen[0]);
-				pos += (int) fldLen[0];
-				int kind = coreModule[pos++] & 0xFF;
-				// kind 0 = func (type index leb), 1 = table (elemtype + limits),
-				// 2 = memory (limits), 3 = global (valtype + mutability byte).
-				if (kind == 2 && "mem".equals(modName) && "memory".equals(fldName)) {
-					int flags = coreModule[pos++] & 0xFF;
-					long[] min = readLeb128(coreModule, pos);
-					return (int) min[0];
-				}
-				// Skip the descriptor of imports we don't care about.
-				switch (kind) {
-					case 0 -> {
-						long[] typeIdx = readLeb128(coreModule, pos);
-						pos = (int) typeIdx[1];
-					}
-					case 1 -> {
-						pos++; // elem type
-						int lim = coreModule[pos++] & 0xFF;
-						long[] mn = readLeb128(coreModule, pos);
-						pos = (int) mn[1];
-						if ((lim & 0x01) != 0) {
-							long[] mx = readLeb128(coreModule, pos);
-							pos = (int) mx[1];
-						}
-					}
-					case 2 -> {
-						int lim = coreModule[pos++] & 0xFF;
-						long[] mn = readLeb128(coreModule, pos);
-						pos = (int) mn[1];
-						if ((lim & 0x01) != 0) {
-							long[] mx = readLeb128(coreModule, pos);
-							pos = (int) mx[1];
-						}
-					}
-					case 3 -> {
-						pos++; // valtype
-						pos++; // mutability
-					}
-					default -> throw new IllegalStateException("Unknown import kind " + kind);
-				}
-			}
-			pos = bodyEnd;
-		}
-		return 6;
+		return WasmImports.memoryMinPages(coreModule, "mem", "memory").orElse(6);
 	}
 
 	/**

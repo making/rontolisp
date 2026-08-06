@@ -46,6 +46,133 @@ class WasmLispCompilerTest {
 		return new WasmLispCompiler(false, true).compile(program);
 	}
 
+	private byte[] compileComponentOptimized(String lispCode) {
+		List<LispVal> program = HttpLibrary.process(LispReader.readAllFromString(lispCode),
+				WitExportDirective.Backend.WASM_COMPONENT, false);
+		program = SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
+		program = StdinLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
+		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
+		program = WitLibrary.process(program);
+		return new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT).compile(program);
+	}
+
+	/** The names of every instance the component imports, in declaration order. */
+	private static List<String> componentImportNames(byte[] component) {
+		List<String> names = new java.util.ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < component.length) {
+			int id = component[p[0]++] & 0xff;
+			int size = readLeb(component, p);
+			int end = p[0] + size;
+			if (id == 10) { // component import section
+				int count = readLeb(component, p);
+				for (int i = 0; i < count; i++) {
+					p[0]++; // extern-name tag
+					int len = readLeb(component, p);
+					names.add(new String(component, p[0], len, java.nio.charset.StandardCharsets.UTF_8));
+					p[0] += len;
+					p[0]++; // extern descriptor sort
+					readLeb(component, p); // its index
+				}
+			}
+			p[0] = end;
+		}
+		return names;
+	}
+
+	private static int readLeb(byte[] buf, int[] p) {
+		int value = 0;
+		int shift = 0;
+		while (true) {
+			int b = buf[p[0]++] & 0xff;
+			value |= (b & 0x7f) << shift;
+			if ((b & 0x80) == 0) {
+				return value;
+			}
+			shift += 7;
+		}
+	}
+
+	@Test
+	void aComponentAlwaysDeclaresTheWholeFixedWasiSurface() {
+		// Without --optimize the core keeps all nine preview1 imports, so the adapter
+		// keeps
+		// every branch and the block keeps every interface -- the shape this builder has
+		// always emitted.
+		assertThat(componentImportNames(compileComponent("(print 1)"))).containsExactly("wasi:cli/types@0.3.0",
+				"wasi:cli/stdout@0.3.0", "wasi:cli/stdin@0.3.0", "wasi:cli/environment@0.3.0",
+				"wasi:clocks/types@0.3.0", "wasi:clocks/system-clock@0.3.0", "wasi:clocks/monotonic-clock@0.3.0",
+				"wasi:filesystem/types@0.3.0", "wasi:filesystem/preopens@0.3.0", "wasi:random/random@0.3.0",
+				"wasi:cli/stderr@0.3.0");
+	}
+
+	@Test
+	void anOptimizedComponentImportsOnlyTheWasiInterfacesItCanReach() {
+		// A printing program's core imports fd_write alone; the adapter is narrowed to
+		// the
+		// stdio-only implementation, so nothing reaches wasi:filesystem, wasi:clocks,
+		// wasi:random, wasi:cli/environment or wasi:cli/stdin. stderr stays: fd 2 is a
+		// runtime value, not an edge the shaker can follow.
+		assertThat(componentImportNames(compileComponentOptimized("(print 1)"))).containsExactly("wasi:cli/types@0.3.0",
+				"wasi:cli/stdout@0.3.0", "wasi:cli/stderr@0.3.0");
+	}
+
+	@Test
+	void anOptimizedComponentThatOpensAFileKeepsTheFilesystemSurface() {
+		// path_open is the only writer of the adapter's fd table, so importing it is what
+		// makes the file arms of fd_write / fd_read live -- and with them
+		// wasi:filesystem.
+		assertThat(componentImportNames(compileComponentOptimized("""
+				(with-open-file (s "x.txt" :direction :output) (format s "hi~%"))
+				"""))).contains("wasi:filesystem/types@0.3.0", "wasi:filesystem/preopens@0.3.0")
+			.doesNotContain("wasi:random/random@0.3.0", "wasi:clocks/system-clock@0.3.0");
+	}
+
+	@Test
+	void anOptimizedComponentsEmittedWitDescribesThePrunedSurface() {
+		// The emitted world and the emitted bytes come from ONE computation: a WIT that
+		// still advertised the dropped interfaces would describe a component that does
+		// not
+		// exist. (WitOracleE2eTest byte-diffs the same text against wasm-tools.)
+		List<LispVal> program = LispReader.readAllFromString("(print 1)");
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		compiler.compile(program);
+
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  import wasi:cli/types@0.3.0;
+				  import wasi:cli/stdout@0.3.0;
+				  import wasi:cli/stderr@0.3.0;
+
+				  export wasi:cli/run@0.3.0;
+				}
+				package wasi:cli@0.3.0 {
+				  interface types {
+				    enum error-code {
+				      io,
+				      illegal-byte-sequence,
+				      pipe,
+				    }
+				  }
+				  interface stdout {
+				    use types.{error-code};
+
+				    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+				  }
+				  interface stderr {
+				    use types.{error-code};
+
+				    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
+				  }
+				  interface run {
+				    run: async func() -> result;
+				  }
+				}
+				""");
+	}
+
 	@Test
 	void conditionFormsCompileOnWasm() {
 		// define-condition (top-level, spliced like defclass), make-condition,

@@ -158,27 +158,10 @@
     (i32.add (i32.const 0x50100)
       (i32.mul (i32.sub (local.get $fd) (i32.const 100)) (i32.const 16))))
 
-  ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout, fd==2 is stderr; otherwise
-  ;; a file fd. One full stream is created per call: open it (write-via-stream for
-  ;; stdout/stderr, append-via-stream for a file), push every iovec through it, signal EOF
-  ;; by dropping the writable end, then await the operation future. stdout and stderr share
-  ;; the wasi:cli error-code, so their future uses the -cli built-ins; a file uses -fs.
-  (func $fd_write (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
-    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32)
-    (local $i i32) (local $base i32) (local $ptr i32) (local $len i32) (local $total i32) (local $sl i32)
-    (local.set $r64 (call $stream_new))
-    (local.set $rx (i32.wrap_i64 (local.get $r64)))
-    (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r64) (i64.const 32))))
-    (if (i32.eq (local.get $fd) (i32.const 1))
-      (then
-        (local.set $fut (call $stdout_write (local.get $rx))))
-      (else
-        (if (i32.eq (local.get $fd) (i32.const 2))
-          (then
-            (local.set $fut (call $stderr_write (local.get $rx))))
-          (else
-            (local.set $sl (call $slot (local.get $fd)))
-            (local.set $fut (call $file_append (i32.load (local.get $sl)) (local.get $rx)))))))
+  ;; Push every iovec through the writable end, signal EOF by dropping it, and answer the
+  ;; total byte count. Shared by the stdio and the file half of fd_write.
+  (func $push_iovs (param $tx i32) (param $iov i32) (param $cnt i32) (result i32)
+    (local $i i32) (local $base i32) (local $ptr i32) (local $len i32) (local $total i32)
     (block $done
       (loop $l
         (br_if $done (i32.ge_u (local.get $i) (local.get $cnt)))
@@ -191,48 +174,106 @@
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $l)))
     (call $stream_drop_w (local.get $tx))
-    ;; await + drop the write future with the matching error-code type (fd 1/2 = cli).
-    (if (i32.or (i32.eq (local.get $fd) (i32.const 1)) (i32.eq (local.get $fd) (i32.const 2)))
-      (then
-        (drop (call $future_read_cli (local.get $fut) (i32.const 0x50000)))
-        (call $future_drop_cli (local.get $fut)))
-      (else
-        (drop (call $future_read_fs (local.get $fut) (i32.const 0x50000)))
-        (call $future_drop_fs (local.get $fut))))
-    (i32.store (local.get $nw) (local.get $total))
+    (local.get $total))
+
+  ;; The stdio half of fd_write: fd 1 is stdout, anything else stderr (only 1 and 2 ever
+  ;; reach it). One full stream per call -- open it with write-via-stream, push every
+  ;; iovec, then await the operation future through the wasi:cli built-ins, which is the
+  ;; error-code stdout and stderr share.
+  ;;
+  ;; It is EXPORTED as an alternative implementation of fd_write, for a program whose core
+  ;; module imports no path_open: path_open is the only writer of the fd table below, so
+  ;; without it no file fd can exist and the file half is dead. Retaining this one under
+  ;; the name `fd_write` is what lets the whole wasi:filesystem surface leave the component
+  ;; (WasmComponentBuilder, WasmExports.retain).
+  (func $fd_write_stdio (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
+    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32)
+    ;; Anything but fd 1/2 is out of this implementation's contract. The WIDE fd_write
+    ;; never routes one here, and a core with no path_open has no file fd -- but it can
+    ;; still hold a SOCKET fd (>= 200), which reaches fd_write when a write form escapes
+    ;; WasmSocketsRewrite's dispatch table. Under the wide adapter that walked off the fd
+    ;; table and trapped inside the host; trap here too, rather than quietly divert the
+    ;; bytes to stderr and report success.
+    (if (i32.gt_u (local.get $fd) (i32.const 2)) (then (unreachable)))
+    (local.set $r64 (call $stream_new))
+    (local.set $rx (i32.wrap_i64 (local.get $r64)))
+    (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r64) (i64.const 32))))
+    (local.set $fut
+      (if (result i32) (i32.eq (local.get $fd) (i32.const 1))
+        (then (call $stdout_write (local.get $rx)))
+        (else (call $stderr_write (local.get $rx)))))
+    (i32.store (local.get $nw) (call $push_iovs (local.get $tx) (local.get $iov) (local.get $cnt)))
+    (drop (call $future_read_cli (local.get $fut) (i32.const 0x50000)))
+    (call $future_drop_cli (local.get $fut))
     (i32.const 0))
 
-  ;; fd_read(fd, iov, cnt, nread) -> errno. Single-iovec; nread==0 signals EOF. fd==0 is
-  ;; stdin (a cached wasi:cli/stdin readable stream); otherwise a file fd whose readable
-  ;; stream is cached in the slot and advances across calls.
-  (func $fd_read (param $fd i32) (param $iov i32) (param $cnt i32) (param $nread i32) (result i32)
-    (local $ins i32) (local $sl i32) (local $ptr i32) (local $len i32) (local $ret i32) (local $n i32)
-    (if (i32.eqz (local.get $fd))
-      (then
-        (if (i32.eqz (i32.load (i32.const 0x50080)))
-          (then
-            (call $stdin_read (i32.const 0x50070))
-            (i32.store (i32.const 0x50084) (i32.load (i32.const 0x50070)))
-            (call $future_drop_cli (i32.load (i32.const 0x50074)))
-            (i32.store (i32.const 0x50080) (i32.const 1))))
-        (local.set $ins (i32.load (i32.const 0x50084))))
-      (else
-        (local.set $sl (call $slot (local.get $fd)))
-        (local.set $ins (i32.load offset=4 (local.get $sl)))
-        (if (i32.eq (local.get $ins) (i32.const -1))
-          (then
-            (call $file_read (i32.load (local.get $sl)) (i64.const 0) (i32.const 0x50060))
-            (local.set $ins (i32.load (i32.const 0x50060)))
-            (i32.store offset=4 (local.get $sl) (local.get $ins))
-            (call $future_drop_fs (i32.load (i32.const 0x50064)))))))
-    (local.set $ptr (i32.load (local.get $iov)))
-    (local.set $len (i32.load offset=4 (local.get $iov)))
-    ;; stream.read writes straight into the shared-memory destination; the return value is
-    ;; (count << 4) | status, with status 0 = completed, 1 = dropped (EOF). count 0 = EOF.
-    (local.set $ret (call $stream_read (local.get $ins) (local.get $ptr) (local.get $len)))
-    (local.set $n (i32.shr_u (local.get $ret) (i32.const 4)))
-    (i32.store (local.get $nread) (local.get $n))
+  ;; The file half of fd_write: append-via-stream on the slot's descriptor, awaited through
+  ;; the wasi:filesystem built-ins (its error-code is a different type from wasi:cli's).
+  (func $fd_write_file (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
+    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32) (local $sl i32)
+    (local.set $r64 (call $stream_new))
+    (local.set $rx (i32.wrap_i64 (local.get $r64)))
+    (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r64) (i64.const 32))))
+    (local.set $sl (call $slot (local.get $fd)))
+    (local.set $fut (call $file_append (i32.load (local.get $sl)) (local.get $rx)))
+    (i32.store (local.get $nw) (call $push_iovs (local.get $tx) (local.get $iov) (local.get $cnt)))
+    (drop (call $future_read_fs (local.get $fut) (i32.const 0x50000)))
+    (call $future_drop_fs (local.get $fut))
     (i32.const 0))
+
+  ;; fd_write(fd, iov, cnt, nwritten) -> errno. fd==1 is stdout, fd==2 is stderr; otherwise
+  ;; a file fd.
+  (func $fd_write (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
+    (if (i32.or (i32.eq (local.get $fd) (i32.const 1)) (i32.eq (local.get $fd) (i32.const 2)))
+      (then (return (call $fd_write_stdio
+        (local.get $fd) (local.get $iov) (local.get $cnt) (local.get $nw)))))
+    (call $fd_write_file (local.get $fd) (local.get $iov) (local.get $cnt) (local.get $nw)))
+
+  ;; Read one iovec out of a readable stream. stream.read writes straight into the
+  ;; shared-memory destination; the return value is (count << 4) | status, with status
+  ;; 0 = completed, 1 = dropped (EOF). count 0 = EOF.
+  (func $read_iov (param $ins i32) (param $iov i32) (param $nread i32) (result i32)
+    (i32.store (local.get $nread)
+      (i32.shr_u
+        (call $stream_read (local.get $ins) (i32.load (local.get $iov)) (i32.load offset=4 (local.get $iov)))
+        (i32.const 4)))
+    (i32.const 0))
+
+  ;; The stdin half of fd_read: a cached wasi:cli/stdin readable stream. Exported as an
+  ;; alternative implementation of fd_read for the same reason as $fd_write_stdio.
+  (func $fd_read_stdin (param $fd i32) (param $iov i32) (param $cnt i32) (param $nread i32) (result i32)
+    ;; Same contract as $fd_write_stdio: only fd 0 belongs here, and answering a socket fd
+    ;; with stdin's bytes would be a silent wrong answer where the wide adapter trapped.
+    (if (local.get $fd) (then (unreachable)))
+    (if (i32.eqz (i32.load (i32.const 0x50080)))
+      (then
+        (call $stdin_read (i32.const 0x50070))
+        (i32.store (i32.const 0x50084) (i32.load (i32.const 0x50070)))
+        (call $future_drop_cli (i32.load (i32.const 0x50074)))
+        (i32.store (i32.const 0x50080) (i32.const 1))))
+    (call $read_iov (i32.load (i32.const 0x50084)) (local.get $iov) (local.get $nread)))
+
+  ;; The file half of fd_read: the slot's readable stream, opened on first use and left to
+  ;; advance across calls.
+  (func $fd_read_file (param $fd i32) (param $iov i32) (param $cnt i32) (param $nread i32) (result i32)
+    (local $sl i32) (local $ins i32)
+    (local.set $sl (call $slot (local.get $fd)))
+    (local.set $ins (i32.load offset=4 (local.get $sl)))
+    (if (i32.eq (local.get $ins) (i32.const -1))
+      (then
+        (call $file_read (i32.load (local.get $sl)) (i64.const 0) (i32.const 0x50060))
+        (local.set $ins (i32.load (i32.const 0x50060)))
+        (i32.store offset=4 (local.get $sl) (local.get $ins))
+        (call $future_drop_fs (i32.load (i32.const 0x50064)))))
+    (call $read_iov (local.get $ins) (local.get $iov) (local.get $nread)))
+
+  ;; fd_read(fd, iov, cnt, nread) -> errno. Single-iovec; nread==0 signals EOF. fd==0 is
+  ;; stdin; otherwise a file fd.
+  (func $fd_read (param $fd i32) (param $iov i32) (param $cnt i32) (param $nread i32) (result i32)
+    (if (i32.eqz (local.get $fd))
+      (then (return (call $fd_read_stdin
+        (local.get $fd) (local.get $iov) (local.get $cnt) (local.get $nread)))))
+    (call $fd_read_file (local.get $fd) (local.get $iov) (local.get $cnt) (local.get $nread)))
 
   ;; path_open(dirfd, dirflags, pptr, plen, oflags, rights_base, rights_inh, fdflags, fdout)
   ;; -> errno. dirfd is ignored (the preopened dir is used). oflags 0 = read, 9 = write
@@ -436,6 +477,10 @@
 
   (export "fd_write" (func $fd_write))
   (export "fd_read" (func $fd_read))
+  ;; The stdio-only / stdin-only implementations, retained UNDER the names above by
+  ;; WasmComponentBuilder when the core imports no path_open (see $fd_write_stdio).
+  (export "fd_write_stdio" (func $fd_write_stdio))
+  (export "fd_read_stdin" (func $fd_read_stdin))
   (export "path_open" (func $path_open))
   (export "fd_readdir" (func $fd_readdir))
   (export "fd_close" (func $fd_close))

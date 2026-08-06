@@ -368,7 +368,7 @@ decides what to make of it.
   resolves inconsistently across backends — the interpreter takes the binding,
   the JVM backend takes the `cl` function.
 - Only an **interface** can be bound. A world's `import` items are not read (a
-  component's WASI imports come from the fixed adapter surface it is built on).
+  component's WASI imports come from the build, not from the world).
 - A resource handle is opaque — only whoever handed it out may read anything into
   the integer — and rontolisp never releases one on its own. It is released by
   [`<resource>-drop`](#releasing-a-resource-resource-drop) and by nothing else:

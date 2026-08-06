@@ -7,7 +7,7 @@ embeds when wrapping a rontolisp core module into a WASI 0.3 (Preview 3) compone
 In WASI 0.3 the `wasi:io` package is gone: byte I/O flows through the built-in
 component-model `stream<u8>` / `future<T>` types and the async canonical ABI. rontolisp
 keeps its Preview 1 core module unchanged and an **adapter** core module implements the
-eight `wasi_snapshot_preview1` functions over WASI 0.3, driving the `stream.*` / `future.*`
+nine `wasi_snapshot_preview1` functions over WASI 0.3, driving the `stream.*` / `future.*`
 canon built-ins. The component's `wasi:cli/run@0.3.0` export (an `async func`) is lifted as
 an async-typed export, and the adapters call the ASYNC (non-blocking) stream/future
 built-ins, parking on a blocking `waitable-set.wait` when one reports BLOCKED -- all of
@@ -92,8 +92,9 @@ wasm-tools component wit prog.wasm     # shows every imported WASI 0.3 interface
 wasm-tools print prog.wasm | less      # full disassembly (core modules + canon section)
 ```
 
-`uni.wit` imports exactly these interfaces (in this order, which fixes the component import
-instance indices `WasmComponentBuilder.build` assumes):
+`uni.wit` imports exactly these interfaces (in this order; appending LAST keeps the
+regenerated blob's existing groups where they were -- note the indices themselves are no
+longer assumed by anything, see "Pruning" below):
 
 ```
 import wasi:cli/stdout@0.3.0;          // write-via-stream(stream<u8>) -> future<result>
@@ -126,7 +127,10 @@ async-typed lift of the rontolisp core's `run`) is emitted programmatically by
   (avoids the instantiate-before-memory cycle without a lazy funcref trampoline).
 - `adapter.wat` -> `adapter.wasm` — the preview1-to-0.3 adapter. Imports the shared memory,
   the lowered WASI 0.3 functions and the async canonical built-ins (under `"w"`), and
-  exports the eight `wasi_snapshot_preview1` functions rontolisp imports. Writes use
+  exports the nine `wasi_snapshot_preview1` functions rontolisp imports **plus two extra
+  entry points**, `fd_write_stdio` and `fd_read_stdin`: the stdio-only halves of the two
+  fd-polymorphic shims, which `WasmComponentBuilder` retains UNDER the preview1 names for a
+  program whose core imports no `path_open` (see "Pruning"). Writes use
   `append-via-stream` + await; reads cache a readable stream per fd. wasi:cli and
   wasi:filesystem expose **distinct** `error-code` enums, so their `future<result<_,
   error-code>>` are distinct types with separate built-ins (`future-read-cli`/`-fs`); the
@@ -136,12 +140,13 @@ async-typed lift of the rontolisp core's `run`) is emitted programmatically by
 ## The unified import block (`import-block.bin`)
 
 `import-block.bin` is the raw component-model **type + import section bytes** for the 11
-imported WASI 0.3 interfaces (component import instances 0-10, component types 0-15). It is
+imported WASI 0.3 interfaces (component import instances 0-10, component types 0-15, before any
+pruning). It is
 written verbatim by `ComponentWriter.writeRaw`, after which `WasmComponentBuilder.build`
 does all remaining wiring programmatically (alias the cli/fs error-code + descriptor types
 and the WASI funcs incl. the stderr write-via-stream, define the
-`stream<u8>`/`future`/`result` types as component types 17-23, lower the WASI funcs + emit
-the `stream.*`/`future.*` canon built-ins as core funcs 1-21, group them as the adapter's
+`stream<u8>`/`future`/`result` types, lower the WASI funcs + emit
+the `stream.*`/`future.*` canon built-ins as core funcs 1.., group them as the adapter's
 `"w"` import, instantiate mem/adapter/rontolisp, lift `run` against an async function type,
 and export `wasi:cli/run@0.3.0`).
 
@@ -157,12 +162,14 @@ and export `wasi:cli/run@0.3.0`).
 slices out the component's type/import/alias sections (everything between the 8-byte
 preamble and the first core-module section) as `import-block.bin`.
 
-The wiring constants in `WasmComponentBuilder.build` were derived from `wasm-tools dump` /
-`wasm-tools print` of the generated reference: the import instance index of each interface,
-the component type indices of the resource/enum types aliased out (cli error-code, fs
-error-code, descriptor), and the canonical options (memory / realloc / utf8) per lowered
-function. If `uni.wit` / `core.wat` change, re-run `regen.sh`, re-derive those constants
-from a fresh dump, and re-run the test suite. Validate end to end with:
+The BASE block's instance / type indices are no longer constants anywhere: `WasmComponentBuilder`
+parses the blob (`am.ik.wasm.ComponentImportBlock`) and reads them back, so editing `uni.wit`
+needs no re-derivation there. What still has to match the blob is the per-lowered-function
+canonical options (memory / realloc / utf8) and the member names in
+`WasmComponentBuilder.BLOCK_FUNCS`; the SERVE block's constants
+(`WasmServeComponentBuilder`, NARROW / WIDE) are still hand-derived from a `wasm-tools dump`.
+After changing `uni.wit` / `core.wat`, re-run `regen.sh` and the test suite. Validate end to
+end with:
 
 ```bash
 wasm-tools validate -f component-model -f cm-async prog.wasm
@@ -313,3 +320,26 @@ import instances 0-8 (`clocks/types` -- dependency-hoisted by `wait-for`'s `dura
 `stdout`, `stderr`) and the first free component type is 15; re-derive from a fresh
 `wasm-tools dump` after changing `uni-http-server.wit` or `core-http-server.wat`.
 Details: `../../.kb/fetch-http.md`.
+
+## Pruning (`--optimize`)
+
+With `--optimize` the wrapper is no longer fixed cost. The compiled core module's surviving
+`wasi_snapshot_preview1` imports narrow the adapter (`WasmExports.retain` +
+`WasmTreeShaker.shake`), the shaken adapter's surviving `"w"` imports narrow the lowerings and
+component types the wrapper emits, and `ComponentImportBlock.prune` cuts this directory's
+`import-block.bin` down to the interfaces those reach, renumbering the survivors.
+`(print "Hello World!")` ends up importing `wasi:cli/{types,stdout,stderr}` only.
+
+Two things to know when editing `adapter.wat`:
+
+- **a new `"w"` import needs a matching `W_MEMBERS` entry** in `WasmComponentBuilder`, or the
+  build throws by name (the wiring table and the adapter are checked against each other);
+- **the fd-polymorphic shims are split on purpose.** `$fd_write` dispatches on a runtime fd, so
+  a call graph reaches the filesystem from any printing program; the narrow `$fd_write_stdio` /
+  `$fd_read_stdin` exist so the wrapper can pick the implementation that provably cannot. Keep
+  the file arms behind `path_open` -- it is the only writer of the fd table, and that is the
+  fact the choice rests on.
+
+The blob grammar the pruner decodes, and its oracle (pruning `import-block.bin` to
+`{wasi:cli/types, wasi:cli/stdout}` reproduces `import-block-nogc-print.bin` byte for byte),
+are in `../../.kb/optimize-dead-code-elimination.md`.

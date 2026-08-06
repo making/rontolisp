@@ -43,6 +43,8 @@ public final class WasmTreeShaker {
 	}
 
 	// Section ids.
+	private static final int SEC_CUSTOM = 0;
+
 	private static final int SEC_TYPE = 1;
 
 	private static final int SEC_IMPORT = 2;
@@ -326,10 +328,36 @@ public final class WasmTreeShaker {
 				case SEC_START -> rebuilt.add(new Section(SEC_START, rebuildStartSection(s.payload(), funcRemap)));
 				case SEC_DATA -> rebuilt.add(deadSegments.isEmpty() && deadRanges.isEmpty() ? s
 						: new Section(SEC_DATA, rebuildDataSection(dataSegments, deadSegments, deadRanges)));
+				case SEC_CUSTOM -> {
+					// The `name` section maps FUNCTION AND TYPE INDICES to names, and
+					// this
+					// pass has just renumbered both -- keeping it would describe the
+					// module's old shape, which is worse than describing nothing. A
+					// hand-written helper module (a WASI adapter assembled from .wat) is
+					// where this actually bites: its name section is most of its bytes.
+					// Every other custom section is index-free and is copied through.
+					if (!"name".equals(customSectionName(s.payload()))) {
+						rebuilt.add(s);
+					}
+				}
 				default -> rebuilt.add(s);
 			}
 		}
 		return assemble(rebuilt);
+	}
+
+	// The name a custom section carries, or null when its payload is not even a valid
+	// name.
+	private static @Nullable String customSectionName(byte[] payload) {
+		if (payload.length == 0) {
+			return null;
+		}
+		int[] p = { 0 };
+		int len = readU(payload, p);
+		if (len < 0 || p[0] + len > payload.length) {
+			return null;
+		}
+		return new String(payload, p[0], len, java.nio.charset.StandardCharsets.UTF_8);
 	}
 
 	private static boolean anyOwnerAlive(int[] owners, boolean[] reachable, int totalFuncs) {

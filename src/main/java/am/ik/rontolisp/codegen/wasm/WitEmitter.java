@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.wasm.ComponentWriter;
 import am.ik.wit.WitDocument;
@@ -14,6 +15,7 @@ import am.ik.wit.WitPackageName;
 import am.ik.wit.WitPrinter;
 import am.ik.wit.WitRef;
 import am.ik.wit.WitType;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Renders the WIT text ({@code package root:component; world root { ... }}) describing a
@@ -74,7 +76,26 @@ final class WitEmitter {
 	 */
 	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls,
 			List<WasmComponentImportCompiler.Import> imports) {
-		WitDocument document = WasiWitDefinitions.document(variant);
+		return emit(variant, exportDecls, imports, null);
+	}
+
+	/**
+	 * Renders the WIT text for a component whose FIXED WASI surface has itself been
+	 * pruned to what the program reaches ({@code --optimize} on the base variant).
+	 * @param variant one of the {@code VARIANT_*} names
+	 * @param exportDecls the {@code rontolisp:wasm-export} directives lifted as
+	 * component-model exports, in export order
+	 * @param imports the user interfaces the component imports, in import order
+	 * @param wasiInterfaces the fixed WASI interface ids the component still imports, or
+	 * {@code null} for the variant's whole world. A dropped interface leaves the world's
+	 * import list AND the package definitions, exactly as it leaves the component's type
+	 * -- {@code wasm-tools component wit} prints what the binary declares and nothing
+	 * else
+	 * @return the WIT text (ends with a newline)
+	 */
+	static String emit(String variant, List<WasmExportCompiler.Decl> exportDecls,
+			List<WasmComponentImportCompiler.Import> imports, @Nullable Set<String> wasiInterfaces) {
+		WitDocument document = prune(WasiWitDefinitions.document(variant), wasiInterfaces);
 		// On the nogc-print variant EVERY export is an async lift (the print bridge's
 		// blocking waitable-set park is legal only inside an async-typed task), so the
 		// emitted WIT must say `async func` the way wasm-tools does -- the directives
@@ -135,7 +156,114 @@ final class WitEmitter {
 			items.addAll(extraBlocks);
 			document = new WitDocument(List.copyOf(items));
 		}
-		return WitPrinter.print(document);
+		return WitPrinter.print(orderPackagesByFirstReference(document));
+	}
+
+	/**
+	 * Reorders the package definitions the way {@code wasm-tools component wit} does: by
+	 * the order in which the WORLD first names them &mdash; every import in import order,
+	 * then the exports.
+	 * <p>
+	 * This used to be true by accident. The templates list their packages in exactly that
+	 * order because {@code wasi:cli/types} is always the first world import, so the fixed
+	 * blocks and the appended user-import / exported-interface blocks happened to line
+	 * up. Pruning breaks the accident: drop every {@code wasi:cli} IMPORT and the package
+	 * survives only through the fixed {@code export wasi:cli/run}, which the tool prints
+	 * last and the template first. Deriving the order from the world removes the hidden
+	 * coupling instead of adding a second list to keep in step.
+	 */
+	private static WitDocument orderPackagesByFirstReference(WitDocument document) {
+		Map<String, Integer> firstReference = new LinkedHashMap<>();
+		int position = 0;
+		for (WitItem item : document.world().items()) {
+			WitRef target = item instanceof WitItem.ImportRef importRef ? importRef.target()
+					: item instanceof WitItem.ExportRef exportRef ? exportRef.target() : null;
+			if (target != null && target.pkg() != null) {
+				firstReference.putIfAbsent(target.pkg().toString(), position++);
+			}
+		}
+		List<WitItem> blocks = new ArrayList<>();
+		List<Integer> slots = new ArrayList<>();
+		List<WitItem> items = new ArrayList<>();
+		for (WitItem item : document.items()) {
+			if (item instanceof WitItem.PackageBlock block) {
+				blocks.add(block);
+				// A block nothing references keeps its relative position at the end
+				// rather
+				// than being dropped: this method reorders, it does not prune.
+				slots.add(firstReference.getOrDefault(block.name().toString(), Integer.MAX_VALUE));
+				items.add(null);
+			}
+			else {
+				items.add(item);
+			}
+		}
+		List<Integer> order = new ArrayList<>();
+		for (int i = 0; i < blocks.size(); i++) {
+			order.add(i);
+		}
+		order.sort(java.util.Comparator.comparingInt(slots::get));
+		int next = 0;
+		List<WitItem> ordered = new ArrayList<>(items.size());
+		for (WitItem item : items) {
+			ordered.add(item == null ? blocks.get(order.get(next++)) : item);
+		}
+		return new WitDocument(List.copyOf(ordered));
+	}
+
+	/**
+	 * Drops the world imports the component no longer has, and with them every package
+	 * definition nothing references any more. A component's WIT is a description of its
+	 * type, so an interface the binary stopped importing has to leave the text too --
+	 * otherwise {@code --emit-wit} hands a binding generator a world the component does
+	 * not implement, and the oracle diff against {@code wasm-tools component wit} fails.
+	 */
+	private static WitDocument prune(WitDocument document, @Nullable Set<String> wasiInterfaces) {
+		if (wasiInterfaces == null) {
+			return document;
+		}
+		WitItem.World world = document.world();
+		List<WitItem> worldItems = new ArrayList<>();
+		for (WitItem item : world.items()) {
+			if (item instanceof WitItem.ImportRef importRef
+					&& !wasiInterfaces.contains(importRef.target().toString())) {
+				continue;
+			}
+			worldItems.add(item);
+		}
+		// Which interfaces the surviving world still names, import or export.
+		Set<String> referenced = new java.util.LinkedHashSet<>();
+		for (WitItem item : worldItems) {
+			if (item instanceof WitItem.ImportRef importRef) {
+				referenced.add(importRef.target().toString());
+			}
+			else if (item instanceof WitItem.ExportRef exportRef) {
+				referenced.add(exportRef.target().toString());
+			}
+		}
+		List<WitItem> items = new ArrayList<>();
+		for (WitItem item : document.items()) {
+			if (item == world) {
+				items.add(new WitItem.World(world.meta(), world.name(), List.copyOf(worldItems)));
+				continue;
+			}
+			if (!(item instanceof WitItem.PackageBlock block)) {
+				items.add(item);
+				continue;
+			}
+			List<WitItem> kept = new ArrayList<>();
+			for (WitItem member : block.items()) {
+				if (member instanceof WitItem.InterfaceDef iface
+						&& !referenced.contains(new WitRef(block.name(), iface.name()).toString())) {
+					continue;
+				}
+				kept.add(member);
+			}
+			if (!kept.isEmpty()) {
+				items.add(new WitItem.PackageBlock(block.meta(), block.name(), List.copyOf(kept)));
+			}
+		}
+		return new WitDocument(List.copyOf(items));
 	}
 
 	// One package block per exported-interface package (interfaces of one package share a

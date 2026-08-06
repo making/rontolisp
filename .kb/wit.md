@@ -83,8 +83,11 @@ package to what the component reaches) get suffixed methods. `WitEmitter`
 appends each `rontolisp:wasm-export` Decl as a typed `export` world item and prints
 canonically. Oracles, strongest first:
 
-- `WitOracleE2eTest` — live byte-diff against `wasm-tools component wit` (local only).
-- `WasiWitDefinitionsTest` — always-on byte pin of every variant against its fixture.
+- `WitOracleE2eTest` — live byte-diff against `wasm-tools component wit` (local only),
+  at `OptimizeLevel.NONE` **and** at `DEFAULT`, where the fixed surface itself is pruned.
+- `WasiWitDefinitionsTest` — always-on byte pin of every variant against its fixture. It
+  pins the UNPRUNED document: pruning is `WitEmitter`'s filter over it, not a second
+  fixture set, so a variant stays one captured artifact.
 - `WitEmitterTest` — line pins of the export shapes.
 - New in the round-trip suite: the emitted WIT re-parses through our own parser.
 
@@ -423,12 +426,19 @@ catches a drifted program is the `wit-export` contract check itself, which runs 
 backend (interpreter included).
 
 What `--emit-wit` uniquely and genuinely reports is the **IMPORT side**, which
-`wit-export` never looks at (a component's WASI surface is the fixed adapter blob's, per
-variant). Measured on the greeter example: a **6-line** hand-written world compiles to a
+`wit-export` never looks at (a component's WASI surface comes from the BUILD -- the blob
+variant, plus what the program reaches). Measured on the greeter example: a **6-line**
+hand-written world compiles to a
 component whose real type is **149 lines** — 10 `wasi:*` imports + `export wasi:cli/run`
 around the single declared export; adding a `rontolisp:fetch` call makes it **216 lines**
 / 12 imports (+ `wasi:http/{types,client}@0.3.0`),
-and `rontolisp:tcp-*` adds `wasi:sockets`. Short of `wasm-tools`, `--emit-wit` is the
+and `rontolisp:tcp-*` adds `wasi:sockets`. Under `--optimize` it goes the OTHER way too:
+todo-270 prunes the fixed surface to what the shaken core reaches, so the same greeter
+drops to 3 imports. That is exactly why the emitted world is filtered from the SAME set
+the builder prunes the import block to (`WasmComponentBuilder.wasiInterfaces` ->
+`WitEmitter.emit`'s `wasiInterfaces` argument), and why `WitOracleE2eTest` grew its first
+`--optimize` legs: every case there compiled at `OptimizeLevel.NONE`, so a world that
+still advertised a dropped interface would have gone unnoticed. Short of `wasm-tools`, `--emit-wit` is the
 only way to see it, and it is what a host / `jco` must consume. For a program WITHOUT a
 world (hand-written `wasm-export`, or an `:s-expr` export, which has no WIT spelling)
 `--emit-wit` remains the sole generator, as before todo 126.

@@ -15,7 +15,7 @@ wasmtime run -W gc=y hello.wasm
 
 In WASI 0.3 all byte I/O flows through the built-in component-model
 `stream<u8>` / `future<T>` types and the async canonical ABI. rontolisp keeps
-the same Preview 1 core module unchanged — it still imports the eight
+the same Preview 1 core module unchanged — it still imports the nine
 `wasi_snapshot_preview1` functions — and an **adapter** core module
 implements them over WASI 0.3 (`wasi:cli`, `wasi:filesystem`, `wasi:clocks`,
 `wasi:random`) using `stream.new`/`stream.read`/`stream.write` and
@@ -100,6 +100,15 @@ wasmtime run -W gc=y --dir . fileio.wasm
   (`rontolisp:http-handler`) also compiles to a component, but a different
   kind (exporting `wasi:http/handler@0.3.0`) run under `wasmtime serve` —
   see the [HTTP handler guide](http-handler.md).
+
+A component built **without** `--optimize` declares all of the above whether or
+not the program uses them, so its imported surface is the same for every
+program. With [`--optimize`](../compiling/wasm.md#optimize-tree-shaking) the
+surface follows the program: a component that only prints imports
+`wasi:cli/{types,stdout,stderr}` and nothing else, which is what a
+`wasm-tools component wit` on it — and the `--emit-wit` output below — will
+show. Nothing about the flags you run it with changes; a host simply has less
+to provide.
 
 ## Component-model Function Exports (`wasm-export`)
 

@@ -77,6 +77,72 @@ class WitOracleE2eTest {
 	}
 
 	@Test
+	void anOptimizedComponentsPrunedWasiSurfaceMatchesWasmToolsByteForByte() throws Exception {
+		// Under --optimize the FIXED WASI surface is narrowed to what the shaken core
+		// still
+		// reaches, so the emitted world names fewer interfaces than the variant's
+		// template.
+		// Every other case here compiles at OptimizeLevel.NONE, which would leave that
+		// whole path un-oracled: an emitted world that still advertised a dropped
+		// interface
+		// is exactly the divergence this file exists to catch.
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		byte[] component = compiler.compile(LispReader.readAllFromString("""
+				(defun greet (s) (concatenate 'string "hello " s))
+				(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+				(print "top level ran")
+				"""));
+		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
+		assertThat(compiler.componentWit()).doesNotContain("wasi:filesystem", "wasi:clocks", "wasi:random");
+	}
+
+	@Test
+	void anOptimizedComponentThatUsesEveryWasiInterfaceKeepsThemAll() throws Exception {
+		// The other end of the same pruning: a program reaching files, the clock, the
+		// environment, stdin and random keeps the whole surface, and the emitted world
+		// still byte-matches the tool.
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		List<am.ik.rontolisp.LispVal> program = LispReader.readAllFromString("""
+				(with-open-file (s "x.txt" :direction :output) (format s "hi~%"))
+				(print (directory "*.txt"))
+				(print (get-universal-time))
+				(print (random 10))
+				(print (uiop:getenv "HOME"))
+				(print (read-line))
+				""");
+		program = am.ik.rontolisp.eval.StdinLibrary.process(program,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false);
+		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+		program = am.ik.rontolisp.eval.WitLibrary.process(program);
+		byte[] component = compiler.compile(program);
+		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
+		assertThat(compiler.componentWit()).contains("wasi:filesystem/types@0.3.0", "wasi:filesystem/preopens@0.3.0",
+				"wasi:clocks/system-clock@0.3.0", "wasi:random/random@0.3.0", "wasi:cli/environment@0.3.0",
+				"wasi:cli/stdin@0.3.0");
+	}
+
+	@Test
+	void aPrunedWorldWithNoWasiCliImportStillOrdersItsPackagesLikeWasmTools() throws Exception {
+		// wasm-tools prints package definitions in the order the WORLD first names them.
+		// That used to agree with the template's own order for free, because
+		// wasi:cli/types
+		// is always the first import. Pruning breaks the coincidence: a program that
+		// reaches
+		// no stdio at all keeps wasi:cli only through the fixed `export wasi:cli/run`,
+		// which
+		// the tool prints LAST. Both --optimize legs above print, so neither reaches this
+		// shape.
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT);
+		byte[] component = compiler.compile(LispReader.readAllFromString("""
+				(defun roll () (random 100))
+				(rontolisp:wasm-export 'roll :returns :int)
+				"""));
+		assertThat(compiler.componentWit()).isEqualTo(oracle(component));
+		assertThat(compiler.componentWit()).contains("package wasi:random@0.3.0").doesNotContain("import wasi:cli/");
+	}
+
+	@Test
 	void gcInterfaceExportWitMatchesWasmToolsByteForByte() throws Exception {
 		// An interface export (`export docs:adder/add@0.1.0`) bundles its functions into
 		// an

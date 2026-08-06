@@ -135,8 +135,8 @@ docs:adder/add@0.1.0;` plus its `interface` definition — byte-for-byte the way
 Current limitations:
 
 - Only the world's **export** side is bound. `import` items are ignored (a
-  component's WASI imports come from the fixed adapter surface it is built
-  on — [`--emit-wit`](#emitting-the-wit-world---emit-wit) is how you see
+  component's WASI imports come from the build, not from the world —
+  [`--emit-wit`](#emitting-the-wit-world---emit-wit) is how you see
   them), and an inline `import name: func(...)` is rejected rather than
   silently dropped; the functions a program calls are bound from an
   interface with [`wit-import`](#importing-a-wit-interface-wit-import) (or
@@ -225,7 +225,10 @@ The world's imports follow the build variant (plain, `rontolisp:fetch`,
 `rontolisp:tcp-*`, or `rontolisp:http-handler`; with
 [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component)
 the world is import-free, or carries the `wasi:cli/stdout@0.3.0` import — and
-`async func` exports — when the program prints), an `:async t` export is
+`async func` exports — when the program prints) and, under
+[`--optimize`](../compiling/wasm.md#optimize-tree-shaking), the part of that
+variant the program can actually reach: the world above shrinks to the two
+`wasi:cli` imports it really needs. An `:async t` export is
 rendered as `async func`, and a `rontolisp:http-handler` build exports
 `wasi:http/handler@0.3.0` instead of `run`. `--emit-wit` without `--component`
 is a compile error — a core module has no WIT-level surface to describe.
@@ -243,11 +246,13 @@ as above.
 has already written its exports down. What it has not written down is the
 component's **imports**, and that is the larger half: `wit-export` reads only
 the world's `export` items, because a component's WASI surface comes from the
-fixed adapter blob the build links, not from the world. The 6-line
+build, not from the world. The 6-line
 `wit/greeter.wit` of the [previous section](#implementing-a-wit-world-wit-export)
 compiles to a component whose real type is **149 lines** — ten `wasi:*`
 imports and `export wasi:cli/run@0.3.0` wrapped around the one `greet` you
-declared. Let that same `greet` call `rontolisp:fetch` and the build silently
+declared. (Add [`--optimize`](../compiling/wasm.md#optimize-tree-shaking) and
+that surface narrows to whatever the program can reach, which is one more
+reason to read the emitted world rather than assume it.) Let that same `greet` call `rontolisp:fetch` and the build silently
 adds two more imports (`wasi:http/types`, `wasi:http/client`), for **216
 lines**; `rontolisp:tcp-*` pulls in `wasi:sockets` the same way. Short of
 installing `wasm-tools` and introspecting the binary, `--emit-wit` is the

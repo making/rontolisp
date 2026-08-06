@@ -4579,9 +4579,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			// An interface the block itself declares (wait.lisp's
 			// wasi:clocks/monotonic-clock) is part of the fixed WASI surface, so the
 			// emitted WIT must not re-declare it as a user import.
+			// Under --optimize the fixed surface itself is narrowed to what the shaken
+			// core
+			// still reaches, so the world must name only the interfaces that survived --
+			// the same set the builder prunes the import block to.
+			boolean shakeSurface = this.optimize.eliminatesDeadCode();
 			this.componentWit = WitEmitter.emit(WitEmitter.VARIANT_BASE, componentExportDecls,
-					WasmComponentBuilder.additionalImports(componentImports));
-			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports);
+					WasmComponentBuilder.additionalImports(componentImports),
+					WasmComponentBuilder.wasiInterfaces(coreModule, componentImports, shakeSurface));
+			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports, shakeSurface);
 		}
 		return this.optimize.eliminatesDeadCode()
 				? am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges) : coreModule;

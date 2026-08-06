@@ -130,7 +130,7 @@ serve-mode component exports only `wasi:http/handler@0.3.0`).
 ## Limitations
 
 - Only the world's **export** side is a contract. `import` items are ignored (a
-  component's WASI imports come from the fixed adapter surface it is built on),
+  component's WASI imports come from the build, not from the world),
   and an inline `import name: func(...)` is rejected rather than silently
   dropped — the functions a program calls are bound from an interface with
   [`rontolisp:wit-import`](rontolisp-wit-import.md), or declared by hand with

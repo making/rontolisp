@@ -102,13 +102,30 @@ For the `fact` example the module drops from ~330 KB to ~4 KB.
 `--optimize` is opt-in and behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
 embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
-shape, `--component` included — the core module is shaken before the wrap. The
+shape, `--component` included. The
 same flag also dead-code-eliminates the [JVM output](jvm.md).
 
 The dead functions take their baggage with them: the WASI imports only they used,
 the type definitions nothing left names, and the static string data no surviving
 code still addresses — a printed literal's module is a few hundred bytes rather
 than the whole runtime's string table.
+
+On the `--component` path the **wrapper shrinks with the core**, not just the core
+itself. Which WASI 0.3 interfaces a component imports follows from what the program
+can actually reach: `(print "Hello World!")` compiles to a component importing
+`wasi:cli/types`, `wasi:cli/stdout` and `wasi:cli/stderr` and nothing else — no
+`wasi:filesystem`, no `wasi:clocks`, no `wasi:random` — while a program that opens
+a file, reads the clock and draws random bytes keeps them all. `--emit-wit` prints
+the world the component really has, so the emitted `.wit` shrinks with it.
+
+```bash
+echo '(print "Hello World!")' > hello.lisp
+rontolisp hello.lisp --component --optimize -o hello.wasm    # ~2 KB
+rontolisp hello.lisp --component -o hello-full.wasm          # ~345 KB
+```
+
+Without `--optimize` a component always declares the full fixed WASI surface, which
+is what makes the two builds comparable byte-for-byte across releases.
 
 `--optimize` also decides how much of a **loaded library** it can reach. A
 compiled program calls most functions directly, but a `funcall` needs a dispatch

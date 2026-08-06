@@ -338,6 +338,10 @@ class WasmLispCompilerIntegrationTest {
 	// http, wait-for, then prelude (read-all is a prelude async-defun) and the wit
 	// runtime.
 	private static byte[] compileFetchComponent(String program) {
+		return compileFetchComponent(program, OptimizeLevel.NONE);
+	}
+
+	private static byte[] compileFetchComponent(String program, OptimizeLevel optimize) {
 		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
 		List<am.ik.rontolisp.LispVal> forms = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.LispPreludeLibrary
@@ -345,7 +349,7 @@ class WasmLispCompilerIntegrationTest {
 						am.ik.rontolisp.eval.WaitForLibrary.process(am.ik.rontolisp.eval.HttpLibrary
 							.process(LispReader.readAllFromString(program), witBackend, false), witBackend),
 						witBackend), witBackend, false)));
-		return new WasmLispCompiler(false, true).compile(forms);
+		return new WasmLispCompiler(false, true, false, optimize).compile(forms);
 	}
 
 	// The same component pipeline with GrayStreamsLibrary in it, in the CLI's order (the
@@ -9211,6 +9215,36 @@ class WasmLispCompilerIntegrationTest {
 				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"hello\"\n65\nNIL");
+	}
+
+	@Test
+	void anOptimizedComponentFailsAsLoudlyAsAPlainOneOnAnFdItCannotServe() throws Exception {
+		// Under --optimize the adapter's STDIO-ONLY fd_write is retained under the name
+		// fd_write, on the strength of "no path_open means no file fd". A SOCKET fd (>=
+		// 200)
+		// is the other thing that can arrive there, when a write form escapes
+		// WasmSocketsRewrite's dispatch table (`format` is one such form today). The wide
+		// implementation walked off the fd table and trapped inside the host; the narrow
+		// one
+		// must NOT quietly divert those bytes to stderr and report success, or --optimize
+		// would turn a loud failure into a silent protocol desync.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port)))
+				  (format client "not through the dispatch table~%")
+				  (print :unreachable))
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT)) {
+			byte[] componentBytes = compileFetchComponent(program, level);
+			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("fd-contract.component.wasm"));
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+					"tcp=y", "-S", "inherit-network=y", path("fd-contract.component.wasm"));
+			assertThat(result.getExitCode())
+				.as("%s must fail rather than succeed; stdout: %s", level, result.getStdout())
+				.isNotZero();
+			assertThat(result.getStdout()).as("%s must not report success", level).doesNotContain("UNREACHABLE");
+		}
 	}
 
 	@Test
