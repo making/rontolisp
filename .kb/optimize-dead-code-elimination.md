@@ -380,7 +380,11 @@ imports and the synthesized `"w"` core instance, ~232 B is the `"w"` field NAMES
 twice each; they are a private linkage between two artifacts this repo ships together, so
 shortening them is available and was deliberately not taken — it trades the legibility of
 `wasm-tools print` on a rontolisp component for bytes the gate above will hand back for
-free.
+free. That judgement, its measurement and the two conditions that would overturn it are
+`.todo/275`. A further ~44 B of this component (and 2.4–5.7% of EVERY module this project
+emits, Preview 1 included) is non-minimal ENCODING rather than surplus content —
+`.todo/274`, which also owns the empty sections the shaken shared-memory module now
+carries.
 
 ### Why the component path is safe (todo-259)
 
