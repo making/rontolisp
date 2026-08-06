@@ -127,19 +127,40 @@ bounding-index / designator siblings),
 `JvmLispCompilerTest#compileAndRunStringOrderingPredicates` and
 `WasmLispCompilerIntegrationTest#stringOrderingPredicates`.
 
-## Case fold is FULL Unicode
+## Case fold is FULL Unicode, and it is PER CODE POINT everywhere
 
 `char-upcase` / `char-downcase` produce the same code point
 `Character.toUpperCase(int)` / `Character.toLowerCase(int)` would on the same
-JVM Unicode baseline. `string-upcase` / `string-downcase` delegate to Java's
-locale-neutral `String.toUpperCase(Locale.ROOT)` / `toLowerCase(Locale.ROOT)`
-which already understands supplementary code points and returns the same
-result.
+JVM Unicode baseline.
 
-- **Interpreter and JVM compile path** -- `Character.toUpperCase(int)` /
-  `Character.toLowerCase(int)` directly. These are single-code-point
-  transformations; a mapping that would expand (e.g. German sharp s) lives on
-  the `String` overload and does not surface at `char-upcase`.
+**`string-upcase` / `string-downcase` / `string-capitalize` apply that same
+single-code-point fold to EVERY character** -- which is exactly how CLHS defines
+them ("each character of the result string is produced by applying the function
+`char-upcase` to the corresponding character of string"). Two consequences that
+are load-bearing, not incidental:
+
+- The result has the SAME CHARACTER COUNT as the argument. There is no
+  multi-character special casing: `(string-upcase "straße")` is `"STRAßE"`, not
+  `"STRASSE"` (SBCL agrees).
+- No context-sensitive rule applies: `(string-downcase "ΑΣ")` is `"ασ"`, not the
+  final-sigma `"ας"`.
+
+Both interpreter and JVM used to call `String.toUpperCase(Locale.ROOT)` /
+`toLowerCase(Locale.ROOT)`, which does apply the 102 upper / 1 lower
+SpecialCasing expansions AND the Final_Sigma rule -- so *those two* were the
+backends deviating from CL, while WASM deviated in the other direction by
+folding ASCII only. Both sides were corrected together (todo 267); do not
+"simplify" either one back to the `String` overload.
+
+- **Interpreter** -- `Environment.caseFoldString` walks code points and applies
+  `Character.toUpperCase(int)` / `toLowerCase(int)`;
+  `Environment.capitalizeString` does the same with the
+  `Character.isLetterOrDigit(int)` word test.
+- **JVM compile path** -- one shared emitter, `JvmStringCaseFold`, walks the
+  quoted designator by `String.codePointAt` / `Character.charCount` and appends
+  through `StringBuilder.appendCodePoint(int)`. `JvmStringUpcaseCompiler` and
+  `JvmStringCapitalizeCompiler` are thin mode selectors over it. The framing
+  quote bytes are neither cased nor alphanumeric, so they survive the walk.
 - **WASM (both backends)** -- `_char_upcase` and `_char_downcase` runtime
   helpers (`WasmCaseFoldRuntimeBuilder`) binary-search a compressed
   `(from:u32, to:u32, delta:i32)` range table baked into the static data
@@ -148,6 +169,37 @@ result.
   interpreter and the JVM know about is present. Cache: ~16 KB combined
   (upper 690 ranges, lower 674 ranges at Unicode 15) with 10-deep binary
   search per call.
+  `_string_upcase` / `_string_downcase` / `_string_capitalize`
+  (`WasmStringRuntimeBuilder.emitCaseFoldCore`) DECODE each 1-4 byte UTF-8
+  sequence, call those same two helpers on the code point, and re-encode --
+  they must never fold bytes. `_string_capitalize` finds its word boundaries
+  with a third helper, `_char_alnum_p` (FUNC_CHAR_ALNUM_P), the same binary
+  search over a `(from, to)` PAIR table generated from
+  `Character.isLetterOrDigit(int)` (728 ranges / ~5.8 KB at Unicode 16); an
+  ASCII alnum test would restart a word after a caseless letter and answer
+  `"AあB"` where the other backends answer `"Aあb"`.
+  All three tables are their own `WasmTreeShaker.OwnedDataSegment` owned by
+  their sole reader, so `--optimize` drops each with its helper.
+
+**Output-buffer sizing on WASM is derived, not assumed.** A fold can WIDEN a
+code point's UTF-8 encoding (`U+0250` upcases to `U+2C6F`: two bytes in, three
+out), so `emitCaseFoldCore` grows the scratch to
+`inputBytes * (1 + WasmCaseFoldRuntimeBuilder.maxUtf8Growth()) + 2`.
+`maxUtf8Growth()` is computed from the baked tables at compile time (1 today),
+which is a valid multiplier because a code point occupies at least one input
+byte -- a future JDK Unicode baseline that folds more widely widens the bound
+with it instead of silently overrunning the scratch.
+
+`--no-gc` is not a fifth opinion here: it rejects `string-upcase` /
+`string-downcase` / `string-capitalize` as ineligible operations at
+`collectCalls`, so there is nothing to keep in step.
+
+Still ASCII-only on WASM and therefore still divergent: `alpha-char-p`
+(`WasmCharCompiler.compileAlphaCharP`) and the `string-equal` / `char-equal`
+case-insensitive compare (`WasmStringRuntimeBuilder.emitMaybeLower`), where the
+interpreter uses `Character.isLetter(int)` and `equalsIgnoreCase`. Those need
+their own membership table (`isLetter`) and a fold-based compare; tracked
+separately, not closed by todo 267.
 
 ## Print / read
 
@@ -243,11 +295,23 @@ same code point compare equal even though they are not the same reference:
   allocations), and `(eq (code-char 128512) #\A)` to `NIL`. Also pins that
   `eq` on freshly-consed cells and on two boxed floats stays `NIL` -- the
   new TYPE_CHAR branch adds no extra value equality for non-chars.
+- `src/test/resources/ci-spec.yaml` -- `string-case-ops-full-unicode` case pins
+  `string-upcase` / `string-downcase` / `string-capitalize` on Latin-1, Greek,
+  Cyrillic and astral (Deseret) input, the length-preserving sharp s and
+  non-context final sigma, the two UTF-8-widening folds (`U+0250`, `U+023A`),
+  and the full-Unicode word constituents -- byte-identical on all four
+  backends.
 - `LispEvaluatorTest`, `JvmLispCompilerTest`, `WasmLispCompilerIntegrationTest`
   cover per-backend char builtins and the WASM `_char_upcase` /
   `_char_downcase` helper indices;
   `WasmLispCompilerIntegrationTest#eqOnCharactersComparesByCodePoint`
-  guards the WASM emit path directly.
+  guards the WASM emit path directly, and
+  `#stringCaseOpsAreFullUnicode` / `#stringCapitalizeWordConstituentsAreFullUnicode`
+  guard the code-point walk and the `_char_alnum_p` word test. The
+  per-backend siblings are
+  `LispEvaluatorTest#evalStringCaseOpsFoldEveryCharacterIndependently` /
+  `#evalStringCapitalizeIsFullUnicode` and
+  `JvmLispCompilerTest#compileAndRunStringCaseOpsAreFullUnicodeAndLengthPreserving`.
 
 ## Related
 - [[wasm-gc-strings]] -- the WASM byte model behind these code-point walks

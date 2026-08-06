@@ -6097,6 +6097,60 @@ cases:
       3
       "a😀b"
       (97 233 128512 98 DONE)
+  - name: string-case-ops-full-unicode
+    source: |
+      ;; string-upcase / string-downcase / string-capitalize are defined by CLHS
+      ;; as char-upcase / char-downcase applied to EACH character, so they are
+      ;; full-Unicode and length-preserving on every backend. The WASM backends
+      ;; decode the UTF-8 content one code point at a time and call the same
+      ;; _char_upcase / _char_downcase range-table helpers char-upcase uses.
+      (print (string-downcase "ÉΛΩ"))
+      (print (string-upcase "éλω"))
+      (print (string-capitalize "élan vital"))
+      ;; Cyrillic, and a mixed ASCII / non-ASCII word.
+      (print (string-upcase "привет"))
+      (print (string-downcase "ПРИВЕТ"))
+      (print (string-capitalize "ЗДРАВСТВУЙ мир"))
+      ;; Astral cased letters: Deseret U+10428 <-> U+10400 exercises the 4-byte
+      ;; UTF-8 decode / re-encode path.
+      (print (string-upcase "𐐨𐐩"))
+      (print (string-downcase "𐐀𐐁"))
+      ;; Length is preserved in CHARACTERS: no multi-character special casing
+      ;; (German sharp s stays one character rather than expanding to "SS", and
+      ;; a Greek final sigma is not context-folded), which is what "apply
+      ;; char-upcase to each character" means.
+      (print (string-upcase "straße"))
+      (print (length (string-upcase "straße")))
+      (print (string-downcase "ΑΣ"))
+      ;; Code points whose fold WIDENS the UTF-8 encoding from 2 to 3 bytes
+      ;; (U+0250 -> U+2C6F upcasing, U+023A -> U+2C65 downcasing), so the output
+      ;; buffer must not be sized from the input byte count alone.
+      (print (string-upcase "ɐɐɐ"))
+      (print (string-downcase "ȺȺȺ"))
+      ;; Word constituents for string-capitalize are alphanumeric characters in
+      ;; the full-Unicode sense, so a caseless letter (CJK) and a non-ASCII digit
+      ;; continue the word rather than starting a new one.
+      (print (string-capitalize "aあb 42x"))
+      (print (string-capitalize "ǆenan"))
+      ;; String designators (symbol / keyword) take the same path.
+      (print (string-downcase :FOO))
+    expected: |
+      "éλω"
+      "ÉΛΩ"
+      "Élan Vital"
+      "ПРИВЕТ"
+      "привет"
+      "Здравствуй Мир"
+      "𐐀𐐁"
+      "𐐨𐐩"
+      "STRAßE"
+      6
+      "ασ"
+      "ⱯⱯⱯ"
+      "ⱥⱥⱥ"
+      "Aあb 42x"
+      "Ǆenan"
+      "foo"
   - name: eq-on-characters-by-code-point
     source: |
       ;; CL permits (but does not require) eq to return T on two characters that

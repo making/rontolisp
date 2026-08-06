@@ -1349,6 +1349,31 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringCaseOpsFoldEveryCharacterIndependently() {
+		// CLHS defines string-upcase / string-downcase as char-upcase / char-downcase
+		// applied to each character, so the fold is full-Unicode AND length-preserving:
+		// no multi-character special casing (sharp s stays one character) and no
+		// context-sensitive final sigma.
+		assertThat(eval("(string-downcase \"ÉΛΩ\")")).isEqualTo(new LispString("éλω"));
+		assertThat(eval("(string-upcase \"éλω\")")).isEqualTo(new LispString("ÉΛΩ"));
+		assertThat(eval("(string-upcase \"straße\")")).isEqualTo(new LispString("STRAßE"));
+		assertThat(eval("(length (string-upcase \"straße\"))")).isEqualTo(new LispInteger(6));
+		assertThat(eval("(string-downcase \"ΑΣ\")")).isEqualTo(new LispString("ασ"));
+		// Astral cased letters (Deseret U+10428 <-> U+10400) fold as single characters.
+		assertThat(eval("(string-upcase \"𐐨𐐩\")")).isEqualTo(new LispString("𐐀𐐁"));
+		assertThat(eval("(string-downcase \"𐐀𐐁\")")).isEqualTo(new LispString("𐐨𐐩"));
+	}
+
+	@Test
+	void evalStringCapitalizeIsFullUnicode() {
+		assertThat(eval("(string-capitalize \"élan vital\")")).isEqualTo(new LispString("Élan Vital"));
+		assertThat(eval("(string-capitalize \"ЗДРАВСТВУЙ мир\")")).isEqualTo(new LispString("Здравствуй Мир"));
+		// A caseless letter is still a word constituent, so the following letter is NOT
+		// treated as a word start.
+		assertThat(eval("(string-capitalize \"aあb 42x\")")).isEqualTo(new LispString("Aあb 42x"));
+	}
+
+	@Test
 	void evalSubseq() {
 		assertThat(eval("(subseq \"hello world\" 6)")).isEqualTo(new LispString("world"));
 		assertThat(eval("(subseq \"hello world\" 0 5)")).isEqualTo(new LispString("hello"));

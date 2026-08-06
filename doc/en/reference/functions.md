@@ -42,7 +42,7 @@ page.
 | `pprint` `pprint-newline` `pprint-indent` `pprint-tab` | `(pprint-newline :mandatory s)` | A newline for `:mandatory` only -- no stream carries a column, so nothing wraps |
 | `copy-pprint-dispatch` `set-pprint-dispatch` `pprint-dispatch` | `(pprint-dispatch 21 table)` | The pretty-print dispatch table (real entries + lookup; the ordinary printing operators do not consult it) |
 | `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"` (`'string` / `'list` / `'vector` result families; the compilers require a literal quoted designator) |
-| `string-upcase` | `(string-upcase "abc")` | `"ABC"` (case conversion is ASCII-only in the WASM backend) |
+| `string-upcase` | `(string-upcase "abc")` | `"ABC"` (full-Unicode, and length-preserving: `char-upcase` per character) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"` (first letter of each word) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"` (works on strings and lists, e.g. `(subseq '(1 2 3 4) 1 3)` => `(2 3)`; the `end` argument is optional) |
@@ -90,7 +90,7 @@ page.
 | `code-char` | `(code-char 66)` | `#\B` -- the character with a given code point |
 | `char=` `char<` `char<=` `char>` `char>=` `char/=` `char-equal` | `(char< #\a #\b #\c)` | `t` (variadic comparison by code point; `char/=` = pairwise distinct, `char-equal` = case-insensitive `char=`) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t` (the case-INSENSITIVE ordering family) |
-| `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A` (ASCII case folding in the WASM backend) |
+| `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A` (full-Unicode case folding on every backend) |
 | `characterp` | `(characterp #\a)` | `t` |
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil` (ASCII letters in the WASM backend) |
 | `alphanumericp` | `(alphanumericp #\x)`, `(alphanumericp #\-)` | `t`, `nil` (letter or decimal digit) |

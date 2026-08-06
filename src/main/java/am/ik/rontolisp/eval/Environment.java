@@ -3236,11 +3236,11 @@ public final class Environment implements Scope {
 	private static void registerStringOps(Environment env) {
 		env.defineFunction(LispNames.STRING_UPCASE, new LispFunction(LispNames.STRING_UPCASE, args -> {
 			requireArgCount(LispNames.STRING_UPCASE, args, 1);
-			return new LispString(stringDesignator(LispNames.STRING_UPCASE, args.get(0)).toUpperCase(Locale.ROOT));
+			return new LispString(caseFoldString(stringDesignator(LispNames.STRING_UPCASE, args.get(0)), true));
 		}));
 		env.defineFunction(LispNames.STRING_DOWNCASE, new LispFunction(LispNames.STRING_DOWNCASE, args -> {
 			requireArgCount(LispNames.STRING_DOWNCASE, args, 1);
-			return new LispString(stringDesignator(LispNames.STRING_DOWNCASE, args.get(0)).toLowerCase(Locale.ROOT));
+			return new LispString(caseFoldString(stringDesignator(LispNames.STRING_DOWNCASE, args.get(0)), false));
 		}));
 		env.defineFunction(LispNames.STRING_CAPITALIZE, new LispFunction(LispNames.STRING_CAPITALIZE, args -> {
 			requireArgCount(LispNames.STRING_CAPITALIZE, args, 1);
@@ -3504,6 +3504,22 @@ public final class Environment implements Scope {
 			return (int) i.value();
 		}
 		throw new LispEvalException(name + " expects an integer index, got: " + val.print());
+	}
+
+	// Applies char-upcase (or char-downcase) to EVERY character, which is how CLHS
+	// defines string-upcase / string-downcase. Deliberately not String.toUpperCase: the
+	// String overload applies multi-character special casing (sharp s -> "SS") and the
+	// context-sensitive Greek final-sigma rule, both of which would change the character
+	// count and diverge from char-upcase applied per character.
+	private static String caseFoldString(String s, boolean upcase) {
+		StringBuilder sb = new StringBuilder(s.length());
+		int i = 0;
+		while (i < s.length()) {
+			int cp = s.codePointAt(i);
+			sb.appendCodePoint(upcase ? Character.toUpperCase(cp) : Character.toLowerCase(cp));
+			i += Character.charCount(cp);
+		}
+		return sb.toString();
 	}
 
 	// Capitalizes the first letter of each alphanumeric word and lowercases the rest,

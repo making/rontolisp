@@ -3401,6 +3401,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStringCaseOpsAreFullUnicodeAndLengthPreserving() throws Exception {
+		// Same contract as the interpreter: char-upcase / char-downcase per character,
+		// so sharp s stays one character and a final sigma is not context-folded.
+		assertThat(compileAndRun("(princ (string-downcase \"ÉΛΩ\"))")).isEqualTo("éλω");
+		assertThat(compileAndRun("(princ (string-upcase \"éλω\"))")).isEqualTo("ÉΛΩ");
+		assertThat(compileAndRun("(princ (string-upcase \"straße\"))")).isEqualTo("STRAßE");
+		assertThat(compileAndRun("(princ (length (string-upcase \"straße\")))")).isEqualTo("6");
+		assertThat(compileAndRun("(princ (string-downcase \"ΑΣ\"))")).isEqualTo("ασ");
+		assertThat(compileAndRun("(princ (string-upcase \"𐐨𐐩\"))")).isEqualTo("𐐀𐐁");
+		assertThat(compileAndRun("(princ (string-downcase \"𐐀𐐁\"))")).isEqualTo("𐐨𐐩");
+		assertThat(compileAndRun("(princ (string-capitalize \"élan vital\"))")).isEqualTo("Élan Vital");
+		assertThat(compileAndRun("(princ (string-capitalize \"aあb 42x\"))")).isEqualTo("Aあb 42x");
+	}
+
+	@Test
 	void compileAndRunSubseq() throws Exception {
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 6))")).isEqualTo("world");
 		assertThat(compileAndRun("(princ (subseq \"hello world\" 0 5))")).isEqualTo("hello");

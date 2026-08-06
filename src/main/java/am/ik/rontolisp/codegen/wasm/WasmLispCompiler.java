@@ -622,6 +622,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Character.toLowerCase(int). Every (char-downcase ch) call routes through it.
 	static final int FUNC_CHAR_DOWNCASE = FUNC_CHAR_UPCASE + 1;
 
+	// _char_alnum_p (cp) -> 0/1: the same binary search over a (from, to) PAIR table
+	// backed by Character.isLetterOrDigit(int), answering membership instead of a fold.
+	// _string_capitalize finds its word boundaries with it, so the WASM word constituents
+	// are the full-Unicode letter-or-digit set the other backends use.
+	static final int FUNC_CHAR_ALNUM_P = FUNC_CHAR_DOWNCASE + 1;
+
 	// The reader's # dispatch helpers (WasmReadRuntimeBuilder): the frontend lexer's
 	// dispatch set mirrored into the emitted runtime reader -- character literals,
 	// radix integers, bit vectors, #(...)/#nA(...) arrays, #f(/#d( packed floats and
@@ -629,7 +635,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// before FUNC_VEC_BASE/FUNC_USER_BASE like the mod/rem helpers, so no
 	// import/FUNC_START index shifts and the component blobs are unaffected; stubs when
 	// the program does not read.
-	static final int FUNC_RD_CHARLIT = FUNC_CHAR_DOWNCASE + 1;
+	static final int FUNC_RD_CHARLIT = FUNC_CHAR_ALNUM_P + 1;
 
 	static final int FUNC_RD_RADIX = FUNC_RD_CHARLIT + 1;
 
@@ -3029,20 +3035,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] stringData = stringTable.toByteArray();
 		final byte[] upperFoldBytes = WasmCaseFoldRuntimeBuilder.upperTableBytes();
 		final byte[] lowerFoldBytes = WasmCaseFoldRuntimeBuilder.lowerTableBytes();
+		final byte[] alnumBytes = WasmCaseFoldRuntimeBuilder.alnumTableBytes();
 		final int upperFoldOffset = (dataBase + stringData.length + 3) & ~3;
-		// 12-byte triples keep the 4-alignment for the second table.
+		// 12-byte triples and 8-byte pairs both keep the 4-alignment for the next table.
 		final int lowerFoldOffset = upperFoldOffset + upperFoldBytes.length;
+		final int alnumOffset = lowerFoldOffset + lowerFoldBytes.length;
 		final byte[] charUpcaseBody = WasmCaseFoldRuntimeBuilder.buildBody(upperFoldOffset,
 				WasmCaseFoldRuntimeBuilder.upperTableCount());
 		final byte[] charDowncaseBody = WasmCaseFoldRuntimeBuilder.buildBody(lowerFoldOffset,
 				WasmCaseFoldRuntimeBuilder.lowerTableCount());
+		final byte[] charAlnumBody = WasmCaseFoldRuntimeBuilder.buildAlnumBody(alnumOffset,
+				WasmCaseFoldRuntimeBuilder.alnumTableCount());
 
 		// Final static-data layout. The static data ends after the case-fold tables, so
 		// the runtime intern table's base and the bump-allocator heap base can be derived
 		// from that end; both are seeded into fixed cells by active data segments below.
 		// This keeps runtime interning and heap allocation above the static data no
 		// matter how large the program is.
-		int staticEnd = lowerFoldOffset + lowerFoldBytes.length;
+		int staticEnd = alnumOffset + alnumBytes.length;
 		int rtInternBase = Math.max(RT_INTERN_MIN_BASE, (staticEnd + 15) & ~15);
 		int heapBase = rtInternBase + RT_INTERN_REGION_SIZE;
 
@@ -3834,6 +3844,7 @@ public final class WasmLispCompiler implements LispCompiler {
 													// (FUNC_STR_CHAR_BYTE_OFFSET)
 				fnDef.addFunction(TYPE_LOOKUP); // _char_upcase (FUNC_CHAR_UPCASE)
 				fnDef.addFunction(TYPE_LOOKUP); // _char_downcase (FUNC_CHAR_DOWNCASE)
+				fnDef.addFunction(TYPE_LOOKUP); // _char_alnum_p (FUNC_CHAR_ALNUM_P)
 				// the reader # dispatch helpers (FUNC_RD_CHARLIT .. FUNC_RD_MEMEQ)
 				fnDef.addFunction(TYPE_READ_LINE); // _rd_charlit () -> value
 				fnDef.addFunction(TYPE_READ_LINE_FD); // _rd_radix (radix) -> value
@@ -4327,6 +4338,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// Character.toLowerCase(int); binary-searches the table at
 				// lowerFoldOffset.
 				code.addFunction(charDowncaseBody);
+				// _char_alnum_p (FUNC_CHAR_ALNUM_P): full-Unicode letter-or-digit
+				// membership backed by Character.isLetterOrDigit(int); binary-searches
+				// the (from, to) pair table at alnumOffset.
+				code.addFunction(charAlnumBody);
 				// the reader # dispatch helper bodies (FUNC_RD_CHARLIT .. FUNC_RD_MEMEQ),
 				// stubs when the program does not read
 				code.addFunction(rdCharlitBody);
@@ -4479,6 +4494,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// (_char_upcase / _char_downcase) -- see caseFoldSegments below.
 				data.addActiveData(0, upperFoldOffset, upperFoldBytes);
 				data.addActiveData(0, lowerFoldOffset, lowerFoldBytes);
+				data.addActiveData(0, alnumOffset, alnumBytes);
 			});
 		byte[] coreModule = out.toByteArray();
 		// Resolve (rontolisp:wasm-import ...) directives: prepend the host imports and
@@ -4496,13 +4512,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The case-fold tables' segments are owned by their sole readers; the injector
 		// (just above) shifted every defined function index up by the injected import
 		// count, so the owners' indices shift with them. Segments 0-2 are the fixed
-		// seed cells, then the string data (when present), then the two tables.
+		// seed cells, then the string data (when present), then the three tables.
 		int upperFoldSegIndex = stringData.length > 0 ? 4 : 3;
 		List<am.ik.wasm.WasmTreeShaker.OwnedDataSegment> caseFoldSegments = List.of(
 				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex,
 						new int[] { FUNC_CHAR_UPCASE + hostImports.size() }),
 				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex + 1,
-						new int[] { FUNC_CHAR_DOWNCASE + hostImports.size() }));
+						new int[] { FUNC_CHAR_DOWNCASE + hostImports.size() }),
+				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex + 2,
+						new int[] { FUNC_CHAR_ALNUM_P + hostImports.size() }));
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
 				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments);

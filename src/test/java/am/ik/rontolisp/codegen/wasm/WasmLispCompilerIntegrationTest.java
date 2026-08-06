@@ -4828,6 +4828,40 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringCaseOpsAreFullUnicode() throws Exception {
+		// The string case operators decode the UTF-8 content one code point at a time
+		// and call the same _char_upcase / _char_downcase range-table helpers
+		// char-upcase uses, so they fold every Unicode letter exactly like the
+		// interpreter and the JVM compile path -- no ASCII-only +/- 32 loop.
+		assertThat(compileAndRun("(print (string-downcase \"ÉΛΩ\"))")).isEqualTo("\"éλω\"");
+		assertThat(compileAndRun("(print (string-upcase \"éλω\"))")).isEqualTo("\"ÉΛΩ\"");
+		assertThat(compileAndRun("(print (string-capitalize \"élan vital\"))")).isEqualTo("\"Élan Vital\"");
+		assertThat(compileAndRun("(print (string-upcase \"привет\"))")).isEqualTo("\"ПРИВЕТ\"");
+		// Astral cased letters exercise the 4-byte UTF-8 decode / re-encode path.
+		assertThat(compileAndRun("(print (string-upcase \"𐐨𐐩\"))")).isEqualTo("\"𐐀𐐁\"");
+		assertThat(compileAndRun("(print (string-downcase \"𐐀𐐁\"))")).isEqualTo("\"𐐨𐐩\"");
+		// Length is preserved in CHARACTERS, so sharp s stays one character and a
+		// final sigma is not context-folded.
+		assertThat(compileAndRun("(print (string-upcase \"straße\"))")).isEqualTo("\"STRAßE\"");
+		assertThat(compileAndRun("(print (length (string-upcase \"straße\")))")).isEqualTo("6");
+		assertThat(compileAndRun("(print (string-downcase \"ΑΣ\"))")).isEqualTo("\"ασ\"");
+		// Folds that WIDEN the UTF-8 encoding from 2 to 3 bytes: the output buffer is
+		// not sized from the input byte count alone.
+		assertThat(compileAndRun("(print (string-upcase \"ɐɐɐ\"))")).isEqualTo("\"ⱯⱯⱯ\"");
+		assertThat(compileAndRun("(print (string-downcase \"ȺȺȺ\"))")).isEqualTo("\"ⱥⱥⱥ\"");
+	}
+
+	@Test
+	void stringCapitalizeWordConstituentsAreFullUnicode() throws Exception {
+		// string-capitalize's word boundary is alphanumericp in the full-Unicode
+		// sense (_char_alnum_p's baked range table), so a caseless letter (CJK) or a
+		// non-ASCII letter continues the word rather than starting a new one.
+		assertThat(compileAndRun("(print (string-capitalize \"aあb 42x\"))")).isEqualTo("\"Aあb 42x\"");
+		assertThat(compileAndRun("(print (string-capitalize \"ЗДРАВСТВУЙ мир\"))")).isEqualTo("\"Здравствуй Мир\"");
+		assertThat(compileAndRun("(print (string-capitalize \"ǆenan\"))")).isEqualTo("\"Ǆenan\"");
+	}
+
+	@Test
 	void equalNestedLists() throws Exception {
 		assertThat(compileAndRun("(print (equal '(1 2 (3)) '(1 2 (3))))")).isEqualTo("T");
 	}

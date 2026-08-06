@@ -27,9 +27,7 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int COLON = 0x3A;
 
-	// Transform modes for the shared build core.
-	private static final int COPY = 0;
-
+	// Fold modes for the shared code-point build core.
 	private static final int UPCASE = 1;
 
 	private static final int DOWNCASE = 2;
@@ -1154,12 +1152,13 @@ final class WasmStringRuntimeBuilder {
 	static byte[] buildCaseConvertBody(boolean upcase) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// Locals 1..6: pos, end, start, cur, b, fb (i32); 7: inArr ($str_bytes).
-		declareI32AndStrArrayLocals(w, 6, 1);
-		int pos = 1, end = 2, start = 3, cur = 4, b = 5, fb = 6, inArr = 7;
+		// Locals 1..7: pos, end, start, cur, cp, step, k (i32); 8: inArr ($str_bytes).
+		// cp doubles as the scratch the designator scan needs before the loop starts.
+		declareI32AndStrArrayLocals(w, 7, 1);
+		int pos = 1, end = 2, start = 3, cur = 4, cp = 5, step = 6, k = 7, inArr = 8;
 		setStrArray(w, 0, inArr);
-		emitDesignatorContentRange(w, 0, inArr, pos, end, fb);
-		emitBuildCore(w, inArr, pos, end, start, cur, b, -1, upcase ? UPCASE : DOWNCASE);
+		emitDesignatorContentRange(w, 0, inArr, pos, end, cp);
+		emitCaseFoldCore(w, inArr, pos, end, start, cur, cp, step, k, -1, upcase ? UPCASE : DOWNCASE);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -1171,13 +1170,13 @@ final class WasmStringRuntimeBuilder {
 	static byte[] buildCapitalizeBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// Locals 1..7: pos, end, start, cur, b, atWordStart, fb (i32); 8: inArr
+		// Locals 1..8: pos, end, start, cur, cp, step, k, atWordStart (i32); 9: inArr
 		// ($str_bytes).
-		declareI32AndStrArrayLocals(w, 7, 1);
-		int pos = 1, end = 2, start = 3, cur = 4, b = 5, ws = 6, fb = 7, inArr = 8;
+		declareI32AndStrArrayLocals(w, 8, 1);
+		int pos = 1, end = 2, start = 3, cur = 4, cp = 5, step = 6, k = 7, ws = 8, inArr = 9;
 		setStrArray(w, 0, inArr);
-		emitDesignatorContentRange(w, 0, inArr, pos, end, fb);
-		emitBuildCore(w, inArr, pos, end, start, cur, b, ws, CAPITALIZE);
+		emitDesignatorContentRange(w, 0, inArr, pos, end, cp);
+		emitCaseFoldCore(w, inArr, pos, end, start, cur, cp, step, k, ws, CAPITALIZE);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -1256,7 +1255,7 @@ final class WasmStringRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 		w.write(Instruction.END);
 		set(w, end);
-		emitBuildCore(w, strArr, pos, end, start, cur, b, -1, COPY);
+		emitBuildCore(w, strArr, pos, end, start, cur, b);
 		w.write(Instruction.ELSE);
 		// --- List branch ---
 		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii);
@@ -1541,7 +1540,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END); // if
-		emitBuildCore(w, strArr, lo, hi, start, cur, b, -1, COPY);
+		emitBuildCore(w, strArr, lo, hi, start, cur, b);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -1678,13 +1677,14 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	// Copies bytes [posL, endL) of the input array inArrL (a $str_bytes, indexed 0-based)
-	// into a fresh heap string (wrapped in quotes), applying the given transform per
-	// byte, and leaves the new string struct on the stack. The output is assembled in a
-	// reused linear scratch at HEAP_PTR (NOT advanced -- a stack pop) and finalized via
-	// _str_fresh (a runtime string gets a counter id); the INPUT read goes through the GC
-	// array.
-	private static void emitBuildCore(WasmWriter w, int inArrL, int posL, int endL, int startL, int curL, int bL,
-			int wsL, int mode) {
+	// into a fresh heap string (wrapped in quotes) and leaves the new string struct on
+	// the stack. A plain byte copy: subseq and the trim family slice at character
+	// boundaries the caller already resolved, so no UTF-8 decoding is needed here (the
+	// case operators, which DO transform per code point, use emitCaseFoldCore). The
+	// output is assembled in a reused linear scratch at HEAP_PTR (NOT advanced -- a stack
+	// pop) and finalized via _str_fresh (a runtime string gets a counter id); the INPUT
+	// read goes through the GC array.
+	private static void emitBuildCore(WasmWriter w, int inArrL, int posL, int endL, int startL, int curL, int bL) {
 		// start = HEAP_PTR; mem[start] = '"'; cur = start + 1
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
@@ -1706,10 +1706,6 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		set(w, curL);
-		if (mode == CAPITALIZE) {
-			i32(w, 1);
-			set(w, wsL);
-		}
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
 		get(w, posL);
@@ -1718,7 +1714,6 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR_IF, 1);
 		arrGetLocal(w, inArrL, posL);
 		set(w, bL);
-		emitTransform(w, bL, wsL, mode);
 		get(w, curL);
 		get(w, bL);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
@@ -1750,21 +1745,145 @@ final class WasmStringRuntimeBuilder {
 		WasmEmitHelper.emitStrFreshCall(w);
 	}
 
-	// Applies the case transform to the byte held in bL (in place).
-	private static void emitTransform(WasmWriter w, int bL, int wsL, int mode) {
+	// Case-folds bytes [posL, endL) of the input array inArrL into a fresh heap string
+	// (wrapped in quotes) and leaves the new string struct on the stack. Unlike
+	// emitBuildCore this walks CODE POINTS, not bytes: each 1-4 byte UTF-8 sequence is
+	// decoded, the code point is folded through the shared _char_upcase / _char_downcase
+	// range-table helpers -- the same ones (char-upcase ch) calls -- and re-encoded. That
+	// is what CLHS asks for ("apply char-upcase to each character"), and it is what keeps
+	// the WASM backends byte-identical to the interpreter and the JVM compile path
+	// instead of folding ASCII only.
+	private static void emitCaseFoldCore(WasmWriter w, int inArrL, int posL, int endL, int startL, int curL, int cpL,
+			int stepL, int kL, int wsL, int mode) {
+		// start = HEAP_PTR; mem[start] = '"'; cur = start + 1
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, startL);
+		// A fold grows a code point's UTF-8 encoding by at most maxUtf8Growth() bytes
+		// (1 today: U+0250 upcases to U+2C6F, two bytes in and three out) and a code
+		// point occupies at least one input byte, so (1 + growth) * inputBytes bounds
+		// the content. The bound is DERIVED from the baked tables rather than assumed,
+		// so a wider future Unicode baseline widens it too.
+		final int growthFactor = 1 + WasmCaseFoldRuntimeBuilder.maxUtf8Growth();
+		WasmEmitHelper.emitGrowHeapTo(w, () -> {
+			get(w, startL);
+			get(w, endL);
+			get(w, posL);
+			w.write(Instruction.I32_SUB);
+			i32(w, growthFactor);
+			w.write(Instruction.I32_MUL);
+			w.write(Instruction.I32_ADD);
+			i32(w, 2);
+			w.write(Instruction.I32_ADD);
+		});
+		get(w, startL);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		get(w, startL);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, curL);
+		if (mode == CAPITALIZE) {
+			i32(w, 1);
+			set(w, wsL);
+		}
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, posL);
+		get(w, endL);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		emitUtf8DecodeAt(w, inArrL, posL, cpL, stepL, kL);
+		get(w, posL);
+		get(w, stepL);
+		w.write(Instruction.I32_ADD);
+		set(w, posL);
+		emitFoldCodePoint(w, cpL, wsL, mode);
+		emitUtf8Encode(w, cpL, curL);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// mem[cur] = '"'. HEAP_PTR is NOT advanced, exactly as in emitBuildCore: the
+		// scratch is dead once _str_fresh has copied it into a fresh GC array.
+		get(w, curL);
+		i32(w, QUOTE);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		get(w, startL);
+		get(w, curL);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		get(w, startL);
+		w.write(Instruction.I32_SUB);
+		WasmEmitHelper.emitStrFreshCall(w);
+	}
+
+	// Decodes the UTF-8 sequence starting at inArrL[posL] into cpL and sets stepL to its
+	// byte width. kL is a scratch cursor. A stray continuation byte decodes as itself
+	// with width 1, matching emitUtf8Width's forgiving walk.
+	private static void emitUtf8DecodeAt(WasmWriter w, int inArrL, int posL, int cpL, int stepL, int kL) {
+		arrGetLocal(w, inArrL, posL);
+		set(w, cpL);
+		emitUtf8Width(w, cpL, stepL);
+		get(w, stepL);
+		i32(w, 1);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		// cp = lead & (0x7F >> step): 0x1F for a 2-byte lead, 0x0F for 3, 0x07 for 4.
+		get(w, cpL);
+		i32(w, 0x7F);
+		get(w, stepL);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_AND);
+		set(w, cpL);
+		// for k in 1..step-1: cp = (cp << 6) | (arr[pos + k] & 0x3F)
+		i32(w, 1);
+		set(w, kL);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, kL);
+		get(w, stepL);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, cpL);
+		i32(w, 6);
+		w.write(Instruction.I32_SHL);
+		get(w, inArrL);
+		get(w, posL);
+		get(w, kL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		i32(w, 0x3F);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		set(w, cpL);
+		get(w, kL);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, kL);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	// Applies the case transform to the code point held in cpL (in place).
+	private static void emitFoldCodePoint(WasmWriter w, int cpL, int wsL, int mode) {
 		switch (mode) {
-			case COPY -> {
-			}
-			case UPCASE -> emitToUpper(w, bL);
-			case DOWNCASE -> emitToLower(w, bL);
+			case UPCASE -> emitCaseFoldCall(w, cpL, WasmLispCompiler.FUNC_CHAR_UPCASE);
+			case DOWNCASE -> emitCaseFoldCall(w, cpL, WasmLispCompiler.FUNC_CHAR_DOWNCASE);
 			case CAPITALIZE -> {
-				emitIsAlnum(w, bL);
+				// A word constituent is any full-Unicode letter or digit, so a caseless
+				// letter continues the word instead of starting a new one.
+				get(w, cpL);
+				w.write(Instruction.CALL);
+				w.writeSignedLeb128(WasmLispCompiler.FUNC_CHAR_ALNUM_P);
 				w.write(Instruction.IF, 0x40);
 				get(w, wsL);
 				w.write(Instruction.IF, 0x40);
-				emitToUpper(w, bL);
+				emitCaseFoldCall(w, cpL, WasmLispCompiler.FUNC_CHAR_UPCASE);
 				w.write(Instruction.ELSE);
-				emitToLower(w, bL);
+				emitCaseFoldCall(w, cpL, WasmLispCompiler.FUNC_CHAR_DOWNCASE);
 				w.write(Instruction.END);
 				i32(w, 0);
 				set(w, wsL);
@@ -1773,30 +1892,15 @@ final class WasmStringRuntimeBuilder {
 				set(w, wsL);
 				w.write(Instruction.END);
 			}
-			default -> throw new IllegalArgumentException("Unknown transform mode: " + mode);
+			default -> throw new IllegalArgumentException("Unknown fold mode: " + mode);
 		}
 	}
 
-	// if (b in 'a'..'z') b -= 32
-	private static void emitToUpper(WasmWriter w, int bL) {
-		emitInRange(w, bL, 97, 122);
-		w.write(Instruction.IF, 0x40);
-		get(w, bL);
-		i32(w, 32);
-		w.write(Instruction.I32_SUB);
-		set(w, bL);
-		w.write(Instruction.END);
-	}
-
-	// if (b in 'A'..'Z') b += 32
-	private static void emitToLower(WasmWriter w, int bL) {
-		emitInRange(w, bL, 65, 90);
-		w.write(Instruction.IF, 0x40);
-		get(w, bL);
-		i32(w, 32);
-		w.write(Instruction.I32_ADD);
-		set(w, bL);
-		w.write(Instruction.END);
+	private static void emitCaseFoldCall(WasmWriter w, int cpL, int funcIndex) {
+		get(w, cpL);
+		w.write(Instruction.CALL);
+		w.writeSignedLeb128(funcIndex);
+		set(w, cpL);
 	}
 
 	// Pushes 1 if the byte in bL is in [lo, hi] (unsigned), else 0.
@@ -1808,15 +1912,6 @@ final class WasmStringRuntimeBuilder {
 		i32(w, hi);
 		w.write(Instruction.I32_LE_U);
 		w.write(Instruction.I32_AND);
-	}
-
-	// Pushes 1 if the byte in bL is ASCII alphanumeric, else 0.
-	private static void emitIsAlnum(WasmWriter w, int bL) {
-		emitInRange(w, bL, 48, 57);
-		emitInRange(w, bL, 65, 90);
-		w.write(Instruction.I32_OR);
-		emitInRange(w, bL, 97, 122);
-		w.write(Instruction.I32_OR);
 	}
 
 	// Pushes the byte in the given local, ASCII-lowercased when ignoreCase is set.

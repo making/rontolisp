@@ -39,7 +39,7 @@
 | `pprint` `pprint-newline` `pprint-indent` `pprint-tab` | `(pprint-newline :mandatory s)` | 改行するのは `:mandatory` のときだけです。ストリームが桁位置を持たないため折り返しは起きません |
 | `copy-pprint-dispatch` `set-pprint-dispatch` `pprint-dispatch` | `(pprint-dispatch 21 table)` | プリティプリント・ディスパッチテーブル(エントリと検索は実装済み。通常の印字操作は参照しません) |
 | `concatenate` | `(concatenate 'string "foo" "bar")` | `"foobar"`(`'string` / `'list` / `'vector` の 3 系統。コンパイラはリテラルの引用指定子を要求します) |
-| `string-upcase` | `(string-upcase "abc")` | `"ABC"`(WASMバックエンドでは大小文字変換はASCII限定です) |
+| `string-upcase` | `(string-upcase "abc")` | `"ABC"`(全 Unicode 対応。各文字に `char-upcase` を適用するため長さは保存されます) |
 | `string-downcase` | `(string-downcase "ABC")` | `"abc"` |
 | `string-capitalize` | `(string-capitalize "hello world")` | `"Hello World"`(各単語の最初の文字) |
 | `subseq` | `(subseq "hello" 1 3)` | `"el"`(文字列とリストで機能します。例: `(subseq '(1 2 3 4) 1 3)` => `(2 3)`。`end` 引数は省略可能) |
@@ -87,7 +87,7 @@
 | `code-char` | `(code-char 66)` | `#\B` -- 指定したコードポイントの文字 |
 | `char=` `char<` `char<=` | `(char< #\a #\b #\c)` | `t`(コードポイントによる可変長引数比較) |
 | `char-lessp` `char-greaterp` `char-not-lessp` `char-not-greaterp` `char-not-equal` | `(char-lessp #\a #\B)` | `t`(大文字・小文字を区別しない比較の一群) |
-| `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A`(WASMバックエンドではASCII大小文字変換) |
+| `char-upcase` `char-downcase` | `(char-upcase #\a)` | `#\A`(すべてのバックエンドで全 Unicode 対応の大小文字変換) |
 | `characterp` | `(characterp #\a)` | `t` |
 | `alpha-char-p` | `(alpha-char-p #\x)`, `(alpha-char-p #\5)` | `t`, `nil`(WASMバックエンドではASCII文字) |
 | `alphanumericp` | `(alphanumericp #\x)`, `(alphanumericp #\-)` | `t`, `nil`(英字または10進数字) |
