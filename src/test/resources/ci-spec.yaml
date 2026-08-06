@@ -7502,6 +7502,14 @@ cases:
       (print (format nil "~<~a~;~a~>" 1 2))
       (print (format nil "~/ci-es-brackets/ ~:@/ci-es-brackets/" 1 2))
       (print (let ((c "~@<~{~a~^, ~}~:>")) (format nil c '(1 2 3))))
+      ;; The ~/name/ arm of the renderer is injected only when a control string
+      ;; the COMPILE can see spells the directive (.kb/format.md) -- the literal
+      ;; below is bound to a local and never appears in the format call, which is
+      ;; all the compile has to go on. A control assembled at run time gets the
+      ;; signalling stub instead (a per-backend unit test pins that half: it
+      ;; cannot be pinned here, where every case shares one program and the
+      ;; literals above already turn the arm on).
+      (print (let ((c "~/ci-es-brackets/~a")) (format nil c 3 "!")))
       ;; *modules* is what provide records and require consults
       (print *modules*)
     expected: |
@@ -7527,6 +7535,7 @@ cases:
       "12"
       "<1> [2]"
       "1, 2, 3"
+      "<3>!"
       NIL
   - name: http-clack-environment-shape
     source: |

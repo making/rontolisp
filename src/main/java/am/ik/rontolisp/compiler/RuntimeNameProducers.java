@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.LispMacroExpander;
 
 /**
  * Whether a program can name a function at run time with a spelling this compile never
@@ -27,19 +28,30 @@ import am.ik.rontolisp.LispVal;
  * <strong>Trigger-shaped, not dataflow-shaped, and deliberately so.</strong> The precise
  * question is whether a symbol out of one of these operators can reach a funcall; getting
  * that wrong is a trap at run time rather than a diagnosis, so the rule stays syntactic
- * and over-approximates. Two refinements were tried and rejected on measurement:
- * <ul>
- * <li>judging the ARGUMENT shape ({@code (intern "EX-FN" :pkg)} spells its name,
- * {@code (intern (symbol-name n))} does not) -- it shrank nothing, because every real
- * program reaching here does so through a computed name anyway, and it broke
- * {@code internIntoALiteralPackage} on both backends: the two-argument lowering folds the
- * literal into the qualified symbol before the constant probe can see either half;</li>
- * <li>exempting rontolisp's own generated {@code (intern (symbol-name n))} slot-name
- * normalizer as a known-harmless use -- it is harmless, but it is not what holds the gate
- * open in practice. The measured blocker in a library program is the spliced runtime
- * {@code format} renderer's {@code %fmt-function-designator}, which resolves the
- * {@code ~/name/} directive's target and then genuinely funcalls it.</li>
- * </ul>
+ * and over-approximates. One refinement was tried and rejected on measurement: judging
+ * the {@code intern} ARGUMENT shape ({@code (intern "EX-FN" :pkg)} spells its name)
+ * shrank nothing -- every real program reaching here computes the name anyway -- and it
+ * broke {@code internIntoALiteralPackage} on both backends, because the two-argument
+ * lowering folds the literal into the qualified symbol before the constant probe can see
+ * either half.
+ *
+ * <p>
+ * <strong>The one exemption is rontolisp's own scaffolding</strong>, and it is matched by
+ * IDENTITY rather than by shape: {@link #isCompilerScaffolding} skips the generated
+ * slot-name fold defun ({@link LispMacroExpander#slotNameKeyDefun()}), whose
+ * {@code (intern (symbol-name n))} re-spells a symbol the program already holds and whose
+ * result reaches nothing but a {@code member} test. Structural equality against the
+ * builder's own output is what keeps the two from drifting. This was rejected once, on
+ * the ground that the real blocker was the format renderer's {@code ~/name/} arm; with
+ * that arm now injected only for a program that spells the directive
+ * ({@code .kb/format.md}), the fold is what remains, and it is worth 21% of a
+ * {@code cl-ppcre} module.
+ *
+ * <p>
+ * The boundary, stated plainly: a program that CALLS {@code %slot-name-key} itself and
+ * funcalls the answer forges a name the gate no longer sees. That is the carve-out the
+ * gate already documents for a name assembled out of computed strings, and the escape is
+ * the same one -- compile with {@code --dynamic}.
  *
  * <p>
  * Run any compile with {@code -Drontolisp.debug.dispatchgate=true} to have the offending
@@ -74,11 +86,27 @@ public final class RuntimeNameProducers {
 	 */
 	public static boolean anyNameResolvable(List<LispVal> program) {
 		for (LispVal form : program) {
-			if (scan(form)) {
+			if (!isCompilerScaffolding(form) && scan(form)) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the top-level form is one the compiler generated and whose name-producing
+	 * operator it therefore vouches for. Exactly one form qualifies today -- the
+	 * runtime-slot-name fold -- and it is compared against the builder that emits it, so
+	 * an edit there cannot leave a stale pattern here.
+	 * @param form a top-level form of the program
+	 * @return true when the scan must skip it
+	 */
+	private static boolean isCompilerScaffolding(LispVal form) {
+		// Name first, so an ordinary form costs one string compare rather than a rebuild
+		// of the canonical definition.
+		return form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name && LispNames.SLOT_NAME_KEY.equals(name.name())
+				&& LispMacroExpander.slotNameKeyDefun().equals(form);
 	}
 
 	/**

@@ -2652,6 +2652,18 @@ public final class LispNames {
 	public static final String SLOT_VALUE_SET_RUNTIME = "%SLOT-VALUE-SET-RUNTIME";
 
 	/**
+	 * The slot-name fold every runtime-slot-name dispatch above applies to its name
+	 * argument first: {@code (%slot-name-key n)} is {@code (intern (symbol-name n))},
+	 * which re-spells a symbol arriving in the caller's package as the bare base name the
+	 * dispatch arms quote. Generated as its own defun rather than inlined in each
+	 * dispatcher so that the ONE {@code intern} rontolisp itself puts in every such
+	 * program is a single, identifiable form -- {@code compiler/RuntimeNameProducers}
+	 * matches it structurally and does not read it as the program being able to forge a
+	 * function name ({@code .kb/optimize-dead-code-elimination.md}).
+	 */
+	public static final String SLOT_NAME_KEY = "%SLOT-NAME-KEY";
+
+	/**
 	 * The internal runtime-class {@code make-instance}: {@code (%mop-make-instance
 	 * designator initargs...)} instantiates a class chosen at RUN time (a metaobject or a
 	 * name symbol) -- what the static {@code make-instance} expansion cannot do, and what

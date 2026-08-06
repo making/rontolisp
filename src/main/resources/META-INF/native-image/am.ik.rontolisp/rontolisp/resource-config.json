@@ -51,6 +51,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
+        },
+        "pattern": "am/ik/rontolisp/macro/format-render-slash\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.macro.FormatRenderer"
+        },
+        "pattern": "am/ik/rontolisp/macro/format-render-slash-stub\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.macro.MopProtocol"
         },
         "pattern": "am/ik/rontolisp/macro/mop-protocol\\.lisp"

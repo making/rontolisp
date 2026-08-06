@@ -1554,7 +1554,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// inject the restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal);
+				packageResolver::spellsAsExternal, this.dynamic);
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
 		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
 		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --

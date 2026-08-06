@@ -92,6 +92,17 @@ provenance" for why the substring rule does not): an uninterned `'#:foo`
 designator and a string literal whose WHOLE content is a definition's canonical
 or member name. Both are hash lookups, not scans.
 
+A `set-dispatch-macro-character` HOOK is not a reference source either
+(`LispMacroExpander.isReadtableHookRegistration` / `isDeadReadtableHook`, and the
+expansion drops the same argument rather than evaluating it): rontolisp's reader
+is not readtable-driven, so the registration is a no-op and nothing can call the
+hook back. A `#'name` or `(lambda ...)` argument is a pure reference, so dropping
+it has no other effect; a hook argument that is a CALL still counts, because a
+call can do something else too. Worth exactly one definition -- ironclad's
+`array-reader` for `#@` -- and that one mattered out of all proportion: its body
+was the ONLY `read` in a whole postmodern program, so pruning it also stops the
+embedded reader runtime from being emitted (`.kb/optimize-dead-code-elimination.md`).
+
 A top-level `declaim`/`proclaim` is NOT a reference source. Both expand to
 `LispNil` on every backend (`LispMacroExpander.expandDeclaim`/`expandProclaim`),
 so nothing they name can be called through them, but `(declaim (inline F))` /

@@ -434,7 +434,7 @@
         ((char= d #\i) (list out pos i nil))
         (t (list (%fmt-cat out (%fmt-cat "~" (string raw))) pos i nil))))
 
-;;; ------------------------------------------------- logical block / ~/name/
+;;; ------------------------------------------------------------ logical block
 
 ;;; ~<...~> is JUSTIFICATION and ~<...~:> a LOGICAL BLOCK; the closing directive
 ;;; decides which. What separates them in CL -- padding a justification out to
@@ -486,53 +486,11 @@
     (if suf (setq acc (%fmt-cat acc (nth 0 (%fmt-run ctrl (nth 0 suf) (nth 1 suf) items start)))))
     (list acc after (if at (nth 1 r) (+ i 1)) nil)))
 
-;;; ~/name/: call the named function as (name stream object colon-p at-p) and
-;;; splice what it writes. The name is looked up as if by find-symbol, where a
-;;; single and a double colon are equivalent (CLHS 22.3.5.4) -- so the INTERNAL
-;;; spelling is tried first (that is the canonical one for a symbol the package
-;;; does not export) and the external one second.
-;;; The string stream is opened and closed by hand rather than with
-;;; with-output-to-string on purpose: the WASM exception-handling gate scans the
-;;; program for a with-* form, and the renderer is spliced into EVERY program
-;;; that formats a computed control string -- one with-output-to-string here
-;;; would put a tag section into modules that catch nothing
-;;; (.kb/wasi-component.md). This IS the shape with-output-to-string lowers to
-;;; outside EH mode.
-(defun %fmt-user-function (ctrl end all out pos i colon at)
-  (let* ((stop (%fmt-slash-end ctrl pos end))
-         (fn (%fmt-function-designator (string-upcase (subseq ctrl pos stop))))
-         (stream (%make-string-output-stream)))
-    (funcall fn stream (nth i all) colon at)
-    (let ((text (%string-stream-contents stream)))
-      (close stream)
-      (list (%fmt-cat out text) (+ stop 1) (+ i 1) nil))))
-
-(defun %fmt-function-designator (name)
-  (let ((k (%fmt-colon-index name)))
-    (if (< k 0)
-        (intern name)
-        (let* ((pkg (subseq name 0 k))
-               (member (if (and (< (+ k 1) (length name)) (char= (char name (+ k 1)) #\:))
-                           (subseq name (+ k 2))
-                           (subseq name (+ k 1))))
-               (found (find-symbol member pkg))
-               (internal (intern (concatenate 'string pkg "::" member)))
-               (external (intern (concatenate 'string pkg ":" member))))
-          ;; find-symbol answers the canonical spelling wherever a live symbol
-          ;; table exists; the two built spellings cover the compiled backends,
-          ;; where a symbol IS its spelling and the internal one is the common
-          ;; case (a library rarely exports the function it names in a ~/.../).
-          (cond ((and found (fboundp found)) found)
-                ((fboundp internal) internal)
-                ((fboundp external) external)
-                ((null found) internal)
-                (t found))))))
-
-(defun %fmt-colon-index (name)
-  (let ((p 0) (n (length name)) (res -1))
-    (while (and (< p n) (< res 0))
-      (if (char= (char name p) #\:) (setq res p) (setq p (+ p 1))))
-    res))
+;;; The ~/name/ arm -- %fmt-user-function -- is NOT here: it is the one part of
+;;; the renderer that resolves a function out of a name built at run time, so it
+;;; is injected separately (format-render-slash.lisp, or its stub) by
+;;; macro/FormatRenderer. The scanners above still recognize the directive; only
+;;; the call is elsewhere.
 
 ;;; ~<newline>: the newline is swallowed; the default also swallows the leading
 ;;; whitespace of the next line, ~@ keeps the newline, ~: keeps the whitespace.

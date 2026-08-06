@@ -34,24 +34,36 @@ Two sources, both EXACT rather than heuristic:
 
 **The gate turns itself off entirely** (every function stays dispatchable) under `--dynamic` and whenever `compiler/RuntimeNameProducers.anyNameResolvable` holds — the program contains `eval`/`read`/`read-from-string`/`load` (it can evaluate data) or `intern`/`find-symbol`/`make-symbol`/`symbol-function`/`fdefinition`/`fboundp`/`uiop:symbol-call` (it can build a name). That class is shared by both backends on purpose: a name that stops resolving on one has to stop resolving on the other. Compile with `-Drontolisp.debug.dispatchgate=true` to have the offending operator NAMED, and to see how many functions stayed dispatchable.
 
+**The one form the scan skips is rontolisp's own** (`RuntimeNameProducers.isCompilerScaffolding`): the generated slot-name fold `(defun %slot-name-key (n) (intern (symbol-name n)))`, which every runtime-slot-name dispatcher (`%slot-value-runtime` & co.) calls on its name argument. It re-spells a symbol the program already holds and its result reaches nothing but a `member` test. It is matched by structural equality against `LispMacroExpander.slotNameKeyDefun()` — the builder that emits it — so an edit there cannot leave a stale pattern here, and a user-written defun of that name with any other body is scanned normally. The fold used to be inlined in each dispatcher; it was pulled out into one named defun precisely so the exemption could be an identity rather than a shape. Boundary: a program that calls `%slot-name-key` itself and funcalls the answer forges a name the gate no longer sees — the same carve-out (and the same `--dynamic` escape) the gate already documents for a name assembled out of computed strings.
+
 Without the bail the gate is not sound, and the failure is a trap rather than a diagnosis — measured: 32 tests across both backends, every one of them a name assembled at run time (`(eval (read))`, `(intern "EX-FN" :pkg)`, `uiop:symbol-call`).
 
-**What the bail costs, measured 2026-08-05** (`--optimize`, wasm-GC):
+**What the bail costs, measured 2026-08-06** (`--optimize`, wasm-GC), after todo-261 retired the two blockers rontolisp itself was contributing:
 
-| program | before | after | gate |
+| program | before todo-261 | after | gate |
 | --- | --- | --- | --- |
-| `md5` via `ql:quickload` | 1,177,653 | **597,641 (-49.3%)** | applies |
-| pure compute (no library) | 26,159 | 26,097 | applies |
-| `split-sequence` | 645,453 | 619,722 (-4.0%) | bails |
-| `com.inuoe.jzon` | 1,158,253 | 1,118,502 (-3.4%) | bails |
-| `cl-ppcre` | 2,513,244 | 2,419,251 (-3.7%) | bails |
-| `examples/db/postgres-hello` (`--component`) | 8,392,789 | 8,085,309 (-3.7%) | bails |
+| `md5` via `ql:quickload` | 597,641 | 597,641 | applies |
+| pure compute (no library) | 25,201 | 25,201 | applies |
+| `split-sequence` | 619,722 | **234,745 (-62.1%)** | applies |
+| `cl-ppcre` | 2,419,247 | **1,890,497 (-21.9%)** | applies |
+| `com.inuoe.jzon` | 1,432,415 | 1,414,105 | bails |
+| `examples/db/postgres-hello` (`--component`) | 8,085,309 | 8,033,507 | bails |
 
-The bailing rows keep only the unrelated `_ub_read` saving. **The measured blocker is rontolisp's own spliced runtime `format` renderer**: `format-render.lisp`'s `%fmt-function-designator` resolves the `~/name/` directive's target out of the control string and then funcalls it, so any program carrying the runtime renderer can reach any function by name. `postgres-hello` additionally trips `read`. Narrowing this is `.todo/261`.
+Both columns are the same probe program measured on the same day; the `jzon` and pure-compute rows sit at a different absolute size than todo-260's table because the probe programs are not the same ones (a row is comparable across its own two columns, not across tables).
 
-Two refinements were tried and REJECTED on measurement (do not re-propose without new numbers): judging the `intern` ARGUMENT shape (shrank nothing — every real program reaching there computes the name anyway — and broke `internIntoALiteralPackage` on both backends, because the two-argument lowering folds the literal into the qualified symbol before either probe can see it), and exempting the generated slot-name normalizer's `(intern (symbol-name n))` (harmless, but not what holds the gate open).
+The two blockers were BOTH rontolisp's own code, and each masked the next:
 
-Tests: `componentCoreIsTreeShakenUnderOptimize` (shrinkage + a scalar and a string-returning export invoked under wasmtime, i.e. the canonical-ABI helpers survived) and `optimizedServeComponentStillServesUnderWasmtimeServe` (a shaken serve component actually answers a request), both in `WasmLispCompilerIntegrationTest`.
+1. the spliced runtime `format` renderer's `%fmt-function-designator` (the `~/name/` directive resolves its target out of the control string and funcalls it), now split into a separately-injected arm — `.kb/format.md`, "The `~/name/` arm is injected SEPARATELY";
+2. with that gone, the generated slot-name fold's `intern` became the blocker for `cl-ppcre` (worth the whole -21.9% above) — now the scan's one exemption, above. Its earlier rejection was recorded as "harmless, but not what holds the gate open"; retiring blocker 1 retired that reason, which is why it was re-taken in the same session.
+
+The two rows that still bail do so **correctly** — the forge is in the library, not in rontolisp:
+
+- `jzon` calls `(fdefinition key-fn)` on a runtime designator (`src/jzon.lisp`);
+- `postgres-hello`: `cl-postgres::initiate-ssl` does `(setf make-ssl-stream (intern (string '#:make-ssl-client-stream) :cl+ssl))` and funcalls it. Dead at run time (guarded by a `find-package :cl+ssl` that fails here), but a trigger-shaped gate cannot see that. **Its `read` half is gone for a different reason**: the one `read` in that whole program was ironclad's `array-reader`, a `#@` reader macro registered with `set-dispatch-macro-character` — a registration rontolisp's reader can never fire. `LibraryDefunPruner` and `expandSetDispatchMacroCharacter` now both skip the `#'name` hook argument (`LispMacroExpander.isDeadReadtableHook`), so the defun is pruned and the reader runtime is not emitted at all. The todo's "postgres-hello needs both halves fixed" was therefore an incomplete diagnosis: three causes, two now gone, the third genuine.
+
+One refinement was tried and REJECTED on measurement (do not re-propose without new numbers): judging the `intern` ARGUMENT shape (shrank nothing — every real program reaching there computes the name anyway — and broke `internIntoALiteralPackage` on both backends, because the two-argument lowering folds the literal into the qualified symbol before either probe can see it).
+
+Tests: `componentCoreIsTreeShakenUnderOptimize` (shrinkage + a scalar and a string-returning export invoked under wasmtime, i.e. the canonical-ABI helpers survived) and `optimizedServeComponentStillServesUnderWasmtimeServe` (a shaken serve component actually answers a request), both in `WasmLispCompilerIntegrationTest`; `FormatRendererTest.theFunctionDesignatorArmIsInjectedOnlyForAProgramThatSpellsTheDirective` for the renderer half.
 
 ## JVM
 

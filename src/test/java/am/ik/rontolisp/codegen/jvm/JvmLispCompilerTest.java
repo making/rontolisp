@@ -2375,6 +2375,34 @@ class JvmLispCompilerTest {
 			.isEqualTo("A | B (00007)");
 	}
 
+	// The ~/name/ arm of the renderer is injected only for a program whose control
+	// strings SPELL the directive (.kb/format.md): it resolves a function out of the
+	// control string at run time, which otherwise keeps every function dispatchable for
+	// --optimize. The literal here is all the compile needs, wherever it sits -- here it
+	// is bound to a local and never appears in the format call itself.
+	@Test
+	void formatUserFunctionDirectiveRendersThroughARuntimeControl() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
+				(let ((c "~/fmt-slash-brackets/ ~:@/fmt-slash-brackets/"))
+				  (princ (format nil c 1 2)))
+				""")).isEqualTo("<1> [2]");
+	}
+
+	// ...and a control ASSEMBLED at run time gets the stub, which says so instead of
+	// silently dropping the directive's output. The narrowing is compile-path only: the
+	// interpreter always carries the real arm. Reporting the condition renders its
+	// message as a control string again, so this also pins that the stub's own message
+	// carries no directive to re-enter it with.
+	@Test
+	void formatUserFunctionDirectiveSignalsWhenTheCompileNeverSawTheDirective() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
+				(princ (handler-case (format nil (concatenate 'string "~" "/fmt-slash-brackets/") 1)
+				         (error (e) (if (search "--dynamic" (format nil "~a" e)) "signalled" "no-hint"))))
+				""")).isEqualTo("signalled");
+	}
+
 	@Test
 	void printToStringStream() throws Exception {
 		assertThat(compileAndRun("(princ (with-output-to-string (s) (print 42 s)))")).isEqualTo("42");

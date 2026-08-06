@@ -121,16 +121,59 @@ class FormatRendererTest {
 		assertThat(rendererDefunCount("(let ((c \"~a\")) (format nil c 1) (format nil c 2))")).isOne();
 	}
 
+	/**
+	 * The {@code ~/name/} arm rides along only when some control string the compile can
+	 * SEE spells the directive. It is the one part of the renderer that resolves a
+	 * function out of runtime data, and carrying it costs every program that formats a
+	 * computed control the {@code --optimize} funcall-dispatch gate
+	 * ({@code .kb/optimize-dead-code-elimination.md}). A program that spells none gets
+	 * the stub, which signals if a control assembled at run time ever renders one.
+	 */
+	@Test
+	void theFunctionDesignatorArmIsInjectedOnlyForAProgramThatSpellsTheDirective() {
+		// Reaches the renderer, spells no ~/name/ anywhere: the stub.
+		assertThat(definesFunctionDesignator("(let ((c \"~a\")) (format nil c 1))")).isFalse();
+		assertThat(definesFunctionDesignator("(princ (funcall #'format nil \"~a\" 1))")).isFalse();
+		// The directive in the control at the call site.
+		assertThat(definesFunctionDesignator("(format nil \"~/f/\" 1)")).isTrue();
+		// ...and in ANY string literal, wherever it sits: the control is runtime data, so
+		// the literal is the only thing the compile can go on.
+		assertThat(definesFunctionDesignator("(let ((c \"~/f/\")) (format nil c 1))")).isTrue();
+		assertThat(definesFunctionDesignator("(defvar *c* \"x ~:@/pkg::f/ y\") (let ((c \"~a\")) (format nil c 1))"))
+			.isTrue();
+		// A lone tilde-slash spells no directive; a slash without a tilde is text.
+		assertThat(definesFunctionDesignator("(defvar *p* \"a/b/c\") (let ((c \"~a\")) (format nil c 1))")).isFalse();
+	}
+
+	/** Under {@code --dynamic} any name resolves at run time, so the arm always rides. */
+	@Test
+	void theFunctionDesignatorArmAlwaysRidesUnderDynamic() {
+		assertThat(definesFunctionDesignator("(let ((c \"~a\")) (format nil c 1))", true)).isTrue();
+	}
+
+	/** Whether the expanded program carries the REAL arm rather than its stub. */
+	private boolean definesFunctionDesignator(String source) {
+		return definesFunctionDesignator(source, false);
+	}
+
+	private boolean definesFunctionDesignator(String source, boolean dynamic) {
+		return expand(source, dynamic).stream().anyMatch(form -> "%FMT-FUNCTION-DESIGNATOR".equals(definedName(form)));
+	}
+
 	/** How many times the renderer's entry point is DEFINED in the expanded program. */
 	private long rendererDefunCount(String source) {
-		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
-				new java.util.HashMap<>(), new am.ik.rontolisp.ClosRegistry());
-		return expanded.stream()
-			.filter(form -> form instanceof am.ik.rontolisp.LispCons defun
-					&& defun.cdr() instanceof am.ik.rontolisp.LispCons rest
-					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name
-					&& FormatRenderer.RENDER.equals(name.name()))
-			.count();
+		return expand(source, false).stream().filter(form -> FormatRenderer.RENDER.equals(definedName(form))).count();
+	}
+
+	private List<LispVal> expand(String source, boolean dynamic) {
+		return LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new java.util.HashMap<>(), new am.ik.rontolisp.ClosRegistry(), null, dynamic);
+	}
+
+	@org.jspecify.annotations.Nullable
+	private static String definedName(LispVal form) {
+		return form instanceof am.ik.rontolisp.LispCons defun && defun.cdr() instanceof am.ik.rontolisp.LispCons rest
+				&& rest.car() instanceof am.ik.rontolisp.LispSymbol name ? name.name() : null;
 	}
 
 	private LispVal eval(String input) {

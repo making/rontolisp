@@ -264,7 +264,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal);
+				packageResolver::spellsAsExternal, this.dynamic);
 		if (System.getProperty("rontolisp.debug.dump-program") != null) {
 			for (LispVal form : program) {
 				System.err.println(form.print());

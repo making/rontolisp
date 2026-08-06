@@ -70,6 +70,8 @@ rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm --optimize
 # => [dispatch-gate] every function stays dispatchable because of: INTERN
 ```
 
+format の制御文字列に含まれる `~/name/` ディレクティブも該当します。実行時に関数を名前で指定するためです。ただし持ち込まれるのはコンパイラが見つけられる制御文字列だけなので、そのディレクティブを綴らないプログラムには影響しません（[`format`](../reference/macros/format.md)を参照）。
+
 `--dynamic` でも同様に無効になります。遅延束縛は実行時に任意の名前を解決するためです。
 
 さらに小さく仕上げたい場合は、同じ `fact.lisp` を [`--no-gc`](../guides/wasm-nogc.md) でコンパイルすると `fact` は unboxed な `i32` にローワリングされ、18 KB を占めていた GC ランタイム一式（リーダーの大文字化テーブル、条件クラス階層、cons セル、プリンタ）が丸ごと落ちます:

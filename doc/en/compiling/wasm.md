@@ -127,6 +127,11 @@ rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm --optimize
 # => [dispatch-gate] every function stays dispatchable because of: INTERN
 ```
 
+A `~/name/` directive in a format control string counts as well, because it
+names its function at run time — but only a control string the compiler can see
+brings it in, so a program that spells no such directive is unaffected (see
+[`format`](../reference/macros/format.md)).
+
 `--dynamic` switches it off too, by design: late binding resolves any name at
 run time.
 

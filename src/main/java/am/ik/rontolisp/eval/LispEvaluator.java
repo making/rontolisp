@@ -5827,6 +5827,13 @@ public final class LispEvaluator {
 	 * evaluator. The forms are the ones {@code expandTopLevelDefinitions} injects on the
 	 * compile path, so the interpreter and every compiled backend render a runtime
 	 * control string with the same code.
+	 *
+	 * <p>
+	 * The {@code ~/name/} arm is loaded unconditionally, which the compile path does NOT
+	 * do: there the arm makes every function dispatchable and it is injected only for a
+	 * program whose control strings spell the directive ({@code .kb/format.md}). Nothing
+	 * is dead-code eliminated here, and the name resolves against a live symbol table, so
+	 * the interpreter has nothing to gain from the same narrowing.
 	 */
 	private void ensureFormatRendererLoaded() {
 		synchronized (this.libraryLoadLock) {
@@ -5835,6 +5842,9 @@ public final class LispEvaluator {
 			}
 			this.formatRendererLoaded = true;
 			for (LispVal form : FormatRenderer.defuns()) {
+				eval(form, this.globalEnv);
+			}
+			for (LispVal form : FormatRenderer.functionDesignatorDefuns()) {
 				eval(form, this.globalEnv);
 			}
 		}

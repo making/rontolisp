@@ -5,7 +5,7 @@
 | control string | who renders it | where |
 |---|---|---|
 | a literal (`(format nil "~a" x)`) | `LispMacroExpander.expandFormat` -- parses at COMPILE time and lowers to string pieces (`FmtParser` -> `FmtOp`s -> `%string-concat` / `princ` calls); no interpreter reaches the output | `macro/LispMacroExpander.java` |
-| a runtime value | `%fmt-render`, a Lisp-source interpreter over the control string, injected once per program | `macro/format-render.lisp` + `macro/FormatRenderer.java` |
+| a runtime value | `%fmt-render`, a Lisp-source interpreter over the control string, injected once per program | `macro/format-render.lisp` (+ `format-render-slash.lisp` / `-stub.lisp`) + `macro/FormatRenderer.java` |
 
 **The invariant: the same control string and arguments render to the same text
 whichever path renders them, on all four backends.** Pinned by
@@ -64,6 +64,43 @@ evaluates the same forms into the global environment on the first resolution of
 a `%FMT-` name (`ensureFormatRendererLoaded`, the `%condition-report-str`
 pattern).
 
+### The `~/name/` arm is injected SEPARATELY (todo-261)
+
+`%fmt-user-function` and the designator resolution under it live in their own
+resource, `format-render-slash.lisp`, and `withFormatRenderer` appends either it
+or `format-render-slash-stub.lisp` -- never both, never neither, since
+`%fmt-directive`'s `#\/` arm calls the name unconditionally.
+
+**Why**: that arm's `find-symbol`/`intern`/`fboundp` can name ANY function, which
+is precisely the condition under which `--optimize`'s funcall-dispatch gate has to
+keep every function dispatchable (`.kb/optimize-dead-code-elimination.md`). The
+renderer is spliced into every program that formats a computed control, so ONE
+directive's arm was holding the gate open for every library program: with it
+split out, a `(ql:quickload "split-sequence")` module went 619,722 -> 234,745
+(**-62%**).
+
+**The gate**: `FormatRenderer.namesFunctionDesignator` -- does any STRING LITERAL
+in the program (post-splice, post-prune) spell a `~/name/` directive -- plus
+`--dynamic`, whose contract is that any name resolves at run time. A control
+string is runtime data, so this is the only honest question the source can
+answer; a control ASSEMBLED at run time out of pieces that never spell the
+directive gets the stub, which signals (the `.kb/clack.md` call-time-error
+policy). Compile-path only: the interpreter loads the real arm always, having a
+live symbol table and nothing to dead-code eliminate.
+
+`FormatRenderer.functionDesignatorNames` is the ONE scanner behind both the gate
+and `LibraryDefunPruner`'s "a `~/name/` is a function reference" rule -- shared so
+that "the pruner kept this function" and "the arm that calls it was injected"
+cannot disagree.
+
+**The stub's message must contain no TILDE.** A signalled condition carries the
+rendered text in `format-control`, and printing the condition renders that text
+AGAIN as a control string (`%format-condition`), so spelling the directive in the
+message made reporting the error re-enter the stub -- outside the `handler-case`
+that caught the first one, i.e. a trap. Pinned by
+`JvmLispCompilerTest.formatUserFunctionDirectiveSignalsWhenTheCompileNeverSawTheDirective`
+(and its WASM twin), which reads the message back through `~a` of the condition.
+
 ## Why the renderer is Lisp source
 
 `FormatRenderer` reads `format-render.lisp` with the real `LispReader`. That is
@@ -86,7 +123,9 @@ backends, verified by the stash dance). One that does grows by ~114 KB of wasm
 (316 KB -> 430 KB), which is the whole directive set in one place and is not
 tree-shakeable -- every arm is reachable from `%fmt-render`, since the control
 string is only known at run time. The gate is what keeps every other program at
-zero.
+zero. The `~/name/` arm is the one exception, and it is separated at INJECTION
+time rather than by the shaker (the section above): what made that arm worth
+separating was never its size, it was the funcall-dispatch gate it held open.
 
 ## Deliberate divergences, and why
 
@@ -96,6 +135,12 @@ zero.
   is a compile-time diagnostic. Reason: a runtime control usually arrives with
   the data being reported -- a condition report must not fail while reporting.
   Do not "fix" this by signalling; it would put a crash inside the error path.
+- **The renderer never signals -- with ONE exception, the absent `~/name/` arm.**
+  That stub is not bad input to a working renderer, it is a capability the
+  artifact does not contain, and rendering the directive as text would drop a
+  report's payload with nothing for the user to search for. See the arm's section
+  above; the tension with the rule right above is deliberate and bounded to that
+  one case.
 - **`~t`, `~p`, `~<...~>` and `~/name/` are renderer-only.** The static path
   declines them and falls back, so all four work either way; the fallback is what
   makes that acceptable. If the static path ever grows them, drop them from this

@@ -166,6 +166,17 @@ splices what it writes. The name is looked up as if by `find-symbol`, where a
 single and a double colon are equivalent, so `~/mypkg:helper/` reaches an
 internal symbol too.
 
+**Compiled output carries `~/name/` only when the compiler can see the
+directive.** Resolving a function out of a control string at run time means any
+function in the program can be reached by name, which is exactly what stops
+`--optimize` from removing unused code -- so the compiler includes that part of
+the renderer only when some string literal in the program spells a `~/name/`
+directive (anywhere: the control at the call site, a control bound to a variable,
+a control inside a spliced library). That covers every ordinary use. A control
+string *assembled at run time* out of pieces that never spell the directive
+signals instead of rendering it, naming the reason; compile with `--dynamic` to
+keep the directive available unconditionally. The interpreter always supports it.
+
 ```lisp
 (defun brackets (stream x &optional colonp atp)
   (princ (if colonp "[" "<") stream) (princ x stream) (princ (if atp "]" ">") stream))

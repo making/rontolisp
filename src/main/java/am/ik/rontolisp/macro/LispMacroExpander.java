@@ -4231,13 +4231,54 @@ public final class LispMacroExpander {
 	 * t-returning progn over its arguments: user dispatch macros cannot extend the
 	 * Java-side reader, so the registration is accepted and ignored (see
 	 * {@link #expandCopyReadtable}).
+	 *
+	 * <p>
+	 * The HOOK argument is dropped, not evaluated -- see
+	 * {@link #isDeadReadtableHook(LispVal)}. A {@code #'name} is the only trace of the
+	 * hook function anywhere in the program, and keeping it here is what kept ironclad's
+	 * {@code #@} reader (whose body calls {@code read}) alive in every program that loads
+	 * ironclad -- alive enough to make the compile emit the reader runtime and to hold
+	 * the {@code --optimize} funcall-dispatch gate open. A function reference has no
+	 * effect of its own, so dropping it costs nothing else.
 	 * @param cons the set-dispatch-macro-character expression
 	 * @return the expanded expression
 	 */
 	public static LispVal expandSetDispatchMacroCharacter(LispCons cons) {
-		List<LispVal> forms = new java.util.ArrayList<>(cons.toList().subList(1, cons.toList().size()));
+		List<LispVal> forms = new java.util.ArrayList<>();
+		for (LispVal arg : cons.toList().subList(1, cons.toList().size())) {
+			if (!isDeadReadtableHook(arg)) {
+				forms.add(arg);
+			}
+		}
 		forms.add(LispTrue.INSTANCE);
 		return makeProgn(forms);
+	}
+
+	/**
+	 * Whether the form registers a reader hook that rontolisp's reader can never fire --
+	 * today exactly {@code set-dispatch-macro-character}, which
+	 * {@link #expandSetDispatchMacroCharacter} lowers to a no-op.
+	 * @param form a form of the program
+	 * @return true when the form is such a registration
+	 */
+	public static boolean isReadtableHookRegistration(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.SET_DISPATCH_MACRO_CHARACTER.equals(memberOf(op.name()));
+	}
+
+	/**
+	 * Whether the argument of such a registration is the hook itself: a {@code #'name}
+	 * reference or a {@code (lambda ...)}. Both are pure references -- evaluating one has
+	 * no effect -- and the function behind them is unreachable, since nothing can call
+	 * the registration back. {@code LibraryDefunPruner} skips exactly these when it
+	 * collects references, so the definition it names may be pruned; a hook argument that
+	 * is a CALL stays, because a call can do something else too.
+	 * @param arg an argument of a readtable-hook registration
+	 * @return true when the argument is a dead hook reference
+	 */
+	public static boolean isDeadReadtableHook(LispVal arg) {
+		return arg instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& (LispNames.FUNCTION.equals(head.name()) || LispNames.LAMBDA.equals(head.name()));
 	}
 
 	/**
@@ -9971,20 +10012,40 @@ public final class LispMacroExpander {
 	 * name arrives in the caller's package spelling (sxql's
 	 * {@code (slot-value select-statement type)} reads struct slots through a quoted
 	 * clause-type list resolved under {@code sxql/statement}), and
-	 * {@code (intern (symbol-name n))} is that fold on every backend. Normalizing inside
-	 * the defun (not at call sites) also puts the {@code intern} spelling into the
-	 * program the WASM {@code usesIntern} emission gate scans, so the {@code _intern}
-	 * runtime it needs is emitted with it.
+	 * {@link #slotNameKeyDefun()} is that fold on every backend. Normalizing inside the
+	 * defun (not at call sites) also puts the {@code intern} spelling into the program
+	 * the WASM {@code usesIntern} emission gate scans, so the {@code _intern} runtime it
+	 * needs is emitted with it.
 	 */
 	private static List<LispVal> slotNameNormalizedDispatchDefuns(String publicName, String helperPrefix,
 			List<LispSymbol> params, LispSymbol nameParam, List<LispVal> clauses, LispVal fallback) {
 		List<LispVal> defuns = new java.util.ArrayList<>(
 				chainedDispatchDefuns(publicName, helperPrefix, params, clauses, fallback));
 		List<LispVal> first = ((LispCons) defuns.get(0)).toList();
-		LispVal normalizedBody = makeLet(nameParam.name(),
-				mvCall(LispNames.INTERN, mvCall(LispNames.SYMBOL_NAME, nameParam)), first.get(3));
+		LispVal normalizedBody = makeLet(nameParam.name(), mvCall(LispNames.SLOT_NAME_KEY, nameParam), first.get(3));
 		defuns.set(0, listToCons(List.of(first.get(0), first.get(1), first.get(2), normalizedBody)));
 		return defuns;
+	}
+
+	/**
+	 * The one definition of the runtime slot-name fold:
+	 * {@code (defun %slot-name-key (n) (intern (symbol-name n)))}. Every dispatcher
+	 * {@link #slotNameNormalizedDispatchDefuns} builds calls it, and
+	 * {@code expandTopLevelDefinitions} appends it once when any of them is injected.
+	 *
+	 * <p>
+	 * It is a defun of its own so that {@code compiler/RuntimeNameProducers} can match
+	 * it: that {@code intern} is rontolisp's own scaffolding, re-spelling a symbol the
+	 * program already holds, and reading it as "this program can forge a function name"
+	 * costs every runtime-slot-name program the {@code --optimize} funcall-dispatch gate
+	 * ({@code .kb/optimize-dead-code-elimination.md}). The match is against THIS
+	 * builder's output, so a change here cannot silently stop matching there.
+	 * @return the fold's definition
+	 */
+	public static LispVal slotNameKeyDefun() {
+		LispSymbol n = new LispSymbol("%snk_n");
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SLOT_NAME_KEY),
+				listToCons(List.of(n)), mvCall(LispNames.INTERN, mvCall(LispNames.SYMBOL_NAME, n))));
 	}
 
 	/**
@@ -13849,6 +13910,28 @@ public final class LispMacroExpander {
 	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported) {
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, false);
+	}
+
+	/**
+	 * As
+	 * {@link #expandTopLevelDefinitions(List, java.util.Map, ClosRegistry, java.util.function.BiPredicate)},
+	 * threading the backend's late-binding mode. The only thing it decides here is
+	 * whether the format renderer's {@code ~/name/} arm is injected unconditionally:
+	 * under {@code --dynamic} any name resolves at run time, so the arm's cost -- keeping
+	 * every function dispatchable -- is already paid and narrowing it would buy nothing.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated: classes, generics, and methods
+	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param dynamic whether the backend compiles in late-binding mode
+	 * ({@code --dynamic})
+	 * @return the program with each definition replaced by its generated defuns
+	 */
+	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
+			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported,
+			boolean dynamic) {
 		// The one whole-program pass both compilers already run, so the load-time-value
 		// hoist rides along instead of needing its own registration in every pipeline.
 		program = hoistLoadTimeValues(program);
@@ -13941,7 +14024,7 @@ public final class LispMacroExpander {
 			// returns the program itself when there is no literal, keeping the fast path.
 			// The format renderer is still injected here when the program reaches it:
 			// this path carries the plainest runtime-control (format ...) programs.
-			return withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry));
+			return withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry), dynamic);
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
@@ -14113,6 +14196,7 @@ public final class LispMacroExpander {
 			out.add(classSlotDefsRuntimeDefun(closRegistry));
 			out.addAll(0, classSlotDefsTableForms(closRegistry));
 		}
+		boolean slotNameFold = false;
 		if (needsRuntimeSlotNameDispatch(program, closRegistry)) {
 			// The shared runtime-slot-name dispatch defuns: the slot-value/slot-boundp
 			// call sites lower to them during the backend passes, and the bodies are
@@ -14120,16 +14204,24 @@ public final class LispMacroExpander {
 			// appended.
 			out.addAll(runtimeSlotValueDefuns(closRegistry));
 			out.addAll(runtimeSlotBoundpDefuns(closRegistry));
+			slotNameFold = true;
 		}
 		if (needsRuntimeSlotExistsDispatch(program)) {
 			// The existence twin, separately gated so programs without a runtime-name
 			// slot-exists-p stay byte-identical.
 			out.addAll(runtimeSlotExistsPDefuns(closRegistry));
+			slotNameFold = true;
 		}
 		if (needsRuntimeSlotSetDispatch(program, closRegistry)) {
 			// The write-side twin, separately gated so read-only programs stay
 			// byte-identical.
 			out.addAll(runtimeSlotValueSetDefuns(closRegistry));
+			slotNameFold = true;
+		}
+		if (slotNameFold) {
+			// The name fold every dispatcher above calls, once: two defuns of one name in
+			// one compiled program are a JVM ClassFormatError.
+			out.add(slotNameKeyDefun());
 		}
 		// The registry is complete and every class constructor is spliced, so this is the
 		// final answer: everything injected below (the runtime-error helpers, the print
@@ -14188,7 +14280,7 @@ public final class LispMacroExpander {
 		// simple-condition's format-control THROUGH the renderer), and gated so a program
 		// whose every format call has a literal control -- the overwhelming majority --
 		// carries none of it.
-		out = withFormatRenderer(out);
+		out = withFormatRenderer(out, dynamic);
 		// The registry is complete: reserve, in every ancestor of a change-class target,
 		// room for the target's slots. %obj-new reads the reservation at backend-compile
 		// time, which is after this pass, so widening here reaches every allocation site.
@@ -14214,14 +14306,26 @@ public final class LispMacroExpander {
 	 * at runtime is a format control, and the designator expansion renders it -- see
 	 * {@link #signalRendersRuntimeControl}.</li>
 	 * </ul>
+	 * <p>
+	 * The {@code ~/name/} arm rides along only when the program can be seen to reach it:
+	 * that arm resolves a function out of the control string at run time, so carrying it
+	 * costs the program {@code --optimize}'s funcall-dispatch gate
+	 * ({@code .kb/optimize-dead-code-elimination.md}). The control string is runtime
+	 * data, so the honest gate is "does any string literal in the program spell the
+	 * directive" ({@link FormatRenderer#namesFunctionDesignator}) -- plus
+	 * {@code --dynamic}, whose whole contract is that a name resolves at run time. A
+	 * program that spells none gets a stub that signals if one is ever rendered.
 	 * @param forms the program to scan
+	 * @param dynamic whether the backend compiles in late-binding mode
 	 * @return the program, with the renderer definitions appended when it needs them
 	 */
-	private static List<LispVal> withFormatRenderer(List<LispVal> forms) {
+	private static List<LispVal> withFormatRenderer(List<LispVal> forms, boolean dynamic) {
 		for (LispVal form : forms) {
 			if (FormatRenderer.isUsed(form) || reachesFormatRenderer(form)) {
 				List<LispVal> withRenderer = new java.util.ArrayList<>(forms);
 				withRenderer.addAll(FormatRenderer.defuns());
+				withRenderer.addAll(dynamic || FormatRenderer.namesFunctionDesignator(forms)
+						? FormatRenderer.functionDesignatorDefuns() : FormatRenderer.functionDesignatorStubDefuns());
 				return withRenderer;
 			}
 		}

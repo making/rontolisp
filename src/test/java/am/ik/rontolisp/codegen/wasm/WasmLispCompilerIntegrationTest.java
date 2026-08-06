@@ -3879,6 +3879,30 @@ class WasmLispCompilerIntegrationTest {
 			.isEqualTo("A | B (00007)");
 	}
 
+	// The renderer's ~/name/ arm is injected only when a control string the compile can
+	// SEE spells the directive (.kb/format.md) -- the literal below is bound to a local
+	// and never appears in the format call. A control assembled at run time gets the
+	// signalling stub instead; the JVM twin pins that half, and both backends have to
+	// answer the same way.
+	@Test
+	void formatUserFunctionDirectiveRendersThroughARuntimeControl() throws Exception {
+		assertThat(compileAndRun("""
+				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
+				(let ((c "~/fmt-slash-brackets/ ~:@/fmt-slash-brackets/"))
+				  (princ (format nil c 1 2)))
+				""")).isEqualTo("<1> [2]");
+	}
+
+	@Test
+	void formatUserFunctionDirectiveSignalsWhenTheCompileNeverSawTheDirective() throws Exception {
+		// search is prelude-backed, so this one splices the prelude like the CLI does.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
+				(princ (handler-case (format nil (concatenate 'string "~" "/fmt-slash-brackets/") 1)
+				         (error (e) (if (search "--dynamic" (format nil "~a" e)) "signalled" "no-hint"))))
+				""")))).isEqualTo("signalled");
+	}
+
 	@Test
 	void formatInsideDefun() throws Exception {
 		assertThat(compileAndRun("(defun greet (name) (format t \"Hi, ~a!~%\" name)) (greet 'alice) (greet \"bob\")"))
