@@ -3977,6 +3977,37 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(princ '(1 \"hello\" 3))")).isEqualTo("(1 hello 3)");
 	}
 
+	/** The literal spellings {@code WasmLiteralPrint} renders at compile time. */
+	private static final List<String> FOLDED_PRINT_LITERALS = List.of("\"s\"", "\"a\\\"b\\\\c\"", "\"\"", "42", "-7",
+			"0", "12345678901234567890", "-12345678901234567890", "1/2", "-3/4", "#\\a", "#\\Space", "#\\Newline",
+			"#\\Tab", "#\\Rubout", "t", "nil");
+
+	@Test
+	void aFoldedLiteralPrintsWhatTheRuntimePrinterWouldHave() throws Exception {
+		// The fold renders a literal at COMPILE time and writes static bytes, so the two
+		// renderers -- LispVal.print()/display() in the compiler and _print_val /
+		// _princ_val in the emitted module -- have to agree character for character.
+		// Passing the same literal through a function parameter is what keeps the
+		// runtime printer in the picture, so the two programs below differ in nothing
+		// but which renderer produced the text.
+		StringBuilder folded = new StringBuilder();
+		StringBuilder viaParameter = new StringBuilder("(defun show (x) (prin1 x) (princ \"|\") (princ x) (terpri))\n");
+		for (String literal : FOLDED_PRINT_LITERALS) {
+			folded.append("(prin1 ")
+				.append(literal)
+				.append(") (princ \"|\") (princ ")
+				.append(literal)
+				.append(") (terpri)\n");
+			viaParameter.append("(show ").append(literal).append(")\n");
+		}
+		String expected = compileAndRun(viaParameter.toString());
+		assertThat(compileAndRun(folded.toString())).isEqualTo(expected);
+		// print is the same rendering plus a newline, and write-string / write-line write
+		// a string literal as it is.
+		assertThat(compileAndRun("(print \"a\\\"b\") (write-string \"x\") (write-line \"y\") (princ #\\z)"))
+			.isEqualTo("\"a\\\"b\"\nxy\nz");
+	}
+
 	@Test
 	void terpri() throws Exception {
 		assertThat(compileAndRun("(prin1 1) (princ 2) (terpri)")).isEqualTo("12");

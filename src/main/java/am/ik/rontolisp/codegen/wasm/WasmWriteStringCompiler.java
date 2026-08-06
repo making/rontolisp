@@ -24,13 +24,26 @@ final class WasmWriteStringCompiler {
 		if (parts.size() != 2 && parts.size() != 3) {
 			throw new UnsupportedOperationException("write-string expects 1 or 2 arguments, got " + (parts.size() - 1));
 		}
-		// A mutable character vector normalizes to a string first.
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		// The destination, under CL's stream designator rule: an explicit stream, or --
 		// for an omitted argument AND for an explicit nil -- the current
 		// *standard-output* (WasmEmitHelper.streamArg).
 		LispVal stream = WasmEmitHelper.streamArg(ctx, parts.size() == 3 ? parts.get(2) : null);
+		if (stream == null && parts.get(1) instanceof am.ik.rontolisp.LispString literal) {
+			// A string literal to standard output: static bytes, so the stream runtime
+			// stays shakeable (WasmLiteralPrint).
+			int objSlot = ctx.allocTemp();
+			WasmExprCompiler.compileExpr(literal, ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeSignedLeb128(objSlot);
+			WasmLiteralPrint.emitStaticWrite(literal.value(), literal, false, ctx);
+			// write-string returns its string argument.
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeSignedLeb128(objSlot);
+			return;
+		}
+		// A mutable character vector normalizes to a string first.
+		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		if (stream != null) {
 			WasmExprCompiler.compileExpr(stream, ctx);
 		}

@@ -14406,12 +14406,9 @@ public final class LispMacroExpander {
 		if (!(control instanceof LispString literal)) {
 			return true;
 		}
-		List<LispSymbol> temps = new java.util.ArrayList<>();
-		for (int i = 3; i < parts.size(); i++) {
-			temps.add(new LispSymbol(FORMAT_ARG_VAR + (i - 3)));
-		}
 		List<FmtOp> parsed;
 		try {
+			List<LispVal> temps = formatArgExprs(parts.subList(3, parts.size()), null);
 			parsed = truncateAtCut(new FmtParser(literal.value()).parseTop(FmtArgs.forTemps(temps)));
 		}
 		catch (UnsupportedOperationException declined) {
@@ -14907,15 +14904,10 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> args = parts.subList(3, parts.size());
 		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispSymbol> argSyms = new java.util.ArrayList<>();
-		for (int i = 0; i < args.size(); i++) {
-			LispSymbol g = new LispSymbol(FORMAT_ARG_VAR + i);
-			argSyms.add(g);
-			bindings.add(listToCons(List.of(g, args.get(i))));
-		}
+		List<LispVal> argExprs = formatArgExprs(args, bindings);
 		List<FmtOp> parsed;
 		try {
-			parsed = truncateAtCut(new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argSyms)));
+			parsed = truncateAtCut(new FmtParser(control.value()).parseTop(FmtArgs.forTemps(argExprs)));
 		}
 		catch (UnsupportedOperationException unsupportedDirective) {
 			// A directive shape the static expansion cannot lower (an uneven ~[
@@ -14985,6 +14977,68 @@ public final class LispMacroExpander {
 		List<LispVal> rebuilt = new java.util.ArrayList<>(parts);
 		rebuilt.set(2, newControl);
 		return listToCons(rebuilt);
+	}
+
+	/**
+	 * The expression each {@code format} argument position denotes, appending to
+	 * {@code bindings} (when given) the {@code let} the call has to wrap around the
+	 * lowering.
+	 *
+	 * <p>
+	 * An argument is normally bound to a {@code __format_arg} temporary, because the
+	 * directives that consume it may read one position more than once ({@code ~:*}, a
+	 * conditional's re-parsed remainder) and every argument must still be evaluated
+	 * exactly once, left to right. A SELF-EVALUATING LITERAL needs neither guarantee: it
+	 * has no side effect and no evaluation order to preserve, so it goes into the
+	 * lowering verbatim. That is what lets the backends' literal folds see it -- behind a
+	 * temporary, {@code (format t "Hello, ~a!~%" "World")} prints through the generic
+	 * runtime printer; substituted, it compiles to static text.
+	 *
+	 * <p>
+	 * The renderer GATE ({@link #formatUsesRenderer}) calls this too, so the shape it
+	 * predicts and the shape the expansion builds cannot diverge.
+	 * @param args the argument forms of the call
+	 * @param bindings collects the {@code (temp form)} pairs, or {@code null} when the
+	 * caller only needs the expressions
+	 * @return one expression per argument position
+	 */
+	private static List<LispVal> formatArgExprs(List<LispVal> args, @Nullable List<LispVal> bindings) {
+		List<LispVal> exprs = new java.util.ArrayList<>();
+		for (int i = 0; i < args.size(); i++) {
+			LispVal arg = args.get(i);
+			if (isSelfEvaluatingLiteral(arg)) {
+				exprs.add(arg);
+				continue;
+			}
+			LispSymbol temp = new LispSymbol(FORMAT_ARG_VAR + i);
+			exprs.add(temp);
+			if (bindings != null) {
+				bindings.add(listToCons(List.of(temp, arg)));
+			}
+		}
+		return exprs;
+	}
+
+	/**
+	 * Whether a form evaluates to itself, with no side effect and no identity to
+	 * preserve, so that substituting it for a variable that would have held it changes
+	 * nothing. Deliberately narrow: an ARRAY / instance literal is self-evaluating too,
+	 * but it builds a fresh object per evaluation, so duplicating one would hand out two
+	 * objects where a temporary hands out one.
+	 */
+	private static boolean isSelfEvaluatingLiteral(LispVal form) {
+		return switch (form) {
+			case LispString ignored -> true;
+			case LispInteger ignored -> true;
+			case LispBigInteger ignored -> true;
+			case LispDouble ignored -> true;
+			case LispRatio ignored -> true;
+			case LispChar ignored -> true;
+			case LispNil ignored -> true;
+			case LispTrue ignored -> true;
+			case LispSymbol sym -> sym.isKeyword();
+			default -> false;
+		};
 	}
 
 	private static final String FORMAT_ARG_VAR = "__format_arg";
@@ -15065,7 +15119,13 @@ public final class LispMacroExpander {
 	 */
 	private static final class FmtArgs {
 
-		private final List<LispSymbol> syms;
+		/**
+		 * The expression each argument position denotes: the {@code __format_arg} temp
+		 * the call binds it to, or -- for a self-evaluating LITERAL, which needs no temp
+		 * -- the literal itself ({@link #formatArgExprs}). Every consumer below only
+		 * READS the expression, so a literal is as good as a variable there.
+		 */
+		private final List<LispVal> syms;
 
 		@Nullable private final String runtimePrefix;
 
@@ -15078,13 +15138,13 @@ public final class LispMacroExpander {
 		 */
 		private boolean cutTerminated;
 
-		private FmtArgs(List<LispSymbol> syms, @Nullable String runtimePrefix, int index) {
+		private FmtArgs(List<LispVal> syms, @Nullable String runtimePrefix, int index) {
 			this.syms = syms;
 			this.runtimePrefix = runtimePrefix;
 			this.index = index;
 		}
 
-		static FmtArgs forTemps(List<LispSymbol> temps) {
+		static FmtArgs forTemps(List<LispVal> temps) {
 			return new FmtArgs(temps, null, 0);
 		}
 
@@ -15096,7 +15156,7 @@ public final class LispMacroExpander {
 			return this.runtimePrefix == null;
 		}
 
-		LispSymbol next(char directive) {
+		LispVal next(char directive) {
 			if (this.runtimePrefix == null && this.index >= this.syms.size()) {
 				if (this.cutTerminated) {
 					// Everything after the fired ~^ is truncated; this temp is never
@@ -15148,7 +15208,7 @@ public final class LispMacroExpander {
 		}
 
 		/** Every item temporary this (runtime) source handed out, in index order. */
-		List<LispSymbol> items() {
+		List<LispVal> items() {
 			return this.syms;
 		}
 
@@ -15281,7 +15341,7 @@ public final class LispMacroExpander {
 					this.pos += 2;
 				}
 				else if (p == 'v' || p == 'V') {
-					params.add(args.next('v'));
+					params.add(vParam(args.next('v')));
 					this.pos++;
 				}
 				else if (p == '#') {
@@ -15657,7 +15717,7 @@ public final class LispMacroExpander {
 			if (at) {
 				// ~@[str~]: the tested argument is re-used by the clause when non-nil
 				// and consumed outright when nil, so the clause must consume exactly it.
-				LispSymbol sel = args.next('[');
+				LispVal sel = args.next('[');
 				FmtArgs branch = args.branchAt(args.position() - 1);
 				List<FmtOp> body = parseOps(branch, "]");
 				if (branch.position() != args.position()) {
@@ -15668,7 +15728,7 @@ public final class LispMacroExpander {
 				return;
 			}
 			if (colon) {
-				LispSymbol sel = args.next('[');
+				LispVal sel = args.next('[');
 				List<FmtClause> clauses = parseClauses(args);
 				if (clauses.size() != 2) {
 					throw new IllegalArgumentException("format: ~:[ requires exactly two clauses");
@@ -15756,7 +15816,7 @@ public final class LispMacroExpander {
 				while (args.remaining('{') > 0 && passes < limit) {
 					if (colon) {
 						// ~:@{: each remaining argument is one iteration's sublist.
-						LispSymbol sub = args.next('{');
+						LispVal sub = args.next('{');
 						FmtArgs items = FmtArgs.forRuntimeItems("__fmtsub" + id + "_" + passes + "_");
 						this.pos = bodyStart;
 						List<FmtOp> body = parseOps(items, "}");
@@ -15787,7 +15847,7 @@ public final class LispMacroExpander {
 				}
 				return;
 			}
-			LispSymbol listSym = args.next('{');
+			LispVal listSym = args.next('{');
 			FmtArgs items = FmtArgs.forRuntimeItems("__fmtit" + id + "_");
 			List<FmtOp> body = parseOps(items, "}");
 			LispVal maxExpr = (maxParam instanceof LispNil) ? null : maxParam;
@@ -16060,10 +16120,28 @@ public final class LispMacroExpander {
 		if (idx < params.size() && params.get(idx) instanceof LispInteger code) {
 			return new LispString(String.valueOf((char) code.value()));
 		}
-		if (idx < params.size() && params.get(idx) instanceof LispSymbol v) {
-			return fmtCall(LispNames.PRINC_TO_STRING, v);
+		if (idx < params.size() && !(params.get(idx) instanceof LispNil)) {
+			// A runtime (v) parameter, or a substituted literal that is not a character
+			// (a string, say): the pad is its printed text.
+			return fmtCall(LispNames.PRINC_TO_STRING, params.get(idx));
 		}
 		return new LispString(String.valueOf(def));
+	}
+
+	/**
+	 * Re-encodes a {@code ~v} prefix parameter whose argument turned out to be a LITERAL.
+	 *
+	 * <p>
+	 * A prefix parameter is normally either a compile-time constant (the parser spells a
+	 * number as a {@code LispInteger} and a {@code ~'c} character as its CODE POINT, also
+	 * a {@code LispInteger}) or a runtime expression (a symbol). {@code ~v} takes it from
+	 * an argument, which {@link #formatArgExprs} substitutes when it is a literal -- and
+	 * a literal character has to arrive in the spelling the accessors below already
+	 * understand, or {@code ~v} with {@code #\0} and {@code ~'0} -- the same parameter
+	 * said two ways -- would lower differently.
+	 */
+	private static LispVal vParam(LispVal arg) {
+		return arg instanceof LispChar c ? new LispInteger(c.codePoint()) : arg;
 	}
 
 	/** A literal character parameter (e.g. the ~e exponent marker), or the default. */
@@ -16145,12 +16223,40 @@ public final class LispMacroExpander {
 	 * and string-valued directives become {@code (princ ...)}, {@code ~%} becomes
 	 * {@code (terpri)}, and {@code ~&} becomes {@code (fresh-line)}.
 	 */
+	/**
+	 * The output form of one string-valued piece under a {@code t} destination.
+	 *
+	 * <p>
+	 * A piece that IS a {@code princ-to-string} / {@code prin1-to-string} call (what a
+	 * plain {@code ~a} / {@code ~s} / {@code ~d} lowers to) prints the same text as
+	 * printing its argument directly -- that is the definition of those two functions --
+	 * so the intermediate string is never built: the printer writes straight to the
+	 * destination. It also puts a LITERAL argument in front of the print family's literal
+	 * fold, which the wrapping call would otherwise hide behind a cons.
+	 * @param expr the string-valued piece
+	 * @return the form that writes it
+	 */
+	private static LispVal printPiece(LispVal expr) {
+		if (expr instanceof LispCons call && call.isProperList() && call.car() instanceof LispSymbol head) {
+			List<LispVal> parts = call.toList();
+			if (parts.size() == 2) {
+				if (LispNames.PRINC_TO_STRING.equals(head.name())) {
+					return fmtCall(LispNames.PRINC, parts.get(1));
+				}
+				if (LispNames.PRIN1_TO_STRING.equals(head.name())) {
+					return fmtCall(LispNames.PRIN1, parts.get(1));
+				}
+			}
+		}
+		return fmtCall(LispNames.PRINC, expr);
+	}
+
 	private static List<LispVal> formatOutputForms(List<FmtOp> ops) {
 		List<LispVal> forms = new java.util.ArrayList<>();
 		for (FmtOp op : ops) {
 			switch (op) {
 				case FmtLiteral l -> forms.add(fmtCall(LispNames.PRINC, new LispString(l.text())));
-				case FmtString f -> forms.add(fmtCall(LispNames.PRINC, f.expr()));
+				case FmtString f -> forms.add(printPiece(f.expr()));
 				case FmtNewline nl -> {
 					for (int k = 0; k < nl.count(); k++) {
 						forms.add(listToCons(List.of(new LispSymbol(LispNames.TERPRI))));
@@ -16385,7 +16491,7 @@ public final class LispMacroExpander {
 	 * Binds the iteration item temporaries to successive elements of {@code base} around
 	 * {@code bodyExpr} (no binding when the body consumed no items).
 	 */
-	private static LispVal letItems(List<LispSymbol> items, LispVal base, LispVal bodyExpr) {
+	private static LispVal letItems(List<LispVal> items, LispVal base, LispVal bodyExpr) {
 		if (items.isEmpty()) {
 			return bodyExpr;
 		}
@@ -16402,7 +16508,7 @@ public final class LispMacroExpander {
 	 * an accumulator, and advances the cursor by {@code m}; an optional {@code maxExpr}
 	 * caps the number of passes.
 	 */
-	private static LispVal flatLoopExpr(LispSymbol listSym, FmtArgs items, List<FmtOp> body, @Nullable LispVal maxExpr,
+	private static LispVal flatLoopExpr(LispVal listSym, FmtArgs items, List<FmtOp> body, @Nullable LispVal maxExpr,
 			int id) {
 		int m = items.position();
 		LispSymbol l = new LispSymbol("__fmtl" + id);
@@ -16441,8 +16547,8 @@ public final class LispMacroExpander {
 	 * the body's item temporaries to the elements of the next sublist and advances by
 	 * one.
 	 */
-	private static LispVal sublistLoopExpr(LispSymbol listSym, FmtArgs items, List<FmtOp> body,
-			@Nullable LispVal maxExpr, int id) {
+	private static LispVal sublistLoopExpr(LispVal listSym, FmtArgs items, List<FmtOp> body, @Nullable LispVal maxExpr,
+			int id) {
 		LispSymbol l = new LispSymbol("__fmtl" + id);
 		LispSymbol o = new LispSymbol("__fmto" + id);
 		LispSymbol c = new LispSymbol("__fmtc" + id);
@@ -16457,7 +16563,7 @@ public final class LispMacroExpander {
 		}
 		List<LispVal> innerBindings = new java.util.ArrayList<>();
 		innerBindings.add(listToCons(List.of(sub, fmtCall(LispNames.CAR, l))));
-		List<LispSymbol> syms = items.items();
+		List<LispVal> syms = items.items();
 		for (int k = 0; k < syms.size(); k++) {
 			innerBindings.add(listToCons(List.of(syms.get(k), carChain(sub, k))));
 		}
@@ -16807,7 +16913,7 @@ public final class LispMacroExpander {
 	private static LispVal expandStringSignal(String opName, String internalName, LispString control,
 			List<LispVal> args, boolean signalHook) {
 		List<LispVal> bindings = new java.util.ArrayList<>();
-		List<LispSymbol> argSyms = new java.util.ArrayList<>();
+		List<LispVal> argSyms = new java.util.ArrayList<>();
 		for (int i = 0; i < args.size(); i++) {
 			LispSymbol g = new LispSymbol(ERROR_ARG_VAR + i);
 			argSyms.add(g);
@@ -17232,7 +17338,7 @@ public final class LispMacroExpander {
 	 * {@code %string-concat} calls (left-associative), as the {@code format nil}
 	 * destination does.
 	 */
-	private static LispVal formatMessagePieces(String controlText, List<LispSymbol> argSyms) {
+	private static LispVal formatMessagePieces(String controlText, List<LispVal> argSyms) {
 		List<FmtOp> parsed;
 		try {
 			parsed = new FmtParser(controlText).parseTop(FmtArgs.forTemps(argSyms));

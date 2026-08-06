@@ -40,6 +40,37 @@ Six ways in -- all of them funnel into `(%fmt-render control arguments)`:
    format arguments, so the object-designator expansion's string arm renders it
    (`.kb/error-handling.md`, todo-220).
 
+## What the LITERAL path lowers to (and the two things it does NOT emit)
+
+A `t` destination lowers to a sequence of print calls, a `nil` one to
+`%string-concat` pieces (`formatOutputForms` / `opsToPieces`). Two rules keep that
+lowering from hiding its own constants, and both are shared by all four backends:
+
+- **A self-evaluating literal argument is NOT bound to a `__format_arg` temp.**
+  The temps exist so that an argument is evaluated exactly once, left to right,
+  even when a directive reads one position twice (`~:*`, a conditional's re-parsed
+  remainder). A literal needs neither guarantee, so `formatArgExprs` substitutes it
+  into the lowering directly. **The renderer gate calls the same function**, so the
+  shape it predicts and the shape the expansion builds cannot diverge -- the same
+  rule the gate already follows for the parser itself.
+- **A piece that IS a `princ-to-string` / `prin1-to-string` call prints straight to
+  the destination.** A plain `~a` / `~d` lowers to `(princ-to-string x)` and `~s` to
+  `(prin1-to-string x)`; under a `t` destination `formatOutputForms` would have
+  wrapped that in `(princ ...)`, which by the definition of those two functions
+  ("the text `princ`/`prin1` would print") is exactly `(princ x)` / `(prin1 x)`.
+  `printPiece` emits that instead, so no intermediate string is built at run time.
+
+Together they are what puts a literal in FRONT of a backend's literal fold instead
+of behind a variable reference and a wrapping call: `(format t "Hello, ~a!~%"
+"World")` went 5,031 -> 694 bytes of wasm at `--optimize`, `(format t "~s~%" "...")`
+6,609 -> 651 (`.kb/optimize-dead-code-elimination.md`, "the print family's literal
+fold"). The second rule pays off for a COMPUTED argument too -- it is one string
+allocation per `~a` that no longer happens on any backend.
+
+`printPiece` matches the two-element call SHAPE only, so a padded or composite piece
+(`~10a` wraps its piece in `padExpr`, `~:a` in an `if`) keeps building its string, as
+it must -- the wrapper consumes the text, not the destination.
+
 ## Injection (compile path) and lazy load (interpreter)
 
 `LispMacroExpander.expandTopLevelDefinitions` appends `FormatRenderer.defuns()`

@@ -110,6 +110,13 @@ the type definitions nothing left names, and the static string data no surviving
 code still addresses — a printed literal's module is a few hundred bytes rather
 than the whole runtime's string table.
 
+That floor does not depend on how the program spells the write. A constant text
+is rendered at compile time and emitted as bytes, so `print`, `princ` + `terpri`,
+`write-string`, `write-line` and `(format t "Hello, ~a!~%" "World")` all leave the
+runtime printer behind and land within a few dozen bytes of each other (under 700 B
+as a core module, ~2.2 KB as a component). Print a computed value and the printer
+comes back, as it must.
+
 On the `--component` path the **wrapper shrinks with the core**, not just the core
 itself. Which WASI 0.3 interfaces a component imports follows from what the program
 can actually reach: `(print "Hello World!")` compiles to a component importing

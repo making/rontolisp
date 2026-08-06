@@ -165,9 +165,27 @@ class WasmTreeShakerTest {
 		Module.parse(folding).assertWellFormed();
 		assertThat(dataSectionSize(hello)).isLessThan(512);
 		assertThat(dataSectionSize(folding)).isGreaterThan(16000);
-		// 1024 also pins the literal-print specialization (WasmPrintCompiler): without
+		// 1024 also pins the literal-print specialization (WasmLiteralPrint): without
 		// it the generic printer family alone puts the module near 6 KB.
 		assertThat(hello.length).isLessThan(1024);
+	}
+
+	@Test
+	void everySpellingOfHelloWorldReachesTheSameFloor() {
+		// The literal fold belongs to the print FAMILY, not to `print`: whichever way a
+		// program spells "write this constant", none of them may reference the generic
+		// printer (WasmLiteralPrint). Before it was shared, the princ / format spellings
+		// carried the whole runtime printer -- 4.8 KB against print's 0.65 KB -- and a
+		// format argument hid its literal behind a `let` temp on top of that.
+		List<String> spellings = List.of("(print \"Hello World!\")", "(princ \"Hello World!\") (terpri)",
+				"(format t \"Hello World!~%\")", "(write-line \"Hello World!\")", "(write-string \"Hello World!\")",
+				"(format t \"Hello, ~a!~%\" \"World\")", "(format t \"~a~%\" 42)",
+				"(format t \"~s~%\" \"Hello World!\")");
+		for (String spelling : spellings) {
+			byte[] module = compile(spelling, false, OptimizeLevel.DEFAULT);
+			Module.parse(module).assertWellFormed();
+			assertThat(module.length).describedAs(spelling).isLessThan(1024);
+		}
 	}
 
 	@Test

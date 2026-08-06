@@ -626,9 +626,12 @@ final class WasmExprCompiler {
 				case LispNames.GT -> compileComparison(cons, ctx, Instruction.I32_GT_S, Instruction.F64_GT);
 				case LispNames.LE -> compileComparison(cons, ctx, Instruction.I32_LE_S, Instruction.F64_LE);
 				case LispNames.GE -> compileComparison(cons, ctx, Instruction.I32_GE_S, Instruction.F64_GE);
-				case LispNames.PRINT -> compilePrintOperator(cons, ctx, () -> WasmPrintCompiler.compile(cons, ctx));
-				case LispNames.PRIN1 -> compilePrintOperator(cons, ctx, () -> WasmPrin1Compiler.compile(cons, ctx));
-				case LispNames.PRINC -> compilePrintOperator(cons, ctx, () -> WasmPrincCompiler.compile(cons, ctx));
+				case LispNames.PRINT ->
+					compilePrintOperator(cons, ctx, () -> WasmPrintCompiler.compilePrint(cons, ctx));
+				case LispNames.PRIN1 ->
+					compilePrintOperator(cons, ctx, () -> WasmPrintCompiler.compilePrin1(cons, ctx));
+				case LispNames.PRINC ->
+					compilePrintOperator(cons, ctx, () -> WasmPrintCompiler.compilePrinc(cons, ctx));
 				case LispNames.TERPRI -> WasmTerpriCompiler.compile(cons, ctx);
 				case LispNames.FRESH_LINE -> WasmFreshLineCompiler.compile(cons, ctx);
 				case LispNames.PRINC_TO_STRING ->

@@ -156,19 +156,56 @@ by `WasmTreeShakerTest.dropsStringsOnlyDeadBodiesInterned` /
 plus `optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo` — a differential run, because
 a wrongly-cut range prints garbage rather than trapping.
 
-### Literal print specialization (same session)
+### The print family's literal fold
 
-`(print <string-literal|integer-literal>)` (no stream argument) does not call
-`FUNC_PRINT_VAL`: the readable form is a compile-time constant (`print` always escapes;
-every printer-control variable that could change the text is inert —
-`.kb/pretty-printer.md`), so `WasmPrintCompiler.compileLiteralPrint` interns the
-pre-rendered form and writes it through `FUNC_WRITE_STR`, which keeps the
-`*standard-output*` redirect semantics. The `print-object` hook cannot fire on this path
-(it is inside `compilePrintOperator`'s print-object-free gate). The point is
-reachability: the generic printer's integer arm alone pins the whole bignum print chain
-(9 functions), plus the f64 renderer and ratio accessors — for a program that only
-prints literals, all of it now shakes out. An escape-free string literal's rendered form
-re-uses the literal's own interned bytes, so the fold costs no data.
+An output built-in whose argument is a LITERAL does not call the generic printer at all:
+the text is a compile-time constant (every printer-control variable that could change it
+is inert — `.kb/pretty-printer.md`), so `WasmLiteralPrint` interns the pre-rendered form
+and writes it through `FUNC_WRITE_STR`, which keeps the `*standard-output*` redirect
+semantics. The `print-object` hook cannot fire on this path (it is inside
+`compilePrintOperator`'s print-object-free gate). The point is reachability: the generic
+printer's integer arm alone pins the whole bignum print chain (9 functions), plus the f64
+renderer and the ratio accessors — for a program that only prints literals, all of it
+shakes out.
+
+**It is the FAMILY, not `print`.** `print` / `prin1` / `princ` are one emitter
+(`WasmPrintCompiler`, switched on readable-vs-display and newline-vs-not) precisely so the
+fold cannot exist for one spelling and not the others; `write-string` / `write-line` fold a
+string literal the same way, through the same helper. Folded types: string, fixnum, bignum,
+character, ratio, `nil`, `t` — everything whose `LispVal.print()` / `display()` the emitted
+renderer reproduces exactly. **A FLOAT is deliberately excluded**: `_print_f64` and
+`LispDouble.print()` disagree at large magnitudes, so folding one would give a program two
+spellings of the same value. That is the re-evaluation trigger — fold floats when those two
+renderers agree.
+
+The fold costs no data for strings: an escape-free readable form re-uses the literal's own
+interned bytes verbatim, and a DISPLAY rendering points at the interior of the same framed
+literal (`offset + 1`, `length - 2`), which is what `_princ_val` computes at run time.
+
+Measured at `--optimize` (2026-08-06), Preview 1 bytes:
+
+| program | before | after | `--component` after |
+| --- | --- | --- | --- |
+| `(print "Hello World!")` | 645 | unchanged | 2,147 |
+| `(princ "Hello World!") (terpri)` | 4,823 | **648** | 2,150 |
+| `(format t "Hello World!~%")` | 4,826 | **651** | 2,153 |
+| `(write-line "Hello World!")` | 993 | **645** | 2,147 |
+| `(write-string "Hello World!")` | 1,767 | **638** | 2,139 |
+| `(format t "Hello, ~a!~%" "World")` | 5,031 | **694** | 2,200 |
+| `(format t "~a~%" 42)` | 4,890 | **563** | 2,064 |
+| `(format t "~s~%" "Hello World!")` | 6,609 | **651** | 2,153 |
+
+The component column is the same core module plus the wrapper floor (~1.5 KB); the two
+spellings the change was reported against went 6,346 / 6,349 -> 2,150 / 2,153 there.
+
+The last two needed the format lowering to stop hiding its constants — a literal argument
+is no longer bound to a temp, and a `~a`/`~s` piece prints straight to the destination
+instead of building a string first (`.kb/format.md`, "What the LITERAL path lowers to").
+Pinned by `WasmTreeShakerTest.everySpellingOfHelloWorldReachesTheSameFloor` (< 1 KB for
+every spelling) and behaviorally by
+`WasmLispCompilerIntegrationTest.aFoldedLiteralPrintsWhatTheRuntimePrinterWouldHave`, a
+differential run of every folded literal against the same value passed through a function
+parameter (the only thing that keeps the runtime printer in the picture).
 
 ### The `name` section is DROPPED, not copied (todo-270, 2026-08-06)
 
