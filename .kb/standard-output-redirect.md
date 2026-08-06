@@ -130,6 +130,17 @@ special case -- and the JVM's `_addStream` starts `_streamCount` at 3.
   `wasi:cli/stderr`. `WasmWarnCompiler` passes the constant i31 2 unless the program
   binds the variable (then the global read), and `_start` seeds the global with i31 2
   rather than `_t_sym`.
+  **Those three are the COMPLETE list of ways a compiled wasm module can put handle 2
+  into a stream designator, and `--component` now depends on that** (todo-273): a
+  descriptor is a value in the core module, not an edge, so the wrapper cannot see it and
+  asks the SOURCE instead -- `WasmLispCompiler` scans for `*ERROR-OUTPUT*` / `WARN` /
+  `%WARN` (and gives up under `--dynamic`) and, when none of them is there, retains the
+  adapter's stdout-only `fd_write` so the whole `wasi:cli/stderr` interface leaves the
+  component. Anything new that materializes `StreamDesignators.STANDARD_ERROR_HANDLE`
+  must join that scan (`WasmComponentBuilder.Narrowing`,
+  `.kb/optimize-dead-code-elimination.md`); miss it and `--optimize` turns that write
+  into a trap. It traps rather than misdirects by design -- the stdout-only half answers
+  fd 1 and `unreachable`s the rest.
 - **`_close` on a standard stream is a no-op on every backend.** The wasm `_close`'s
   guard is now `fd >= FIRST_USER_HANDLE` instead of `fd >= 0`: it used to `fd_close(2)`
   for real, so a `(close *error-output*)` silenced every later `warn` on wasm-GC while

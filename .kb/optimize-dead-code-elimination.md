@@ -186,23 +186,25 @@ Measured at `--optimize` (2026-08-06), Preview 1 bytes:
 
 | program | before | after | `--component` after |
 | --- | --- | --- | --- |
-| `(print "Hello World!")` | 645 | unchanged | 2,147 |
-| `(princ "Hello World!") (terpri)` | 4,823 | **648** | 2,150 |
-| `(format t "Hello World!~%")` | 4,826 | **651** | 2,153 |
-| `(write-line "Hello World!")` | 993 | **645** | 2,147 |
-| `(write-string "Hello World!")` | 1,767 | **638** | 2,139 |
-| `(format t "Hello, ~a!~%" "World")` | 5,031 | **694** | 2,200 |
-| `(format t "~a~%" 42)` | 4,890 | **563** | 2,064 |
-| `(format t "~s~%" "Hello World!")` | 6,609 | **651** | 2,153 |
+| `(print "Hello World!")` | 645 | unchanged | 1,820 |
+| `(princ "Hello World!") (terpri)` | 4,823 | **648** | 1,823 |
+| `(format t "Hello World!~%")` | 4,826 | **651** | 1,826 |
+| `(write-line "Hello World!")` | 993 | **645** | 1,820 |
+| `(write-string "Hello World!")` | 1,767 | **638** | 1,812 |
+| `(format t "Hello, ~a!~%" "World")` | 5,031 | **694** | 1,873 |
+| `(format t "~a~%" 42)` | 4,890 | **563** | 1,737 |
+| `(format t "~s~%" "Hello World!")` | 6,609 | **651** | 1,826 |
 
-The component column is the same core module plus the wrapper floor (~1.5 KB); the two
-spellings the change was reported against went 6,346 / 6,349 -> 2,150 / 2,153 there.
+The component column is the same core module plus the wrapper floor, re-measured after
+todo-273 narrowed that floor to ~1,175 B (it was ~1,500 when the fold landed); the two
+spellings the change was reported against went 6,346 / 6,349 -> 1,823 / 1,826 there.
 
 The last two needed the format lowering to stop hiding its constants — a literal argument
 is no longer bound to a temp, and a `~a`/`~s` piece prints straight to the destination
 instead of building a string first (`.kb/format.md`, "What the LITERAL path lowers to").
 Pinned by `WasmTreeShakerTest.everySpellingOfHelloWorldReachesTheSameFloor` (< 1 KB for
-every spelling) and behaviorally by
+every spelling), its `…ComponentFloor` twin (< 2 KB, and the imported-interface set)
+and behaviorally by
 `WasmLispCompilerIntegrationTest.aFoldedLiteralPrintsWhatTheRuntimePrinterWouldHave`, a
 differential run of every folded literal against the same value passed through a function
 parameter (the only thing that keeps the runtime printer in the picture).
@@ -253,7 +255,8 @@ retains `fd_write_stdio` UNDER THE NAME `fd_write` (`WasmExports.retain` renames
 whole filesystem surface goes. This is the one place the component reads an adapter export
 whose name differs from `adapter.wat`'s — deliberately, because the alternative (a
 `from-exports` renaming instance) costs bytes and index churn in exactly the case being
-optimized. `wasi:cli/stderr` stays for every printing program: fd 2 is a value, not an edge.
+optimized. `wasi:cli/stderr` used to stay for every printing program — retired by todo-273
+below, which answers "can this program present fd 2" from the SOURCE instead.
 
 **A narrow half must be no more PERMISSIVE than the wide one.** `$fd_write_stdio` answers fd 1
 and 2 and TRAPS (`unreachable`) on anything else; `$fd_read_stdin` traps on any fd but 0.
@@ -302,20 +305,82 @@ steps apply unchanged — the machinery is variant-independent.
 
 **Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47), the changes
 above in the order they landed — the case-fold segment split and the literal-print fold, then
-the type section and the string blob, then the wrapper:
+the type section and the string blob, then the wrapper, then todo-273's two narrowings:
 Preview 1 `--optimize` 22,355 -> 1,886 -> **645 bytes** (the first two: -16,368 data,
 -4,078 code; the last two: the type section 578 -> 79 B and the data section 909 -> 168 B);
-`--component` 29,430 -> 8,930 -> 7,690 -> **2,138**.
-The component is now shaken core 653 + adapter 568 (from 3,624) + the shared-memory module 158
-+ 742 B of component types/imports/aliases/canonical functions (from ~3,255). The core was 8%
-of the component and is 31% of it now -- the wrapper is still the majority of a HELLO
-component, but it is no longer fixed cost: it shrinks with the program instead of standing
-under it. Two ends of the same measurement: a component with no I/O at all (only
-`wasm-export`s) imports ZERO interfaces and is 2,072 B; a program that opens a file, lists a
-directory, reads the clock, draws random bytes and reads the environment keeps the whole
+`--component` 29,430 -> 8,930 -> 7,690 -> 2,138 -> **1,820**.
+The component is now shaken core 653 + adapter 547 (from 3,624) + the shared-memory module 34
+(from 158) + 586 B of component types/imports/aliases/canonical functions (from ~3,255). The
+core was 8% of the component and is 36% of it now -- the wrapper is still the majority of a
+HELLO component, but it is no longer fixed cost: it shrinks with the program instead of
+standing under it. Two ends of the same measurement: a component with no I/O at all (only
+`wasm-export`s) imports ZERO interfaces; a program that opens a file, lists a directory,
+reads the clock, draws random bytes and reads the environment keeps the whole
 eleven-interface surface and lands where it always did.
 
 **Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops 337,744 -> 3,804 bytes (2026-08-06). Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
+
+### The wrapper's last two fixed costs, and the floor under them (todo-273, 2026-08-06)
+
+Two things the todo-270 chain could not reach, because neither is an edge in any module:
+
+**`wasi:cli/stderr`, 185 B measured.** `fd_write` dispatches on a runtime fd, so `$fd_write_stdio`
+reaches `stderr-write` from *any* printing program and the whole interface — its 69-byte
+instance type, its import, its `error-code` alias, its `write-via-stream` alias, its
+`canon lower` and its `"w"` entry — rode along. But fd 2 is the RESERVED `*error-output*`
+handle (`.kb/standard-output-redirect.md`), and the compiled core materializes it in exactly
+three places, all of them `StreamDesignators.STANDARD_ERROR_HANDLE`: a read of that
+variable, `warn`'s report, and the `_start` seed a binding of the variable installs. So
+"can this program present fd 2" is a question about the SOURCE, and `WasmLispCompiler`
+answers it (`programUsesSymbol` over `*ERROR-OUTPUT*` / `WARN` / `%WARN`, plus `--dynamic`,
+where any symbol is reachable at run time) and hands the answer to the wrapper as
+`WasmComponentBuilder.Narrowing`. `adapter.wat` gained a third `fd_write` —
+`$fd_write_stdout`, fd 1 only, `unreachable` on anything else — and the retain table picks
+between the three. **The narrow/wide rule from todo-270 holds unchanged: the stdout-only
+half rejects fd 2 rather than approximating it**, so a wrong answer is a trap, never bytes
+silently written to the wrong descriptor. A program with `path_open` keeps the WIDE
+`fd_write` and therefore keeps stderr regardless — a fourth "files but no fd 2" variant
+would buy those bytes back on a component already orders of magnitude past this budget.
+
+*This is a dependency on a list being complete.* Anything new that can put handle 2 into a
+stream designator must join that gate, which is why the producer list lives in
+`.kb/standard-output-redirect.md` and says so there.
+
+**The shared `cabi_realloc`, 142 B measured.** The mem module exists for its MEMORY: the `"w"`
+lowerings' canonical options name a core memory, and that memory must belong to an instance
+older than the adapter they are grouped for — a circularity no other module can break. Its
+allocator half is a separate question, answered by whether any canonical option actually
+references it. For a print-only program none does (`stdout-write` lowers bare; the
+stream/future/waitable built-ins take `(memory 0)` only), so the alias goes, `nextCoreFunc`
+starts at 0 instead of 1, and the module is retained-and-shaken down to a bare
+`(memory 6) (export "memory")` — 158 B to 34. `WMember.realloc()` cannot drift from the
+encoders because the realloc index is reachable only through the `lowerRealloc` /
+`builtinRealloc` factories that also set the flag. Block-bound and user interface imports
+are answered with a plain yes (`needsSharedRealloc`): every one of their lowerings stages
+through it, and such a component is nowhere near this budget. A `wasm-export`'s string ABI
+is NOT part of the question — it lifts through the CORE module's own `cabi_realloc`.
+
+**The floor: WASI 0.3 streams are asynchronous, and the blocking spelling is gated.** The
+adapter builds a stream, a future and a waitable set for one constant write, and that is
+~279 B of the remaining wrapper (the `waitable-set-new` / `waitable-join` /
+`waitable-set-wait` canons, their `"w"` entries and imports, and `$ensure_ws` /
+`$await_waitable` / the two BLOCKED-retry wrappers). The component model does have the
+synchronous `stream.write` / `future.read` built-ins that would delete all of it — measured
+by hand on the emitted component, 1,820 -> ~1,541 — but they sit behind the spec's
+"more async builtins" tier: `wasm-tools validate` and wasmtime 47 both reject them without
+`component-model-more-async-builtins`, which is NOT default-on (`wasmtime run -W gc=y`
+alone fails to parse; adding `-W component-model-more-async-builtins=y` runs it and prints
+correctly). rontolisp's contract is that a component runs with **zero** flags, so this is
+the floor today. **Re-evaluation trigger: when more-async-builtins becomes default-on, drop
+the waitable trio from `adapter.wat` and the async keyword from those two canon encodings.**
+
+What is left in the 1,820 B, for whoever comes next: shaken core 653 (`.todo/271` owns
+~104 of it), adapter 547, import block 197, shared memory 34, wiring 389. Of the adapter's
+imports and the synthesized `"w"` core instance, ~232 B is the `"w"` field NAMES, spelled
+twice each; they are a private linkage between two artifacts this repo ships together, so
+shortening them is available and was deliberately not taken — it trades the legibility of
+`wasm-tools print` on a rontolisp component for bytes the gate above will hand back for
+free.
 
 ### Why the component path is safe (todo-259)
 

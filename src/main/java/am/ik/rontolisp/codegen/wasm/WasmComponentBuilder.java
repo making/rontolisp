@@ -83,7 +83,9 @@ public final class WasmComponentBuilder {
 	/**
 	 * A core module exporting a linear {@code memory} (6 pages) and a bump-allocator
 	 * {@code cabi_realloc}, shared by the canonical lowering, the canonical built-ins and
-	 * the main modules. Source: {@code src/wasm-component/mem.wat}.
+	 * the main modules. The allocator half is dropped again for a component whose
+	 * canonical options never name it ({@link #memModuleFor(byte[], boolean)}). Source:
+	 * {@code src/wasm-component/mem.wat}.
 	 */
 	private static final byte[] MEM_MODULE = resource("mem.wasm");
 
@@ -131,8 +133,8 @@ public final class WasmComponentBuilder {
 			"fd_close", "random_get", "clock_time_get", "environ_sizes_get", "environ_get");
 
 	/**
-	 * The adapter's NARROW implementation of the two fd-polymorphic entry points,
-	 * retained under the preview1 name when the core module imports no {@code path_open}.
+	 * The adapter's NARROW implementations of the two fd-polymorphic entry points,
+	 * retained under the preview1 name when the program cannot present the wider fds.
 	 * <p>
 	 * {@code path_open} is the only writer of the adapter's fd table, so a core module
 	 * that does not import it can never present a file fd: {@code fd_write}'s file arm
@@ -140,9 +142,56 @@ public final class WasmComponentBuilder {
 	 * {@code wasi:filesystem} surface -- which the shaker cannot see for itself, because
 	 * a runtime fd is a value, not an edge. Naming the narrow implementation instead is
 	 * what makes the reachability visible.
+	 * <p>
+	 * {@code fd_write} narrows once more. fd&nbsp;2 is the RESERVED
+	 * {@code *error-output*} handle ({@code .kb/standard-output-redirect.md}),
+	 * materialized by nothing but that variable and {@code warn} -- so whether a program
+	 * can write it is a question about its SOURCE, which
+	 * {@link Narrowing#reachesStandardError()} answers. When it cannot,
+	 * {@code fd_write_stdout} is retained instead and the whole {@code wasi:cli/stderr}
+	 * interface leaves the component.
+	 * @param preview1 the preview1 entry point the core module imports
+	 * @param files whether the program can present a file fd (it imports
+	 * {@code path_open})
+	 * @param standardError whether the program can present fd 2
+	 * @return the adapter export to retain under {@code preview1}
 	 */
-	private static final java.util.Map<String, String> NARROW_PREVIEW1_IMPL = java.util.Map.of("fd_write",
-			"fd_write_stdio", "fd_read", "fd_read_stdin");
+	private static String narrowImpl(String preview1, boolean files, boolean standardError) {
+		if (files) {
+			// The fd-polymorphic implementations are the only ones that can serve a file
+			// fd, so nothing narrows.
+			return preview1;
+		}
+		return switch (preview1) {
+			case "fd_write" -> standardError ? "fd_write_stdio" : "fd_write_stdout";
+			case "fd_read" -> "fd_read_stdin";
+			default -> preview1;
+		};
+	}
+
+	/**
+	 * How far the wrapper may narrow its fixed WASI surface for one program.
+	 * <p>
+	 * Most of the narrowing reads the core module's own bytes (which preview1 functions
+	 * it still imports, which {@code "w"} members the shaken adapter still binds), but
+	 * not all of it can: a runtime file descriptor is a VALUE, not an edge, so "can this
+	 * program write fd&nbsp;2" is unanswerable from the module and has to come from the
+	 * source. That is what this record carries -- the compile-time facts
+	 * {@link WasmLispCompiler} knows and the bytes do not.
+	 *
+	 * @param shake whether to narrow at all ({@code --optimize}); {@code false} keeps the
+	 * whole surface, which is what every pre-{@code --optimize} component had
+	 * @param reachesStandardError whether the program can materialize the reserved
+	 * {@code *error-output*} handle 2 -- it mentions {@code *error-output*}, calls
+	 * {@code warn}, or is compiled in {@code --dynamic} mode, where any symbol is
+	 * reachable at run time
+	 */
+	record Narrowing(boolean shake, boolean reachesStandardError) {
+
+		/** Keep the whole fixed surface: no {@code --optimize}. */
+		static final Narrowing NONE = new Narrowing(false, true);
+
+	}
 
 	/** A WASI function the fixed wiring aliases out of one of the block's instances. */
 	private record BlockFunc(String iface, String member) {
@@ -253,9 +302,10 @@ public final class WasmComponentBuilder {
 	 * @param func the {@link #BLOCK_FUNCS} key this member lowers, or {@code null} for a
 	 * canonical built-in
 	 * @param types the type keys the encoding names
+	 * @param realloc whether the encoding names the shared {@code cabi_realloc}
 	 * @param encode the encoder, given the assigned component function and type indices
 	 */
-	private record WMember(@Nullable String func, List<String> types,
+	private record WMember(@Nullable String func, List<String> types, boolean realloc,
 			java.util.function.BiFunction<java.util.Map<String, Integer>, java.util.Map<String, Integer>, byte[]> encode) {
 	}
 
@@ -272,13 +322,15 @@ public final class WasmComponentBuilder {
 		final java.util.LinkedHashMap<String, WMember> w = new java.util.LinkedHashMap<>();
 		w.put("stdout-write", lower("stdout-write", ComponentWriter::canonLower));
 		w.put("stdin-read", lower("stdin-read", f -> ComponentWriter.canonLowerMemory(f, 0)));
-		w.put("get-environment", lower("get-environment", f -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, 0)));
+		w.put("get-environment",
+				lowerRealloc("get-environment", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		w.put("sys-now", lower("sys-now", f -> ComponentWriter.canonLowerMemory(f, 0)));
 		w.put("mono-now", lower("mono-now", ComponentWriter::canonLower));
 		w.put("file-read", lower("file-read", f -> ComponentWriter.canonLowerMemory(f, 0)));
 		w.put("file-append", lower("file-append", ComponentWriter::canonLower));
-		w.put("open-at", lower("open-at", f -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, 0)));
-		w.put("get-directories", lower("get-directories", f -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, 0)));
+		w.put("open-at", lowerRealloc("open-at", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
+		w.put("get-directories",
+				lowerRealloc("get-directories", (f, r) -> ComponentWriter.canonLowerMemoryReallocUtf8(f, 0, r)));
 		w.put("get-random-u64", lower("get-random-u64", ComponentWriter::canonLower));
 		w.put("drop-desc", builtin(T_DESCRIPTOR, ComponentWriter::canonResourceDrop));
 		w.put("stream-new", builtin(T_STREAM, ComponentWriter::canonStreamNew));
@@ -295,20 +347,21 @@ public final class WasmComponentBuilder {
 		w.put("future-drop-cli", builtin(T_CLI_FUTURE, ComponentWriter::canonFutureDropReadable));
 		// the filesystem error-code is a variant with a string-bearing case, so its
 		// future
-		// payload needs realloc (cabi_realloc = core func 0)
-		w.put("future-read-fs", builtin(T_FS_FUTURE, t -> ComponentWriter.canonFutureReadAsync(t, 0, 0)));
+		// payload needs the shared allocator
+		w.put("future-read-fs", builtinRealloc(T_FS_FUTURE, (t, r) -> ComponentWriter.canonFutureReadAsync(t, 0, r)));
 		w.put("future-drop-fs", builtin(T_FS_FUTURE, ComponentWriter::canonFutureDropReadable));
 		w.put("stderr-write", lower("stderr-write", ComponentWriter::canonLower));
-		w.put("waitable-set-new", new WMember(null, List.of(), (f, t) -> ComponentWriter.canonWaitableSetNew()));
-		w.put("waitable-join", new WMember(null, List.of(), (f, t) -> ComponentWriter.canonWaitableJoin()));
-		w.put("waitable-set-wait", new WMember(null, List.of(), (f, t) -> ComponentWriter.canonWaitableSetWait(0)));
+		w.put("waitable-set-new", new WMember(null, List.of(), false, (f, t) -> ComponentWriter.canonWaitableSetNew()));
+		w.put("waitable-join", new WMember(null, List.of(), false, (f, t) -> ComponentWriter.canonWaitableJoin()));
+		w.put("waitable-set-wait",
+				new WMember(null, List.of(), false, (f, t) -> ComponentWriter.canonWaitableSetWait(0)));
 		// descriptor.read-directory: the result is a (stream, future) handle pair, two
 		// flat
 		// values, so it returns through a memory retptr.
 		w.put("read-dir", lower("read-dir", f -> ComponentWriter.canonLowerMemory(f, 0)));
 		// The directory-entry stream's own read / drop. The read needs realloc: each
 		// element owns its name string.
-		w.put("stream-read-de", builtin(T_DE_STREAM, t -> ComponentWriter.canonStreamReadAsync(t, 0, 0)));
+		w.put("stream-read-de", builtinRealloc(T_DE_STREAM, (t, r) -> ComponentWriter.canonStreamReadAsync(t, 0, r)));
 		w.put("stream-drop-r-de", builtin(T_DE_STREAM, ComponentWriter::canonStreamDropReadable));
 		return w;
 	}
@@ -321,11 +374,39 @@ public final class WasmComponentBuilder {
 	}
 
 	private static WMember lower(String func, java.util.function.IntFunction<byte[]> encode) {
-		return new WMember(func, List.of(), (f, t) -> encode.apply(at(f, func)));
+		return new WMember(func, List.of(), false, (f, t) -> encode.apply(at(f, func)));
 	}
 
 	private static WMember builtin(String type, java.util.function.IntFunction<byte[]> encode) {
-		return new WMember(null, List.of(type), (f, t) -> encode.apply(at(t, type)));
+		return new WMember(null, List.of(type), false, (f, t) -> encode.apply(at(t, type)));
+	}
+
+	/**
+	 * The core function index of the shared memory module's {@code cabi_realloc}, which
+	 * is aliased first and so is core func 0 <strong>whenever it is aliased at
+	 * all</strong> ({@link #needsSharedRealloc}). It is reachable only through the two
+	 * factories below, which is what keeps {@link WMember#realloc()} from drifting away
+	 * from the encoders: a member that names the allocator cannot be declared without
+	 * declaring that it does.
+	 */
+	private static final int SHARED_REALLOC = 0;
+
+	/**
+	 * Encodes a {@code canon} entry that stages host-owned bytes through an allocator.
+	 */
+	@FunctionalInterface
+	private interface ReallocEncoder {
+
+		byte[] encode(int index, int realloc);
+
+	}
+
+	private static WMember lowerRealloc(String func, ReallocEncoder encode) {
+		return new WMember(func, List.of(), true, (f, t) -> encode.encode(at(f, func), SHARED_REALLOC));
+	}
+
+	private static WMember builtinRealloc(String type, ReallocEncoder encode) {
+		return new WMember(null, List.of(type), true, (f, t) -> encode.encode(at(t, type), SHARED_REALLOC));
 	}
 
 	/**
@@ -520,7 +601,7 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	public static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
-		return build(coreModule, funcExports, List.of(), false);
+		return build(coreModule, funcExports, List.of(), Narrowing.NONE);
 	}
 
 	/**
@@ -539,7 +620,7 @@ public final class WasmComponentBuilder {
 	 * @return the WASI 0.3 component binary
 	 */
 	static byte[] build(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
-			List<WasmComponentImportCompiler.Import> imports, boolean shake) {
+			List<WasmComponentImportCompiler.Import> imports, Narrowing narrowing) {
 		// rontolisp:fetch off serve is the http.lisp library over canon-lowered
 		// wasi:http@0.3 user imports (the base variant); a serving program goes through
 		// buildServe instead.
@@ -553,7 +634,7 @@ public final class WasmComponentBuilder {
 		validateFixedMembers(fixed);
 		rejectAdapterImportCollisions(user, WitEmitter.VARIANT_BASE);
 		rejectDuplicateUserImports(user);
-		return buildBase(coreModule, funcExports, fixed, user, shake);
+		return buildBase(coreModule, funcExports, fixed, user, narrowing);
 	}
 
 	/**
@@ -565,11 +646,12 @@ public final class WasmComponentBuilder {
 	 * same computation {@link #build} runs, not a parallel one.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param imports the interface imports the program declares
-	 * @param shake whether the fixed surface is narrowed at all ({@code --optimize})
+	 * @param narrowing how far the fixed surface is narrowed ({@code --optimize} plus the
+	 * source-derived facts)
 	 * @return the interface ids the component imports from the block
 	 */
 	static java.util.Set<String> wasiInterfaces(byte[] coreModule, List<WasmComponentImportCompiler.Import> imports,
-			boolean shake) {
+			Narrowing narrowing) {
 		final List<WasmComponentImportCompiler.Import> fixed = new java.util.ArrayList<>();
 		for (WasmComponentImportCompiler.Import imported : imports) {
 			if (FIXED_BLOCK_IFACES.containsKey(imported.ifaceId())) {
@@ -577,7 +659,7 @@ public final class WasmComponentBuilder {
 			}
 		}
 		return ComponentImportBlock.parse(IMPORT_BLOCK)
-			.prune(fixedSurface(coreModule, fixed, shake).interfaces())
+			.prune(fixedSurface(coreModule, fixed, narrowing).interfaces())
 			.instanceOf()
 			.keySet();
 	}
@@ -1305,34 +1387,34 @@ public final class WasmComponentBuilder {
 	 * The chain is one-directional and every link is exact. The core's surviving
 	 * {@code wasi_snapshot_preview1} imports name the adapter entry points that still
 	 * have a caller; {@link WasmExports#retain} makes them the adapter's only exports
-	 * (choosing the narrow implementation of {@code fd_write} / {@code fd_read} when no
-	 * {@code path_open} survives, see {@link #NARROW_PREVIEW1_IMPL}) and
-	 * {@link WasmTreeShaker#shake} then deletes everything unreachable from them --
-	 * including the adapter's own {@code "w"} imports. What is left of {@code "w"}
-	 * decides which WASI functions are lowered, which component types are declared, and
-	 * finally which interfaces the import block still has to declare.
+	 * (choosing the narrow implementation of {@code fd_write} / {@code fd_read} the
+	 * program can still reach, see {@link #narrowImpl}) and {@link WasmTreeShaker#shake}
+	 * then deletes everything unreachable from them -- including the adapter's own
+	 * {@code "w"} imports. What is left of {@code "w"} decides which WASI functions are
+	 * lowered, which component types are declared, and finally which interfaces the
+	 * import block still has to declare.
 	 * <p>
-	 * Without {@code shake} the core keeps all nine imports, so every step is the
-	 * identity and the component is the one this builder always emitted.
+	 * Without {@link Narrowing#shake()} the core keeps all nine imports, so every step is
+	 * the identity and the component is the one this builder always emitted.
 	 * @param coreModule the rontolisp core module compiled in component mode
 	 * @param blockBound the block-declared interfaces the program binds directly
 	 * (wait.lisp's monotonic-clock &c) -- they are reached by the Lisp library rather
 	 * than by the adapter, so they join the interface set here
-	 * @param shake whether to narrow at all ({@code --optimize}); {@code false} keeps the
-	 * whole surface
+	 * @param narrowing how far to narrow, and the source-derived facts the core module's
+	 * bytes cannot answer
 	 * @return the narrowed surface
 	 */
 	static FixedSurface fixedSurface(byte[] coreModule, List<WasmComponentImportCompiler.Import> blockBound,
-			boolean shake) {
+			Narrowing narrowing) {
 		final java.util.LinkedHashSet<String> corePreview1 = WasmImports.functionFields(coreModule,
 				"wasi_snapshot_preview1");
 		byte[] adapter = ADAPTER_MODULE;
-		if (shake) {
-			final boolean narrow = !corePreview1.contains("path_open");
+		if (narrowing.shake()) {
+			final boolean files = corePreview1.contains("path_open");
 			final java.util.LinkedHashMap<String, String> keep = new java.util.LinkedHashMap<>();
 			for (String preview1 : PREVIEW1_FUNCS) {
 				if (corePreview1.contains(preview1)) {
-					keep.put(narrow ? NARROW_PREVIEW1_IMPL.getOrDefault(preview1, preview1) : preview1, preview1);
+					keep.put(narrowImpl(preview1, files, narrowing.reachesStandardError()), preview1);
 				}
 			}
 			adapter = WasmTreeShaker.shake(WasmExports.retain(ADAPTER_MODULE, keep));
@@ -1398,16 +1480,16 @@ public final class WasmComponentBuilder {
 	 * @param fixed the block-declared interfaces to bind FROM the block (wait.lisp's
 	 * wasi:clocks/monotonic-clock; empty for none)
 	 * @param imports the genuine user interface imports
-	 * @param shake whether to narrow the fixed surface to what the core reaches
-	 * ({@code --optimize})
+	 * @param narrowing how far to narrow the fixed surface ({@code --optimize} plus the
+	 * source-derived facts the core module's bytes cannot answer)
 	 * @return the WASI 0.3 component binary
 	 */
 	private static byte[] buildBase(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports,
 			List<WasmComponentImportCompiler.Import> fixed, List<WasmComponentImportCompiler.Import> imports,
-			boolean shake) {
+			Narrowing narrowing) {
 		final int userIfaces = imports.size();
 		final ComponentWriter c = new ComponentWriter();
-		final FixedSurface surface = fixedSurface(coreModule, fixed, shake);
+		final FixedSurface surface = fixedSurface(coreModule, fixed, narrowing);
 		// The imported WASI 0.3 interfaces, pruned to the ones the surface above still
 		// reaches. Their component instance indices, and the first free component type
 		// index after the block, come back from the prune -- nothing here may assume
@@ -1420,15 +1502,21 @@ public final class WasmComponentBuilder {
 		// pool (its memory-import min-pages declaration), so a program with a large
 		// data segment does not trap on the very first data-segment write when the
 		// mem module is instantiated with only its default six pages.
-		c.rawSection(ComponentWriter.SEC_CORE_MODULE, memModuleFor(coreModule));
+		final boolean sharedRealloc = needsSharedRealloc(surface, fixed, imports);
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, memModuleFor(coreModule, sharedRealloc));
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, surface.adapter());
 		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
-		// Alias the shared memory (core memory 0) and cabi_realloc (core func 0).
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(List
-			.of(ComponentWriter.aliasCoreMemory(0, "memory"), ComponentWriter.aliasCoreFunc(0, "cabi_realloc"))));
+		// Alias the shared memory (core memory 0) and, when anything below stages
+		// host-owned bytes, cabi_realloc (core func 0 -- SHARED_REALLOC).
+		final List<byte[]> memAliases = new java.util.ArrayList<>();
+		memAliases.add(ComponentWriter.aliasCoreMemory(0, "memory"));
+		if (sharedRealloc) {
+			memAliases.add(ComponentWriter.aliasCoreFunc(0, "cabi_realloc"));
+		}
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(memAliases));
 		// One alias section: the projected types first (continuing the block's component
 		// type space), then the WASI functions (component funcs from 0). Both index
 		// spaces
@@ -1474,11 +1562,13 @@ public final class WasmComponentBuilder {
 		}
 		c.rawSection(ComponentWriter.SEC_TYPE, ComponentWriter.vec(types));
 		// Lower the WASI functions and emit the canonical built-ins, in W_MEMBERS order:
-		// core funcs 1.. (0 is the shared memory module's cabi_realloc, aliased above).
+		// core funcs after the aliases above (the shared cabi_realloc took index 0
+		// exactly
+		// when it was aliased).
 		final List<byte[]> canons = new java.util.ArrayList<>();
 		final List<String> wNames = new java.util.ArrayList<>();
 		final List<Integer> wCoreFuncs = new java.util.ArrayList<>();
-		int nextCoreFunc = 1;
+		int nextCoreFunc = sharedRealloc ? 1 : 0;
 		for (java.util.Map.Entry<String, WMember> member : W_MEMBERS.entrySet()) {
 			if (!surface.members().contains(member.getKey())) {
 				continue;
@@ -1590,11 +1680,65 @@ public final class WasmComponentBuilder {
 	 * the unchanged resource when the core module asks for six pages or fewer
 	 */
 	static byte[] memModuleFor(byte[] coreModule) {
+		return memModuleFor(coreModule, true);
+	}
+
+	/**
+	 * {@link #memModuleFor(byte[])}, additionally dropping the allocator when nothing in
+	 * the component stages host-owned bytes through it ({@link #needsSharedRealloc}).
+	 * <p>
+	 * The module exists for its MEMORY: the canonical options of the {@code "w"}
+	 * lowerings name a core memory, and that memory has to belong to an instance older
+	 * than the adapter they are grouped for -- which is why the allocator sits here
+	 * beside it rather than in the adapter or the core. Its allocator half is a different
+	 * question, answered by the canonical options that actually reference it, so it is
+	 * retained and shaken like any other over-provisioned helper module
+	 * ({@link WasmExports#retain}).
+	 * @param coreModule the rontolisp core module whose memory-import minimum drives the
+	 * mem module's initial size
+	 * @param realloc whether the component aliases the module's {@code cabi_realloc}
+	 * @return the mem module bytes
+	 */
+	static byte[] memModuleFor(byte[] coreModule, boolean realloc) {
+		byte[] mem = realloc ? MEM_MODULE
+				: WasmTreeShaker.shake(WasmExports.retain(MEM_MODULE, java.util.Map.of("memory", "memory")));
 		int needed = requiredMemPagesFromCore(coreModule);
 		if (needed <= 6) {
-			return MEM_MODULE;
+			return mem;
 		}
-		return patchMemModuleMinPages(MEM_MODULE, needed);
+		return patchMemModuleMinPages(mem, needed);
+	}
+
+	/**
+	 * Whether anything in this component stages host-owned bytes through the shared
+	 * memory module's {@code cabi_realloc} ({@link #SHARED_REALLOC}).
+	 * <p>
+	 * For the fixed WASI wiring the answer is exact: a {@code "w"} member names the
+	 * allocator exactly when it was declared through one of the {@code *Realloc}
+	 * factories, so a print-only program -- whose surviving members are stdout, the
+	 * stream/future built-ins and the waitable trio, none of which lift anything -- needs
+	 * no allocator at all and drops the whole 86-byte bump-allocator body with it. For a
+	 * program that imports an INTERFACE the answer is a plain yes: every block-bound and
+	 * user lowering stages through it (an async call always, a sync one whenever it
+	 * touches memory), and such a component is orders of magnitude past the budget this
+	 * distinction exists for, so paying 158 bytes there buys precision nobody measures.
+	 * <p>
+	 * {@code wasm-export}s are not part of the question: a
+	 * {@code :string}/{@code :s-expr} boundary lifts through the CORE module's own
+	 * {@code cabi_realloc} ({@link #appendFuncExports}), never this one.
+	 * @param surface the narrowed fixed surface
+	 * @param fixed the block-bound interfaces the program binds
+	 * @param user the genuine user interface imports
+	 * @return whether to alias the allocator
+	 */
+	private static boolean needsSharedRealloc(FixedSurface surface, List<WasmComponentImportCompiler.Import> fixed,
+			List<WasmComponentImportCompiler.Import> user) {
+		for (String member : surface.members()) {
+			if (at(W_MEMBERS, member).realloc()) {
+				return true;
+			}
+		}
+		return !fixed.isEmpty() || !user.isEmpty();
 	}
 
 	/**

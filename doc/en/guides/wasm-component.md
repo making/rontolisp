@@ -105,10 +105,11 @@ A component built **without** `--optimize` declares all of the above whether or
 not the program uses them, so its imported surface is the same for every
 program. With [`--optimize`](../compiling/wasm.md#optimize-tree-shaking) the
 surface follows the program: a component that only prints imports
-`wasi:cli/{types,stdout,stderr}` and nothing else, which is what a
-`wasm-tools component wit` on it — and the `--emit-wit` output below — will
-show. Nothing about the flags you run it with changes; a host simply has less
-to provide.
+`wasi:cli/{types,stdout}` and nothing else — `wasi:cli/stderr` joins only when
+the program can actually write there ([`warn`](../reference/macros/warn.md), or
+`*error-output*`) — which is what a `wasm-tools component wit` on it, and the
+`--emit-wit` output below, will show. Nothing about the flags you run it with
+changes; a host simply has less to provide.
 
 ## Component-model Function Exports (`wasm-export`)
 

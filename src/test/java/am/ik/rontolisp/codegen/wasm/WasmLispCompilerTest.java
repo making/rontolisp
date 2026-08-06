@@ -110,11 +110,27 @@ class WasmLispCompilerTest {
 	void anOptimizedComponentImportsOnlyTheWasiInterfacesItCanReach() {
 		// A printing program's core imports fd_write alone; the adapter is narrowed to
 		// the
-		// stdio-only implementation, so nothing reaches wasi:filesystem, wasi:clocks,
-		// wasi:random, wasi:cli/environment or wasi:cli/stdin. stderr stays: fd 2 is a
-		// runtime value, not an edge the shaker can follow.
+		// stdout-only implementation, so nothing reaches wasi:filesystem, wasi:clocks,
+		// wasi:random, wasi:cli/environment or wasi:cli/stdin -- nor wasi:cli/stderr: fd
+		// 2 is a runtime value rather than an edge the shaker can follow, so the SOURCE
+		// answers for it, and this program names neither *error-output* nor warn.
 		assertThat(componentImportNames(compileComponentOptimized("(print 1)"))).containsExactly("wasi:cli/types@0.3.0",
-				"wasi:cli/stdout@0.3.0", "wasi:cli/stderr@0.3.0");
+				"wasi:cli/stdout@0.3.0");
+	}
+
+	@Test
+	void anOptimizedComponentThatCanWriteFdTwoKeepsTheStderrSurface() {
+		// The other side of the same judgement. Both spellings that materialize the
+		// reserved *error-output* handle hold wasi:cli/stderr open, and so does the WIDE
+		// fd_write a file-opening program needs -- it can route fd 2 whatever the source
+		// says.
+		assertThat(componentImportNames(compileComponentOptimized("(warn \"careful\")")))
+			.contains("wasi:cli/stderr@0.3.0");
+		assertThat(componentImportNames(compileComponentOptimized("(format *error-output* \"careful~%\")")))
+			.contains("wasi:cli/stderr@0.3.0");
+		assertThat(componentImportNames(compileComponentOptimized("""
+				(with-open-file (s "x.txt" :direction :output) (format s "hi~%"))
+				"""))).contains("wasi:cli/stderr@0.3.0");
 	}
 
 	@Test
@@ -144,7 +160,6 @@ class WasmLispCompilerTest {
 				world root {
 				  import wasi:cli/types@0.3.0;
 				  import wasi:cli/stdout@0.3.0;
-				  import wasi:cli/stderr@0.3.0;
 
 				  export wasi:cli/run@0.3.0;
 				}
@@ -157,11 +172,6 @@ class WasmLispCompilerTest {
 				    }
 				  }
 				  interface stdout {
-				    use types.{error-code};
-
-				    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;
-				  }
-				  interface stderr {
 				    use types.{error-code};
 
 				    write-via-stream: func(data: stream<u8>) -> future<result<_, error-code>>;

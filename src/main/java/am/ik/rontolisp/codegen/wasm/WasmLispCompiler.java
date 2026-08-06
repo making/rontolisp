@@ -4583,11 +4583,23 @@ public final class WasmLispCompiler implements LispCompiler {
 			// core
 			// still reaches, so the world must name only the interfaces that survived --
 			// the same set the builder prunes the import block to.
-			boolean shakeSurface = this.optimize.eliminatesDeadCode();
+			// One narrowing question the core module's bytes cannot answer: a file
+			// descriptor is a VALUE there, so "can this program write fd 2" is decided
+			// here, from the source. The reserved *error-output* handle is materialized
+			// by exactly three things -- a read of that variable, warn's report, and the
+			// _start seed the variable's own binding installs (all three go through
+			// StreamDesignators.STANDARD_ERROR_HANDLE) -- so naming the two source
+			// spellings covers them. --dynamic makes every symbol reachable at run time,
+			// which no source scan can bound, so it keeps the wider surface.
+			WasmComponentBuilder.Narrowing narrowing = new WasmComponentBuilder.Narrowing(
+					this.optimize.eliminatesDeadCode(),
+					this.dynamic || programUsesSymbol(program, LispNames.ERROR_OUTPUT_VAR)
+							|| programUsesSymbol(program, LispNames.WARN)
+							|| programUsesSymbol(program, LispNames.WARN_INTERNAL));
 			this.componentWit = WitEmitter.emit(WitEmitter.VARIANT_BASE, componentExportDecls,
 					WasmComponentBuilder.additionalImports(componentImports),
-					WasmComponentBuilder.wasiInterfaces(coreModule, componentImports, shakeSurface));
-			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports, shakeSurface);
+					WasmComponentBuilder.wasiInterfaces(coreModule, componentImports, narrowing));
+			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports, narrowing);
 		}
 		return this.optimize.eliminatesDeadCode()
 				? am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges) : coreModule;

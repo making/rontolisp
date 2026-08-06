@@ -114,16 +114,19 @@ That floor does not depend on how the program spells the write. A constant text
 is rendered at compile time and emitted as bytes, so `print`, `princ` + `terpri`,
 `write-string`, `write-line` and `(format t "Hello, ~a!~%" "World")` all leave the
 runtime printer behind and land within a few dozen bytes of each other (under 700 B
-as a core module, ~2.2 KB as a component). Print a computed value and the printer
+as a core module, under 1.9 KB as a component). Print a computed value and the printer
 comes back, as it must.
 
 On the `--component` path the **wrapper shrinks with the core**, not just the core
 itself. Which WASI 0.3 interfaces a component imports follows from what the program
 can actually reach: `(print "Hello World!")` compiles to a component importing
-`wasi:cli/types`, `wasi:cli/stdout` and `wasi:cli/stderr` and nothing else — no
-`wasi:filesystem`, no `wasi:clocks`, no `wasi:random` — while a program that opens
-a file, reads the clock and draws random bytes keeps them all. `--emit-wit` prints
-the world the component really has, so the emitted `.wit` shrinks with it.
+`wasi:cli/types` and `wasi:cli/stdout` and nothing else — no `wasi:filesystem`, no
+`wasi:clocks`, no `wasi:random`, and not even `wasi:cli/stderr`, since nothing in
+that program can write to standard error — while a program that opens a file, reads
+the clock and draws random bytes keeps them all, and one that calls
+[`warn`](../reference/macros/warn.md) or writes to `*error-output*` gets
+`wasi:cli/stderr` back. `--emit-wit` prints the world the component really has, so
+the emitted `.wit` shrinks with it.
 
 ```bash
 echo '(print "Hello World!")' > hello.lisp

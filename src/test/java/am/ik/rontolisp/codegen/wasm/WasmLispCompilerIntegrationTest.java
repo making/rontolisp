@@ -3023,6 +3023,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anOptimizedComponentThatWarnsStillReachesStderr() throws Exception {
+		// --optimize narrows fd_write to its STDOUT-ONLY half whenever the source cannot
+		// materialize the reserved *error-output* handle 2, which drops the whole
+		// wasi:cli/stderr surface. The narrowing is a claim about the source, so the two
+		// spellings that CAN reach fd 2 have to keep working -- and land on the right
+		// descriptor, not merged into stdout.
+		for (String program : List.of("(warn \"careful\") (print :done)",
+				"(format *error-output* \"careful~%\") (print :done)")) {
+			byte[] componentBytes = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT)
+				.compile(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(program)));
+			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("warn.optcomp.wasm"));
+			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("warn.optcomp.wasm"));
+			assertThat(result.getExitCode()).as("%s\nstderr: %s", program, result.getStderr()).isZero();
+			assertThat(result.getStdout().trim()).as(program).isEqualTo(":DONE");
+			assertThat(result.getStderr()).as(program).contains("careful");
+		}
+	}
+
+	@Test
 	void componentCoreIsTreeShakenUnderOptimize() throws Exception {
 		// --optimize shakes the core module on the --component path too: every core
 		// <-> component linkage is by NAME (alias core func "name"; core:instantiate

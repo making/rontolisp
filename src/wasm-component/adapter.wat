@@ -207,6 +207,32 @@
     (call $future_drop_cli (local.get $fut))
     (i32.const 0))
 
+  ;; The STDOUT-ONLY half of fd_write, one narrowing further than $fd_write_stdio: it
+  ;; never mentions $stderr_write, so retaining it lets the whole wasi:cli/stderr
+  ;; interface -- its instance type, its import, its alias and its lowering -- leave the
+  ;; component. Whether a program can present fd 2 at all is a question about its SOURCE
+  ;; (2 is the reserved *error-output* handle, materialized by nothing but that variable
+  ;; and warn), not about this module, so the choice is made in WasmComponentBuilder; here
+  ;; we only make the narrower contract explicit and REJECT what it does not implement.
+  ;;
+  ;; The body repeats $fd_write_stdio's rather than sharing it. Delegating to that function
+  ;; would keep it -- and with it $stderr_write -- reachable, which is the one thing this
+  ;; half exists to avoid; and hoisting the common tail into a third function turned out to
+  ;; cost more (its own signature, entry and five-argument call) than the duplicated
+  ;; instructions, in BOTH shaken adapters -- measured, +21 B each. The two bodies are
+  ;; deliberately adjacent so a change to the write/await discipline is made twice.
+  (func $fd_write_stdout (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
+    (local $r64 i64) (local $rx i32) (local $tx i32) (local $fut i32)
+    (if (i32.ne (local.get $fd) (i32.const 1)) (then (unreachable)))
+    (local.set $r64 (call $stream_new))
+    (local.set $rx (i32.wrap_i64 (local.get $r64)))
+    (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r64) (i64.const 32))))
+    (local.set $fut (call $stdout_write (local.get $rx)))
+    (i32.store (local.get $nw) (call $push_iovs (local.get $tx) (local.get $iov) (local.get $cnt)))
+    (drop (call $future_read_cli (local.get $fut) (i32.const 0x50000)))
+    (call $future_drop_cli (local.get $fut))
+    (i32.const 0))
+
   ;; The file half of fd_write: append-via-stream on the slot's descriptor, awaited through
   ;; the wasi:filesystem built-ins (its error-code is a different type from wasi:cli's).
   (func $fd_write_file (param $fd i32) (param $iov i32) (param $cnt i32) (param $nw i32) (result i32)
@@ -477,9 +503,11 @@
 
   (export "fd_write" (func $fd_write))
   (export "fd_read" (func $fd_read))
-  ;; The stdio-only / stdin-only implementations, retained UNDER the names above by
-  ;; WasmComponentBuilder when the core imports no path_open (see $fd_write_stdio).
+  ;; The stdio-only / stdout-only / stdin-only implementations, retained UNDER the names
+  ;; above by WasmComponentBuilder when the core imports no path_open (see
+  ;; $fd_write_stdio) and, for the stdout-only one, cannot present fd 2 either.
   (export "fd_write_stdio" (func $fd_write_stdio))
+  (export "fd_write_stdout" (func $fd_write_stdout))
   (export "fd_read_stdin" (func $fd_read_stdin))
   (export "path_open" (func $path_open))
   (export "fd_readdir" (func $fd_readdir))

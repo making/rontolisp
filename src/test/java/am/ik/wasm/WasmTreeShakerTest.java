@@ -25,6 +25,11 @@ class WasmTreeShakerTest {
 		return new WasmLispCompiler(false, false, noWasi, optimize).compile(program);
 	}
 
+	private static byte[] compileComponent(String source, OptimizeLevel optimize) {
+		List<LispVal> program = LispReader.readAllFromString(source);
+		return new WasmLispCompiler(false, true, false, optimize).compile(program);
+	}
+
 	@Test
 	void dropsUnreachableFunctionsAndShrinksOutput() {
 		String source = """
@@ -186,6 +191,47 @@ class WasmTreeShakerTest {
 			Module.parse(module).assertWellFormed();
 			assertThat(module.length).describedAs(spelling).isLessThan(1024);
 		}
+	}
+
+	@Test
+	void everySpellingOfHelloWorldReachesTheSameComponentFloor() {
+		// The same eight spellings wrapped as WASI 0.3 components. The wrapper follows
+		// the core rather than standing under it, and for a program whose whole I/O is
+		// "write this constant to fd 1" that means TWO imported interfaces and no
+		// allocator: wasi:cli/stderr goes because the reserved fd 2 is unreachable from a
+		// source that names neither *error-output* nor warn, and the shared cabi_realloc
+		// goes because nothing here lifts host-owned bytes -- which takes the whole
+		// bump-allocator body of the shared memory module with it.
+		List<String> spellings = List.of("(print \"Hello World!\")", "(princ \"Hello World!\") (terpri)",
+				"(format t \"Hello World!~%\")", "(write-line \"Hello World!\")", "(write-string \"Hello World!\")",
+				"(format t \"Hello, ~a!~%\" \"World\")", "(format t \"~a~%\" 42)",
+				"(format t \"~s~%\" \"Hello World!\")");
+		for (String spelling : spellings) {
+			byte[] component = compileComponent(spelling, OptimizeLevel.DEFAULT);
+			assertThat(component.length).describedAs(spelling).isLessThan(2048);
+			assertThat(names(component, "wasi:cli/stdout")).describedAs(spelling).isTrue();
+			assertThat(names(component, "wasi:cli/stderr")).describedAs(spelling).isFalse();
+			assertThat(names(component, "cabi_realloc")).describedAs(spelling).isFalse();
+		}
+	}
+
+	@Test
+	void aProgramThatCanWriteFdTwoKeepsTheStderrSurface() {
+		// The narrowing above is a claim about the SOURCE -- a file descriptor is a
+		// value in the core module, not an edge, so the shaker cannot see it. Both
+		// spellings that materialize the reserved handle 2 must therefore hold the
+		// interface open, or --optimize would compile a warning into a trap.
+		for (String spelling : List.of("(warn \"careful\")", "(format *error-output* \"careful~%\")")) {
+			byte[] component = compileComponent(spelling, OptimizeLevel.DEFAULT);
+			assertThat(names(component, "wasi:cli/stderr")).describedAs(spelling).isTrue();
+		}
+	}
+
+	// Whether the component names something anywhere in its bytes: interface ids and
+	// core-module import/export fields are the only places these strings occur, and the
+	// emitted component carries no name sections to give a false positive.
+	private static boolean names(byte[] component, String text) {
+		return new String(component, java.nio.charset.StandardCharsets.ISO_8859_1).contains(text);
 	}
 
 	@Test
