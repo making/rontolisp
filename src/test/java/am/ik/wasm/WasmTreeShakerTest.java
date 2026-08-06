@@ -112,11 +112,69 @@ class WasmTreeShakerTest {
 		byte[] folding = compile("(print (char-upcase (char-downcase #\\A)))", false, OptimizeLevel.DEFAULT);
 		Module.parse(hello).assertWellFormed();
 		Module.parse(folding).assertWellFormed();
-		assertThat(dataSectionSize(hello)).isLessThan(2048);
+		assertThat(dataSectionSize(hello)).isLessThan(512);
 		assertThat(dataSectionSize(folding)).isGreaterThan(16000);
-		// 4096 also pins the literal-print specialization (WasmPrintCompiler): without
+		// 1024 also pins the literal-print specialization (WasmPrintCompiler): without
 		// it the generic printer family alone puts the module near 6 KB.
-		assertThat(hello.length).isLessThan(4096);
+		assertThat(hello.length).isLessThan(1024);
+	}
+
+	@Test
+	void dropsTypesTheSurvivorsNoLongerName() {
+		// The type section is a verbatim-copied fixed table (~60 entries: every runtime
+		// struct, array and helper signature). A program reaching almost none of the
+		// runtime must keep almost none of them, and a rec group goes as a unit.
+		byte[] plain = compile("(print \"Hello World!\")", false, OptimizeLevel.NONE);
+		byte[] optimized = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
+		Module before = Module.parse(plain);
+		Module after = Module.parse(optimized);
+		after.assertWellFormed();
+		assertThat(before.typeEntryCount()).isGreaterThan(50);
+		assertThat(after.typeEntryCount()).isLessThan(15);
+	}
+
+	@Test
+	void keepsTheTypesAnEhModeModuleStillNames() {
+		// The tag section names a function type by index and is copied verbatim, so its
+		// type has to be a renumbering root -- otherwise the tag would dangle.
+		byte[] optimized = compile("""
+				(print (handler-case (error "boom") (error (e) :caught)))
+				""", false, OptimizeLevel.DEFAULT);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	@Test
+	void dropsStringsOnlyDeadBodiesInterned() {
+		// The builtin wrappers Pass 2a compiles intern their literals -- FIND-PACKAGE's
+		// package-alias alist alone is ~680 bytes -- and the shaker then deletes the
+		// wrappers, leaving the bytes behind. A hello program keeps only what a live
+		// body still addresses; a program that actually reaches find-package keeps the
+		// table.
+		// A COMPUTED designator is what reaches the alist (PackageResolver folds a
+		// literal one before the compiler sees it), so that program keeps the table.
+		byte[] hello = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
+		byte[] packages = compile("""
+				(defun pkg (n) (find-package (string-upcase n)))
+				(print (pkg "cl-user"))
+				""", false, OptimizeLevel.DEFAULT);
+		Module.parse(hello).assertWellFormed();
+		Module.parse(packages).assertWellFormed();
+		assertThat(dataSectionSize(packages) - dataSectionSize(hello)).isGreaterThan(600);
+		// The rendered literal itself must still be there: 12 bytes of "Hello World!"
+		// plus its quotes, the seed cells, and little else.
+		assertThat(dataSectionSize(hello)).isBetween(64, 512);
+	}
+
+	@Test
+	void keepsEveryStringAProgramCanInternAtRunTime() {
+		// _intern scans a blob citing EVERY interned entry by offset, and that citation
+		// lives in DATA where the i32.const scan cannot see it -- so a program that
+		// interns at run time offers no droppable ranges at all.
+		byte[] interning = compile("(print (intern (string-upcase \"foo\")))", false, OptimizeLevel.DEFAULT);
+		Module.parse(interning).assertWellFormed();
+		assertThat(dataSectionSize(interning)).isGreaterThan(1024);
 	}
 
 	// Total payload size of the data section (0 when absent).
@@ -153,7 +211,8 @@ class WasmTreeShakerTest {
 	 * relies on.
 	 */
 	private record Module(int functionImportCount, List<String> functionImportNames, int definedFunctionCount,
-			int codeEntryCount, List<String> exportedFunctionNames, List<Integer> exportedFunctionIndices) {
+			int codeEntryCount, List<String> exportedFunctionNames, List<Integer> exportedFunctionIndices,
+			int typeEntryCount, int definedTypeCount, List<Integer> functionTypeIndices) {
 
 		void assertWellFormed() {
 			// Function section and code section must stay aligned.
@@ -161,6 +220,9 @@ class WasmTreeShakerTest {
 			// Every exported function index must be in range.
 			int total = functionImportCount + definedFunctionCount;
 			assertThat(exportedFunctionIndices).allSatisfy(i -> assertThat(i).isBetween(0, total - 1));
+			// Every function signature must still name a type the module defines.
+			assertThat(functionTypeIndices).hasSize(total)
+				.allSatisfy(i -> assertThat(i).isBetween(0, definedTypeCount - 1));
 		}
 
 		static Module parse(byte[] module) {
@@ -169,13 +231,22 @@ class WasmTreeShakerTest {
 			List<String> functionImportNames = new ArrayList<>();
 			int definedFunctionCount = 0;
 			int codeEntryCount = 0;
+			int typeEntryCount = 0;
+			int definedTypeCount = 0;
 			List<String> exportedFunctionNames = new ArrayList<>();
 			List<Integer> exportedFunctionIndices = new ArrayList<>();
+			List<Integer> functionTypeIndices = new ArrayList<>();
 			while (p[0] < module.length) {
 				int id = module[p[0]++] & 0xff;
 				int size = readU(module, p);
 				int end = p[0] + size;
 				switch (id) {
+					case 1 -> { // type
+						typeEntryCount = readU(module, p);
+						for (int i = 0; i < typeEntryCount; i++) {
+							definedTypeCount += skipRecType(module, p);
+						}
+					}
 					case 2 -> { // import
 						int count = readU(module, p);
 						for (int i = 0; i < count; i++) {
@@ -184,7 +255,7 @@ class WasmTreeShakerTest {
 							int kind = module[p[0]++] & 0xff;
 							switch (kind) {
 								case 0x00 -> { // func
-									readU(module, p); // typeidx
+									functionTypeIndices.add(readU(module, p)); // typeidx
 									functionImportCount++;
 									functionImportNames.add(name);
 								}
@@ -201,7 +272,12 @@ class WasmTreeShakerTest {
 							}
 						}
 					}
-					case 3 -> definedFunctionCount = readU(module, p); // function
+					case 3 -> { // function
+						definedFunctionCount = readU(module, p);
+						for (int i = 0; i < definedFunctionCount; i++) {
+							functionTypeIndices.add(readU(module, p));
+						}
+					}
 					case 7 -> { // export
 						int count = readU(module, p);
 						for (int i = 0; i < count; i++) {
@@ -221,7 +297,8 @@ class WasmTreeShakerTest {
 				p[0] = end;
 			}
 			return new Module(functionImportCount, functionImportNames, definedFunctionCount, codeEntryCount,
-					exportedFunctionNames, exportedFunctionIndices);
+					exportedFunctionNames, exportedFunctionIndices, typeEntryCount, definedTypeCount,
+					functionTypeIndices);
 		}
 
 		private static int readU(byte[] buf, int[] p) {
@@ -257,6 +334,64 @@ class WasmTreeShakerTest {
 			if (b == 0x63 || b == 0x64) {
 				readU(buf, p);
 			}
+		}
+
+		// rectype := 0x4E vec(subtype) | subtype. Returns the number of type indices the
+		// entry defines, so a rec group counts as its member count.
+		private static int skipRecType(byte[] buf, int[] p) {
+			if ((buf[p[0]] & 0xff) == 0x4E) {
+				p[0]++;
+				int members = readU(buf, p);
+				for (int i = 0; i < members; i++) {
+					skipSubType(buf, p);
+				}
+				return members;
+			}
+			skipSubType(buf, p);
+			return 1;
+		}
+
+		private static void skipSubType(byte[] buf, int[] p) {
+			int b = buf[p[0]] & 0xff;
+			if (b == 0x50 || b == 0x4F) { // sub / sub final
+				p[0]++;
+				int supertypes = readU(buf, p);
+				for (int i = 0; i < supertypes; i++) {
+					readU(buf, p);
+				}
+			}
+			int tag = buf[p[0]++] & 0xff;
+			switch (tag) {
+				case 0x60 -> { // func
+					int params = readU(buf, p);
+					for (int i = 0; i < params; i++) {
+						skipValType(buf, p);
+					}
+					int results = readU(buf, p);
+					for (int i = 0; i < results; i++) {
+						skipValType(buf, p);
+					}
+				}
+				case 0x5E -> skipFieldType(buf, p); // array
+				case 0x5F -> { // struct
+					int fields = readU(buf, p);
+					for (int i = 0; i < fields; i++) {
+						skipFieldType(buf, p);
+					}
+				}
+				default -> throw new IllegalStateException("comptype tag " + tag);
+			}
+		}
+
+		private static void skipFieldType(byte[] buf, int[] p) {
+			int b = buf[p[0]] & 0xff;
+			if (b == 0x78 || b == 0x77) { // i8 / i16 packed storage
+				p[0]++;
+			}
+			else {
+				skipValType(buf, p);
+			}
+			p[0]++; // mutability
 		}
 
 		private static void skipLimits(byte[] buf, int[] p) {

@@ -20,10 +20,15 @@ import org.jspecify.annotations.Nullable;
  * function), drops the rest, and renumbers every surviving function reference so the
  * module stays valid.
  * <p>
+ * The same walk collects every <strong>type</strong> index the survivors still mention
+ * (function signatures, GC-op immediates, block types, locals, globals, tags, imports,
+ * plus the type-to-type edges inside the type section itself), so unreferenced type
+ * definitions are dropped and the rest renumbered as well. A {@code rec} group is kept or
+ * dropped atomically: its members occupy consecutive indices and its structural identity
+ * under wasm-GC canonicalization is a property of the whole group.
+ * <p>
  * The pass is purely additive and opt-in ({@code --optimize}); it never runs on the
- * default deterministic output. It only renumbers <strong>function</strong> indices:
- * type, memory, global and data sections are copied verbatim, so type indices stay
- * stable. The module's section order is preserved.
+ * default deterministic output. The module's section order is preserved.
  * <p>
  * Correctness rests on two properties of the rontolisp output that this class verifies by
  * construction: the only function references are {@code call} immediates (the backend
@@ -38,17 +43,27 @@ public final class WasmTreeShaker {
 	}
 
 	// Section ids.
+	private static final int SEC_TYPE = 1;
+
 	private static final int SEC_IMPORT = 2;
 
 	private static final int SEC_FUNCTION = 3;
+
+	private static final int SEC_TABLE = 4;
+
+	private static final int SEC_GLOBAL = 6;
 
 	private static final int SEC_EXPORT = 7;
 
 	private static final int SEC_START = 8;
 
+	private static final int SEC_ELEMENT = 9;
+
 	private static final int SEC_CODE = 10;
 
 	private static final int SEC_DATA = 11;
+
+	private static final int SEC_TAG = 13;
 
 	// Import / export descriptor kinds.
 	private static final int KIND_FUNC = 0x00;
@@ -60,6 +75,27 @@ public final class WasmTreeShaker {
 	private static final int KIND_GLOBAL = 0x03;
 
 	record Section(int id, byte[] payload) {
+	}
+
+	/** How an index immediate is encoded, hence how a rewritten one must be written. */
+	enum RefKind {
+
+		/** A function index (unsigned LEB): a {@code call} / {@code ref.func} operand. */
+		FUNC,
+		/** A type index encoded as an unsigned LEB (an instruction's {@code typeidx}). */
+		TYPE_U,
+		/** A type index encoded as a signed s33 (a {@code heaptype} or a blocktype). */
+		TYPE_S
+
+	}
+
+	/**
+	 * An index immediate to rewrite: the byte range it occupies in the buffer it was
+	 * scanned from, and the old index it holds. Refs are produced by a single forward
+	 * walk, so a ref list is always ascending by {@code start} -- which is what
+	 * {@link #applyRefs} relies on.
+	 */
+	record Ref(int start, int end, int index, RefKind kind) {
 	}
 
 	/**
@@ -87,6 +123,31 @@ public final class WasmTreeShaker {
 	}
 
 	/**
+	 * A byte range WITHIN one active data segment that may be dropped when no surviving
+	 * function body still addresses it -- the sub-segment counterpart of
+	 * {@link OwnedDataSegment}, for a segment holding many independently-referenced
+	 * pieces (the string blob). Where {@code OwnedDataSegment} takes the caller's word
+	 * for who owns the bytes, this form is decided by OBSERVATION: the pass keeps the
+	 * range when any surviving body holds an {@code i32.const} addressing into it (its
+	 * whole span plus the one-past-the-end address, so a range reached through an
+	 * interior or end pointer survives too). A linear-memory reference is an
+	 * indistinguishable {@code i32.const}, which makes the test conservative in the safe
+	 * direction: an unrelated constant that happens to land inside a range only KEEPS
+	 * bytes.
+	 * <p>
+	 * What the caller still owes: a range must not be cited from anywhere the scan cannot
+	 * see -- notably a word inside another DATA blob. Dropping cuts the range out and
+	 * re-emits the segment as one active segment per surviving run, each at the absolute
+	 * address it already had, so no surviving reference moves.
+	 *
+	 * @param segmentIndex index of the segment within the data section
+	 * @param start offset of the range within that segment's bytes
+	 * @param end end offset (exclusive) of the range within that segment's bytes
+	 */
+	public record DroppableDataRange(int segmentIndex, int start, int end) {
+	}
+
+	/**
 	 * Removes functions unreachable from the module's roots and renumbers the survivors.
 	 * @param module a core WASM module (the 8-byte header followed by sections)
 	 * @return an equivalent module with dead functions removed; the input is returned
@@ -106,13 +167,44 @@ public final class WasmTreeShaker {
 	 * removed; the input is returned unchanged when nothing is dropped
 	 */
 	public static byte[] shake(byte[] module, List<OwnedDataSegment> ownedDataSegments) {
+		return shake(module, ownedDataSegments, List.of());
+	}
+
+	/**
+	 * Removes functions unreachable from the module's roots and renumbers the survivors,
+	 * drops every {@link OwnedDataSegment} whose owners all died with them and every
+	 * {@link DroppableDataRange} no survivor still addresses, and drops every type
+	 * definition the survivors no longer name.
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @param ownedDataSegments data segments to drop when their owning functions are all
+	 * unreachable
+	 * @param droppableDataRanges byte ranges within a data segment to cut out when no
+	 * surviving body holds an {@code i32.const} addressing into them
+	 * @return an equivalent module with dead functions, orphaned data and unreferenced
+	 * types removed; the input is returned unchanged when nothing is dropped
+	 */
+	public static byte[] shake(byte[] module, List<OwnedDataSegment> ownedDataSegments,
+			List<DroppableDataRange> droppableDataRanges) {
 		List<Section> sections = parseSections(module);
 
+		@Nullable Section typeSec = find(sections, SEC_TYPE);
 		@Nullable Section importSec = find(sections, SEC_IMPORT);
 		@Nullable Section functionSec = find(sections, SEC_FUNCTION);
+		@Nullable Section globalSec = find(sections, SEC_GLOBAL);
+		@Nullable Section tagSec = find(sections, SEC_TAG);
 		@Nullable Section codeSec = find(sections, SEC_CODE);
+		@Nullable Section dataSec = find(sections, SEC_DATA);
 		@Nullable Section exportSec = find(sections, SEC_EXPORT);
 		@Nullable Section startSec = find(sections, SEC_START);
+		// A table or element section would carry reference types and function indices
+		// this pass does not renumber. The backend emits neither (first-class calls go
+		// through dispatch functions), so their presence means the module is not the
+		// shape this pass verifies by construction.
+		for (Section s : sections) {
+			if (s.id() == SEC_TABLE || s.id() == SEC_ELEMENT) {
+				throw new IllegalStateException("WasmTreeShaker: unhandled section id " + s.id());
+			}
+		}
 
 		// Imports: record each entry's raw span and, for function imports, their order.
 		List<ImportEntry> imports = importSec == null ? List.of() : parseImports(importSec.payload());
@@ -130,10 +222,15 @@ public final class WasmTreeShaker {
 		int numDefined = codeEntries.size();
 		int totalFuncs = numImportedFuncs + numDefined;
 
-		// Call graph: outgoing edges per defined function (by global function index).
-		List<List<CallSite>> callSites = new ArrayList<>(numDefined);
+		// Call graph, type references and -- only when a droppable range makes them
+		// matter -- the i32.const immediates: one forward walk per defined function.
+		List<List<Ref>> bodyRefs = new ArrayList<>(numDefined);
+		List<@Nullable IntList> bodyConstants = new ArrayList<>(numDefined);
+		boolean needConstants = !droppableDataRanges.isEmpty();
 		for (byte[] entry : codeEntries) {
-			callSites.add(scanCallSites(entry));
+			@Nullable IntList constants = needConstants ? new IntList() : null;
+			bodyRefs.add(scanBody(entry, constants));
+			bodyConstants.add(constants);
 		}
 
 		// Roots: exported functions plus an optional start function.
@@ -159,38 +256,53 @@ public final class WasmTreeShaker {
 			if (defIndex < 0) {
 				continue; // imported function: no body, no out-edges
 			}
-			for (CallSite cs : callSites.get(defIndex)) {
-				if (cs.target >= 0 && cs.target < totalFuncs && !reachable[cs.target]) {
-					reachable[cs.target] = true;
-					work.push(cs.target);
+			for (Ref r : bodyRefs.get(defIndex)) {
+				if (r.kind() == RefKind.FUNC && r.index() >= 0 && r.index() < totalFuncs && !reachable[r.index()]) {
+					reachable[r.index()] = true;
+					work.push(r.index());
 				}
 			}
 		}
 
 		// Old global function index -> new global function index (kept functions only),
 		// preserving order (kept imports first, then kept defined functions).
-		int[] remap = new int[totalFuncs];
+		int[] funcRemap = new int[totalFuncs];
 		int next = 0;
 		for (int i = 0; i < totalFuncs; i++) {
-			remap[i] = reachable[i] ? next++ : -1;
+			funcRemap[i] = reachable[i] ? next++ : -1;
+		}
+
+		// Types still named by the survivors, closed over the type section's own edges.
+		List<TypeEntry> typeEntries = typeSec == null ? List.of() : parseTypeSection(typeSec.payload());
+		int totalTypes = 0;
+		for (TypeEntry e : typeEntries) {
+			totalTypes += e.typeCount();
+		}
+		List<Ref> globalRefs = globalSec == null ? List.of() : scanGlobalSection(globalSec.payload());
+		List<Ref> tagRefs = tagSec == null ? List.of() : scanTagSection(tagSec.payload());
+		boolean[] typeUsed = markUsedTypes(typeEntries, totalTypes, imports, reachable, numImportedFuncs, defTypeIdx,
+				bodyRefs, globalRefs, tagRefs);
+		int[] typeRemap = new int[totalTypes];
+		int nextType = 0;
+		for (TypeEntry e : typeEntries) {
+			for (int k = 0; k < e.typeCount(); k++) {
+				typeRemap[e.firstTypeIndex() + k] = typeUsed[e.firstTypeIndex()] ? nextType++ : -1;
+			}
 		}
 
 		// Data segments whose owners all died go with them.
 		List<Integer> deadSegments = new ArrayList<>();
 		for (OwnedDataSegment owned : ownedDataSegments) {
-			boolean anyOwnerAlive = false;
-			for (int owner : owned.ownerFuncIndices()) {
-				if (owner >= 0 && owner < totalFuncs && reachable[owner]) {
-					anyOwnerAlive = true;
-					break;
-				}
-			}
-			if (!anyOwnerAlive) {
+			if (!anyOwnerAlive(owned.ownerFuncIndices(), reachable, totalFuncs)) {
 				deadSegments.add(owned.segmentIndex());
 			}
 		}
+		// ... and so do the ranges inside a surviving segment that no survivor addresses.
+		List<DataSegment> dataSegments = dataSec == null ? List.of() : parseDataSection(dataSec.payload());
+		List<DroppableDataRange> deadRanges = deadRanges(droppableDataRanges, dataSegments, deadSegments, reachable,
+				numImportedFuncs, bodyConstants, globalConstants(globalSec));
 
-		if (next == totalFuncs && deadSegments.isEmpty()) {
+		if (next == totalFuncs && nextType == totalTypes && deadSegments.isEmpty() && deadRanges.isEmpty()) {
 			return module; // nothing to drop
 		}
 
@@ -198,20 +310,35 @@ public final class WasmTreeShaker {
 		List<Section> rebuilt = new ArrayList<>(sections.size());
 		for (Section s : sections) {
 			switch (s.id()) {
+				case SEC_TYPE -> rebuilt.add(new Section(SEC_TYPE,
+						rebuildTypeSection(s.payload(), typeEntries, typeUsed, funcRemap, typeRemap)));
 				case SEC_IMPORT ->
-					rebuilt.add(new Section(SEC_IMPORT, rebuildImports(imports, numImportedFuncs, reachable)));
-				case SEC_FUNCTION -> rebuilt
-					.add(new Section(SEC_FUNCTION, rebuildFunctionSection(defTypeIdx, numImportedFuncs, reachable)));
+					rebuilt.add(new Section(SEC_IMPORT, rebuildImports(imports, reachable, funcRemap, typeRemap)));
+				case SEC_FUNCTION -> rebuilt.add(new Section(SEC_FUNCTION,
+						rebuildFunctionSection(defTypeIdx, numImportedFuncs, reachable, typeRemap)));
+				case SEC_GLOBAL ->
+					rebuilt.add(new Section(SEC_GLOBAL, applyRefs(s.payload(), globalRefs, funcRemap, typeRemap)));
+				case SEC_TAG ->
+					rebuilt.add(new Section(SEC_TAG, applyRefs(s.payload(), tagRefs, funcRemap, typeRemap)));
 				case SEC_CODE -> rebuilt.add(new Section(SEC_CODE,
-						rebuildCodeSection(codeEntries, callSites, numImportedFuncs, reachable, remap)));
-				case SEC_EXPORT -> rebuilt.add(new Section(SEC_EXPORT, rebuildExportSection(s.payload(), remap)));
-				case SEC_START -> rebuilt.add(new Section(SEC_START, rebuildStartSection(s.payload(), remap)));
-				case SEC_DATA -> rebuilt.add(deadSegments.isEmpty() ? s
-						: new Section(SEC_DATA, rebuildDataSection(s.payload(), deadSegments)));
+						rebuildCodeSection(codeEntries, bodyRefs, numImportedFuncs, reachable, funcRemap, typeRemap)));
+				case SEC_EXPORT -> rebuilt.add(new Section(SEC_EXPORT, rebuildExportSection(s.payload(), funcRemap)));
+				case SEC_START -> rebuilt.add(new Section(SEC_START, rebuildStartSection(s.payload(), funcRemap)));
+				case SEC_DATA -> rebuilt.add(deadSegments.isEmpty() && deadRanges.isEmpty() ? s
+						: new Section(SEC_DATA, rebuildDataSection(dataSegments, deadSegments, deadRanges)));
 				default -> rebuilt.add(s);
 			}
 		}
 		return assemble(rebuilt);
+	}
+
+	private static boolean anyOwnerAlive(int[] owners, boolean[] reachable, int totalFuncs) {
+		for (int owner : owners) {
+			if (owner >= 0 && owner < totalFuncs && reachable[owner]) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// --- Section framing ---
@@ -251,9 +378,214 @@ public final class WasmTreeShaker {
 		return null;
 	}
 
+	// Splices a buffer, replacing each recorded immediate with its remapped value. The
+	// refs must be ascending and non-overlapping (they come from one forward walk), and
+	// the replacement's LEB length may differ from the original's -- exactly as the
+	// function renumbering already relies on.
+	private static byte[] applyRefs(byte[] buf, List<Ref> refs, int[] funcRemap, int[] typeRemap) {
+		if (refs.isEmpty()) {
+			return buf;
+		}
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		int cursor = 0;
+		for (Ref r : refs) {
+			writeRaw(out, slice(buf, cursor, r.start()));
+			int[] remap = r.kind() == RefKind.FUNC ? funcRemap : typeRemap;
+			// A kept site naming a dropped definition means the reachability walk missed
+			// an edge; -1 would encode as a five-byte index and validate as nothing.
+			if (remap[r.index()] < 0) {
+				throw new IllegalStateException(
+						"WasmTreeShaker: surviving " + r.kind() + " reference to dropped index " + r.index());
+			}
+			switch (r.kind()) {
+				case FUNC, TYPE_U -> writeU(out, remap[r.index()]);
+				case TYPE_S -> writeS(out, remap[r.index()]);
+			}
+			cursor = r.end();
+		}
+		writeRaw(out, slice(buf, cursor, buf.length));
+		return out.toByteArray();
+	}
+
+	// --- Type section ---
+
+	/**
+	 * One {@code rectype} entry of the type section: its byte span within the payload,
+	 * the type indices it defines ({@code typeCount} consecutive indices from
+	 * {@code firstTypeIndex} -- more than one for a {@code rec} group), and every type
+	 * index its own definition mentions.
+	 */
+	private record TypeEntry(int start, int end, int firstTypeIndex, int typeCount, List<Ref> refs) {
+	}
+
+	private static List<TypeEntry> parseTypeSection(byte[] payload) {
+		int[] p = { 0 };
+		int count = readU(payload, p);
+		List<TypeEntry> entries = new ArrayList<>();
+		int typeIndex = 0;
+		for (int i = 0; i < count; i++) {
+			int start = p[0];
+			List<Ref> refs = new ArrayList<>();
+			int members;
+			if ((payload[p[0]] & 0xff) == 0x4E) { // rec group
+				p[0]++;
+				members = readU(payload, p);
+				for (int k = 0; k < members; k++) {
+					scanSubType(payload, p, refs);
+				}
+			}
+			else {
+				members = 1;
+				scanSubType(payload, p, refs);
+			}
+			entries.add(new TypeEntry(start, p[0], typeIndex, members, refs));
+			typeIndex += members;
+		}
+		return entries;
+	}
+
+	// subtype := 0x50 vec(typeidx) comptype | 0x4F vec(typeidx) comptype | comptype
+	private static void scanSubType(byte[] buf, int[] p, List<Ref> refs) {
+		int b = buf[p[0]] & 0xff;
+		if (b == 0x50 || b == 0x4F) {
+			p[0]++;
+			int supertypes = readU(buf, p);
+			for (int i = 0; i < supertypes; i++) {
+				recordTypeIdx(buf, p, refs);
+			}
+		}
+		scanCompType(buf, p, refs);
+	}
+
+	// comptype := 0x60 functype | 0x5E arraytype | 0x5F structtype
+	private static void scanCompType(byte[] buf, int[] p, List<Ref> refs) {
+		int b = buf[p[0]++] & 0xff;
+		switch (b) {
+			case 0x60 -> { // func
+				int params = readU(buf, p);
+				for (int i = 0; i < params; i++) {
+					scanValType(buf, p, refs);
+				}
+				int results = readU(buf, p);
+				for (int i = 0; i < results; i++) {
+					scanValType(buf, p, refs);
+				}
+			}
+			case 0x5E -> scanFieldType(buf, p, refs); // array
+			case 0x5F -> { // struct
+				int fields = readU(buf, p);
+				for (int i = 0; i < fields; i++) {
+					scanFieldType(buf, p, refs);
+				}
+			}
+			default ->
+				throw new IllegalStateException(String.format("WasmTreeShaker: unhandled comptype tag 0x%02X", b));
+		}
+	}
+
+	// fieldtype := storagetype mut; storagetype := valtype | i8 (0x78) | i16 (0x77)
+	private static void scanFieldType(byte[] buf, int[] p, List<Ref> refs) {
+		int b = buf[p[0]] & 0xff;
+		if (b == 0x78 || b == 0x77) {
+			p[0]++;
+		}
+		else {
+			scanValType(buf, p, refs);
+		}
+		p[0]++; // mutability
+	}
+
+	// Marks every type index the surviving module still names, closed over the type
+	// section's own edges. A rec group is atomic: naming one member keeps them all (their
+	// indices are consecutive and their structural identity is a property of the group),
+	// and every member's own references are then live too.
+	private static boolean[] markUsedTypes(List<TypeEntry> typeEntries, int totalTypes, List<ImportEntry> imports,
+			boolean[] reachable, int numImportedFuncs, int[] defTypeIdx, List<List<Ref>> bodyRefs, List<Ref> globalRefs,
+			List<Ref> tagRefs) {
+		boolean[] used = new boolean[totalTypes];
+		Deque<Integer> work = new ArrayDeque<>();
+		// entryOf[t] = the index of the rectype entry defining type t.
+		int[] entryOf = new int[totalTypes];
+		for (int i = 0; i < typeEntries.size(); i++) {
+			TypeEntry e = typeEntries.get(i);
+			for (int k = 0; k < e.typeCount(); k++) {
+				entryOf[e.firstTypeIndex() + k] = i;
+			}
+		}
+		int funcOrdinal = 0;
+		for (ImportEntry e : imports) {
+			boolean kept = e.kind != KIND_FUNC || reachable[funcOrdinal];
+			if (e.kind == KIND_FUNC) {
+				funcOrdinal++;
+			}
+			if (kept) {
+				seed(e.refs, used, work, totalTypes);
+			}
+		}
+		for (int i = 0; i < defTypeIdx.length; i++) {
+			if (reachable[numImportedFuncs + i]) {
+				seedIndex(defTypeIdx[i], used, work, totalTypes);
+			}
+		}
+		for (int i = 0; i < bodyRefs.size(); i++) {
+			if (reachable[numImportedFuncs + i]) {
+				seed(bodyRefs.get(i), used, work, totalTypes);
+			}
+		}
+		seed(globalRefs, used, work, totalTypes);
+		seed(tagRefs, used, work, totalTypes);
+		while (!work.isEmpty()) {
+			TypeEntry e = typeEntries.get(entryOf[work.pop()]);
+			for (int k = 0; k < e.typeCount(); k++) {
+				used[e.firstTypeIndex() + k] = true;
+			}
+			for (Ref r : e.refs()) {
+				seedIndex(r.index(), used, work, totalTypes);
+			}
+		}
+		return used;
+	}
+
+	private static void seed(List<Ref> refs, boolean[] used, Deque<Integer> work, int totalTypes) {
+		for (Ref r : refs) {
+			if (r.kind() != RefKind.FUNC) {
+				seedIndex(r.index(), used, work, totalTypes);
+			}
+		}
+	}
+
+	private static void seedIndex(int index, boolean[] used, Deque<Integer> work, int totalTypes) {
+		if (index >= 0 && index < totalTypes && !used[index]) {
+			used[index] = true;
+			work.push(index);
+		}
+	}
+
+	private static byte[] rebuildTypeSection(byte[] payload, List<TypeEntry> entries, boolean[] typeUsed,
+			int[] funcRemap, int[] typeRemap) {
+		List<byte[]> kept = new ArrayList<>();
+		for (TypeEntry e : entries) {
+			if (!typeUsed[e.firstTypeIndex()]) {
+				continue;
+			}
+			byte[] raw = slice(payload, e.start(), e.end());
+			List<Ref> refs = new ArrayList<>(e.refs().size());
+			for (Ref r : e.refs()) {
+				refs.add(new Ref(r.start() - e.start(), r.end() - e.start(), r.index(), r.kind()));
+			}
+			kept.add(applyRefs(raw, refs, funcRemap, typeRemap));
+		}
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		writeU(body, kept.size());
+		for (byte[] entry : kept) {
+			writeRaw(body, entry);
+		}
+		return body.toByteArray();
+	}
+
 	// --- Import section ---
 
-	private record ImportEntry(int kind, byte[] raw) {
+	private record ImportEntry(int kind, byte[] raw, List<Ref> refs) {
 	}
 
 	private static List<ImportEntry> parseImports(byte[] payload) {
@@ -262,28 +594,34 @@ public final class WasmTreeShaker {
 		int count = readU(payload, p);
 		for (int i = 0; i < count; i++) {
 			int start = p[0];
+			List<Ref> refs = new ArrayList<>();
 			skipName(payload, p); // module
 			skipName(payload, p); // name
 			int kind = payload[p[0]++] & 0xff;
 			switch (kind) {
-				case KIND_FUNC -> readU(payload, p); // typeidx
+				case KIND_FUNC -> recordTypeIdx(payload, p, refs); // typeidx
 				case KIND_TABLE -> {
-					skipValType(payload, p); // element reftype
+					scanValType(payload, p, refs); // element reftype
 					skipLimits(payload, p);
 				}
 				case KIND_MEM -> skipLimits(payload, p);
 				case KIND_GLOBAL -> {
-					skipValType(payload, p);
+					scanValType(payload, p, refs);
 					p[0]++; // mutability
 				}
 				default -> throw new IllegalStateException("Unknown import kind: " + kind);
 			}
-			entries.add(new ImportEntry(kind, slice(payload, start, p[0])));
+			List<Ref> relative = new ArrayList<>(refs.size());
+			for (Ref r : refs) {
+				relative.add(new Ref(r.start() - start, r.end() - start, r.index(), r.kind()));
+			}
+			entries.add(new ImportEntry(kind, slice(payload, start, p[0]), relative));
 		}
 		return entries;
 	}
 
-	private static byte[] rebuildImports(List<ImportEntry> imports, int numImportedFuncs, boolean[] reachable) {
+	private static byte[] rebuildImports(List<ImportEntry> imports, boolean[] reachable, int[] funcRemap,
+			int[] typeRemap) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		List<ImportEntry> kept = new ArrayList<>();
 		int funcOrdinal = 0;
@@ -300,7 +638,7 @@ public final class WasmTreeShaker {
 		}
 		writeU(body, kept.size());
 		for (ImportEntry e : kept) {
-			writeRaw(body, e.raw);
+			writeRaw(body, applyRefs(e.raw, e.refs, funcRemap, typeRemap));
 		}
 		return body.toByteArray();
 	}
@@ -317,12 +655,13 @@ public final class WasmTreeShaker {
 		return types;
 	}
 
-	private static byte[] rebuildFunctionSection(int[] defTypeIdx, int numImportedFuncs, boolean[] reachable) {
+	private static byte[] rebuildFunctionSection(int[] defTypeIdx, int numImportedFuncs, boolean[] reachable,
+			int[] typeRemap) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		List<Integer> kept = new ArrayList<>();
 		for (int i = 0; i < defTypeIdx.length; i++) {
 			if (reachable[numImportedFuncs + i]) {
-				kept.add(defTypeIdx[i]);
+				kept.add(typeRemap[defTypeIdx[i]]);
 			}
 		}
 		writeU(body, kept.size());
@@ -330,6 +669,49 @@ public final class WasmTreeShaker {
 			writeU(body, t);
 		}
 		return body.toByteArray();
+	}
+
+	// --- Global / tag sections ---
+
+	// globalsec := vec(globaltype expr); globaltype := valtype mut
+	private static List<Ref> scanGlobalSection(byte[] payload) {
+		return scanGlobalSection(payload, null);
+	}
+
+	private static List<Ref> scanGlobalSection(byte[] payload, @Nullable IntList i32Constants) {
+		List<Ref> refs = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readU(payload, p);
+		for (int i = 0; i < count; i++) {
+			scanValType(payload, p, refs);
+			p[0]++; // mutability
+			scanConstExpr(payload, p, refs, i32Constants);
+		}
+		return refs;
+	}
+
+	// tagsec := vec(0x00 typeidx). Tags are never dropped (throw/try_table reference them
+	// by index), so every tag's type stays live.
+	private static List<Ref> scanTagSection(byte[] payload) {
+		List<Ref> refs = new ArrayList<>();
+		int[] p = { 0 };
+		int count = readU(payload, p);
+		for (int i = 0; i < count; i++) {
+			int attribute = payload[p[0]++] & 0xff;
+			if (attribute != 0x00) {
+				throw new IllegalStateException("WasmTreeShaker: unhandled tag attribute " + attribute);
+			}
+			recordTypeIdx(payload, p, refs);
+		}
+		return refs;
+	}
+
+	// A constant initializer expression: instructions up to its terminating `end`.
+	private static void scanConstExpr(byte[] buf, int[] p, List<Ref> refs, @Nullable IntList i32Constants) {
+		while ((buf[p[0]] & 0xff) != 0x0B) {
+			scanInstr(buf, p, refs, i32Constants);
+		}
+		p[0]++; // end
 	}
 
 	// --- Code section ---
@@ -346,13 +728,13 @@ public final class WasmTreeShaker {
 		return entries;
 	}
 
-	private static byte[] rebuildCodeSection(List<byte[]> codeEntries, List<List<CallSite>> callSites,
-			int numImportedFuncs, boolean[] reachable, int[] remap) {
+	private static byte[] rebuildCodeSection(List<byte[]> codeEntries, List<List<Ref>> bodyRefs, int numImportedFuncs,
+			boolean[] reachable, int[] funcRemap, int[] typeRemap) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		List<byte[]> kept = new ArrayList<>();
 		for (int i = 0; i < codeEntries.size(); i++) {
 			if (reachable[numImportedFuncs + i]) {
-				kept.add(rewriteBody(codeEntries.get(i), callSites.get(i), remap));
+				kept.add(applyRefs(codeEntries.get(i), bodyRefs.get(i), funcRemap, typeRemap));
 			}
 		}
 		writeU(body, kept.size());
@@ -363,32 +745,20 @@ public final class WasmTreeShaker {
 		return body.toByteArray();
 	}
 
-	// Rewrites a code entry's body so each call/ref.func operand uses the remapped index.
-	private static byte[] rewriteBody(byte[] entry, List<CallSite> sites, int[] remap) {
-		if (sites.isEmpty()) {
-			return entry;
-		}
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		int cursor = 0;
-		for (CallSite cs : sites) {
-			writeRaw(out, slice(entry, cursor, cs.operandStart));
-			writeU(out, remap[cs.target]);
-			cursor = cs.operandEnd;
-		}
-		writeRaw(out, slice(entry, cursor, entry.length));
-		return out.toByteArray();
-	}
-
 	// --- Data section ---
 
-	// Rebuilds the data section without the segments listed in deadSegments. Only
-	// active mode-0 segments (flags 0: memory 0, i32.const offset expression) are
+	/**
+	 * One active data segment: its linear-memory address, its bytes, and its raw span.
+	 */
+	private record DataSegment(int offset, byte[] bytes, byte[] raw) {
+	}
+
+	// Only active mode-0 segments (flags 0: memory 0, i32.const offset expression) are
 	// understood; anything else throws rather than risk mis-framing a segment.
-	private static byte[] rebuildDataSection(byte[] payload, List<Integer> deadSegments) {
+	private static List<DataSegment> parseDataSection(byte[] payload) {
 		int[] p = { 0 };
 		int count = readU(payload, p);
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		writeU(body, count - deadSegments.size());
+		List<DataSegment> segments = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
 			int start = p[0];
 			int flags = readU(payload, p);
@@ -400,19 +770,120 @@ public final class WasmTreeShaker {
 				throw new IllegalStateException(
 						String.format("WasmTreeShaker: unhandled data offset opcode 0x%02X", op));
 			}
-			skipLeb(payload, p); // offset value
+			int offset = readS(payload, p);
 			int end = payload[p[0]++] & 0xff;
 			if (end != 0x0B) {
 				throw new IllegalStateException(
 						String.format("WasmTreeShaker: unterminated data offset expression 0x%02X", end));
 			}
 			int len = readU(payload, p);
+			byte[] bytes = slice(payload, p[0], p[0] + len);
 			p[0] += len;
-			if (!deadSegments.contains(i)) {
-				writeRaw(body, slice(payload, start, p[0]));
+			segments.add(new DataSegment(offset, bytes, slice(payload, start, p[0])));
+		}
+		return segments;
+	}
+
+	// The droppable ranges no surviving function body (nor a global initializer) still
+	// addresses. A range survives when some live i32.const lands anywhere in
+	// [address, address + length] -- the closed interval, so an interior pointer or a
+	// one-past-the-end pointer keeps its range too.
+	private static List<DroppableDataRange> deadRanges(List<DroppableDataRange> candidates, List<DataSegment> segments,
+			List<Integer> deadSegments, boolean[] reachable, int numImportedFuncs,
+			List<@Nullable IntList> bodyConstants, IntList globalConstants) {
+		if (candidates.isEmpty()) {
+			return List.of();
+		}
+		IntList live = new IntList();
+		live.addAll(globalConstants);
+		for (int i = 0; i < bodyConstants.size(); i++) {
+			@Nullable IntList constants = bodyConstants.get(i);
+			if (constants != null && reachable[numImportedFuncs + i]) {
+				live.addAll(constants);
 			}
 		}
+		int[] sorted = live.toSortedArray();
+		List<DroppableDataRange> dead = new ArrayList<>();
+		for (DroppableDataRange r : candidates) {
+			if (r.end() <= r.start() || deadSegments.contains(r.segmentIndex())) {
+				continue;
+			}
+			int address = segments.get(r.segmentIndex()).offset() + r.start();
+			if (!containsInRange(sorted, address, address + (r.end() - r.start()))) {
+				dead.add(r);
+			}
+		}
+		return dead;
+	}
+
+	// Whether the sorted array holds a value in [lo, hi] (both inclusive).
+	private static boolean containsInRange(int[] sorted, int lo, int hi) {
+		int at = java.util.Arrays.binarySearch(sorted, lo);
+		int from = at >= 0 ? at : -at - 1;
+		return from < sorted.length && sorted[from] <= hi;
+	}
+
+	private static IntList globalConstants(@Nullable Section globalSec) {
+		IntList constants = new IntList();
+		if (globalSec != null) {
+			scanGlobalSection(globalSec.payload(), constants);
+		}
+		return constants;
+	}
+
+	// Rebuilds the data section without the segments listed in deadSegments and without
+	// the byte ranges listed in deadRanges (a segment carrying one keeps its surviving
+	// runs, each re-emitted as its own active segment at the address it already had).
+	private static byte[] rebuildDataSection(List<DataSegment> segments, List<Integer> deadSegments,
+			List<DroppableDataRange> deadRanges) {
+		List<byte[]> kept = new ArrayList<>();
+		for (int i = 0; i < segments.size(); i++) {
+			DataSegment segment = segments.get(i);
+			if (deadSegments.contains(i)) {
+				continue;
+			}
+			List<DroppableDataRange> cuts = new ArrayList<>();
+			for (DroppableDataRange r : deadRanges) {
+				if (r.segmentIndex() == i) {
+					cuts.add(r);
+				}
+			}
+			if (cuts.isEmpty()) {
+				kept.add(segment.raw());
+				continue;
+			}
+			cuts.sort((a, b) -> Integer.compare(a.start(), b.start()));
+			int len = segment.bytes().length;
+			int cursor = 0;
+			for (DroppableDataRange cut : cuts) {
+				if (cut.start() > cursor) {
+					kept.add(activeSegment(segment.offset() + cursor, slice(segment.bytes(), cursor, cut.start())));
+				}
+				cursor = Math.max(cursor, cut.end());
+			}
+			if (cursor < len) {
+				kept.add(activeSegment(segment.offset() + cursor, slice(segment.bytes(), cursor, len)));
+			}
+		}
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		writeU(body, kept.size());
+		for (byte[] segment : kept) {
+			writeRaw(body, segment);
+		}
 		return body.toByteArray();
+	}
+
+	// One active mode-0 data segment: flags 0, an i32.const offset expression, then the
+	// bytes.
+	private static byte[] activeSegment(int offset, byte[] bytes) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		writeU(out, 0); // flags: active, memory 0
+		out.write(0x41); // i32.const
+		writeS(out, offset);
+		out.write(0x0B); // end
+		writeU(out, bytes.length);
+		writeRaw(out, bytes);
+		return out.toByteArray();
 	}
 
 	// --- Export / start sections ---
@@ -467,26 +938,47 @@ public final class WasmTreeShaker {
 
 	// --- Instruction scanning ---
 
-	// Walks one code entry (locals + body) and returns every call/ref.func site.
-	static List<CallSite> scanCallSites(byte[] entry) {
-		List<CallSite> sites = new ArrayList<>();
+	// Walks one code entry (locals + body) and returns every function and type reference,
+	// optionally collecting the i32.const immediates on the way (a droppable data range
+	// survives when one of them addresses it).
+	static List<Ref> scanBody(byte[] entry) {
+		return scanBody(entry, null);
+	}
+
+	static List<Ref> scanBody(byte[] entry, @Nullable IntList i32Constants) {
+		List<Ref> refs = new ArrayList<>();
 		int[] p = { 0 };
 		// Local declarations: count, then (count, valtype) pairs.
 		int localGroups = readU(entry, p);
 		for (int i = 0; i < localGroups; i++) {
 			readU(entry, p); // run length
-			skipValType(entry, p);
+			scanValType(entry, p, refs);
 		}
 		// Instruction stream up to the end of the entry.
 		while (p[0] < entry.length) {
-			scanInstr(entry, p, sites);
+			scanInstr(entry, p, refs, i32Constants);
+		}
+		return refs;
+	}
+
+	/**
+	 * Every {@code call}/{@code ref.func} site in one code entry. Kept for
+	 * {@link WasmImportInjector}, which renumbers functions only.
+	 * @param entry a code section entry (locals + body)
+	 * @return the call sites in body order
+	 */
+	static List<CallSite> scanCallSites(byte[] entry) {
+		List<CallSite> sites = new ArrayList<>();
+		for (Ref r : scanBody(entry)) {
+			if (r.kind() == RefKind.FUNC) {
+				sites.add(new CallSite(r.start(), r.end(), r.index()));
+			}
 		}
 		return sites;
 	}
 
-	// Advances p past one instruction, recording a CallSite for call (0x10) / ref.func
-	// (0xD2).
-	private static void scanInstr(byte[] buf, int[] p, List<CallSite> sites) {
+	// Advances p past one instruction, recording every function and type immediate.
+	private static void scanInstr(byte[] buf, int[] p, List<Ref> refs, @Nullable IntList i32Constants) {
 		int op = buf[p[0]++] & 0xff;
 		if (op >= 0x45 && op <= 0xC4) {
 			return; // numeric / comparison / conversion / sign-extension: no immediate
@@ -496,16 +988,16 @@ public final class WasmTreeShaker {
 			case 0x00, 0x01, 0x05, 0x0A, 0x0B, 0x0F, 0x1A, 0x1B, 0xD1, 0xD3 -> {
 			}
 			// Block types.
-			case 0x02, 0x03, 0x04 -> skipBlockType(buf, p);
+			case 0x02, 0x03, 0x04 -> scanBlockType(buf, p, refs); // block / loop / if
 			// throw (exception-handling proposal): one tag-index immediate. Tags have
 			// their own index space, so function remapping does not touch it.
 			case 0x08 -> skipLeb(buf, p);
 			// try_table (exception-handling proposal): a blocktype, then a vector of
 			// catch clauses -- catch/catch_ref carry a tag index and a label,
 			// catch_all/catch_all_ref a label only. Labels and tag indices are both
-			// remap-free here (only function indices are renumbered).
+			// remap-free here (only function and type indices are renumbered).
 			case 0x1F -> {
-				skipBlockType(buf, p);
+				scanBlockType(buf, p, refs);
 				int clauses = readU(buf, p);
 				for (int i = 0; i < clauses; i++) {
 					int kind = buf[p[0]++] & 0xff;
@@ -521,19 +1013,26 @@ public final class WasmTreeShaker {
 				}
 			}
 			// One label/index immediate.
-			case 0x0C, 0x0D, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x41, 0x42, 0xD0 -> skipLeb(buf, p);
+			case 0x0C, 0x0D, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x42 -> skipLeb(buf, p);
+			case 0x41 -> { // i32.const: also a candidate linear-memory address
+				int value = readS(buf, p);
+				if (i32Constants != null) {
+					i32Constants.add(value);
+				}
+			}
+			case 0xD0 -> recordHeapType(buf, p, refs); // ref.null
 			case 0x0E -> { // br_table
 				int n = readU(buf, p);
 				for (int i = 0; i <= n; i++) {
 					skipLeb(buf, p);
 				}
 			}
-			case 0x10 -> recordFuncRef(buf, p, sites); // call
+			case 0x10 -> recordFuncRef(buf, p, refs); // call
 			case 0x11 -> { // call_indirect
-				skipLeb(buf, p);
-				skipLeb(buf, p);
+				recordTypeIdx(buf, p, refs);
+				skipLeb(buf, p); // tableidx
 			}
-			case 0xD2 -> recordFuncRef(buf, p, sites); // ref.func
+			case 0xD2 -> recordFuncRef(buf, p, refs); // ref.func
 			// Memory load/store: align + offset.
 			case 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
 					0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E -> {
@@ -543,7 +1042,7 @@ public final class WasmTreeShaker {
 			case 0x3F, 0x40 -> p[0]++; // memory.size / memory.grow: one memidx byte
 			case 0x43 -> p[0] += 4; // f32.const
 			case 0x44 -> p[0] += 8; // f64.const
-			case 0xFB -> skipGc(buf, p); // wasm-GC prefix
+			case 0xFB -> scanGc(buf, p, refs); // wasm-GC prefix
 			// Misc prefix: the saturating truncations (0x00-0x07) carry no immediate.
 			case 0xFC -> {
 				int sub = readU(buf, p);
@@ -557,38 +1056,67 @@ public final class WasmTreeShaker {
 		}
 	}
 
-	private static void recordFuncRef(byte[] buf, int[] p, List<CallSite> sites) {
+	private static void recordFuncRef(byte[] buf, int[] p, List<Ref> refs) {
 		int start = p[0];
 		int target = readU(buf, p);
-		sites.add(new CallSite(start, p[0], target));
+		refs.add(new Ref(start, p[0], target, RefKind.FUNC));
 	}
 
-	// Skips a wasm-GC instruction (after the 0xFB prefix) by its sub-opcode.
-	private static void skipGc(byte[] buf, int[] p) {
+	// An unsigned-LEB typeidx immediate.
+	private static void recordTypeIdx(byte[] buf, int[] p, List<Ref> refs) {
+		int start = p[0];
+		int index = readU(buf, p);
+		refs.add(new Ref(start, p[0], index, RefKind.TYPE_U));
+	}
+
+	// A heaptype (s33): negative values are the abstract shorthands (eq, i31, ...), which
+	// name no type definition; a non-negative one is a concrete type index.
+	private static void recordHeapType(byte[] buf, int[] p, List<Ref> refs) {
+		int start = p[0];
+		int index = readS(buf, p);
+		if (index >= 0) {
+			refs.add(new Ref(start, p[0], index, RefKind.TYPE_S));
+		}
+	}
+
+	// Scans a wasm-GC instruction (after the 0xFB prefix) by its sub-opcode.
+	private static void scanGc(byte[] buf, int[] p, List<Ref> refs) {
 		int sub = readU(buf, p);
 		switch (sub) {
-			// One type/heaptype immediate.
-			case 0x00, 0x01, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x10, 0x14, 0x15, 0x16, 0x17 -> skipLeb(buf, p);
-			// Two immediates (typeidx + field/count/etc.).
-			case 0x02, 0x03, 0x04, 0x05, 0x08, 0x09, 0x0A, 0x11, 0x12, 0x13 -> {
+			// struct.new / struct.new_default / array.new / array.new_default /
+			// array.get(_s|_u) / array.set / array.fill: one typeidx.
+			case 0x00, 0x01, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x10 -> recordTypeIdx(buf, p, refs);
+			// ref.test / ref.cast (nullable and not): one heaptype.
+			case 0x14, 0x15, 0x16, 0x17 -> recordHeapType(buf, p, refs);
+			// struct.get(_s|_u) / struct.set: typeidx + fieldidx.
+			// array.new_fixed: typeidx + element count.
+			case 0x02, 0x03, 0x04, 0x05, 0x08 -> {
+				recordTypeIdx(buf, p, refs);
 				skipLeb(buf, p);
-				skipLeb(buf, p);
+			}
+			case 0x11 -> { // array.copy: destination typeidx + source typeidx
+				recordTypeIdx(buf, p, refs);
+				recordTypeIdx(buf, p, refs);
 			}
 			// No immediate.
 			case 0x0F, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E -> {
 			}
+			// array.new_data / array.new_elem / array.init_data / array.init_elem carry a
+			// dataidx / elemidx this pass does not renumber -- and it DOES drop data
+			// segments (see OwnedDataSegment), so accepting one would silently corrupt
+			// the module. The backend emits none of them.
 			default ->
 				throw new IllegalStateException(String.format("WasmTreeShaker: unhandled GC opcode 0xFB 0x%02X", sub));
 		}
 	}
 
 	// Skips a fixed-width SIMD instruction (after the 0xFD prefix) by its u32-LEB
-	// sub-opcode. SIMD instructions carry no function references, so this only advances
-	// p.
+	// sub-opcode. SIMD instructions carry no function or type references, so this only
+	// advances p.
 	// Only the sub-opcodes the compilers emit (the packed-float-vector kernels:
 	// NoGcWasmCompiler f64x2 / f32x4) are handled; an unknown one throws so a
 	// newly-emitted SIMD op with different immediates is caught rather than silently
-	// mis-skipped (mirroring skipGc).
+	// mis-skipped (mirroring scanGc).
 	private static void skipSimd(byte[] buf, int[] p) {
 		int sub = readU(buf, p);
 		switch (sub) {
@@ -615,24 +1143,26 @@ public final class WasmTreeShaker {
 	}
 
 	// blocktype := 0x40 | valtype | s33 typeindex
-	private static void skipBlockType(byte[] buf, int[] p) {
+	private static void scanBlockType(byte[] buf, int[] p, List<Ref> refs) {
 		int b = buf[p[0]] & 0xff;
 		if (b == 0x40) {
 			p[0]++;
 		}
 		else if (isValTypeStart(b)) {
-			skipValType(buf, p);
+			scanValType(buf, p, refs);
 		}
 		else {
-			skipLeb(buf, p); // s33 type index
+			int start = p[0];
+			int index = readS(buf, p); // s33 type index (never negative in this form)
+			refs.add(new Ref(start, p[0], index, RefKind.TYPE_S));
 		}
 	}
 
 	// valtype := numeric | vector | (0x63|0x64) heaptype | abstract-ref shorthand
-	private static void skipValType(byte[] buf, int[] p) {
+	private static void scanValType(byte[] buf, int[] p, List<Ref> refs) {
 		int b = buf[p[0]++] & 0xff;
 		if (b == 0x63 || b == 0x64) {
-			skipLeb(buf, p); // heaptype
+			recordHeapType(buf, p, refs);
 		}
 		// otherwise a single-byte value type (0x7B-0x7F numeric/vector, 0x6F/0x70 ref
 		// shorthand)
@@ -680,6 +1210,22 @@ public final class WasmTreeShaker {
 		return result;
 	}
 
+	static int readS(byte[] buf, int[] p) {
+		int result = 0;
+		int shift = 0;
+		int b;
+		do {
+			b = buf[p[0]++] & 0xff;
+			result |= (b & 0x7f) << shift;
+			shift += 7;
+		}
+		while ((b & 0x80) != 0);
+		if (shift < 32 && (b & 0x40) != 0) {
+			result |= -(1 << shift);
+		}
+		return result;
+	}
+
 	static void writeU(ByteArrayOutputStream out, int value) {
 		int v = value;
 		do {
@@ -691,6 +1237,49 @@ public final class WasmTreeShaker {
 			out.write(b);
 		}
 		while (v != 0);
+	}
+
+	static void writeS(ByteArrayOutputStream out, int value) {
+		int v = value;
+		while (true) {
+			int b = v & 0x7f;
+			v >>= 7;
+			if ((v == 0 && (b & 0x40) == 0) || (v == -1 && (b & 0x40) != 0)) {
+				out.write(b);
+				return;
+			}
+			out.write(b | 0x80);
+		}
+	}
+
+	/** A growable {@code int} buffer: the scanned {@code i32.const} immediates. */
+	static final class IntList {
+
+		private int[] values = new int[16];
+
+		private int size;
+
+		void add(int value) {
+			if (this.size == this.values.length) {
+				int[] grown = new int[this.values.length * 2];
+				System.arraycopy(this.values, 0, grown, 0, this.size);
+				this.values = grown;
+			}
+			this.values[this.size++] = value;
+		}
+
+		void addAll(IntList other) {
+			for (int i = 0; i < other.size; i++) {
+				add(other.values[i]);
+			}
+		}
+
+		int[] toSortedArray() {
+			int[] copy = java.util.Arrays.copyOf(this.values, this.size);
+			java.util.Arrays.sort(copy);
+			return copy;
+		}
+
 	}
 
 	static byte[] slice(byte[] src, int from, int to) {

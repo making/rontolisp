@@ -95,15 +95,20 @@ to a handful of functions:
 echo "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 (rontolisp:wasm-export 'fact :params '(:int) :returns :int)" > fact.lisp
 rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
-wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~5 KB module
+wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~4 KB module
 ```
 
-For the `fact` example the module drops from ~330 KB to ~5 KB.
+For the `fact` example the module drops from ~330 KB to ~4 KB.
 `--optimize` is opt-in and behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
 embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
 shape, `--component` included — the core module is shaken before the wrap. The
 same flag also dead-code-eliminates the [JVM output](jvm.md).
+
+The dead functions take their baggage with them: the WASI imports only they used,
+the type definitions nothing left names, and the static string data no surviving
+code still addresses — a printed literal's module is a few hundred bytes rather
+than the whole runtime's string table.
 
 `--optimize` also decides how much of a **loaded library** it can reach. A
 compiled program calls most functions directly, but a `funcall` needs a dispatch
@@ -194,10 +199,10 @@ and how much you pay depends on how integer-heavy the program is:
 
 | program | `--optimize` | `--optimize=size` | run time |
 | --- | --- | --- | --- |
-| ironclad SHA-256/HMAC/PBKDF2, 4096 rounds | 2,075,455 B | 1,560,097 B (**-24.8%**) | 1.4 s -> 5.2 s (**3.8x**) |
-| a `vec:`-kernel neural-net training loop | 288,576 B | 231,533 B (-19.8%) | 1.07 s -> 1.26 s (+18%) |
-| a float MLP training loop (no `vec:`) | 177,173 B | 142,943 B (-19.3%) | 5.6 s -> 6.1 s (+9%) |
-| `cl-postgres` hello world (`--component`) | 8,033,507 B | 6,408,277 B (-20.2%) | — |
+| ironclad SHA-256/HMAC/PBKDF2, 4096 rounds | 2,078,195 B | 1,562,816 B (**-24.8%**) | 1.4 s -> 5.2 s (**3.8x**) |
+| a `vec:`-kernel neural-net training loop | 271,233 B | 214,169 B (-21.0%) | 1.07 s -> 1.26 s (+18%) |
+| a float MLP training loop (no `vec:`) | 159,747 B | 125,496 B (-21.4%) | 5.6 s -> 6.1 s (+9%) |
+| `cl-postgres` hello world (`--component`) | 8,024,998 B | 6,384,099 B (-20.4%) | — |
 
 (wasmtime 47, best of three runs.) The size win barely varies; the run-time
 price does, because only integer arithmetic fuses — a float kernel pays it on

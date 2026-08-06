@@ -2135,6 +2135,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			.serveInitGlobalIndex(serveInitGlobalIndex)
 			.callbackExports(cbMode ? this.callbackExportsForTest : Set.of());
 
+		// Passes 2a-2c emit function BODIES, and a body is the only consumer of a string
+		// it interns (an i32.const the tree shaker can see). Everything interned outside
+		// this window ends up somewhere the shaker cannot follow -- a word in the
+		// _lookup registry blob, the instance-layout blob, a reader table, a runtime
+		// helper built later -- so only what is interned here may be shaken out with its
+		// body. See .kb/optimize-dead-code-elimination.md.
+		stringTable.attributing(true);
+
 		// Pass 2a: Compile each defun body (with env param at slot 0)
 		List<byte[]> userFunctionBodies = new ArrayList<>();
 		// Import wrapper bodies are deferred until after the lambda pass: a :string
@@ -2369,6 +2377,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			lambdaFunctionBodies.add(buildLocalsAndPatch(lambdaCtx, lambda.paramNames.size() + 1, lambdaBody));
 			lambdaIdx++;
 		}
+		stringTable.attributing(false);
 
 		// Build dispatch function bodies
 		int numDefuns = defuns.size();
@@ -4521,9 +4530,16 @@ public final class WasmLispCompiler implements LispCompiler {
 						new int[] { FUNC_CHAR_DOWNCASE + hostImports.size() }),
 				new am.ik.wasm.WasmTreeShaker.OwnedDataSegment(upperFoldSegIndex + 2,
 						new int[] { FUNC_CHAR_ALNUM_P + hostImports.size() }));
+		// A string interned by a body Pass 2a-2c emitted, and by nothing else, goes when
+		// that body does. One blob cites EVERY entry -- the runtime intern table, which
+		// _intern scans by offset -- so a program that interns at run time keeps the
+		// whole string blob and offers no candidates at all.
+		int stringDataSegIndex = upperFoldSegIndex - 1;
+		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = usesIntern || stringData.length == 0
+				? List.of() : stringTable.shakeableRanges(stringDataSegIndex, dataBase);
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
-				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments);
+				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges);
 			}
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
@@ -4567,8 +4583,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmComponentBuilder.additionalImports(componentImports));
 			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports);
 		}
-		return this.optimize.eliminatesDeadCode() ? am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments)
-				: coreModule;
+		return this.optimize.eliminatesDeadCode()
+				? am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges) : coreModule;
 	}
 
 	// The import-slot ordinal of a $sched builtin field.
@@ -5832,6 +5848,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final Map<String, StringEntry> cache = new HashMap<>();
 
+		/**
+		 * The entries a dead function body may take with it: the ones interned ONLY while
+		 * {@link #attributing} was on, i.e. while a user function / top level / lambda
+		 * body was being emitted, where the only consumer of the offset is the body's own
+		 * {@code i32.const}. Every other {@code addString} caller bakes the offset
+		 * somewhere the tree shaker cannot see it -- a word inside the {@code _lookup}
+		 * registry blob, the instance-layout blob, the reader tables -- so touching an
+		 * entry outside the window pins it for good. See
+		 * {@code .kb/optimize-dead-code-elimination.md}.
+		 */
+		private final Set<String> shakeable = new HashSet<>();
+
+		private boolean attributing;
+
 		private int nextOffset;
 
 		final StringEntry nil;
@@ -5945,7 +5975,20 @@ public final class WasmLispCompiler implements LispCompiler {
 			return this.cache.containsKey(s);
 		}
 
+		/**
+		 * Opens/closes the body-emission window: while it is open, a string first
+		 * interned here is a candidate for {@link #shakeableRanges}. Interning the same
+		 * string with the window CLOSED retracts the candidacy, whichever came first.
+		 * @param on whether a function body is being emitted
+		 */
+		void attributing(boolean on) {
+			this.attributing = on;
+		}
+
 		StringEntry addString(String s) {
+			if (!this.attributing) {
+				this.shakeable.remove(s);
+			}
 			StringEntry existing = this.cache.get(s);
 			if (existing != null) {
 				return existing;
@@ -5956,7 +5999,32 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.nextOffset += bytes.length;
 			StringEntry entry = new StringEntry(offset, bytes.length);
 			this.cache.put(s, entry);
+			if (this.attributing) {
+				this.shakeable.add(s);
+			}
 			return entry;
+		}
+
+		/**
+		 * The byte ranges (relative to the string data segment's own base) the tree
+		 * shaker may cut out when no surviving function body addresses them. Ordered by
+		 * offset so the emitted module stays deterministic.
+		 * @param segmentIndex the data segment index the string data occupies
+		 * @param dataBase the linear-memory address the segment starts at
+		 * @return the candidate ranges, ascending
+		 */
+		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> shakeableRanges(int segmentIndex, int dataBase) {
+			List<StringEntry> entries = new ArrayList<>(this.shakeable.size());
+			for (String s : this.shakeable) {
+				entries.add(this.cache.get(s));
+			}
+			entries.sort(java.util.Comparator.comparingInt(StringEntry::offset));
+			List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> ranges = new ArrayList<>(entries.size());
+			for (StringEntry e : entries) {
+				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, e.offset() - dataBase,
+						e.offset() - dataBase + e.length()));
+			}
+			return ranges;
 		}
 
 		/**

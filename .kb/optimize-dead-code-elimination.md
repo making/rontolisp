@@ -24,18 +24,24 @@ Measured 2026-08-06, `--optimize` vs `--optimize=size`, wasmtime 47.0.2 (best of
 
 | program | default | size | run time |
 | --- | --- | --- | --- |
-| `examples/db/postgres-hello` (`--component`) | 8,033,507 | 6,408,277 (**-20.2%**) | — |
-| `examples/asdf/ironclad-demo` (SHA-256/HMAC/PBKDF2, 4096 rounds) | 2,075,455 | 1,560,097 (-24.8%) | 1.38 s -> 5.21 s (**3.8x**) |
-| `examples/ml/nn-vec` (`vec:` kernels) | 288,576 | 231,533 (-19.8%) | 1.07 s -> 1.26 s (+18%) |
-| `examples/ml/mlp` (float, no `vec:`) | 177,173 | 142,943 (-19.3%) | 5.58 s -> 6.06 s (+9%) |
-| `examples/ml/heat3d` (`linalg:` stencil) | 200,051 | 157,623 (-21.2%) | 0.03 s either way (too short to resolve) |
-| the whole `ci-spec.yaml` corpus (319 cases) | 6,070,518 | 5,040,437 (-17.0%) | 2,132 output lines, byte-identical, exit 0 at both |
+| `examples/db/postgres-hello` (`--component`) | 8,024,998 | 6,384,099 (**-20.4%**) | — |
+| `examples/asdf/ironclad-demo` (SHA-256/HMAC/PBKDF2, 4096 rounds) | 2,078,195 | 1,562,816 (-24.8%) | 1.38 s -> 5.21 s (**3.8x**) |
+| `examples/ml/nn-vec` (`vec:` kernels) | 271,233 | 214,169 (-21.0%) | 1.07 s -> 1.26 s (+18%) |
+| `examples/ml/mlp` (float, no `vec:`) | 159,747 | 125,496 (-21.4%) | 5.58 s -> 6.06 s (+9%) |
+| `examples/ml/heat3d` (`linalg:` stencil) | 182,689 | 140,240 (-23.2%) | 0.03 s either way (too short to resolve) |
+| the whole `ci-spec.yaml` corpus (321 cases) | 6,073,627 | 5,038,076 (-17.0%) | 2,132 output lines, byte-identical, exit 0 at both |
+
+(Sizes re-measured after the string/type shake below; the run-time column is unchanged
+by it — neither pass touches what the module computes.)
 
 The run-time column is why the level must be asked for and why the docs carry it beside the size one. Note what the spread says: the SIZE win barely varies (-17% to -25% across every program measured, library-heavy or not), while the run-time price varies more than thirtyfold (+9% to +280%), because only INTEGER arithmetic fuses -- a `vec:`/`linalg:` kernel pays it on its loop indices, an ironclad round pays it on every operation. So the level's cost cannot be stated as one number, and a program that is not integer-hot gets the size win nearly free.
 
 ### Why the two trades are ONE level and not two switches
 
-Measured on `postgres-hello --component`, all four combinations:
+Measured on `postgres-hello --component`, all four combinations. The absolute bytes here
+predate the string/type shake below (the two off-diagonal rows need a debug switch and a
+throwaway patch to reproduce, so the set is kept as one self-consistent session); the
+ratios are the point and the shake moves every row alike:
 
 | fusion | unboxed locals | bytes | vs default |
 | --- | --- | --- | --- |
@@ -50,9 +56,44 @@ The separate savings sum to 24.9 points against 20.2 combined, so they overlap �
 
 ## WASM
 
-A **post-pass relocating tree-shaker** (`am.ik.wasm.WasmTreeShaker`, language-independent) runs on the finished **core module** bytes in `WasmLispCompiler.compile` just before returning — **including under `--component`**, where it runs right after `WasmImportInjector.inject` and before the component wrapper is built (see "Why the component path is safe" below; it was skipped there until todo-259, on a constraint that turned out not to exist). It parses the module sections, builds a call graph from the actual `call` (and `ref.func`) immediates in every body, computes the functions reachable from the roots (exported functions + `_start`/start section), drops the rest **including unused WASI function imports**, and renumbers every surviving function reference. Reachability is exact, not a manual table: when `eval`/`load`/`apply` is used, the dispatch bodies contain real `call`s to every registered function, so nothing dynamically-reached is pruned. It only renumbers **function** indices — type/memory/global sections are copied verbatim, so type indices (and the GC rec-group layout) stay stable. This is the one place the fixed-index invariant is deliberately broken, and only because every `call` site is rewritten in lockstep.
+A **post-pass relocating tree-shaker** (`am.ik.wasm.WasmTreeShaker`, language-independent) runs on the finished **core module** bytes in `WasmLispCompiler.compile` just before returning — **including under `--component`**, where it runs right after `WasmImportInjector.inject` and before the component wrapper is built (see "Why the component path is safe" below; it was skipped there until todo-259, on a constraint that turned out not to exist). It parses the module sections, builds a call graph from the actual `call` (and `ref.func`) immediates in every body, computes the functions reachable from the roots (exported functions + `_start`/start section), drops the rest **including unused WASI function imports**, and renumbers every surviving function reference. Reachability is exact, not a manual table: when `eval`/`load`/`apply` is used, the dispatch bodies contain real `call`s to every registered function, so nothing dynamically-reached is pruned. It renumbers **function** AND **type** indices (see the next section; the memory and global sections keep their own index spaces untouched). This is the one place the fixed-index invariant is deliberately broken, and only because every reference site is rewritten in lockstep.
 
-### Owned data segments (todo-268 groundwork, landed 2026-08-06)
+### Type section (todo-268, 2026-08-06)
+
+The type section used to be copied verbatim, which cost every module the whole fixed table
+(60 entries / 578 B — every runtime struct, array and helper signature) however little of
+the runtime survived. The same forward walk that finds the `call` immediates now records
+every **type** immediate too, so unreferenced definitions go and the survivors renumber:
+
+- **roots** — the function-section entry of each surviving defined function, each surviving
+  function import's `typeidx`, every tag (the tag section is copied verbatim, so its type
+  is always live), the global section's value types and initializer expressions, and every
+  type immediate in a surviving body: GC-op `typeidx`es, `ref.test`/`ref.cast`/`ref.null`
+  heap types, block types and the locals' declarations;
+- **edges** — the type-to-type references inside the type section itself: a struct/array
+  field's `(ref null $t)`, a func type's params/results, a `sub` clause's supertypes;
+- **a `rec` group is atomic.** Its members take consecutive indices, and its structural
+  identity under wasm-GC canonicalization is a property of the whole group — which is
+  exactly what makes `ref.test $limbs` (`array (mut i32)` inside the `[limbs, bigint]`
+  pair) discriminate against `TYPE_I32ARR` (the same `array (mut i32)` inside the
+  `[i8arr, i16arr, i32arr]` triple). Naming one member keeps them all, and then every
+  member's own references are live too.
+
+Encoding matters on the way back out: a `typeidx` immediate is an unsigned LEB, a
+`heaptype`/blocktype is a signed s33 whose NEGATIVE values are the abstract shorthands
+(`eq`, `i31`, …) and name no definition — `WasmTreeShaker.RefKind` carries which, and only
+non-negative heap types become rewritable references. Two decoder gaps were closed in the
+same pass, both "throw rather than emit a corrupt module": a `table`/`element` section
+(reference types and function indices this pass does not renumber) and the four GC ops
+carrying a `dataidx`/`elemidx` (`array.new_data` & co.) — the pass DROPS data segments, so
+silently accepting one would corrupt the module. The backend emits none of them.
+
+`(print "Hello World!")` at `--optimize`: 60 type entries / 578 B -> 7 entries / 79 B.
+Pinned by `WasmTreeShakerTest.dropsTypesTheSurvivorsNoLongerName` and
+`keepsTheTypesAnEhModeModuleStillNames`, plus `WasmTreeShakerCorpusTest`, which runs
+`wasm-tools validate` over the whole `ci-spec.yaml` corpus in both WASI modes.
+
+### Owned data segments (landed 2026-08-06)
 
 The data section is copied verbatim EXCEPT for segments the compiler declares as owned:
 `WasmTreeShaker.OwnedDataSegment(segmentIndex, ownerFuncIndices)` names a segment whose
@@ -68,6 +109,53 @@ indices are shifted by the injected host-import count because the shake runs aft
 reachable reads; segment indices carry no other references because the backend emits no
 bulk-memory ops. Pinned by `WasmTreeShakerTest.orphanedCaseFoldTableSegmentsAreDropped`.
 
+### String blob: droppable ranges (todo-268, 2026-08-06)
+
+One segment holds the whole `StringTable` blob, so whole-segment ownership cannot express
+it: the builtin WRAPPER bodies Pass 2a compiles intern their literals — `FIND-PACKAGE`'s
+package-alias alist (`expandRuntimeFindPackage` over `PackageResolver.runtimePackageTable()`)
+alone was ~676 B of a hello module's 871 B — and the shaker then deletes the wrappers,
+leaving the bytes behind. `WasmTreeShaker.DroppableDataRange(segmentIndex, start, end)` is
+the sub-segment form: the pass cuts the range out and re-emits the segment as one active
+segment per surviving run, **each at the address it already had**, so nothing relocates and
+no reference is rewritten.
+
+Which ranges die is decided by OBSERVATION, not by a declared owner — the same choice the
+call graph makes: a range survives when any SURVIVING body (or a global initializer) holds
+an `i32.const` in `[address, address + length]` (the closed interval, so an interior or
+one-past-the-end pointer keeps its range). A linear-memory reference is an
+indistinguishable `i32.const`, and that cuts the safe way here: an unrelated constant
+landing in a range only KEEPS bytes. This is why a declared-owner scheme was NOT used —
+attribution would have to be right at all ~20 `addString` call sites and at every emitter
+that bakes a cached `entry.offset()` into a body other than the one that interned it,
+whereas the scan reads what the module actually contains.
+
+What the scan cannot see is a citation from DATA, so the COMPILER decides candidacy, and
+the rule is a window rather than a list: `StringTable.attributing(true/false)` brackets
+passes 2a-2c (defun bodies, the top level, lambda bodies), where a body's own `i32.const`
+is the only consumer of what it interns. Interning a string with the window CLOSED retracts
+its candidacy for good, whichever came first — and that is exactly what every blob-citing
+caller does: the instance-layout blob (built BEFORE Pass 2a), the `_lookup` registry rows
+(`stringTable.addString(defun.name)` after it), the `eval` special-form offsets, the
+reader's char-name and struct-directory tables. The one blob that cites EVERY entry is the
+runtime intern table (`buildInternBlob` over `stringTable.entries()`, scanned by `_intern`
+on offset equality), so a program with `usesIntern` offers no candidates at all —
+`WasmLispCompiler.compile`, "stringRanges".
+
+**Re-evaluation trigger:** the `usesIntern` bail is the coarse half. It could become
+per-entry (drop a range when `_intern` itself is unreachable, or filter the intern blob's
+rows post-shake), but `usesIntern` and a live `_intern` almost always coincide, so it was
+not worth the machinery; revisit only with numbers showing a program that interns AND has a
+large dead-wrapper string set.
+
+`(print "Hello World!")` at `--optimize`: data 909 B -> 168 B, module 1,886 B -> **645 B**.
+A program on the same gate that reaches the runtime `find-package` keeps the alist. Pinned
+by `WasmTreeShakerTest.dropsStringsOnlyDeadBodiesInterned` /
+`keepsEveryStringAProgramCanInternAtRunTime`, and behaviorally by
+`WasmLispCompilerIntegrationTest.optimizedProgramKeepsEveryStringALiveBodyStillAddresses`
+plus `optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo` — a differential run, because
+a wrongly-cut range prints garbage rather than trapping.
+
 ### Literal print specialization (same session)
 
 `(print <string-literal|integer-literal>)` (no stream argument) does not call
@@ -82,15 +170,17 @@ reachability: the generic printer's integer arm alone pins the whole bignum prin
 prints literals, all of it now shakes out. An escape-free string literal's rendered form
 re-uses the literal's own interned bytes, so the fold costs no data.
 
-**Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47):
-Preview 1 `--optimize` 22,355 -> **1,886 bytes** (the two changes: -16,368 data,
--4,078 code); `--component` 29,430 -> **8,930** (shaken core 1,893 + the P1 adapter
-module 3,624 + component metadata — the adapter/surface half is `.todo/268`'s third
-section). What remains in the P1 module is dominated by the verbatim-copied type section
-(578 B) and the string blob (871 B, ~78% of it the FIND-PACKAGE wrapper's package-alias
-table interned by Pass 2a before the wrapper dies) — both are `.todo/268`.
+**Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47), the four
+changes above in the order they landed — the case-fold segment split and the literal-print
+fold, then the type section and the string blob:
+Preview 1 `--optimize` 22,355 -> 1,886 -> **645 bytes** (the first two: -16,368 data,
+-4,078 code; the last two: the type section 578 -> 79 B and the data section 909 -> 168 B);
+`--component` 29,430 -> 8,930 -> **7,690**
+(shaken core 653 + the P1 adapter module 3,624 + the shared-memory module 158 + ~3.2 KB of
+component types/imports/aliases). The component floor is now almost entirely the adapter
+and the fixed WASI surface, which is `.todo/270`.
 
-**Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops ~26 KB -> ~1.3 KB. Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
+**Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops 337,744 -> 3,804 bytes (2026-08-06). Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
 
 ### Why the component path is safe (todo-259)
 

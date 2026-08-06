@@ -2344,6 +2344,70 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void optimizedProgramKeepsEveryStringALiveBodyStillAddresses() throws Exception {
+		// --optimize cuts out of the string blob every range no surviving body holds an
+		// i32.const for -- the builtin wrappers Pass 2a compiles intern their literals
+		// and the shaker then deletes the wrappers. The names below are interned by
+		// wrapper bodies too (STRING, LIST, the sequence keywords), so a cut that used
+		// the wrong owner would print garbage or an empty symbol rather than trap.
+		// Symbol identity is offset equality, so the eq tests pin that the survivors
+		// kept their addresses.
+		String program = """
+				(defun tag (x) (cond ((eq x 'alpha) "A") ((eq x 'beta) "B") (t "?")))
+				(print (tag 'alpha))
+				(print (tag 'gamma))
+				(print '(string list alpha))
+				(print (concatenate 'string "n=" "7"))
+				(print (subseq "abcdef" 1 3))
+				""";
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+			.compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
+				path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("""
+				"A"
+				"?"
+				(STRING LIST ALPHA)
+				"n=7"
+				"bc\"""");
+	}
+
+	@Test
+	void optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo() throws Exception {
+		// A dropped byte range that a live body still reads shows up as WRONG OUTPUT,
+		// not as a trap, so the guard has to be a differential run rather than a
+		// validity check. Each program below prints values whose text comes out of the
+		// string blob (symbols, strings, struct/keyword printing, a format control, a
+		// hash-table key) on a shape where the funcall-dispatch gate applies -- a
+		// program that interns at run time offers no droppable ranges at all.
+		List<String> programs = List.of("(print (list 'a \"b\" #\\c :d 1/2 2.5 (list 1 2)))",
+				"(defstruct pt x y) (let ((p (make-pt :x 1 :y 2))) (print p) (print (pt-x p)))",
+				"(print (format nil \"~a/~s/~d\" 'sym \"str\" 42))",
+				"(print (mapcar #'string-upcase (list \"ab\" \"cd\")))",
+				"(print (assoc \"b\" (list (cons \"a\" 1) (cons \"b\" 2)) :test #'equal))",
+				"(print (handler-case (error \"boom\") (error (e) 'caught)))",
+				"(let ((h (make-hash-table :test 'equal))) (setf (gethash \"k\" h) 'v) (print (gethash \"k\" h)))",
+				"(print (with-output-to-string (s) (princ 'hello s) (princ \" \" s) (princ 42 s)))");
+		for (String program : programs) {
+			List<LispVal> parsed = LispReader.readAllFromString(program);
+			String plain = runOptimizeLevel(parsed, OptimizeLevel.NONE);
+			String optimized = runOptimizeLevel(parsed, OptimizeLevel.DEFAULT);
+			assertThat(optimized).as("--optimize changed the output of: %s", program).isEqualTo(plain);
+		}
+	}
+
+	private static String runOptimizeLevel(List<LispVal> program, OptimizeLevel optimize) throws Exception {
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, optimize).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y",
+				path("test.wasm"));
+		assertThat(result.getExitCode()).as("exit code at %s\nstderr: %s", optimize, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
 	void optimizedEvalProgramResolvesDynamically() throws Exception {
 		// A program using eval keeps the interpreter + dispatch reachable; --optimize
 		// must
