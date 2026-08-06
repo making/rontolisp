@@ -13,7 +13,10 @@ writes are sent immediately (`write-line` flushes per line), and `read-line`
 returns `nil` once the peer has closed the connection. A socket carries BYTES:
 `write-string` puts the string's UTF-8 bytes on the wire and `read-char` reads
 one character back out of them, so `read-byte` and `read-char` can be mixed on
-the same handle. The printing functions (`print`, `princ`, `format`) do not
+the same handle. At end of stream the reads follow their own Common Lisp
+defaults: `read-char` and `read-byte` signal `end-of-file` unless you pass the
+eof arguments — `(read-char sock nil :eof)` yields `:eof` — while `read-line`
+answers `nil`, as it does on a file. The printing functions (`print`, `princ`, `format`) do not
 take a socket; render with `(format nil ...)` and send the result with
 `write-line` or `write-string`.
 

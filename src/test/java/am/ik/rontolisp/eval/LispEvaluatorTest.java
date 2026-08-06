@@ -5992,6 +5992,18 @@ class LispEvaluatorTest {
 				    (end-of-file () :signalled)))
 				""";
 		assertThat(eval(signalling).print()).isEqualTo(":SIGNALLED");
+		// The bare read-byte carries the same eof-error-p t default, and the component
+		// answers the same (componentTcpBareReadCharSignalsAtPeerClose).
+		String bareByte = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (handler-case (read-byte server)
+				    (end-of-file () :signalled)))
+				""";
+		assertThat(eval(bareByte).print()).isEqualTo(":SIGNALLED");
 	}
 
 	@Test

@@ -9078,6 +9078,62 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void componentTcpBareReadCharSignalsAtPeerClose() throws Exception {
+		// A bare (read-char sock) / (read-byte sock) after peer close carries CL's
+		// default eof-error-p t, so it SIGNALS end-of-file -- the same contract the
+		// interpreter and the JVM have
+		// (LispEvaluatorTest#tcpReadCharAtPeerCloseHonoursTheEofArguments,
+		// JvmLispCompilerTest#compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments)
+		// and the same the component's own non-socket designators have. The socket
+		// reads underneath still answer nil at EOF -- the eof test lives in the two
+		// dispatch entries the bare shape reaches, the sync %io-read-char and the
+		// async-promoted %read-char-future -- so BOTH contexts are pinned here: a
+		// defun body (sync dispatch) and the async top level (await promotion).
+		// read-line is the read that keeps answering nil at peer close, because
+		// rontolisp's read-line defaults eof-error-p to nil.
+		String program = """
+				(defun run-sync ()
+				  (let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				         (port (rontolisp:tcp-local-port listener))
+				         (client (rontolisp:tcp-connect "127.0.0.1" port))
+				         (server (rontolisp:tcp-accept listener)))
+				    (close client)
+				    (print (read-char server nil :eof))
+				    (print (handler-case (read-char server)
+				             (end-of-file () :signalled)
+				             (error (e) :other)))
+				    (print (handler-case (read-byte server)
+				             (end-of-file () :signalled)
+				             (error (e) :other)))
+				    (print (read-line server))
+				    (close server)
+				    (close listener)))
+				(run-sync)
+				(let* ((l2 (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (c2 (rontolisp:tcp-connect "127.0.0.1" (rontolisp:tcp-local-port l2)))
+				       (s2 (rontolisp:tcp-accept l2)))
+				  (close c2)
+				  (print (read-char s2 nil :eof))
+				  (print (handler-case (read-char s2)
+				           (end-of-file () :signalled)
+				           (error (e) :other)))
+				  (print (handler-case (read-byte s2)
+				           (end-of-file () :signalled)
+				           (error (e) :other)))
+				  (print (read-line s2))
+				  (close s2)
+				  (close l2))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/tcp-readchar-eof.component.wasm");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
+				"tcp=y", "-S", "inherit-network=y", "/tmp/tcp-readchar-eof.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim())
+			.isEqualTo(":EOF\n:SIGNALLED\n:SIGNALLED\nNIL\n:EOF\n:SIGNALLED\n:SIGNALLED\nNIL");
+	}
+
+	@Test
 	void componentTcpGrayStreamsFallThroughShapesReachTheSocketDispatch() throws Exception {
 		// GrayStreamsLibrary.process runs BEFORE the component socket rewrite
 		// and normalizes every possibly-CLOS-instance stream call site onto its
@@ -9267,6 +9323,28 @@ class WasmLispCompilerIntegrationTest {
 				"printf 'alpha\\nbeta\\ngamma\\n' | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-echo.component.wasm");
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo("\"alpha\"\n\"beta\"\n\"gamma\"");
+	}
+
+	@Test
+	void componentAsyncStdinBareReadCharSignalsTheEndOfFileClass() throws Exception {
+		// The stdin arm of the same bare-read-char contract the socket arm has
+		// (componentTcpBareReadCharSignalsAtPeerClose): at EOF it signals, and with the
+		// end-of-file CLASS -- a look-alike message would leave handler-case unable to
+		// catch what the interpreter and the JVM let it catch.
+		String program = """
+				(rontolisp:async-defun main ()
+				  (print (read-char))
+				  (print (handler-case (read-char)
+				           (end-of-file () :signalled)
+				           (error (e) :other))))
+				(rontolisp:await (main))
+				""";
+		byte[] componentBytes = compileFetchComponent(program);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/stdin-readchar-eof.component.wasm");
+		ExecResult result = wasmtime.execInContainer("sh", "-c",
+				"printf 'A' | wasmtime run -W gc=y -W exceptions=y /tmp/stdin-readchar-eof.component.wasm");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("#\\A\n:SIGNALLED");
 	}
 
 	@Test

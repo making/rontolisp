@@ -103,12 +103,16 @@
 
 (rontolisp:async-defun rontolisp::%stdin-read-char-or-raw-f (s)
   ;; The native read-char's 0/1-arg form signals at EOF (eof-error-p defaults
-  ;; to t), so the stdin path must too -- message parity with the interpreter.
+  ;; to t), so the stdin path must too -- and with the SAME condition CLASS the
+  ;; native lowering uses (LispMacroExpander.endOfFileSignal), not merely a
+  ;; look-alike message: a (handler-case (read-char) (end-of-file () ...)) has to
+  ;; catch it here exactly as it does on the interpreter and the JVM. The socket
+  ;; arm of %read-char-future signals the same class for the same reason.
   (let ((in (or s *standard-input*)))
     (if (integerp in)
         (rontolisp::%read-char-raw in)
         (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))
-          (if c c (error "read-char: end of file"))))))
+          (if c c (error 'end-of-file))))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-byte-or-raw-f (s)
   ;; read-byte has NO stdin designator (a stream argument is mandatory and must

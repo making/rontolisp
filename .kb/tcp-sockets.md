@@ -415,17 +415,29 @@ External state (a PostgreSQL row) survives; a defvar does not.
   (`LispEvaluatorTest#tcpCharacterOpsOnSocket`), the JVM
   (`JvmLispCompilerTest#compileAndRunTcpCharacterOpsOnSocket`) and the component
   (`componentTcpBinaryBytesAreWireTransparent`, the same wire bytes).
-  **The one edge that still differs: a bare `(read-char sock)` AT PEER CLOSE.**
-  The interpreter and the JVM signal `end-of-file` (CL's default `eof-error-p`
-  t, the same contract their file streams have); the component answers `nil`,
-  because its socket reads all answer nil at EOF and `%io-read-char` hands that
-  through. The eof-CARRYING shape agrees everywhere -- `(read-char sock nil
-  :eof)` is `:eof` on all three (`%io-read-char-eof` signals the same
-  `end-of-file` class), which is the shape the Gray-streams fall-through arm and
-  every real driver spell. Closing the gap means deciding whether a component
-  socket read follows CL's signalling `read-char` or the lite nil convention its
-  `read-line` already follows, and doing it on BOTH the sync `%io-read-char`
-  and the async-promoted `%read-char-future`: `.todo/265`.
+  **A bare `(read-char sock)` / `(read-byte sock)` AT PEER CLOSE signals
+  `end-of-file` on all three** (CL's default `eof-error-p` t, the same contract
+  their file streams have, and the same the component's own non-socket
+  designators have). The component was the odd one out until 2026-08-06 -- its
+  socket reads all answer nil at EOF and the bare shapes handed that through --
+  and the fix had to land on BOTH entries a bare shape reaches: the
+  async-promoted `%read-char-future` / `%read-byte-future` (whose socket arms now
+  turn a nil read into `(error 'end-of-file)`) and the sync `%io-read-char` /
+  `%io-read-byte`, which inherit it by forcing those same futures. The nil
+  convention stays BELOW those entries, in `%sock-read-char-f` /
+  `%sock-read-byte-f`, because `%read-char-eof-future` /
+  `%read-byte-eof-future` need the raw nil to apply the CALLER's eof arguments
+  -- `(read-char sock nil :eof)` is `:eof` on all three, the shape the
+  Gray-streams fall-through arm and every real driver spell. `read-line` is the
+  one read that still answers nil at peer close everywhere, and only because
+  rontolisp's `read-line` defaults `eof-error-p` to nil (the todo that closed
+  this gap scoped only `read-char`; `read-byte` had the identical divergence,
+  from the identical hand-through, and was fixed in the same pass rather than
+  left to re-trap). Pinned by
+  `LispEvaluatorTest#tcpReadCharAtPeerCloseHonoursTheEofArguments`, its JVM twin
+  `compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments`, and
+  `componentTcpBareReadCharSignalsAtPeerClose` (which pins the sync defun body
+  and the async top level separately -- they take different dispatch entries).
 - **The two rewrites MEET in an async body, and the `%` prefix is a naming
   convention there, not a marker of specialness**: a write is never promoted,
   so it takes the `%io-*` dispatch head even in async context, while a read in

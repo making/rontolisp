@@ -301,15 +301,27 @@
         (rontolisp:await (rontolisp::%stdin-read-line-or-raw-f s)))))
 
 (rontolisp:async-defun rontolisp::%read-char-future (&optional s)
+  ;; The BARE (read-char s) carries CL's default eof-error-p t, so the socket arm
+  ;; turns the read's nil-at-EOF into the same end-of-file signal the interpreter,
+  ;; the JVM and this backend's own non-socket designators give -- read-line is the
+  ;; one that answers nil at peer close, and only because rontolisp's read-line
+  ;; defaults eof-error-p to nil. The nil convention stays BELOW this entry
+  ;; (%sock-read-char-f keeps it) because %read-char-eof-future needs the raw nil to
+  ;; apply the caller's own eof arguments. The stdin arm already signals.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (rontolisp:await (rontolisp::%sock-read-char-f e))
+        (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
+          (if c c (error 'end-of-file)))
         (rontolisp:await (rontolisp::%stdin-read-char-or-raw-f s)))))
 
 (rontolisp:async-defun rontolisp::%read-byte-future (&optional s)
+  ;; Same eof contract as %read-char-future above, for the same reason: a bare
+  ;; (read-byte s) carries eof-error-p t, and %read-byte-eof-future is where the
+  ;; caller's own eof arguments are applied to the raw nil.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
-        (rontolisp:await (rontolisp::%sock-read-byte-f e))
+        (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
+          (if b b (error 'end-of-file)))
         (rontolisp:await (rontolisp::%stdin-read-byte-or-raw-f s)))))
 
 ;;; The stream DESIGNATOR is resolved HERE, before the nil test: an omitted

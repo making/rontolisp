@@ -7123,6 +7123,17 @@ class JvmLispCompilerTest {
 				  (print (handler-case (read-char server)
 				           (end-of-file () :signalled))))
 				""")).isEqualTo(":SIGNALLED");
+		// The bare read-byte carries the same eof-error-p t default, and the component
+		// answers the same (componentTcpBareReadCharSignalsAtPeerClose).
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (print (handler-case (read-byte server)
+				           (end-of-file () :signalled))))
+				""")).isEqualTo(":SIGNALLED");
 	}
 
 	@Test

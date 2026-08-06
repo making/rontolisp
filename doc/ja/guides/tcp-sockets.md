@@ -11,7 +11,10 @@
 閉じると `read-line` は `nil` を返します。ソケットが運ぶのはバイトです:
 `write-string` は文字列のUTF-8バイトをワイヤーに書き出し、`read-char` はそこから
 1文字を読み戻すため、同じハンドルに対して `read-byte` と `read-char` を混在
-させられます。出力関数 (`print`、`princ`、`format`) はソケットを受け取りません。
+させられます。ストリーム終端での挙動はそれぞれのCommon Lispの既定に従います:
+`read-char` と `read-byte` はeof引数を渡さない限り `end-of-file` をシグナルし
+(`(read-char sock nil :eof)` なら `:eof` を返します)、`read-line` はファイルの
+場合と同じく `nil` を返します。出力関数 (`print`、`princ`、`format`) はソケットを受け取りません。
 `(format nil ...)` で文字列を作り、`write-line` または `write-string` で
 送信してください。
 
