@@ -8,11 +8,13 @@ plus the address accessors `tcp-local-address` (handle) / `tcp-peer-address`
 password port &optional host) and `tls-listen-pem` (cert-file key-file port
 &optional host; all three interpreter/JVM only, see below), that return
 **bidirectional stream handles in the same handle space as file streams**, so
-the standard stream built-ins (`read-line`, `write-line`, `read-byte`,
-`write-byte`, `close`) work on sockets unchanged on every backend --
-`write-string` / `write-char` / `read-char` on a socket answer on the
-`--component` backend ONLY (`.todo/264`; the bullet near the end of "The
-component mechanics" has the mechanism). Blocking,
+the standard stream built-ins (`read-line`, `write-line`, `write-string`,
+`write-char`, `read-char`, `read-byte`, `write-byte`, `close`) work on sockets
+unchanged on every backend -- the character three joined the list on the
+interpreter and the JVM in todo-264 (they were component-only before; the
+bullet near the end of "The component mechanics" has the mechanism and the ONE
+edge that still differs). The print family (`print`/`princ`/`prin1`/`format` to
+a socket) is deliberately NOT part of that surface on any backend. Blocking,
 synchronous API (no promises) -- except that on `--component` a read inside an
 ASYNC body is promoted to a real suspension point (below). Reads are
 byte-at-a-time (no readahead buffer is held between calls) on the
@@ -35,17 +37,29 @@ matches fetch: interpreter/JVM signal, the WASM component returns `nil`.
   stream section because the handle table is a local there): the raw
   `java.net.Socket` / `ServerSocket` is stored directly in the
   `Map<Long, Closeable> streams` table (`close` needs no special case); the
-  stream built-ins branch on `instanceof Socket`. `SocketSupport` is the web
+  stream built-ins branch on `instanceof Socket` (the `socketEntry` helper next
+  to `emitTo`, applied to the ALREADY-resolved designator).
+  `SocketSupport.writeString`/`readChar` are the todo-264 additions.
+  `SocketSupport` is the web
   substitution seam — `src/web/java/.../Target_SocketSupport.java` makes every
   operation signal "not supported in the browser playground".
 - **JVM** (`JvmTcpCompiler` dispatch + `JvmSocketRuntimeBuilder` emitting
   `_tcpConnect`/`_tcpListen`/`_tcpAccept`/`_tcpLocalPort` plus
-  `_addStream`/`_sockReadLine`/`_sockWriteLine`): the `_streams` entry is the
+  `_addStream`/`_sockReadLine`/`_sockWriteLine`/`_sockWriteString`/
+  `_sockReadChar`): the `_streams` entry is the
   raw `Socket`/`ServerSocket`. `JvmIoRuntimeBuilder` takes a nullable
   `SocketRuntime` and grows `instanceof Socket` branches in
-  `_writeLine`/`_readLineStream`/`_readByte`/`_writeByte`/`_closeStream` ONLY
+  `_writeLine`/`_readLineStream`/`_writeString`/`_readChar`/`_readByte`/
+  `_writeByte`/`_closeStream` ONLY
   when the program uses a tcp built-in (`usesTcp` in `JvmLispCompiler`) —
-  non-socket programs keep byte-identical stream runtime bodies.
+  non-socket programs keep byte-identical stream runtime bodies (which is why
+  the two arms that need an extra local raise `maxLocals` only in that mode).
+  **The `_writeString` arm is deliberately NOT in `_writeStr`**, the sink
+  `_writeString` shares with the print family: `print`/`princ` to a socket has
+  no dispatch on `--component` (it would reach the native `fd_write` on a
+  socket fd and trap), so putting the branch one level down would ship a
+  program that works on two backends and traps on the third. Same reason the
+  interpreter's arm sits in the `write-string` built-in and not in `emitTo`.
 - **WASM**: component-only (Preview 1 lowers each tcp call site to a
   CALL-TIME error via `LispMacroExpander.callTimeUnsupportedStub` -- since
   2026-07-28/todo-195, so a spliced library whose socket layer is dead code
@@ -385,21 +399,33 @@ External state (a PostgreSQL row) survives; a defvar does not.
   written. `StdinLibraryTest#theTwoDispatchSplicesDefineTheSameNamesAndShapes`
   compares the two name -> (required/optional) maps so the next widening cannot
   land in one file only.
-- **`write-string` / `write-char` / `read-char` on a socket work on the
-  component and NOT on the interpreter or the JVM** (measured 2026-08-05): the
-  interpreter's `write-string` destination resolver signals `not an output stream`
-  and the JVM's `_writeStr` casts the table entry to `java.io.Writer` (the
-  `instanceof Socket` branches `JvmIoRuntimeBuilder` grows cover
-  `_writeLine`/`_readLineStream`/`_readByte`/`_writeByte`/`_closeStream` only),
-  while `read-char` needs a `BufferedReader` the socket table entry is not. The
-  component reaches all three through `%io-write-string` / `%io-read-char`. The
-  divergence is PRE-EXISTING and points the safe way (the component works; the
-  other two error rather than corrupt), which is why todo-263 widened the
-  component side anyway instead of narrowing it. Re-evaluation trigger and the
-  fix sketch: `.todo/264`. Until then the socket surface that is real on all four
-  backends is the one listed at the top of this file
-  (`read-line`/`write-line`/`read-byte`/`write-byte`/`close`, plus the sequence
-  ops).
+- **`write-string` / `write-char` / `read-char` on a socket: real on all four
+  backends since todo-264** (they were component-only, through
+  `%io-write-string` / `%io-read-char`, until 2026-08-06). The interpreter and
+  the JVM grew the matching arms (see their bullets above); `write-char` needed
+  none of its own anywhere, because it lowers to `write-string` on every backend
+  (`LispMacroExpander.expandWriteChar`), and neither did the bounded
+  `write-string ... :start :end` (`lowerWriteStringBounds`). All three
+  interpret a socket read/write as BYTES on the wire, so `read-char` assembles
+  ONE UTF-8 sequence byte-wise -- never through a `Reader`/decoder that would
+  buffer ahead and swallow bytes a following `read-byte`/`read-line` owes the
+  caller -- and an invalid lead byte stands alone and decodes to U+FFFD on all
+  three. The cross-backend pin is one program answering
+  `(65 195 135 66 504 90 121)` on the interpreter
+  (`LispEvaluatorTest#tcpCharacterOpsOnSocket`), the JVM
+  (`JvmLispCompilerTest#compileAndRunTcpCharacterOpsOnSocket`) and the component
+  (`componentTcpBinaryBytesAreWireTransparent`, the same wire bytes).
+  **The one edge that still differs: a bare `(read-char sock)` AT PEER CLOSE.**
+  The interpreter and the JVM signal `end-of-file` (CL's default `eof-error-p`
+  t, the same contract their file streams have); the component answers `nil`,
+  because its socket reads all answer nil at EOF and `%io-read-char` hands that
+  through. The eof-CARRYING shape agrees everywhere -- `(read-char sock nil
+  :eof)` is `:eof` on all three (`%io-read-char-eof` signals the same
+  `end-of-file` class), which is the shape the Gray-streams fall-through arm and
+  every real driver spell. Closing the gap means deciding whether a component
+  socket read follows CL's signalling `read-char` or the lite nil convention its
+  `read-line` already follows, and doing it on BOTH the sync `%io-read-char`
+  and the async-promoted `%read-char-future`: `.todo/265`.
 - **The two rewrites MEET in an async body, and the `%` prefix is a naming
   convention there, not a marker of specialness**: a write is never promoted,
   so it takes the `%io-*` dispatch head even in async context, while a read in
@@ -528,7 +554,11 @@ splice). Key mechanics:
 
 ## Pinning tests
 
-`LispEvaluatorTest#tcp*` / `#usocket*`, `JvmLispCompilerTest#compileAndRunTcp*`
+`LispEvaluatorTest#tcp*` (incl. `#tcpCharacterOpsOnSocket` /
+`#tcpReadCharAtPeerCloseHonoursTheEofArguments`) / `#usocket*`,
+`JvmLispCompilerTest#compileAndRunTcp*` (incl.
+`#compileAndRunTcpCharacterOpsOnSocket` /
+`#compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments`)
 / `#compileTcpRejectsWrongArgCount` / `#compileAndRunUsocket*`,
 `WasmLispCompilerTest#tcp*` / `#usocket*` /
 `#fetchAndTcpInOneComponentProgramCompiles` / `#httpHandlerWithTcpCompilesInServeMode`,

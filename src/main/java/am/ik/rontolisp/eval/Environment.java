@@ -3695,6 +3695,14 @@ public final class Environment implements Scope {
 			}
 			return src;
 		};
+		// The socket arm of the character built-ins: a RESOLVED designator whose table
+		// entry is a raw Socket. write-string / write-char / read-char take it
+		// (.todo/264) exactly as write-line / read-line / the byte ops already did; the
+		// print family deliberately does NOT, because it has no socket dispatch on the
+		// --component backend either and a program that wrote through it here would trap
+		// there (see .kb/tcp-sockets.md).
+		java.util.function.Function<@Nullable LispVal, @Nullable Socket> socketEntry = designator -> designator instanceof LispInteger handle
+				&& streams.get(handle.value()) instanceof Socket socket ? socket : null;
 		// Routes print-family output: the destination is resolved through the designator
 		// rule above; nil or t is standard output; an integer handle selects a Writer
 		// entry in the stream table (file output streams and string streams).
@@ -3773,7 +3781,14 @@ public final class Environment implements Scope {
 			}
 			int startCU = full.offsetByCodePoints(0, start);
 			int endCU = full.offsetByCodePoints(0, end);
-			emitTo.accept(full.substring(startCU, endCU), stream);
+			String text = full.substring(startCU, endCU);
+			LispVal dest = resolveOutputDest.apply(stream);
+			Socket socket = socketEntry.apply(dest);
+			if (socket != null) {
+				SocketSupport.writeString(socket, text);
+				return str;
+			}
+			emitTo.accept(text, dest);
 			return str;
 		}));
 		env.defineFunction(LispNames.WRITE_TO_STRING, new LispFunction(LispNames.WRITE_TO_STRING, args -> {
@@ -4372,6 +4387,16 @@ public final class Environment implements Scope {
 			return src instanceof LispInteger handle
 					&& streams.get(handle.value()) instanceof HttpRequestBodyStream body ? body : null;
 		};
+		// The shared end-of-file answer of the character reads (read-char / %peek-char,
+		// every stream kind): signal unless eof-error-p is explicitly nil, in which case
+		// the eof-value -- CL's default, unlike read-line's lite nil-at-EOF convention.
+		java.util.function.Function<List<LispVal>, LispVal> charEof = args -> {
+			boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
+			if (eofError) {
+				throw endOfFile();
+			}
+			return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+		};
 		java.util.function.Function<List<LispVal>, LispVal> readChar = args -> {
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.READ_CHAR + " expects 0 to 3 arguments");
@@ -4379,24 +4404,21 @@ public final class Environment implements Scope {
 			HttpRequestBodyStream bufferedBody = bufferedBodyArg.apply(args);
 			if (bufferedBody != null) {
 				int cp = bufferedBody.readCodePoint();
-				if (cp < 0) {
-					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
-					if (eofError) {
-						throw endOfFile();
-					}
-					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
-				}
-				return new LispChar(cp);
+				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
+			}
+			// A socket entry decodes ONE UTF-8 sequence off the raw input stream: the
+			// entry is a Socket, not a Reader, and wrapping one here would read ahead and
+			// swallow bytes a following read-byte / read-line owes the caller.
+			Socket socket = socketEntry.apply(resolveInputSrc.apply(args.isEmpty() ? null : args.get(0)));
+			if (socket != null) {
+				int cp = SocketSupport.readChar(socket);
+				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
 			}
 			try {
 				Reader reader = inputReader.apply(LispNames.READ_CHAR, args);
 				int c = reader.read();
 				if (c < 0) {
-					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
-					if (eofError) {
-						throw endOfFile();
-					}
-					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+					return charEof.apply(args);
 				}
 				if (Character.isHighSurrogate((char) c)) {
 					reader.mark(1);
@@ -4426,14 +4448,7 @@ public final class Environment implements Scope {
 			HttpRequestBodyStream bufferedBody = bufferedBodyArg.apply(args);
 			if (bufferedBody != null) {
 				int cp = bufferedBody.peekCodePoint();
-				if (cp < 0) {
-					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
-					if (eofError) {
-						throw endOfFile();
-					}
-					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
-				}
-				return new LispChar(cp);
+				return (cp < 0) ? charEof.apply(args) : new LispChar(cp);
 			}
 			try {
 				Reader reader = inputReader.apply(LispNames.PEEK_CHAR, args);
@@ -4441,11 +4456,7 @@ public final class Environment implements Scope {
 				int c = reader.read();
 				if (c < 0) {
 					reader.reset();
-					boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
-					if (eofError) {
-						throw endOfFile();
-					}
-					return args.size() > 2 ? args.get(2) : LispNil.INSTANCE;
+					return charEof.apply(args);
 				}
 				if (Character.isHighSurrogate((char) c)) {
 					int low = reader.read();

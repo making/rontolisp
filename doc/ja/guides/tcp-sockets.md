@@ -6,9 +6,14 @@
 ([パッケージ](../reference/packages.md)を参照)。接続されたソケットはファイル
 ストリームと同じハンドル空間の **双方向ストリームハンドル** なので、標準の
 ストリーム関数がそのまま使えます: `read-line`、`write-line`、`write-string`、
-`read-byte`、`write-byte`、`close`。バッファリングされるファイル出力と異なり、ソケットへの
+`write-char`、`read-char`、`read-byte`、`write-byte`、`close`。バッファリングされるファイル出力と異なり、ソケットへの
 書き込みは即時に送信され (`write-line` は行ごとにフラッシュ)、相手が接続を
-閉じると `read-line` は `nil` を返します。
+閉じると `read-line` は `nil` を返します。ソケットが運ぶのはバイトです:
+`write-string` は文字列のUTF-8バイトをワイヤーに書き出し、`read-char` はそこから
+1文字を読み戻すため、同じハンドルに対して `read-byte` と `read-char` を混在
+させられます。出力関数 (`print`、`princ`、`format`) はソケットを受け取りません。
+`(format nil ...)` で文字列を作り、`write-line` または `write-string` で
+送信してください。
 
 | 関数 | 用途 |
 |----------|---------|

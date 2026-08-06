@@ -7070,6 +7070,62 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunTcpCharacterOpsOnSocket() throws Exception {
+		// write-string / write-char / read-char on a socket handle (.todo/264): the
+		// _writeString / _readChar stream helpers grow the socket arm the byte and line
+		// ops always had. Same program and same answers as
+		// LispEvaluatorTest#tcpCharacterOpsOnSocket and the component's
+		// componentTcpBinaryBytesAreWireTransparent -- 199 184 is the ONE code point
+		// U+01F8 (504), not two.
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "AÇB" client)
+				  (let* ((b1 (read-byte server))
+				         (b2 (read-byte server))
+				         (b3 (read-byte server))
+				         (b4 (read-byte server)))
+				    (write-byte 199 client)
+				    (write-byte 184 client)
+				    (let ((multi (char-code (read-char server))))
+				      (write-char #\\Z client)
+				      (write-string "xyz" client :start 1 :end 2)
+				      (let* ((ch (char-code (read-char server)))
+				             (bounded (char-code (read-char server))))
+				        (close client)
+				        (close server)
+				        (close listener)
+				        (print (list b1 b2 b3 b4 multi ch bounded))))))
+				""")).isEqualTo("(65 195 135 66 504 90 121)");
+	}
+
+	@Test
+	void compileAndRunTcpReadCharAtPeerCloseHonoursTheEofArguments() throws Exception {
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (let ((c (read-char server nil :eof)))
+				    (close server)
+				    (close listener)
+				    (print c)))
+				""")).isEqualTo(":EOF");
+		assertThat(compileAndRun("""
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (print (handler-case (read-char server)
+				           (end-of-file () :signalled))))
+				""")).isEqualTo(":SIGNALLED");
+	}
+
+	@Test
 	void compileAndRunTcpReadLineReturnsNilAfterPeerClose() throws Exception {
 		assertThat(compileAndRun("""
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))

@@ -30,11 +30,12 @@ import org.jspecify.annotations.Nullable;
  * {@link Socket} / {@link ServerSocket}. A socket is stored directly in the interpreter's
  * stream table (both types implement {@link Closeable}, so {@code close} needs no special
  * case) and the stream built-ins ({@code read-line}, {@code write-line},
- * {@code read-byte}, {@code write-byte}) dispatch to the helpers here for socket entries.
- * Reads are byte-at-a-time (no readahead buffer is held between calls) and writes go out
- * immediately, matching the compiled backends. This is the seam the browser playground
- * substitutes (see {@code src/web/java/.../eval/Target_SocketSupport.java}), where every
- * operation signals an error: the browser sandbox provides no host TCP sockets.
+ * {@code write-string}, {@code read-char}, {@code read-byte}, {@code write-byte})
+ * dispatch to the helpers here for socket entries. Reads are byte-at-a-time (no readahead
+ * buffer is held between calls) and writes go out immediately, matching the compiled
+ * backends. This is the seam the browser playground substitutes (see
+ * {@code src/web/java/.../eval/Target_SocketSupport.java}), where every operation signals
+ * an error: the browser sandbox provides no host TCP sockets.
  */
 final class SocketSupport {
 
@@ -419,6 +420,59 @@ final class SocketSupport {
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("write-line: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Writes a string (UTF-8) to a socket -- {@link #writeLine} without the newline. Like
+	 * every socket write the bytes go out immediately.
+	 * @param socket the connected socket
+	 * @param text the string to send
+	 */
+	static void writeString(Socket socket, String text) {
+		try {
+			socket.getOutputStream().write(text.getBytes(StandardCharsets.UTF_8));
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("write-string: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Reads ONE character -- a Unicode code point -- from a socket, assembling its UTF-8
+	 * sequence byte-wise off the socket's input stream. The socket entry is a raw
+	 * {@code Socket}, never a {@code Reader}, and it must stay that way: a Reader would
+	 * buffer ahead and swallow bytes a following {@code read-byte} / {@code read-line}
+	 * owes the caller. An invalid lead byte stands alone and decodes to whatever the
+	 * UTF-8 decoder yields for it (U+FFFD), which is what the component's byte-wise
+	 * {@code %sock-read-char-f} answers as well.
+	 * @param socket the connected socket
+	 * @return the code point, or -1 when the peer closed before any byte arrived
+	 */
+	static int readChar(Socket socket) {
+		try {
+			InputStream in = socket.getInputStream();
+			int b0 = in.read();
+			if (b0 < 0) {
+				return -1;
+			}
+			if (b0 < 128) {
+				return b0;
+			}
+			int continuations = (b0 < 192) ? 0 : (b0 < 224) ? 1 : (b0 < 240) ? 2 : 3;
+			ByteArrayOutputStream sequence = new ByteArrayOutputStream();
+			sequence.write(b0);
+			for (int i = 0; i < continuations; i++) {
+				int bn = in.read();
+				if (bn < 0) {
+					break;
+				}
+				sequence.write(bn);
+			}
+			return new String(sequence.toByteArray(), StandardCharsets.UTF_8).codePointAt(0);
+		}
+		catch (IOException ex) {
+			throw new LispEvalException("read-char: " + ex.getMessage());
 		}
 	}
 

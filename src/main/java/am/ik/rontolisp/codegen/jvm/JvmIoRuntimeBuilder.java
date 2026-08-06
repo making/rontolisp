@@ -707,13 +707,16 @@ final class JvmIoRuntimeBuilder {
 		ms.add(new IoMethod(this.cp.addUtf8(READ_LINE_STREAM_METHOD), this.cp.addUtf8(READ_LINE_STREAM_DESC), 4, 2,
 				buildReadLineStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(READ_BYTE_METHOD), this.cp.addUtf8(READ_BYTE_DESC), 4, 5, buildReadByte()));
-		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5, 6, buildReadChar()));
+		// The socket arms below take one extra local each (the table entry), so a
+		// socket-free program keeps the exact frame sizes it always had.
+		ms.add(new IoMethod(this.cp.addUtf8(READ_CHAR_METHOD), this.cp.addUtf8(READ_CHAR_DESC), 5,
+				this.sockets != null ? 7 : 6, buildReadChar()));
 		ms.add(new IoMethod(this.cp.addUtf8(PEEK_CHAR_METHOD), this.cp.addUtf8(PEEK_CHAR_DESC), 5, 6, buildPeekChar()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_BYTE_METHOD), this.cp.addUtf8(WRITE_BYTE_DESC), 4, 3,
 				buildWriteByte()));
 		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STR_METHOD), this.cp.addUtf8(WRITE_STR_DESC), 4, 3, buildWriteStr()));
-		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC), 4, 3,
-				buildWriteString()));
+		ms.add(new IoMethod(this.cp.addUtf8(WRITE_STRING_METHOD), this.cp.addUtf8(WRITE_STRING_DESC), 4,
+				this.sockets != null ? 4 : 3, buildWriteString()));
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_METHOD),
 				this.cp.addUtf8(MAKE_STRING_OUTPUT_STREAM_DESC), 3, 1, buildMakeStringOutputStream()));
 		ms.add(new IoMethod(this.cp.addUtf8(MAKE_STRING_INPUT_STREAM_METHOD),
@@ -2132,8 +2135,56 @@ final class JvmIoRuntimeBuilder {
 	 */
 	private List<Integer> buildReadChar() {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=r (BufferedReader), 4=c (int),
-		// 5=low (int)
+		// 5=low (int), 6=entry/char (socket programs only)
 		List<Integer> code = new ArrayList<>();
+		int ifSocketEofPos = -1;
+		if (this.sockets != null) {
+			// if (handle instanceof Long && _streams[idx] instanceof Socket) {
+			// c = _sockReadChar(entry); if (c != null) return c; goto EOF; }
+			// A socket entry is a raw Socket, never the BufferedReader the resolver
+			// below casts to -- and it must stay one: a Reader would buffer ahead and
+			// swallow bytes a following read-byte/read-line owes the caller.
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.longClass.index());
+			int ifNotHandlePos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamsField.index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.longClass.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.longValue.index());
+			code.add(Opcode.L2I);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.ASTORE);
+			code.add(6);
+			code.add(Opcode.ALOAD);
+			code.add(6);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD);
+			code.add(6);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.sockets.sockReadChar().index());
+			code.add(Opcode.ASTORE);
+			code.add(6);
+			code.add(Opcode.ALOAD);
+			code.add(6);
+			ifSocketEofPos = code.size();
+			code.add(Opcode.IFNULL);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD);
+			code.add(6);
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotHandlePos, code.size());
+			patchBranch(code, ifNotSocketPos, code.size());
+		}
 		emitResolveReader(code);
 		// READ: c = r.read();
 		code.add(Opcode.ALOAD_3);
@@ -2206,8 +2257,12 @@ final class JvmIoRuntimeBuilder {
 		patchBranch(code, ifLowEofPos, code.size());
 		patchBranch(code, gotoBoxAfterCombinePos, code.size());
 		emitBoxCodePoint(code, 4);
-		// EOF: if (eofErrorP == null) return eofValue;
+		// EOF: if (eofErrorP == null) return eofValue; -- the socket arm's nil (peer
+		// closed) lands here too, so a socket answers the same eof contract as a file.
 		patchBranch(code, ifEofPos, code.size());
+		if (ifSocketEofPos >= 0) {
+			patchBranch(code, ifSocketEofPos, code.size());
+		}
 		emitCharEof(code);
 		return code;
 	}
@@ -2549,8 +2604,45 @@ final class JvmIoRuntimeBuilder {
 	 * minus the newline.
 	 */
 	private List<Integer> buildWriteString() {
-		// Slots: 0=str, 1=handle, 2=content (String)
+		// Slots: 0=str, 1=handle, 2=content (String), 3=entry (socket programs only)
 		List<Integer> code = new ArrayList<>();
+		if (this.sockets != null) {
+			// if (handle instanceof Long && _streams[idx] instanceof Socket)
+			// return _sockWriteString(str, entry);
+			// The arm sits HERE and not in _writeStr, which the print family shares:
+			// print/princ to a socket has no dispatch on the --component backend, so
+			// widening it here only would ship a program that works on two backends and
+			// traps on the third (.kb/tcp-sockets.md, .todo/264).
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.longClass.index());
+			int ifNotHandlePos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, this.streamsField.index());
+			code.add(Opcode.ALOAD_1);
+			code.add(Opcode.CHECKCAST);
+			emitU2(code, this.longClass.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.longValue.index());
+			code.add(Opcode.L2I);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.ASTORE_3);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.INSTANCEOF);
+			emitU2(code, this.sockets.socketClass().index());
+			int ifNotSocketPos = code.size();
+			code.add(Opcode.IFEQ);
+			emitU2(code, 0);
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ALOAD_3);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, this.sockets.sockWriteString().index());
+			code.add(Opcode.ARETURN);
+			patchBranch(code, ifNotHandlePos, code.size());
+			patchBranch(code, ifNotSocketPos, code.size());
+		}
 		// content = ((String) str).substring(1, length - 1);
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);

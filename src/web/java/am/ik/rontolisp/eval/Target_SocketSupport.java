@@ -89,6 +89,16 @@ final class Target_SocketSupport {
 	}
 
 	@Substitute
+	static void writeString(Socket socket, String text) {
+		throw new LispEvalException("write-string: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
+	static int readChar(Socket socket) {
+		throw new LispEvalException("read-char: TCP sockets are not supported in the browser playground");
+	}
+
+	@Substitute
 	static int readByte(Socket socket) {
 		throw new LispEvalException("read-byte: TCP sockets are not supported in the browser playground");
 	}

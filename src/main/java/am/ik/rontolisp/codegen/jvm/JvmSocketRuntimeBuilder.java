@@ -18,11 +18,12 @@ import am.ik.jvm.Opcode;
  * ({@link JvmIoRuntimeBuilder}); the entry is the raw {@code java.net.Socket} (or
  * {@code java.net.ServerSocket} for a listener; an {@code SSLSocket} for
  * {@code tls-connect} -- a plain {@code Socket} subclass, so no extra branches), and the
- * stream built-ins dispatch on it: {@code _writeLine}/{@code _readLineStream} call the
- * {@code _sockWriteLine}/{@code _sockReadLine} helpers here (byte-at-a-time reads,
- * unbuffered writes), {@code _readByte}/{@code _writeByte} branch to the socket's
- * input/output stream, and {@code _closeStream} closes the socket directly. All methods
- * are emitted only when the program uses a tcp or tls built-in.
+ * stream built-ins dispatch on it: {@code _writeLine}/{@code _readLineStream}/
+ * {@code _writeString}/{@code _readChar} call the {@code _sockWriteLine}/
+ * {@code _sockReadLine}/{@code _sockWriteString}/{@code _sockReadChar} helpers here
+ * (byte-at-a-time reads, unbuffered writes), {@code _readByte}/{@code _writeByte} branch
+ * to the socket's input/output stream, and {@code _closeStream} closes the socket
+ * directly. All methods are emitted only when the program uses a tcp or tls built-in.
  */
 final class JvmSocketRuntimeBuilder {
 
@@ -37,7 +38,7 @@ final class JvmSocketRuntimeBuilder {
 	record SocketRuntime(List<SocketMethod> methods, ClassConstant socketClass, ClassConstant serverSocketClass,
 			MethodrefConstant socketGetInputStream, MethodrefConstant socketGetOutputStream,
 			MethodrefConstant socketClose, MethodrefConstant serverSocketClose, MethodrefConstant sockReadLine,
-			MethodrefConstant sockWriteLine) {
+			MethodrefConstant sockWriteLine, MethodrefConstant sockWriteString, MethodrefConstant sockReadChar) {
 	}
 
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
@@ -87,6 +88,14 @@ final class JvmSocketRuntimeBuilder {
 	private static final String SOCK_WRITE_LINE_METHOD = "_sockWriteLine";
 
 	private static final String SOCK_WRITE_LINE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String SOCK_WRITE_STRING_METHOD = "_sockWriteString";
+
+	private static final String SOCK_WRITE_STRING_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	private static final String SOCK_READ_CHAR_METHOD = "_sockReadChar";
+
+	private static final String SOCK_READ_CHAR_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	private final ConstantPool cp;
 
@@ -232,6 +241,12 @@ final class JvmSocketRuntimeBuilder {
 
 	private final MethodrefConstant sockWriteLineRef;
 
+	private final MethodrefConstant sockWriteStringRef;
+
+	private final MethodrefConstant sockReadCharRef;
+
+	private final MethodrefConstant stringCodePointAt;
+
 	private final ConstantPool.StringConstant quoteStr;
 
 	private final ConstantPool.StringConstant newlineStr;
@@ -374,6 +389,12 @@ final class JvmSocketRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(SOCK_READ_LINE_METHOD), cp.addUtf8(SOCK_READ_LINE_DESC)));
 		this.sockWriteLineRef = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC)));
+		this.sockWriteStringRef = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(SOCK_WRITE_STRING_METHOD), cp.addUtf8(SOCK_WRITE_STRING_DESC)));
+		this.sockReadCharRef = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(SOCK_READ_CHAR_METHOD), cp.addUtf8(SOCK_READ_CHAR_DESC)));
+		this.stringCodePointAt = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
 		this.quoteStr = cp.addString("\"");
 		this.newlineStr = cp.addString("\n");
 	}
@@ -408,9 +429,13 @@ final class JvmSocketRuntimeBuilder {
 				builder.buildSockReadLine()));
 		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_LINE_METHOD), cp.addUtf8(SOCK_WRITE_LINE_DESC), 4, 3,
 				builder.buildSockWriteLine()));
+		methods.add(new SocketMethod(cp.addUtf8(SOCK_WRITE_STRING_METHOD), cp.addUtf8(SOCK_WRITE_STRING_DESC), 4, 3,
+				builder.buildSockWriteString()));
+		methods.add(new SocketMethod(cp.addUtf8(SOCK_READ_CHAR_METHOD), cp.addUtf8(SOCK_READ_CHAR_DESC), 6, 6,
+				builder.buildSockReadChar()));
 		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.socketGetInputStream,
 				builder.socketGetOutputStream, builder.socketClose, builder.serverSocketClose, builder.sockReadLineRef,
-				builder.sockWriteLineRef);
+				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef);
 	}
 
 	/**
@@ -1029,6 +1054,206 @@ final class JvmSocketRuntimeBuilder {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.ARETURN);
 		return code;
+	}
+
+	/**
+	 * {@code _sockWriteString(Object str, Object socket) -> str}.
+	 * {@link #buildSockWriteLine} without the newline: the string content (quotes
+	 * stripped) UTF-8-encoded onto the socket, sent immediately. Reached from
+	 * {@code _writeString} -- and therefore from {@code write-char}, which lowers to
+	 * {@code write-string} on every backend.
+	 */
+	private List<Integer> buildSockWriteString() {
+		// Slots: 0=str, 1=socket, 2=content (String)
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, 0, 2);
+		// ((Socket) socket).getOutputStream().write(content.getBytes(UTF_8));
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketGetOutputStream.index());
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.utf8Field.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringGetBytes.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.outputStreamWriteBytes.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _sockReadChar(Object socket) -> Object}. One character -- a Unicode CODE
+	 * POINT boxed as {@code int[1]}, the runtime CHARACTER representation -- assembled
+	 * from its UTF-8 sequence BYTE-WISE off the socket's input stream; {@code null} (nil)
+	 * when the peer closed before any byte arrived, which {@code _readChar} turns into
+	 * its eof contract. Byte-wise is the point: the entry is a raw {@code Socket} and a
+	 * {@code Reader} wrapped around it would read ahead and swallow bytes a following
+	 * {@code read-byte}/{@code read-line} owes the caller. An invalid lead byte stands
+	 * alone and decodes to whatever the UTF-8 decoder yields for it (U+FFFD) -- the same
+	 * answer as the interpreter's {@code SocketSupport.readChar} and the component's
+	 * {@code %sock-read-char-f}.
+	 */
+	private List<Integer> buildSockReadChar() {
+		// Slots: 0=socket, 1=in (InputStream), 2=b0 (int), 3=n (int), 4=baos, 5=b (int)
+		List<Integer> code = new ArrayList<>();
+		// in = ((Socket) socket).getInputStream();
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.socketClass.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.socketGetInputStream.index());
+		code.add(Opcode.ASTORE_1);
+		// b0 = in.read(); if (b0 < 0) return null;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inputStreamRead.index());
+		code.add(Opcode.ISTORE_2);
+		code.add(Opcode.ILOAD_2);
+		int ifDataPos = code.size();
+		code.add(Opcode.IFGE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifDataPos, code.size());
+		// if (b0 >= 128) goto MULTI; return int[1]{b0};
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.SIPUSH);
+		emitU2(code, 128);
+		int ifMultiPos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		emitBoxCodePoint(code, 2);
+		// MULTI: n = b0 < 192 ? 0 : b0 < 224 ? 1 : b0 < 240 ? 2 : 3;
+		patchBranch(code, ifMultiPos, code.size());
+		emitContinuationCount(code);
+		code.add(Opcode.ISTORE_3);
+		// baos = new ByteArrayOutputStream(); baos.write(b0);
+		code.add(Opcode.NEW);
+		emitU2(code, this.baosClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.baosInit.index());
+		emitAstore(code, 4);
+		emitAload(code, 4);
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.baosWrite.index());
+		// while (n > 0) { b = in.read(); if (b < 0) break; baos.write(b); n--; }
+		int loopStart = code.size();
+		code.add(Opcode.ILOAD_3);
+		int ifDonePos = code.size();
+		code.add(Opcode.IFLE);
+		emitU2(code, 0);
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.inputStreamRead.index());
+		code.add(Opcode.ISTORE);
+		code.add(5);
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		int ifEofPos = code.size();
+		code.add(Opcode.IFLT);
+		emitU2(code, 0);
+		emitAload(code, 4);
+		code.add(Opcode.ILOAD);
+		code.add(5);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.baosWrite.index());
+		code.add(Opcode.IINC);
+		code.add(3);
+		code.add(0xFF); // -1
+		int gotoLoopPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, gotoLoopPos, loopStart);
+		patchBranch(code, ifDonePos, code.size());
+		patchBranch(code, ifEofPos, code.size());
+		// b0 = new String(baos.toByteArray(), 0, length, UTF_8).codePointAt(0);
+		code.add(Opcode.NEW);
+		emitU2(code, this.stringClassRef.index());
+		code.add(Opcode.DUP);
+		emitAload(code, 4);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.baosToByteArray.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ASTORE);
+		code.add(5);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ALOAD);
+		code.add(5);
+		code.add(Opcode.ARRAYLENGTH);
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.utf8Field.index());
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.stringInitBytes.index());
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.stringCodePointAt.index());
+		code.add(Opcode.ISTORE_2);
+		emitBoxCodePoint(code, 2);
+		return code;
+	}
+
+	/**
+	 * Emits the UTF-8 continuation count of the lead byte in slot 2 onto the stack:
+	 * {@code b0 < 192 ? 0 : b0 < 224 ? 1 : b0 < 240 ? 2 : 3} (an invalid lead byte -- a
+	 * stray continuation -- counts 0 and stands alone).
+	 */
+	private void emitContinuationCount(List<Integer> code) {
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.SIPUSH);
+		emitU2(code, 192);
+		int ifNot0Pos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		code.add(Opcode.ICONST_0);
+		int goto0Pos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNot0Pos, code.size());
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.SIPUSH);
+		emitU2(code, 224);
+		int ifNot1Pos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		code.add(Opcode.ICONST_1);
+		int goto1Pos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNot1Pos, code.size());
+		code.add(Opcode.ILOAD_2);
+		code.add(Opcode.SIPUSH);
+		emitU2(code, 240);
+		int ifNot2Pos = code.size();
+		code.add(Opcode.IF_ICMPGE);
+		emitU2(code, 0);
+		code.add(Opcode.ICONST_2);
+		int goto2Pos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifNot2Pos, code.size());
+		code.add(Opcode.ICONST_3);
+		patchBranch(code, goto0Pos, code.size());
+		patchBranch(code, goto1Pos, code.size());
+		patchBranch(code, goto2Pos, code.size());
+	}
+
+	/** Emits {@code return int[1]{slot}} -- the runtime CHARACTER representation. */
+	private static void emitBoxCodePoint(List<Integer> code, int slot) {
+		code.add(Opcode.ICONST_1);
+		code.add(Opcode.NEWARRAY);
+		code.add(10); // T_INT
+		code.add(Opcode.DUP);
+		code.add(Opcode.ICONST_0);
+		code.add(Opcode.ILOAD);
+		code.add(slot);
+		code.add(Opcode.IASTORE);
+		code.add(Opcode.ARETURN);
 	}
 
 	/** Emits {@code slot<target> = ((String) slot<src>).substring(1, length() - 1)}. */

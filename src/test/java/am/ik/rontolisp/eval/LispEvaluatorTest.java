@@ -5932,6 +5932,69 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void tcpCharacterOpsOnSocket() {
+		// write-string / write-char / read-char on a socket handle (.todo/264): the
+		// write side puts the string's UTF-8 bytes on the wire (read back one by one
+		// through read-byte), and read-char assembles ONE code point from the raw
+		// bytes -- 199 184 is U+01F8, which a per-byte decode would have split. The
+		// program is the interpreter twin of
+		// WasmLispCompilerIntegrationTest#componentTcpBinaryBytesAreWireTransparent,
+		// whose read-char half used to be component-only; the answers must agree.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (write-string "AÇB" client)
+				  (let* ((b1 (read-byte server))
+				         (b2 (read-byte server))
+				         (b3 (read-byte server))
+				         (b4 (read-byte server)))
+				    (write-byte 199 client)
+				    (write-byte 184 client)
+				    (let ((multi (char-code (read-char server))))
+				      (write-char #\\Z client)
+				      (write-string "xyz" client :start 1 :end 2)
+				      (let* ((ch (char-code (read-char server)))
+				             (bounded (char-code (read-char server))))
+				        (close client)
+				        (close server)
+				        (close listener)
+				        (list b1 b2 b3 b4 multi ch bounded)))))
+				""";
+		assertThat(eval(program).print()).isEqualTo("(65 195 135 66 504 90 121)");
+	}
+
+	@Test
+	void tcpReadCharAtPeerCloseHonoursTheEofArguments() {
+		// The socket read answers nil at peer close, and read-char turns that into the
+		// SAME eof contract a file stream gets: the 3-arg form yields the eof value,
+		// the bare form signals end-of-file.
+		String program = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (let ((c (read-char server nil :eof)))
+				    (close server)
+				    (close listener)
+				    c))
+				""";
+		assertThat(eval(program).print()).isEqualTo(":EOF");
+		String signalling = """
+				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
+				       (port (rontolisp:tcp-local-port listener))
+				       (client (rontolisp:tcp-connect "127.0.0.1" port))
+				       (server (rontolisp:tcp-accept listener)))
+				  (close client)
+				  (handler-case (read-char server)
+				    (end-of-file () :signalled)))
+				""";
+		assertThat(eval(signalling).print()).isEqualTo(":SIGNALLED");
+	}
+
+	@Test
 	void tcpReadLineReturnsNilAfterPeerClose() {
 		String program = """
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))

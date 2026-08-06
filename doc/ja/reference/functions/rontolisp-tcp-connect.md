@@ -6,6 +6,7 @@
 返します。このハンドルはファイルストリームと同じハンドル空間に属するため、標準の
 ストリーム関数がそのまま使えます: [`read-line`](read-line.md)、
 [`write-line`](write-line.md)、[`write-string`](write-string.md)、
+[`write-char`](../macros/write-char.md)、[`read-char`](read-char.md)、
 [`read-byte`](read-byte.md)、
 [`write-byte`](write-byte.md)、[`close`](close.md)。バッファリングされる
 ファイル出力と異なり、ソケットへの書き込みは即時に送信されます(`write-line` は

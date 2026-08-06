@@ -6,10 +6,16 @@ are **not part of Common Lisp**; reference them with the `rontolisp:`
 qualifier (see [Packages](../reference/packages.md)). A connected socket is a
 **bidirectional stream handle** in the same handle space as file streams, so
 the standard stream functions work on it directly: `read-line`, `write-line`,
-`write-string`, `read-byte`, `write-byte` and `close`. Unlike buffered file
+`write-string`, `write-char`, `read-char`, `read-byte`, `write-byte` and
+`close`. Unlike buffered file
 output, socket
 writes are sent immediately (`write-line` flushes per line), and `read-line`
-returns `nil` once the peer has closed the connection.
+returns `nil` once the peer has closed the connection. A socket carries BYTES:
+`write-string` puts the string's UTF-8 bytes on the wire and `read-char` reads
+one character back out of them, so `read-byte` and `read-char` can be mixed on
+the same handle. The printing functions (`print`, `princ`, `format`) do not
+take a socket; render with `(format nil ...)` and send the result with
+`write-line` or `write-string`.
 
 | Function | Purpose |
 |----------|---------|
