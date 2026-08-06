@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -76,10 +77,10 @@ class HttpHandlerJvmTest {
 	// background thread (http-handler blocks in serve) and waits until the port is
 	// accepting connections.
 	private void compileAndServeInBackground(String program, int port) throws Exception {
-		compileAndServeInBackground(program, port, false);
+		compileAndServeInBackground(program, port, OptimizeLevel.NONE);
 	}
 
-	private void compileAndServeInBackground(String program, int port, boolean optimize) throws Exception {
+	private void compileAndServeInBackground(String program, int port, OptimizeLevel optimize) throws Exception {
 		JvmLispCompiler compiler = new JvmLispCompiler("TestHttpServe", false, optimize);
 		// mirror the CLI pipeline's splices: http-server.lisp (the shared server value
 		// model the injected handle() calls into), then the Gray call-site rewrite its
@@ -192,7 +193,7 @@ class HttpHandlerJvmTest {
 				(defun handle (env)
 				  (list 200 nil (list "opt=" (getf env :path-info))))
 				(rontolisp:http-handler 'handle %d)
-				""".formatted(port), port, true);
+				""".formatted(port), port, OptimizeLevel.DEFAULT);
 		HttpResponse<String> response = get(port, "/x");
 		assertThat(response.statusCode()).isEqualTo(200);
 		assertThat(response.body()).isEqualTo("opt=/x");

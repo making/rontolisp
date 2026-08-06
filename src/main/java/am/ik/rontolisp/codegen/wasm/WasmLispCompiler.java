@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.wasm.ExternalKind;
@@ -55,7 +56,7 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean noWasi;
 
-	private final boolean optimize;
+	private final OptimizeLevel optimize;
 
 	private final boolean serve;
 
@@ -105,7 +106,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * (print/read/open/getenv/time/random) traps.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
-		this(dynamic, component, noWasi, false);
+		this(dynamic, component, noWasi, OptimizeLevel.NONE);
 	}
 
 	/**
@@ -113,15 +114,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
 	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
 	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize when {@code true}, the emitted core module is run through
-	 * {@link am.ik.wasm.WasmTreeShaker}: functions unreachable from the module's roots
-	 * (its exports and {@code _start}) are dropped and the survivors renumbered. Combined
-	 * with {@code noWasi} a pure-compute reactor module shrinks to a handful of
-	 * functions. The pass is a no-op in {@code component} mode (the WASI 0.3 adapter
-	 * wiring relies on the core's fixed import/index layout), so component output is
-	 * unchanged.
+	 * @param optimize what to optimize the module FOR (the CLI's {@code --optimize}).
+	 * Every level but {@link OptimizeLevel#NONE} runs the emitted core module through
+	 * {@link am.ik.wasm.WasmTreeShaker} -- functions unreachable from the module's roots
+	 * (its exports and {@code _start}) are dropped and the survivors renumbered, in
+	 * {@code component} mode too; combined with {@code noWasi} a pure-compute reactor
+	 * module shrinks to a handful of functions. {@link OptimizeLevel#SIZE} additionally
+	 * declines the two emissions that spend bytes on speed: integer expression-tree
+	 * fusion ({@code .kb/wasm-int-fusion.md}) and unboxed dual-representation locals
+	 * ({@code .kb/wasm-unboxed-locals.md}).
 	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize) {
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize) {
 		this(dynamic, component, noWasi, optimize, false);
 	}
 
@@ -130,7 +133,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
 	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
 	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see {@link #WasmLispCompiler(boolean, boolean, boolean, boolean)}
+	 * @param optimize see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
 	 * @param serve when {@code true} (implies {@code component}), the program serves HTTP
 	 * via {@code rontolisp:http-handler}: the {@code HttpHandlerInliner} has spliced in a
 	 * {@code %http-dispatch} {@code wasm-export} wrapper, so the wasm-export memory-ABI
@@ -140,7 +144,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * with wasm-GC enabled, e.g. jco or wasmCloud) instead of the {@code wasi:cli/run}
 	 * component.
 	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve) {
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve) {
 		this(dynamic, component, noWasi, optimize, serve, false);
 	}
 
@@ -149,9 +153,10 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
 	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
 	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
-	 * @param optimize see {@link #WasmLispCompiler(boolean, boolean, boolean, boolean)}
+	 * @param optimize see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
 	 * @param serve see
-	 * {@link #WasmLispCompiler(boolean, boolean, boolean, boolean, boolean)}
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
 	 * @param simd when {@code true} (the CLI's {@code --simd}), the vectorizable
 	 * {@code vec:} kernels are intercepted at their call sites and routed to emitted v128
 	 * runtime helpers ({@link WasmVecSimdRuntimeBuilder}) instead of the scalar
@@ -164,7 +169,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * the output is byte-identical to a build of this compiler that never knew about the
 	 * flag.
 	 */
-	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean serve,
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
 			boolean simd) {
 		this.dynamic = dynamic;
 		this.component = component;
@@ -2099,6 +2104,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.valueFuncIds(valueFuncIds)
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
+			.optimize(this.optimize)
 			.component(this.component)
 			.serve(this.serve)
 			.simd(this.simd)
@@ -4478,7 +4484,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			return coreModule;
 		}
 		if (this.component) {
-			if (this.optimize) {
+			if (this.optimize.eliminatesDeadCode()) {
 				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule);
 			}
 			if (this.serve) {
@@ -4523,7 +4529,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmComponentBuilder.additionalImports(componentImports));
 			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports);
 		}
-		return this.optimize ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
+		return this.optimize.eliminatesDeadCode() ? am.ik.wasm.WasmTreeShaker.shake(coreModule) : coreModule;
 	}
 
 	// The import-slot ordinal of a $sched builtin field.
@@ -5108,6 +5114,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		boolean dynamic = false;
 
+		/**
+		 * What this module is being optimized FOR. The emitters ask it exactly one
+		 * question -- {@link OptimizeLevel#prefersSizeOverSpeed()} -- at the two places
+		 * that deliberately spend bytes on speed: {@link WasmIntFusionCompiler}'s entry
+		 * points (a fused site emits its tree twice) and {@link WasmLetCompiler}'s
+		 * unboxed-local eligibility. Dead-code elimination is not decided here; it is a
+		 * post-pass over the finished module.
+		 */
+		OptimizeLevel optimize = OptimizeLevel.NONE;
+
 		boolean component = false;
 
 		// True in a rontolisp:http-handler (serve-mode) component.
@@ -5399,6 +5415,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.valueFuncIds = builder.valueFuncIds;
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
+			this.optimize = builder.optimize;
 			this.component = builder.component;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
@@ -5456,6 +5473,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int[] nextFuncId = new int[1];
 
 			private boolean dynamic = false;
+
+			private OptimizeLevel optimize = OptimizeLevel.NONE;
 
 			private boolean component = false;
 
@@ -5562,6 +5581,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder dynamic(boolean dynamic) {
 				this.dynamic = dynamic;
+				return this;
+			}
+
+			Builder optimize(OptimizeLevel optimize) {
+				this.optimize = optimize;
 				return this;
 			}
 

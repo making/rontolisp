@@ -72,6 +72,15 @@ Reads:
 A `let` binding qualifies when ALL hold; everything else keeps the ordinary
 eqref local:
 
+- the module emits the speed-for-size trades at all --
+  `WasmIntFusionCompiler.speedTradesEnabled(ctx)`, false under
+  `--optimize=size`. This feature and fusion share ONE switch because a raw
+  local is only ever a win THROUGH a fused tree: with fusion off every
+  assignment bails into the boxed shadow and every read goes through
+  `_ub_read`, which measures larger than dropping both and slower than keeping
+  both (the four-way table is in `.kb/optimize-dead-code-elimination.md`).
+  `-Drontolisp.debug.norawlocals` remains the way to switch THIS half alone,
+  for profiling;
 - not special, not captured by a nested lambda (`FreeVarAnalyzer` -- captures
   need cells), not a duplicate binding name in the same `let`;
 - not at top level (the eval-mirror reads boxed slots), not under `--dynamic`,

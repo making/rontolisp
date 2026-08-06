@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +45,7 @@ class WasmExportCompilerTest {
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary.process(
 				am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
-		return new WasmLispCompiler(false, true, false, false, true).compile(program);
+		return new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program);
 	}
 
 	private static boolean containsAscii(byte[] bytes, String needle) {
@@ -612,7 +613,7 @@ class WasmExportCompilerTest {
 				"""), am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded));
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true);
 		compiler.compile(program);
 		assertThat(compiler.componentWit()).contains("  export wasi:http/handler@0.3.0;")
 			.doesNotContain("http-dispatch");

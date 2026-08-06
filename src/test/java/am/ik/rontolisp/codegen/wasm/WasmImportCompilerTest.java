@@ -8,6 +8,7 @@ import java.util.Objects;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -202,7 +203,7 @@ class WasmImportCompilerTest {
 				(defun add10 (n) (add n 10))
 				(rontolisp:wasm-export 'add10 :params '(:int) :returns :int)
 				""");
-		byte[] optimized = new WasmLispCompiler(false, false, true, true).compile(program);
+		byte[] optimized = new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT).compile(program);
 		List<String[]> imports = functionImports(optimized);
 		assertThat(imports).hasSize(1);
 		assertThat(imports.get(0)).containsExactly("host", "add");

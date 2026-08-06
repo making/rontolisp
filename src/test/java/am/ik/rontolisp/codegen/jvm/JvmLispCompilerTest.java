@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -7417,7 +7418,7 @@ class JvmLispCompilerTest {
 					    (close client)
 					    (print reply)))
 					""".formatted(server.getLocalPort()));
-			byte[] classBytes = new JvmLispCompiler("Test", false, true).compile(program);
+			byte[] classBytes = new JvmLispCompiler("Test", false, OptimizeLevel.DEFAULT).compile(program);
 			Path classFile = tempDir.resolve("Test.class");
 			Files.write(classFile, classBytes);
 			try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
@@ -9975,6 +9976,23 @@ class JvmLispCompilerTest {
 				(with-open-file (out "%s" :direction :output :if-exists :append) (write-string "two" out))
 				(with-open-file (in "%s") (print (read-line in)))
 				""".formatted(file, file, file))).isEqualTo("\"onetwo\"");
+	}
+
+	@Test
+	void theSizeLevelIsADocumentedNoOpOnThisBackend() {
+		// --optimize=size is accepted everywhere so a build script need not be
+		// backend-specific, but the emissions it declines are wasm-GC ones (fused
+		// integer trees, unboxed dual-representation locals) and this backend has
+		// neither. The docs say the two levels produce the same class here; this is
+		// what makes that statement checkable -- and what fails the day someone gives
+		// the JVM backend a speed-for-size trade without saying so.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun rol32e (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(print (rol32e 2882400001 8))
+				""");
+		byte[] fast = new JvmLispCompiler("Same", false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new JvmLispCompiler("Same", false, OptimizeLevel.SIZE).compile(program);
+		assertThat(small).isEqualTo(fast);
 	}
 
 }

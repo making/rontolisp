@@ -53,6 +53,28 @@ final class WasmIntFusionCompiler {
 	private WasmIntFusionCompiler() {
 	}
 
+	/**
+	 * Whether this module emits the two speed-for-size trades this file implements --
+	 * fusion itself (a fused site emits its tree TWICE, once raw and once through the
+	 * generic helpers) and the unboxed dual-representation locals that feed it
+	 * ({@link WasmLetCompiler}'s eligibility scan asks here too). {@code false} only
+	 * under {@code --optimize=size}.
+	 *
+	 * <p>
+	 * <strong>One switch for both, deliberately.</strong> An unboxed local's whole payoff
+	 * is being read raw inside a fused tree and stored raw from one; with fusion off
+	 * every assignment would bail into the boxed shadow and every read would go through
+	 * {@code _ub_read}. Measured, that half-configuration is dominated on BOTH axes --
+	 * larger than declining both, slower than keeping both
+	 * ({@code .kb/optimize-dead-code-elimination.md} has the four-way table), so it is a
+	 * configuration nobody can want and it gets no spelling.
+	 * @param ctx the compilation context
+	 * @return {@code true} when the trades are emitted
+	 */
+	static boolean speedTradesEnabled(WasmLispCompiler.Ctx ctx) {
+		return !ctx.optimize.prefersSizeOverSpeed();
+	}
+
 	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RawLeaf {
 
 	}
@@ -187,7 +209,7 @@ final class WasmIntFusionCompiler {
 	 * ordinary per-operation path.
 	 */
 	static boolean tryCompile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (ctx.asyncResume != null) {
+		if (!speedTradesEnabled(ctx) || ctx.asyncResume != null) {
 			return false;
 		}
 		Site site = new Site(cons);
@@ -270,7 +292,7 @@ final class WasmIntFusionCompiler {
 	 * nothing) when it does not apply.
 	 */
 	static boolean tryCompileCompare(LispCons cons, WasmLispCompiler.Ctx ctx, int i64Opcode, int cmpMask) {
-		if (ctx.asyncResume != null) {
+		if (!speedTradesEnabled(ctx) || ctx.asyncResume != null) {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
@@ -330,7 +352,7 @@ final class WasmIntFusionCompiler {
 	 * nothing) when the expression is not an integer operation tree.
 	 */
 	static boolean tryCompileRaw(LispVal expr, WasmLispCompiler.Ctx ctx) {
-		if (ctx.asyncResume != null) {
+		if (!speedTradesEnabled(ctx) || ctx.asyncResume != null) {
 			return false;
 		}
 		Site site = new Site(expr);

@@ -124,8 +124,30 @@ power-of-two literal is `x & (2^k - 1)` (two's complement makes that the
 divisor-signed CL mod), and `(ash x -k)` with a literal non-positive count is
 an arithmetic right shift clamped at 63.
 
+## `--optimize=size` turns the whole thing off
+
+**The double emission is the price of the speed, and a build may decline to pay
+it.** `WasmIntFusionCompiler.speedTradesEnabled(ctx)` (`ctx.optimize` ->
+`OptimizeLevel.prefersSizeOverSpeed()`) is read at the three entry points --
+`tryCompile`, `tryCompileCompare`, `tryCompileRaw` (`tryCompileLocalCall`
+delegates to the first) -- and returning false there emits NOTHING, so every
+caller falls through to the per-op path it already had. The same predicate gates
+`WasmLetCompiler`'s unboxed-local eligibility, and the two are ONE switch on
+purpose: a raw local with fusion off bails into its boxed shadow at every
+assignment, which is both slower and larger than either end (the four-way
+measurement lives in `.kb/optimize-dead-code-elimination.md`). Worth **-24.8%**
+on the ironclad demo, at 3.8x the run time on its PBKDF2 loop.
+
+That the generic path still answers identically is not a hope: it is the same
+fallback every bail already takes, pinned between the two levels by
+`WasmLispCompilerIntegrationTest.theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult`
+(and, the broadest check available, the whole `ci-spec.yaml` corpus compiled at
+both levels producing identical output).
+
 ## When fusion does NOT trigger (and must keep not triggering)
 
+- Under `--optimize=size` (above), which is the only reason the fast path is
+  optional at all -- everything else here is a shape it cannot handle.
 - A single fusable operation with neither a raw-reading leaf (unboxed local /
   packed aref) nor a literal operand -- two plain boxed leaves under one op run
   no leaner fused, so the generic call keeps owning that shape (and the

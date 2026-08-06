@@ -14,6 +14,7 @@ import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
@@ -210,11 +211,11 @@ class WasmLispCompilerIntegrationTest {
 	// need -- including FetchLibrary, so a handler that also calls rontolisp:fetch (the
 	// proxy shape) gets fetch.lisp spliced alongside serve.lisp, over the wider block.
 	private static byte[] compileServeComponent(String source, @org.jspecify.annotations.Nullable String baseDir) {
-		return compileServeComponent(source, baseDir, false);
+		return compileServeComponent(source, baseDir, OptimizeLevel.NONE);
 	}
 
 	private static byte[] compileServeComponent(String source, @org.jspecify.annotations.Nullable String baseDir,
-			boolean optimize) {
+			OptimizeLevel optimize) {
 		var witBackend = am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT;
 		List<LispVal> loaded = am.ik.rontolisp.eval.WitImportInliner.inline(LispReader.readAllFromString(source),
 				baseDir, witBackend, am.ik.rontolisp.eval.SourceLoader.fileSystem());
@@ -909,6 +910,77 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
+		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
+		// integer expression-tree fusion (every fused site emits its tree TWICE, raw
+		// plus generic fallback) and the unboxed dual-representation locals that feed
+		// it. Both are documented as optimizations with a TOTAL fallback
+		// (.kb/wasm-int-fusion.md, .kb/wasm-unboxed-locals.md), so the level is only
+		// honest if the generic-only module answers exactly what the fused one does --
+		// which is what the two `MatchTheGenericPath` tests above assert WITHIN a
+		// module and this one asserts BETWEEN the two levels, over the same shapes:
+		// nested trees, overflow promotion into the limb tier, a float leaf, an
+		// inlinable-defun substitution, an unboxed local degrading to a boxed shadow
+		// (list, float, nil), the masked-wrap peephole, a fused comparison, and a
+		// packed-vector raw store.
+		String program = """
+				(defun rol32c (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(print (rol32c 2882400001 8))
+				(print (logand (+ (* 3 5) (- 10 4) (mod 17 5)) 255))
+				(print (* (+ 4294967296 1) (+ 4294967296 1)))
+				(print (mod (- 0 4294967297) 4294967296))
+				(let ((f 1.5)) (print (+ (logand 3 1) f)))
+				(let ((acc 0) (i 0))
+				  (tagbody top
+				    (setq acc (logand (+ (rol32c acc 7) i) 4294967295))
+				    (setq i (+ i 1))
+				    (if (< i 64) (go top)))
+				  (print acc))
+				(let ((x 1))
+				  (tagbody top (setq x (* x 3)) (if (< x 100000000000000000000) (go top)))
+				  (print x))
+				(let ((y 5)) (setq y (+ y 1)) (setq y (list y)) (print y))
+				(let ((n nil)) (print n) (setq n (+ 1 2)) (print n) (setq n nil) (print n))
+				(print (ldb (byte 32 0) (+ 9223372036854775807 9223372036854775807)))
+				(print (< 9223372036854775807 (+ 9223372036854775807 1)))
+				(let ((u (make-array 3 :element-type '(unsigned-byte 32) :initial-element 0)))
+				  (setf (aref u 0) 4000000000)
+				  (setf (aref u 1) (aref u 0))
+				  (setf (aref u 2) (+ (aref u 0) 7))
+				  (print u))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		assertThat(small.length).as("--optimize=size should emit a smaller module").isLessThan(fast.length);
+		assertThat(runModule(small, "size.wasm")).isEqualTo(runModule(fast, "fast.wasm"));
+		assertThat(runModule(fast, "fast.wasm")).isEqualTo("""
+				3454992811
+				23
+				18446744082299486209
+				4294967295
+				2.5
+				2434942088
+				109418989131512359209
+				(6)
+				NIL
+				3
+				NIL
+				4294967294
+				T
+				#(4000000000 4000000000 4000000007)""");
+	}
+
+	// Runs an already-compiled module. Used where the point of the test is to compare
+	// two compilations of the SAME program, so the module name has to differ per run.
+	private static String runModule(byte[] wasmBytes, String name) throws Exception {
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path(name));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", path(name));
+		assertThat(result.getExitCode()).as("exit code for %s%nstderr: %s", name, result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
 	void floatModAndRemComputeCorrectly() throws Exception {
 		// Regression: float mod/rem on the GC backend used to miscompile. A literal float
 		// operand wrote an invalid f64 opcode (byte 0xff, there is no f64.rem), and a
@@ -978,7 +1050,7 @@ class WasmLispCompilerIntegrationTest {
 	// Compiles a "host" module (whose wasm-exports play the imported host functions)
 	// and a main module using (rontolisp:wasm-import ... :from "host"), then runs the
 	// main module with the host instance preloaded (`wasmtime run --preload host=...`).
-	private static String compileAndRunWithPreload(String hostCode, String mainCode, boolean optimize)
+	private static String compileAndRunWithPreload(String hostCode, String mainCode, OptimizeLevel optimize)
 			throws Exception {
 		byte[] host = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(hostCode));
 		byte[] main = new WasmLispCompiler(false, false, false, optimize)
@@ -1012,7 +1084,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (mapcar (lambda (x) (add x 100)) (list 1 2 3)))
 				(print (eval '(add 5 6)))
 				""";
-		assertThat(compileAndRunWithPreload(host, main, false)).isEqualTo("""
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.NONE)).isEqualTo("""
 				42
 				3
 				10.0
@@ -1039,7 +1111,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (hostapi:add 40 2))
 				(print (hostapi:add3 1 2 3))
 				""";
-		assertThat(compileAndRunWithPreload(host, main, false)).isEqualTo("""
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.NONE)).isEqualTo("""
 				42
 				6""");
 	}
@@ -1056,7 +1128,7 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
 				(print (add 40 2))
 				""";
-		assertThat(compileAndRunWithPreload(host, main, true)).isEqualTo("42");
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.DEFAULT)).isEqualTo("42");
 	}
 
 	@Test
@@ -1073,7 +1145,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (big 200))
 				(print (big 3))
 				""";
-		assertThat(compileAndRunWithPreload(host, main, false)).isEqualTo("T\nNIL");
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.NONE)).isEqualTo("T\nNIL");
 	}
 
 	@Test
@@ -1089,7 +1161,7 @@ class WasmLispCompilerIntegrationTest {
 	// export
 	// WITHOUT `-W gc`, proving the module runs on a plain MVP runtime with no wasm-GC and
 	// no import object.
-	private static String compileNoGcAndInvoke(boolean optimize, String lispCode, String function, String... args)
+	private static String compileNoGcAndInvoke(OptimizeLevel optimize, String lispCode, String function, String... args)
 			throws Exception {
 		return compileNoGcAndInvoke(optimize, false, lispCode, function, args);
 	}
@@ -1100,7 +1172,7 @@ class WasmLispCompilerIntegrationTest {
 	// run on a plain MVP runtime; the v128 build additionally needs the SIMD proposal (on
 	// by
 	// default in wasmtime).
-	private static String compileNoGcAndInvoke(boolean optimize, boolean simd, String lispCode, String function,
+	private static String compileNoGcAndInvoke(OptimizeLevel optimize, boolean simd, String lispCode, String function,
 			String... args) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
 		byte[] wasmBytes = new NoGcWasmCompiler(optimize, simd).compile(program);
@@ -1124,8 +1196,8 @@ class WasmLispCompilerIntegrationTest {
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, fact, "fact", "5")).isEqualTo("120");
-		assertThat(compileNoGcAndInvoke(false, fact, "fact", "10")).isEqualTo("3628800");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, fact, "fact", "5")).isEqualTo("120");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, fact, "fact", "10")).isEqualTo("3628800");
 	}
 
 	@Test
@@ -1138,7 +1210,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun f (a) (- (* a a) (* (- a 1) (+ a 1))))
 				(rontolisp:wasm-export 'f :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "f", "100000000")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "f", "100000000")).isEqualTo("1");
 	}
 
 	@Test
@@ -1151,9 +1223,11 @@ class WasmLispCompilerIntegrationTest {
 				(defun sumsquared (a b) (* (+ a b) (+ a b)))
 				(rontolisp:wasm-export 'sumsquared :params '(:long :long) :returns :long)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "sumsquared", "3", "4")).isEqualTo("49");
-		assertThat(compileNoGcAndInvoke(false, program, "sumsquared", "100000", "100000")).isEqualTo("40000000000");
-		assertThat(compileNoGcAndInvoke(true, program, "sumsquared", "100000", "100000")).isEqualTo("40000000000");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "sumsquared", "3", "4")).isEqualTo("49");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "sumsquared", "100000", "100000"))
+			.isEqualTo("40000000000");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "sumsquared", "100000", "100000"))
+			.isEqualTo("40000000000");
 	}
 
 	// Compiles with --no-gc --component (the compact reactor component) and
@@ -1164,7 +1238,7 @@ class WasmLispCompilerIntegrationTest {
 	// stderr must carry no "experimental" warning.
 	private static String compileNoGcComponentAndInvoke(String lispCode, String waveInvocation) throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] componentBytes = new NoGcWasmCompiler(false, false, true).compile(program);
+		byte[] componentBytes = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", waveInvocation,
 				path("test.component.wasm"));
@@ -1229,12 +1303,13 @@ class WasmLispCompilerIntegrationTest {
 		// Same rule as the GC path: the boundary carries the value exactly or it traps.
 		// :s32 keeps that promise too -- what used to be a silent i32.wrap_i64 of the
 		// i64 house integer is now a refusal.
-		byte[] component = new NoGcWasmCompiler(false, false, true).compile(LispReader.readAllFromString("""
-				(defun down (n) (- n))
-				(defun wide (n) (* n 1000000))
-				(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
-				(rontolisp:wasm-export 'wide :params '(:s32) :returns :s32)
-				"""));
+		byte[] component = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true)
+			.compile(LispReader.readAllFromString("""
+					(defun down (n) (- n))
+					(defun wide (n) (* n 1000000))
+					(rontolisp:wasm-export 'down :params '(:s32) :returns :u32)
+					(rontolisp:wasm-export 'wide :params '(:s32) :returns :s32)
+					"""));
 		wasmtime.copyFileToContainer(Transferable.of(component), path("test.component.wasm"));
 		for (String invocation : new String[] { "down(5)", "wide(1000000)" }) {
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", invocation,
@@ -1253,7 +1328,8 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'sum-sq :as "sum-squared" :params '(:int :int) :returns :int)
 				""";
 		assertThat(compileNoGcComponentAndInvoke(program, "sum-squared(2, 3)")).isEqualTo("25");
-		byte[] optimized = new NoGcWasmCompiler(true, false, true).compile(LispReader.readAllFromString(program));
+		byte[] optimized = new NoGcWasmCompiler(OptimizeLevel.DEFAULT, false, true)
+			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "sum-squared(2, 3)",
 				path("test.component.wasm"));
@@ -1351,13 +1427,13 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'entry :params '(:int) :returns :int)
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		assertThat(compileNoGcAndInvoke(true, program, "entry", "5")).isEqualTo("20");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "entry", "5")).isEqualTo("20");
 		// The optimized module is no larger than the plain one (the unreachable `dead`
 		// function is dropped); behavior is identical either way.
-		int plain = new NoGcWasmCompiler(false).compile(parsed).length;
-		int optimized = new NoGcWasmCompiler(true).compile(parsed).length;
+		int plain = new NoGcWasmCompiler(OptimizeLevel.NONE).compile(parsed).length;
+		int optimized = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(parsed).length;
 		assertThat(optimized).isLessThanOrEqualTo(plain);
-		assertThat(compileNoGcAndInvoke(false, program, "entry", "5")).isEqualTo("20");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "entry", "5")).isEqualTo("20");
 	}
 
 	@Test
@@ -1372,10 +1448,10 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'area :params '(:float) :returns :float)
 				(rontolisp:wasm-export 'in-range :params '(:int) :returns :bool)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "gcd2", "48", "36")).isEqualTo("12");
-		assertThat(compileNoGcAndInvoke(false, program, "area", "2.0")).isEqualTo("12.56636");
-		assertThat(compileNoGcAndInvoke(false, program, "in-range", "50")).isEqualTo("1");
-		assertThat(compileNoGcAndInvoke(false, program, "in-range", "200")).isEqualTo("0");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "gcd2", "48", "36")).isEqualTo("12");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "area", "2.0")).isEqualTo("12.56636");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "in-range", "50")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "in-range", "200")).isEqualTo("0");
 	}
 
 	@Test
@@ -1396,10 +1472,10 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'ifact :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'sumsq :params '(:int) :returns :float)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "sum-upto", "100")).isEqualTo("4950");
-		assertThat(compileNoGcAndInvoke(false, program, "ifact", "10")).isEqualTo("3628800");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "sum-upto", "100")).isEqualTo("4950");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "ifact", "10")).isEqualTo("3628800");
 		// 0^2 + 1^2 + ... + 4^2 = 30; printed by wasmtime as an f64.
-		assertThat(compileNoGcAndInvoke(false, program, "sumsq", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "sumsq", "5")).isEqualTo("30");
 	}
 
 	@Test
@@ -1415,8 +1491,8 @@ class WasmLispCompilerIntegrationTest {
 				    c))
 				(rontolisp:wasm-export 'count-down :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "count-down", "42")).isEqualTo("42");
-		assertThat(compileNoGcAndInvoke(false, program, "count-down", "0")).isEqualTo("0");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "count-down", "42")).isEqualTo("42");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "count-down", "0")).isEqualTo("0");
 	}
 
 	@Test
@@ -1436,12 +1512,12 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'shr :params '(:int :int) :returns :int)
 				(rontolisp:wasm-export 'popcount :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "root", "16.0")).isEqualTo("4");
-		assertThat(compileNoGcAndInvoke(false, program, "band", "12", "10")).isEqualTo("8");
-		assertThat(compileNoGcAndInvoke(false, program, "shr", "1024", "3")).isEqualTo("128");
-		assertThat(compileNoGcAndInvoke(false, program, "popcount", "255")).isEqualTo("8");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "root", "16.0")).isEqualTo("4");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "band", "12", "10")).isEqualTo("8");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "shr", "1024", "3")).isEqualTo("128");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "popcount", "255")).isEqualTo("8");
 		// The loop-based popcount also survives the tree shaker under --optimize.
-		assertThat(compileNoGcAndInvoke(true, program, "popcount", "43")).isEqualTo("4");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "popcount", "43")).isEqualTo("4");
 	}
 
 	@Test
@@ -1459,10 +1535,10 @@ class WasmLispCompilerIntegrationTest {
 				    out))
 				(rontolisp:wasm-export 'band :params '(:int) :returns :string)
 				""";
-		assertThat(noGcStringLength(false, program, "band", "12")).isEqualTo(12);
-		assertThat(noGcStringLength(false, program, "band", "0")).isZero();
+		assertThat(noGcStringLength(OptimizeLevel.NONE, program, "band", "12")).isEqualTo(12);
+		assertThat(noGcStringLength(OptimizeLevel.NONE, program, "band", "0")).isZero();
 		// Composes with the tree shaker (--optimize).
-		assertThat(noGcStringLength(true, program, "band", "30")).isEqualTo(30);
+		assertThat(noGcStringLength(OptimizeLevel.DEFAULT, program, "band", "30")).isEqualTo(30);
 	}
 
 	// Invokes an export of an already-compiled --no-gc module under a hard linear-memory
@@ -1521,9 +1597,9 @@ class WasmLispCompilerIntegrationTest {
 				NIL
 				5
 				"a2.5\"""";
-		assertThat(compileNoGcAndInvoke(false, program, "show")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show")).isEqualTo(expected);
 		// The import + __write_stdout funnel survive the tree shaker under --optimize.
-		assertThat(compileNoGcAndInvoke(true, program, "show")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "show")).isEqualTo(expected);
 	}
 
 	@Test
@@ -1548,8 +1624,8 @@ class WasmLispCompilerIntegrationTest {
 				a"b\\c
 				"plain"
 				"x\\"y\"""";
-		assertThat(compileNoGcAndInvoke(false, program, "show")).isEqualTo(expected);
-		assertThat(compileNoGcAndInvoke(true, program, "show")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "show")).isEqualTo(expected);
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "show")).isEqualTo(expected);
 	}
 
 	@Test
@@ -1625,22 +1701,22 @@ class WasmLispCompilerIntegrationTest {
 				(defun code-at (n) (char-code (char "abc" n)))
 				(rontolisp:wasm-export 'code-at :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, program, "route", "6")).isEqualTo("1");
-		assertThat(compileNoGcAndInvoke(false, program, "route", "4")).isEqualTo("2");
-		assertThat(compileNoGcAndInvoke(false, program, "route", "-1")).isEqualTo("3");
-		assertThat(compileNoGcAndInvoke(false, program, "digits", "0")).isEqualTo("1");
-		assertThat(compileNoGcAndInvoke(false, program, "digits", "12345")).isEqualTo("5");
-		assertThat(compileNoGcAndInvoke(false, program, "digits", "-42")).isEqualTo("3");
-		assertThat(compileNoGcAndInvoke(false, program, "code-at", "1")).isEqualTo("98");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "route", "6")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "route", "4")).isEqualTo("2");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "route", "-1")).isEqualTo("3");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "digits", "0")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "digits", "12345")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "digits", "-42")).isEqualTo("3");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, program, "code-at", "1")).isEqualTo("98");
 		// Composes with the tree shaker (--optimize).
-		assertThat(compileNoGcAndInvoke(true, program, "route", "6")).isEqualTo("1");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, program, "route", "6")).isEqualTo("1");
 		// A string-producing op with no literal and no :string boundary still gets the
 		// memory + helpers (subseq/princ-to-string flag the memory as used).
 		String noLiteral = """
 				(defun width (n) (length (princ-to-string (* n n))))
 				(rontolisp:wasm-export 'width :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, noLiteral, "width", "100")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, noLiteral, "width", "100")).isEqualTo("5");
 	}
 
 	@Test
@@ -1672,15 +1748,15 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'consd :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'arand :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, true, program, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(false, true, program, "sum280", "0")).isEqualTo("280");
-		assertThat(compileNoGcAndInvoke(false, true, program, "scalesum", "0")).isEqualTo("45");
-		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "5")).isEqualTo("30");
-		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "8")).isEqualTo("140");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "buildsum", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "buildsum", "8")).isEqualTo("140");
 		// vec:ones / vec:arange with no element-type build the default F64VEC (the
 		// double path is unaffected by the element-type constructor argument).
-		assertThat(compileNoGcAndInvoke(false, true, program, "consd", "0")).isEqualTo("5");
-		assertThat(compileNoGcAndInvoke(false, true, program, "arand", "0")).isEqualTo("6");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "consd", "0")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "arand", "0")).isEqualTo("6");
 	}
 
 	@Test
@@ -1720,20 +1796,20 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'consf :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'aranf :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, true, program, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(false, true, program, "sum280", "0")).isEqualTo("280");
-		assertThat(compileNoGcAndInvoke(false, true, program, "addref", "0")).isEqualTo("11");
-		assertThat(compileNoGcAndInvoke(false, true, program, "addref", "2")).isEqualTo("33");
-		assertThat(compileNoGcAndInvoke(false, true, program, "scalesum", "0")).isEqualTo("45");
-		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "5")).isEqualTo("30");
-		assertThat(compileNoGcAndInvoke(false, true, program, "buildsum", "8")).isEqualTo("140");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "addref", "0")).isEqualTo("11");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "addref", "2")).isEqualTo("33");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "buildsum", "5")).isEqualTo("30");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "buildsum", "8")).isEqualTo("140");
 		// vec:ones / vec:arange with a literal 'single-float construct an F32VEC
 		// natively: sum(ones 5) = 5, sum(arange 4) = 0+1+2+3 = 6.
-		assertThat(compileNoGcAndInvoke(false, true, program, "consf", "0")).isEqualTo("5");
-		assertThat(compileNoGcAndInvoke(false, true, program, "aranf", "0")).isEqualTo("6");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "consf", "0")).isEqualTo("5");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, true, program, "aranf", "0")).isEqualTo("6");
 		// --optimize (tree-shaken module) still runs the f32x4 kernels identically.
-		assertThat(compileNoGcAndInvoke(true, true, program, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(true, true, program, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, true, program, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, true, program, "sum280", "0")).isEqualTo("280");
 	}
 
 	@Test
@@ -1757,9 +1833,9 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		// simd=false -- the scalar loops, run with no `-W gc` (and no SIMD proposal
 		// needed).
-		assertThat(compileNoGcAndInvoke(false, false, doubles, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(false, false, doubles, "sum280", "0")).isEqualTo("280");
-		assertThat(compileNoGcAndInvoke(false, false, doubles, "scalesum", "0")).isEqualTo("45");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, doubles, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, doubles, "sum280", "0")).isEqualTo("280");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, doubles, "scalesum", "0")).isEqualTo("45");
 		// Single-float scalar path: f32.load/store, computed in f32, promoted on return.
 		// Covers a pure-tail case (count 3 < a lane group) and a mixed case.
 		String singles = """
@@ -1770,9 +1846,9 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'dot55 :params '(:int) :returns :int)
 				(rontolisp:wasm-export 'addref :params '(:int) :returns :int)
 				""";
-		assertThat(compileNoGcAndInvoke(false, false, singles, "dot55", "0")).isEqualTo("55");
-		assertThat(compileNoGcAndInvoke(false, false, singles, "addref", "0")).isEqualTo("11");
-		assertThat(compileNoGcAndInvoke(false, false, singles, "addref", "2")).isEqualTo("33");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, singles, "dot55", "0")).isEqualTo("55");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, singles, "addref", "0")).isEqualTo("11");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, false, singles, "addref", "2")).isEqualTo("33");
 	}
 
 	@Test
@@ -1801,13 +1877,14 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'accumulate :params '(:int) :returns :int)
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "addinto", "0")).isEqualTo("2");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "addinto", "4")).isEqualTo("10");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "scaleinto", "0")).isEqualTo("45");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "addinto", "0")).isEqualTo("2");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "addinto", "4")).isEqualTo("10");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "scaleinto", "0")).isEqualTo("45");
 			// 100000 iterations x a fresh 5-element vector would be ~4.4 MB of bump heap
 			// in
 			// the allocating form; -into allocates once, before the loop.
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "accumulate", "100000")).isEqualTo("400000");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "accumulate", "100000"))
+				.isEqualTo("400000");
 		}
 		// Single-float: the f32 stride, a pure scalar-tail count (3) and a lane-group
 		// count.
@@ -1822,10 +1899,10 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'mulinto :params '(:int) :returns :int)
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, singles, "addinto", "0")).isEqualTo("11");
-			assertThat(compileNoGcAndInvoke(false, simd, singles, "addinto", "2")).isEqualTo("33");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, singles, "addinto", "0")).isEqualTo("11");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, singles, "addinto", "2")).isEqualTo("33");
 			// sum of i^2 for i in 0..7 = 140
-			assertThat(compileNoGcAndInvoke(false, simd, singles, "mulinto", "0")).isEqualTo("140");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, singles, "mulinto", "0")).isEqualTo("140");
 		}
 	}
 
@@ -1856,9 +1933,9 @@ class WasmLispCompilerIntegrationTest {
 		for (boolean simd : new boolean[] { false, true }) {
 			// sum s = 26, sum |v| = 26, sum -v = -6, 32 * sum(1/2^k) = 31 -> 26+26-6+31 =
 			// 77
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "ufuncs", "0")).isEqualTo("77");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "intos", "0")).isEqualTo("3");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "intos", "3")).isEqualTo("12");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "ufuncs", "0")).isEqualTo("77");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "intos", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "intos", "3")).isEqualTo("12");
 		}
 		String singles = """
 				(defun ufuncs (i)
@@ -1871,7 +1948,7 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
 			// sum a = 15, sum s = 15, 8 * (1/2 + 1/4 + 1/8) = 7 -> 37
-			assertThat(compileNoGcAndInvoke(false, simd, singles, "ufuncs", "0")).isEqualTo("37");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, singles, "ufuncs", "0")).isEqualTo("37");
 		}
 	}
 
@@ -1905,17 +1982,17 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'sgnf :params '(:int) :returns :int)
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, source, "expd", "0")).isEqualTo(wasmGcExpD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "expf", "0")).isEqualTo(wasmGcExpF);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "expzero", "0")).isEqualTo("3");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sgn", "0")).isEqualTo("-1");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sgn", "1")).isEqualTo("0");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sgn", "2")).isEqualTo("1");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "expd", "0")).isEqualTo(wasmGcExpD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "expf", "0")).isEqualTo(wasmGcExpF);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "expzero", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sgn", "0")).isEqualTo("-1");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sgn", "1")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sgn", "2")).isEqualTo("1");
 			// sign-into aliases its operand (sign of sign is sign): -100 + 0 + 1.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sgninto", "0")).isEqualTo("-99");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sgninto", "0")).isEqualTo("-99");
 			// negative(arange) = (-0.0 -1.0 -2.0 -3.0); sign maps -0.0 to 0.0 here
 			// (the wasm family's own edge), so the sum is -3.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sgnf", "0")).isEqualTo("-3");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sgnf", "0")).isEqualTo("-3");
 		}
 	}
 
@@ -1955,17 +2032,17 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'tanhinto :params '(:int) :returns :int)
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, source, "logd", "0")).isEqualTo(wasmGcLogD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "logf", "0")).isEqualTo(wasmGcLogF);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "logone", "0")).isEqualTo("5");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "loginto", "0")).isEqualTo("5");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhd", "0")).isEqualTo(wasmGcTanhD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhf", "0")).isEqualTo(wasmGcTanhF);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhsat", "0")).isEqualTo("-1");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhsat", "1")).isEqualTo("0");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhsat", "2")).isEqualTo("1");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "logd", "0")).isEqualTo(wasmGcLogD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "logf", "0")).isEqualTo(wasmGcLogF);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "logone", "0")).isEqualTo("5");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "loginto", "0")).isEqualTo("5");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tanhd", "0")).isEqualTo(wasmGcTanhD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tanhf", "0")).isEqualTo(wasmGcTanhF);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tanhsat", "0")).isEqualTo("-1");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tanhsat", "1")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tanhsat", "2")).isEqualTo("1");
 			// tanh-into then read back the saturated triple: -100 + 0 + 1.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tanhinto", "0")).isEqualTo("-99");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tanhinto", "0")).isEqualTo("-99");
 		}
 	}
 
@@ -2004,14 +2081,14 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'sininto :params '(:int) :returns :int)
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sind", "0")).isEqualTo(wasmGcSinD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sinf", "0")).isEqualTo(wasmGcSinF);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "cosd", "0")).isEqualTo(wasmGcCosD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "tand", "0")).isEqualTo(wasmGcTanD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sind", "0")).isEqualTo(wasmGcSinD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sinf", "0")).isEqualTo(wasmGcSinF);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "cosd", "0")).isEqualTo(wasmGcCosD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "tand", "0")).isEqualTo(wasmGcTanD);
 			// sin(0) + 3 * cos(0) + tan(0) = 3.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "zeros", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "zeros", "0")).isEqualTo("3");
 			// tan(cos(sin(0))) per element = tan(1); 3 * tan(1) truncates to 4.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sininto", "0")).isEqualTo("4");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sininto", "0")).isEqualTo("4");
 		}
 	}
 
@@ -2066,14 +2143,14 @@ class WasmLispCompilerIntegrationTest {
 				  (print (truncate (* 1000000 (vec:aref o 0)))))
 				""", false);
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, source, "atand", "0")).isEqualTo(wasmGcAtanD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "asinf", "0")).isEqualTo(wasmGcAsinF);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "acosd", "0")).isEqualTo(wasmGcAcosD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "sinhd", "0")).isEqualTo(wasmGcSinhD);
-			assertThat(compileNoGcAndInvoke(false, simd, source, "coshf", "0")).isEqualTo(wasmGcCoshF);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "atand", "0")).isEqualTo(wasmGcAtanD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "asinf", "0")).isEqualTo(wasmGcAsinF);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "acosd", "0")).isEqualTo(wasmGcAcosD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "sinhd", "0")).isEqualTo(wasmGcSinhD);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "coshf", "0")).isEqualTo(wasmGcCoshF);
 			// atan(0) + asin(0) + acos(1) + sinh(0) + 3 * cosh(0) = 3.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "anchors", "0")).isEqualTo("3");
-			assertThat(compileNoGcAndInvoke(false, simd, source, "arcinto", "0")).isEqualTo(wasmGcInto);
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "anchors", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "arcinto", "0")).isEqualTo(wasmGcInto);
 		}
 	}
 
@@ -2124,13 +2201,13 @@ class WasmLispCompilerIntegrationTest {
 		for (boolean simd : new boolean[] { false, true }) {
 			// a = (-2 -1 0 1 2), b = (2 1 0 -1 -2): maximum sums to 6, minimum to -6,
 			// relu(a) to 3, clip(a, -1, 1) to 0 -> 6 - 600 + 30000 + 0 = 29406.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "probe", "0")).isEqualTo("29406");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "probe", "0")).isEqualTo("29406");
 			// relu(a) = (0 0 0 1 2); maximum with a is unchanged; clip to [-1.5, 1.5]
 			// gives (0 0 0 1 1.5), whose sum is 2.5 -> 250.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "probef", "0")).isEqualTo("250");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "probef", "0")).isEqualTo("250");
 			// minimum(a, b) = (-2 -1 0 -1 -2); maximum with a = (-2 -1 0 1 2);
 			// relu of that = (0 0 0 1 2) -> 3. Exercises aliasing at every step.
-			assertThat(compileNoGcAndInvoke(false, simd, source, "probeinto", "0")).isEqualTo("3");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, source, "probeinto", "0")).isEqualTo("3");
 		}
 	}
 
@@ -2183,17 +2260,17 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wasm-export 'gemvf :params '(:int) :returns :int)
 				""";
 		for (boolean simd : new boolean[] { false, true }) {
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemv", "0")).isEqualTo("40");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemv", "1")).isEqualTo("190");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemv", "2")).isEqualTo("340");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "gemvinto", "2")).isEqualTo("340");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "flat", "6")).isEqualTo("11");
-			assertThat(compileNoGcAndInvoke(false, simd, doubles, "flat", "5")).isEqualTo("0");
-			assertThat(compileNoGcAndInvoke(false, simd, singles, "gemvf", "0")).isEqualTo("70");
-			assertThat(compileNoGcAndInvoke(false, simd, singles, "gemvf", "1")).isEqualTo("280");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "gemv", "0")).isEqualTo("40");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "gemv", "1")).isEqualTo("190");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "gemv", "2")).isEqualTo("340");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "gemvinto", "2")).isEqualTo("340");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "flat", "6")).isEqualTo("11");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, doubles, "flat", "5")).isEqualTo("0");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, singles, "gemvf", "0")).isEqualTo("70");
+			assertThat(compileNoGcAndInvoke(OptimizeLevel.NONE, simd, singles, "gemvf", "1")).isEqualTo("280");
 		}
 		// Composes with the tree shaker (--optimize).
-		assertThat(compileNoGcAndInvoke(true, true, doubles, "gemv", "1")).isEqualTo("190");
+		assertThat(compileNoGcAndInvoke(OptimizeLevel.DEFAULT, true, doubles, "gemv", "1")).isEqualTo("190");
 	}
 
 	// Invokes a --no-gc :string-returning export and returns the length component of the
@@ -2203,7 +2280,7 @@ class WasmLispCompilerIntegrationTest {
 	// the ABI needs a host that writes linear memory and is exercised by the runnable
 	// docs
 	// examples / playground rather than the wasmtime-only container here.)
-	private static int noGcStringLength(boolean optimize, String lispCode, String function, String... args)
+	private static int noGcStringLength(OptimizeLevel optimize, String lispCode, String function, String... args)
 			throws Exception {
 		String out = compileNoGcAndInvoke(optimize, lispCode, function, args);
 		String[] tokens = out.trim().split("\\s+");
@@ -2216,7 +2293,7 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileOptimizedAndInvoke(String lispCode, boolean noWasi, String function, String... args)
 			throws Exception {
 		List<LispVal> program = LispReader.readAllFromString(lispCode);
-		byte[] wasmBytes = new WasmLispCompiler(false, false, noWasi, true).compile(program);
+		byte[] wasmBytes = new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(
 				List.of("wasmtime", "run", "--invoke", function, "-W", "gc", "-W", "exceptions=y", path("test.wasm")));
@@ -2243,8 +2320,8 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileOptimizedAndInvoke(program, true, "fact", "10")).isEqualTo("3628800");
 
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		int plain = new WasmLispCompiler(false, false, true, false).compile(parsed).length;
-		int optimized = new WasmLispCompiler(false, false, true, true).compile(parsed).length;
+		int plain = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE).compile(parsed).length;
+		int optimized = new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT).compile(parsed).length;
 		assertThat(optimized).isLessThan(plain / 5);
 	}
 
@@ -2257,7 +2334,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (+ 1 2))
 				(print (string-upcase "hi"))
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true)
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
 			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
@@ -2275,7 +2352,7 @@ class WasmLispCompilerIntegrationTest {
 				(defun sq (x) (* x x))
 				(print (eval '(sq 9)))
 				""";
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true)
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
 			.compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y",
@@ -2893,8 +2970,8 @@ class WasmLispCompilerIntegrationTest {
 				(defun never-called (x) (* x x x))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
-		byte[] plain = new WasmLispCompiler(false, true, false, false).compile(parsed);
-		byte[] optimized = new WasmLispCompiler(false, true, false, true).compile(parsed);
+		byte[] plain = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE).compile(parsed);
+		byte[] optimized = new WasmLispCompiler(false, true, false, OptimizeLevel.DEFAULT).compile(parsed);
 		assertThat(optimized.length).as("--optimize should shrink the component").isLessThan(plain.length);
 		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.optcomp.wasm"));
 		ExecResult add = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", "add(3, 4)",
@@ -2920,7 +2997,7 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:http-handler 'handle)
 				""";
 		byte[] plain = compileServeComponent(program, null);
-		byte[] optimized = compileServeComponent(program, null, true);
+		byte[] optimized = compileServeComponent(program, null, OptimizeLevel.DEFAULT);
 		assertThat(optimized.length).as("--optimize should shrink the serve component").isLessThan(plain.length);
 		wasmtime.copyFileToContainer(Transferable.of(optimized), "/tmp/serve-opt.wasm");
 		ExecResult result = wasmtime.execInContainer("bash", "-c",
@@ -11441,7 +11518,7 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunVec(String lispCode, boolean simd, String... extraFlags) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, simd).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		List<String> command = new java.util.ArrayList<>(List.of("wasmtime", "run", "--wasm", "gc"));
 		command.addAll(List.of(extraFlags));
@@ -11593,7 +11670,8 @@ class WasmLispCompilerIntegrationTest {
 				+ "(print (vec:sum (vec:add (vec:arange 7 'single-float) (vec:ones 7 'single-float))))"
 				+ "(print (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0)))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		byte[] optimized = new WasmLispCompiler(false, false, false, true, false, true).compile(program);
+		byte[] optimized = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true)
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(optimized), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
@@ -11614,7 +11692,7 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunVec(source, false, noSimd)).isEqualTo("5.0");
 
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		byte[] simdBytes = new WasmLispCompiler(false, false, false, false, false, true).compile(program);
+		byte[] simdBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(simdBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", "--wasm", "simd=n", "--wasm",
 				"relaxed-simd=n", path("test.wasm"));
@@ -11821,7 +11899,7 @@ class WasmLispCompilerIntegrationTest {
 	private static int compileAndRunVecExitCode(String lispCode, boolean simd) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, simd).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		return wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm")).getExitCode();
 	}
@@ -12263,7 +12341,8 @@ class WasmLispCompilerIntegrationTest {
 	private static String compileAndRunLinalgSimdOptimized(String lispCode) throws Exception {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary
 			.process(am.ik.rontolisp.eval.LinalgLibrary.process(LispReader.readAllFromString(lispCode)));
-		byte[] wasmBytes = new WasmLispCompiler(false, false, false, true, false, true).compile(program);
+		byte[] wasmBytes = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true)
+			.compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--wasm", "gc", path("test.wasm"));
 		assertThat(result.getExitCode()).as("exit code for: %s\nstderr: %s", lispCode, result.getStderr()).isZero();

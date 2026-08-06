@@ -10,6 +10,7 @@ import java.util.Objects;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.LispReader;
@@ -113,7 +114,7 @@ class WasmComponentImportCompilerTest {
 	private static byte[] compileServeComponent(String source) {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HttpLibrary.process(LispReader.readAllFromString(source),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
-		return new WasmLispCompiler(false, true, false, false, true)
+		return new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true)
 			.compile(am.ik.rontolisp.eval.WitLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 	}
 

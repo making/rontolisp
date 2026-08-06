@@ -166,6 +166,48 @@ from computed strings and called through `eval`/`apply` signals the usual
 "undefined function" error. Compile with `--no-prune` (or `--dynamic`) to keep
 every library definition in that case.
 
+The flag takes an optional level. `--optimize` and `--optimize=default` are the
+same thing — everything above — and the bare spelling keeps that meaning
+permanently; `--optimize=size` is that plus the trades in the next section.
+
+### Optimizing for Size (`--optimize=size`)
+
+Two wasm-GC emissions deliberately spend bytes to gain speed, and both are on
+whether or not you pass `--optimize`:
+
+- an integer expression tree like `(logand (+ (ash x 7) i) #xFFFFFFFF)` compiles
+  **twice** — once as a single unboxed `i64` computation, and once through the
+  generic helpers, as the fallback a float, a ratio or an overflow into bignum
+  territory takes;
+- a `let` binding whose assignments are integer arithmetic gets an unboxed
+  `i64` slot beside its ordinary boxed one.
+
+`--optimize=size` declines both. Nothing the program computes changes — the
+fast path only ever existed as an alternative to the fallback, which stays —
+but the arithmetic now runs through the generic helpers, so the price is real,
+and how much you pay depends on how integer-heavy the program is:
+
+| program | `--optimize` | `--optimize=size` | run time |
+| --- | --- | --- | --- |
+| ironclad SHA-256/HMAC/PBKDF2, 4096 rounds | 2,075,455 B | 1,560,097 B (**-24.8%**) | 1.4 s -> 5.2 s (**3.8x**) |
+| a `vec:`-kernel neural-net training loop | 288,576 B | 231,533 B (-19.8%) | 1.07 s -> 1.26 s (+18%) |
+| a float MLP training loop (no `vec:`) | 177,173 B | 142,943 B (-19.3%) | 5.6 s -> 6.1 s (+9%) |
+| `cl-postgres` hello world (`--component`) | 8,033,507 B | 6,408,277 B (-20.2%) | — |
+
+(wasmtime 47, best of three runs.) The size win barely varies; the run-time
+price does, because only integer arithmetic fuses — a float kernel pays it on
+its loop indices alone, while a crypto round pays it on everything.
+
+So reach for it when the module has to travel — an edge deploy, a browser
+download, a registry with a size limit — unless the program's hot loop is
+integer arithmetic (hashing, crypto, bit twiddling), where the same win costs
+several times the run time.
+
+The level is accepted on every backend, so a build script need not know which
+one it targets, but only wasm-GC (Preview 1 and `--component`) has anything to
+trade: the [JVM](jvm.md) and [`--no-gc`](../guides/wasm-nogc.md) outputs are
+byte-for-byte what `--optimize` produces.
+
 ### SIMD Acceleration (`--simd`)
 
 `--simd` is the one acceleration switch shared by every backend: it lowers the

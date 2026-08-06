@@ -758,6 +758,11 @@ final class WasmAsyncEmit {
 			.valueFuncIds(proto.valueFuncIds)
 			.nextFuncId(proto.nextFuncId)
 			.dynamic(proto.dynamic)
+			// The level decides emission shape (the fusion/unboxed-local trades), so a
+			// chunk built here must carry it: an async module's SYNCHRONOUS top level is
+			// built through this method too, and would otherwise fuse under
+			// --optimize=size while the same form in a defun did not.
+			.optimize(proto.optimize)
 			.component(proto.component)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)

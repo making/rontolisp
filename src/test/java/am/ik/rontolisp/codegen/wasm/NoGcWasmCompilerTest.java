@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +37,7 @@ class NoGcWasmCompilerTest {
 	// with no 0xFD opcode. The [count][data] block layout is identical either way.
 	private static byte[] compileSimd(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new NoGcWasmCompiler(false, true).compile(program);
+		return new NoGcWasmCompiler(OptimizeLevel.NONE, true).compile(program);
 	}
 
 	@Test
@@ -374,7 +375,7 @@ class NoGcWasmCompilerTest {
 
 	@Test
 	void optimizeProducesAValidShapeAndKeepsTheExport() {
-		byte[] module = new NoGcWasmCompiler(true).compile(LispReader.readAllFromString("""
+		byte[] module = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(LispReader.readAllFromString("""
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
 				"""));
@@ -1661,7 +1662,7 @@ class NoGcWasmCompilerTest {
 	// component whose scalar exports are typed component-model exports.
 	private static byte[] compileComponent(String source) {
 		List<LispVal> program = LispReader.readAllFromString(source);
-		return new NoGcWasmCompiler(false, false, true).compile(program);
+		return new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program);
 	}
 
 	private static final String COMPONENT_PROGRAM = """
@@ -1973,7 +1974,7 @@ class NoGcWasmCompilerTest {
 		// The CLI's --emit-wit output for the adapter-free reactor: an import-free world
 		// of
 		// just the typed exports (:long lifts as s64 here only).
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
 		assertThat(compiler.componentWit()).isNull();
 		compiler.compile(LispReader.readAllFromString("""
 				(defun big-add (a b) (+ a b))
@@ -1997,7 +1998,7 @@ class NoGcWasmCompilerTest {
 		// (plus their package definitions), separated from the exports by one blank
 		// line the way wasm-tools prints it -- and the exports say `async func`,
 		// because a printing program's exports are async lifts.
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
 		compiler.compile(LispReader.readAllFromString("""
 				(defun hello () (print "hi"))
 				(rontolisp:wasm-export 'hello)
@@ -2018,6 +2019,20 @@ class NoGcWasmCompilerTest {
 		compiler.compile(LispReader
 			.readAllFromString("(defun f (a) a) (rontolisp:wasm-export 'f :params '(:long) :returns :long)"));
 		assertThat(compiler.componentWit()).isNull();
+	}
+
+	@Test
+	void theSizeLevelIsADocumentedNoOpOnThisBackend() {
+		// Same statement as on the JVM: this lowering is i64-native, so it never emits
+		// the boxed/unboxed pair --optimize=size declines on wasm-GC. Accepted, equal,
+		// and pinned so the docs cannot quietly go stale.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun rol32f (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(rontolisp:wasm-export 'rol32f :params '(:long :long) :returns :long)
+				""");
+		byte[] fast = new NoGcWasmCompiler(OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new NoGcWasmCompiler(OptimizeLevel.SIZE).compile(program);
+		assertThat(small).isEqualTo(fast);
 	}
 
 }

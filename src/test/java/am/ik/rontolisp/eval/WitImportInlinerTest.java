@@ -9,6 +9,7 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -187,7 +188,7 @@ class WitImportInlinerTest {
 	 */
 	@Test
 	void preview1ImportsAreByteIdenticalToTheHandWrittenImportBlock() throws IOException {
-		assertThat(compile(witProgram(), false)).isEqualTo(compile(handWritten(), false));
+		assertThat(compile(witProgram(), OptimizeLevel.NONE)).isEqualTo(compile(handWritten(), OptimizeLevel.NONE));
 	}
 
 	/**
@@ -198,11 +199,11 @@ class WitImportInlinerTest {
 	 */
 	@Test
 	void optimizeShakesTheUncalledImportOutOfBothProgramsIdentically() throws IOException {
-		byte[] optimized = compile(witProgram(), true);
-		assertThat(optimized).isEqualTo(compile(handWritten(), true));
+		byte[] optimized = compile(witProgram(), OptimizeLevel.DEFAULT);
+		assertThat(optimized).isEqualTo(compile(handWritten(), OptimizeLevel.DEFAULT));
 		// The shaker really ran (and so the byte-identity above is not identity between
 		// two un-shaken modules).
-		assertThat(optimized.length).isLessThan(compile(witProgram(), false).length);
+		assertThat(optimized.length).isLessThan(compile(witProgram(), OptimizeLevel.NONE).length);
 	}
 
 	/**
@@ -314,7 +315,7 @@ class WitImportInlinerTest {
 		return LispReader.readAllFromString(HAND_WRITTEN + BODY);
 	}
 
-	private static byte[] compile(List<LispVal> program, boolean optimize) {
+	private static byte[] compile(List<LispVal> program, OptimizeLevel optimize) {
 		return new WasmLispCompiler(false, false, false, optimize, false, false).compile(program);
 	}
 

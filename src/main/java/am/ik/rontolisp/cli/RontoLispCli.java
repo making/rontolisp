@@ -25,6 +25,7 @@ import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
@@ -115,9 +116,10 @@ public final class RontoLispCli {
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
-					options.contains("--component"), options.contains("--no-wasi"), options.contains("--optimize"),
-					options.contains("--no-gc"), options.contains("--simd"), options.contains("--no-prune"),
-					options.contains("--emit-wit"), inputFile);
+					options.contains("--component"), options.contains("--no-wasi"),
+					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
+					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
+					inputFile);
 		}
 		else {
 			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
@@ -266,7 +268,7 @@ public final class RontoLispCli {
 	}
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
-			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
+			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
 			boolean noPrune, boolean wit, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
@@ -307,7 +309,7 @@ public final class RontoLispCli {
 	}
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
-			boolean dynamic, boolean component, boolean noWasi, boolean optimize, boolean noGc, boolean simd,
+			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
 			boolean noPrune, boolean wit, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
@@ -628,7 +630,7 @@ public final class RontoLispCli {
 		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
 		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");
 		this.out.println("                     rontolisp:wasm-export functions work (I/O traps)");
-		this.out.println("  --optimize         Dead-code-eliminate the compiled output");
+		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");
 		this.out.println("                     JVM: drop methods unreachable from main + compact the constant pool");
@@ -636,6 +638,15 @@ public final class RontoLispCli {
 		this.out.println("                     dispatch case, so library code goes too -- unless the program");
 		this.out.println("                     can name a function at run time (eval/read/intern/...), which");
 		this.out.println("                     keeps everything. -Drontolisp.debug.dispatchgate=true says which");
+		this.out.println("                     LEVEL says what to optimize FOR (default: the bare flag above)");
+		this.out.println("                       default  the above, and nothing traded away for it");
+		this.out.println("                       size     the above, plus: give up speed for size. On wasm-GC");
+		this.out.println("                                that drops the two emissions that spend bytes on");
+		this.out.println("                                speed (fused integer trees, unboxed locals): about");
+		this.out.println("                                -20% of any module, but only integer arithmetic");
+		this.out.println("                                fuses, so the price runs from ~+10% on a float");
+		this.out.println("                                kernel to ~4x on integer crypto.");
+		this.out.println("                                Accepted and identical to default on JVM and --no-gc");
 		this.out.println("  --no-gc            Emit a plain (non-wasm-GC) WASM module for pure-numeric exports");
 		this.out.println("                     Runs on any MVP runtime (no -W gc, no import object). Only");
 		this.out.println("                     scalar rontolisp:wasm-export functions (:int/:float/:bool) work;");

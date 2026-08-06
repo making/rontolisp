@@ -14,6 +14,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -33,7 +34,7 @@ class JvmClassShakerTest {
 	@TempDir
 	Path tempDir;
 
-	private static byte[] compile(String source, boolean optimize) {
+	private static byte[] compile(String source, OptimizeLevel optimize) {
 		List<LispVal> program = LispReader.readAllFromString(source);
 		return new JvmLispCompiler("Test", false, optimize).compile(program);
 	}
@@ -78,8 +79,8 @@ class JvmClassShakerTest {
 	@Test
 	void dropsUnreachableMethodsAndShrinksOutput() throws Exception {
 		String source = "(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1))))) (print (fact 5))";
-		byte[] plain = compile(source, false);
-		byte[] optimized = compile(source, true);
+		byte[] plain = compile(source, OptimizeLevel.NONE);
+		byte[] optimized = compile(source, OptimizeLevel.DEFAULT);
 
 		assertThat(optimized.length).isLessThan(plain.length / 2);
 		assertThat(declaredMethodNames(optimized).size()).isLessThan(declaredMethodNames(plain).size());
@@ -88,7 +89,8 @@ class JvmClassShakerTest {
 
 	@Test
 	void dropsAnUncalledDefunAndItsHelpers() throws Exception {
-		byte[] optimized = compile("(defun used (x) (+ x 1)) (defun unused (x) (car x)) (print (used 41))", true);
+		byte[] optimized = compile("(defun used (x) (+ x 1)) (defun unused (x) (car x)) (print (used 41))",
+				OptimizeLevel.DEFAULT);
 		List<String> names = declaredMethodNames(optimized);
 		assertThat(names).contains("main", "USED").doesNotContain("UNUSED");
 		assertThat(run(optimized)).isEqualTo("42");
@@ -96,7 +98,7 @@ class JvmClassShakerTest {
 
 	@Test
 	void dropsUnreferencedFields() throws Exception {
-		byte[] optimized = compile("(print 1)", true);
+		byte[] optimized = compile("(print 1)", OptimizeLevel.DEFAULT);
 		Path classFile = this.tempDir.resolve("Test.class");
 		Files.write(classFile, optimized);
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { this.tempDir.toUri().toURL() },
@@ -113,7 +115,7 @@ class JvmClassShakerTest {
 	@Test
 	void keepsTransitivelyReachableRuntime() throws Exception {
 		// Ratio arithmetic reaches the rational runtime helpers; they must survive.
-		assertThat(run(compile("(print (+ 1/3 1/6))", true))).isEqualTo("1/2");
+		assertThat(run(compile("(print (+ 1/3 1/6))", OptimizeLevel.DEFAULT))).isEqualTo("1/2");
 	}
 
 	@Test
@@ -126,7 +128,7 @@ class JvmClassShakerTest {
 				(print (reduce #'+ (list 1 2 3)))
 				(print (eval '(add1 4)))
 				""";
-		assertThat(run(compile(source, true))).isEqualTo("42\n6\n5");
+		assertThat(run(compile(source, OptimizeLevel.DEFAULT))).isEqualTo("42\n6\n5");
 	}
 
 	@Test
@@ -137,19 +139,19 @@ class JvmClassShakerTest {
 				(setq s (java:proxy "java.util.function.Supplier" (lambda (method) 42)))
 				(print (java:call s "get"))
 				""";
-		assertThat(run(compile(source, true))).isEqualTo("42");
+		assertThat(run(compile(source, OptimizeLevel.DEFAULT))).isEqualTo("42");
 	}
 
 	@Test
 	void nonAsciiConstantsSurviveCompaction() throws Exception {
 		// Compaction copies CONSTANT_Utf8 entries verbatim (byte-length modified UTF-8).
-		assertThat(run(compile("(princ \"日本語\")", true))).isEqualTo("日本語");
-		assertThat(run(compile("(print '日本語)", true))).isEqualTo("日本語");
+		assertThat(run(compile("(princ \"日本語\")", OptimizeLevel.DEFAULT))).isEqualTo("日本語");
+		assertThat(run(compile("(print '日本語)", OptimizeLevel.DEFAULT))).isEqualTo("日本語");
 	}
 
 	@Test
 	void isIdempotent() {
-		byte[] once = JvmClassShaker.shake(compile("(print (+ 1 2))", false), Set.of("main"));
+		byte[] once = JvmClassShaker.shake(compile("(print (+ 1 2))", OptimizeLevel.NONE), Set.of("main"));
 		byte[] twice = JvmClassShaker.shake(once, Set.of("main"));
 		assertThat(twice).isEqualTo(once);
 	}
@@ -164,7 +166,7 @@ class JvmClassShakerTest {
 				(let ((s "abc")) (setf (elt s 0) #\\z) (print s))
 				(print (funcall #'funcall #'add1 41))
 				(print (mapcar #'class-of (list 1)))
-				""", false))).isEmpty();
+				""", OptimizeLevel.NONE))).isEmpty();
 	}
 
 	@Test

@@ -5,6 +5,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WasmTreeShakerTest {
 
-	private static byte[] compile(String source, boolean noWasi, boolean optimize) {
+	private static byte[] compile(String source, boolean noWasi, OptimizeLevel optimize) {
 		List<LispVal> program = LispReader.readAllFromString(source);
 		return new WasmLispCompiler(false, false, noWasi, optimize).compile(program);
 	}
@@ -30,8 +31,8 @@ class WasmTreeShakerTest {
 				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
 				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
 				""";
-		byte[] plain = compile(source, true, false);
-		byte[] optimized = compile(source, true, true);
+		byte[] plain = compile(source, true, OptimizeLevel.NONE);
+		byte[] optimized = compile(source, true, OptimizeLevel.DEFAULT);
 
 		assertThat(optimized.length).isLessThan(plain.length / 5);
 		Module before = Module.parse(plain);
@@ -47,7 +48,7 @@ class WasmTreeShakerTest {
 	void dropsUnusedWasiImports() {
 		// A program that only prints uses fd_write; the other seven WASI imports are
 		// dead.
-		byte[] optimized = compile("(print (+ 1 2))", false, true);
+		byte[] optimized = compile("(print (+ 1 2))", false, OptimizeLevel.DEFAULT);
 		Module m = Module.parse(optimized);
 		m.assertWellFormed();
 		assertThat(m.functionImportNames()).containsExactly("fd_write");
@@ -56,7 +57,7 @@ class WasmTreeShakerTest {
 	@Test
 	void keepsTransitivelyReachableRuntime() {
 		// Ratio arithmetic reaches the rational runtime helpers; they must survive.
-		byte[] optimized = compile("(print (+ 1/3 1/6))", false, true);
+		byte[] optimized = compile("(print (+ 1/3 1/6))", false, OptimizeLevel.DEFAULT);
 		Module m = Module.parse(optimized);
 		m.assertWellFormed();
 		assertThat(m.exportedFunctionNames()).contains("_start");
@@ -72,8 +73,8 @@ class WasmTreeShakerTest {
 				  (handler-case (/ a b) (error (e) -1)))
 				(print (unwind-protect (protected-div 10 2) (print :cleaned)))
 				""";
-		byte[] plain = compile(source, false, false);
-		byte[] optimized = compile(source, false, true);
+		byte[] plain = compile(source, false, OptimizeLevel.NONE);
+		byte[] optimized = compile(source, false, OptimizeLevel.DEFAULT);
 		assertThat(optimized.length).isLessThan(plain.length);
 		Module m = Module.parse(optimized);
 		m.assertWellFormed();
@@ -84,7 +85,7 @@ class WasmTreeShakerTest {
 
 	@Test
 	void isIdempotent() {
-		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, false));
+		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, OptimizeLevel.NONE));
 		byte[] twice = WasmTreeShaker.shake(once);
 		assertThat(twice).isEqualTo(once);
 	}
@@ -92,7 +93,7 @@ class WasmTreeShakerTest {
 	@Test
 	void returnsEquivalentModuleWhenNothingToDrop() {
 		// Shaking an already-minimal module should not corrupt it.
-		byte[] optimized = compile("(print 1)", false, true);
+		byte[] optimized = compile("(print 1)", false, OptimizeLevel.DEFAULT);
 		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
 	}
 

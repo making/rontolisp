@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
 
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -161,7 +162,7 @@ class WitOracleE2eTest {
 
 	@Test
 	void noGcComponentWitsMatchWasmToolsByteForByte() throws Exception {
-		NoGcWasmCompiler plain = new NoGcWasmCompiler(false, false, true);
+		NoGcWasmCompiler plain = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
 		byte[] plainComponent = plain.compile(LispReader.readAllFromString("""
 				(defun big-add (a b) (+ a b))
 				(defun shout (s) (concatenate 'string s "!"))
@@ -171,7 +172,7 @@ class WitOracleE2eTest {
 				(rontolisp:wasm-export 'huge :params '(:u64 :u64) :returns :u64)
 				"""));
 		assertThat(plain.componentWit()).isEqualTo(oracle(plainComponent));
-		NoGcWasmCompiler print = new NoGcWasmCompiler(false, false, true);
+		NoGcWasmCompiler print = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
 		byte[] printComponent = print.compile(LispReader.readAllFromString("""
 				(defun hello () (print "hi"))
 				(rontolisp:wasm-export 'hello)
@@ -186,7 +187,7 @@ class WitOracleE2eTest {
 		// WIT
 		// -- `export docs:calc/ops@1.0.0;` plus its package block -- must byte-match
 		// wasm-tools.
-		NoGcWasmCompiler compiler = new NoGcWasmCompiler(false, false, true);
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true);
 		byte[] component = compiler.compile(LispReader.readAllFromString(
 				"""
 						(defun add (x y) (+ x y))

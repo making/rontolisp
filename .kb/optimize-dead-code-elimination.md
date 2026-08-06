@@ -1,6 +1,52 @@
-# `--optimize` (dead-code elimination, WASM + JVM)
+# `--optimize` (levels; dead-code elimination, WASM + JVM)
 
-Opt-in (CLI `--optimize`; `WasmLispCompiler(dynamic, component, noWasi, optimize)` / `JvmLispCompiler(className, dynamic, optimize)`).
+Opt-in (CLI `--optimize[=LEVEL]`; `WasmLispCompiler(dynamic, component, noWasi, optimize)` / `JvmLispCompiler(className, dynamic, optimize)` / `NoGcWasmCompiler(optimize)`, all taking a `compiler.OptimizeLevel`).
+
+## The levels
+
+**Invariant: the bare `--optimize` is `DEFAULT` and emits exactly the bytes it always did.** It is in every doc page, every `.kb` passage, the CI jobs, the examples and the README, so it is not a level that may be redefined later. Pinned by `OptimizeLevelTest.theBareFlagIsTheDefaultLevel` (`parse("")` -> `DEFAULT`) plus `CliOptionsTest.theBareFlagKeepsItsEmptyValue`; measured once directly, `postgres-hello --component` at `--optimize` and at `--optimize=default` byte-identical at 8,033,507.
+
+| spelling | `eliminatesDeadCode()` | `prefersSizeOverSpeed()` |
+| --- | --- | --- |
+| (flag absent) — `NONE` | no | no |
+| `--optimize`, `--optimize=default` — `DEFAULT` | yes | no |
+| `--optimize=size` — `SIZE` | yes | yes |
+
+Those two predicates ARE the level: `OptimizeLevelTest.everyLevelIsDistinguishableAndOnlyNoneHasNoSpelling` fails if two levels answer both the same way, which is the rule "**do not ship a level that is an alias of another**" made mechanical. It is why there is no `high`: nothing in the compiler is held back for being too aggressive, so a third level would have nothing to switch on, and a synonym would teach a reader that levels are decoration. An unknown value is an `IllegalArgumentException` naming the accepted set, not a silent fallback.
+
+**Why a VALUE rather than a second flag.** A separate `--optimize-size` / `-Os` sitting next to `--optimize` does not say how the two relate — a reader hitting it in a build script cannot tell whether it replaces `--optimize`, adds to it, or contradicts it. A value cannot be read that way. The CLI consequence is that `--optimize` stays in `CliOptions.noValueKeys` and the parser learned the `--key=value` form instead (`CliOptions.build`): moving it out of that set would make `rontolisp app.lisp --optimize -o out.wasm` read `-o` as the level.
+
+### What `SIZE` declines, and what that costs
+
+Only the wasm-GC backends (Preview 1 AND `--component`) have anything to trade: the two emissions that deliberately spend bytes on speed, both **on even without `--optimize`** — integer expression-tree fusion (`.kb/wasm-int-fusion.md`; a fused site emits its tree TWICE, raw plus the generic fallback) and unboxed dual-representation locals (`.kb/wasm-unboxed-locals.md`). One predicate switches both: `WasmIntFusionCompiler.speedTradesEnabled(ctx)`, read at the three fusion entry points and at `WasmLetCompiler`'s eligibility scan. The JVM backend and `--no-gc` accept the level and emit byte-identical output (pinned by `theSizeLevelIsADocumentedNoOpOnThisBackend` in `JvmLispCompilerTest` and `NoGcWasmCompilerTest`) — accepted rather than rejected so one build script can pass it for every target.
+
+Measured 2026-08-06, `--optimize` vs `--optimize=size`, wasmtime 47.0.2 (best of three):
+
+| program | default | size | run time |
+| --- | --- | --- | --- |
+| `examples/db/postgres-hello` (`--component`) | 8,033,507 | 6,408,277 (**-20.2%**) | — |
+| `examples/asdf/ironclad-demo` (SHA-256/HMAC/PBKDF2, 4096 rounds) | 2,075,455 | 1,560,097 (-24.8%) | 1.38 s -> 5.21 s (**3.8x**) |
+| `examples/ml/nn-vec` (`vec:` kernels) | 288,576 | 231,533 (-19.8%) | 1.07 s -> 1.26 s (+18%) |
+| `examples/ml/mlp` (float, no `vec:`) | 177,173 | 142,943 (-19.3%) | 5.58 s -> 6.06 s (+9%) |
+| `examples/ml/heat3d` (`linalg:` stencil) | 200,051 | 157,623 (-21.2%) | 0.03 s either way (too short to resolve) |
+| the whole `ci-spec.yaml` corpus (319 cases) | 6,070,518 | 5,040,437 (-17.0%) | 2,132 output lines, byte-identical, exit 0 at both |
+
+The run-time column is why the level must be asked for and why the docs carry it beside the size one. Note what the spread says: the SIZE win barely varies (-17% to -25% across every program measured, library-heavy or not), while the run-time price varies more than thirtyfold (+9% to +280%), because only INTEGER arithmetic fuses -- a `vec:`/`linalg:` kernel pays it on its loop indices, an ironclad round pays it on every operation. So the level's cost cannot be stated as one number, and a program that is not integer-hot gets the size win nearly free.
+
+### Why the two trades are ONE level and not two switches
+
+Measured on `postgres-hello --component`, all four combinations:
+
+| fusion | unboxed locals | bytes | vs default |
+| --- | --- | --- | --- |
+| on | on (`=default`) | 8,033,507 | — |
+| on | off | 6,973,056 | -13.2% |
+| off | on | 7,096,879 | -11.7% |
+| off | off (`=size`) | 6,408,277 | **-20.2%** |
+
+The separate savings sum to 24.9 points against 20.2 combined, so they overlap — but the decisive row is "off/on": it is **dominated on both axes**. Larger than `=size`, measured above; and necessarily slower than `=default`, because an unboxed local's whole payoff is being read raw inside a fused tree and stored raw from one — with fusion off the arithmetic is generic anyway, and every assignment additionally bails into the boxed shadow while every read goes through `_ub_read`, which `=size` does not pay either. A configuration nobody can want does not deserve a spelling.
+
+`-Drontolisp.debug.norawlocals=true` still switches the unboxed locals alone; it exists for A/B profiling and is what produced the "on/off" row above (the "off/on" row needed a throwaway local patch, since no shipped switch produces it).
 
 ## WASM
 

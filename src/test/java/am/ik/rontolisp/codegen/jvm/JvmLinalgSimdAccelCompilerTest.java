@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,7 @@ class JvmLinalgSimdAccelCompilerTest {
 
 	private byte[] compile(String lispCode, boolean accel) {
 		List<LispVal> program = LinalgLibrary.process(LispReader.readAllFromString(lispCode));
-		return new JvmLispCompiler("Test", false, false, accel).compile(program);
+		return new JvmLispCompiler("Test", false, OptimizeLevel.NONE, accel).compile(program);
 	}
 
 	private String run(byte[] classBytes) throws Exception {

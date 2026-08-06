@@ -34,6 +34,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 
@@ -69,7 +70,7 @@ public final class JvmLispCompiler implements LispCompiler {
 
 	private final boolean dynamic;
 
-	private final boolean optimize;
+	private final OptimizeLevel optimize;
 
 	private final boolean simdAccel;
 
@@ -141,7 +142,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * to be emitted.
 	 */
 	public JvmLispCompiler(String className, boolean dynamic) {
-		this(className, dynamic, false);
+		this(className, dynamic, OptimizeLevel.NONE);
 	}
 
 	/**
@@ -150,11 +151,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param dynamic when {@code true}, unresolved function calls and variable references
 	 * are resolved at runtime against the embedded {@code eval} global environment (late
 	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize when {@code true}, dead-code-eliminate the finished class with
-	 * {@link JvmClassShaker}: methods unreachable from {@code main} (and any static field
-	 * only they reference) are dropped and the constant pool is compacted
+	 * @param optimize what to optimize the class FOR (the CLI's {@code --optimize}).
+	 * Every level but {@link OptimizeLevel#NONE} dead-code-eliminates the finished class
+	 * with {@link JvmClassShaker}: methods unreachable from {@code main} (and any static
+	 * field only they reference) are dropped and the constant pool is compacted.
+	 * {@link OptimizeLevel#SIZE} is accepted and equals {@link OptimizeLevel#DEFAULT}
+	 * here: this backend has nothing that spends bytes on speed -- the emissions the
+	 * level declines are wasm-GC ones, and the same program's JVM bytecode is a third the
+	 * size of its WASM to begin with.
 	 */
-	public JvmLispCompiler(String className, boolean dynamic, boolean optimize) {
+	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize) {
 		this(className, dynamic, optimize, false);
 	}
 
@@ -164,8 +170,8 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param dynamic when {@code true}, unresolved function calls and variable references
 	 * are resolved at runtime against the embedded {@code eval} global environment (late
 	 * binding); see {@link #JvmLispCompiler(String, boolean)}
-	 * @param optimize when {@code true}, dead-code-eliminate the finished class with
-	 * {@link JvmClassShaker}; see {@link #JvmLispCompiler(String, boolean, boolean)}
+	 * @param optimize dead-code elimination and what the class is optimized FOR; see
+	 * {@link #JvmLispCompiler(String, boolean, OptimizeLevel)}
 	 * @param simdAccel when {@code true} ({@code --simd}), the six vectorizable
 	 * {@code vec:} kernels
 	 * ({@code add}/{@code sub}/{@code mul}/{@code scale}/{@code dot}/ {@code sum}) are
@@ -173,7 +179,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * ({@link JvmSimdVectorTemplate}) instead of the scalar {@code vec.lisp} reference.
 	 * Running such a class requires {@code java --add-modules jdk.incubator.vector}.
 	 */
-	public JvmLispCompiler(String className, boolean dynamic, boolean optimize, boolean simdAccel) {
+	public JvmLispCompiler(String className, boolean dynamic, OptimizeLevel optimize, boolean simdAccel) {
 		this.className = className;
 		this.dynamic = dynamic;
 		this.optimize = optimize;
@@ -2540,7 +2546,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (!underpredicted.isEmpty()) {
 			throw new GateUnderpredicted(underpredicted);
 		}
-		if (this.optimize) {
+		if (this.optimize.eliminatesDeadCode()) {
 			// Drop every method unreachable from main (and compact the constant pool).
 			// Dispatch methods contain real invokestatic calls to every registered
 			// function, so dynamically-reached methods (eval/apply/funcall targets) stay

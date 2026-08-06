@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.WasmWriter;
@@ -98,7 +99,7 @@ class WasmGcHeapPregrowTest {
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
 				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
-		return new WasmLispCompiler(false, true, false, false, true).compile(program);
+		return new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program);
 	}
 
 }

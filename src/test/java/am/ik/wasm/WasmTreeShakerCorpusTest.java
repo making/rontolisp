@@ -10,6 +10,7 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
@@ -92,9 +93,9 @@ class WasmTreeShakerCorpusTest {
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.
 		for (boolean noWasi : new boolean[] { false, true }) {
-			byte[] plain = new WasmLispCompiler(false, false, noWasi, false).compile(program);
+			byte[] plain = new WasmLispCompiler(false, false, noWasi, OptimizeLevel.NONE).compile(program);
 			// A decoder gap (unrecognized opcode) throws here -> test failure, by design.
-			byte[] optimized = new WasmLispCompiler(false, false, noWasi, true).compile(program);
+			byte[] optimized = new WasmLispCompiler(false, false, noWasi, OptimizeLevel.DEFAULT).compile(program);
 
 			assertThat(optimized.length).as("optimized should shrink the module (noWasi=%s)", noWasi)
 				.isLessThan(plain.length);

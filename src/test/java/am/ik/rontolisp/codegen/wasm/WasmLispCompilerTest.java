@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
@@ -400,7 +401,7 @@ class WasmLispCompilerTest {
 				  (list 200 nil (list (or (uiop:getenv "RLENV") "unset"))))
 				(rontolisp:http-handler 'handle)
 				""");
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, true);
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true);
 		byte[] component = compiler.compile(program);
 		assertThat(new String(component, java.nio.charset.StandardCharsets.ISO_8859_1))
 			.contains("wasi:cli/environment@0.3.0");
@@ -439,7 +440,7 @@ class WasmLispCompilerTest {
 				        (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:9/")) :body)))
 				(rontolisp:http-handler 'h)
 				""");
-		assertThat(new WasmLispCompiler(false, true, false, false, true).compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -452,7 +453,7 @@ class WasmLispCompilerTest {
 				(rontolisp:http-handler 'h)
 				(rontolisp:tcp-listen 7777)
 				""");
-		assertThat(new WasmLispCompiler(false, true, false, false, true).compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, true).compile(program)).isNotEmpty();
 	}
 
 	@Test
@@ -672,7 +673,7 @@ class WasmLispCompilerTest {
 
 	private static byte[] compileVec(String source, boolean simd) {
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		return new WasmLispCompiler(false, false, false, false, false, simd).compile(program);
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, simd).compile(program);
 	}
 
 	@Test
@@ -732,7 +733,7 @@ class WasmLispCompilerTest {
 		assertThat(WasmLispCompiler.linalgFuncBase())
 			.isEqualTo(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT);
 		assertThat(new WasmLispCompiler().userFuncBase()).isEqualTo(WasmLispCompiler.FUNC_USER_BASE);
-		assertThat(new WasmLispCompiler(false, false, false, false, false, true).userFuncBase())
+		assertThat(new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, true).userFuncBase())
 			.isEqualTo(WasmLispCompiler.FUNC_USER_BASE + WasmVecSimdRuntimeBuilder.FUNC_COUNT
 					+ WasmLinalgSimdRuntimeBuilder.FUNC_COUNT);
 	}
@@ -744,8 +745,10 @@ class WasmLispCompilerTest {
 		// the 0xFD prefix (including v128.const and i8x16.shuffle's 16 immediate bytes).
 		String source = "(print (vec:sum (vec:matvec #d((1.0 2.0) (3.0 4.0)) #d(5.0 6.0))))";
 		List<LispVal> program = am.ik.rontolisp.eval.VecLibrary.process(LispReader.readAllFromString(source));
-		assertThat(new WasmLispCompiler(false, true, false, false, false, true).compile(program)).isNotEmpty();
-		assertThat(new WasmLispCompiler(false, false, false, true, false, true).compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, true).compile(program))
+			.isNotEmpty();
+		assertThat(new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT, false, true).compile(program))
+			.isNotEmpty();
 	}
 
 	// --- minimal module reader (sections + code-section local declarations) -----------
@@ -810,6 +813,32 @@ class WasmLispCompilerTest {
 			p[0] = end;
 		}
 		return false;
+	}
+
+	@Test
+	void theSizeLevelShrinksTheModuleAndTheDefaultLevelIsTheBareFlag() {
+		// The Docker-free half of the level's coverage (behavior parity under wasmtime
+		// is WasmLispCompilerIntegrationTest's). Two things are pinned here: an
+		// integer-hot program is SMALLER at --optimize=size, because the fused sites
+		// that emit their tree twice are gone; and DEFAULT is byte-for-byte what the
+		// bare --optimize has always emitted, which is the whole reason the flag took a
+		// value instead of growing a second flag.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defun rol32d (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
+				(defun mixd (a b)
+				  (let ((acc 0) (i 0))
+				    (tagbody top
+				      (setq acc (logand (+ (rol32d acc 7) (* a b) i) 4294967295))
+				      (setq i (+ i 1))
+				      (if (< i 64) (go top)))
+				    acc))
+				(print (mixd 12345 6789))
+				""");
+		byte[] none = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(program);
+		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(program);
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(program);
+		assertThat(fast.length).isLessThan(none.length);
+		assertThat(small.length).isLessThan(fast.length);
 	}
 
 	private static int readUleb(byte[] buf, int[] p) {

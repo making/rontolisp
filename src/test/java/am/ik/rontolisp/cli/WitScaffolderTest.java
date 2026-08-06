@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.WitExportInliner;
@@ -193,7 +194,7 @@ class WitScaffolderTest {
 				""");
 		Path lisp = this.tempDir.resolve("analyzer.lisp");
 		runCli("--scaffold-wit", wit.toString(), "-o", lisp.toString());
-		assertThatCode(() -> new WasmLispCompiler(false, true, false, false, false, false)
+		assertThatCode(() -> new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false)
 			.compile(WitExportInliner.inline(LispReader.readAllFromString(Files.readString(lisp)),
 					this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem())))
 			.doesNotThrowAnyException();

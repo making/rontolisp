@@ -31,6 +31,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Mutability;
@@ -202,7 +203,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static final Set<String> ARRAY_OPS = Set.of(LispNames.AREF, LispNames.ROW_MAJOR_AREF, LispNames.ASET,
 			LispNames.ROW_MAJOR_ASET);
 
-	private final boolean optimize;
+	private final OptimizeLevel optimize;
 
 	/**
 	 * Whether to accelerate the vectorizable {@code vec:} kernels with WASM fixed-width
@@ -234,40 +235,39 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	/** Creates a new non-GC WASM compiler (no optimize, scalar {@code vec:} kernels). */
 	public NoGcWasmCompiler() {
-		this(false, false);
+		this(OptimizeLevel.NONE, false);
 	}
 
 	/**
 	 * Creates a new non-GC WASM compiler with scalar (non-SIMD) {@code vec:} kernels.
-	 * @param optimize when {@code true}, the finished module is run through
+	 * @param optimize what to optimize the module FOR (the CLI's {@code --optimize}).
+	 * Every level but {@link OptimizeLevel#NONE} runs the finished module through
 	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
 	 * dropped and the survivors renumbered. The shaker is GC-agnostic, so it composes
-	 * with the non-GC module shape for free.
+	 * with the non-GC module shape for free. {@link OptimizeLevel#SIZE} is accepted and
+	 * equals {@link OptimizeLevel#DEFAULT} here: this lowering is i64-native, so it never
+	 * emits the boxed/unboxed pair the level declines on wasm-GC.
 	 */
-	public NoGcWasmCompiler(boolean optimize) {
+	public NoGcWasmCompiler(OptimizeLevel optimize) {
 		this(optimize, false);
 	}
 
 	/**
 	 * Creates a new non-GC WASM compiler.
-	 * @param optimize when {@code true}, the finished module is run through
-	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
-	 * dropped and the survivors renumbered.
+	 * @param optimize see {@link #NoGcWasmCompiler(OptimizeLevel)}
 	 * @param simd when {@code true}, the vectorizable {@code vec:} kernels lower to
 	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
 	 * to scalar linear-memory loops that need no SIMD proposal. This is the
 	 * {@code --simd} switch wired on the {@code --no-gc} backend, orthogonal to the
 	 * memory model.
 	 */
-	public NoGcWasmCompiler(boolean optimize, boolean simd) {
+	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd) {
 		this(optimize, simd, false);
 	}
 
 	/**
 	 * Creates a new non-GC WASM compiler.
-	 * @param optimize when {@code true}, the finished module is run through
-	 * {@link am.ik.wasm.WasmTreeShaker} so anything unreachable from the exports is
-	 * dropped and the survivors renumbered.
+	 * @param optimize see {@link #NoGcWasmCompiler(OptimizeLevel)}
 	 * @param simd when {@code true}, the vectorizable {@code vec:} kernels lower to
 	 * native WASM v128 SIMD ({@code f64x2}/{@code f32x4}); when {@code false} they lower
 	 * to scalar linear-memory loops that need no SIMD proposal.
@@ -276,7 +276,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code --no-gc --component}); export names must be lower-kebab-case and
 	 * {@code :async} is rejected
 	 */
-	public NoGcWasmCompiler(boolean optimize, boolean simd, boolean component) {
+	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd, boolean component) {
 		this.optimize = optimize;
 		this.simd = simd;
 		this.component = component;
@@ -437,7 +437,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 		byte[] module = assemble(reachable, internalBodies, exportDecls, wrapperBodies, wrapperOrdinals, exportOrdinals,
 				internalCount, types, mem);
-		if (this.optimize) {
+		if (this.optimize.eliminatesDeadCode()) {
 			module = am.ik.wasm.WasmTreeShaker.shake(module);
 		}
 		if (this.component) {

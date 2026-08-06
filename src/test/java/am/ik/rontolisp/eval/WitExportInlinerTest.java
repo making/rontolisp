@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.RontoLispCli;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -155,7 +156,7 @@ class WitExportInlinerTest {
 	void gcComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
 		// The base component blob variant.
 		assertByteIdentical("",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				program -> new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false).compile(program),
 				WitExportDirective.Backend.WASM_GC);
 	}
 
@@ -164,10 +165,11 @@ class WitExportInlinerTest {
 		// rontolisp:tcp-* rides the sockets.lisp user import (wasi:sockets@0.3.0);
 		// both programs get the identical splice, so the wit-export byte-identity
 		// property holds on a socket-importing component too.
-		assertByteIdentical("(defun listen () (rontolisp:tcp-listen 7777))\n",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(WitLibrary.process(
-						StdinLibrary.process(SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT),
-								WitExportDirective.Backend.WASM_COMPONENT, false))),
+		assertByteIdentical("(defun listen () (rontolisp:tcp-listen 7777))\n", program -> new WasmLispCompiler(false,
+				true, false, OptimizeLevel.NONE, false, false)
+			.compile(WitLibrary.process(
+					StdinLibrary.process(SocketsLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT),
+							WitExportDirective.Backend.WASM_COMPONENT, false))),
 				WitExportDirective.Backend.WASM_GC);
 	}
 
@@ -176,19 +178,19 @@ class WitExportInlinerTest {
 		// No component: the export is a plain core export, whose WASM parameters have no
 		// names at all -- so the world's parameter names must not leak into the bytes.
 		assertByteIdentical("",
-				program -> new WasmLispCompiler(false, false, false, false, false, false).compile(program),
+				program -> new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, false).compile(program),
 				WitExportDirective.Backend.WASM_GC);
 	}
 
 	@Test
 	void noGcModuleIsByteIdenticalToTheHandWrittenExport() throws IOException {
-		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, false).compile(program),
+		assertByteIdentical("", program -> new NoGcWasmCompiler(OptimizeLevel.NONE, false, false).compile(program),
 				WitExportDirective.Backend.WASM_NO_GC);
 	}
 
 	@Test
 	void noGcComponentIsByteIdenticalToTheHandWrittenExport() throws IOException {
-		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, true).compile(program),
+		assertByteIdentical("", program -> new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program),
 				WitExportDirective.Backend.WASM_NO_GC);
 	}
 
@@ -207,9 +209,9 @@ class WitExportInlinerTest {
 		String handWritten = "(rontolisp:wasm-export 'count-vowels :params '(:string) "
 				+ ":param-names '(s) :returns :u32)";
 		assertByteIdentical("",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				program -> new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false).compile(program),
 				WitExportDirective.Backend.WASM_GC, world, handWritten);
-		assertByteIdentical("", program -> new NoGcWasmCompiler(false, false, true).compile(program),
+		assertByteIdentical("", program -> new NoGcWasmCompiler(OptimizeLevel.NONE, false, true).compile(program),
 				WitExportDirective.Backend.WASM_NO_GC, world, handWritten);
 	}
 
@@ -219,7 +221,7 @@ class WitExportInlinerTest {
 		// That is the whole reason every program written against the pre-WIT vocabulary
 		// keeps producing the artifact it always did.
 		assertByteIdentical("",
-				program -> new WasmLispCompiler(false, true, false, false, false, false).compile(program),
+				program -> new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false).compile(program),
 				WitExportDirective.Backend.WASM_GC, WORLD,
 				"(rontolisp:wasm-export 'count-vowels :params '(:string) " + ":param-names '(s) :returns :s32)");
 	}
@@ -233,7 +235,7 @@ class WitExportInlinerTest {
 		// :param-names is for).
 		Path wit = this.tempDir.resolve("world.wit");
 		Files.writeString(wit, WORLD);
-		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, false, false, false);
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false);
 		compiler.compile(
 				WitExportInliner.inline(LispReader.readAllFromString(BODY + "(rontolisp:wit-export \"world.wit\")"),
 						this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem()));
@@ -348,7 +350,7 @@ class WitExportInlinerTest {
 			// url-decode is spliced with the library but unreachable from the export.
 			.doesNotContain("(defun rontolisp:url-decode");
 		// And the pruned program still compiles as a component.
-		assertThat(new WasmLispCompiler(false, true, false, false, false, false)
+		assertThat(new WasmLispCompiler(false, true, false, OptimizeLevel.NONE, false, false)
 			.compile(LibraryDefunPruner.prune(lowered))).isNotEmpty();
 	}
 

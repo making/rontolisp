@@ -60,6 +60,14 @@ you loaded — as does `--dynamic`. Compile with
 `-Drontolisp.debug.dispatchgate=true` to have the compiler name the operator
 responsible.
 
+`--optimize` takes an optional level, shared with the [WASM backend](wasm.md):
+`--optimize=default` is the bare flag written out, and `--optimize=size` asks
+for the smallest output a backend can give. This backend accepts it and emits a
+byte-for-byte identical class, because what that level declines are the wasm-GC
+emissions that spend bytes on speed and there is no counterpart here -- the same
+program's JVM bytecode is about a third the size of its WASM to begin with. So
+one build script can pass `--optimize=size` for every target.
+
 Independently of `--optimize`, compilation always tree-shakes the libraries it
 splices in: the bundled Lisp-source ones (`linalg:`, `vec:`, JSON, URL,
 `equalp`/`string<`) and every system loaded with

@@ -72,6 +72,13 @@ public class CliOptions {
 
 	/**
 	 * Parse command-line arguments into a {@link CliOptions} instance.
+	 * <p>
+	 * A value is written either as the following argument ({@code -o out.wasm}) or glued
+	 * to the key with an {@code =} ({@code --optimize=size}). The two forms are not
+	 * interchangeable: a key in {@link #noValueKeys} still takes NO following argument,
+	 * so {@code --optimize -o out.wasm} keeps meaning the bare flag plus an output file
+	 * rather than reading {@code -o} as the level. That is why a valued flag whose bare
+	 * form must keep working can only be spelled with {@code =}.
 	 * @param args the command-line arguments
 	 * @return the parsed options
 	 */
@@ -80,8 +87,24 @@ public class CliOptions {
 		String key = null;
 		for (String arg : args) {
 			if (key == null) {
+				// --key=value: everything after the FIRST '=' is the value, so a value
+				// may itself contain one.
+				int eq = arg.indexOf('=');
 				if (arg.equals("-") || !arg.startsWith("-")) {
+					// There is exactly one positional argument (the input file), so a
+					// second one is a mistake -- and the likeliest mistake is spelling a
+					// valued option with a space, where the value lands here and used to
+					// silently REPLACE the input file (`--optimize size` compiled a file
+					// named "size").
+					if (options.containsKey(NOKEY)) {
+						throw new IllegalArgumentException("unexpected extra argument '" + arg
+								+ "': rontolisp takes one input file, and an option value is written"
+								+ " with '=' (as in --optimize=size)");
+					}
 					options.put(NOKEY, arg);
+				}
+				else if (eq > 0) {
+					options.put(arg.substring(0, eq), arg.substring(eq + 1));
 				}
 				else {
 					key = arg;
