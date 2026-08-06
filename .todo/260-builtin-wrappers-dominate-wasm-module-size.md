@@ -98,7 +98,45 @@ the fix below -- it shrinks every function, wrappers included -- but it means **
 size number for this item must now say which level it was taken at**, including the
 714,633 / 685,933 / 660,153 figures above, which are all at the bare `--optimize`.
 
-## The shape of the fix
+## Status (2026-08-06, later): closed -- the keyword-intern exemption landed and the numbers followed
+
+The INTERN blocker above was retired by deciding the "obviously available" exemption
+against the code, as this file demanded, and it survived: the worry about `_lookup`'s
+third probe ran the probe BACKWARDS. That probe widens which functions GET a registry
+row from pool strings; it never strips a designator's spelling at run time, and the
+runtime match is exact-spelling (WASM: canonical-offset) equality. A keyword interned
+by `(intern NAME :keyword)` is spelled `":" + NAME`
+(`LispMacroExpander.internKeywordForm`), and no row key can begin with a colon because
+a keyword can never name a defun -- every backend rejects `(defun :foo ...)` at the
+implicit block (`BLOCK: block name must be a symbol`). So the exemption is
+`RuntimeNameProducers` exemption 2: an evaluated `(intern NAME :keyword)` -- judged by
+the same `isKeywordPackageDesignator` predicate the lowering branches on -- is not a
+name producer; under QUOTE the shape stays a trigger. No `LibraryDefunPruner` widening
+was needed: the dispatch-level gate plus three blocker retirements reached this file's
+goal without touching wrapper emission.
+
+Measured, same trivial serve program, `--component`, all levels named:
+
+| flag | bytes | vs pre-fix same flag |
+| --- | --- | --- |
+| (none) | 594,477 | 669,572 -> -11.2% (fewer ladder cases even unoptimized) |
+| `--optimize` | 280,256 | 641,599 -> **-56.3%** (54 of 367 defuns dispatchable) |
+| `--optimize=size` | 225,683 | 530,637 -> -57.5% |
+
+`examples/asdf/clack-hello.lisp` (`--component`): 1,812,547 none / 1,708,259
+`--optimize` / 1,443,544 `--optimize=size`. It still bails, CORRECTLY -- the real
+clack resolves its handler backend by name at run time (`find-symbol` + `read`), the
+same genuine-forge class as jzon/postgres.
+
+259's serve benchmark re-run (wasmtime 47.0.2, 4 conns x 10 s closed loop, Bench.java,
+best of three, 280,256 vs the pre-fix 641,599 module): `--max-instance-reuse-count 1`
+~1757 vs ~1781 rps, `128` ~4899 vs ~4990 -- unchanged within noise. The premise "module
+size is instantiation cost" does NOT hold on the wasmtime serve reuse loop: the module
+is compiled once per server run, so per-instance cost is the 1 MiB pre-grow plus fixed
+instantiation work. The bytes buy transfer, disk, and compile-time cold start
+(wasmCloud-shaped hosts) -- recorded in `.kb/optimize-dead-code-elimination.md`.
+
+## The shape of the fix (as proposed before the dispatch-level gate existed)
 
 The seam already exists: `wrapperExcludes` in `WasmLispCompiler` (~line 1866) and
 `JvmLispCompiler` (~line 736), plus `BuiltinFunctionWrappers.REFERENCE_GATED_FUNCTIONS`

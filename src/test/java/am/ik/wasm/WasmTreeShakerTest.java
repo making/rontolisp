@@ -84,6 +84,25 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void keywordInternDoesNotHoldTheFuncallDispatchGateOpen() {
+		// (intern NAME :keyword) lowers to a leading-colon spelling
+		// (LispMacroExpander.internKeywordForm), and no _lookup row key can begin with a
+		// colon (a keyword can never name a defun), so the funcall-dispatch gate stays
+		// exact and the builtin wrappers shake out. The same intern WITHOUT the keyword
+		// package can forge any function name, so it must keep every wrapper
+		// dispatchable.
+		// The funcall keeps the dispatch machinery emitted at all -- without one there
+		// are no ladders and both modules would be tiny whatever the gate decides.
+		String funcall = "(defun f () 1) (print (funcall 'f)) ";
+		String keyword = funcall + "(print (eq (intern (string-upcase \"post\") :keyword) :post))";
+		String forging = funcall + "(print (intern (string-upcase \"post\")))";
+		byte[] gated = compile(keyword, false, OptimizeLevel.DEFAULT);
+		byte[] bailed = compile(forging, false, OptimizeLevel.DEFAULT);
+		Module.parse(gated).assertWellFormed();
+		assertThat(gated.length).isLessThan(bailed.length / 2);
+	}
+
+	@Test
 	void isIdempotent() {
 		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, OptimizeLevel.NONE));
 		byte[] twice = WasmTreeShaker.shake(once);

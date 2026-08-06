@@ -2985,6 +2985,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void keywordInternStaysInternedInAGateShakenModule() throws Exception {
+		// (intern NAME :keyword) does not turn the funcall-dispatch gate off
+		// (RuntimeNameProducers exemption 2), so this module shakes hard -- and the
+		// shaken module must still route the runtime keyword through _intern so its
+		// offset matches the literal (canonical-offset discipline: eq and getf are
+		// offset comparisons).
+		String program = """
+				(print (eq (intern (string-upcase "post") :keyword) :post))
+				(print (keywordp (intern (string-upcase "get") :keyword)))
+				(print (getf (list :post 1) (intern (string-upcase "post") :keyword)))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		byte[] plain = new WasmLispCompiler(false, false, false, OptimizeLevel.NONE).compile(parsed);
+		byte[] optimized = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
+		assertThat(optimized.length).as("the gate should apply, not bail").isLessThan(plain.length / 2);
+		assertThat(runModule(optimized, "kwgate.wasm")).isEqualTo("T\nT\n1");
+	}
+
+	@Test
 	void optimizedServeComponentStillServesUnderWasmtimeServe() throws Exception {
 		// The serve shape is the one the shaker could most easily break: `handle` and
 		// `async_cb` are reached ONLY from the component's canon lift (and its callback

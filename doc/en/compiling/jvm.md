@@ -56,7 +56,8 @@ listing switches off, and every function stays reachable, as soon as the program
 can name a function at run time: any use of `eval`, `read`, `read-from-string`, a
 runtime `load`, `intern`, `find-symbol`, `make-symbol`, `symbol-function`,
 `fdefinition`, `fboundp` or `uiop:symbol-call` — including one inside a library
-you loaded — as does `--dynamic`. Compile with
+you loaded — as does `--dynamic`. `(intern name :keyword)` is exempt: it only
+ever builds a keyword, which can never name a function. Compile with
 `-Drontolisp.debug.dispatchgate=true` to have the compiler name the operator
 responsible.
 

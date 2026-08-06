@@ -132,6 +132,28 @@ class JvmClassShakerTest {
 	}
 
 	@Test
+	void keywordInternDoesNotHoldTheDispatchGateOpen() throws Exception {
+		// (intern NAME :keyword) spells its result ":NAME", and no _lookup row key can
+		// begin with a colon (a keyword can never name a defun), so the dispatch gate
+		// stays exact: an uncalled defun still shakes out while the runtime-interned
+		// keyword stays eq to its literal. A one-argument intern of the same computed
+		// name can forge any function name, so it keeps the uncalled defun alive -- and
+		// so does the keyword shape inside QUOTED data, where the intern symbol itself
+		// can be extracted and funcalled.
+		// The funcall keeps the dispatch machinery emitted at all -- without one there
+		// are no dispatch methods and UNUSED is dropped whatever the gate decides.
+		String prefix = "(defun unused (x) (car x)) (defun f () 1) (print (funcall 'f)) ";
+		byte[] gated = compile(prefix + "(print (eq (intern (string-upcase \"post\") :keyword) :post))",
+				OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(gated)).contains("F").doesNotContain("UNUSED");
+		assertThat(run(gated)).isEqualTo("1\nT");
+		byte[] forging = compile(prefix + "(print (intern (string-upcase \"post\")))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(forging)).contains("UNUSED");
+		byte[] quoted = compile(prefix + "(print (cadr '(intern \"POST\" :keyword)))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(quoted)).contains("UNUSED");
+	}
+
+	@Test
 	void keepsTheReflectiveApplyRootForJavaInterop() throws Exception {
 		// The java: bridge looks up _apply reflectively (no bytecode edge); the shaker is
 		// invoked with _apply as an extra root, so a proxy callback still works.

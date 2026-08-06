@@ -5,6 +5,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -36,7 +37,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * either half.
  *
  * <p>
- * <strong>The one exemption is rontolisp's own scaffolding</strong>, and it is matched by
+ * <strong>Exemption 1 is rontolisp's own scaffolding</strong>, and it is matched by
  * IDENTITY rather than by shape: {@link #isCompilerScaffolding} skips the generated
  * slot-name fold defun ({@link LispMacroExpander#slotNameKeyDefun()}), whose
  * {@code (intern (symbol-name n))} re-spells a symbol the program already holds and whose
@@ -46,6 +47,23 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * that arm now injected only for a program that spells the directive
  * ({@code .kb/format.md}), the fold is what remains, and it is worth 21% of a
  * {@code cl-ppcre} module.
+ *
+ * <p>
+ * <strong>Exemption 2 is the keyword-package intern</strong>, {@code (intern NAME
+ * :keyword)} in evaluated position, and unlike the rejected NAME-argument refinement
+ * above it judges the PACKAGE argument -- by the same predicate the compile-path lowering
+ * itself uses ({@link LispMacroExpander#isKeywordPackageDesignator}), so the two cannot
+ * disagree about which forms it covers. It is sound against {@code _lookup}'s probes
+ * rather than by intuition: the lowering ({@link LispMacroExpander#internKeywordForm})
+ * spells the result {@code ":" + NAME}, the runtime match is exact-spelling equality
+ * against the registry's row keys, and no row key can begin with a colon because a
+ * keyword can never name a function on any backend (the defun's implicit block rejects it
+ * -- {@code BLOCK: block name must be a symbol,
+ * got :FOO} -- in {@code LispMacroExpander.blockName} and {@code
+ * LispEvaluator.blockName}). So whatever NAME computes, the interned symbol resolves no
+ * function row, and gating stays exact. The form is exempt only as evaluated CODE: inside
+ * quoted data the scan stays trigger-shaped, so extracting the {@code intern} symbol out
+ * of such a list still turns the gate off.
  *
  * <p>
  * The boundary, stated plainly: a program that CALLS {@code %slot-name-key} itself and
@@ -86,7 +104,7 @@ public final class RuntimeNameProducers {
 	 */
 	public static boolean anyNameResolvable(List<LispVal> program) {
 		for (LispVal form : program) {
-			if (!isCompilerScaffolding(form) && scan(form)) {
+			if (!isCompilerScaffolding(form) && scan(form, false)) {
 				return true;
 			}
 		}
@@ -113,9 +131,11 @@ public final class RuntimeNameProducers {
 	 * Any occurrence of one of the names anywhere in the form -- operator position,
 	 * argument position, {@code #'} reference, quoted data. Position does not narrow it:
 	 * a {@code #'intern} handed to a higher-order function resolves just as much as a
-	 * call does.
+	 * call does. The one positional judgment is exemption 2 (class doc): an evaluated
+	 * {@code (intern NAME :keyword)} call scans only its NAME argument, while the same
+	 * shape under {@code quote} stays a plain occurrence.
 	 */
-	private static boolean scan(LispVal val) {
+	private static boolean scan(LispVal val, boolean quoted) {
 		if (val instanceof LispSymbol sym) {
 			if (EVALUATES_DATA.contains(sym.name()) || BUILDS_A_NAME.contains(sym.name())) {
 				report(sym.name());
@@ -123,14 +143,31 @@ public final class RuntimeNameProducers {
 			}
 			return false;
 		}
+		if (!quoted && isKeywordIntern(val)) {
+			return scan(((LispCons) ((LispCons) val).cdr()).car(), false);
+		}
+		boolean inData = quoted || (val instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.QUOTE.equals(op.name()));
 		LispVal cur = val;
 		while (cur instanceof LispCons cell) {
-			if (scan(cell.car())) {
+			if (scan(cell.car(), inData)) {
 				return true;
 			}
 			cur = cell.cdr();
 		}
-		return cur instanceof LispSymbol && scan(cur);
+		return cur instanceof LispSymbol && scan(cur, inData);
+	}
+
+	/**
+	 * The three-part {@code (intern NAME PKG)} call whose package designates
+	 * {@code keyword} -- judged by the predicate the compile-path lowering itself
+	 * branches on, so the exemption covers exactly the forms that lower to
+	 * {@link LispMacroExpander#internKeywordForm} and nothing else.
+	 */
+	private static boolean isKeywordIntern(LispVal val) {
+		return val instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.INTERN.equals(op.name())
+				&& cons.cdr() instanceof LispCons nameCell && nameCell.cdr() instanceof LispCons pkgCell
+				&& pkgCell.cdr() instanceof LispNil && LispMacroExpander.isKeywordPackageDesignator(pkgCell.car());
 	}
 
 	/**

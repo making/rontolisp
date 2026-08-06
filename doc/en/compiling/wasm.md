@@ -127,6 +127,11 @@ rontolisp -Drontolisp.debug.dispatchgate=true app.lisp -o app.wasm --optimize
 # => [dispatch-gate] every function stays dispatchable because of: INTERN
 ```
 
+One `intern` shape is exempt: `(intern name :keyword)` only ever builds a
+keyword, and a keyword can never name a function, so it leaves the listing on —
+a handler upcasing a request method into `:GET`/`:POST` does not cost you the
+optimization.
+
 A `~/name/` directive in a format control string counts as well, because it
 names its function at run time — but only a control string the compiler can see
 brings it in, so a program that spells no such directive is unaffected (see
