@@ -18,6 +18,7 @@ The programs are grouped by theme, one directory per group:
 | [`wit/lisp-calls-rust/`](wit/lisp-calls-rust), [`wit/rust-calls-lisp/`](wit/rust-calls-lisp), [`wit/pipeline/`](wit/pipeline) | Across languages: Lisp and Rust components composed into one with `wac`, calling each other through WIT (a direction each, plus a three-component `wac compose` chain) |
 | [`db/`](db) | PostgreSQL over the real cl-postgres driver and postmodern on top of it — queries, CRUD, S-SQL, and a cl-who web app |
 | [`asdf/`](asdf), [`wasmcloud/`](wasmcloud), [`cloudflare-workers/`](cloudflare-workers) | Third-party libraries and platform templates |
+| [`wasm-size/`](wasm-size) | How big the compiled `.wasm` actually is, next to the same programs in C / Rust / Zig / Moonbit / Wado |
 
 Assuming the executable JAR has been built
 (`./mvnw clean spring-javaformat:apply package`), set:
@@ -192,6 +193,24 @@ function** — the Rust side takes whichever shape the Lisp end needs.
 | [`wit/lisp-calls-rust/`](wit/lisp-calls-rust) | **Lisp calls Rust.** [`app.lisp`](wit/lisp-calls-rust/app.lisp) (a Lisp command) imports the interface `example:textkit/casing` with `rontolisp:wit-import` and calls `(tk:shout phrase)`; [`rust-shouter/`](wit/lisp-calls-rust/rust-shouter) (Rust) **exports** that interface, uppercasing the text and adding `!`. [`build.sh`](wit/lisp-calls-rust/build.sh) compiles both (`rontolisp app.lisp --component`; `cargo component build --target wasm32-unknown-unknown`), `wac plug`s the Rust component into the Lisp app, and `wasmtime run -W gc=y textkit.wasm` prints `hello world  ->  HELLO WORLD!`. The Rust component imports no WASI, so it needs no adapter. The app also runs **standalone** on the interpreter/JVM, where a bundled Lisp `rontolisp:wit-provide` answers the same interface |
 | [`wit/rust-calls-lisp/`](wit/rust-calls-lisp) | **Rust calls Lisp.** [`counter.lisp`](wit/rust-calls-lisp/counter.lisp) (a Lisp component) **exports** the plain function `vowel-count` via `rontolisp:wit-export`; [`rust-describer/`](wit/rust-calls-lisp/rust-describer) (Rust) **imports** it and calls it from `describe`, building a sentence like `"hello world" has 3 vowels`. `wac plug`s the Lisp counter into the Rust describer, and `wasmtime run -W gc=y --invoke 'describe("hello world")' vowels.wasm` returns the sentence — the vowel count in it came from Lisp, the wording from Rust |
 | [`wit/pipeline/`](wit/pipeline) | **Both directions, chained — with `wac compose`.** A three-component pipeline: [`app.lisp`](wit/pipeline/app.lisp) (Lisp) imports `example:pipeline/shout`, [`rust-shouter/`](wit/pipeline/rust-shouter) (Rust) exports it and in turn imports `vowel-count`, and [`stats.lisp`](wit/pipeline/stats.lisp) (Lisp) exports `vowel-count`. So one call is **Lisp → Rust → Lisp**. `wac plug` cannot wire a plug into another plug, so [`composition.wac`](wit/pipeline/composition.wac) writes out each edge and one `wac compose` builds the whole chain; `wasmtime run -W gc=y pipeline.wasm` prints `hello world  ->  HELLO WORLD!!!` (five `!` for the five vowels of `component model`, counted by Lisp) |
+
+## How big is the `.wasm`? — `wasm-size/`
+
+[`wasm-size/`](wasm-size) measures the compiled artifact rather than what it
+prints. It follows
+[wado-lang/wado `wasm-size/`](https://github.com/wado-lang/wado/tree/main/wasm-size),
+a cross-language Wasm binary size comparison, and adds the rontolisp side of two
+of its programs — `hello_world` and `pi_approx` (a million Leibniz terms printed
+to 15 decimal places) — so the numbers can be read next to C, Rust, Zig, Moonbit
+and Wado. `./build.sh` builds every flag combination, runs each module, checks
+its output and prints the table.
+
+The short version: `hello_world` is **518 bytes** with `--optimize=size` (one
+import, `fd_write`) and **406 bytes** as a `--no-gc` MVP module; `pi_approx` is
+**16,083 bytes**, of which the loop is only 3,778 — printing the answer to 15
+decimal places is the rest, because `~,15F` expands inline into the caller
+instead of calling a renderer (the same program printed with `princ` is 7,930). Without `--optimize` both are ~320 KB of un-tree-shaken prelude, which is
+the one number on that page worth remembering.
 
 ## Running
 

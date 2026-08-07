@@ -586,3 +586,37 @@ examples:
       portable Clack application, on the two backends where clackup can actually
       bind (a blocking server, hence compile-only; Preview 1 has no incoming
       TCP).
+
+  # --- wasm-size: the same two programs the cross-language size table measures ---
+  - path: wasm-size/hello_world/hello_world.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: >-
+      the size-comparison floor. What matters in its directory is the size of the
+      compiled module (518 bytes with --optimize), but the number only means
+      something if the module still prints, so the run legs pin the output and the
+      wasm-component leg pins that the WASI 0.3 build of it compiles too.
+    expect:
+      equals: |
+        Hello, World!
+  - path: wasm-size/pi_approx/pi_approx.lisp
+    backends: [interpreter, jvm, wasm, wasm-component]
+    note: >-
+      a million Leibniz terms in f64 and one ~,15F. The equals check is the point:
+      the 15 decimal places must be identical on every backend, or the size table
+      would be comparing modules that do not agree on what they compute.
+    expect:
+      equals: |
+        pi = 3.141591653589774
+  - path: wasm-size/hello_world/hello_world-nogc.lisp
+    backends: [no-gc]
+    note: >-
+      the --no-gc floor, 406 bytes: a plain MVP core module that prints through
+      fd_write with no wasm-GC at all. Host-invoked (wasmtime run --invoke
+      say-hello), so the harness only compiles it.
+  - path: wasm-size/pi_approx/pi_approx-nogc.lisp
+    backends: [no-gc]
+    note: >-
+      the same Leibniz loop as a 1,042-byte MVP core module -- the smallest
+      artifact in the directory, and the measurement that says most of pi_approx's
+      16 KB is the format directive interpreter rather than the loop. Host-invoked
+      (wasmtime run --invoke approx-pi), so the harness only compiles it.
