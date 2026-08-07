@@ -51,18 +51,18 @@ final class WasmP1FutureRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
-		w.writeSignedLeb128(fieldIdx);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		w.writeUnsignedLeb128(fieldIdx);
 	}
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void call(WasmWriter w, int func) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(func);
+		w.writeUnsignedLeb128(func);
 	}
 
 }

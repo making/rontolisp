@@ -80,7 +80,7 @@ final class WasmFunctionFormCompiler {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 		}
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileFunctionRef(name, ctx);

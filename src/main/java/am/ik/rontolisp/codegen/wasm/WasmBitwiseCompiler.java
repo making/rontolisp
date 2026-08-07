@@ -41,21 +41,21 @@ final class WasmBitwiseCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(func);
+		ctx.writer.writeUnsignedLeb128(func);
 	}
 
 	static void compileLognot(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_NOT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_NOT);
 	}
 
 	static void compileIntegerLength(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_INTLEN);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_INTLEN);
 	}
 
 	static void compileLogbitp(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -63,7 +63,7 @@ final class WasmBitwiseCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_LOGBITP);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_LOGBITP);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 

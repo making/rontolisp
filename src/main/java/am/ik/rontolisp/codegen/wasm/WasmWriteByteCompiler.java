@@ -24,7 +24,7 @@ final class WasmWriteByteCompiler {
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_BYTE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_BYTE);
 	}
 
 }

@@ -51,7 +51,7 @@ final class WasmInstanceCompiler {
 		refNull(ctx);
 		i32Const(ctx, layout.capacity());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		int slotsSlot = ctx.allocTemp();
 		setLocal(ctx, slotsSlot);
 		for (int i = 2; i < args.size(); i++) {
@@ -62,7 +62,7 @@ final class WasmInstanceCompiler {
 				i32Const(ctx, index);
 				WasmExprCompiler.compileExpr(args.get(i), ctx);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			}
 			else {
 				// A surplus argument is still evaluated, left to right, then dropped --
@@ -74,7 +74,7 @@ final class WasmInstanceCompiler {
 		i32Const(ctx, address);
 		getLocal(ctx, slotsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
 	}
 
 	/** {@code (%obj-ref obj <k>)}. */
@@ -90,7 +90,7 @@ final class WasmInstanceCompiler {
 		pushSlots(ctx);
 		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_REF));
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	/**
@@ -112,8 +112,8 @@ final class WasmInstanceCompiler {
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		i32Const(ctx, address);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(0);
 		getLocal(ctx, objSlot);
 	}
 
@@ -133,7 +133,7 @@ final class WasmInstanceCompiler {
 		i32Const(ctx, literalIndex(args.get(2), LispNames.OBJ_SET));
 		getLocal(ctx, valSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		getLocal(ctx, valSlot);
 	}
 
@@ -192,8 +192,7 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		// _str_build (NOT _str_fresh): the tag text was interned by
 		// WasmInstanceLayouts, so the symbol's id is the interned offset and two reads
 		// of the same tag stay eq, exactly like a quoted symbol literal.
@@ -230,8 +229,7 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		refNull(ctx);
 		setLocal(ctx, listSlot);
 		// The cursor starts at the LAYOUT's slot count, not at array.len: a
@@ -253,10 +251,10 @@ final class WasmInstanceCompiler {
 		pushSlots(ctx);
 		getIndex(ctx, idxSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		getLocal(ctx, listSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		setLocal(ctx, listSlot);
 		getIndex(ctx, idxSlot);
 		i32Const(ctx, 1);
@@ -353,8 +351,8 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(1);
 		castBuckets(ctx);
 	}
 
@@ -363,8 +361,8 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	private static void castBuckets(WasmLispCompiler.Ctx ctx) {
@@ -374,12 +372,12 @@ final class WasmInstanceCompiler {
 
 	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32Const(WasmLispCompiler.Ctx ctx, int value) {

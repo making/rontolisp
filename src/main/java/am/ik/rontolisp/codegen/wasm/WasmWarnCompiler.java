@@ -34,7 +34,7 @@ final class WasmWarnCompiler {
 			// The redirect is active: the destination is the variable's current value.
 			WasmExprCompiler.compileExpr(am.ik.rontolisp.compiler.StreamDesignators.errorOutput(), ctx);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
 			ctx.writer.write(Instruction.DROP);
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
@@ -45,7 +45,7 @@ final class WasmWarnCompiler {
 		ctx.writer.writeSignedLeb128((int) am.ik.rontolisp.compiler.StreamDesignators.STANDARD_ERROR_HANDLE);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
 		// _write_line returns the string; %warn returns nil
 		ctx.writer.write(Instruction.DROP);
 		ctx.writer.write(Instruction.REF_NULL);

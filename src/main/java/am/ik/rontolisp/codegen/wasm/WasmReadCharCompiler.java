@@ -40,7 +40,7 @@ final class WasmReadCharCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_CHAR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_CHAR);
 	}
 
 }

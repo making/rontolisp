@@ -248,16 +248,16 @@ final class WasmArrayCompiler {
 		i32Const(ctx, charVector ? 1 : 0);
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		getLocal(ctx, dataArrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 	}
 
 	// (make-array dims :displaced-to target [:displaced-index-offset off]): a displaced
@@ -333,16 +333,16 @@ final class WasmArrayCompiler {
 		refNull(ctx);
 		getLocal(ctx, offSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		getLocal(ctx, targetSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 	}
 
 	// (make-array dims :element-type 'double-float | 'single-float [:initial-element x]):
@@ -391,7 +391,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dimsArrSlot);
 		getLocal(ctx, dataArrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	// (make-array dims :element-type '(unsigned-byte 8|16|32) [:initial-element x]): a
@@ -468,16 +468,16 @@ final class WasmArrayCompiler {
 		i32Const(ctx, 0);
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		getLocal(ctx, dataArrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -530,16 +530,16 @@ final class WasmArrayCompiler {
 		i32Const(ctx, 0);
 		boxI31(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		getLocal(ctx, dataArrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -595,7 +595,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dimsArrSlot);
 		getLocal(ctx, vbSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	// Whether the :initial-element form is a literal that coerces to POSITIVE zero -- the
@@ -612,7 +612,7 @@ final class WasmArrayCompiler {
 	// call $_v_new / $_v_get / $_v_set.
 	private static void callVec(WasmLispCompiler.Ctx ctx, int vecFunc) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + vecFunc);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + vecFunc);
 	}
 
 	// Parses the make-array dimensions value in dimsSlot (an i31 for the rank-1
@@ -835,7 +835,7 @@ final class WasmArrayCompiler {
 		emitIfEq(ctx);
 		emitPackedIntRead(ctx, arrSlot, idxSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.ELSE);
 		// general: arr -> header (the (dims . (meta . data)) cons), then data[idx].
 		getLocal(ctx, arrSlot);
@@ -878,7 +878,7 @@ final class WasmArrayCompiler {
 		int iIdxSlot = setTemp(ctx);
 		emitPackedIntRead(ctx, arrSlot, iIdxSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.ELSE);
 		// general: resolve the displacement chain, then data[index].
 		getLocal(ctx, arrSlot);
@@ -933,7 +933,7 @@ final class WasmArrayCompiler {
 		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
 		ctx.writer.write(Instruction.TEE_LOCAL);
-		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.writeUnsignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
 		ctx.writer.write(Instruction.END);
@@ -994,7 +994,7 @@ final class WasmArrayCompiler {
 		arrayGet(ctx);
 		getLocal(ctx, resultSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		setLocal(ctx, resultSlot);
 		getLocal(ctx, jSlot);
 		WasmEmitHelper.castI31GetS(ctx);
@@ -1062,7 +1062,7 @@ final class WasmArrayCompiler {
 		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 		ctx.writer.write(Instruction.TEE_LOCAL);
-		ctx.writer.writeSignedLeb128(valSlot);
+		ctx.writer.writeUnsignedLeb128(valSlot);
 		arraySet(ctx);
 		getLocal(ctx, valSlot);
 		if (rank == 1) {
@@ -1093,11 +1093,11 @@ final class WasmArrayCompiler {
 			emitUnboxIntForStore(ctx, valSlot);
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_IV_SET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IV_SET);
 		if (resultNeeded) {
 			emitPackedIntRead(ctx, arrSlot, idxSlot);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		}
 		else {
 			refNull(ctx);
@@ -1246,9 +1246,9 @@ final class WasmArrayCompiler {
 		boxI31(ctx);
 		refNull(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.END);
@@ -1416,8 +1416,7 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.ELSE);
 		refNull(ctx);
@@ -1440,8 +1439,7 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		getLocal(ctx, headerSlot);
 		getMeta(ctx);
 		castConsGet(ctx, 1);
@@ -1479,8 +1477,7 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		ctx.writer.write(Instruction.I32_GE_S);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		refNull(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		emitStoreAtFillPointerAndAdvance(ctx, headerSlot, metaSlot, valSlot);
@@ -1768,12 +1765,12 @@ final class WasmArrayCompiler {
 
 	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32Const(WasmLispCompiler.Ctx ctx, int value) {
@@ -1802,7 +1799,7 @@ final class WasmArrayCompiler {
 	// Boxes the f64 on the stack into a TYPE_FLOAT struct (an eqref value).
 	private static void boxFloat(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 	// Pushes an i32: whether the value in slot is a TYPE_FARRAY (packed float array).
@@ -1815,8 +1812,7 @@ final class WasmArrayCompiler {
 	// Opens an IF whose result type is (ref null eq); pairs with ELSE/END.
 	private static void emitIfEq(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 	}
 
 	// Pushes the given field of the TYPE_FARRAY held (as eq) in slot: field 0 = dims
@@ -1828,8 +1824,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
-		ctx.writer.writeSignedLeb128(field);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeUnsignedLeb128(field);
 	}
 
 	// --- packed float-array VBLOCK helpers (--simd only) ------------------------------
@@ -1845,8 +1841,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	// The --simd counterpart of emitPackedReadF64: _v_get(vblock, idx).
@@ -1875,8 +1871,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		ctx.writer.writeUnsignedLeb128(1);
 	}
 
 	// Reads the packed farray element data[idx] as an f64, dispatching on the data
@@ -1967,37 +1963,37 @@ final class WasmArrayCompiler {
 	// array.new TYPE_F64ARR: [f64 init, i32 size] -> [array].
 	private static void f64ArrayNew(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	// array.get TYPE_F64ARR: [array, i32 index] -> [f64].
 	private static void f64ArrayGet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	// array.set TYPE_F64ARR: [array, i32 index, f64] -> [].
 	private static void f64ArraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	// array.new TYPE_F32ARR: [f32 init, i32 size] -> [array].
 	private static void f32ArrayNew(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
 	}
 
 	// array.get TYPE_F32ARR: [array, i32 index] -> [f32].
 	private static void f32ArrayGet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
 	}
 
 	// array.set TYPE_F32ARR: [array, i32 index, f32] -> [].
 	private static void f32ArraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
 	}
 
 	// Pushes an f32 constant: emitted as its widening f64 constant narrowed with
@@ -2011,19 +2007,19 @@ final class WasmArrayCompiler {
 	// array.new TYPE_HASH_BUCKETS: [init, size] -> [array].
 	private static void arrayNew(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	// array.get TYPE_HASH_BUCKETS: [array, i32 index] -> [value].
 	private static void arrayGet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	// array.set TYPE_HASH_BUCKETS: [array, i32 index, value] -> [].
 	private static void arraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	// Casts the (ref null eq) on the stack to TYPE_HASH_BUCKETS.
@@ -2041,8 +2037,8 @@ final class WasmArrayCompiler {
 	// struct.set TYPE_CONS field: [cons, value] -> [].
 	private static void structSetCons(WasmLispCompiler.Ctx ctx, int field) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(field);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
 	}
 
 	// Assumes the header cons (eqref) on the stack; replaces it with the data bucket
@@ -2072,8 +2068,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	// Assumes a cons (eqref) on the stack; replaces it with car (field 0) or cdr (field
@@ -2082,8 +2078,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(field);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
 	}
 
 	// A make-array keyword explicitly given a NON-nil value. An explicit nil
@@ -2181,7 +2177,7 @@ final class WasmArrayCompiler {
 		else {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
 		}
-		ctx.writer.writeSignedLeb128(type);
+		ctx.writer.writeUnsignedLeb128(type);
 		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
 	}
 
@@ -2208,8 +2204,8 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.ELSE);
 		// TYPE_BIGINT: low limb (32 bits) via _limb_get(limbs, 0); the ref.cast traps
 		// on a non-integer, preserving the exact-or-trap boundary.
@@ -2217,11 +2213,11 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.writeUnsignedLeb128(0);
 		i32Const(ctx, 0);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_LIMB_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_LIMB_GET);
 		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
@@ -2236,14 +2232,14 @@ final class WasmArrayCompiler {
 		emitUnboxIntForStore(ctx, valSlot);
 		ctx.writer.write(Instruction.I32_WRAP_I64);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(type);
+		ctx.writer.writeUnsignedLeb128(type);
 	}
 
 	// array.new_default of the packed width for TYPE_I8ARR/I16ARR/I32ARR (all elements
 	// zero): [i32 size] -> [array].
 	static void intArrNewDefault(WasmLispCompiler.Ctx ctx, int type) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		ctx.writer.writeSignedLeb128(type);
+		ctx.writer.writeUnsignedLeb128(type);
 	}
 
 	// The TYPE_* index of a packed integer-vector width.

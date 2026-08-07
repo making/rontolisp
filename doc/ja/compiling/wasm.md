@@ -59,7 +59,7 @@ rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~4 KB module
 ```
 
-この `fact` の例では、モジュールは約 330 KB から約 4 KB まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。`--component` を含む**すべての**出力形状で有効です。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
+この `fact` の例では、モジュールは約 320 KB から約 4 KB まで縮みます。`--optimize` はオプトインで、動作を保存します: 実際の `call` 命令から呼び出しグラフを辿るため、到達可能なもの(組み込みの `eval`/`load` がディスパッチするコードを含む)はすべて保持されます。`--component` を含む**すべての**出力形状で有効です。同じフラグは [JVM 出力](jvm.md)のデッドコード除去も行います。
 
 落ちた関数は道連れも持っていきます: それらだけが使っていた WASI インポート、もはやどこからも名指されない型定義、そして生き残ったコードがどこからも参照しない静的な文字列データです — リテラルを 1 つ表示するだけのモジュールは、ランタイム全体の文字列表ではなく数百バイトになります。
 
@@ -70,12 +70,12 @@ wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~4 KB module
 ```bash
 echo '(print "Hello World!")' > hello.lisp
 rontolisp hello.lisp --component --optimize -o hello.wasm    # ~2 KB
-rontolisp hello.lisp --component -o hello-full.wasm          # ~345 KB
+rontolisp hello.lisp --component -o hello-full.wasm          # ~325 KB
 ```
 
 `--optimize` なしのコンポーネントは常に固定の WASI 表面をすべて宣言します。これがリリースをまたいで 2 つのビルドをバイト単位で比較可能にしています。
 
-`--optimize` は、読み込んだ**ライブラリ**にどこまで手が届くかも左右します。コンパイル済みプログラムはほとんどの関数を直接呼びますが、`funcall` にはディスパッチ表が必要で、そこに載った関数は実際にその経路で呼ばれるかどうかに関わらず到達可能扱いになります。そこで、表に載るのはプログラムが実際に値として取得しうる関数だけ — `#'name`、クォートされた `'name` の指定子、`lambda` — で、それ以外は普通のデッドコードとなり `--optimize` が除去します。`md5` を読み込んで関数を 1 つ呼ぶだけのプログラムでは、これが 1.18 MB と 598 KB の差になります。
+`--optimize` は、読み込んだ**ライブラリ**にどこまで手が届くかも左右します。コンパイル済みプログラムはほとんどの関数を直接呼びますが、`funcall` にはディスパッチ表が必要で、そこに載った関数は実際にその経路で呼ばれるかどうかに関わらず到達可能扱いになります。そこで、表に載るのはプログラムが実際に値として取得しうる関数だけ — `#'name`、クォートされた `'name` の指定子、`lambda` — で、それ以外は普通のデッドコードとなり `--optimize` が除去します。`md5` を読み込んで関数を 1 つ呼ぶだけのプログラムでは、これが約 1.1 MB と 582 KB の差になります。
 
 この絞り込みは全部か無かで、1 つの条件で無効になります: プログラムが実行時に関数を名前で指定できる場合、すべての関数を残さなければなりません。該当するのは `eval`、`read`、`read-from-string`、実行時の `load`、`intern`、`find-symbol`、`make-symbol`、`symbol-function`、`fdefinition`、`fboundp`、`uiop:symbol-call` のいずれかの使用で、読み込んだライブラリの中にあるものも含みます。`--optimize` が期待ほど縮まないときは、どの演算子が原因かをコンパイラに尋ねてください:
 

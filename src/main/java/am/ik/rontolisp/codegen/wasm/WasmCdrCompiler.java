@@ -22,23 +22,22 @@ final class WasmCdrCompiler {
 		// cast.
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.END);
 	}
 

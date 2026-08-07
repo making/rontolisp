@@ -156,7 +156,7 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.I64_CONST);
 		ctx.writer.writeSignedLeb128(value);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 	}
 
 	/**
@@ -181,10 +181,10 @@ final class WasmEmitHelper {
 			ctx.writer.writeSignedLeb128(value.shiftRight(32 * i).intValue());
 		}
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
-		ctx.writer.writeSignedLeb128(n);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		ctx.writer.writeUnsignedLeb128(n);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGINT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGINT);
 	}
 
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {
@@ -208,14 +208,14 @@ final class WasmEmitHelper {
 	static void streamFdOrStdin(WasmLispCompiler.Ctx ctx) {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		castI31GetS(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.I32_CONST);
@@ -248,10 +248,10 @@ final class WasmEmitHelper {
 		WasmWriter w = ctx.writer;
 		// valid = (ref.is_null list) | (ref.test $cons list)
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(listSlot);
+		w.writeUnsignedLeb128(listSlot);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(listSlot);
+		w.writeUnsignedLeb128(listSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.I32_OR);
@@ -271,16 +271,16 @@ final class WasmEmitHelper {
 	static void castFloatGetF64(WasmLispCompiler.Ctx ctx) {
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.F64);
 		// i31 path: cast to i31, get_s, convert to f64
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
@@ -288,59 +288,59 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.ELSE);
 		// boxed-integer path: convert the i64 field
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.F64);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.F64_CONVERT_S_I64);
 		ctx.writer.write(Instruction.ELSE);
 		// limb-integer path: the float approximation via _big_to_f64
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.F64);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_TO_F64);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_TO_F64);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.F64);
 		// ratio path: numerator / denominator as f64 (float contagion)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
 		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
 		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
 		ctx.writer.write(Instruction.F64_DIV);
 		ctx.writer.write(Instruction.ELSE);
 		// float_struct path: cast, extract f64 field
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
@@ -357,7 +357,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitTrue(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 	}
 
 	/**
@@ -366,8 +366,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitBoolFromI32(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		emitTrue(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.REF_NULL);
@@ -378,11 +377,11 @@ final class WasmEmitHelper {
 	static void emitBoxLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		// Box: load value, create cell, store cell back
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	static void emitLoadCapture(WasmLispCompiler.Ctx ctx, int depth) {
@@ -390,28 +389,28 @@ final class WasmEmitHelper {
 		emitLoadCaptureCell(ctx, depth);
 		// Unbox from cell
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	static void emitLoadCaptureCell(WasmLispCompiler.Ctx ctx, int depth) {
 		// Load env from slot 0
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(ctx.closureEnvSlot);
+		ctx.writer.writeUnsignedLeb128(ctx.closureEnvSlot);
 		// Navigate through cons list: cdr depth times
 		for (int i = 0; i < depth; i++) {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(1); // cdr
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1); // cdr
 		}
 		// Get car (the cell)
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car = cell
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car = cell
 		// Cast to cell
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -425,7 +424,7 @@ final class WasmEmitHelper {
 		Integer slot = ctx.locals.get(varName);
 		if (slot != null && ctx.boxedVars.contains(varName)) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			// The local IS the cell
 			return;
 		}
@@ -438,9 +437,9 @@ final class WasmEmitHelper {
 		// Unboxed local: create a new cell
 		if (slot != null) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 			return;
 		}
 		throw new UnsupportedOperationException("Cannot find variable for closure: " + varName);
@@ -462,14 +461,14 @@ final class WasmEmitHelper {
 		int aSlot = ctx.allocTemp();
 		int bSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		// Try ref.eq
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.REF_EQ);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
@@ -491,11 +490,11 @@ final class WasmEmitHelper {
 	 */
 	private static void emitBignumEqOrElse(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, Runnable elseBranch) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.I32_AND);
@@ -508,22 +507,22 @@ final class WasmEmitHelper {
 		// both limb integers -> _big_eq (canonical limbs, so limb value equality;
 		// the normalization invariant keeps mixed-tier pairs numerically unequal)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
 		ctx.writer.write(Instruction.ELSE);
 		elseBranch.run();
 		ctx.writer.write(Instruction.END); // end limb-integer if
@@ -540,30 +539,30 @@ final class WasmEmitHelper {
 	 */
 	private static void emitCharCodePointEqOrElse(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, Runnable elseBranch) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.I32_EQ);
 		ctx.writer.write(Instruction.ELSE);
 		elseBranch.run();
@@ -579,14 +578,14 @@ final class WasmEmitHelper {
 		int aSlot = ctx.allocTemp();
 		int bSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		// Try ref.eq
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.REF_EQ);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
@@ -609,11 +608,11 @@ final class WasmEmitHelper {
 		// every in-range integer an i31, so a boxed value only ever equals another
 		// boxed value)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.I32_AND);
@@ -625,80 +624,80 @@ final class WasmEmitHelper {
 		ctx.writer.write(Instruction.ELSE);
 		// Both limb integers: _big_eq value equality (canonical limbs)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_EQ);
 		ctx.writer.write(Instruction.ELSE);
 		// Both floats: compare f64 fields (float structs are value objects)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.F64_EQ);
 		ctx.writer.write(Instruction.ELSE);
 		// Both ratios: compare numerators and denominators
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
 		ctx.writer.write(Instruction.I32_EQ);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
 		ctx.writer.write(Instruction.I32_EQ);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.ELSE);
@@ -715,12 +714,12 @@ final class WasmEmitHelper {
 	// Pushes the i64 field of the TYPE_BIGNUM held in the given local.
 	private static void emitBignumField(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	// Emits an i32 result: 1 if both slots are TYPE_STRING structs with the same data
@@ -729,33 +728,33 @@ final class WasmEmitHelper {
 	private static void emitStringEqOrZero(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
 		// Check if a is string
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		// Check if b is string
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
 		// Both strings: compare offset fields
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.I32_EQ);
 		ctx.writer.write(Instruction.ELSE);
 		// a is string, b is not
@@ -790,7 +789,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitStrBuildCall(WasmWriter w) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
 	}
 
 	/**
@@ -804,7 +803,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitStrFreshCall(WasmWriter w) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_FRESH);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_FRESH);
 	}
 
 	/**
@@ -818,7 +817,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitStrToMemCall(WasmWriter w) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_TO_MEM);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_TO_MEM);
 	}
 
 	/**
@@ -832,7 +831,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitWriteStrGcCall(WasmWriter w) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR_GC);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR_GC);
 	}
 
 	/**
@@ -857,7 +856,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitCharvecToStrCall(WasmWriter w) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_CHARVEC_TO_STR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_CHARVEC_TO_STR);
 	}
 
 	/**
@@ -869,7 +868,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitStrCharCountCall(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
 	}
 
 	/**
@@ -882,7 +881,7 @@ final class WasmEmitHelper {
 	 */
 	static void emitStrCharAtCall(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_AT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_AT);
 	}
 
 	/**
@@ -912,8 +911,8 @@ final class WasmEmitHelper {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(2);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
 	}

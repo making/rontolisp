@@ -24,20 +24,19 @@ final class WasmRemfTailCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int currentSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(currentSlot);
+		ctx.writer.writeUnsignedLeb128(currentSlot);
 		// Evaluate indicator
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		int indicatorSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(indicatorSlot);
+		ctx.writer.writeUnsignedLeb128(indicatorSlot);
 
 		int valueCellSlot = ctx.allocTemp();
 		int nextKeyCellSlot = ctx.allocTemp();
 
 		// block $result (result (ref null eq))
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		// block $nil (void)
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		// loop $cont (void)
@@ -45,7 +44,7 @@ final class WasmRemfTailCompiler {
 
 		// Check current is cons
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(currentSlot);
+		ctx.writer.writeUnsignedLeb128(currentSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.I32_EQZ);
@@ -53,18 +52,18 @@ final class WasmRemfTailCompiler {
 
 		// valueCell = cdr(current)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(currentSlot);
+		ctx.writer.writeUnsignedLeb128(currentSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueCellSlot);
+		ctx.writer.writeUnsignedLeb128(valueCellSlot);
 
 		// Check valueCell is cons
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueCellSlot);
+		ctx.writer.writeUnsignedLeb128(valueCellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.I32_EQZ);
@@ -72,18 +71,18 @@ final class WasmRemfTailCompiler {
 
 		// nextKeyCell = cdr(valueCell)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueCellSlot);
+		ctx.writer.writeUnsignedLeb128(valueCellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(nextKeyCellSlot);
+		ctx.writer.writeUnsignedLeb128(nextKeyCellSlot);
 
 		// Check nextKeyCell is cons
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(nextKeyCellSlot);
+		ctx.writer.writeUnsignedLeb128(nextKeyCellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.I32_EQZ);
@@ -91,39 +90,39 @@ final class WasmRemfTailCompiler {
 
 		// Compare car(nextKeyCell) with indicator using eq
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(nextKeyCellSlot);
+		ctx.writer.writeUnsignedLeb128(nextKeyCellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(indicatorSlot);
+		ctx.writer.writeUnsignedLeb128(indicatorSlot);
 		WasmEmitHelper.emitEqComparison(ctx);
 
 		ctx.writer.write(Instruction.IF, 0x40);
 		// Match! splice: rplacd(valueCell, cddr(nextKeyCell))
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueCellSlot);
+		ctx.writer.writeUnsignedLeb128(valueCellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		// cddr(nextKeyCell): cdr(cdr(nextKeyCell))
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(nextKeyCellSlot);
+		ctx.writer.writeUnsignedLeb128(nextKeyCellSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1); // cdr(nextKeyCell)
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1); // cdr(nextKeyCell)
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1); // cddr(nextKeyCell)
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1); // cddr(nextKeyCell)
 		// struct.set valueCell.cdr
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		// Push t and break to $result
 		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.BR, 2); // break to $result
@@ -131,9 +130,9 @@ final class WasmRemfTailCompiler {
 
 		// No match: current = nextKeyCell, continue loop
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(nextKeyCellSlot);
+		ctx.writer.writeUnsignedLeb128(nextKeyCellSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(currentSlot);
+		ctx.writer.writeUnsignedLeb128(currentSlot);
 		ctx.writer.write(Instruction.BR, 0); // continue loop
 
 		ctx.writer.write(Instruction.END); // end loop

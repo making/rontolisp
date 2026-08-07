@@ -347,9 +347,9 @@ final class WasmVecSimdRuntimeBuilder {
 		i32Const(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), 1, 0, 0, 0, 0, 0);
 	}
@@ -587,7 +587,7 @@ final class WasmVecSimdRuntimeBuilder {
 		else {
 			WasmVecLoops.get(w, count);
 			WasmVecLoops.get(w, kind);
-			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_NEW);
 			WasmVecLoops.set(w, vbD);
 		}
 		farrayField(w, v, 1);
@@ -597,7 +597,7 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.get(w, i);
 		WasmVecLoops.get(w, vbV);
 		WasmVecLoops.get(w, i);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_GET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_GET);
 		WasmVecLoops.set(w, t);
 		// t = select(x, lo, x > lo)
 		WasmVecLoops.get(w, t);
@@ -614,7 +614,7 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.get(w, hi);
 		w.write(Instruction.F64_LT);
 		w.write(Instruction.SELECT);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_SET);
 		w.write(Instruction.DROP);
 		WasmVecLoops.closeIndexLoop(w, i);
 		finish(w, into, count, vbD);
@@ -774,7 +774,7 @@ final class WasmVecSimdRuntimeBuilder {
 		else {
 			WasmVecLoops.get(w, count);
 			WasmVecLoops.get(w, kind);
-			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_NEW);
 			WasmVecLoops.set(w, vbD);
 		}
 		farrayField(w, v, 1);
@@ -784,9 +784,9 @@ final class WasmVecSimdRuntimeBuilder {
 		WasmVecLoops.get(w, i);
 		WasmVecLoops.get(w, vbV);
 		WasmVecLoops.get(w, i);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_GET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_GET);
 		emitScalarUnaryF64(w, scalarOp, f64Base);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_SET);
 		w.write(Instruction.DROP);
 		WasmVecLoops.closeIndexLoop(w, i);
 		finish(w, into, count, vbD);
@@ -1536,7 +1536,7 @@ final class WasmVecSimdRuntimeBuilder {
 		else {
 			WasmVecLoops.get(w, d);
 			WasmVecLoops.get(w, kind);
-			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_NEW);
 			WasmVecLoops.set(w, vbD);
 		}
 		farrayGroups(w, mat, gw);
@@ -1591,7 +1591,7 @@ final class WasmVecSimdRuntimeBuilder {
 		if (single) {
 			w.write(Instruction.F64_PROMOTE_F32);
 		}
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_SET);
 		w.write(Instruction.DROP);
 		// flat += n; row++
 		WasmVecLoops.get(w, flat);
@@ -1649,7 +1649,7 @@ final class WasmVecSimdRuntimeBuilder {
 			w.write(Instruction.I32_ADD);
 		}
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 	}
 
 	// --- shared emit helpers --------------------------------------------------------
@@ -1698,7 +1698,7 @@ final class WasmVecSimdRuntimeBuilder {
 		else {
 			WasmVecLoops.get(w, countLocal);
 			WasmVecLoops.get(w, kindLocal);
-			w.write(Instruction.CALL).writeSignedLeb128(vecBase + V_NEW);
+			w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + V_NEW);
 			WasmVecLoops.set(w, vbDLocal);
 			vblockGroups(w, vbDLocal, gdLocal);
 		}
@@ -1722,8 +1722,8 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(field);
 	}
 
 	// Pushes field `field` of the $vblock held (as eq) in vbLocal.
@@ -1732,8 +1732,8 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeUnsignedLeb128(field);
 	}
 
 	// Pushes the element count of the farray in argLocal.
@@ -1753,8 +1753,8 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeUnsignedLeb128(field);
 	}
 
 	// outLocal((ref null $v128arr)) = the group array of the farray in argLocal.
@@ -1774,8 +1774,8 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+		w.writeUnsignedLeb128(2);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_V128ARR);
 		WasmVecLoops.set(w, outLocal);
@@ -1796,7 +1796,7 @@ final class WasmVecSimdRuntimeBuilder {
 		i32Const(w, WasmVecLoops.laneShift(single));
 		w.write(Instruction.I32_SHR_U);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 		WasmVecLoops.set(w, vLocal);
 	}
 
@@ -1819,7 +1819,7 @@ final class WasmVecSimdRuntimeBuilder {
 		castBuckets(w);
 		i32Const(w, index);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
@@ -1859,16 +1859,16 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		i32Const(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		WasmVecLoops.get(w, vbLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	// Boxes the f64 on the stack into a TYPE_FLOAT struct.
 	static void boxFloat(WasmWriter w) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 	// Converts the (ref null eq) on the stack to an f64, mirroring
@@ -1891,10 +1891,10 @@ final class WasmVecSimdRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.IF, Type.F64.code());
 		WasmVecLoops.get(w, tmpLocal);
-		w.write(Instruction.CALL).writeSignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
 		w.write(Instruction.F64_CONVERT_S_I32);
 		WasmVecLoops.get(w, tmpLocal);
-		w.write(Instruction.CALL).writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
 		w.write(Instruction.F64_CONVERT_S_I32);
 		w.write(Instruction.F64_DIV);
 		w.write(Instruction.ELSE);
@@ -1902,8 +1902,8 @@ final class WasmVecSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 	}
@@ -1935,13 +1935,11 @@ final class WasmVecSimdRuntimeBuilder {
 		}
 		if (eqCount > 0) {
 			w.writeUnsignedLeb128(eqCount);
-			w.write(Type.REFNULL.code());
-			w.writeHeapType(Type.EQ.code());
+			w.writeRefType(true, Type.EQ.code());
 		}
 		if (groupsCount > 0) {
 			w.writeUnsignedLeb128(groupsCount);
-			w.write(Type.REFNULL.code());
-			w.writeHeapType(WasmLispCompiler.TYPE_V128ARR);
+			w.writeRefType(true, WasmLispCompiler.TYPE_V128ARR);
 		}
 		w.write((Object) body);
 		return out.toByteArray();

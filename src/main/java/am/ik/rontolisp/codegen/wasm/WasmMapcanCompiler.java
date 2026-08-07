@@ -35,7 +35,7 @@ final class WasmMapcanCompiler {
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
 		int funcSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 
 		// Compile each list expression; mapcan operates on lists, so a non-list (e.g. a
 		// string) traps. The slots double as the cursors -- only the concatenation is
@@ -45,7 +45,7 @@ final class WasmMapcanCompiler {
 			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
 			listSlots.add(listSlot);
 		}
@@ -55,7 +55,7 @@ final class WasmMapcanCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 
 		int mappedSlot = ctx.allocTemp();
 
@@ -66,7 +66,7 @@ final class WasmMapcanCompiler {
 		// Break to $exit as soon as any list is no longer a cons (shortest list stops).
 		for (int listSlot : listSlots) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.I32_EQZ);
@@ -75,43 +75,43 @@ final class WasmMapcanCompiler {
 
 		// mapped = dispatch_<nLists>(func, car(list)...)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 		for (int listSlot : listSlots) {
 			// car(list)
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(0); // car
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(0); // car
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
+		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(mappedSlot);
+		ctx.writer.writeUnsignedLeb128(mappedSlot);
 
 		// result = _append(result, mapped)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(mappedSlot);
+		ctx.writer.writeUnsignedLeb128(mappedSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_APPEND);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPEND);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 
 		// advance each list: list = cdr(list)
 		for (int listSlot : listSlots) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(1); // cdr
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1); // cdr
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 		}
 
 		// br 0 (continue loop)
@@ -121,7 +121,7 @@ final class WasmMapcanCompiler {
 
 		// Result
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 	}
 
 }

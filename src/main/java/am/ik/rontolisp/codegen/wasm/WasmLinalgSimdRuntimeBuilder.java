@@ -361,7 +361,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, bArg);
 		i32Const(w, bop);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.CALL).writeSignedLeb128(WasmLispCompiler.linalgFuncBase() + BCAST);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.linalgFuncBase() + BCAST);
 		set(w, res);
 		w.write(Instruction.BR, 3); // -> B0
 		w.write(Instruction.END);
@@ -466,7 +466,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, bArg);
 		i32Const(w, greater ? BOP_MAX : BOP_MIN);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.CALL).writeSignedLeb128(WasmLispCompiler.linalgFuncBase() + BCAST);
+		w.write(Instruction.CALL).writeUnsignedLeb128(WasmLispCompiler.linalgFuncBase() + BCAST);
 		set(w, res);
 		w.write(Instruction.BR, 3); // -> B0
 		w.write(Instruction.END);
@@ -557,7 +557,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		}
 		w.write(greater ? Instruction.F64_GT : Instruction.F64_LT);
 		w.write(Instruction.SELECT);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, i);
 		w.write(Instruction.ELSE);
@@ -598,7 +598,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			get(w, s);
 		}
 		w.write(scalar64Op);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, i);
 		w.write(Instruction.ELSE);
@@ -666,7 +666,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			get(w, i);
 			vget(w, vbA, i, vecBase);
 			WasmVecSimdRuntimeBuilder.emitScalarUnaryF64(w, scalarOp, f64Base);
-			w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+			w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 			w.write(Instruction.DROP);
 			WasmVecLoops.closeIndexLoop(w, i);
 		}
@@ -697,7 +697,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF, 0);
 		get(w, a);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.SUM);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.SUM);
 		set(w, res);
 		w.write(Instruction.END);
 		get(w, res);
@@ -722,7 +722,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.BR_IF, 0);
 		get(w, a);
 		get(w, a);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.DOT);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.DOT);
 		unboxFloatStruct(w);
 		w.write(Instruction.F64_SQRT);
 		boxFloat(w);
@@ -942,7 +942,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, vbD);
 		get(w, dst);
 		vget(w, vbA, src, vecBase);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, j);
 		closeCountLoop(w, i);
@@ -1077,7 +1077,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, arr);
 		blockGroupIndex(w, blk, laneShift, row, stride, pos);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 		set(w, outLocal);
 	}
 
@@ -1197,7 +1197,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.ELSE);
 		get(w, rank);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		set(w, nd);
 		get(w, shape);
 		set(w, cur);
@@ -1217,7 +1217,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, d);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		consCdr(w, cur);
 		set(w, cur);
 		closeCountLoop(w, i);
@@ -1367,7 +1367,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		get(w, a);
 		get(w, bArg);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.DOT);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.DOT);
 		set(w, res);
 		w.write(Instruction.END);
 		w.write(Instruction.BR, 1);
@@ -1390,7 +1390,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		get(w, a);
 		get(w, bArg);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.MATVEC);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.MATVEC);
 		set(w, res);
 		w.write(Instruction.END);
 		w.write(Instruction.BR, 1);
@@ -1434,7 +1434,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		// acc = _v_new(p, 0): one f64 accumulator row, reused across output rows
 		get(w, p);
 		i32Const(w, 0);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_NEW);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_NEW);
 		set(w, acc);
 		vblockGroups(w, acc, gacc);
 		farrayGroups(w, bArg, gb);
@@ -1514,7 +1514,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, j);
 		w.write(Instruction.I32_ADD);
 		vget(w, acc, j, vecBase);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, j);
 		closeCountLoop(w, i);
@@ -1668,7 +1668,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, s);
 		vget(w, vbV, j, vecBase);
 		w.write(Instruction.F64_MUL);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, j);
 		closeCountLoop(w, i);
@@ -2031,7 +2031,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 			vget(w, vbSrc, cursor, vecBase);
 			w.write(Instruction.F64_ADD);
 		}
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END); // if in-bounds column
 		get(w, cursor);
@@ -2072,7 +2072,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		castBuckets(w);
 		i32Const(w, index);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
@@ -2234,7 +2234,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		vget(w, vbB, oy, vecBase);
 		set(w, vy);
 		emitApplyBop(w, op, vx, vy);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		emitOdometer(w, rank, ax, tmp, idx, od, sx, ox, sy, oy);
 		closeCountLoop(w, k);
@@ -2415,7 +2415,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, vbD);
 		get(w, k);
 		vget(w, vbA, src, vecBase);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		emitOdometer(w, rank, ax, tmp, idx, od, os, src, -1, -1);
 		closeCountLoop(w, k);
@@ -2517,7 +2517,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, i);
 		w.write(Instruction.I32_ADD);
 		get(w, accF);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, i);
 		closeCountLoop(w, o);
@@ -2665,7 +2665,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		get(w, bi);
 		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_SET);
 		w.write(Instruction.DROP);
 		closeCountLoop(w, i);
 		closeCountLoop(w, o);
@@ -2982,7 +2982,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		get(w, nLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		set(w, outLocal);
 	}
 
@@ -2994,7 +2994,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, valLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	private static void block(WasmWriter w) {
@@ -3042,7 +3042,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		castBuckets(w);
 		i32Const(w, index);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
@@ -3053,7 +3053,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	private static void newVblock(WasmWriter w, int countLocal, int kindLocal, int outLocal, int vecBase) {
 		get(w, countLocal);
 		get(w, kindLocal);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_NEW);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_NEW);
 		set(w, outLocal);
 	}
 
@@ -3061,7 +3061,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	private static void vget(WasmWriter w, int vbLocal, int idxLocal, int vecBase) {
 		get(w, vbLocal);
 		get(w, idxLocal);
-		w.write(Instruction.CALL).writeSignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_GET);
+		w.write(Instruction.CALL).writeUnsignedLeb128(vecBase + WasmVecSimdRuntimeBuilder.V_GET);
 	}
 
 	/** Consumes the {@code $farray} on the stack and pushes its {@code $float} value. */
@@ -3069,8 +3069,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
 	}
 
 	private static void consCar(WasmWriter w, int cellLocal) {
@@ -3078,8 +3078,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
 	}
 
 	private static void consCdr(WasmWriter w, int cellLocal) {
@@ -3087,8 +3087,8 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 	}
 
 	/** {@code for (i = 0; i < count; i++)} -- the body follows, then closeCountLoop. */
@@ -3119,7 +3119,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		i32Const(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		set(w, outLocal);
 	}
 
@@ -3127,7 +3127,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 	private static void newBuckets2(WasmWriter w, int d0, int d1, int outLocal) {
 		i32Const(w, 2);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		set(w, outLocal);
 		get(w, outLocal);
 		castBuckets(w);
@@ -3135,14 +3135,14 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, d0);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		get(w, outLocal);
 		castBuckets(w);
 		i32Const(w, 1);
 		get(w, d1);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	/**
@@ -3159,7 +3159,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		set(w, lenLocal);
 		get(w, lenLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		set(w, outLocal);
 		openCountLoop(w, iLocal, lenLocal);
 		get(w, outLocal);
@@ -3169,9 +3169,9 @@ final class WasmLinalgSimdRuntimeBuilder {
 		castBuckets(w);
 		get(w, iLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		closeCountLoop(w, iLocal);
 	}
 
@@ -3180,7 +3180,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		get(w, dimsLocal);
 		get(w, vbLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	/** {@code okLocal} = whether the two farrays have identical dimension lists. */
@@ -3237,7 +3237,7 @@ final class WasmLinalgSimdRuntimeBuilder {
 		castBuckets(w);
 		get(w, iLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);

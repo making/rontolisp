@@ -24,8 +24,7 @@ final class WasmIfCompiler {
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		// The branches are compiled inside the if structure; track the depth so a return
 		// nested in a branch computes the correct br depth to its enclosing %block.
 		ctx.wasmCtrlDepth++;
@@ -65,7 +64,7 @@ final class WasmIfCompiler {
 		// resuming into the test), derived from the target's branch range on a resume.
 		if (testN == 0) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+			ctx.writer.writeUnsignedLeb128(WasmAsyncEmit.RT_SLOT);
 			ctx.writer.write(Instruction.I32_EQZ);
 		}
 		else {
@@ -88,8 +87,7 @@ final class WasmIfCompiler {
 		ctx.writer.write(Instruction.END);
 		WasmAsyncEmit.assertStates(ctx, testLo, testN, test);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		if (elseExpr != null) {
 			WasmAsyncEmit.spine(elseExpr, ctx);

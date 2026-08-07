@@ -19,7 +19,7 @@ final class WasmConsCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 	}
 
 }

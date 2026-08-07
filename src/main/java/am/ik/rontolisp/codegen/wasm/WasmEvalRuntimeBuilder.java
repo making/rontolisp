@@ -92,12 +92,12 @@ final class WasmEvalRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32(WasmWriter w, int value) {
@@ -117,19 +117,19 @@ final class WasmEvalRuntimeBuilder {
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void structSet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void structNew(WasmWriter w, int type) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(type);
+		w.writeUnsignedLeb128(type);
 	}
 
 	private static void emitNull(WasmWriter w) {
@@ -167,7 +167,7 @@ final class WasmEvalRuntimeBuilder {
 		emitCarOf(w, slot);
 		getLocal(w, envSlot);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 	}
 
 	/** Emits {@code global.get $genv} (the top-level eval environment). */
@@ -193,7 +193,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, offSlot);
 		emitGetGlobalFenv(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, tmpSlot);
 		getLocal(w, tmpSlot);
 		w.write(Instruction.REF_IS_NULL);
@@ -205,7 +205,7 @@ final class WasmEvalRuntimeBuilder {
 		// compiled registry?
 		getLocal(w, offSlot);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		setLocal(w, addrSlot);
 		getLocal(w, addrSlot);
 		i32(w, 0);
@@ -238,7 +238,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, offScratch);
 		emitGetGlobalFenv(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, tmpSlot);
 		getLocal(w, tmpSlot);
 		w.write(Instruction.REF_IS_NULL);
@@ -269,7 +269,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, offSlot);
 		emitGetGlobalEnv(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, tmpSlot);
 		getLocal(w, tmpSlot);
 		w.write(Instruction.REF_IS_NULL);
@@ -375,7 +375,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.I32_MUL);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.TEE_LOCAL);
-		w.writeSignedLeb128(ADDR);
+		w.writeUnsignedLeb128(ADDR);
 		// load name offset at addr+0, compare with param
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		getLocal(w, OFF);
@@ -416,8 +416,7 @@ final class WasmEvalRuntimeBuilder {
 		// params: 0 = off (i32), 1 = env (ref); locals: 2 = pair, 3 = name
 		w.write(1);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 
 		final int OFF = 0, ENV = 1, PAIR = 2, NAME = 3;
 
@@ -492,8 +491,7 @@ final class WasmEvalRuntimeBuilder {
 		// ref locals: 2..13, i32 locals: 14..19
 		w.write(2);
 		w.write(12);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(6);
 		w.write(Type.I32);
 
@@ -542,7 +540,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, OFF);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, TMP);
 		getLocal(w, TMP);
 		w.write(Instruction.REF_IS_NULL);
@@ -682,7 +680,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, TMP);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, NEWCELL);
 		// install into the function namespace (Lisp-2): $fenv, not $genv
 		emitStoreFunctionBinding(w, ACC, NEWCELL, TMP, IDX);
@@ -708,7 +706,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ACC);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -880,7 +878,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.BR_IF, 1); // test nil -> exit
 		getLocal(w, BODY);
@@ -909,8 +907,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ACC);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		emitNull(w);
 		w.write(Instruction.ELSE);
 		emitCarOf(w, ACC);
@@ -960,14 +957,13 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		emitNull(w);
 		w.write(Instruction.ELSE);
 		getLocal(w, FN);
 		getLocal(w, ELEM);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		w.write(Instruction.END);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
@@ -990,7 +986,7 @@ final class WasmEvalRuntimeBuilder {
 		emitEvalCar(w, NEWCELL, ENV);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		setLocal(w, ACC);
 		emitCdrOf(w, BINDCUR);
 		setLocal(w, BINDCUR);
@@ -1011,7 +1007,7 @@ final class WasmEvalRuntimeBuilder {
 		emitEvalCar(w, NEWCELL, ENV); // value
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1033,7 +1029,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ACC);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1063,7 +1059,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, TMP);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		w.write(Instruction.DROP);
 		getLocal(w, ACC);
 		w.write(Instruction.RETURN);
@@ -1074,7 +1070,7 @@ final class WasmEvalRuntimeBuilder {
 		emitEvalCar(w, REST, ENV);
 		emitNull(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1088,7 +1084,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 
@@ -1118,7 +1114,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, NEWCELL);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		setLocal(w, TMP);
 		// append cons(mapped, null)
 		getLocal(w, TMP);
@@ -1159,7 +1155,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, NEWCELL);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.DROP); // discard the result
 		emitCdrOf(w, ELEM);
 		setLocal(w, ELEM);
@@ -1216,7 +1212,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, NEWCELL);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		setLocal(w, ACC);
 		emitCdrOf(w, ELEM);
 		setLocal(w, ELEM);
@@ -1314,7 +1310,7 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, OFF);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		setLocal(w, ADDR);
 		getLocal(w, ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
@@ -1339,7 +1335,7 @@ final class WasmEvalRuntimeBuilder {
 		i31New(w);
 		getLocal(w, ACC);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
 		setLocal(w, ACC);
 		w.write(Instruction.END);
 		getLocal(w, OFF);
@@ -1351,7 +1347,7 @@ final class WasmEvalRuntimeBuilder {
 		i31New(w);
 		getLocal(w, ACC);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
 		setLocal(w, ACC);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
@@ -1364,7 +1360,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, ACC);
 		emitEvalCar(w, REST, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 2);
 		setLocal(w, ACC);
 		emitCdrOf(w, REST);
 		setLocal(w, REST);
@@ -1382,7 +1378,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, OFF);
 		emitGetGlobalFenv(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, TMP);
 		getLocal(w, TMP);
 		w.write(Instruction.REF_IS_NULL);
@@ -1394,13 +1390,13 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// (b) registered function -> evaluate exactly its arity, then apply
 		getLocal(w, OFF);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		setLocal(w, ADDR);
 		getLocal(w, ADDR);
 		i32(w, 0);
@@ -1428,7 +1424,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// (c) car/cdr composition such as cadr (operator matches c[ad]+r)
@@ -1442,13 +1438,13 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, OP);
 		getLocal(w, ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, FN);
 		emitBuildArgList(w, REST, ENV, ARGHEAD, ARGTAIL, NEWCELL, TMP);
 		getLocal(w, FN);
 		getLocal(w, ARGHEAD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // symbol-vs-non-symbol if/else
 
@@ -1528,8 +1524,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, restSlot);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		emitNull(w);
 		w.write(Instruction.ELSE);
 		emitEvalCar(w, restSlot, envSlot);
@@ -1569,7 +1564,7 @@ final class WasmEvalRuntimeBuilder {
 		WasmEmitHelper.emitStrBytesArray(w);
 		pushIdx.run();
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 	}
 
 	/**
@@ -1760,8 +1755,7 @@ final class WasmEvalRuntimeBuilder {
 		// i32 locals: 15..16 (FUNCID, LEN)
 		w.write(2);
 		w.write(13);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 
@@ -1789,7 +1783,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FUNCID);
 		emitGetGlobalFenv(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, TMP);
 		getLocal(w, TMP);
 		w.write(Instruction.REF_IS_NULL);
@@ -1801,7 +1795,7 @@ final class WasmEvalRuntimeBuilder {
 		// compiled registry?
 		getLocal(w, FUNCID);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		setLocal(w, LEN); // scratch: record address
 		getLocal(w, LEN);
 		i32(w, 0);
@@ -1912,7 +1906,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, ARGLIST);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_SPREAD);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_SPREAD);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // if closure
 
@@ -1931,8 +1925,7 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, argcurSlot);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		emitNull(w);
 		w.write(Instruction.ELSE);
 		if (head) {
@@ -1970,8 +1963,7 @@ final class WasmEvalRuntimeBuilder {
 		// ref locals: 3..5, i32 locals: 6..10
 		w.write(2);
 		w.write(3);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(5);
 		w.write(Type.I32);
 
@@ -2107,7 +2099,7 @@ final class WasmEvalRuntimeBuilder {
 			getLocal(w, envSlot);
 		}
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		setLocal(w, tmpSlot);
 		getLocal(w, tmpSlot);
 		w.write(Instruction.REF_IS_NULL);

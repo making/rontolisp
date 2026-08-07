@@ -42,12 +42,12 @@ final class WasmOpenCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(wasmMode(OpenModes.staticMode(parts)));
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_OPEN);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_OPEN);
 		int fd = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(fd);
+		ctx.writer.writeUnsignedLeb128(fd);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(fd);
+		ctx.writer.writeUnsignedLeb128(fd);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF, 0x40);
 		// Stack-polymorphic in both modes (unreachable / throw), so the void block type
@@ -56,7 +56,7 @@ final class WasmOpenCompiler {
 				new LispCons(new LispString("open: cannot open file"), am.ik.rontolisp.LispNil.INSTANCE)), ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(fd);
+		ctx.writer.writeUnsignedLeb128(fd);
 	}
 
 	/**

@@ -24,7 +24,7 @@ final class WasmFreshLineCompiler {
 		if (stream != null) {
 			WasmExprCompiler.compileExpr(stream, ctx);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_FRESH_LINE_STREAM);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FRESH_LINE_STREAM);
 			return;
 		}
 		// if (memory[LINE_START_ADDR] != 0) write "\n"
@@ -37,7 +37,7 @@ final class WasmFreshLineCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(ctx.stringTable.newline.length());
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		ctx.writer.write(Instruction.END);
 		// Return nil
 		ctx.writer.write(Instruction.REF_NULL);

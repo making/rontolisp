@@ -76,8 +76,7 @@ final class WasmHandlerCaseCompiler {
 		emitDepthAdjust(ctx, true);
 		// block $done (result (ref null eq)) -- the handler-case value.
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		int doneDepth = ctx.wasmCtrlDepth;
 		// block $tramp (result (ref null eq)) -- the return-exit trampoline (see
@@ -90,8 +89,7 @@ final class WasmHandlerCaseCompiler {
 		if (needTrampoline) {
 			continueDepth = WasmUnwindProtectCompiler.continueTargetDepth(ctx);
 			ctx.writer.write(Instruction.BLOCK);
-			ctx.writer.write(Type.REFNULL.code());
-			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeRefType(true, Type.EQ.code());
 			ctx.wasmCtrlDepth++;
 			trampolineDepth = ctx.wasmCtrlDepth;
 		}
@@ -104,15 +102,13 @@ final class WasmHandlerCaseCompiler {
 		int blockExitDepth = -1;
 		if (ctx.blockExitTag) {
 			ctx.writer.write(Instruction.BLOCK);
-			ctx.writer.write(Type.REFNULL.code());
-			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeRefType(true, Type.EQ.code());
 			ctx.wasmCtrlDepth++;
 			blockExitDepth = ctx.wasmCtrlDepth;
 		}
 		// block $h (result (ref null eq)) -- the landing pad, receiving the payload.
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		int handlerDepth = ctx.wasmCtrlDepth;
 		// try_table (result (ref null eq)) (catch $lisp-cond $h) [(catch $block-exit
@@ -121,8 +117,7 @@ final class WasmHandlerCaseCompiler {
 		// block
 		// $h; $bx (one level out) is label 1.
 		ctx.writer.write(Instruction.TRY_TABLE);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.writeUnsignedLeb128(ctx.blockExitTag ? 2 : 1);
 		ctx.writer.write(Instruction.CATCH);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
@@ -147,13 +142,13 @@ final class WasmHandlerCaseCompiler {
 		// region -- an error signaled by it is not caught by this handler-case).
 		int resultSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 		emitDepthAdjust(ctx, false);
 		if (noErrorClause != null) {
 			compileClauseBody(noErrorClause, resultSlot, resultSlot, ctx);
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $h
@@ -161,19 +156,19 @@ final class WasmHandlerCaseCompiler {
 		// condition instance (car) and the message (cdr), synthesize a simple-error
 		// from the message when the instance is nil.
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		emitDepthAdjust(ctx, false);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(condSlot);
+		ctx.writer.writeUnsignedLeb128(condSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(condSlot);
+		ctx.writer.writeUnsignedLeb128(condSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
@@ -195,7 +190,7 @@ final class WasmHandlerCaseCompiler {
 				ctx.wasmCtrlDepth++;
 				compileClauseBody(clauseParts, condSlot, resultSlot, ctx);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(resultSlot);
+				ctx.writer.writeUnsignedLeb128(resultSlot);
 				ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
 				ctx.wasmCtrlDepth--;
 				ctx.writer.write(Instruction.END);
@@ -207,7 +202,7 @@ final class WasmHandlerCaseCompiler {
 		// No clause matched: rethrow the original payload on the same tag (an outer
 		// handler-case must see the typed instance, not a re-synthesized simple-error).
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		if (ctx.blockExitTag) {
@@ -261,7 +256,7 @@ final class WasmHandlerCaseCompiler {
 				}
 			}
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(resultSlot);
+			ctx.writer.writeUnsignedLeb128(resultSlot);
 		}
 		finally {
 			if (varName != null) {
@@ -284,14 +279,14 @@ final class WasmHandlerCaseCompiler {
 	private static void emitSynthesizeSimpleError(int payloadSlot, int condSlot, WasmLispCompiler.Ctx ctx) {
 		int msgSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(msgSlot);
+		ctx.writer.writeUnsignedLeb128(msgSlot);
 		String msgVarName = "__hc_msg$" + msgSlot;
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
@@ -306,7 +301,7 @@ final class WasmHandlerCaseCompiler {
 			ctx.locals.remove(msgVarName);
 		}
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(condSlot);
+		ctx.writer.writeUnsignedLeb128(condSlot);
 	}
 
 	/**

@@ -5,6 +5,17 @@ import java.util.function.Consumer;
 
 /**
  * Definition for rec type groups in wasm-GC.
+ * <p>
+ * Every type added here is <strong>sub final with no supertype</strong>, and it is
+ * spelled as the bare {@code comptype} the format defines as exactly that shorthand
+ * ({@code subtype ::= 0x50 x* comptype | 0x4F x* comptype | comptype}). Writing the
+ * explicit {@code 4F 00} instead would be two dead bytes per type for an identical
+ * decoded type -- and finality is a load-bearing PERFORMANCE property here, not hygiene
+ * (an engine inlines a {@code ref.cast} / {@code call_indirect} check only when the
+ * target is final; see {@code .kb/wasm-gc-final-types.md}), which is why the
+ * {@code addSubFinal*} names stay: the shorthand is how finality is spelled, not a
+ * relaxation of it. The explicit form comes back the moment any type here needs a
+ * supertype -- the shorthand cannot express one.
  */
 public class RecTypeDef {
 
@@ -17,7 +28,8 @@ public class RecTypeDef {
 	private int count = 0;
 
 	/**
-	 * Add a sub-final function type to this rec group.
+	 * Add a sub-final function type to this rec group (spelled as a bare {@code functype}
+	 * -- see the class note).
 	 * @param params the parameter types
 	 * @param results the result types
 	 * @return this instance for chaining
@@ -26,7 +38,6 @@ public class RecTypeDef {
 		this.count++;
 		ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(stream);
-		writer.write(Type.SUB_FINAL, 0x00); // sub final, 0 supertypes
 		writer.write(Type.FUNC, params.length);
 		writer.write((Object) params);
 		writer.write(results.length);
@@ -41,7 +52,8 @@ public class RecTypeDef {
 	}
 
 	/**
-	 * Add a sub-final array type to this rec group.
+	 * Add a sub-final array type to this rec group (spelled as a bare {@code arraytype}
+	 * -- see the class note).
 	 * @param consumer a consumer that writes the element field type (storage type
 	 * followed by mutability)
 	 * @return this instance for chaining
@@ -50,7 +62,6 @@ public class RecTypeDef {
 		this.count++;
 		ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(stream);
-		writer.write(Type.SUB_FINAL, 0x00); // sub final, 0 supertypes
 		writer.write(Type.ARRAY_TYPE);
 		consumer.accept(writer);
 		try {
@@ -63,7 +74,8 @@ public class RecTypeDef {
 	}
 
 	/**
-	 * Add a sub-final struct type to this rec group.
+	 * Add a sub-final struct type to this rec group (spelled as a bare {@code structtype}
+	 * -- see the class note).
 	 * @param consumer a consumer that defines the struct fields
 	 * @return this instance for chaining
 	 */
@@ -73,7 +85,6 @@ public class RecTypeDef {
 		consumer.accept(fieldWriter);
 		ByteArrayOutputStream stream = new ByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(stream);
-		writer.write(Type.SUB_FINAL, 0x00); // sub final, 0 supertypes
 		writer.write(Type.STRUCT_TYPE);
 		writer.write((Object) fieldWriter.toByteArray());
 		try {

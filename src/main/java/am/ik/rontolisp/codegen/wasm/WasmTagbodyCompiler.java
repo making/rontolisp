@@ -71,7 +71,7 @@ final class WasmTagbodyCompiler {
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(pcSlot);
+		ctx.writer.writeUnsignedLeb128(pcSlot);
 		ctx.writer.write(Instruction.LOOP, 0x40);
 		ctx.wasmCtrlDepth++;
 		int dispatchDepth = ctx.wasmCtrlDepth;
@@ -82,7 +82,7 @@ final class WasmTagbodyCompiler {
 			ctx.wasmCtrlDepth++;
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(pcSlot);
+		ctx.writer.writeUnsignedLeb128(pcSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		ctx.writer.write(Instruction.BR_TABLE);
 		ctx.writer.writeUnsignedLeb128(segments + 1);
@@ -157,9 +157,9 @@ final class WasmTagbodyCompiler {
 		ctx.writer.writeSignedLeb128(java.util.Objects.requireNonNull(scope.labelIndex().get(tag)));
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(scope.pcSlot());
+		ctx.writer.writeUnsignedLeb128(scope.pcSlot());
 		ctx.writer.write(Instruction.BR);
-		ctx.writer.writeSignedLeb128(ctx.wasmCtrlDepth - scope.dispatchDepth());
+		ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - scope.dispatchDepth());
 		// No value is pushed: the branch never falls through and the abandoned
 		// continuation validates stack-polymorphically, like return.
 	}

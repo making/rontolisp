@@ -730,8 +730,7 @@ final class WasmComponentImportCompiler {
 		entryWriter.write(Type.I64);
 		if (body.eqTemps() > 0) {
 			entryWriter.writeUnsignedLeb128(body.eqTemps());
-			entryWriter.write(Type.REFNULL.code());
-			entryWriter.writeHeapType(Type.EQ.code());
+			entryWriter.writeRefType(true, Type.EQ.code());
 		}
 		entryWriter.write((Object) body.bytes());
 		return entry.toByteArray();
@@ -757,7 +756,7 @@ final class WasmComponentImportCompiler {
 		// to
 		// an i31 and traps.
 		writer.write(Instruction.GET_LOCAL);
-		writer.writeSignedLeb128(1);
+		writer.writeUnsignedLeb128(1);
 		WasmEmitHelper.castI31GetS(ctx);
 		writer.write(Instruction.CALL);
 		writer.writeUnsignedLeb128(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal);
@@ -1122,9 +1121,9 @@ final class WasmComponentImportCompiler {
 				rp = allocI32();
 				i32Const(sig.retSize());
 				this.w.write(Instruction.CALL);
-				this.w.writeSignedLeb128(this.allocFuncIndex);
+				this.w.writeUnsignedLeb128(this.allocFuncIndex);
 				this.w.write(Instruction.TEE_LOCAL);
-				this.w.writeSignedLeb128(rp);
+				this.w.writeUnsignedLeb128(rp);
 			}
 			callImport();
 			// Lift the result into one boxed value.
@@ -1162,7 +1161,7 @@ final class WasmComponentImportCompiler {
 				int area = allocI32();
 				i32Const(layout.size());
 				this.w.write(Instruction.CALL);
-				this.w.writeSignedLeb128(this.allocFuncIndex);
+				this.w.writeUnsignedLeb128(this.allocFuncIndex);
 				setLocal(area);
 				int index = 0;
 				if (func.resource() != null && func.def().kind() == WitItem.FuncKind.PLAIN) {
@@ -1192,9 +1191,9 @@ final class WasmComponentImportCompiler {
 				rp = allocI32();
 				i32Const(sig.retSize());
 				this.w.write(Instruction.CALL);
-				this.w.writeSignedLeb128(this.allocFuncIndex);
+				this.w.writeUnsignedLeb128(this.allocFuncIndex);
 				this.w.write(Instruction.TEE_LOCAL);
-				this.w.writeSignedLeb128(rp);
+				this.w.writeUnsignedLeb128(rp);
 			}
 			callImport();
 			// packed on the stack -> the token's car
@@ -1338,10 +1337,9 @@ final class WasmComponentImportCompiler {
 				i32Const(4);
 				this.w.write(Instruction.I32_SHR_U);
 				this.w.write(Instruction.TEE_LOCAL);
-				this.w.writeSignedLeb128(n);
+				this.w.writeUnsignedLeb128(n);
 				this.w.write(Instruction.IF);
-				this.w.write(Type.REFNULL.code());
-				this.w.writeHeapType(Type.EQ.code());
+				this.w.writeRefType(true, Type.EQ.code());
 				emitReadLift(handleElem, buf, n);
 				this.w.write(Instruction.ELSE);
 				refNullEq();
@@ -1366,7 +1364,7 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.IF, 0x40);
 			i32Const(ASYNC_READ_CHUNK);
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(this.allocFuncIndex);
+			this.w.writeUnsignedLeb128(this.allocFuncIndex);
 			setLocal(buf);
 			this.w.write(Instruction.ELSE);
 			globalGet(wiring.readFreeGlobal());
@@ -1386,15 +1384,14 @@ final class WasmComponentImportCompiler {
 			i32Const(-1);
 			this.w.write(Instruction.I32_EQ);
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 			// BLOCKED: a fresh pending future, registered as
 			// (handle . (kind . (future . (buf . nil)))) -- kind 1 = byte chunk (the
 			// stream struct is attached by _wasi_stream_read), kind 2 = a handle
 			// element -- with the handle joined into the task waitable-set (created
 			// lazily).
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(this.ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
+			this.w.writeUnsignedLeb128(this.ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
 			int fut = this.ctx.allocTemp();
 			setLocal(fut);
 			getLocal(handle);
@@ -1429,10 +1426,9 @@ final class WasmComponentImportCompiler {
 			i32Const(4);
 			this.w.write(Instruction.I32_SHR_U);
 			this.w.write(Instruction.TEE_LOCAL);
-			this.w.writeSignedLeb128(n);
+			this.w.writeUnsignedLeb128(n);
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 			emitReadLift(handleElem, buf, n);
 			this.w.write(Instruction.ELSE);
 			refNullEq();
@@ -1459,7 +1455,7 @@ final class WasmComponentImportCompiler {
 			getLocal(buf);
 			getLocal(n);
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(this.strFromMemFuncIndex);
+			this.w.writeUnsignedLeb128(this.strFromMemFuncIndex);
 		}
 
 		// stream.write of a whole Lisp string: the async built-in plus the BLOCKED
@@ -1504,8 +1500,7 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.I32_AND);
 			this.w.write(Instruction.I32_EQZ);
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 			emitLiftAt(async.abi(), payload, rp, 0);
 			this.w.write(Instruction.ELSE);
 			refNullEq();
@@ -1603,7 +1598,7 @@ final class WasmComponentImportCompiler {
 			i32Const(WasmLispCompiler.HEAP_PTR_ADDR);
 			alignedHeapTop(() -> loadCell(WasmLispCompiler.HEAP_PTR_ADDR));
 			this.w.write(Instruction.TEE_LOCAL);
-			this.w.writeSignedLeb128(this.mark);
+			this.w.writeUnsignedLeb128(this.mark);
 			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
 		}
 
@@ -1637,7 +1632,7 @@ final class WasmComponentImportCompiler {
 			int rp = allocI32();
 			i32Const(size);
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(this.allocFuncIndex);
+			this.w.writeUnsignedLeb128(this.allocFuncIndex);
 			setLocal(rp);
 			return rp;
 		}
@@ -1903,8 +1898,7 @@ final class WasmComponentImportCompiler {
 			getLocal(slot);
 			refTest(WasmLispCompiler.TYPE_CONS);
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 			getLocal(slot);
 			structGet(WasmLispCompiler.TYPE_CONS, 0);
 			this.w.write(Instruction.ELSE);
@@ -1931,8 +1925,7 @@ final class WasmComponentImportCompiler {
 			getLocal(slot);
 			refTest(WasmLispCompiler.TYPE_CONS);
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 			getLocal(slot);
 			structGet(WasmLispCompiler.TYPE_CONS, 1);
 			this.w.write(Instruction.ELSE);
@@ -1961,7 +1954,7 @@ final class WasmComponentImportCompiler {
 							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
 								.offset());
 					this.w.write(Instruction.CALL);
-					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
+					this.w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
 				}
 				else {
 					for (int k = 0; k < i; k++) {
@@ -2242,7 +2235,7 @@ final class WasmComponentImportCompiler {
 							this.ctx.stringTable.addString(":" + info.names().get(i).toUpperCase(java.util.Locale.ROOT))
 								.offset());
 					this.w.write(Instruction.CALL);
-					this.w.writeSignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
+					this.w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PLIST_GET);
 				}
 				else {
 					for (int k = 0; k < i; k++) {
@@ -2465,7 +2458,7 @@ final class WasmComponentImportCompiler {
 			load(base, offset, Instruction.I32_LOAD, 2);
 			load(base, offset + 4, Instruction.I32_LOAD, 2);
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(this.strFromMemFuncIndex);
+			this.w.writeUnsignedLeb128(this.strFromMemFuncIndex);
 		}
 
 		// A variant-shaped value (variant / enum / option / result) in memory: load the
@@ -2494,8 +2487,7 @@ final class WasmComponentImportCompiler {
 				i32Const(i);
 				this.w.write(Instruction.I32_EQ);
 				this.w.write(Instruction.IF);
-				this.w.write(Type.REFNULL.code());
-				this.w.writeHeapType(Type.EQ.code());
+				this.w.writeRefType(true, Type.EQ.code());
 				emitVariantCase(abi, type, info, i, payloadBase, payloadOffset);
 				this.w.write(Instruction.ELSE);
 			}
@@ -2589,7 +2581,7 @@ final class WasmComponentImportCompiler {
 			getLocal(idx);
 			this.w.write(Instruction.I32_EQZ);
 			this.w.write(Instruction.BR_IF);
-			this.w.writeSignedLeb128(1);
+			this.w.writeUnsignedLeb128(1);
 			getLocal(idx);
 			i32Const(1);
 			this.w.write(Instruction.I32_SUB);
@@ -2605,7 +2597,7 @@ final class WasmComponentImportCompiler {
 			newCons();
 			setLocal(acc);
 			this.w.write(Instruction.BR);
-			this.w.writeSignedLeb128(0);
+			this.w.writeUnsignedLeb128(0);
 			this.w.write(Instruction.END);
 			this.w.write(Instruction.END);
 			getLocal(acc);
@@ -2620,12 +2612,12 @@ final class WasmComponentImportCompiler {
 
 		private void boxFloat() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		}
 
 		private void boxChar() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		}
 
 		// Pushes the eqref local's value as an i64. The exact-integer representations
@@ -2644,7 +2636,7 @@ final class WasmComponentImportCompiler {
 			this.w.write(Type.I64);
 			getLocal(slot);
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
 			this.w.write(Instruction.ELSE);
 			getLocal(slot);
 			WasmEmitHelper.castFloatGetF64(this.ctx);
@@ -2661,7 +2653,7 @@ final class WasmComponentImportCompiler {
 		private void boxI64(boolean signed) {
 			if (signed) {
 				this.w.write(Instruction.CALL);
-				this.w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				this.w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 				return;
 			}
 			setLocal64();
@@ -2670,11 +2662,10 @@ final class WasmComponentImportCompiler {
 			this.w.writeSignedLeb128(0);
 			this.w.write(Instruction.I64_GE_S);
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 			getLocal64();
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			this.w.write(Instruction.ELSE);
 			getLocal64();
 			this.w.write(Instruction.F64_CONVERT_U_I64);
@@ -2684,7 +2675,7 @@ final class WasmComponentImportCompiler {
 
 		private void newCons() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		}
 
 		// i32 = 1 when the (ref null eq) on the stack is of the given struct type.
@@ -2700,8 +2691,8 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			this.w.writeHeapType(typeIndex);
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			this.w.writeSignedLeb128(typeIndex);
-			this.w.writeSignedLeb128(field);
+			this.w.writeUnsignedLeb128(typeIndex);
+			this.w.writeUnsignedLeb128(field);
 		}
 
 		private void refNullEq() {
@@ -2722,22 +2713,22 @@ final class WasmComponentImportCompiler {
 
 		private void getLocal(int slot) {
 			this.w.write(Instruction.GET_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		private void globalGet(int index) {
 			this.w.write(Instruction.GET_GLOBAL);
-			this.w.writeSignedLeb128(index);
+			this.w.writeUnsignedLeb128(index);
 		}
 
 		private void globalSet(int index) {
 			this.w.write(Instruction.SET_GLOBAL);
-			this.w.writeSignedLeb128(index);
+			this.w.writeUnsignedLeb128(index);
 		}
 
 		private void setLocal(int slot) {
 			this.w.write(Instruction.SET_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		private void setLocal64() {

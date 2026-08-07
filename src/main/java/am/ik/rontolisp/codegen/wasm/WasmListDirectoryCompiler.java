@@ -28,7 +28,7 @@ final class WasmListDirectoryCompiler {
 		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_LIST_DIRECTORY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_LIST_DIRECTORY);
 	}
 
 }

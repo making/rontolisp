@@ -64,20 +64,20 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(r.denominator().intValue());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_RATIO);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_RATIO);
 			}
 			case LispDouble d -> {
 				ctx.writer.write(Instruction.F64_CONST);
 				ctx.writer.writeF64(d.value());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
 			case LispString s -> WasmEmitHelper.compileStringLiteral(s.literal(), ctx);
 			case am.ik.rontolisp.LispChar c -> {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(c.codePoint());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 			}
 			case LispSymbol sym -> {
 				if (sym.isKeyword()) {
@@ -159,14 +159,14 @@ final class WasmExprCompiler {
 		Integer slot = ctx.locals.get(name);
 		if (slot != null) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			if (ctx.boxedVars.contains(name)) {
 				// Unbox from cell
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+				ctx.writer.writeUnsignedLeb128(0);
 			}
 			return;
 		}

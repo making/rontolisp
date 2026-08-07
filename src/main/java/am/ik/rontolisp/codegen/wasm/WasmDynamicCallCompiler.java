@@ -41,7 +41,7 @@ final class WasmDynamicCallCompiler {
 		WasmExprCompiler.compileExpr(listForm, ctx);
 		// _apply(fn, args)
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 	}
 
 	/** Compiles an unresolved variable reference {@code name} as a late-bound lookup. */
@@ -71,7 +71,7 @@ final class WasmDynamicCallCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 	}
 
 }

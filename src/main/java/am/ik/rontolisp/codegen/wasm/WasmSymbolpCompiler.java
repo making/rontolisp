@@ -20,31 +20,29 @@ final class WasmSymbolpCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		// nil (and t, a plain string) are symbols in CL.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		WasmEmitHelper.emitTrue(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		// It is a string struct; check if first byte is NOT '"'
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		WasmEmitHelper.emitStrBytesArray(ctx);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(34); // '"'
 		ctx.writer.write(Instruction.I32_NE);

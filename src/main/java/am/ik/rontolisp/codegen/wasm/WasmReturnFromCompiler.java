@@ -87,7 +87,7 @@ final class WasmReturnFromCompiler {
 				break;
 			}
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(bind[1]);
+			ctx.writer.writeUnsignedLeb128(bind[1]);
 			ctx.writer.write(Instruction.SET_GLOBAL);
 			ctx.writer.writeUnsignedLeb128(bind[0]);
 		}

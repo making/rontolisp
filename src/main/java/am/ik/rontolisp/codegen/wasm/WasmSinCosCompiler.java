@@ -95,7 +95,7 @@ final class WasmSinCosCompiler {
 		WasmEmitHelper.castFloatGetF64(ctx);
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(xSlot);
+		ctx.writer.writeUnsignedLeb128(xSlot);
 
 		// The IEEE edges, then the finite main path.
 		// if (x != x) -> NaN
@@ -286,7 +286,7 @@ final class WasmSinCosCompiler {
 	private static void boxInto(WasmLispCompiler.Ctx ctx, int slot) {
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 }

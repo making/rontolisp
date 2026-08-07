@@ -4,7 +4,9 @@ Opt-in (CLI `--optimize[=LEVEL]`; `WasmLispCompiler(dynamic, component, noWasi, 
 
 ## The levels
 
-**Invariant: the bare `--optimize` is `DEFAULT` and emits exactly the bytes it always did.** It is in every doc page, every `.kb` passage, the CI jobs, the examples and the README, so it is not a level that may be redefined later. Pinned by `OptimizeLevelTest.theBareFlagIsTheDefaultLevel` (`parse("")` -> `DEFAULT`) plus `CliOptionsTest.theBareFlagKeepsItsEmptyValue`; measured once directly, `postgres-hello --component` at `--optimize` and at `--optimize=default` byte-identical at 8,033,507.
+**Invariant: the bare `--optimize` is `DEFAULT` and emits exactly the bytes it always did.** It is in every doc page, every `.kb` passage, the CI jobs, the examples and the README, so it is not a level that may be redefined later. Pinned by `OptimizeLevelTest.theBareFlagIsTheDefaultLevel` (`parse("")` -> `DEFAULT`) plus `CliOptionsTest.theBareFlagKeepsItsEmptyValue`; measured directly, `postgres-hello --component` at `--optimize` and at `--optimize=default` byte-identical at 7,609,611.
+
+> **Absolute byte counts in this file were re-measured 2026-08-07**, after `.kb/wasm-shortest-encoding.md` took 2.4%-5.7% out of every module the project emits. The three tables the change moved (the level table below, the literal-fold table, the component breakdown) carry fresh numbers. Where a number is part of a HISTORICAL progression -- a "before X / after X" pair measured in one earlier session -- it is left as it was and marked, because the pair's ratio is what it records and neither half can be rebuilt.
 
 | spelling | `eliminatesDeadCode()` | `prefersSizeOverSpeed()` |
 | --- | --- | --- |
@@ -20,28 +22,32 @@ Those two predicates ARE the level: `OptimizeLevelTest.everyLevelIsDistinguishab
 
 Only the wasm-GC backends (Preview 1 AND `--component`) have anything to trade: the two emissions that deliberately spend bytes on speed, both **on even without `--optimize`** — integer expression-tree fusion (`.kb/wasm-int-fusion.md`; a fused site emits its tree TWICE, raw plus the generic fallback) and unboxed dual-representation locals (`.kb/wasm-unboxed-locals.md`). One predicate switches both: `WasmIntFusionCompiler.speedTradesEnabled(ctx)`, read at the three fusion entry points and at `WasmLetCompiler`'s eligibility scan. The JVM backend and `--no-gc` accept the level and emit byte-identical output (pinned by `theSizeLevelIsADocumentedNoOpOnThisBackend` in `JvmLispCompilerTest` and `NoGcWasmCompilerTest`) — accepted rather than rejected so one build script can pass it for every target.
 
-Measured 2026-08-06, `--optimize` vs `--optimize=size`, wasmtime 47.0.2 (best of three):
+Sizes measured 2026-08-07, `--optimize` vs `--optimize=size`; run times 2026-08-06,
+wasmtime 47.0.2 (best of three):
 
 | program | default | size | run time |
 | --- | --- | --- | --- |
-| `examples/db/postgres-hello` (`--component`) | 8,024,998 | 6,384,099 (**-20.4%**) | — |
-| `examples/asdf/ironclad-demo` (SHA-256/HMAC/PBKDF2, 4096 rounds) | 2,078,195 | 1,562,816 (-24.8%) | 1.38 s -> 5.21 s (**3.8x**) |
-| `examples/ml/nn-vec` (`vec:` kernels) | 271,233 | 214,169 (-21.0%) | 1.07 s -> 1.26 s (+18%) |
-| `examples/ml/mlp` (float, no `vec:`) | 159,747 | 125,496 (-21.4%) | 5.58 s -> 6.06 s (+9%) |
-| `examples/ml/heat3d` (`linalg:` stencil) | 182,689 | 140,240 (-23.2%) | 0.03 s either way (too short to resolve) |
-| the whole `ci-spec.yaml` corpus (321 cases) | 6,073,627 | 5,038,076 (-17.0%) | 2,132 output lines, byte-identical, exit 0 at both |
+| `examples/db/postgres-hello` (`--component`) | 7,609,611 | 6,150,090 (**-19.2%**) | — |
+| `examples/asdf/ironclad-demo` (SHA-256/HMAC/PBKDF2, 4096 rounds) | 1,962,292 | 1,502,363 (-23.4%) | 1.38 s -> 5.21 s (**3.8x**) |
+| `examples/ml/nn-vec` (`vec:` kernels) | 257,391 | 205,745 (-20.1%) | 1.07 s -> 1.26 s (+18%) |
+| `examples/ml/mlp` (float, no `vec:`) | 152,466 | 121,266 (-20.5%) | 5.58 s -> 6.06 s (+9%) |
+| `examples/ml/heat3d` (`linalg:` stencil) | 172,541 | 134,791 (-21.9%) | 0.03 s either way (too short to resolve) |
+| the whole `ci-spec.yaml` corpus (321 cases) | 5,819,288 | 4,891,849 (-15.9%) | 2,132 output lines, byte-identical, exit 0 at both |
 
-(Sizes re-measured after the string/type shake below; the run-time column is unchanged
-by it — neither pass touches what the module computes.)
+(The run-time column is unchanged by the size re-measurements — neither the string/type
+shake below nor the encoding minimization touches what the module computes. Note the SIZE
+win narrowed by ~1.5 points everywhere: `=size` emits fewer fused sites, so it had fewer
+of the padded local references the encoding fix retired, and had less to give back.)
 
-The run-time column is why the level must be asked for and why the docs carry it beside the size one. Note what the spread says: the SIZE win barely varies (-17% to -25% across every program measured, library-heavy or not), while the run-time price varies more than thirtyfold (+9% to +280%), because only INTEGER arithmetic fuses -- a `vec:`/`linalg:` kernel pays it on its loop indices, an ironclad round pays it on every operation. So the level's cost cannot be stated as one number, and a program that is not integer-hot gets the size win nearly free.
+The run-time column is why the level must be asked for and why the docs carry it beside the size one. Note what the spread says: the SIZE win barely varies (-16% to -24% across every program measured, library-heavy or not), while the run-time price varies more than thirtyfold (+9% to +280%), because only INTEGER arithmetic fuses -- a `vec:`/`linalg:` kernel pays it on its loop indices, an ironclad round pays it on every operation. So the level's cost cannot be stated as one number, and a program that is not integer-hot gets the size win nearly free.
 
 ### Why the two trades are ONE level and not two switches
 
 Measured on `postgres-hello --component`, all four combinations. The absolute bytes here
-predate the string/type shake below (the two off-diagonal rows need a debug switch and a
-throwaway patch to reproduce, so the set is kept as one self-consistent session); the
-ratios are the point and the shake moves every row alike:
+predate the string/type shake below and the encoding minimization (the two off-diagonal
+rows need a debug switch and a throwaway patch to reproduce, so the set is kept as one
+self-consistent session); the ratios are the point and both later passes move every row
+alike:
 
 | fusion | unboxed locals | bytes | vs default |
 | --- | --- | --- | --- |
@@ -88,7 +94,8 @@ same pass, both "throw rather than emit a corrupt module": a `table`/`element` s
 carrying a `dataidx`/`elemidx` (`array.new_data` & co.) — the pass DROPS data segments, so
 silently accepting one would corrupt the module. The backend emits none of them.
 
-`(print "Hello World!")` at `--optimize`: 60 type entries / 578 B -> 7 entries / 79 B.
+`(print "Hello World!")` at `--optimize`: 60 type entries / 429 B -> 7 entries / 61 B
+(578 B / 79 B before the type SPELLING shrank too — `.kb/wasm-shortest-encoding.md`).
 Pinned by `WasmTreeShakerTest.dropsTypesTheSurvivorsNoLongerName` and
 `keepsTheTypesAnEhModeModuleStillNames`, plus `WasmTreeShakerCorpusTest`, which runs
 `wasm-tools validate` over the whole `ci-spec.yaml` corpus in both WASI modes.
@@ -148,8 +155,9 @@ rows post-shake), but `usesIntern` and a live `_intern` almost always coincide, 
 not worth the machinery; revisit only with numbers showing a program that interns AND has a
 large dead-wrapper string set.
 
-`(print "Hello World!")` at `--optimize`: data 909 B -> 168 B, module 1,886 B -> **645 B**.
-A program on the same gate that reaches the runtime `find-package` keeps the alist. Pinned
+`(print "Hello World!")` at `--optimize`: data 909 B -> 168 B, module 1,886 B -> 645 B
+(**622 B** once the encoding shrank too). A program on the same gate that reaches the
+runtime `find-package` keeps the alist. Pinned
 by `WasmTreeShakerTest.dropsStringsOnlyDeadBodiesInterned` /
 `keepsEveryStringAProgramCanInternAtRunTime`, and behaviorally by
 `WasmLispCompilerIntegrationTest.optimizedProgramKeepsEveryStringALiveBodyStillAddresses`
@@ -182,22 +190,25 @@ The fold costs no data for strings: an escape-free readable form re-uses the lit
 interned bytes verbatim, and a DISPLAY rendering points at the interior of the same framed
 literal (`offset + 1`, `length - 2`), which is what `_princ_val` computes at run time.
 
-Measured at `--optimize` (2026-08-06), Preview 1 bytes:
+Measured at `--optimize`; the "after" columns 2026-08-07, the "before" column the
+pre-fold state of 2026-08-06 (it cannot be rebuilt, and it is ~4% high in today's
+encoding — the ratio is what it records). Preview 1 bytes:
 
-| program | before | after | `--component` after |
+| program | before the fold | after | `--component` after |
 | --- | --- | --- | --- |
-| `(print "Hello World!")` | 645 | unchanged | 1,820 |
-| `(princ "Hello World!") (terpri)` | 4,823 | **648** | 1,823 |
-| `(format t "Hello World!~%")` | 4,826 | **651** | 1,826 |
-| `(write-line "Hello World!")` | 993 | **645** | 1,820 |
-| `(write-string "Hello World!")` | 1,767 | **638** | 1,812 |
-| `(format t "Hello, ~a!~%" "World")` | 5,031 | **694** | 1,873 |
-| `(format t "~a~%" 42)` | 4,890 | **563** | 1,737 |
-| `(format t "~s~%" "Hello World!")` | 6,609 | **651** | 1,826 |
+| `(print "Hello World!")` | 645 | 622 | 1,776 |
+| `(princ "Hello World!") (terpri)` | 4,823 | **625** | 1,779 |
+| `(format t "Hello World!~%")` | 4,826 | **628** | 1,782 |
+| `(write-line "Hello World!")` | 993 | **622** | 1,776 |
+| `(write-string "Hello World!")` | 1,767 | **615** | 1,768 |
+| `(format t "Hello, ~a!~%" "World")` | 5,031 | **671** | 1,829 |
+| `(format t "~a~%" 42)` | 4,890 | **541** | 1,694 |
+| `(format t "~s~%" "Hello World!")` | 6,609 | **628** | 1,782 |
 
 The component column is the same core module plus the wrapper floor, re-measured after
-todo-273 narrowed that floor to ~1,175 B (it was ~1,500 when the fold landed); the two
-spellings the change was reported against went 6,346 / 6,349 -> 1,823 / 1,826 there.
+todo-273 narrowed that floor to ~1,175 B (it was ~1,500 when the fold landed) and again
+after the encoding minimization took it to ~1,154; the two
+spellings the change was reported against went 6,346 / 6,349 -> 1,779 / 1,782 there.
 
 The last two needed the format lowering to stop hiding its constants — a literal argument
 is no longer bound to a temp, and a `~a`/`~s` piece prints straight to the destination
@@ -303,22 +314,25 @@ reaching the `wasi:cli`/`wasi:clocks`/`wasi:random` halves (a handler that neith
 times nor randomises), or if the serve floor drops by an order of magnitude, the same three
 steps apply unchanged — the machinery is variant-independent.
 
-**Combined effect, measured 2026-08-06** (`(print "Hello World!")`, wasmtime 47), the changes
-above in the order they landed — the case-fold segment split and the literal-print fold, then
-the type section and the string blob, then the wrapper, then todo-273's two narrowings:
-Preview 1 `--optimize` 22,355 -> 1,886 -> **645 bytes** (the first two: -16,368 data,
--4,078 code; the last two: the type section 578 -> 79 B and the data section 909 -> 168 B);
-`--component` 29,430 -> 8,930 -> 7,690 -> 2,138 -> **1,820**.
-The component is now shaken core 653 + adapter 547 (from 3,624) + the shared-memory module 34
-(from 158) + 586 B of component types/imports/aliases/canonical functions (from ~3,255). The
-core was 8% of the component and is 36% of it now -- the wrapper is still the majority of a
+**Combined effect** (`(print "Hello World!")`, wasmtime 47), the changes above in the order
+they landed — the case-fold segment split and the literal-print fold, then the type section
+and the string blob, then the wrapper, then todo-273's two narrowings, then the shortest-
+encoding pass (`.kb/wasm-shortest-encoding.md`, 2026-08-07; every step before it measured
+2026-08-06):
+Preview 1 `--optimize` 22,355 -> 1,886 -> 645 -> **622 bytes** (the first two: -16,368 data,
+-4,078 code; the next two: the type section 578 -> 79 B and the data section 909 -> 168 B);
+`--component` 29,430 -> 8,930 -> 7,690 -> 2,138 -> 1,820 -> **1,776**.
+The component is now shaken core 627 + adapter 547 (from 3,624) + the import block 197 +
+the shared-memory module 25 (from 158) + 380 B of wiring (component types, aliases,
+canonical functions, core instances, the preamble and the module framing). The
+core was 8% of the component and is 35% of it now -- the wrapper is still the majority of a
 HELLO component, but it is no longer fixed cost: it shrinks with the program instead of
 standing under it. Two ends of the same measurement: a component with no I/O at all (only
 `wasm-export`s) imports ZERO interfaces; a program that opens a file, lists a directory,
 reads the clock, draws random bytes and reads the environment keeps the whole
 eleven-interface surface and lands where it always did.
 
-**Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops 337,744 -> 3,804 bytes (2026-08-06). Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
+**Decoder correctness** rests on the backend emitting (a) no `call_indirect`/element segments — first-class calls go through dispatch functions with direct `call`, so `call` is the only function reference; and (b) a finite, enumerated opcode set (incl. the `0xFB` GC ops, the `0xFD` fixed-width SIMD ops — `skipSimd`, needed since the `--no-gc` `vec:` kernels emit `v128`/`f64x2`/`f32x4` — the `0xFC` misc-prefix saturating truncations the float->integer conversions emit, and `block (result …)` blocktypes — including the ONE-BYTE `eqref` spelling of one, `.kb/wasm-shortest-encoding.md`) — an unknown opcode (or SIMD sub-opcode) throws rather than emit a corrupt module. With `--no-wasi --optimize` a pure-compute reactor (`fact`) drops 318,560 -> 3,727 bytes (2026-08-07). Tests: `WasmTreeShakerTest` (structural, no Docker: shrinkage, import drop, well-formedness via a mini-parser, idempotence) + optimize cases in `WasmLispCompilerIntegrationTest` (`wasmtime` behavior parity, incl. `--no-gc --optimize` f64x2/f32x4 vec kernels).
 
 ### The wrapper's last two fixed costs, and the floor under them (todo-273, 2026-08-06)
 
@@ -353,7 +367,9 @@ allocator half is a separate question, answered by whether any canonical option 
 references it. For a print-only program none does (`stdout-write` lowers bare; the
 stream/future/waitable built-ins take `(memory 0)` only), so the alias goes, `nextCoreFunc`
 starts at 0 instead of 1, and the module is retained-and-shaken down to a bare
-`(memory 6) (export "memory")` — 158 B to 34. `WMember.realloc()` cannot drift from the
+`(memory 6) (export "memory")` — 158 B to 34, and to 25 once the shaker stopped writing
+back the three sections it had emptied (`.kb/wasm-shortest-encoding.md`).
+`WMember.realloc()` cannot drift from the
 encoders because the realloc index is reachable only through the `lowerRealloc` /
 `builtinRealloc` factories that also set the flag. Block-bound and user interface imports
 are answered with a plain yes (`needsSharedRealloc`): every one of their lowerings stages
@@ -366,7 +382,7 @@ adapter builds a stream, a future and a waitable set for one constant write, and
 `waitable-set-wait` canons, their `"w"` entries and imports, and `$ensure_ws` /
 `$await_waitable` / the two BLOCKED-retry wrappers). The component model does have the
 synchronous `stream.write` / `future.read` built-ins that would delete all of it — measured
-by hand on the emitted component, 1,820 -> ~1,541 — but they sit behind the spec's
+by hand on the emitted component of the day, 1,820 -> ~1,541 — but they sit behind the spec's
 "more async builtins" tier: `wasm-tools validate` and wasmtime 47 both reject them without
 `component-model-more-async-builtins`, which is NOT default-on (`wasmtime run -W gc=y`
 alone fails to parse; adding `-W component-model-more-async-builtins=y` runs it and prints
@@ -374,17 +390,17 @@ correctly). rontolisp's contract is that a component runs with **zero** flags, s
 the floor today. **Re-evaluation trigger: when more-async-builtins becomes default-on, drop
 the waitable trio from `adapter.wat` and the async keyword from those two canon encodings.**
 
-What is left in the 1,820 B, for whoever comes next: shaken core 653 (`.todo/271` owns
-~104 of it), adapter 547, import block 197, shared memory 34, wiring 389. Of the adapter's
+What is left in the 1,776 B, for whoever comes next: shaken core 627 (`.todo/271` owns
+~104 of it), adapter 547, import block 197, shared memory 25, wiring 380. Of the adapter's
 imports and the synthesized `"w"` core instance, ~232 B is the `"w"` field NAMES, spelled
 twice each; they are a private linkage between two artifacts this repo ships together, so
 shortening them is available and was deliberately not taken — it trades the legibility of
 `wasm-tools print` on a rontolisp component for bytes the gate above will hand back for
 free. That judgement, its measurement and the two conditions that would overturn it are
-`.todo/275`. A further ~44 B of this component (and 2.4–5.7% of EVERY module this project
-emits, Preview 1 included) is non-minimal ENCODING rather than surplus content —
-`.todo/274`, which also owns the empty sections the shaken shared-memory module now
-carries.
+`.todo/275`. The ~44 B that used to sit here as non-minimal ENCODING (and 2.4–5.7% of
+EVERY module this project emits, Preview 1 included) is gone: every module and component
+the project writes is now a `wasm-tools` round-trip FIXPOINT, so what is left above is
+content, not spelling — `.kb/wasm-shortest-encoding.md`.
 
 ### Why the component path is safe (todo-259)
 
@@ -398,7 +414,7 @@ The same by-name linkage is what lets todo-270 run the shaker on the ADAPTER too
 
 `WasmComponentBuilder.memModuleFor` reads the core's `mem`/`memory` **memory** import, which the shaker keeps verbatim along with every other non-function import.
 
-Effect: a non-serve component is where the shaker earns its keep (`(print "hi")`: 357 KB -> 29 KB), because such a program never reaches the arity dispatch. A **serve** component was long the counter-example (the Clack model `funcall`s the handler, so the dispatch bodies were live and they `call`ed every registered builtin wrapper — a ~4% drop): each of the three rontolisp-owned gate blockers had to be retired first, the keyword-intern exemption below being the last. With it (todo-260, 2026-08-06) the trivial serve component is 594,477 no flag / **280,256** at `--optimize` (-52.9%; 54 of 367 defuns dispatchable) / 225,683 at `--optimize=size`. Note what the bytes do NOT buy on wasmtime serve: rps at `--max-instance-reuse-count` 1 and 128 is unchanged within noise vs the 641,599-byte pre-fix module (measured 2026-08-06, best of three: ~1760 vs ~1780, ~4900 vs ~4990) — the module is compiled once per server run, so per-instance cost is the pre-grow plus fixed instantiation work, not module bytes. The size win is transfer, disk, and compile-time cold start (wasmCloud-shaped hosts), not the reuse loop.
+Effect: a non-serve component is where the shaker earns its keep (`(print "hi")`: 357 KB -> 29 KB), because such a program never reaches the arity dispatch. A **serve** component was long the counter-example (the Clack model `funcall`s the handler, so the dispatch bodies were live and they `call`ed every registered builtin wrapper — a ~4% drop): each of the three rontolisp-owned gate blockers had to be retired first, the keyword-intern exemption below being the last. With it (todo-260) the trivial serve component is 569,842 no flag / **273,547** at `--optimize` (-52.0%; 54 of 367 defuns dispatchable) / 225,024 at `--optimize=size` (2026-08-07; 594,477 / 280,256 / 225,683 before the encoding minimization). Note what the bytes do NOT buy on wasmtime serve: rps at `--max-instance-reuse-count` 1 and 128 is unchanged within noise vs the 641,599-byte pre-fix module (measured 2026-08-06, best of three: ~1760 vs ~1780, ~4900 vs ~4990) — the module is compiled once per server run, so per-instance cost is the pre-grow plus fixed instantiation work, not module bytes. The size win is transfer, disk, and compile-time cold start (wasmCloud-shaped hosts), not the reuse loop.
 
 ## The funcall-dispatch gate (what makes `--optimize` reach library code)
 
@@ -431,7 +447,7 @@ Without the bail the gate is not sound, and the failure is a trap rather than a 
 | `com.inuoe.jzon` | 1,432,415 | 1,414,105 | bails |
 | `examples/db/postgres-hello` (`--component`) | 8,085,309 | 8,033,507 | bails |
 
-Both columns are the same probe program measured on the same day; the `jzon` and pure-compute rows sit at a different absolute size than todo-260's table because the probe programs are not the same ones (a row is comparable across its own two columns, not across tables).
+Both columns are the same probe program measured on the same day; the `jzon` and pure-compute rows sit at a different absolute size than todo-260's table because the probe programs are not the same ones (a row is comparable across its own two columns, not across tables). Every absolute here — and the `1,177,653 -> 597,641` above — predates the encoding minimization and is ~4% high today (`md5` re-measured 2026-08-07: 582,131 with the gate applying); the RATIOS, which are what this table is about, are unmoved.
 
 The two blockers were BOTH rontolisp's own code, and each masked the next:
 

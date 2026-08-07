@@ -68,7 +68,7 @@ final class WasmExpCompiler {
 		ctx.writer.write(Instruction.F64_MUL);
 		boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tSlot);
+		ctx.writer.writeUnsignedLeb128(tSlot);
 
 		// Horner evaluation of the Taylor polynomial: acc = (((((c0)*t + c1)*t + ...)*t.
 		ctx.writer.write(Instruction.F64_CONST);
@@ -82,7 +82,7 @@ final class WasmExpCompiler {
 		}
 		boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(accSlot);
+		ctx.writer.writeUnsignedLeb128(accSlot);
 
 		// Square the reduced result SQUARINGS times: acc = acc * acc.
 		for (int i = 0; i < SQUARINGS; i++) {
@@ -91,31 +91,31 @@ final class WasmExpCompiler {
 			ctx.writer.write(Instruction.F64_MUL);
 			boxF64(ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(accSlot);
+			ctx.writer.writeUnsignedLeb128(accSlot);
 		}
 
 		// The result is the boxed TYPE_FLOAT already in accSlot.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(accSlot);
+		ctx.writer.writeUnsignedLeb128(accSlot);
 	}
 
 	// Boxes the f64 on the stack into a TYPE_FLOAT struct. Package-private for
 	// WasmTanhCompiler / WasmLogCompiler, which build on the same boxed-temp idiom.
 	static void boxF64(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 	// Loads local[slot] (a TYPE_FLOAT struct) and extracts its f64 field onto the stack.
 	// Package-private for WasmTanhCompiler / WasmLogCompiler.
 	static void unboxF64Local(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 }

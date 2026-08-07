@@ -38,11 +38,11 @@ final class WasmWasiStreamCompiler {
 			}
 			case LispNames.STREAM_READ -> {
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_WSTREAM_READ);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_WSTREAM_READ);
 			}
 			case LispNames.STREAM_CLOSE -> {
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_WSTREAM_CLOSE);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_WSTREAM_CLOSE);
 			}
 			default -> throw new IllegalArgumentException("unknown stream member: " + member);
 		}

@@ -131,12 +131,12 @@ final class WasmLetCompiler {
 					WasmExprCompiler.compileExpr(pairList.get(1), ctx);
 					int dupSlot = ctx.allocTemp();
 					ctx.writer.write(Instruction.TEE_LOCAL);
-					ctx.writer.writeSignedLeb128(dupSlot);
+					ctx.writer.writeUnsignedLeb128(dupSlot);
 					ctx.writer.write(Instruction.GET_GLOBAL);
 					ctx.writer.writeUnsignedLeb128(globalIndex);
 					int saveSlot = ctx.allocTemp();
 					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeSignedLeb128(saveSlot);
+					ctx.writer.writeUnsignedLeb128(saveSlot);
 					ctx.writer.write(Instruction.SET_GLOBAL);
 					ctx.writer.writeUnsignedLeb128(globalIndex);
 					if (dynamicRestores == null) {
@@ -145,14 +145,14 @@ final class WasmLetCompiler {
 					dynamicRestores.add(new int[] { globalIndex, saveSlot });
 					ctx.specialBindScopes.push(new int[] { globalIndex, saveSlot, ctx.blockMarkers.size() });
 					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeSignedLeb128(dupSlot);
+					ctx.writer.writeUnsignedLeb128(dupSlot);
 					if (capturedInLet.contains(name)) {
 						ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-						ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+						ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 					}
 					int lexSlot = ctx.allocLocal(name);
 					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeSignedLeb128(lexSlot);
+					ctx.writer.writeUnsignedLeb128(lexSlot);
 					continue;
 				}
 				if (rawEligible.contains(name)) {
@@ -167,11 +167,11 @@ final class WasmLetCompiler {
 				if (capturedInLet.contains(name)) {
 					// Box in a cell
 					ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 				}
 				int slot = ctx.allocLocal(name);
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 			}
 		}
 
@@ -279,7 +279,7 @@ final class WasmLetCompiler {
 			for (int i = dynamicRestores.size() - 1; i >= 0; i--) {
 				int[] restore = dynamicRestores.get(i);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(restore[1]);
+				ctx.writer.writeUnsignedLeb128(restore[1]);
 				ctx.writer.write(Instruction.SET_GLOBAL);
 				ctx.writer.writeUnsignedLeb128(restore[0]);
 				ctx.specialBindScopes.pop();
@@ -377,7 +377,7 @@ final class WasmLetCompiler {
 		int lo = java.util.Objects.requireNonNull(ctx.asyncResume).nextState;
 		if (n == 0) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+			ctx.writer.writeUnsignedLeb128(WasmAsyncEmit.RT_SLOT);
 			ctx.writer.write(Instruction.I32_EQZ);
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		}
@@ -393,10 +393,10 @@ final class WasmLetCompiler {
 		WasmAsyncEmit.spine(init, ctx);
 		if (boxed) {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 		}
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
 		ctx.locals.put(name, slot);

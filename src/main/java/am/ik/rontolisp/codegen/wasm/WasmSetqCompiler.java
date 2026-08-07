@@ -41,7 +41,7 @@ final class WasmSetqCompiler {
 				int n = WasmAwaitAnalysis.countAwaits(valueExpr);
 				if (n == 0) {
 					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+					ctx.writer.writeUnsignedLeb128(WasmAsyncEmit.RT_SLOT);
 					ctx.writer.write(Instruction.I32_EQZ);
 					ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 					ctx.wasmCtrlDepth++;
@@ -123,23 +123,23 @@ final class WasmSetqCompiler {
 			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			// Load cell
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 			// Push value
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			// Set cell field
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			ctx.writer.writeUnsignedLeb128(0);
 			dualWriteSpecialGlobal(name, tmpSlot, ctx);
 			// Return value
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			return;
 		}
 
@@ -150,20 +150,20 @@ final class WasmSetqCompiler {
 			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			// Navigate to cell in env
 			WasmEmitHelper.emitLoadCaptureCell(ctx, captureIdx);
 			// Push value
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			// Set cell
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			ctx.writer.writeUnsignedLeb128(0);
 			dualWriteSpecialGlobal(name, tmpSlot, ctx);
 			// Return value
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			return;
 		}
 
@@ -175,13 +175,13 @@ final class WasmSetqCompiler {
 			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int tmpSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.TEE_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			ctx.writer.write(Instruction.SET_GLOBAL);
 			ctx.writer.writeUnsignedLeb128(globalIndex);
 			mirrorTopLevelGlobal(name, tmpSlot, ctx);
 			// Leave the assigned value on the stack as the form's result.
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			return;
 		}
 
@@ -191,7 +191,7 @@ final class WasmSetqCompiler {
 			slot = ctx.allocLocal(name);
 		}
 		ctx.writer.write(Instruction.TEE_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		mirrorTopLevelGlobal(name, slot, ctx);
 		dualWriteSpecialGlobal(name, slot, ctx);
 	}
@@ -205,7 +205,7 @@ final class WasmSetqCompiler {
 			return;
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		ctx.writer.write(Instruction.SET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(globalIndex);
 	}
@@ -227,11 +227,11 @@ final class WasmSetqCompiler {
 		// already sits below it on the stack).
 		WasmEmitHelper.compileStringLiteral(name, ctx); // symbol place
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STORE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		ctx.writer.write(Instruction.DROP);
 	}
 

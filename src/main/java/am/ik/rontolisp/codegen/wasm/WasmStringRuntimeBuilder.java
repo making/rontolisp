@@ -60,15 +60,14 @@ final class WasmStringRuntimeBuilder {
 		// params: off = 0, len = 1. locals: arr = 2 (ref null $str_bytes), i = 3 (i32).
 		w.write(2); // 2 local groups
 		w.write(1); // group 1: 1 local (arr)
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(1); // group 2: 1 local (i)
 		w.write(Type.I32);
 		int off = 0, len = 1, arr = 2, i = 3;
 		// arr = array.new_default $str_bytes (len)
 		get(w, len);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, arr);
 		// i = 0
 		i32(w, 0);
@@ -88,7 +87,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		// i++
 		get(w, i);
 		i32(w, 1);
@@ -102,7 +101,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, len);
 		get(w, arr);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}
@@ -124,15 +123,14 @@ final class WasmStringRuntimeBuilder {
 		// params: off = 0, len = 1. locals: arr = 2 ($str_bytes), i = 3, id = 4 (i32).
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(2);
 		w.write(Type.I32);
 		int off = 0, len = 1, arr = 2, i = 3, id = 4;
 		// arr = array.new_default $str_bytes (len)
 		get(w, len);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, arr);
 		// i = 0; while (i < len) { arr[i] = load8_u[off + i]; i++ }
 		i32(w, 0);
@@ -150,7 +148,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		get(w, i);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -172,7 +170,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, len);
 		get(w, arr);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}
@@ -194,8 +192,7 @@ final class WasmStringRuntimeBuilder {
 		// i = 4 (i32).
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(2);
 		w.write(Type.I32);
 		int str = 0, ptr = 1, arr = 2, len = 3, i = 4;
@@ -270,8 +267,7 @@ final class WasmStringRuntimeBuilder {
 		// growing the scratch, then the running OUTPUT count.
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(4);
 		w.write(Type.I32);
 		int str = 0, from = 1, to = 2, esc = 3, arr = 4, dst = 5, i = 6, n = 7, b = 8;
@@ -382,7 +378,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, dst);
 		get(w, n);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.END);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -434,15 +430,13 @@ final class WasmStringRuntimeBuilder {
 		// n = 4, start = 5, i = 6, cur = 7, code = 8 (i32).
 		w.write(2);
 		w.write(3);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(5);
 		w.write(Type.I32);
 		int v = 0, header = 1, meta = 2, data = 3, n = 4, start = 5, i = 6, cur = 7, code = 8;
 		// Result block: the normalized string, or v unchanged.
 		w.write(Instruction.BLOCK);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// if (!(v is TYPE_CELL)) return v
 		get(w, v);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -457,8 +451,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
 		set(w, header);
 		get(w, header);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -493,8 +487,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		set(w, data);
 		get(w, data);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -510,8 +504,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
 		set(w, meta);
 		get(w, meta);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -564,7 +558,7 @@ final class WasmStringRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		i32(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
@@ -621,12 +615,12 @@ final class WasmStringRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		get(w, i);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(0);
 		set(w, code);
 		emitUtf8Encode(w, code, cur);
 		get(w, i);
@@ -807,8 +801,7 @@ final class WasmStringRuntimeBuilder {
 		// b = 5 (i32).
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(4);
 		w.write(Type.I32);
 		int str = 0, arr = 1, len = 2, i = 3, count = 4, b = 5;
@@ -883,8 +876,7 @@ final class WasmStringRuntimeBuilder {
 		// len = 3, pos = 4, remaining = 5, b = 6, step = 7 (i32).
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(5);
 		w.write(Type.I32);
 		int str = 0, iParam = 1, arr = 2, len = 3, pos = 4, remaining = 5, b = 6, step = 7;
@@ -981,8 +973,7 @@ final class WasmStringRuntimeBuilder {
 		// len = 3, pos = 4, b0 = 5, b1 = 6, b2 = 7, b3 = 8 (i32).
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(6);
 		w.write(Type.I32);
 		int str = 0, iParam = 1, arr = 2, len = 3, pos = 4, b0 = 5, b1 = 6, b2 = 7, b3 = 8;
@@ -990,7 +981,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, str);
 		get(w, iParam);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 		set(w, pos);
 		setStrArray(w, str, arr);
 		get(w, arr);
@@ -1027,7 +1018,7 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, b1);
 		get(w, b0);
 		i32(w, 0x1F);
@@ -1050,14 +1041,14 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, b1);
 		get(w, arr);
 		get(w, pos);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, b2);
 		get(w, b0);
 		i32(w, 0x0F);
@@ -1082,21 +1073,21 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, b1);
 		get(w, arr);
 		get(w, pos);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, b2);
 		get(w, arr);
 		get(w, pos);
 		i32(w, 3);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, b3);
 		get(w, b0);
 		i32(w, 0x07);
@@ -1129,8 +1120,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 	}
 
 	// Pushes field (0 = car, 1 = cdr) of the TYPE_CONS held in the given local.
@@ -1139,8 +1130,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(field);
 	}
 
 	/**
@@ -1198,13 +1189,11 @@ final class WasmStringRuntimeBuilder {
 		// ref local 15: strArr (the input string's $str_bytes, for the string branch).
 		w.write(3);
 		w.write(4);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(8);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		int node = 3, head = 4, tail = 5, newc = 6;
 		int pos = 7, end = 8, start = 9, cur = 10, b = 11, startIdx = 12, endIdx = 13, ii = 14;
 		int strArr = 15;
@@ -1225,8 +1214,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// --- String branch ---
 		// strArr = string.data; pos/end are 0-based byte positions in that array.
 		// The character indices in startIdx/endIdx are translated to byte offsets by
@@ -1237,7 +1225,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, 0);
 		get(w, startIdx);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 		set(w, pos);
 		// end = (endIdx < 0) ? length - 1 : _str_char_byte_offset(str, endIdx)
 		get(w, endIdx);
@@ -1252,7 +1240,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, 0);
 		get(w, endIdx);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 		w.write(Instruction.END);
 		set(w, end);
 		emitBuildCore(w, strArr, pos, end, start, cur, b);
@@ -1327,12 +1315,12 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		set(w, newc);
 		// if (head is null) head = tail = newc; else tail.cdr = newc; tail = newc
 		get(w, head);
@@ -1348,8 +1336,8 @@ final class WasmStringRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		get(w, newc);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		get(w, newc);
 		set(w, tail);
 		w.write(Instruction.END);
@@ -1373,8 +1361,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 	}
 
 	/**
@@ -1394,8 +1382,7 @@ final class WasmStringRuntimeBuilder {
 		int i = 2, n = 3, ca = 4, cb = 5, aArr = 6, bArr = 7;
 		// Result block: a string struct (t) or null (nil).
 		w.write(Instruction.BLOCK);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// if (a.length != b.length) return nil
 		emitStrLen(w, 0);
 		emitStrLen(w, 1);
@@ -1526,7 +1513,7 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, c);
 		emitInBag(w, c, bagArr, bagStart, bagEnd, found, scan);
 		get(w, found);
@@ -1549,12 +1536,12 @@ final class WasmStringRuntimeBuilder {
 
 	private static void get(WasmWriter w, int local) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(local);
+		w.writeUnsignedLeb128(local);
 	}
 
 	private static void set(WasmWriter w, int local) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(local);
+		w.writeUnsignedLeb128(local);
 	}
 
 	private static void i32(WasmWriter w, int value) {
@@ -1577,7 +1564,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, arrLocal);
 		get(w, idxLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 	}
 
 	// Declares n i32 locals followed by refCount (ref null $str_bytes) locals.
@@ -1586,8 +1573,7 @@ final class WasmStringRuntimeBuilder {
 		w.write(n);
 		w.write(Type.I32);
 		w.write(refCount);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 	}
 
 	// Pushes the length field (1) of the string at the given param local.
@@ -1596,8 +1582,8 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(1);
 	}
 
 	// Unboxes the i31 integer at the given param local to an i32 on the stack.
@@ -1628,7 +1614,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, arrLocal);
 		i32(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		set(w, fbLocal);
 		// A leading quote marks a real string; anything else is a symbol name.
 		get(w, fbLocal);
@@ -1852,7 +1838,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, kL);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		i32(w, 0x3F);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.I32_OR);
@@ -1877,7 +1863,7 @@ final class WasmStringRuntimeBuilder {
 				// letter continues the word instead of starting a new one.
 				get(w, cpL);
 				w.write(Instruction.CALL);
-				w.writeSignedLeb128(WasmLispCompiler.FUNC_CHAR_ALNUM_P);
+				w.writeUnsignedLeb128(WasmLispCompiler.FUNC_CHAR_ALNUM_P);
 				w.write(Instruction.IF, 0x40);
 				get(w, wsL);
 				w.write(Instruction.IF, 0x40);
@@ -1899,7 +1885,7 @@ final class WasmStringRuntimeBuilder {
 	private static void emitCaseFoldCall(WasmWriter w, int cpL, int funcIndex) {
 		get(w, cpL);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(funcIndex);
+		w.writeUnsignedLeb128(funcIndex);
 		set(w, cpL);
 	}
 

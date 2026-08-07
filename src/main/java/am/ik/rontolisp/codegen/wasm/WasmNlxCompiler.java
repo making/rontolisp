@@ -80,7 +80,7 @@ final class WasmNlxCompiler {
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
 	}
@@ -102,7 +102,7 @@ final class WasmNlxCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		if (parts.size() == 3) {
 			WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		}
@@ -111,7 +111,7 @@ final class WasmNlxCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
 	}
@@ -158,25 +158,22 @@ final class WasmNlxCompiler {
 			idSlot = ctx.allocTemp();
 			WasmExprCompiler.compileExpr(idForm, ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(idSlot);
+			ctx.writer.writeUnsignedLeb128(idSlot);
 		}
 		// block $done (result (ref null eq)) -- the whole form's value.
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		int doneDepth = ctx.wasmCtrlDepth;
 		// block $h (result (ref null eq)) -- the landing pad, receiving the payload cons.
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		int handlerDepth = ctx.wasmCtrlDepth;
 		// try_table (result (ref null eq)) (catch $block-exit $h). Catch labels resolve
 		// without the try_table's own label, so label 0 is block $h here.
 		ctx.writer.write(Instruction.TRY_TABLE);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.CATCH);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
@@ -205,7 +202,7 @@ final class WasmNlxCompiler {
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $h -- the payload cons is on the stack
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		// car(payload) is the block-instance id (an i31) for %nlx-catch and the (tag)
 		// wrapper cons for catch; either way, when it is ours deliver cdr(payload).
 		if (eqTags) {
@@ -213,9 +210,9 @@ final class WasmNlxCompiler {
 			int wrapSlot = ctx.allocTemp();
 			emitConsField(ctx, payloadSlot, 0);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(wrapSlot);
+			ctx.writer.writeUnsignedLeb128(wrapSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(wrapSlot);
+			ctx.writer.writeUnsignedLeb128(wrapSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
@@ -227,7 +224,7 @@ final class WasmNlxCompiler {
 		}
 		if (idSlot >= 0) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(idSlot);
+			ctx.writer.writeUnsignedLeb128(idSlot);
 		}
 		else {
 			WasmExprCompiler.compileExpr(idForm, ctx);
@@ -251,7 +248,7 @@ final class WasmNlxCompiler {
 		}
 		// No match: rethrow the same payload for an outer establishing block.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_BLOCK_EXIT);
 		ctx.wasmCtrlDepth--;
@@ -261,12 +258,12 @@ final class WasmNlxCompiler {
 	/** Loads {@code (struct.get $cons index)} of the cons in {@code payloadSlot}. */
 	private static void emitConsField(WasmLispCompiler.Ctx ctx, int payloadSlot, int index) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(payloadSlot);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(index);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(index);
 	}
 
 }

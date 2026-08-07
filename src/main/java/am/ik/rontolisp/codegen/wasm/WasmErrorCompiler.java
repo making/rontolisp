@@ -64,7 +64,7 @@ final class WasmErrorCompiler {
 	 */
 	static void emitThrowPayload(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.THROW);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 	}

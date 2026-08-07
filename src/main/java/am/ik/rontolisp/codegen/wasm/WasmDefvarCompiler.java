@@ -35,7 +35,7 @@ final class WasmDefvarCompiler {
 				WasmAsyncEmit.spine(parts.get(2), ctx);
 				int tmpSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.TEE_LOCAL);
-				ctx.writer.writeSignedLeb128(tmpSlot);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
 				ctx.writer.write(Instruction.SET_GLOBAL);
 				ctx.writer.writeUnsignedLeb128(globalIndex);
 				// Mirror into the eval runtime's global env (no-op unless eval is used at
@@ -51,7 +51,7 @@ final class WasmDefvarCompiler {
 			WasmAsyncEmit.spine(parts.get(2), ctx);
 			int slot = ctx.allocLocal(name.name());
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			// Mirror the binding into the eval runtime's global env (no-op unless eval is
 			// used at top level); the stack is left clean (the SET_LOCAL consumed the
 			// value and mirrorTopLevelGlobal drops the _store return).

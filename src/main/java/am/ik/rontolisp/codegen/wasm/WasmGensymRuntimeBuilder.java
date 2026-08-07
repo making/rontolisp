@@ -56,7 +56,7 @@ final class WasmGensymRuntimeBuilder {
 		get(w, LEN);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		get(w, START);
 		get(w, K);
 		w.write(Instruction.I32_ADD);
@@ -70,7 +70,7 @@ final class WasmGensymRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		set(w, K);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// cur = start + len
@@ -95,7 +95,7 @@ final class WasmGensymRuntimeBuilder {
 		set(w, T);
 		get(w, T);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		// write digits backwards: t = n; k = cur + d - 1;
 		// do { mem[k] = '0' + t % 10; t /= 10; k-- } while t != 0
@@ -125,7 +125,7 @@ final class WasmGensymRuntimeBuilder {
 		set(w, K);
 		get(w, T);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		// cur += d. HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the #:g<n>
 		// bytes into a fresh GC array with a unique counter id (each gensym is a distinct

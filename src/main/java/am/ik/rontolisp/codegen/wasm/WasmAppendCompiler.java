@@ -34,7 +34,7 @@ final class WasmAppendCompiler {
 		// Right-fold: call _append N-1 times from right to left
 		for (int i = 0; i < argCount - 1; i++) {
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_APPEND);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPEND);
 		}
 	}
 

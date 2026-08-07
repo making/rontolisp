@@ -98,7 +98,7 @@ rontolisp fact.lisp --no-wasi --optimize -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120, from a ~4 KB module
 ```
 
-For the `fact` example the module drops from ~330 KB to ~4 KB.
+For the `fact` example the module drops from ~320 KB to ~4 KB.
 `--optimize` is opt-in and behavior-preserving: it walks the call graph from
 the actual `call` instructions, so anything reachable (including code an
 embedded `eval`/`load` dispatches to) is kept. It applies on **every** output
@@ -131,7 +131,7 @@ the emitted `.wit` shrinks with it.
 ```bash
 echo '(print "Hello World!")' > hello.lisp
 rontolisp hello.lisp --component --optimize -o hello.wasm    # ~2 KB
-rontolisp hello.lisp --component -o hello-full.wasm          # ~345 KB
+rontolisp hello.lisp --component -o hello-full.wasm          # ~325 KB
 ```
 
 Without `--optimize` a component always declares the full fixed WASI surface, which
@@ -144,7 +144,7 @@ ever calls it that way. So a function is listed only when your program can
 actually obtain it as a value — `#'name`, a quoted `'name` designator, a
 `lambda` — and everything else becomes ordinary dead code that `--optimize`
 removes. On a program that loads `md5` and calls one function, that is the
-difference between 1.18 MB and 598 KB.
+difference between about 1.1 MB and 582 KB.
 
 The listing is all-or-nothing, and one thing switches it off: if the program can
 name a function at run time, every function has to stay reachable. That is any

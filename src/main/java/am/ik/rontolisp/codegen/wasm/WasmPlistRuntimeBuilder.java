@@ -58,7 +58,7 @@ final class WasmPlistRuntimeBuilder {
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
 		setLocal(w, CUR);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop (never falls through)
 		w.write(0x00); // unreachable
 		w.write(Instruction.END);
@@ -73,12 +73,12 @@ final class WasmPlistRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void refCast(WasmWriter w, int heapType) {
@@ -88,8 +88,8 @@ final class WasmPlistRuntimeBuilder {
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 }

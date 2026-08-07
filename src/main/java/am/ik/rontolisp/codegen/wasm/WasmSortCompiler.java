@@ -27,12 +27,12 @@ final class WasmSortCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int listSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(2)), ctx);
 		int predSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(predSlot);
+		ctx.writer.writeUnsignedLeb128(predSlot);
 
 		int iSlot = ctx.allocTemp();
 		int jSlot = ctx.allocTemp();
@@ -40,9 +40,9 @@ final class WasmSortCompiler {
 
 		// i = list
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(iSlot);
+		ctx.writer.writeUnsignedLeb128(iSlot);
 
 		// block $outer / loop $outerLoop
 		ctx.writer.write(Instruction.BLOCK, 0x40);
@@ -50,7 +50,7 @@ final class WasmSortCompiler {
 
 		// if !consp(i) br $outer
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(iSlot);
+		ctx.writer.writeUnsignedLeb128(iSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.I32_EQZ);
@@ -59,7 +59,7 @@ final class WasmSortCompiler {
 		// j = cdr(i)
 		emitCdr(ctx, iSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(jSlot);
+		ctx.writer.writeUnsignedLeb128(jSlot);
 
 		// block $inner / loop $innerLoop
 		ctx.writer.write(Instruction.BLOCK, 0x40);
@@ -67,7 +67,7 @@ final class WasmSortCompiler {
 
 		// if !consp(j) br $inner
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(jSlot);
+		ctx.writer.writeUnsignedLeb128(jSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.I32_EQZ);
@@ -75,11 +75,11 @@ final class WasmSortCompiler {
 
 		// if truthy(dispatch_2(pred, car(j), car(i))) swap car(i) and car(j)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(predSlot);
+		ctx.writer.writeUnsignedLeb128(predSlot);
 		emitCar(ctx, jSlot);
 		emitCar(ctx, iSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
+		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.I32_EQZ); // 1 when the predicate result is truthy
 		ctx.writer.write(Instruction.IF, 0x40);
@@ -87,33 +87,33 @@ final class WasmSortCompiler {
 		// tmp = car(i)
 		emitCar(ctx, iSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		// car(i) = car(j)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(iSlot);
+		ctx.writer.writeUnsignedLeb128(iSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		emitCar(ctx, jSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
 		// car(j) = tmp
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(jSlot);
+		ctx.writer.writeUnsignedLeb128(jSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
 
 		ctx.writer.write(Instruction.END); // end if
 
 		// j = cdr(j)
 		emitCdr(ctx, jSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(jSlot);
+		ctx.writer.writeUnsignedLeb128(jSlot);
 		ctx.writer.write(Instruction.BR, 0); // continue innerLoop
 		ctx.writer.write(Instruction.END); // end innerLoop
 		ctx.writer.write(Instruction.END); // end $inner
@@ -121,34 +121,34 @@ final class WasmSortCompiler {
 		// i = cdr(i)
 		emitCdr(ctx, iSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(iSlot);
+		ctx.writer.writeUnsignedLeb128(iSlot);
 		ctx.writer.write(Instruction.BR, 0); // continue outerLoop
 		ctx.writer.write(Instruction.END); // end outerLoop
 		ctx.writer.write(Instruction.END); // end $outer
 
 		// result = list (original head, now sorted)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 	}
 
 	private static void emitCar(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
 	}
 
 	private static void emitCdr(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1); // cdr
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1); // cdr
 	}
 
 }

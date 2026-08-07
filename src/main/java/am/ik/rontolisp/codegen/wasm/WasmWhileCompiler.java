@@ -65,7 +65,7 @@ final class WasmWhileCompiler {
 		ctx.wasmCtrlDepth += 2;
 		if (testN == 0) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+			ctx.writer.writeUnsignedLeb128(WasmAsyncEmit.RT_SLOT);
 			ctx.writer.write(Instruction.I32_EQZ);
 		}
 		else {

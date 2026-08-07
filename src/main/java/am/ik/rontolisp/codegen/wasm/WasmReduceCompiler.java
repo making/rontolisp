@@ -32,7 +32,7 @@ final class WasmReduceCompiler {
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
 		int funcSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 
 		int accSlot = ctx.allocTemp();
 		int listSlot = ctx.allocTemp();
@@ -41,39 +41,39 @@ final class WasmReduceCompiler {
 			// (reduce fn list :initial-value init)
 			WasmExprCompiler.compileExpr(args.get(4), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(accSlot);
+			ctx.writer.writeUnsignedLeb128(accSlot);
 
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 		}
 		else {
 			// 2-arg: (reduce fn list) - first element becomes accumulator
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 
 			// acc = car(list)
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(0); // car
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(0); // car
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(accSlot);
+			ctx.writer.writeUnsignedLeb128(accSlot);
 
 			// list = cdr(list)
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(1); // cdr
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1); // cdr
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 		}
 
 		// block $exit / loop $cont
@@ -82,7 +82,7 @@ final class WasmReduceCompiler {
 
 		// Check if list is cons; if not, break to $exit
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.I32_EQZ);
@@ -90,33 +90,33 @@ final class WasmReduceCompiler {
 
 		// acc = func(acc, car(list))
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(accSlot);
+		ctx.writer.writeUnsignedLeb128(accSlot);
 		// car(list)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0); // car
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
 		// Call dispatch_2(func, acc, car)
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
+		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(accSlot);
+		ctx.writer.writeUnsignedLeb128(accSlot);
 
 		// list = cdr(list)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1); // cdr
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1); // cdr
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlot);
+		ctx.writer.writeUnsignedLeb128(listSlot);
 
 		// br 0 (continue loop)
 		ctx.writer.write(Instruction.BR, 0);
@@ -125,7 +125,7 @@ final class WasmReduceCompiler {
 
 		// Result: accumulator
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(accSlot);
+		ctx.writer.writeUnsignedLeb128(accSlot);
 	}
 
 	/**

@@ -143,7 +143,7 @@ final class WasmToplevelEmit {
 		WasmWriter s = start.writer;
 		if (guarded) {
 			s.write(Instruction.GET_LOCAL);
-			s.writeSignedLeb128(WasmAsyncEmit.RT_SLOT);
+			s.writeUnsignedLeb128(WasmAsyncEmit.RT_SLOT);
 			s.write(Instruction.I32_EQZ);
 			s.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			start.wasmCtrlDepth++;
@@ -151,7 +151,7 @@ final class WasmToplevelEmit {
 		s.write(Instruction.REF_NULL);
 		s.writeHeapType(Type.EQ.code());
 		s.write(Instruction.CALL);
-		s.writeSignedLeb128(chunk.funcIndex);
+		s.writeUnsignedLeb128(chunk.funcIndex);
 		s.write(Instruction.DROP);
 		if (guarded) {
 			start.wasmCtrlDepth--;

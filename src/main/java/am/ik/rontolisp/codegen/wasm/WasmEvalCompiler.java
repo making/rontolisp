@@ -27,7 +27,7 @@ final class WasmEvalCompiler {
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 	}
 
 }

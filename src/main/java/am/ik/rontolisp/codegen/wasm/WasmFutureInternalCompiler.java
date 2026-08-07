@@ -32,14 +32,14 @@ final class WasmFutureInternalCompiler {
 			case LispNames.FUTURE_NEW_INTERNAL -> {
 				expectArgs(member, args, 0);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
 			}
 			case LispNames.FUTURE_SETTLE_INTERNAL -> {
 				expectArgs(member, args, 2);
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SETTLE);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SETTLE);
 			}
 			case LispNames.FUTURE_REJECT_INTERNAL -> {
 				expectArgs(member, args, 2);
@@ -51,16 +51,16 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.writeHeapType(Type.EQ.code());
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
 			}
 			case LispNames.SUBTASK_FUTURE_INTERNAL -> {
 				expectArgs(member, args, 2);
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SUBTASK_FUTURE);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SUBTASK_FUTURE);
 			}
 			case LispNames.FUTURE_FORCE_INTERNAL -> {
 				// The synchronous force: block on the module scheduler until the future
@@ -69,7 +69,7 @@ final class WasmFutureInternalCompiler {
 				expectArgs(member, args, 1);
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
 			}
 			case LispNames.WASI_STREAM_NEW_INTERNAL -> {
 				expectArgs(member, args, 2);
@@ -79,7 +79,7 @@ final class WasmFutureInternalCompiler {
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				WasmExprCompiler.compileExpr(args.get(2), ctx);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(ctx.wasiStreamTypeIndex);
+				ctx.writer.writeUnsignedLeb128(ctx.wasiStreamTypeIndex);
 			}
 			default -> throw new IllegalArgumentException("unknown future internal: " + member);
 		}

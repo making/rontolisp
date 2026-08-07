@@ -34,7 +34,7 @@ final class WasmMapcCompiler {
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
 		int funcSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 
 		// Compile each list expression; mapc operates on lists, so a non-list (e.g. a
 		// string) traps.
@@ -43,7 +43,7 @@ final class WasmMapcCompiler {
 			WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
 			int listSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			WasmEmitHelper.emitRequireListGuard(ctx, listSlot);
 			listSlots.add(listSlot);
 		}
@@ -52,10 +52,10 @@ final class WasmMapcCompiler {
 		List<Integer> cursorSlots = new ArrayList<>();
 		for (int listSlot : listSlots) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(listSlot);
+			ctx.writer.writeUnsignedLeb128(listSlot);
 			int cursorSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(cursorSlot);
+			ctx.writer.writeUnsignedLeb128(cursorSlot);
 			cursorSlots.add(cursorSlot);
 		}
 
@@ -66,7 +66,7 @@ final class WasmMapcCompiler {
 		// Break to $exit as soon as any cursor is no longer a cons (shortest list stops).
 		for (int cursorSlot : cursorSlots) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(cursorSlot);
+			ctx.writer.writeUnsignedLeb128(cursorSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.I32_EQZ);
@@ -75,34 +75,34 @@ final class WasmMapcCompiler {
 
 		// Push func and car of each cursor for dispatch
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 		for (int cursorSlot : cursorSlots) {
 			// car(cursor)
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(cursorSlot);
+			ctx.writer.writeUnsignedLeb128(cursorSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(0); // car
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(0); // car
 		}
 		// Call dispatch_<nLists>(func, car...)
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
+		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 		// Discard the mapped result
 		ctx.writer.write(Instruction.DROP);
 
 		// advance each cursor: cursor = cdr(cursor)
 		for (int cursorSlot : cursorSlots) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(cursorSlot);
+			ctx.writer.writeUnsignedLeb128(cursorSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeSignedLeb128(1); // cdr
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(1); // cdr
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(cursorSlot);
+			ctx.writer.writeUnsignedLeb128(cursorSlot);
 		}
 
 		// br 0 (continue loop)
@@ -112,7 +112,7 @@ final class WasmMapcCompiler {
 
 		// Result: the first list
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(listSlots.get(0));
+		ctx.writer.writeUnsignedLeb128(listSlots.get(0));
 	}
 
 }

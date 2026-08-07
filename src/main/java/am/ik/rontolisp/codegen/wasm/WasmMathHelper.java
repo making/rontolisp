@@ -19,7 +19,7 @@ final class WasmMathHelper {
 	/** Pushes the signed i32 value held (i31-boxed) in {@code slot}. */
 	static void getI32(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.castI31GetS(ctx);
 	}
 
@@ -27,7 +27,7 @@ final class WasmMathHelper {
 	static void setI32(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	/** Pushes an i32 constant. */
@@ -42,9 +42,9 @@ final class WasmMathHelper {
 	 */
 	static void getI64(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
 	}
 
 	/**
@@ -53,9 +53,9 @@ final class WasmMathHelper {
 	 */
 	static void setI64(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	/**
@@ -98,14 +98,14 @@ final class WasmMathHelper {
 		setI64(ctx, scratchSlot);
 		// a = b
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		// b = scratch
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(scratchSlot);
+		ctx.writer.writeUnsignedLeb128(scratchSlot);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.BR, 0);
 		ctx.writer.write(Instruction.END); // loop
 		ctx.writer.write(Instruction.END); // block

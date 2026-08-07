@@ -33,7 +33,7 @@ final class WasmAsyncRunCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
 	}
 
 }

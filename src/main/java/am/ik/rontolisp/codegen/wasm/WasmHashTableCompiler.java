@@ -37,7 +37,7 @@ final class WasmHashTableCompiler {
 		// (count=0 . empty-buckets) header.
 		emitNewHeader(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 	}
 
 	static void compileGet(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -62,8 +62,7 @@ final class WasmHashTableCompiler {
 
 		// block $result (eqref) / block $notfound / loop
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
 
@@ -75,7 +74,7 @@ final class WasmHashTableCompiler {
 		castConsGet(ctx, 0); // entry
 		castConsGet(ctx, 0); // car(entry) = key
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
 		ctx.writer.write(Instruction.IF, 0x40);
 		// match: push cdr(entry) and break to $result
 		getLocal(ctx, curSlot);
@@ -123,7 +122,7 @@ final class WasmHashTableCompiler {
 		castConsGet(ctx, 0);
 		castConsGet(ctx, 0); // key of entry
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
 		ctx.writer.write(Instruction.IF, 0x40);
 		// match: rplacd(entry, value)
 		getLocal(ctx, curSlot);
@@ -132,8 +131,8 @@ final class WasmHashTableCompiler {
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		getLocal(ctx, valSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		// depth 3: $if(0) $loop(1) $notfound(2) $done(3)
 		ctx.writer.write(Instruction.BR, 3); // -> $done
 		ctx.writer.write(Instruction.END); // end if
@@ -149,13 +148,13 @@ final class WasmHashTableCompiler {
 		getLocal(ctx, keySlot);
 		getLocal(ctx, valSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		// cons(newentry, oldhead)
 		getHeaderArr(ctx, headerSlot);
 		getIndex(ctx, idxSlot);
 		arrayGet(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		arraySet(ctx);
 		// count = count + 1
 		addToCount(ctx, headerSlot, 1);
@@ -173,7 +172,7 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.IF, 0x40);
 		getLocal(ctx, headerSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_HASH_RESIZE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH_RESIZE);
 		ctx.writer.write(Instruction.END); // end resize if
 		ctx.writer.write(Instruction.END); // end $done
 		// return value
@@ -200,8 +199,7 @@ final class WasmHashTableCompiler {
 		int prevSlot = setTemp(ctx);
 
 		ctx.writer.write(Instruction.BLOCK); // $result (eqref)
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.BLOCK, 0x40); // $notfound
 		ctx.writer.write(Instruction.LOOP, 0x40);
 
@@ -212,7 +210,7 @@ final class WasmHashTableCompiler {
 		castConsGet(ctx, 0);
 		castConsGet(ctx, 0);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
 		ctx.writer.write(Instruction.IF, 0x40);
 		// remove cur: if prev is nil, buckets[idx] = cdr(cur); else rplacd(prev,
 		// cdr(cur))
@@ -231,8 +229,8 @@ final class WasmHashTableCompiler {
 		getLocal(ctx, curSlot);
 		castConsGet(ctx, 1);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.END); // end inner if
 		// count = count - 1
 		addToCount(ctx, headerSlot, -1);
@@ -262,8 +260,8 @@ final class WasmHashTableCompiler {
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		emitNewHeader(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
 		getLocal(ctx, cellSlot);
 	}
 
@@ -283,36 +281,36 @@ final class WasmHashTableCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valueSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		int innerSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
 		// inner = cell.get(value, 0)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(innerSlot);
+		ctx.writer.writeUnsignedLeb128(innerSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(innerSlot);
+		ctx.writer.writeUnsignedLeb128(innerSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
 		// header car is an i31 entry count (a hash table), not a dims array?
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(innerSlot);
+		ctx.writer.writeUnsignedLeb128(innerSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(am.ik.wasm.Type.I31.code());
 		ctx.writer.write(Instruction.ELSE);
@@ -368,7 +366,7 @@ final class WasmHashTableCompiler {
 		castConsGet(ctx, 0); // entry
 		castConsGet(ctx, 1); // value
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
+		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 		ctx.writer.write(Instruction.DROP);
 		advanceCursor(ctx, curSlot);
 		ctx.writer.write(Instruction.BR, 0); // loop $in
@@ -394,18 +392,18 @@ final class WasmHashTableCompiler {
 	private static int setTemp(WasmLispCompiler.Ctx ctx) {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		return slot;
 	}
 
 	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	// Compiles the table expression and reads its (count . buckets) header cons into a
@@ -428,10 +426,10 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(INITIAL_CAP);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		// header = cons(count, buckets)
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 	}
 
 	// Pushes the header's bucket array (cast to TYPE_HASH_BUCKETS) onto the stack.
@@ -446,7 +444,7 @@ final class WasmHashTableCompiler {
 	private static void pushBucketIndex(WasmLispCompiler.Ctx ctx, int headerSlot, int keySlot) {
 		getLocal(ctx, keySlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_HASH);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_HASH);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0x7fffffff);
 		ctx.writer.write(Instruction.I32_AND);
@@ -471,13 +469,13 @@ final class WasmHashTableCompiler {
 	// array.get TYPE_HASH_BUCKETS: [array, i32 index] -> [value].
 	private static void arrayGet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	// array.set TYPE_HASH_BUCKETS: [array, i32 index, value] -> [].
 	private static void arraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	// Pushes the header's live-entry count as an i32 on the stack.
@@ -498,8 +496,8 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	// Assumes a cell (eqref) on the stack; replaces it with its field-0 value (the header
@@ -508,8 +506,8 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	// Assumes a cons (eqref) on the stack; replaces it with car (field 0) or cdr (field
@@ -518,8 +516,8 @@ final class WasmHashTableCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(field);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
 	}
 
 	// if cursor is not a cons, break out by `depth`.

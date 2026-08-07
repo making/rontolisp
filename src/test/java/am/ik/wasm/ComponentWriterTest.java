@@ -211,13 +211,17 @@ class ComponentWriterTest {
 		c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(List.of(ComponentWriter.canonLift(1, 1))));
 		c.rawSection(ComponentWriter.SEC_EXPORT, ComponentWriter.vec(List.of(ComponentWriter.exportFunc("run", 1))));
 
+		// Note the `02 1e 02` two thirds in: the two consecutive core-instance sections
+		// requested above come out as ONE section holding both entries. The writer merges
+		// adjacent vector sections of the same kind (index spaces advance in declaration
+		// order either way), because a repeated section id costs a header for nothing.
 		assertThat(hex(c.toByteArray()))
 			.isEqualTo("0061736d0d000100071b014202014000007704000e6765742d72616e646f6d2d75363401000a1d010018"
 					+ "776173693a72616e646f6d2f72616e646f6d40302e322e3005000613010100000e6765742d72616e646f6d2d"
 					+ "7536340805010100000001420061736d010000000109026000017e6000017f0217010472616e640e6765742d"
-					+ "72616e646f6d2d7536340000030201010707010372756e00010a070105001000a70b02140101010e6765742d"
-					+ "72616e646f6d2d7536340000020b010000010472616e6412000705014000007a060901000001010372756e08"
-					+ "060100000100010b0901000372756e010100");
+					+ "72616e646f6d2d7536340000030201010707010372756e00010a070105001000a70b021e0201010e6765742d"
+					+ "72616e646f6d2d75363400000000010472616e6412000705014000007a060901000001010372756e08060100"
+					+ "000100010b0901000372756e010100");
 	}
 
 	// --- async canonical ABI (WASI 0.3 / Preview 3) ---------------------------------

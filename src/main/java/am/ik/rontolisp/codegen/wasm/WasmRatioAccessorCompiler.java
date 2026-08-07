@@ -20,7 +20,7 @@ final class WasmRatioAccessorCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(ratioFunc);
+		ctx.writer.writeUnsignedLeb128(ratioFunc);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 

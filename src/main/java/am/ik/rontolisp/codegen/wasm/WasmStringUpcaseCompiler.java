@@ -29,7 +29,7 @@ final class WasmStringUpcaseCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(func);
+		ctx.writer.writeUnsignedLeb128(func);
 	}
 
 }

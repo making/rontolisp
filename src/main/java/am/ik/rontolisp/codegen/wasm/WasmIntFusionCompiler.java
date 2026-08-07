@@ -233,8 +233,7 @@ final class WasmIntFusionCompiler {
 		int savedI64 = ctx.nextI64Local;
 		evalLeaves(leaves, ctx);
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		emitLeafUnboxes(leaves, ctx);
 		emitFast(root, ctx);
@@ -385,7 +384,7 @@ final class WasmIntFusionCompiler {
 		emitFallback(root, ctx);
 		int boxedSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(boxedSlot);
+		ctx.writer.writeUnsignedLeb128(boxedSlot);
 		WasmArrayCompiler.emitUnboxIntForStore(ctx, boxedSlot);
 		ctx.writer.write(Instruction.END);
 		ctx.nextI64Local = savedI64;
@@ -517,9 +516,9 @@ final class WasmIntFusionCompiler {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writeI64LocalIndex(target.i64Slot());
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(src.shadowSlot());
+				ctx.writer.writeUnsignedLeb128(src.shadowSlot());
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(target.shadowSlot());
+				ctx.writer.writeUnsignedLeb128(target.shadowSlot());
 				return;
 			}
 			Site site = new Site(expr);
@@ -551,7 +550,7 @@ final class WasmIntFusionCompiler {
 				ctx.writer.write(Instruction.END);
 				emitFallback(root, ctx);
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(target.shadowSlot());
+				ctx.writer.writeUnsignedLeb128(target.shadowSlot());
 				ctx.writer.write(Instruction.END);
 				ctx.nextI64Local = savedI64;
 				return;
@@ -559,7 +558,7 @@ final class WasmIntFusionCompiler {
 		}
 		WasmExprCompiler.compileExpr(expr, ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(target.shadowSlot());
+		ctx.writer.writeUnsignedLeb128(target.shadowSlot());
 	}
 
 	// Marks the raw i64 slot authoritative: shadow := the module's raw-local
@@ -569,13 +568,13 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(target.shadowSlot());
+		ctx.writer.writeUnsignedLeb128(target.shadowSlot());
 	}
 
 	// Pushes i32 1 when the shadow in `slot` is the sentinel (raw value valid).
 	private static void emitShadowIsSentinel(int slot, WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(ctx.rawSentinelGlobalIndex);
 		ctx.writer.write(Instruction.REF_EQ);
@@ -599,11 +598,11 @@ final class WasmIntFusionCompiler {
 	 */
 	static void emitRawLocalBoxedRead(RawLocal raw, WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(raw.shadowSlot());
+		ctx.writer.writeUnsignedLeb128(raw.shadowSlot());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(raw.i64Slot());
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_UB_READ);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_UB_READ);
 	}
 
 	/**
@@ -625,8 +624,7 @@ final class WasmIntFusionCompiler {
 		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.I64_EQ);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.I32_WRAP_I64);
@@ -635,7 +633,7 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(i64Slot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -996,17 +994,17 @@ final class WasmIntFusionCompiler {
 				WasmExprCompiler.compileExpr(leaf.expr, ctx);
 				leaf.slot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
+				ctx.writer.writeUnsignedLeb128(leaf.slot);
 			}
 			else if (node instanceof ArefLeaf aref) {
 				WasmExprCompiler.compileExpr(aref.arrayExpr, ctx);
 				aref.arrSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(aref.arrSlot);
+				ctx.writer.writeUnsignedLeb128(aref.arrSlot);
 				WasmExprCompiler.compileExpr(aref.indexExpr, ctx);
 				aref.idxSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(aref.idxSlot);
+				ctx.writer.writeUnsignedLeb128(aref.idxSlot);
 			}
 			else if (node instanceof RawLeaf raw) {
 				raw.snapI64 = ctx.allocI64Temp();
@@ -1016,9 +1014,9 @@ final class WasmIntFusionCompiler {
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writeI64LocalIndex(raw.snapI64);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(raw.src.shadowSlot());
+				ctx.writer.writeUnsignedLeb128(raw.src.shadowSlot());
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
 			}
 		}
 	}
@@ -1039,29 +1037,29 @@ final class WasmIntFusionCompiler {
 			// more than the two type tests it performs.
 			if (node instanceof ExprLeaf leaf) {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
+				ctx.writer.writeUnsignedLeb128(leaf.slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 				ctx.writer.writeHeapType(Type.I31.code());
 				ctx.writer.write(Instruction.IF);
 				ctx.writer.write(Type.I64);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
+				ctx.writer.writeUnsignedLeb128(leaf.slot);
 				WasmEmitHelper.castI31GetS(ctx);
 				ctx.writer.write(Instruction.I64_EXTEND_S_I32);
 				ctx.writer.write(Instruction.ELSE);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
+				ctx.writer.writeUnsignedLeb128(leaf.slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 				ctx.writer.write(Instruction.I32_EQZ);
 				ctx.writer.write(Instruction.BR_IF, 1);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
+				ctx.writer.writeUnsignedLeb128(leaf.slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+				ctx.writer.writeUnsignedLeb128(0);
 				ctx.writer.write(Instruction.END);
 				leaf.i64Slot = ctx.allocI64Temp();
 				ctx.writer.write(Instruction.SET_LOCAL);
@@ -1074,7 +1072,7 @@ final class WasmIntFusionCompiler {
 				ctx.writer.write(Instruction.I32_EQZ);
 				ctx.writer.write(Instruction.BR_IF, 0);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.idxSlot);
+				ctx.writer.writeUnsignedLeb128(leaf.idxSlot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 				ctx.writer.writeHeapType(Type.I31.code());
 				ctx.writer.write(Instruction.I32_EQZ);
@@ -1096,29 +1094,29 @@ final class WasmIntFusionCompiler {
 				ctx.writeI64LocalIndex(raw.snapI64);
 				ctx.writer.write(Instruction.ELSE);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 				ctx.writer.writeHeapType(Type.I31.code());
 				ctx.writer.write(Instruction.IF);
 				ctx.writer.write(Type.I64);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
 				WasmEmitHelper.castI31GetS(ctx);
 				ctx.writer.write(Instruction.I64_EXTEND_S_I32);
 				ctx.writer.write(Instruction.ELSE);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 				ctx.writer.write(Instruction.I32_EQZ);
 				ctx.writer.write(Instruction.BR_IF, 2);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(raw.snapShadow);
+				ctx.writer.writeUnsignedLeb128(raw.snapShadow);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+				ctx.writer.writeUnsignedLeb128(0);
 				ctx.writer.write(Instruction.END);
 				ctx.writer.write(Instruction.END);
 				ctx.writer.write(Instruction.SET_LOCAL);
@@ -1278,7 +1276,7 @@ final class WasmIntFusionCompiler {
 
 	private static void emitCall(int func, WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(func);
+		ctx.writer.writeUnsignedLeb128(func);
 	}
 
 	/**
@@ -1292,7 +1290,7 @@ final class WasmIntFusionCompiler {
 			case ConstLeaf c -> WasmEmitHelper.compileIntegerLiteral(c.value(), ctx);
 			case ExprLeaf leaf -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.slot);
+				ctx.writer.writeUnsignedLeb128(leaf.slot);
 			}
 			// The ordinary rank-1 aref dispatch from the SAME locals: string, packed
 			// float, packed integer and general arrays all behave exactly as an
@@ -1304,15 +1302,14 @@ final class WasmIntFusionCompiler {
 			case RawLeaf leaf -> {
 				emitShadowIsSentinel(leaf.snapShadow, ctx);
 				ctx.writer.write(Instruction.IF);
-				ctx.writer.write(Type.REFNULL.code());
-				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.writeRefType(true, Type.EQ.code());
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writeI64LocalIndex(leaf.snapI64);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 				ctx.writer.write(Instruction.ELSE);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(leaf.snapShadow);
+				ctx.writer.writeUnsignedLeb128(leaf.snapShadow);
 				ctx.writer.write(Instruction.END);
 			}
 			case OpNode op -> {

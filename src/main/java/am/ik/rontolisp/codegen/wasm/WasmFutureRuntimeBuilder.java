@@ -281,7 +281,7 @@ final class WasmFutureRuntimeBuilder {
 		refNullEq(w);
 		refNullEq(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(futureType);
+		w.writeUnsignedLeb128(futureType);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -309,7 +309,7 @@ final class WasmFutureRuntimeBuilder {
 		// Tail: wake the waiters (returns nil).
 		getLocal(w, 0);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_WAKE);
+		w.writeUnsignedLeb128(base + OFF_WAKE);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -322,13 +322,12 @@ final class WasmFutureRuntimeBuilder {
 		// locals: 2x (ref null eq)
 		w.write(1);
 		w.writeUnsignedLeb128(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// node = (closure . nil)
 		getLocal(w, 1);
 		refNullEq(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		setLocal(w, NODE);
 		// Empty list: waiters = node.
 		castFuture(w, 0, futureType);
@@ -375,8 +374,7 @@ final class WasmFutureRuntimeBuilder {
 		// locals: 1x (ref null eq)
 		w.write(1);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// list = fut.waiters; fut.waiters = nil
 		castFuture(w, 0, futureType);
 		structGet(w, futureType, 2);
@@ -386,7 +384,7 @@ final class WasmFutureRuntimeBuilder {
 		structSet(w, futureType, 2);
 		getLocal(w, LIST);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_WAKE_LIST);
+		w.writeUnsignedLeb128(base + OFF_WAKE_LIST);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -409,8 +407,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeUnsignedLeb128(3);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(6);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY); // $done
 		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY); // $next
 		getLocal(w, LIST);
@@ -505,12 +502,10 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.END); // if defer
 		// Direct resume. block $caught (result eq): the rejection payload lands here.
 		w.write(Instruction.BLOCK);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// try_table (result eq) (catch $lisp-cond -> $caught)
 		w.write(Instruction.TRY_TABLE);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.writeUnsignedLeb128(1);
 		w.write(Instruction.CATCH);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
@@ -518,7 +513,7 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, CLOSURE);
 		refNullEq(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
 		w.write(Instruction.END); // try_table
 		setLocal(w, RESULT);
 		// Still suspended (the resume returned its own frame): nothing to do.
@@ -533,7 +528,7 @@ final class WasmFutureRuntimeBuilder {
 		structGet(w, frameType, 2);
 		getLocal(w, RESULT);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_SETTLE);
+		w.writeUnsignedLeb128(base + OFF_SETTLE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.BR, 1); // -> $next
 		w.write(Instruction.END); // block $caught; payload on stack
@@ -544,7 +539,7 @@ final class WasmFutureRuntimeBuilder {
 		structGet(w, frameType, 2);
 		getLocal(w, PAYLOAD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_REJECT);
+		w.writeUnsignedLeb128(base + OFF_REJECT);
 		w.write(Instruction.DROP);
 		w.write(Instruction.BR, 0); // -> $next
 		w.write(Instruction.END); // loop
@@ -623,8 +618,7 @@ final class WasmFutureRuntimeBuilder {
 		// locals: 3x (ref null eq)
 		w.write(1);
 		w.writeUnsignedLeb128(3);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// Drained already: a settled-nil future.
 		castStream(w, S, streamType);
 		structGet(w, streamType, 0);
@@ -636,7 +630,7 @@ final class WasmFutureRuntimeBuilder {
 		castStream(w, S, streamType);
 		structGet(w, streamType, 1);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
 		setLocal(w, CHUNK);
 		if (sched != null) {
 			// A pending read: find the registry entry whose future is CHUNK (the read
@@ -722,7 +716,7 @@ final class WasmFutureRuntimeBuilder {
 		castStream(w, slot, streamType);
 		structGet(w, streamType, 2);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
 		w.write(Instruction.DROP);
 	}
 
@@ -733,7 +727,7 @@ final class WasmFutureRuntimeBuilder {
 		refNullEq(w);
 		refNullEq(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(futureType);
+		w.writeUnsignedLeb128(futureType);
 	}
 
 	private static void castStream(WasmWriter w, int slot, int streamType) {
@@ -765,8 +759,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeUnsignedLeb128(2);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// PACKED = i31get(car(token))
 		castCons(w, TOKEN);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
@@ -783,11 +776,11 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, FN);
 		getLocal(w, TOKEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
 		refNullEq(w);
 		refNullEq(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(futureType);
+		w.writeUnsignedLeb128(futureType);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// Pending: register (subtask . (0 . (future . (lift . token)))) -- kind 0, a
@@ -802,7 +795,7 @@ final class WasmFutureRuntimeBuilder {
 		refNullEq(w);
 		refNullEq(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(futureType);
+		w.writeUnsignedLeb128(futureType);
 		setLocal(w, FUT);
 		// registry = ((sub . (0 . (fut . (fn . token)))) . registry)
 		getLocal(w, SUB);
@@ -853,7 +846,7 @@ final class WasmFutureRuntimeBuilder {
 		// EVTP = __ronto_alloc(8): the (waitable, payload) event scratch.
 		i32(w, 8);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(sched.allocFuncIndex());
+		w.writeUnsignedLeb128(sched.allocFuncIndex());
 		setLocal(w, EVTP);
 		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY); // $done
 		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY); // $next
@@ -876,7 +869,7 @@ final class WasmFutureRuntimeBuilder {
 		load32(w, EVTP, 0);
 		load32(w, EVTP, 4);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_SCHED_DISPATCH);
+		w.writeUnsignedLeb128(base + OFF_SCHED_DISPATCH);
 		w.write(Instruction.DROP);
 		w.write(Instruction.BR, 0); // -> $next
 		w.write(Instruction.END); // loop $next
@@ -884,7 +877,7 @@ final class WasmFutureRuntimeBuilder {
 		// The exit: flatten the settled chain / re-signal a rejection.
 		getLocal(w, FUT);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_POLL);
+		w.writeUnsignedLeb128(base + OFF_POLL);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -908,8 +901,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeUnsignedLeb128(2);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(6);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		getLocal(w, EV);
 		i32(w, WasmComponentImportCompiler.EVENT_SUBTASK);
 		w.write(Instruction.I32_EQ);
@@ -986,7 +978,7 @@ final class WasmFutureRuntimeBuilder {
 		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
 		setLocal(w, VAL);
 		getLocal(w, WAITABLE);
 		callOrdinal(w, sched.ordinals().subtaskDrop());
@@ -1003,22 +995,20 @@ final class WasmFutureRuntimeBuilder {
 		i32(w, 4);
 		w.write(Instruction.I32_SHR_U);
 		w.write(Instruction.TEE_LOCAL);
-		w.writeSignedLeb128(N); // the element count
+		w.writeUnsignedLeb128(N); // the element count
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		getLocal(w, KIND);
 		i32(w, 1);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
 		unboxI31(w);
 		getLocal(w, N);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(sched.strFromMemFuncIndex());
+		w.writeUnsignedLeb128(sched.strFromMemFuncIndex());
 		w.write(Instruction.ELSE);
 		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
@@ -1061,7 +1051,7 @@ final class WasmFutureRuntimeBuilder {
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
 		getLocal(w, VAL);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_SETTLE);
+		w.writeUnsignedLeb128(base + OFF_SETTLE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END); // block $miss
 		w.write(Instruction.END); // if interesting
@@ -1118,8 +1108,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I64);
 		w.writeUnsignedLeb128(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		globalGet(w, currentTaskGlobal);
 		setLocal(w, REC);
 		// CELL = cdr(REC); CELL.car = the root future.
@@ -1198,7 +1187,7 @@ final class WasmFutureRuntimeBuilder {
 		callOrdinal(w, cb.ctxSet0());
 		refNullEq(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_TASK_FINISH);
+		w.writeUnsignedLeb128(base + OFF_TASK_FINISH);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -1214,8 +1203,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(4);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		globalGet(w, currentTaskGlobal);
 		setLocal(w, REC);
 		// CELL = the (set . ready) cons; drain: list = CELL.cdr, CELL.cdr = nil.
@@ -1239,7 +1227,7 @@ final class WasmFutureRuntimeBuilder {
 		structSet(w, WasmLispCompiler.TYPE_CONS, 1);
 		getLocal(w, CUR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_WAKE_LIST);
+		w.writeUnsignedLeb128(base + OFF_WAKE_LIST);
 		w.write(Instruction.DROP);
 		// STATE = root.state
 		castCons(w, REC);
@@ -1330,8 +1318,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeUnsignedLeb128(3);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		w.write(Instruction.TRY_TABLE, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		w.writeUnsignedLeb128(1);
@@ -1417,12 +1404,12 @@ final class WasmFutureRuntimeBuilder {
 		getLocal(w, WAITABLE);
 		getLocal(w, CODE);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_SCHED_DISPATCH);
+		w.writeUnsignedLeb128(base + OFF_SCHED_DISPATCH);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END);
 		refNullEq(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(base + OFF_TASK_FINISH);
+		w.writeUnsignedLeb128(base + OFF_TASK_FINISH);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // try_table
 		w.write(Instruction.END); // block
@@ -1439,17 +1426,17 @@ final class WasmFutureRuntimeBuilder {
 
 	private static void newCons(WasmWriter w) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 	}
 
 	private static void globalGet(WasmWriter w, int index) {
 		w.write(Instruction.GET_GLOBAL);
-		w.writeSignedLeb128(index);
+		w.writeUnsignedLeb128(index);
 	}
 
 	private static void globalSet(WasmWriter w, int index) {
 		w.write(Instruction.SET_GLOBAL);
-		w.writeSignedLeb128(index);
+		w.writeUnsignedLeb128(index);
 	}
 
 	private static void callOrdinal(WasmWriter w, int ordinal) {
@@ -1477,14 +1464,14 @@ final class WasmFutureRuntimeBuilder {
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void structSet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void refNullEq(WasmWriter w) {
@@ -1494,12 +1481,12 @@ final class WasmFutureRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32(WasmWriter w, int value) {

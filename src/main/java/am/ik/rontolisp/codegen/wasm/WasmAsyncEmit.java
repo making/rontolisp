@@ -125,7 +125,7 @@ final class WasmAsyncEmit {
 		WasmLispCompiler.Ctx prologueCtx = freshCtx(proto, p, prologueBuf);
 		frameField(p, ctx, 0);
 		p.write(Instruction.SET_LOCAL);
-		p.writeSignedLeb128(RT_SLOT);
+		p.writeUnsignedLeb128(RT_SLOT);
 		for (int slot = SPILL_BASE; slot < ctx.nextLocal; slot++) {
 			frameField(p, ctx, 1);
 			p.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -133,14 +133,14 @@ final class WasmAsyncEmit {
 			p.write(Instruction.I32_CONST);
 			p.writeSignedLeb128(slot);
 			p.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-			p.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			p.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			p.write(Instruction.SET_LOCAL);
-			p.writeSignedLeb128(slot);
+			p.writeUnsignedLeb128(slot);
 		}
 		if (envSlot >= 0) {
 			frameField(p, ctx, 3);
 			p.write(Instruction.SET_LOCAL);
-			p.writeSignedLeb128(envSlot);
+			p.writeUnsignedLeb128(envSlot);
 		}
 		boolean anyBoxed = false;
 		for (String param : paramNames) {
@@ -151,7 +151,7 @@ final class WasmAsyncEmit {
 		}
 		if (anyBoxed) {
 			p.write(Instruction.GET_LOCAL);
-			p.writeSignedLeb128(RT_SLOT);
+			p.writeUnsignedLeb128(RT_SLOT);
 			p.write(Instruction.I32_EQZ);
 			p.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			for (int i = 0; i < paramNames.size(); i++) {
@@ -171,8 +171,7 @@ final class WasmAsyncEmit {
 			w.writeUnsignedLeb128(1);
 			w.write(Type.I32);
 			w.writeUnsignedLeb128(eqLocals);
-			w.write(Type.REFNULL.code());
-			w.writeHeapType(Type.EQ.code());
+			w.writeRefType(true, Type.EQ.code());
 		}
 		else {
 			w.write(1);
@@ -207,41 +206,40 @@ final class WasmAsyncEmit {
 		// locals: 4x (ref null eq)
 		w.write(1);
 		w.writeUnsignedLeb128(4);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// spill = array.new_default(resume local count); spill[3+i] = param i
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(resume.localCount());
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(spillArr);
+		w.writeUnsignedLeb128(spillArr);
 		for (int i = 0; i < paramCount; i++) {
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(spillArr);
+			w.writeUnsignedLeb128(spillArr);
 			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(SPILL_BASE + i);
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(1 + i);
+			w.writeUnsignedLeb128(1 + i);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-			w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		}
 		// future + frame
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
+		w.writeUnsignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(spillArr);
+		w.writeUnsignedLeb128(spillArr);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		if (envFromLocal0) {
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(0);
+			w.writeUnsignedLeb128(0);
 		}
 		else {
 			w.write(Instruction.REF_NULL);
@@ -250,66 +248,64 @@ final class WasmAsyncEmit {
 		// owner = the CURRENT task record (null at a synchronous boundary): the
 		// routing key of _wake_list's cross-task doorbell deferral.
 		w.write(Instruction.GET_GLOBAL);
-		w.writeSignedLeb128(proto.currentTaskGlobalIndex);
+		w.writeUnsignedLeb128(proto.currentTaskGlobalIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(proto.frameTypeIndex);
+		w.writeUnsignedLeb128(proto.frameTypeIndex);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		// block $h (result eq) { try_table (catch $lisp-cond -> $h) { r = resume(frame,
 		// nil) } ... } -- the landing rejects the future with the payload.
 		w.write(Instruction.BLOCK);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(Instruction.TRY_TABLE);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.writeUnsignedLeb128(1);
 		w.write(Instruction.CATCH);
 		w.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(resume.funcIndex());
+		w.writeUnsignedLeb128(resume.funcIndex());
 		w.write(Instruction.END); // try_table
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		// Suspended: the future stays pending.
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// Completed: settle and return the future.
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SETTLE);
+		w.writeUnsignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SETTLE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END); // block $h; the payload is on the stack
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
+		w.writeUnsignedLeb128(proto.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_REJECT);
 		w.write(Instruction.DROP);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(fut);
+		w.writeUnsignedLeb128(fut);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -333,49 +329,49 @@ final class WasmAsyncEmit {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(resume.localCount());
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(spillArr);
+		w.writeUnsignedLeb128(spillArr);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(spillArr);
+		w.writeUnsignedLeb128(spillArr);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
+		w.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_NEW);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		// owner: _start is a synchronous boundary, and CURRENT is null there.
 		w.write(Instruction.GET_GLOBAL);
-		w.writeSignedLeb128(ctx.currentTaskGlobalIndex);
+		w.writeUnsignedLeb128(ctx.currentTaskGlobalIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(ctx.frameTypeIndex);
+		w.writeUnsignedLeb128(ctx.frameTypeIndex);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(resume.funcIndex());
+		w.writeUnsignedLeb128(resume.funcIndex());
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(r);
+		w.writeUnsignedLeb128(r);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		// Suspended: block on the event loop until the root future settles (a
 		// rejection re-signals out of it into the catch-all prologue).
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(frame);
+		w.writeUnsignedLeb128(frame);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(ctx.frameTypeIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(ctx.frameTypeIndex);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(ctx.frameTypeIndex);
+		w.writeUnsignedLeb128(2);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
+		w.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END);
 	}
@@ -473,7 +469,7 @@ final class WasmAsyncEmit {
 		WasmLispCompiler.AsyncResume ar = java.util.Objects.requireNonNull(ctx.asyncResume);
 		if (n == 0) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(RT_SLOT);
+			ctx.writer.writeUnsignedLeb128(RT_SLOT);
 			ctx.writer.write(Instruction.I32_EQZ);
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			ctx.wasmCtrlDepth++;
@@ -518,7 +514,7 @@ final class WasmAsyncEmit {
 	static void emitRangeGuard(WasmLispCompiler.Ctx ctx, int lo, int hi) {
 		WasmWriter w = ctx.writer;
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(RT_SLOT);
+		w.writeUnsignedLeb128(RT_SLOT);
 		w.write(Instruction.I32_EQZ);
 		emitInRange(ctx, lo, hi);
 		w.write(Instruction.I32_OR);
@@ -533,12 +529,12 @@ final class WasmAsyncEmit {
 	static void emitInRange(WasmLispCompiler.Ctx ctx, int lo, int hi) {
 		WasmWriter w = ctx.writer;
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(RT_SLOT);
+		w.writeUnsignedLeb128(RT_SLOT);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(lo);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(RT_SLOT);
+		w.writeUnsignedLeb128(RT_SLOT);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(hi);
 		w.write(Instruction.I32_LE_S);
@@ -586,36 +582,35 @@ final class WasmAsyncEmit {
 		// evaluates the awaited expression (a resume targeting a state INSIDE that
 		// expression routes through the normal arm and dispatches there).
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(RT_SLOT);
+		w.writeUnsignedLeb128(RT_SLOT);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(k);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(RT_SLOT);
+		w.writeUnsignedLeb128(RT_SLOT);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 		w.write(Instruction.ELSE);
 		spine(args.get(1), ctx);
 		ctx.wasmCtrlDepth--;
 		w.write(Instruction.END);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 		// Poll: settled chains flatten to the value, a rejection re-signals, a pending
 		// future comes back unchanged and suspends this frame.
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
+		w.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(ctx.futureTypeIndex);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
@@ -626,32 +621,32 @@ final class WasmAsyncEmit {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(k);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		w.writeSignedLeb128(ctx.frameTypeIndex);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(ctx.frameTypeIndex);
+		w.writeUnsignedLeb128(0);
 		int arrSlot = ctx.allocTemp();
 		int spillBound = ctx.nextLocal;
 		frameCast(ctx);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(ctx.frameTypeIndex);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(ctx.frameTypeIndex);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(arrSlot);
+		w.writeUnsignedLeb128(arrSlot);
 		for (int slot = SPILL_BASE; slot < spillBound; slot++) {
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(arrSlot);
+			w.writeUnsignedLeb128(arrSlot);
 			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(slot);
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(slot);
+			w.writeUnsignedLeb128(slot);
 			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-			w.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		}
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 		// The waiter closure over the resume function: a third place a funcId becomes a
 		// callable value (Ctx.valueFuncIds), and the only one outside
 		// WasmFunctionFormCompiler/WasmLambdaCompiler -- the future runtime calls the
@@ -660,11 +655,11 @@ final class WasmAsyncEmit {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(ar.resumeFuncId);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_ADD_WAITER);
+		w.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_ADD_WAITER);
 		w.write(Instruction.DROP);
 		for (WasmLispCompiler.UnwindScope scope : ctx.unwindScopes) {
 			if (isHandlerDepthScope(scope)) {
@@ -672,12 +667,12 @@ final class WasmAsyncEmit {
 			}
 		}
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.RETURN);
 		ctx.wasmCtrlDepth--;
 		w.write(Instruction.END);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(futSlot);
+		w.writeUnsignedLeb128(futSlot);
 	}
 
 	/**
@@ -718,7 +713,7 @@ final class WasmAsyncEmit {
 	// frame (local 0) cast to TYPE_ASYNC_FRAME
 	private static void frameCast(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(ctx.frameTypeIndex);
 	}
@@ -726,12 +721,12 @@ final class WasmAsyncEmit {
 	// frame field via a fresh writer (the prologue), reading through slot 0
 	private static void frameField(WasmWriter w, WasmLispCompiler.Ctx ctx, int field) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(ctx.frameTypeIndex);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(ctx.frameTypeIndex);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(ctx.frameTypeIndex);
+		w.writeUnsignedLeb128(field);
 	}
 
 	/**

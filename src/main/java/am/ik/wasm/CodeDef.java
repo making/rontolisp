@@ -15,7 +15,9 @@ public class CodeDef extends CountingDef<CodeDef> {
 	 * @return this instance for chaining
 	 */
 	public CodeDef addFunction(byte[] body) {
-		return this.add(function -> function.writeSignedLeb128(body.length).write(body));
+		// The size prefix is a u32: a SIGNED LEB pads any length in [64, 127] (and every
+		// 64th block above it) with a redundant continuation byte.
+		return this.add(function -> function.writeUnsignedLeb128(body.length).write(body));
 	}
 
 }

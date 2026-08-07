@@ -25,59 +25,57 @@ final class WasmLcmCompiler {
 
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 
 		// if (a == 0 || b == 0) result is 0 (zero is always the i31 0, so ref.eq works)
 		emitEqZero(ctx, aSlot);
 		emitEqZero(ctx, bSlot);
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		emitI31Zero(ctx);
 
 		ctx.writer.write(Instruction.ELSE);
 		// prod = (a / gcd(a, b)) * b -- the division is always even, so exact
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(aSlot);
+		ctx.writer.writeUnsignedLeb128(aSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_GCD);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_GCD);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_DIVREM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_DIVREM);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(bSlot);
+		ctx.writer.writeUnsignedLeb128(bSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_MUL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_MUL);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(prodSlot);
+		ctx.writer.writeUnsignedLeb128(prodSlot);
 		// abs
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(prodSlot);
+		ctx.writer.writeUnsignedLeb128(prodSlot);
 		emitI31Zero(ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_CMP);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_CMP);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(0);
 		ctx.writer.write(Instruction.I32_LT_S);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(prodSlot);
+		ctx.writer.writeUnsignedLeb128(prodSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(prodSlot);
+		ctx.writer.writeUnsignedLeb128(prodSlot);
 		ctx.writer.write(Instruction.END);
 
 		ctx.writer.write(Instruction.END);
@@ -85,7 +83,7 @@ final class WasmLcmCompiler {
 
 	private static void emitEqZero(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		emitI31Zero(ctx);
 		ctx.writer.write(Instruction.REF_EQ);
 	}

@@ -191,7 +191,7 @@ final class WasmLinalgSimdCompiler {
 			WasmExprCompiler.compileExpr(args.get(i + 1), ctx);
 			slots[i] = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(slots[i]);
+			ctx.writer.writeUnsignedLeb128(slots[i]);
 		}
 		int result = ctx.allocTemp();
 		loadAll(ctx, slots);
@@ -201,20 +201,20 @@ final class WasmLinalgSimdCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.linalgFuncBase() + offset);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.linalgFuncBase() + offset);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(result);
+		ctx.writer.writeUnsignedLeb128(result);
 		// A null result means the kernel declined: run the scalar defun over the same
 		// locals. (The defun's leading parameter is the ignored closure environment.)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(result);
+		ctx.writer.writeUnsignedLeb128(result);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF, 0x40);
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		for (int i = 0; i < arity; i++) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slots[i]);
+			ctx.writer.writeUnsignedLeb128(slots[i]);
 		}
 		if (defun.variadic()) {
 			// A defun with an &optional/&rest lambda list takes a trailing rest
@@ -223,33 +223,33 @@ final class WasmLinalgSimdCompiler {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(result);
+			ctx.writer.writeUnsignedLeb128(result);
 			for (int k = supplied - 1; k >= arity; k--) {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slots[k]);
+				ctx.writer.writeUnsignedLeb128(slots[k]);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(result);
+				ctx.writer.writeUnsignedLeb128(result);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(result);
+				ctx.writer.writeUnsignedLeb128(result);
 			}
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(result);
+			ctx.writer.writeUnsignedLeb128(result);
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(defun.funcIndex());
+		ctx.writer.writeUnsignedLeb128(defun.funcIndex());
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(result);
+		ctx.writer.writeUnsignedLeb128(result);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(result);
+		ctx.writer.writeUnsignedLeb128(result);
 	}
 
 	private static void loadAll(WasmLispCompiler.Ctx ctx, int[] slots) {
 		for (int slot : slots) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 		}
 	}
 

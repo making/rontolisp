@@ -1369,34 +1369,34 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// old = heap
-		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
 		// end = (old + size + 3) & -4
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(3).write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(-4).write(Instruction.I32_AND);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
 		// heap = end
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.SET_GLOBAL, 0x00);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.SET_GLOBAL, 0x00);
 		// need = (end + 65535) >> 16
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0xffff).write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(16).write(Instruction.I32_SHR_U);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
 		// if need > memory.size: grow(need - memory.size); drop
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.CURRENT_MEMORY, 0x00);
 		w.write(Instruction.I32_GT_S);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.CURRENT_MEMORY, 0x00);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.GROW_MEMORY, 0x00);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END);
 		// return old
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING));
 	}
@@ -1409,19 +1409,19 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
 		// if n == 0 break out of the block
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_EQZ);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF, 1);
 		// mem[dst] = mem[src] (one byte)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1).write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		// dst++, src++, n--
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(0);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_SUB).write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB).write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
@@ -1435,18 +1435,18 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		// if a == b return 1 (same header address, e.g. the same interned literal)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// la = len(a); if la != len(b) return 0
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0).write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(2);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1).write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0).write(Instruction.I32_LOAD, 0x02, 0x00);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1).write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
@@ -1454,20 +1454,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.END);
 		// byte loop
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
 		// if a[4+i] != b[4+i] return 0
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
 		w.write(Instruction.I32_NE);
@@ -1475,8 +1475,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
@@ -1494,95 +1494,95 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = new WasmWriter(b);
 		Runnable loadMagnitude = () -> {
 			// t = v < 0 ? -v : v
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 			w.write(Instruction.I64_CONST).writeSignedLeb128(0);
 			w.write(Instruction.I64_LT_S);
 			w.write(Instruction.IF, 0x40);
 			w.write(Instruction.I64_CONST).writeSignedLeb128(0);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 			w.write(Instruction.I64_SUB);
-			w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
 			w.write(Instruction.ELSE);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
-			w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
 			w.write(Instruction.END);
 		};
 		loadMagnitude.run();
 		// count the digits (a do-while, so 0 renders as "0")
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(2);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I64_DIV_S);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I64_EQZ);
 		w.write(Instruction.BR_IF, 1);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// the sign takes one more byte
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
 		w.write(Instruction.I64_LT_S);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD).write(Instruction.SET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.END);
 		// p = __alloc(4 + count); store the length header
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.CALL).writeSignedLeb128(allocIndex);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.CALL).writeUnsignedLeb128(allocIndex);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// idx = p + 3 + count (the last content byte)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(2);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(2);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(4);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(4);
 		// write digits backwards (again a do-while)
 		loadMagnitude.run();
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I64_REM_S);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(48);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(4).write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.I32_SUB).write(Instruction.SET_LOCAL).writeSignedLeb128(4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(4).write(Instruction.I32_CONST).writeSignedLeb128(1);
+		w.write(Instruction.I32_SUB).write(Instruction.SET_LOCAL).writeUnsignedLeb128(4);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I64_DIV_S);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I64_EQZ);
 		w.write(Instruction.BR_IF, 1);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// the '-' sign
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
 		w.write(Instruction.I64_LT_S);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(45);
 		w.write(Instruction.I32_STORE8, 0x00, 0x04);
 		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
 		w.write(Instruction.END); // function
 		return withLocals(b.toByteArray(), List.of(Ty.INT, Ty.STRING, Ty.STRING, Ty.STRING));
 	}
@@ -1610,7 +1610,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static byte[] resetBody() {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.SET_GLOBAL, 0x00);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
@@ -1638,8 +1638,8 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private static byte[] cabiReallocBody(int allocIndex) {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(3);
-		w.write(Instruction.CALL).writeSignedLeb128(allocIndex);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(3);
+		w.write(Instruction.CALL).writeUnsignedLeb128(allocIndex);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
 	}
@@ -1673,21 +1673,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int len = paramSlots + 1;
 		int ret = paramSlots + 2;
 		for (int s = 0; s < paramSlots; s++) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(s);
 		}
-		w.write(Instruction.CALL).writeSignedLeb128(wrapperIndex);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(len);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ptr);
+		w.write(Instruction.CALL).writeUnsignedLeb128(wrapperIndex);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(len);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(ptr);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
-		w.write(Instruction.CALL).writeSignedLeb128(allocIndex);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ret);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ret);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ptr);
+		w.write(Instruction.CALL).writeUnsignedLeb128(allocIndex);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(ptr);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ret);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
 		w.write(Instruction.I32_STORE, 0x02, 0x04);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(ret);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(ret);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of(Ty.STRING, Ty.STRING, Ty.STRING));
 	}
@@ -1707,13 +1707,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		final int P = 1, C = 2, INT64 = 3, POW = 4, DIGIT = 5, STARTED = 6, FRAC = 7, EXP = 8, COUNT = 9;
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
-		Runnable getV = () -> w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
-		Runnable getC = () -> w.write(Instruction.GET_LOCAL).writeSignedLeb128(C);
+		Runnable getV = () -> w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
+		Runnable getC = () -> w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(C);
 		Runnable incC = () -> {
 			getC.run();
 			w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 			w.write(Instruction.I32_ADD);
-			w.write(Instruction.SET_LOCAL).writeSignedLeb128(C);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(C);
 		};
 		// NaN: value != value -> the static "NaN" literal (no allocation).
 		getV.run();
@@ -1741,12 +1741,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// p = __alloc(48): 4 header + at most 31 content bytes ('-' + 19 integer digits
 		// + '.' + 6 fraction digits + 'E' + 3 exponent digits); c = p + 4.
 		w.write(Instruction.I32_CONST).writeSignedLeb128(48);
-		w.write(Instruction.CALL).writeSignedLeb128(mem.allocIndex());
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(P);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.CALL).writeUnsignedLeb128(mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(P);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(C);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(C);
 		// Negative by the sign BIT (so -0.0 keeps its '-'): write it, then negate.
 		getV.run();
 		w.write(Instruction.I64_REINTERPRET_F64);
@@ -1759,7 +1759,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		incC.run();
 		getV.run();
 		w.write(Instruction.F64_NEG);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 		// value >= 2^63 cannot go through integer digit extraction: divide into [1, 10)
 		// and remember the decimal exponent (appended as E<exp> at the end).
@@ -1776,11 +1776,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		getV.run();
 		w.write(Instruction.F64_CONST).writeF64(10.0);
 		w.write(Instruction.F64_DIV);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(0);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(EXP);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
@@ -1790,42 +1790,42 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		getV.run();
 		w.write(Instruction.F64_FLOOR);
 		w.write(Instruction.I64_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(INT64);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(INT64);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(1000000000);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(1000000000);
 		w.write(Instruction.I64_MUL);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(POW);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(INT64);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(INT64);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
 		w.write(Instruction.I64_DIV_U);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I64_REM_U);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(STARTED);
 		w.write(Instruction.I32_OR);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I64_EQ);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, 0x40);
 		getC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		incC.run();
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(STARTED);
 		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I64_DIV_U);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(POW);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(POW);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(POW);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(POW);
 		w.write(Instruction.I64_CONST).writeSignedLeb128(0);
 		w.write(Instruction.I64_NE);
 		w.write(Instruction.BR_IF, 0);
@@ -1833,10 +1833,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // block
 		// frac = v - f64(int64); '.'
 		getV.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(INT64);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(INT64);
 		w.write(Instruction.F64_CONVERT_S_I64);
 		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(FRAC);
 		getC.run();
 		w.write(Instruction.I32_CONST).writeSignedLeb128('.');
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
@@ -1844,35 +1844,35 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// Fraction digits: at least 1, at most 6, stop when the residue < 1e-7.
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
 		w.write(Instruction.F64_CONST).writeF64(10.0);
 		w.write(Instruction.F64_MUL);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(FRAC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
 		w.write(Instruction.I32_TRUNC_S_F64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
 		getC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		incC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
 		w.write(Instruction.F64_CONVERT_S_I32);
 		w.write(Instruction.F64_SUB);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(FRAC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(COUNT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(COUNT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(COUNT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(COUNT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_LT_S);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(FRAC);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(FRAC);
 		w.write(Instruction.F64_CONST).writeF64(0.0000001);
 		w.write(Instruction.F64_GT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(COUNT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(COUNT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(6);
 		w.write(Instruction.I32_LT_S);
 		w.write(Instruction.I32_AND);
@@ -1882,43 +1882,43 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.END); // block
 		// Exponent suffix from the >= 2^63 normalization: 'E' then up to three decimal
 		// digits with leading-zero suppression (exp <= 291 for finite doubles).
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
 		w.write(Instruction.IF, 0x40);
 		getC.run();
 		w.write(Instruction.I32_CONST).writeSignedLeb128('E');
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		incC.run();
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(STARTED);
 		// hundreds
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(100);
 		w.write(Instruction.I32_DIV_U);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
 		w.write(Instruction.IF, 0x40);
 		getC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		incC.run();
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(STARTED);
 		w.write(Instruction.END);
 		// tens
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I32_DIV_U);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I32_REM_U);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(STARTED);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(STARTED);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, 0x40);
 		getC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(DIGIT);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(DIGIT);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
@@ -1926,7 +1926,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.END);
 		// ones (always written)
 		getC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(EXP);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(EXP);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(10);
 		w.write(Instruction.I32_REM_U);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('0');
@@ -1935,14 +1935,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		incC.run();
 		w.write(Instruction.END); // if exp
 		// Store the length header: p.len = c - p - 4; return p.
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
 		getC.run();
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(P);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(P);
 		w.write(Instruction.END);
 		// Locals 1..9: p, c (i32), int64, pow (i64), digit, started (i32), frac (f64),
 		// exp, digit_count (i32).
@@ -1958,17 +1958,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		ByteArrayOutputStream b = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr());
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(0);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(0);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr() + 4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(1);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(1);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// fd_write(1, iov, 1, nwritten); drop errno
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr());
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mem.iovAddr() + 8);
-		w.write(Instruction.CALL).writeSignedLeb128(mem.fdWriteIndex());
+		w.write(Instruction.CALL).writeUnsignedLeb128(mem.fdWriteIndex());
 		w.write(Instruction.DROP);
 		w.write(Instruction.END);
 		return withLocals(b.toByteArray(), List.of());
@@ -2072,7 +2072,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		if (resetHeap) {
 			mark = nextLocal++;
 			wrapperLocals.add(Ty.STRING);
-			w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(mark);
+			w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(mark);
 		}
 
 		// Box each host argument into the internal value of the inferred parameter type,
@@ -2093,45 +2093,45 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				wrapperLocals.add(Ty.STRING);
 				wrapperLocals.add(Ty.STRING);
 				w.write(Instruction.GET_LOCAL)
-					.writeSignedLeb128(slot)
+					.writeUnsignedLeb128(slot)
 					.write(Instruction.SET_LOCAL)
-					.writeSignedLeb128(hp);
+					.writeUnsignedLeb128(hp);
 				w.write(Instruction.GET_LOCAL)
-					.writeSignedLeb128(slot + 1)
+					.writeUnsignedLeb128(slot + 1)
 					.write(Instruction.SET_LOCAL)
-					.writeSignedLeb128(len);
+					.writeUnsignedLeb128(len);
 				w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(len).write(Instruction.I32_ADD);
-				w.write(Instruction.CALL).writeSignedLeb128(mem.allocIndex());
-				w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len).write(Instruction.I32_ADD);
+				w.write(Instruction.CALL).writeUnsignedLeb128(mem.allocIndex());
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
 				// store the length header
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(len).write(Instruction.I32_STORE, 0x02, 0x00);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len).write(Instruction.I32_STORE, 0x02, 0x00);
 				// __memcpy(dst+4, hp, len)
 				w.write(Instruction.GET_LOCAL)
-					.writeSignedLeb128(dst)
+					.writeUnsignedLeb128(dst)
 					.write(Instruction.I32_CONST)
 					.writeSignedLeb128(4)
 					.write(Instruction.I32_ADD);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(hp);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
-				w.write(Instruction.CALL).writeSignedLeb128(mem.memcpyIndex());
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(hp);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
+				w.write(Instruction.CALL).writeUnsignedLeb128(mem.memcpyIndex());
 				// leave the internal string pointer for the call
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 				slot += 2;
 			}
 			else {
 				// A u64 above 2^63 has no exact place in the house i64: refuse it here
 				// rather than let it arrive as a negative Lisp integer.
 				if (hostType == BoundaryType.U64) {
-					w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+					w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
 					i64Const(w, 0);
 					w.write(Instruction.I64_LT_S);
 					w.write(Instruction.IF, 0x40);
 					w.write(Instruction.UNREACHABLE);
 					w.write(Instruction.END);
 				}
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
 				switch (hostType) {
 					// host f64 -> internal (always FLOAT, since :float pins the param)
 					case FLOAT -> {
@@ -2169,7 +2169,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				slot += 1;
 			}
 		}
-		w.write(Instruction.CALL).writeSignedLeb128(mem.funcIndex(targetIndex));
+		w.write(Instruction.CALL).writeUnsignedLeb128(mem.funcIndex(targetIndex));
 		// Unbox the internal result (its inferred return type) back to the host type.
 		Ty ret = returnTy(name, types);
 		switch (decl.returnType()) {
@@ -2210,13 +2210,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// internal [len][bytes] pointer -> (content ptr, len) host pair.
 				int r = nextLocal++;
 				wrapperLocals.add(Ty.STRING);
-				w.write(Instruction.SET_LOCAL).writeSignedLeb128(r);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(r);
 				w.write(Instruction.GET_LOCAL)
-					.writeSignedLeb128(r)
+					.writeUnsignedLeb128(r)
 					.write(Instruction.I32_CONST)
 					.writeSignedLeb128(4)
 					.write(Instruction.I32_ADD);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(r).write(Instruction.I32_LOAD, 0x02, 0x00);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(r).write(Instruction.I32_LOAD, 0x02, 0x00);
 			}
 			case VOID -> w.write(Instruction.DROP);
 			case S_EXPR -> throw new UnsupportedOperationException("--no-gc does not support the export return type "
@@ -2226,7 +2226,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// host result already on the stack, global.set pops it -- the result stays on top
 		// (for :void the stack is empty and this is still valid).
 		if (resetHeap) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
 		}
 		w.write(Instruction.END);
 		return withLocals(bodyStream.toByteArray(), wrapperLocals);
@@ -2261,7 +2261,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return 0;
 		}
 		wrapperLocals.add(Ty.INT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
 		BoundaryType.Range range = Objects.requireNonNull(type.range());
 		if (narrowSigned) {
 			emitTrapIf(w, slot, Instruction.I64_LT_S, range.min().longValueExact());
@@ -2276,7 +2276,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			emitTrapIf(w, slot, Instruction.I64_LT_S, 0);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
 		return 1;
 	}
 
@@ -2284,7 +2284,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// cannot
 	// state. A trap is the shape a host already sees for a failure inside an export.
 	private static void emitTrapIf(WasmWriter w, int slot, int comparison, long bound) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
 		i64Const(w, bound);
 		w.write(comparison);
 		w.write(Instruction.IF, 0x40);
@@ -2292,9 +2292,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		w.write(Instruction.END);
 	}
 
-	// Prepends the locals declaration to a function body. Each extra local is emitted as
-	// its own run (count 1) so the declaration order matches the allocation order
-	// regardless of the i64/f64 mix.
+	// Prepends the locals declaration to a function body. The locals keep their
+	// ALLOCATION order whatever the i64/f64/v128 mix, so a run can only cover a maximal
+	// stretch of consecutive locals that share a type -- which is exactly what the
+	// shortest legal encoding is (.kb/wasm-shortest-encoding.md): two adjacent runs of
+	// the same type are one run, and each avoided run is two bytes.
 	private static byte[] withLocals(byte[] code, List<Ty> extraLocals) {
 		List<Integer> raw = new ArrayList<>(extraLocals.size());
 		for (Ty ty : extraLocals) {
@@ -2306,12 +2308,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// The raw-wasm-type-byte variant (a defun body may hold a v128 local, which has no Ty
 	// value-model kind), taking the already-lowered value-type bytes directly.
 	private static byte[] withLocalsRaw(byte[] code, List<Integer> extraLocals) {
+		// [count, valtype] per maximal run of consecutive same-typed locals.
+		List<int[]> runs = new ArrayList<>();
+		for (int t : extraLocals) {
+			if (!runs.isEmpty() && runs.getLast()[1] == t) {
+				runs.getLast()[0]++;
+			}
+			else {
+				runs.add(new int[] { 1, t });
+			}
+		}
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(out);
-		w.writeUnsignedLeb128(extraLocals.size());
-		for (int t : extraLocals) {
-			w.write(1);
-			w.write(t);
+		w.writeUnsignedLeb128(runs.size());
+		for (int[] run : runs) {
+			w.writeUnsignedLeb128(run[0]);
+			w.write(run[1]);
 		}
 		w.write((Object) code);
 		return out.toByteArray();
@@ -2363,7 +2375,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 					throw new UnsupportedOperationException("--no-gc: '" + sym.name() + "' in function '" + fn.fnName
 							+ "' is not a parameter or let binding (scalar mode has no globals or heap values)");
 				}
-				fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(slot);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(slot);
 				return Objects.requireNonNull(fn.localTypes.get(sym.name()));
 			}
 			case LispCons cons -> {
@@ -2533,7 +2545,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		for (int i = 1; i < args.size(); i++) {
 			compileCoerced(args.get(i), fn, paramTypes[i - 1]);
 		}
-		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.funcIndex(funcIndex));
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.funcIndex(funcIndex));
 		return returnTy(name, fn.types);
 	}
 
@@ -2604,7 +2616,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			Ty ty = localType(fn, varName, init);
 			compileCoerced(init, fn, ty);
 			int slot = fn.allocLocal(ty);
-			fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
 			names.add(varName);
 			slots.add(slot);
 			tys.add(ty);
@@ -2656,7 +2668,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			}
 			Ty ty = Objects.requireNonNull(fn.localTypes.get(var));
 			compileCoerced(args.get(2 + 2 * p), fn, ty);
-			fn.writer.write(Instruction.TEE_LOCAL).writeSignedLeb128(slot);
+			fn.writer.write(Instruction.TEE_LOCAL).writeUnsignedLeb128(slot);
 			last = ty;
 		}
 		return last;
@@ -2819,21 +2831,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		int acc = fn.allocLocal(Ty.INT);
 		compileCoerced(args.get(1), fn, Ty.INT);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(acc);
 		for (int i = 2; i < args.size(); i++) {
 			int t = fn.allocLocal(Ty.INT);
 			compileCoerced(args.get(i), fn, Ty.INT);
-			fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(t);
+			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(t);
 			// select acc if (min ? acc<t : acc>t) else t
-			fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-			fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(t);
-			fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
-			fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(t);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
 			fn.writer.write(min ? Instruction.I64_LT_S : Instruction.I64_GT_S);
 			fn.writer.write(Instruction.SELECT);
-			fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(acc);
+			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(acc);
 		}
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(acc);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(acc);
 		return Ty.INT;
 	}
 
@@ -2850,16 +2862,16 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			int a = fn.allocLocal(Ty.INT);
 			int b = fn.allocLocal(Ty.INT);
 			compileCoerced(args.get(1), fn, Ty.INT);
-			fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(a);
+			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(a);
 			compileCoerced(args.get(2), fn, Ty.INT);
-			fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(b);
-			fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(a);
-			fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+			fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
+			fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 			fn.writer.write(Instruction.I64_REM_S);
 			if (mod) {
-				fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 				fn.writer.write(Instruction.I64_ADD);
-				fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+				fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 				fn.writer.write(Instruction.I64_REM_S);
 			}
 			return Ty.INT;
@@ -2867,14 +2879,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int a = fn.allocLocal(Ty.FLOAT);
 		int b = fn.allocLocal(Ty.FLOAT);
 		compileCoerced(args.get(1), fn, Ty.FLOAT);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(a);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(a);
 		compileCoerced(args.get(2), fn, Ty.FLOAT);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(b);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
 		// a - b * round(a / b)
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(a);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(a);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(a);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 		fn.writer.write(Instruction.F64_DIV);
 		fn.writer.write(mod ? Instruction.F64_FLOOR : Instruction.F64_TRUNC);
 		fn.writer.write(Instruction.F64_MUL);
@@ -2894,17 +2906,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		int t = fn.allocLocal(Ty.INT);
 		compileCoerced(args.get(1), fn, Ty.INT);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(t);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(t);
 		// x < 0 ? 0 - x : x
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(t);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
 		i64Const(fn.writer, 0);
 		fn.writer.write(Instruction.I64_LT_S);
 		fn.writer.write(Instruction.IF).write(Type.I64.code());
 		i64Const(fn.writer, 0);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(t);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
 		fn.writer.write(Instruction.I64_SUB);
 		fn.writer.write(Instruction.ELSE);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(t);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(t);
 		fn.writer.write(Instruction.END);
 		return Ty.INT;
 	}
@@ -2951,50 +2963,50 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		for (int i = 2; i < args.size(); i++) {
 			compileCoerced(args.get(i), fn, Ty.STRING);
 			int slot = fn.allocLocal(Ty.STRING); // i32 pointer
-			w.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
 			operands.add(slot);
 		}
 		// total = sum of each operand's stored length.
 		int total = fn.allocLocal(Ty.STRING); // i32 scratch
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(total);
 		for (int s : operands) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(total);
 			emitStrLen(w, s);
 			w.write(Instruction.I32_ADD);
-			w.write(Instruction.SET_LOCAL).writeSignedLeb128(total);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(total);
 		}
 		// dst = __alloc(4 + total); store the length header.
 		int dst = fn.allocLocal(Ty.STRING); // i32 pointer
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(total);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(total);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// off = dst + 4; copy each operand's content bytes, advancing off.
 		int off = fn.allocLocal(Ty.STRING); // i32 scratch
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(off);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(off);
 		for (int s : operands) {
 			// __memcpy(off, s + 4, len(s))
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(off);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(off);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(s);
 			w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 			w.write(Instruction.I32_ADD);
 			emitStrLen(w, s);
-			w.write(Instruction.CALL).writeSignedLeb128(fn.mem.memcpyIndex());
+			w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.memcpyIndex());
 			// off += len(s)
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(off);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(off);
 			emitStrLen(w, s);
 			w.write(Instruction.I32_ADD);
-			w.write(Instruction.SET_LOCAL).writeSignedLeb128(off);
+			w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(off);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return Ty.STRING;
 	}
 
@@ -3050,14 +3062,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = fn.writer;
 		int dst = fn.allocLocal(vecTy);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(countLocal);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL); // width*count
 		w.write(Instruction.I32_ADD); // 4 + width*count
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(countLocal);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(countLocal);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		return dst;
 	}
@@ -3069,7 +3081,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private int compileVecArg(LispVal arg, Fn fn, Ty vecTy) {
 		int slot = fn.allocLocal(vecTy);
 		compileCoerced(arg, fn, vecTy);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(slot);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(slot);
 		return slot;
 	}
 
@@ -3078,9 +3090,9 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// fresh i32 local.
 	private int loadVecCount(Fn fn, int vecLocal) {
 		int count = fn.allocLocal(Ty.F64VEC);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(vecLocal);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(vecLocal);
 		fn.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		return count;
 	}
 
@@ -3118,10 +3130,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int n = fa.totalSize();
 		int count = fn.allocLocal(Ty.F64VEC); // i32 scratch
 		w.write(Instruction.I32_CONST).writeSignedLeb128(n);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int dst = allocVec(fn, count, vecTy);
 		for (int i = 0; i < n; i++) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 			w.write(Instruction.I32_CONST).writeSignedLeb128(4 + width * i);
 			w.write(Instruction.I32_ADD);
 			if (single) {
@@ -3133,7 +3145,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				w.write(Instruction.F64_STORE, 0x00, 0x00);
 			}
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -3200,13 +3212,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private void emitMatElementAddr(LispVal mat, LispVal iExpr, @Nullable LispVal jExpr, Fn fn, Ty matTy) {
 		WasmWriter w = fn.writer;
 		int base = compileVecArg(mat, fn, matTy);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(base);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(base);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
 		w.write(Instruction.I32_ADD);
 		compileCoerced(iExpr, fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
 		if (jExpr != null) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(base);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(base);
 			w.write(Instruction.I32_LOAD, 0x02, 0x04); // cols
 			w.write(Instruction.I32_MUL);
 			compileCoerced(jExpr, fn, Ty.INT);
@@ -3256,23 +3268,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			emitElementAddr(args.get(1), args.get(2), fn, vecTy);
 			valueExpr = args.get(3);
 		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(addr);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(addr);
 		compileCoerced(valueExpr, fn, Ty.FLOAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(val);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(addr);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(val);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(addr);
 		if (single) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(val);
 			w.write(Instruction.F32_DEMOTE_F64);
 			w.write(Instruction.F32_STORE, 0x00, 0x00);
 			// return promote(demote(val)) -- the value as actually stored (f32-rounded).
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(val);
 			w.write(Instruction.F32_DEMOTE_F64);
 			w.write(Instruction.F64_PROMOTE_F32);
 		}
 		else {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(val);
 			w.write(Instruction.F64_STORE, 0x00, 0x00);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(val);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(val);
 		}
 		return Ty.FLOAT;
 	}
@@ -3316,7 +3328,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int count = fn.allocLocal(Ty.F64VEC); // i32 element count
 		compileCoerced(lengthExpr, fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int dst = allocVec(fn, count, vecTy);
 		// Evaluate the fill value once into a f64 local (:initial-element, default 0.0).
 		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
@@ -3327,26 +3339,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			compileCoerced(init, fn, Ty.FLOAT);
 		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(fill);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(fill);
 		// for (i = 0; i < count; i++) mem[dst + 4 + (i << shift)] = fill (narrowed for
 		// f32)
 		int i = fn.allocLocal(Ty.F64VEC);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(count);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fill);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(fill);
 		if (single) {
 			w.write(Instruction.F32_DEMOTE_F64);
 			w.write(Instruction.F32_STORE, 0x00, 0x00);
@@ -3354,14 +3366,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			w.write(Instruction.F64_STORE, 0x00, 0x00);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -3398,30 +3410,30 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int rows = fn.allocLocal(Ty.F64VEC); // i32 row count
 		compileCoerced(dims.get(0), fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rows);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(rows);
 		int cols = fn.allocLocal(Ty.F64VEC); // i32 column count
 		compileCoerced(dims.get(1), fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(cols);
 		int total = fn.allocLocal(Ty.F64VEC); // i32 element count rows*cols
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rows);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(rows);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(cols);
 		w.write(Instruction.I32_MUL);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(total);
 		// dst = __alloc(8 + (total << shift)); mem[dst] = rows; mem[dst+4] = cols
 		int dst = fn.allocLocal(matTy);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(total);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(matTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rows);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(rows);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(cols);
 		w.write(Instruction.I32_STORE, 0x02, 0x04);
 		// Evaluate the fill value once into a f64 local (:initial-element, default 0.0).
 		LispVal init = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
@@ -3432,26 +3444,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			compileCoerced(init, fn, Ty.FLOAT);
 		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(fill);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(fill);
 		// for (i = 0; i < total; i++) mem[dst + 8 + (i << shift)] = fill (narrowed for
 		// f32)
 		int i = fn.allocLocal(Ty.F64VEC);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(total);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(total);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(matTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fill);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(fill);
 		if (single) {
 			w.write(Instruction.F32_DEMOTE_F64);
 			w.write(Instruction.F32_STORE, 0x00, 0x00);
@@ -3459,14 +3471,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			w.write(Instruction.F64_STORE, 0x00, 0x00);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return matTy;
 	}
 
@@ -3806,10 +3818,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 
 	// out = base + 4 (skip the count header to reach the packed f64 data).
 	private static void dataPtr(WasmWriter w, int baseLocal, int outLocal) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(baseLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(baseLocal);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(outLocal);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(outLocal);
 	}
 
 	// count = i32.wrap(the length argument) into a fresh i32 local.
@@ -3818,7 +3830,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int count = fn.allocLocal(Ty.F64VEC);
 		compileCoerced(arg, fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		return count;
 	}
 
@@ -3854,23 +3866,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		// for (i = 0; i < count; i++) mem[dst+4+width*i] = <fill>
 		int i = fn.allocLocal(Ty.F64VEC);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(count);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
 		// addr = dst + 4 + (i << shift)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
 		if (fillMode == FILL_ARANGE) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 			w.write(Instruction.F64_CONVERT_S_I32);
 			if (single) {
 				w.write(Instruction.F32_DEMOTE_F64);
@@ -3883,14 +3895,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.F64_CONST).writeF64(fillMode == FILL_ONE ? 1.0 : 0.0);
 		}
 		w.write(single ? Instruction.F32_STORE : Instruction.F64_STORE, 0x00, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -3925,7 +3937,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
 		WasmVecLoops.simdMap2(w, dp, ap, bp, count, rem, -1, false, simdOp, scalarOp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return Ty.F64VEC;
 	}
 
@@ -3959,7 +3971,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			WasmVecLoops.scalarMap1(w, dp, vp, count, rem, single, uop);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -3996,7 +4008,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			WasmVecLoops.scalarMap2Select(w, dp, ap, bp, count, rem, single, greater);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -4015,10 +4027,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int vL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
 		int lo = fn.allocLocal(Ty.FLOAT);
 		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(lo);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(lo);
 		int hi = fn.allocLocal(Ty.FLOAT);
 		compileCoerced(args.get(into ? 4 : 3), fn, Ty.FLOAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(hi);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(hi);
 		int count = loadVecCount(fn, vL);
 		int dst = into ? dstL : allocVec(fn, count, vecTy);
 		int vp = fn.allocLocal(Ty.F64VEC);
@@ -4058,7 +4070,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmVecLoops.advancePtr(w, vp, stride);
 		WasmVecLoops.advancePtr(w, dp, stride);
 		WasmVecLoops.closeLoop(w, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -4105,7 +4117,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmVecLoops.advancePtr(w, vp, stride);
 		WasmVecLoops.advancePtr(w, dp, stride);
 		WasmVecLoops.closeLoop(w, rem);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -4126,7 +4138,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int vL = compileVecArg(args.get(into ? 2 : 1), fn, Ty.F64VEC);
 		int s = fn.allocLocal(Ty.FLOAT);
 		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 		int count = loadVecCount(fn, vL);
 		int dst = into ? dstL : allocVec(fn, count);
 		int vp = fn.allocLocal(Ty.F64VEC);
@@ -4135,7 +4147,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, dst, dp);
 		int rem = fn.allocLocal(Ty.F64VEC);
 		WasmVecLoops.simdScale(w, dp, vp, count, rem, -1, s, false);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return Ty.F64VEC;
 	}
 
@@ -4153,11 +4165,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(Ty.F64VEC);
 		compileCoerced(args.get(1), fn, Ty.F64VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(vL);
 		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(vL);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int acc = fn.allocV128Local();
 		WasmVecLoops.splatZero(w, acc);
 		int vp = fn.allocLocal(Ty.F64VEC);
@@ -4182,13 +4194,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int aL = fn.allocLocal(Ty.F64VEC);
 		int bL = fn.allocLocal(Ty.F64VEC);
 		compileCoerced(args.get(1), fn, Ty.F64VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(aL);
 		compileCoerced(args.get(2), fn, Ty.F64VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bL);
 		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(aL);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int acc = fn.allocV128Local();
 		WasmVecLoops.splatZero(w, acc);
 		int ap = fn.allocLocal(Ty.F64VEC);
@@ -4233,21 +4245,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int wl = compileVecArg(wArg, fn, matTy);
 		int xl = compileVecArg(args.get(into ? 3 : 2), fn, vecTy);
 		int d = fn.allocLocal(Ty.F64VEC); // i32 row count (rows header word)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(wl);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(d);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(d);
 		int cols = fn.allocLocal(Ty.F64VEC); // i32 column count (cols header word)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(wl);
 		w.write(Instruction.I32_LOAD, 0x02, 0x04);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(cols);
 		if (into) {
 			// if (out == x || out == w) trap: the aliasing the other backends reject with
 			// an error would silently corrupt the GEMV here.
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dstL);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(xl);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dstL);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(xl);
 			w.write(Instruction.I32_EQ);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(dstL);
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dstL);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(wl);
 			w.write(Instruction.I32_EQ);
 			w.write(Instruction.I32_OR);
 			w.write(Instruction.IF, 0x40);
@@ -4256,10 +4268,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		int dst = into ? dstL : allocVec(fn, d, vecTy);
 		int rp = fn.allocLocal(Ty.F64VEC); // current row's data pointer
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(wl);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(wl);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(8);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rp);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(rp);
 		int xp = fn.allocLocal(Ty.F64VEC); // x's data base (never advanced)
 		dataPtr(w, xl, xp);
 		int dp = fn.allocLocal(Ty.F64VEC); // output element pointer
@@ -4281,17 +4293,17 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int rowVal = fn.allocLocal(Ty.FLOAT); // the row's dot result (f64 boundary)
 		int i = fn.allocLocal(Ty.F64VEC); // i32 row index
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(d);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(d);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rp);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(ap);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(xp);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bp);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(rp);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(ap);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(xp);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bp);
 		if (this.simd) {
 			WasmVecLoops.splatZero(w, acc, single);
 			WasmVecLoops.simdDot(w, ap, bp, cols, rem, trem, acc, sum, single);
@@ -4299,10 +4311,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			WasmVecLoops.scalarDot(w, ap, bp, cols, rem, sum, single);
 		}
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rowVal);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(rowVal);
 		// dst[i] = rowVal (narrowed on a f32 output, like aset)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rowVal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dp);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(rowVal);
 		if (single) {
 			w.write(Instruction.F32_DEMOTE_F64);
 			w.write(Instruction.F32_STORE, 0x00, 0x00);
@@ -4311,21 +4323,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			w.write(Instruction.F64_STORE, 0x00, 0x00);
 		}
 		// rp += cols << shift (the next row); dp += one element
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(rp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(cols);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(rp);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(cols);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(elemShift(vecTy));
 		w.write(Instruction.I32_SHL);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(rp);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(rp);
 		WasmVecLoops.advancePtr(w, dp, single ? 4 : 8);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -4370,7 +4382,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int rem = fn.allocLocal(Ty.F64VEC);
 		int trem = fn.allocLocal(Ty.F64VEC);
 		WasmVecLoops.simdMap2(w, dp, ap, bp, count, rem, trem, true, simdOp, scalarOp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return Ty.F32VEC;
 	}
 
@@ -4384,7 +4396,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int vL = compileVecArg(args.get(into ? 2 : 1), fn, Ty.F32VEC);
 		int s = fn.allocLocal(Ty.FLOAT);
 		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 		int count = loadVecCount(fn, vL);
 		int dst = into ? dstL : allocVec(fn, count, Ty.F32VEC);
 		int vp = fn.allocLocal(Ty.F32VEC);
@@ -4394,7 +4406,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int rem = fn.allocLocal(Ty.F64VEC);
 		int trem = fn.allocLocal(Ty.F64VEC);
 		WasmVecLoops.simdScale(w, dp, vp, count, rem, trem, s, true);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return Ty.F32VEC;
 	}
 
@@ -4406,11 +4418,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(Ty.F32VEC);
 		compileCoerced(args.get(1), fn, Ty.F32VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(vL);
 		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(vL);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int acc = fn.allocV128Local();
 		WasmVecLoops.splatZeroF32(w, acc);
 		int vp = fn.allocLocal(Ty.F32VEC);
@@ -4430,13 +4442,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int aL = fn.allocLocal(Ty.F32VEC);
 		int bL = fn.allocLocal(Ty.F32VEC);
 		compileCoerced(args.get(1), fn, Ty.F32VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(aL);
 		compileCoerced(args.get(2), fn, Ty.F32VEC);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bL);
 		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(aL);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int acc = fn.allocV128Local();
 		WasmVecLoops.splatZeroF32(w, acc);
 		int ap = fn.allocLocal(Ty.F32VEC);
@@ -4494,7 +4506,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, bL, bp);
 		dataPtr(w, dst, dp);
 		emitScalarMap2Loop(fn, ap, bp, dp, count, vecTy, scalarOp);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -4522,7 +4534,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int vL = compileVecArg(args.get(into ? 2 : 1), fn, vecTy);
 		int s = fn.allocLocal(Ty.FLOAT);
 		compileCoerced(args.get(into ? 3 : 2), fn, Ty.FLOAT);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 		int count = loadVecCount(fn, vL);
 		int dst = into ? dstL : allocVec(fn, count, vecTy);
 		int vp = fn.allocLocal(vecTy);
@@ -4530,7 +4542,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		dataPtr(w, vL, vp);
 		dataPtr(w, dst, dp);
 		emitScalarScaleLoop(fn, vp, dp, count, s, vecTy);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return vecTy;
 	}
 
@@ -4549,11 +4561,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = fn.writer;
 		int vL = fn.allocLocal(vecTy);
 		compileCoerced(args.get(1), fn, vecTy);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(vL);
 		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(vL);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(vL);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int vp = fn.allocLocal(vecTy);
 		dataPtr(w, vL, vp);
 		emitScalarSumLoop(fn, vp, count, vecTy);
@@ -4576,13 +4588,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int aL = fn.allocLocal(vecTy);
 		int bL = fn.allocLocal(vecTy);
 		compileCoerced(args.get(1), fn, vecTy);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(aL);
 		compileCoerced(args.get(2), fn, vecTy);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(bL);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(bL);
 		int count = fn.allocLocal(Ty.F64VEC);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(aL);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(aL);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(count);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(count);
 		int ap = fn.allocLocal(vecTy);
 		int bp = fn.allocLocal(vecTy);
 		dataPtr(w, aL, ap);
@@ -4632,7 +4644,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		compileCoerced(args.get(1), fn, Ty.STRING);
 		compileCoerced(args.get(2), fn, Ty.STRING);
-		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.streqIndex());
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.streqIndex());
 		fn.writer.write(Instruction.I64_EXTEND_U_I32);
 		return Ty.INT;
 	}
@@ -4647,11 +4659,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		WasmWriter w = fn.writer;
 		compileCoerced(args.get(1), fn, Ty.STRING);
 		int s = fn.allocLocal(Ty.STRING);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 		compileCoerced(args.get(2), fn, Ty.INT);
 		w.write(Instruction.I32_WRAP_I64);
 		int start = fn.allocLocal(Ty.STRING); // i32 scratch
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(start);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(start);
 		int len = fn.allocLocal(Ty.STRING); // i32 scratch: end - start
 		if (args.size() > 3) {
 			compileCoerced(args.get(3), fn, Ty.INT);
@@ -4660,31 +4672,31 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		else {
 			emitStrLen(w, s);
 		}
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(start);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(start);
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(len);
 		// dst = __alloc(4 + len); store the length header.
 		int dst = fn.allocLocal(Ty.STRING);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.allocIndex());
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.allocIndex());
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		// __memcpy(dst + 4, s + 4 + start, len)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(s);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(start);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(start);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.memcpyIndex());
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(dst);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.memcpyIndex());
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(dst);
 		return Ty.STRING;
 	}
 
@@ -4703,11 +4715,11 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		if (argTy == Ty.FLOAT) {
 			compileCoerced(args.get(1), fn, Ty.FLOAT);
-			fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.ftoaIndex());
+			fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.ftoaIndex());
 			return Ty.STRING;
 		}
 		compileCoerced(args.get(1), fn, Ty.INT);
-		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.itoaIndex());
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.itoaIndex());
 		return Ty.STRING;
 	}
 
@@ -4737,20 +4749,20 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case INT, FLOAT -> {
 				int v = fn.allocLocal(t);
 				compileCoerced(arg, fn, t);
-				w.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(v);
 				// mark / render / write / reset: the transient digits are reclaimed.
 				int mark = fn.allocLocal(Ty.STRING);
-				w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(mark);
+				w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(mark);
 				int s = fn.allocLocal(Ty.STRING);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
-				w.write(Instruction.CALL).writeSignedLeb128(t == Ty.INT ? fn.mem.itoaIndex() : fn.mem.ftoaIndex());
-				w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+				w.write(Instruction.CALL).writeUnsignedLeb128(t == Ty.INT ? fn.mem.itoaIndex() : fn.mem.ftoaIndex());
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 				emitWriteString(fn, s);
 				if (print) {
 					emitWriteLiteral(fn, "\n");
 				}
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 				return t;
 			}
 			case STRING -> {
@@ -4759,7 +4771,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				// " / \ so the text reads back; princ writes it bare.
 				int s = fn.allocLocal(Ty.STRING);
 				compileCoerced(arg, fn, Ty.STRING);
-				w.write(Instruction.SET_LOCAL).writeSignedLeb128(s);
+				w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(s);
 				if (print) {
 					emitWriteLiteral(fn, "\"");
 					emitWriteStringEscaped(fn, s);
@@ -4769,7 +4781,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				else {
 					emitWriteString(fn, s);
 				}
-				w.write(Instruction.GET_LOCAL).writeSignedLeb128(s);
+				w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(s);
 				return Ty.STRING;
 			}
 			default -> throw new UnsupportedOperationException("--no-gc: " + name
@@ -4794,7 +4806,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		fn.writer.write(Instruction.I32_CONST).writeSignedLeb128(off + 4);
 		fn.writer.write(Instruction.I32_CONST)
 			.writeSignedLeb128(content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
-		fn.writer.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
+		fn.writer.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.writeStdoutIndex());
 	}
 
 	// Writes the [len][bytes] string held in the given local to stdout with the
@@ -4813,40 +4825,40 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int run = fn.allocLocal(Ty.STRING);
 		int b = fn.allocLocal(Ty.STRING);
 		emitStrLen(w, strLocal);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(len);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(0);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(run);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(run);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(len);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(len);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
 		// b = mem[strLocal + 4 + i]
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(strLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x04);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(b);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(b);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('"');
 		w.write(Instruction.I32_EQ);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(b);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(b);
 		w.write(Instruction.I32_CONST).writeSignedLeb128('\\');
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.I32_OR);
 		w.write(Instruction.IF, 0x40);
 		emitWriteRun(fn, strLocal, run, i);
 		emitWriteLiteral(fn, "\\");
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(run);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(run);
 		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(i);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
@@ -4857,26 +4869,26 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	// bytes.
 	private void emitWriteRun(Fn fn, int strLocal, int fromLocal, int toLocal) {
 		WasmWriter w = fn.writer;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(strLocal);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fromLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(fromLocal);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(toLocal);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(fromLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(toLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(fromLocal);
 		w.write(Instruction.I32_SUB);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.writeStdoutIndex());
 	}
 
 	// Writes the [len][bytes] string held in the given local to stdout via the
 	// __write_stdout funnel.
 	private void emitWriteString(Fn fn, int strLocal) {
 		WasmWriter w = fn.writer;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(strLocal);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(4);
 		w.write(Instruction.I32_ADD);
 		emitStrLen(w, strLocal);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.writeStdoutIndex());
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.writeStdoutIndex());
 	}
 
 	// (rontolisp:with-arena () body...): the intra-call free. Snapshot the bump heap
@@ -4894,43 +4906,43 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		WasmWriter w = fn.writer;
 		int mark = fn.allocLocal(Ty.STRING);
-		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeSignedLeb128(mark);
+		w.write(Instruction.GET_GLOBAL, 0x00).write(Instruction.SET_LOCAL).writeUnsignedLeb128(mark);
 		Ty t = compileProgn(body, fn);
 		if (!isRefKind(t)) {
 			// A scalar result: pop the whole arena, the value rides the stack.
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
 			return t;
 		}
 		int v = fn.allocLocal(Ty.STRING);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(v);
 		int size = fn.allocLocal(Ty.STRING);
 		emitRefByteSize(fn, v, t, size);
 		// v >= mark: allocated inside the arena -- copy down and keep just the value.
 		// v < mark: predates the arena (e.g. a literal or an outer value passed
 		// through) -- pop everything, the pointer stays valid as-is.
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.IF, 0x40);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(size);
-		w.write(Instruction.CALL).writeSignedLeb128(fn.mem.memcpyIndex());
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(size);
+		w.write(Instruction.CALL).writeUnsignedLeb128(fn.mem.memcpyIndex());
 		// heap = (mark + size + 3) & -4 (the same 4-byte rounding as __alloc)
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(size);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(size);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(3);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST).writeSignedLeb128(-4);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.SET_GLOBAL, 0x00);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(v);
 		w.write(Instruction.ELSE);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(mark).write(Instruction.SET_GLOBAL, 0x00);
 		w.write(Instruction.END);
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 		return t;
 	}
 
@@ -4940,10 +4952,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	private void emitRefByteSize(Fn fn, int v, Ty t, int size) {
 		WasmWriter w = fn.writer;
 		boolean mat = t == Ty.F64MAT || t == Ty.F32MAT;
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		if (mat) {
-			w.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+			w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 			w.write(Instruction.I32_LOAD, 0x02, 0x04);
 			w.write(Instruction.I32_MUL);
 		}
@@ -4953,14 +4965,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		}
 		w.write(Instruction.I32_CONST).writeSignedLeb128(mat ? 8 : 4);
 		w.write(Instruction.I32_ADD);
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(size);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(size);
 	}
 
 	// Pushes the stored length (the i32 header word) of the string whose pointer is in
 	// the
 	// given local.
 	private static void emitStrLen(WasmWriter w, int strLocal) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(strLocal);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(strLocal);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 	}
 
@@ -5004,21 +5016,21 @@ public final class NoGcWasmCompiler implements LispCompiler {
 		int v = fn.allocLocal(Ty.INT);
 		int c = fn.allocLocal(Ty.INT);
 		compileCoerced(args.get(1), fn, Ty.INT);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(v);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(v);
 		compileCoerced(args.get(2), fn, Ty.INT);
-		fn.writer.write(Instruction.SET_LOCAL).writeSignedLeb128(c);
+		fn.writer.write(Instruction.SET_LOCAL).writeUnsignedLeb128(c);
 		// left = v << c
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(c);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
 		fn.writer.write(Instruction.I64_SHL);
 		// right = v >> (0 - c)
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(v);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(v);
 		i64Const(fn.writer, 0);
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(c);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
 		fn.writer.write(Instruction.I64_SUB);
 		fn.writer.write(Instruction.I64_SHR_S);
 		// select left when c >= 0, else right
-		fn.writer.write(Instruction.GET_LOCAL).writeSignedLeb128(c);
+		fn.writer.write(Instruction.GET_LOCAL).writeUnsignedLeb128(c);
 		i64Const(fn.writer, 0);
 		fn.writer.write(Instruction.I64_GE_S);
 		fn.writer.write(Instruction.SELECT);

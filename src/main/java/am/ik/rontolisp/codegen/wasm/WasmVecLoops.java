@@ -55,11 +55,11 @@ final class WasmVecLoops {
 	// --- raw instruction helpers -------------------------------------------------
 
 	static void get(WasmWriter w, int local) {
-		w.write(Instruction.GET_LOCAL).writeSignedLeb128(local);
+		w.write(Instruction.GET_LOCAL).writeUnsignedLeb128(local);
 	}
 
 	static void set(WasmWriter w, int local) {
-		w.write(Instruction.SET_LOCAL).writeSignedLeb128(local);
+		w.write(Instruction.SET_LOCAL).writeUnsignedLeb128(local);
 	}
 
 	static void i32Const(WasmWriter w, int value) {
@@ -759,7 +759,7 @@ final class WasmVecLoops {
 		get(w, arrLocal);
 		get(w, idxLocal);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 	}
 
 	/**
@@ -1115,7 +1115,7 @@ final class WasmVecLoops {
 		get(w, gd);
 		lastGroupIndex(w, ngroups);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 		set(w, old);
 		w.write(Instruction.END);
 	}
@@ -1132,7 +1132,7 @@ final class WasmVecLoops {
 		get(w, gd);
 		lastGroupIndex(w, ngroups);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 		set(w, cur);
 		// lane 0 is always a real element (rem >= 1 inside this guard)
 		for (int lane = 1; lane < lanes(single); lane++) {
@@ -1209,7 +1209,7 @@ final class WasmVecLoops {
 	/** {@code array.set $v128arr}: consumes the array, the index and the lane group. */
 	static void arraySet(WasmWriter w) {
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 	}
 
 	// --- shared single-element bodies --------------------------------------------

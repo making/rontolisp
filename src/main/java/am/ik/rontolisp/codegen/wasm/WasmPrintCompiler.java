@@ -54,55 +54,56 @@ final class WasmPrintCompiler {
 			WasmExprCompiler.compileExpr(obj, ctx);
 			if (rendered != null) {
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(objSlot);
+				ctx.writer.writeUnsignedLeb128(objSlot);
 				WasmEmitHelper.compileStringLiteral("\"" + rendered + "\"", ctx);
 			}
 			else {
 				ctx.writer.write(Instruction.TEE_LOCAL);
-				ctx.writer.writeSignedLeb128(objSlot);
+				ctx.writer.writeUnsignedLeb128(objSlot);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(
+				ctx.writer.writeUnsignedLeb128(
 						readably ? WasmLispCompiler.FUNC_PRIN1_TO_STR : WasmLispCompiler.FUNC_PRINC_TO_STR);
 			}
 			int streamSlot = newline ? ctx.allocTemp() : -1;
 			WasmExprCompiler.compileExpr(stream, ctx);
 			if (newline) {
 				ctx.writer.write(Instruction.TEE_LOCAL);
-				ctx.writer.writeSignedLeb128(streamSlot);
+				ctx.writer.writeUnsignedLeb128(streamSlot);
 			}
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 			ctx.writer.write(Instruction.DROP);
 			if (newline) {
 				WasmTerpriCompiler.emitNewlineStringStruct(ctx);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(streamSlot);
+				ctx.writer.writeUnsignedLeb128(streamSlot);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 				ctx.writer.write(Instruction.DROP);
 			}
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			return;
 		}
 		WasmExprCompiler.compileExpr(obj, ctx);
 		if (rendered != null) {
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			WasmLiteralPrint.emitStaticWrite(rendered, obj, readably, ctx);
 		}
 		else {
 			ctx.writer.write(Instruction.TEE_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(readably ? WasmLispCompiler.FUNC_PRINT_VAL : WasmLispCompiler.FUNC_PRINC_VAL);
+			ctx.writer
+				.writeUnsignedLeb128(readably ? WasmLispCompiler.FUNC_PRINT_VAL : WasmLispCompiler.FUNC_PRINC_VAL);
 		}
 		if (newline) {
 			WasmLiteralPrint.emitNewline(ctx);
 		}
 		// Return the argument
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(objSlot);
+		ctx.writer.writeUnsignedLeb128(objSlot);
 	}
 
 }

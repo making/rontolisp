@@ -69,7 +69,7 @@ final class WasmSinhCoshCompiler {
 		WasmEmitHelper.castFloatGetF64(ctx);
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(xSlot);
+		ctx.writer.writeUnsignedLeb128(xSlot);
 
 		// if (x != x) -> NaN
 		unbox(ctx, xSlot);
@@ -186,7 +186,7 @@ final class WasmSinhCoshCompiler {
 	private static void boxInto(WasmLispCompiler.Ctx ctx, int slot) {
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 }

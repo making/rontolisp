@@ -48,15 +48,14 @@ final class WasmBignumRuntimeBuilder {
 		w.write(Instruction.I64_LE_S);
 		w.write(Instruction.I32_AND);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		getLocal(w, 0);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.ELSE);
 		getLocal(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
 		w.write(Instruction.END);
 
 		w.write(Instruction.END);
@@ -86,8 +85,8 @@ final class WasmBignumRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 
 		w.write(Instruction.END);
@@ -117,7 +116,7 @@ final class WasmBignumRuntimeBuilder {
 		w.writeSignedLeb128(0);
 		w.write(Instruction.I64_LT_S);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		getLocal(w, 1);
 		w.write(Instruction.IF, 0x40);
 		w.write(Instruction.I64_CONST);
@@ -125,7 +124,7 @@ final class WasmBignumRuntimeBuilder {
 		getLocal(w, 0);
 		w.write(Instruction.I64_SUB);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 
 		// if (v == 0) { buf[0] = '0'; len = 1 } else digit loop
@@ -140,7 +139,7 @@ final class WasmBignumRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(2);
 		w.write(Instruction.ELSE);
 
 		w.write(Instruction.BLOCK, 0x40);
@@ -169,14 +168,14 @@ final class WasmBignumRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(2);
 
 		getLocal(w, 0);
 		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(10);
 		w.write(Instruction.I64_DIV_U);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
@@ -198,7 +197,7 @@ final class WasmBignumRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(3);
+		w.writeUnsignedLeb128(3);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
 		getLocal(w, 3);
@@ -231,7 +230,7 @@ final class WasmBignumRuntimeBuilder {
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(3);
+		w.writeUnsignedLeb128(3);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
@@ -243,7 +242,7 @@ final class WasmBignumRuntimeBuilder {
 		getLocal(w, 2);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -251,7 +250,7 @@ final class WasmBignumRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 }

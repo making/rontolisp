@@ -1509,22 +1509,21 @@ public final class WasmComponentBuilder {
 		// Instantiate the shared memory module (core instance 0).
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
 				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
-		// Alias the shared memory (core memory 0) and, when anything below stages
-		// host-owned bytes, cabi_realloc (core func 0 -- SHARED_REALLOC).
-		final List<byte[]> memAliases = new java.util.ArrayList<>();
-		memAliases.add(ComponentWriter.aliasCoreMemory(0, "memory"));
-		if (sharedRealloc) {
-			memAliases.add(ComponentWriter.aliasCoreFunc(0, "cabi_realloc"));
-		}
-		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(memAliases));
-		// One alias section: the projected types first (continuing the block's component
-		// type space), then the WASI functions (component funcs from 0). Both index
-		// spaces
-		// advance in declaration order, so a member that shook out simply leaves a gap
-		// nobody names.
+		// ONE alias section, in three index spaces that each advance in declaration
+		// order: the shared memory (core memory 0) and, when anything below stages
+		// host-owned bytes, cabi_realloc (core func 0 -- SHARED_REALLOC); then the
+		// projected types (continuing the block's component type space); then the WASI
+		// functions (component funcs from 0). A member that shook out simply leaves a
+		// gap nobody names. The format allows repeated sections, so splitting these
+		// three groups apart would still be correct -- it would just spend a section
+		// header per group for nothing.
 		final java.util.Map<String, Integer> typeIndex = new java.util.LinkedHashMap<>();
 		final java.util.Map<String, Integer> funcIndex = new java.util.LinkedHashMap<>();
 		final List<byte[]> aliases = new java.util.ArrayList<>();
+		aliases.add(ComponentWriter.aliasCoreMemory(0, "memory"));
+		if (sharedRealloc) {
+			aliases.add(ComponentWriter.aliasCoreFunc(0, "cabi_realloc"));
+		}
 		int nextType = block.typeCount();
 		for (java.util.Map.Entry<String, BlockFunc> projection : PROJECTED_TYPES.entrySet()) {
 			if (!surface.types().contains(projection.getKey())) {
@@ -1543,14 +1542,7 @@ public final class WasmComponentBuilder {
 					func.getValue().member()));
 			funcIndex.put(func.getKey(), nextComponentFunc++);
 		}
-		if (!aliases.isEmpty()) {
-			// A program that reaches no WASI function at all (a pure-compute component
-			// with
-			// only wasm-exports) aliases nothing, and emits no section rather than an
-			// empty
-			// one -- the same rule the user-import and block-bound emissions follow.
-			c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
-		}
+		c.rawSection(ComponentWriter.SEC_ALIAS, ComponentWriter.vec(aliases));
 		// The async value/function types the surviving members (and the run lift) name.
 		final List<byte[]> types = new java.util.ArrayList<>();
 		for (java.util.Map.Entry<String, DefinedType> defined : DEFINED_TYPES.entrySet()) {
@@ -1580,13 +1572,13 @@ public final class WasmComponentBuilder {
 		if (!canons.isEmpty()) {
 			c.rawSection(ComponentWriter.SEC_CANON, ComponentWriter.vec(canons));
 		}
-		// Group them for the adapter's "w" import (core instance 1). Names match
-		// adapter.wat's imports.
+		// One section, two entries: group the lowered functions for the adapter's "w"
+		// import (core instance 1, names matching adapter.wat's imports), then
+		// instantiate the adapter itself (core instance 2): mem = instance 0, w =
+		// instance 1.
 		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
-				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(wNames, wCoreFuncs))));
-		// Instantiate the adapter (core instance 2): mem = instance 0, w = instance 1.
-		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE, ComponentWriter
-			.vec(List.of(ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceFromFuncs(wNames, wCoreFuncs),
+						ComponentWriter.coreInstanceInstantiate(1, List.of("mem", "w"), List.of(0, 1)))));
 		final int runFuncType = at(typeIndex, T_RUN_FUNC);
 		// Block-declared interfaces the program binds (wait.lisp's monotonic-clock,
 		// stdin.lisp's wasi:cli/stdin, environment.lisp's wasi:cli/environment): lowered

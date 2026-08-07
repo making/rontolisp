@@ -76,7 +76,7 @@ final class WasmLogCompiler {
 		WasmEmitHelper.castFloatGetF64(ctx);
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(xSlot);
+		ctx.writer.writeUnsignedLeb128(xSlot);
 
 		// The IEEE edges, then the finite positive main path.
 		// if (x != x) -> NaN
@@ -125,7 +125,7 @@ final class WasmLogCompiler {
 		f64Const(ctx, 0.0);
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(eSlot);
+		ctx.writer.writeUnsignedLeb128(eSlot);
 		unbox(ctx, xSlot);
 		f64Const(ctx, MIN_NORMAL);
 		ctx.writer.write(Instruction.F64_LT);
@@ -227,7 +227,7 @@ final class WasmLogCompiler {
 	private static void boxInto(WasmLispCompiler.Ctx ctx, int slot) {
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 }

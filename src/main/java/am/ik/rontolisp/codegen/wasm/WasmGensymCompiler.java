@@ -38,7 +38,7 @@ final class WasmGensymCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.length());
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_GENSYM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_GENSYM);
 	}
 
 }

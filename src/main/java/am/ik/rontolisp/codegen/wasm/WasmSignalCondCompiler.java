@@ -38,10 +38,10 @@ final class WasmSignalCondCompiler {
 		int msgSlot = ctx.allocTemp();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(condSlot);
+		ctx.writer.writeUnsignedLeb128(condSlot);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(msgSlot);
+		ctx.writer.writeUnsignedLeb128(msgSlot);
 		// A handler exists (depth > 0): raise like %error-cond.
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(ctx.ehDepthGlobalIndex);
@@ -51,9 +51,9 @@ final class WasmSignalCondCompiler {
 		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		ctx.wasmCtrlDepth++;
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(condSlot);
+		ctx.writer.writeUnsignedLeb128(condSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(msgSlot);
+		ctx.writer.writeUnsignedLeb128(msgSlot);
 		WasmErrorCompiler.emitThrowPayload(ctx);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);

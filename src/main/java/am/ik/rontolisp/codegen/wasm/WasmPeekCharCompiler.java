@@ -41,7 +41,7 @@ final class WasmPeekCharCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PEEK_CHAR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PEEK_CHAR);
 	}
 
 }

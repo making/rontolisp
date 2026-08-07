@@ -28,11 +28,11 @@ final class WasmFuturepCompiler {
 			// the degenerate TYPE_P1_FUTURE a non-async-mode %async-run produced.
 			int tmp = ctx.allocTemp();
 			ctx.writer.write(Instruction.TEE_LOCAL);
-			ctx.writer.writeSignedLeb128(tmp);
+			ctx.writer.writeUnsignedLeb128(tmp);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_P1_FUTURE);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmp);
+			ctx.writer.writeUnsignedLeb128(tmp);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(ctx.futureTypeIndex);
 			ctx.writer.write(Instruction.I32_OR);

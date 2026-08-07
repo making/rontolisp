@@ -22,11 +22,15 @@ public enum Type implements Codable {
 	I8_STORAGE(0x78), //
 	/** 16-bit packed storage type (wasm-GC field storage only). */
 	I16_STORAGE(0x77), //
-	/** Function reference type. */
+	// The ABSTRACT heap types occupy the contiguous range 0x69-0x74, and each code is
+	// also the one-byte value type for a NULLABLE reference to it -- 0x70 is `funcref`
+	// as much as it is `func`. WasmWriter.writeRefType range-tests against the two
+	// endpoints (EXNREF and NOEXN), so the set below has to stay complete.
+	/** Function reference type / func heap type. */
 	FUNCREF(0x70), //
-	/** External reference type. */
+	/** External reference type / extern heap type. */
 	EXTERNREF(0x6F), //
-	/** Exception reference type (exception-handling proposal). */
+	/** Exception reference type / exn heap type (exception-handling proposal). */
 	EXNREF(0x69), //
 	// wasm-GC heap types
 	/** Any heap type (wasm-GC). */
@@ -41,6 +45,12 @@ public enum Type implements Codable {
 	ARRAY_HT(0x6A), //
 	/** None (bottom) heap type (wasm-GC). */
 	NONE(0x71), //
+	/** Noextern (bottom external) heap type (wasm-GC). */
+	NOEXTERN(0x72), //
+	/** Nofunc (bottom function) heap type (wasm-GC). */
+	NOFUNC(0x73), //
+	/** Noexn (bottom exception) heap type (exception-handling proposal). */
+	NOEXN(0x74), //
 	// Ref type constructors
 	/** Non-nullable reference type constructor. */
 	REF(0x64), //

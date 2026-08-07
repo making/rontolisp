@@ -53,40 +53,39 @@ final class WasmIntConvCompiler {
 			int bSlot = ctx.allocTemp();
 			WasmExprCompiler.compileExpr(divArgs.get(1), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(aSlot);
+			ctx.writer.writeUnsignedLeb128(aSlot);
 			WasmExprCompiler.compileExpr(divArgs.get(2), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(bSlot);
+			ctx.writer.writeUnsignedLeb128(bSlot);
 			emitIsExactInt(ctx, aSlot);
 			emitIsExactInt(ctx, bSlot);
 			ctx.writer.write(Instruction.I32_AND);
 			ctx.writer.write(Instruction.IF);
-			ctx.writer.write(am.ik.wasm.Type.REFNULL.code());
-			ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+			ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(aSlot);
+			ctx.writer.writeUnsignedLeb128(aSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(bSlot);
+			ctx.writer.writeUnsignedLeb128(bSlot);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(fdivMode);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_FDIV);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_FDIV);
 			ctx.writer.write(Instruction.ELSE);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(aSlot);
+			ctx.writer.writeUnsignedLeb128(aSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(bSlot);
+			ctx.writer.writeUnsignedLeb128(bSlot);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpSlot);
+			ctx.writer.writeUnsignedLeb128(tmpSlot);
 			emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc);
 			ctx.writer.write(Instruction.END);
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc);
 	}
 
@@ -94,25 +93,23 @@ final class WasmIntConvCompiler {
 	// runtime helper; exact integer -> identity; float -> f64 rounding + i64 trunc.
 	private static void emitGenericFromSlot(WasmLispCompiler.Ctx ctx, int tmpSlot, int f64RoundingOp, int ratioFunc) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(am.ik.wasm.Type.REFNULL.code());
-		ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(ratioFunc);
+		ctx.writer.writeUnsignedLeb128(ratioFunc);
 		ctx.writer.write(Instruction.ELSE);
 		// Exact-integer path: an i31, boxed or limb integer is already its own
 		// conversion (the f64 route below would trap on a value past the i64 range).
 		emitIsExactInt(ctx, tmpSlot);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(am.ik.wasm.Type.REFNULL.code());
-		ctx.writer.writeHeapType(am.ik.wasm.Type.EQ.code());
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.ELSE);
 		// Float path: apply the f64 rounding, then truncate to i64 and re-normalize
 		// (so a float past the i31 range converts to a boxed integer). The
@@ -120,15 +117,15 @@ final class WasmIntConvCompiler {
 		// Long.MAX/MIN_VALUE, matching what the interpreter and JVM answer for
 		// (truncate 1e30) instead of trapping.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		if (f64RoundingOp >= 0) {
 			ctx.writer.write(f64RoundingOp);
 		}
 		ctx.writer.write(Instruction.MISC_PREFIX);
-		ctx.writer.writeSignedLeb128(Instruction.I64_TRUNC_SAT_F64_S);
+		ctx.writer.writeUnsignedLeb128(Instruction.I64_TRUNC_SAT_F64_S);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -136,16 +133,16 @@ final class WasmIntConvCompiler {
 	// Pushes `local[slot] is (i31 | TYPE_BIGNUM | TYPE_BIGINT)` as an i32.
 	private static void emitIsExactInt(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(am.ik.wasm.Type.I31.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.I32_OR);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
 		ctx.writer.write(Instruction.I32_OR);

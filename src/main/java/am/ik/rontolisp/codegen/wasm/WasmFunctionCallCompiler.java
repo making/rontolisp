@@ -55,7 +55,7 @@ final class WasmFunctionCallCompiler {
 		}
 		// Call dispatch
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(dispatchFuncIdx);
+		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
 	}
 
 	private static void compileDirectCall(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -82,29 +82,29 @@ final class WasmFunctionCallCompiler {
 					WasmExprCompiler.compileExpr(args.get(i), ctx);
 					int s = ctx.allocTemp();
 					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeSignedLeb128(s);
+					ctx.writer.writeUnsignedLeb128(s);
 					extraSlots.add(s);
 				}
 				int restSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(restSlot);
+				ctx.writer.writeUnsignedLeb128(restSlot);
 				for (int k = extraSlots.size() - 1; k >= 0; k--) {
 					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeSignedLeb128(extraSlots.get(k));
+					ctx.writer.writeUnsignedLeb128(extraSlots.get(k));
 					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeSignedLeb128(restSlot);
+					ctx.writer.writeUnsignedLeb128(restSlot);
 					ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeSignedLeb128(restSlot);
+					ctx.writer.writeUnsignedLeb128(restSlot);
 				}
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(restSlot);
+				ctx.writer.writeUnsignedLeb128(restSlot);
 			}
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(fi.funcIndex());
+			ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 		}
 		else if (ctx.dynamic) {
 			WasmDynamicCallCompiler.compileCall(name, cons, ctx);

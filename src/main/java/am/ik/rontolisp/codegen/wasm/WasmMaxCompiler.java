@@ -25,38 +25,37 @@ final class WasmMaxCompiler {
 			WasmEmitHelper.castFloatGetF64(ctx);
 			ctx.writer.write(Instruction.F64_MAX);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		}
 		else {
 			// Integer path: store boxed values, use if/else
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			int aSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(aSlot);
+			ctx.writer.writeUnsignedLeb128(aSlot);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			int bSlot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(bSlot);
+			ctx.writer.writeUnsignedLeb128(bSlot);
 			// Condition: a > b (via _rat_cmp, which handles integers and ratios)
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(aSlot);
+			ctx.writer.writeUnsignedLeb128(aSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(bSlot);
+			ctx.writer.writeUnsignedLeb128(bSlot);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.I32_GT_S);
 			// if a > b: return a
 			ctx.writer.write(Instruction.IF);
-			ctx.writer.write(Type.REFNULL.code());
-			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeRefType(true, Type.EQ.code());
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(aSlot);
+			ctx.writer.writeUnsignedLeb128(aSlot);
 			// else: return b
 			ctx.writer.write(Instruction.ELSE);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(bSlot);
+			ctx.writer.writeUnsignedLeb128(bSlot);
 			ctx.writer.write(Instruction.END);
 		}
 	}

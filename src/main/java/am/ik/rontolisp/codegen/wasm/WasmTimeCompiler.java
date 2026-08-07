@@ -64,7 +64,7 @@ final class WasmTimeCompiler {
 		// Normalize the i64 into the exact-integer representation (an i31 would only
 		// occur for a pre-1970 clock; realistically a TYPE_BIGNUM box).
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 	}
 
 	// Calls clock_time_get(clockId, precision=1, TIME_SCRATCH_ADDR), then loads the i64
@@ -77,7 +77,7 @@ final class WasmTimeCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TIME_SCRATCH_ADDR);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_CLOCK_TIME_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_CLOCK_TIME_GET);
 		ctx.writer.write(Instruction.DROP); // errno
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.TIME_SCRATCH_ADDR);

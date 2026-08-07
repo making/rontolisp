@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -2240,7 +2241,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		startWriter.write(Instruction.I32_CONST);
 		startWriter.writeSignedLeb128(this.serve ? GC_HEAP_PREGROW_SERVE_BYTES : GC_HEAP_PREGROW_BYTES);
 		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		startWriter.writeSignedLeb128(TYPE_STR_BYTES);
+		startWriter.writeUnsignedLeb128(TYPE_STR_BYTES);
 		startWriter.write(Instruction.DROP);
 
 		// A program that redirects *standard-output* / *standard-input* (the variable has
@@ -2250,7 +2251,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			Integer streamGlobal = ctx.globalIndices.get(streamVar);
 			if (streamGlobal != null) {
 				startWriter.write(Instruction.CALL);
-				startWriter.writeSignedLeb128(FUNC_T_SYM);
+				startWriter.writeUnsignedLeb128(FUNC_T_SYM);
 				startWriter.write(Instruction.SET_GLOBAL);
 				startWriter.writeUnsignedLeb128(streamGlobal);
 			}
@@ -2667,8 +2668,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				if (extraLocals > 0) {
 					finalWriter.writeUnsignedLeb128(extraLocals);
-					finalWriter.write(Type.REFNULL.code());
-					finalWriter.writeHeapType(Type.EQ.code());
+					finalWriter.writeRefType(true, Type.EQ.code());
 				}
 				finalWriter.write((Object) bodyStream.toByteArray());
 				exportBodies.add(finalBody.toByteArray());
@@ -3119,8 +3119,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(0);
 				});
 				// type 10: _print_f64 / _print_f64_no_nl
@@ -3133,12 +3132,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(Type.FUNC);
 						w.write(paramCount);
 						for (int i = 0; i < paramCount; i++) {
-							w.write(Type.REFNULL.code());
-							w.writeHeapType(Type.EQ.code());
+							w.writeRefType(true, Type.EQ.code());
 						}
 						w.write(1);
-						w.write(Type.REFNULL.code());
-						w.writeHeapType(Type.EQ.code());
+						w.writeRefType(true, Type.EQ.code());
 					});
 				}
 				// type 19: _read_line () -> (ref null eq)
@@ -3146,8 +3143,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.FUNC);
 					w.write(0); // no params
 					w.write(1); // 1 result
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 20: _lookup (i32) -> (i32)
 				types.addFunc(new Type[] { Type.I32 }, new Type[] { Type.I32 });
@@ -3156,11 +3152,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.FUNC);
 					w.write(2);
 					w.write(Type.I32);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 22: _intern (i32, i32) -> (i32)
 				types.addFunc(new Type[] { Type.I32, Type.I32 }, new Type[] { Type.I32 });
@@ -3179,15 +3173,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.I32);
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 26: _rat_num/_rat_den ((ref null eq)) -> (i32)
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(1);
 					w.write(Type.I32);
 				});
@@ -3195,10 +3187,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(1);
 					w.write(Type.I32);
 				});
@@ -3208,19 +3198,16 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 29: _open ((ref null eq) path, i32 mode) -> (ref null eq)
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 30: clock_time_get (i32, i64, i32) -> i32
 				types.addFunc(new Type[] { Type.I32, Type.I64, Type.I32 }, new Type[] { Type.I32 });
@@ -3256,8 +3243,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(1);
 					w.write(Type.I32);
@@ -3267,8 +3253,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(4);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(Type.I32);
 					w.write(Type.I32);
@@ -3305,25 +3290,20 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 41 (TYPE_RD_FLAT): _rd_flat ((ref null eq), i32, (ref null eq),
 				// (ref null eq), i32) -> i32
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(5);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(1);
 					w.write(Type.I32);
@@ -3356,15 +3336,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.write(Type.I64);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 46 (TYPE_INT_VAL): _int_val ((ref null eq)) -> i64
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(1);
 					w.write(Type.I64);
 				});
@@ -3385,45 +3363,37 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 51 (TYPE_BIG_TRIPLE): ((ref null eq), (ref null eq), i32) ->
 				// (ref null eq)
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(3);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 52 (TYPE_BIG_GROW): ((ref null eq), i32, i32) -> (ref null eq)
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(3);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(Type.I32);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 53 (TYPE_BIG_TO_F64): ((ref null eq)) -> f64
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(1);
 					w.write(Type.F64);
 				});
@@ -3431,8 +3401,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(2);
 					w.write(Type.I64);
 					w.write(Type.I32);
@@ -3472,8 +3441,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(3);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I32);
 					w.write(Type.I64);
 					w.write(0);
@@ -3483,8 +3451,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(Type.FUNC);
 					w.write(0);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				// type 62 (TYPE_FD_READDIR): fd_readdir
 				// (i32 fd, i32 buf, i32 buf_len, i64 cookie, i32 retptr) -> i32 errno
@@ -3504,12 +3471,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				types.add(w -> {
 					w.write(Type.FUNC);
 					w.write(2);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 					w.write(Type.I64);
 					w.write(1);
-					w.write(Type.REFNULL.code());
-					w.writeHeapType(Type.EQ.code());
+					w.writeRefType(true, Type.EQ.code());
 				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
@@ -3532,8 +3497,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.add(w -> {
 						w.write(Type.FUNC);
 						w.write(2);
-						w.write(Type.REFNULL.code());
-						w.writeHeapType(Type.EQ.code());
+						w.writeRefType(true, Type.EQ.code());
 						w.write(Type.I32);
 						w.write(1);
 						w.write(Type.F64);
@@ -3542,8 +3506,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.add(w -> {
 						w.write(Type.FUNC);
 						w.write(3);
-						w.write(Type.REFNULL.code());
-						w.writeHeapType(Type.EQ.code());
+						w.writeRefType(true, Type.EQ.code());
 						w.write(Type.I32);
 						w.write(Type.F64);
 						w.write(1);
@@ -4013,15 +3976,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			// null
 			.writeGlobal(gs -> {
 				gs.add(g -> {
-					g.write(Type.REFNULL.code());
-					g.writeHeapType(Type.EQ.code());
+					g.writeRefType(true, Type.EQ.code());
 					g.write(am.ik.wasm.Mutability.VAR.code());
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
 					g.write(Instruction.END);
 				}).add(g -> {
-					g.write(Type.REFNULL.code());
-					g.writeHeapType(Type.EQ.code());
+					g.writeRefType(true, Type.EQ.code());
 					g.write(am.ik.wasm.Mutability.VAR.code());
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
@@ -4031,8 +3992,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// 2+).
 				for (int i = 0; i < globalCount; i++) {
 					gs.add(g -> {
-						g.write(Type.REFNULL.code());
-						g.writeHeapType(Type.EQ.code());
+						g.writeRefType(true, Type.EQ.code());
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.REF_NULL);
 						g.writeHeapType(Type.EQ.code());
@@ -4058,8 +4018,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// counter, a (mut i32) = 0.
 				if (this.asyncMode) {
 					gs.add(g -> {
-						g.write(Type.REFNULL.code());
-						g.writeHeapType(Type.EQ.code());
+						g.writeRefType(true, Type.EQ.code());
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.REF_NULL);
 						g.writeHeapType(Type.EQ.code());
@@ -4073,24 +4032,21 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 					gs.add(g -> {
-						g.write(Type.REFNULL.code());
-						g.writeHeapType(Type.EQ.code());
+						g.writeRefType(true, Type.EQ.code());
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.REF_NULL);
 						g.writeHeapType(Type.EQ.code());
 						g.write(Instruction.END);
 					});
 					gs.add(g -> {
-						g.write(Type.REFNULL.code());
-						g.writeHeapType(Type.EQ.code());
+						g.writeRefType(true, Type.EQ.code());
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.REF_NULL);
 						g.writeHeapType(Type.EQ.code());
 						g.write(Instruction.END);
 					});
 					gs.add(g -> {
-						g.write(Type.REFNULL.code());
-						g.writeHeapType(Type.EQ.code());
+						g.writeRefType(true, Type.EQ.code());
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.REF_NULL);
 						g.writeHeapType(Type.EQ.code());
@@ -4123,21 +4079,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				// instance nothing else can hold. Always last, so every other index is
 				// stable.
 				gs.add(g -> {
-					g.write(Type.REFNULL.code());
-					g.writeHeapType(Type.EQ.code());
+					g.writeRefType(true, Type.EQ.code());
 					g.write(am.ik.wasm.Mutability.VAR.code());
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
 					g.write(Instruction.END);
 				});
 				gs.add(g -> {
-					g.write(Type.REFNULL.code());
-					g.writeHeapType(Type.EQ.code());
+					g.writeRefType(true, Type.EQ.code());
 					g.write(am.ik.wasm.Mutability.CONST.code());
 					g.write(Instruction.REF_NULL);
 					g.writeHeapType(Type.EQ.code());
 					g.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-					g.writeSignedLeb128(TYPE_CELL);
+					g.writeUnsignedLeb128(TYPE_CELL);
 					g.write(Instruction.END);
 				});
 			})
@@ -5074,12 +5028,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
-	 * Builds a function body's locals declaration and appends the body, patching the i64
+	 * Builds a function body's locals declaration and appends the body, resolving the i64
 	 * scratch-local references the fusion compiler emitted as placeholders
 	 * ({@link Ctx#writeI64LocalIndex}): the declaration is one {@code (ref null eq)} run
 	 * for everything past {@code predeclaredSlots} followed by one {@code i64} run, so an
 	 * i64 local's absolute index is {@code ctx.nextLocal + slot}. A body with no i64
 	 * locals is byte-identical to the pre-stage-3 emission.
+	 * <p>
+	 * The placeholder is SPLICED OUT rather than overwritten in place, so a resolved
+	 * reference costs the LEB length its index actually needs (one byte below 128)
+	 * instead of the fixed placeholder width. That is what makes the emitted encoding
+	 * minimal, and it is why the references must be ascending -- they are, being appended
+	 * by one forward emission walk, and the loop says so rather than trusting it.
 	 * @param ctx the function's compilation context after its body was emitted
 	 * @param predeclaredSlots slots covered by the signature (params, closure env),
 	 * excluded from the declared runs
@@ -5088,13 +5048,6 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	static byte[] buildLocalsAndPatch(Ctx ctx, int predeclaredSlots, ByteArrayOutputStream funcBody) {
 		byte[] body = funcBody.toByteArray();
-		for (int[] ref : ctx.i64LocalRefs) {
-			int index = ctx.nextLocal + ref[1];
-			int offset = ref[0];
-			body[offset] = (byte) (0x80 | (index & 0x7f));
-			body[offset + 1] = (byte) (0x80 | ((index >>> 7) & 0x7f));
-			body[offset + 2] = (byte) ((index >>> 14) & 0x7f);
-		}
 		int extraEq = ctx.nextLocal - predeclaredSlots;
 		int numI64 = ctx.maxI64Locals;
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -5102,14 +5055,23 @@ public final class WasmLispCompiler implements LispCompiler {
 		writer.write((extraEq > 0 ? 1 : 0) + (numI64 > 0 ? 1 : 0));
 		if (extraEq > 0) {
 			writer.writeUnsignedLeb128(extraEq);
-			writer.write(Type.REFNULL.code());
-			writer.writeHeapType(Type.EQ.code());
+			writer.writeRefType(true, Type.EQ.code());
 		}
 		if (numI64 > 0) {
 			writer.writeUnsignedLeb128(numI64);
 			writer.write(Type.I64);
 		}
-		writer.write((Object) body);
+		int cursor = 0;
+		for (int[] ref : ctx.i64LocalRefs) {
+			if (ref[0] < cursor) {
+				throw new IllegalStateException(
+						"i64 local placeholders out of order at " + ref[0] + " (cursor " + cursor + ")");
+			}
+			writer.write((Object) Arrays.copyOfRange(body, cursor, ref[0]));
+			writer.writeUnsignedLeb128(ctx.nextLocal + ref[1]);
+			cursor = ref[0] + Ctx.I64_LOCAL_PLACEHOLDER_WIDTH;
+		}
+		writer.write((Object) Arrays.copyOfRange(body, cursor, body.length));
 		return out.toByteArray();
 	}
 
@@ -5834,12 +5796,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		int maxI64Locals = 0;
 
+		/** The byte width of one {@link #writeI64LocalIndex} placeholder. */
+		static final int I64_LOCAL_PLACEHOLDER_WIDTH = 3;
+
 		/**
 		 * Patch sites for i64 local references: {bodyStream offset, site-relative slot}.
 		 * An i64 local's absolute index is {@code nextLocal + slot}, unknown until the
 		 * function body is complete (every eqref local precedes the i64 run), so
-		 * references are emitted as 3-byte padded LEB placeholders and patched by
-		 * {@link WasmLispCompiler#buildLocalsAndPatch}.
+		 * references are emitted as fixed-width placeholders and replaced by
+		 * {@link WasmLispCompiler#buildLocalsAndPatch}, which splices in the minimal LEB
+		 * for the resolved index.
 		 */
 		List<int[]> i64LocalRefs = new ArrayList<>();
 
@@ -5850,8 +5816,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * Writes a reference to i64 scratch local {@code slot} as a 3-byte padded LEB
-		 * placeholder (valid up to index 2^21 - 1) and records it for patching.
+		 * Writes a reference to i64 scratch local {@code slot} as a fixed-width
+		 * placeholder (three bytes, so it never has to be widened) and records it for
+		 * resolution. The placeholder never reaches the output: it is spliced out for the
+		 * minimal LEB of the resolved index.
 		 */
 		void writeI64LocalIndex(int slot) {
 			this.i64LocalRefs.add(new int[] { this.bodyStream.size(), slot });

@@ -25,7 +25,7 @@ final class WasmReadFromStringCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(val);
+		ctx.writer.writeUnsignedLeb128(val);
 		// The string's bytes live on the GC heap, so copy them into the reader input
 		// scratch at HEAP_PTR and point the cursor/end there. sp = HEAP_PTR (all i32
 		// intermediates stay on the stack / in memory -- ctx temps are ref-typed). The
@@ -36,7 +36,7 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.READ_END_ADDR);
 		loadHeapPtr(ctx);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(val);
+		ctx.writer.writeUnsignedLeb128(val);
 		loadHeapPtr(ctx);
 		WasmEmitHelper.emitStrToMemCall(ctx.writer);
 		ctx.writer.write(Instruction.I32_ADD);
@@ -66,7 +66,7 @@ final class WasmReadFromStringCompiler {
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 		// parse one datum
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 	}
 
 	// Pushes mem[HEAP_PTR_ADDR] (the reader input scratch base).

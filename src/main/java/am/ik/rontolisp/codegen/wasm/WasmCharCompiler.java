@@ -73,7 +73,7 @@ final class WasmCharCompiler {
 	private static void compileCaseFold(LispCons cons, WasmLispCompiler.Ctx ctx, int funcIndex) {
 		pushCode(cons.toList().get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(funcIndex);
+		ctx.writer.writeUnsignedLeb128(funcIndex);
 		makeChar(ctx);
 	}
 
@@ -83,7 +83,7 @@ final class WasmCharCompiler {
 		pushCode(cons.toList().get(1), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(t);
+		ctx.writer.writeUnsignedLeb128(t);
 		inRange(ctx, t, 'A', 'Z');
 		inRange(ctx, t, 'a', 'z');
 		ctx.writer.write(Instruction.I32_OR);
@@ -99,7 +99,7 @@ final class WasmCharCompiler {
 		pushCode(args.get(1), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(c);
+		ctx.writer.writeUnsignedLeb128(c);
 		if (args.size() > 2) {
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 		}
@@ -109,7 +109,7 @@ final class WasmCharCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		}
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(r);
+		ctx.writer.writeUnsignedLeb128(r);
 		// d = weight of c (digit / letter), or -1
 		inRange(ctx, c, '0', '9');
 		ctx.writer.write(Instruction.IF);
@@ -142,7 +142,7 @@ final class WasmCharCompiler {
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(d);
+		ctx.writer.writeUnsignedLeb128(d);
 		// (d >= 0 && d < radix) ? i31(d) : nil
 		getI32(ctx, d);
 		ctx.writer.write(Instruction.I32_CONST);
@@ -153,8 +153,7 @@ final class WasmCharCompiler {
 		ctx.writer.write(Instruction.I32_LT_S);
 		ctx.writer.write(Instruction.I32_AND);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		getI32(ctx, d);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.ELSE);
@@ -186,17 +185,17 @@ final class WasmCharCompiler {
 		pushCode(args.get(1), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(prev);
+		ctx.writer.writeUnsignedLeb128(prev);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(acc);
+		ctx.writer.writeUnsignedLeb128(acc);
 		for (int i = 2; i < args.size(); i++) {
 			pushCode(args.get(i), ctx);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(cur);
+			ctx.writer.writeUnsignedLeb128(cur);
 			getI32(ctx, acc);
 			getI32(ctx, prev);
 			getI32(ctx, cur);
@@ -204,11 +203,11 @@ final class WasmCharCompiler {
 			ctx.writer.write(Instruction.I32_AND);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(acc);
+			ctx.writer.writeUnsignedLeb128(acc);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(cur);
+			ctx.writer.writeUnsignedLeb128(cur);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(prev);
+			ctx.writer.writeUnsignedLeb128(prev);
 		}
 		getI32(ctx, acc);
 		WasmEmitHelper.emitBoolFromI32(ctx);
@@ -220,20 +219,20 @@ final class WasmCharCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CHAR);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.writeUnsignedLeb128(0);
 	}
 
 	// Boxes the i32 on the stack into a TYPE_CHAR struct.
 	static void makeChar(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 	}
 
 	// Reads an i31-boxed i32 temp back onto the stack as a raw i32.
 	private static void getI32(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.castI31GetS(ctx);
 	}
 

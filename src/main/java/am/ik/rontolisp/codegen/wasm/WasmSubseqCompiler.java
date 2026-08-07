@@ -44,7 +44,7 @@ final class WasmSubseqCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_SUBSEQ);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ);
 	}
 
 }

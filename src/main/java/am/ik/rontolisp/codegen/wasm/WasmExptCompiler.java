@@ -26,10 +26,10 @@ final class WasmExptCompiler {
 
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(baseSlot);
+		ctx.writer.writeUnsignedLeb128(baseSlot);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(pSlot);
+		ctx.writer.writeUnsignedLeb128(pSlot);
 
 		// Negative exponent: base = (/ 1 base), power = -power.
 		WasmMathHelper.getI32(ctx, pSlot);
@@ -39,11 +39,11 @@ final class WasmExptCompiler {
 		WasmMathHelper.constI32(ctx, 1);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(baseSlot);
+		ctx.writer.writeUnsignedLeb128(baseSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DIV);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(baseSlot);
+		ctx.writer.writeUnsignedLeb128(baseSlot);
 		WasmMathHelper.constI32(ctx, 0);
 		WasmMathHelper.getI32(ctx, pSlot);
 		ctx.writer.write(Instruction.I32_SUB);
@@ -54,7 +54,7 @@ final class WasmExptCompiler {
 		WasmMathHelper.constI32(ctx, 1);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(rSlot);
+		ctx.writer.writeUnsignedLeb128(rSlot);
 
 		ctx.writer.write(Instruction.BLOCK, 0x40);
 		ctx.writer.write(Instruction.LOOP, 0x40);
@@ -65,13 +65,13 @@ final class WasmExptCompiler {
 		ctx.writer.write(Instruction.BR_IF, 1);
 		// r = r * base (rational multiplication keeps ratio bases exact)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(rSlot);
+		ctx.writer.writeUnsignedLeb128(rSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(baseSlot);
+		ctx.writer.writeUnsignedLeb128(baseSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_MUL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_MUL);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(rSlot);
+		ctx.writer.writeUnsignedLeb128(rSlot);
 		// power = power - 1
 		WasmMathHelper.getI32(ctx, pSlot);
 		WasmMathHelper.constI32(ctx, 1);
@@ -82,7 +82,7 @@ final class WasmExptCompiler {
 		ctx.writer.write(Instruction.END); // block
 
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(rSlot);
+		ctx.writer.writeUnsignedLeb128(rSlot);
 	}
 
 }

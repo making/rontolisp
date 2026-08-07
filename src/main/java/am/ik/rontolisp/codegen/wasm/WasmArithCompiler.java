@@ -31,7 +31,7 @@ final class WasmArithCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(ratioFunc);
+		ctx.writer.writeUnsignedLeb128(ratioFunc);
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx, int f64Opcode, int ratioFunc) {
@@ -45,7 +45,7 @@ final class WasmArithCompiler {
 				WasmEmitHelper.castFloatGetF64(ctx);
 				ctx.writer.write(f64Opcode);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 				return;
 			}
 			// Unary (- x) is IEEE negation: f64.neg. (Falling through to the loop
@@ -55,7 +55,7 @@ final class WasmArithCompiler {
 				WasmEmitHelper.castFloatGetF64(ctx);
 				ctx.writer.write(Instruction.F64_NEG);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 				return;
 			}
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -66,7 +66,7 @@ final class WasmArithCompiler {
 				ctx.writer.write(f64Opcode);
 			}
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			return;
 		}
 		// Common Lisp unary forms: (- x) negates, (/ x) is the reciprocal.
@@ -77,14 +77,14 @@ final class WasmArithCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(ratioFunc);
+			ctx.writer.writeUnsignedLeb128(ratioFunc);
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		for (int i = 2; i < args.size(); i++) {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(ratioFunc);
+			ctx.writer.writeUnsignedLeb128(ratioFunc);
 		}
 	}
 

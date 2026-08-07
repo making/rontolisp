@@ -88,22 +88,22 @@ final class WasmLambdaCompiler {
 				int tmpCdr = ctx.allocTemp();
 				int tmpCar = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(tmpCar);
+				ctx.writer.writeUnsignedLeb128(tmpCar);
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(tmpCdr);
+				ctx.writer.writeUnsignedLeb128(tmpCdr);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(tmpCar);
+				ctx.writer.writeUnsignedLeb128(tmpCar);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(tmpCdr);
+				ctx.writer.writeUnsignedLeb128(tmpCdr);
 				// struct.new cons
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 			}
 		}
 
 		// struct.new closure
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CLOSURE);
 	}
 
 	/**
@@ -129,7 +129,7 @@ final class WasmLambdaCompiler {
 			WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
 			int slot = ctx.allocLocal(paramNames.get(i));
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 		}
 		if (nf.variadic()) {
 			// Evaluate the surplus arguments left to right into temps, then link them
@@ -139,23 +139,23 @@ final class WasmLambdaCompiler {
 				WasmExprCompiler.compileExpr(callArgs.get(i + 1), ctx);
 				int s = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(s);
+				ctx.writer.writeUnsignedLeb128(s);
 				extraSlots.add(s);
 			}
 			int restSlot = ctx.allocLocal(paramNames.get(required));
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(restSlot);
+			ctx.writer.writeUnsignedLeb128(restSlot);
 			for (int k = extraSlots.size() - 1; k >= 0; k--) {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(extraSlots.get(k));
+				ctx.writer.writeUnsignedLeb128(extraSlots.get(k));
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(restSlot);
+				ctx.writer.writeUnsignedLeb128(restSlot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(restSlot);
+				ctx.writer.writeUnsignedLeb128(restSlot);
 			}
 		}
 

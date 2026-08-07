@@ -139,7 +139,7 @@ final class WasmVecSimdCompiler {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + offset);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + offset);
 	}
 
 }

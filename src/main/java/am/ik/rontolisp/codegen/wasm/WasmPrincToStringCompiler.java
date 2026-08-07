@@ -19,7 +19,7 @@ final class WasmPrincToStringCompiler {
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRINC_TO_STR);
 	}
 
 }

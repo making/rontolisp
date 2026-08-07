@@ -119,7 +119,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_EQ);
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
 		// pop the staged path (PLEN is free now: reuse it for the errno)
 		setLocal(w, PLEN);
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -195,7 +195,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 0);
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
 		// pop the staged path (PLEN is free now: reuse it for the errno)
 		setLocal(w, PLEN);
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -211,7 +211,7 @@ final class WasmIoRuntimeBuilder {
 		// close the descriptor the probe just opened, then answer with the path itself
 		loadMem32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
 		w.write(Instruction.DROP);
 		getLocal(w, PATH);
 		w.write(Instruction.END);
@@ -264,8 +264,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(1);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 
 		// Stage the path bytes into linear scratch exactly as _open / _probe_file do.
 		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -303,7 +302,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 0);
 		i32(w, WasmLispCompiler.OPEN_FD_ADDR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
 		// pop the staged path (PLEN is free now: reuse it for the errno)
 		setLocal(w, PLEN);
 		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
@@ -357,10 +356,10 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, COOKIE);
 		i32(w, WasmLispCompiler.READDIR_USED_ADDR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READDIR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READDIR);
 		// a non-zero errno ends the walk with whatever was collected (break outer)
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// end = buf + bufused ; nothing written means the directory is exhausted
 		getLocal(w, BUF);
 		loadMem32(w, WasmLispCompiler.READDIR_USED_ADDR);
@@ -370,7 +369,7 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, BUF);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// p = buf
 		getLocal(w, BUF);
 		setLocal(w, P);
@@ -386,7 +385,7 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, END);
 		w.write(Instruction.I32_GT_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// namlen = u32 at p+16 (d_namlen)
 		getLocal(w, P);
 		i32(w, 16);
@@ -401,7 +400,7 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, END);
 		w.write(Instruction.I32_GT_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// cookie = d_next (u64 at p+0): the resume point of the last COMPLETE entry
 		getLocal(w, P);
 		w.write(Instruction.I64_LOAD, 0x03, 0x00);
@@ -428,7 +427,7 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, NAMLEN);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		getLocal(w, DST);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -446,7 +445,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, I);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// a directory entry (preview1 filetype 3) carries the trailing '/'
@@ -484,7 +483,7 @@ final class WasmIoRuntimeBuilder {
 		WasmEmitHelper.emitStrFreshCall(w);
 		getLocal(w, ACC);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		setLocal(w, ACC);
 		// namlen may have grown by the slash; restore it for the p advance below
 		getLocal(w, P);
@@ -501,7 +500,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, P);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // inner loop
 		w.write(Instruction.END); // inner block
 		// Only an EMPTY round ends the walk (the test at the top of the loop). A short
@@ -514,9 +513,9 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, BUF);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // outer loop
 		w.write(Instruction.END); // outer block
 		// pop the listing buffer, close the descriptor and answer (t . names)
@@ -525,13 +524,13 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		getLocal(w, FD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_T_SYM);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_T_SYM);
 		getLocal(w, ACC);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -608,7 +607,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		getLocal(w, FD);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_CLOSE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.END);
 		// return t
@@ -720,7 +719,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
 		// iov.ptr = newline ; iov.len = 1
 		i32(w, IOV);
@@ -735,7 +734,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
 		// return the string
 		getLocal(w, STR);
@@ -781,7 +780,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READ);
 		w.write(Instruction.DROP);
 		// if (mem[NWRITTEN] == 0): EOF -- return eof-value when eof-error-p is nil,
 		// trap otherwise
@@ -935,7 +934,7 @@ final class WasmIoRuntimeBuilder {
 		// return TYPE_CHAR(decodeUtf8(needed, b0, b1, b2, b3))
 		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// WASI fd branch. A peek on this fd may have parked a whole code point in the
@@ -951,7 +950,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		loadMem32(w, WasmLispCompiler.PEEK_CP_ADDR);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// Read the lead byte via fd_read, then per-byte follow-ups.
@@ -968,7 +967,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READ);
 		w.write(Instruction.DROP);
 		// if (mem[NWRITTEN] == 0): EOF
 		loadMem32(w, NWRITTEN);
@@ -993,14 +992,14 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, NEEDED);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// iov points at SCRATCH already; we reuse it. Read one byte into SCRATCH.
 		getLocal(w, FD);
 		i32(w, IOV);
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READ);
 		w.write(Instruction.DROP);
 		// If nread == 0: needed = i; break.
 		loadMem32(w, NWRITTEN);
@@ -1009,7 +1008,7 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, I);
 		setLocal(w, NEEDED);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(2);
 		w.write(Instruction.END);
 		// Stash the just-read byte into local B1/B2/B3 by index. Emitted as a small
 		// switch on i to keep the loop body free of writable memory (SCRATCH is single-
@@ -1044,7 +1043,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, I);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// If needed collapsed to 0 mid-sequence (very first follow-up EOF), clamp to 1
@@ -1060,7 +1059,7 @@ final class WasmIoRuntimeBuilder {
 		// return TYPE_CHAR(decodeUtf8(needed, b0, b1, b2, b3))
 		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -1086,8 +1085,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(9);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL);
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int STREAM = 0, EOF_ERROR_P = 1, EOF_VALUE = 2, FD = 3, REC = 4, CUR = 5, END = 6, NEEDED = 7, B0 = 8,
 				B1 = 9, B2 = 10, B3 = 11, C = 12;
 
@@ -1179,7 +1177,7 @@ final class WasmIoRuntimeBuilder {
 		// The cursor is NOT advanced -- that is the whole difference from _read_char.
 		emitUtf8DecodeFromLocals(w, NEEDED, B0, B1, B2, B3);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// WASI fd: answer the parked code point when this fd already has one.
@@ -1191,7 +1189,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		loadMem32(w, WasmLispCompiler.PEEK_CP_ADDR);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// c = _read_char(stream, nil, nil) -- nil eof-error-p, so end of file is null.
@@ -1201,7 +1199,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_CHAR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_CHAR);
 		setLocal(w, C);
 		getLocal(w, C);
 		w.write(Instruction.REF_IS_NULL);
@@ -1382,7 +1380,7 @@ final class WasmIoRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
 		// return the byte
 		getLocal(w, BYTE);
@@ -1394,12 +1392,12 @@ final class WasmIoRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32(WasmWriter w, int value) {
@@ -1409,8 +1407,8 @@ final class WasmIoRuntimeBuilder {
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void refCast(WasmWriter w, int heapType) {

@@ -43,6 +43,15 @@ public class CountingDef<T extends CountingDef<?>> {
 	}
 
 	/**
+	 * Whether no entry was added -- a section built from this holds an empty vector and
+	 * therefore says nothing an absent section does not.
+	 * @return true when the definition has no entries
+	 */
+	protected final boolean isEmpty() {
+		return this.count == 0;
+	}
+
+	/**
 	 * Serialize the count and all entries to a byte array.
 	 * @return the serialized bytes
 	 */

@@ -116,7 +116,7 @@ final class WasmStringStreamRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
 		getLocal(w, STR);
 		w.write(Instruction.RETURN);
@@ -126,7 +126,7 @@ final class WasmStringStreamRuntimeBuilder {
 		getLocal(w, OFF);
 		getLocal(w, LEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		getLocal(w, STR);
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -527,7 +527,7 @@ final class WasmStringStreamRuntimeBuilder {
 		getLocal(w, CUR);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// len = chunk.len ; if (len != 0) LASTB = mem8[chunk.off + len - 1]
 		getLocal(w, CUR);
 		i32(w, 4);
@@ -552,7 +552,7 @@ final class WasmStringStreamRuntimeBuilder {
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		setLocal(w, CUR);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		// if (LASTB >= 0 && LASTB != '\n') append a "\n" chunk
@@ -583,7 +583,7 @@ final class WasmStringStreamRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
@@ -597,7 +597,7 @@ final class WasmStringStreamRuntimeBuilder {
 		i32(w, newlineOff);
 		i32(w, 1);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		w.write(Instruction.END);
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
@@ -609,12 +609,12 @@ final class WasmStringStreamRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32(WasmWriter w, int value) {
@@ -624,8 +624,8 @@ final class WasmStringStreamRuntimeBuilder {
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void refCast(WasmWriter w, int heapType) {

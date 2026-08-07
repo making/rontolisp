@@ -59,8 +59,7 @@ final class WasmUnwindProtectCompiler {
 		int resultSlot = ctx.allocTemp();
 		// block $done (result (ref null eq)) -- the unwind-protect value.
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		int doneDepth = ctx.wasmCtrlDepth;
 		// block $tramp (result (ref null eq)) -- the return-exit trampoline, only when
@@ -72,8 +71,7 @@ final class WasmUnwindProtectCompiler {
 		if (needTrampoline) {
 			continueDepth = continueTargetDepth(ctx);
 			ctx.writer.write(Instruction.BLOCK);
-			ctx.writer.write(Type.REFNULL.code());
-			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeRefType(true, Type.EQ.code());
 			ctx.wasmCtrlDepth++;
 			trampolineDepth = ctx.wasmCtrlDepth;
 		}
@@ -85,8 +83,7 @@ final class WasmUnwindProtectCompiler {
 		// try_table (result (ref null eq)) (catch_all_ref $u). Catch labels are
 		// resolved without the try_table's own label, so label 0 is block $u here.
 		ctx.writer.write(Instruction.TRY_TABLE);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.CATCH_ALL_REF);
 		ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - landingDepth);
@@ -101,10 +98,10 @@ final class WasmUnwindProtectCompiler {
 		ctx.writer.write(Instruction.END); // try_table
 		// Normal exit: stash the value, run the cleanups, skip the landing pads.
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 		compileCleanups(cleanups, ctx);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(resultSlot);
+		ctx.writer.writeUnsignedLeb128(resultSlot);
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $u

@@ -46,7 +46,7 @@ final class WasmStringTrimCompiler {
 		ctx.writer.writeSignedLeb128(mode);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STRING_TRIM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STRING_TRIM);
 	}
 
 }

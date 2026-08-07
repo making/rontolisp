@@ -216,12 +216,12 @@ final class WasmReadRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32(WasmWriter w, int value) {
@@ -231,13 +231,13 @@ final class WasmReadRuntimeBuilder {
 
 	private static void structNew(WasmWriter w, int type) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(type);
+		w.writeUnsignedLeb128(type);
 	}
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void refCast(WasmWriter w, int heapType) {
@@ -300,7 +300,7 @@ final class WasmReadRuntimeBuilder {
 
 	private static void call(WasmWriter w, int func) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(func);
+		w.writeUnsignedLeb128(func);
 	}
 
 	private static void refTest(WasmWriter w, int heapType) {
@@ -314,17 +314,17 @@ final class WasmReadRuntimeBuilder {
 
 	private static void arrayGet(WasmWriter w, int type) {
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeSignedLeb128(type);
+		w.writeUnsignedLeb128(type);
 	}
 
 	private static void arraySet(WasmWriter w, int type) {
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(type);
+		w.writeUnsignedLeb128(type);
 	}
 
 	private static void arrayNew(WasmWriter w, int type) {
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		w.writeSignedLeb128(type);
+		w.writeUnsignedLeb128(type);
 	}
 
 	private static void arrayLen(WasmWriter w) {
@@ -746,15 +746,13 @@ final class WasmReadRuntimeBuilder {
 		// reuse the i32 slots freely between attempts.
 		w.write(4);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(12);
 		w.write(Type.I32);
 		w.write(2);
 		w.write(Type.F64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int CAR = 0, CDR = 1, BYTE = 2, START = 3, LEN = 4, OFF = 5, POS = 6, ESC = 7, HP = 8, NEG = 9, ACC = 10,
 				VALID = 11, SAWDOT = 12, C2 = 13, FVAL = 14, FPLACE = 15, ACC64 = 16;
 
@@ -778,7 +776,7 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		advanceCursor(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LIST);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_LIST);
 		w.write(Instruction.RETURN);
 		end(w);
 
@@ -789,7 +787,7 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		advanceCursor(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		setLocal(w, CAR); // inner
 		// cdr = cons(inner, null)
 		getLocal(w, CAR);
@@ -898,7 +896,7 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, START);
 		getLocal(w, LEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
 		setLocal(w, OFF);
 		// nil? -> the null ref (nil is the unique null value, not a symbol struct)
 		getLocal(w, OFF);
@@ -935,7 +933,7 @@ final class WasmReadRuntimeBuilder {
 		advanceCursor(w);
 		advanceCursor(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		setLocal(w, CAR);
 		getLocal(w, CAR);
 		emitNull(w);
@@ -1283,7 +1281,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, '0');
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_GROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_GROW);
 		setLocal(w, ACC);
 		end(w);
 		end(w);
@@ -1304,7 +1302,7 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		getLocal(w, ACC);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
 		setLocal(w, ACC);
 		end(w);
 		getLocal(w, ACC);
@@ -1627,8 +1625,7 @@ final class WasmReadRuntimeBuilder {
 		// ref locals: CAR=0, CDR=1 ; i32 locals: ISDOT=2, CH2=3
 		w.write(2);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 		final int CAR = 0, CDR = 1, ISDOT = 2, CH2 = 3;
@@ -1653,7 +1650,7 @@ final class WasmReadRuntimeBuilder {
 		end(w);
 		// car = _read_expr
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		setLocal(w, CAR);
 		// Dotted pair: a standalone '.' token (followed by a delimiter or the end of
 		// input) puts the next datum directly in the final cdr, mirroring the
@@ -1715,7 +1712,7 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		advanceCursor(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		setLocal(w, CDR);
 		emitSkipWs(w, ctx);
 		loadMem32(w, CURSOR);
@@ -1735,7 +1732,7 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_EQZ);
 		ifVoid(w);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LIST);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_LIST);
 		setLocal(w, CDR);
 		end(w);
 		// cons(car, cdr)
@@ -1960,8 +1957,7 @@ final class WasmReadRuntimeBuilder {
 		// param: FD=0 (i32) ; ref local: V=1 ; i32 locals: OFF=2, LEN=3
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 		final int FD = 0, V = 1, OFF = 2, LEN = 3;
@@ -1973,7 +1969,7 @@ final class WasmReadRuntimeBuilder {
 		loop(w);
 		getLocal(w, FD); // fd
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
 		setLocal(w, V);
 		// if V is null: return null
 		getLocal(w, V);
@@ -2021,7 +2017,7 @@ final class WasmReadRuntimeBuilder {
 		brIf(w, 0);
 		// parse one datum
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		w.write(Instruction.RETURN);
 		end(w); // loop
 		end(w); // block
@@ -2091,7 +2087,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 0);
 		i32(w, FD_ADDR);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_PATH_OPEN);
 		// pop the staged path on BOTH exits (PLEN is free now: reuse it for the errno)
 		setLocal(w, PLEN);
 		i32(w, HEAP);
@@ -2129,7 +2125,7 @@ final class WasmReadRuntimeBuilder {
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_FD_READ);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_READ);
 		w.write(Instruction.DROP);
 		// nread = mem[NWRITTEN]
 		loadMem32(w, NWRITTEN);
@@ -2170,10 +2166,10 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_GE_S);
 		brIf(w, 1);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 		emitNull(w); // env = null (global)
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_EVAL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		w.write(Instruction.DROP);
 		br(w, 0);
 		end(w); // loop
@@ -2556,8 +2552,7 @@ final class WasmReadRuntimeBuilder {
 		w.write(4);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int RADIX = 0, NEG = 1, DSTART = 2, BYTE = 3, DV = 4, ACC = 5;
 		i32(w, 0);
 		setLocal(w, NEG);
@@ -2641,7 +2636,7 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, RADIX);
 		getLocal(w, DV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_GROW);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_GROW);
 		setLocal(w, ACC);
 		advanceCursor(w);
 		br(w, 0);
@@ -2692,7 +2687,7 @@ final class WasmReadRuntimeBuilder {
 		ifVoid(w);
 		getLocal(w, ACC);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_NEG);
 		setLocal(w, ACC);
 		end(w);
 		getLocal(w, ACC);
@@ -2707,8 +2702,7 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(3);
 		w.write(Type.I32);
 		final int DATA = 0, DIMS = 1, START = 2, COUNT = 3, I = 4;
@@ -2813,8 +2807,7 @@ final class WasmReadRuntimeBuilder {
 		w.write(1);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int V = 0, N = 1, TAIL = 2;
 		i32(w, 0);
 		setLocal(w, N);
@@ -2878,8 +2871,7 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
 		w.write(Type.I32);
 		final int ROWS = 0, RANK = 1, DIMS = 2, LEVEL = 3, D = 4;
@@ -2940,8 +2932,7 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
 		w.write(Type.I32);
 		final int ITEMS = 0, DEPTH = 1, DIMS = 2, OUT = 3, IDX = 4, TAIL = 5, N = 6;
@@ -3035,8 +3026,7 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(1);
 		w.write(Type.I32);
 		final int ROWS = 0, PROBE = 1, RANK = 2;
@@ -3091,8 +3081,7 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(3);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 		final int RANK = 0, ROWS = 1, DIMS = 2, DATA = 3, TOTAL = 4, D = 5;
@@ -3164,8 +3153,7 @@ final class WasmReadRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		w.write(2);
 		w.write(5);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(4);
 		w.write(Type.I32);
 		final int SINGLE = 0, ROWS = 1, DIMS = 2, TMP = 3, DATA = 4, VAL = 5, RANK = 6, TOTAL = 7, D = 8, I = 9;
@@ -3348,8 +3336,7 @@ final class WasmReadRuntimeBuilder {
 		}
 		w.write(2);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(20);
 		w.write(Type.I32);
 		final int SLOTS = 0, VAL = 1;

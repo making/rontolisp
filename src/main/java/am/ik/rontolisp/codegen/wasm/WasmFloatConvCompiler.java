@@ -21,7 +21,7 @@ final class WasmFloatConvCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 }

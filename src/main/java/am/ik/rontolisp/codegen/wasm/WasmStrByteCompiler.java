@@ -40,8 +40,8 @@ final class WasmStrByteCompiler {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-				ctx.writer.writeSignedLeb128(1);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+				ctx.writer.writeUnsignedLeb128(1);
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(2);
 				ctx.writer.write(Instruction.I32_SUB);
@@ -58,7 +58,7 @@ final class WasmStrByteCompiler {
 				ctx.writer.writeSignedLeb128(1);
 				ctx.writer.write(Instruction.I32_ADD);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
 			case LispNames.STR_FROM_BYTE_INTERNAL -> {
@@ -70,7 +70,7 @@ final class WasmStrByteCompiler {
 				int tmp = ctx.allocTemp();
 				WasmExprCompiler.compileExpr(args.get(1), ctx);
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(tmp);
+				ctx.writer.writeUnsignedLeb128(tmp);
 				WasmEmitHelper.emitGrowHeapTo(ctx.writer, () -> {
 					loadHeapPtr(ctx);
 					ctx.writer.write(Instruction.I32_CONST);
@@ -84,7 +84,7 @@ final class WasmStrByteCompiler {
 				ctx.writer.writeUnsignedLeb128(0);
 				loadHeapPtr(ctx);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(tmp);
+				ctx.writer.writeUnsignedLeb128(tmp);
 				WasmEmitHelper.castI31GetS(ctx);
 				ctx.writer.write(Instruction.I32_STORE8, 0x00);
 				ctx.writer.writeUnsignedLeb128(1);

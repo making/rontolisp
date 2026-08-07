@@ -22,7 +22,7 @@ final class WasmSqrtCompiler {
 		WasmEmitHelper.castFloatGetF64(ctx);
 		ctx.writer.write(Instruction.F64_SQRT);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 }

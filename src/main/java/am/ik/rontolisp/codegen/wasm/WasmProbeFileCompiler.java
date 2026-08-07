@@ -28,7 +28,7 @@ final class WasmProbeFileCompiler {
 		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PROBE_FILE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PROBE_FILE);
 	}
 
 }

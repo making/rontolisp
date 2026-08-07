@@ -847,17 +847,20 @@ class WasmLispCompilerTest {
 		assertThat(simdTypes).as("the default types are a prefix of the --simd types").startsWith(scalarTypes);
 		// The four appended entries, in TYPE_V128ARR .. TYPE_V_SET order.
 		byte[] appended = Arrays.copyOfRange(simdTypes, scalarTypes.length, simdTypes.length);
+		// Every reference below is `(ref null eq)` written in its one-byte form (0x6D IS
+		// `eqref`), and the struct is a bare `structtype` -- the format's own spelling of
+		// `sub final` with no supertype, so it is still FINAL
+		// (.kb/wasm-gc-final-types.md, .kb/wasm-shortest-encoding.md).
 		assertThat(appended).isEqualTo(new byte[] {
 				// TYPE_V128ARR: (array (mut v128)) -- the type that needs the SIMD
 				// proposal
 				0x5E, 0x7B, 0x01,
-				// TYPE_VBLOCK: rec { sub final struct {i32, i32, (ref null eq)} } --
-				// 0x4F is the spec's `sub final`, .kb/wasm-gc-final-types.md
-				0x4E, 0x01, 0x4F, 0x00, 0x5F, 0x03, 0x7F, 0x00, 0x7F, 0x00, 0x63, 0x6D, 0x00,
-				// TYPE_V_GET: (func (param (ref null eq) i32) (result f64))
-				0x60, 0x02, 0x63, 0x6D, 0x7F, 0x01, 0x7C,
-				// TYPE_V_SET: (func (param (ref null eq) i32 f64) (result f64))
-				0x60, 0x03, 0x63, 0x6D, 0x7F, 0x7C, 0x01, 0x7C });
+				// TYPE_VBLOCK: rec { struct {i32, i32, eqref} }
+				0x4E, 0x01, 0x5F, 0x03, 0x7F, 0x00, 0x7F, 0x00, 0x6D, 0x00,
+				// TYPE_V_GET: (func (param eqref i32) (result f64))
+				0x60, 0x02, 0x6D, 0x7F, 0x01, 0x7C,
+				// TYPE_V_SET: (func (param eqref i32 f64) (result f64))
+				0x60, 0x03, 0x6D, 0x7F, 0x7C, 0x01, 0x7C });
 		// --simd emits TWO function blocks: the vec: kernels, then the linalg: ones.
 		// Both are absent from a default module -- this delta is the only
 		// structural guard that a build without the flag stays byte-identical to one that

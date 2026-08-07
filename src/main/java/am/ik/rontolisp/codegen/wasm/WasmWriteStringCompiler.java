@@ -34,11 +34,11 @@ final class WasmWriteStringCompiler {
 			int objSlot = ctx.allocTemp();
 			WasmExprCompiler.compileExpr(literal, ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			WasmLiteralPrint.emitStaticWrite(literal.value(), literal, false, ctx);
 			// write-string returns its string argument.
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			return;
 		}
 		// A mutable character vector normalizes to a string first.
@@ -52,12 +52,12 @@ final class WasmWriteStringCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 	}
 
 	static void compileMakeOutputStream(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_MAKE_STR_OSTREAM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_MAKE_STR_OSTREAM);
 	}
 
 	static void compileMakeInputStream(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -66,14 +66,14 @@ final class WasmWriteStringCompiler {
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		WasmEmitHelper.emitCharvecToStrCall(ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_MAKE_STR_ISTREAM);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_MAKE_STR_ISTREAM);
 	}
 
 	static void compileContents(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_STR_STREAM_CONTENTS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_STREAM_CONTENTS);
 	}
 
 }

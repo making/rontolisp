@@ -52,7 +52,7 @@ final class WasmExportRuntimeBuilder {
 		w.write(0x40);
 		loadCell(w, WasmLispCompiler.CABI_MARK_ACTIVE_ADDR);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.CABI_MARK_ACTIVE_ADDR);
 		w.write(Instruction.I32_CONST);
@@ -69,9 +69,9 @@ final class WasmExportRuntimeBuilder {
 		w.write(Instruction.END);
 		// return __ronto_alloc(new-size)
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(3);
+		w.writeUnsignedLeb128(3);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(allocFuncIndex);
+		w.writeUnsignedLeb128(allocFuncIndex);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -97,13 +97,13 @@ final class WasmExportRuntimeBuilder {
 		loadCell(w, WasmLispCompiler.CABI_MARK_ACTIVE_ADDR);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		// interning happened since the snapshot -> keep this call's allocations
 		loadCell(w, WasmLispCompiler.RT_INTERN_COUNT_ADDR);
 		loadCell(w, WasmLispCompiler.CABI_MARK_INTERN_ADDR);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		// HEAP_PTR = MARK_HEAP
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
@@ -155,33 +155,33 @@ final class WasmExportRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(8);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(cabiReallocFuncIndex);
+		w.writeUnsignedLeb128(cabiReallocFuncIndex);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(ret);
+		w.writeUnsignedLeb128(ret);
 		// (ptr, len) = wrapper(params...)
 		for (int s = 0; s < paramSlots; s++) {
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(s);
+			w.writeUnsignedLeb128(s);
 		}
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(wrapperFuncIndex);
+		w.writeUnsignedLeb128(wrapperFuncIndex);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(len);
+		w.writeUnsignedLeb128(len);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(ptr);
+		w.writeUnsignedLeb128(ptr);
 		// record[0] = ptr; record[4] = len; return record
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(ret);
+		w.writeUnsignedLeb128(ret);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(ptr);
+		w.writeUnsignedLeb128(ptr);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(ret);
+		w.writeUnsignedLeb128(ret);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(len);
+		w.writeUnsignedLeb128(len);
 		w.write(Instruction.I32_STORE, 0x02, 0x04);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(ret);
+		w.writeUnsignedLeb128(ret);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -213,14 +213,14 @@ final class WasmExportRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// memory[HEAP_PTR_ADDR] = (old + size + 7) & ~7
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(7);
@@ -232,14 +232,14 @@ final class WasmExportRuntimeBuilder {
 		// Ensure [old, old+size) is within linear memory before the host writes into it.
 		WasmEmitHelper.emitGrowHeapTo(w, () -> {
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(1);
+			w.writeUnsignedLeb128(1);
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(0);
+			w.writeUnsignedLeb128(0);
 			w.write(Instruction.I32_ADD);
 		});
 		// return old
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -288,18 +288,18 @@ final class WasmExportRuntimeBuilder {
 		w.write(Type.I32);
 		loadCell(w, WasmLispCompiler.RT_INTERN_HEAP_ADDR);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(water);
+		w.writeUnsignedLeb128(water);
 		// HEAP_PTR = mark > water ? mark : water
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(mark);
+		w.writeUnsignedLeb128(mark);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(water);
+		w.writeUnsignedLeb128(water);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(mark);
+		w.writeUnsignedLeb128(mark);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(water);
+		w.writeUnsignedLeb128(water);
 		w.write(Instruction.I32_GT_U);
 		w.write(Instruction.SELECT);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
@@ -332,13 +332,13 @@ final class WasmExportRuntimeBuilder {
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(dst);
+		w.writeUnsignedLeb128(dst);
 		// Ensure [dst, dst+len+2) is within linear memory before writing the quoted copy.
 		WasmEmitHelper.emitGrowHeapTo(w, () -> {
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(dst);
+			w.writeUnsignedLeb128(dst);
 			w.write(Instruction.GET_LOCAL);
-			w.writeSignedLeb128(len);
+			w.writeUnsignedLeb128(len);
 			w.write(Instruction.I32_ADD);
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(2);
@@ -346,7 +346,7 @@ final class WasmExportRuntimeBuilder {
 		});
 		// memory[dst] = '"'
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(dst);
+		w.writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0x22);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
@@ -354,7 +354,7 @@ final class WasmExportRuntimeBuilder {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(idx);
+		w.writeUnsignedLeb128(idx);
 		// while (idx < len) memory[dst+1+idx] = memory[ptr+idx]; idx++
 		w.write(Instruction.BLOCK);
 		w.write(0x40); // void block type
@@ -362,50 +362,50 @@ final class WasmExportRuntimeBuilder {
 		w.write(0x40);
 		// if idx >= len, break out of block (depth 1)
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(idx);
+		w.writeUnsignedLeb128(idx);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(len);
+		w.writeUnsignedLeb128(len);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		// addr = dst + 1 + idx
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(dst);
+		w.writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(idx);
+		w.writeUnsignedLeb128(idx);
 		w.write(Instruction.I32_ADD);
 		// value = memory[ptr + idx]
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(ptr);
+		w.writeUnsignedLeb128(ptr);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(idx);
+		w.writeUnsignedLeb128(idx);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		// idx++
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(idx);
+		w.writeUnsignedLeb128(idx);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(idx);
+		w.writeUnsignedLeb128(idx);
 		// continue loop (depth 0)
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// memory[dst+1+len] = '"'
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(dst);
+		w.writeUnsignedLeb128(dst);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(len);
+		w.writeUnsignedLeb128(len);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(0x22);
@@ -416,9 +416,9 @@ final class WasmExportRuntimeBuilder {
 		// source buffer at ptr is __ronto_alloc'd and owned by the host, untouched.)
 		// return _str_fresh(dst, len + 2)
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(dst);
+		w.writeUnsignedLeb128(dst);
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(len);
+		w.writeUnsignedLeb128(len);
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(2);
 		w.write(Instruction.I32_ADD);

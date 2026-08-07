@@ -68,8 +68,7 @@ final class WasmBlockCompiler {
 			boolean catchesPlain, boolean functionBoundary) {
 		// block (result (ref null eq))
 		ctx.writer.write(Instruction.BLOCK);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.wasmCtrlDepth++;
 		ctx.blockMarkers
 			.push(new WasmLispCompiler.BlockMarker(ctx.wasmCtrlDepth, name, catchesPlain, functionBoundary));

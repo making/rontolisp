@@ -34,12 +34,12 @@ final class WasmWriteLineCompiler {
 			int objSlot = ctx.allocTemp();
 			WasmExprCompiler.compileExpr(literal, ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			WasmLiteralPrint.emitStaticWrite(literal.value(), literal, false, ctx);
 			WasmLiteralPrint.emitNewline(ctx);
 			// write-line returns its string argument.
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(objSlot);
+			ctx.writer.writeUnsignedLeb128(objSlot);
 			return;
 		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
@@ -51,7 +51,7 @@ final class WasmWriteLineCompiler {
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_LINE);
 	}
 
 }

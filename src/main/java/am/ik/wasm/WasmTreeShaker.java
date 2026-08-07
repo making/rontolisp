@@ -308,26 +308,35 @@ public final class WasmTreeShaker {
 			return module; // nothing to drop
 		}
 
-		// Rebuild the affected sections in place, preserving section order.
+		// Rebuild the affected sections in place, preserving section order. A rebuilt
+		// section the pass emptied is DROPPED rather than written back as a zero-entry
+		// vector: an absent section and an empty one mean the same thing, and a module
+		// this pass shook down to nothing would otherwise still carry three bytes of
+		// `type`, `function` and `code` saying so.
 		List<Section> rebuilt = new ArrayList<>(sections.size());
 		for (Section s : sections) {
 			switch (s.id()) {
-				case SEC_TYPE -> rebuilt.add(new Section(SEC_TYPE,
-						rebuildTypeSection(s.payload(), typeEntries, typeUsed, funcRemap, typeRemap)));
+				case SEC_TYPE -> addVector(rebuilt, SEC_TYPE,
+						rebuildTypeSection(s.payload(), typeEntries, typeUsed, funcRemap, typeRemap));
 				case SEC_IMPORT ->
-					rebuilt.add(new Section(SEC_IMPORT, rebuildImports(imports, reachable, funcRemap, typeRemap)));
-				case SEC_FUNCTION -> rebuilt.add(new Section(SEC_FUNCTION,
-						rebuildFunctionSection(defTypeIdx, numImportedFuncs, reachable, typeRemap)));
+					addVector(rebuilt, SEC_IMPORT, rebuildImports(imports, reachable, funcRemap, typeRemap));
+				case SEC_FUNCTION -> addVector(rebuilt, SEC_FUNCTION,
+						rebuildFunctionSection(defTypeIdx, numImportedFuncs, reachable, typeRemap));
 				case SEC_GLOBAL ->
-					rebuilt.add(new Section(SEC_GLOBAL, applyRefs(s.payload(), globalRefs, funcRemap, typeRemap)));
-				case SEC_TAG ->
-					rebuilt.add(new Section(SEC_TAG, applyRefs(s.payload(), tagRefs, funcRemap, typeRemap)));
-				case SEC_CODE -> rebuilt.add(new Section(SEC_CODE,
-						rebuildCodeSection(codeEntries, bodyRefs, numImportedFuncs, reachable, funcRemap, typeRemap)));
-				case SEC_EXPORT -> rebuilt.add(new Section(SEC_EXPORT, rebuildExportSection(s.payload(), funcRemap)));
+					addVector(rebuilt, SEC_GLOBAL, applyRefs(s.payload(), globalRefs, funcRemap, typeRemap));
+				case SEC_TAG -> addVector(rebuilt, SEC_TAG, applyRefs(s.payload(), tagRefs, funcRemap, typeRemap));
+				case SEC_CODE -> addVector(rebuilt, SEC_CODE,
+						rebuildCodeSection(codeEntries, bodyRefs, numImportedFuncs, reachable, funcRemap, typeRemap));
+				case SEC_EXPORT -> addVector(rebuilt, SEC_EXPORT, rebuildExportSection(s.payload(), funcRemap));
 				case SEC_START -> rebuilt.add(new Section(SEC_START, rebuildStartSection(s.payload(), funcRemap)));
-				case SEC_DATA -> rebuilt.add(deadSegments.isEmpty() && deadRanges.isEmpty() ? s
-						: new Section(SEC_DATA, rebuildDataSection(dataSegments, deadSegments, deadRanges)));
+				case SEC_DATA -> {
+					if (deadSegments.isEmpty() && deadRanges.isEmpty()) {
+						rebuilt.add(s);
+					}
+					else {
+						addVector(rebuilt, SEC_DATA, rebuildDataSection(dataSegments, deadSegments, deadRanges));
+					}
+				}
 				case SEC_CUSTOM -> {
 					// The `name` section maps FUNCTION AND TYPE INDICES to names, and
 					// this
@@ -344,6 +353,15 @@ public final class WasmTreeShaker {
 			}
 		}
 		return assemble(rebuilt);
+	}
+
+	// Keeps a rebuilt vector-shaped section unless it came out empty, in which case the
+	// section is dropped: `00` (zero entries) says exactly what no section at all says.
+	private static void addVector(List<Section> sections, int id, byte[] payload) {
+		if (payload.length == 1 && payload[0] == 0) {
+			return;
+		}
+		sections.add(new Section(id, payload));
 	}
 
 	// The name a custom section carries, or null when its payload is not even a valid
@@ -1192,13 +1210,30 @@ public final class WasmTreeShaker {
 		if (b == 0x63 || b == 0x64) {
 			recordHeapType(buf, p, refs);
 		}
-		// otherwise a single-byte value type (0x7B-0x7F numeric/vector, 0x6F/0x70 ref
-		// shorthand)
+		// otherwise a single-byte value type (0x7B-0x7F numeric/vector, 0x69-0x74
+		// abstract-ref shorthand), which names no type definition
 	}
 
+	/**
+	 * Whether the byte can begin a {@code valtype} -- the disambiguator for a blocktype,
+	 * whose third alternative is an s33 type index.
+	 * <p>
+	 * The abstract-reference shorthands are the whole contiguous {@code 0x69-0x74} range,
+	 * and ALL of them have to be listed: the emitter writes every nullable reference to
+	 * an abstract heap type that way ({@code block (result eqref)} is the single byte
+	 * {@code 6D}), and a shorthand missing here falls through to the s33 arm and is
+	 * recorded as a type reference at the negative index it decodes to. That is a read
+	 * that does not describe the module -- the rewriter then indexes its remap table with
+	 * a negative number, so the symptom lands far from the cause, and a module with
+	 * nothing to drop escapes only because the pass returned early. The range is
+	 * unambiguous because a blocktype's s33 is a type index, hence non-negative, so its
+	 * first byte is either {@code 0x00-0x3F} (a small index) or has the continuation bit
+	 * set -- never {@code 0x40-0x7F}.
+	 * @param b the first byte of the blocktype
+	 * @return true when the byte begins a value type rather than a type index
+	 */
 	private static boolean isValTypeStart(int b) {
-		// 0x69 = exnref (exception-handling proposal).
-		return (b >= 0x7B && b <= 0x7F) || b == 0x70 || b == 0x6F || b == 0x69 || b == 0x63 || b == 0x64;
+		return (b >= 0x7B && b <= 0x7F) || (b >= 0x69 && b <= 0x74) || b == 0x63 || b == 0x64;
 	}
 
 	// limits := 0x00 min | 0x01 min max (also tolerates the shared/64 flag bits)

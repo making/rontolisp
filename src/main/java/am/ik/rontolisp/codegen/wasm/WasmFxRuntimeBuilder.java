@@ -52,8 +52,8 @@ final class WasmFxRuntimeBuilder {
 		b.get(0);
 		b.refCastHeap(WasmLispCompiler.TYPE_BIGNUM);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(0);
 		b.i32c(1);
 		w.write(Instruction.RETURN);
 		b.end();
@@ -276,7 +276,7 @@ final class WasmFxRuntimeBuilder {
 		b.get(2);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
 		w.write(Instruction.RETURN);
 		b.end();
 
@@ -289,7 +289,7 @@ final class WasmFxRuntimeBuilder {
 		b.get(2);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_I16ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I16ARR);
 		w.write(Instruction.RETURN);
 		b.end();
 
@@ -299,7 +299,7 @@ final class WasmFxRuntimeBuilder {
 		b.get(2);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_I32ARR);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I32ARR);
 		b.end();
 		return b.toByteArray();
 	}
@@ -344,7 +344,7 @@ final class WasmFxRuntimeBuilder {
 		b.i32c(tOffset);
 		b.i32c(tLength);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(tSymGlobalIndex);
 		b.end();
@@ -380,8 +380,7 @@ final class WasmFxRuntimeBuilder {
 		w.writeUnsignedLeb128(rawSentinelGlobalIndex);
 		w.write(Instruction.REF_EQ);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// (raw << 33) >> 33 == raw -- the i31 signed range test
 		b.get(1);
 		b.i64c(33);
@@ -391,15 +390,14 @@ final class WasmFxRuntimeBuilder {
 		b.get(1);
 		w.write(Instruction.I64_EQ);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		b.get(1);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		b.els();
 		b.get(1);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		b.end();
 		b.els();
 		b.get(0);
@@ -416,12 +414,12 @@ final class WasmFxRuntimeBuilder {
 
 		void get(int slot) {
 			this.w.write(Instruction.GET_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		void set(int slot) {
 			this.w.write(Instruction.SET_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		void i32c(int v) {

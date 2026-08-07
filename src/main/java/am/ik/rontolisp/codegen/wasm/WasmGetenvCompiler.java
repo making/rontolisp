@@ -25,7 +25,7 @@ final class WasmGetenvCompiler {
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_GETENV);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_GETENV);
 	}
 
 }

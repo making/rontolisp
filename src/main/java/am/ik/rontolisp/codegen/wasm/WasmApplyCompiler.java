@@ -26,23 +26,22 @@ final class WasmApplyCompiler {
 	private static void emitNullSafeCell(WasmLispCompiler.Ctx ctx, int field) {
 		int tmpSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmpSlot);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(field);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(field);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -64,7 +63,7 @@ final class WasmApplyCompiler {
 				WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx);
 				int argsSlot = ctx.allocTemp();
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(argsSlot);
+				ctx.writer.writeUnsignedLeb128(argsSlot);
 				// Push null env first (defun functions ignore it), like the direct-call
 				// convention.
 				ctx.writer.write(Instruction.REF_NULL);
@@ -72,7 +71,7 @@ final class WasmApplyCompiler {
 				int required = fi.variadic() ? fi.paramCount() - 1 : fi.paramCount();
 				for (int i = 0; i < required; i++) {
 					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeSignedLeb128(argsSlot);
+					ctx.writer.writeUnsignedLeb128(argsSlot);
 					for (int step = 0; step < i; step++) {
 						emitNullSafeCell(ctx, 1);
 					}
@@ -80,13 +79,13 @@ final class WasmApplyCompiler {
 				}
 				if (fi.variadic()) {
 					ctx.writer.write(Instruction.GET_LOCAL);
-					ctx.writer.writeSignedLeb128(argsSlot);
+					ctx.writer.writeUnsignedLeb128(argsSlot);
 					for (int step = 0; step < required; step++) {
 						emitNullSafeCell(ctx, 1);
 					}
 				}
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(fi.funcIndex());
+				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
 				return;
 			}
 		}
@@ -95,7 +94,7 @@ final class WasmApplyCompiler {
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
 		int funcSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 
 		// Compile the leading literal arguments (indices 2 .. n-2), left to right.
 		List<Integer> argSlots = new ArrayList<>();
@@ -103,7 +102,7 @@ final class WasmApplyCompiler {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
 			int s = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(s);
+			ctx.writer.writeUnsignedLeb128(s);
 			argSlots.add(s);
 		}
 
@@ -111,27 +110,27 @@ final class WasmApplyCompiler {
 		WasmExprCompiler.compileExpr(args.get(n - 1), ctx);
 		int curSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(curSlot);
+		ctx.writer.writeUnsignedLeb128(curSlot);
 
 		// Prepend each leading argument: cur = cons(arg, cur).
 		for (int k = argSlots.size() - 1; k >= 0; k--) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(argSlots.get(k));
+			ctx.writer.writeUnsignedLeb128(argSlots.get(k));
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(curSlot);
+			ctx.writer.writeUnsignedLeb128(curSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(curSlot);
+			ctx.writer.writeUnsignedLeb128(curSlot);
 		}
 
 		// _apply(func, argList)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(funcSlot);
+		ctx.writer.writeUnsignedLeb128(funcSlot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(curSlot);
+		ctx.writer.writeUnsignedLeb128(curSlot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_APPLY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_APPLY);
 	}
 
 }

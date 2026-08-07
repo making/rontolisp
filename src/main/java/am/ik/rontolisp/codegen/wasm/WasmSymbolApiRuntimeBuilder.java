@@ -47,8 +47,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeUnsignedLeb128(3);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		// arr = STR.data; len = content length (the name minus its surrounding quotes)
 		get(w, STR);
 		WasmEmitHelper.emitStrBytesArray(w);
@@ -57,8 +56,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(1);
 		i32(w, 2);
 		w.write(Instruction.I32_SUB);
 		set(w, LEN);
@@ -91,7 +90,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, LEN);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(1);
 		get(w, START);
 		i32(w, 2);
 		w.write(Instruction.I32_ADD);
@@ -102,14 +101,14 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, K);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(Instruction.I32_STORE8, 0x00, 0x00);
 		get(w, K);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		set(w, K);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
 		// HEAP_PTR is NOT advanced (a stack pop): _str_fresh copies the #:name bytes into
@@ -164,7 +163,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, OFF);
 		get(w, LEN);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
 		get(w, LEN);
 		WasmEmitHelper.emitStrBuildCall(w);
 		w.write(Instruction.END);
@@ -197,7 +196,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
 		emitNull(w);
@@ -231,7 +230,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_ENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		set(w, SYM); // reuse the SYM slot for the binding pair
 		get(w, SYM);
 		w.write(Instruction.REF_IS_NULL);
@@ -242,8 +241,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -257,8 +256,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// nil or a non-string value is not a function name
 		get(w, SYM);
 		w.write(Instruction.REF_IS_NULL);
@@ -279,8 +277,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0);
 		set(w, OFF);
 		// bind = _env_lookup(off, GLOBAL_FENV). A binding decides the answer on its own:
 		// fmakunbound leaves a TOMBSTONE here (cdr nil) that must SHADOW the compiled
@@ -289,7 +287,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		set(w, BIND);
 		get(w, BIND);
 		w.write(Instruction.REF_IS_NULL);
@@ -299,8 +297,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
 		emitNull(w);
@@ -312,7 +310,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		// _lookup(off) != -1 -> t
 		get(w, OFF);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_LOOKUP);
 		i32(w, -1);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.IF, 0x40);
@@ -339,8 +337,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		// nil or a non-string value names no function: hand it back untouched
 		get(w, SYM);
 		w.write(Instruction.REF_IS_NULL);
@@ -361,15 +358,15 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0);
 		set(w, OFF);
 		// bind = _env_lookup(off, GLOBAL_FENV)
 		get(w, OFF);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		set(w, BIND);
 		get(w, BIND);
 		w.write(Instruction.REF_IS_NULL);
@@ -378,11 +375,11 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, SYM);
 		emitNull(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.ELSE);
@@ -392,8 +389,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		emitNull(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.END);
 		get(w, SYM);
 		w.write(Instruction.END);
@@ -417,8 +414,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		get(w, SYM);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
@@ -439,15 +435,15 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0);
 		set(w, OFF);
 		// bind = _env_lookup(off, GLOBAL_FENV)
 		get(w, OFF);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		set(w, BIND);
 		get(w, BIND);
 		w.write(Instruction.REF_IS_NULL);
@@ -456,11 +452,11 @@ final class WasmSymbolApiRuntimeBuilder {
 		get(w, SYM);
 		get(w, VALUE);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.SET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.ELSE);
@@ -470,8 +466,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		get(w, VALUE);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		w.write(Instruction.END);
 		get(w, VALUE);
 		w.write(Instruction.END);
@@ -494,8 +490,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.writeUnsignedLeb128(1);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		get(w, SYM);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, 0x40);
@@ -512,14 +507,14 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0);
 		set(w, OFF);
 		get(w, OFF);
 		w.write(Instruction.GET_GLOBAL);
 		w.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		set(w, VALUE);
 		get(w, VALUE);
 		w.write(Instruction.REF_IS_NULL);
@@ -531,8 +526,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
 		set(w, VALUE);
 		get(w, VALUE);
 		w.write(Instruction.REF_IS_NULL);
@@ -569,8 +564,8 @@ final class WasmSymbolApiRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(0);
 		set(w, offSlot);
 		// the symbol t (shared literal offset) is self-bound
 		get(w, offSlot);
@@ -584,7 +579,7 @@ final class WasmSymbolApiRuntimeBuilder {
 		WasmEmitHelper.emitStrBytesArray(w);
 		i32(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		i32(w, ':');
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);

@@ -5,6 +5,15 @@
 shorthand) -- is FINAL. No emitted type declares or permits subtypes; the module uses
 no wasm-level subtyping at all.
 
+**How it is SPELLED changed in todo-274, what it MEANS did not.** `RecTypeDef` used to
+write the explicit `4F 00` ("sub final, zero supertypes") in front of every struct and
+array; it now writes the bare `comptype`, which the format defines as exactly that
+shorthand (`subtype ::= 0x50 x* comptype | 0x4F x* comptype | comptype`) and which is
+two bytes shorter per type. The decoded type -- and therefore every claim below about
+cast lowering -- is identical; `RecTypeDefTest` now pins the bare tag and, either way,
+that the emitted byte is never the OPEN `0x50`. The explicit form comes back the moment
+any emitted type needs a supertype, because the shorthand cannot express one.
+
 **Why it is a performance invariant, not just hygiene**: wasmtime's Cranelift lowers
 `ref.cast` / `ref.test` / the `call_indirect` signature check to a single inline
 type-index equality ONLY when the target type is final
@@ -21,7 +30,9 @@ quickloaded, because the loaded stack's type-pair traffic evicted the hot pairs.
 (`SUB_FINAL` wrote 0x50, the spec's OPEN `sub`), so every rec-group type shipped
 non-final and every hot-path cast took the libcall. The spec mapping is 0x4F =
 `sub final`, 0x50 = `sub`; `RecTypeDefTest` asserts the emitted opcode against the
-spec constants, not against the enum, so a re-swap cannot pass.
+spec constants, not against the enum, so a re-swap cannot pass. Since the wrapper is
+no longer written, what the test rules out is a re-introduced `0x50` in either
+position -- an emitter that starts declaring supertypes has to use `0x4F`.
 
 Both browsers and wasmtime validate final and open types alike (the module declares
 zero supertypes either way), so nothing but the cast lowering ever notices --

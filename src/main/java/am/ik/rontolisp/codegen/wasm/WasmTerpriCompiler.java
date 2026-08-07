@@ -24,7 +24,7 @@ final class WasmTerpriCompiler {
 			emitNewlineStringStruct(ctx);
 			WasmExprCompiler.compileExpr(stream, ctx);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STREAM_STR);
 			ctx.writer.write(Instruction.DROP);
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
@@ -35,7 +35,7 @@ final class WasmTerpriCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(ctx.stringTable.newline.length());
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 		// Return nil
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());

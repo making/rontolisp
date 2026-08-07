@@ -82,7 +82,7 @@ final class WasmAtanCompiler {
 		WasmEmitHelper.castFloatGetF64(ctx);
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(xSlot);
+		ctx.writer.writeUnsignedLeb128(xSlot);
 
 		switch (name) {
 			case LispNames.ATAN -> emitAtanCore(ctx, xSlot, tSlot, uSlot, zSlot, rSlot);
@@ -245,7 +245,7 @@ final class WasmAtanCompiler {
 	private static void boxInto(WasmLispCompiler.Ctx ctx, int slot) {
 		WasmExpCompiler.boxF64(ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 }

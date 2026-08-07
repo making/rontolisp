@@ -1,7 +1,9 @@
 package am.ik.wasm;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 import org.jspecify.annotations.Nullable;
 
@@ -22,6 +24,9 @@ import org.jspecify.annotations.Nullable;
  * LEB128 of their primitive code so the negative single-byte form is produced.
  */
 public final class ComponentWriter {
+
+	/** Component section id: custom (a named blob, e.g. a producers section). */
+	public static final int SEC_CUSTOM = 0;
 
 	/** Component section id: core module (embeds a full core module). */
 	public static final int SEC_CORE_MODULE = 1;
@@ -102,6 +107,11 @@ public final class ComponentWriter {
 
 	private final WasmWriter writer = new WasmWriter(this.out);
 
+	/** The section written but not yet flushed -- see {@link #rawSection}. */
+	private int pendingId = -1;
+
+	private byte @Nullable [] pendingPayload;
+
 	/**
 	 * Create a new component writer and emit the component preamble.
 	 */
@@ -112,13 +122,31 @@ public final class ComponentWriter {
 
 	/**
 	 * Write a component section: section id, then the byte length, then the payload.
+	 * <p>
+	 * <strong>Consecutive VECTOR sections of the same kind are merged into one.</strong>
+	 * The format allows a kind to repeat, and a builder naturally emits one section per
+	 * group it computes -- but two adjacent groups of, say, aliases say exactly what one
+	 * section holding both says, for the price of an extra id byte, an extra size prefix
+	 * and an extra count. So the section is held back until the next call proves it
+	 * cannot be extended. Index spaces are unaffected: they advance in declaration order,
+	 * and merging preserves that order exactly. An EMPTY vector section is likewise not
+	 * written at all -- a zero-entry vector says what an absent section says.
 	 * @param sectionId the component section id (see {@code SEC_*} constants)
 	 * @param payload the already-encoded section payload (begins with the entry count for
 	 * vector sections)
 	 * @return this instance for chaining
 	 */
 	public ComponentWriter rawSection(int sectionId, byte[] payload) {
-		this.writer.write(sectionId).writeUnsignedLeb128(payload.length).write(payload);
+		if (isVectorSection(sectionId) && payload.length == 1 && payload[0] == 0) {
+			return this;
+		}
+		if (this.pendingId == sectionId && isVectorSection(sectionId)) {
+			this.pendingPayload = mergeVectors(Objects.requireNonNull(this.pendingPayload), payload);
+			return this;
+		}
+		this.flush();
+		this.pendingId = sectionId;
+		this.pendingPayload = payload;
 		return this;
 	}
 
@@ -129,6 +157,7 @@ public final class ComponentWriter {
 	 * @return this instance for chaining
 	 */
 	public ComponentWriter writeRaw(byte[] bytes) {
+		this.flush();
 		this.writer.write((Object) bytes);
 		return this;
 	}
@@ -138,7 +167,54 @@ public final class ComponentWriter {
 	 * @return the component bytes
 	 */
 	public byte[] toByteArray() {
+		this.flush();
 		return this.out.toByteArray();
+	}
+
+	private void flush() {
+		if (this.pendingPayload == null) {
+			return;
+		}
+		this.writer.write(this.pendingId).writeUnsignedLeb128(this.pendingPayload.length).write(this.pendingPayload);
+		this.pendingId = -1;
+		this.pendingPayload = null;
+	}
+
+	// Whether the section's payload is a counted vector of entries, hence extendable by
+	// another section of the same kind (and meaningless when empty). The four that are
+	// not: a custom section, a core module and a nested component each hold ONE embedded
+	// artifact, and a start section holds one function invocation.
+	private static boolean isVectorSection(int sectionId) {
+		return sectionId != SEC_CUSTOM && sectionId != SEC_CORE_MODULE && sectionId != SEC_COMPONENT
+				&& sectionId != SEC_START;
+	}
+
+	// Concatenates two vector payloads: the summed count, then both bodies.
+	private static byte[] mergeVectors(byte[] first, byte[] second) {
+		final int[] p = { 0 };
+		final int firstCount = readUnsignedLeb128(first, p);
+		final int firstBody = p[0];
+		p[0] = 0;
+		final int secondCount = readUnsignedLeb128(second, p);
+		final int secondBody = p[0];
+		return enc(w -> {
+			w.writeUnsignedLeb128(firstCount + secondCount);
+			w.write((Object) Arrays.copyOfRange(first, firstBody, first.length));
+			w.write((Object) Arrays.copyOfRange(second, secondBody, second.length));
+		});
+	}
+
+	private static int readUnsignedLeb128(byte[] buf, int[] p) {
+		int result = 0;
+		int shift = 0;
+		while (true) {
+			final int b = buf[p[0]++] & 0xff;
+			result |= (b & 0x7f) << shift;
+			if ((b & 0x80) == 0) {
+				return result;
+			}
+			shift += 7;
+		}
 	}
 
 	// --- encoding helpers (language-independent component-model primitives) ---

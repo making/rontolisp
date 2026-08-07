@@ -91,7 +91,7 @@ final class WasmQuoteCompiler {
 		getLocal(ctx, dimsSlot);
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	/**
@@ -109,7 +109,7 @@ final class WasmQuoteCompiler {
 		int type = WasmArrayCompiler.intArrType(iv.width());
 		i32Const(ctx, data.length);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		ctx.writer.writeSignedLeb128(type);
+		ctx.writer.writeUnsignedLeb128(type);
 		int dataSlot = ctx.allocTemp();
 		setLocal(ctx, dataSlot);
 		for (int i = 0; i < data.length; i++) {
@@ -122,7 +122,7 @@ final class WasmQuoteCompiler {
 			i32Const(ctx, i);
 			i32Const(ctx, (int) data[i]);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-			ctx.writer.writeSignedLeb128(type);
+			ctx.writer.writeUnsignedLeb128(type);
 		}
 		getLocal(ctx, dataSlot);
 	}
@@ -149,7 +149,7 @@ final class WasmQuoteCompiler {
 		i32Const(ctx, count);
 		i32Const(ctx, single ? 1 : 0);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_BASE + WasmVecSimdRuntimeBuilder.V_NEW);
 		int vbSlot = ctx.allocTemp();
 		setLocal(ctx, vbSlot);
 		int lanes = single ? 4 : 2;
@@ -160,8 +160,8 @@ final class WasmQuoteCompiler {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_VBLOCK);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
-			ctx.writer.writeSignedLeb128(2);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_VBLOCK);
+			ctx.writer.writeUnsignedLeb128(2);
 			setLocal(ctx, groupsSlot);
 			for (int g = 0; g < groupCount; g++) {
 				byte[] groupBytes = bytes.of(g);
@@ -176,7 +176,7 @@ final class WasmQuoteCompiler {
 				ctx.writer.writeUnsignedLeb128(Instruction.V128_CONST);
 				ctx.writer.write((Object) groupBytes);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_V128ARR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_V128ARR);
 			}
 		}
 		// dims buckets, then struct.new TYPE_FARRAY (dims, vb)
@@ -195,7 +195,7 @@ final class WasmQuoteCompiler {
 		getLocal(ctx, dimsSlot);
 		getLocal(ctx, vbSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	private static boolean isZero(byte[] bytes) {
@@ -265,7 +265,7 @@ final class WasmQuoteCompiler {
 		getLocal(ctx, dimsSlot);
 		getLocal(ctx, dataSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FARRAY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FARRAY);
 	}
 
 	private static void compileQuotedVal(LispVal val, WasmLispCompiler.Ctx ctx) {
@@ -278,13 +278,13 @@ final class WasmQuoteCompiler {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(r.denominator().intValue());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_RATIO);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_RATIO);
 			}
 			case LispDouble d -> {
 				ctx.writer.write(Instruction.F64_CONST);
 				ctx.writer.writeF64(d.value());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
 			case LispNil ignored -> {
 				ctx.writer.write(Instruction.REF_NULL);
@@ -296,7 +296,7 @@ final class WasmQuoteCompiler {
 				ctx.writer.write(Instruction.I32_CONST);
 				ctx.writer.writeSignedLeb128(c.codePoint());
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CHAR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CHAR);
 			}
 			case LispSymbol sym -> WasmEmitHelper.compileStringLiteral(sym.name(), ctx);
 			case LispCons cons -> compileQuotedCons(cons, ctx);
@@ -316,7 +316,7 @@ final class WasmQuoteCompiler {
 		compileQuotedVal(cons.car(), ctx);
 		compileQuotedVal(cons.cdr(), ctx);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 	}
 
 	// Builds the runtime array representation: a TYPE_CELL box wrapping a header
@@ -364,16 +364,16 @@ final class WasmQuoteCompiler {
 		i32Const(ctx, 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		getBuckets(ctx, dataSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 	}
 
 	/**
@@ -408,9 +408,9 @@ final class WasmQuoteCompiler {
 		}
 		i32Const(ctx, address);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slotsSlot);
+		ctx.writer.writeUnsignedLeb128(slotsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
 	}
 
 	private static void refNull(WasmLispCompiler.Ctx ctx) {
@@ -430,48 +430,48 @@ final class WasmQuoteCompiler {
 
 	private static void setLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	private static void getLocal(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 	}
 
 	// Pushes the f64 array stored in slot, cast to TYPE_F64ARR.
 	private static void getF64Arr(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	private static void f64ArrayNew(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	private static void f64ArraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F64ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F64ARR);
 	}
 
 	// Pushes the f32 array stored in slot, cast to TYPE_F32ARR.
 	private static void getF32Arr(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_F32ARR);
 	}
 
 	private static void f32ArrayNew(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
 	}
 
 	private static void f32ArraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_F32ARR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_F32ARR);
 	}
 
 	// Pushes an f32 constant: emitted as its widening f64 constant narrowed with
@@ -485,19 +485,19 @@ final class WasmQuoteCompiler {
 	// Pushes the bucket array stored in slot, cast to TYPE_HASH_BUCKETS.
 	private static void getBuckets(WasmLispCompiler.Ctx ctx, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	private static void arrayNew(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 	private static void arraySet(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 	}
 
 }

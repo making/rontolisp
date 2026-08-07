@@ -62,8 +62,8 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(Instruction.I64_SHR_S);
 		w.write(Instruction.I32_WRAP_I64);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
-		w.writeSignedLeb128(2);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		w.writeUnsignedLeb128(2);
 
 		b.end();
 		return b.toByteArray();
@@ -80,13 +80,11 @@ final class WasmBigIntRuntimeBuilder {
 		// $limbs)
 		w.write(3);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(2);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int a = 1, len = 2, n = 3, out = 4;
 
 		b.get(0);
@@ -191,8 +189,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 2 = a (ref null $limbs), 3 = len (i32)
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(1);
 		w.write(Type.I32);
 		final int a = 2, len = 3;
@@ -240,8 +237,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(2);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int n = 3, i = 4, carry = 5, t = 6, out = 7;
 
 		// n = max(len(a), len(b)) + 1, via the i temp
@@ -332,8 +328,8 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(0);
 		b.i32c(0);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_FIXED);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
-		w.writeSignedLeb128(1);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+		w.writeUnsignedLeb128(1);
 		b.get(0);
 		b.i32c(1);
 		b.call(WasmLispCompiler.FUNC_LIMB_ADDSUB);
@@ -349,13 +345,11 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 1 = a (ref null $limbs), 2 = len (i32), 3 = out (ref null $limbs)
 		w.write(3);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(1);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int a = 1, len = 2, out = 3;
 
 		b.get(0);
@@ -389,15 +383,13 @@ final class WasmBigIntRuntimeBuilder {
 		// (i32), 8=ai, 9=carry, 10=t (i64), 11=out (ref null $limbs)
 		w.write(4);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(4);
 		w.write(Type.I32);
 		w.write(3);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int aT = 2, bT = 3, m = 4, n = 5, i = 6, j = 7, ai = 8, carry = 9, t = 10, out = 11;
 
 		b.get(0);
@@ -679,8 +671,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(1);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int ls = 2, bs = 3, n = 4, i = 5, src = 6, t = 7, out = 8;
 
 		b.get(1);
@@ -782,8 +773,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(1);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int ls = 2, bs = 3, n = 4, i = 5, t = 6, out = 7;
 
 		b.get(1);
@@ -872,8 +862,7 @@ final class WasmBigIntRuntimeBuilder {
 		// 17=t (i64)
 		w.write(3);
 		w.write(4);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(10);
 		w.write(Type.I32);
 		w.write(1);
@@ -1108,8 +1097,7 @@ final class WasmBigIntRuntimeBuilder {
 		// (i64)
 		w.write(3);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(1);
 		w.write(Type.I32);
 		w.write(2);
@@ -1331,8 +1319,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(2);
 		w.write(Type.I32);
 		w.write(3);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int va = 3, vb = 4, sa = 5, sb = 6, ma = 7, mb = 8, res = 9;
 
 		emitNeitherBigint(b);
@@ -1456,8 +1443,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 2=r (ref null eq)
 		w.write(1);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int r = 2;
 
 		b.get(0);
@@ -1543,13 +1529,11 @@ final class WasmBigIntRuntimeBuilder {
 		// $limbs)
 		w.write(3);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int aArr = 2, bArr = 3, n = 4, i = 5, out = 6;
 
 		emitNeitherBigint(b);
@@ -1627,13 +1611,11 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 1=aT (ref null $limbs), 2=n, 3=i (i32), 4=out (ref null $limbs)
 		w.write(3);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(2);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		final int aT = 1, n = 2, i = 3, out = 4;
 
 		b.get(0);
@@ -1699,8 +1681,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(3);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int c = 2, va = 3, m = 4, arr = 5;
 
 		b.get(1);
@@ -1810,8 +1791,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(1);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(3);
 		w.write(Type.I32);
 		final int v = 1, aT = 2, s = 3, i = 4, t = 5;
@@ -1895,8 +1875,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(2);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int c = 2, v = 3, arr = 4;
 
 		b.get(0);
@@ -1964,8 +1943,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 2=t (ref null eq)
 		w.write(1);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		final int t = 2;
 
 		emitAbsIntoParam(b, 0);
@@ -2037,8 +2015,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 1=aT (ref null $limbs), 2=s, 3=i (i32), 4=acc (f64)
 		w.write(3);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(2);
 		w.write(Type.I32);
 		w.write(1);
@@ -2132,8 +2109,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 1=a0 (ref null eq), 2=la, 3=s (i32)
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 		final int a0 = 1, la = 2, s = 3;
@@ -2190,8 +2166,7 @@ final class WasmBigIntRuntimeBuilder {
 		w.write(1);
 		w.write(Type.I32);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(2);
 		w.write(Type.I32);
 		final int r = 1, aT = 2, i = 3, nz = 4;
@@ -2301,8 +2276,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 2=aT, 3=bT (ref null $limbs), 4=la, 5=i (i32)
 		w.write(2);
 		w.write(2);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(2);
 		w.write(Type.I32);
 		final int aT = 2, bT = 3, la = 4, i = 5;
@@ -2363,8 +2337,7 @@ final class WasmBigIntRuntimeBuilder {
 		// locals: 1=aT (ref null $limbs), 2=la, 3=i, 4=h (i32)
 		w.write(2);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_LIMBS);
+		w.writeRefType(true, WasmLispCompiler.TYPE_LIMBS);
 		w.write(3);
 		w.write(Type.I32);
 		final int aT = 1, la = 2, i = 3, h = 4;
@@ -2418,8 +2391,7 @@ final class WasmBigIntRuntimeBuilder {
 		// 7=sd, 8=c (i32)
 		w.write(2);
 		w.write(4);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
 		final int q = 3, r = 4, rm = 5, bm = 6, sd = 7, c = 8;
@@ -2579,17 +2551,17 @@ final class WasmBigIntRuntimeBuilder {
 
 		void get(int slot) {
 			this.w.write(Instruction.GET_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		void set(int slot) {
 			this.w.write(Instruction.SET_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		void tee(int slot) {
 			this.w.write(Instruction.TEE_LOCAL);
-			this.w.writeSignedLeb128(slot);
+			this.w.writeUnsignedLeb128(slot);
 		}
 
 		void i32c(int v) {
@@ -2604,7 +2576,7 @@ final class WasmBigIntRuntimeBuilder {
 
 		void call(int funcIndex) {
 			this.w.write(Instruction.CALL);
-			this.w.writeSignedLeb128(funcIndex);
+			this.w.writeUnsignedLeb128(funcIndex);
 		}
 
 		void block() {
@@ -2629,8 +2601,7 @@ final class WasmBigIntRuntimeBuilder {
 
 		void ifEq() {
 			this.w.write(Instruction.IF);
-			this.w.write(Type.REFNULL.code());
-			this.w.writeHeapType(Type.EQ.code());
+			this.w.writeRefType(true, Type.EQ.code());
 		}
 
 		void els() {
@@ -2653,23 +2624,23 @@ final class WasmBigIntRuntimeBuilder {
 
 		void structNew(int typeIndex) {
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			this.w.writeSignedLeb128(typeIndex);
+			this.w.writeUnsignedLeb128(typeIndex);
 		}
 
 		void structGet(int typeIndex, int field) {
 			this.w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			this.w.writeSignedLeb128(typeIndex);
-			this.w.writeSignedLeb128(field);
+			this.w.writeUnsignedLeb128(typeIndex);
+			this.w.writeUnsignedLeb128(field);
 		}
 
 		void arrayGet() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
 		}
 
 		void arraySet() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
 		}
 
 		void arrayLen() {
@@ -2678,13 +2649,13 @@ final class WasmBigIntRuntimeBuilder {
 
 		void arrayNewDefault() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
 		}
 
 		void arrayCopy() {
 			this.w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
-			this.w.writeSignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_LIMBS);
 		}
 
 		byte[] toByteArray() {

@@ -102,12 +102,20 @@ map + the i64 watermark restore on exit. A name in `rawLocals` is never in
 
 Wasm locals declare as typed runs; every eqref local (whose count is known only
 after the body is emitted) precedes the i64 run, so an i64 local's absolute
-index is unknowable mid-emission. References emit as **3-byte padded-LEB
+index is unknowable mid-emission. References emit as **3-byte fixed-width
 placeholders** recorded in `Ctx.i64LocalRefs`, and every function-body
 finalizer routes through `WasmLispCompiler.buildLocalsAndPatch` (defuns,
-lambdas, `_start`, the toplevel/async chunk emitters), which patches them to
-`ctx.nextLocal + slot` and appends the `[eqref-run, i64-run]` declaration. A
-body with no i64 locals is byte-identical to the pre-stage-3 emission. Fused
+lambdas, `_start`, the toplevel/async chunk emitters), which resolves them to
+`ctx.nextLocal + slot` and appends the `[eqref-run, i64-run]` declaration.
+
+The placeholder is **spliced out, not overwritten in place** (todo-274): a
+resolved reference costs the LEB length its index actually needs, so a slot
+below 128 is one byte rather than three. That is what makes the encoding
+minimal (`.kb/wasm-shortest-encoding.md`) and it is why the recorded offsets
+must be ASCENDING -- they are, being appended by one forward emission walk, and
+the splice loop throws rather than assume it.
+
+A body with no i64 locals is byte-identical to the pre-stage-3 emission. Fused
 sites save/restore `Ctx.nextI64Local` (slots are reused across sites;
 `maxI64Locals` keeps the declaration's high-water mark); let-scope raw locals
 allocate below the sites' watermark and restore at scope end.

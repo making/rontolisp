@@ -23,26 +23,25 @@ final class WasmSignumCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 
 		// Branch on whether the argument is a float struct or an integer/ratio.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 
 		// Float path: (x > 0.0) - (x < 0.0) converted to f64 and boxed.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		ctx.writer.write(Instruction.F64_CONST);
 		ctx.writer.writeF64(0.0);
 		ctx.writer.write(Instruction.F64_GT);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		ctx.writer.write(Instruction.F64_CONST);
 		ctx.writer.writeF64(0.0);
@@ -50,7 +49,7 @@ final class WasmSignumCompiler {
 		ctx.writer.write(Instruction.I32_SUB);
 		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 
 		ctx.writer.write(Instruction.ELSE);
 
@@ -58,11 +57,11 @@ final class WasmSignumCompiler {
 		// the exact-integer (i31 or boxed i64) and ratio representations alike, where
 		// the old _rat_num shape would wrap a boxed integer's sign.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmMathHelper.constI32(ctx, 0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 
 		ctx.writer.write(Instruction.END);

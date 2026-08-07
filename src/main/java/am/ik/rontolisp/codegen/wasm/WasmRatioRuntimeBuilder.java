@@ -112,7 +112,7 @@ final class WasmRatioRuntimeBuilder {
 		getLocal(w, 0);
 		getLocal(w, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_RATIO);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.END);
 
 		w.write(Instruction.END);
@@ -144,8 +144,8 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_RATIO);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_RATIO);
+		w.writeUnsignedLeb128(field);
 		w.write(Instruction.ELSE);
 		if (field == 0) {
 			// An i31 is its own numerator; a TYPE_BIGNUM wraps to i32 (ratio
@@ -153,7 +153,7 @@ final class WasmRatioRuntimeBuilder {
 			// pre-bignum truncating semantics instead of trapping).
 			getLocal(w, 0);
 			w.write(Instruction.CALL);
-			w.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
 			w.write(Instruction.I32_WRAP_I64);
 		}
 		else {
@@ -186,7 +186,7 @@ final class WasmRatioRuntimeBuilder {
 		emitLocalToF64(w, 1);
 		w.write(f64Opcode);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
 
 		emitBothExactInt(w);
@@ -249,8 +249,7 @@ final class WasmRatioRuntimeBuilder {
 		w.write(2);
 		w.write(Type.I64);
 		w.write(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 
 		// Float fast path: f64 division when either operand is a float.
 		emitEitherFloat(w);
@@ -259,7 +258,7 @@ final class WasmRatioRuntimeBuilder {
 		emitLocalToF64(w, 1);
 		w.write(Instruction.F64_DIV);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
 
 		emitBothExactInt(w);
@@ -271,7 +270,7 @@ final class WasmRatioRuntimeBuilder {
 		constI32(w, 1);
 		call(w, WasmLispCompiler.FUNC_BIG_DIVREM);
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(4);
+		w.writeUnsignedLeb128(4);
 		getLocal(w, 4);
 		constI32(w, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
@@ -343,7 +342,7 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.F64_MUL); // fb*q
 		w.write(Instruction.F64_SUB); // fa - fb*q
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.ELSE);
 
 		// Non-float: fast exact-integer path at any tier -- _big_divrem / _big_mod
@@ -660,12 +659,12 @@ final class WasmRatioRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void constI32(WasmWriter w, int value) {
@@ -675,7 +674,7 @@ final class WasmRatioRuntimeBuilder {
 
 	private static void call(WasmWriter w, int funcIndex) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(funcIndex);
+		w.writeUnsignedLeb128(funcIndex);
 	}
 
 	private static void refTestI31(WasmWriter w) {
@@ -718,8 +717,8 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.F64_CONVERT_S_I64);
 		w.write(Instruction.ELSE);
 		getLocal(w, slot);
@@ -745,8 +744,8 @@ final class WasmRatioRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
@@ -797,8 +796,7 @@ final class WasmRatioRuntimeBuilder {
 
 	private static void ifRefNullEq(WasmWriter w) {
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 	}
 
 }

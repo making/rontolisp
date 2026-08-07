@@ -197,8 +197,7 @@ final class WasmImportCompiler {
 		}
 		if (numEqTemps > 0) {
 			entryWriter.writeUnsignedLeb128(numEqTemps);
-			entryWriter.write(Type.REFNULL.code());
-			entryWriter.writeHeapType(Type.EQ.code());
+			entryWriter.writeRefType(true, Type.EQ.code());
 		}
 		entryWriter.write((Object) bodyStream.toByteArray());
 		return entry.toByteArray();
@@ -207,7 +206,7 @@ final class WasmImportCompiler {
 	// Pushes the host-ABI value(s) of the boxed Lisp argument in the given local slot.
 	private static void emitUnboxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		switch (type) {
 			case S32 -> WasmEmitHelper.castI31GetS(ctx);
 			// Accepts an int, ratio or float Lisp value (numeric contagion like the
@@ -223,7 +222,7 @@ final class WasmImportCompiler {
 			// Any Lisp value -> readable s-expression text -> (ptr, len).
 			case S_EXPR -> {
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 				WasmExportCompiler.emitStringResult(ctx);
 			}
 			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-import type: " + type);
@@ -237,7 +236,7 @@ final class WasmImportCompiler {
 			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			case FLOAT -> {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
 			case BOOL -> WasmEmitHelper.emitBoolFromI32(ctx);
 			case VOID -> {
@@ -247,18 +246,18 @@ final class WasmImportCompiler {
 			// (ptr,len) the host wrote into linear memory -> a fresh Lisp string.
 			case STRING -> {
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(strFromMemFuncIndex);
+				ctx.writer.writeUnsignedLeb128(strFromMemFuncIndex);
 			}
 			// (ptr,len) of s-expression text -> parse via the embedded reader.
 			case S_EXPR -> {
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(ptrSlot + 1); // len
+				ctx.writer.writeUnsignedLeb128(ptrSlot + 1); // len
 				ctx.writer.write(Instruction.SET_LOCAL);
-				ctx.writer.writeSignedLeb128(ptrSlot); // ptr
+				ctx.writer.writeUnsignedLeb128(ptrSlot); // ptr
 				WasmExportCompiler.storeWord(ctx, WasmLispCompiler.READ_CURSOR_ADDR, ptrSlot, false);
 				WasmExportCompiler.storeWord(ctx, WasmLispCompiler.READ_END_ADDR, ptrSlot, true);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 			}
 			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-import type: " + type);
 		}

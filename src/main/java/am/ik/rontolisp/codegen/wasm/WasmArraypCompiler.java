@@ -26,13 +26,13 @@ final class WasmArraypCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valueSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		int innerSlot = ctx.allocTemp();
 
 		// A packed float array (TYPE_FARRAY) is an array; otherwise fall through to the
 		// general cell test below.
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
@@ -49,34 +49,34 @@ final class WasmArraypCompiler {
 
 		// value is a cell? (i31/string/cons/closure values fail here)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
 		// inner = cell.get(value, 0)
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(valueSlot);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(innerSlot);
+		ctx.writer.writeUnsignedLeb128(innerSlot);
 		// inner is a header cons?
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(innerSlot);
+		ctx.writer.writeUnsignedLeb128(innerSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32)
 		// header car is a dims array (an array), not an i31 count (a hash table)?
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(innerSlot);
+		ctx.writer.writeUnsignedLeb128(innerSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(0);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		ctx.writer.write(Instruction.ELSE);

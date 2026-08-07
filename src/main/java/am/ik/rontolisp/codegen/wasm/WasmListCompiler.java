@@ -39,7 +39,7 @@ final class WasmListCompiler {
 			WasmExprCompiler.compileExpr(args.get(i), ctx);
 			int slot = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			slots.add(slot);
 		}
 		// Build cons list right-to-left
@@ -52,21 +52,21 @@ final class WasmListCompiler {
 			}
 			else {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(pre);
+				ctx.writer.writeUnsignedLeb128(pre);
 			}
 			// Swap car and cdr on stack using temp
 			int tmpCdr = ctx.allocTemp();
 			int tmpCar = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpCar);
+			ctx.writer.writeUnsignedLeb128(tmpCar);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpCdr);
+			ctx.writer.writeUnsignedLeb128(tmpCdr);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpCar);
+			ctx.writer.writeUnsignedLeb128(tmpCar);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(tmpCdr);
+			ctx.writer.writeUnsignedLeb128(tmpCdr);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		}
 	}
 

@@ -58,8 +58,7 @@ final class WasmGetenvRuntimeBuilder {
 		w.writeUnsignedLeb128(10);
 		w.write(Type.I32);
 		w.writeUnsignedLeb128(1);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 
 		// nameArr = the name string's data array ; nameLen = length - 2 (strip the
 		// quotes).
@@ -99,7 +98,7 @@ final class WasmGetenvRuntimeBuilder {
 		getLocal(w, COUNT);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1); // br to $done
+		w.writeUnsignedLeb128(1); // br to $done
 		// p = load(ENV_PTRS_ADDR + i*4)
 		i32(w, WasmLispCompiler.ENV_PTRS_ADDR);
 		getLocal(w, I);
@@ -119,7 +118,7 @@ final class WasmGetenvRuntimeBuilder {
 		getLocal(w, NAME_LEN);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1); // br to $cmpDone
+		w.writeUnsignedLeb128(1); // br to $cmpDone
 		// if p[j] != nameArr[1 + j]: ok = 0 ; break (name content past the opening quote)
 		getLocal(w, P);
 		getLocal(w, J);
@@ -130,20 +129,20 @@ final class WasmGetenvRuntimeBuilder {
 		getLocal(w, J);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
-		w.writeSignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.write(Instruction.I32_NE);
 		w.write(Instruction.IF, 0x40);
 		i32(w, 0);
 		setLocal(w, OK);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(2); // br to $cmpDone (out of if + loop)
+		w.writeUnsignedLeb128(2); // br to $cmpDone (out of if + loop)
 		w.write(Instruction.END); // end if
 		getLocal(w, J);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, J);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0); // br to $cmp
+		w.writeUnsignedLeb128(0); // br to $cmp
 		w.write(Instruction.END); // end $cmp loop
 		w.write(Instruction.END); // end $cmpDone block
 		// if ok && p[nameLen] == '=': valStart = p + nameLen + 1 ; break
@@ -163,14 +162,14 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, VAL_START);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(2); // br to $done
+		w.writeUnsignedLeb128(2); // br to $done
 		w.write(Instruction.END); // end if
 		getLocal(w, I);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, I);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0); // br to $l
+		w.writeUnsignedLeb128(0); // br to $l
 		w.write(Instruction.END); // end $l loop
 		w.write(Instruction.END); // end $done block
 
@@ -179,8 +178,7 @@ final class WasmGetenvRuntimeBuilder {
 		i32(w, -1);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF);
-		w.write(Type.REFNULL.code());
-		w.writeHeapType(Type.EQ.code());
+		w.writeRefType(true, Type.EQ.code());
 		w.write(Instruction.REF_NULL);
 		w.writeHeapType(Type.EQ.code());
 		w.write(Instruction.ELSE);
@@ -194,13 +192,13 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1); // br to $strDone
+		w.writeUnsignedLeb128(1); // br to $strDone
 		getLocal(w, VAL_END);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		setLocal(w, VAL_END);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // end $str loop
 		w.write(Instruction.END); // end $strDone block
 		// valLen = valEnd - valStart (reuse J)
@@ -225,7 +223,7 @@ final class WasmGetenvRuntimeBuilder {
 		getLocal(w, J);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF);
-		w.writeSignedLeb128(1); // br to $copyDone
+		w.writeUnsignedLeb128(1); // br to $copyDone
 		getLocal(w, HEAP);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
@@ -241,7 +239,7 @@ final class WasmGetenvRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		setLocal(w, OK);
 		w.write(Instruction.BR);
-		w.writeSignedLeb128(0);
+		w.writeUnsignedLeb128(0);
 		w.write(Instruction.END); // end $copy loop
 		w.write(Instruction.END); // end $copyDone block
 		// heap[1 + valLen] = '"'
@@ -269,12 +267,12 @@ final class WasmGetenvRuntimeBuilder {
 
 	private static void getLocal(WasmWriter w, int slot) {
 		w.write(Instruction.GET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void setLocal(WasmWriter w, int slot) {
 		w.write(Instruction.SET_LOCAL);
-		w.writeSignedLeb128(slot);
+		w.writeUnsignedLeb128(slot);
 	}
 
 	private static void i32(WasmWriter w, int value) {
@@ -284,7 +282,7 @@ final class WasmGetenvRuntimeBuilder {
 
 	private static void call(WasmWriter w, int func) {
 		w.write(Instruction.CALL);
-		w.writeSignedLeb128(func);
+		w.writeUnsignedLeb128(func);
 	}
 
 	private static void refCast(WasmWriter w, int heapType) {
@@ -294,13 +292,13 @@ final class WasmGetenvRuntimeBuilder {
 
 	private static void structGet(WasmWriter w, int type, int field) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeSignedLeb128(type);
-		w.writeSignedLeb128(field);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
 	}
 
 	private static void structNew(WasmWriter w, int type) {
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		w.writeSignedLeb128(type);
+		w.writeUnsignedLeb128(type);
 	}
 
 }

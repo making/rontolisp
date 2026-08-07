@@ -42,7 +42,7 @@ final class WasmReadLineCompiler {
 			WasmEmitHelper.streamFdOrStdin(ctx);
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_LINE);
 	}
 
 }

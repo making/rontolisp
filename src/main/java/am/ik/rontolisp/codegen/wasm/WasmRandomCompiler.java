@@ -54,19 +54,18 @@ final class WasmRandomCompiler {
 			int limitSlot = ctx.allocTemp();
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(limitSlot);
+			ctx.writer.writeUnsignedLeb128(limitSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(limitSlot);
+			ctx.writer.writeUnsignedLeb128(limitSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 			ctx.writer.write(Instruction.IF);
-			ctx.writer.write(Type.REFNULL.code());
-			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeRefType(true, Type.EQ.code());
 			// Float limit: (rand / 2^31) * limit, a TYPE_FLOAT struct.
 			emitRandomI32(ctx);
 			emitFloatLimitProduct(ctx, () -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(limitSlot);
+				ctx.writer.writeUnsignedLeb128(limitSlot);
 				WasmEmitHelper.castFloatGetF64(ctx);
 			});
 			ctx.writer.write(Instruction.ELSE);
@@ -75,12 +74,12 @@ final class WasmRandomCompiler {
 			// remainder stays in [0, limit); _int_val accepts an i31 or boxed limit.
 			emitRandomI63(ctx);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(limitSlot);
+			ctx.writer.writeUnsignedLeb128(limitSlot);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
 			ctx.writer.write(Instruction.I64_REM_U);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			ctx.writer.write(Instruction.END);
 		}
 	}
@@ -104,7 +103,7 @@ final class WasmRandomCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(8);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
 		ctx.writer.write(Instruction.DROP);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);
@@ -125,7 +124,7 @@ final class WasmRandomCompiler {
 		pushLimitF64.run();
 		ctx.writer.write(Instruction.F64_MUL);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 	}
 
 	// Leaves a non-negative random i32 in [0, 2^31) on the stack, drawn from the WASI
@@ -139,7 +138,7 @@ final class WasmRandomCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(8);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
 		ctx.writer.write(Instruction.DROP);
 		// Load the low 32 bits and mask to [0, 2^31).
 		ctx.writer.write(Instruction.I32_CONST);
@@ -158,7 +157,7 @@ final class WasmRandomCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(8);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RANDOM_GET);
 		ctx.writer.write(Instruction.DROP);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(WasmLispCompiler.RANDOM_SCRATCH_ADDR);

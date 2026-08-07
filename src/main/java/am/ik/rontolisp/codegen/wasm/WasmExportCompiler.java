@@ -407,15 +407,15 @@ final class WasmExportCompiler {
 			// The flag is set BEFORE the call so a handler reached from the top level
 			// itself cannot re-enter the init.
 			ctx.writer.write(Instruction.GET_GLOBAL);
-			ctx.writer.writeSignedLeb128(ctx.serveInitGlobalIndex);
+			ctx.writer.writeUnsignedLeb128(ctx.serveInitGlobalIndex);
 			ctx.writer.write(Instruction.I32_EQZ);
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(1);
 			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeSignedLeb128(ctx.serveInitGlobalIndex);
+			ctx.writer.writeUnsignedLeb128(ctx.serveInitGlobalIndex);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_START);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_START);
 			// _start returns i32 (0 = ok) in component mode.
 			ctx.writer.write(Instruction.DROP);
 			ctx.writer.write(Instruction.END);
@@ -437,14 +437,14 @@ final class WasmExportCompiler {
 		if (ctx.asyncFuncBase >= 0 && ctx.currentTaskGlobalIndex >= 0) {
 			if (callbackDriven) {
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_BEGIN);
+				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_BEGIN);
 				ctx.writer.write(Instruction.DROP);
 			}
 			else {
 				ctx.writer.write(Instruction.REF_NULL);
 				ctx.writer.writeHeapType(Type.EQ.code());
 				ctx.writer.write(Instruction.SET_GLOBAL);
-				ctx.writer.writeSignedLeb128(ctx.currentTaskGlobalIndex);
+				ctx.writer.writeUnsignedLeb128(ctx.currentTaskGlobalIndex);
 			}
 		}
 		// env (defuns ignore it)
@@ -457,7 +457,7 @@ final class WasmExportCompiler {
 			slot += slotsForType(t);
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(targetFuncIndex);
+		ctx.writer.writeUnsignedLeb128(targetFuncIndex);
 		if (callbackDriven) {
 			// The CALLBACK driver: a settled target already delivered its result
 			// through task.return, so the wrapper answers EXIT; a still-pending one
@@ -467,27 +467,27 @@ final class WasmExportCompiler {
 			// _async_cb). A rejected future's re-signal (the poll) reaches the
 			// catch-all above -- the trap an error in an exported function produces.
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
+			ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
 			int polled = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(ctx.futureTypeIndex);
 			ctx.writer.write(Instruction.IF);
 			ctx.writer.write(0x7f); // blocktype: one i32 result
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_SUSPEND);
+			ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_TASK_SUSPEND);
 			ctx.writer.write(Instruction.ELSE);
 			// Completed synchronously: the record was never registered; just clear
 			// the CURRENT task and answer EXIT.
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeSignedLeb128(ctx.currentTaskGlobalIndex);
+			ctx.writer.writeUnsignedLeb128(ctx.currentTaskGlobalIndex);
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.END);
@@ -505,24 +505,24 @@ final class WasmExportCompiler {
 		// above (the trap an error in an exported function produces today).
 		if (asyncTarget) {
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
+			ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
 			int polled = ctx.allocTemp();
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(ctx.futureTypeIndex);
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
+			ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
 			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 			ctx.writer.write(Instruction.END);
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(polled);
+			ctx.writer.writeUnsignedLeb128(polled);
 		}
 		// The scratch locals sit right after the parameter slots (see scratchTypes).
 		emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl));
@@ -548,7 +548,7 @@ final class WasmExportCompiler {
 			// held to the same declared type.
 			case S8, S16, U8, U16 -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			}
 			// s32/u32 exceed the i31 house integer, so they box the way every other wide
@@ -562,13 +562,13 @@ final class WasmExportCompiler {
 			// different number (the boundary's exact-or-trap rule).
 			case S64 -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			}
 			case U64 -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				ctx.writer.write(Instruction.I64_CONST);
 				ctx.writer.writeSignedLeb128(0);
 				ctx.writer.write(Instruction.I64_LT_S);
@@ -576,36 +576,36 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.UNREACHABLE);
 				ctx.writer.write(Instruction.END);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 			}
 			case FLOAT -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
 			}
 			case BOOL -> {
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				WasmEmitHelper.emitBoolFromI32(ctx);
 			}
 			case STRING -> {
 				// (ptr,len) -> a Lisp string copied out of linear memory.
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot);
+				ctx.writer.writeUnsignedLeb128(slot);
 				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeSignedLeb128(slot + 1);
+				ctx.writer.writeUnsignedLeb128(slot + 1);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(strFromMemFuncIndex);
+				ctx.writer.writeUnsignedLeb128(strFromMemFuncIndex);
 			}
 			case S_EXPR -> {
 				// (ptr,len) of s-expression text -> parse via the embedded reader.
 				storeWord(ctx, WasmLispCompiler.READ_CURSOR_ADDR, slot, false);
 				storeWord(ctx, WasmLispCompiler.READ_END_ADDR, slot, true);
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 			}
 			// :void is never a parameter.
 			case VOID -> throw new UnsupportedOperationException(
@@ -620,10 +620,10 @@ final class WasmExportCompiler {
 	// component import lifts).
 	private static void emitBoxWideInt(WasmLispCompiler.Ctx ctx, int slot, boolean signed) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(signed ? Instruction.I64_EXTEND_S_I32 : Instruction.I64_EXTEND_U_I32);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 	}
 
 	// Whether an integer result needs an explicit range check after the trapping trunc:
@@ -653,8 +653,8 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-				ctx.writer.writeSignedLeb128(0);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+				ctx.writer.writeUnsignedLeb128(0);
 			}
 			case BOOL -> {
 				// nil -> 0, anything else -> 1
@@ -666,7 +666,7 @@ final class WasmExportCompiler {
 				// Serialize any value to readable s-expression text, then return its
 				// bytes.
 				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 				emitStringResult(ctx);
 			}
 			case VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
@@ -686,14 +686,14 @@ final class WasmExportCompiler {
 	private static void emitNarrowGuard(WasmLispCompiler.Ctx ctx, BoundaryType type, int scratchSlot) {
 		BoundaryType.Range range = java.util.Objects.requireNonNull(type.range());
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(scratchSlot);
+		ctx.writer.writeUnsignedLeb128(scratchSlot);
 		if (type.signed()) {
 			emitTrapUnless(ctx, scratchSlot, Instruction.I32_LT_S, range.min().intValueExact());
 		}
 		emitTrapUnless(ctx, scratchSlot, type.signed() ? Instruction.I32_GT_S : Instruction.I32_GT_U,
 				range.max().intValueExact());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(scratchSlot);
+		ctx.writer.writeUnsignedLeb128(scratchSlot);
 	}
 
 	// A 64-bit integer result. The exact-integer representations (i31 and TYPE_BIGNUM)
@@ -706,13 +706,13 @@ final class WasmExportCompiler {
 	private static void emitWideIntResult(WasmLispCompiler.Ctx ctx, boolean signed) {
 		int slot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(Type.I31.code());
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
 		ctx.writer.write(Instruction.I32_OR);
@@ -720,9 +720,9 @@ final class WasmExportCompiler {
 		ctx.writer.write(Type.I64);
 		if (!signed) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot);
+			ctx.writer.writeUnsignedLeb128(slot);
 			ctx.writer.write(Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
 			ctx.writer.write(Instruction.I64_CONST);
 			ctx.writer.writeSignedLeb128(0);
 			ctx.writer.write(Instruction.I64_LT_S);
@@ -731,12 +731,12 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.END);
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_VAL);
 		ctx.writer.write(Instruction.ELSE);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		WasmEmitHelper.castFloatGetF64(ctx);
 		ctx.writer.write(signed ? Instruction.I64_TRUNC_S_F64 : Instruction.I64_TRUNC_U_F64);
 		ctx.writer.write(Instruction.END);
@@ -748,7 +748,7 @@ final class WasmExportCompiler {
 	// function (the catch_all landing pad above), so the failure shape is unchanged.
 	private static void emitTrapUnless(WasmLispCompiler.Ctx ctx, int slot, int comparison, int bound) {
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(bound);
 		ctx.writer.write(comparison);
@@ -763,7 +763,7 @@ final class WasmExportCompiler {
 	static void emitStringResult(WasmLispCompiler.Ctx ctx) {
 		int tmp = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmp);
+		ctx.writer.writeUnsignedLeb128(tmp);
 		// The string's bytes live on the GC heap; copy them into linear scratch at
 		// HEAP_PTR (not advanced -- the host reads the returned (ptr,len) right after
 		// this
@@ -776,7 +776,7 @@ final class WasmExportCompiler {
 		ctx.writer.writeSignedLeb128(1);
 		ctx.writer.write(Instruction.I32_ADD);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(tmp);
+		ctx.writer.writeUnsignedLeb128(tmp);
 		loadHeapPtr(ctx);
 		WasmEmitHelper.emitStrToMemCall(ctx.writer);
 		ctx.writer.write(Instruction.I32_CONST);
@@ -798,10 +798,10 @@ final class WasmExportCompiler {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(address);
 		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeSignedLeb128(slot);
+		ctx.writer.writeUnsignedLeb128(slot);
 		if (addEnd) {
 			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeSignedLeb128(slot + 1);
+			ctx.writer.writeUnsignedLeb128(slot + 1);
 			ctx.writer.write(Instruction.I32_ADD);
 		}
 		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);

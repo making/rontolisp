@@ -22,7 +22,7 @@ final class WasmEqualCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_EQUAL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_EQUAL);
 		WasmEmitHelper.emitBoolFromI32(ctx);
 	}
 

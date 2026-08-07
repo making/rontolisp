@@ -100,7 +100,7 @@ final class WasmLiteralPrint {
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(length);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
 	}
 
 	/**

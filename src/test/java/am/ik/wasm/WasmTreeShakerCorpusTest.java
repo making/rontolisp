@@ -101,7 +101,46 @@ class WasmTreeShakerCorpusTest {
 				.isLessThan(plain.length);
 
 			validateWithWasmTools(optimized, noWasi);
+			roundTripIsAFixpoint(plain, "plain-" + (noWasi ? "nowasi" : "wasi"));
+			roundTripIsAFixpoint(optimized, "optimized-" + (noWasi ? "nowasi" : "wasi"));
 		}
+	}
+
+	/**
+	 * The emitter writes the SHORTEST LEGAL encoding, and this is the oracle for it:
+	 * {@code wasm-tools parse (wasm-tools print M)} must converge on {@code M} itself.
+	 * The tool re-encodes from the decoded module, so any field this project spells
+	 * non-minimally (a {@code (ref null eq)} written long, an index written as a signed
+	 * LEB, an explicit {@code sub final} wrapper, a zero-entry section) comes back
+	 * shorter and the comparison fails -- which is the whole point, because such a module
+	 * still VALIDATES and RUNS, so nothing else notices.
+	 * <p>
+	 * A failure is one of two things and the message says so: a newly-emitted field in a
+	 * non-minimal encoding (fix the emitter), or a place where {@code wasm-tools} started
+	 * normalizing something this project deliberately does not (record the reason in
+	 * {@code .kb/optimize-dead-code-elimination.md} and relax this to a size comparison).
+	 */
+	private void roundTripIsAFixpoint(byte[] module, String label) throws Exception {
+		assumeTrue(onPath("wasm-tools"), "wasm-tools not on PATH; skipping the round-trip oracle");
+		Path binary = this.workDir.resolve(label + ".wasm");
+		Path text = this.workDir.resolve(label + ".wat");
+		Path reencoded = this.workDir.resolve(label + ".rt.wasm");
+		Files.write(binary, module);
+		run("wasm-tools", "print", binary.toString(), "-o", text.toString());
+		run("wasm-tools", "parse", text.toString(), "-o", reencoded.toString());
+		byte[] roundTripped = Files.readAllBytes(reencoded);
+		assertThat(module.length)
+			.as("%s: wasm-tools re-encodes this module in %d bytes, %d fewer than we wrote it in -- "
+					+ "something is not in its shortest legal encoding", label, roundTripped.length,
+					module.length - roundTripped.length)
+			.isEqualTo(roundTripped.length);
+		assertThat(module).as("%s: same size but different bytes than the round-trip", label).isEqualTo(roundTripped);
+	}
+
+	private static void run(String... command) throws Exception {
+		Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as("%s failed:%n%s", String.join(" ", command), output).isZero();
 	}
 
 	// Runs `wasm-tools validate -f gc` on the bytes when wasm-tools is available;

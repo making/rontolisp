@@ -158,7 +158,7 @@ final class WasmSymbolApiCompiler {
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		WasmExprCompiler.compileExpr(parts.get(2), ctx);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);
 	}
 
 	/**
@@ -185,15 +185,14 @@ final class WasmSymbolApiCompiler {
 		ctx.writer.write(Instruction.GET_GLOBAL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.GLOBAL_FENV);
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bind);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(bind);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		if (folded) {
 			WasmEmitHelper.emitTrue(ctx);
 		}
@@ -207,12 +206,11 @@ final class WasmSymbolApiCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeSignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeSignedLeb128(1);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.REFNULL.code());
-		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		emitNil(ctx);
 		ctx.writer.write(Instruction.ELSE);
 		WasmEmitHelper.emitTrue(ctx);
@@ -235,7 +233,7 @@ final class WasmSymbolApiCompiler {
 			WasmEmitHelper.emitCharvecToStrCall(ctx);
 		}
 		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeSignedLeb128(funcIndex);
+		ctx.writer.writeUnsignedLeb128(funcIndex);
 	}
 
 	private static List<LispVal> requireArgs(LispCons cons, String name) {

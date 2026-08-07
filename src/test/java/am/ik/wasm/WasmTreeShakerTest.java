@@ -307,6 +307,73 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void decodesTheOneByteAbstractReferenceBlockType() {
+		// THE decoder trap of the shortest-encoding pass: `block (result eqref)` is the
+		// single byte 0x6D, and a blocktype's third alternative is an s33 TYPE INDEX. A
+		// predicate that does not list the abstract-reference shorthands reads that byte
+		// as index -19 and tries to renumber it. Every value-producing `if` in a
+		// compiled body is one, so the module below is full of them.
+		byte[] optimized = compile("""
+				(defun pick (n) (if (> n 0) "positive" "not"))
+				(print (pick 1))
+				(print (pick -1))
+				""", false, OptimizeLevel.DEFAULT);
+		Module m = Module.parse(optimized);
+		m.assertWellFormed();
+		// 0x04 = `if`, 0x6D = eqref: the short form really is in the bytes being decoded.
+		assertThat(indexOf(optimized, new byte[] { 0x04, 0x6D })).isGreaterThan(0);
+		// A misread blocktype renumbers a type index that is not one, so the second pass
+		// would not agree with the first.
+		assertThat(WasmTreeShaker.shake(optimized)).isEqualTo(optimized);
+	}
+
+	private static int indexOf(byte[] haystack, byte[] needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int k = 0; k < needle.length; k++) {
+				if (haystack[i + k] != needle[k]) {
+					continue outer;
+				}
+			}
+			return i;
+		}
+		return -1;
+	}
+
+	@Test
+	void aSectionTheShakeEmptiedIsDroppedRatherThanWrittenBackEmpty() {
+		// A module exporting only its memory: the one function is unreachable and goes,
+		// and so does the type only it named. `00` (zero entries) says exactly what no
+		// section at all says, so the type, function and code sections must be gone --
+		// not present and empty. This is the shape the component's shared-memory module
+		// shakes down to for a print-only program, where it carried three of them.
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		new WasmWriter(out).write("\0asm")
+			.writeLittleEndian4(1)
+			.writeTypeSection(types -> types.addFunc(new Type[0], new Type[0]))
+			.writeFunction(funcs -> funcs.addFunction(0))
+			.writeMemory(memories -> memories.addMemory(1))
+			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0))
+			.writeCode(code -> code.addFunction(new byte[] { 0x00, (byte) 0x0B }));
+		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
+
+		assertThat(sectionIds(shaken)).containsExactly(5, 7); // memory, export -- no more
+		assertThat(WasmTreeShaker.shake(shaken)).isEqualTo(shaken);
+	}
+
+	private static List<Integer> sectionIds(byte[] module) {
+		List<Integer> ids = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			ids.add(module[p[0]++] & 0xff);
+			// Read the size first: `p[0] += readU(module, p)` would discard readU's own
+			// advance of p[0].
+			int size = WasmTreeShaker.readU(module, p);
+			p[0] += size;
+		}
+		return ids;
+	}
+
+	@Test
 	void isIdempotent() {
 		byte[] once = WasmTreeShaker.shake(compile("(print 42)", false, OptimizeLevel.NONE));
 		byte[] twice = WasmTreeShaker.shake(once);

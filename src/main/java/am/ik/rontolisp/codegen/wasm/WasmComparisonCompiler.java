@@ -35,7 +35,7 @@ final class WasmComparisonCompiler {
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			ctx.writer.write(am.ik.wasm.Instruction.CALL);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.FUNC_RAT_CMP_BITS);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_CMP_BITS);
 			ctx.writer.write(am.ik.wasm.Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(maskFor(i32Opcode));
 			ctx.writer.write(am.ik.wasm.Instruction.I32_AND);
