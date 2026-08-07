@@ -137,11 +137,19 @@ object**, so the host side is just "instantiate, then call the exports"
 A complete, copy-paste runnable Node + browser example is in the
 [browser guide's reactor section](wasm-browser.md#reactor-modules-by-hand).
 
-The eight WASI import slots are filled with internal trap stubs so every
-function index stays fixed (no other codegen changes). This mode is for
-**pure-compute** exports only: any I/O (`print`/`read`/`open`/`uiop:getenv`/
-time/`random`, including a top-level form that prints) hits a stub and
-**traps**.
+The WASI import slots are filled with internal stubs so every function index
+stays fixed (no other codegen changes). This mode is for **pure-compute**
+exports: any INPUT, file, time or `random` call (`read`/`open`/`uiop:getenv`/
+`get-universal-time`/`random`, including from a top-level form) hits a stub and
+**traps**, because a stub could only answer by inventing data.
+
+Output is the exception. `print`, `format t` and everything else that writes to
+standard output or standard error go to a **sink**: a reactor host hands the
+module no file descriptors, so the bytes are discarded and the call returns
+normally. That is what lets a library that logs while it loads be quickloaded
+into a reactor at all — the alternative was killing the instance for a log line.
+If you need the text, return it from the export instead.
+
 It is Preview 1 only — `--no-wasi` is ignored under `--component`.
 
 Because the module is a reactor (not a WASI command), its top-level

@@ -276,6 +276,32 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void noWasiFdWriteStubIsASink() {
+		// The nine omitted imports become internal stubs; eight are `unreachable`, and
+		// fd_write is deliberately not one of them -- it reports the iovec as written
+		// and returns errno 0, so a reactor discards its output instead of trapping.
+		// Pinned on the emitted body, since the behaviour is invisible structurally.
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun f (n) (print n) n)(rontolisp:wasm-export 'f :params '(:int) :returns :int)");
+		byte[] bytes = new WasmLispCompiler(false, false, true).compile(program);
+		// 0 locals; local.get 3 ; local.get 1 ; i32.load off=4 ; i32.store ; i32.const 0
+		byte[] sink = { 0x00, 0x20, 0x03, 0x20, 0x01, 0x28, 0x02, 0x04, 0x36, 0x02, 0x00, 0x41, 0x00, 0x0b };
+		assertThat(containsBytes(bytes, sink)).as("the no-wasi fd_write sink body").isTrue();
+	}
+
+	private static boolean containsBytes(byte[] haystack, byte[] needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (haystack[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	@Test
 	void defaultModeKeepsWasiImports() {
 		byte[] bytes = compile("(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))"
 				+ "(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");

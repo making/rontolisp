@@ -249,12 +249,15 @@ plan's 3 MB.
 Everything below is the Worker sandbox or the `--no-wasi` build, not rontolisp
 itself:
 
-- **No I/O at all in the Lisp.** `--no-wasi` means `print`, `format t`, `random`,
+- **No input, time or randomness in the Lisp.** `--no-wasi` means `random`,
   `get-universal-time` and `uiop:getenv` have nothing behind them and trap when
-  called. Return values instead, and do the logging in `src/index.js` with
+  called — a stub could only answer by inventing data. Return values instead.
+- **Printing is discarded, not trapped.** `print` and `format t` reach a sink
+  under `--no-wasi` (a reactor host hands the module no file descriptors), so
+  they cost nothing and lose everything. Do the logging in `src/index.js` with
   `console.log` (which reaches `npx wrangler tail`). If you want the Lisp itself
-  to print, drop `--no-wasi`, supply a WASI shim, and call `_start` instead of
-  `_initialize`.
+  to print for real, drop `--no-wasi`, supply a WASI shim, and call `_start`
+  instead of `_initialize`.
 - **No filesystem.** Even with WASI shimmed, a Worker has no files:
   `with-open-file` and a runtime `load` cannot work. A compile-time
   `(load "...")` is fine — it is inlined into the module before it ever reaches

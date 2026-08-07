@@ -96,21 +96,42 @@ signals.
 
 Some hosts never hand you a socket. A Cloudflare Worker, a browser page, node
 and a JVM embedding all parse the request themselves and then **call an exported
-function**. There is nothing for `clackup` to start there, but the application
-does not have to change: a second built-in handler backend bridges the two.
+function**. There is nothing for `clackup` to start there — but you still write
+`clackup`, and neither the application nor the shape of the source has to
+change: a second built-in handler backend bridges the two.
 
 ```console
 $ cat worker.lisp
 (ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
-(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-
-(defun handle-request (request-json)
-  (clack.handler.cloudflare-workers:handle #'app request-json))
+(clack:clackup #'app
+               :server :cloudflare-workers
+               :use-thread nil
+               :use-default-middlewares nil)
 ```
 
-`handle` needs no Worker to try — it is an ordinary function of two arguments:
+`run` starts nothing here: it stores the application, and the compiler
+synthesizes the export the host calls (`handle-request`, a JSON request string
+in and a JSON response string out) from a marker the handler backend leaves
+behind. Nothing in your source names it, and `--no-wasi` still applies — the
+module imports nothing.
+
+The two keywords are properties of this host, not boilerplate to memorize:
+
+- `:use-thread nil` — on the interpreter and the JVM `clackup` defaults to
+  running the backend on its own thread, which would store the application
+  *after* the next form runs. On the WASM backends it is already the default.
+- `:use-default-middlewares nil` — lack's `backtrace` middleware writes its
+  report to `*error-output*`, which a host-driven reactor does not have.
+
+On the interpreter and the JVM there is no export to synthesize, so the host
+calls `(clack.handler.cloudflare-workers:dispatch request-json)` — the same
+function the synthesized export calls — directly, which is how a Worker can be
+developed and tested without the Worker.
+
+Underneath both is `handle`, and it needs no `clackup` and no Worker to try —
+it is an ordinary function of two arguments:
 
 ```lisp
 (ql:quickload "clack-handler-cloudflare-workers")
@@ -159,8 +180,9 @@ Two details the host side must get right:
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.
 
-`(clack:clackup #'app :server :cloudflare-workers)` resolves this backend too, and fails
-with an explanation: there is no socket to bind.
+A complete Worker built this way — application, `worker.lisp`, the JavaScript
+side and the measurements — is
+[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack).
 
 ## Current limits
 

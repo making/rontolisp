@@ -4,7 +4,8 @@ The same five echo endpoints as [`../httpbin`](../httpbin), written as a
 [Clack](https://github.com/fukamachi/clack) application instead of a Worker
 handler. It is the Cloudflare port of
 [`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp), and the port
-consists of deleting one form and adding four.
+consists of replacing that file's `clackup` call with **another `clackup`
+call**.
 
 ```bash
 ./build.sh          # worker.lisp + app.lisp -> src/app.wasm
@@ -37,11 +38,21 @@ removed and nothing added — that file's last form is
 (clack:clackup #'app :server :rontolisp :port 8080 :use-thread nil)
 ```
 
-and **`clackup` is the only thing this Worker replaces** — in the separate
+and **`clackup` is the only thing this Worker changes** — in the separate
 [`worker.lisp`](worker.lisp), which is the only file that knows Cloudflare
-exists, and which is four forms long because the adapter is a built-in Clack
-handler backend rather than example code. A Worker hands you a parsed request
-rather than a socket, so there is no server to run.
+exists, and which is three forms long because both the adapter and the export
+are built in rather than example code:
+
+```lisp
+(clack:clackup #'app
+               :server :cloudflare-workers
+               :use-thread nil
+               :use-default-middlewares nil)
+```
+
+A Worker hands you a parsed request rather than a socket, so there is no server
+to run — `run` stores the application and the compiler synthesizes the exported
+function the Worker calls.
 
 |  | `../httpbin` | this |
 | --- | --- | --- |
@@ -49,10 +60,10 @@ rather than a socket, so there is no server to run.
 | Portable to another Clack handler | no, it would have to be rewritten | **yes, unchanged** |
 | Query string | pre-split by JavaScript's `URLSearchParams` | split and percent-decoded by Clack's own env builder, so `:path-info` / `:query-string` are what Clack promises |
 | Body | a string field | Clack's `:raw-body` — a synchronous bivalent stream, drained with `read-char` |
-| Module | 283 KB raw / **91 KB gzip** | 1.57 MB raw / **334 KB gzip** |
+| Module | 283 KB raw / **91 KB gzip** | 1.69 MB raw / **366 KB gzip** |
 
-334 KB gzip is about **11%** of the free plan's 3 MB bundle limit, so it fits
-with room — but it is **3.7×** the hand-rolled Worker, and that is the honest
+366 KB gzip is about **12%** of the free plan's 3 MB bundle limit, so it fits
+with room — but it is **4×** the hand-rolled Worker, and that is the honest
 trade: you are paying for the whole of clack and lack to be in the module so that
 the application can be an ordinary Clack application. If the program will only
 ever run on a Worker, `../httpbin` is the cheaper shape.
@@ -82,11 +93,11 @@ is carried over verbatim, and `net/httpbin-clack.lisp` has none.
 | File | Purpose |
 | --- | --- |
 | [`app.lisp`](app.lisp) | **The Clack application, and nothing else** — `net/httpbin-clack.lisp` with its `clackup` line removed, with nothing added. No Cloudflare in it anywhere. |
-| [`worker.lisp`](worker.lisp) | The other half, and it is **four forms**: quickload the handler backend, load the application, export one function, call `handle` from it. This is what `build.sh` compiles. |
+| [`worker.lisp`](worker.lisp) | The other half, and it is **three forms**: quickload the handler backend, load the application, `clackup` it. This is what `build.sh` compiles. |
 | [`serve.lisp`](serve.lisp) | `worker.lisp`'s counterpart: `(load "app.lisp")` plus the `clackup` call — the very form `worker.lisp` replaces. Serves the same application over real HTTP. |
 | [`demo.lisp`](demo.lisp) | Drives the Worker's handler with no Cloudflare in sight — the local edit/run loop. |
 | [`src/index.js`](src/index.js) | The whole Worker. The boundary code is `../httpbin/src/index.js` unchanged; only `requestToJson` differs. |
-| `src/app.wasm` | The compiled module (~1.57 MB). A build product — run `./build.sh` first. |
+| `src/app.wasm` | The compiled module (~1.69 MB). A build product — run `./build.sh` first. |
 
 `worker.lisp` and `serve.lisp` are **peers over one application**, and that is
 the point of the split:
@@ -117,15 +128,48 @@ handler backend** — the sibling of `clack-handler-rontolisp`, which is what
 (ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")
 
-(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-
-(defun handle-request (request-json)
-  (clack.handler.cloudflare-workers:handle #'app request-json))
+(clack:clackup #'app
+               :server :cloudflare-workers
+               :use-thread nil
+               :use-default-middlewares nil)
 ```
 
-That is `worker.lisp` in full. `handle` is `(app request-json) -> response-json`:
-it builds the Clack environment, runs the application, lowers the Clack response
-back, and answers 500 rather than trapping if the application signals.
+That is `worker.lisp` in full. Underneath, `handle` is
+`(app request-json) -> response-json`: it builds the Clack environment, runs the
+application, lowers the Clack response back, and answers 500 rather than
+trapping if the application signals.
+
+### Where the export comes from
+
+`clackup` applies the backend's `run`, and a reactor owns no socket, so `run`
+stores the application and returns. What replaces the socket is a WASM export —
+and `rontolisp:wasm-export` needs a **literal** name at compile time, which a
+program whose whole Worker half is a `clackup` call cannot give it. So the
+backend leaves a marker in `run` and the compiler answers it, appending the
+equivalent of
+
+```lisp
+(defun %reactor-dispatch (json) (clack.handler.cloudflare-workers:dispatch json))
+(rontolisp:wasm-export '%reactor-dispatch :as "handle-request"
+                       :params '(:string) :returns :string)
+```
+
+after the program. `dispatch` runs the stored application; on the interpreter
+and the JVM, where there is no export to synthesize, you call it yourself — that
+is exactly what [`demo.lisp`](demo.lisp) does.
+
+The two keywords are properties of this host rather than boilerplate:
+
+- **`:use-thread nil`.** The WASM backends are single-threaded, so `clackup`
+  already defaults to `nil` there — but the interpreter and the JVM have
+  threads, and would run `run` (the application store) on one of them, racing
+  the next form. `serve.lisp` passes the same keyword for the same reason.
+- **`:use-default-middlewares nil`.** lack's `backtrace` middleware exists to
+  print a report to `*error-output*`, which a host-driven reactor does not have.
+  It also prints for an error the *application catches*, and on the compiled
+  backends `(symbol-value '*error-output*)` is unbound today, so leaving it in
+  turns a handled error into a failure. The handler backend already answers 500
+  for anything the application signals.
 
 It is a handler backend rather than a `rontolisp:`-level function on purpose.
 Nothing in the envelope is actually Cloudflare-specific — the same `handle` works
@@ -134,17 +178,18 @@ mechanism would not be findable by the people who need it, and a vendor name in
 `rontolisp:` would be worse. A handler backend is where the Clack ecosystem
 already puts per-host names (`clack-handler-hunchentoot`, `clack-handler-woo`).
 
-`(clack:clackup #'app :server :cloudflare-workers)` resolves the same backend and fails
-with a sentence: a reactor owns no socket, so there is nothing for `run` to
-start. See [below](#why-not-clackclackup-itself).
+The backend is what makes `:server :cloudflare-workers` mean something to
+`clackup`, and `clackup` is what makes this file look like every other Clack
+program.
 
 The backend is also usable **without clack at all** — a Clack application is
 just a function of the environment, and nothing here needs the library to be
 present. That build is the one to compare against when reading the size table
-below: a program that is only `clack-handler-cloudflare-workers` plus a four-line
-application compiles to **357,822 B raw / 116,945 B gzip**. So the 1.57 MB this
-directory ships is not the adapter — it is clack and lack, which `app.lisp`
-quickloads so that it stays byte-identical to the upstream example.
+below: a program that skips `clackup`, calls `handle` from its own
+`wasm-export`ed function and is otherwise a four-line application compiles to
+**357,389 B raw / 116,702 B gzip**. So the 1.69 MB this directory ships is not
+the adapter — it is clack and lack, which `app.lisp` quickloads so that it stays
+byte-identical to the upstream example.
 
 ### It converts nothing
 
@@ -213,19 +258,29 @@ byte-for-byte boundary code of [`src/index.js`](src/index.js) against this exact
 | --- | --- | --- |
 | imports | **zero** | **zero** — the Worker instantiates with `{}`, no WASI shim |
 | exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why `src/index.js` could be reused as is |
-| module | 283,200 B raw / 91,743 B gzip | 1,575,467 B raw / **342,757 B gzip** |
-| `WebAssembly.Module` compile | 1.7 ms | 6.5 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
-| `_initialize` | 18.7 ms | 23.0 ms — clack's entire load time is the difference |
+| module | 283,200 B raw / 91,743 B gzip | 1,691,678 B raw / **374,424 B gzip** |
+| `WebAssembly.Module` compile | 1.7 ms | 6.6 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
+| `_initialize` | 18.7 ms | ~56 ms — clack's entire load time, `clackup` included |
 | warm `GET /get` | | **0.07 ms** |
-| warm `POST /post` | | **0.13 ms** |
+| warm `POST /post` | | **0.12 ms** |
+
+Going through `clackup` instead of calling `handle` from a hand-written export
+is what the last two rows do *not* show: measured against the previous version
+of this same directory, the module grew 1,575,467 → 1,691,678 B (342,757 →
+374,424 B gzip, **+9%**) and `_initialize` went 23 → 56 ms (median of five runs
+each), while warm `GET` (0.071 → 0.068 ms) and warm `POST` (0.121 ms both) did
+not move. **`clackup` is
+a startup cost on a reactor, not a request cost** — and on Cloudflare startup is
+paid once per isolate, not once per request.
 
 Those per-request figures are the Lisp call plus the string boundary, with V8
 warm; the first call of a fresh isolate is ~40 ms while V8 tiers the module up.
 
-On the real edge, `wrangler deploy` reports **1541.11 KiB upload / 340.35 KiB
-gzip** and a **Worker Startup Time of 14 ms**, and all five endpoints (plus the
-405, the 404, the unparseable body, a percent-encoded path and a UTF-8 query)
-answer correctly there — verified after deploying, not inferred. End-to-end
+On the real edge, `wrangler deploy` reports **1654.60 KiB upload / 372.11 KiB
+gzip** and a **Worker Startup Time of 25 ms** (14 ms before `clackup`), and all
+five endpoints (plus the 405, the 404, the unparseable body and a
+percent-encoded path) answer correctly there — verified after deploying, not
+inferred. End-to-end
 `curl` from this side of the Pacific settles at 50-85 ms, which is network time:
 the Lisp share of it is the 0.07 ms above.
 
@@ -270,15 +325,19 @@ rontolisp serve.lisp -o serve.wasm --component && \
   wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y serve.wasm
 ```
 
-WASM Preview 1 is the one host where `clackup` cannot serve: it has no incoming
-TCP, so the program compiles and `clackup` fails at run time. That is also why
-the Worker needs `worker.lisp` at all — see
-[below](#why-not-clackclackup-itself).
+WASM Preview 1 is the one host where `clackup` cannot **serve**: it has no
+incoming TCP, so the program compiles and `clackup` fails at run time. A Worker
+is the other side of that coin — Preview 1 has no incoming TCP *because* the
+host is the one doing the calling, which is precisely what
+`:server :cloudflare-workers` is for.
 
 ## Developing without Cloudflare
 
-`handle-request` is an ordinary function of a string, so the Worker's adapter —
-not just the application — can be developed on the interpreter:
+The Worker's entry point is an export, which only the WASM backends have — but
+what sits under it does not. `clack.handler.cloudflare-workers:dispatch` is an
+ordinary function of a string, and it is exactly what the synthesized export
+calls, so the Worker's adapter — not just the application — can be developed on
+the interpreter:
 
 ```bash
 rontolisp demo.lisp
@@ -302,10 +361,12 @@ backends** — it follows hash-table iteration order. The values are identical.
 
 ## Middleware, `lack:builder`, sessions
 
-Nothing here uses `lack/request` or the middleware stack — and that is not only a
-scoping choice. **`(ql:quickload "lack-request")` in a `--no-wasi` program traps
-at `_initialize` today**, so the middleware variant of this example cannot be
-built yet. Measured, and narrowed to one line upstream:
+Nothing here uses `lack/request` or the middleware stack — `worker.lisp` even
+turns lack's default `backtrace` middleware off, for the reasons
+[above](#where-the-export-comes-from) — and that is not only a scoping choice.
+**`(ql:quickload "lack-request")` in a `--no-wasi` program traps at
+`_initialize` today**, so the middleware variant of this example cannot be built
+yet. Measured, and narrowed to one line upstream:
 
 ```
 lack-request -> http-body -> fast-http -> smart-buffer
@@ -315,7 +376,10 @@ and `smart-buffer/src/smart-buffer.lisp` names its temporary directory with a
 **top-level `(random ...)`**. `--no-wasi` has no WASI, so `random` compiles to an
 `unreachable` stub — which is the documented `--no-wasi` limitation
 ([below](#limitations)) firing at *load* time instead of at call time, where a
-`handler-case` could at least see it. The same program is fine on the
+`handler-case` could at least see it. This is the same shape as clackup's own
+`format t` calls, and it is deliberately **not** fixed the same way: output has
+a meaningful null destination, so it goes to a sink, while a `random` that
+answered zeros would hand the program data it cannot tell from real. The same program is fine on the
 interpreter, on the JVM and as a Preview 1 `_start` module: only the reactor
 build, whose top-level forms run inside `_initialize`, hits it.
 
@@ -325,32 +389,33 @@ environment, `content-length` included, which is exactly what
 cares what is wrapped around `app`. When the load-time trap is gone, adding the
 middleware stack is an `app.lisp` change and nothing else.
 
-## Why not `clack:clackup` itself?
+## Why `clackup` prints, and why that is fine here
 
-Two reasons, and only one of them is fundamental.
+`clackup` writes two lines unconditionally — its own startup banner, and
+`clack.handler:run`'s debug NOTICE — and they are in upstream clack, not here.
+On a `--no-wasi` module there is no stdout to write them to. They used to
+**trap** the instance at `_initialize` for exactly that reason, which is why
+this example could not call `clackup` at all; now standard output and standard
+error are a **sink** under `--no-wasi`, so the bytes are simply discarded.
 
-`rontolisp:wasm-export` needs a **literal** name at compile time, so the exported
-function cannot come from a library call — the compiler would have to synthesize
-it, the way the `--component` path already synthesizes its serve bridge. That is
-the real work, and it has not been done.
+That is a deliberate policy rather than a patch for clack: a reactor host hands
+the module no file descriptors, so discarding loses only the bytes, while the
+alternative was killing the instance for a log line — and it applies to every
+library that logs while it loads, not just this one. Input, time and `random`
+still trap under `--no-wasi`, because a stub can only answer those by inventing
+data.
 
-The other reason is smaller than it looks. `clackup` prints two lines — its own
-startup banner, and `clack.handler:run`'s debug NOTICE — and a `--no-wasi` build
-has no stdout, so each one traps the instance. Measured: with `:silent t :debug
-nil` (both are needed; either alone still traps) `clackup` runs on a `--no-wasi`
-reactor **today**, and the exported function answers requests.
-
-So `clack.handler.cloudflare-workers:handle` is what a Worker calls for now, and
-`run` exists only so that `:server :cloudflare-workers` fails with a sentence
-rather than with "undefined function". The application itself is unaffected
-either way, which is the whole point of keeping it a Clack application.
+Locally (`rontolisp demo.lisp`, `wasmtime run`) the two lines are visible, and
+`demo.lisp` says so. Pass `:silent t :debug nil` if you would rather not see
+them.
 
 ## Limitations
 
 Everything below is the Worker sandbox or the `--no-wasi` build, and every one
 of them applies to [`../httpbin`](../httpbin/README.md#limitations) identically:
-no I/O at all in the Lisp (`print`, `random`, `get-universal-time` trap), no
-filesystem, no `rontolisp:fetch` (use JavaScript's `fetch()` in `src/index.js`).
+no input, time or `random` in the Lisp (they trap; `print` and `format t` do
+not, but their output is discarded), no filesystem, no `rontolisp:fetch` (use
+JavaScript's `fetch()` in `src/index.js`).
 One more is specific to this directory: a runtime `(ql:quickload ...)` cannot
 work either — the `(ql:quickload "clack")` at the top of `app.lisp`, like the
 `(load "app.lisp")` at the top of `worker.lisp`, is resolved at **compile** time

@@ -2458,17 +2458,48 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void noWasiModuleTrapsWhenItAttemptsIo() throws Exception {
-		// I/O is unsupported in no-wasi mode: the omitted fd_write becomes a trap stub,
-		// so an
-		// export that prints traps (non-zero exit) -- the documented contract.
+	void noWasiModuleDiscardsOutputInsteadOfTrapping() throws Exception {
+		// Output is the ONE no-wasi stub that is a sink rather than a trap: a reactor
+		// host provides no file descriptors, so the bytes go nowhere and the call
+		// returns normally. The export still answers -- only the print is lost.
 		String program = """
-				(defun shout (n) (print n))
-				(rontolisp:wasm-export 'shout :params '(:int))
+				(defun shout (n) (print n) (* n 2))
+				(rontolisp:wasm-export 'shout :params '(:int) :returns :int)
 				""";
 		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "shout", "-W", "gc", "-W",
+				"exceptions=y", path("test.wasm"), "7");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		// 14 is the return value wasmtime prints; the 7 the program printed is gone.
+		assertThat(result.getStdout().trim()).isEqualTo("14");
+	}
+
+	@Test
+	void noWasiModuleWithATopLevelPrintStillInstantiates() throws Exception {
+		// The shape that made (clack:clackup ...) impossible on a reactor: a print
+		// from a TOP-LEVEL form runs inside _initialize, so a trapping stub killed the
+		// instance before any export could be called -- with no diagnostic naming the
+		// culprit. Every library that logs while it loads has this shape.
+		String program = """
+				(format t "loading~%")
+				(defun answer () 42)
+				(rontolisp:wasm-export 'answer :returns :int)
+				""";
+		assertThat(compileNoWasiAndInvoke(program, "answer")).isEqualTo("42");
+	}
+
+	@Test
+	void noWasiModuleStillTrapsOnInput() throws Exception {
+		// The other side of the rule: a stub may discard output, but answering a READ
+		// would fabricate input the program cannot tell from real, so it still traps.
+		String program = """
+				(defun ask (n) (+ n (length (read-line))))
+				(rontolisp:wasm-export 'ask :params '(:int) :returns :int)
+				""";
+		byte[] wasmBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program));
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "ask", "-W", "gc", "-W",
 				"exceptions=y", path("test.wasm"), "7");
 		assertThat(result.getExitCode()).isNotZero();
 		assertThat(result.getStderr()).contains("unreachable");

@@ -177,16 +177,24 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
-	void theCloudflareHandlerShimRefusesClackupWithAnExplanation() {
+	void theCloudflareHandlerShimServesClackupThroughDispatch() {
 		// (clackup app :server :cloudflare-workers) resolves this backend and applies
-		// RUN.
-		// A reactor owns no socket, so run exists only to say so -- an undefined
-		// function would be a worse answer than a sentence.
-		assertThatThrownBy(() -> run("""
+		// RUN -- which is what the two calls below stand in for, so the test needs no
+		// download of clack itself. A reactor owns no socket, so run stores the
+		// application and returns nil; DISPATCH is what the host calls instead of
+		// connecting, and on the interpreter it is called directly (the WASM backends
+		// reach the same function through the compiler-synthesized export).
+		String output = run("""
 				(ql:quickload "clack-handler-cloudflare-workers")
-				(clack.handler.cloudflare-workers:run #'identity :port 8080)
-				""", Map.of(), List.of())).hasMessageContaining("host-driven reactor")
-			.hasMessageContaining("clack.handler.cloudflare-workers:handle");
+				(defun app (env)
+				  (list 200 '(:content-type "text/plain")
+				        (list (format nil "~a ~a" (getf env :request-method)
+				                      (getf env :path-info)))))
+				(print (clack.handler.cloudflare-workers:run #'app :port 8080))
+				(print (clack.handler.cloudflare-workers:dispatch
+				        "{\\"method\\":\\"GET\\",\\"target\\":\\"/hi\\"}"))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"status\\\":200").contains("GET /hi");
 	}
 
 	@Test

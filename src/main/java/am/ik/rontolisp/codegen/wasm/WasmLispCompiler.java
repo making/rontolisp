@@ -4178,12 +4178,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			})
 			// Code section
 			.writeCode(code -> {
-				// No-wasi mode: bodies for the nine trap stubs at indices 0-8. Each is
-				// `unreachable; end` (no locals); unreachable is stack-polymorphic so one
-				// shape satisfies every WASI signature. Calling one (i.e. any I/O) traps.
+				// No-wasi mode: bodies for the nine stubs at indices 0-8. All but
+				// fd_write are `unreachable; end` (no locals); unreachable is
+				// stack-polymorphic so one shape satisfies every WASI signature, and
+				// calling one (i.e. any input, file or clock I/O) traps.
+				// fd_write is the ONE exception: it is a SINK (report every byte
+				// written, return errno 0), so writing to stdout/stderr on a reactor
+				// discards the bytes instead of killing the instance. See
+				// buildNoWasiSinkBody for why output is the only primitive that gets
+				// this.
 				if (this.noWasi) {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
-						code.addFunction(new byte[] { 0x00, 0x00, 0x0b });
+						code.addFunction(i == FUNC_FD_WRITE ? WasmIoRuntimeBuilder.buildNoWasiFdWriteSinkBody()
+								: new byte[] { 0x00, 0x00, 0x0b });
 					}
 				}
 				code.addFunction(finalStartBytes)

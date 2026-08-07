@@ -4416,6 +4416,20 @@ public final class LispNames {
 	public static final String HTTP_HANDLER = "HTTP-HANDLER";
 
 	/**
+	 * The internal {@code rontolisp::%http-reactor} marker:
+	 * {@code (rontolisp::%http-reactor 'dispatch-fn "export-name")}, left inside a Clack
+	 * handler backend's {@code run} by the {@code clack-handler-cloudflare-workers} shim.
+	 * It is NOT a function -- nothing defines it. On the WASM backends
+	 * {@code eval/HttpReactorInliner} lowers the call site to {@code nil} and answers it
+	 * with the synthesized {@link #WASM_EXPORT} of a bridge to the named dispatcher (a
+	 * host-driven reactor's entry point is an export, and {@code wasm-export} needs a
+	 * literal name at compile time, which a program that only calls {@code clack:clackup}
+	 * cannot supply); every other backend never reads the form (the shim guards it with
+	 * {@code #+rontolisp-wasm}) because its host calls the dispatcher directly.
+	 */
+	public static final String HTTP_REACTOR = "%HTTP-REACTOR";
+
+	/**
 	 * The internal {@code rontolisp::%http-server-start} function: the STOPPABLE
 	 * counterpart of the {@link #HTTP_HANDLER} directive, used as
 	 * {@code (rontolisp::%http-server-start handler-fn port address)} where

@@ -1388,6 +1388,48 @@ final class WasmIoRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the {@code --no-wasi} {@code fd_write} stub: a SINK. It reports the whole
+	 * iovec as written ({@code *nwritten = iovs[0].len}) and returns errno 0, so a
+	 * reactor's {@code print} / {@code format t} -- and, far more importantly, a
+	 * quickloaded library that logs while it loads -- discards its bytes instead of
+	 * trapping the instance at {@code _initialize}.
+	 *
+	 * <p>
+	 * <strong>Why output, and ONLY output, gets a sink</strong> (the re-evaluation
+	 * trigger, decided 2026-08-07): a reactor host hands the module no file descriptors
+	 * at all, so there IS no destination for stdout/stderr -- discarding loses only the
+	 * bytes, and the alternative was killing the whole instance for a log line, with a
+	 * bare {@code unreachable} naming nothing. Every other stub keeps trapping because
+	 * answering would have to FABRICATE INPUT: an {@code fd_read} that reported EOF, a
+	 * {@code random_get} that left the buffer zeroed or a {@code clock_time_get} that
+	 * answered 0 all return data the program cannot tell from real, which is strictly
+	 * worse than a trap. {@code .todo/284}'s {@code random} half is exactly that case and
+	 * is deliberately still open.
+	 *
+	 * <p>
+	 * Every emitter here calls {@code fd_write} with ONE iovec and drops the errno, so
+	 * the single-iovec accounting is exact; a future caller passing more (or looping on
+	 * {@code *nwritten}) must widen this.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiFdWriteSinkBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: FD=0, IOVS=1, IOVS_LEN=2, NWRITTEN=3 (all i32); no locals.
+		w.write(0);
+		final int IOVS = 1, NWRITTEN = 3;
+		// *nwritten = iovs[0].len
+		getLocal(w, NWRITTEN);
+		getLocal(w, IOVS);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// return 0 (success)
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	// === low-level emit helpers ===
 
 	private static void getLocal(WasmWriter w, int slot) {

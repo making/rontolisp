@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
+import am.ik.rontolisp.eval.HttpReactorInliner;
 import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
@@ -405,6 +406,14 @@ public final class RontoLispCli {
 		// %serve-request-body in there and the splice filter below.
 		boolean bufferBody = HttpLibrary.usesBufferedBody(loaded);
 		loaded = HttpLibrary.process(loaded, witBackend, serveGlue);
+		// The host-driven reactor's counterpart of that splice: a Clack handler
+		// backend whose run stores the app and leaves a rontolisp::%http-reactor
+		// marker (the clack-handler-cloudflare-workers shim) gets the marker lowered
+		// to nil and the wasm-export of a bridge to its dispatcher synthesized -- so
+		// a Worker source is (clack:clackup #'app :server :cloudflare-workers) and
+		// nothing else. A no-op on the interpreter and the JVM (the shim does not
+		// even read the marker there).
+		loaded = HttpReactorInliner.process(loaded, witBackend);
 		// The server-side HTTP value model (http-server.lisp): the Clack environment a
 		// handler receives and the Clack response it returns, written once in rontolisp
 		// so every backend agrees by construction. Spliced for EVERY backend (unlike

@@ -97,24 +97,44 @@ writer 形はエラーを送出します。
 
 ソケットを渡してこないホストもあります。Cloudflare Workers、ブラウザのページ、
 node、JVM への埋め込みは、いずれもホスト側でリクエストを解析し、**エクスポート
-された関数を呼び出します**。そこでは `clackup` に起動するものがありませんが、
-アプリケーションを書き換える必要はありません。2 つ目の組み込みハンドラ
-バックエンドが両者を橋渡しします。
+された関数を呼び出します**。そこでは `clackup` に起動するものがありません —
+それでも書くのは `clackup` であり、アプリケーションもソースの形も変える必要は
+ありません。2 つ目の組み込みハンドラバックエンドが両者を橋渡しします。
 
 ```console
 $ cat worker.lisp
 (ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
-(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-
-(defun handle-request (request-json)
-  (clack.handler.cloudflare-workers:handle #'app request-json))
+(clack:clackup #'app
+               :server :cloudflare-workers
+               :use-thread nil
+               :use-default-middlewares nil)
 ```
 
 (`app` は通常の Clack アプリケーションです。)
 
-`handle` を試すのに Worker は要りません。2 引数の普通の関数です:
+ここでの `run` は何も起動しません。アプリケーションを保存するだけで、ホストが
+呼ぶエクスポート(`handle-request` — JSON のリクエスト文字列を受け取り JSON の
+レスポンス文字列を返す)は、ハンドラバックエンドが残したマーカーからコンパイラが
+合成します。ソース側でその名前に触れる箇所はなく、`--no-wasi` もそのまま使えます
+— モジュールは何もインポートしません。
+
+2 つのキーワードは暗記すべき定型句ではなく、このホストの性質そのものです:
+
+- `:use-thread nil` — インタプリタと JVM では `clackup` はバックエンドを別スレッド
+  で実行するのが既定で、そのままだとアプリケーションの保存が次のフォームより後に
+  なります。WASM バックエンドでは元から既定値が nil です。
+- `:use-default-middlewares nil` — lack の `backtrace` ミドルウェアはレポートを
+  `*error-output*` に書きますが、ホスト駆動のリアクターにそれはありません。
+
+インタプリタと JVM には合成すべきエクスポートがないので、ホストは合成された
+エクスポートが呼ぶのと同じ関数を
+`(clack.handler.cloudflare-workers:dispatch request-json)` と直接呼びます。
+Worker なしで Worker を開発・テストできるのはこれによります。
+
+その下にあるのが `handle` で、こちらは `clackup` も Worker も要りません。
+2 引数の普通の関数です:
 
 ```lisp
 (ql:quickload "clack-handler-cloudflare-workers")
@@ -163,8 +183,10 @@ report を載せた 500 を返します。
 レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
 
-`(clack:clackup #'app :server :cloudflare-workers)` もこのバックエンドに解決されますが、
-bind するソケットが無い旨を説明して失敗します。
+この方法で作った完全な Worker — アプリケーション、`worker.lisp`、JavaScript 側、
+そして実測値 —は
+[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack)
+にあります。
 
 ## 現在の制限
 

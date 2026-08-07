@@ -110,6 +110,26 @@ requests. `.todo/285` is that narrow slice, with the full measurement and the on
 decision left (what to do about the two prints); `clack-handler-cloudflare-workers`
 already exists as the backend. Narrow or close this item if 285 lands.
 
+## Update (2026-08-07): 285 landed -- what is left of this item
+
+`.todo/285` shipped, so `(clack:clackup #'app :server :cloudflare-workers
+:use-thread nil :use-default-middlewares nil)` IS the whole Worker half today
+(deployed and curl'd, not inferred). Of the design questions above, two are now
+settled by that: the exported entry point is the JSON envelope (`handle-request`,
+synthesized by `eval/HttpReactorInliner` from a `rontolisp::%http-reactor` marker
+the handler backend leaves in `run`), and the user asks for it with the `:server`
+designator rather than by inference from `--no-wasi`.
+
+**What this item still wants is only its second acceptance criterion**: ONE
+source with no `#+`/`#-` AND no per-host `:server`, so the same file runs under
+`wasmtime serve`, on the JVM, on the interpreter and on a reactor. That means
+either making `:rontolisp` itself reactor-aware (its wasm `run` would have to
+choose between the `http-handler` directive and the reactor marker at COMPILE
+time -- the information is there: `--no-wasi` is a compiler flag) or teaching
+`clackup` a `:server :auto`. Also still open, and now the visible remainder of
+the gap: the two keywords. `:use-thread nil` is a genuine per-host fact, but
+`:use-default-middlewares nil` is only waiting on `.todo/283`.
+
 ## Related
 
 `.kb/clack.md` (the handler backend and its discovery protocol -- the package must

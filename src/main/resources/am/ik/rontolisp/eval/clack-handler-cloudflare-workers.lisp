@@ -8,18 +8,41 @@
 ;; Like clack-handler-rontolisp the package is NOT seeded in PackageRegistry, so
 ;; this shim carries its own defpackage (the leaf-module pattern).
 ;;
-;; What it provides is HANDLE, not RUN: there is no socket to bind, so clackup
-;; has nothing to do here (see the run stub at the bottom, and .todo/281). The
-;; user exports one function and calls handle from it:
+;; It is driven by CLACKUP like every other handler backend:
 ;;
 ;;   (ql:quickload "clack-handler-cloudflare-workers")
-;;   (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-;;   (defun handle-request (json)
-;;     (clack.handler.cloudflare-workers:handle #'app json))
+;;   (clack:clackup #'app :server :cloudflare-workers :use-thread nil)
 ;;
 ;; and APP is an ordinary Clack application -- the environment plist in, the
 ;; (status headers body) list out -- unchanged from the one that runs on
 ;; hunchentoot, on woo, under `wasmtime serve` or on the JVM.
+;;
+;; A reactor owns no socket, so RUN starts nothing: it stores the application in
+;; *APP* and returns. What replaces the socket is DISPATCH -- a JSON request
+;; string in, a JSON response string out -- and how the host reaches it is the
+;; one per-backend difference:
+;;
+;; - On the WASM backends the module's entry point IS an export, and
+;;   rontolisp:wasm-export needs a literal name at COMPILE time, which a program
+;;   that only calls clackup can no longer supply. So run leaves a marker --
+;;   (rontolisp::%http-reactor 'dispatch "handle-request") -- that the compiler
+;;   (eval/HttpReactorInliner) detects, lowers to nil, and answers by
+;;   synthesizing the bridge defun plus the wasm-export it stands for. The
+;;   precedent is exact: HttpLibrary reads the http-handler directive nested in
+;;   the clack-handler-rontolisp shim's run the same way.
+;; - On the interpreter and the JVM there is no export mechanism to synthesize,
+;;   so the marker is not even read (#+rontolisp-wasm) and the host calls
+;;   DISPATCH as an ordinary function. That is why dispatch is exported rather
+;;   than being a compiler-only internal, and why run does NOT defun a
+;;   handle-request of its own: a library that defines a function into the
+;;   user's namespace is surprising, and the demo would then be pinning a name
+;;   only one backend needs.
+;;
+;; :use-thread nil is not decoration on the interpreter and the JVM: both have
+;; the :thread-support feature, so clackup defaults :use-thread to T and runs
+;; RUN -- i.e. the *APP* store -- on another thread, which races the very next
+;; form. On the WASM backends the default is already nil (single-threaded by
+;; construction, no :thread-support), so a Worker source may omit it.
 ;;
 ;; There is no re-implementation of Clack here either. Since the
 ;; rontolisp:http-handler cutover rontolisp's own server protocol IS Clack's,
@@ -68,7 +91,9 @@
 
 (defpackage :clack.handler.cloudflare-workers
   (:use :cl)
-  (:export :handle :run :stop))
+  (:export :handle :dispatch :run :stop))
+
+(defvar clack.handler.cloudflare-workers::*app* nil)
 
 (defun clack.handler.cloudflare-workers::%header-alist (table)
   ;; The headers JSON object -> the ((name . value) ...) alist the raw tuple
@@ -126,16 +151,25 @@ answer the JSON response. See the envelope in this file's header."
                 (rontolisp:plist-hash-table
                  (list :error (format nil "~a" e)))))))))
 
-;; clackup's protocol, present so (clack:clackup app :server
-;; :cloudflare-workers) fails with a sentence rather than with "undefined
-;; function RUN". A reactor owns no socket, so there is nothing for run to start
-;; and nothing to stop. Making clackup itself work here is .todo/285 -- and
-;; clackup ALREADY runs on a --no-wasi reactor when the caller passes
-;; :silent t :debug nil; what is missing is the compiler-synthesized export.
+(defun clack.handler.cloudflare-workers:dispatch (request-json)
+  "Run the application CLACKUP stored against the JSON request REQUEST-JSON and
+answer the JSON response. The host's entry point: on the WASM backends the
+synthesized wasm-export calls this, on every other backend the host calls it
+directly."
+  (clack.handler.cloudflare-workers:handle
+   clack.handler.cloudflare-workers::*app* request-json))
+
+;; clackup's protocol. A reactor owns no socket, so run starts nothing and stop
+;; has nothing to stop; what run does own is the *app* store and -- on the WASM
+;; backends only -- the compile-time marker the export is synthesized from (see
+;; this file's header).
 (defun clack.handler.cloudflare-workers:run (app &rest ignored)
-  (declare (ignore app ignored))
-  (error
-   "clack.handler.cloudflare-workers: clackup cannot run on a host-driven reactor -- there is no socket to bind. Export a function and call clack.handler.cloudflare-workers:handle from it instead."))
+  (declare (ignore ignored))
+  (setq clack.handler.cloudflare-workers::*app* app)
+  #+rontolisp-wasm
+  (rontolisp::%http-reactor 'clack.handler.cloudflare-workers:dispatch
+                            "handle-request")
+  nil)
 
 (defun clack.handler.cloudflare-workers:stop (server)
   (declare (ignore server))

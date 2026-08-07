@@ -1,22 +1,34 @@
 ;;; demo.lisp -- drive worker.lisp's handler without Cloudflare.
 ;;;
-;;; `handle-request` is an ordinary function of a string, so the whole Worker --
-;;; the Clack application (app.lisp) AND the Worker entry point that feeds it
-;;; (worker.lisp) -- can be developed and debugged on the interpreter, where the
-;;; edit/run loop costs nothing:
+;;; The Worker's entry point is a WASM export, which only the WASM backends
+;;; have. What is underneath it exists everywhere: `dispatch` -- a JSON request
+;;; string in, a JSON response string out, over the application clackup stored
+;;; -- is an ordinary function of the handler backend, and it is exactly what
+;;; the synthesized export calls. So the whole Worker -- the Clack application
+;;; (app.lisp) AND the entry point that feeds it (worker.lisp) -- can be
+;;; developed and debugged on the interpreter, where the edit/run loop costs
+;;; nothing:
 ;;;
 ;;;   rontolisp examples/cloudflare-workers/httpbin-clack/demo.lisp
 ;;;
 ;;; It runs identically on the JVM and WASM backends, which is what pins the
 ;;; handler against every backend the compiler has.
+;;;
+;;; The two lines before the first --> are upstream clack's: clackup announces
+;;; the server it is about to start, and clack.handler:run announces debug mode.
+;;; On a Worker (--no-wasi) they go to a discarding stdout; here they do not,
+;;; and that is the honest picture of what running a real clackup costs. Pass
+;;; :silent t :debug nil to quiet them.
 
 (load "worker.lisp")
 
 (defun try (request-plist)
   (let ((request
          (rontolisp:json-stringify (rontolisp:plist-hash-table request-plist))))
-    (format t "--> ~a~%" request)
-    (format t "<-- ~a~%" (handle-request request))))
+    ;; ~& rather than plain ~: clack.handler:run's debug NOTICE ends without a
+    ;; newline, so the first line here would otherwise be glued onto it.
+    (format t "~&--> ~a~%" request)
+    (format t "<-- ~a~%" (clack.handler.cloudflare-workers:dispatch request))))
 
 (defun headers (&rest plist) (rontolisp:plist-hash-table plist))
 

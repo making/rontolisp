@@ -522,6 +522,24 @@ examples:
       563-byte MVP module the Worker imports; wasm-component pins that the same
       three exports lower through the canonical ABI, which is what
       cloudflare-workers/httpbin-component transpiles with jco.
+  - path: cloudflare-workers/hello-clack/demo.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      the smallest Clack application on a Worker, and the counterpart of
+      hello/: worker.lisp is THREE forms -- quickload, the application defun,
+      clackup with :server :cloudflare-workers -- and contains no
+      Worker-specific code at all, because the handler backend stores the app
+      and the compiler synthesizes the exported entry point. The demo drives it
+      through that backend's `dispatch`, the same function the synthesized
+      wasm-export calls, so what this pins is the clackup route itself on every
+      backend the compiler has. Checked with contains, not equals: the demo
+      prints clackup's own start-up banner, and the JSON key ORDER follows
+      hash-table iteration order, which differs per backend.
+    expect:
+      contains:
+        - 'Hello from Clack on Cloudflare Workers'
+        - 'GET /anything'
+        - '"status":200'
   - path: cloudflare-workers/httpbin/demo.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
@@ -551,18 +569,21 @@ examples:
       loads worker.lisp -- the CLACK flavour of the Worker. The two halves are
       separate files on purpose: app.lisp is net/httpbin-clack.lisp verbatim (a
       Clack environment in, a Clack response out) with only its clackup line
-      removed, and worker.lisp is four forms over the built-in
-      clack-handler-cloudflare-workers handler backend, whose `handle` replaces clackup
-      and rides the shared %http-make-env / %http-normalize-response entry
-      points. What this pins is
+      removed, and worker.lisp puts a clackup line BACK -- :server
+      :cloudflare-workers, the built-in handler backend that stores the app and
+      whose exported entry point the compiler synthesizes -- so the two halves
+      of the directory differ only in clackup's arguments. What this pins is
       that the adapter builds the same environment on every backend: the "?"
       split and the percent-decoding of the raw target (/%67et answers
       "path":"/get"), the content-length the buffered :raw-body needs, and the
       response header ALIST crossing as a JSON array of pairs rather than an
-      object. The Worker itself calls the wasm-export'ed handle-request from
-      JavaScript and is built by the directory's build.sh (--no-wasi
-      --optimize). Checked with contains, not equals: the key ORDER inside a
-      JSON object follows hash-table iteration order, which differs per backend.
+      object. It also pins the clackup route itself, since the demo drives the
+      handler backend's `dispatch` -- the same function the synthesized
+      wasm-export calls -- on all three backends. The Worker calls that export
+      (handle-request) from JavaScript and is built by the directory's build.sh
+      (--no-wasi --optimize). Checked with contains, not equals: the key ORDER
+      inside a JSON object follows hash-table iteration order, which differs per
+      backend.
     expect:
       contains:
         # The response body is a JSON string nested in the outer JSON, so its
