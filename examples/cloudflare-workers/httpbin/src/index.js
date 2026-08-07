@@ -6,26 +6,21 @@ import module from "./app.wasm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-let lisp = null;
+// Instantiated here at module scope, so the cost lands on isolate startup
+// rather than on a request -- `wrangler deploy` then reports and budget-checks
+// it ("Worker Startup Time: 12 ms"). Doing it lazily on the first request also
+// works, measured, but then nothing checks the cost at deploy time. Set back to
+// null when a trap retires the instance, below.
+let lisp = instantiate();
 
-// A function rather than a module-scope const, for two reasons the simpler
-// ../hello does not have: `_initialize` has to run once (it is where app.lisp's
-// top-level forms happen), and a trap has to be able to retire the instance so
-// the next request gets a fresh one.
-function boot() {
-  if (!lisp) {
-    const instance = new WebAssembly.Instance(module, {});
-    instance.exports._initialize();
-    lisp = instance.exports;
-  }
-  return lisp;
+// `_initialize` is where app.lisp's top-level forms run. ../hello has no such
+// entry point at all -- it is --no-gc with nothing to initialise -- which is why
+// it needs none of this.
+function instantiate() {
+  const instance = new WebAssembly.Instance(module, {});
+  instance.exports._initialize();
+  return instance.exports;
 }
-
-// Called here at module scope so instantiation is isolate startup rather than
-// request work (`wrangler deploy` then reports it: "Worker Startup Time: 12 ms",
-// and enforces a budget on it). Doing it lazily on the first request also works
-// -- measured -- but then nothing checks the cost at deploy time.
-boot();
 
 // Synchronous on purpose: a Worker isolate interleaves concurrent requests only
 // at `await` points, so nothing else can allocate inside the bracket.
@@ -66,7 +61,8 @@ export default {
     const body = await requestToJson(request);
     let reply;
     try {
-      reply = JSON.parse(handleRequest(boot(), body));
+      if (!lisp) lisp = instantiate();
+      reply = JSON.parse(handleRequest(lisp, body));
     } catch (error) {
       // app.lisp answers 500 for Lisp errors itself, so reaching here means a
       // WASM trap: the instance's Lisp heap can no longer be trusted.

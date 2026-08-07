@@ -6,9 +6,9 @@ import module from "./hello.wasm";
 // The module imports nothing, so instantiating it is one synchronous line with
 // an empty import object -- and it happens once per isolate, not per request.
 //
-// No boot function, unlike ../httpbin: this module exports no `_initialize`
-// (--no-gc, and hello.lisp has no top-level forms, so there is nothing to run),
-// and none of these three functions can trap and leave the instance unusable.
+// One line, unlike ../httpbin: this module exports no `_initialize` (--no-gc,
+// and hello.lisp has no top-level forms, so there is nothing to run), and none
+// of these three functions can trap and leave the instance unusable.
 const lisp = new WebAssembly.Instance(module, {}).exports;
 
 /** Decode a (pointer, length) result out of the module's linear memory. */

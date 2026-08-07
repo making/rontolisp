@@ -128,7 +128,7 @@ is a small implementation to start from if you ever need one.)
 
 `--no-wasi` also changes the entry point: a module with no WASI is a *reactor*,
 not a command, so its top-level forms run under `_initialize` instead of
-`_start`. `src/index.js` calls it once at isolate boot.
+`_start`. `src/index.js` calls it once, when the isolate instantiates the module.
 
 ### Two heaps: wasm-GC collects one of them, you collect the other
 

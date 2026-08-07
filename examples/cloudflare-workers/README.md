@@ -135,8 +135,8 @@ compressed bundle, so even the component build sits at about 4% of the free
 plan's 3 MB.
 
 "Worker Startup Time" is what `wrangler deploy` measures and budget-checks, and
-it is why `httpbin/src/index.js` calls its `boot()` at **module scope** rather
-than from the first request. Both work — deferring it was measured and serves
+it is why `httpbin/src/index.js` instantiates at **module scope** rather than
+from the first request. Both work — deferring it was measured and serves
 requests fine — but at module scope the cost is paid once per isolate outside
 the request path and Cloudflare validates it at deploy time.
 

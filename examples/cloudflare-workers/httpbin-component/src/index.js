@@ -24,21 +24,13 @@ const WASI_STUBS = {
   "wasi:filesystem/types": { Descriptor: class Descriptor {} },
 };
 
-let lisp = null;
-
-function boot() {
-  if (!lisp) {
-    // No initialisation call: there is no `_initialize` on this path, and the
-    // `wasi:cli/run` export that would stand in for it cannot be driven through
-    // jco -- which is why app.lisp keeps its state inside functions.
-    lisp = instantiate((path) => CORE_MODULES[path], WASI_STUBS);
-  }
-  return lisp;
-}
-
-// Called here at module scope so instantiation is isolate startup rather than
-// request work, and `wrangler deploy` reports and budget-checks it.
-boot();
+// jco's `instantiate` is the whole of it, and there is no initialisation call
+// to follow it with: this path has no `_initialize`, and the `wasi:cli/run`
+// export that would stand in for one cannot be driven through jco -- which is
+// why app.lisp keeps its state inside functions.
+//
+// At module scope, so the cost is isolate startup rather than request work.
+let lisp = instantiate((path) => CORE_MODULES[path], WASI_STUBS);
 
 /** The request, in the shape app.lisp's `handle-request` reads. */
 async function requestToJson(request) {
@@ -59,7 +51,8 @@ export default {
     const body = await requestToJson(request);
     let reply;
     try {
-      reply = JSON.parse(boot().handleRequest(body));
+      if (!lisp) lisp = instantiate((path) => CORE_MODULES[path], WASI_STUBS);
+      reply = JSON.parse(lisp.handleRequest(body));
     } catch (error) {
       lisp = null; // a trapped instance cannot be trusted afterwards
       console.error("handleRequest failed:", error);
