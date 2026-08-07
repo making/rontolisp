@@ -194,7 +194,7 @@ program that wants no clack at all can still call `handle` directly with its own
   is why `dispatch` is EXPORTED from the package rather than being a
   compiler-only internal, and why `run` does not `defun` a `handle-request` of
   its own — a library defining a function into the user's namespace is
-  surprising, and `demo.lisp` would then pin a name only one backend needs.
+  surprising, and `check.lisp` would then pin a name only one backend needs.
   Consequence, and the reason `HttpReactorInliner.declaresExport` exists: the
   marker fires for any WASM program that merely quickloads the shim, `clackup`
   called or not — exactly like `HttpLibrary`'s nested-directive detection. For
@@ -236,7 +236,7 @@ per-host names (`clack-handler-hunchentoot`, `clack-handler-woo`), and it keeps
 the core package vendor-free. Pinned by `LispEvaluatorAsdfTest`
 (`theCloudflareHandlerShim*`), by `HttpReactorInlinerTest` (the marker lowering
 and the synthesized export) and by `examples/cloudflare-workers/httpbin-clack/`,
-whose `demo.lisp` runs it on the interpreter, the JVM and wasm-GC
+whose `check.lisp` runs it on the interpreter, the JVM and wasm-GC
 (`examples/examples.yaml`) and whose `worker.lisp` is the deployed Worker --
 and by `examples/cloudflare-workers/hello-clack/`, the three-form floor.
 

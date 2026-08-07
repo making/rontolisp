@@ -95,15 +95,15 @@ of a JSON string, and it is exactly what the synthesized export calls. So the
 whole Worker runs on the interpreter:
 
 ```bash
-rontolisp demo.lisp
+rontolisp check.lisp
 ```
 
 and identically on the JVM and the WASM backends, which
 [`examples/examples.yaml`](../../examples.yaml) pins:
 
 ```bash
-rontolisp demo.lisp -o Demo.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Demo
-rontolisp demo.lisp -o demo.wasm && wasmtime run -W gc -W exceptions=y demo.wasm
+rontolisp check.lisp -o Check.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Check
+rontolisp check.lisp -o check.wasm && wasmtime run -W gc -W exceptions=y check.wasm
 ```
 
 The two lines it prints before the first `-->` are upstream clack's: `clackup`
@@ -117,7 +117,7 @@ Pass `:silent t :debug nil` to quiet them.
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | The whole program — three forms. This is what `build.sh` compiles. |
-| [`demo.lisp`](demo.lisp) | Drives it with no Cloudflare in sight, on any backend. |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend — and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`. |
 | `src/app.wasm` | The compiled module. A build product — run `./build.sh` first. |
 

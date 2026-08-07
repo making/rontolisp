@@ -531,7 +531,7 @@ examples:
       563-byte MVP module the Worker imports; wasm-component pins that the same
       three exports lower through the canonical ABI, which is what
       cloudflare-workers/httpbin-component transpiles with jco.
-  - path: cloudflare-workers/hello-clack/demo.lisp
+  - path: cloudflare-workers/hello-clack/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
       the smallest Clack application on a Worker, and the counterpart of
@@ -572,7 +572,7 @@ examples:
         - '\"json\":null'
         - '\"allowed\":\"POST\"'
         - '"status":404'
-  - path: cloudflare-workers/httpbin-clack/demo.lisp
+  - path: cloudflare-workers/httpbin-clack/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
       loads worker.lisp -- the CLACK flavour of the Worker, and the whole of it:

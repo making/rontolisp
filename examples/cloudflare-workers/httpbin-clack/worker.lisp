@@ -40,7 +40,7 @@
 ;;; - :use-thread nil is for the OTHER backends. On WASM it is already the
 ;;;   default (single-threaded by construction), but the interpreter and the JVM
 ;;;   have threads, so clackup would otherwise store the application on one --
-;;;   and demo.lisp, which drives this file without Cloudflare, would race it.
+;;;   and check.lisp, which drives this file without Cloudflare, would race it.
 ;;; - :use-default-middlewares nil drops lack's `backtrace` middleware, whose
 ;;;   whole job is to print a report to *error-output* -- which a reactor does
 ;;;   not have. It also prints on an error the application CATCHES, and on the

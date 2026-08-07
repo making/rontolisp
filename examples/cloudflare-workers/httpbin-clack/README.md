@@ -94,7 +94,7 @@ is carried over verbatim, and `net/httpbin-clack.lisp` has none.
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | **The whole program.** `net/httpbin-clack.lisp` verbatim, with its `clackup` line's arguments changed. This is what `build.sh` compiles. |
-| [`demo.lisp`](demo.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop. |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. The boundary code is `../httpbin/src/index.js` unchanged; only `requestToJson` differs. |
 | `src/app.wasm` | The compiled module (~1.69 MB). A build product — run `./build.sh` first. |
 
@@ -152,7 +152,7 @@ equivalent of
 
 after the program. `dispatch` runs the stored application; on the interpreter
 and the JVM, where there is no export to synthesize, you call it yourself — that
-is exactly what [`demo.lisp`](demo.lisp) does.
+is exactly what [`check.lisp`](check.lisp) does.
 
 The two keywords are properties of this host rather than boilerplate:
 
@@ -340,15 +340,15 @@ calls, so the Worker's adapter — not just the application — can be developed
 the interpreter:
 
 ```bash
-rontolisp demo.lisp
+rontolisp check.lisp
 ```
 
 and it runs identically on the JVM and the WASM backend, which
 `examples/examples.yaml` pins as well:
 
 ```bash
-rontolisp demo.lisp -o Prog.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Prog
-rontolisp demo.lisp -o demo.wasm --optimize && wasmtime run -W gc -W exceptions=y demo.wasm
+rontolisp check.lisp -o Prog.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Prog
+rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exceptions=y check.wasm
 ```
 
 The JVM run needs the compiler jar on the classpath, unlike `../httpbin`'s:
@@ -405,8 +405,8 @@ library that logs while it loads, not just this one. Input, time and `random`
 still trap under `--no-wasi`, because a stub can only answer those by inventing
 data.
 
-Locally (`rontolisp demo.lisp`, `wasmtime run`) the two lines are visible, and
-`demo.lisp` says so. Pass `:silent t :debug nil` if you would rather not see
+Locally (`rontolisp check.lisp`, `wasmtime run`) the two lines are visible, and
+`check.lisp` says so. Pass `:silent t :debug nil` if you would rather not see
 them.
 
 ## Limitations

@@ -1,4 +1,4 @@
-;;; demo.lisp -- drive worker.lisp without Cloudflare.
+;;; check.lisp -- drive worker.lisp without Cloudflare.
 ;;;
 ;;; The Worker's entry point is a WASM export, which only the WASM backends
 ;;; have; what sits under it does not. `dispatch` -- a JSON request string in, a
@@ -6,7 +6,7 @@
 ;;; ordinary function of the handler backend, and it is exactly what the
 ;;; synthesized export calls. So the whole Worker runs on the interpreter:
 ;;;
-;;;   rontolisp examples/cloudflare-workers/hello-clack/demo.lisp
+;;;   rontolisp examples/cloudflare-workers/hello-clack/check.lisp
 ;;;
 ;;; and identically on the JVM and the WASM backends.
 ;;;
