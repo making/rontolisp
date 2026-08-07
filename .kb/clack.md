@@ -237,11 +237,22 @@ the core package vendor-free. Pinned by `LispEvaluatorAsdfTest`
 (`theCloudflareHandlerShim*`), by `HttpReactorInlinerTest` (the marker lowering
 and the synthesized export) and by `examples/cloudflare-workers/httpbin-clack/`,
 whose `demo.lisp` runs it on the interpreter, the JVM and wasm-GC
-(`examples/examples.yaml`) and whose `worker.lisp` is the deployed Worker.
+(`examples/examples.yaml`) and whose `worker.lisp` is the deployed Worker --
+and by `examples/cloudflare-workers/hello-clack/`, the three-form floor.
+
+**The example directory collapsed to ONE Lisp file when this landed, and that is
+the readable proof the abstraction is at the Clack level**: `worker.lisp` is now
+`examples/net/httpbin-clack.lisp` VERBATIM down to `app`, with that file's
+`clackup` line carrying different arguments. The old `app.lisp` / `worker.lisp`
+/ `serve.lisp` split existed because the transport was a hand-written adapter
+that had to be kept out of the application; a `:server` designator needs no such
+quarantine. `net/httpbin-clack.lisp` gained the manifest entry `serve.lisp` used
+to carry, so the "it still serves for real" leg is pinned on the real file
+rather than on a copy.
 
 Measured on the deployed Worker when `clackup` replaced the hand-written
 `wasm-export` + `defun` (node 24, same machine, `--no-wasi --optimize`): the
-module grew 1,575,467 -> 1,691,678 B raw (342,761 -> 374,424 B gzip, +9%) and
+module grew 1,575,467 -> 1,691,678 B raw (342,761 -> 373,999 B gzip, +9%) and
 `_initialize` went 23 -> 56 ms (median of five runs each), while the per-request cost did not move
 (warm `GET` 0.071 -> 0.068 ms, warm `POST` 0.121 ms both). So `clackup` is a
 STARTUP cost on a reactor, not a request cost — which on Cloudflare is paid once

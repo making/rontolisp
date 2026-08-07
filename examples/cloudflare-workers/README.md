@@ -9,7 +9,7 @@ on Cloudflare Workers. Each directory is a complete, independent Worker project:
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
 | [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 1.65 MB (**351 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case`. The Cloudflare port of [`examples/net/httpbin.lisp`](../net/httpbin.lisp). | 277 KB, `--no-wasi` wasm-GC, zero imports | 53 lines, one file, no dependencies |
-| [`httpbin-clack/`](httpbin-clack) | **The same endpoints as a real [Clack](https://github.com/fukamachi/clack) application** — the environment plist in, the Clack response list out — so the handler also runs on hunchentoot, on woo and under `wasmtime serve`, unchanged. The Cloudflare port of [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp): `app.lisp` is that file minus its `clackup` line and nothing else, `worker.lisp` is three forms — quickload, load, `clackup` again, this time with `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes — and `serve.lisp` puts the `clackup` line back so the identical application can be curl'd on a real HTTP server. | 1.69 MB (**366 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/`'s boundary code verbatim; only the request shape differs |
+| [`httpbin-clack/`](httpbin-clack) | **The same endpoints as a real [Clack](https://github.com/fukamachi/clack) application** — the environment plist in, the Clack response list out — so the handler also runs on hunchentoot, on woo and under `wasmtime serve`, unchanged. The Cloudflare port of [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp), and the port is that file's `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. Run the upstream file itself to curl the identical application on a real HTTP server. | 1.69 MB (**365 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/`'s boundary code verbatim; only the request shape differs |
 | [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (278 KB) | 51 hand-written lines + 247 KB of generated glue |
 
 ## Which one should I copy?
@@ -125,7 +125,7 @@ The Lisp in every one of these is an ordinary function, so the whole edit/run
 loop happens locally — [`httpbin/demo.lisp`](httpbin/demo.lisp) and
 [`httpbin-clack/demo.lisp`](httpbin-clack/demo.lisp) drive their handlers on the
 interpreter, the JVM and wasmtime, and `httpbin-clack/`'s application can also be
-served for real with `rontolisp httpbin-clack/serve.lisp` — no Cloudflare, no
+served for real with `rontolisp ../net/httpbin-clack.lisp` — no Cloudflare, no
 JavaScript. Every Lisp source here is pinned by `examples/examples.yaml`; while
 iterating on them, narrow the suite:
 
@@ -146,7 +146,7 @@ All four were deployed to the real edge and verified there, not only under
 | `httpbin` | 278.53 KiB | **91.03 KiB** | 12-13 ms |
 | `httpbin-component` | 503.84 KiB | **130.21 KiB** | 5 ms |
 | `hello-clack` | 1608.77 KiB | **358.27 KiB** | 30 ms |
-| `httpbin-clack` | 1654.60 KiB | **372.11 KiB** | 25 ms |
+| `httpbin-clack` | 1654.60 KiB | **371.94 KiB** | 26 ms |
 
 The gzip column is the one that counts: the Worker size limit applies to the
 compressed bundle, so even the component build sits at about 4% of the free

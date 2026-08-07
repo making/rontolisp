@@ -4,9 +4,9 @@
 ;;; have. What is underneath it exists everywhere: `dispatch` -- a JSON request
 ;;; string in, a JSON response string out, over the application clackup stored
 ;;; -- is an ordinary function of the handler backend, and it is exactly what
-;;; the synthesized export calls. So the whole Worker -- the Clack application
-;;; (app.lisp) AND the entry point that feeds it (worker.lisp) -- can be
-;;; developed and debugged on the interpreter, where the edit/run loop costs
+;;; the synthesized export calls. So the whole Worker -- worker.lisp, the Clack
+;;; application and the clackup call that puts it on Cloudflare together -- can
+;;; be developed and debugged on the interpreter, where the edit/run loop costs
 ;;; nothing:
 ;;;
 ;;;   rontolisp examples/cloudflare-workers/httpbin-clack/demo.lisp

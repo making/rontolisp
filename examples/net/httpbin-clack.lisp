@@ -14,12 +14,13 @@
 ;; :use-thread t returns a handler for (clack:stop handler) instead.
 ;;
 ;; Everything from the quickload down to `app` is also, verbatim,
-;; examples/cloudflare-workers/httpbin-clack/app.lisp -- a Cloudflare Worker
+;; examples/cloudflare-workers/httpbin-clack/worker.lisp -- a Cloudflare Worker
 ;; hands over a parsed request instead of a socket, so there the clackup line
-;; below is the ONE form replaced, by a call into the built-in
-;; clack-handler-cloudflare-workers backend. That is the point of writing the handler as
-;; a Clack application rather than as a server: it is the same function on every
-;; host, and swapping the host swaps only the handler backend.
+;; below carries different ARGUMENTS (:server :cloudflare-workers, the built-in
+;; handler backend for a host that calls an export instead of connecting) and
+;; nothing else differs. That is the point of writing the handler as a Clack
+;; application rather than as a server: it is the same function on every host,
+;; and swapping the host swaps only the handler backend.
 ;;
 ;; Run (the first run downloads clack/lack into ~/.rontolisp/quicklisp):
 ;;   rontolisp examples/net/httpbin-clack.lisp

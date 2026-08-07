@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Compile worker.lisp -- the adapter, which (load "app.lisp")s the Clack
-# application -- to the .wasm module the Worker imports. A compile-time load is
-# inlined into the module, so only this one file is named here.
+# Compile worker.lisp -- the whole program: the Clack application and the
+# clackup call that puts it on a Worker -- to the .wasm module the Worker
+# imports.
 #
 # --no-wasi: the Worker calls the exported `handle-request` directly, it never
 #   runs the module as a program, and the handler does no I/O -- so the module
@@ -10,7 +10,7 @@
 # --optimize: a Worker bundle has a size limit, and the tree-shaker is what
 #   keeps the module small -- only the functions the program actually reaches
 #   end up in the output. It matters more here than in ../httpbin, because
-#   app.lisp quickloads the whole of clack.
+#   the program quickloads the whole of clack.
 #
 # The first run downloads clack/lack into ~/.rontolisp/quicklisp; after that the
 # build is offline.
@@ -26,7 +26,7 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling worker.lisp (which loads app.lisp) -> src/app.wasm"
+echo "compiling worker.lisp -> src/app.wasm"
 java -jar "$jar" "$here/worker.lisp" -o "$here/src/app.wasm" --no-wasi --optimize
 
 ls -l "$here/src/app.wasm"

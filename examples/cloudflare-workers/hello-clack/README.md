@@ -70,7 +70,7 @@ and lack being in the module so that `app` can be an ordinary Clack application.
 | | [`../hello`](../hello) | this | [`../httpbin-clack`](../httpbin-clack) |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | the same, with five echo endpoints |
-| module | 563 B | 1,645,734 B raw / **359,259 B gzip** | 1,691,678 B / 374,424 B gzip |
+| module | 563 B | 1,645,734 B raw / **359,259 B gzip** | 1,691,678 B / 373,999 B gzip |
 | imports | zero | **zero** — instantiated with `{}`, no WASI shim | zero |
 | `_initialize` | none (no top-level forms) | ~52 ms — clack's load time, `clackup` included | ~56 ms |
 | warm request | | **0.04 ms** | 0.07 ms |
@@ -122,10 +122,11 @@ Pass `:silent t :debug nil` to quiet them.
 | `src/app.wasm` | The compiled module. A build product — run `./build.sh` first. |
 
 [`../httpbin-clack`](../httpbin-clack) is this example grown up: the same
-handler backend and the same envelope, but with the application in its own file
-(byte-identical to a non-Cloudflare example), five endpoints, a body, and a
-`serve.lisp` that runs the identical application on a real HTTP server so the
-two can be compared with `curl`.
+handler backend and the same envelope, but with five endpoints, a request body,
+and an application that is byte-identical to
+[`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) — which serves
+the very same code on a real HTTP server, so the two can be compared with
+`curl`.
 
 ## Limitations
 

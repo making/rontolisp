@@ -494,6 +494,15 @@ examples:
     systemPath: src/test/resources/cl-who
   - path: net/httpbin.lisp
     backends: [jvm-compile, wasm-component]
+  - path: net/httpbin-clack.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the SAME application examples/cloudflare-workers/httpbin-clack/worker.lisp
+      compiles (everything down to `app` is verbatim there), served by the real
+      clack:clackup on :server :rontolisp instead. What this pins is that the
+      file the Worker ships is still a portable Clack application, on the two
+      backends where clackup can actually bind (a blocking server, hence
+      compile-only; Preview 1 has no incoming TCP).
   - path: net/httpbin-clos.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/httpbin-jzon.lisp
@@ -566,13 +575,12 @@ examples:
   - path: cloudflare-workers/httpbin-clack/demo.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      loads worker.lisp -- the CLACK flavour of the Worker. The two halves are
-      separate files on purpose: app.lisp is net/httpbin-clack.lisp verbatim (a
-      Clack environment in, a Clack response out) with only its clackup line
-      removed, and worker.lisp puts a clackup line BACK -- :server
+      loads worker.lisp -- the CLACK flavour of the Worker, and the whole of it:
+      everything from the quickload down to `app` is net/httpbin-clack.lisp
+      VERBATIM (a Clack environment in, a Clack response out), and the Cloudflare
+      port is that file's clackup line with different ARGUMENTS -- :server
       :cloudflare-workers, the built-in handler backend that stores the app and
-      whose exported entry point the compiler synthesizes -- so the two halves
-      of the directory differ only in clackup's arguments. What this pins is
+      whose exported entry point the compiler synthesizes. What this pins is
       that the adapter builds the same environment on every backend: the "?"
       split and the percent-decoding of the raw target (/%67et answers
       "path":"/get"), the content-length the buffered :raw-body needs, and the
@@ -597,16 +605,6 @@ examples:
         - '\"allowed\":\"POST\"'
         - '"status":404'
         - '[["content-type","application/json"]]'
-  - path: cloudflare-workers/httpbin-clack/serve.lisp
-    backends: [jvm-compile, wasm-component]
-    note: >-
-      the other half of the same directory: app.lisp under the REAL clack:clackup
-      instead of under worker.lisp's Worker adapter. app.lisp + serve.lisp is
-      byte-for-byte net/httpbin-clack.lisp, which is the claim the directory
-      makes -- so what this pins is that the file the Worker compiles is still a
-      portable Clack application, on the two backends where clackup can actually
-      bind (a blocking server, hence compile-only; Preview 1 has no incoming
-      TCP).
 
   # --- wasm-size: the same two programs the cross-language size table measures ---
   - path: wasm-size/hello_world/hello_world.lisp
