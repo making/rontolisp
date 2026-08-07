@@ -391,13 +391,52 @@ the floor today. **Re-evaluation trigger: when more-async-builtins becomes defau
 the waitable trio from `adapter.wat` and the async keyword from those two canon encodings.**
 
 What is left in the 1,776 B, for whoever comes next: shaken core 627 (`.todo/271` owns
-~104 of it), adapter 547, import block 197, shared memory 25, wiring 380. Of the adapter's
-imports and the synthesized `"w"` core instance, ~232 B is the `"w"` field NAMES, spelled
-twice each; they are a private linkage between two artifacts this repo ships together, so
-shortening them is available and was deliberately not taken — it trades the legibility of
-`wasm-tools print` on a rontolisp component for bytes the gate above will hand back for
-free. That judgement, its measurement and the two conditions that would overturn it are
-`.todo/275`. The ~44 B that used to sit here as non-minimal ENCODING (and 2.4–5.7% of
+~104 of it), adapter 547, import block 197, shared memory 25, wiring 380.
+
+**The `"w"` field names, ~232 B, deliberately left long — decided, and re-affirmed
+2026-08-07.** Of the adapter's import section and the synthesized `"w"` core instance,
+~232 B is the field NAMES, and each is spelled twice: once as the adapter's
+`(import "w" "<name>" …)` and once as the `(export "<name>" (func n))` of the instance
+built to satisfy it. For the nine members a printing program keeps —
+
+```
+stdout-write(12) stream-new(10) stream-write(12) stream-drop-w(13)
+future-read-cli(16) future-drop-cli(16) waitable-set-new(16)
+waitable-join(13) waitable-set-wait(17)          = 125 chars x 2
+```
+
+— one character each would leave 9 x 2, saving ~232 B: **13.1% of the whole component**,
+taking hello from 1,776 to roughly 1,544. It is available, cheap and safe. `"w"` is a
+private linkage between two artifacts this repo ships together, so the names carry no
+information the reader cannot get elsewhere (`adapter.wat` names every import with a
+`$symbolic` local right beside it, and `W_MEMBERS` is keyed by the descriptive name), and
+`fixedSurface` already throws when the adapter imports a `w` member the wiring does not
+declare, so a table/WAT drift is a build failure, not a silent bug.
+
+Against it: `wasm-tools print` on a shipped component goes opaque (`(import "w" "3" …)`);
+a name-to-ordinal mapping has to be read in two places; and `adapter-http-server-p1.wat` /
+`WasmServeComponentBuilder.BRIDGE_FUNCS` would have to follow or the two adapters diverge
+in convention. **And the decisive one: the bytes are coming back anyway.** The ~279 B the
+gate above holds is a strictly larger win on the same component, and an upstream default
+will hand it over for free. Spending legibility now for bytes that are already owed is the
+wrong trade.
+
+Re-open it only when one of these is true, and record which. **(a) The gate above opens** —
+then do THAT first (the trigger and recipe are the paragraph above), re-measure, and re-read
+this one; it may be enough on its own. **(b) A host makes the component floor matter more
+than its legibility** — a wasmCloud-shaped registry where transfer size is the cost; then
+take the ~232 B, and take it for BOTH adapters in one pass. Both were checked 2026-08-07 and
+both failed: a hand-written component whose only content is a synchronous `canon
+stream.write` is still rejected by wasm-tools 1.254.0 and by wasmtime 47.0.2 — the version
+this repo pins for CI — with "requires the component model more async builtins feature", and
+no size-driven host requirement has arrived. If it is ever taken, keep `W_MEMBERS` keyed by
+the descriptive name and give each member an explicit wire field, so the mapping lives in
+exactly one table next to the encoders (the shape `WMember.realloc()` already uses). What is
+NOT part of that question either way: the core module (`.todo/271`), the serve variant's
+floor (a ~280 KB core, where 232 B is noise), and how what is emitted is SPELLED — which is
+the next paragraph.
+
+The ~44 B that used to sit here as non-minimal ENCODING (and 2.4–5.7% of
 EVERY module this project emits, Preview 1 included) is gone: every module and component
 the project writes is now a `wasm-tools` round-trip FIXPOINT, so what is left above is
 content, not spelling — `.kb/wasm-shortest-encoding.md`.
