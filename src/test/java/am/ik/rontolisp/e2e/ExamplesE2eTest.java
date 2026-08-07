@@ -94,6 +94,13 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
  *        -Drontolisp.binary="$PWD/target/rontolisp" test
  * }</pre>
+ *
+ * The whole suite takes minutes. While iterating on one example, narrow it with
+ * {@code -Drontolisp.examples.only=<substrings>} -- a comma-separated list matched
+ * against the manifest path, so {@code =cloudflare} runs one directory and
+ * {@code =console/,ml/} runs two. A pattern that matches nothing produces no tests at all
+ * (a skipped assumption naming the pattern), never the whole suite -- so a typo is
+ * visible as "Tests run: 0" rather than as an unexpectedly long run.
  */
 class ExamplesE2eTest {
 
@@ -155,11 +162,35 @@ class ExamplesE2eTest {
 		assumeTrue(Files.isRegularFile(MANIFEST), () -> "manifest not found: " + MANIFEST);
 
 		Manifest manifest = loadManifest();
+		String only = System.getProperty("rontolisp.examples.only");
+		List<Example> selected = manifest.examples().stream().filter(example -> matchesOnly(example, only)).toList();
+		assumeTrue(!selected.isEmpty(),
+				() -> "-Drontolisp.examples.only=" + only + " matched no example in " + MANIFEST);
+
 		List<DynamicNode> nodes = new ArrayList<>();
-		for (Example example : manifest.examples()) {
+		for (Example example : selected) {
 			nodes.add(exampleNode(example, driver));
 		}
 		return nodes.stream();
+	}
+
+	/**
+	 * Whether {@code example} survives the {@code -Drontolisp.examples.only=...} filter:
+	 * a comma-separated list of substrings matched against the manifest path, so
+	 * {@code -Drontolisp.examples.only=cloudflare} runs one directory and
+	 * {@code =console/,ml/} runs two. Unset (or blank) selects everything.
+	 */
+	private static boolean matchesOnly(Example example, @Nullable String only) {
+		if (only == null || only.isBlank()) {
+			return true;
+		}
+		for (String pattern : only.split(",")) {
+			String trimmed = pattern.trim();
+			if (!trimmed.isEmpty() && example.path().contains(trimmed)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static DynamicContainer exampleNode(Example example, List<String> driver) {
