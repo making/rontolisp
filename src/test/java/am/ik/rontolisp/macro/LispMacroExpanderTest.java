@@ -114,4 +114,39 @@ class LispMacroExpanderTest {
 		assertThat(out).contains("WRITE-STRING").contains("%FIXED-DECIMAL");
 	}
 
+	@Test
+	void aStringWriteSiteIsOneCallAndNotAnInlinedSubseqConcatRebuild() {
+		// A rank-1 array place may hold a string at run time, so (setf (aref v i) x)
+		// carries a string arm -- and that arm used to inline the whole rebuild: two
+		// subseqs (each an inline COPY LOOP on both compile paths), a `string` and two
+		// %string-concats, about 8 KB of wasm PER SITE. An array-only program paid it
+		// too: webgl-cube spent 203 of its 218 KB on 25 such sites. If any of those
+		// names comes back into the site, the cost comes back with it.
+		String site = LispMacroExpander
+			.expandScharSetFunctional((LispCons) LispReader.readAllFromString("(%schar-set s i c)").get(0))
+			.print();
+		assertThat(site).contains("%SCHAR-SET-RUNTIME");
+		assertThat(site).doesNotContain("SUBSEQ").doesNotContain("%STRING-CONCAT").doesNotContain("%ARRAYP");
+	}
+
+	@Test
+	void theStringWriteRuntimeIsInjectedForAnArrayPlaceAndOmittedWithoutOne() {
+		// The helper the site calls has to be THERE, and the scan that puts it there
+		// runs on the pre-expansion program (expression expansion happens per form much
+		// later and cannot add a top-level defun). Generous on purpose: any of the place
+		// heads that can grow a string arm carries it.
+		assertThat(injectsStringWriteRuntime("(defun f (v i) (setf (aref v i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (char s i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (s i) (setf (elt s i) #\\x))")).isTrue();
+		assertThat(injectsStringWriteRuntime("(defun f (v) (car v))")).isFalse();
+	}
+
+	private static boolean injectsStringWriteRuntime(String source) {
+		return LispMacroExpander
+			.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), new ClosRegistry())
+			.stream()
+			.anyMatch(form -> form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && LispNames.SCHAR_SET_RUNTIME.equals(name.name()));
+	}
+
 }

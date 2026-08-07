@@ -280,6 +280,11 @@ expression keeps the two-way list/array dispatch over a temp. Pinned by the
 `compileSetfEltOnAVectorAndAList`, and
 `WasmLispCompilerIntegrationTest.compileSetfEltDispatchesOverListStringAndVector`.
 
+**The string arm is a CALL now, not an inlined rebuild** -- `%schar-set-runtime`,
+one spliced defun per program, `.kb/string-write-runtime.md`. That is what the
+"costs that came with it" below are measured against; both of them shrank by more
+than an order of magnitude when it landed.
+
 Two long-latent bugs of the same family surfaced the moment step 2 ran over the
 corpus, both now fixed at the source rather than by a retry:
 
@@ -305,13 +310,21 @@ Costs that came with it, both deliberate:
 - Any program using `(setf (elt ...))` now pulls in the array runtime, because
   the string arm's `schar-set` rebuild reaches `%arrayp`/`%row-major-aset`. Same
   trade as `make-string` above.
-- The `_top$N` chunk budget dropped from 40000 to 24000. The string arm costs
+- The `_top$N` chunk budget dropped from 40000 to 24000. The string arm cost
   ~6 KB per `(setf (elt ...))` site, which took the ci-spec corpus's largest
   single top-level form to ~39 KB -- and a single form cannot be split, so the
   budget has to leave room for it under the JVM's 65535-byte method cap. To
   re-measure, compile with the budget set to 1 (every top-level form gets its own
   chunk) and read `-Drontolisp.jvm.debug-method-sizes=true`, which now ranks the
   top-level chunks alongside the defuns and lambdas.
+
+  **Re-evaluation trigger, and the reason no longer holds as stated**: with the
+  arm out of line the marginal JVM cost of one more `(setf (elt ...))` site is
+  **293 bytes, not 5,042** (measured 2026-08-08, `.kb/string-write-runtime.md`),
+  so the form that forced 24000 is nowhere near 39 KB any more. The budget was
+  left where it is because nothing measured it back up, not because 24000 is
+  still the number the corpus needs -- re-measure with the procedure above before
+  treating it as load-bearing.
 
 The rosters in step 3 are the one thing still written by hand, so
 `JvmRuntimeGroupNamesTest` pins each against what its builder actually emits, in

@@ -14028,7 +14028,8 @@ public final class LispMacroExpander {
 			// returns the program itself when there is no literal, keeping the fast path.
 			// The format renderer is still injected here when the program reaches it:
 			// this path carries the plainest runtime-control (format ...) programs.
-			return withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry), dynamic);
+			return withScharSetRuntime(
+					withFormatRenderer(StructLiteralFolder.foldProgram(program, closRegistry), dynamic));
 		}
 		List<LispVal> out = new java.util.ArrayList<>(program.size());
 		java.util.Map<Integer, String> dispatcherSlots = new java.util.LinkedHashMap<>();
@@ -14285,6 +14286,12 @@ public final class LispMacroExpander {
 		// whose every format call has a literal control -- the overwhelming majority --
 		// carries none of it.
 		out = withFormatRenderer(out, dynamic);
+		// The shared (setf (aref var i) x) / (setf (char s i) c) string writer, once per
+		// program that can reach it. LAST, so its scan covers every definition injected
+		// above INCLUDING the renderer's: a spliced body that writes into a string makes
+		// the same site as a user one, and the site is a call to a defun that has to be
+		// there. (Nothing this appends can reach the renderer, so the order is one-way.)
+		out = withScharSetRuntime(out);
 		// The registry is complete: reserve, in every ancestor of a change-class target,
 		// room for the target's slots. %obj-new reads the reservation at backend-compile
 		// time, which is after this pass, so widening here reaches every allocation site.
@@ -14334,6 +14341,51 @@ public final class LispMacroExpander {
 			}
 		}
 		return forms;
+	}
+
+	/**
+	 * Appends the shared {@code %schar-set-runtime} defun when the program can reach it,
+	 * and answers the program unchanged when it cannot.
+	 *
+	 * <p>
+	 * The reaching sites are made by {@link #expandSetf} -- the
+	 * {@code aref}/{@code svref} /{@code elt} places' string arm and the
+	 * {@code schar}/{@code char} places -- and by a {@code %schar-set} call already in
+	 * the source. Expression expansion runs per form much later and cannot add a
+	 * top-level defun, so this has to be a scan of the pre-expansion program, and it
+	 * names the PLACE HEADS rather than trying to predict which of them will keep the
+	 * string arm: the arm's condition (a variable place, one subscript) is cheap to
+	 * re-check but a macro that expands into one of these places is not, so the scan is
+	 * deliberately generous. Over-injecting costs the module one unreachable defun, which
+	 * {@code --optimize} drops; under-injecting would be a call to a function that does
+	 * not exist.
+	 * @param forms the program to scan
+	 * @return the program, with the helper appended when it needs it
+	 */
+	private static List<LispVal> withScharSetRuntime(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (reachesScharSet(form)) {
+				List<LispVal> withHelper = new java.util.ArrayList<>(forms);
+				withHelper.add(scharSetRuntimeDefun());
+				return withHelper;
+			}
+		}
+		return forms;
+	}
+
+	private static boolean reachesScharSet(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return switch (sym.name()) {
+				case LispNames.AREF, LispNames.SVREF, LispNames.ELT, LispNames.CHAR, LispNames.SCHAR,
+						LispNames.SCHAR_SET ->
+					true;
+				default -> false;
+			};
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		return reachesScharSet(cons.car()) || reachesScharSet(cons.cdr());
 	}
 
 	private static boolean reachesFormatRenderer(LispVal form) {
@@ -21749,16 +21801,29 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Rewrites {@code (%schar-set var index char)} for the compiled backends. A mutable
-	 * character vector (a fill-pointered {@code make-array :element-type 'character}
-	 * result, represented as a general vector) is written IN PLACE through
-	 * {@code %row-major-aset}; an immutable string is rebuilt with the character replaced
-	 * and {@code setq}-bound back to the variable. The branch is chosen at runtime on
-	 * {@code %arrayp}; the stored character is the value. Lite semantics: the string
-	 * place must be a variable (an immutable string has nowhere else to store the rebuilt
-	 * result), and for an immutable string the update is visible through that variable
-	 * only -- an alias made before the write still sees the old content (the interpreter
-	 * mutates in place).
+	 * Rewrites {@code (%schar-set var index char)} for the compiled backends into a call
+	 * to the shared {@link #scharSetRuntimeDefun()}, whose answer is {@code setq}'d back
+	 * into the variable and whose value is the stored character.
+	 *
+	 * <p>
+	 * The write itself is the runtime defun's job: a mutable character vector (a
+	 * fill-pointered {@code make-array :element-type 'character} result, represented as a
+	 * general vector) is written IN PLACE and answers itself; an immutable string is
+	 * rebuilt with the character replaced and answers the fresh string. Lite semantics:
+	 * the place must be a variable (an immutable string has nowhere else to store the
+	 * rebuilt result), and for an immutable string the update is visible through that
+	 * variable only -- an alias made before the write still sees the old content (the
+	 * interpreter mutates in place).
+	 *
+	 * <p>
+	 * <strong>Why a call and not the rebuild inline.</strong> The rebuild is two
+	 * {@code subseq}s, a {@code string} and two {@code %string-concat}s, and
+	 * {@code subseq} lowers to an inline copy LOOP on both compile paths -- about 8 KB of
+	 * wasm per site. Every {@code (setf (aref var i) x)} carries one, because a rank-1
+	 * array place may hold a string at run time, so an array-only program paid it too:
+	 * {@code webgl-cube} spent 203 of its 218 KB on 25 such sites. Emitted once, the site
+	 * is two lets, a call and a {@code setq}. Same lesson as
+	 * {@code .kb/wasm-shared-coercion.md}; do not inline it back.
 	 * @param cons the %schar-set call
 	 * @return the expanded expression
 	 */
@@ -21773,15 +21838,37 @@ public final class LispMacroExpander {
 		}
 		LispSymbol idxVar = new LispSymbol("__schar_i");
 		LispSymbol chVar = new LispSymbol("__schar_c");
-		LispVal head = fmtCall(LispNames.SUBSEQ, var, new LispInteger(0), idxVar);
-		LispVal mid = fmtCall(LispNames.STRING, chVar);
-		LispVal tail = fmtCall(LispNames.SUBSEQ, var, fmtCall(LispNames.ADD, idxVar, new LispInteger(1)));
+		LispVal assign = listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), var, fmtCall(LispNames.SCHAR_SET_RUNTIME, var, idxVar, chVar)));
+		return makeLet(idxVar.name(), parts.get(2),
+				makeLet(chVar.name(), parts.get(3), makeProgn(List.of(assign, chVar))));
+	}
+
+	/**
+	 * Builds the shared {@code %schar-set-runtime} defun: the body
+	 * {@link #expandScharSetFunctional} used to inline at every site. It answers the
+	 * string the write leaves behind -- the same object for a mutable character vector
+	 * (written in place through {@code %row-major-aset}), a fresh one for an immutable
+	 * string (rebuilt around the replaced character) -- so the one call site shape,
+	 * {@code (setq var (%schar-set-runtime var i c))}, serves both.
+	 * @return the helper's definition
+	 */
+	public static LispVal scharSetRuntimeDefun() {
+		LispSymbol s = new LispSymbol("%scs_s");
+		LispSymbol i = new LispSymbol("%scs_i");
+		LispSymbol c = new LispSymbol("%scs_c");
+		// %subseq-core, not subseq: the rebuild runs only where %arrayp said no, so
+		// the general-array copy arm expandSubseqCompat wraps every plain subseq in
+		// (a make-array plus an inline copy loop, thousands of bytes) is dead here.
+		// The core lane is the string/list one both compilers lower to one call.
+		LispVal head = fmtCall(LispNames.SUBSEQ_CORE, s, new LispInteger(0), i);
+		LispVal mid = fmtCall(LispNames.STRING, c);
+		LispVal tail = fmtCall(LispNames.SUBSEQ_CORE, s, fmtCall(LispNames.ADD, i, new LispInteger(1)));
 		LispVal rebuilt = fmtCall(LispNames.STRING_CONCAT, fmtCall(LispNames.STRING_CONCAT, head, mid), tail);
-		LispVal assign = listToCons(List.of(new LispSymbol(LispNames.SETQ), var, rebuilt));
-		LispVal functional = makeProgn(List.of(assign, chVar));
-		LispVal mutating = makeProgn(List.of(fmtCall(LispNames.ROW_MAJOR_ASET, var, idxVar, chVar), chVar));
-		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, var), mutating, functional);
-		return makeLet(idxVar.name(), parts.get(2), makeLet(chVar.name(), parts.get(3), body));
+		LispVal mutating = makeProgn(List.of(fmtCall(LispNames.ROW_MAJOR_ASET, s, i, c), s));
+		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, s), mutating, rebuilt);
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.SCHAR_SET_RUNTIME),
+				listToCons(List.of(s, i, c)), body));
 	}
 
 	/**

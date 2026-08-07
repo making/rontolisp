@@ -1,4 +1,4 @@
-# wasm-GC module size regressed, almost all of it in the arity dispatchers
+# wasm-GC module size regressed (NOT in the arity dispatchers -- see the correction)
 
 Difficulty: High
 
@@ -21,119 +21,88 @@ Same `.lisp`, same flags, only the compiler differs:
 | `wasm-browser/hello.lisp` | (none) | 103,562 | 319,357 | 3.1x |
 | `wasm-browser/hello.lisp` | `--optimize` | 4,644 | 8,730 | 1.9x |
 
-`--optimize=size` does not recover it (cube: 256,407 -> 191,694). Neither do the two
-size passes that landed the same day: the string-blob shaking moves these by tens of
-bytes, and after the **pure-builtin literal fold** (`.kb/pure-builtin-fold.md`) every
-number above and every number below is byte-for-byte unchanged -- all 24 example
-modules regenerate identically across it. That is the expected shape, not a
-disappointment: the fold pays where a computation over literals pinned a runtime
-dispatch tree, and none of these programs has one. It does mean the fold cannot be
-counted against this item.
-
 To rebuild the reference compiler:
 
 ```bash
 git worktree add /tmp/old 7bf7b2ce && (cd /tmp/old && ./mvnw -q clean package -DskipTests)
 ```
 
-## Where the bytes are
+## CORRECTION 2026-08-08: it was never the arity dispatchers
 
-Disassemble cube both ways and group the WAT by function. **Six generic
-arity-dispatch functions hold 102,232 of the new module's 109,453 function-body
-lines (93%).** The same six were 7,382 of 10,335 lines before -- they grew **13.8x**,
-and everything else in the module is roughly flat.
+The "six generic arity-dispatch functions hold 93% of the module" reading below was
+**wrong**, and the two items it produced were aimed at a mechanism that already has the
+shape they proposed. What the disassembly actually shows, checked function by function:
 
-They are the `(eqref ...) -> eqref` bodies of arity 0..4 (the leading `eqref` is the
-function id), reached from the exported `frame` through one spliced library helper --
-**in both builds**. So they did not newly appear; they inflated.
+- The six big `(eqref ...) -> eqref` bodies in `cube.wasm` are **cube's own `mat4-*`
+  defuns**. Their leading `eqref` parameter is the CLOSURE ENV every compiled defun
+  takes, not a function id -- which is why their arities read as "0..4" and why there
+  were two with the same signature.
+- `WasmRuntimeBuilder.buildDispatchBody` has emitted a `br_table` with one `call` per
+  arm since long before this window (item 2's premise, "the emitted bodies contain
+  `br_table` zero times today", was reading those `mat4-*` bodies). `cube.wasm`
+  contains **no dispatcher at all** -- it never takes a function as a value, so the
+  funcall-dispatch gate leaves the set empty.
+- `BuiltinFunctionWrappers` bodies are NOT inlined into dispatcher arms. Each wrapper is
+  its own function and each arm is a `call`, which is what item 1 proposed building.
 
-**What grew is inline code, not calls.** Per-function, biggest first:
+The real cost was **per `(setf (aref v i) x)` site**: `expandSetf` gives a rank-1
+indexed place a runtime string arm, and that arm inlined the whole immutable-string
+rebuild -- two `subseq`s (each an inline copy LOOP), a `string`, two `%string-concat`s.
+**8,615 bytes per site**, paid by array-only code because nothing in
+`(setf (aref m 0) 1.0)` says `m` is not a string. cube has 25 such sites across those
+six `mat4-*` defuns: 203 of its 218 KB.
 
-| | 7bf7b2ce | 0e044c7a |
-| --- | --- | --- |
-| biggest dispatcher | 2,149 lines / 9 distinct callees | 27,188 lines / 23 distinct callees |
-| second | 1,446 / 3 | 21,188 / 20 |
-| all six | 7,382 lines | 102,232 lines |
+Lesson for the next item of this shape: **read the WAT against a function whose name
+you have confirmed** before naming the mechanism. Two independent readings agreed on
+"arity dispatchers" only because both started from the same guess.
 
-A body that grows 12.6x while its callee set barely moves is a body whose ARMS carry
-their code inline. So the arms appear to hold `BuiltinFunctionWrappers` bodies
-directly rather than each wrapper being its own function the arm merely `call`s --
-which is also what makes them un-shakeable, since the tree-shaker works on whole
-functions and can never drop an inlined arm. **Confirming that against
-`WasmRuntimeBuilder.buildDispatchBody` is the first thing to do.**
+## What landed
 
-The funcall-dispatch gate (`.kb/optimize-dead-code-elimination.md`) is working here
-and is not the regression: on cube it reports `33 of 266 defuns dispatchable`
-(`-Drontolisp.debug.dispatchgate=true`), and the minimal-funcall floor actually
-IMPROVED across the same window (94,503 -> 32,605 B on a two-defun program that
-`funcall`s a variable). The cost is per arm, not per admitted function.
+1. ~~Give each builtin wrapper its own wasm function and make the dispatcher arm a
+   `call`.~~ **NOT A DEFECT** -- this is already the emitted shape (above).
+2. ~~Make the dispatcher a `br_table` on a small integer tag.~~ **ALREADY TRUE**
+   (above).
+3. ~~Route `castFloatGetF64` through one shared runtime helper.~~ **LANDED 2026-08-07**
+   at the DEFAULT level: `pi_approx` 5,356 -> 3,540 (-33.9%), `ml/mlp` -10.1%,
+   `ml/nn` -11.4%. `.kb/wasm-shared-coercion.md`.
+4. ~~`castFloatGetF64` calls `ctx.allocTemp()` per site.~~ **LANDED with 3.**
+5. **The string arm of an indexed write is one spliced defun.** **LANDED 2026-08-08**:
+   `%schar-set-runtime`, injected once per program by `expandTopLevelDefinitions`.
+   Per-site marginal **8,615 -> 588 bytes** on wasm-GC and **5,042 -> 293 bytes** on the
+   JVM; cube **218,235 -> 37,202 (-83.0%)**. `.kb/string-write-runtime.md`. The
+   checked-in `examples/browser/**` artifacts were rebuilt and every page was verified
+   in a real browser (cube, galaxy, triangle, heat3d, platformer, robot-arm,
+   battlefront, minesweeper, rainbow, the three wasm-browser modules, hiragana
+   recognition), zero console errors.
 
-Two things multiply into that:
+Against the ORIGINAL `7bf7b2ce` baseline the top of the table now reads: cube 26,602 ->
+37,202, galaxy 17,012 -> 25,620, minesweeper 105,800 -> 303,308, hello `--optimize`
+4,644 -> 7,624. The first two are within ~1.5x of where they started; the last two are
+not, and that residue is what is left of this item.
 
-- **`BuiltinFunctionWrappers` grew** -- 423 -> 1,072 source lines over the same
-  window (roughly 3.5x the quoted names).
-- **Every numeric coercion inlines a longer type ladder.**
-  `WasmEmitHelper.castFloatGetF64` emits an inline `ref.test` chain over
-  i31 / `TYPE_BIGNUM` / `TYPE_BIGINT` / `TYPE_RATIO` / `TYPE_FLOAT`. It was a 3-way
-  chain before the boxed-i64 and limb tiers landed. Measured marginal cost of one
-  extra site, at `--optimize` (identical at `--optimize=size`):
+## What is left
 
-  | site | 7bf7b2ce | 0e044c7a |
-  | --- | ---: | ---: |
-  | `(sqrt x)` | 59 B | 89 B |
-  | `(setq s (+ s 1.5))` | 126 B | 193 B |
-  | `(setq s (* s 1.5))` | 126 B | 193 B |
-  | `(if (< s 1.5) ...)` | 169 B | 225 B |
-  | `(car (list 1.5 2.5))` | 81 B | 79 B |
-
-  A flat ~1.5x on numeric code and nothing on the rest -- small on its own, but it
-  applies inside every inlined dispatcher arm as well as in user code, so it
-  compounds with the two above. cube's module carries **462** of these ladders
-  (count `ref.test (ref <TYPE_BIGINT>)`), and the marginal cost of one more
-  dispatchable defun moved 205 B -> 313 B for the same reason.
-
-## What to do
-
-Ordered by expected payoff; each is independently landable.
-
-1. **Give each builtin wrapper its own wasm function and make the dispatcher arm a
-   `call`.** This is the shape that lets `WasmTreeShaker` drop wrappers one by one
-   instead of only whole dispatchers, and it collapses the biggest dispatcher from
-   27,188 lines to roughly one arm each. Confirm first that the arms really do
-   inline (read `WasmRuntimeBuilder.buildDispatchBody` against the WAT).
-2. **Make the dispatcher a `br_table` on a small integer tag** instead of the
-   present if/else chain -- the emitted bodies contain `br_table` zero times today,
-   so every arm pays a compare and a branch. Also bounds the ctrl depth.
-3. ~~**Route `castFloatGetF64` through one shared runtime helper**
-   (`_as_f64 : eqref -> f64`) and `call` it.~~ **LANDED 2026-08-07**, at the DEFAULT
-   level: the speed cost this item hedged against is not there (`ml/mlp` 5.6 s ->
-   5.4 s, `pi_approx` 0.12 s either way), so it did not need `--optimize=size`. It
-   also retired the ratio runtime's own COPY of the ladder, sixteen more sites.
-   Measured: `pi_approx` 5,356 -> 3,540 (-33.9%), `ml/mlp` -10.1%, `ml/nn` -11.4%.
-   `.kb/wasm-shared-coercion.md`.
-4. ~~`castFloatGetF64` calls `ctx.allocTemp()` per site and temps are never
-   released.~~ **LANDED with 3**: the call site no longer allocates one at all. The
-   REST of the "temps never released" shape is untouched and still worth a pass --
-   every other `allocTemp()` caller, and `.todo/137` for the JVM twin.
-
-Verify with the table above plus the browser demos, which is where the artifacts are
-checked in: `examples/browser/**` (`cube`, `galaxy`, `platformer`, `robot-arm`,
-`battlefront`, `minesweeper`, `hiragana`).
-
-**The checked-in artifacts are stale by the amount item 3 already bought** (measured
-2026-08-07 against the modules committed at `3c6e73e6`, same sources, same flags):
-cube 256,407 -> 218,235 (-14.9%), galaxy 68,881 -> 57,148 (-17.0%), rainbow 56,931
--> 49,714 (-12.7%), wasm-browser/hello 8,730 -> 7,624 (-12.7%), minesweeper 314,413
--> 303,308 (-3.5%), triangle 2,711 -> 2,478 (-8.6%). They were deliberately NOT
-rebuilt in that pass: `3c6e73e6` set the bar at "verified by running them", live in a
-page, which a headless session cannot meet. Rebuild them WITH that verification when
-items 1 and 2 land -- those move the same files far more, so one rebuild covers both.
+- **`minesweeper` is still 2.9x its `7bf7b2ce` size** (303,308 vs 105,800) and did not
+  move at all across item 5 -- it has no rank-1 `setf`-`aref` site. Nothing here
+  explains it yet; it needs its own function-by-function disassembly, done the way the
+  correction above insists on.
+- **`hello --optimize` is 1.6x** (7,624 vs 4,644) and also did not move. Same.
+- **`%aset` itself is ~515 bytes of inline code per site**: an farray test, a
+  packed-integer-vector test and the general-array store, all three arms emitted at
+  every site. That is the same shape one order of magnitude down. The packed-integer arm
+  is the fused raw-i64 store (`.kb/packed-integer-vectors.md`) and must stay inline; the
+  GENERAL arm is the candidate for a shared callee.
+- **`subseq` on a string is ~3.7 KB of inline copy loop per site** on both compile
+  paths (`expandSubseqCompat`'s general-array arm). Item 5 routed around it for the one
+  helper that needed it; every other `subseq` in every library still pays it. This is
+  probably the largest single remaining per-site cost in the compiler.
+- **Compile-path temps are never released.** Item 4 removed one caller; every other
+  `ctx.allocTemp()` is still permanent, and `.todo/137` is the JVM twin.
 
 ## Non-goals
 
 - The `--no-gc` and component paths: both are flat or smaller across the same
   window, and the component wrapper floor is a different budget.
-- The funcall-dispatch gate itself. It works, and its floor improved; this is about
-  what one arm costs, not about which functions get an arm.
+- The funcall-dispatch gate itself. It works, and its floor improved.
 - Reverting the numeric tiers. The 5-way ladder is the price of exact arbitrary
   precision on wasm; the fix is to emit it once, not to drop a tier.

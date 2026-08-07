@@ -2422,6 +2422,19 @@ public final class LispNames {
 	 */
 	public static final String SCHAR_SET = "%SCHAR-SET";
 
+	/**
+	 * The {@code %schar-set-runtime} internal helper: {@link #SCHAR_SET}'s whole
+	 * compile-path body as ONE defun, {@code (%schar-set-runtime s i c)} answering the
+	 * string the write leaves behind (the same object when it is a mutable character
+	 * vector, a fresh one when the rebuild had to run). Injected once per program by
+	 * {@code LispMacroExpander.expandTopLevelDefinitions} so that a
+	 * {@code (setf (aref v i) x)} site is a call rather than an inlined subseq/concat
+	 * rebuild -- see {@code .kb/wasm-shared-coercion.md} for the same lesson applied to
+	 * the numeric coercion ladder. The interpreter never sees it: it has a real in-place
+	 * {@code %schar-set} primitive.
+	 */
+	public static final String SCHAR_SET_RUNTIME = "%SCHAR-SET-RUNTIME";
+
 	/** The {@code char-code} built-in function (the code point of a character). */
 	public static final String CHAR_CODE = "CHAR-CODE";
 

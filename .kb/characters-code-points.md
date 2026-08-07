@@ -247,7 +247,9 @@ ArrayList slot (normalized to a String at read-out via
 `StringBuilder.appendCodePoint`), and WASM holds `TYPE_CHAR` per slot. A
 supplementary code point via setf-aref lands in exactly one indexed slot on
 every backend and prints as its glyph. Capacity, fill pointer and index are all
-in code-point units.
+in code-point units. On the two compile paths the write itself goes through the
+shared `%schar-set-runtime` defun rather than being expanded at the site --
+semantics unchanged, `.kb/string-write-runtime.md` for why.
 
 `read-char` is code-point-symmetric across all four backends now (interpreter
 and JVM combine UTF-16 surrogate pairs via `mark(1)`/`reset()`; WASM decodes
