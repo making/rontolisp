@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -62,6 +63,8 @@ public final class RontoLispCli {
 
 	private final InputStream in;
 
+	private int exitCode;
+
 	/**
 	 * Create a new CLI instance.
 	 * @param in the input stream
@@ -73,10 +76,30 @@ public final class RontoLispCli {
 	}
 
 	/**
+	 * The exit code the last {@link #run} produced. Every mode but {@code format} leaves
+	 * it at 0 and reports failure by throwing, which {@code main} turns into a stack
+	 * trace; the {@code format} subcommand instead has to distinguish "these files are
+	 * not formatted" (1) from "something went wrong" (2) so it can be used as a CI gate.
+	 * @return the exit code, 0 when there was nothing to report
+	 */
+	public int exitCode() {
+		return this.exitCode;
+	}
+
+	/**
 	 * Run the CLI with the given arguments.
 	 * @param args the command-line arguments
 	 */
 	public void run(String[] args) {
+		// Subcommands are matched before option parsing: they take their own arguments
+		// (any
+		// number of paths, unlike the single input file every other mode takes) and share
+		// none of the compiler flags.
+		if (args.length > 0 && "format".equals(args[0])) {
+			this.exitCode = new FormatCommand(this.in, this.out).run(Arrays.copyOfRange(args, 1, args.length));
+			return;
+		}
+
 		CliOptions options = CliOptions.build(args);
 
 		if (options.contains("-h") || options.contains("--help")) {
@@ -602,6 +625,11 @@ public final class RontoLispCli {
 		this.out.println("  file -o out.class   Compile to JVM bytecode");
 		this.out.println("  file -o out.wasm    Compile to WASM");
 		this.out.println();
+		this.out.println("Subcommands:");
+		this.out.println("  format PATH...     Re-indent Lisp source files in place (a");
+		this.out.println("                     directory is walked for .lisp and .asd files).");
+		this.out.println("                     See: rontolisp format --help");
+		this.out.println();
 		this.out.println("Options:");
 		this.out.println("  -h, --help         Show this help message");
 		this.out.println("  -v, --version      Show version");
@@ -732,7 +760,9 @@ public final class RontoLispCli {
 			}
 		}
 		if (!buffered) {
-			new RontoLispCli(System.in, System.out).run(args);
+			RontoLispCli cli = new RontoLispCli(System.in, System.out);
+			cli.run(args);
+			exit(cli.exitCode());
 			return;
 		}
 		PrintStream bufferedOut = new PrintStream(
@@ -740,11 +770,24 @@ public final class RontoLispCli {
 				StandardCharsets.UTF_8);
 		System.setOut(bufferedOut);
 		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
+		RontoLispCli cli = new RontoLispCli(System.in, bufferedOut);
 		try {
-			new RontoLispCli(System.in, bufferedOut).run(args);
+			cli.run(args);
 		}
 		finally {
 			bufferedOut.flush();
+		}
+		exit(cli.exitCode());
+	}
+
+	// A non-zero exit code has to go through System.exit -- returning from main is always
+	// 0.
+	// Zero returns normally instead, so an embedded caller (tests, the native binary's
+	// own
+	// smoke checks) is not killed by a successful run.
+	private static void exit(int code) {
+		if (code != 0) {
+			System.exit(code);
 		}
 	}
 

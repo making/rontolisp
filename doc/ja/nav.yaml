@@ -11,6 +11,8 @@ sections:
         title: REPL
       - file: getting-started/file-interpretation.md
         title: ファイルのインタプリタ実行
+      - file: getting-started/format.md
+        title: ソースコードのフォーマット
   - title: コンパイル
     pages:
       - file: compiling/jvm.md

@@ -80,6 +80,7 @@ come here only when you need the "why exactly" behind a constraint.
 - [eval-runtime.md](eval-runtime.md) -- runtime `eval` interpreter embedded in compiled output
 - [hash-tables.md](hash-tables.md) -- hash table representation per backend
 - [documentation-site.md](documentation-site.md) -- doc site layout, code-fence conventions, build/preview
+- [formatter.md](formatter.md) -- `rontolisp format` (the source formatter): the whitespace-only invariant (identical token stream + fixpoint, pinned over every checked-in `.lisp`/`.asd`), why it has its own lossless CST reader instead of `LispReader`, the `Style` model and the `childStyle`/`statements` fields that carry what structure cannot, the two width mechanics that silently overrun the margin when forgotten (closing-paren accounting; "would moving it help"), the naming-convention guess for unknown macros, and the three deliberate divergences from trivial-formatter with their reasons
 - [asdf.md](asdf.md) -- `asdf:defsystem`/`asdf:load-system` limited ASDF subset (.asd parsed as data, LoadInliner splice + interpreter runtime), the shim/replacement-`.asd`/leaf-module substitution ladder, and every loadable real library incl. the ironclad slice
 - [declarations-type-checks.md](declarations-type-checks.md) -- `declare`/`declaim`/`proclaim`/`the` no-ops, `eval-when` (+ top-level flattening), `check-type`/`assert`, shared type-specifier tests
 - [flet-labels.md](flet-labels.md) -- `flet`/`labels` local functions via let-bound lambdas + Lisp-2 call-site rewrite (labels = nil-then-setq letrec)

@@ -65,13 +65,15 @@ rontolisp                                # REPL
 rontolisp hello.lisp                     # interpret           -> 3
 rontolisp hello.lisp -o Hello.class && java Hello              # JVM -> 3
 rontolisp hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
+
+rontolisp format hello.lisp               # re-indent (a directory works too)
 ```
 
 For the REPL, file interpretation, JVM/WASM compilation (including
 `rontolisp:wasm-export`, `rontolisp:wasm-import`, `rontolisp:wit-export` with
 `--scaffold-wit` (implement a WIT world), `--no-wasi`, `--optimize`,
-`--component`, and `--dynamic`), the full language reference, and the
-`rontolisp` extensions (`fetch`), see the
+`--component`, and `--dynamic`), the `format` source formatter, the full
+language reference, and the `rontolisp` extensions (`fetch`), see the
 [documentation site](https://making.github.io/rontolisp/docs/).
 
 ## Project Structure
@@ -83,6 +85,7 @@ am.ik.rontolisp.eval         -- Tree-walking interpreter + Environment
 am.ik.rontolisp.compiler     -- Shared compiler interface + FreeVarAnalyzer
 am.ik.rontolisp.codegen.jvm  -- JVM .class generation
 am.ik.rontolisp.codegen.wasm -- WASM .wasm generation (wasm-GC + WASI)
+am.ik.rontolisp.format       -- Source formatter (rontolisp format)
 am.ik.rontolisp.cli          -- REPL + CLI entry point
 am.ik.jvm                    -- JVM bytecode primitives
 am.ik.wasm                   -- WASM binary primitives

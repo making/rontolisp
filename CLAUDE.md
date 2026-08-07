@@ -40,14 +40,20 @@ Source string
 Package dependency direction (no cycles allowed):
 
 ```
-cli -> eval, compiler, codegen.*, macro, reader, am.ik.wit
+cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit
 codegen.jvm -> compiler, macro, am.ik.jvm
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, rontolisp (AST types only), am.ik.wit
 eval -> macro, compiler, reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
+format -> (nothing)
 ```
+
+`format` (the `rontolisp format` source formatter) depends on NOTHING -- not even
+`reader`. That is the point: it needs the source verbatim, and the reader upcases symbols,
+evaluates `#+`/`#-`, rewrites `'x` and drops comments, so it has its own lossless CST
+front end. `.kb/formatter.md`.
 
 `compiler` holds the backend-shared, backend-FREE directive front-ends: anything that must
 behave identically on every backend (both `eval` and `cli` do) depends on it, never the
@@ -87,6 +93,10 @@ the "grep before you change behavior" rule:
   `.kb/pure-builtin-fold.md`
 - Backends & flags -- `--dynamic`, `--optimize`, `--component` (WASI 0.3), `--no-gc`, `--simd`,
   `wit-import`/`wit-export`/`wasm-export`, WASM GC strings.
+- `rontolisp format`, the source formatter: the whitespace-ONLY invariant (identical token
+  stream + fixpoint, pinned over every checked-in `.lisp`/`.asd`), why it reads source with
+  its own lossless CST reader rather than `LispReader`, and the deliberate divergences from
+  trivial-formatter -> `.kb/formatter.md`
 
 Governing rule (why "all four backends" matters): where behavior must be identical across the
 interpreter, the JVM, and both WASM backends, the topic's `.kb` file says so and names the
@@ -132,6 +142,10 @@ When adding a new built-in function or special form:
 3. **WASM compiler** -> run `WasmLispCompilerIntegrationTest`
 4. Add a case to `src/test/resources/ci-spec.yaml` if it should be covered end-to-end (`CiSpecE2eTest`)
 5. Update the docs (see "Updating the Documentation Site"). For a new built-in **function / macro / special form**: add a per-operator page (H1 = name, signature, short description, one runnable ```lisp example with a `; => value` annotation -- a static ```console block for forms needing stdin/files or that signal, e.g. `error`/`with-open-file`) under the matching `reference/{functions,macros,special-forms}/` directory, a `_catalog.yaml` entry, and a row in the curated `reference/functions.md` table, then run the `-Drontolisp.doc.fix=true` helper.
+6. A new operator whose trailing arguments are a BODY (not an argument list) also needs an
+   `am.ik.rontolisp.format.IndentRules` entry -- without one `rontolisp format` lays it out
+   as a function call and aligns its whole body under its first argument. A plain function
+   needs nothing. `.kb/formatter.md`
 
 ### Adding a New Built-in Function
 
