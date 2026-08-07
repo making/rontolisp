@@ -53,11 +53,11 @@
                 (text-response 200
                  (format nil "[in_memory] Stored key '~a'~%" key)))
               (text-response 400
-                             (format nil
-                                     "Invalid JSON (expected key and value string fields)~%"))))
+               (format nil
+                "Invalid JSON (expected key and value string fields)~%"))))
         (text-response 400
-                       (format nil
-                               "Invalid JSON (expected key and value string fields)~%")))))
+         (format nil
+                 "Invalid JSON (expected key and value string fields)~%")))))
 
 ;; GET /?key=<key> answers the stored value, or 404 when the key is unknown.
 ;; The raw query string arrives as :query-string; rontolisp:query-param

@@ -64,15 +64,15 @@
                     (text-response 502
                                    (format nil "leet service unavailable~%"))))
               (text-response 400
-                             (format nil
-                                     "expected a JSON object with a string payload field~%"))))
+               (format nil
+                "expected a JSON object with a string payload field~%"))))
         (text-response 400
          (format nil "expected a JSON object with a string payload field~%")))))
 
 (defun home (env)
   (text-response 200
-                 (format nil
-                         "POST /task with {\"payload\":\"...\"} to get it back in leet speak~%")))
+   (format nil
+    "POST /task with {\"payload\":\"...\"} to get it back in leet speak~%")))
 
 ;; The env plist's :path-info carries the (percent-decoded) path only (any
 ;; query string arrives separately as :query-string), so the comparisons are

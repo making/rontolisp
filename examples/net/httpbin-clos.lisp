@@ -69,25 +69,22 @@
          (cl-who:with-html-output-to-string (s)
            (:html (:head (:title "rontolisp httpbin"))
                   (:body (:h1 "rontolisp httpbin")
-                         (:p
-                          "A miniature httpbin: every route below echoes the "
-                          "request back as JSON.")
-                         (:ul (:li (:code "GET /get")
-                                   " -- args, headers, method, path")
-                              (:li (:code "POST /post")
-                                   " -- ditto, plus the request body (raw and parsed JSON)")
-                              (:li (:code "PUT /put") " -- ditto")
-                              (:li (:code "PATCH /patch") " -- ditto")
-                              (:li (:code "DELETE /delete") " -- ditto"))
-                         (:p "Try it:")
-                         (:pre
-                          (:code
-                           (cl-who:esc
-                            "curl 'http://127.0.0.1:8080/get?a=1&b=two'")))
-                         (:pre
-                          (:code
-                           (cl-who:esc
-                            "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post")))))))))
+                   (:p "A miniature httpbin: every route below echoes the "
+                       "request back as JSON.")
+                   (:ul
+                    (:li (:code "GET /get") " -- args, headers, method, path")
+                    (:li (:code "POST /post")
+                     " -- ditto, plus the request body (raw and parsed JSON)")
+                    (:li (:code "PUT /put") " -- ditto")
+                    (:li (:code "PATCH /patch") " -- ditto")
+                    (:li (:code "DELETE /delete") " -- ditto")) (:p "Try it:")
+                   (:pre
+                    (:code
+                     (cl-who:esc "curl 'http://127.0.0.1:8080/get?a=1&b=two'")))
+                   (:pre
+                    (:code
+                     (cl-who:esc
+                      "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post")))))))))
 
 (defun echo (env)
   (json-response 200

@@ -55,6 +55,8 @@ public final class LispFormatter {
 
 	private final Map<CstNode, Optional<String>> flatCache = new IdentityHashMap<>();
 
+	private final Map<CstNode, Extent> narrowestCache = new IdentityHashMap<>();
+
 	/** Offsets in {@link #out} at which a trailing comment starts. */
 	private final List<Integer> trailingCommentStarts = new ArrayList<>();
 
@@ -155,7 +157,7 @@ public final class LispFormatter {
 	 */
 	private void renderPrefix(CstNode.Prefix prefix, int indent, @Nullable Style override, int closers) {
 		String text = prefix.prefix();
-		boolean guard = text.startsWith("#+") || text.startsWith("#-");
+		boolean guard = isFeatureGuard(text);
 		String flat = flat(prefix);
 		if (guard && (flat == null || !fits(indent, flat.length(), closers))) {
 			emit(text.stripTrailing());
@@ -406,7 +408,7 @@ public final class LispFormatter {
 	 * when it stops being possible to read: a long operator name, or a call already
 	 * nested deep, can leave the alignment column with less room than the arguments need,
 	 * and then EVERY argument line overruns the margin with no way to recover. When that
-	 * happens and a plain indent would not, the arguments indent by 4 instead. The
+	 * happens and the shallowest column would not, the arguments go there instead. The
 	 * condition is written as "would the fallback actually help", so nothing moves unless
 	 * moving fixes something.
 	 * @param items the call's items, with the operator at index 0
@@ -428,21 +430,31 @@ public final class LispFormatter {
 			return fits(aligned, flatWidth(items.get(1)), inner) ? aligned : shallow;
 		}
 		int widest = 0;
+		boolean overflows = false;
 		for (int index = 1; index < items.size(); index++) {
 			boolean pair = pairStartsAt(items, index, items.size());
 			int closers = closersAfter(items, pair ? index + 1 : index, inner);
 			int unit = pair ? pairWidth(items, index) : flatWidth(items.get(index));
-			// An argument that fits nowhere has to wrap whichever column it starts in, so
-			// it
-			// cannot speak to which column the others should get.
 			if (unit >= 0 && fits(shallow, unit, closers)) {
 				widest = Math.max(widest, unit + closers);
+			}
+			else if (unit >= 0) {
+				// An argument too wide for either column wraps wherever it starts, so it
+				// cannot say which column the OTHERS should get. It does speak for itself
+				// -- it is the one that will overrun the margin -- but on the same terms
+				// as every other "move it elsewhere" rule here: only when the alignment
+				// is what puts it over and the shallow column takes it back under. One
+				// merely too wide FLAT is comfortable in either column once broken and
+				// gains nothing; one too wide even at the shallow column is not rescued,
+				// only spread over more lines that are still over.
+				Extent extent = pair ? pairNarrowest(items, index) : narrowest(items.get(index));
+				overflows |= !fitsNarrowest(aligned, extent, closers) && fitsNarrowest(shallow, extent, closers);
 			}
 			if (pair) {
 				index++;
 			}
 		}
-		boolean overruns = widest > 0 && aligned + widest > this.width;
+		boolean overruns = overflows || (widest > 0 && aligned + widest > this.width);
 		return overruns && shallow < aligned ? shallow : aligned;
 	}
 
@@ -557,6 +569,101 @@ public final class LispFormatter {
 			case CstNode.Listing listing ->
 				listing.open().length() + (listing.items().isEmpty() ? 1 : firstLineWidth(listing.items().get(0)));
 		};
+	}
+
+	/**
+	 * The shape of a node's NARROWEST rendering, both measured from the column it starts
+	 * in: how wide its widest line is, and how wide its last line is. The two are
+	 * separate questions because everything written after the node -- the closing parens
+	 * of every form it ends -- lands on the last line and nowhere else, and charging them
+	 * to the widest line is how a two-column error creeps in.
+	 *
+	 * @param widest the width of its widest line
+	 * @param last the width of its last line
+	 */
+	private record Extent(int widest, int last) {
+	}
+
+	/**
+	 * How narrow a node can be made: the shape it has once it has been broken as far as
+	 * this formatter can break it. Where {@link #flatWidth} answers "does it fit on one
+	 * line", this answers "is there a line it fits on at all" -- which is what tells an
+	 * argument too wide for its column because of how far it is INDENTED from one too
+	 * wide because of what it contains. An unbreakable 54-column string overruns from any
+	 * deep column; a {@code (prog1 (schar ...) (incf ...))} clause fits in every column
+	 * once it breaks.
+	 * <p>
+	 * Both numbers are under-estimates: each element is charged the shallowest offset any
+	 * style could give it, one column past the opening paren, where the real style may
+	 * indent it further. No rendering is narrower than this, and nothing may treat it as
+	 * a rendering that exists.
+	 * @param node the node
+	 * @return a lower bound on the shape of its narrowest rendering
+	 */
+	private Extent narrowest(CstNode node) {
+		Extent cached = this.narrowestCache.get(node);
+		if (cached == null) {
+			cached = computeNarrowest(node);
+			this.narrowestCache.put(node, cached);
+		}
+		return cached;
+	}
+
+	private Extent computeNarrowest(CstNode node) {
+		return switch (node) {
+			// Only a node that HAS a one-line rendering is ever measured this way, so a
+			// token here is a single line by construction; the split is for safety.
+			case CstNode.Atom atom -> lineExtent(atom.text());
+			case CstNode.LineComment comment -> lineExtent(comment.text());
+			case CstNode.BlockComment comment -> lineExtent(comment.text());
+			case CstNode.Prefix prefix -> {
+				Extent datum = narrowest(prefix.datum());
+				// A #+feature guard is the one prefix that can hand its datum the whole
+				// line below; every other one shifts the datum right by its own width.
+				yield isFeatureGuard(prefix.prefix())
+						? new Extent(Math.max(prefix.prefix().stripTrailing().length(), datum.widest()), datum.last())
+						: new Extent(prefix.prefix().length() + datum.widest(),
+								prefix.prefix().length() + datum.last());
+			}
+			case CstNode.Listing listing -> {
+				List<CstNode> items = listing.items();
+				int open = listing.open().length();
+				if (items.isEmpty()) {
+					yield new Extent(open + 1, open + 1);
+				}
+				int widest = open;
+				for (int index = 0; index < items.size(); index++) {
+					// The first element always follows the opener; every other one may
+					// start as far left as one column past it.
+					int offset = index == 0 ? open : 1;
+					widest = Math.max(widest, offset + narrowest(items.get(index)).widest());
+				}
+				int last = (items.size() == 1 ? open : 1) + narrowest(items.getLast()).last() + 1;
+				yield new Extent(Math.max(widest, last), last);
+			}
+		};
+	}
+
+	/**
+	 * Whether a node's narrowest rendering fits at a column: no line of it over the
+	 * margin, and room left on its last line for the closing parens that follow it.
+	 * @param column the column it would start at
+	 * @param extent the shape of its narrowest rendering
+	 * @param closers how many closing parens follow it
+	 * @return {@code true} if some rendering of it could fit there
+	 */
+	private boolean fitsNarrowest(int column, Extent extent, int closers) {
+		return column + extent.widest() <= this.width && column + extent.last() + closers <= this.width;
+	}
+
+	private static Extent lineExtent(String text) {
+		int first = text.indexOf('\n');
+		return first < 0 ? new Extent(text.length(), text.length())
+				: new Extent(first, text.length() - text.lastIndexOf('\n') - 1);
+	}
+
+	private static boolean isFeatureGuard(String prefix) {
+		return prefix.startsWith("#+") || prefix.startsWith("#-");
 	}
 
 	/**
@@ -698,6 +805,20 @@ public final class LispFormatter {
 		String key = flat(items.get(index));
 		String value = flat(items.get(index + 1));
 		return key != null && value != null ? key.length() + 1 + value.length() : -1;
+	}
+
+	/**
+	 * The narrowest the {@code :key value} pair starting at the given index can be made.
+	 * The value goes below its key, at the key's own column, when it will not fit beside
+	 * it, so the pair is as wide as its wider half and ends where its value ends.
+	 * @param items the call's items
+	 * @param index the key's index
+	 * @return a lower bound on the shape of the pair's narrowest rendering
+	 */
+	private Extent pairNarrowest(List<CstNode> items, int index) {
+		Extent key = narrowest(items.get(index));
+		Extent value = narrowest(items.get(index + 1));
+		return new Extent(Math.max(key.widest(), value.widest()), value.last());
 	}
 
 	private static boolean isKeyword(CstNode node) {

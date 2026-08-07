@@ -60,13 +60,13 @@
               (json-response 200
                (rontolisp:plist-hash-table (list :message message)))
               (json-response 400
-                             (rontolisp:plist-hash-table
-                              (list :error
-                                    "expected a JSON object with a string message field")))))
+               (rontolisp:plist-hash-table
+                (list :error
+                      "expected a JSON object with a string message field")))))
         (json-response 400
-                       (rontolisp:plist-hash-table
-                        (list :error
-                              "expected a JSON object with a string message field"))))))
+         (rontolisp:plist-hash-table
+          (list
+           :error "expected a JSON object with a string message field"))))))
 
 (defun not-found (env) (text-response 404 (format nil "Not found~%")))
 

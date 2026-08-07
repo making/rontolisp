@@ -105,9 +105,27 @@ which of them is which.
    therefore gives the alignment up for `indent + 1` whenever the arguments do not
    fit at it, and never charges depth for an alignment with nothing to align --
    a call with ONE argument that must break starts it at `indent + 1`. An argument
-   that fits nowhere is skipped when measuring, since it wraps in any column and so
-   cannot speak to which column the others should get. Getting these three right cut
-   the corpus's over-margin lines by more than half.
+   that fits in NEITHER column is left out of that measurement, since it wraps in
+   any column and so cannot speak to which column the others should get. Getting
+   these three right cut the corpus's over-margin lines by more than half.
+
+   Being left out of the measurement is not the same as having no say, and reading
+   it as the same was a bug: at two identical calls one nesting level apart, the
+   `(format nil "...")` argument fit at `indent + 1` in the shallower one and voted
+   for it, fit nowhere in the deeper one and was skipped, and the deeper site kept
+   an alignment that ran 15 columns past the margin -- chosen by the one argument
+   (`400`) with room to spare. An argument that fits nowhere therefore also votes
+   for `indent + 1`, but only for itself and only on the same "would moving it
+   help" terms as `movesToOwnLine`: when the ALIGNMENT is what puts it over and
+   `indent + 1` takes it back under. That question is `narrowest`, which measures
+   how wide a node still is once broken as far as it can be -- an unbreakable
+   54-column string is over from a deep column however it breaks, while a
+   `(t (prog1 (schar ...) (incf ...)))` cond clause is only too wide FLAT and is
+   comfortable in either column once it breaks, so it keeps its siblings' alignment.
+   `narrowest` returns TWO widths, widest line and last line, because the closing
+   parens that follow a form land on its last line only; charging them to its widest
+   line makes it look two columns wider than it is and costs a `cond` its alignment.
+   This took the corpus measurement below from 481 to 414.
 
 ### Unknown operators are guessed from their name
 
@@ -156,5 +174,15 @@ author's. A line whose content cannot be broken may therefore exceed the margin,
 and deeply nested expressions can too. The margin is a target, not a guarantee;
 `LispFormatterTest` pins the token stream and the fixpoint, NOT the margin. If you
 tighten this, the useful measurement is "output lines over the margin that are
-neither a comment nor a trailing comment", compared against the same count in the
-input.
+neither a comment nor a trailing comment", taken over the files
+`LispFormatterTest.repositoryLispSources` walks and compared against the same count
+in the input:
+
+```
+files=377  code lines over 80: source=1365 formatted=414  files-made-worse=5
+```
+
+Only the `formatted` column is comparable across sessions. The `source` column
+measures the input, and the input moves whenever `examples/` or
+`src/main/resources/` is reformatted -- which every rule change has to do anyway, or
+`rontolisp format --check` over them goes red.

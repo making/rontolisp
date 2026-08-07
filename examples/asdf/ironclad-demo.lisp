@@ -17,8 +17,9 @@
    :sha256 (ironclad:ascii-string-to-byte-array "abc"))))
 (print
  (ironclad:byte-array-to-hex-string
-  (ironclad:digest-sequence :sha256 (ironclad:ascii-string-to-byte-array
-                                     "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))))
+  (ironclad:digest-sequence
+   :sha256 (ironclad:ascii-string-to-byte-array
+            "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))))
 
 ;; SHA-224 shares the SHA-256 compression function
 (print

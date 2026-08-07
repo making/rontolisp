@@ -216,6 +216,65 @@ class LispFormatterTest {
 	}
 
 	@Test
+	void startsAnArgumentThatFitsInNoColumnAtTheShallowestOne() {
+		// The same call at two depths. Its (format nil "...") argument fits at the
+		// shallow
+		// column in the outer one and in neither column in the inner one -- and that
+		// alone
+		// used to decide the two layouts apart, because an argument fitting nowhere was
+		// left out of the vote, leaving the inner site aligned under 400 by 400, the only
+		// argument with room to spare. The wrapping argument is the one the choice is
+		// FOR:
+		// it runs past the margin from either column, and by less from the shallow one
+		// (here 74 columns against the 95 the alignment gave it).
+		assertThat(LispFormatter.format("""
+				(defun handle-task (env)
+				  (let ((body (getf env :body)))
+				    (if (json-object-p body)
+				        (let ((payload (gethash "payload" (rontolisp:json-parse body))))
+				          (if (stringp payload)
+				              (accept payload)
+				              (text-response 400 (format nil "expected a JSON object with a \
+				string payload field~%"))))
+				        (text-response 400 (format nil "expected a JSON object with a string \
+				payload field~%")))))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defun handle-task (env)
+				  (let ((body (getf env :body)))
+				    (if (json-object-p body)
+				        (let ((payload (gethash "payload" (rontolisp:json-parse body))))
+				          (if (stringp payload)
+				              (accept payload)
+				              (text-response 400
+				               (format nil
+				                "expected a JSON object with a string payload field~%"))))
+				        (text-response 400
+				         (format nil "expected a JSON object with a string payload field~%")))))
+				""");
+	}
+
+	@Test
+	void keepsTheAlignmentForAnArgumentThatIsTooWideOnlyWhileItIsFlat() {
+		// The other half of the rule above. This clause fits in no column FLAT -- 79
+		// columns from column 8 -- but every line of it fits once it breaks, so the
+		// shallow
+		// column would buy it nothing and cost the clause above it its alignment. Only an
+		// argument the alignment itself puts past the margin may ask for the move.
+		assertThat(LispFormatter.format("""
+				(defun next-char-non-extended (lexer)
+				  (cond ((end-of-string-p lexer) nil)
+				        (t (prog1 (schar (lexer-str lexer) (lexer-pos lexer)) \
+				(incf (lexer-pos lexer))))))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defun next-char-non-extended (lexer)
+				  (cond ((end-of-string-p lexer) nil)
+				        (t
+				         (prog1 (schar (lexer-str lexer) (lexer-pos lexer))
+				           (incf (lexer-pos lexer))))))
+				""");
+	}
+
+	@Test
 	void keepsTheLambdaListOfADefmethodOnTheFirstLine() {
 		assertThat(LispFormatter
 			.format("(defmethod render :around ((s stream) (x thing)) (call-next-method) (flush s))\n")).isEqualTo("""

@@ -68,8 +68,8 @@
               (json-response 400
                              (rontolisp:plist-hash-table
                               (list :error "ask the ball a question"
-                                    :usage
-                                    "GET /?question=... or POST a question body")))))
+                               :usage
+                               "GET /?question=... or POST a question body")))))
         (json-response 404
          (rontolisp:plist-hash-table (list :error "not found" :path path))))))
 

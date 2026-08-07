@@ -155,18 +155,17 @@
 
 (defun usage ()
   (json-response 200
-                 (rontolisp:plist-hash-table
-                  (list :service "linalg-api"
-                        :endpoints (list (rontolisp:plist-hash-table
-                                          (list :method "POST"
-                                                :path "/solve"
-                                                :body
-                                                "{\"a\": [[2,1],[1,3]], \"b\": [5,10]}"))
-                                         (rontolisp:plist-hash-table
-                                          (list :method "POST"
-                                                :path "/fit"
-                                                :body
-                                                "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))))
+   (rontolisp:plist-hash-table
+    (list :service "linalg-api"
+          :endpoints (list (rontolisp:plist-hash-table
+                            (list :method "POST"
+                             :path "/solve"
+                             :body "{\"a\": [[2,1],[1,3]], \"b\": [5,10]}"))
+                           (rontolisp:plist-hash-table
+                            (list :method "POST"
+                                  :path "/fit"
+                                  :body
+                                  "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))))
 
 ;; The env plist's :path-info carries the (percent-decoded) path only (any
 ;; query string arrives separately as :query-string), so the comparisons are
