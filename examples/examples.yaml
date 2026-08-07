@@ -9,7 +9,10 @@
 # --------------
 #   RUN (the program runs to completion; we assert exit 0 and check the output):
 #     interpreter     <driver> FILE [args]
-#     jvm             <driver> FILE -o Prog.class   then  java -cp . Prog [args]
+#     jvm             <driver> FILE -o Prog.class   then  java -cp .:<exec jar> Prog [args]
+#                     (the jar is on the classpath because a compiled program that
+#                     reaches a runtime support class -- an HTTP server, a socket,
+#                     a Gray stream -- needs it; most are self-contained and do not)
 #     wasm            <driver> FILE -o prog.wasm --optimize   then  wasmtime run -W gc --dir . prog.wasm [args]
 #   COMPILE (blocking servers / host-invoked modules never return on their own,
 #   so we only build them and assert the compile succeeds):
@@ -542,3 +545,43 @@ examples:
         - '\"json\":null'
         - '\"allowed\":\"POST\"'
         - '"status":404'
+  - path: cloudflare-workers/httpbin-clack/demo.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- the CLACK flavour of the Worker. The two halves are
+      separate files on purpose: app.lisp is net/httpbin-clack.lisp verbatim (a
+      Clack environment in, a Clack response out) with only its clackup line
+      removed, and worker.lisp is the adapter that replaces clackup, written
+      over the shared %http-make-env / %http-normalize-response entry points.
+      What this pins is
+      that the adapter builds the same environment on every backend: the "?"
+      split and the percent-decoding of the raw target (/%67et answers
+      "path":"/get"), the content-length the buffered :raw-body needs, and the
+      response header ALIST crossing as a JSON array of pairs rather than an
+      object. The Worker itself calls the wasm-export'ed handle-request from
+      JavaScript and is built by the directory's build.sh (--no-wasi
+      --optimize). Checked with contains, not equals: the key ORDER inside a
+      JSON object follows hash-table iteration order, which differs per backend.
+    expect:
+      contains:
+        # The response body is a JSON string nested in the outer JSON, so its
+        # own quotes arrive backslash-escaped. One key per needle: a needle
+        # spanning two keys would depend on their order.
+        - '\"path\":\"/get\"'
+        - '\"a\":\"1\"'
+        - '\"b\":\"two\"'
+        - '\"json\":{\"name\":\"rontolisp\"}'
+        - '\"json\":null'
+        - '\"allowed\":\"POST\"'
+        - '"status":404'
+        - '[["content-type","application/json"]]'
+  - path: cloudflare-workers/httpbin-clack/serve.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the other half of the same directory: app.lisp under the REAL clack:clackup
+      instead of under worker.lisp's Worker adapter. app.lisp + serve.lisp is
+      byte-for-byte net/httpbin-clack.lisp, which is the claim the directory
+      makes -- so what this pins is that the file the Worker compiles is still a
+      portable Clack application, on the two backends where clackup can actually
+      bind (a blocking server, hence compile-only; Preview 1 has no incoming
+      TCP).

@@ -1,6 +1,6 @@
 # rontolisp on Cloudflare Workers
 
-Three ways to run a Common Lisp program, compiled to WebAssembly by rontolisp,
+Four ways to run a Common Lisp program, compiled to WebAssembly by rontolisp,
 on Cloudflare Workers. Each directory is a complete, independent Worker project:
 `./build.sh && npx wrangler dev`, then `npx wrangler deploy`.
 
@@ -8,6 +8,7 @@ on Cloudflare Workers. Each directory is a complete, independent Worker project:
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case`. The Cloudflare port of [`examples/net/httpbin.lisp`](../net/httpbin.lisp). | 277 KB, `--no-wasi` wasm-GC, zero imports | 53 lines, one file, no dependencies |
+| [`httpbin-clack/`](httpbin-clack) | **The same endpoints as a real [Clack](https://github.com/fukamachi/clack) application** — the environment plist in, the Clack response list out — so the handler also runs on hunchentoot, on woo and under `wasmtime serve`, unchanged. The Cloudflare port of [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp): `app.lisp` is that file minus its `clackup` line and nothing else, `worker.lisp` is the fifteen-line adapter that replaces it, and `serve.lisp` puts the `clackup` line back so the identical application can be curl'd on a real HTTP server. | 1.57 MB (**334 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/`'s boundary code verbatim; only the request shape differs |
 | [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (278 KB) | 51 hand-written lines + 247 KB of generated glue |
 
 ## Which one should I copy?
@@ -18,6 +19,12 @@ that works, and it needs no runtime support at all.
 `httpbin/` for anything else. It is the shortest path to the full language on
 Workers, and it is a straight port of an existing rontolisp server example, so
 the two are worth diffing.
+
+`httpbin-clack/` when the program must **also** run somewhere that is not a
+Worker. It is the same five endpoints, but the handler is a Clack application
+rather than a Worker handler, so it ports to any Clack server unchanged — for
+3.7× the compressed module, because the whole of clack and lack ships inside it.
+That directory states the trade in full.
 
 `httpbin-component/` answers a question rather than being a recommendation:
 *wouldn't the component model be simpler?* For the string marshalling, yes — see
@@ -109,19 +116,22 @@ Even there it is 92 KB of generated JavaScript to replace about ten lines.
 ## Developing without Cloudflare
 
 The Lisp in every one of these is an ordinary function, so the whole edit/run
-loop happens locally — [`httpbin/demo.lisp`](httpbin/demo.lisp) drives the
-handler on the interpreter, the JVM and wasmtime. Both Lisp sources are pinned
-by `examples/examples.yaml`; while iterating on them, narrow the suite:
+loop happens locally — [`httpbin/demo.lisp`](httpbin/demo.lisp) and
+[`httpbin-clack/demo.lisp`](httpbin-clack/demo.lisp) drive their handlers on the
+interpreter, the JVM and wasmtime, and `httpbin-clack/`'s application can also be
+served for real with `rontolisp httpbin-clack/serve.lisp` — no Cloudflare, no
+JavaScript. Every Lisp source here is pinned by `examples/examples.yaml`; while
+iterating on them, narrow the suite:
 
 ```bash
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
        -Drontolisp.examples=true -Drontolisp.examples.only=cloudflare test
-# Tests run: 5 in ~2s, instead of 212 in ~6min
+# Tests run: 10, instead of 217 in ~6min
 ```
 
 ## Deploying
 
-All three were deployed to the real edge and verified there, not only under
+All four were deployed to the real edge and verified there, not only under
 `wrangler dev`:
 
 | | Upload | gzip | Worker Startup Time |
@@ -129,10 +139,12 @@ All three were deployed to the real edge and verified there, not only under
 | `hello` | 1.88 KiB | **1.12 KiB** | not reported |
 | `httpbin` | 278.53 KiB | **91.03 KiB** | 12-13 ms |
 | `httpbin-component` | 503.84 KiB | **130.21 KiB** | 5 ms |
+| `httpbin-clack` | 1539.52 KiB | **339.95 KiB** | 16 ms |
 
 The gzip column is the one that counts: the Worker size limit applies to the
 compressed bundle, so even the component build sits at about 4% of the free
-plan's 3 MB.
+plan's 3 MB, and `httpbin-clack` — the largest of the four by a wide margin,
+because the whole of clack and lack is inside it — at about 11%.
 
 "Worker Startup Time" is what `wrangler deploy` measures and budget-checks, and
 it is why `httpbin/src/index.js` instantiates at **module scope** rather than

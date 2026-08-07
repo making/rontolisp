@@ -1,37 +1,24 @@
-;; The Clack flavour of httpbin.lisp: the same five echo endpoints (/get,
-;; /post, /put, /patch, /delete -- see there for the JSON they answer), served
-;; through clack:clackup on the real clack (ql:quickload) instead of the
-;; rontolisp:http-handler directive. rontolisp's server protocol IS Clack's,
-;; so only the edges differ:
-;;
-;;   * the application is a function VALUE handed to clackup, where
-;;     rontolisp:http-handler takes a literally quoted defun name;
-;;   * clack's :raw-body is a SYNCHRONOUS stream (nil for a bodiless request),
-;;     so it is drained with read-char and app is an ordinary defun -- not
-;;     httpbin.lisp's async-defun + (await (read-all ...)).
-;;
-;; :use-thread nil serves in the foreground (Ctrl-C to stop); the default
-;; :use-thread t returns a handler for (clack:stop handler) instead.
-;;
-;; Everything from the quickload down to `app` is also, verbatim,
-;; examples/cloudflare-workers/httpbin-clack/app.lisp -- a Cloudflare Worker
-;; hands over a parsed request instead of a socket, so there the clackup line
-;; below is the ONE form replaced, by a fifteen-line adapter. That is the point
-;; of writing the handler as a Clack application rather than as a server: it is
-;; the same function on every host.
-;;
-;; Run (the first run downloads clack/lack into ~/.rontolisp/quicklisp):
-;;   rontolisp examples/net/httpbin-clack.lisp
-;;   rontolisp examples/net/httpbin-clack.lisp -o HttpbinClack.class && \
-;;     java -cp rontolisp-exec.jar:. HttpbinClack
-;;   rontolisp examples/net/httpbin-clack.lisp -o httpbin-clack.wasm --component && \
-;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
-;;       httpbin-clack.wasm
-;; Preview 1 has no incoming TCP: the program compiles, clackup fails at run
-;; time. Under --component the host owns the socket, so :port is ignored.
-;;
-;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
-;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
+;;; app.lisp -- the Clack application, and NOTHING else.
+;;;
+;;; This file is examples/net/httpbin-clack.lisp with its last form -- the
+;;; (clack:clackup #'app ...) call -- removed. Nothing has been added: no
+;;; Cloudflare, no wasm-export, no JSON envelope, not even a mention that a
+;;; Worker exists. That is the claim this directory makes, and splitting it into
+;;; its own file is what makes the claim checkable rather than a comment: `app`
+;;; takes the Clack environment plist and returns the Clack (status headers body)
+;;; list, so the same function runs on hunchentoot, on woo, under
+;;; `wasmtime serve` and on the JVM, unchanged.
+;;;
+;;; worker.lisp is the other half: it loads this file and supplies the transport
+;;; a Worker needs. clackup is what it replaces.
+;;;
+;;; The five echo endpoints (see ../httpbin for the JSON they answer):
+;;;
+;;;   GET    /get     -> {"args": {...}, "headers": {...}, "method": "GET", "path": "/get"}
+;;;   POST   /post    -> the same plus {"data": "<raw body>", "json": <parsed body or null>}
+;;;   PUT    /put     -> ditto
+;;;   PATCH  /patch   -> ditto
+;;;   DELETE /delete  -> ditto
 
 (ql:quickload "clack")
 
@@ -105,5 +92,3 @@
            (json-response 404
                           (rontolisp:plist-hash-table
                            (list :error "not found" :path path)))))))
-
-(clack:clackup #'app :server :rontolisp :port 8080 :use-thread nil)

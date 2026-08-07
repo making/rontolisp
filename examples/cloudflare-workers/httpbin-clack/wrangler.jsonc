@@ -1,0 +1,13 @@
+{
+  // https://developers.cloudflare.com/workers/wrangler/configuration/
+  "name": "rontolisp-httpbin-clack",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+
+  // `import module from "./app.wasm"` needs no configuration: .wasm is a
+  // built-in module rule for ES-module Workers, and the file is compiled at
+  // deploy time rather than on the request path.
+  "observability": {
+    "enabled": true
+  }
+}

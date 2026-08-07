@@ -230,7 +230,7 @@ class ExamplesE2eTest {
 			case JVM -> {
 				Result compile = exec(runDir, concat(driver, concat(List.of(src, "-o", "Prog.class"), flags)), null);
 				assertCompiled(compile, example, "jvm (compile)");
-				Result run = exec(runDir, concat(List.of("java", "-cp", runDir.toString(), "Prog"), args), stdin);
+				Result run = exec(runDir, concat(List.of("java", "-cp", jvmClasspath(runDir), "Prog"), args), stdin);
 				assertRan(run, example, "jvm (run)");
 			}
 			case WASM -> {
@@ -412,6 +412,21 @@ class ExamplesE2eTest {
 		Path jar = jarProp != null ? Path.of(jarProp) : newestExecJar();
 		return (jar != null && Files.isRegularFile(jar)) ? List.of("java", "-jar", jar.toAbsolutePath().toString())
 				: null;
+	}
+
+	/**
+	 * The classpath a compiled {@code Prog.class} runs on: the workspace, plus the exec
+	 * jar when there is one. Most compiled programs are self-contained and only need the
+	 * workspace, but one that reaches a runtime support class -- an HTTP server (which
+	 * quickloading clack pulls in whether or not the program starts a server), a socket,
+	 * a Gray stream -- needs the jar, which is exactly what those examples' own READMEs
+	 * tell a reader to put on the classpath.
+	 * @param runDir the workspace the leg runs in
+	 * @return the {@code -cp} value
+	 */
+	private static String jvmClasspath(Path runDir) {
+		Path jar = newestExecJar();
+		return jar == null ? runDir.toString() : runDir + File.pathSeparator + jar.toAbsolutePath();
 	}
 
 	private static @Nullable Path newestExecJar() {
