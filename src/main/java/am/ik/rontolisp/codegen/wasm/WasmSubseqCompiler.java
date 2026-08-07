@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.wasm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
 import am.ik.wasm.Instruction;
@@ -24,7 +25,8 @@ final class WasmSubseqCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons);
+		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons, true,
+				ctx.functions.containsKey(LispNames.SUBSEQ_RUNTIME));
 		if (rewritten != null) {
 			WasmExprCompiler.compileExpr(rewritten, ctx);
 			return;

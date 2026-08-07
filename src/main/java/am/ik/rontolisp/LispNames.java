@@ -2218,6 +2218,19 @@ public final class LispNames {
 	public static final String SUBSEQ_CORE = "%SUBSEQ-CORE";
 
 	/**
+	 * The {@code %subseq-runtime} internal helper: the whole
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandSubseqCompat} dispatch --
+	 * string, general array (a {@code %array-alike} plus an element copy loop), cons
+	 * chain -- as ONE defun, {@code (%subseq-runtime seq start end)} with a nil
+	 * {@code end} meaning "to the end". Injected once per program by each compiler
+	 * backend, beside the builtin wrappers -- which is where most of a program's
+	 * {@code subseq} sites live -- so that a site is a call rather than an inlined copy
+	 * loop; see {@code .kb/subseq-runtime.md}. The interpreter never sees it (its
+	 * {@code subseq} dispatches over {@code Environment.seqAsList} directly).
+	 */
+	public static final String SUBSEQ_RUNTIME = "%SUBSEQ-RUNTIME";
+
+	/**
 	 * The {@code make-string} built-in function ({@code (make-string n &key
 	 * initial-element element-type)}). Lowered to a fill loop over {@code concatenate};
 	 * {@code element-type} is parsed and ignored (single string representation).

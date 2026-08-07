@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class LispMacroExpanderTest {
@@ -147,6 +148,59 @@ class LispMacroExpanderTest {
 			.stream()
 			.anyMatch(form -> form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
 					&& rest.car() instanceof LispSymbol name && LispNames.SCHAR_SET_RUNTIME.equals(name.name()));
+	}
+
+	@Test
+	void aSubseqSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch() {
+		// The array arm of subseq is a %array-alike plus a dotimes copy loop whose body
+		// is
+		// an aref and a %aset -- each of those a multi-arm representation dispatch of its
+		// own, about 2.3 KB of wasm PER SITE, paid by string-only code too because
+		// nothing
+		// in (subseq s i j) says s is not a vector. If those names come back into the
+		// site, the cost comes back with it.
+		LispCons call = (LispCons) LispReader.readAllFromString("(subseq s i j)").get(0);
+		String shared = requireNonNull(LispMacroExpander.expandSubseqCompat(call, true, true)).print();
+		assertThat(shared).isEqualTo("(%SUBSEQ-RUNTIME S I J)");
+		// Without the helper the site keeps the pre-existing inline lowering, so a gate
+		// that under-predicts costs sharing and never correctness.
+		String inline = requireNonNull(LispMacroExpander.expandSubseqCompat(call, true, false)).print();
+		assertThat(inline).contains("%ARRAY-ALIKE").contains("%ASET").contains("%SUBSEQ-CORE");
+	}
+
+	@Test
+	void theSharedSubseqDispatchAnswersTheSameThingAsTheInlinedOne() {
+		// One body, two homes: the defun and the inline lowering are the same dispatch
+		// over the same three names, so routing a site to the helper cannot change what
+		// it answers. The defun's end is a PARAMETER, nil when the caller omitted it,
+		// which is what lets one call-site shape serve (subseq s i) and (subseq s i j).
+		String helper = LispMacroExpander.subseqRuntimeWrapper().print();
+		// The parameter names are spelled in lower case on purpose: the reader upcases,
+		// so a name in this shape cannot collide with anything the program can write.
+		assertThat(helper).startsWith("(SETQ %SUBSEQ-RUNTIME (LAMBDA (%ssr_seq %ssr_start %ssr_end)");
+		assertThat(helper).contains("STRINGP").contains("%ARRAYP").contains("%ARRAY-ALIKE").contains("%ASET");
+		assertThat(helper).contains("(%SUBSEQ-CORE %ssr_seq %ssr_start %ssr_end)");
+		// It must not call subseq itself, or the lowering would re-enter it forever.
+		assertThat(helper).doesNotContain("(SUBSEQ ");
+	}
+
+	@Test
+	void theGeneralArrayGateNamesTheOperatorsThatCanProduceOne() {
+		// The one list of "this program can hold an array", shared by the JVM backend's
+		// array-runtime gate and by the shared subseq helper's injection. A string-only
+		// program must stay off it: the helper's copy arm names aref/%aset, and turning
+		// the JVM array runtime on for a program with no array costs ~120 KB.
+		assertThat(usesGeneralArray("(defun f (n) (make-array n))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (v i) (aref v i))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (n) (make-string n))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (x) (coerce x 'list))")).isTrue();
+		assertThat(usesGeneralArray("(print #(1 2 3))")).isTrue();
+		assertThat(usesGeneralArray("(defun f (s i j) (subseq s i j))")).isFalse();
+		assertThat(usesGeneralArray("(defun f (l) (car l))")).isFalse();
+	}
+
+	private static boolean usesGeneralArray(String source) {
+		return LispMacroExpander.programUsesGeneralArrayOp(LispReader.readAllFromString(source));
 	}
 
 }

@@ -7,6 +7,7 @@ import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispFloatArray;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLayout;
@@ -7843,7 +7844,7 @@ public final class LispMacroExpander {
 	 * @return the lowered expression, or {@code null} when the shape is not handled here
 	 */
 	@Nullable public static LispVal expandSubseqCompat(LispCons cons) {
-		return expandSubseqCompat(cons, true);
+		return expandSubseqCompat(cons, true, false);
 	}
 
 	/**
@@ -7857,6 +7858,25 @@ public final class LispMacroExpander {
 	 * @return the lowered expression, or {@code null} when the shape is not handled here
 	 */
 	@Nullable public static LispVal expandSubseqCompat(LispCons cons, boolean arraysExist) {
+		return expandSubseqCompat(cons, arraysExist, false);
+	}
+
+	/**
+	 * Like {@link #expandSubseqCompat(LispCons, boolean)}, but answers a CALL to the
+	 * shared {@link #subseqRuntimeWrapper()} when the program carries it
+	 * ({@code helperPresent}) instead of inlining the dispatch.
+	 *
+	 * <p>
+	 * The two answers are the same lowering; the caller decides only where it lives. A
+	 * compiler passes {@code helperPresent} true exactly when {@code %subseq-runtime} is
+	 * among the program's functions, so a gate that under-predicts costs the module the
+	 * sharing and nothing else -- the inline form is still correct.
+	 * @param cons the call expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @param helperPresent whether the program defines {@code %subseq-runtime}
+	 * @return the lowered expression, or {@code null} when the shape is not handled here
+	 */
+	@Nullable public static LispVal expandSubseqCompat(LispCons cons, boolean arraysExist, boolean helperPresent) {
 		if (!arraysExist) {
 			return null;
 		}
@@ -7867,14 +7887,62 @@ public final class LispMacroExpander {
 		if (parts.size() < 3 || parts.size() > 4) {
 			return null;
 		}
+		LispVal endInit = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		if (helperPresent) {
+			return listToCons(List.of(new LispSymbol(LispNames.SUBSEQ_RUNTIME), parts.get(1), parts.get(2), endInit));
+		}
 		LispSymbol seqVar = new LispSymbol("__ss_seq");
 		LispSymbol startVar = new LispSymbol("__ss_start");
 		LispSymbol endVar = new LispSymbol("__ss_end");
+		LispVal dispatch = subseqDispatch(seqVar, startVar, endVar, parts.size() > 3);
+		LispVal outerBindings = listToCons(List.of(listToCons(List.of(seqVar, parts.get(1))),
+				listToCons(List.of(startVar, parts.get(2))), listToCons(List.of(endVar, endInit))));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, dispatch));
+	}
+
+	/**
+	 * Builds the shared {@code %subseq-runtime} defun: the dispatch
+	 * {@link #expandSubseqCompat} used to inline at every site, over three parameters
+	 * whose {@code end} may be nil ("to the end") at run time -- which both compilers'
+	 * {@code %subseq-core} lane already accepts, so the one call-site shape serves the
+	 * two-argument and three-argument calls alike.
+	 *
+	 * <p>
+	 * <strong>Why a call and not the dispatch inline.</strong> The array arm is a
+	 * {@code %array-alike} plus a {@code dotimes} copy loop whose body is an {@code aref}
+	 * and a {@code %aset}, each of which is itself a multi-arm representation dispatch:
+	 * about 2.3 KB of wasm at every {@code subseq} site, paid by string-only code too
+	 * because nothing in {@code (subseq s i j)} says {@code s} is not a vector. The
+	 * generic sequence bodies that carry three of them -- {@code replace},
+	 * {@code string-capitalize}, the {@code format} number renderers -- multiply it.
+	 * Emitted once, a site is a call. Same lesson as {@code .kb/string-write-runtime.md};
+	 * do not inline it back.
+	 * <p>
+	 * Answered in the {@code (setq name (lambda ...))} shape
+	 * {@code BuiltinFunctionWrappers.generate} uses, because a backend injects it in the
+	 * same loop and for the same reason: those wrappers are where most of a program's
+	 * {@code subseq} sites live ({@code replace} alone has three), and they do not exist
+	 * until the backend generates them -- well after this class's top-level pass.
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal subseqRuntimeWrapper() {
+		LispSymbol seq = new LispSymbol("%ssr_seq");
+		LispSymbol start = new LispSymbol("%ssr_start");
+		LispSymbol end = new LispSymbol("%ssr_end");
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(seq, start, end)),
+				subseqDispatch(seq, start, end, true)));
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.SUBSEQ_RUNTIME), lambda));
+	}
+
+	// The string / general-array / cons-chain dispatch shared by the inline lowering and
+	// the %subseq-runtime defun. passEnd tells whether the %subseq-core lane is handed
+	// the end at all: the two-argument inline form has no end variable worth passing,
+	// while the defun always has one (nil when the caller omitted it).
+	private static LispVal subseqDispatch(LispSymbol seqVar, LispSymbol startVar, LispSymbol endVar, boolean passEnd) {
 		LispSymbol lenVar = new LispSymbol("__ss_len");
 		LispSymbol nVar = new LispSymbol("__ss_n");
 		LispSymbol outVar = new LispSymbol("__ss_out");
 		LispSymbol iVar = new LispSymbol("__ss_i");
-		LispVal endInit = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
 		LispVal effectiveEnd = makeIf(endVar, endVar, callOf(LispNames.LENGTH, seqVar));
 		LispVal length = listToCons(List.of(new LispSymbol(LispNames.SUB), lenVar, startVar));
 		// %array-alike, not make-array: the output keeps the input's representation, so
@@ -7893,7 +7961,7 @@ public final class LispMacroExpander {
 		coreParts.add(new LispSymbol(LispNames.SUBSEQ_CORE));
 		coreParts.add(seqVar);
 		coreParts.add(startVar);
-		if (parts.size() > 3) {
+		if (passEnd) {
 			coreParts.add(endVar);
 		}
 		LispVal coreCall = listToCons(coreParts);
@@ -7902,10 +7970,7 @@ public final class LispMacroExpander {
 		// caller-expected element type; only a general (non-string) array switches to
 		// the fresh make-array copy.
 		LispVal arrayDispatch = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seqVar), vectorBody, coreCall);
-		LispVal dispatch = makeIf(callOf(LispNames.STRINGP, seqVar), coreCall, arrayDispatch);
-		LispVal outerBindings = listToCons(List.of(listToCons(List.of(seqVar, parts.get(1))),
-				listToCons(List.of(startVar, parts.get(2))), listToCons(List.of(endVar, endInit))));
-		return listToCons(List.of(new LispSymbol(LispNames.LET), outerBindings, dispatch));
+		return makeIf(callOf(LispNames.STRINGP, seqVar), coreCall, arrayDispatch);
 	}
 
 	/**
@@ -14386,6 +14451,88 @@ public final class LispMacroExpander {
 			return false;
 		}
 		return reachesScharSet(cons.car()) || reachesScharSet(cons.cdr());
+	}
+
+	/**
+	 * Whether any of {@code forms} calls {@code subseq}, i.e. whether the shared
+	 * {@link #subseqRuntimeWrapper()} would have a caller.
+	 *
+	 * <p>
+	 * A backend asks this of its program AND of the builtin wrappers it is about to
+	 * inject: most {@code subseq} sites in a wrapper-carrying program live in those
+	 * wrapper bodies ({@code replace} alone has three), and they do not exist until the
+	 * backend generates them, which is well after this class's top-level pass has run.
+	 * That is why the helper is injected there rather than here.
+	 * @param forms the forms to scan
+	 * @return whether a {@code subseq} call can be reached from them
+	 */
+	public static boolean programUsesSubseq(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesSymbol(form, LispNames.SUBSEQ)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesSymbol(LispVal form, String name) {
+		if (form instanceof LispSymbol sym) {
+			return name.equals(sym.name());
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		return namesSymbol(cons.car(), name) || namesSymbol(cons.cdr(), name);
+	}
+
+	/**
+	 * Whether the program names an operator that can produce or consume a general array,
+	 * or carries an array literal -- the one list of "this program can hold an array",
+	 * shared by the backends' {@link #subseqRuntimeWrapper()} injection and by the JVM
+	 * backend's array-runtime gate so the two cannot drift apart.
+	 *
+	 * <p>
+	 * The derived names are on the list because the operators that expand into them --
+	 * {@code vector} / {@code svref} / {@code coerce} / {@code array-rank} /
+	 * {@code row-major-aref} and friends -- expand during expression compilation, long
+	 * after any program-level scan runs. {@code make-string} is on it for the same
+	 * reason: it lowers to a mutable character vector, so a string-only program that
+	 * allocates a buffer does hold an array ({@code .kb/adjustable-arrays.md}).
+	 * @param forms the program to scan
+	 * @return whether a general array can exist in this program
+	 */
+	public static boolean programUsesGeneralArrayOp(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (usesGeneralArrayOp(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean usesGeneralArrayOp(LispVal form) {
+		if (form instanceof LispArray || form instanceof LispFloatArray) {
+			return true;
+		}
+		if (form instanceof LispSymbol sym) {
+			return switch (sym.name()) {
+				case LispNames.MAKE_ARRAY, LispNames.MAKE_STRING, LispNames.MAKE_SEQUENCE, LispNames.AREF,
+						LispNames.ASET, LispNames.ARRAY_DIMENSIONS, LispNames.VECTOR, LispNames.SVREF,
+						LispNames.ARRAY_RANK, LispNames.ARRAY_DIMENSION, LispNames.ARRAY_TOTAL_SIZE,
+						LispNames.ROW_MAJOR_AREF, LispNames.ROW_MAJOR_ASET, LispNames.ARRAY_ROW_MAJOR_INDEX,
+						LispNames.FILL_POINTER, LispNames.SET_FILL_POINTER, LispNames.ARRAY_HAS_FILL_POINTER_P,
+						LispNames.ADJUSTABLE_ARRAY_P, LispNames.ARRAY_ELEMENT_TYPE, LispNames.VECTOR_PUSH,
+						LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
+						LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
+						LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.COERCE ->
+					true;
+				default -> false;
+			};
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		return usesGeneralArrayOp(cons.car()) || usesGeneralArrayOp(cons.cdr());
 	}
 
 	private static boolean reachesFormatRenderer(LispVal form) {

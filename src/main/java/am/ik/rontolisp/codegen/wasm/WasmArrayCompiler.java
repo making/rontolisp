@@ -798,9 +798,9 @@ final class WasmArrayCompiler {
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
+		getLocal(ctx, headerSlot);
 		emitFlatIndex(ctx, headerSlot, args, 2, rank);
-		emitResolveDataAndIndex(ctx, headerSlot);
-		arrayGet(ctx);
+		callArrGet(ctx);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -840,11 +840,9 @@ final class WasmArrayCompiler {
 		// general: arr -> header (the (dims . (meta . data)) cons), then data[idx].
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
-		int headerSlot = setTemp(ctx);
 		getLocal(ctx, idxSlot);
 		WasmEmitHelper.castI31GetS(ctx);
-		emitResolveDataAndIndex(ctx, headerSlot);
-		arrayGet(ctx);
+		callArrGet(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
@@ -883,11 +881,9 @@ final class WasmArrayCompiler {
 		// general: resolve the displacement chain, then data[index].
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
-		int headerSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
-		emitResolveDataAndIndex(ctx, headerSlot);
-		arrayGet(ctx);
+		callArrGet(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -924,18 +920,12 @@ final class WasmArrayCompiler {
 		emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(3), true);
 		ctx.writer.write(Instruction.ELSE);
 		// general: resolve the displacement chain, store, and leave the value.
-		int valSlot = ctx.allocTemp();
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
-		int headerSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
 		WasmEmitHelper.castI31GetS(ctx);
-		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(3), ctx);
-		ctx.writer.write(Instruction.TEE_LOCAL);
-		ctx.writer.writeUnsignedLeb128(valSlot);
-		arraySet(ctx);
-		getLocal(ctx, valSlot);
+		callArrSet(ctx);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
@@ -1051,20 +1041,15 @@ final class WasmArrayCompiler {
 			emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(args.size() - 1), resultNeeded);
 			ctx.writer.write(Instruction.ELSE);
 		}
-		// general: data[flat] = val, leaving val as the result. tee keeps the value on
-		// the
-		// stack for array.set.
+		// general: data[flat] = val, leaving val as the result -- the shared _arr_set
+		// answers the value it stored.
 		getLocal(ctx, arrSlot);
 		castCellGet0(ctx);
 		int headerSlot = setTemp(ctx);
-		int valSlot = ctx.allocTemp();
+		getLocal(ctx, headerSlot);
 		emitFlatIndex(ctx, headerSlot, args, 2, rank);
-		emitResolveDataAndIndex(ctx, headerSlot);
 		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
-		ctx.writer.write(Instruction.TEE_LOCAL);
-		ctx.writer.writeUnsignedLeb128(valSlot);
-		arraySet(ctx);
-		getLocal(ctx, valSlot);
+		callArrSet(ctx);
 		if (rank == 1) {
 			ctx.writer.write(Instruction.END);
 		}
@@ -1104,51 +1089,21 @@ final class WasmArrayCompiler {
 		}
 	}
 
-	// Resolves the displacement chain: expects the i32 flat index on the stack; leaves
-	// [buckets, i32 index] ready for array.get/array.set. While the header's data slot
-	// holds a TARGET CELL (a displaced view), the meta offset is added to the index and
-	// the walk hops to the target's header; an ordinary array falls straight through.
-	private static void emitResolveDataAndIndex(WasmLispCompiler.Ctx ctx, int headerSlot) {
-		int flatSlot = ctx.allocTemp();
-		boxI31(ctx);
-		setLocal(ctx, flatSlot);
-		int curSlot = ctx.allocTemp();
-		getLocal(ctx, headerSlot);
-		setLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.BLOCK, 0x40);
-		ctx.writer.write(Instruction.LOOP, 0x40);
-		// exit when the data slot is not a cell (it is the buckets array)
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		castConsGet(ctx, 1);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		ctx.writer.write(Instruction.I32_EQZ);
-		ctx.writer.write(Instruction.BR_IF, 1);
-		// flat += the meta offset (meta.cdr.cdr)
-		getLocal(ctx, flatSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getLocal(ctx, curSlot);
-		getMeta(ctx);
-		castConsGet(ctx, 1);
-		castConsGet(ctx, 1);
-		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_ADD);
-		boxI31(ctx);
-		setLocal(ctx, flatSlot);
-		// cur = the target cell's header
-		getLocal(ctx, curSlot);
-		castConsGet(ctx, 1);
-		castConsGet(ctx, 1);
-		castCellGet0(ctx);
-		setLocal(ctx, curSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // loop
-		ctx.writer.write(Instruction.END); // block
-		getLocal(ctx, curSlot);
-		getData(ctx);
-		getLocal(ctx, flatSlot);
-		WasmEmitHelper.castI31GetS(ctx);
+	// The general-array read: expects [header, i32 flat] on the stack, leaves the
+	// element.
+	// The displacement-chain walk behind it is WasmArrayRuntimeBuilder's, emitted once
+	// per module -- it used to be spelled inline here, ~45 instructions and two
+	// never-released temps at each of the five accessor sites.
+	private static void callArrGet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_GET);
+	}
+
+	// The general-array store: expects [header, i32 flat, value] on the stack, leaves the
+	// value as stored (which is the value). Same sharing as callArrGet.
+	private static void callArrSet(WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_SET);
 	}
 
 	// Pushes the i32 flat index for the subscripts at args[firstSub..firstSub+rank-1]:

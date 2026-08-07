@@ -803,8 +803,22 @@ public final class JvmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
-		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
+		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
+		for (LispVal wrapper : wrappers) {
 			defuns.add(extractSetqLambda(wrapper));
+		}
+		// The shared subseq dispatch, once per program that calls subseq -- from its own
+		// source or from a wrapper body just added, which is why this is here and not in
+		// expandTopLevelDefinitions (.kb/subseq-runtime.md). Gated on the array runtime
+		// too, unlike the wasm backend: the helper's copy arm names aref/%aset, which is
+		// what programUsesAnyArrayOp scans for, so injecting it into an array-free
+		// program
+		// would pull ~120 KB of array runtime into a class with no use for it. When the
+		// gate is off JvmSubseqCompiler declines the rewrite anyway, so nothing calls it.
+		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME)
+				&& (programUsesAnyArrayOp(program) || forcedGroups.contains(GROUP_ARRAYS))
+				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers))) {
+			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
 		}
 
 		// Collect top-level global variables and give each a dedicated static field.
@@ -2768,37 +2782,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	}
 
 	private static boolean programUsesAnyArrayOp(List<LispVal> program) {
-		// vector/svref/coerce/array-rank/array-dimension/array-total-size/
-		// row-major-aref/array-row-major-index expand into make-array/aref/%aset/
-		// array-dimensions/_aref1 during compileExpr, after this scan runs, so the
-		// derived names gate the helpers too. make-string is on the list for the same
-		// reason: it lowers to (make-array n :element-type 'character ...) -- the
-		// mutable character vector -- so a string-only program that allocates a buffer
-		// does pull in the array runtime (.kb/adjustable-arrays.md).
-		return programUsesSymbol(program, LispNames.MAKE_ARRAY) || programUsesSymbol(program, LispNames.MAKE_STRING)
-				|| programUsesSymbol(program, LispNames.MAKE_SEQUENCE) || programUsesSymbol(program, LispNames.AREF)
-				|| programUsesSymbol(program, LispNames.ASET) || programUsesSymbol(program, LispNames.ARRAY_DIMENSIONS)
-				|| programUsesSymbol(program, LispNames.VECTOR) || programUsesSymbol(program, LispNames.SVREF)
-				|| programUsesSymbol(program, LispNames.ARRAY_RANK)
-				|| programUsesSymbol(program, LispNames.ARRAY_DIMENSION)
-				|| programUsesSymbol(program, LispNames.ARRAY_TOTAL_SIZE)
-				|| programUsesSymbol(program, LispNames.ROW_MAJOR_AREF)
-				|| programUsesSymbol(program, LispNames.ROW_MAJOR_ASET)
-				|| programUsesSymbol(program, LispNames.ARRAY_ROW_MAJOR_INDEX)
-				|| programUsesSymbol(program, LispNames.FILL_POINTER)
-				|| programUsesSymbol(program, LispNames.SET_FILL_POINTER)
-				|| programUsesSymbol(program, LispNames.ARRAY_HAS_FILL_POINTER_P)
-				|| programUsesSymbol(program, LispNames.ADJUSTABLE_ARRAY_P)
-				|| programUsesSymbol(program, LispNames.ARRAY_ELEMENT_TYPE)
-				|| programUsesSymbol(program, LispNames.VECTOR_PUSH) || programUsesSymbol(program, LispNames.VECTOR_POP)
-				|| programUsesSymbol(program, LispNames.VECTOR_PUSH_EXTEND)
-				|| programUsesSymbol(program, LispNames.ADJUST_ARRAY)
-				|| programUsesSymbol(program, LispNames.ARRAY_BECOME)
-				|| programUsesSymbol(program, LispNames.ARRAY_DISPLACEMENT)
-				|| programUsesSymbol(program, LispNames.ARRAY_DISP_TARGET)
-				|| programUsesSymbol(program, LispNames.ARRAY_DISP_OFFSET)
-				|| programUsesSymbol(program, LispNames.COERCE) || programBuildsConcatenateSequence(program)
-				|| programContainsArrayLiteral(program);
+		// The operator/literal half is LispMacroExpander.programUsesGeneralArrayOp, which
+		// the shared %subseq-runtime injection gates on too -- one list, so a program
+		// that
+		// carries the helper is exactly a program this returns true for, and a subseq
+		// site
+		// never routes to a helper that was not injected.
+		return LispMacroExpander.programUsesGeneralArrayOp(program) || programBuildsConcatenateSequence(program);
 	}
 
 	// True when concatenate can build a list / vector here, which lowers through coerce
@@ -2827,32 +2817,6 @@ public final class JvmLispCompiler implements LispCompiler {
 			}
 		}
 		return buildsConcatenateSequence(cons.car()) || buildsConcatenateSequence(cons.cdr());
-	}
-
-	// True when a self-evaluating array literal (#(...)) appears anywhere in the program,
-	// so the array runtime helpers (used to print it) are emitted even without an
-	// explicit
-	// make-array/aref call.
-	private static boolean programContainsArrayLiteral(List<LispVal> program) {
-		for (LispVal expr : program) {
-			if (containsArrayLiteral(expr)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean containsArrayLiteral(LispVal val) {
-		// A packed #d(...) literal lowers to a general array here, so it counts as an
-		// array
-		// literal for the runtime/print gate exactly like #(...)/#nA.
-		if (val instanceof am.ik.rontolisp.LispArray || val instanceof am.ik.rontolisp.LispFloatArray) {
-			return true;
-		}
-		if (val instanceof LispCons cons) {
-			return containsArrayLiteral(cons.car()) || containsArrayLiteral(cons.cdr());
-		}
-		return false;
 	}
 
 	// True when the program can produce a packed float array: a #d(...) literal

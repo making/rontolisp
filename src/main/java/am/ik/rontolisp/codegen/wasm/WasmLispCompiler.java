@@ -887,7 +887,20 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shifts.
 	static final int FUNC_AS_F64 = FUNC_FIXED_DEC + 1;
 
-	static final int FX_FUNC_LAST = FUNC_AS_F64;
+	// _arr_get ((ref null eq) header, i32 flat) -> (ref null eq) and
+	// _arr_set ((ref null eq) header, i32 flat, (ref null eq) value) -> (ref null eq):
+	// the GENERAL-array arm of every element access -- the displacement-chain walk
+	// (WasmArrayRuntimeBuilder) plus the buckets array.get/array.set. It used to be
+	// inlined by all five accessors (aref rank-1 and rank-n, row-major-aref, %aset,
+	// %row-major-aset), ~45 instructions and two never-released temps at each site; the
+	// packed float and packed integer arms stay inline on purpose
+	// (.kb/packed-integer-vectors.md). Appended after the last fixed helper so no index
+	// above shifts.
+	static final int FUNC_ARR_GET = FUNC_AS_F64 + 1;
+
+	static final int FUNC_ARR_SET = FUNC_ARR_GET + 1;
+
+	static final int FX_FUNC_LAST = FUNC_ARR_SET;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1178,7 +1191,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_FD_READDIR above, so every type index keeps its value.
 	static final int TYPE_UB_READ = TYPE_FD_READDIR + 1; // 63
 
-	static final int IARR_TYPE_LAST = TYPE_UB_READ;
+	// _arr_set ((ref null eq) header, i32 flat, (ref null eq) value) -> (ref null eq):
+	// the shared general-array store's signature. _arr_get reuses TYPE_BIG_SHIFT, which
+	// is already ((ref null eq), i32) -> (ref null eq). Appended after the last fixed
+	// type, like the two above, so every type index keeps its value.
+	static final int TYPE_ARR_SET = TYPE_UB_READ + 1; // 64
+
+	static final int IARR_TYPE_LAST = TYPE_ARR_SET;
 
 	// --- the --simd block (see WasmVecSimdRuntimeBuilder) -------------------------
 	//
@@ -1964,8 +1983,19 @@ public final class WasmLispCompiler implements LispCompiler {
 				wrapperExcludes.add(op);
 			}
 		}
-		for (LispVal wrapper : BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes)) {
+		List<LispVal> wrappers = BuiltinFunctionWrappers.generate(userDefinedNames, wrapperExcludes);
+		for (LispVal wrapper : wrappers) {
 			defuns.add(extractSetqLambda(wrapper));
+		}
+		// The shared subseq dispatch, once per program that calls subseq -- from its own
+		// source or from a wrapper body just added, which is why this is here and not in
+		// expandTopLevelDefinitions (.kb/subseq-runtime.md). No array gate: this backend
+		// holds every representation unconditionally, so the helper is a strict
+		// improvement wherever there is a caller, and WasmSubseqCompiler routes a site to
+		// it exactly when it is present.
+		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME)
+				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers))) {
+			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
 		}
 
 		// Collect top-level global variables and give each its own module-level wasm
@@ -3488,6 +3518,18 @@ public final class WasmLispCompiler implements LispCompiler {
 					w.write(1);
 					w.writeRefType(true, Type.EQ.code());
 				});
+				// type 64 (TYPE_ARR_SET): _arr_set ((ref null eq) header, i32 flat,
+				// (ref null eq) value) -> (ref null eq). _arr_get needs no type of its
+				// own: TYPE_BIG_SHIFT is already ((ref null eq), i32) -> (ref null eq).
+				types.add(w -> {
+					w.write(Type.FUNC);
+					w.write(3);
+					w.writeRefType(true, Type.EQ.code());
+					w.write(Type.I32);
+					w.writeRefType(true, Type.EQ.code());
+					w.write(1);
+					w.writeRefType(true, Type.EQ.code());
+				});
 				if (this.simd) {
 					// type 48 (TYPE_V128ARR): array (mut v128) -- the lane-group storage
 					// of a packed float array. Declaring it at all requires the SIMD
@@ -3903,6 +3945,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _fixed_dec (value, places,
 															// int-digits, plus) -> string
 				fnDef.addFunction(TYPE_BIG_TO_F64); // _as_f64 (value) -> f64
+				fnDef.addFunction(TYPE_BIG_SHIFT); // _arr_get (header, flat) -> value
+				fnDef.addFunction(TYPE_ARR_SET); // _arr_set (header, flat, value) ->
+													// value
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4407,6 +4452,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFixedDecimalRuntimeBuilder.build());
 				// shared numeric-to-f64 coercion body (FUNC_AS_F64)
 				code.addFunction(WasmEmitHelper.buildAsF64Body());
+				// shared general-array element access bodies (FUNC_ARR_GET/FUNC_ARR_SET)
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrGetBody());
+				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

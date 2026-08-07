@@ -32,17 +32,17 @@ only the output checks are skipped.
 
 ## Results
 
-rontolisp 0.1.0-SNAPSHOT, measured 2026-08-07, validated on wasmtime 47.0.2. The
+rontolisp 0.1.0-SNAPSHOT, measured 2026-08-08, validated on wasmtime 47.0.2. The
 sizes are toolchain- but not host-dependent, so `./build.sh` reproduces them.
 
 | Artifact | Flags | Size (bytes) |
 | --- | --- | ---: |
-| hello_world | (none) | 307,110 |
+| hello_world | (none) | 256,823 |
 | hello_world | `--optimize` | 518 |
 | hello_world | `--optimize=size` | 518 |
 | hello_world | `--component --optimize=size` | 1,672 |
 | hello_world | `--no-gc --optimize=size` | 406 |
-| pi_approx | (none) | 307,419 |
+| pi_approx | (none) | 257,132 |
 | pi_approx | `--optimize` | 3,540 |
 | pi_approx | `--optimize=size` | 3,420 |
 | pi_approx | `--component --optimize=size` | 4,549 |
@@ -84,9 +84,9 @@ flags; rontolisp's are `--optimize=size` for the Preview 1 command and
 ## Reading the numbers
 
 **`--optimize` is not optional.** Without it a rontolisp module carries the
-whole prelude: 307 KB for `hello_world`, 99.8% of which nothing in the program
+whole prelude: 257 KB for `hello_world`, 99.8% of which nothing in the program
 reaches. `--optimize` is the dead-code tree-shaker -- keep only what `_start`
-and the exports reach -- and it is what turns 307,110 bytes into 518. Every
+and the exports reach -- and it is what turns 256,823 bytes into 518. Every
 number worth comparing on this page is a tree-shaken one.
 
 **`hello_world` is 518 bytes and imports one function.** A rontolisp command

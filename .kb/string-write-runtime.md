@@ -79,14 +79,18 @@ Two things would make this worth revisiting, and neither is "inline it back":
   written, in the `make-string` fill loops (ironclad's hex conversion is the shape).
   The answer would be a fast path at the SITE (a `ref.test` on the mutable-vector
   representation before the call), not a return to inlining the rebuild.
-- **If `subseq` on a string ever becomes one call on both compile paths.** Then the
-  `%subseq-core` spelling here stops mattering and the helper can go back to plain
-  `subseq` -- but only then; today the difference is 10x the helper's size.
+- ~~**If `subseq` on a string ever becomes one call on both compile paths.**~~
+  **ANSWERED, and the answer is still `%subseq-core`.** `subseq` IS one call now
+  (`%subseq-runtime`, `.kb/subseq-runtime.md`), but the rebuild here runs only where
+  `%arrayp` said no, so `%subseq-core` reaches the string lane DIRECTLY while
+  `%subseq-runtime` would re-test `stringp`/`%arrayp` on the way. The spelling stays.
 
-What is left in a site after this is `%aset` itself, ~515 bytes of inline
+What is left in a site after this is `%aset` itself, an inline
 farray / packed-int-vector / general-array dispatch, which is the same shape of cost one
-order of magnitude down. It stays inline on purpose: the packed-integer arm is the fused
-raw-i64 store (`.kb/packed-integer-vectors.md`), which a call would give up.
+order of magnitude down. Its GENERAL arm has since become a call too
+(`_arr_set`, `.kb/subseq-runtime.md`), taking a site from ~292 to 187 bytes; the packed
+arms stay inline on purpose, the integer one being the fused raw-i64 store
+(`.kb/packed-integer-vectors.md`), which a call would give up.
 
 Same lesson, different mechanism, as `.kb/wasm-shared-coercion.md` (a wasm runtime
 function emitted by the backend) and `.kb/format.md`'s `%fixed-decimal` (a compiler

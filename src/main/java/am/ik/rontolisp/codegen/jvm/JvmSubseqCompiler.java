@@ -3,6 +3,7 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
@@ -35,7 +36,8 @@ final class JvmSubseqCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons, ctx.usesArrays);
+		LispVal rewritten = LispMacroExpander.expandSubseqCompat(cons, ctx.usesArrays,
+				ctx.functions.containsKey(LispNames.SUBSEQ_RUNTIME));
 		if (rewritten != null) {
 			JvmExprCompiler.compileExpr(rewritten, ctx, className);
 			return;

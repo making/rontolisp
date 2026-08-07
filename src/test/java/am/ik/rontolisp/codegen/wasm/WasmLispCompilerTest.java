@@ -981,6 +981,39 @@ class WasmLispCompilerTest {
 		assertThat(small.length).isLessThan(fast.length);
 	}
 
+	@Test
+	void anElementAccessSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime() {
+		// A byte budget, because nothing else notices: every arrangement of this code
+		// compiles and runs correctly, and the only difference is how many times the
+		// shared body is spelled out (.kb/subseq-runtime.md).
+		//
+		// The general-array arm of aref / %aset calls _arr_get / _arr_set rather than
+		// re-emitting the displacement-chain walk, ~105-140 bytes of it per site;
+		// measured 202 and 187 here, so re-inlining the walk overshoots the bound.
+		assertThat(marginalBytesPerSite("(aref *v* i)")).isLessThan(260);
+		assertThat(marginalBytesPerSite("(%aset *v* i 1)")).isLessThan(260);
+		// A subseq site is one call to %subseq-runtime; the array arm it used to inline
+		// -- a %array-alike plus a copy loop built out of exactly those two accessors --
+		// was 2,316 bytes per site. Measured 11.
+		assertThat(marginalBytesPerSite("(subseq *v* i)")).isLessThan(60);
+	}
+
+	// The bytes one more occurrence of `site` adds to a module that already has four of
+	// them, so the shared runtime each of them calls is paid for in both measurements.
+	private static int marginalBytesPerSite(String site) {
+		return compileWithSites(site, 5).length - compileWithSites(site, 4).length;
+	}
+
+	private static byte[] compileWithSites(String site, int count) {
+		StringBuilder source = new StringBuilder("(defvar *v* (make-array 8 :initial-element 0))\n(defun f (i)");
+		for (int k = 0; k < count; k++) {
+			source.append(' ').append(site);
+		}
+		source.append(")\n(print (f 1))");
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
 	private static int readUleb(byte[] buf, int[] p) {
 		int result = 0;
 		int shift = 0;
