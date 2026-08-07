@@ -13932,8 +13932,12 @@ public final class LispMacroExpander {
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported,
 			boolean dynamic) {
-		// The one whole-program pass both compilers already run, so the load-time-value
-		// hoist rides along instead of needing its own registration in every pipeline.
+		// The one whole-program pass both compilers already run, so the pure-builtin fold
+		// and the load-time-value hoist ride along instead of needing their own
+		// registration in every pipeline. The fold goes FIRST: a folded
+		// (load-time-value (+ 1 2)) is an atom, which the hoist then correctly declines
+		// to give a slot.
+		program = PureBuiltinFolder.foldProgram(program, dynamic);
 		program = hoistLoadTimeValues(program);
 		// A defclass carrying (:metaclass M) switches the metaclass protocol on: the
 		// protocol's default methods and driver (MopProtocol) are PREPENDED so the walk

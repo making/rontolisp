@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -7009,6 +7010,16 @@ class LispEvaluatorTest {
 			evaluator.eval(expr);
 		}
 		return baos.toString();
+	}
+
+	@Test
+	void theInterpreterIsTheReferenceThePureBuiltinFoldIsMeasuredAgainst() {
+		// The interpreter never folds -- it has no reachability to win -- so both
+		// columns of the harness are the same runtime twice here. That is exactly its
+		// role: it is the answer the compile backends' folded column has to match, and
+		// running the probe program here is what proves every probe is a legal call in
+		// the first place.
+		FoldDifferential.assertNoDivergence(capture(FoldDifferential.program()));
 	}
 
 	@Test

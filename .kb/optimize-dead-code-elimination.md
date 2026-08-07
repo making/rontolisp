@@ -253,6 +253,14 @@ and behaviorally by
 differential run of every folded literal against the same value passed through a function
 parameter (the only thing that keeps the runtime printer in the picture).
 
+**A COMPUTED argument reaches this fold too, when the computation is itself constant**
+(`.kb/pure-builtin-fold.md`, 2026-08-07): a pure built-in over literal arguments is
+evaluated by the compiler before either backend sees the print, so `(princ (* 6 7))`
+and `(princ (length "Hello World!"))` compile to the same 410-byte module as
+`(princ 42)` — byte for byte — instead of 5,740 / 5,103 B. That composition — a general fold feeding the
+print/format literal folds — is where the bytes are; the fold's own arithmetic is
+worth three instructions.
+
 ### The `name` section is DROPPED, not copied (todo-270, 2026-08-06)
 
 A `name` custom section maps **function and type indices** to names, and this pass has just

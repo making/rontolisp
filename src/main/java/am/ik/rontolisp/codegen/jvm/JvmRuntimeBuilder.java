@@ -1743,6 +1743,16 @@ final class JvmRuntimeBuilder {
 		}
 	}
 
+	/**
+	 * The pool-free variant of {@link JvmEmitHelper#emitIntConst}, for the runtime
+	 * builders that assemble a body as a raw byte list. Its callers push funcIds and
+	 * character codes that are bounded by the program's own function count, so the
+	 * {@code sipush} range is enough -- but a value past it would truncate and
+	 * sign-extend SILENTLY into a class that verifies and computes the wrong number, so
+	 * it fails loudly here instead, the way {@link #patchBranch} does for an overflowing
+	 * branch offset. The fix if it ever fires: hand this builder a constant pool and use
+	 * the {@code ldc} arm {@code JvmEmitHelper.emitIntConst} has.
+	 */
 	static void emitIntConstStatic(List<Integer> code, int value) {
 		if (value >= 0 && value <= 5) {
 			code.add(Opcode.ICONST_0 + value);
@@ -1751,9 +1761,13 @@ final class JvmRuntimeBuilder {
 			code.add(Opcode.BIPUSH);
 			code.add(value & 0xFF);
 		}
-		else {
+		else if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
 			code.add(Opcode.SIPUSH);
 			emitU2(code, value);
+		}
+		else {
+			throw new IllegalStateException(
+					"int constant " + value + " overflows the signed 16-bit sipush encoding in a pool-free builder");
 		}
 	}
 

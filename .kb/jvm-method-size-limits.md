@@ -32,6 +32,29 @@ Two JVM class-file ceilings bound every emitted method:
 defun/lambda bodies plus every computed-typep expansion — run that first when a
 large program trips the 64 KB guard.
 
+### The third signed-16-bit field: `sipush` (2026-08-07)
+
+`sipush` takes a SIGNED 16-bit operand, so `JvmEmitHelper.emitIntConst` truncated
+and sign-extended anything outside `[-32768, 32767]` — silently, into a class that
+VERIFIES and computes the wrong number. It is the same failure shape as an
+out-of-range branch offset, minus the guard.
+
+The reachable case is a CHARACTER above the BMP: a Lisp character is an `int[]{cp}`
+holding a full code point (`.kb/characters-code-points.md`), so
+`(string (code-char 128512))` pushed 0x1F600 and got -2560
+(`IllegalArgumentException: Not a valid Unicode code point: 0xFFFFF600` from
+`Character.toString`). It was latent because a supplementary code point only ever
+reached that emitter as a computed value until the pure-builtin literal fold
+(`.kb/pure-builtin-fold.md`) started producing folded `#\U+1F600` LITERALS — the
+"a newly reachable path finds the latent bug" case, found by
+`JvmLispCompilerTest.compileCharBeyondBmpCodePoint` and `Uax15E2eTest`.
+
+`emitIntConst` now falls through to `ldc`/`ldc_w` of an `Integer` constant, which
+also covers its counting callers (lambda ids, quoted-vector lengths, slot indices —
+each of which would need an absurd program to reach 32768, but shares the fix). The
+pool-free `JvmRuntimeBuilder.emitIntConstStatic` cannot mint a constant, so it
+throws loudly instead, exactly like `JvmRuntimeBuilder.patchBranch`.
+
 ## What is kept bounded, and how
 
 The bodies that grow with PROGRAM or REGISTRY size are each bounded by

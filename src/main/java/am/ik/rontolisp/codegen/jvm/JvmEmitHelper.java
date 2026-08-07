@@ -277,6 +277,19 @@ final class JvmEmitHelper {
 		ctx.emitU2(ctx.doubleValueOf.index());
 	}
 
+	/**
+	 * Pushes an {@code int} constant in its shortest encoding.
+	 *
+	 * <p>
+	 * {@code sipush} takes a SIGNED 16-bit operand, so anything outside
+	 * {@code [-32768, 32767]} has to come from the constant pool -- emitting it as a
+	 * {@code sipush} truncates and sign-extends silently, producing a class that verifies
+	 * and computes the wrong number. The reachable case is a CHARACTER above the BMP
+	 * ({@code (string (code-char 128512))}, code point 0x1F600 -&gt; -2560), which the
+	 * literal fold routes through here as a folded {@code #\U+1F600} literal; the
+	 * counting callers (lambda ids, quoted-vector lengths, slot indices) would need a
+	 * program of absurd size to reach it, but they share the same fix.
+	 */
 	static void emitIntConst(JvmLispCompiler.Ctx ctx, int value) {
 		if (value >= 0 && value <= 5) {
 			ctx.emit(Opcode.ICONST_0 + value);
@@ -285,9 +298,20 @@ final class JvmEmitHelper {
 			ctx.emit(Opcode.BIPUSH);
 			ctx.emit(value & 0xFF);
 		}
-		else {
+		else if (value >= Short.MIN_VALUE && value <= Short.MAX_VALUE) {
 			ctx.emit(Opcode.SIPUSH);
 			ctx.emitU2(value);
+		}
+		else {
+			ConstantPool.IntegerConstant constant = ctx.cp.addInteger(value);
+			if (constant.index() <= 255) {
+				ctx.emit(Opcode.LDC);
+				ctx.emit(constant.index());
+			}
+			else {
+				ctx.emit(Opcode.LDC_W);
+				ctx.emitU2(constant.index());
+			}
 		}
 	}
 

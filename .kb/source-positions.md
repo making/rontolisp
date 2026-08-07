@@ -151,6 +151,23 @@ form's own -- not the top-level one, and not absent. What legitimately stays coa
 a form the frontend genuinely REWROTE: a macro expansion's products were never read, so
 a failure inside one falls back to the nearest enclosing form that was.
 
+### The other half: a pass that legitimately REWRITES
+
+The identity rule only covers the pass that changes nothing. A pass that genuinely
+rewrites a form -- a constant fold, an inliner -- rebuilds every cons from the
+top-level form down to the rewrite, and each of those is a fresh key in an
+identity-keyed table. For a rewrite that fires rarely that is the "genuinely REWROTE"
+case above and coarsening is right; for one that fires all over an ordinary program
+it would blank out most of it.
+
+`SourceProvenance.inherit(original, rewritten)` closes that: the rewritten cons stands
+for the same source text, so it takes the original's position (a no-op when the pass
+handed back the original, when the result is not a cons, or when nothing is
+recording). `PureBuiltinFolder` -- whose folds land in essentially every real program
+-- routes every rebuild through it, and it is the general answer for the next
+rewriting pass. Pinned by
+`PureBuiltinFolderTest.aFoldedFormKeepsTheSourcePositionItReplaced`.
+
 ## Phase 3 -- the source position literals a PROGRAM can read
 
 `rontolisp:current-file` and `rontolisp:current-line` (`LispNames.CURRENT_FILE` /

@@ -14,6 +14,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,6 +31,16 @@ class JvmLispCompilerTest {
 		// mirror the CLI pipeline's prelude splice (equalp/string</read-all) so the
 		// prelude-backed built-ins resolve like they do in a real compile
 		return compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	@Test
+	void aFoldedCallPrintsWhatTheRuntimeWouldHave() throws Exception {
+		// The pure-builtin fold renders in JAVA at compile time what the emitted class
+		// would have computed at run time, so the two have to agree character for
+		// character. Hiding the arguments behind a function parameter is what keeps the
+		// runtime in the picture; every table entry has a row
+		// (am.ik.rontolisp.macro.FoldDifferential).
+		FoldDifferential.assertNoDivergence(compileAndRun(FoldDifferential.program()));
 	}
 
 	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
@@ -2399,7 +2410,10 @@ class JvmLispCompilerTest {
 	void formatUserFunctionDirectiveSignalsWhenTheCompileNeverSawTheDirective() throws Exception {
 		assertThat(compileAndRun("""
 				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
-				(princ (handler-case (format nil (concatenate 'string "~" "/fmt-slash-brackets/") 1)
+				; The control must be built from a value the compile path cannot know, or the
+				; pure-builtin literal fold reduces it back to a literal directive.
+				(defun fmt-control (tilde) (concatenate 'string tilde "/fmt-slash-brackets/"))
+				(princ (handler-case (format nil (fmt-control "~") 1)
 				         (error (e) (if (search "--dynamic" (format nil "~a" e)) "signalled" "no-hint"))))
 				""")).isEqualTo("signalled");
 	}

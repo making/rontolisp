@@ -164,12 +164,19 @@ class WasmTreeShakerTest {
 		// _char_upcase/_char_downcase. A program that never case-folds loses both
 		// segments with the helpers; one that folds keeps them and still works (behavior
 		// pinned by WasmLispCompilerIntegrationTest).
+		// The case fold has to be over a value the COMPILER cannot know, or the
+		// pure-builtin literal fold evaluates it and the helpers are unreachable after
+		// all (.kb/pure-builtin-fold.md) -- which is the third case asserted below.
 		byte[] hello = compile("(print \"Hello World!\")", false, OptimizeLevel.DEFAULT);
-		byte[] folding = compile("(print (char-upcase (char-downcase #\\A)))", false, OptimizeLevel.DEFAULT);
+		byte[] folding = compile("(defun fold-char (c) (char-upcase (char-downcase c))) (print (fold-char #\\A))",
+				false, OptimizeLevel.DEFAULT);
+		byte[] literalFolded = compile("(print (char-upcase (char-downcase #\\A)))", false, OptimizeLevel.DEFAULT);
 		Module.parse(hello).assertWellFormed();
 		Module.parse(folding).assertWellFormed();
+		Module.parse(literalFolded).assertWellFormed();
 		assertThat(dataSectionSize(hello)).isLessThan(512);
 		assertThat(dataSectionSize(folding)).isGreaterThan(16000);
+		assertThat(dataSectionSize(literalFolded)).isLessThan(512);
 		// 1024 also pins the literal-print specialization (WasmLiteralPrint): without
 		// it the generic printer family alone puts the module near 6 KB.
 		assertThat(hello.length).isLessThan(1024);
@@ -191,6 +198,24 @@ class WasmTreeShakerTest {
 			Module.parse(module).assertWellFormed();
 			assertThat(module.length).describedAs(spelling).isLessThan(1024);
 		}
+	}
+
+	@Test
+	void aFoldedComputationCompilesToTheLiteralItReducesTo() {
+		// The pure-builtin fold's payoff is that it feeds the literal folds above: a
+		// computed argument that the compiler can work out is a literal by the time
+		// WasmLiteralPrint sees it, so the whole generic printer shakes out. Byte
+		// IDENTITY with the literal spelling is the strongest form of that claim --
+		// nothing of the deleted call survives anywhere in the module
+		// (.kb/pure-builtin-fold.md).
+		assertThat(compile("(princ (* 6 7))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ 42)", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(princ (length \"Hello World!\"))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ 12)", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(princ (concatenate 'string \"Hello\" \" \" \"World!\"))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(princ \"Hello World!\")", false, OptimizeLevel.DEFAULT));
+		assertThat(compile("(format t \"~a~%\" (* 6 7))", false, OptimizeLevel.DEFAULT))
+			.isEqualTo(compile("(format t \"~a~%\" 42)", false, OptimizeLevel.DEFAULT));
 	}
 
 	@Test

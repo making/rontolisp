@@ -133,6 +133,35 @@ public final class SourceProvenance {
 	}
 
 	/**
+	 * Gives a cons a REWRITING pass just built the position of the cons it replaces, and
+	 * returns it. The identity rule ({@code .kb/source-positions.md}) covers the pass
+	 * that changes nothing; a pass that legitimately rewrites a form -- a fold, an
+	 * inliner -- would still drop the position of every cons on the path from the
+	 * top-level form down to the rewrite, because a rebuilt parent forces rebuilt
+	 * children. The rewritten form stands for the same source text, so it inherits the
+	 * same position.
+	 *
+	 * <p>
+	 * A no-op when the pass handed back the original (the identity rule already applied),
+	 * when the result is not a cons, or when this thread is not recording.
+	 * @param <T> the static type of the rewritten form
+	 * @param original the cons the pass walked
+	 * @param rewritten what it produced in its place
+	 * @return {@code rewritten}, for {@code return SourceProvenance.inherit(cons, ...)}
+	 */
+	public static <T extends @Nullable LispVal> T inherit(LispCons original, T rewritten) {
+		State state = STATE.get();
+		if (state == null || !(rewritten instanceof LispCons cons) || cons == original) {
+			return rewritten;
+		}
+		Position position = state.positions.get(original);
+		if (position != null) {
+			state.positions.putIfAbsent(cons, position);
+		}
+		return rewritten;
+	}
+
+	/**
 	 * The recorded location of a form, or {@code null} when it is not a cons, was not
 	 * read from source (a macro built it), or this thread is not recording.
 	 * @param form the form to locate

@@ -15,6 +15,7 @@ import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
@@ -138,6 +139,33 @@ class WasmLispCompilerIntegrationTest {
 
 	private static String compileAndRun(String lispCode) throws Exception {
 		return compileAndRunProgram(LispReader.readAllFromString(lispCode));
+	}
+
+	// A --component program run for its standard output, the fourth backend. The core
+	// module is the same one Preview 1 gets, but the I/O adapter is not, so a text
+	// differential is only complete once it has run here too.
+	private static String compileComponentAndRun(String lispCode) throws Exception {
+		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void aFoldedCallPrintsWhatTheRuntimeWouldHave() throws Exception {
+		// The pure-builtin fold renders in JAVA at compile time what the emitted module
+		// would have computed at run time, so the two have to agree character for
+		// character -- the generalization of
+		// aFoldedLiteralPrintsWhatTheRuntimePrinterWouldHave to every table entry.
+		// Hiding the arguments behind a function parameter is what keeps the runtime in
+		// the picture (am.ik.rontolisp.macro.FoldDifferential).
+		FoldDifferential.assertNoDivergence(compileAndRun(FoldDifferential.program()));
+	}
+
+	@Test
+	void aFoldedCallPrintsWhatTheRuntimeWouldHaveOnTheComponentPath() throws Exception {
+		FoldDifferential.assertNoDivergence(compileComponentAndRun(FoldDifferential.program()));
 	}
 
 	@Test
@@ -4112,7 +4140,10 @@ class WasmLispCompilerIntegrationTest {
 		// search is prelude-backed, so this one splices the prelude like the CLI does.
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(defun fmt-slash-brackets (s x c a) (princ (if c "[" "<") s) (princ x s) (princ (if a "]" ">") s))
-				(princ (handler-case (format nil (concatenate 'string "~" "/fmt-slash-brackets/") 1)
+				; The control must be built from a value the compile path cannot know, or the
+				; pure-builtin literal fold reduces it back to a literal directive.
+				(defun fmt-control (tilde) (concatenate 'string tilde "/fmt-slash-brackets/"))
+				(princ (handler-case (format nil (fmt-control "~") 1)
 				         (error (e) (if (search "--dynamic" (format nil "~a" e)) "signalled" "no-hint"))))
 				""")))).isEqualTo("signalled");
 	}
