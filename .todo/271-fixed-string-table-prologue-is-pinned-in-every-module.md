@@ -11,7 +11,9 @@ only when the bodies that interned it are all dead" -- can never reach them: not
 recorded them as shakeable in the first place.
 
 The cost is ~104 B of data in a module that may use one of the entries. Measured
-2026-08-06 on `(princ "Hello World!") (terpri)` at `--optimize`, 648 B total:
+2026-08-06 on `(princ "Hello World!") (terpri)` at `--optimize`, 648 B total (625 B
+since the encoding minimization -- the DATA is untouched by it, so the ~104 B is now
+a larger share of the module):
 
 ```
 (data (;3;) (i32.const 256) "NIL()  . \0a#<function>#<FUTURE>#(#A(#d(#f(-./NaNInfinityE#\5cSpaceNewlineTabReturnPageBackspaceNulRuboutT")
