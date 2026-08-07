@@ -2,7 +2,7 @@
 
 Difficulty: High
 
-Regenerating every `examples/**/*.wasm` with the compiler at `9cd51dde` (2026-08-07)
+Regenerating every `examples/**/*.wasm` with the compiler at `0e044c7a` (2026-08-07)
 against the artifacts built at `7bf7b2ce` (2026-07-17) showed the wasm-GC output
 growing several-fold **with the same source and the same flags**. The `--no-gc` and
 component paths are unaffected (they got slightly smaller); this is wasm-GC only.
@@ -11,7 +11,7 @@ component paths are unaffected (they got slightly smaller); this is wasm-GC only
 
 Same `.lisp`, same flags, only the compiler differs:
 
-| program | flags | 7bf7b2ce | 9cd51dde | |
+| program | flags | 7bf7b2ce | 0e044c7a | |
 | --- | --- | ---: | ---: | ---: |
 | `webgl-cube/cube.lisp` | `--no-wasi --optimize` | 26,602 | 256,407 | 9.6x |
 | `webgl-galaxy/galaxy.lisp` | `--no-wasi --optimize` | 17,012 | 68,881 | 4.0x |
@@ -21,8 +21,14 @@ Same `.lisp`, same flags, only the compiler differs:
 | `wasm-browser/hello.lisp` | (none) | 103,562 | 319,357 | 3.1x |
 | `wasm-browser/hello.lisp` | `--optimize` | 4,644 | 8,730 | 1.9x |
 
-`--optimize=size` does not recover it (cube: 256,407 -> ~192 KB). The string-blob
-shaking that landed the same day moves these by tens of bytes, not by the factor.
+`--optimize=size` does not recover it (cube: 256,407 -> 191,694). Neither do the two
+size passes that landed the same day: the string-blob shaking moves these by tens of
+bytes, and after the **pure-builtin literal fold** (`.kb/pure-builtin-fold.md`) every
+number above and every number below is byte-for-byte unchanged -- all 24 example
+modules regenerate identically across it. That is the expected shape, not a
+disappointment: the fold pays where a computation over literals pinned a runtime
+dispatch tree, and none of these programs has one. It does mean the fold cannot be
+counted against this item.
 
 To rebuild the reference compiler:
 
@@ -33,25 +39,34 @@ git worktree add /tmp/old 7bf7b2ce && (cd /tmp/old && ./mvnw -q clean package -D
 ## Where the bytes are
 
 Disassemble cube both ways and group the WAT by function. **Six generic
-arity-dispatch functions hold 102,238 of the new module's 109,693 lines (93%).**
-The same six were 7,388 of 10,541 lines before -- they grew **13.8x**, and
-everything else in the module is roughly flat.
+arity-dispatch functions hold 102,232 of the new module's 109,453 function-body
+lines (93%).** The same six were 7,382 of 10,335 lines before -- they grew **13.8x**,
+and everything else in the module is roughly flat.
 
-They are the `(eqref ... ) -> eqref` bodies of arity 1..5, reached from the exported
-`frame` through one spliced library helper -- **in both builds**. So they did not
-newly appear; they inflated. Distinct `call` targets inside the 5-argument
-dispatcher: **19 -> 142**.
+They are the `(eqref ...) -> eqref` bodies of arity 0..4 (the leading `eqref` is the
+function id), reached from the exported `frame` through one spliced library helper --
+**in both builds**. So they did not newly appear; they inflated.
+
+**What grew is inline code, not calls.** Per-function, biggest first:
+
+| | 7bf7b2ce | 0e044c7a |
+| --- | --- | --- |
+| biggest dispatcher | 2,149 lines / 9 distinct callees | 27,188 lines / 23 distinct callees |
+| second | 1,446 / 3 | 21,188 / 20 |
+| all six | 7,382 lines | 102,232 lines |
+
+A body that grows 12.6x while its callee set barely moves is a body whose ARMS carry
+their code inline. So the arms appear to hold `BuiltinFunctionWrappers` bodies
+directly rather than each wrapper being its own function the arm merely `call`s --
+which is also what makes them un-shakeable, since the tree-shaker works on whole
+functions and can never drop an inlined arm. **Confirming that against
+`WasmRuntimeBuilder.buildDispatchBody` is the first thing to do.**
 
 The funcall-dispatch gate (`.kb/optimize-dead-code-elimination.md`) is working here
 and is not the regression: on cube it reports `33 of 266 defuns dispatchable`
 (`-Drontolisp.debug.dispatchgate=true`), and the minimal-funcall floor actually
-IMPROVED across the same two commits (94,503 -> 32,465 B on a two-defun program that
-`funcall`s a variable). **The open question is why a dispatcher gated to 33
-dispatchable defuns calls 142 distinct targets** -- the arms appear to carry
-`BuiltinFunctionWrappers` bodies INLINE rather than each wrapper being its own
-function the arm merely `call`s. That is what makes the dispatcher both huge and
-un-shakeable: the tree-shaker works on whole functions, so an inlined arm can never
-be dropped individually.
+IMPROVED across the same window (94,503 -> 32,605 B on a two-defun program that
+`funcall`s a variable). The cost is per arm, not per admitted function.
 
 Two things multiply into that:
 
@@ -63,7 +78,7 @@ Two things multiply into that:
   chain before the boxed-i64 and limb tiers landed. Measured marginal cost of one
   extra site, at `--optimize` (identical at `--optimize=size`):
 
-  | site | 7bf7b2ce | ede8b227 |
+  | site | 7bf7b2ce | 0e044c7a |
   | --- | ---: | ---: |
   | `(sqrt x)` | 59 B | 89 B |
   | `(setq s (+ s 1.5))` | 126 B | 193 B |
@@ -83,8 +98,8 @@ Ordered by expected payoff; each is independently landable.
 
 1. **Give each builtin wrapper its own wasm function and make the dispatcher arm a
    `call`.** This is the shape that lets `WasmTreeShaker` drop wrappers one by one
-   instead of only whole dispatchers, and it collapses the 5-arg dispatcher from
-   27,189 lines to roughly one arm each. Confirm first that the arms really do
+   instead of only whole dispatchers, and it collapses the biggest dispatcher from
+   27,188 lines to roughly one arm each. Confirm first that the arms really do
    inline (read `WasmRuntimeBuilder.buildDispatchBody` against the WAT).
 2. **Make the dispatcher a `br_table` on a small integer tag** instead of the
    present if/else chain -- the emitted bodies contain `br_table` zero times today,
