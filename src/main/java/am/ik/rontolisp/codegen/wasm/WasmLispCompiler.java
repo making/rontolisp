@@ -875,7 +875,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Appended after the last fixed helper so no index above shifts.
 	static final int FUNC_UB_READ = FUNC_LIST_DIRECTORY + 1;
 
-	static final int FX_FUNC_LAST = FUNC_UB_READ;
+	// _fixed_dec ((ref null eq) value, places, int-digits, plus) -> (ref null eq): the
+	// %fixed-decimal primitive behind format's ~F / ~$ (WasmFixedDecimalRuntimeBuilder).
+	// Appended after the last fixed helper so no index above shifts.
+	static final int FUNC_FIXED_DEC = FUNC_UB_READ + 1;
+
+	static final int FX_FUNC_LAST = FUNC_FIXED_DEC;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -3888,6 +3893,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (ref null eq)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _list_directory
 				fnDef.addFunction(TYPE_UB_READ); // _ub_read
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _fixed_dec (value, places,
+															// int-digits, plus) -> string
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4388,6 +4395,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmIoRuntimeBuilder.buildListDirectoryBody());
 				// unboxed-local boxed-read helper body (FUNC_UB_READ)
 				code.addFunction(WasmFxRuntimeBuilder.buildUbReadBody(rawSentinelGlobalIndex));
+				// %fixed-decimal runtime helper body (FUNC_FIXED_DEC)
+				code.addFunction(WasmFixedDecimalRuntimeBuilder.build());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.StringValuedForms;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -41,9 +42,13 @@ final class WasmWriteStringCompiler {
 			ctx.writer.writeUnsignedLeb128(objSlot);
 			return;
 		}
-		// A mutable character vector normalizes to a string first.
+		// A mutable character vector normalizes to a string first -- unless the argument
+		// form cannot BE one, in which case the normalizer is 653 bytes of runtime the
+		// program never needed (StringValuedForms).
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		WasmEmitHelper.emitCharvecToStrCall(ctx);
+		if (!StringValuedForms.certainlyString(parts.get(1))) {
+			WasmEmitHelper.emitCharvecToStrCall(ctx);
+		}
 		if (stream != null) {
 			WasmExprCompiler.compileExpr(stream, ctx);
 		}

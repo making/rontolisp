@@ -15934,51 +15934,25 @@ public final class LispMacroExpander {
 
 	/**
 	 * Builds the string-valued expansion of a fixed-decimal float (~f) or monetary value
-	 * (~$). The value is scaled by 10^places, rounded to an integer (round-half-to-even,
-	 * matching {@code round} on every backend) and split into integer and fractional
-	 * parts by string slicing, so no floating-point string formatting is needed at
-	 * runtime. When {@code nbefore} is non-null the integer part is zero-padded to that
-	 * many digits (~$).
+	 * (~$): ONE call to the {@code %fixed-decimal} primitive, whose rendering is
+	 * {@code compiler/FixedDecimal} on every backend. When {@code nbefore} is non-null
+	 * the integer part is zero-padded to that many digits (~$); a null one means 1, i.e.
+	 * no padding.
+	 *
+	 * <p>
+	 * It used to expand INLINE into eight ordinary forms -- scale by {@code 10^places},
+	 * {@code round} to an integer, {@code princ-to-string} it, then punch in a decimal
+	 * point with {@code subseq} and {@code %string-concat}. Every generic operation in
+	 * that chain was emitted with its full numeric type ladder at every site, and the
+	 * chain's {@code round} dragged the bignum-capable integer path into programs whose
+	 * only number is a float: on the WASM GC backend one {@code ~,15F} cost 7,616 bytes
+	 * of inline code plus 22 runtime functions nothing else reached. See
+	 * {@code .kb/format.md}.
 	 */
 	private static LispVal decimalFloatExpr(LispVal arg, LispVal placesExpr, @Nullable LispVal nbefore, boolean plus) {
-		boolean zeroPlaces = placesExpr instanceof LispInteger li && li.value() == 0;
-		// A floating-point 10^places keeps the scaling multiply in f64 on every backend
-		// (an integer expt can widen to bignum and break mixed arithmetic).
-		LispVal pow10 = (placesExpr instanceof LispInteger li) ? new LispDouble(pow10(li.value()))
-				: fmtCall(LispNames.EXPT, new LispDouble(10.0), placesExpr);
-		LispVal nPlus1 = (placesExpr instanceof LispInteger li) ? new LispInteger(li.value() + 1)
-				: fmtCall(LispNames.ADD, placesExpr, new LispInteger(1));
-		LispSymbol v = new LispSymbol("__fmtv");
-		LispSymbol neg = new LispSymbol("__fmtneg");
-		LispSymbol sc = new LispSymbol("__fmtsc");
-		LispSymbol s2 = new LispSymbol("__fmts");
-		LispSymbol len = new LispSymbol("__fmtlen");
-		LispSymbol ip = new LispSymbol("__fmtip");
-		LispVal vInit = fmtCall(LispNames.MUL, arg, new LispDouble(1.0));
-		LispVal negInit = fmtCall(LispNames.LT, v, new LispDouble(0.0));
-		// Round to a signed integer, then take the magnitude by integer negation (the
-		// integer `abs` runtime path rejects a float operand on the compiled backends).
-		LispVal signedScaled = fmtCall(LispNames.ROUND, fmtCall(LispNames.MUL, v, pow10));
-		LispVal scInit = makeIf(neg, fmtCall(LispNames.SUB, new LispInteger(0), signedScaled), signedScaled);
-		LispVal s2Init = padExpr(fmtCall(LispNames.PRINC_TO_STRING, sc), nPlus1, new LispString("0"), true);
-		LispVal lenInit = fmtCall(LispNames.LENGTH, s2);
-		LispVal ipSlice = fmtCall(LispNames.SUBSEQ, s2, new LispInteger(0), fmtCall(LispNames.SUB, len, placesExpr));
-		LispVal ipInit = (nbefore == null) ? ipSlice : padExpr(ipSlice, nbefore, new LispString("0"), true);
-		LispVal sign = makeIf(neg, new LispString("-"), new LispString(plus ? "+" : ""));
-		List<LispVal> bindings = new java.util.ArrayList<>(List.of(listToCons(List.of(v, vInit)),
-				listToCons(List.of(neg, negInit)), listToCons(List.of(sc, scInit)), listToCons(List.of(s2, s2Init)),
-				listToCons(List.of(len, lenInit)), listToCons(List.of(ip, ipInit))));
-		LispVal body;
-		if (zeroPlaces) {
-			body = fmtCall(LispNames.STRING_CONCAT, sign, ip);
-		}
-		else {
-			LispVal fp = fmtCall(LispNames.SUBSEQ, s2, fmtCall(LispNames.SUB, len, placesExpr));
-			LispVal withDot = fmtCall(LispNames.STRING_CONCAT,
-					fmtCall(LispNames.STRING_CONCAT, ip, new LispString(".")), fp);
-			body = fmtCall(LispNames.STRING_CONCAT, sign, withDot);
-		}
-		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), listToCons(bindings), body));
+		LispVal intDigits = (nbefore == null) ? new LispInteger(1) : nbefore;
+		return fmtCall(LispNames.FIXED_DECIMAL, arg, placesExpr, intDigits,
+				plus ? LispTrue.INSTANCE : LispNil.INSTANCE);
 	}
 
 	private static long pow10(long n) {
@@ -16237,6 +16211,15 @@ public final class LispMacroExpander {
 	 * so the intermediate string is never built: the printer writes straight to the
 	 * destination. It also puts a LITERAL argument in front of the print family's literal
 	 * fold, which the wrapping call would otherwise hide behind a cons.
+	 *
+	 * <p>
+	 * A piece that IS a {@code %fixed-decimal} call (what {@code ~f} / {@code ~$} lowers
+	 * to) is a STRING by construction, so it goes out through {@code write-string} rather
+	 * than {@code princ}: {@code princ} of a value whose type the compiler cannot see has
+	 * to keep the whole generic printer reachable -- on the WASM GC backend that is the
+	 * float digit printer and its ~3.8 KB of runtime, in a program that no longer prints
+	 * a float anywhere. {@code write-string} tracks the output column exactly as
+	 * {@code princ} does, so a following {@code ~&} is unaffected.
 	 * @param expr the string-valued piece
 	 * @return the form that writes it
 	 */
@@ -16250,6 +16233,9 @@ public final class LispMacroExpander {
 				if (LispNames.PRIN1_TO_STRING.equals(head.name())) {
 					return fmtCall(LispNames.PRIN1, parts.get(1));
 				}
+			}
+			if (LispNames.FIXED_DECIMAL.equals(head.name())) {
+				return fmtCall(LispNames.WRITE_STRING, expr);
 			}
 		}
 		return fmtCall(LispNames.PRINC, expr);

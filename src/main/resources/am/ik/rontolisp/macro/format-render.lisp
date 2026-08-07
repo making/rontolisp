@@ -247,24 +247,14 @@
                (grouped (if colon (%fmt-group g comma interval) g)))
           (%fmt-cat (if neg "-" (if at "+" "")) grouped)))))
 
-;;; ~F / ~$: scale by 10^places, round to an integer (round-half-to-even on every
-;;; backend) and split by string slicing, so no float printing is involved.
+;;; ~F / ~$: one call to the %fixed-decimal primitive, which is also what the
+;;; static path expands the directive to -- one renderer, so the two paths cannot
+;;; disagree about a digit. A non-number argument prints as if by ~A (CLHS
+;;; 22.3.3.1); the primitive itself takes numbers only.
 (defun %fmt-fixed (x places nbefore at)
   (if (not (numberp x))
       (princ-to-string x)
-      (let* ((v (* x 1.0))
-             (neg (< v 0.0))
-             (signed (round (* v (expt 10.0 places))))
-             (sc (if neg (- 0 signed) signed))
-             (s (%fmt-pad (princ-to-string sc) (+ places 1) 1 0 "0" t))
-             (len (length s))
-             (ip0 (subseq s 0 (- len places)))
-             (ip (if (null nbefore) ip0 (%fmt-pad ip0 nbefore 1 0 "0" t)))
-             (sign (if neg "-" (if at "+" ""))))
-        (if (= places 0)
-            (%fmt-cat sign ip)
-            (%fmt-cat sign
-             (%fmt-cat (%fmt-cat ip ".") (subseq s (- len places))))))))
+      (%fixed-decimal x places (if (null nbefore) 1 nbefore) at)))
 
 (defun %fmt-strip-zeros (s)
   (let ((g s))

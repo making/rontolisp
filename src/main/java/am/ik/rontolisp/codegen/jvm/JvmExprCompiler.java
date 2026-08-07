@@ -415,6 +415,7 @@ final class JvmExprCompiler {
 				case LispNames.PRINC_TO_STRING_RAW -> JvmPrincToStringCompiler.compile(cons, ctx, className);
 				case LispNames.PRIN1_TO_STRING_RAW -> JvmPrin1ToStringCompiler.compile(cons, ctx, className);
 				case LispNames.STRING_CONCAT -> JvmStringConcatCompiler.compile(cons, ctx, className);
+				case LispNames.FIXED_DECIMAL -> JvmFixedDecimalCompiler.compile(cons, ctx, className);
 				case LispNames.GENSYM -> JvmGensymCompiler.compile(cons, ctx, className);
 				case LispNames.STRING -> JvmSymbolApiCompiler.compileString(cons, ctx, className);
 				case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);

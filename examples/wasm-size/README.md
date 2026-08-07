@@ -32,20 +32,20 @@ only the output checks are skipped.
 
 ## Results
 
-rontolisp 0.1.0-SNAPSHOT, measured 2026-08-07, validated on wasmtime 46.0.1. The
+rontolisp 0.1.0-SNAPSHOT, measured 2026-08-07, validated on wasmtime 47.0.2. The
 sizes are toolchain- but not host-dependent, so `./build.sh` reproduces them.
 
 | Artifact | Flags | Size (bytes) |
 | --- | --- | ---: |
-| hello_world | (none) | 318,599 |
+| hello_world | (none) | 319,138 |
 | hello_world | `--optimize` | 518 |
 | hello_world | `--optimize=size` | 518 |
 | hello_world | `--component --optimize=size` | 1,672 |
 | hello_world | `--no-gc --optimize=size` | 406 |
-| pi_approx | (none) | 327,227 |
-| pi_approx | `--optimize` | 17,012 |
-| pi_approx | `--optimize=size` | 16,083 |
-| pi_approx | `--component --optimize=size` | 17,265 |
+| pi_approx | (none) | 320,227 |
+| pi_approx | `--optimize` | 5,356 |
+| pi_approx | `--optimize=size` | 5,236 |
+| pi_approx | `--component --optimize=size` | 6,365 |
 | pi_approx | `--no-gc --optimize=size` | 1,042 |
 
 ## Cross-language context
@@ -73,10 +73,10 @@ flags; rontolisp's are `--optimize=size` for the Preview 1 command and
 
 | Language | WASI | Size (bytes) |
 | --- | --- | ---: |
+| rontolisp | Preview 1 | 5,236 |
 | wado | Preview 3 (component) | 6,034 |
+| rontolisp | Preview 3 (component) | 6,365 |
 | zig | Preview 1 | 10,608 |
-| rontolisp | Preview 1 | 16,083 |
-| rontolisp | Preview 3 (component) | 17,265 |
 | c | Preview 1 | 18,105 |
 | moonbit | Preview 1 | 22,986 |
 | rust | Preview 1 | 59,753 |
@@ -84,9 +84,9 @@ flags; rontolisp's are `--optimize=size` for the Preview 1 command and
 ## Reading the numbers
 
 **`--optimize` is not optional.** Without it a rontolisp module carries the
-whole prelude: 318 KB for `hello_world`, 99.8% of which nothing in the program
+whole prelude: 319 KB for `hello_world`, 99.8% of which nothing in the program
 reaches. `--optimize` is the dead-code tree-shaker -- keep only what `_start`
-and the exports reach -- and it is what turns 318,599 bytes into 518. Every
+and the exports reach -- and it is what turns 319,138 bytes into 518. Every
 number worth comparing on this page is a tree-shaken one.
 
 **`hello_world` is 518 bytes and imports one function.** A rontolisp command
@@ -104,25 +104,34 @@ and no linear-memory bookkeeping. The other Preview 1 rows all carry their own
 heap. The like-for-like linear-memory row is `--no-gc` below; the like-for-like
 component row is the 1,672-byte one.
 
-**`pi_approx` is dominated by printing the answer, not by computing it.** The
-whole million-iteration loop -- the f64 accumulate, the divide, the sign flip --
-is 3,778 bytes with a `princ` at the end. Printing the result to 15 decimal
-places is the other 13,234.
+**`pi_approx` is now dominated by the loop, and printing to 15 places is nearly
+free.** All four rows are the same program at `--optimize`:
 
-Almost all of that is one directive. A literal control string is parsed at
-compile time, so no directive interpreter ships; instead `~,15F` *expands* into
-eight ordinary Lisp forms (scale by `10^15`, `round` to an integer,
+| variant | bytes |
+| --- | ---: |
+| the loop alone, `(princ "done")` at the end | 4,129 |
+| the loop + `(format t "pi = ~,2F~%" ...)` | 5,356 |
+| the loop + `(format t "pi = ~,15F~%" ...)` -- the real program | 5,356 |
+| the loop + `(princ <the f64 result>)` | 8,050 |
+
+Read off it: the fixed-decimal directive costs **1,227 bytes**, the digit count
+does not move it at all, and printing the same float through the generic printer
+instead is **2,694 bytes MORE** than printing it to 15 decimal places.
+
+That last row is the inversion of what this page used to say. `~,nF` used to
+*expand* into eight ordinary Lisp forms (scale by `10^15`, `round` to an integer,
 `princ-to-string` it, then punch in a decimal point with `subseq` and
-`%string-concat`) which are emitted **inline into the caller**, each generic
-operation carrying its own numeric type ladder. The result: half the module is
-the five-line program's own function body. `~,2F` costs the same as `~,15F`, so
-it is the shape of the lowering rather than the digit count. Replacing the
-`format` call with `princ` -- same loop, same everything else -- drops the module
-from 16,083 to 7,930 bytes.
+`%string-concat`) emitted **inline into the caller**, each generic operation
+carrying its own numeric type ladder and the `round` dragging the whole
+bignum-capable integer path into a program whose only number is a float. Half the
+module was the five-line program's own body, and `pi_approx` was 17,012 bytes. It
+now lowers to a single call to one fixed-decimal routine that builds its digits
+straight out of an unboxed `f64` (`%fixed-decimal`, 535 bytes of runtime shared by
+every site), and the caller's body went 8,607 -> 1,111.
 
-**The component costs about 1.2 KB.** `--component` re-frames the module as a
+**The component costs about 1.1 KB.** `--component` re-frames the module as a
 WASI 0.3 component: the canonical-ABI adapters and the type section are the
-whole difference (1,672 vs 518, 17,265 vs 16,083). Its imports are stated as a
+whole difference (1,672 vs 518, 6,365 vs 5,236). Its imports are stated as a
 WIT world rather than as `fd_write`:
 
 ```console
@@ -155,15 +164,17 @@ Two caveats, which is why these live outside the main table:
   The other languages' programs are `_start` commands.
 - **`pi_approx-nogc` prints differently.** `format` is outside the `--no-gc`
   subset, so it prints with `princ`, which gives rontolisp's default float shape
-  (`3.141591`) instead of 15 decimal places. Same loop, less output -- and, as
-  the `format` finding above says, that accounts for most of the difference
-  between 1,042 and 16,083 bytes.
+  (`3.141591`) instead of 15 decimal places. Same loop, less output -- but that
+  is no longer where the gap to the 5,236-byte wasm-GC build comes from: printing
+  to 15 places costs 1,227 bytes there, and printing through `princ` costs more,
+  not less. What `--no-gc` is not carrying is the GC value model and the generic
+  numeric tower behind every `+` and `/` in the loop.
 
 ## Flags
 
 | Flag | What it does |
 | --- | --- |
 | `--optimize` | Dead-code-eliminate: keep only what `_start` and the exports reach |
-| `--optimize=size` | The above, plus trade speed for size -- drops fused integer trees and unboxed locals. Free here (`hello_world` is unchanged; `pi_approx` is a float kernel, so it gains 5.5%), but it costs up to 4x the runtime on integer-heavy code |
+| `--optimize=size` | The above, plus trade speed for size -- drops fused integer trees and unboxed locals. Free here (`hello_world` is unchanged; `pi_approx` is a float kernel, so it gains 2.2%), but it costs up to 4x the runtime on integer-heavy code |
 | `--component` | Emit a WASI 0.3 component instead of a Preview 1 module |
 | `--no-gc` | Emit a plain MVP core module: no wasm-GC, numeric subset only, exports rather than `_start` |

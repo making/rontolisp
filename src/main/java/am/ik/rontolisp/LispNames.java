@@ -2137,6 +2137,15 @@ public final class LispNames {
 	public static final String STRING_CONCAT = "%STRING-CONCAT";
 
 	/**
+	 * The {@code %fixed-decimal} internal helper: one number as a fixed-point decimal
+	 * string, {@code (%fixed-decimal value places int-digits plus-p)}. It is what
+	 * {@code format}'s {@code ~F} and {@code ~$} lower to on both format paths, so the
+	 * directive costs one call instead of an inlined scale/round/slice expansion. The
+	 * algorithm it must render is {@code compiler/FixedDecimal}.
+	 */
+	public static final String FIXED_DECIMAL = "%FIXED-DECIMAL";
+
+	/**
 	 * The {@code %seq-string} internal helper: one character sequence (a string, a cons
 	 * list, a vector, or nil -- the empty list) as a string. It is what makes the
 	 * {@code concatenate 'string} family take any sequence argument without planting a

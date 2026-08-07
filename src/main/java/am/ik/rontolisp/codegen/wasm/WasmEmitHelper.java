@@ -188,9 +188,14 @@ final class WasmEmitHelper {
 	}
 
 	static void castI31GetS(WasmLispCompiler.Ctx ctx) {
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(Type.I31.code());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		castI31GetS(ctx.writer);
+	}
+
+	/** The same cast against a raw writer, for a RUNTIME function body. */
+	static void castI31GetS(WasmWriter w) {
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 	}
 
 	/**
@@ -269,82 +274,92 @@ final class WasmEmitHelper {
 	 * extracts f64 field.
 	 */
 	static void castFloatGetF64(WasmLispCompiler.Ctx ctx) {
-		int tmpSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(Type.I31.code());
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
+		castFloatGetF64(ctx.writer, ctx.allocTemp());
+	}
+
+	/**
+	 * The same ladder against a raw writer and a caller-chosen scratch slot, so a RUNTIME
+	 * function body can carry it once instead of every call site inlining it. The slot
+	 * must be a {@code (ref null eq)} local.
+	 * @param w the body writer
+	 * @param tmpSlot an {@code (ref null eq)} local the ladder may clobber
+	 */
+	static void castFloatGetF64(WasmWriter w, int tmpSlot) {
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.F64);
 		// i31 path: cast to i31, get_s, convert to f64
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(Type.I31.code());
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
-		ctx.writer.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.ELSE);
 		// boxed-integer path: convert the i64 field
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.F64_CONVERT_S_I64);
-		ctx.writer.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.F64_CONVERT_S_I64);
+		w.write(Instruction.ELSE);
 		// limb-integer path: the float approximation via _big_to_f64
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_TO_F64);
-		ctx.writer.write(Instruction.ELSE);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_RATIO);
-		ctx.writer.write(Instruction.IF);
-		ctx.writer.write(Type.F64);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_BIGINT);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_BIG_TO_F64);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_RATIO);
+		w.write(Instruction.IF);
+		w.write(Type.F64);
 		// ratio path: numerator / denominator as f64 (float contagion)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
-		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
-		ctx.writer.write(Instruction.F64_CONVERT_S_I32);
-		ctx.writer.write(Instruction.F64_DIV);
-		ctx.writer.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_NUM);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_RAT_DEN);
+		w.write(Instruction.F64_CONVERT_S_I32);
+		w.write(Instruction.F64_DIV);
+		w.write(Instruction.ELSE);
 		// float_struct path: cast, extract f64 field
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(tmpSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		ctx.writer.writeUnsignedLeb128(0);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(tmpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	/**

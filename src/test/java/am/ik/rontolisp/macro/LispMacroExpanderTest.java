@@ -81,4 +81,37 @@ class LispMacroExpanderTest {
 		assertThat(ancestorTableNames(source)).isEqualTo(ancestorTableNames(source));
 	}
 
+	private static String expandOne(String source) {
+		LispCons form = (LispCons) LispReader.readAllFromString(source).get(0);
+		return LispMacroExpander.expandFormat(form).print();
+	}
+
+	@Test
+	void aFixedDecimalDirectiveIsOneCallAndNotAnInlinedScaleRoundSliceExpansion() {
+		// ~F and ~$ used to expand INLINE into eight ordinary forms -- scale by 10^d,
+		// `round` to a bignum-capable integer, `princ-to-string` it, then punch in a
+		// decimal point with `subseq` and `%string-concat` -- and every generic
+		// operation in that chain was emitted with its full numeric type ladder at
+		// every site. On the WASM GC backend one ~,15F cost 7,616 bytes of caller body
+		// and pulled in 22 runtime functions nothing else reached (.kb/format.md).
+		// If any of those names comes back into the lowering, the cost comes back too.
+		String fixed = expandOne("(format nil \"~,15F\" x)");
+		assertThat(fixed).contains("%FIXED-DECIMAL");
+		assertThat(fixed).doesNotContain("ROUND")
+			.doesNotContain("PRINC-TO-STRING")
+			.doesNotContain("SUBSEQ")
+			.doesNotContain("%STRING-CONCAT");
+		assertThat(expandOne("(format nil \"~,3$\" x)")).contains("%FIXED-DECIMAL").doesNotContain("ROUND");
+	}
+
+	@Test
+	void aFixedDecimalPieceGoesOutThroughWriteStringNotPrinc() {
+		// %fixed-decimal answers a string by construction, and `princ` of a value whose
+		// type the compiler cannot see has to keep the whole generic printer reachable
+		// -- on the WASM GC backend that is the float digit printer and its ~3.8 KB of
+		// runtime, in a program that no longer prints a float anywhere.
+		String out = expandOne("(format t \"pi = ~,15F~%\" x)");
+		assertThat(out).contains("WRITE-STRING").contains("%FIXED-DECIMAL");
+	}
+
 }

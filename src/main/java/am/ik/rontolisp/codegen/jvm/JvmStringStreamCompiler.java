@@ -8,6 +8,7 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.StringValuedForms;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -91,7 +92,11 @@ final class JvmStringStreamCompiler {
 			throw new UnsupportedOperationException("write-string expects 1 or 2 arguments, got " + (parts.size() - 1));
 		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
-		JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		// A mutable character vector normalizes to a string first -- unless the argument
+		// form cannot BE one (StringValuedForms), the same rule the WASM backend follows.
+		if (!StringValuedForms.certainlyString(parts.get(1))) {
+			JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		}
 		LispVal stream = streamArg(ctx, parts.size() == 3 ? parts.get(2) : null);
 		if (stream != null) {
 			JvmExprCompiler.compileExpr(stream, ctx, className);

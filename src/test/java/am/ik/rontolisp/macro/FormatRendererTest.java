@@ -47,6 +47,11 @@ class FormatRendererTest {
 			"~,3f ~,2f|-3.14159 -0.005", "~e ~,3e|0.0 0.0", "~,3,2e|1234.5", "~$ ~,3$ ~2,4$|3.5 3.5 3.5",
 			"~:a ~:s|nil nil", "[~10@a]|\"hi\"", "~,,,4:b|255", "~a~^~a|1", "~{~a~^-~}|'(1 2 3)",
 			"~:{~a~^/~a~}|'((1 2) (3))", "&#x~x;|233",
+			// ~f / ~$ past the point where the scaled magnitude leaves the signed 64-bit
+			// range. Both paths call the ONE %fixed-decimal primitive now, so both
+			// saturate identically; before it they scaled by different powers of ten and
+			// answered different digits (todo-286).
+			"~,25F ~,30F|3.14159 1.5", "~,2F ~,0F|1e30 -1e30", "~,2F|-0.0", "~,3$|-0.5",
 			// The logical block / justification family. The static expansion DECLINES
 			// every one of these, so both columns are the runtime renderer -- the rows
 			// are here so a future static implementation has to match it.

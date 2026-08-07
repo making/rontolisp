@@ -103,6 +103,14 @@ final class JvmNumericRuntimeBuilder {
 	 */
 	static final String EQUAL = "_equal";
 
+	/**
+	 * Renders a number as a fixed-point decimal string, the {@code %fixed-decimal}
+	 * primitive behind {@code format}'s {@code ~F} / {@code ~$}. The algorithm is
+	 * {@link am.ik.rontolisp.compiler.FixedDecimal}, emitted here so the class stays
+	 * self-contained (a compiled class runs with no rontolisp runtime on the classpath).
+	 */
+	static final String FIXED_DEC = "_fixdec";
+
 	/** Truncates a rational toward zero. */
 	static final String RAT_TRUNC = "_rtrunc";
 
@@ -340,6 +348,8 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Constant nAsh = cp.addUtf8(ASH);
 		Utf8Constant nIntLen = cp.addUtf8(INTEGER_LENGTH);
 		Utf8Constant nLogbitp = cp.addUtf8(LOGBITP);
+		Utf8Constant nFixDec = cp.addUtf8(FIXED_DEC);
+		Utf8Constant dFixDec = cp.addUtf8("(" + OBJ + OBJ + OBJ + OBJ + ")Ljava/lang/String;");
 		Utf8Constant dBinary = cp.addUtf8(BINARY_DESC);
 		Utf8Constant dUnary = cp.addUtf8(UNARY_DESC);
 		Utf8Constant dCmp = cp.addUtf8("(" + OBJ + OBJ + ")I");
@@ -377,6 +387,7 @@ final class JvmNumericRuntimeBuilder {
 		MethodrefConstant rAsh = cp.addMethodref(thisClass, cp.addNameAndType(nAsh, dBinary));
 		MethodrefConstant rIntLen = cp.addMethodref(thisClass, cp.addNameAndType(nIntLen, dUnary));
 		MethodrefConstant rLogbitp = cp.addMethodref(thisClass, cp.addNameAndType(nLogbitp, dCmp));
+		MethodrefConstant rFixDec = cp.addMethodref(thisClass, cp.addNameAndType(nFixDec, dFixDec));
 
 		List<NumericMethod> methods = new ArrayList<>();
 		methods.add(buildBig(nBig, dBig, longClass, bigClass, longValue, biValueOf));
@@ -433,6 +444,7 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildAsh(nAsh, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biShiftLeft));
 		methods.add(buildIntegerLength(nIntLen, dUnary, longClass, longValue, longValueOf, rBig, biBitLength, longNlz));
 		methods.add(buildLogbitp(nLogbitp, dCmp, longClass, longValue, rBig, biTestBit));
+		methods.add(buildFixedDec(cp, nFixDec, dFixDec, mathClass, longClass, numberClass, numDoubleValue, rDbl));
 
 		Map<String, MethodrefConstant> ops = new LinkedHashMap<>();
 		ops.put(ADD, rAdd);
@@ -471,6 +483,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(ASH, rAsh);
 		ops.put(INTEGER_LENGTH, rIntLen);
 		ops.put(LOGBITP, rLogbitp);
+		ops.put(FIXED_DEC, rFixDec);
 		return new NumericRuntime(methods, ops);
 	}
 
@@ -2131,6 +2144,170 @@ final class JvmNumericRuntimeBuilder {
 		JvmRuntimeBuilder.emitU2(c, biTestBit.index());
 		c.add(Opcode.IRETURN);
 		return new NumericMethod(name, desc, c, 4, 5, List.of());
+	}
+
+	/**
+	 * Builds {@code _fixdec(value, places, intDigits, plus) -> String}: the
+	 * {@code %fixed-decimal} primitive, step for step the algorithm of
+	 * {@link am.ik.rontolisp.compiler.FixedDecimal} (which is what the interpreter runs
+	 * and what the WASM {@code _fixed_dec} emits), with the frame quotes a compiled
+	 * string carries as storage added around the text.
+	 *
+	 * <p>
+	 * Nothing here reaches for {@code String.format}: the scaling {@code 10^places} has
+	 * to be the same repeated multiplication every backend does, the rounding the same
+	 * half-to-even {@link Math#rint}, and the {@code double}-to-{@code long} conversion
+	 * the same saturating one, or the four backends stop printing the same digits.
+	 */
+	private static NumericMethod buildFixedDec(ConstantPool cp, Utf8Constant name, Utf8Constant desc,
+			ClassConstant mathClass, ClassConstant longClass, ClassConstant numberClass,
+			MethodrefConstant numDoubleValue, MethodrefConstant rDbl) {
+		ClassConstant stringClass = cp.addClass(cp.addUtf8("java/lang/String"));
+		MethodrefConstant mathRint = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("rint"), cp.addUtf8("(D)D")));
+		MethodrefConstant mathAbsD = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("abs"), cp.addUtf8("(D)D")));
+		MethodrefConstant mathMaxI = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("max"), cp.addUtf8("(II)I")));
+		MethodrefConstant mathMinI = cp.addMethodref(mathClass,
+				cp.addNameAndType(cp.addUtf8("min"), cp.addUtf8("(II)I")));
+		MethodrefConstant longToString = cp.addMethodref(longClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("(J)Ljava/lang/String;")));
+		MethodrefConstant numIntValue = cp.addMethodref(numberClass,
+				cp.addNameAndType(cp.addUtf8("intValue"), cp.addUtf8("()I")));
+		MethodrefConstant strLength = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
+		MethodrefConstant strConcat = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("concat"), cp.addUtf8("(Ljava/lang/String;)Ljava/lang/String;")));
+		MethodrefConstant strSub2 = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(II)Ljava/lang/String;")));
+		MethodrefConstant strSub1 = cp.addMethodref(stringClass,
+				cp.addNameAndType(cp.addUtf8("substring"), cp.addUtf8("(I)Ljava/lang/String;")));
+		ConstantPool.DoubleConstant ten = cp.addDouble(10.0);
+
+		final int x = 4, d = 6, n = 7, scale = 8, i = 10, s = 11, min = 12, out = 13, split = 14;
+		JvmAsm a = new JvmAsm();
+		// x = ((Number) _dbl(value)).doubleValue()
+		a.aload(0);
+		a.invokestatic(rDbl);
+		a.checkcast(numberClass);
+		a.invokevirtual(numDoubleValue);
+		a.dstore(x);
+		// d = min(max(places, 0), MAX_DIGITS); n likewise
+		emitClampedIntArg(a, 1, d, numberClass, numIntValue, mathMaxI, mathMinI);
+		emitClampedIntArg(a, 2, n, numberClass, numIntValue, mathMaxI, mathMinI);
+		// scale = 1.0; for (i = 0; i < d; i++) scale *= 10.0
+		a.op(Opcode.DCONST_1);
+		a.dstore(scale);
+		a.iconst(0);
+		a.istore(i);
+		int scaleTop = a.label(), scaleEnd = a.label();
+		a.bind(scaleTop);
+		a.iload(i);
+		a.iload(d);
+		a.branch(Opcode.IF_ICMPGE, scaleEnd);
+		a.dload(scale);
+		a.ldc2Double(ten);
+		a.dmul();
+		a.dstore(scale);
+		a.iinc(i, 1);
+		a.branch(Opcode.GOTO, scaleTop);
+		a.bind(scaleEnd);
+		// s = Long.toString((long) Math.abs(Math.rint(x * scale)))
+		a.dload(x);
+		a.dload(scale);
+		a.dmul();
+		a.invokestatic(mathRint);
+		a.invokestatic(mathAbsD);
+		a.op(Opcode.D2L);
+		a.invokestatic(longToString);
+		a.astore(s);
+		// min = max(d + 1, n + d); while (s.length() < min) s = "0".concat(s)
+		a.iload(d);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.iload(n);
+		a.iload(d);
+		a.op(Opcode.IADD);
+		a.invokestatic(mathMaxI);
+		a.istore(min);
+		int padTop = a.label(), padEnd = a.label();
+		a.bind(padTop);
+		a.aload(s);
+		a.invokevirtual(strLength);
+		a.iload(min);
+		a.branch(Opcode.IF_ICMPGE, padEnd);
+		a.ldcString(cp.addString("0"));
+		a.aload(s);
+		a.invokevirtual(strConcat);
+		a.astore(s);
+		a.branch(Opcode.GOTO, padTop);
+		a.bind(padEnd);
+		// split = s.length() - d
+		a.aload(s);
+		a.invokevirtual(strLength);
+		a.iload(d);
+		a.op(Opcode.ISUB);
+		a.istore(split);
+		// out = (x < 0.0) ? "\"-" : (plus != null ? "\"+" : "\"") -- the opening frame
+		// quote and the sign in one constant. dcmpg answers 1 for a NaN, which is not
+		// negative, exactly as `value < 0.0` is false for one.
+		int negative = a.label(), plain = a.label(), haveSign = a.label();
+		a.dload(x);
+		a.op(Opcode.DCONST_0);
+		a.op(Opcode.DCMPG);
+		a.branch(Opcode.IFLT, negative);
+		a.aload(3);
+		a.branch(Opcode.IFNULL, plain);
+		a.ldcString(cp.addString("\"+"));
+		a.branch(Opcode.GOTO, haveSign);
+		a.bind(plain);
+		a.ldcString(cp.addString("\""));
+		a.branch(Opcode.GOTO, haveSign);
+		a.bind(negative);
+		a.ldcString(cp.addString("\"-"));
+		a.bind(haveSign);
+		a.astore(out);
+		// out = out.concat(s.substring(0, split))
+		a.aload(out);
+		a.aload(s);
+		a.iconst(0);
+		a.iload(split);
+		a.invokevirtual(strSub2);
+		a.invokevirtual(strConcat);
+		a.astore(out);
+		// if (d > 0) out = out.concat(".").concat(s.substring(split))
+		int noPoint = a.label();
+		a.iload(d);
+		a.branch(Opcode.IFLE, noPoint);
+		a.aload(out);
+		a.ldcString(cp.addString("."));
+		a.invokevirtual(strConcat);
+		a.aload(s);
+		a.iload(split);
+		a.invokevirtual(strSub1);
+		a.invokevirtual(strConcat);
+		a.astore(out);
+		a.bind(noPoint);
+		// return out.concat("\"") -- the closing frame quote
+		a.aload(out);
+		a.ldcString(cp.addString("\""));
+		a.invokevirtual(strConcat);
+		a.areturn();
+		return new NumericMethod(name, desc, a.finish(), 6, 16, List.of());
+	}
+
+	// Loads argument slot `arg` as an int and stores it clamped into [0, MAX_DIGITS].
+	private static void emitClampedIntArg(JvmAsm a, int arg, int slot, ClassConstant numberClass,
+			MethodrefConstant numIntValue, MethodrefConstant mathMaxI, MethodrefConstant mathMinI) {
+		a.aload(arg);
+		a.checkcast(numberClass);
+		a.invokevirtual(numIntValue);
+		a.iconst(0);
+		a.invokestatic(mathMaxI);
+		a.iconst(am.ik.rontolisp.compiler.FixedDecimal.MAX_DIGITS);
+		a.invokestatic(mathMinI);
+		a.istore(slot);
 	}
 
 	// Emits the two `instanceof Long` guards shared by _mod and _cmp, returning the two

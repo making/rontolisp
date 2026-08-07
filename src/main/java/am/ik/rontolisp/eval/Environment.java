@@ -64,6 +64,7 @@ import am.ik.rontolisp.Scope;
 import am.ik.rontolisp.VersionInfo;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.FetchResponseShape;
+import am.ik.rontolisp.compiler.FixedDecimal;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -4008,6 +4009,14 @@ public final class Environment implements Scope {
 						"%string-concat expects strings, got: " + args.get(0).print() + ", " + args.get(1).print());
 			}
 			return new LispString(a.value() + b.value());
+		}));
+		// %fixed-decimal: internal fixed-point rendering, what format's ~F and ~$ lower
+		// to on both format paths. The algorithm is compiler/FixedDecimal, which the two
+		// compile backends emit as bytecode / a runtime function.
+		env.defineFunction(LispNames.FIXED_DECIMAL, new LispFunction(LispNames.FIXED_DECIMAL, args -> {
+			requireArgCount(LispNames.FIXED_DECIMAL, args, 4);
+			return new LispString(FixedDecimal.render(asDouble(args.get(0)), (int) asLong(args.get(1)),
+					(int) asLong(args.get(2)), !(args.get(3) instanceof LispNil)));
 		}));
 		// %seq-string: one character sequence as a string. The compile paths generate
 		// calls to it around every non-literal concatenate 'string argument; the

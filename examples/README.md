@@ -207,10 +207,11 @@ its output and prints the table.
 
 The short version: `hello_world` is **518 bytes** with `--optimize=size` (one
 import, `fd_write`) and **406 bytes** as a `--no-gc` MVP module; `pi_approx` is
-**16,083 bytes**, of which the loop is only 3,778 — printing the answer to 15
-decimal places is the rest, because `~,15F` expands inline into the caller
-instead of calling a renderer (the same program printed with `princ` is 7,930). Without `--optimize` both are ~320 KB of un-tree-shaken prelude, which is
-the one number on that page worth remembering.
+**5,236 bytes**, the smallest entry in the cross-language table, of which the
+million-iteration loop is 4,129 and printing the answer to 15 decimal places is
+1,227 — less than printing the same float through `princ` would cost. Without
+`--optimize` both are ~320 KB of un-tree-shaken prelude, which is the one number
+on that page worth remembering.
 
 ## Running
 

@@ -71,6 +71,64 @@ allocation per `~a` that no longer happens on any backend.
 (`~10a` wraps its piece in `padExpr`, `~:a` in an `if`) keeps building its string, as
 it must -- the wrapper consumes the text, not the destination.
 
+## `~F` / `~$` lower to ONE call, and must keep doing so (todo-286)
+
+`decimalFloatExpr` emits exactly `(%fixed-decimal value places int-digits plus-p)`.
+The primitive is `compiler/FixedDecimal` in the interpreter, `_fixdec` on the JVM
+(`JvmNumericRuntimeBuilder`) and `_fixed_dec` on WASM
+(`WasmFixedDecimalRuntimeBuilder`), and the RUNTIME renderer's `%fmt-fixed` is now a
+`numberp` guard in front of the same call -- one renderer, so the two paths cannot
+disagree about a digit.
+
+**What it replaced, and why the shape is the point.** The directive used to expand
+INLINE into eight ordinary Lisp forms -- scale by `10^d`, `round` to an integer,
+`princ-to-string` it, then punch in a decimal point with `subseq` and
+`%string-concat`. That is a reasonable fixed-decimal renderer to WRITE in Lisp and a
+bad one to inline into a caller: every generic operation in it was emitted with its
+full i31 / bignum / bigint / ratio / float ladder **at every site**, and its `round`
+dragged the bignum-capable integer path into a program whose only number is a float.
+Measured on `examples/wasm-size/pi_approx` at `--optimize`: **17,012 -> 5,356 bytes**
+(-68.5%), of which the caller's own body was 8,607 -> 1,113 and the 22 runtime
+functions only that chain reached went away. `~,2F` cost the same as `~,15F`, which
+is how you can tell it was the shape and not the digit count.
+
+**The algorithm is a cross-backend contract, not an implementation detail.** Every
+step is chosen so four backends can reproduce it bit for bit: `10^places` by repeated
+multiplication (WASM has no `pow`), `Math.rint` = `f64.nearest` = round half to even,
+and `(long)` of a double = `i64.trunc_sat_f64_s` = SATURATING -- which is why a
+magnitude past `2^63` renders as `Long.MAX_VALUE`'s digits (`~,2F` of `1e30` is
+`92233720368547758.07`), exactly as the `round`-based expansion did. `places` and
+`int-digits` are clamped to `[0, FixedDecimal.MAX_DIGITS]` so a computed `~v,vF`
+cannot ask a backend for an unbounded digit buffer. Pinned by `FixedDecimalTest` (the
+contract) and by the `~f` / `~$` rows of
+`FormatRendererTest.staticAndRuntimeRenderingAgree` (the two paths).
+
+**A `%fixed-decimal` piece goes out through `write-string`, not `princ`.** It is a
+string by construction, and `princ` of a value whose type the compiler cannot see has
+to keep the generic printer reachable -- on the WASM GC backend that is the float
+digit printer and ~3.8 KB of runtime, in a program that no longer prints a float
+anywhere. `write-string` tracks the output column the same way, so a following `~&`
+is unaffected. The `write-string` sites additionally skip the character-vector
+normalizer for an argument that CANNOT be one
+(`compiler/StringValuedForms.certainlyString`; `_charvec_to_str` alone is 653 bytes
+of WASM) -- that set is closed and conservative on purpose, since answering true for
+something that can also answer a character vector drops a normalization the semantics
+need.
+
+**It retired a real drift.** The two paths used to scale by different powers of ten
+-- the static one by a `long` `pow10` that OVERFLOWS past `10^18`, the renderer by
+`(expt 10.0 places)` -- so `(format nil "~,25F" 3.14159)` answered
+`0.0000004997949179834153984` with the control inline and
+`0.0000009223372036854775807` through a variable. Nothing pinned it because the
+agreement table carried no large-`places` row; it does now, and the primitive is why
+one answer is possible.
+
+**Re-evaluation trigger:** if a future `~F` grows a case the primitive cannot
+express, add it TO the primitive rather than reintroducing an inline arm --
+`LispMacroExpanderTest.aFixedDecimalDirectiveIsOneCallAndNotAnInlinedScaleRoundSliceExpansion`
+fails the moment `round` / `princ-to-string` / `subseq` / `%string-concat` reappear in
+the lowering, and that failure is the whole finding above coming back.
+
 ## Injection (compile path) and lazy load (interpreter)
 
 `LispMacroExpander.expandTopLevelDefinitions` appends `FormatRenderer.defuns()`

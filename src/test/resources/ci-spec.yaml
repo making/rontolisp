@@ -3294,9 +3294,16 @@ cases:
       #d((0.0 1.0 4.0 5.0) (2.0 3.0 6.0 7.0) (8.0 9.0 12.0 13.0) (10.0 11.0 14.0 15.0))
       T
       #d((((1.0 2.0 1.0) (2.0 4.0 2.0) (1.0 2.0 1.0))))
-  # A fixed-decimal ~f of a NEGATIVE value: the format expansion computes the
-  # magnitude as (- 0 (round (* v 10^places))), and the compile-time double-path
-  # classifier (containsDouble) must NOT descend into the rounding form -- a
+  # ~f / ~$ render through the ONE %fixed-decimal primitive (.kb/format.md), and
+  # its whole contract is that four backends produce the same digits: the scale is
+  # the same repeated multiplication, the rounding the same half-to-even, and the
+  # double-to-integer conversion the same SATURATING one -- which is why 1e30 at
+  # two places is Long.MAX_VALUE's digits rather than a wrap or a trap. -0.0 is
+  # unsigned (the test is `value < 0.0`) and ~,3$ zero-pads the integer part.
+  #
+  # The bare (- 0 (round (* -5.0 100.0))) below is what the directive USED to
+  # expand to, kept as a direct form: the compile-time double-path classifier
+  # (containsDouble) must NOT descend into the rounding form -- a
   # round/truncate/floor/ceiling result is an integer whatever its argument
   # types, and dragging the enclosing subtraction onto the double path rendered
   # "-500.00.0" for -5.0 on the compiled backends.
@@ -3304,11 +3311,13 @@ cases:
     source: |
       (defun ci-format-neg ()
         (format t "~,4f ~6,1f ~,2f~%" -1.25 -5.0 3.75)
+        (format t "~,2f|~,2f|~,3$|~,15f~%" 1e30 -0.0 -0.5 3.141591653589774)
         (print (- 0 (round (* -5.0 100.0))))
         (print (+ 1 (floor 2.5))))
       (ci-format-neg)
     expected: |
       -1.2500   -5.0 3.75
+      92233720368547758.07|0.00|-000.50|3.141591653589774
       500
       3
   # length is a sequence operation: it returns the element count of a vector (rank-1
