@@ -584,7 +584,7 @@ final class WasmIoRuntimeBuilder {
 	 * @return the function body bytes
 	 */
 	static byte[] buildCloseBody(WasmLispCompiler.StringTable st) {
-		WasmLispCompiler.StringTable.StringEntry t = st.addString("T");
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// param: FD_VAL=0 (ref) ; i32 local: FD=1

@@ -279,7 +279,78 @@ class WasmTreeShakerTest {
 		assertThat(dataSectionSize(packages) - dataSectionSize(hello)).isGreaterThan(600);
 		// The rendered literal itself must still be there: 12 bytes of "Hello World!"
 		// plus its quotes, the seed cells, and little else.
-		assertThat(dataSectionSize(hello)).isBetween(64, 512);
+		assertThat(dataSectionSize(hello)).isBetween(32, 128);
+	}
+
+	@Test
+	void dropsThePrinterPrologueNoLiveBodyReads() {
+		// The StringTable constructor's fixed entries (NIL, the list punctuation, the
+		// float specials, the "#\" prefix and the eight character names) are read only by
+		// the RUNTIME printer bodies, each of which bakes the offset as its own
+		// i32.const -- so they are ordinary droppable ranges. A literal-fold hello never
+		// reaches the generic printer and must keep none of them; a program that prints a
+		// COMPUTED cons does reach it and keeps the punctuation.
+		byte[] hello = compile("(princ \"Hello World!\") (terpri)", false, OptimizeLevel.DEFAULT);
+		byte[] generic = compile("""
+				(defun pair (a b) (cons a b))
+				(print (pair 1 2))
+				""", false, OptimizeLevel.DEFAULT);
+		Module.parse(hello).assertWellFormed();
+		Module.parse(generic).assertWellFormed();
+		byte[] helloData = dataSectionPayload(hello);
+		for (String dead : new String[] { "#<function>", "#<FUTURE>", "Infinity", "Rubout", "Backspace", "#A(" }) {
+			assertThat(contains(helloData, dead)).as("hello module keeps the dead prologue entry %s", dead).isFalse();
+		}
+		// "\n" is the one prologue entry a literal write reaches directly (terpri), so it
+		// stays -- and it is all that is left besides the printed literal.
+		assertThat(contains(helloData, "\n")).isTrue();
+		byte[] genericData = dataSectionPayload(generic);
+		for (String live : new String[] { "NIL", " . " }) {
+			assertThat(contains(genericData, live)).as("generic printer lost %s", live).isTrue();
+		}
+	}
+
+	@Test
+	void aBareOnePastTheEndPointerDoesNotKeepARange() {
+		// The keep predicate is the HALF-OPEN interval. A dead builtin-wrapper literal
+		// that happens to sit immediately before the one the program prints ends exactly
+		// where the live range starts; under a closed interval the live start pointer
+		// pinned the dead neighbour too. Same shape inside the prologue, where " . "
+		// abuts "\n". Nothing a live body cannot address may remain.
+		byte[] hello = compile("(princ \"Hello World!\") (terpri)", false, OptimizeLevel.DEFAULT);
+		byte[] data = dataSectionPayload(hello);
+		// What is left: the three 4-byte seed cells, "\n", and the framed literal.
+		assertThat(dataSectionSize(hello)).isLessThan(80);
+		assertThat(contains(data, "keyword")).isFalse();
+		assertThat(contains(data, " . ")).isFalse();
+		assertThat(contains(data, "\"Hello World!\"")).isTrue();
+	}
+
+	private static boolean contains(byte[] haystack, String needle) {
+		byte[] n = needle.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		outer: for (int i = 0; i + n.length <= haystack.length; i++) {
+			for (int j = 0; j < n.length; j++) {
+				if (haystack[i + j] != n[j]) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// The data section's payload bytes (empty when the section is absent).
+	private static byte[] dataSectionPayload(byte[] module) {
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = WasmTreeShaker.readU(module, p);
+			if (id == 11) {
+				return java.util.Arrays.copyOfRange(module, p[0], p[0] + size);
+			}
+			p[0] += size;
+		}
+		return new byte[0];
 	}
 
 	@Test

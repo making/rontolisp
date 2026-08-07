@@ -1374,7 +1374,7 @@ final class WasmStringRuntimeBuilder {
 	 * @return the function body
 	 */
 	static byte[] buildStringEqBody(boolean ignoreCase, WasmLispCompiler.StringTable st) {
-		WasmLispCompiler.StringTable.StringEntry t = st.addString("T");
+		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// Locals 2..5: i, n, ca, cb (i32); 6..7: aArr, bArr ($str_bytes).

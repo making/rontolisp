@@ -6,7 +6,7 @@ Opt-in (CLI `--optimize[=LEVEL]`; `WasmLispCompiler(dynamic, component, noWasi, 
 
 **Invariant: the bare `--optimize` is `DEFAULT` and emits exactly the bytes it always did.** It is in every doc page, every `.kb` passage, the CI jobs, the examples and the README, so it is not a level that may be redefined later. Pinned by `OptimizeLevelTest.theBareFlagIsTheDefaultLevel` (`parse("")` -> `DEFAULT`) plus `CliOptionsTest.theBareFlagKeepsItsEmptyValue`; measured directly, `postgres-hello --component` at `--optimize` and at `--optimize=default` byte-identical at 7,609,611.
 
-> **Absolute byte counts in this file were re-measured 2026-08-07**, after `.kb/wasm-shortest-encoding.md` took 2.4%-5.7% out of every module the project emits. The three tables the change moved (the level table below, the literal-fold table, the component breakdown) carry fresh numbers. Where a number is part of a HISTORICAL progression -- a "before X / after X" pair measured in one earlier session -- it is left as it was and marked, because the pair's ratio is what it records and neither half can be rebuilt.
+> **Absolute byte counts in this file were re-measured 2026-08-07**, after `.kb/wasm-shortest-encoding.md` took 2.4%-5.7% out of every module the project emits, and again the same day after todo-271 unpinned the printer prologue (another ~18% of a hello core). The three tables the changes moved (the level table below, the literal-fold table, the component breakdown) carry fresh numbers. Where a number is part of a HISTORICAL progression -- a "before X / after X" pair measured in one earlier session -- it is left as it was and marked, because the pair's ratio is what it records and neither half can be rebuilt.
 
 | spelling | `eliminatesDeadCode()` | `prefersSizeOverSpeed()` |
 | --- | --- | --- |
@@ -129,25 +129,51 @@ no reference is rewritten.
 
 Which ranges die is decided by OBSERVATION, not by a declared owner — the same choice the
 call graph makes: a range survives when any SURVIVING body (or a global initializer) holds
-an `i32.const` in `[address, address + length]` (the closed interval, so an interior or
-one-past-the-end pointer keeps its range). A linear-memory reference is an
-indistinguishable `i32.const`, and that cuts the safe way here: an unrelated constant
-landing in a range only KEEPS bytes. This is why a declared-owner scheme was NOT used —
-attribution would have to be right at all ~20 `addString` call sites and at every emitter
-that bakes a cached `entry.offset()` into a body other than the one that interned it,
-whereas the scan reads what the module actually contains.
+an `i32.const` in `[address, address + length)` — the HALF-OPEN interval. A linear-memory
+reference is an indistinguishable `i32.const`, and that cuts the safe way here: an
+unrelated constant landing in a range only KEEPS bytes. This is why a declared-owner scheme
+was NOT used — attribution would have to be right at all ~20 `addString` call sites and at
+every emitter that bakes a cached `entry.offset()` into a body other than the one that
+interned it, whereas the scan reads what the module actually contains.
+
+**Why half-open, and not the closed interval it shipped with (todo-271, 2026-08-07).** The
+extra byte was there to let a one-past-the-end pointer keep its range, but no emitter
+produces one: a body cannot use a range from its end alone (it needs the base to read
+from), so every real consumer holds a const INSIDE the range as well — the only computed
+pointer anywhere in the backend is `WasmLiteralPrint`'s `framed.offset() + 1`, which is
+interior. What the closed interval did instead was pin every range whose end abutted a
+LIVE neighbour's start, and the string blob is one dense run of abutting entries: hello's
+`" . "` was kept only by `"\n"`'s start pointer, and a dead builtin-wrapper literal only
+by the start of the literal the program actually prints. Ranges with `end <= start` are
+skipped before the probe, so a zero-length entry is never a candidate either way.
 
 What the scan cannot see is a citation from DATA, so the COMPILER decides candidacy, and
 the rule is a window rather than a list: `StringTable.attributing(true/false)` brackets
 passes 2a-2c (defun bodies, the top level, lambda bodies), where a body's own `i32.const`
-is the only consumer of what it interns. Interning a string with the window CLOSED retracts
-its candidacy for good, whichever came first — and that is exactly what every blob-citing
-caller does: the instance-layout blob (built BEFORE Pass 2a), the `_lookup` registry rows
-(`stringTable.addString(defun.name)` after it), the `eval` special-form offsets, the
-reader's char-name and struct-directory tables. The one blob that cites EVERY entry is the
-runtime intern table (`buildInternBlob` over `stringTable.entries()`, scanned by `_intern`
-on offset equality), so a program with `usesIntern` offers no candidates at all —
-`WasmLispCompiler.compile`, "stringRanges".
+is the only consumer of what it interns. `StringTable.addBodyString` is the same grant
+spelled explicitly, for the runtime-body interns that happen outside that window (the
+printer prologue below, and the cached symbol `T` its four helper sites share). Interning a
+string with the window CLOSED retracts its candidacy for good, whichever came first — and
+that is exactly what every blob-citing caller does: the instance-layout blob (built BEFORE
+Pass 2a), the `_lookup` registry rows (`stringTable.addString(defun.name)` after it), the
+`eval` special-form offsets, the reader's char-name and struct-directory tables. The one
+blob that cites EVERY entry is the runtime intern table (`buildInternBlob` over
+`stringTable.entries()`, scanned by `_intern` on offset equality), so a program with
+`usesIntern` offers no candidates at all — `WasmLispCompiler.compile`, "stringRanges".
+
+**The printer prologue is not exempt (todo-271, 2026-08-07).** `StringTable`'s constructor
+interns 28 fixed entries — `NIL`, the list punctuation `(` `)` ` ` `" . "`, `\n`, the
+`#<function>` / `#<FUTURE>` tags, the array prefixes `#(` `#` `A(` `#d(` `#f(`, the number
+pieces `-` `.` `/` `NaN` `Infinity` `E`, the `#\` prefix and the eight character names
+`Space`..`Rubout` — plus `T` right after it. Every one is read by a RUNTIME body
+(`_print_val` / `_princ_val` / the float, character and array printers, the newline
+writers, the `T`-returning helpers), and every one of those bodies bakes the offset as its
+own `i32.const`: the exact shape the scan reads. So they are interned through
+`addBodyString` and stand or fall with the bodies that address them — a hello that never
+reaches the generic printer keeps none of them (`\n` is the one a literal write reaches
+directly, `WasmLiteralPrint.emitNewline`). The ordinary retraction rule still covers the
+blob citers: the reader's char-name table re-interns `Space`..`Rubout` with the window
+closed, and `_lookup`/the intern blob do the same for `T`.
 
 **Re-evaluation trigger:** the `usesIntern` bail is the coarse half. It could become
 per-entry (drop a range when `_intern` itself is unreachable, or filter the intern blob's
@@ -156,10 +182,16 @@ not worth the machinery; revisit only with numbers showing a program that intern
 large dead-wrapper string set.
 
 `(print "Hello World!")` at `--optimize`: data 909 B -> 168 B, module 1,886 B -> 645 B
-(**622 B** once the encoding shrank too). A program on the same gate that reaches the
-runtime `find-package` keeps the alist. Pinned
+(**622 B** once the encoding shrank too, **511 B** once the prologue and the half-open
+interval landed — its data section is down to 58 B and holds exactly the three seed cells,
+`"\n"` and the framed literal, nothing dead at all). `(princ "Hello World!") (terpri)`
+moved 625 B -> 514 B the same way, and its component 1,668 B; the whole spelling table
+below re-measured 430-560 B core / 1,583-1,718 B component. A program on
+the same gate that reaches the runtime `find-package` keeps the alist. Pinned
 by `WasmTreeShakerTest.dropsStringsOnlyDeadBodiesInterned` /
-`keepsEveryStringAProgramCanInternAtRunTime`, and behaviorally by
+`keepsEveryStringAProgramCanInternAtRunTime` /
+`dropsThePrinterPrologueNoLiveBodyReads` / `aBareOnePastTheEndPointerDoesNotKeepARange`,
+and behaviorally by
 `WasmLispCompilerIntegrationTest.optimizedProgramKeepsEveryStringALiveBodyStillAddresses`
 plus `optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo` — a differential run, because
 a wrongly-cut range prints garbage rather than trapping.
@@ -190,20 +222,21 @@ The fold costs no data for strings: an escape-free readable form re-uses the lit
 interned bytes verbatim, and a DISPLAY rendering points at the interior of the same framed
 literal (`offset + 1`, `length - 2`), which is what `_princ_val` computes at run time.
 
-Measured at `--optimize`; the "after" columns 2026-08-07, the "before" column the
-pre-fold state of 2026-08-06 (it cannot be rebuilt, and it is ~4% high in today's
-encoding — the ratio is what it records). Preview 1 bytes:
+Measured at `--optimize`; the "after" columns 2026-08-07 (re-measured once the printer
+prologue stopped being pinned, todo-271), the "before" column the pre-fold state of
+2026-08-06 (it cannot be rebuilt, and it is ~4% high in today's encoding — the ratio is
+what it records). Preview 1 bytes:
 
 | program | before the fold | after | `--component` after |
 | --- | --- | --- | --- |
-| `(print "Hello World!")` | 645 | 622 | 1,776 |
-| `(princ "Hello World!") (terpri)` | 4,823 | **625** | 1,779 |
-| `(format t "Hello World!~%")` | 4,826 | **628** | 1,782 |
-| `(write-line "Hello World!")` | 993 | **622** | 1,776 |
-| `(write-string "Hello World!")` | 1,767 | **615** | 1,768 |
-| `(format t "Hello, ~a!~%" "World")` | 5,031 | **671** | 1,829 |
-| `(format t "~a~%" 42)` | 4,890 | **541** | 1,694 |
-| `(format t "~s~%" "Hello World!")` | 6,609 | **628** | 1,782 |
+| `(print "Hello World!")` | 645 | 511 | 1,665 |
+| `(princ "Hello World!") (terpri)` | 4,823 | **514** | 1,668 |
+| `(format t "Hello World!~%")` | 4,826 | **517** | 1,671 |
+| `(write-line "Hello World!")` | 993 | **511** | 1,665 |
+| `(write-string "Hello World!")` | 1,767 | **497** | 1,649 |
+| `(format t "Hello, ~a!~%" "World")` | 5,031 | **560** | 1,718 |
+| `(format t "~a~%" 42)` | 4,890 | **430** | 1,583 |
+| `(format t "~s~%" "Hello World!")` | 6,609 | **517** | 1,671 |
 
 The component column is the same core module plus the wrapper floor, re-measured after
 todo-273 narrowed that floor to ~1,175 B (it was ~1,500 when the fold landed) and again
@@ -319,13 +352,15 @@ they landed — the case-fold segment split and the literal-print fold, then the
 and the string blob, then the wrapper, then todo-273's two narrowings, then the shortest-
 encoding pass (`.kb/wasm-shortest-encoding.md`, 2026-08-07; every step before it measured
 2026-08-06):
-Preview 1 `--optimize` 22,355 -> 1,886 -> 645 -> **622 bytes** (the first two: -16,368 data,
--4,078 code; the next two: the type section 578 -> 79 B and the data section 909 -> 168 B);
-`--component` 29,430 -> 8,930 -> 7,690 -> 2,138 -> 1,820 -> **1,776**.
-The component is now shaken core 627 + adapter 547 (from 3,624) + the import block 197 +
+Preview 1 `--optimize` 22,355 -> 1,886 -> 645 -> 622 -> **511 bytes** (the first two:
+-16,368 data, -4,078 code; the next two: the type section 578 -> 79 B and the data section
+909 -> 168 B; the last, todo-271's unpinned printer prologue and half-open range probe,
+that data section 168 -> 58 B);
+`--component` 29,430 -> 8,930 -> 7,690 -> 2,138 -> 1,820 -> 1,776 -> **1,665**.
+The component is now shaken core 516 + adapter 547 (from 3,624) + the import block 197 +
 the shared-memory module 25 (from 158) + 380 B of wiring (component types, aliases,
 canonical functions, core instances, the preamble and the module framing). The
-core was 8% of the component and is 35% of it now -- the wrapper is still the majority of a
+core was 8% of the component and is 31% of it now -- the wrapper is still the majority of a
 HELLO component, but it is no longer fixed cost: it shrinks with the program instead of
 standing under it. Two ends of the same measurement: a component with no I/O at all (only
 `wasm-export`s) imports ZERO interfaces; a program that opens a file, lists a directory,
@@ -390,8 +425,10 @@ correctly). rontolisp's contract is that a component runs with **zero** flags, s
 the floor today. **Re-evaluation trigger: when more-async-builtins becomes default-on, drop
 the waitable trio from `adapter.wat` and the async keyword from those two canon encodings.**
 
-What is left in the 1,776 B, for whoever comes next: shaken core 627 (`.todo/271` owns
-~104 of it), adapter 547, import block 197, shared memory 25, wiring 380.
+What is left in the 1,665 B, for whoever comes next: shaken core 516, adapter 547, import
+block 197, shared memory 25, wiring 380. (The core was 627 until todo-271 unpinned the
+printer prologue and made the range probe half-open; the other four are untouched by it,
+and the core's own data section is now down to what the program writes.)
 
 **The `"w"` field names, ~232 B, deliberately left long — decided, and re-affirmed
 2026-08-07.** Of the adapter's import section and the synthesized `"w"` core instance,
@@ -406,7 +443,7 @@ waitable-join(13) waitable-set-wait(17)          = 125 chars x 2
 ```
 
 — one character each would leave 9 x 2, saving ~232 B: **13.1% of the whole component**,
-taking hello from 1,776 to roughly 1,544. It is available, cheap and safe. `"w"` is a
+taking hello from 1,665 to roughly 1,433. It is available, cheap and safe. `"w"` is a
 private linkage between two artifacts this repo ships together, so the names carry no
 information the reader cannot get elsewhere (`adapter.wat` names every import with a
 `$symbolic` local right beside it, and `W_MEMBERS` is keyed by the descriptive name), and
@@ -432,7 +469,7 @@ this repo pins for CI — with "requires the component model more async builtins
 no size-driven host requirement has arrived. If it is ever taken, keep `W_MEMBERS` keyed by
 the descriptive name and give each member an explicit wire field, so the mapping lives in
 exactly one table next to the encoders (the shape `WMember.realloc()` already uses). What is
-NOT part of that question either way: the core module (`.todo/271`), the serve variant's
+NOT part of that question either way: the core module (its own budget), the serve variant's
 floor (a ~280 KB core, where 232 B is noise), and how what is emitted is SPELLED — which is
 the next paragraph.
 

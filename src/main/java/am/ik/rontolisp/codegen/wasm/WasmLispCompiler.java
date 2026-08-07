@@ -2011,7 +2011,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Create string table
 		int dataBase = this.component ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase);
-		StringTable.StringEntry tSymEntry = stringTable.addString("T");
+		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
 		// emits a record's address as an i32.const inside an ordinary function body, so
 		// unlike the eval registry, the intern table and the case-fold tables -- all of
@@ -2919,7 +2919,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
 		// T; intern it before the runtime intern blob below is snapshotted so a runtime
 		// (intern "T") resolves to the same offset literals use (uppercase-canonical).
-		int symbolTOffset = stringTable.addString("T").offset();
+		int symbolTOffset = stringTable.addBodyString("T").offset();
 		// Build the reader runtime (read/load). Symbols parsed at runtime are interned
 		// against a compile-time table of (offset,length) so they match the offsets the
 		// eval runtime compares against. The intern built-in reuses _intern for the same
@@ -5837,7 +5837,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * The entries a dead function body may take with it: the ones interned ONLY while
 		 * {@link #attributing} was on, i.e. while a user function / top level / lambda
-		 * body was being emitted, where the only consumer of the offset is the body's own
+		 * body was being emitted (or the printer prologue below, whose every reader is a
+		 * runtime body), where the only consumer of the offset is a body's own
 		 * {@code i32.const}. Every other {@code addString} caller bakes the offset
 		 * somewhere the tree shaker cannot see it -- a word inside the {@code _lookup}
 		 * registry blob, the instance-layout blob, the reader tables -- so touching an
@@ -5916,34 +5917,43 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		StringTable(int baseOffset) {
 			this.nextOffset = baseOffset;
-			this.nil = addString("NIL");
-			this.lparen = addString("(");
-			this.rparen = addString(")");
-			this.space = addString(" ");
-			this.dot = addString(" . ");
-			this.newline = addString("\n");
-			this.funcStr = addString("#<function>");
-			this.futureStr = addString("#<FUTURE>");
-			this.vecPrefix = addString("#(");
-			this.hashPrefix = addString("#");
-			this.rankAOpen = addString("A(");
-			this.fPrefix = addString("#d(");
-			this.sfPrefix = addString("#f(");
-			this.minus = addString("-");
-			this.period = addString(".");
-			this.slash = addString("/");
-			this.nanStr = addString("NaN");
-			this.infinityStr = addString("Infinity");
-			this.expE = addString("E");
-			this.charPrefix = addString("#\\");
-			this.charSpace = addString("Space");
-			this.charNewline = addString("Newline");
-			this.charTab = addString("Tab");
-			this.charReturn = addString("Return");
-			this.charPage = addString("Page");
-			this.charBackspace = addString("Backspace");
-			this.charNul = addString("Nul");
-			this.charRubout = addString("Rubout");
+			// The printer prologue. Every entry below is read by a RUNTIME body -- the
+			// generic printer arms (_print_val / _princ_val), the float printer, the
+			// character printer, the array printer, the newline writers -- and each of
+			// them bakes the offset as its own i32.const, which is exactly the shape the
+			// droppable-range scan reads -- so they are interned as body strings and
+			// stand or fall with the bodies that address them; a hello world that never
+			// reaches the generic printer keeps none of them. A later intern of the same
+			// text from a blob-citing caller (the reader's char-name table, the runtime
+			// intern blob) retracts the candidacy through the ordinary addString rule.
+			this.nil = addBodyString("NIL");
+			this.lparen = addBodyString("(");
+			this.rparen = addBodyString(")");
+			this.space = addBodyString(" ");
+			this.dot = addBodyString(" . ");
+			this.newline = addBodyString("\n");
+			this.funcStr = addBodyString("#<function>");
+			this.futureStr = addBodyString("#<FUTURE>");
+			this.vecPrefix = addBodyString("#(");
+			this.hashPrefix = addBodyString("#");
+			this.rankAOpen = addBodyString("A(");
+			this.fPrefix = addBodyString("#d(");
+			this.sfPrefix = addBodyString("#f(");
+			this.minus = addBodyString("-");
+			this.period = addBodyString(".");
+			this.slash = addBodyString("/");
+			this.nanStr = addBodyString("NaN");
+			this.infinityStr = addBodyString("Infinity");
+			this.expE = addBodyString("E");
+			this.charPrefix = addBodyString("#\\");
+			this.charSpace = addBodyString("Space");
+			this.charNewline = addBodyString("Newline");
+			this.charTab = addBodyString("Tab");
+			this.charReturn = addBodyString("Return");
+			this.charPage = addBodyString("Page");
+			this.charBackspace = addBodyString("Backspace");
+			this.charNul = addBodyString("Nul");
+			this.charRubout = addBodyString("Rubout");
 		}
 
 		/**
@@ -5969,6 +5979,27 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		void attributing(boolean on) {
 			this.attributing = on;
+		}
+
+		/**
+		 * Interns a string whose offset is ONLY ever baked as an {@code i32.const} inside
+		 * a function body -- the explicit spelling for a runtime helper built outside the
+		 * pass-2 window (the cached {@code T} symbol and the helper bodies that return
+		 * it). Candidacy is granted exactly as {@link #addString} inside the window does,
+		 * i.e. on the FIRST intern only, so a blob-citing caller that got there first
+		 * still pins the entry for good.
+		 * @param s the string to intern
+		 * @return its entry
+		 */
+		StringEntry addBodyString(String s) {
+			boolean saved = this.attributing;
+			this.attributing = true;
+			try {
+				return addString(s);
+			}
+			finally {
+				this.attributing = saved;
+			}
 		}
 
 		StringEntry addString(String s) {

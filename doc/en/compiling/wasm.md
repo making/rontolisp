@@ -113,9 +113,11 @@ than the whole runtime's string table.
 That floor does not depend on how the program spells the write. A constant text
 is rendered at compile time and emitted as bytes, so `print`, `princ` + `terpri`,
 `write-string`, `write-line` and `(format t "Hello, ~a!~%" "World")` all leave the
-runtime printer behind and land within a few dozen bytes of each other (under 700 B
-as a core module, under 1.9 KB as a component). Print a computed value and the printer
-comes back, as it must.
+runtime printer behind and land within a few dozen bytes of each other (under 600 B
+as a core module, under 1.8 KB as a component). What is left of the static data is
+only what the program itself writes: the printer's own fixed strings — `NIL`, the
+list punctuation, the float specials, the character names — go with the printer.
+Print a computed value and both come back, as they must.
 
 On the `--component` path the **wrapper shrinks with the core**, not just the core
 itself. Which WASI 0.3 interfaces a component imports follows from what the program

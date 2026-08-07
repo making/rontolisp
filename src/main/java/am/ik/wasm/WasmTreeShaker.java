@@ -130,12 +130,13 @@ public final class WasmTreeShaker {
 	 * {@link OwnedDataSegment}, for a segment holding many independently-referenced
 	 * pieces (the string blob). Where {@code OwnedDataSegment} takes the caller's word
 	 * for who owns the bytes, this form is decided by OBSERVATION: the pass keeps the
-	 * range when any surviving body holds an {@code i32.const} addressing into it (its
-	 * whole span plus the one-past-the-end address, so a range reached through an
-	 * interior or end pointer survives too). A linear-memory reference is an
-	 * indistinguishable {@code i32.const}, which makes the test conservative in the safe
-	 * direction: an unrelated constant that happens to land inside a range only KEEPS
-	 * bytes.
+	 * range when any surviving body holds an {@code i32.const} addressing into it -- its
+	 * span half-open, so a start or interior pointer keeps it but a bare one-past-the-end
+	 * address does not (no emitter produces one, and treating it as a citation pinned
+	 * every dead range whose end abutted a live neighbour's start). A linear-memory
+	 * reference is an indistinguishable {@code i32.const}, which makes the test
+	 * conservative in the safe direction: an unrelated constant that happens to land
+	 * inside a range only KEEPS bytes.
 	 * <p>
 	 * What the caller still owes: a range must not be cited from anywhere the scan cannot
 	 * see -- notably a word inside another DATA blob. Dropping cuts the range out and
@@ -831,9 +832,14 @@ public final class WasmTreeShaker {
 	}
 
 	// The droppable ranges no surviving function body (nor a global initializer) still
-	// addresses. A range survives when some live i32.const lands anywhere in
-	// [address, address + length] -- the closed interval, so an interior pointer or a
-	// one-past-the-end pointer keeps its range too.
+	// addresses. A range survives when some live i32.const lands in
+	// [address, address + length) -- the HALF-OPEN interval: a start or interior pointer
+	// keeps its range, a bare one-past-the-end pointer does not. A body cannot use a
+	// range from its end alone (it needs the base to read from), so every real consumer
+	// holds a const inside the range as well, and an end pointer that is also the next
+	// range's start would otherwise pin a genuinely dead neighbour -- which is what kept
+	// the printer prologue's " . " alive behind "\n", and a dead builtin-wrapper literal
+	// alive behind the one the program actually prints.
 	private static List<DroppableDataRange> deadRanges(List<DroppableDataRange> candidates, List<DataSegment> segments,
 			List<Integer> deadSegments, boolean[] reachable, int numImportedFuncs,
 			List<@Nullable IntList> bodyConstants, IntList globalConstants) {
@@ -855,7 +861,7 @@ public final class WasmTreeShaker {
 				continue;
 			}
 			int address = segments.get(r.segmentIndex()).offset() + r.start();
-			if (!containsInRange(sorted, address, address + (r.end() - r.start()))) {
+			if (!containsInRange(sorted, address, address + (r.end() - r.start()) - 1)) {
 				dead.add(r);
 			}
 		}
