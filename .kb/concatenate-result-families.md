@@ -221,5 +221,5 @@ mixed-sequence string family) and `concatenate-packed-element-type`,
 `#concatenateResolvesADeftypeAliasResultType` +
 `#concatenateKeepsThePackedElementType`,
 `IroncladE2eTest` (the HKDF vector, end to end on four backends), and the
-`LackEcosystemE2eTest` lack legs (fast-http's `'simple-byte-vector`, the
+`LackEcosystem*E2eTest` lack legs (fast-http's `'simple-byte-vector`, the
 parameterized shape end to end).

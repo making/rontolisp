@@ -61,7 +61,7 @@ work fixed -- all four fixes are general, none lack-shaped:
 ## The substrate DOES run on all four backends
 
 What sits under the chain -- `smart-buffer` + `flexi-streams` -- is compiled and
-run on every backend by `LackEcosystemE2eTest`:
+run on every backend by the two `LackEcosystem*E2eTest` classes:
 
 - an in-memory octet stream through `read-byte` / `read-sequence` /
   `file-position` (the value `finalize-buffer` hands the multipart parser for
@@ -74,11 +74,44 @@ run on every backend by `LackEcosystemE2eTest`:
   `handler-case` rather than trapping. Lifting that is `.todo/257` (two more
   preview1 imports plus their `wasi:filesystem@0.3.0` adapter halves).
 
+## Alongside a Clack SERVER, on all four backends (todo-279)
+
+The chain above runs STANDALONE on every backend, but the reason to reach for
+Clack at all is a served body: `lack/request:request-body-parameters` over the
+buffered `:raw-body` a handler receives. That COMBINATION -- a program that
+quickloads both a Clack server and `lack-request` -- did not compile on the JVM
+or on either WASM backend until todo-279, and the cause was placement, not
+semantics: `HttpServerLibrary` prepends `http-server.lisp` (whose buffered half
+subclasses the Gray protocol) at index 0 while the protocol itself arrives at
+the trivial-gray-streams shim's splice site, mid-program. The subclass preceded
+its base class. Full mechanics and the two rules the repair has to keep:
+`.kb/gray-streams.md`.
+
+The four-backend pin is `SERVED_BODY_EXERCISE`: `lack:builder` wraps the app and
+`rontolisp::%http-serve-request` -- the one server-side request path every
+transport calls -- drives it over a `%http-body-stream` body. It runs the
+request DIRECTLY rather than through `clack:clackup` because Preview 1 has no
+incoming TCP and a clack program under `--component` is a `wasmtime serve`
+component, not a runnable CLI one (`.kb/clack.md`). The clackup-and-fetch
+spelling of the same chain is pinned on the interpreter and the JVM.
+
 ## Tests
 
-`LackEcosystemE2eTest` (opt-in `RONTOLISP_LACK_E2E=1`: Docker for the pinned
-wasmtime, network for the first quickload). Eight legs -- the lack chain AND the
-substrate, each on all four backends. The language-level pins live
+`LackEcosystemE2eTest` -- the interpreter and JVM legs, NO container -- and
+`LackEcosystemWasmE2eTest` -- the Preview 1 and `--component` legs, Docker for
+the pinned wasmtime. Both opt-in (`RONTOLISP_LACK_E2E=1`; network for the first
+quickload), sharing their programs through `LackE2eSupport`. **The split is
+load-bearing, not tidiness**: with every leg in one `@Testcontainers` class, a
+machine without Docker skipped the container-free legs too, and reported
+`Tests run: 2, Skipped: 2, BUILD SUCCESS` while the only test covering the
+served-body regression never ran. Anything Docker-gated belongs in the Wasm
+class and nowhere else.
+
+Fourteen legs -- the lack chain, the substrate and the served body, each on all
+four backends, plus the clackup-and-fetch spelling on the two that can serve.
+The splice ORDERING itself is pinned separately by `GrayStreamsLibraryTest`,
+which needs neither Docker nor network and therefore runs in a plain
+`./mvnw test`. The language-level pins live
 with their own topics (see the table above) and in `ci-spec.yaml`
 (`open-if-exists-append-keeps-the-existing-content`,
 `defgeneric-short-form-method-combination`, `defstruct-keyword-conc-name`).

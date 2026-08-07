@@ -76,6 +76,43 @@ quoted data and the gray.lisp defuns' own bodies (`DISPATCH_DEFUNS` — their
 fallback built-in calls must not rewrite into themselves). The compiled
 runtimes themselves know nothing: the dispatch is ordinary Lisp.
 
+**`GrayStreamsLibrary.process` OWNS where the protocol sits — including when a
+load already spliced it.** The guard in (1) is not "decline and leave it";
+when the protocol is present but a form that SUBCLASSES a Gray base class
+precedes it, the protocol forms are HOISTED to the front
+(`protocolFormsToHoist`). One owner for placement, and it runs last, so no
+library's splice index has to depend on another's. The real collision:
+`HttpServerLibrary.process` prepends `http-server.lisp` at index 0 and its
+buffered `:raw-body` half defines `http-request-body-stream`, a
+`rontolisp:fundamental-binary-input-stream` subclass — while the protocol
+arrives at the trivial-gray-streams shim's splice site, i.e. wherever the
+`ql:quickload` sat. A program quickloading BOTH a Clack server and
+`lack-request` therefore had its subclass at the top and its base class in the
+middle, and every compile path rejected the `defclass` ("unknown superclass").
+
+Two rules the hoist has to keep, both learned the hard way:
+
+- **Conditional, so an unaffected program is BYTE-IDENTICAL.** A program whose
+  protocol already precedes every subclass — every program that loads a Gray
+  shim and nothing else — moves nothing. Pinned by
+  `GrayStreamsLibraryTest#programWithoutAGrayShimKeepsTheProtocolSpliceAtTheFront`.
+- **The "is this one of gray.lisp's own definitions" key is built from
+  `print()`, never `display()`.** A symbol's DISPLAY text drops its package
+  prefix, so `trivial-gray-streams:stream-read-line` and
+  `rontolisp:stream-read-line` collide — which hoisted the SHIM's delegating
+  methods above the shim's own classes, and their specializers then resolved
+  to the rontolisp base class (`ClosRegistry.findClass`'s unique-member
+  fallback). The two methods collapsed onto one registry key, so the
+  dispatcher tested the rontolisp descendant set and called the shim's body:
+  `read-sequence` on a plain `rontolisp:` Gray stream ended in "No applicable
+  method: TRIVIAL-GRAY-STREAMS:STREAM-READ-SEQUENCE". Package-qualified
+  identity is load-bearing in this file.
+
+Re-evaluation trigger: the hoist exists because two pre-passes both prepend at
+index 0. If `HttpServerLibrary` ever stops prepending (or the shim stops
+splicing the protocol at its load site), the hoist becomes dead code — check
+`protocolFormsToHoist` then, do not leave it as a permanent unexplained pass.
+
 **Shim** (`trivial-gray-streams.lisp` via `ShimLibraries`/`BuiltinSystems`):
 mirrors the full hierarchy — each `trivial-gray-streams:` class subclasses its
 trivial-gray-streams parent AND its rontolisp twin, so ONE delegating method
@@ -211,4 +248,4 @@ before the `vector-stream` defclass runs -- the eagerly compiling backends
 otherwise fail with "unknown superclass
 RONTOLISP:FUNDAMENTAL-BINARY-INPUT-STREAM". Pinned by
 `LispEvaluatorTest#evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream` and
-`LackEcosystemE2eTest` (all four backends).
+the two `LackEcosystem*E2eTest` classes (all four backends).

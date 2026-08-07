@@ -94,8 +94,8 @@ the program (BEFORE `HttpLibrary` rewrites the directive away — order in
   `file-position`. That is what lets the `lack:builder` ->
   `circular-streams` -> `http-body:parse` chain run on the native server
   (the pre-cutover `%make-string-input-stream` body rejected `read-byte`, so
-  sessions/CSRF/ningle could not work there — `LackEcosystemE2eTest`'s
-  builder-over-clackup legs pin the fix). A bodiless request gets
+  sessions/CSRF/ningle could not work there — the `LackEcosystem*E2eTest`
+  served-body legs pin the fix, on all four backends). A bodiless request gets
   `:raw-body nil` (upstream guards with `(when raw-body ...)`) and pays
   nothing.
 
@@ -158,7 +158,7 @@ half-migrated handler.
 Pinned across all four backends by ci-spec `http-response-normalizer`; the
 served round trips by `HttpHandlerTest` / `HttpHandlerJvmTest` /
 `WasmLispCompilerIntegrationTest` serve cases / `ClackE2eTest` /
-`LackEcosystemE2eTest`.
+`LackEcosystemE2eTest` + `LackEcosystemWasmE2eTest`.
 
 ## Known bug in the same area (pre-existing, NOT part of the cutover)
 

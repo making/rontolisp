@@ -134,6 +134,11 @@ public final class GrayStreamsLibrary {
 	 * built-in, which the Preview 1 WASM backend rejects at compile time -- a Gray
 	 * program that never calls {@code listen} must not inherit that rejection). A program
 	 * that never mentions the protocol is returned unchanged.
+	 *
+	 * <p>
+	 * This pass OWNS where the protocol sits. When a load already spliced it but left it
+	 * behind a form that subclasses it, the protocol forms are hoisted to the front
+	 * ({@link #protocolFormsToHoist}) instead of the splice being declined outright.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
 	 * @return the program with the Gray protocol spliced and call sites rewritten
 	 */
@@ -151,14 +156,161 @@ public final class GrayStreamsLibrary {
 			usedHelpers.add(WRITE_STRING_DISPATCH);
 		}
 		java.util.List<LispVal> out = new java.util.ArrayList<>();
+		java.util.List<LispVal> body = rewritten;
 		if (program.stream().noneMatch(GrayStreamsLibrary::definesProtocol)) {
 			out.addAll(protocolForms());
+		}
+		else {
+			java.util.Set<Integer> hoisted = protocolFormsToHoist(program);
+			if (!hoisted.isEmpty()) {
+				java.util.List<LispVal> rest = new java.util.ArrayList<>();
+				for (int i = 0; i < rewritten.size(); i++) {
+					(hoisted.contains(i) ? out : rest).add(rewritten.get(i));
+				}
+				body = rest;
+			}
 		}
 		for (String helper : usedHelpers) {
 			out.add(dispatchDefun(helper));
 		}
-		out.addAll(rewritten);
+		out.addAll(body);
 		return out;
+	}
+
+	/**
+	 * The indices of the already-present protocol forms that must move to the front,
+	 * empty when nothing has to move.
+	 *
+	 * <p>
+	 * A load splices the protocol at the LOAD's position ({@link ShimLibraries} prepends
+	 * {@link #protocolForms()} to the trivial-gray-streams shim, so it lands wherever the
+	 * {@code ql:quickload} sat), while another pre-pass may prepend a form that
+	 * SUBCLASSES it at index 0 -- {@code HttpServerLibrary}'s buffered {@code :raw-body}
+	 * stream is a {@code rontolisp:fundamental-binary-input-stream}. Placement has one
+	 * owner, this class, and it runs last, so it repairs the order here rather than
+	 * making one library's splice index depend on another's.
+	 *
+	 * <p>
+	 * Deliberately conditional: when the protocol already precedes every subclass --
+	 * which is every program that loads a Gray shim and nothing else -- nothing moves and
+	 * the output is byte-identical.
+	 * @param program the top-level forms, BEFORE the call-site rewrite (indices are
+	 * shared with the rewritten list, which is element-wise the same length)
+	 * @return the indices to hoist, in program order
+	 */
+	private static java.util.Set<Integer> protocolFormsToHoist(List<LispVal> program) {
+		java.util.Set<String> protocolKeys = protocolDefinitionKeys();
+		java.util.Set<String> baseClasses = protocolBaseClassNames();
+		java.util.Set<Integer> protocolAt = new java.util.LinkedHashSet<>();
+		int lastProtocolAt = -1;
+		int firstSubclassAt = -1;
+		for (int i = 0; i < program.size(); i++) {
+			LispVal form = program.get(i);
+			String key = definitionKey(form);
+			if (key != null && protocolKeys.contains(key)) {
+				protocolAt.add(i);
+				lastProtocolAt = i;
+			}
+			else if (firstSubclassAt < 0 && subclassesProtocol(form, baseClasses)) {
+				firstSubclassAt = i;
+			}
+		}
+		if (firstSubclassAt < 0 || lastProtocolAt < firstSubclassAt) {
+			return java.util.Set.of();
+		}
+		return protocolAt;
+	}
+
+	/**
+	 * The definition keys of {@link #protocolForms()}: what makes a top-level form one of
+	 * gray.lisp's OWN definitions rather than a user's. Derived from the source, so a new
+	 * form in gray.lisp needs no update here.
+	 *
+	 * <p>
+	 * The key carries the lambda list / superclass list, not just the name, and that
+	 * discriminator is load-bearing: the trivial-gray-streams shim defines its own
+	 * {@code (defmethod rontolisp:stream-read-line ((stream
+	 * trivial-gray-streams:fundamental-input-stream)) ...)} alongside gray.lisp's method
+	 * on the rontolisp base class, and only the specializer tells them apart. Hoisting
+	 * the shim's method would put it above the class it specializes on.
+	 */
+	private static java.util.Set<String> protocolDefinitionKeys() {
+		java.util.Set<String> keys = new java.util.HashSet<>();
+		for (LispVal form : protocolForms()) {
+			String key = definitionKey(form);
+			if (key != null) {
+				keys.add(key);
+			}
+		}
+		return keys;
+	}
+
+	/**
+	 * The member names of gray.lisp's base classes, read off {@link #protocolForms()}.
+	 */
+	private static java.util.Set<String> protocolBaseClassNames() {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (LispVal form : protocolForms()) {
+			if (form instanceof am.ik.rontolisp.LispCons cons && cons.car() instanceof am.ik.rontolisp.LispSymbol op
+					&& LispNames.DEFCLASS.equals(member(op.name()))
+					&& cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name) {
+				names.add(member(name.name()));
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * A {@code defclass} / {@code defgeneric} / {@code defun} / {@code defmethod} form's
+	 * identity: the operator, the defined name and the shape that follows it (the
+	 * superclass list, or the lambda list -- or a {@code defmethod} qualifier, equally
+	 * discriminating). Returns null for anything else.
+	 *
+	 * <p>
+	 * Built from {@code print()}, never {@code display()}: the display text of a symbol
+	 * DROPS its package prefix, which would make the shim's
+	 * {@code trivial-gray-streams:stream-read-line} definitions collide with gray.lisp's
+	 * {@code rontolisp:} ones -- and hoisting the shim's methods above the shim's own
+	 * classes resolved their specializers to the rontolisp base class instead.
+	 */
+	private static @Nullable String definitionKey(LispVal form) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons) || !(cons.car() instanceof am.ik.rontolisp.LispSymbol op)
+				|| !cons.isProperList()) {
+			return null;
+		}
+		String opName = member(op.name());
+		if (!DEFINITION_OPS.contains(opName)) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3) {
+			return null;
+		}
+		return opName + " " + parts.get(1).print() + " " + parts.get(2).print();
+	}
+
+	private static final java.util.Set<String> DEFINITION_OPS = java.util.Set.of(LispNames.DEFCLASS,
+			LispNames.DEFGENERIC, LispNames.DEFUN, LispNames.DEFMETHOD);
+
+	/**
+	 * Whether the form is a {@code defclass} naming a Gray base class as a superclass.
+	 */
+	private static boolean subclassesProtocol(LispVal form, java.util.Set<String> baseClasses) {
+		if (!(form instanceof am.ik.rontolisp.LispCons cons) || !(cons.car() instanceof am.ik.rontolisp.LispSymbol op)
+				|| !LispNames.DEFCLASS.equals(member(op.name())) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || !(parts.get(2) instanceof am.ik.rontolisp.LispCons supers) || !supers.isProperList()) {
+			return false;
+		}
+		for (LispVal superClass : supers.toList()) {
+			if (superClass instanceof am.ik.rontolisp.LispSymbol name && baseClasses.contains(member(name.name()))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
