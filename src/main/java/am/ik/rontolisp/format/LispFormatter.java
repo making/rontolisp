@@ -263,26 +263,12 @@ public final class LispFormatter {
 	private int renderCall(CstNode.Listing listing, int indent, Style style, int inner) {
 		List<CstNode> items = listing.items();
 		render(items.get(0), column(), null, closersAfter(items, 0, inner));
-		int aligned = column() + 1;
-		int pairsFrom = keywordPairsFrom(items, aligned, inner);
-		int breakColumn = argumentColumn(items, indent, inner, pairsFrom);
+		int breakColumn = argumentColumn(items, indent, inner);
 		Style argumentStyle = style.childStyle();
 		// Arguments pack: one shares the line when it fits and takes a line of its own
 		// when it does not. cond's clauses are the exception -- they are alternatives,
 		// and alternatives read as a column.
-		layoutRun(items, 1, pairsFrom, breakColumn, argumentStyle == null, true, argumentStyle, inner);
-		for (int index = pairsFrom; index < items.size(); index += 2) {
-			int closers = closersAfter(items, index + 1, inner);
-			if (index == 1 && !this.afterLineComment && fits(column() + 1, pairWidth(items, index), closers)) {
-				emit(" ");
-			}
-			else {
-				breakLine(breakColumn, items.get(index).trivia().blankLineBefore());
-			}
-			render(items.get(index), column(), null, 0);
-			emit(" ");
-			render(items.get(index + 1), column(), argumentStyle, closers);
-		}
+		layoutRun(items, 1, items.size(), breakColumn, argumentStyle == null, true, argumentStyle, inner);
 		return breakColumn;
 	}
 
@@ -426,25 +412,38 @@ public final class LispFormatter {
 	 * @param items the call's items, with the operator at index 0
 	 * @param indent the column the opening paren is at
 	 * @param inner how many closing parens follow the last argument
-	 * @param pairsFrom the index the trailing {@code :key value} pairs begin at
 	 * @return the column to align the arguments in
 	 */
-	private int argumentColumn(List<CstNode> items, int indent, int inner, int pairsFrom) {
+	private int argumentColumn(List<CstNode> items, int indent, int inner) {
 		int aligned = column() + 1;
+		int shallow = indent + 1;
+		// With a single argument there is nothing to align it WITH, so the alignment
+		// column
+		// buys only depth: if the argument does not fit on the operator's line, it is
+		// better
+		// off starting at the shallowest column, and every call nested inside it inherits
+		// the
+		// room instead of the deficit.
+		if (items.size() == 2) {
+			return fits(aligned, flatWidth(items.get(1)), inner) ? aligned : shallow;
+		}
 		int widest = 0;
 		for (int index = 1; index < items.size(); index++) {
-			if (index >= pairsFrom) {
-				widest = Math.max(widest, pairWidth(items, index) + closersAfter(items, index + 1, inner));
-				index++;
-				continue;
+			boolean pair = pairStartsAt(items, index, items.size());
+			int closers = closersAfter(items, pair ? index + 1 : index, inner);
+			int unit = pair ? pairWidth(items, index) : flatWidth(items.get(index));
+			// An argument that fits nowhere has to wrap whichever column it starts in, so
+			// it
+			// cannot speak to which column the others should get.
+			if (unit >= 0 && fits(shallow, unit, closers)) {
+				widest = Math.max(widest, unit + closers);
 			}
-			String flat = flat(items.get(index));
-			if (flat != null) {
-				widest = Math.max(widest, flat.length() + closersAfter(items, index, inner));
+			if (pair) {
+				index++;
 			}
 		}
 		boolean overruns = widest > 0 && aligned + widest > this.width;
-		return overruns && indent + 4 + widest <= this.width ? indent + 4 : aligned;
+		return overruns && shallow < aligned ? shallow : aligned;
 	}
 
 	/**
@@ -470,30 +469,118 @@ public final class LispFormatter {
 				emitTrailingComment(item);
 				continue;
 			}
-			int closers = closersAfter(items, index, inner);
+			boolean pair = !comment && pairStartsAt(items, index, to);
+			int closers = closersAfter(items, pair ? index + 1 : index, inner);
+			int unitWidth = pair ? pairWidth(items, index) : flatWidth(item);
 			boolean sameLine;
 			if (this.afterLineComment || comment || item.trivia().blankLineBefore()) {
 				sameLine = false;
 			}
+			else if (pair) {
+				// One option per line: a column of options reads far better than a
+				// paragraph of them. Only the first argument shares the operator's line,
+				// and on the same terms as any other first argument.
+				sameLine = index == from && firstOnCurrentLine
+						&& (fits(column() + 1, unitWidth, closers) || breakColumn >= column() + 1);
+			}
 			else if (index == from && firstOnCurrentLine) {
-				sameLine = true;
+				// The first argument keeps the operator company so the operator is never
+				// stranded alone on a line -- unless it has to break anyway AND the break
+				// column is further left, in which case company costs it room it needs.
+				sameLine = fits(column() + 1, unitWidth, closers) || breakColumn >= column() + 1;
 			}
 			else if (!fill) {
 				sameLine = false;
 			}
 			else {
-				String flat = flat(item);
-				sameLine = flat != null && fits(column() + 1, flat.length(), closers);
+				sameLine = fits(column() + 1, unitWidth, closers);
 			}
 			if (sameLine) {
 				emit(" ");
-				render(item, column(), childStyle, closers);
 			}
 			else {
 				breakLine(breakColumn, item.trivia().blankLineBefore());
-				render(item, breakColumn, childStyle, closers);
+			}
+			render(item, column(), pair ? null : childStyle, pair ? 0 : closers);
+			if (pair) {
+				renderPairValue(items.get(index + 1), breakColumn, childStyle, closers);
+				index++;
 			}
 		}
+	}
+
+	/**
+	 * Writes the value half of a {@code :key value} pair, which has just had its key
+	 * written.
+	 * <p>
+	 * It stays on the key's line when it fits -- that is the whole point of the pairing.
+	 * When it does not, the choice is between a line of its own and breaking inside
+	 * itself on the key's line, and the test is whether a line of its own would ACTUALLY
+	 * hold it: a plist value like
+	 * {@code :depends-on ("alexandria" "bordeaux-threads" ...)} is far too wide either
+	 * way, so it belongs beside its key and wraps under its own first element, while a
+	 * value that does fit on the next line reads better there than split open.
+	 * @param value the value node
+	 * @param breakColumn the column a new line is indented to
+	 * @param childStyle the style to force onto it, or {@code null}
+	 * @param closers how many closing parens follow it
+	 */
+	private void renderPairValue(CstNode value, int breakColumn, @Nullable Style childStyle, int closers) {
+		int column = column() + 1;
+		boolean beside = fits(column, flatWidth(value), closers)
+				|| (fits(column, firstLineWidth(value), 0) && column <= this.width / 2);
+		if (beside) {
+			emit(" ");
+			render(value, column, childStyle, closers);
+			return;
+		}
+		breakLine(breakColumn, false);
+		render(value, breakColumn, childStyle, closers);
+	}
+
+	/**
+	 * The width of the SHORTEST first line the node can be written on: its opening
+	 * delimiters plus its first element, all the way down. It is what answers "can this
+	 * even START here", which is a different question from whether it fits -- a plist
+	 * value like {@code ("alexandria" "bordeaux-threads" ...)} never fits on one line
+	 * anywhere, but it begins in thirteen columns and so belongs beside its key, wrapping
+	 * under its own first element.
+	 * @param node the node
+	 * @return the width of its shortest possible first line
+	 */
+	private int firstLineWidth(CstNode node) {
+		return switch (node) {
+			case CstNode.Atom atom -> atom.text().length();
+			case CstNode.LineComment comment -> comment.text().length();
+			case CstNode.BlockComment comment -> comment.text().length();
+			case CstNode.Prefix prefix -> prefix.prefix().length() + firstLineWidth(prefix.datum());
+			case CstNode.Listing listing ->
+				listing.open().length() + (listing.items().isEmpty() ? 1 : firstLineWidth(listing.items().get(0)));
+		};
+	}
+
+	/**
+	 * Whether a {@code :key value} pair starts at the given index. A pair is laid out as
+	 * one unit -- it starts a line of its own even in a packed run, because a column of
+	 * options reads far better than a paragraph of them. A comment in either half
+	 * disables the grouping, since a comment ends its line.
+	 * @param items the enclosing listing's items
+	 * @param index the candidate key's index
+	 * @param to one past the last index being laid out
+	 * @return {@code true} if the two items should be written as one unit
+	 */
+	private static boolean pairStartsAt(List<CstNode> items, int index, int to) {
+		return index + 1 < to && isKeyword(items.get(index)) && !(items.get(index + 1) instanceof CstNode.LineComment);
+	}
+
+	/**
+	 * The width of a node's one-line rendering, or -1 when it has none.
+	 * @param node the node
+	 * @return the width, or -1
+	 */
+	private int flatWidth(CstNode node) {
+		String flat = flat(node);
+		return flat != null ? flat.length() : -1;
 	}
 
 	/**
@@ -537,12 +624,13 @@ public final class LispFormatter {
 		if (!style.statements()) {
 			return false;
 		}
-		int inlineArgs = switch (style.kind()) {
-			case DEFMETHOD -> lambdaListIndex(listing.items());
-			// (do (bindings) (end-test result ...) body ...)
-			case DO -> 2;
-			default -> style.inlineArgs();
-		};
+		if (style.kind() == Style.Kind.DO) {
+			// (do (bindings) (end-test result ...) body ...) -- three distinct parts, and
+			// the layout is what tells them apart. One with a body is never a one-liner
+			// however short it is; one without has nothing to separate.
+			return listing.items().size() > 3;
+		}
+		int inlineArgs = style.kind() == Style.Kind.DEFMETHOD ? lambdaListIndex(listing.items()) : style.inlineArgs();
 		return listing.items().size() - 1 - inlineArgs >= 2;
 	}
 
@@ -597,37 +685,6 @@ public final class LispFormatter {
 				yield flat.append(')').toString();
 			}
 		};
-	}
-
-	/**
-	 * The index at which the trailing {@code :key value} pairs of a call begin, or
-	 * {@code items.size()} when there are none. Pairs are counted from the end so that
-	 * {@code (open path :direction :output :if-exists :supersede)} keeps each option with
-	 * its value.
-	 * <p>
-	 * A pair is only grouped while it FITS as a unit at the column the arguments will
-	 * start in. A pair too wide for one line is not a unit worth preserving -- splitting
-	 * it back into two ordinary arguments puts the key on the operator's line and the
-	 * value under it, which is both narrower and how the code was written. A comment
-	 * anywhere in the call disables the grouping outright, since it would shift the
-	 * pairing.
-	 * @param items the call's items
-	 * @param column the column the arguments will start in
-	 * @param inner how many closing parens follow the last item
-	 * @return the index the pairs begin at
-	 */
-	private int keywordPairsFrom(List<CstNode> items, int column, int inner) {
-		for (CstNode item : items) {
-			if (item instanceof CstNode.LineComment || item instanceof CstNode.BlockComment) {
-				return items.size();
-			}
-		}
-		int from = items.size();
-		while (from - 2 >= 1 && isKeyword(items.get(from - 2))
-				&& fits(column, pairWidth(items, from - 2), closersAfter(items, from - 1, inner))) {
-			from -= 2;
-		}
-		return from;
 	}
 
 	/**

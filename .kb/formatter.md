@@ -50,6 +50,16 @@ discarded and re-derived.
 `IndentRules` maps an operator to a `Style`; `LispFormatter` walks the tree
 emitting text and tracking the current column.
 
+A `:key value` pair is one unit everywhere, not only in call position -- a
+`defsystem`'s tail is a BODY of options, and pairing it in `renderCall` alone split
+every keyword from its value. A pair takes a line of its own (a column of options
+reads better than a paragraph of them), and its value stays beside the key: even a
+value far too wide for any line belongs there, wrapping under its own first
+element, rather than stranded below its key. The exception is depth --
+`renderPairValue` sends a wrapping value below its key once the key's line has less
+room left than a fresh line would give, or a nested
+`:components ((:module ... :components (...)))` walks the whole tree rightward.
+
 A `Style` is `(kind, inlineArgs, bodyIndent, childStyle, statements)`:
 
 - `CALL` -- arguments align under the first one; trailing `:key value` pairs are
@@ -71,7 +81,9 @@ A `Style` is `(kind, inlineArgs, bodyIndent, childStyle, statements)`:
 `statements` is also checked inside `flat()`, not only at the top of each form: a
 form that must break has NO one-line rendering at all, or an enclosing form that
 does fit would flatten it from above and `(defun f (x) (when x (a) (b)))` would
-collapse whole.
+collapse whole. `do`/`do*` is the one form that breaks on a body of ONE: its three
+parts are told apart by the layout and nothing else, so a one-line `do` loop hides
+which of them is which.
 
 ### Two width mechanics that are easy to get wrong
 
@@ -81,14 +93,21 @@ collapse whole.
    the formatter produces lines one or two columns over the margin, everywhere,
    with no obvious cause.
 2. **Every "move it elsewhere" rule is written as "would moving it help".**
-   `argumentColumn` abandons align-under-first-argument only when the alignment
-   column cannot hold the arguments AND `indent + 4` can; `movesToOwnLine` moves a
-   distinguished argument down only when it does not fit where it is and does fit
-   there. Unconditional versions of either rule make the common case worse.
-   `movesToOwnLine` additionally refuses index 1: the first distinguished argument
-   sits directly after the operator, already as far left as the form allows, so
-   moving it buys at most the operator's width -- it would break up
-   `(let* (BINDINGS) ...)` to gain one column.
+   `movesToOwnLine` moves a distinguished argument down only when it does not fit
+   where it is and does fit there; unconditionally, it would break up
+   `(let* (BINDINGS) ...)` to gain one column, which is also why it refuses index 1
+   (the first distinguished argument sits directly after the operator, already as
+   far left as the form allows).
+
+   Align-under-first-argument is the one that needs watching, because getting it
+   wrong COMPOUNDS: every call nested in a too-deep argument repeats the mistake one
+   level further right, and a four-deep chain walks off the page. `argumentColumn`
+   therefore gives the alignment up for `indent + 1` whenever the arguments do not
+   fit at it, and never charges depth for an alignment with nothing to align --
+   a call with ONE argument that must break starts it at `indent + 1`. An argument
+   that fits nowhere is skipped when measuring, since it wraps in any column and so
+   cannot speak to which column the others should get. Getting these three right cut
+   the corpus's over-margin lines by more than half.
 
 ### Unknown operators are guessed from their name
 

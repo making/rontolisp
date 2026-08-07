@@ -141,6 +141,20 @@ class LispFormatterTest {
 	}
 
 	@Test
+	void neverCollapsesADoLoopThatHasABody() {
+		// Its three parts -- bindings, end test, body -- are told apart by the layout and
+		// nothing else, so a do with a body is never a one-liner however short it is. One
+		// without a body has nothing to separate.
+		assertThat(LispFormatter.format("(do ((i 0 (+ i 1))) ((>= i n) out) (setq out (cons 0 out)))\n")).isEqualTo("""
+				(do ((i 0 (+ i 1)))
+				    ((>= i n) out)
+				  (setq out (cons 0 out)))
+				""");
+		assertThat(LispFormatter.format("(do ((i 0 (1+ i))) ((= i 5)))\n"))
+			.isEqualTo("(do ((i 0 (1+ i))) ((= i 5)))\n");
+	}
+
+	@Test
 	void putsTheDoEndTestPastTheBody() {
 		assertThat(LispFormatter.format("(do ((i 0 (1+ i))) ((= i n) result) (body i) (more i))\n")).isEqualTo("""
 				(do ((i 0 (1+ i)))
@@ -160,6 +174,45 @@ class LispFormatterTest {
 					                   :if-exists :supersede
 					                   :if-does-not-exist :create))
 					""");
+	}
+
+	@Test
+	void keepsAPlistOptionWithItsValueOutsideCallPosition() {
+		// A defsystem's tail is a body of options, not an argument list, so it does not
+		// go
+		// through the call layout -- and without pairing there it split every keyword
+		// from
+		// its value, one item per line.
+		assertThat(LispFormatter.format("""
+				(defsystem "postmodern" :description "PostgreSQL programming API" :depends-on \
+				("alexandria" "bordeaux-threads" "cl-postgres" "s-sql" "split-sequence" "uiop"))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defsystem "postmodern"
+				  :description "PostgreSQL programming API"
+				  :depends-on ("alexandria" "bordeaux-threads" "cl-postgres" "s-sql"
+				               "split-sequence" "uiop"))
+				""");
+	}
+
+	@Test
+	void startsALoneArgumentAtTheShallowestColumnWhenItMustBreak() {
+		// Aligning under the first argument is worth depth only when there are siblings
+		// to
+		// align WITH. One argument that has to break gets the shallowest column instead,
+		// so
+		// the calls nested in it inherit room rather than a deficit -- the whole reason a
+		// chain of nested calls used to walk off the right edge.
+		assertThat(LispFormatter.format("""
+				(rontolisp:plist-hash-table (list :args (rontolisp:alist-hash-table \
+				(rontolisp:query-params (getf env :query-string))) :headers (getf env :headers) \
+				:path (getf env :path-info)))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(rontolisp:plist-hash-table
+				 (list :args (rontolisp:alist-hash-table
+				              (rontolisp:query-params (getf env :query-string)))
+				       :headers (getf env :headers)
+				       :path (getf env :path-info)))
+				""");
 	}
 
 	@Test
