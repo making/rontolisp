@@ -123,7 +123,7 @@ Even there it is 92 KB of generated JavaScript to replace about ten lines.
 ## Developing without Cloudflare
 
 The Lisp in every one of these is an ordinary function, so the whole edit/run
-loop happens locally — [`httpbin/demo.lisp`](httpbin/demo.lisp) and
+loop happens locally — [`httpbin/check.lisp`](httpbin/check.lisp) and
 [`httpbin-clack/check.lisp`](httpbin-clack/check.lisp) drive their handlers on the
 interpreter, the JVM and wasmtime, and `httpbin-clack/`'s application can also be
 served for real with `rontolisp ../net/httpbin-clack.lisp` — no Cloudflare, no

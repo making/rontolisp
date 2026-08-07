@@ -266,7 +266,7 @@ whose `check.lisp` runs it on the interpreter, the JVM and wasm-GC
 (`examples/examples.yaml`) and whose `worker.lisp` is the deployed Worker --
 and by `examples/cloudflare-workers/hello-clack/`, the three-form floor. The
 clack-free half of the pair, `examples/cloudflare-workers/httpbin/`, is pinned
-the same way by its `demo.lisp`: same three backends, same requests, so a
+the same way by its `check.lisp`: same three backends, same requests, so a
 divergence between the shim's `handle` and a hand-written one shows up as two
 manifest cases disagreeing.
 

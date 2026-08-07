@@ -1,11 +1,11 @@
-;;; demo.lisp -- drive app.lisp's handler without Cloudflare.
+;;; check.lisp -- drive app.lisp's handler without Cloudflare.
 ;;;
 ;;; `handle-request` is an ordinary function of a string, so the whole Worker --
 ;;; the Clack application and the reactor adapter under it together -- can be
 ;;; developed and debugged on the interpreter, where the edit/run loop costs
 ;;; nothing:
 ;;;
-;;;   rontolisp examples/cloudflare-workers/httpbin/demo.lisp
+;;;   rontolisp examples/cloudflare-workers/httpbin/check.lisp
 ;;;
 ;;; It runs identically on the JVM and WASM backends, which is what pins the
 ;;; handler against every backend the compiler has.

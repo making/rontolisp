@@ -550,7 +550,7 @@ examples:
         - 'Hello from Clack on Cloudflare Workers'
         - 'GET /anything'
         - '"status":200'
-  - path: cloudflare-workers/httpbin/demo.lisp
+  - path: cloudflare-workers/httpbin/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
       loads app.lisp -- the CLACK-FREE flavour of the Worker: the application

@@ -99,7 +99,7 @@ size matters more than that.
 | File | Purpose |
 | --- | --- |
 | [`app.lisp`](app.lisp) | **The whole program.** The Clack application (verbatim from upstream) plus the reactor adapter. |
-| [`demo.lisp`](demo.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`, including the string boundary. |
 | `src/app.wasm` | The compiled module (~414 KB). A build product — run `./build.sh` first. |
 
@@ -279,15 +279,15 @@ instance's Lisp heap cannot be trusted afterwards.
 application — so the whole edit/run loop can happen on the interpreter:
 
 ```bash
-rontolisp demo.lisp
+rontolisp check.lisp
 ```
 
 It runs identically on the JVM and the WASM backend, which is what keeps the
 handler honest:
 
 ```bash
-rontolisp demo.lisp -o Demo.class && java -cp . Demo
-rontolisp demo.lisp -o demo.wasm --optimize && wasmtime run -W gc -W exceptions=y demo.wasm
+rontolisp check.lisp -o Check.class && java -cp . Check
+rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exceptions=y check.wasm
 ```
 
 One thing to expect when comparing those outputs: the **order of the keys inside
