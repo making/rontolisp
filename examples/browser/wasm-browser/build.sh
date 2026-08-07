@@ -2,6 +2,11 @@
 # Recompile the .lisp sources in this directory to .wasm using rontolisp.
 # Run from the repository root or from this directory; it locates the JAR
 # relative to the repo root.
+#
+# --optimize tree-shakes the runtime so only the reachable functions -- and only
+# the WASI imports they actually reach -- ship. These are the smallest programs
+# in the examples, so it is also the largest difference: without it each module
+# carries the whole runtime and is ~40x bigger.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -17,7 +22,7 @@ fi
 for src in "$here"/*.lisp; do
   name="$(basename "$src" .lisp)"
   echo "compiling $name.lisp -> $name.wasm"
-  java -jar "$jar" "$src" -o "$here/$name.wasm"
+  java -jar "$jar" "$src" -o "$here/$name.wasm" --optimize
 done
 
 echo "done. Serve this directory over http, e.g.:"

@@ -51,7 +51,10 @@ echo "[1/2] training (Adam over K49 + the synthetic glyphs; a few minutes)"
     && rm -f Train.class )
 
 echo "[2/2] compiling recognize.lisp -> infer.wasm"
-java -jar "$jar" "$here/recognize.lisp" -o "$here/infer.wasm"
+# --optimize tree-shakes the runtime and the WASI import surface down to what the
+# inference half reaches; the convnet itself dominates the module, so the win is
+# small here -- but the page then links against exactly the imports the shim has.
+java -jar "$jar" "$here/recognize.lisp" -o "$here/infer.wasm" --optimize
 
 echo "done."
 echo "  weights.bin  $(wc -c < "$here/weights.bin") bytes"

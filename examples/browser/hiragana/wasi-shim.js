@@ -2,11 +2,14 @@
 //
 // A tiny, dependency-free WASI Preview 1 shim, just large enough to run a
 // program compiled by rontolisp (`rontolisp prog.lisp -o prog.wasm`) in a
-// browser. rontolisp's WASM output imports exactly eight functions from the
+// browser. rontolisp's WASM output imports exactly nine functions from the
 // "wasi_snapshot_preview1" module:
 //
-//   fd_write, fd_read, path_open, fd_close,
+//   fd_write, fd_read, path_open, fd_close, fd_readdir,
 //   random_get, clock_time_get, environ_sizes_get, environ_get
+//
+// A module built with --optimize imports only the ones it actually reaches, so
+// the shim provides all nine and lets the link pick.
 //
 // This shim implements them over plain JavaScript:
 //   - stdout/stderr (fd 1/2) are captured into strings instead of a real tty
@@ -136,6 +139,14 @@ export function createWasi({ stdin = "", env = {}, files = {} } = {}) {
     fd_close(fd) {
       openFiles.delete(fd);
       return WASI_ESUCCESS;
+    },
+
+    // fd_readdir(fd, buf, buf_len, cookie, bufused_out) -> errno
+    // The virtual filesystem is a flat path -> bytes map with no directories, so
+    // a program that lists one gets "not supported" rather than an empty listing
+    // it would read as "no files".
+    fd_readdir() {
+      return WASI_ENOSYS;
     },
 
     // random_get(ptr, len) -> errno
