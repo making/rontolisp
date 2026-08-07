@@ -17,7 +17,7 @@ The programs are grouped by theme, one directory per group:
 | [`wit/keyvalue/`](wit/keyvalue) | The other direction: *calling* a WIT interface, with a different implementation behind it per backend |
 | [`wit/lisp-calls-rust/`](wit/lisp-calls-rust), [`wit/rust-calls-lisp/`](wit/rust-calls-lisp), [`wit/pipeline/`](wit/pipeline) | Across languages: Lisp and Rust components composed into one with `wac`, calling each other through WIT (a direction each, plus a three-component `wac compose` chain) |
 | [`db/`](db) | PostgreSQL over the real cl-postgres driver and postmodern on top of it — queries, CRUD, S-SQL, and a cl-who web app |
-| [`asdf/`](asdf), [`wasmcloud/`](wasmcloud) | Third-party libraries and platform templates |
+| [`asdf/`](asdf), [`wasmcloud/`](wasmcloud), [`cloudflare-workers/`](cloudflare-workers) | Third-party libraries and platform templates |
 
 Assuming the executable JAR has been built
 (`./mvnw clean spring-javaformat:apply package`), set:
@@ -112,6 +112,7 @@ the file.
 | --- | --- |
 | [`asdf/`](asdf) | Loading REAL third-party libraries through `asdf:load-system`: unmodified [split-sequence v2.0.1](https://github.com/sharplispers/split-sequence), [parse-number v1.8](https://github.com/sharplispers/parse-number), [cl-utilities v1.2.4](https://common-lisp.net/project/cl-utilities/), [cl-who v1.1.5](https://github.com/edicl/cl-who), [assoc-utils](https://github.com/fukamachi/assoc-utils), [cl-base64 v3.4](https://github.com/darabi/cl-base64), [md5 v2.0.4](https://github.com/pmai/md5), [cl-ppcre v2.1.2](https://github.com/edicl/cl-ppcre), [com.inuoe.jzon v1.1.4](https://github.com/Zulu-Inuoe/jzon), [ironclad v0.61](https://github.com/sharplispers/ironclad) (SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice) and [uax-15 v0.1.3](https://github.com/sabracrolleton/uax-15) sources, exercised on all four backends (interpreter / JVM / WASM Preview 1 / `--component`); the directory README has the per-backend run commands and expected output |
 | [`wasmcloud/`](wasmcloud) | Ports of the **wasmCloud Rust templates** to `rontolisp:http-handler`, one directory per template (hello world, routed handler, outgoing-HTTP proxy, in-memory key-value API, and the TCP service + HTTP API pair of `service-tcp`), each with a `.wash/config.yaml` so `wash dev` builds and serves it directly; the directory README has a template-by-backend support matrix |
+| [`cloudflare-workers/`](cloudflare-workers) | Running on **Cloudflare Workers** (`npx wrangler deploy`), as three independent Worker projects that answer three different questions. [`hello/`](cloudflare-workers/hello) is the floor: three `rontolisp:wasm-export`ed functions a Worker calls like JavaScript ones, `--no-gc`, **563 bytes**, zero imports, no shim and no allocator code. [`httpbin/`](cloudflare-workers/httpbin) is the Cloudflare port of [`net/httpbin.lisp`](net/httpbin.lisp) -- the same five echo endpoints, but reached through one exported `handle-request` (JSON string in, JSON string out) instead of `rontolisp:http-handler`, which is what brings the `__ronto_alloc_mark`/`_reset` arena bracket that keeps a resident instance's linear memory flat (measured over 20 000 requests); `--no-wasi` still leaves the module importing *nothing*, and `handler-case` lets it return `"json": null` for an unparseable body the way the original could not. [`httpbin-component/`](cloudflare-workers/httpbin-component) builds that same `app.lisp` as a component and transpiles it with `jco`: the canonical ABI does delete all the memory code, at the price of 247 KB of generated glue, three hand-written WASI stubs, three non-obvious jco flags, and no way to run top-level forms. Settled along the way, all verified under `wrangler dev`: workerd runs wasm-GC *and* wasm exception handling with no flags, and forbids runtime WebAssembly compilation -- which is what rules out jco's default output |
 
 ## Java interop / GUI (JVM only) — `jvm/`
 
@@ -256,6 +257,20 @@ Every WASM build (`wasm` / `wasm-component` / `no-gc`) is compiled with
 compile-only backends need no runtime. To run against the GraalVM native binary
 instead of the jar, pass `-Drontolisp.binary="$PWD/target/rontolisp"` (and drop
 `-Drontolisp.examples`).
+
+The full suite takes minutes. While iterating on one example, narrow it with
+`-Drontolisp.examples.only=<substrings>` -- a comma-separated list matched
+against the manifest path:
+
+```bash
+./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false -Drontolisp.examples=true \
+       -Drontolisp.examples.only=cloudflare test        # one directory
+./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false -Drontolisp.examples=true \
+       -Drontolisp.examples.only=console/,ml/ test      # two
+```
+
+A pattern that matches nothing produces no tests at all rather than the whole
+suite, so a typo shows up as `Tests run: 0`.
 
 Adding an example? Append an entry to `examples.yaml` with its backends and an
 `expect` -- no Java changes needed. To regenerate an externalised expected file

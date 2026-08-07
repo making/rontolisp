@@ -1,0 +1,7 @@
+# Build products and local tool state, for all three Worker projects here.
+# Every .wasm is produced by the directory's build.sh; dist/ is jco's output.
+*.wasm
+dist/
+node_modules/
+.wrangler/
+package-lock.json

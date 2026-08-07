@@ -509,3 +509,36 @@ examples:
   - path: net/kv-server-tls.lisp
     backends: [jvm-compile]
     note: TLS is a compile error on WASM -- JVM/interpreter only
+
+  # --- cloudflare-workers: a wasm-export handler driven by a JavaScript host ---
+  - path: cloudflare-workers/hello/hello.lisp
+    backends: [no-gc, wasm-component]
+    note: >-
+      the simplest Worker: three wasm-export'ed functions a JavaScript host calls
+      directly. Host-invoked, so the harness only compiles it. no-gc pins the
+      563-byte MVP module the Worker imports; wasm-component pins that the same
+      three exports lower through the canonical ABI, which is what
+      cloudflare-workers/httpbin-component transpiles with jco.
+  - path: cloudflare-workers/httpbin/demo.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads app.lisp -- the Cloudflare Worker's mini httpbin, the same five echo
+      endpoints as net/httpbin.lisp over a JSON string boundary instead of
+      http-handler -- and drives it over the requests the README curls. The
+      Worker itself calls the wasm-export'ed handle-request from JavaScript and
+      is built by the directory's build.sh (--no-wasi --optimize, a shape no
+      backend token here covers); what this pins is that the handler logic,
+      JSON parsing and the handler-case that turns an unparseable body into
+      null included, answers identically on the interpreter, the JVM and
+      wasm-GC. Checked with contains, not equals: the key ORDER inside a JSON
+      object follows hash-table iteration order, which differs per backend.
+    expect:
+      contains:
+        # The response body is a JSON string nested in the outer JSON, so its
+        # own quotes arrive backslash-escaped. One key per needle: a needle
+        # spanning two keys would depend on their order.
+        - '\"path\":\"/get\"'
+        - '\"json\":{\"name\":\"rontolisp\"}'
+        - '\"json\":null'
+        - '\"allowed\":\"POST\"'
+        - '"status":404'
