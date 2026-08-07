@@ -1,9 +1,10 @@
-;; clack.handler.cloudflare: the Clack handler backend for a HOST-DRIVEN
+;; clack.handler.cloudflare-workers: the Clack handler backend for a HOST-DRIVEN
 ;; REACTOR -- a Cloudflare Worker, and any other embedding where the host has
 ;; already parsed the request and calls an exported function instead of handing
 ;; the program a socket. Satisfies the built-in ASDF system
-;; "clack-handler-cloudflare" (and its dotted alias "clack.handler.cloudflare",
-;; the spelling lack's find-package-or-load derives from the package name).
+;; "clack-handler-cloudflare-workers" (and its dotted alias
+;; "clack.handler.cloudflare-workers", the spelling lack's find-package-or-load
+;; derives from the package name).
 ;; Like clack-handler-rontolisp the package is NOT seeded in PackageRegistry, so
 ;; this shim carries its own defpackage (the leaf-module pattern).
 ;;
@@ -11,9 +12,10 @@
 ;; has nothing to do here (see the run stub at the bottom, and .todo/281). The
 ;; user exports one function and calls handle from it:
 ;;
-;;   (ql:quickload "clack-handler-cloudflare")
+;;   (ql:quickload "clack-handler-cloudflare-workers")
 ;;   (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-;;   (defun handle-request (json) (clack.handler.cloudflare:handle #'app json))
+;;   (defun handle-request (json)
+;;     (clack.handler.cloudflare-workers:handle #'app json))
 ;;
 ;; and APP is an ordinary Clack application -- the environment plist in, the
 ;; (status headers body) list out -- unchanged from the one that runs on
@@ -39,9 +41,10 @@
 ;;                                     ;   that split; a pre-split path would
 ;;                                     ;   leave :query-string nil.
 ;;         "headers": {"host": "..."}, ; content-length MUST be here for a body:
-;;                                     ;   lack/request parses nothing without it,
-;;                                     ;   and a chunked request carries none, so
-;;                                     ;   the host sets it from the bytes it read.
+;;                                     ;   lack/request parses nothing without
+;;                                     ;   it, and a chunked request carries
+;;                                     ;   none, so the host sets it from the
+;;                                     ;   bytes it actually read.
 ;;         "body": "...",              ; already read; "" or absent for none
 ;;         "scheme": "https",          ; optional, defaults to "http"
 ;;         "remote-addr": "203.0.113.7"}  ; optional, Clack's :remote-addr
@@ -63,9 +66,11 @@
 ;; answers 500 with the condition's report instead, which is what every other
 ;; rontolisp transport does with a handler error.
 
-(defpackage :clack.handler.cloudflare (:use :cl) (:export :handle :run :stop))
+(defpackage :clack.handler.cloudflare-workers
+  (:use :cl)
+  (:export :handle :run :stop))
 
-(defun clack.handler.cloudflare::%header-alist (table)
+(defun clack.handler.cloudflare-workers::%header-alist (table)
   ;; The headers JSON object -> the ((name . value) ...) alist the raw tuple
   ;; wants. nil (no headers) passes straight through.
   (if (null table)
@@ -75,59 +80,63 @@
                  table)
         (nreverse out))))
 
-(defun clack.handler.cloudflare::%header-pairs (alist)
+(defun clack.handler.cloudflare-workers::%header-pairs (alist)
   ;; The response header alist -> a JSON array of [name, value]. See the
   ;; envelope note above for why this is not an object.
   (let ((out nil))
     (dolist (pair alist) (setq out (cons (list (car pair) (cdr pair)) out)))
     (nreverse out)))
 
-(defun clack.handler.cloudflare::%request-tuple (req)
+(defun clack.handler.cloudflare-workers::%request-tuple (req)
   ;; The positional raw tuple %http-make-env consumes:
   ;;   (method request-uri header-alist body server-protocol url-scheme
   ;;    local-name local-port remote-addr remote-port)
   ;; The Host header supplies :server-name / :server-port, so the two
   ;; placeholders below never win when the host sends one.
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
-        (clack.handler.cloudflare::%header-alist (gethash "headers" req))
-        (rontolisp::%http-body-stream (gethash "body" req)) "HTTP/1.1"
-        (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
+   (clack.handler.cloudflare-workers::%header-alist (gethash "headers" req))
+   (rontolisp::%http-body-stream (gethash "body" req)) "HTTP/1.1"
+   (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
 
-(defun clack.handler.cloudflare::%envelope (status headers body)
+(defun clack.handler.cloudflare-workers::%envelope (status headers body)
   (rontolisp:json-stringify
    (rontolisp:plist-hash-table
     (list :status status
-          :headers (clack.handler.cloudflare::%header-pairs headers)
+          :headers (clack.handler.cloudflare-workers::%header-pairs headers)
           :body body))))
 
-(defun clack.handler.cloudflare:handle (app request-json)
+(defun clack.handler.cloudflare-workers:handle (app request-json)
   "Run the Clack application APP against the JSON request REQUEST-JSON and
 answer the JSON response. See the envelope in this file's header."
   (handler-case (let* ((req (rontolisp:json-parse request-json))
                        (env
                         (rontolisp::%http-make-env
-                         (clack.handler.cloudflare::%request-tuple req)))
+                         (clack.handler.cloudflare-workers::%request-tuple
+                          req)))
                        (triple
                         (rontolisp::%http-normalize-response
                          (funcall app env))))
-                  (clack.handler.cloudflare::%envelope (car triple)
+                  (clack.handler.cloudflare-workers::%envelope (car triple)
                    (car (cdr triple)) (car (cdr (cdr triple)))))
     (error (e)
-      (clack.handler.cloudflare::%envelope 500
+      (clack.handler.cloudflare-workers::%envelope 500
        (list (cons "content-type" "application/json"))
        (format nil "~a~%"
                (rontolisp:json-stringify
                 (rontolisp:plist-hash-table
                  (list :error (format nil "~a" e)))))))))
 
-;; clackup's protocol, present so (clack:clackup app :server :cloudflare) fails
-;; with a sentence rather than with "undefined function RUN". A reactor owns no
-;; socket, so there is nothing for run to start and nothing for stop to stop.
-(defun clack.handler.cloudflare:run (app &rest ignored)
+;; clackup's protocol, present so (clack:clackup app :server
+;; :cloudflare-workers) fails with a sentence rather than with "undefined
+;; function RUN". A reactor owns no socket, so there is nothing for run to start
+;; and nothing to stop. Making clackup itself work here is .todo/285 -- and
+;; clackup ALREADY runs on a --no-wasi reactor when the caller passes
+;; :silent t :debug nil; what is missing is the compiler-synthesized export.
+(defun clack.handler.cloudflare-workers:run (app &rest ignored)
   (declare (ignore app ignored))
   (error
-   "clack.handler.cloudflare: clackup cannot run on a host-driven reactor -- there is no socket to bind. Export a function and call clack.handler.cloudflare:handle from it instead."))
+   "clack.handler.cloudflare-workers: clackup cannot run on a host-driven reactor -- there is no socket to bind. Export a function and call clack.handler.cloudflare-workers:handle from it instead."))
 
-(defun clack.handler.cloudflare:stop (server)
+(defun clack.handler.cloudflare-workers:stop (server)
   (declare (ignore server))
   nil)

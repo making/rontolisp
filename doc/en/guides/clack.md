@@ -92,7 +92,7 @@ signals.
   `clackup` signals `HTTP-HANDLER requires --component ...` at run time
   (catchable with `handler-case`).
 
-## A host that calls you: `clack-handler-cloudflare`
+## A host that calls you: `clack-handler-cloudflare-workers`
 
 Some hosts never hand you a socket. A Cloudflare Worker, a browser page, node
 and a JVM embedding all parse the request themselves and then **call an exported
@@ -101,26 +101,26 @@ does not have to change: a second built-in handler backend bridges the two.
 
 ```console
 $ cat worker.lisp
-(ql:quickload "clack-handler-cloudflare")
+(ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
 (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
 
 (defun handle-request (request-json)
-  (clack.handler.cloudflare:handle #'app request-json))
+  (clack.handler.cloudflare-workers:handle #'app request-json))
 ```
 
 `handle` needs no Worker to try — it is an ordinary function of two arguments:
 
 ```lisp
-(ql:quickload "clack-handler-cloudflare")
+(ql:quickload "clack-handler-cloudflare-workers")
 
 (defun app (env)
   (list 200 '(:content-type "text/plain")
         (list (format nil "~a ~a ~a" (getf env :request-method)
                       (getf env :path-info) (getf env :query-string)))))
 
-(princ (clack.handler.cloudflare:handle
+(princ (clack.handler.cloudflare-workers:handle
         #'app "{\"method\":\"GET\",\"target\":\"/hi?a=1\"}"))
 ```
 
@@ -159,7 +159,7 @@ Two details the host side must get right:
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.
 
-`(clack:clackup #'app :server :cloudflare)` resolves this backend too, and fails
+`(clack:clackup #'app :server :cloudflare-workers)` resolves this backend too, and fails
 with an explanation: there is no socket to bind.
 
 ## Current limits

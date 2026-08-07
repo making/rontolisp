@@ -129,10 +129,10 @@ and so are `stream-read`/`stream-close`/`streamp` when no stream type exists
 loads. An uncaught error is a silent trap on Preview 1, so the E2E pins the
 message through `handler-case`.
 
-## The host-driven reactor: `clack-handler-cloudflare` (`handle`, not `run`)
+## The host-driven reactor: `clack-handler-cloudflare-workers` (`handle`, not `run`)
 
-A SECOND built-in handler backend, `clack-handler-cloudflare.lisp` (package
-`clack.handler.cloudflare`, both system spellings in `ShimLibraries.RESOURCES` /
+A SECOND built-in handler backend, `clack-handler-cloudflare-workers.lisp` (package
+`clack.handler.cloudflare-workers`, both system spellings in `ShimLibraries.RESOURCES` /
 `BuiltinSystems` / `resource-config.json`, again NOT seeded in `PackageRegistry`).
 It exists for the hosts that call an EXPORTED FUNCTION instead of handing the
 program a socket — a Cloudflare Worker, and any other `wasm-export` /
@@ -141,9 +141,9 @@ program a socket — a Cloudflare Worker, and any other `wasm-export` /
 Its entry point is **`handle`**, not `run`:
 
 ```lisp
-(ql:quickload "clack-handler-cloudflare")
+(ql:quickload "clack-handler-cloudflare-workers")
 (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-(defun handle-request (json) (clack.handler.cloudflare:handle #'app json))
+(defun handle-request (json) (clack.handler.cloudflare-workers:handle #'app json))
 ```
 
 - `handle` is `(app request-json) -> response-json`. It converts nothing itself:
@@ -164,13 +164,17 @@ Its entry point is **`handle`**, not `run`:
   handler error. The consequence to know: loading this shim puts `handler-case`
   in the module, so the program compiles in EH mode.
 - **`run`/`stop` exist only to fail with a sentence.** `(clack:clackup app
-  :server :cloudflare)` resolves this backend through the same discovery
+  :server :cloudflare-workers)` resolves this backend through the same discovery
   protocol and applies `RUN`; a reactor owns no socket, so `run` signals
   "clackup cannot run on a host-driven reactor" rather than being undefined.
-  Making `clackup` itself work on a reactor is `.todo/281` (it needs compiler
-  synthesis of the export, the way `HttpLibrary` synthesizes `%serve-dispatch`
-  for the component path) — the reason for the divergence, so the next visitor
-  can tell whether it still holds.
+  Making `clackup` itself work here is `.todo/285` (it needs compiler synthesis
+  of the export, the way `HttpLibrary` synthesizes `%serve-dispatch` for the
+  component path, plus a decision about clackup's two `format t` calls, which a
+  `--no-wasi` build lowers to the stubbed `fd_write`). MEASURED, so the next
+  visitor can tell whether the reason still holds: `clackup` ITSELF already runs
+  on a `--no-wasi` reactor when the backend's `run` avoids the `http-handler`
+  directive and the caller passes `:silent t :debug nil` — what is missing is
+  the synthesized export and a way not to need those two keywords.
 
 Why the vendor name is in a shim system rather than in `rontolisp:`: nothing in
 the envelope is Cloudflare-specific, but a `rontolisp:`-level function would

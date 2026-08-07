@@ -17,7 +17,7 @@
 ;; examples/cloudflare-workers/httpbin-clack/app.lisp -- a Cloudflare Worker
 ;; hands over a parsed request instead of a socket, so there the clackup line
 ;; below is the ONE form replaced, by a call into the built-in
-;; clack-handler-cloudflare backend. That is the point of writing the handler as
+;; clack-handler-cloudflare-workers backend. That is the point of writing the handler as
 ;; a Clack application rather than as a server: it is the same function on every
 ;; host, and swapping the host swaps only the handler backend.
 ;;

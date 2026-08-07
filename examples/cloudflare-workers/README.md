@@ -8,7 +8,7 @@ on Cloudflare Workers. Each directory is a complete, independent Worker project:
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case`. The Cloudflare port of [`examples/net/httpbin.lisp`](../net/httpbin.lisp). | 277 KB, `--no-wasi` wasm-GC, zero imports | 53 lines, one file, no dependencies |
-| [`httpbin-clack/`](httpbin-clack) | **The same endpoints as a real [Clack](https://github.com/fukamachi/clack) application** — the environment plist in, the Clack response list out — so the handler also runs on hunchentoot, on woo and under `wasmtime serve`, unchanged. The Cloudflare port of [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp): `app.lisp` is that file minus its `clackup` line and nothing else, `worker.lisp` is four forms over the built-in `clack-handler-cloudflare` handler backend that replaces it, and `serve.lisp` puts the `clackup` line back so the identical application can be curl'd on a real HTTP server. | 1.57 MB (**334 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/`'s boundary code verbatim; only the request shape differs |
+| [`httpbin-clack/`](httpbin-clack) | **The same endpoints as a real [Clack](https://github.com/fukamachi/clack) application** — the environment plist in, the Clack response list out — so the handler also runs on hunchentoot, on woo and under `wasmtime serve`, unchanged. The Cloudflare port of [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp): `app.lisp` is that file minus its `clackup` line and nothing else, `worker.lisp` is four forms over the built-in `clack-handler-cloudflare-workers` handler backend that replaces it, and `serve.lisp` puts the `clackup` line back so the identical application can be curl'd on a real HTTP server. | 1.57 MB (**334 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/`'s boundary code verbatim; only the request shape differs |
 | [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (278 KB) | 51 hand-written lines + 247 KB of generated glue |
 
 ## Which one should I copy?
@@ -139,7 +139,7 @@ All four were deployed to the real edge and verified there, not only under
 | `hello` | 1.88 KiB | **1.12 KiB** | not reported |
 | `httpbin` | 278.53 KiB | **91.03 KiB** | 12-13 ms |
 | `httpbin-component` | 503.84 KiB | **130.21 KiB** | 5 ms |
-| `httpbin-clack` | 1540.98 KiB | **340.29 KiB** | 17 ms |
+| `httpbin-clack` | 1541.11 KiB | **340.35 KiB** | 14 ms |
 
 The gzip column is the one that counts: the Worker size limit applies to the
 compressed bundle, so even the component build sits at about 4% of the free

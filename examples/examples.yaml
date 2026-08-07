@@ -552,7 +552,7 @@ examples:
       separate files on purpose: app.lisp is net/httpbin-clack.lisp verbatim (a
       Clack environment in, a Clack response out) with only its clackup line
       removed, and worker.lisp is four forms over the built-in
-      clack-handler-cloudflare handler backend, whose `handle` replaces clackup
+      clack-handler-cloudflare-workers handler backend, whose `handle` replaces clackup
       and rides the shared %http-make-env / %http-normalize-response entry
       points. What this pins is
       that the adapter builds the same environment on every backend: the "?"

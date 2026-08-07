@@ -251,7 +251,7 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
         },
-        "pattern": "am/ik/rontolisp/eval/clack-handler-(rontolisp|cloudflare)\\.lisp"
+        "pattern": "am/ik/rontolisp/eval/clack-handler-(rontolisp|cloudflare-workers)\\.lisp"
       },
       {
         "condition": {

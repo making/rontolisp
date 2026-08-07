@@ -5,7 +5,7 @@
 // instantiation and the trap recovery are identical (all explained in
 // ../../README.md and ../../httpbin/README.md). What differs is only
 // `requestToJson`: the Lisp half feeds a CLACK environment (through the built-in
-// clack-handler-cloudflare handler backend), so this side must hand over the
+// clack-handler-cloudflare-workers handler backend), so this side must hand over the
 // facts Clack's environment is built from rather than a pre-chewed request. Two
 // of them are easy to get wrong -- see the comments in that function.
 
@@ -46,7 +46,7 @@ function handleRequest(lisp, input) {
   return result;
 }
 
-/** The raw facts clack.handler.cloudflare:handle turns into the Clack environment. */
+/** The raw facts clack.handler.cloudflare-workers:handle turns into the Clack environment. */
 async function requestToJson(request) {
   const url = new URL(request.url);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";

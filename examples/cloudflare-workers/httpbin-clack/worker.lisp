@@ -13,7 +13,7 @@
 ;;;
 ;;; and src/index.js -- which does have a real `Request` -- calls it.
 ;;;
-;;; The bridge between the two is not written here. clack-handler-cloudflare is
+;;; The bridge between the two is not written here. clack-handler-cloudflare-workers is
 ;;; a built-in handler backend, the sibling of the clack-handler-rontolisp one
 ;;; that clackup uses when it DOES own a socket, and its `handle` is the whole
 ;;; adapter: it builds the Clack environment from the JSON envelope, runs the
@@ -28,11 +28,11 @@
 ;;; import object and needs no WASI shim. The flip side is that adding a `print`
 ;;; or a `random` here traps at run time -- see the README.
 
-(ql:quickload "clack-handler-cloudflare")
+(ql:quickload "clack-handler-cloudflare-workers")
 
 (load "app.lisp")
 
 (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
 
 (defun handle-request (request-json)
-  (clack.handler.cloudflare:handle #'app request-json))
+  (clack.handler.cloudflare-workers:handle #'app request-json))

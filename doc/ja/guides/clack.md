@@ -93,7 +93,7 @@ writer 形はエラーを送出します。
   でき、`clackup` は実行時に `HTTP-HANDLER requires --component ...` を送出
   します (`handler-case` で捕捉可能)。
 
-## ホストから呼ばれる場合: `clack-handler-cloudflare`
+## ホストから呼ばれる場合: `clack-handler-cloudflare-workers`
 
 ソケットを渡してこないホストもあります。Cloudflare Workers、ブラウザのページ、
 node、JVM への埋め込みは、いずれもホスト側でリクエストを解析し、**エクスポート
@@ -103,13 +103,13 @@ node、JVM への埋め込みは、いずれもホスト側でリクエストを
 
 ```console
 $ cat worker.lisp
-(ql:quickload "clack-handler-cloudflare")
+(ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
 (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
 
 (defun handle-request (request-json)
-  (clack.handler.cloudflare:handle #'app request-json))
+  (clack.handler.cloudflare-workers:handle #'app request-json))
 ```
 
 (`app` は通常の Clack アプリケーションです。)
@@ -117,14 +117,14 @@ $ cat worker.lisp
 `handle` を試すのに Worker は要りません。2 引数の普通の関数です:
 
 ```lisp
-(ql:quickload "clack-handler-cloudflare")
+(ql:quickload "clack-handler-cloudflare-workers")
 
 (defun app (env)
   (list 200 '(:content-type "text/plain")
         (list (format nil "~a ~a ~a" (getf env :request-method)
                       (getf env :path-info) (getf env :query-string)))))
 
-(princ (clack.handler.cloudflare:handle
+(princ (clack.handler.cloudflare-workers:handle
         #'app "{\"method\":\"GET\",\"target\":\"/hi?a=1\"}"))
 ```
 
@@ -163,7 +163,7 @@ report を載せた 500 を返します。
 レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
 
-`(clack:clackup #'app :server :cloudflare)` もこのバックエンドに解決されますが、
+`(clack:clackup #'app :server :cloudflare-workers)` もこのバックエンドに解決されますが、
 bind するソケットが無い旨を説明して失敗します。
 
 ## 現在の制限

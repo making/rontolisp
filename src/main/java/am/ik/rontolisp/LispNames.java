@@ -6219,33 +6219,34 @@ public final class LispNames {
 	public static final String CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM = "clack.handler.rontolisp";
 
 	/**
-	 * The {@code clack.handler.cloudflare} package: the Clack handler backend for a
-	 * HOST-DRIVEN REACTOR -- a Cloudflare Worker, and any embedding where the host has
+	 * The {@code clack.handler.cloudflare-workers} package: the Clack handler backend for
+	 * a HOST-DRIVEN REACTOR -- a Cloudflare Worker, and any embedding where the host has
 	 * already parsed the request and calls an exported function instead of handing the
 	 * program a socket. Satisfied by the built-in ASDF system
-	 * {@code clack-handler-cloudflare} ({@code clack-handler-cloudflare.lisp},
-	 * {@code eval.ShimLibraries}), and NOT seeded in {@code PackageRegistry} for the same
-	 * reason as {@link #CLACK_HANDLER_RONTOLISP_PKG}.
+	 * {@code clack-handler-cloudflare-workers}
+	 * ({@code clack-handler-cloudflare-workers.lisp}, {@code eval.ShimLibraries}), and
+	 * NOT seeded in {@code PackageRegistry} for the same reason as
+	 * {@link #CLACK_HANDLER_RONTOLISP_PKG}.
 	 *
 	 * <p>
 	 * Its entry point is {@code handle} (a JSON request string in, a JSON response string
 	 * out) rather than {@code run}: a reactor owns no socket, so {@code clackup} has
 	 * nothing to start. {@code run} is present only to fail with a sentence.
 	 */
-	public static final String CLACK_HANDLER_CLOUDFLARE_PKG = "CLACK.HANDLER.CLOUDFLARE";
+	public static final String CLACK_HANDLER_CLOUDFLARE_WORKERS_PKG = "CLACK.HANDLER.CLOUDFLARE-WORKERS";
 
 	/**
-	 * The {@code clack-handler-cloudflare} built-in ASDF system name -- the
+	 * The {@code clack-handler-cloudflare-workers} built-in ASDF system name -- the
 	 * ecosystem-conventional hyphenated spelling a user names directly.
 	 */
-	public static final String CLACK_HANDLER_CLOUDFLARE_SYSTEM = "clack-handler-cloudflare";
+	public static final String CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM = "clack-handler-cloudflare-workers";
 
 	/**
-	 * The dotted alias of {@link #CLACK_HANDLER_CLOUDFLARE_SYSTEM}, registered for the
-	 * same reason as {@link #CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM}: it is the system
-	 * name lack's {@code find-package-or-load} derives from the package name.
+	 * The dotted alias of {@link #CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM}, registered
+	 * for the same reason as {@link #CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM}: it is the
+	 * system name lack's {@code find-package-or-load} derives from the package name.
 	 */
-	public static final String CLACK_HANDLER_CLOUDFLARE_DOTTED_SYSTEM = "clack.handler.cloudflare";
+	public static final String CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM = "clack.handler.cloudflare-workers";
 
 	/**
 	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each

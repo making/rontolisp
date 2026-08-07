@@ -96,8 +96,9 @@ public final class ShimLibraries {
 			// Worker and friends): a JSON request string in, a JSON response
 			// string out, over the same %http-make-env / %http-normalize-response
 			// entry points every other transport meets in. Both spellings again.
-			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_SYSTEM, "clack-handler-cloudflare.lisp"),
-			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_DOTTED_SYSTEM, "clack-handler-cloudflare.lisp"));
+			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM, "clack-handler-cloudflare-workers.lisp"),
+			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM,
+					"clack-handler-cloudflare-workers.lisp"));
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's

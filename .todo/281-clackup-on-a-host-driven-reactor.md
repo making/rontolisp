@@ -15,10 +15,11 @@ because the shim's `#+rontolisp-wasm` `run` delegates to the `rontolisp:http-han
 directive, and on Preview 1 -- which `--no-wasi` output belongs to -- that directive
 is a call-time error by design (no incoming TCP, `.kb/tcp-sockets.md`).
 
-So today the Worker example has to hand-write the adapter and call the application
-function directly. That is only fifteen lines, but it means the source cannot be the
-same source that runs under `wasmtime serve` or on the JVM: the entry point differs.
-Closing that is what this item is for.
+So today the Worker example calls the application through a handler backend
+(`clack-handler-cloudflare-workers`, `.kb/clack.md`) instead of through `clackup`.
+That is four forms rather than fifteen lines now, but it still means the source
+cannot be the same source that runs under `wasmtime serve` or on the JVM: the entry
+point differs. Closing that is what this item is for.
 
 ## Why the shape is already close
 
@@ -98,8 +99,19 @@ node -e 'const m=new WebAssembly.Instance(new WebAssembly.Module(require("fs").r
 # -> TRAP unreachable
 ```
 
+## Update (2026-08-07): the measurement above is too broad
+
+The `TRAP unreachable` reproduced above is NOT clackup failing on a reactor. It is
+(a) the `:rontolisp` backend's wasm `run` delegating to the `rontolisp:http-handler`
+directive, and (b) clackup's two `format t` calls hitting the stubbed `fd_write`.
+With a backend whose `run` only stores the app, and with `:silent t :debug nil`,
+`clackup` runs on a `--no-wasi` reactor TODAY and the exported function answers
+requests. `.todo/285` is that narrow slice, with the full measurement and the one
+decision left (what to do about the two prints); `clack-handler-cloudflare-workers`
+already exists as the backend. Narrow or close this item if 285 lands.
+
 ## Related
 
 `.kb/clack.md` (the handler backend and its discovery protocol -- the package must
 NOT be pre-seeded, the system answers to two names, the compile paths splice the shim
-eagerly), `.kb/http-server.md`, `.todo/280`, `.todo/279`.
+eagerly), `.kb/http-server.md`, `.todo/285`, `.todo/280`, `.todo/279`.
