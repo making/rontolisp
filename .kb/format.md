@@ -87,10 +87,13 @@ INLINE into eight ordinary Lisp forms -- scale by `10^d`, `round` to an integer,
 bad one to inline into a caller: every generic operation in it was emitted with its
 full i31 / bignum / bigint / ratio / float ladder **at every site**, and its `round`
 dragged the bignum-capable integer path into a program whose only number is a float.
-Measured on `examples/wasm-size/pi_approx` at `--optimize`: **17,012 -> 5,356 bytes**
-(-68.5%), of which the caller's own body was 8,607 -> 1,113 and the 22 runtime
-functions only that chain reached went away. `~,2F` cost the same as `~,15F`, which
-is how you can tell it was the shape and not the digit count.
+Measured on `examples/wasm-size/pi_approx` at `--optimize` the day it landed:
+**17,012 -> 5,356 bytes** (-68.5%), of which the caller's own body was 8,607 ->
+1,113 and the 22 runtime functions only that chain reached went away. `~,2F` cost
+the same as `~,15F`, which is how you can tell it was the shape and not the digit
+count. (The same program is 3,540 today; the rest came from
+`.kb/wasm-shared-coercion.md`, which took the type ladders out of the operands the
+directive still evaluates.)
 
 **The algorithm is a cross-backend contract, not an implementation detail.** Every
 step is chosen so four backends can reproduce it bit for bit: `10^places` by repeated

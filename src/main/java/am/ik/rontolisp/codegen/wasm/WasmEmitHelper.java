@@ -274,19 +274,37 @@ final class WasmEmitHelper {
 	 * extracts f64 field.
 	 */
 	static void castFloatGetF64(WasmLispCompiler.Ctx ctx) {
-		castFloatGetF64(ctx.writer, ctx.allocTemp());
+		castFloatGetF64(ctx.writer);
 	}
 
 	/**
-	 * The same ladder against a raw writer and a caller-chosen scratch slot, so a RUNTIME
-	 * function body can carry it once instead of every call site inlining it. The slot
-	 * must be a {@code (ref null eq)} local.
+	 * Emits {@code call FUNC_AS_F64}: consumes the {@code (ref null eq)} on the stack and
+	 * leaves its {@code f64} value.
+	 *
+	 * <p>
+	 * The dispatch itself is {@link #buildAsF64Body} -- ONE shared function rather than
+	 * the ~80-byte ladder every site used to inline. The float arithmetic of
+	 * {@code examples/wasm-size/pi_approx} reached it ten times in one five-line program,
+	 * and the whole module carried 26 copies, 43% of its code section
+	 * ({@code .kb/wasm-shared-coercion.md}). Out of line it also stops allocating a
+	 * scratch temp per site, which the caller never released.
 	 * @param w the body writer
-	 * @param tmpSlot an {@code (ref null eq)} local the ladder may clobber
 	 */
-	static void castFloatGetF64(WasmWriter w, int tmpSlot) {
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(tmpSlot);
+	static void castFloatGetF64(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_AS_F64);
+	}
+
+	/**
+	 * Builds {@code _as_f64} (FUNC_AS_F64): the value in {@code local[slot]} as an
+	 * {@code f64}, dispatching on its runtime type -- an i31 integer converts directly, a
+	 * {@code TYPE_BIGNUM} converts its {@code i64} field, a limb {@code TYPE_BIGINT} goes
+	 * through {@code _big_to_f64}, a ratio divides numerator by denominator (float
+	 * contagion), and anything else is cast to a {@code TYPE_FLOAT} struct and read.
+	 * @param w the body writer
+	 * @param slot the {@code (ref null eq)} local holding the value
+	 */
+	static void emitAsF64FromLocal(WasmWriter w, int tmpSlot) {
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(tmpSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -360,6 +378,19 @@ final class WasmEmitHelper {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
+	}
+
+	/**
+	 * Builds the {@code _as_f64} function body: the ladder over its single parameter.
+	 * @return the function body (signature {@code (eqref) -> f64}, TYPE_BIG_TO_F64)
+	 */
+	static byte[] buildAsF64Body() {
+		java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no extra locals: the parameter IS the slot the ladder reads
+		emitAsF64FromLocal(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
 	}
 
 	/**

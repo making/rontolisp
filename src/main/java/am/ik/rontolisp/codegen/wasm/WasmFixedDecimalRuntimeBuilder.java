@@ -76,7 +76,7 @@ final class WasmFixedDecimalRuntimeBuilder {
 
 		// x = <value as f64>
 		get(w, P_VALUE);
-		WasmEmitHelper.castFloatGetF64(w, L_TMP);
+		WasmEmitHelper.castFloatGetF64(w);
 		set(w, L_X);
 		// d = clamp(places), n = clamp(int-digits) -- the bound is what keeps the digit
 		// buffer below finite for a computed ~v,vF parameter.

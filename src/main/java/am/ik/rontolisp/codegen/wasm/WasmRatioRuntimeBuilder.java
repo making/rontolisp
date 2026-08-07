@@ -682,74 +682,20 @@ final class WasmRatioRuntimeBuilder {
 		w.writeHeapType(Type.I31.code());
 	}
 
-	private static void castI31GetS(WasmWriter w) {
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-	}
-
 	// Emits ref.test against a concrete struct type index (e.g. TYPE_FLOAT, TYPE_RATIO).
 	private static void refTestType(WasmWriter w, int typeIndex) {
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(typeIndex);
 	}
 
-	// Converts the value held in local[slot] to an f64, dispatching on its runtime type:
-	// an i31 integer converts directly, a TYPE_BIGNUM converts its i64 field, a ratio
-	// divides numerator by denominator, and a TYPE_FLOAT struct yields its field.
-	// Mirrors WasmEmitHelper.castFloatGetF64 but works on a value already stored in a
-	// local (no temp allocation), so it is usable from the raw-WasmWriter ratio runtime.
+	// Converts the value held in local[slot] to an f64 through the shared _as_f64 helper.
+	// This runtime used to carry its own copy of the ladder -- sixteen call sites here,
+	// which was more than half of every copy in a float program's module. _as_f64 calls
+	// _rat_num / _rat_den, which read struct fields and call nothing, so the arithmetic
+	// bodies below can reach it without a cycle.
 	private static void emitLocalToF64(WasmWriter w, int slot) {
 		getLocal(w, slot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.IF);
-		w.write(Type.F64);
-		getLocal(w, slot);
-		castI31GetS(w);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.ELSE);
-		getLocal(w, slot);
-		refTestType(w, WasmLispCompiler.TYPE_BIGNUM);
-		w.write(Instruction.IF);
-		w.write(Type.F64);
-		getLocal(w, slot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_BIGNUM);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_BIGNUM);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.F64_CONVERT_S_I64);
-		w.write(Instruction.ELSE);
-		getLocal(w, slot);
-		refTestType(w, WasmLispCompiler.TYPE_BIGINT);
-		w.write(Instruction.IF);
-		w.write(Type.F64);
-		getLocal(w, slot);
-		call(w, WasmLispCompiler.FUNC_BIG_TO_F64);
-		w.write(Instruction.ELSE);
-		getLocal(w, slot);
-		refTestType(w, WasmLispCompiler.TYPE_RATIO);
-		w.write(Instruction.IF);
-		w.write(Type.F64);
-		getLocal(w, slot);
-		call(w, WasmLispCompiler.FUNC_RAT_NUM);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		getLocal(w, slot);
-		call(w, WasmLispCompiler.FUNC_RAT_DEN);
-		w.write(Instruction.F64_CONVERT_S_I32);
-		w.write(Instruction.F64_DIV);
-		w.write(Instruction.ELSE);
-		getLocal(w, slot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_FLOAT);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_FLOAT);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
-		w.write(Instruction.END);
+		call(w, WasmLispCompiler.FUNC_AS_F64);
 	}
 
 	// Emits the test `(a is exact integer) & (b is exact integer)` over locals 0 and 1

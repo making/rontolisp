@@ -880,7 +880,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// Appended after the last fixed helper so no index above shifts.
 	static final int FUNC_FIXED_DEC = FUNC_UB_READ + 1;
 
-	static final int FX_FUNC_LAST = FUNC_FIXED_DEC;
+	// _as_f64 ((ref null eq) value) -> f64: the shared numeric-to-f64 coercion ladder
+	// (WasmEmitHelper.buildAsF64Body). It used to be inlined at every site that wants an
+	// unboxed operand -- ~80 bytes each, 26 copies and 43% of the code section in a
+	// five-line float program. Appended after the last fixed helper so no index above
+	// shifts.
+	static final int FUNC_AS_F64 = FUNC_FIXED_DEC + 1;
+
+	static final int FX_FUNC_LAST = FUNC_AS_F64;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -3895,6 +3902,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_UB_READ); // _ub_read
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 3); // _fixed_dec (value, places,
 															// int-digits, plus) -> string
+				fnDef.addFunction(TYPE_BIG_TO_F64); // _as_f64 (value) -> f64
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4397,6 +4405,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmFxRuntimeBuilder.buildUbReadBody(rawSentinelGlobalIndex));
 				// %fixed-decimal runtime helper body (FUNC_FIXED_DEC)
 				code.addFunction(WasmFixedDecimalRuntimeBuilder.build());
+				// shared numeric-to-f64 coercion body (FUNC_AS_F64)
+				code.addFunction(WasmEmitHelper.buildAsF64Body());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

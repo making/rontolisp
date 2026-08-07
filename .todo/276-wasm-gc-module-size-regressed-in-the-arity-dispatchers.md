@@ -104,18 +104,30 @@ Ordered by expected payoff; each is independently landable.
 2. **Make the dispatcher a `br_table` on a small integer tag** instead of the
    present if/else chain -- the emitted bodies contain `br_table` zero times today,
    so every arm pays a compare and a branch. Also bounds the ctrl depth.
-3. **Route `castFloatGetF64` through one shared runtime helper**
-   (`_as_f64 : eqref -> f64`) and `call` it: ~85 B per site becomes ~3 B, at one
-   extra call per numeric operand. If the speed cost is real, make it the
-   `--optimize=size` behavior -- that level exists for exactly this trade.
-4. `castFloatGetF64` calls `ctx.allocTemp()` per site and temps are never released,
-   so the ladder also inflates the local vector (cube's biggest body declares ~700
-   `eqref` locals on one line). Worth checking against `.todo/137`, which is the
-   same "temps never released" shape on the JVM.
+3. ~~**Route `castFloatGetF64` through one shared runtime helper**
+   (`_as_f64 : eqref -> f64`) and `call` it.~~ **LANDED 2026-08-07**, at the DEFAULT
+   level: the speed cost this item hedged against is not there (`ml/mlp` 5.6 s ->
+   5.4 s, `pi_approx` 0.12 s either way), so it did not need `--optimize=size`. It
+   also retired the ratio runtime's own COPY of the ladder, sixteen more sites.
+   Measured: `pi_approx` 5,356 -> 3,540 (-33.9%), `ml/mlp` -10.1%, `ml/nn` -11.4%.
+   `.kb/wasm-shared-coercion.md`.
+4. ~~`castFloatGetF64` calls `ctx.allocTemp()` per site and temps are never
+   released.~~ **LANDED with 3**: the call site no longer allocates one at all. The
+   REST of the "temps never released" shape is untouched and still worth a pass --
+   every other `allocTemp()` caller, and `.todo/137` for the JVM twin.
 
 Verify with the table above plus the browser demos, which is where the artifacts are
 checked in: `examples/browser/**` (`cube`, `galaxy`, `platformer`, `robot-arm`,
 `battlefront`, `minesweeper`, `hiragana`).
+
+**The checked-in artifacts are stale by the amount item 3 already bought** (measured
+2026-08-07 against the modules committed at `3c6e73e6`, same sources, same flags):
+cube 256,407 -> 218,235 (-14.9%), galaxy 68,881 -> 57,148 (-17.0%), rainbow 56,931
+-> 49,714 (-12.7%), wasm-browser/hello 8,730 -> 7,624 (-12.7%), minesweeper 314,413
+-> 303,308 (-3.5%), triangle 2,711 -> 2,478 (-8.6%). They were deliberately NOT
+rebuilt in that pass: `3c6e73e6` set the bar at "verified by running them", live in a
+page, which a headless session cannot meet. Rebuild them WITH that verification when
+items 1 and 2 land -- those move the same files far more, so one rebuild covers both.
 
 ## Non-goals
 
