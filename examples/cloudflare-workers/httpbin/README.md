@@ -82,7 +82,7 @@ and the Worker calls that function directly. As in [`../hello`](../hello), a
 which is what brings the allocator into the picture. The module exports
 `memory`, the bump allocator `__ronto_alloc`, the arena pair
 `__ronto_alloc_mark` / `__ronto_alloc_reset`, and
-`handle-request(ptr, len) -> [ptr, len]`. `callLisp` in
+`handle-request(ptr, len) -> [ptr, len]`. `handleRequest` in
 [`src/index.js`](src/index.js) is the dozen lines that do the bookkeeping; the
 same boundary, driven from Node and from Java, is the subject of
 [`examples/count-vowels/`](../../count-vowels).
@@ -165,14 +165,14 @@ many requests. Measured over 20 000 `POST /post` calls, driving this same
 | with the mark/reset bracket | 262 144 bytes (unchanged) |
 | without it | 2 162 688 bytes and climbing |
 
-Two rules come with a manual arena, both observed in `callLisp`: read the
+Two rules come with a manual arena, both observed in `handleRequest`: read the
 returned bytes out **before** resetting (the result lives in the scratch the
 reset hands back), and only ever reset to a mark taken **before** everything
 still live. Resetting is otherwise safe even when the call interned new symbols —
 the reset floor is the interned-symbol pool's high-water mark, not the raw
 snapshot.
 
-The bracket is also why `callLisp` is deliberately **synchronous**. A Worker
+The bracket is also why `handleRequest` is deliberately **synchronous**. A Worker
 isolate interleaves concurrent requests only at `await` points, so a call with no
 `await` inside it cannot have another request's allocation land in the middle of
 the bracket.

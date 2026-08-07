@@ -25,7 +25,7 @@ The canonical ABI marshals the strings, so the call is a call:
 const result = lisp.handleRequest(input);   // string in, string out
 ```
 
-Compare [`../httpbin/src/index.js`](../httpbin/src/index.js), whose `callLisp`
+Compare [`../httpbin/src/index.js`](../httpbin/src/index.js), whose `handleRequest`
 allocates, writes bytes into linear memory, reads a `[ptr, len]` pair back out
 and pops a bump-allocator arena to do the same thing. That whole function
 disappears here. It is the entire benefit, and it is a genuine one.

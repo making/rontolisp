@@ -1,5 +1,5 @@
 // index.js -- the whole Worker: Request -> JSON -> Lisp -> JSON -> Response.
-// What the mark/reset bracket in callLisp is for is explained in ../README.md.
+// The mark/reset bracket in handleRequest is explained in ../README.md.
 
 import module from "./app.wasm";
 
@@ -29,7 +29,7 @@ boot();
 
 // Synchronous on purpose: a Worker isolate interleaves concurrent requests only
 // at `await` points, so nothing else can allocate inside the bracket.
-function callLisp(exports, input) {
+function handleRequest(exports, input) {
   const bytes = encoder.encode(input);
   const mark = exports.__ronto_alloc_mark();
 
@@ -66,7 +66,7 @@ export default {
     const body = await requestToJson(request);
     let reply;
     try {
-      reply = JSON.parse(callLisp(boot(), body));
+      reply = JSON.parse(handleRequest(boot(), body));
     } catch (error) {
       // app.lisp answers 500 for Lisp errors itself, so reaching here means a
       // WASM trap: the instance's Lisp heap can no longer be trusted.
