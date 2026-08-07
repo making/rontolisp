@@ -155,6 +155,32 @@ Below `clackup` sit two functions, and BOTH are public: `handle`
 program that wants no clack at all can still call `handle` directly with its own
 `wasm-export` — that is the shape this shim shipped with, and it still works.
 
+**And a program can skip the shim too.** `handle` is thirty lines over
+`%http-make-env` / `%http-normalize-response` plus the JSON envelope, so a
+reactor that wants NO clack package in the module at all can write those lines
+itself and export its own `handle-request`.
+`examples/cloudflare-workers/httpbin` is exactly that, and it is deliberately
+the SAME application as `examples/cloudflare-workers/httpbin-clack`
+(`net/httpbin-clack.lisp` verbatim down to `app`, pinned by the `diff` in its
+README) with the SAME envelope (one `src/index.js`, byte-identical between the
+two directories). The pair is therefore a controlled measurement of what clack
+costs on a reactor, and the answer is startup and size only — node 24, same
+machine, `--no-wasi --optimize`:
+
+| | hand-written adapter | `clackup` + clack |
+| --- | --- | --- |
+| module | 423,536 B / 135,519 B gzip | 1,691,678 B / 376,239 B gzip |
+| `_initialize`, cold | 4.5 ms | 19.4 ms |
+| warm `GET` / `POST` | 0.028 / 0.048 ms | 0.028 / 0.049 ms |
+
+The hand-written half costs ~140 KB more than the pre-Clack Worker handler that
+directory used to carry (283,200 B), because naming `%http-make-env` splices
+`http-server.lisp` — env builder, response normalizer, and the buffered
+`:raw-body` Gray stream (`HttpServerLibrary.referencesBufferedBody` keeps that
+half when the program mentions `%http-body-stream`). That is the price of the
+application being a portable Clack application, and it is about a third of what
+clack costs.
+
 - `handle` is `(app request-json) -> response-json`. It converts nothing itself:
   it builds the raw tuple and calls `rontolisp::%http-make-env` /
   `%http-normalize-response`, exactly as every other transport does, so it
@@ -238,7 +264,11 @@ the core package vendor-free. Pinned by `LispEvaluatorAsdfTest`
 and the synthesized export) and by `examples/cloudflare-workers/httpbin-clack/`,
 whose `check.lisp` runs it on the interpreter, the JVM and wasm-GC
 (`examples/examples.yaml`) and whose `worker.lisp` is the deployed Worker --
-and by `examples/cloudflare-workers/hello-clack/`, the three-form floor.
+and by `examples/cloudflare-workers/hello-clack/`, the three-form floor. The
+clack-free half of the pair, `examples/cloudflare-workers/httpbin/`, is pinned
+the same way by its `demo.lisp`: same three backends, same requests, so a
+divergence between the shim's `handle` and a hand-written one shows up as two
+manifest cases disagreeing.
 
 **The example directory collapsed to ONE Lisp file when this landed, and that is
 the readable proof the abstraction is at the Clack level**: `worker.lisp` is now

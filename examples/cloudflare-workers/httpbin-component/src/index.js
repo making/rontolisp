@@ -33,34 +33,43 @@ const WASI_STUBS = {
 const getCoreModule = (path) => CORE_MODULES[path];
 let lisp = instantiate(getCoreModule, WASI_STUBS);
 
-/** The request, in the shape app.lisp's `handle-request` reads. */
+// The envelope is app.lisp's, not this directory's, so this function is
+// ../../httpbin/src/index.js's unchanged -- the component model moves the
+// boundary, not the contract. Its two load-bearing fields (the RAW target and
+// the forwarded content-length) are commented there.
+/** The raw facts the Lisp side turns into the Clack environment. */
 async function requestToJson(request) {
   const url = new URL(request.url);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const body = hasBody ? await request.text() : "";
+  const headers = Object.fromEntries(request.headers);
+  if (body) headers["content-length"] = String(new TextEncoder().encode(body).length);
+
   return JSON.stringify({
     method: request.method,
-    url: request.url,
-    path: url.pathname,
-    query: Object.fromEntries(url.searchParams),
-    headers: Object.fromEntries(request.headers),
-    body: hasBody ? await request.text() : "",
+    target: url.pathname + url.search,
+    scheme: url.protocol.replace(":", ""),
+    "remote-addr": request.headers.get("cf-connecting-ip"),
+    headers,
+    body,
   });
 }
 
 export default {
   async fetch(request) {
-    const body = await requestToJson(request);
+    const input = await requestToJson(request);
     let reply;
     try {
-      reply = JSON.parse(lisp.handleRequest(body));
+      reply = JSON.parse(lisp.handleRequest(input));
     } catch (error) {
       lisp = instantiate(getCoreModule, WASI_STUBS); // retire the trapped one
       console.error("handleRequest failed:", error);
       return new Response("internal error\n", { status: 500 });
     }
+    // An ARRAY of [name, value] pairs, so a repeated Set-Cookie survives.
     return new Response(reply.body ?? "", {
       status: reply.status ?? 200,
-      headers: reply.headers ?? {},
+      headers: reply.headers ?? [],
     });
   },
 };

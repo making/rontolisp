@@ -1,13 +1,17 @@
 // index.js -- the whole Worker: Request -> JSON -> Lisp -> JSON -> Response.
 //
-// Byte for byte the boundary code of ../../httpbin/src/index.js -- the module
-// exports the same six names, so the arena bracket, the module-scope
-// instantiation and the trap recovery are identical (all explained in
-// ../../README.md and ../../httpbin/README.md). What differs is only
-// `requestToJson`: the Lisp half feeds a CLACK environment (through the built-in
-// clack-handler-cloudflare-workers handler backend), so this side must hand over the
-// facts Clack's environment is built from rather than a pre-chewed request. Two
-// of them are easy to get wrong -- see the comments in that function.
+// This file is BYTE-IDENTICAL in ../../httpbin and ../../httpbin-clack, and that
+// is the readable proof that the two directories differ only in how the Lisp
+// half is written. Both speak the same JSON envelope, and on both sides of it
+// sits the same Clack application; what differs is only what builds the Clack
+// environment from the envelope -- thirty hand-written lines in ../app.lisp
+// there, the built-in clack-handler-cloudflare-workers handler backend that
+// `clackup` installs here. Neither is visible from JavaScript.
+//
+//   diff ../../httpbin/src/index.js ../../httpbin-clack/src/index.js   # no output
+//
+// The envelope is documented in ../../httpbin/README.md; two of its fields are
+// easy to get wrong, and requestToJson below says which.
 
 import module from "./app.wasm";
 
@@ -16,10 +20,13 @@ const decoder = new TextDecoder();
 
 // Instantiated here at module scope, so the cost lands on isolate startup
 // rather than on a request -- `wrangler deploy` then reports and budget-checks
-// it. It is where clack's whole load-time runs, which is most of this Worker's
-// startup: measured ~24 ms of `_initialize`, against ~19 ms for ../httpbin.
+// it ("Worker Startup Time: 12 ms"). Doing it lazily on the first request also
+// works, measured, but then nothing checks the cost at deploy time.
 let lisp = instantiate();
 
+// `_initialize` is where the Lisp program's top-level forms run. ../../hello has
+// no such entry point at all -- it is --no-gc with nothing to initialise --
+// which is why it needs none of this.
 function instantiate() {
   const instance = new WebAssembly.Instance(module, {});
   instance.exports._initialize();
@@ -46,7 +53,7 @@ function handleRequest(lisp, input) {
   return result;
 }
 
-/** The raw facts clack.handler.cloudflare-workers:handle turns into the Clack environment. */
+/** The raw facts the Lisp side turns into the Clack environment. */
 async function requestToJson(request) {
   const url = new URL(request.url);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
@@ -61,11 +68,10 @@ async function requestToJson(request) {
 
   return JSON.stringify({
     method: request.method,
-    // The RAW target -- path and query still joined, still percent-encoded --
-    // NOT the pre-split path + query object ../httpbin sends. `%http-make-env`
-    // does the "?" split and the decoding itself, and :path-info /
-    // :query-string have to come from it for a Clack application to see what
-    // Clack promises.
+    // The RAW target -- path and query still joined, still percent-encoded.
+    // `%http-make-env` does the "?" split and the decoding itself, and
+    // :path-info / :query-string have to come from it for a Clack application
+    // to see what Clack promises. A pre-split path leaves :query-string nil.
     target: url.pathname + url.search,
     scheme: url.protocol.replace(":", ""),
     // Clack's :remote-addr. Cloudflare puts the client IP here; there is no
@@ -83,7 +89,7 @@ export default {
     try {
       reply = JSON.parse(handleRequest(lisp, input));
     } catch (error) {
-      // The handler backend answers 500 for Lisp errors itself, so reaching here
+      // The Lisp side answers 500 for Lisp errors itself, so reaching here
       // means a WASM trap -- which skipped the arena reset and may have left
       // Lisp state half-written. Replace the instance rather than keep serving.
       lisp = instantiate();

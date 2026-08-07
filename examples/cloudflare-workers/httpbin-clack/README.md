@@ -1,8 +1,9 @@
-# httpbin-clack — a **Clack application** on Cloudflare Workers
+# httpbin-clack — a **Clack application** on Cloudflare Workers, through `clackup`
 
-The same five echo endpoints as [`../httpbin`](../httpbin), written as a
-[Clack](https://github.com/fukamachi/clack) application instead of a Worker
-handler. It is the Cloudflare port of
+The same five echo endpoints as [`../httpbin`](../httpbin) — in fact the same
+[Clack](https://github.com/fukamachi/clack) application, byte for byte — but put
+on the Worker by `clack:clackup` instead of by an adapter written out by hand. It
+is the Cloudflare port of
 [`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp), and the port
 is that file's `clackup` call with **different arguments**. There is no second
 file: [`worker.lisp`](worker.lisp) *is* the upstream example, down to the last
@@ -24,16 +25,13 @@ $ curl -X POST -d '{"name":"rontolisp"}' http://localhost:8787/post
 
 ## What this answers that `../httpbin` does not
 
-`../httpbin`'s handler is a *Worker* handler: it takes a JSON hash table this
-repository invented and returns a JSON envelope. That is a fine way to write a
-Worker, and it is the smaller module — but the handler only runs on a Worker.
-
-Here, `app` is a Clack application: it takes the Clack environment plist and
-returns the Clack `(status headers body)` list. So the **same function** also
-runs on hunchentoot, on woo, under `wasmtime serve`, and on the JVM, unchanged.
-Everything in [`worker.lisp`](worker.lisp) from its `(ql:quickload "clack")`
-down to `app` is [`../../net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp)
-*verbatim*, and that file's last form is
+Both directories run the identical Clack application: it takes the Clack
+environment plist and returns the Clack `(status headers body)` list, so the
+**same function** also runs on hunchentoot, on woo, under `wasmtime serve`, and
+on the JVM, unchanged. Everything in [`worker.lisp`](worker.lisp) from its
+`(ql:quickload "clack")` down to `app` is
+[`../../net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) *verbatim*, and
+that file's last form is
 
 ```lisp
 (clack:clackup #'app :server :rontolisp :port 8080 :use-thread nil)
@@ -55,19 +53,27 @@ at the Clack level, which is why this directory no longer splits the
 application into a file of its own: there is nothing Cloudflare-specific to keep
 out of it.
 
+What `../httpbin` does instead is write that adapter out by hand — thirty lines
+under a row of dashes, calling the same `%http-make-env` /
+`%http-normalize-response` entry points [the backend
+does](#it-converts-nothing) — so that clack is never loaded. Same application,
+same envelope, same answers, and `src/index.js` is byte-identical between the two
+directories.
+
 |  | `../httpbin` | this |
 | --- | --- | --- |
-| `app` is | a Worker handler (JSON in, JSON envelope out) | a **Clack application** (environment in, Clack response out) |
-| Portable to another Clack handler | no, it would have to be rewritten | **yes, unchanged** |
-| Query string | pre-split by JavaScript's `URLSearchParams` | split and percent-decoded by Clack's own env builder, so `:path-info` / `:query-string` are what Clack promises |
-| Body | a string field | Clack's `:raw-body` — a synchronous bivalent stream, drained with `read-char` |
-| Module | 283 KB raw / **91 KB gzip** | 1.69 MB raw / **365 KB gzip** |
+| The application | a Clack application | **the same file**, verbatim |
+| How it reaches the Worker | thirty hand-written lines and an explicit `wasm-export` | `clackup`, plus a `:server` designator and a synthesized export |
+| Reads as | a Worker program that happens to speak Clack | **every other Clack program** |
+| clack in the module | none | the whole of clack and lack |
+| Module | 414 KB raw / **132 KB gzip** | 1.61 MB raw / **367 KB gzip** |
 
-365 KB gzip is about **12%** of the free plan's 3 MB bundle limit, so it fits
-with room — but it is **4×** the hand-rolled Worker, and that is the honest
+367 KB gzip is about **12%** of the free plan's 3 MB bundle limit, so it fits
+with room — but it is **2.8×** the hand-written adapter compressed (4× raw), and that is the honest
 trade: you are paying for the whole of clack and lack to be in the module so that
-the application can be an ordinary Clack application. If the program will only
-ever run on a Worker, `../httpbin` is the cheaper shape.
+the file reads like an ordinary Clack program rather than like a Worker. The
+[cost table below](#what-it-costs) shows where that goes — module size and
+startup, not per-request time.
 
 ## The endpoints
 
@@ -86,16 +92,13 @@ curl         http://localhost:8787/post                   # 405 {"allowed":"POST
 curl         http://localhost:8787/nope                   # 404
 ```
 
-There is no `GET /` index page here, unlike `../httpbin`: the Clack application
-is carried over verbatim, and `net/httpbin-clack.lisp` has none.
-
 ## What's in here
 
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | **The whole program.** `net/httpbin-clack.lisp` verbatim, with its `clackup` line's arguments changed. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
-| [`src/index.js`](src/index.js) | The whole Worker. The boundary code is `../httpbin/src/index.js` unchanged; only `requestToJson` differs. |
+| [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` — same envelope, same boundary code, same file. |
 | `src/app.wasm` | The compiled module (~1.69 MB). A build product — run `./build.sh` first. |
 
 The directory used to split the application into an `app.lisp` and the transport
@@ -181,10 +184,11 @@ program.
 
 The backend is also usable **without clack at all** — a Clack application is
 just a function of the environment, and nothing here needs the library to be
-present. That build is the one to compare against when reading the size table
-below: a program that skips `clackup`, calls `handle` from its own
-`wasm-export`ed function and is otherwise a four-line application compiles to
-**357,389 B raw / 116,702 B gzip**. So the 1.69 MB this directory ships is not
+present: a program can call `handle` from its own `wasm-export`ed function and
+never quickload clack. That is what the size table below should be read against,
+and [`../httpbin`](../httpbin) is that build on this exact application, with the
+handful of lines under `handle` written out rather than quickloaded:
+**423,536 B raw / 135,519 B gzip**. So the 1.69 MB this directory ships is not
 the adapter — it is clack and lack, which the program quickloads so that it
 stays byte-identical to the upstream example.
 
@@ -248,27 +252,29 @@ constructor; an object would have collapsed the duplicates.
 ## What it costs
 
 Measured on node 24 (V8, the same engine family as workerd) driving the
-byte-for-byte boundary code of [`src/index.js`](src/index.js) against this exact
-`src/app.wasm`:
+byte-identical boundary code of [`src/index.js`](src/index.js) against each
+directory's `src/app.wasm`, over the same requests:
 
 | | `../httpbin` | this |
 | --- | --- | --- |
-| imports | **zero** | **zero** — the Worker instantiates with `{}`, no WASI shim |
-| exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why `src/index.js` could be reused as is |
-| module | 283,200 B raw / 91,743 B gzip | 1,691,678 B raw / **373,999 B gzip** |
-| `WebAssembly.Module` compile | 1.7 ms | 6.6 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
-| `_initialize` | 18.7 ms | ~56 ms — clack's entire load time, `clackup` included |
-| warm `GET /get` | | **0.07 ms** |
-| warm `POST /post` | | **0.12 ms** |
+| imports | zero | **zero** — the Worker instantiates with `{}`, no WASI shim |
+| exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why one `src/index.js` serves both |
+| module | 423,536 B raw / 135,519 B gzip | 1,691,678 B raw / **376,239 B gzip** |
+| `WebAssembly.Module` compile | 0.6 ms | 1.9 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
+| `_initialize`, cold | 4.5 ms | **19.4 ms** — clack's entire load time, `clackup` included |
+| warm `GET /get` | 0.028 ms | **0.028 ms** |
+| warm `POST /post` | 0.048 ms | **0.049 ms** |
+| linear memory after 44,000 requests | 262,144 B | 327,680 B |
 
-Going through `clackup` instead of calling `handle` from a hand-written export
-is what the last two rows do *not* show: measured against the previous version
-of this same directory, the module grew 1,575,467 → 1,691,678 B (342,757 →
-373,999 B gzip, **+9%**) and `_initialize` went 23 → 56 ms (median of five runs
-each), while warm `GET` (0.071 → 0.068 ms) and warm `POST` (0.121 ms both) did
-not move. **`clackup` is
-a startup cost on a reactor, not a request cost** — and on Cloudflare startup is
-paid once per isolate, not once per request.
+**The per-request rows are the same to three decimal places.** Everything clack
+costs on a reactor is in the two rows above them — module size and startup — and
+on Cloudflare startup is paid once per isolate, not once per request.
+
+`clackup` itself is a slice of that startup rather than of the request path:
+measured when this directory switched from calling `handle` behind a hand-written
+export to calling `clackup`, the module grew 1,575,467 → 1,691,678 B (**+9%**)
+and `_initialize` roughly doubled, while warm `GET` and warm `POST` did not move
+at all.
 
 Those per-request figures are the Lisp call plus the string boundary, with V8
 warm; the first call of a fresh isolate is ~40 ms while V8 tiers the module up.
@@ -279,11 +285,11 @@ five endpoints (plus the 405, the 404, the unparseable body and a
 percent-encoded path) answer correctly there — verified after deploying, not
 inferred. End-to-end
 `curl` from this side of the Pacific settles at 50-85 ms, which is network time:
-the Lisp share of it is the 0.07 ms above.
+the Lisp share of it is the 0.05 ms above.
 
-Linear memory sat at 327,680 bytes after 14,000 requests — the
-`__ronto_alloc_mark` / `__ronto_alloc_reset` bracket in `src/index.js` is what
-keeps it flat, and [`../httpbin/README.md`](../httpbin/README.md#two-heaps-wasm-gc-collects-one-of-them-you-collect-the-other)
+The linear-memory row is flat rather than climbing because of the
+`__ronto_alloc_mark` / `__ronto_alloc_reset` bracket in `src/index.js`;
+[`../httpbin/README.md`](../httpbin/README.md#two-heaps-wasm-gc-collects-one-of-them-you-collect-the-other)
 explains why it is needed at all.
 
 ## Verify it against a real Clack server

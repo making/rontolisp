@@ -34,7 +34,7 @@ disappears here. It is the entire benefit, and it is a genuine one.
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` (277 KB) | 3 × `.wasm` (278 KB) + `app.js` (247 KB) |
+| Files the Worker imports | 1 × `.wasm` (414 KB) | 3 × `.wasm` (429 KB) + `app.js` (293 KB) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | 3 interfaces, stubbed by hand |
 | Top-level `defparameter` | works, via `_initialize` | does not work at all |
@@ -84,10 +84,11 @@ Error: (component [0]) task [1] exited without resolution
 ```
 
 — jco cannot drive a stackful-async export. So there is no `_initialize`
-equivalent on this path, and `app.lisp` deliberately keeps its state inside
-functions (`(defun index-page () ...)`, not `(defparameter *index-page* ...)`).
-Miss that and every top-level definition is silently `nil`: the symptom is a
-route quietly answering `false`.
+equivalent on this path, and `app.lisp` is only buildable here because every
+piece of its state lives inside a `defun` — there is not one `defparameter` in
+it, and adding one would be a constraint of this directory rather than of the
+Lisp. Miss that and every top-level definition is silently `nil`: the symptom is
+a route quietly answering `false`.
 
 ## The WASI stubs
 

@@ -497,12 +497,13 @@ examples:
   - path: net/httpbin-clack.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
-      the SAME application examples/cloudflare-workers/httpbin-clack/worker.lisp
-      compiles (everything down to `app` is verbatim there), served by the real
-      clack:clackup on :server :rontolisp instead. What this pins is that the
-      file the Worker ships is still a portable Clack application, on the two
-      backends where clackup can actually bind (a blocking server, hence
-      compile-only; Preview 1 has no incoming TCP).
+      the SAME application both Cloudflare httpbin Workers compile
+      (cloudflare-workers/httpbin-clack/worker.lisp and
+      cloudflare-workers/httpbin/app.lisp carry everything down to `app`
+      verbatim), served by the real clack:clackup on :server :rontolisp instead.
+      What this pins is that the file those Workers ship is still a portable
+      Clack application, on the two backends where clackup can actually bind (a
+      blocking server, hence compile-only; Preview 1 has no incoming TCP).
   - path: net/httpbin-clos.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/httpbin-jzon.lisp
@@ -552,15 +553,22 @@ examples:
   - path: cloudflare-workers/httpbin/demo.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      loads app.lisp -- the Cloudflare Worker's mini httpbin, the same five echo
-      endpoints as net/httpbin.lisp over a JSON string boundary instead of
-      http-handler -- and drives it over the requests the README curls. The
-      Worker itself calls the wasm-export'ed handle-request from JavaScript and
-      is built by the directory's build.sh (--no-wasi --optimize, a shape no
-      backend token here covers); what this pins is that the handler logic,
-      JSON parsing and the handler-case that turns an unparseable body into
-      null included, answers identically on the interpreter, the JVM and
-      wasm-GC. Checked with contains, not equals: the key ORDER inside a JSON
+      loads app.lisp -- the CLACK-FREE flavour of the Worker: the application
+      down to `app` is net/httpbin-clack.lisp VERBATIM (the same text
+      cloudflare-workers/httpbin-clack/worker.lisp deploys), and what puts it on
+      a reactor is thirty lines written out under it rather than
+      clack:clackup -- and drives it over the requests the README curls. So the
+      two directories differ in exactly one thing, and this case is the
+      clackup-free half of the pair: the adapter calls the same
+      rontolisp::%http-make-env / %http-normalize-response entry points the
+      handler backend does, so what it pins is that a hand-written adapter
+      builds the same environment on every backend -- the "?" split and the
+      percent-decoding of the raw target (/%67et answers "path":"/get"), the
+      content-length the buffered :raw-body needs, and the response header ALIST
+      crossing as a JSON array of pairs rather than an object. The Worker itself
+      calls the wasm-export'ed handle-request from JavaScript and is built by the
+      directory's build.sh (--no-wasi --optimize, a shape no backend token here
+      covers). Checked with contains, not equals: the key ORDER inside a JSON
       object follows hash-table iteration order, which differs per backend.
     expect:
       contains:

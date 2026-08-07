@@ -184,6 +184,14 @@ A complete Worker built this way — application, `worker.lisp`, the JavaScript
 side and the measurements — is
 [`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack).
 
+If the module size matters more than the `clackup` line, this adapter is small
+enough to write out by hand and skip loading clack entirely.
+[`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin)
+is that: the same application, the same envelope, the same JavaScript side, and
+about a quarter of the module. The two directories are a measured pair — the
+per-request cost turns out to be identical, and what clack costs on a host like
+this is module size and isolate startup.
+
 ## Current limits
 
 - One Clack server per process: a second concurrent `clackup` replaces the

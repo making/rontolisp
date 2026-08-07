@@ -1,9 +1,10 @@
-# httpbin — a mini httpbin on Cloudflare Workers
+# httpbin — a mini httpbin on Cloudflare Workers, without clack
 
-The five echo endpoints of [httpbin.org](https://httpbin.org), in Common Lisp
-([`app.lisp`](app.lisp)), compiled to WebAssembly and served from a Worker. It is
-the Cloudflare port of [`examples/net/httpbin.lisp`](../../net/httpbin.lisp) —
-same endpoints, same JSON, a different way in.
+The five echo endpoints of [httpbin.org](https://httpbin.org), written as a
+[Clack](https://github.com/fukamachi/clack) application
+([`app.lisp`](app.lisp)), compiled to WebAssembly and served from a Worker — with
+the adapter that puts it there **written out by hand** instead of installed by
+`clack:clackup`.
 
 ```bash
 ./build.sh          # app.lisp -> src/app.wasm
@@ -23,15 +24,14 @@ $ curl -X POST -d '{"name":"rontolisp"}' http://localhost:8787/post
 
 | | |
 | --- | --- |
-| `GET /` | a plain-text index |
 | `GET /get` | echo the request: `args`, `headers`, `method`, `path` |
 | `POST /post` | the same, plus `data` (the raw body) and `json` (its parsed value) |
 | `PUT /put`, `PATCH /patch`, `DELETE /delete` | ditto |
 
 A wrong method answers **405** with the one it wanted, an unknown path **404**,
 and a body that does not parse leaves `"json": null` — the real httpbin's
-behaviour, which `../../net/httpbin.lisp` explicitly could not manage. See
-[Errors stay in the Lisp](#errors-stay-in-the-lisp).
+behaviour, which [`../../net/httpbin.lisp`](../../net/httpbin.lisp) explicitly
+could not manage. See [Errors stay in the Lisp](#errors-stay-in-the-lisp).
 
 ```bash
 curl -X POST -d '{not json'  http://localhost:8787/post   # "json":null
@@ -39,38 +39,77 @@ curl         http://localhost:8787/post                   # 405 {"allowed":"POST
 curl         http://localhost:8787/nope                   # 404
 ```
 
+## The application is not from here, and neither is the adapter's logic
+
+[`app.lisp`](app.lisp) is two halves with a line of dashes between them, and
+neither half is code this directory invented.
+
+Everything from `read-body` down to `app` is
+[`../httpbin-clack/worker.lisp`](../httpbin-clack/worker.lisp) — that is,
+[`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) — **verbatim**.
+It is an ordinary Clack application: the environment plist in, the
+`(status headers body)` list out, no Cloudflare anywhere in it. The same
+function runs on hunchentoot, on woo, under `wasmtime serve` and on the JVM,
+unchanged — and `rontolisp ../../net/httpbin-clack.lisp` serves this exact text
+on a real socket.
+
+```console
+$ diff <(sed -n '/^;; --- request helpers/,/^;; --- the reactor adapter/p' app.lisp | sed '$d') \
+       <(sed -n '/^;; --- request helpers/,$p' ../httpbin-clack/worker.lisp | sed '/^(ql:quickload/,$d')
+$                                          # no output: identical
+```
+
+Below the dashes is the **reactor adapter**: what
+`clack:clackup :server :cloudflare-workers` would have installed, written out in
+about thirty lines. It converts nothing itself either. rontolisp's own server
+protocol *is* Clack's, so there is exactly one implementation of it —
+[`http-server.lisp`](../../../src/main/resources/am/ik/rontolisp/eval/http-server.lisp)
+— and the adapter calls the same two entry points the JDK server, the WASI
+component and both Clack handler backends meet in:
+
+```lisp
+(rontolisp::%http-make-env raw)          ; positional raw tuple -> the Clack environment
+(rontolisp::%http-normalize-response r)  ; whatever app returned -> (status header-alist body-string)
+```
+
+The percent-decoding, the `?` split, the header lowercasing and comma-joining,
+the `Host` split, the `content-length` parsing, the `:raw-body` stream and the
+whole response normalizer therefore come for free, and **cannot drift from what a
+served request sees**. All that is left to write is the JSON envelope.
+
+## How it relates to the other httpbins
+
+| | this | [`../httpbin-clack`](../httpbin-clack) | [`../../net/httpbin.lisp`](../../net/httpbin.lisp) |
+| --- | --- | --- | --- |
+| The application | a Clack application | **the same file**, verbatim | a `rontolisp:http-handler` handler (also the Clack shapes) |
+| How it is installed | thirty hand-written lines | `clack:clackup :server :cloudflare-workers` | `(rontolisp:http-handler 'handle 8080)`, blocking on a socket |
+| clack in the module | **none** | the whole of clack and lack | none |
+| Module | **414 KB** (132 KB gzip) | 1.61 MB (367 KB gzip) | n/a, it is a server |
+
+So this directory and `../httpbin-clack` ship *the same application* and answer
+*the same JSON*; `src/index.js` is byte-identical between them. What differs is
+only who builds the Clack environment — and that is worth **4× the module** raw,
+2.8× compressed, which
+is what this directory exists to show. Copy `../httpbin-clack` when you want the
+program to look like every other Clack program; copy this one when the module
+size matters more than that.
+
 ## What's in here
 
 | File | Purpose |
 | --- | --- |
-| [`app.lisp`](app.lisp) | The handler. One exported function: JSON request string -> JSON response string. |
-| [`demo.lisp`](demo.lisp) | Drives the same handler with no Cloudflare in sight — the local edit/run loop. |
+| [`app.lisp`](app.lisp) | **The whole program.** The Clack application (verbatim from upstream) plus the reactor adapter. |
+| [`demo.lisp`](demo.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`, including the string boundary. |
-| `src/app.wasm` | The compiled module (~277 KB). A build product — run `./build.sh` first. |
-
-## How it differs from `net/httpbin.lisp`
-
-That one is a *server*: `(rontolisp:http-handler 'handle 8080)`, a handler taking
-the Clack environment and returning a Clack response, blocking on a socket. A
-Worker provides none of that — no WASI, no sockets, no server loop — so the same
-five endpoints arrive here through a different door.
-
-| | `net/httpbin.lisp` | this |
-| --- | --- | --- |
-| Entry point | `rontolisp:http-handler` binds a port | one `rontolisp:wasm-export`ed function |
-| Request | the Clack environment plist | a JSON string, parsed to a hash table |
-| Query string | `rontolisp:query-params` on `:query-string` | already split by JavaScript's `URLSearchParams` |
-| Body | `(await (read-all (getf env :raw-body)))` | already read, as a string |
-| Response | the Clack `(status headers body)` list | a JSON envelope the Worker rebuilds |
-
-The routing and the echo document itself are the same code either way.
+| `src/app.wasm` | The compiled module (~414 KB). A build product — run `./build.sh` first. |
 
 ## How it works
 
 ### The interface is one exported function
 
 A WASI command has no interface but stdout, which makes for an awkward request
-handler. So `app.lisp` does not run as a whole program per request. It declares a
+handler. A Worker also hands over a request JavaScript has already parsed rather
+than a socket, so there is no server to run either. `app.lisp` declares a
 **host-callable export** instead:
 
 ```lisp
@@ -87,26 +126,48 @@ which is what brings the allocator into the picture. The module exports
 same boundary, driven from Node and from Java, is the subject of
 [`examples/count-vowels/`](../../count-vowels).
 
+`../httpbin-clack` declares no export at all: `clackup` cannot, because
+`wasm-export` needs a **literal** name at compile time, so the compiler
+synthesizes the export from a marker the handler backend leaves behind. Writing
+the adapter by hand is what makes the export ordinary again.
+
+### The envelope, and two fields the JavaScript side must get right
+
 The request and response are **JSON** because the other side of the boundary is
-JavaScript. `handle-request` takes what `src/index.js` built out of the incoming
-`Request`:
+JavaScript. What `src/index.js` sends (`scheme` and `remote-addr` are optional;
+`method` defaults to `GET` and `target` to `/`):
 
 ```json
-{ "method": "GET", "url": "...", "path": "/get",
-  "query": {"a": "1"}, "headers": {...}, "body": "" }
+{ "method": "GET", "target": "/path?a=1", "headers": {"host": "..."},
+  "body": "", "scheme": "https", "remote-addr": "203.0.113.7" }
 ```
 
-and returns what becomes the `Response`:
+and what it gets back:
 
 ```json
-{ "status": 200, "headers": {"content-type": "application/json"}, "body": "..." }
+{ "status": 200, "headers": [["content-type", "application/json"]], "body": "..." }
 ```
 
-`rontolisp:json-parse` and `rontolisp:json-stringify` handle both directions in
-the Lisp; `rontolisp:plist-hash-table` is what makes building the echo document
-readable. `args` and `headers` need no conversion at all — they arrive as JSON
-objects, which are already the string-keyed hash tables `json-stringify` writes
-back out as objects.
+This is the same envelope the built-in `clack-handler-cloudflare-workers` backend
+speaks, which is why `src/index.js` is byte-identical in both directories. Two of
+its fields are load-bearing, and both fail quietly rather than loudly:
+
+- **Pass the raw target** (`url.pathname + url.search`) as one string, *not* a
+  pre-split path plus a query object. `%http-make-env` does the `?` split and the
+  percent-decoding itself, and `:path-info` / `:query-string` have to come from it
+  for a Clack application to see what Clack promises. Send a pre-split path and
+  the application gets a `:query-string` of `nil`.
+- **Forward `content-length`.** `%http-make-env` reads `:content-length` off the
+  header table, and `lack/request`-style body parsing returns *nothing* without
+  it — while a request that arrived chunked carries no `content-length` at all.
+  `src/index.js` therefore sets it from the bytes it just read rather than
+  copying the incoming header.
+
+And one thing to notice on the way out: the response `headers` are an **array of
+pairs, not an object**, because `%http-normalize-response` answers an alist in
+which a name may repeat — an application that sets two cookies answers two
+`Set-Cookie` headers. `src/index.js` feeds the array straight to the `Headers`
+constructor; an object would have collapsed the duplicates.
 
 ### Nothing to shim: `--no-wasi`
 
@@ -138,7 +199,7 @@ not. A rontolisp module has **two** memories:
 
 | | The Lisp heap | Linear memory |
 | --- | --- | --- |
-| What lives there | every cons cell, hash table, CLOS instance and Lisp string `app.lisp` builds — including the parsed request and the reply it renders | *only* the bytes of a string crossing the boundary, plus the compiler's own static data |
+| What lives there | every cons cell, hash table, CLOS instance and Lisp string `app.lisp` builds — including the Clack environment and the reply it renders | *only* the bytes of a string crossing the boundary, plus the compiler's own static data |
 | Managed by | **the engine.** It is wasm-GC: objects become unreachable and V8 reclaims them. Nothing in `src/index.js` touches it. | **you.** The engine never traces it, so nothing in there is ever freed on its own. |
 | Grows with | nothing, over time | every argument you write in, forever, unless you reclaim it |
 
@@ -157,13 +218,13 @@ That only matters because the instance is **resident**: importing a `.wasm` file
 in a Worker yields a compiled `WebAssembly.Module` (Cloudflare compiles it at
 deploy time, so no request pays for compilation), instantiating is per-isolate
 work, and `src/index.js` therefore does it once and caches it. One isolate serves
-many requests. Measured over 20 000 `POST /post` calls, driving this same
-`src/app.wasm` from Node:
+many requests. Measured over 44 000 requests, driving this same `src/app.wasm`
+from Node:
 
-| | linear memory after 20 000 requests |
+| | linear memory after 44 000 requests |
 | --- | --- |
 | with the mark/reset bracket | 262 144 bytes (unchanged) |
-| without it | 2 162 688 bytes and climbing |
+| without it | grows without bound |
 
 Two rules come with a manual arena, both observed in `handleRequest`: read the
 returned bytes out **before** resetting (the result lives in the scratch the
@@ -201,8 +262,11 @@ compatibility flag and no `wrangler.jsonc` setting, and rontolisp compiles
 - `body-json` falls back to `null` when the body does not parse, exactly like the
   real httpbin. `net/httpbin.lisp` says in its header that it cannot do this —
   it predates catching on the WASM backends.
-- `handle-request` wraps the router, so any other Lisp error answers 500 and the
-  instance keeps serving.
+- `handle-request` wraps the whole adapter, so any other Lisp error answers 500
+  and the instance keeps serving. That is not optional on a reactor: an uncaught
+  Lisp error is a **trap**, which takes the instance down and forces the host to
+  throw it away. The `clack-handler-cloudflare-workers` backend catches in exactly
+  the same place, for exactly the same reason.
 
 Exception handling is not free: it pulls the condition system into the module and
 roughly doubles its size here. `src/index.js` still catches whatever escapes —
@@ -211,8 +275,8 @@ instance's Lisp heap cannot be trusted afterwards.
 
 ## Developing the handler without Cloudflare
 
-`handle-request` is an ordinary function of a string, so the whole edit/run loop
-can happen on the interpreter:
+`handle-request` is an ordinary function of a string — the adapter as much as the
+application — so the whole edit/run loop can happen on the interpreter:
 
 ```bash
 rontolisp demo.lisp
@@ -222,7 +286,7 @@ It runs identically on the JVM and the WASM backend, which is what keeps the
 handler honest:
 
 ```bash
-rontolisp demo.lisp -o Demo.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Demo
+rontolisp demo.lisp -o Demo.class && java -cp . Demo
 rontolisp demo.lisp -o demo.wasm --optimize && wasmtime run -W gc -W exceptions=y demo.wasm
 ```
 
@@ -236,13 +300,40 @@ diff of two backends' output will show it.
 
 `--optimize` is not optional here. A Worker bundle has a size limit (see
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)),
-and the tree-shaker is what keeps this module at **277 KB** instead of **580 KB**
-— it ships only the functions the program actually reaches, for no behaviour
-difference.
+and the tree-shaker is what keeps this module at **423,536 B** instead of
+**813,639 B** — it ships only the functions the program actually reaches, for no
+behaviour difference. Compressed it is **135,519 B**, about 4% of the free plan's
+3 MB.
 
-The limit applies to the *compressed* bundle, and `wrangler deploy` reports both:
-this Worker uploads as `278.53 KiB / gzip: 91.03 KiB`, so about 3% of the free
-plan's 3 MB.
+Measured on node 24 driving [`src/index.js`](src/index.js)'s boundary code
+against this exact `src/app.wasm`, next to `../httpbin-clack`'s — the same
+application, the same envelope, the same requests, `clackup` and clack instead of
+the hand-written adapter:
+
+| | this | [`../httpbin-clack`](../httpbin-clack) |
+| --- | --- | --- |
+| imports | **zero** | zero |
+| module | **423,536 B** raw / **135,519 B** gzip | 1,691,678 B raw / 376,239 B gzip |
+| `WebAssembly.Module` compile | 0.6 ms | 1.9 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
+| `_initialize`, cold | **4.5 ms** | 19.4 ms — clack's entire load time, `clackup` included |
+| warm `GET /get` | 0.028 ms | 0.028 ms |
+| warm `POST /post` | 0.048 ms | 0.049 ms |
+| linear memory after 44 000 requests | 262 144 B | 327 680 B |
+
+**The per-request cost is the same to three decimal places.** What clack costs on
+a reactor is module size and *startup* — and on Cloudflare startup is paid once
+per isolate, not once per request, which is why `../httpbin-clack` is a perfectly
+reasonable thing to deploy. This directory is the version to reach for when the
+4× module is the thing you cannot afford.
+
+Being a Clack application is not free either: the module carries
+`http-server.lisp` — the environment builder, the response normalizer and the
+buffered `:raw-body` Gray stream — which a handler taking a pre-parsed JSON hash
+table would not need. Measured against exactly that shape, this directory's
+previous one: 283,200 B raw, and a warm `POST` of 0.038 ms rather than 0.048 ms
+(the body now arrives as a stream `read-body` drains with `read-char`, instead of
+as a string field). That is the price of the application being portable, and it
+is about a third of what clack costs.
 
 ## Limitations
 
@@ -265,9 +356,11 @@ itself:
 - **No outgoing HTTP from the Lisp.** `rontolisp:fetch` needs a WASI HTTP host;
   a Worker has JavaScript's `fetch()` instead. Call it in `src/index.js` and pass
   the result into the handler.
-- **Repeated query parameters collapse.** `src/index.js` builds `args` with
-  `Object.fromEntries(url.searchParams)`, so `?a=1&a=2` keeps only the last. The
-  real httpbin returns a list.
+- **Repeated query parameters collapse.** The echo document builds `args` with
+  `alist-hash-table`, so `?a=1&a=2` reports only `"a":"1"`. The real httpbin
+  returns a list. Nothing is lost on the way in — `:query-string` carries the
+  whole thing, and `rontolisp:query-params` answers both pairs — so a handler that
+  wants httpbin's behaviour can have it.
 
 ## Rebuilding
 

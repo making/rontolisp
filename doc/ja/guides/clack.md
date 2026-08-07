@@ -188,6 +188,14 @@ report を載せた 500 を返します。
 [`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack)
 にあります。
 
+`clackup` の 1 行よりモジュールサイズが重要なら、このアダプタは手書きできる程度
+の量なので、clack のロード自体を省けます。
+[`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin)
+がそれです。同じアプリケーション、同じエンベロープ、同じ JavaScript 側で、
+モジュールは約 4 分の 1 になります。2 つのディレクトリは実測用のペアであり、
+リクエストあたりのコストは同じで、このようなホストで clack が要求するのは
+モジュールサイズとアイソレートの起動時間だけだと分かります。
+
 ## 現在の制限
 
 - Clack サーバはプロセスあたり 1 つ: 2 つ目の同時 `clackup` は 1 つ目の
