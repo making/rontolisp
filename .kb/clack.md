@@ -129,6 +129,59 @@ and so are `stream-read`/`stream-close`/`streamp` when no stream type exists
 loads. An uncaught error is a silent trap on Preview 1, so the E2E pins the
 message through `handler-case`.
 
+## The host-driven reactor: `clack-handler-cloudflare` (`handle`, not `run`)
+
+A SECOND built-in handler backend, `clack-handler-cloudflare.lisp` (package
+`clack.handler.cloudflare`, both system spellings in `ShimLibraries.RESOURCES` /
+`BuiltinSystems` / `resource-config.json`, again NOT seeded in `PackageRegistry`).
+It exists for the hosts that call an EXPORTED FUNCTION instead of handing the
+program a socket — a Cloudflare Worker, and any other `wasm-export` /
+`--no-wasi` reactor embedding (the browser, node, a JVM host).
+
+Its entry point is **`handle`**, not `run`:
+
+```lisp
+(ql:quickload "clack-handler-cloudflare")
+(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
+(defun handle-request (json) (clack.handler.cloudflare:handle #'app json))
+```
+
+- `handle` is `(app request-json) -> response-json`. It converts nothing itself:
+  it builds the raw tuple and calls `rontolisp::%http-make-env` /
+  `%http-normalize-response`, exactly as every other transport does, so it
+  cannot drift from what a SERVED request sees. All that is left in the shim is
+  the JSON envelope, documented in the file's own header.
+- **The envelope is an API now** — `{method, target, headers, body, scheme,
+  remote-addr}` in, `{status, headers, body}` out. Two parts of it are
+  load-bearing and were both found by measurement: `target` is the RAW request
+  target (path and query still joined, still encoded — `%http-make-env` owns
+  that split, and a pre-split path leaves `:query-string` nil), and the response
+  `headers` cross as an ARRAY of `[name, value]` pairs, not an object, so a
+  repeated `Set-Cookie` survives.
+- **`handle` CATCHES and answers 500.** On a reactor an uncaught Lisp error is a
+  trap that takes the whole instance down and the host must throw the instance
+  away; catching is what every other rontolisp transport already does with a
+  handler error. The consequence to know: loading this shim puts `handler-case`
+  in the module, so the program compiles in EH mode.
+- **`run`/`stop` exist only to fail with a sentence.** `(clack:clackup app
+  :server :cloudflare)` resolves this backend through the same discovery
+  protocol and applies `RUN`; a reactor owns no socket, so `run` signals
+  "clackup cannot run on a host-driven reactor" rather than being undefined.
+  Making `clackup` itself work on a reactor is `.todo/281` (it needs compiler
+  synthesis of the export, the way `HttpLibrary` synthesizes `%serve-dispatch`
+  for the component path) — the reason for the divergence, so the next visitor
+  can tell whether it still holds.
+
+Why the vendor name is in a shim system rather than in `rontolisp:`: nothing in
+the envelope is Cloudflare-specific, but a `rontolisp:`-level function would
+have had to be named for the mechanism and would then not be findable by the
+people who need it. A handler backend is where the ecosystem already puts
+per-host names (`clack-handler-hunchentoot`, `clack-handler-woo`), and it keeps
+the core package vendor-free. Pinned by `LispEvaluatorAsdfTest`
+(`theCloudflareHandlerShim*`) and by
+`examples/cloudflare-workers/httpbin-clack/`, whose `demo.lisp` runs it on the
+interpreter, the JVM and wasm-GC (`examples/examples.yaml`).
+
 ## Compile-path enablers that are NOT clack-specific
 
 Landed with this milestone, each with its own pin:

@@ -93,6 +93,79 @@ writer 形はエラーを送出します。
   でき、`clackup` は実行時に `HTTP-HANDLER requires --component ...` を送出
   します (`handler-case` で捕捉可能)。
 
+## ホストから呼ばれる場合: `clack-handler-cloudflare`
+
+ソケットを渡してこないホストもあります。Cloudflare Workers、ブラウザのページ、
+node、JVM への埋め込みは、いずれもホスト側でリクエストを解析し、**エクスポート
+された関数を呼び出します**。そこでは `clackup` に起動するものがありませんが、
+アプリケーションを書き換える必要はありません。2 つ目の組み込みハンドラ
+バックエンドが両者を橋渡しします。
+
+```console
+$ cat worker.lisp
+(ql:quickload "clack-handler-cloudflare")
+(load "app.lisp")                       ; defines app, an ordinary Clack application
+
+(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
+
+(defun handle-request (request-json)
+  (clack.handler.cloudflare:handle #'app request-json))
+```
+
+(`app` は通常の Clack アプリケーションです。)
+
+`handle` を試すのに Worker は要りません。2 引数の普通の関数です:
+
+```lisp
+(ql:quickload "clack-handler-cloudflare")
+
+(defun app (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "~a ~a ~a" (getf env :request-method)
+                      (getf env :path-info) (getf env :query-string)))))
+
+(princ (clack.handler.cloudflare:handle
+        #'app "{\"method\":\"GET\",\"target\":\"/hi?a=1\"}"))
+```
+
+```text
+{"status":200,"headers":[["content-type","text/plain"]],"body":"GET /hi a=1"}
+```
+
+`handle` はアプリケーションと JSON のリクエスト文字列 1 つを受け取り、JSON の
+レスポンス文字列 1 つを返します。Clack 環境の構築と Clack レスポンスの正規化は
+serve 時とまったく同じ経路を通るので、アプリケーションからは Clack が約束する
+ものがそのまま見えます。また `handle` は**エラーを捕捉します**: この種のホスト
+では未捕捉のエラーはインスタンス全体を落とすため、代わりにコンディションの
+report を載せた 500 を返します。
+
+エンベロープは両方向とも次の形です:
+
+```json
+{ "method": "GET", "target": "/path?a=1", "headers": {"host": "..."},
+  "body": "", "scheme": "https", "remote-addr": "203.0.113.7" }
+```
+
+```json
+{ "status": 200, "headers": [["content-type", "text/plain"]], "body": "..." }
+```
+
+ホスト側で間違えやすい点が 2 つあります:
+
+- `target` は**生の**リクエストターゲットです — パスとクエリは繋がったまま、
+  パーセントエンコードされたままにします。分割とデコードは Lisp 側で行われ、
+  アプリケーションが Clack の約束どおりのものを見るには `:path-info` /
+  `:query-string` がそこから来る必要があります。
+- ボディのあるリクエストでは `content-length` を送ってください。これがないと
+  `lack/request` は何も解析せず、chunked で届いたリクエストにはそもそも付いて
+  いません — 実際に読んだバイト数から設定してください。
+
+レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
+より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
+
+`(clack:clackup #'app :server :cloudflare)` もこのバックエンドに解決されますが、
+bind するソケットが無い旨を説明して失敗します。
+
 ## 現在の制限
 
 - Clack サーバはプロセスあたり 1 つ: 2 つ目の同時 `clackup` は 1 つ目の

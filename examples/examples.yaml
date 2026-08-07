@@ -551,9 +551,10 @@ examples:
       loads worker.lisp -- the CLACK flavour of the Worker. The two halves are
       separate files on purpose: app.lisp is net/httpbin-clack.lisp verbatim (a
       Clack environment in, a Clack response out) with only its clackup line
-      removed, and worker.lisp is the adapter that replaces clackup, written
-      over the shared %http-make-env / %http-normalize-response entry points.
-      What this pins is
+      removed, and worker.lisp is four forms over the built-in
+      clack-handler-cloudflare handler backend, whose `handle` replaces clackup
+      and rides the shared %http-make-env / %http-normalize-response entry
+      points. What this pins is
       that the adapter builds the same environment on every backend: the "?"
       split and the percent-decoding of the raw target (/%67et answers
       "path":"/get"), the content-length the buffered :raw-body needs, and the

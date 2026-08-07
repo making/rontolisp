@@ -4,10 +4,10 @@
 // exports the same six names, so the arena bracket, the module-scope
 // instantiation and the trap recovery are identical (all explained in
 // ../../README.md and ../../httpbin/README.md). What differs is only
-// `requestToJson`: app.lisp's adapter feeds a CLACK environment, so this side
-// must hand over the facts Clack's environment is built from rather than a
-// pre-chewed request. Two of them are easy to get wrong -- see the comments in
-// that function.
+// `requestToJson`: the Lisp half feeds a CLACK environment (through the built-in
+// clack-handler-cloudflare handler backend), so this side must hand over the
+// facts Clack's environment is built from rather than a pre-chewed request. Two
+// of them are easy to get wrong -- see the comments in that function.
 
 import module from "./app.wasm";
 
@@ -17,7 +17,7 @@ const decoder = new TextDecoder();
 // Instantiated here at module scope, so the cost lands on isolate startup
 // rather than on a request -- `wrangler deploy` then reports and budget-checks
 // it. It is where clack's whole load-time runs, which is most of this Worker's
-// startup: measured ~6 ms, against ~1 ms for ../httpbin.
+// startup: measured ~24 ms of `_initialize`, against ~19 ms for ../httpbin.
 let lisp = instantiate();
 
 function instantiate() {
@@ -46,7 +46,7 @@ function handleRequest(lisp, input) {
   return result;
 }
 
-/** The raw facts app.lisp's adapter turns into the Clack environment. */
+/** The raw facts clack.handler.cloudflare:handle turns into the Clack environment. */
 async function requestToJson(request) {
   const url = new URL(request.url);
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
@@ -83,9 +83,9 @@ export default {
     try {
       reply = JSON.parse(handleRequest(lisp, input));
     } catch (error) {
-      // app.lisp answers 500 for Lisp errors itself, so reaching here means a
-      // WASM trap -- which skipped the arena reset and may have left Lisp state
-      // half-written. Replace the instance rather than keep serving from it.
+      // The handler backend answers 500 for Lisp errors itself, so reaching here
+      // means a WASM trap -- which skipped the arena reset and may have left
+      // Lisp state half-written. Replace the instance rather than keep serving.
       lisp = instantiate();
       console.error("handle-request failed:", error);
       return new Response("internal error\n", { status: 500 });

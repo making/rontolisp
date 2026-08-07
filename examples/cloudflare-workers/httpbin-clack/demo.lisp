@@ -1,7 +1,7 @@
 ;;; demo.lisp -- drive worker.lisp's handler without Cloudflare.
 ;;;
 ;;; `handle-request` is an ordinary function of a string, so the whole Worker --
-;;; the Clack application (app.lisp) AND the adapter that feeds it
+;;; the Clack application (app.lisp) AND the Worker entry point that feeds it
 ;;; (worker.lisp) -- can be developed and debugged on the interpreter, where the
 ;;; edit/run loop costs nothing:
 ;;;

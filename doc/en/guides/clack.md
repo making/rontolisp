@@ -92,6 +92,76 @@ signals.
   `clackup` signals `HTTP-HANDLER requires --component ...` at run time
   (catchable with `handler-case`).
 
+## A host that calls you: `clack-handler-cloudflare`
+
+Some hosts never hand you a socket. A Cloudflare Worker, a browser page, node
+and a JVM embedding all parse the request themselves and then **call an exported
+function**. There is nothing for `clackup` to start there, but the application
+does not have to change: a second built-in handler backend bridges the two.
+
+```console
+$ cat worker.lisp
+(ql:quickload "clack-handler-cloudflare")
+(load "app.lisp")                       ; defines app, an ordinary Clack application
+
+(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
+
+(defun handle-request (request-json)
+  (clack.handler.cloudflare:handle #'app request-json))
+```
+
+`handle` needs no Worker to try — it is an ordinary function of two arguments:
+
+```lisp
+(ql:quickload "clack-handler-cloudflare")
+
+(defun app (env)
+  (list 200 '(:content-type "text/plain")
+        (list (format nil "~a ~a ~a" (getf env :request-method)
+                      (getf env :path-info) (getf env :query-string)))))
+
+(princ (clack.handler.cloudflare:handle
+        #'app "{\"method\":\"GET\",\"target\":\"/hi?a=1\"}"))
+```
+
+```text
+{"status":200,"headers":[["content-type","text/plain"]],"body":"GET /hi a=1"}
+```
+
+`handle` takes the application and one JSON request string and answers one JSON
+response string. It builds the Clack environment and normalizes the Clack
+response through the same code path a served request takes, so the application
+sees exactly what Clack promises — and it **catches**: on a host like this an
+uncaught error would take the whole instance down, so it answers 500 with the
+condition's report instead.
+
+The envelope, in both directions:
+
+```json
+{ "method": "GET", "target": "/path?a=1", "headers": {"host": "..."},
+  "body": "", "scheme": "https", "remote-addr": "203.0.113.7" }
+```
+
+```json
+{ "status": 200, "headers": [["content-type", "text/plain"]], "body": "..." }
+```
+
+Two details the host side must get right:
+
+- `target` is the **raw** request target — path and query still joined and still
+  percent-encoded. The split and the decoding happen on the Lisp side, and
+  `:path-info` / `:query-string` have to come from there for the application to
+  see what Clack promises.
+- Send `content-length` for a request with a body. `lack/request` parses nothing
+  without it, and a request that arrived chunked carries none — set it from the
+  bytes you actually read.
+
+Response headers cross as an **array of pairs**, not an object, so an
+application that sets two cookies still answers two `Set-Cookie` headers.
+
+`(clack:clackup #'app :server :cloudflare)` resolves this backend too, and fails
+with an explanation: there is no socket to bind.
+
 ## Current limits
 
 - One Clack server per process: a second concurrent `clackup` replaces the

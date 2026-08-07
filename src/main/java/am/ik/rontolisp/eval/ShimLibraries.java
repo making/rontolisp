@@ -91,7 +91,13 @@ public final class ShimLibraries {
 			// ecosystem convention a user names directly, the dotted one is what lack's
 			// find-package-or-load derives from the package name at clackup time.
 			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, "clack-handler-rontolisp.lisp"),
-			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp"));
+			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp"),
+			// The Clack handler backend for a HOST-DRIVEN REACTOR (a Cloudflare
+			// Worker and friends): a JSON request string in, a JSON response
+			// string out, over the same %http-make-env / %http-normalize-response
+			// entry points every other transport meets in. Both spellings again.
+			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_SYSTEM, "clack-handler-cloudflare.lisp"),
+			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_DOTTED_SYSTEM, "clack-handler-cloudflare.lisp"));
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's

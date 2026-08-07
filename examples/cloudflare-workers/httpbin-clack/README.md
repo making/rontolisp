@@ -4,7 +4,7 @@ The same five echo endpoints as [`../httpbin`](../httpbin), written as a
 [Clack](https://github.com/fukamachi/clack) application instead of a Worker
 handler. It is the Cloudflare port of
 [`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp), and the port
-consists of deleting one line and adding about fifteen.
+consists of deleting one form and adding four.
 
 ```bash
 ./build.sh          # worker.lisp + app.lisp -> src/app.wasm
@@ -39,8 +39,9 @@ removed and nothing added — that file's last form is
 
 and **`clackup` is the only thing this Worker replaces** — in the separate
 [`worker.lisp`](worker.lisp), which is the only file that knows Cloudflare
-exists. A Worker hands you a parsed request rather than a socket, so there is no
-server to run.
+exists, and which is four forms long because the adapter is a built-in Clack
+handler backend rather than example code. A Worker hands you a parsed request
+rather than a socket, so there is no server to run.
 
 |  | `../httpbin` | this |
 | --- | --- | --- |
@@ -81,7 +82,7 @@ is carried over verbatim, and `net/httpbin-clack.lisp` has none.
 | File | Purpose |
 | --- | --- |
 | [`app.lisp`](app.lisp) | **The Clack application, and nothing else** — `net/httpbin-clack.lisp` with its `clackup` line removed, with nothing added. No Cloudflare in it anywhere. |
-| [`worker.lisp`](worker.lisp) | The other half: `(load "app.lisp")` plus the adapter that replaces `clackup`, and the one `wasm-export`. This is what `build.sh` compiles. |
+| [`worker.lisp`](worker.lisp) | The other half, and it is **four forms**: quickload the handler backend, load the application, export one function, call `handle` from it. This is what `build.sh` compiles. |
 | [`serve.lisp`](serve.lisp) | `worker.lisp`'s counterpart: `(load "app.lisp")` plus the `clackup` call — the very form `worker.lisp` replaces. Serves the same application over real HTTP. |
 | [`demo.lisp`](demo.lisp) | Drives the Worker's handler with no Cloudflare in sight — the local edit/run loop. |
 | [`src/index.js`](src/index.js) | The whole Worker. The boundary code is `../httpbin/src/index.js` unchanged; only `requestToJson` differs. |
@@ -106,42 +107,83 @@ $                                          # no output: identical
 
 and by *running* it — see [the next section](#verify-it-against-a-real-clack-server).
 
-## The adapter
+## The adapter is a handler backend, not example code
 
-Everything a transport has to do is already factored out of the server, in
-[`http-server.lisp`](../../../src/main/resources/am/ik/rontolisp/eval/http-server.lisp)
-— because rontolisp's own server protocol *is* Clack's, there is exactly one
-implementation of it, and every backend goes through the same two functions:
+`worker.lisp` writes no adapter. `clack-handler-cloudflare` is a **built-in Clack
+handler backend** — the sibling of `clack-handler-rontolisp`, which is what
+`clackup` uses when it *does* own a socket — and it is the whole bridge:
+
+```lisp
+(ql:quickload "clack-handler-cloudflare")
+(load "app.lisp")
+
+(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
+
+(defun handle-request (request-json)
+  (clack.handler.cloudflare:handle #'app request-json))
+```
+
+That is `worker.lisp` in full. `handle` is `(app request-json) -> response-json`:
+it builds the Clack environment, runs the application, lowers the Clack response
+back, and answers 500 rather than trapping if the application signals.
+
+It is a handler backend rather than a `rontolisp:`-level function on purpose.
+Nothing in the envelope is actually Cloudflare-specific — the same `handle` works
+from a browser page, from node and from a JVM host — but a name chosen for the
+mechanism would not be findable by the people who need it, and a vendor name in
+`rontolisp:` would be worse. A handler backend is where the Clack ecosystem
+already puts per-host names (`clack-handler-hunchentoot`, `clack-handler-woo`).
+
+`(clack:clackup #'app :server :cloudflare)` resolves the same backend and fails
+with a sentence: a reactor owns no socket, so there is nothing for `run` to
+start. See [below](#why-not-clackclackup-itself).
+
+The backend is also usable **without clack at all** — a Clack application is
+just a function of the environment, and nothing here needs the library to be
+present. That build is the one to compare against when reading the size table
+below: a program that is only `clack-handler-cloudflare` plus a four-line
+application compiles to **357,765 B raw / 116,932 B gzip**. So the 1.57 MB this
+directory ships is not the adapter — it is clack and lack, which `app.lisp`
+quickloads so that it stays byte-identical to the upstream example.
+
+### It converts nothing
+
+The backend is thin because everything a transport has to do is already factored
+out of the server, in
+[`http-server.lisp`](../../../src/main/resources/am/ik/rontolisp/eval/http-server.lisp).
+rontolisp's own server protocol *is* Clack's, so there is exactly one
+implementation of it and every backend goes through the same two functions:
 
 ```lisp
 (rontolisp::%http-make-env raw)        ; positional raw tuple -> the Clack environment
 (rontolisp::%http-normalize-response r) ; whatever app returned -> (status header-alist body-string)
 ```
 
-The JDK server, the WASI component and `clack.handler.rontolisp` all meet there,
-so an adapter that calls them gets the percent-decoding, the `?` split, the
-header lowercasing and comma-joining, the `Host` split, the content-length
-parsing, the `:raw-body` stream and the whole response normalizer for free — and
-cannot drift from what a *served* request sees. Naming either function from a
-user program splices the library into the build; no directive, no server.
+The JDK server, the WASI component, `clack.handler.rontolisp` and
+`clack.handler.cloudflare` all meet there, so the percent-decoding, the `?`
+split, the header lowercasing and comma-joining, the `Host` split, the
+content-length parsing, the `:raw-body` stream and the whole response normalizer
+come for free — and cannot drift from what a *served* request sees. All that is
+left in the backend is the JSON envelope below.
 
-The Worker's whole Lisp-side transport is therefore the middle of
-[`worker.lisp`](worker.lisp)'s `handle-request`:
+### The envelope, and two things the JavaScript side must get right
 
-```lisp
-(let* ((tuple (request-tuple (rontolisp:json-parse request-json)))
-       (env (rontolisp::%http-make-env tuple))
-       (triple (rontolisp::%http-normalize-response (funcall #'app env))))
-  (envelope (car triple) (car (cdr triple)) (car (cdr (cdr triple)))))
+What `src/index.js` sends (`scheme` and `remote-addr` are optional; `method`
+defaults to `GET` and `target` to `/`):
+
+```json
+{ "method": "GET", "target": "/path?a=1", "headers": {"host": "..."},
+  "body": "", "scheme": "https", "remote-addr": "203.0.113.7" }
 ```
 
-where `request-tuple` is the ten-element positional list of the facts only a
-transport can know — method, raw target, header alist, body stream, protocol,
-scheme, local name and port, peer address and port.
+and what it gets back:
 
-### Two things the JavaScript side must get right
+```json
+{ "status": 200, "headers": [["content-type", "text/plain"]], "body": "..." }
+```
 
-Both were found by measurement, and both fail quietly rather than loudly:
+Both of these were found by measurement, and both fail quietly rather than
+loudly:
 
 - **Pass the raw target** (`url.pathname + url.search`) as one string, *not* the
   pre-split `path` + `query` object `../httpbin`'s Worker sends. `%http-make-env`
@@ -155,13 +197,11 @@ Both were found by measurement, and both fail quietly rather than loudly:
   that arrived chunked carries no `content-length` at all, so `src/index.js` sets
   it from the bytes it just read rather than copying the incoming header.
 
-### Response headers cross as an array, not an object
-
-`%http-normalize-response` answers an **alist**, in which a name may repeat — a
-Clack application that sets two cookies answers two `Set-Cookie` headers. So the
-envelope carries `[["content-type", "application/json"], ...]` and `src/index.js`
-feeds that straight to the `Headers` constructor. A JSON object would have
-collapsed the duplicates.
+And one thing to notice on the way out: the response `headers` are an **array of
+pairs, not an object**, because `%http-normalize-response` answers an alist in
+which a name may repeat — a Clack application that sets two cookies answers two
+`Set-Cookie` headers. `src/index.js` feeds the array straight to the `Headers`
+constructor; an object would have collapsed the duplicates.
 
 ## What it costs
 
@@ -173,17 +213,17 @@ byte-for-byte boundary code of [`src/index.js`](src/index.js) against this exact
 | --- | --- | --- |
 | imports | **zero** | **zero** — the Worker instantiates with `{}`, no WASI shim |
 | exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why `src/index.js` could be reused as is |
-| module | 283,200 B raw / 91,743 B gzip | 1,573,838 B raw / **342,058 B gzip** |
-| `WebAssembly.Module` compile | 1.7 ms | 6.7 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
-| `_initialize` | 18.2 ms | 21.4 ms — clack's entire load time is the ~3 ms difference |
+| module | 283,200 B raw / 91,743 B gzip | 1,575,331 B raw / **342,700 B gzip** |
+| `WebAssembly.Module` compile | 1.7 ms | 6.5 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
+| `_initialize` | 18.7 ms | 24.4 ms — clack's entire load time is the difference |
 | warm `GET /get` | | **0.08 ms** |
-| warm `POST /post` | | **0.14 ms** |
+| warm `POST /post` | | **0.13 ms** |
 
 Those per-request figures are the Lisp call plus the string boundary, with V8
 warm; the first call of a fresh isolate is ~40 ms while V8 tiers the module up.
 
-On the real edge, `wrangler deploy` reports **1539.52 KiB upload / 339.95 KiB
-gzip** and a **Worker Startup Time of 16 ms**, and all five endpoints (plus the
+On the real edge, `wrangler deploy` reports **1540.98 KiB upload / 340.29 KiB
+gzip** and a **Worker Startup Time of 17 ms**, and all five endpoints (plus the
 405, the 404, the unparseable body, a percent-encoded path and a UTF-8 query)
 answer correctly there — verified after deploying, not inferred. End-to-end
 `curl` from this side of the Pacific settles at 50-85 ms, which is network time:
@@ -292,9 +332,12 @@ handler backend's WASM leg delegates to the `rontolisp:http-handler` directive,
 and on Preview 1 — which `--no-wasi` output belongs to — that directive is a
 call-time error, because Preview 1 has no incoming TCP. Making `clackup` work on
 a host that calls an exported function instead of handing over a socket is a
-separate, larger piece of work; until it lands, the fifteen-line adapter is what
-a Worker writes. The application itself is unaffected either way, which is the
-whole point of keeping it a Clack application.
+separate, larger piece of work (it needs the compiler to synthesize the export,
+the way the component path already synthesizes its serve bridge); until it
+lands, `clack.handler.cloudflare:handle` is what a Worker calls, and `run` exists
+only so that `:server :cloudflare` fails with that sentence rather than with
+"undefined function". The application itself is unaffected either way, which is
+the whole point of keeping it a Clack application.
 
 ## Limitations
 

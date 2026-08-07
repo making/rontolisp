@@ -138,6 +138,56 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void theCloudflareHandlerShimRunsAClackApplicationOverTheJsonEnvelope() {
+		// clack-handler-cloudflare is the handler backend for a HOST-DRIVEN REACTOR:
+		// no socket, so its entry point is `handle` (a JSON request string in, a JSON
+		// response string out) rather than clackup's `run`. It converts nothing
+		// itself -- it rides %http-make-env / %http-normalize-response -- so what this
+		// pins is that an ordinary Clack application sees what Clack promises: the
+		// RAW target split into a percent-decoded :path-info and a :query-string, and
+		// the response lowered back into the envelope.
+		String output = run("""
+				(ql:quickload "clack-handler-cloudflare")
+				(defun app (env)
+				  (list 200 '(:content-type "text/plain")
+				        (list (format nil "~a ~a ~a"
+				                      (getf env :request-method)
+				                      (getf env :path-info)
+				                      (getf env :query-string)))))
+				(print (clack.handler.cloudflare:handle
+				        #'app "{\\"method\\":\\"GET\\",\\"target\\":\\"/%67et?a=1\\"}"))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"status\\\":200")
+			.contains("GET /get a=1")
+			.contains("[[\\\"content-type\\\",\\\"text/plain\\\"]]");
+	}
+
+	@Test
+	void theCloudflareHandlerShimAnswers500RatherThanLettingAnErrorEscape() {
+		// On a reactor an uncaught error is a trap that takes the whole instance
+		// down, so the transport catches -- as every other rontolisp transport does
+		// with a handler error.
+		String output = run("""
+				(ql:quickload "clack-handler-cloudflare")
+				(defun app (env) (declare (ignore env)) (error "boom"))
+				(print (clack.handler.cloudflare:handle #'app "{\\"target\\":\\"/\\"}"))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"status\\\":500").contains("boom");
+	}
+
+	@Test
+	void theCloudflareHandlerShimRefusesClackupWithAnExplanation() {
+		// (clackup app :server :cloudflare) resolves this backend and applies RUN.
+		// A reactor owns no socket, so run exists only to say so -- an undefined
+		// function would be a worse answer than a sentence.
+		assertThatThrownBy(() -> run("""
+				(ql:quickload "clack-handler-cloudflare")
+				(clack.handler.cloudflare:run #'identity :port 8080)
+				""", Map.of(), List.of())).hasMessageContaining("host-driven reactor")
+			.hasMessageContaining("clack.handler.cloudflare:handle");
+	}
+
+	@Test
 	void quickloadResolvesBuiltinUsocketWithoutDownloading() {
 		// A built-in system short-circuits before the QuicklispClient is even
 		// created, so no network or cache is touched.
