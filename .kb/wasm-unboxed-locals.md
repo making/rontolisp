@@ -11,8 +11,8 @@ out-of-i31 u32 words) and a guarded unbox per fused read.
 ## Representation
 
 An eligible binding gets NO ordinary eqref local. Instead
-(`WasmIntFusionCompiler.RawLocal`, registered in `Ctx.rawLocals` by
-`WasmLetCompiler`):
+(`WasmIntFusionCompiler.RawLocal` with `counted = false`, registered in
+`Ctx.rawLocals` by `WasmLetCompiler`):
 
 - an **i64 slot** (in the second locals run, see below) holding the raw value,
 - a **boxed shadow slot** (ordinary eqref local): it holds the module's
@@ -66,6 +66,16 @@ Reads:
   DIFFERENT, already-compact shape -- a bare `_int_new` call with no inline i31
   test, ~14 bytes -- and stays inline: routing it through `_ub_read` too would
   save ~68 KB (0.8%) and is not worth a second shape to reason about.
+
+## The other flavour in the same map
+
+`RawLocal` has a second shape, `counted = true` (`shadowSlot = -1`), for a
+`dotimes` induction variable over a LITERAL bound: no shadow, no guard, no
+fallback, and reads that resolve to the slot itself. It shares `Ctx.rawLocals`
+so that shadowing, `defvar` collision and symbol resolution need no new rules,
+and it is at EVERY optimize level because it is not a speed-for-size trade.
+Everything about it -- the emission, the four `counted()` branches, the
+eligibility scan -- is `.kb/wasm-counted-loops.md`.
 
 ## Eligibility (WasmLetCompiler)
 

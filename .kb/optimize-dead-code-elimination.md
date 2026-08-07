@@ -238,6 +238,48 @@ what it records). Preview 1 bytes:
 | `(format t "~a~%" 42)` | 4,890 | **430** | 1,583 |
 | `(format t "~s~%" "Hello World!")` | 6,609 | **517** | 1,671 |
 
+### The print family's static-TYPE shortcut
+
+The fold above needs a literal. The same reachability argument covers an argument
+that is not a literal but whose TYPE the compiler knows, and there the numbers are
+bigger, because what the generic dispatch drags in is not the renderer for the type
+at hand -- it is every other renderer. Measured on the `wasm-size/pi_approx` loop at
+`--optimize`: the loop ending in `(princ "done")` is 1,770 bytes and the same loop
+ending in `(princ <the f64 result>)` was **6,307** -- +3,777 bytes to print one
+float, of which `_print_f64_no_nl` is **379**. The rest is `_princ_val` itself
+(1,540), the character-vector normalizer it calls on every value before dispatching
+(`_charvec_to_str`, 653) and the bignum / ratio / character / cons / array printers
+reachable only from it. Two shortcuts, both in `WasmPrintCompiler`, both above the
+literal fold:
+
+- **`princ` of a certainly-STRING form is compiled as `write-string`**
+  (`compiler/StringValuedForms.certainlyString`, the predicate `write-string`
+  already consults to skip `_charvec_to_str`). Same text, same returned object,
+  and it works with an explicit stream too because `write-string` takes one.
+- **`princ` / `prin1` / `print` of a certainly-DOUBLE form unboxes the
+  `TYPE_FLOAT` struct and calls `_print_f64_no_nl` directly**
+  (`compiler/DoubleValuedForms.certainlyDouble`: an immediate literal-double
+  argument of `+ - * /`, which is strictly narrower than the backends' own
+  `hasDoubleLiteral` f64-path predicate, so every form it accepts is one the
+  arithmetic already compiled to a boxed double). That IS the arm both dispatches
+  take for a float, so the output is identical by construction. Only for the
+  hard-coded standard output: an explicit stream, or an active
+  `*standard-output*` rebinding, renders to a string first and keeps the general
+  path.
+
+Printing one float now costs **522** bytes over the same loop (6,307 -> 2,292 for
+the whole module), and a module whose only output is a computed string is 504
+bytes. Pinned by
+`WasmLispCompilerIntegrationTest.staticallyTypedPrintArgumentsPrintWhatTheValueDispatchWouldHave`
+and the `statically-typed-print-arguments` ci-spec case (all four backends).
+
+**Re-evaluation trigger:** the two predicates are the whole risk surface -- a form
+wrongly admitted prints as the wrong type rather than failing -- so a new entry is
+earned by checking every backend's emission for that operator, not by "it usually
+returns a string/float". The obvious next entries are the stream-carrying spellings
+(a float would need a float-to-string helper the string case gets for free) and
+`format`'s `~A` runtime path.
+
 The component column is the same core module plus the wrapper floor, re-measured after
 todo-273 narrowed that floor to ~1,175 B (it was ~1,500 when the fold landed) and again
 after the encoding minimization took it to ~1,154; the two

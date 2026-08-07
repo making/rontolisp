@@ -90,8 +90,35 @@ final class WasmIntFusionCompiler {
 	 * shadow, whatever it is, INCLUDING nil/null" (null cannot be the marker: nil IS
 	 * null, and a local assigned nil must read back as nil, not as the stale raw slot).
 	 * Registered per eligible {@code let} binding by {@link WasmLetCompiler}.
+	 *
+	 * <p>
+	 * {@code counted} marks the OTHER flavour: a counted loop's induction variable
+	 * ({@link WasmDotimesCompiler}), which has NO shadow slot at all
+	 * ({@code shadowSlot < 0}). Its bound is a literal, it starts at zero and the only
+	 * assignment anywhere is the loop's own {@code +1} step, so the i64 slot is
+	 * authoritative at every point and its value provably stays inside the i31 fixnum
+	 * range -- every guard, every bail and every {@code _ub_read} the dual representation
+	 * needs is statically dead. That is what makes it a size AND speed win at every
+	 * optimize level, where the dual representation is a speed-for-size trade
+	 * {@code --optimize=size} declines.
 	 */
-	record RawLocal(int i64Slot, int shadowSlot) {
+	record RawLocal(int i64Slot, int shadowSlot, boolean counted) {
+
+		RawLocal {
+			if (counted != (shadowSlot < 0)) {
+				throw new IllegalArgumentException("a counted raw local has no shadow slot, and only a counted one");
+			}
+		}
+
+		/** The dual-representation flavour: an i64 slot plus its boxed shadow. */
+		static RawLocal dual(int i64Slot, int shadowSlot) {
+			return new RawLocal(i64Slot, shadowSlot, false);
+		}
+
+		/** The counted-loop flavour: an i64 slot that is always authoritative. */
+		static RawLocal counted(int i64Slot) {
+			return new RawLocal(i64Slot, -1, true);
+		}
 	}
 
 	private record OpNode(String op, List<Node> args) implements Node {
@@ -498,6 +525,12 @@ final class WasmIntFusionCompiler {
 	 * is needed.
 	 */
 	static void compileRawStore(LispVal expr, WasmLispCompiler.Ctx ctx, RawLocal target) {
+		if (target.counted()) {
+			// A counted induction variable has no shadow to bail into, which is exactly
+			// why WasmDotimesCompiler refuses the shape when anything in the loop could
+			// assign the name. Reaching here means that scan missed a write.
+			throw new IllegalStateException("a counted loop variable cannot be assigned");
+		}
 		if (expr instanceof LispInteger lit) {
 			ctx.writer.write(Instruction.I64_CONST);
 			ctx.writer.writeSignedLeb128(lit.value());
@@ -515,6 +548,12 @@ final class WasmIntFusionCompiler {
 				ctx.writeI64LocalIndex(src.i64Slot());
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writeI64LocalIndex(target.i64Slot());
+				if (src.counted()) {
+					// A counted source has no shadow: its raw slot is always
+					// authoritative, so the target's is too.
+					emitNullShadow(target, ctx);
+					return;
+				}
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(src.shadowSlot());
 				ctx.writer.write(Instruction.SET_LOCAL);
@@ -597,12 +636,29 @@ final class WasmIntFusionCompiler {
 	 * recorded.
 	 */
 	static void emitRawLocalBoxedRead(RawLocal raw, WasmLispCompiler.Ctx ctx) {
+		if (raw.counted()) {
+			emitCountedBox(raw.i64Slot(), ctx);
+			return;
+		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(raw.shadowSlot());
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(raw.i64Slot());
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_UB_READ);
+	}
+
+	/**
+	 * Boxes a COUNTED loop variable's i64 slot: a bare {@code ref.i31}, with neither the
+	 * range test {@link #emitBoxI64FromSlot} needs nor the shadow test
+	 * {@link #emitRawLocalBoxedRead} needs. A literal bound below the i31 ceiling is what
+	 * buys both away ({@link WasmDotimesCompiler}).
+	 */
+	static void emitCountedBox(int i64Slot, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(i64Slot);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 	}
 
 	/**
@@ -1007,6 +1063,13 @@ final class WasmIntFusionCompiler {
 				ctx.writer.writeUnsignedLeb128(aref.idxSlot);
 			}
 			else if (node instanceof RawLeaf raw) {
+				if (raw.src.counted()) {
+					// A counted loop variable cannot be assigned anywhere in the loop,
+					// so there is nothing a later leaf could change: the leaf IS the
+					// slot, snapshot-free and guard-free.
+					raw.snapI64 = raw.src.i64Slot();
+					continue;
+				}
 				raw.snapI64 = ctx.allocI64Temp();
 				raw.snapShadow = ctx.allocTemp();
 				ctx.writer.write(Instruction.GET_LOCAL);
@@ -1087,6 +1150,10 @@ final class WasmIntFusionCompiler {
 			// unbox (i31 / TYPE_BIGNUM; anything else -- a float or limb-tier shadow
 			// -- bails at depth 2: past the inner guard if and the outer if).
 			else if (node instanceof RawLeaf raw) {
+				if (raw.src.counted()) {
+					// Nothing to resolve: emitFast reads the counted slot directly.
+					continue;
+				}
 				emitShadowIsSentinel(raw.snapShadow, ctx);
 				ctx.writer.write(Instruction.IF);
 				ctx.writer.write(Type.I64);
@@ -1300,17 +1367,23 @@ final class WasmIntFusionCompiler {
 			// The snapshot re-boxed: the shadow when non-null, else the raw value
 			// through _int_new (an i31 for the fixnum range -- allocation-free).
 			case RawLeaf leaf -> {
-				emitShadowIsSentinel(leaf.snapShadow, ctx);
-				ctx.writer.write(Instruction.IF);
-				ctx.writer.writeRefType(true, Type.EQ.code());
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writeI64LocalIndex(leaf.snapI64);
-				ctx.writer.write(Instruction.CALL);
-				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
-				ctx.writer.write(Instruction.ELSE);
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(leaf.snapShadow);
-				ctx.writer.write(Instruction.END);
+				if (leaf.src.counted()) {
+					// The counted slot is always authoritative and always a fixnum.
+					emitCountedBox(leaf.snapI64, ctx);
+				}
+				else {
+					emitShadowIsSentinel(leaf.snapShadow, ctx);
+					ctx.writer.write(Instruction.IF);
+					ctx.writer.writeRefType(true, Type.EQ.code());
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writeI64LocalIndex(leaf.snapI64);
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+					ctx.writer.write(Instruction.ELSE);
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(leaf.snapShadow);
+					ctx.writer.write(Instruction.END);
+				}
 			}
 			case OpNode op -> {
 				emitFallback(op.args().get(0), ctx);

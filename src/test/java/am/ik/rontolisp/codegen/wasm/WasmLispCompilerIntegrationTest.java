@@ -942,6 +942,103 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void countedDotimesLoopsMatchTheExpandedLowering() throws Exception {
+		// A dotimes over a LITERAL bound compiles to a bare i64 counter with no boxed
+		// shadow (.kb/wasm-counted-loops.md), so what has to be pinned is every way the
+		// variable can still be observed -- and every shape the eligibility scan must
+		// REFUSE, which then falls back to the ordinary let/while expansion. In order:
+		// (1) the result form sees the counter holding the count; (2) a zero count runs
+		// the body never and still binds it; (3) a `return` out of the body carries its
+		// value through the %block; (4) a nested loop of the SAME name shadows and
+		// restores; (5) an indexed store whose SUBSCRIPT is the counter stays eligible
+		// (only the place's sub-place is a write); (6) a body that ASSIGNS the counter
+		// falls back; (7) a counter CAPTURED by a lambda falls back (one binding for
+		// the whole loop, so every closure sees the final value); (8) the binding
+		// shadows an outer lexical of the same name; (9) the counter reads raw inside a
+		// fused tree; (10) it is an ordinary Lisp value as a hash key and a string
+		// index.
+		String program = """
+				(print (dotimes (i 5 i)))
+				(print (dotimes (i 0 (list :done i))))
+				(print (dotimes (i 10) (when (= i 3) (return (* i 100)))))
+				(let ((acc nil))
+				  (dotimes (i 2) (dotimes (i 3) (push i acc)))
+				  (print (reverse acc)))
+				(let ((v (make-array 4 :initial-element 0)))
+				  (dotimes (i 4) (setf (aref v i) (* i i)))
+				  (print v))
+				(let ((seen nil))
+				  (dotimes (i 6) (push i seen) (when (= i 1) (setq i 4)))
+				  (print (reverse seen)))
+				(let ((fs nil) (out nil))
+				  (dotimes (i 3) (push (lambda () i) fs))
+				  (dolist (f (reverse fs)) (push (funcall f) out))
+				  (print (reverse out)))
+				(let ((i :outer)) (dotimes (i 2)) (print i))
+				(let ((s 0)) (dotimes (i 1000) (setq s (+ s (* i i) (- i 2)))) (print s))
+				(let ((h (make-hash-table)) (str "abcdef") (out nil))
+				  (dotimes (i 3) (setf (gethash i h) (char str i)))
+				  (dotimes (i 3) (push (gethash i h) out))
+				  (print (reverse out)))
+				""";
+		String expected = """
+				5
+				(:DONE 0)
+				300
+				(0 1 2 0 1 2)
+				#(0 1 4 9)
+				(0 1 5)
+				(3 3 3)
+				:OUTER
+				333331000
+				(#\\a #\\b #\\c)""";
+		assertThat(compileAndRun(program)).isEqualTo(expected);
+		// Unlike fusion and the unboxed locals this is not a speed-for-size trade, so
+		// --optimize=size emits it too and must answer the same.
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString(program));
+		assertThat(runModule(small, "counted-dotimes-size.wasm")).isEqualTo(expected);
+	}
+
+	@Test
+	void staticallyTypedPrintArgumentsPrintWhatTheValueDispatchWouldHave() throws Exception {
+		// princ of a form the compiler can TYPE skips the value dispatch, which is what
+		// keeps _princ_val and everything reachable only from it out of the module
+		// (compiler/DoubleValuedForms, compiler/StringValuedForms). The shortcut is only
+		// legal because it lands on the arm the dispatch would have taken, so the
+		// rendering must be identical -- including the NaN/infinity text, the negative
+		// zero and the readable spellings prin1/print produce for the same value.
+		assertThat(compileAndRun("""
+				(princ (* 1.0 3)) (terpri)
+				(prin1 (+ 1.0 2)) (terpri)
+				(print (/ 6.0 2))
+				(princ (- 2.5)) (terpri)
+				(princ (/ 2.0)) (terpri)
+				(princ (* -1.0 0.0)) (terpri)
+				(princ (/ 0.0 0.0)) (terpri)
+				(princ (/ 1.0 0.0)) (terpri)
+				(princ (/ -1.0 0.0)) (terpri)
+				(princ (princ-to-string 42)) (terpri)
+				(princ (format nil "a~ab" 7)) (terpri)
+				(princ (with-output-to-string (s) (princ (* 1.0 3) s))) (terpri)
+				(princ (with-output-to-string (*standard-output*) (princ (* 1.0 3))))
+				""")).isEqualTo("""
+				3.0
+				3.0
+				3.0
+				-2.5
+				0.5
+				-0.0
+				NaN
+				Infinity
+				-Infinity
+				42
+				a7b
+				3.0
+				3.0""");
+	}
+
+	@Test
 	void theSizeLevelDeclinesTheSpeedTradesWithoutChangingAnyResult() throws Exception {
 		// --optimize=size declines the two wasm-GC emissions that spend bytes on speed:
 		// integer expression-tree fusion (every fused site emits its tree TWICE, raw

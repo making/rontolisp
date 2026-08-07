@@ -7766,6 +7766,75 @@ cases:
       "
       "returned"
       8
+  - name: counted-dotimes
+    source: |
+      ;; A dotimes over a LITERAL bound compiles to a bare i64 counter with no
+      ;; boxed shadow on the wasm-GC backend, so these pin every way the counter
+      ;; can still be observed -- and the shapes the eligibility scan must refuse
+      ;; (an assigned counter, a captured one), which fall back to the ordinary
+      ;; let/while expansion.
+      (print (dotimes (cd-i 5 cd-i)))
+      (print (dotimes (cd-i 0 (list :done cd-i))))
+      (print (dotimes (cd-i 10) (when (= cd-i 3) (return (* cd-i 100)))))
+      (let ((cd-acc nil))
+        (dotimes (cd-i 2) (dotimes (cd-i 3) (push cd-i cd-acc)))
+        (print (reverse cd-acc)))
+      (let ((cd-v (make-array 4 :initial-element 0)))
+        (dotimes (cd-i 4) (setf (aref cd-v cd-i) (* cd-i cd-i)))
+        (print cd-v))
+      (let ((cd-seen nil))
+        (dotimes (cd-i 6) (push cd-i cd-seen) (when (= cd-i 1) (setq cd-i 4)))
+        (print (reverse cd-seen)))
+      (let ((cd-fs nil) (cd-out nil))
+        (dotimes (cd-i 3) (push (lambda () cd-i) cd-fs))
+        (dolist (cd-f (reverse cd-fs)) (push (funcall cd-f) cd-out))
+        (print (reverse cd-out)))
+      (let ((cd-i :outer)) (dotimes (cd-i 2)) (print cd-i))
+      (let ((cd-s 0))
+        (dotimes (cd-i 1000) (setq cd-s (+ cd-s (* cd-i cd-i) (- cd-i 2))))
+        (print cd-s))
+    expected: |
+      5
+      (:DONE 0)
+      300
+      (0 1 2 0 1 2)
+      #(0 1 4 9)
+      (0 1 5)
+      (3 3 3)
+      :OUTER
+      333331000
+  - name: statically-typed-print-arguments
+    source: |
+      ;; princ of a form the compiler can TYPE (a float-contagious arithmetic
+      ;; form, a string-valued call) skips the generic value dispatch on the wasm
+      ;; backend. The shortcut lands on the arm that dispatch would have taken, so
+      ;; the rendering has to be identical everywhere -- including the NaN and
+      ;; infinity text, the negative zero, and the readable spellings.
+      (princ (* 1.0 3)) (terpri)
+      (prin1 (+ 1.0 2)) (terpri)
+      (princ (- 2.5)) (terpri)
+      (princ (/ 2.0)) (terpri)
+      (princ (* -1.0 0.0)) (terpri)
+      (princ (/ 0.0 0.0)) (terpri)
+      (princ (/ 1.0 0.0)) (terpri)
+      (princ (/ -1.0 0.0)) (terpri)
+      (princ (princ-to-string 42)) (terpri)
+      (princ (format nil "a~ab" 7)) (terpri)
+      (princ (with-output-to-string (st-s) (princ (* 1.0 3) st-s))) (terpri)
+      (princ (with-output-to-string (*standard-output*) (princ (* 1.0 3)))) (terpri)
+    expected: |
+      3.0
+      3.0
+      -2.5
+      0.5
+      -0.0
+      NaN
+      Infinity
+      -Infinity
+      42
+      a7b
+      3.0
+      3.0
   - name: pure-builtin-literal-fold
     source: |
       ;; A pure built-in over literal arguments is evaluated by the COMPILER (in

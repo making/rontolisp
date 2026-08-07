@@ -116,7 +116,10 @@ normalizer for an argument that CANNOT be one
 (`compiler/StringValuedForms.certainlyString`; `_charvec_to_str` alone is 653 bytes
 of WASM) -- that set is closed and conservative on purpose, since answering true for
 something that can also answer a character vector drops a normalization the semantics
-need.
+need. (`princ` of a certainly-string form now takes the same shortcut by itself, so
+the spelling here is no longer load-bearing for size -- it stays because `%fixed-decimal`
+IS a string operation. `.kb/optimize-dead-code-elimination.md`, "the print family's
+static-TYPE shortcut".)
 
 **It retired a real drift.** The two paths used to scale by different powers of ten
 -- the static one by a `long` `pow10` that OVERFLOWS past `10^18`, the renderer by

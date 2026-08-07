@@ -77,6 +77,14 @@
 > PARAMETERS -- params have no raw representation; see the unboxed-locals
 > re-evaluation trigger).
 
+> Counted-loop leaves (2026-08-08): a `dotimes` induction variable over a
+> LITERAL bound registers as a COUNTED `RawLocal` (no shadow), and its `RawLeaf`
+> therefore needs no snapshot, no guard and no `_int_new` in the fallback -- it
+> reads the i64 slot directly, so `(- i 2)` index math and `(+ s i)`
+> accumulation fuse with nothing in front of them. That registration is at every
+> optimize level, unlike everything else in this file; the classifier only sees
+> it when fusion is on. `.kb/wasm-counted-loops.md`.
+
 **Invariant: fusing an integer expression tree must never change a result, an
 observable side effect, or an error shape -- the fast path is an optimization
 with a total fallback, not a semantic variant.** The wasm-GC backend (Preview 1

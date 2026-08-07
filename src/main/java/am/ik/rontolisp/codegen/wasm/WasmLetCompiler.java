@@ -157,7 +157,7 @@ final class WasmLetCompiler {
 				}
 				if (rawEligible.contains(name)) {
 					// Unboxed dual-representation binding: no ordinary local at all.
-					WasmIntFusionCompiler.RawLocal raw = new WasmIntFusionCompiler.RawLocal(ctx.allocI64Temp(),
+					WasmIntFusionCompiler.RawLocal raw = WasmIntFusionCompiler.RawLocal.dual(ctx.allocI64Temp(),
 							ctx.allocTemp());
 					WasmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, raw);
 					rawRegistrations.put(name, raw);

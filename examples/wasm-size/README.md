@@ -42,10 +42,10 @@ sizes are toolchain- but not host-dependent, so `./build.sh` reproduces them.
 | hello_world | `--optimize=size` | 518 |
 | hello_world | `--component --optimize=size` | 1,672 |
 | hello_world | `--no-gc --optimize=size` | 406 |
-| pi_approx | (none) | 257,132 |
-| pi_approx | `--optimize` | 3,540 |
-| pi_approx | `--optimize=size` | 3,420 |
-| pi_approx | `--component --optimize=size` | 4,549 |
+| pi_approx | (none) | 257,023 |
+| pi_approx | `--optimize` | 2,781 |
+| pi_approx | `--optimize=size` | 2,781 |
+| pi_approx | `--component --optimize=size` | 3,908 |
 | pi_approx | `--no-gc --optimize=size` | 1,042 |
 
 ## Cross-language context
@@ -73,8 +73,8 @@ flags; rontolisp's are `--optimize=size` for the Preview 1 command and
 
 | Language | WASI | Size (bytes) |
 | --- | --- | ---: |
-| rontolisp | Preview 1 | 3,420 |
-| rontolisp | Preview 3 (component) | 4,549 |
+| rontolisp | Preview 1 | 2,781 |
+| rontolisp | Preview 3 (component) | 3,908 |
 | wado | Preview 3 (component) | 6,034 |
 | zig | Preview 1 | 10,608 |
 | c | Preview 1 | 18,105 |
@@ -104,23 +104,25 @@ and no linear-memory bookkeeping. The other Preview 1 rows all carry their own
 heap. The like-for-like linear-memory row is `--no-gc` below; the like-for-like
 component row is the 1,672-byte one.
 
-**`pi_approx` is now dominated by the loop, and printing to 15 places is nearly
-free.** All four rows are the same program at `--optimize`:
+**`pi_approx` is now dominated by the arithmetic tower, and both the loop and the
+printing are nearly free.** All four rows are the same program at `--optimize`:
 
 | variant | bytes |
 | --- | ---: |
-| the loop alone, `(princ "done")` at the end | 2,547 |
-| the loop + `(format t "pi = ~,2F~%" ...)` | 3,540 |
-| the loop + `(format t "pi = ~,15F~%" ...)` -- the real program | 3,540 |
-| the loop + `(princ <the f64 result>)` | 6,312 |
+| the million-iteration `dotimes` alone, empty body | 203 |
+| the loop alone, `(princ "done")` at the end | 1,770 |
+| the loop + `(format t "pi = ~,2F~%" ...)` | 2,781 |
+| the loop + `(format t "pi = ~,15F~%" ...)` -- the real program | 2,781 |
+| the loop + `(princ <the f64 result>)` | 2,292 |
 
-Read off it: the fixed-decimal directive costs **993 bytes**, the digit count does
-not move it at all, and printing the same float through the generic printer
-instead is **2,772 bytes MORE** than printing it to 15 decimal places.
+Read off it: the fixed-decimal directive costs **1,011 bytes** (the literal text
+included), the digit count does not move it at all, and printing the same float
+through `princ` is **489 bytes LESS** than printing it to 15 decimal places -- so
+`~,15F` is now the more expensive of the two, by exactly the renderer it carries.
 
-That last row is the inversion of what this page used to say. `pi_approx` was
-17,012 bytes, more than half of it the five-line program's own function body, and
-two findings account for the whole difference:
+`pi_approx` was 17,012 bytes when this page was first written, more than half of it
+the five-line program's own function body. Four findings account for the whole
+difference:
 
 - **`~,nF` used to expand INLINE into eight ordinary Lisp forms** -- scale by
   `10^15`, `round` to an integer, `princ-to-string` it, then punch in a decimal
@@ -131,13 +133,28 @@ two findings account for the whole difference:
   each operand of each float operation. This module carried 26 copies, 43% of its
   code section; they are one shared 80-byte function now
   (`.kb/wasm-shared-coercion.md`).
+- **the counted loop used to carry a boxed induction variable** -- a generic `<`
+  call per iteration whose `t`/nil answer was immediately tested for nullness, plus
+  a re-box of the counter per step. A `dotimes` over a literal bound is now a bare
+  `i64` counter (`.kb/wasm-counted-loops.md`); the empty loop above went 1,987 ->
+  203 bytes, and a 100-million-iteration integer accumulation went 3.49 s -> 0.36 s.
+  It is the same at `--optimize=size`, which is why the two levels now agree.
+- **`princ` of a value the compiler could not type kept the WHOLE printer
+  reachable.** Printing one float cost 3,777 bytes, of which the float printer
+  itself is 379 -- the rest was the generic value dispatch, the character-vector
+  normalizer in front of it, and the bignum / ratio / character / cons / array
+  printers reachable only from there. An argument whose type is decidable at
+  compile time now goes straight to its renderer, and that row above is 522 bytes
+  over the loop instead of 3,777 (`.kb/optimize-dead-code-elimination.md`).
 
-Together the program's own body went **8,607 -> 331 bytes**, and the whole module
-is smaller than the loop alone used to be.
+Together the program's own body went **8,607 -> 224 bytes**, and the whole module
+is smaller than the loop alone used to be. What is left is the arithmetic tower
+(`_fixed_dec` 457, `_write_stream_str` 253, the shared `_as_f64` 80, and ~1,400
+bytes of rational/float helpers behind every `+` and `/` in the loop).
 
 **The component costs about 1.1 KB.** `--component` re-frames the module as a
 WASI 0.3 component: the canonical-ABI adapters and the type section are the
-whole difference (1,672 vs 518, 4,549 vs 3,420). Its imports are stated as a
+whole difference (1,672 vs 518, 3,908 vs 2,781). Its imports are stated as a
 WIT world rather than as `fd_write`:
 
 ```console
@@ -171,16 +188,16 @@ Two caveats, which is why these live outside the main table:
 - **`pi_approx-nogc` prints differently.** `format` is outside the `--no-gc`
   subset, so it prints with `princ`, which gives rontolisp's default float shape
   (`3.141591`) instead of 15 decimal places. Same loop, less output -- but that
-  is no longer where the gap to the 3,420-byte wasm-GC build comes from: printing
-  to 15 places costs 993 bytes there, and printing through `princ` costs more,
-  not less. What `--no-gc` is not carrying is the GC value model and the generic
-  numeric tower behind every `+` and `/` in the loop.
+  is not where the gap to the 2,781-byte wasm-GC build comes from: printing to
+  15 places costs 1,011 bytes there against `princ`'s 522. What `--no-gc` is not
+  carrying is the GC value model and the generic numeric tower behind every `+`
+  and `/` in the loop.
 
 ## Flags
 
 | Flag | What it does |
 | --- | --- |
 | `--optimize` | Dead-code-eliminate: keep only what `_start` and the exports reach |
-| `--optimize=size` | The above, plus trade speed for size -- drops fused integer trees and unboxed locals. Free here (`hello_world` is unchanged; `pi_approx` is a float kernel, so it gains 3.4%), but it costs up to 4x the runtime on integer-heavy code |
+| `--optimize=size` | The above, plus trade speed for size -- drops fused integer trees and unboxed locals. Both programs here are byte-identical at the two levels, but it costs up to 6x the runtime on integer-heavy code |
 | `--component` | Emit a WASI 0.3 component instead of a Preview 1 module |
 | `--no-gc` | Emit a plain MVP core module: no wasm-GC, numeric subset only, exports rather than `_start` |
