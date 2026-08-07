@@ -9,8 +9,7 @@ const decoder = new TextDecoder();
 // Instantiated here at module scope, so the cost lands on isolate startup
 // rather than on a request -- `wrangler deploy` then reports and budget-checks
 // it ("Worker Startup Time: 12 ms"). Doing it lazily on the first request also
-// works, measured, but then nothing checks the cost at deploy time. Set back to
-// null when a trap retires the instance, below.
+// works, measured, but then nothing checks the cost at deploy time.
 let lisp = instantiate();
 
 // `_initialize` is where app.lisp's top-level forms run. ../hello has no such
@@ -24,21 +23,21 @@ function instantiate() {
 
 // Synchronous on purpose: a Worker isolate interleaves concurrent requests only
 // at `await` points, so nothing else can allocate inside the bracket.
-function handleRequest(exports, input) {
+function handleRequest(lisp, input) {
   const bytes = encoder.encode(input);
-  const mark = exports.__ronto_alloc_mark();
+  const mark = lisp.__ronto_alloc_mark();
 
-  const ptr = exports.__ronto_alloc(bytes.length);
-  new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
+  const ptr = lisp.__ronto_alloc(bytes.length);
+  new Uint8Array(lisp.memory.buffer, ptr, bytes.length).set(bytes);
 
-  const [resultPtr, resultLen] = exports["handle-request"](ptr, bytes.length);
+  const [resultPtr, resultLen] = lisp["handle-request"](ptr, bytes.length);
 
   // Copy out before resetting: the result sits in the scratch the reset frees.
   const result = decoder.decode(
-    new Uint8Array(exports.memory.buffer.slice(resultPtr, resultPtr + resultLen)),
+    new Uint8Array(lisp.memory.buffer.slice(resultPtr, resultPtr + resultLen)),
   );
 
-  exports.__ronto_alloc_reset(mark);
+  lisp.__ronto_alloc_reset(mark);
   return result;
 }
 
@@ -61,12 +60,12 @@ export default {
     const body = await requestToJson(request);
     let reply;
     try {
-      if (!lisp) lisp = instantiate();
       reply = JSON.parse(handleRequest(lisp, body));
     } catch (error) {
       // app.lisp answers 500 for Lisp errors itself, so reaching here means a
-      // WASM trap: the instance's Lisp heap can no longer be trusted.
-      lisp = null;
+      // WASM trap -- which skipped the arena reset and may have left Lisp state
+      // half-written. Replace the instance rather than keep serving from it.
+      lisp = instantiate();
       console.error("handle-request failed:", error);
       return new Response("internal error\n", { status: 500 });
     }

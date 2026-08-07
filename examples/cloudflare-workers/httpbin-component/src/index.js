@@ -30,7 +30,8 @@ const WASI_STUBS = {
 // why app.lisp keeps its state inside functions.
 //
 // At module scope, so the cost is isolate startup rather than request work.
-let lisp = instantiate((path) => CORE_MODULES[path], WASI_STUBS);
+const getCoreModule = (path) => CORE_MODULES[path];
+let lisp = instantiate(getCoreModule, WASI_STUBS);
 
 /** The request, in the shape app.lisp's `handle-request` reads. */
 async function requestToJson(request) {
@@ -51,10 +52,9 @@ export default {
     const body = await requestToJson(request);
     let reply;
     try {
-      if (!lisp) lisp = instantiate((path) => CORE_MODULES[path], WASI_STUBS);
       reply = JSON.parse(lisp.handleRequest(body));
     } catch (error) {
-      lisp = null; // a trapped instance cannot be trusted afterwards
+      lisp = instantiate(getCoreModule, WASI_STUBS); // retire the trapped one
       console.error("handleRequest failed:", error);
       return new Response("internal error\n", { status: 500 });
     }
