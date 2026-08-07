@@ -15,38 +15,37 @@
 (load "dataset.lisp")
 (load "../../deep-learning-from-scratch/common/trainer.lisp")
 
-(defparameter *k49-train-limit* 40000)  ; real samples used (the file holds 36777)
-(defparameter *k49-test-limit* 4600)    ; held-out real samples (the whole split)
+(defparameter *k49-train-limit* 40000) ; real samples used (the file holds 36777)
+(defparameter *k49-test-limit* 4600)   ; held-out real samples (the whole split)
 (defparameter *epochs* 12)
 (defparameter *batch-size* 64)
-(defparameter *lr* 0.001)               ; Adam
+(defparameter *lr* 0.001) ; Adam
 
 (linalg:seed 42)
 
-(format t ";; loading K49 (~a train / ~a test)~%" *k49-train-limit* *k49-test-limit*)
+(format t ";; loading K49 (~a train / ~a test)~%" *k49-train-limit*
+        *k49-test-limit*)
 (defparameter *real* (k49-load "data/k49-train.bin" *k49-train-limit*))
 (defparameter *test* (k49-load "data/k49-test.bin" *k49-test-limit*))
 
 (format t ";; augmenting the synthetic glyphs~%")
 (defparameter *synth* (samples->batch (synthetic-samples)))
 
-(defparameter *train*
-  (shuffle-batch (concat-batches *synth* *real*)))
+(defparameter *train* (shuffle-batch (concat-batches *synth* *real*)))
 
 (format t ";; dataset: ~a synthetic + ~a real = ~a samples~%"
-        (car (linalg:shape (first *synth*)))
-        (car (linalg:shape (first *real*)))
+        (car (linalg:shape (first *synth*))) (car (linalg:shape (first *real*)))
         (car (linalg:shape (first *train*))))
 
 (defparameter *net* (make-hiragana-net))
 
 (time
- (train *net* (scn-params *net*)
-        (first *train*) (second *train*)
-        (first *test*) (second *test*)
-        :epochs *epochs* :mini-batch-size *batch-size*
-        :optimizer (make-instance 'adam :lr *lr*)
-        :eval-limit 2000))
+  (train *net* (scn-params *net*) (first *train*) (second *train*)
+         (first *test*) (second *test*)
+         :epochs *epochs*
+         :mini-batch-size *batch-size*
+         :optimizer (make-instance 'adam :lr *lr*)
+         :eval-limit 2000))
 
 ;;; The clean reference glyphs (the display font, one per class) are what the
 ;;; page shows and what a user tries to copy, so they get their own score:
@@ -56,13 +55,12 @@
   (let ((correct 0) (class 0))
     (dolist (variants *glyphs*)
       (let ((scores (classify net (glyph->image (first variants)))))
-        (when (= (linalg:argmax scores) class)
-          (setq correct (+ correct 1))))
+        (when (= (linalg:argmax scores) class) (setq correct (+ correct 1))))
       (setq class (+ class 1)))
     correct))
 
-(format t ";; reference-glyph accuracy ~a/~a~%"
-        (reference-accuracy *net*) *nclasses*)
+(format t ";; reference-glyph accuracy ~a/~a~%" (reference-accuracy *net*)
+        *nclasses*)
 
 (save-hiragana-net *net* "weights.bin")
 (format t ";; wrote weights.bin~%")

@@ -22,50 +22,52 @@
 
 (defparameter *scn-keys* '("W1" "b1" "W2" "b2" "W3" "b3"))
 
-(defun make-simple-convnet (&key (input-dim '(1 28 28))
-                                 (filter-num 30) (filter-size 5)
-                                 (filter-pad 0) (filter-stride 1)
-                                 (hidden-size 100) (output-size 10)
-                                 (weight-init-std 0.01))
+(defun make-simple-convnet (&key (input-dim '(1 28 28)) (filter-num 30)
+                                 (filter-size 5) (filter-pad 0)
+                                 (filter-stride 1) (hidden-size 100)
+                                 (output-size 10) (weight-init-std 0.01))
   (let* ((channels (car input-dim))
          (input-size (car (cdr input-dim)))
-         (conv-output-size (+ 1 (floor (- (+ input-size (* 2 filter-pad))
-                                          filter-size)
-                                       filter-stride)))
-         (pool-output-size (* filter-num
-                              (floor conv-output-size 2)
-                              (floor conv-output-size 2)))
+         (conv-output-size
+          (+ 1
+             (floor (- (+ input-size (* 2 filter-pad)) filter-size)
+                    filter-stride)))
+         (pool-output-size
+          (* filter-num (floor conv-output-size 2) (floor conv-output-size 2)))
          (params (make-hash-table :test 'equal)))
     (setf (gethash "W1" params)
           (linalg:mul weight-init-std
-                      (linalg:randn (list filter-num channels
-                                          filter-size filter-size))))
+           (linalg:randn (list filter-num channels filter-size filter-size))))
     (setf (gethash "b1" params) (linalg:zeros filter-num))
     (setf (gethash "W2" params)
           (linalg:mul weight-init-std
                       (linalg:randn (list pool-output-size hidden-size))))
     (setf (gethash "b2" params) (linalg:zeros hidden-size))
     (setf (gethash "W3" params)
-          (linalg:mul weight-init-std
-                      (linalg:randn (list hidden-size output-size))))
+     (linalg:mul weight-init-std (linalg:randn (list hidden-size output-size))))
     (setf (gethash "b3" params) (linalg:zeros output-size))
-    (let ((conv1 (make-instance 'convolution
-                                :w (gethash "W1" params)
-                                :b (gethash "b1" params)
-                                :stride filter-stride :pad filter-pad))
-          (affine1 (make-instance 'affine :w (gethash "W2" params)
-                                  :b (gethash "b2" params)))
-          (affine2 (make-instance 'affine :w (gethash "W3" params)
-                                  :b (gethash "b3" params))))
+    (let ((conv1
+           (make-instance 'convolution
+                          :w (gethash "W1" params)
+                          :b (gethash "b1" params)
+                          :stride filter-stride
+                          :pad filter-pad))
+          (affine1
+           (make-instance 'affine
+                          :w (gethash "W2" params)
+                          :b (gethash "b2" params)))
+          (affine2
+           (make-instance 'affine
+                          :w (gethash "W3" params)
+                          :b (gethash "b3" params))))
       (make-instance 'simple-convnet
                      :params params
-                     :layers (list conv1
-                                   (make-instance 'relu-layer)
-                                   (make-instance 'pooling :pool-h 2 :pool-w 2
-                                                  :stride 2)
-                                   affine1
-                                   (make-instance 'relu-layer)
-                                   affine2)
+                     :layers (list conv1 (make-instance 'relu-layer)
+                                   (make-instance 'pooling
+                                                  :pool-h 2
+                                                  :pool-w 2
+                                                  :stride 2) affine1
+                                   (make-instance 'relu-layer) affine2)
                      :conv1 conv1
                      :affine1 affine1
                      :affine2 affine2
@@ -83,8 +85,7 @@
 
 (defmethod predict ((net simple-convnet) x)
   (let ((out x))
-    (dolist (layer (scn-layers net))
-      (setq out (forward layer out)))
+    (dolist (layer (scn-layers net)) (setq out (forward layer out)))
     out))
 
 (defmethod net-loss ((net simple-convnet) x target)
@@ -93,9 +94,7 @@
 (defmethod net-accuracy-count ((net simple-convnet) x target)
   ;; Correctly classified batch rows; target may be one-hot or labels.
   (let ((y (linalg:argmax (predict net x) 1))
-        (tl (if (= (linalg:ndim target) 1)
-                target
-                (linalg:argmax target 1))))
+        (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
     (truncate (linalg:sum (linalg:equal y tl)))))
 
 (defmethod net-gradient ((net simple-convnet) x target)
@@ -136,7 +135,10 @@
          (arrays (load-rlw1 path element-type) (cdr arrays)))
         ((null keys))
       (setf (gethash (car keys) params) (car arrays)))
-    (layer-set-params (scn-conv1 net) (gethash "W1" params) (gethash "b1" params))
-    (layer-set-params (scn-affine1 net) (gethash "W2" params) (gethash "b2" params))
-    (layer-set-params (scn-affine2 net) (gethash "W3" params) (gethash "b3" params))
+    (layer-set-params (scn-conv1 net) (gethash "W1" params)
+                      (gethash "b1" params))
+    (layer-set-params (scn-affine1 net) (gethash "W2" params)
+                      (gethash "b2" params))
+    (layer-set-params (scn-affine2 net) (gethash "W3" params)
+                      (gethash "b3" params))
     net))

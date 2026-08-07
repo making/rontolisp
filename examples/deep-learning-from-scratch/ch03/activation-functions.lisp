@@ -11,15 +11,11 @@
 
 (load "../common/functions.lisp")
 
-(defparameter *xs* (linalg:from-list '(-5.0 -2.0 -1.0 -0.5 0.0 0.5 1.0 2.0 5.0)))
+(defparameter *xs*
+  (linalg:from-list '(-5.0 -2.0 -1.0 -0.5 0.0 0.5 1.0 2.0 5.0)))
 
-(let ((step (step-function *xs*))
-      (sig (sigmoid *xs*))
-      (rel (relu *xs*)))
+(let ((step (step-function *xs*)) (sig (sigmoid *xs*)) (rel (relu *xs*)))
   (format t "     x   step  sigmoid    relu~%")
   (dotimes (i (linalg:size *xs*))
-    (format t "~6,1f  ~5d  ~7,4f  ~6,1f~%"
-            (aref *xs* i)
-            (truncate (aref step i))
-            (aref sig i)
-            (aref rel i))))
+    (format t "~6,1f  ~5d  ~7,4f  ~6,1f~%" (aref *xs* i)
+            (truncate (aref step i)) (aref sig i) (aref rel i))))

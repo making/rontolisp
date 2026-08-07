@@ -25,15 +25,11 @@
 ;;; Map an escape time to a shading character: dense for points that stay
 ;;; bounded ("inside"), sparse for points that escape quickly.
 (defun shade (i max-iter)
-  (cond ((>= i max-iter) "#")
-        ((>= i 10) "+")
-        ((>= i 5) ".")
-        (t " ")))
+  (cond ((>= i max-iter) "#") ((>= i 10) "+") ((>= i 5) ".") (t " ")))
 
 ;;; Render the region [x0,x1] x [y0,y1] as a cols x rows grid of characters.
 (defun mandelbrot (x0 x1 y0 y1 cols rows max-iter)
-  (let ((dx (/ (- x1 x0) cols))
-        (dy (/ (- y1 y0) rows)))
+  (let ((dx (/ (- x1 x0) cols)) (dy (/ (- y1 y0) rows)))
     (dotimes (r rows)
       (let ((cy (+ y0 (* dy r))))
         (dotimes (c cols)

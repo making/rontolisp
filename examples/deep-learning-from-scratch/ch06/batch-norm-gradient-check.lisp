@@ -22,7 +22,7 @@
   (dolist (key (mlne-keys net))
     (let* ((gn (gethash key grad-numerical))
            (gb (gethash key grad-backprop))
-           (diff (/ (linalg:sum (linalg:abs (linalg:sub gb gn)))
-                    (linalg:size gn))))
+           (diff
+            (/ (linalg:sum (linalg:abs (linalg:sub gb gn))) (linalg:size gn))))
       (format t "~a: ~a~%" key
               (if (< diff 1.0e-5) "PASS (mean |diff| < 1e-5)" "FAIL")))))

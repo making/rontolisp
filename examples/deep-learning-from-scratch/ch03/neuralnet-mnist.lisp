@@ -24,7 +24,8 @@
          (z1 (sigmoid a1))
          (a2 (linalg:add (linalg:dot z1 (getf network :w2)) (getf network :b2)))
          (z2 (sigmoid a2))
-         (a3 (linalg:add (linalg:dot z2 (getf network :w3)) (getf network :b3))))
+         (a3
+          (linalg:add (linalg:dot z2 (getf network :w3)) (getf network :b3))))
     (softmax a3)))
 
 (let ((x (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*))
@@ -32,8 +33,7 @@
       (network (load-sample-weight "ch03/sample-weight.bin"))
       (accuracy-cnt 0))
   (dotimes (i (car (linalg:shape x)))
-    (let* ((y (predict network (linalg:row x i)))   ; numpy x[i]: the axis-0 slice, axis dropped
+    (let* ((y (predict network (linalg:row x i))) ; numpy x[i]: the axis-0 slice, axis dropped
            (p (linalg:argmax y)))
-      (when (= p (aref target i))
-        (setq accuracy-cnt (+ accuracy-cnt 1)))))
+      (when (= p (aref target i)) (setq accuracy-cnt (+ accuracy-cnt 1)))))
   (format t "Accuracy: ~a/~a~%" accuracy-cnt *test-limit*))

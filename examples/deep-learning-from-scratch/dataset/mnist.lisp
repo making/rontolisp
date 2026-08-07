@@ -31,8 +31,10 @@
         (error "not an idx3 image file (run ./download-mnist.sh first)"))
       (let* ((pixels (* rows cols))
              (n (min limit (- count offset)))
-             (out (make-array (list n pixels) :element-type 'double-float
-                              :initial-element 0.0)))
+             (out
+              (make-array (list n pixels)
+                          :element-type 'double-float
+                          :initial-element 0.0)))
         (%skip-bytes s (* offset pixels))
         (dotimes (i (* n pixels))
           (setf (row-major-aref out i) (/ (read-byte s) 255.0)))
@@ -43,19 +45,15 @@
   ;; double vector of label values 0..9, or with ONE-HOT the (limit x 10)
   ;; one-hot matrix (the book loader's one_hot_label=True).
   (with-open-file (s path :element-type '(unsigned-byte 8))
-    (let ((magic (%read-be32 s))
-          (count (%read-be32 s)))
+    (let ((magic (%read-be32 s)) (count (%read-be32 s)))
       (unless (= magic 2049)
         (error "not an idx1 label file (run ./download-mnist.sh first)"))
       (let* ((n (min limit (- count offset)))
-             (lab (make-array n :element-type 'double-float
-                              :initial-element 0.0)))
+             (lab
+              (make-array n :element-type 'double-float :initial-element 0.0)))
         (%skip-bytes s offset)
-        (dotimes (i n)
-          (setf (aref lab i) (read-byte s)))
-        (if one-hot
-            (linalg:one-hot lab 10)
-            lab)))))
+        (dotimes (i n) (setf (aref lab i) (read-byte s)))
+        (if one-hot (linalg:one-hot lab 10) lab)))))
 
 ;; --- pretrained ch03 weights ---------------------------------------------------
 
@@ -64,6 +62,9 @@
   ;; (see tools/export-sample-weight.py for the format), as the plist
   ;; (:w1 W1 :b1 b1 :w2 W2 :b2 b2 :w3 W3 :b3 b3) of packed double arrays.
   (let ((v (load-rlw1 path nil)))
-    (list :w1 (nth 0 v) :b1 (nth 1 v)
-          :w2 (nth 2 v) :b2 (nth 3 v)
-          :w3 (nth 4 v) :b3 (nth 5 v))))
+    (list :w1 (nth 0 v)
+          :b1 (nth 1 v)
+          :w2 (nth 2 v)
+          :b2 (nth 3 v)
+          :w3 (nth 4 v)
+          :b3 (nth 5 v))))

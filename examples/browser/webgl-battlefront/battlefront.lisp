@@ -50,45 +50,77 @@
 ;; set-color / set-emissive / set-shine latch them and set-vertex stages
 ;; position + normal + those latched values (a call crosses the WASM boundary
 ;; with at most 7 parameters).
-(rontolisp:wasm-import 'set-color :from "gl" :as "setColor"
-                       :params '(:float :float :float) :returns :void)
-(rontolisp:wasm-import 'set-emissive :from "gl" :as "setEmissive"
-                       :params '(:float) :returns :void)
+(rontolisp:wasm-import 'set-color
+                       :from "gl"
+                       :as "setColor"
+                       :params '(:float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'set-emissive
+                       :from "gl"
+                       :as "setEmissive"
+                       :params '(:float)
+                       :returns :void)
 ;; shine (0 = matte cloth/snow, 1 = polished metal/glass) drives the specular
 ;; highlight in the fragment shader -- latched like color/emissive, so armor
 ;; plates, helmet domes and blaster/saber metal can read as harder materials
 ;; than the fabric and snow around them.
-(rontolisp:wasm-import 'set-shine :from "gl" :as "setShine"
-                       :params '(:float) :returns :void)
-(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
+(rontolisp:wasm-import 'set-shine
+                       :from "gl"
+                       :as "setShine"
+                       :params '(:float)
+                       :returns :void)
+(rontolisp:wasm-import 'set-vertex
+                       :from "gl"
+                       :as "setVertex"
                        :params '(:int :float :float :float :float :float :float)
                        :returns :void)
-(rontolisp:wasm-import 'gl-upload-vertices :from "gl" :as "uploadVertices"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'set-float :from "gl" :as "setFloat"
-                       :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'gl-uniform-matrix4fv :from "gl" :as "uniformMatrix4fv"
-                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-upload-vertices
+                       :from "gl"
+                       :as "uploadVertices"
+                       :params '(:int :int)
+                       :returns :void)
+(rontolisp:wasm-import 'set-float
+                       :from "gl"
+                       :as "setFloat"
+                       :params '(:int :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-uniform-matrix4fv
+                       :from "gl"
+                       :as "uniformMatrix4fv"
+                       :params '(:int)
+                       :returns :void)
 
 ;; Canvas metrics, owned by the page.
-(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
-                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-width
+                       :from "canvas"
+                       :as "width"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'canvas-height
+                       :from "canvas"
+                       :as "height"
+                       :params '()
+                       :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's; the
 ;; host also supplies entropy (trooper fire timing, muzzle jitter).
 (rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
 (rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
-(rontolisp:wasm-import 'atan2 :from "math" :params '(:float :float) :returns :float)
-(rontolisp:wasm-import 'host-random :from "math" :as "random" :params '() :returns :float)
+(rontolisp:wasm-import 'atan2
+                       :from "math"
+                       :params '(:float :float)
+                       :returns :float)
+(rontolisp:wasm-import 'host-random
+                       :from "math"
+                       :as "random"
+                       :params '()
+                       :returns :float)
 
 (defconstant +pi+ 3.141592653589793)
 (defconstant +two-pi+ 6.283185307179586)
 
 (defun rand01 () (host-random))
 (defun rand-range (a b) (+ a (* (- b a) (host-random))))
-
 
 ;; --- shaders ----------------------------------------------------------------
 ;;
@@ -98,7 +130,8 @@
 ;; and glow at its own color -- that is what the lightsaber blades and the
 ;; blaster bolts use.
 
-(defconstant +solid-vs+ "#version 300 es
+(defconstant +solid-vs+
+  "#version 300 es
 layout(location=0) in vec3 aPos;     // world-space position from Lisp
 layout(location=1) in vec3 aNormal;  // world-space normal from Lisp
 layout(location=2) in vec3 aColor;
@@ -119,7 +152,8 @@ void main() {
   vS = aShine;
 }")
 
-(defconstant +solid-fs+ "#version 300 es
+(defconstant +solid-fs+
+  "#version 300 es
 precision mediump float;
 in vec3 vN;
 in vec3 vC;
@@ -164,7 +198,7 @@ void main() {
 ;; convention, VP = P x V is one linalg:matmul, and upload-vp flattens the
 ;; transpose into the column-major order WebGL expects.
 
-(defconstant +half-fov+ 0.44)                   ; a touch under 50-degree fov
+(defconstant +half-fov+ 0.44) ; a touch under 50-degree fov
 
 (defun mat4-perspective (aspect near far)
   (let* ((f (/ (cos +half-fov+) (sin +half-fov+)))
@@ -182,26 +216,37 @@ void main() {
   ;; (right / up / -forward), the translation column is -(basis . eye). The
   ;; basis comes out of a couple of cross products -- kept in local scalars,
   ;; the matrix itself is the linalg (4 4) that combines with the projection.
-  (let* ((ex (aref eye 0)) (ey (aref eye 1)) (ez (aref eye 2))
+  (let* ((ex (aref eye 0))
+         (ey (aref eye 1))
+         (ez (aref eye 2))
          (fx0 (- (aref target 0) ex))
          (fy0 (- (aref target 1) ey))
          (fz0 (- (aref target 2) ez))
          (fl (sqrt (+ (* fx0 fx0) (* fy0 fy0) (* fz0 fz0))))
-         (fx (/ fx0 fl)) (fy (/ fy0 fl)) (fz (/ fz0 fl))
+         (fx (/ fx0 fl))
+         (fy (/ fy0 fl))
+         (fz (/ fz0 fl))
          ;; right = normalize(forward x up), up = (0 1 0)
-         (rx0 (- 0.0 fz)) (rz0 fx)
+         (rx0 (- 0.0 fz))
+         (rz0 fx)
          (rl (sqrt (+ (* rx0 rx0) (* rz0 rz0))))
-         (rx (/ rx0 rl)) (rz (/ rz0 rl))
+         (rx (/ rx0 rl))
+         (rz (/ rz0 rl))
          ;; up = right x forward (right has ry = 0)
          (ux (- 0.0 (* rz fy)))
          (uy (- (* rz fx) (* rx fz)))
          (uz (* rx fy))
          (v (linalg:full '(4 4) 0.0)))
-    (setf (aref v 0 0) rx) (setf (aref v 0 1) 0.0) (setf (aref v 0 2) rz)
+    (setf (aref v 0 0) rx)
+    (setf (aref v 0 1) 0.0)
+    (setf (aref v 0 2) rz)
     (setf (aref v 0 3) (- 0.0 (+ (* rx ex) (* rz ez))))
-    (setf (aref v 1 0) ux) (setf (aref v 1 1) uy) (setf (aref v 1 2) uz)
+    (setf (aref v 1 0) ux)
+    (setf (aref v 1 1) uy)
+    (setf (aref v 1 2) uz)
     (setf (aref v 1 3) (- 0.0 (+ (* ux ex) (* uy ey) (* uz ez))))
-    (setf (aref v 2 0) (- 0.0 fx)) (setf (aref v 2 1) (- 0.0 fy))
+    (setf (aref v 2 0) (- 0.0 fx))
+    (setf (aref v 2 1) (- 0.0 fy))
     (setf (aref v 2 2) (- 0.0 fz))
     (setf (aref v 2 3) (+ (* fx ex) (* fy ey) (* fz ez)))
     (setf (aref v 3 3) 1.0)
@@ -213,8 +258,8 @@ void main() {
 ;; drives the orbit (Pointer Lock on the page), so it doubles as the aim: you
 ;; face the way the camera looks and fire along that heading.
 
-(defvar *cam* #f(0.0 0.0 0.0))          ; the smoothed follow point
-(defconstant +cam-yaw-0+ 0.0)           ; 0 looks along +x, into the field
+(defvar *cam* #f(0.0 0.0 0.0)) ; the smoothed follow point
+(defconstant +cam-yaw-0+ 0.0)  ; 0 looks along +x, into the field
 (defconstant +cam-pitch-0+ 0.32)
 (defconstant +cam-dist-0+ 7.5)
 
@@ -223,7 +268,7 @@ void main() {
 (defvar *cam-dist* +cam-dist-0+)
 (defvar *eye* #f(0.0 0.0 0.0))
 (defvar *aspect* 1.0)
-(defvar *vp* nil)                       ; the current view-projection matrix
+(defvar *vp* nil) ; the current view-projection matrix
 
 ;; The aim frame, refreshed from the camera yaw each frame: forward *aimf* is the
 ;; horizontal heading you face and fire along (y = 0), right *aimr* is
@@ -232,8 +277,11 @@ void main() {
 (defvar *aimr* #f(0.0 0.0 1.0))
 
 (defun update-aim ()
-  (setq *aimf* (linalg:from-list (list (cos *cam-yaw*) 0.0 (sin *cam-yaw*)) 'single-float))
-  (setq *aimr* (linalg:from-list (list (- 0.0 (sin *cam-yaw*)) 0.0 (cos *cam-yaw*)) 'single-float)))
+  (setq *aimf*
+   (linalg:from-list (list (cos *cam-yaw*) 0.0 (sin *cam-yaw*)) 'single-float))
+  (setq *aimr*
+        (linalg:from-list (list (- 0.0 (sin *cam-yaw*)) 0.0 (cos *cam-yaw*))
+                          'single-float)))
 
 (defun orbit (dx dy)
   ;; Exported: mouse-look deltas, normalized by the canvas height.
@@ -253,12 +301,18 @@ void main() {
         (sp (sin *cam-pitch*))
         (cy (cos *cam-yaw*))
         (sy (sin *cam-yaw*)))
-    (setq *eye* (linalg:add *cam* (linalg:from-list (list (- 0.0 (* *cam-dist* cp cy))
-                                        (+ 1.1 (* *cam-dist* sp))
-                                        (- 0.0 (* *cam-dist* cp sy))) 'single-float)))
-    (let ((target (linalg:add *cam* (linalg:from-list (list (* 2.0 cy) 1.1 (* 2.0 sy)) 'single-float))))
-      (setq *vp* (linalg:matmul (mat4-perspective *aspect* 0.1 160.0)
-                                (build-view *eye* target))))))
+    (setq *eye*
+          (linalg:add *cam*
+                      (linalg:from-list (list (- 0.0 (* *cam-dist* cp cy))
+                                              (+ 1.1 (* *cam-dist* sp))
+                                              (- 0.0 (* *cam-dist* cp sy)))
+                                        'single-float)))
+    (let ((target
+           (linalg:add *cam*
+            (linalg:from-list (list (* 2.0 cy) 1.1 (* 2.0 sy)) 'single-float))))
+      (setq *vp*
+            (linalg:matmul (mat4-perspective *aspect* 0.1 160.0)
+                           (build-view *eye* target))))))
 
 (defun upload-vp (loc)
   ;; WebGL wants column-major, which is the row-major layout of the transpose;
@@ -283,8 +337,8 @@ void main() {
 ;; setVertex writes into, and a JS typed-array store past the end is silently
 ;; dropped, so a Lisp-side cap above the page's would lose triangles with no
 ;; error anywhere.
-(defconstant +max-verts+ 190000)        ; lit-triangle vertex capacity
-(defconstant +stride+ 44)               ; 11 floats per vertex
+(defconstant +max-verts+ 190000) ; lit-triangle vertex capacity
+(defconstant +stride+ 44)        ; 11 floats per vertex
 
 (defun setup-gl ()
   (setq *prog* (gl:build-program +solid-vs+ +solid-fs+))
@@ -317,8 +371,8 @@ void main() {
 ;; straight off the rotation's columns. Corner index bits: bit 0 = +x, bit 1 =
 ;; +y, bit 2 = +z in local space; *corners* holds the resulting world (3 8).
 
-(defvar *v* 0)                          ; vertex write cursor
-(defvar *static-verts* 0)               ; the baked snow field, uploaded once
+(defvar *v* 0)            ; vertex write cursor
+(defvar *static-verts* 0) ; the baked snow field, uploaded once
 
 ;; Edge softening: a box face can be stamped with per-corner normals bent
 ;; towards the corner's own outward direction instead of the flat face normal.
@@ -338,21 +392,23 @@ void main() {
 (defun emit-v (col nx ny nz)
   ;; stages corner `col` of *corners* with the latched color + the given normal
   (when (< *v* +max-verts+)
-   (let ((x (aref *corners* 0 col))
-        (y (aref *corners* 1 col))
-        (z (aref *corners* 2 col)))
-    (if (> *csoft* 0.0)
-        (let* ((dx (- x *ccx*)) (dy (- y *ccy*)) (dz (- z *ccz*))
-               (dl (max 0.000001 (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
-               (k *csoft*)
-               (j (- 1.0 k))
-               (mx (+ (* j nx) (* k (/ dx dl))))
-               (my (+ (* j ny) (* k (/ dy dl))))
-               (mz (+ (* j nz) (* k (/ dz dl))))
-               (ml (max 0.000001 (sqrt (+ (* mx mx) (* my my) (* mz mz))))))
-          (set-vertex *v* x y z (/ mx ml) (/ my ml) (/ mz ml)))
-        (set-vertex *v* x y z nx ny nz))
-    (setq *v* (+ *v* 1)))))
+    (let ((x (aref *corners* 0 col))
+          (y (aref *corners* 1 col))
+          (z (aref *corners* 2 col)))
+      (if (> *csoft* 0.0)
+          (let* ((dx (- x *ccx*))
+                 (dy (- y *ccy*))
+                 (dz (- z *ccz*))
+                 (dl (max 0.000001 (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
+                 (k *csoft*)
+                 (j (- 1.0 k))
+                 (mx (+ (* j nx) (* k (/ dx dl))))
+                 (my (+ (* j ny) (* k (/ dy dl))))
+                 (mz (+ (* j nz) (* k (/ dz dl))))
+                 (ml (max 0.000001 (sqrt (+ (* mx mx) (* my my) (* mz mz))))))
+            (set-vertex *v* x y z (/ mx ml) (/ my ml) (/ mz ml)))
+          (set-vertex *v* x y z nx ny nz))
+      (setq *v* (+ *v* 1)))))
 
 (defun emit-face (a b c d nx ny nz)
   (emit-v a nx ny nz)
@@ -377,8 +433,10 @@ void main() {
   (setq *ccx* cx *ccy* cy *ccz* cz)
   (let* ((c (cos yaw))
          (s (sin yaw))
-         (axx (* c hx)) (axz (- 0.0 (* s hx)))   ; the local +x edge, in world
-         (azx (* s hz)) (azz (* c hz)))          ; the local +z edge, in world
+         (axx (* c hx))
+         (axz (- 0.0 (* s hx))) ; the local +x edge, in world
+         (azx (* s hz))
+         (azz (* c hz))) ; the local +z edge, in world
     (dotimes (i 8)
       (let ((sx (if (= (logand i 1) 1) 1.0 -1.0))
             (sy (if (= (logand i 2) 2) hy (- 0.0 hy)))
@@ -388,12 +446,12 @@ void main() {
         (setf (aref *corners* 2 i) (+ cz (* sx axz) (* sz azz)))))
     ;; the face normals are the same two edge directions, normalized (yaw only
     ;; tilts x / z, so +y and -y stay axis-aligned)
-    (emit-face 4 5 7 6 s 0.0 c)                                  ; +z
-    (emit-face 1 0 2 3 (- 0.0 s) 0.0 (- 0.0 c))                  ; -z
-    (emit-face 5 1 3 7 c 0.0 (- 0.0 s))                          ; +x
-    (emit-face 0 4 6 2 (- 0.0 c) 0.0 s)                          ; -x
-    (emit-face 6 7 3 2 0.0 1.0 0.0)                              ; +y
-    (emit-face 0 1 5 4 0.0 -1.0 0.0)                             ; -y
+    (emit-face 4 5 7 6 s 0.0 c)                 ; +z
+    (emit-face 1 0 2 3 (- 0.0 s) 0.0 (- 0.0 c)) ; -z
+    (emit-face 5 1 3 7 c 0.0 (- 0.0 s))         ; +x
+    (emit-face 0 4 6 2 (- 0.0 c) 0.0 s)         ; -x
+    (emit-face 6 7 3 2 0.0 1.0 0.0)             ; +y
+    (emit-face 0 1 5 4 0.0 -1.0 0.0)            ; -y
     (setq *csoft* 0.0)))
 
 ;; --- rounded primitives: cylinders and ellipsoids ------------------------------
@@ -430,19 +488,24 @@ void main() {
 ;; and centered at (cx cy cz) exactly like emit-box. Used for upright limbs
 ;; (thighs, shins, neck).
 (defun emit-cylinder (cx cy cz r hy yaw nsides)
-  (let ((c (cos yaw)) (s (sin yaw))
-        (ytop (+ cy hy)) (ybot (- cy hy)))
+  (let ((c (cos yaw)) (s (sin yaw)) (ytop (+ cy hy)) (ybot (- cy hy)))
     (dotimes (i nsides)
       (let* ((a0 (* +two-pi+ (/ (float i) (float nsides))))
              (a1 (* +two-pi+ (/ (float (+ i 1)) (float nsides))))
-             (lx0 (cos a0)) (lz0 (sin a0))
-             (lx1 (cos a1)) (lz1 (sin a1))
+             (lx0 (cos a0))
+             (lz0 (sin a0))
+             (lx1 (cos a1))
+             (lz1 (sin a1))
              ;; the local radial direction, rotated by yaw -- already unit,
              ;; so it doubles as the smooth side normal
-             (n0x (+ (* c lx0) (* s lz0))) (n0z (- (* c lz0) (* s lx0)))
-             (n1x (+ (* c lx1) (* s lz1))) (n1z (- (* c lz1) (* s lx1)))
-             (x0 (+ cx (* r n0x))) (z0 (+ cz (* r n0z)))
-             (x1 (+ cx (* r n1x))) (z1 (+ cz (* r n1z))))
+             (n0x (+ (* c lx0) (* s lz0)))
+             (n0z (- (* c lz0) (* s lx0)))
+             (n1x (+ (* c lx1) (* s lz1)))
+             (n1z (- (* c lz1) (* s lx1)))
+             (x0 (+ cx (* r n0x)))
+             (z0 (+ cz (* r n0z)))
+             (x1 (+ cx (* r n1x)))
+             (z1 (+ cz (* r n1z))))
         (emit-vertex x0 ytop z0 n0x 0.0 n0z)
         (emit-vertex x0 ybot z0 n0x 0.0 n0z)
         (emit-vertex x1 ybot z1 n1x 0.0 n1z)
@@ -461,29 +524,47 @@ void main() {
 ;; r in the perpendicular plane. Used for arms, gun barrels and blade/hilt
 ;; rods -- anything currently built as a "beam between two points".
 (defun emit-cyl-beam (cx cy cz half-len r yaw nsides)
-  (let* ((c (cos yaw)) (s (sin yaw))
-         (axx c) (axz (- 0.0 s))            ; axis direction (matches box hx)
-         (perpx s) (perpz c))               ; horizontal perpendicular (box hz)
+  (let* ((c (cos yaw))
+         (s (sin yaw))
+         (axx c)
+         (axz (- 0.0 s)) ; axis direction (matches box hx)
+         (perpx s)
+         (perpz c)) ; horizontal perpendicular (box hz)
     (dotimes (i nsides)
       (let* ((a0 (* +two-pi+ (/ (float i) (float nsides))))
              (a1 (* +two-pi+ (/ (float (+ i 1)) (float nsides))))
-             (ca0 (cos a0)) (sa0 (sin a0))
-             (ca1 (cos a1)) (sa1 (sin a1))
-             (n0x (* sa0 perpx)) (n0y ca0) (n0z (* sa0 perpz))
-             (n1x (* sa1 perpx)) (n1y ca1) (n1z (* sa1 perpz))
-             (bx0 (+ cx (* r n0x))) (by0 (+ cy (* r n0y))) (bz0 (+ cz (* r n0z)))
-             (bx1 (+ cx (* r n1x))) (by1 (+ cy (* r n1y))) (bz1 (+ cz (* r n1z)))
-             (fx0 (+ bx0 (* half-len axx))) (fz0 (+ bz0 (* half-len axz)))
-             (kx0 (- bx0 (* half-len axx))) (kz0 (- bz0 (* half-len axz)))
-             (fx1 (+ bx1 (* half-len axx))) (fz1 (+ bz1 (* half-len axz)))
-             (kx1 (- bx1 (* half-len axx))) (kz1 (- bz1 (* half-len axz))))
+             (ca0 (cos a0))
+             (sa0 (sin a0))
+             (ca1 (cos a1))
+             (sa1 (sin a1))
+             (n0x (* sa0 perpx))
+             (n0y ca0)
+             (n0z (* sa0 perpz))
+             (n1x (* sa1 perpx))
+             (n1y ca1)
+             (n1z (* sa1 perpz))
+             (bx0 (+ cx (* r n0x)))
+             (by0 (+ cy (* r n0y)))
+             (bz0 (+ cz (* r n0z)))
+             (bx1 (+ cx (* r n1x)))
+             (by1 (+ cy (* r n1y)))
+             (bz1 (+ cz (* r n1z)))
+             (fx0 (+ bx0 (* half-len axx)))
+             (fz0 (+ bz0 (* half-len axz)))
+             (kx0 (- bx0 (* half-len axx)))
+             (kz0 (- bz0 (* half-len axz)))
+             (fx1 (+ bx1 (* half-len axx)))
+             (fz1 (+ bz1 (* half-len axz)))
+             (kx1 (- bx1 (* half-len axx)))
+             (kz1 (- bz1 (* half-len axz))))
         (emit-vertex fx0 by0 fz0 n0x n0y n0z)
         (emit-vertex kx0 by0 kz0 n0x n0y n0z)
         (emit-vertex kx1 by1 kz1 n1x n1y n1z)
         (emit-vertex fx0 by0 fz0 n0x n0y n0z)
         (emit-vertex kx1 by1 kz1 n1x n1y n1z)
         (emit-vertex fx1 by1 fz1 n1x n1y n1z)
-        (emit-vertex (+ cx (* half-len axx)) cy (+ cz (* half-len axz)) axx 0.0 axz)
+        (emit-vertex (+ cx (* half-len axx)) cy (+ cz (* half-len axz)) axx 0.0
+                     axz)
         (emit-vertex fx0 by0 fz0 axx 0.0 axz)
         (emit-vertex fx1 by1 fz1 axx 0.0 axz)
         (emit-vertex (- cx (* half-len axx)) cy (- cz (* half-len axz))
@@ -510,10 +591,15 @@ void main() {
 ;; ellipsoid, yaw-rotates the result into world space, and derives the
 ;; correctly-lit normal (scale by 1/r, then renormalize) the same way.
 (defun ellipsoid-vertex (ux uy uz)
-  (let* ((nx (/ ux *el-rx*)) (ny (/ uy *el-ry*)) (nz (/ uz *el-rz*))
+  (let* ((nx (/ ux *el-rx*))
+         (ny (/ uy *el-ry*))
+         (nz (/ uz *el-rz*))
          (nl (max 0.000001 (sqrt (+ (* nx nx) (* ny ny) (* nz nz)))))
-         (nnx (/ nx nl)) (nny (/ ny nl)) (nnz (/ nz nl))
-         (lx (* ux *el-rx*)) (lz (* uz *el-rz*))
+         (nnx (/ nx nl))
+         (nny (/ ny nl))
+         (nnz (/ nz nl))
+         (lx (* ux *el-rx*))
+         (lz (* uz *el-rz*))
          (wx (+ *el-cx* (* *el-c* lx) (* *el-s* lz)))
          (wz (+ *el-cz* (- (* *el-c* lz) (* *el-s* lx))))
          (wy (+ *el-cy* (* uy *el-ry*)))
@@ -528,18 +614,26 @@ void main() {
   (dotimes (j lat-segs)
     (let* ((th0 (* +pi+ (/ (float j) (float lat-segs))))
            (th1 (* +pi+ (/ (float (+ j 1)) (float lat-segs))))
-           (y0 (cos th0)) (rad0 (sin th0))
-           (y1 (cos th1)) (rad1 (sin th1)))
+           (y0 (cos th0))
+           (rad0 (sin th0))
+           (y1 (cos th1))
+           (rad1 (sin th1)))
       (dotimes (i lon-segs)
         (let* ((p0 (* +two-pi+ (/ (float i) (float lon-segs))))
                (p1 (* +two-pi+ (/ (float (+ i 1)) (float lon-segs))))
-               (cp0 (cos p0)) (sp0 (sin p0))
-               (cp1 (cos p1)) (sp1 (sin p1))
+               (cp0 (cos p0))
+               (sp0 (sin p0))
+               (cp1 (cos p1))
+               (sp1 (sin p1))
                ;; the four unit-sphere corners of this lat/lon quad
-               (u00x (* rad0 cp0)) (u00z (* rad0 sp0))
-               (u01x (* rad0 cp1)) (u01z (* rad0 sp1))
-               (u10x (* rad1 cp0)) (u10z (* rad1 sp0))
-               (u11x (* rad1 cp1)) (u11z (* rad1 sp1)))
+               (u00x (* rad0 cp0))
+               (u00z (* rad0 sp0))
+               (u01x (* rad0 cp1))
+               (u01z (* rad0 sp1))
+               (u10x (* rad1 cp0))
+               (u10z (* rad1 sp0))
+               (u11x (* rad1 cp1))
+               (u11z (* rad1 sp1)))
           (ellipsoid-vertex u00x y0 u00z)
           (ellipsoid-vertex u10x y1 u10z)
           (ellipsoid-vertex u11x y1 u11z)
@@ -567,15 +661,15 @@ void main() {
 ;; signature is already at the seven-parameter ceiling with the two endpoints
 ;; and the near radius. `taper` is CONSUMED -- emit-limb resets it after use --
 ;; so a forgotten taper yields a plain cylinder rather than a stale cone.
-(defvar *limb-r1* -1.0)                 ; < 0 = "same as r0", i.e. no taper
-(defvar *limb-n* 8)                     ; ring segments, before the LOD scale
-(defvar *limb-caps* t)                  ; end discs; off for a buried base
+(defvar *limb-r1* -1.0) ; < 0 = "same as r0", i.e. no taper
+(defvar *limb-n* 8)     ; ring segments, before the LOD scale
+(defvar *limb-caps* t)  ; end discs; off for a buried base
 
 (defun taper (r1) (setq *limb-r1* r1))
 (defun limb-sides (n) (setq *limb-n* n))
 (defun limb-caps (b) (setq *limb-caps* b))
 
-(defvar *lx0* 0.0)                      ; the limb's cached perpendicular frame
+(defvar *lx0* 0.0) ; the limb's cached perpendicular frame
 (defvar *ly0* 0.0)
 (defvar *lz0* 0.0)
 (defvar *lx1* 0.0)
@@ -593,25 +687,30 @@ void main() {
          (p1z (- (* ux ay) (* uy ax)))
          (p1l (max 0.000001 (sqrt (+ (* p1x p1x) (* p1y p1y) (* p1z p1z))))))
     (setq *lx0* (/ p1x p1l) *ly0* (/ p1y p1l) *lz0* (/ p1z p1l))
-    (setq *lx1* (- (* ay *lz0*) (* az *ly0*))
-          *ly1* (- (* az *lx0*) (* ax *lz0*))
-          *lz1* (- (* ax *ly0*) (* ay *lx0*)))))
+    (setq *lx1* (- (* ay *lz0*) (* az *ly0*)) *ly1*
+          (- (* az *lx0*) (* ax *lz0*)) *lz1* (- (* ax *ly0*) (* ay *lx0*)))))
 
 (defun emit-limb (x0 y0 z0 x1 y1 z1 r0)
-  (let* ((dx (- x1 x0)) (dy (- y1 y0)) (dz (- z1 z0))
+  (let* ((dx (- x1 x0))
+         (dy (- y1 y0))
+         (dz (- z1 z0))
          (r1 (if (< *limb-r1* 0.0) r0 *limb-r1*))
          (nsides (segs *limb-n*))
          (len (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
-    (setq *limb-r1* -1.0)               ; consumed
+    (setq *limb-r1* -1.0) ; consumed
     (when (> len 0.000001)
-      (let* ((ax (/ dx len)) (ay (/ dy len)) (az (/ dz len))
+      (let* ((ax (/ dx len))
+             (ay (/ dy len))
+             (az (/ dz len))
              (slope (/ (- r0 r1) len)))
         (limb-frame ax ay az)
         (dotimes (i nsides)
           (let* ((a0 (* +two-pi+ (/ (float i) (float nsides))))
                  (a1 (* +two-pi+ (/ (float (+ i 1)) (float nsides))))
-                 (c0 (cos a0)) (s0 (sin a0))
-                 (c1 (cos a1)) (s1 (sin a1))
+                 (c0 (cos a0))
+                 (s0 (sin a0))
+                 (c1 (cos a1))
+                 (s1 (sin a1))
                  ;; the two radial directions bounding this side quad
                  (d0x (+ (* c0 *lx0*) (* s0 *lx1*)))
                  (d0y (+ (* c0 *ly0*) (* s0 *ly1*)))
@@ -620,18 +719,34 @@ void main() {
                  (d1y (+ (* c1 *ly0*) (* s1 *ly1*)))
                  (d1z (+ (* c1 *lz0*) (* s1 *lz1*)))
                  ;; the taper tilts the side normal along the axis
-                 (m0x (+ d0x (* slope ax))) (m0y (+ d0y (* slope ay)))
+                 (m0x (+ d0x (* slope ax)))
+                 (m0y (+ d0y (* slope ay)))
                  (m0z (+ d0z (* slope az)))
-                 (m0l (max 0.000001 (sqrt (+ (* m0x m0x) (* m0y m0y) (* m0z m0z)))))
-                 (n0x (/ m0x m0l)) (n0y (/ m0y m0l)) (n0z (/ m0z m0l))
-                 (m1x (+ d1x (* slope ax))) (m1y (+ d1y (* slope ay)))
+                 (m0l
+                  (max 0.000001 (sqrt (+ (* m0x m0x) (* m0y m0y) (* m0z m0z)))))
+                 (n0x (/ m0x m0l))
+                 (n0y (/ m0y m0l))
+                 (n0z (/ m0z m0l))
+                 (m1x (+ d1x (* slope ax)))
+                 (m1y (+ d1y (* slope ay)))
                  (m1z (+ d1z (* slope az)))
-                 (m1l (max 0.000001 (sqrt (+ (* m1x m1x) (* m1y m1y) (* m1z m1z)))))
-                 (n1x (/ m1x m1l)) (n1y (/ m1y m1l)) (n1z (/ m1z m1l))
-                 (a0x (+ x0 (* r0 d0x))) (a0y (+ y0 (* r0 d0y))) (a0z (+ z0 (* r0 d0z)))
-                 (b0x (+ x1 (* r1 d0x))) (b0y (+ y1 (* r1 d0y))) (b0z (+ z1 (* r1 d0z)))
-                 (a1x (+ x0 (* r0 d1x))) (a1y (+ y0 (* r0 d1y))) (a1z (+ z0 (* r0 d1z)))
-                 (b1x (+ x1 (* r1 d1x))) (b1y (+ y1 (* r1 d1y))) (b1z (+ z1 (* r1 d1z))))
+                 (m1l
+                  (max 0.000001 (sqrt (+ (* m1x m1x) (* m1y m1y) (* m1z m1z)))))
+                 (n1x (/ m1x m1l))
+                 (n1y (/ m1y m1l))
+                 (n1z (/ m1z m1l))
+                 (a0x (+ x0 (* r0 d0x)))
+                 (a0y (+ y0 (* r0 d0y)))
+                 (a0z (+ z0 (* r0 d0z)))
+                 (b0x (+ x1 (* r1 d0x)))
+                 (b0y (+ y1 (* r1 d0y)))
+                 (b0z (+ z1 (* r1 d0z)))
+                 (a1x (+ x0 (* r0 d1x)))
+                 (a1y (+ y0 (* r0 d1y)))
+                 (a1z (+ z0 (* r0 d1z)))
+                 (b1x (+ x1 (* r1 d1x)))
+                 (b1y (+ y1 (* r1 d1y)))
+                 (b1z (+ z1 (* r1 d1z))))
             (emit-vertex a0x a0y a0z n0x n0y n0z)
             (emit-vertex b0x b0y b0z n0x n0y n0z)
             (emit-vertex b1x b1y b1z n1x n1y n1z)
@@ -669,10 +784,10 @@ void main() {
 ;; This is what armour plates, hulls, packs and boots want -- shapes that ARE
 ;; boxes but were never machined with knife edges.
 
-(defvar *rb-hx* 1.0)                    ; the box being sampled (local frame)
+(defvar *rb-hx* 1.0) ; the box being sampled (local frame)
 (defvar *rb-hy* 1.0)
 (defvar *rb-hz* 1.0)
-(defvar *rb-ax* 1.0)                    ; ... and its core half-extents
+(defvar *rb-ax* 1.0) ; ... and its core half-extents
 (defvar *rb-ay* 1.0)
 (defvar *rb-az* 1.0)
 (defvar *rb-br* 0.1)
@@ -689,37 +804,54 @@ void main() {
   (let* ((qx (clamp1 px *rb-ax*))
          (qy (clamp1 py *rb-ay*))
          (qz (clamp1 pz *rb-az*))
-         (dx (- px qx)) (dy (- py qy)) (dz (- pz qz))
+         (dx (- px qx))
+         (dy (- py qy))
+         (dz (- pz qz))
          (dl (max 0.000001 (sqrt (+ (* dx dx) (* dy dy) (* dz dz)))))
-         (nx (/ dx dl)) (ny (/ dy dl)) (nz (/ dz dl))
+         (nx (/ dx dl))
+         (ny (/ dy dl))
+         (nz (/ dz dl))
          (lx (+ qx (* *rb-br* nx)))
          (ly (+ qy (* *rb-br* ny)))
          (lz (+ qz (* *rb-br* nz))))
-    (emit-vertex (+ *rb-cx* (* *rb-c* lx) (* *rb-s* lz))
-                 (+ *rb-cy* ly)
+    (emit-vertex (+ *rb-cx* (* *rb-c* lx) (* *rb-s* lz)) (+ *rb-cy* ly)
                  (+ *rb-cz* (- (* *rb-c* lz) (* *rb-s* lx)))
-                 (+ (* *rb-c* nx) (* *rb-s* nz))
-                 ny
+                 (+ (* *rb-c* nx) (* *rb-s* nz)) ny
                  (- (* *rb-c* nz) (* *rb-s* nx)))))
 
 ;; one quad of a face, given in that face's (u v) parameters plus the pinned
 ;; coordinate `f`; `axis` selects the permutation back to (x y z).
 (defun rbox-quad (axis f u0 v0 u1 v1)
   (cond ((= axis 0)
-         (rbox-vertex f u0 v0) (rbox-vertex f u1 v0) (rbox-vertex f u1 v1)
-         (rbox-vertex f u0 v0) (rbox-vertex f u1 v1) (rbox-vertex f u0 v1))
+         (rbox-vertex f u0 v0)
+         (rbox-vertex f u1 v0)
+         (rbox-vertex f u1 v1)
+         (rbox-vertex f u0 v0)
+         (rbox-vertex f u1 v1)
+         (rbox-vertex f u0 v1))
         ((= axis 1)
-         (rbox-vertex u0 f v0) (rbox-vertex u1 f v0) (rbox-vertex u1 f v1)
-         (rbox-vertex u0 f v0) (rbox-vertex u1 f v1) (rbox-vertex u0 f v1))
+         (rbox-vertex u0 f v0)
+         (rbox-vertex u1 f v0)
+         (rbox-vertex u1 f v1)
+         (rbox-vertex u0 f v0)
+         (rbox-vertex u1 f v1)
+         (rbox-vertex u0 f v1))
         (t
-         (rbox-vertex u0 v0 f) (rbox-vertex u1 v0 f) (rbox-vertex u1 v1 f)
-         (rbox-vertex u0 v0 f) (rbox-vertex u1 v1 f) (rbox-vertex u0 v1 f))))
+         (rbox-vertex u0 v0 f)
+         (rbox-vertex u1 v0 f)
+         (rbox-vertex u1 v1 f)
+         (rbox-vertex u0 v0 f)
+         (rbox-vertex u1 v1 f)
+         (rbox-vertex u0 v1 f))))
 
 ;; one face of the outer box, as a 3x3 grid split at the core boundary. The
 ;; face is addressed through a small permutation: `axis` says which coordinate
 ;; is pinned to the face (0 = x, 1 = y, 2 = z) and `sgn` which side.
 (defun rbox-face (axis sgn)
-  (let* ((f (if (= axis 0) (* sgn *rb-hx*) (if (= axis 1) (* sgn *rb-hy*) (* sgn *rb-hz*))))
+  (let* ((f
+          (if (= axis 0)
+              (* sgn *rb-hx*)
+              (if (= axis 1) (* sgn *rb-hy*) (* sgn *rb-hz*))))
          ;; the two in-plane axes and their split points
          (uh (if (= axis 0) *rb-hy* *rb-hx*))
          (ua (if (= axis 0) *rb-ay* *rb-ax*))
@@ -741,8 +873,8 @@ void main() {
   (let ((r (max 0.004 (min br (* 0.98 (min hx (min hy hz)))))))
     (setq *rb-cx* cx *rb-cy* cy *rb-cz* cz)
     (setq *rb-hx* hx *rb-hy* hy *rb-hz* hz *rb-br* r)
-    (setq *rb-ax* (max 0.0 (- hx r)) *rb-ay* (max 0.0 (- hy r))
-          *rb-az* (max 0.0 (- hz r)))
+    (setq *rb-ax* (max 0.0 (- hx r)) *rb-ay* (max 0.0 (- hy r)) *rb-az*
+          (max 0.0 (- hz r)))
     (rbox-face 0 1.0)
     (rbox-face 0 -1.0)
     (rbox-face 1 1.0)
@@ -817,8 +949,8 @@ void main() {
   (emit-cylinder (lwx lx lz) (lwy ly) (lwz lx lz) r hy *oyaw* (segs nsides)))
 
 (defun part-ellipsoid (lx ly lz rx ry rz &optional (lon-segs 8) (lat-segs 5))
-  (emit-ellipsoid (lwx lx lz) (lwy ly) (lwz lx lz)
-                  rx ry rz *oyaw* (segs lon-segs) (segs lat-segs)))
+  (emit-ellipsoid (lwx lx lz) (lwy ly) (lwz lx lz) rx ry rz *oyaw*
+                  (segs lon-segs) (segs lat-segs)))
 
 ;; A rounded box in the local frame -- when the fillet is actually worth nine
 ;; times the triangles of a plain box, which is a question about THIS PART, not
@@ -839,22 +971,23 @@ void main() {
   (let ((wx (lwx lx lz)) (wy (lwy ly)) (wz (lwz lx lz)))
     (if (and (roundp) (rbox-worth-it wx wy wz (max hx (max hy hz))))
         (emit-rbox wx wy wz hx hy hz br)
-        (progn (soften 0.5)
-               (emit-box wx wy wz hx hy hz *oyaw*)))))
+        (progn
+          (soften 0.5)
+          (emit-box wx wy wz hx hy hz *oyaw*)))))
 
 ;; A free-standing tapered segment between two LOCAL points -- the articulated
 ;; limb in figure coordinates. Precede it with (taper r1) for a cone.
 (defun part-limb (lx0 ly0 lz0 lx1 ly1 lz1 r0)
-  (emit-limb (lwx lx0 lz0) (lwy ly0) (lwz lx0 lz0)
-             (lwx lx1 lz1) (lwy ly1) (lwz lx1 lz1) r0))
+  (emit-limb (lwx lx0 lz0) (lwy ly0) (lwz lx0 lz0) (lwx lx1 lz1) (lwy ly1)
+             (lwz lx1 lz1) r0))
 
 ;; A joint ball at a local point -- what turns two limb segments into a knee or
 ;; a shoulder instead of two sticks that happen to touch.
 (defun part-joint (lx ly lz r)
   ;; coarser than a head or a helmet on purpose: a joint ball is small on
   ;; screen and there are a dozen of them per figure
-  (emit-ellipsoid (lwx lx lz) (lwy ly) (lwz lx lz)
-                  r r r *oyaw* (segs 6) (segs 3)))
+  (emit-ellipsoid (lwx lx lz) (lwy ly) (lwz lx lz) r r r *oyaw* (segs 6)
+                  (segs 3)))
 
 ;; colour + emissive + shine helpers
 ;; *hit-tint* (0..1) reddens and lights whatever `col` draws next -- set around
@@ -869,9 +1002,14 @@ void main() {
       (let ((k *hit-tint*))
         (set-emissive (* 0.55 k))
         (set-color (+ r (* k (- 1.0 r))) (* g (- 1.0 k)) (* b (- 1.0 k))))
-      (progn (set-emissive 0.0) (set-color r g b))))
+      (progn
+        (set-emissive 0.0)
+        (set-color r g b))))
 (defun metal (r g b) (col r g b 0.85))
-(defun glow-col (r g b) (set-shine 0.0) (set-emissive 1.0) (set-color r g b))
+(defun glow-col (r g b)
+  (set-shine 0.0)
+  (set-emissive 1.0)
+  (set-color r g b))
 
 ;; --- the snow field -----------------------------------------------------------
 ;;
@@ -887,8 +1025,7 @@ void main() {
 ;; ruled across the snow. Pushing the rim past the fog's saturation distance is
 ;; what makes the field read as endless. It is also kept thin, so a stray
 ;; sightline under a peak sees as little of the edge as possible.
-(defconstant +scenery+
-  '((-260.0 -0.6 -260.0 300.0 0.0 260.0 0.90 0.93 0.98)))
+(defconstant +scenery+ '((-260.0 -0.6 -260.0 300.0 0.0 260.0 0.90 0.93 0.98)))
 
 ;; The horizon used to be four tall boxes, which from inside the arena is a
 ;; flat grey wall with two conspicuous vertical corners running up the sky. It
@@ -896,7 +1033,7 @@ void main() {
 ;; whose skirts overlap, at jittered sizes, so the skyline is a range. All of
 ;; it is baked once with the rest of the field, so the triangles cost nothing
 ;; per frame.
-(defconstant +peak-base+ -2.6)          ; how far the cone is planted below the snow
+(defconstant +peak-base+ -2.6) ; how far the cone is planted below the snow
 
 (defun emit-peak (px pz r h)
   ;; The apex leans off the base's centre -- that lean is the difference
@@ -907,16 +1044,14 @@ void main() {
   ;; edge rises by about radius * lean / height -- for a 25m-wide apron that is
   ;; metres, so an unbounded lean lifts the buried end clean out of the snow.
   (let* ((rise (- h +peak-base+))
-         (lean (min (* 0.30 (min r h))
-                    (* 0.85 (/ (* (- 0.0 +peak-base+) rise) r)))))
+         (lean
+          (min (* 0.30 (min r h)) (* 0.85 (/ (* (- 0.0 +peak-base+) rise) r)))))
     (col (rand-range 0.79 0.87) (rand-range 0.85 0.91) (rand-range 0.93 0.98))
     (limb-sides 7)
-    (limb-caps nil)                     ; the base is underground, the tip a point
-    (taper 0.0)                         ; a true point, so no lid is missed
-    (emit-limb px +peak-base+ pz
-               (+ px (rand-range (- 0.0 lean) lean)) h
-               (+ pz (rand-range (- 0.0 lean) lean))
-               r)
+    (limb-caps nil) ; the base is underground, the tip a point
+    (taper 0.0)     ; a true point, so no lid is missed
+    (emit-limb px +peak-base+ pz (+ px (rand-range (- 0.0 lean) lean)) h
+               (+ pz (rand-range (- 0.0 lean) lean)) r)
     (limb-caps t)))
 
 ;; The apron the ranges stand on: very wide, very low cones. A box shelf would
@@ -929,8 +1064,7 @@ void main() {
   (dotimes (i n)
     (let ((t0 (float i)))
       (emit-peak (+ x0 (* dx t0) (rand-range -8.0 8.0))
-                 (+ z0 (* dz t0) (rand-range -8.0 8.0))
-                 (rand-range 22.0 34.0)
+                 (+ z0 (* dz t0) (rand-range -8.0 8.0)) (rand-range 22.0 34.0)
                  (rand-range 1.5 3.4)))))
 
 (defun emit-peaks (x0 z0 dx dz n hlo hhi)
@@ -939,18 +1073,14 @@ void main() {
   (dotimes (i n)
     (let ((t0 (float i)))
       (emit-peak (+ x0 (* dx t0) (rand-range -9.0 9.0))
-                 (+ z0 (* dz t0) (rand-range -9.0 9.0))
-                 (rand-range 9.0 20.0)
+                 (+ z0 (* dz t0) (rand-range -9.0 9.0)) (rand-range 9.0 20.0)
                  (rand-range hlo hhi)))))
 
 (defun emit-block (b)
   (col (nth 6 b) (nth 7 b) (nth 8 b))
-  (emit-box (* 0.5 (+ (nth 0 b) (nth 3 b)))
-            (* 0.5 (+ (nth 1 b) (nth 4 b)))
-            (* 0.5 (+ (nth 2 b) (nth 5 b)))
-            (* 0.5 (- (nth 3 b) (nth 0 b)))
-            (* 0.5 (- (nth 4 b) (nth 1 b)))
-            (* 0.5 (- (nth 5 b) (nth 2 b)))
+  (emit-box (* 0.5 (+ (nth 0 b) (nth 3 b))) (* 0.5 (+ (nth 1 b) (nth 4 b)))
+            (* 0.5 (+ (nth 2 b) (nth 5 b))) (* 0.5 (- (nth 3 b) (nth 0 b)))
+            (* 0.5 (- (nth 4 b) (nth 1 b))) (* 0.5 (- (nth 5 b) (nth 2 b)))
             0.0))
 
 ;; low snow drifts: smooth wind-blown mounds, not plateaus -- same
@@ -967,46 +1097,44 @@ void main() {
 
 (defun emit-drift (b)
   (col (nth 6 b) (nth 7 b) (nth 8 b))
-  (emit-ellipsoid (* 0.5 (+ (nth 0 b) (nth 3 b)))
-                   (nth 1 b)
-                   (* 0.5 (+ (nth 2 b) (nth 5 b)))
-                   (* 0.5 (- (nth 3 b) (nth 0 b)))
-                   (- (nth 4 b) (nth 1 b))
-                   (* 0.5 (- (nth 5 b) (nth 2 b)))
-                   0.0 12 6))
+  (emit-ellipsoid (* 0.5 (+ (nth 0 b) (nth 3 b))) (nth 1 b)
+                  (* 0.5 (+ (nth 2 b) (nth 5 b)))
+                  (* 0.5 (- (nth 3 b) (nth 0 b))) (- (nth 4 b) (nth 1 b))
+                  (* 0.5 (- (nth 5 b) (nth 2 b))) 0.0 12 6))
 
 ;; ice boulders (cold blue-grey): center + radius + a squash/yaw so a plain
 ;; sphere reads as a lumpy rock, not a ball-bearing.
 (defconstant +boulders+
-  '((3.2 0.9 13.2 1.2 0.62 0.9)
-    (14.9 0.65 -5.1 0.9 0.55 -0.9)
-    (31.3 1.1 5.3 1.3 0.68 1.7)
-    (-5.0 0.75 -11.0 1.0 0.60 -1.3)
+  '((3.2 0.9 13.2 1.2 0.62 0.9) (14.9 0.65 -5.1 0.9 0.55 -0.9)
+    (31.3 1.1 5.3 1.3 0.68 1.7) (-5.0 0.75 -11.0 1.0 0.60 -1.3)
     (45.5 1.3 9.5 1.5 0.75 0.4)))
 
 (defun emit-boulder (b)
   (col 0.64 0.72 0.81)
-  (emit-ellipsoid (nth 0 b) (nth 1 b) (nth 2 b)
-                   (nth 3 b) (nth 4 b) (* 0.9 (nth 3 b)) (nth 5 b) 10 6))
+  (emit-ellipsoid (nth 0 b) (nth 1 b) (nth 2 b) (nth 3 b) (nth 4 b)
+                  (* 0.9 (nth 3 b)) (nth 5 b) 10 6))
 
 ;; a few clouds: each is a small cluster of overlapping ellipsoid puffs
 ;; (center + half-width/height/depth), fluffier than one stretched blob.
 (defconstant +clouds+
-  '((15.0 16.0 -27.5 5.0 1.0 2.5)
-    (39.5 18.0 25.0 5.5 1.0 3.0)
+  '((15.0 16.0 -27.5 5.0 1.0 2.5) (39.5 18.0 25.0 5.5 1.0 3.0)
     (-9.0 17.0 7.0 5.0 1.0 3.0)))
 
 (defun emit-cloud (c)
-  (let ((cx (nth 0 c)) (cy (nth 1 c)) (cz (nth 2 c))
-        (w (nth 3 c)) (h (nth 4 c)) (d (nth 5 c)))
+  (let ((cx (nth 0 c))
+        (cy (nth 1 c))
+        (cz (nth 2 c))
+        (w (nth 3 c))
+        (h (nth 4 c))
+        (d (nth 5 c)))
     (col 0.99 0.99 1.00)
     (emit-ellipsoid cx cy cz (* 0.55 w) h (* 0.85 d) 0.0 10 5)
-    (emit-ellipsoid (- cx (* 0.32 w)) (- cy (* 0.15 h)) cz
-                     (* 0.40 w) (* 0.75 h) (* 0.70 d) 0.0 8 4)
-    (emit-ellipsoid (+ cx (* 0.34 w)) (- cy (* 0.10 h)) cz
-                     (* 0.42 w) (* 0.80 h) (* 0.72 d) 0.0 8 4)
-    (emit-ellipsoid cx (+ cy (* 0.35 h)) (+ cz (* 0.10 d))
-                     (* 0.36 w) (* 0.70 h) (* 0.60 d) 0.0 8 4)))
+    (emit-ellipsoid (- cx (* 0.32 w)) (- cy (* 0.15 h)) cz (* 0.40 w) (* 0.75 h)
+                    (* 0.70 d) 0.0 8 4)
+    (emit-ellipsoid (+ cx (* 0.34 w)) (- cy (* 0.10 h)) cz (* 0.42 w) (* 0.80 h)
+                    (* 0.72 d) 0.0 8 4)
+    (emit-ellipsoid cx (+ cy (* 0.35 h)) (+ cz (* 0.10 d)) (* 0.36 w) (* 0.70 h)
+                    (* 0.60 d) 0.0 8 4)))
 
 (defun bake-static ()
   (setq *v* 0)
@@ -1026,7 +1154,7 @@ void main() {
   (emit-peaks -80.0 -60.0 0.0 12.0 11 12.0 25.0)
   (emit-peaks 82.0 -60.0 0.0 12.0 11 5.0 11.0)
   (emit-peaks 100.0 -60.0 0.0 12.0 11 13.0 26.0)
-  (limb-sides 8)                        ; restore the default ring count
+  (limb-sides 8) ; restore the default ring count
   (dolist (b +drifts+) (emit-drift b))
   (dolist (b +boulders+) (emit-boulder b))
   (dolist (c +clouds+) (emit-cloud c))
@@ -1043,25 +1171,25 @@ void main() {
 (defconstant +field-max-z+ 34.0)
 (defconstant +player-max-hp+ 120.0)
 (defconstant +gravity+ 26.0)
-(defconstant +jump-v+ 9.2)             ; a roomy hop, apex ~1.6
-(defconstant +invuln+ 0.6)             ; i-frames after taking a hit
+(defconstant +jump-v+ 9.2) ; a roomy hop, apex ~1.6
+(defconstant +invuln+ 0.6) ; i-frames after taking a hit
 
-(defvar *ppos* #f(0.0 0.0 0.0))        ; player position
-(defvar *pvel* #f(0.0 0.0 0.0))        ; velocity (y = vertical, jump / gravity)
+(defvar *ppos* #f(0.0 0.0 0.0)) ; player position
+(defvar *pvel* #f(0.0 0.0 0.0)) ; velocity (y = vertical, jump / gravity)
 (defvar *grounded* t)
-(defvar *pyaw* 0.0)                     ; render facing = -cam-yaw
+(defvar *pyaw* 0.0) ; render facing = -cam-yaw
 (defvar *php* 120.0)
-(defvar *inv-t* 0.0)                    ; invulnerability countdown
-(defvar *hurt-flash* 0.0)               ; brief red vignette timer (HUD)
+(defvar *inv-t* 0.0)      ; invulnerability countdown
+(defvar *hurt-flash* 0.0) ; brief red vignette timer (HUD)
 (defvar *run-phase* 0.0)
 
-(defvar *weapon* 1)                     ; 0 lightsaber, 1 blaster (start armed with the blaster)
-(defvar *attack* 0.0)                   ; 1.0 while the mouse button is held
+(defvar *weapon* 1)   ; 0 lightsaber, 1 blaster (start armed with the blaster)
+(defvar *attack* 0.0) ; 1.0 while the mouse button is held
 (defvar *attack-prev* nil)
-(defvar *swing-t* 0.0)                  ; lightsaber swing countdown
+(defvar *swing-t* 0.0) ; lightsaber swing countdown
 (defvar *swing-cd* 0.0)
-(defvar *swing-hit* nil)                ; damage applied once per swing
-(defvar *fire-cd* 0.0)                  ; blaster cadence
+(defvar *swing-hit* nil) ; damage applied once per swing
+(defvar *fire-cd* 0.0)   ; blaster cadence
 
 ;; game state: 0 playing, 1 victory, 2 defeat
 (defvar *state* 0)
@@ -1070,11 +1198,11 @@ void main() {
 (defvar *pending-reset* nil)
 
 ;; keyboard state, forwarded by the page: 1.0 while held
-(defvar *in-l* 0.0)                     ; A
-(defvar *in-r* 0.0)                     ; D
-(defvar *in-f* 0.0)                     ; W
-(defvar *in-b* 0.0)                     ; S
-(defvar *in-jump* 0.0)                  ; Space
+(defvar *in-l* 0.0)    ; A
+(defvar *in-r* 0.0)    ; D
+(defvar *in-f* 0.0)    ; W
+(defvar *in-b* 0.0)    ; S
+(defvar *in-jump* 0.0) ; Space
 (defvar *jump-prev* nil)
 
 (defun set-key (code down)
@@ -1094,8 +1222,7 @@ void main() {
   ;; Exported: F toggles the lightsaber and the blaster.
   (setq *weapon* (if (= *weapon* 0) 1 0)))
 
-(defun restart ()
-  (setq *pending-reset* t))
+(defun restart () (setq *pending-reset* t))
 
 ;; --- blaster bolts ------------------------------------------------------------
 ;;
@@ -1107,10 +1234,10 @@ void main() {
 (defconstant +nbolt+ 48)
 (defvar *bpos* (make-array +nbolt+ :initial-element nil))
 (defvar *bvel* (make-array +nbolt+ :initial-element nil))
-(defvar *bt* (make-array +nbolt+ :initial-element 0.0))     ; life left
-(defvar *bown* (make-array +nbolt+ :initial-element 0))     ; 0 player / 1 enemy
+(defvar *bt* (make-array +nbolt+ :initial-element 0.0)) ; life left
+(defvar *bown* (make-array +nbolt+ :initial-element 0)) ; 0 player / 1 enemy
 (defvar *bdmg* (make-array +nbolt+ :initial-element 0.0))
-(defvar *bsz* (make-array +nbolt+ :initial-element 1.0))    ; visual scale
+(defvar *bsz* (make-array +nbolt+ :initial-element 1.0)) ; visual scale
 (defvar *br* (make-array +nbolt+ :initial-element 1.0))
 (defvar *bg* (make-array +nbolt+ :initial-element 1.0))
 (defvar *bb* (make-array +nbolt+ :initial-element 1.0))
@@ -1118,11 +1245,9 @@ void main() {
 
 (defun spawn-bolt (pos dir speed owner dmg sz r g b)
   ;; dir is a (not necessarily unit) heading vector; normalise and launch.
-  (let ((len (linalg:norm dir))
-        (slot -1))
+  (let ((len (linalg:norm dir)) (slot -1))
     (dotimes (i +nbolt+)
-      (when (and (< slot 0) (not (aref *balive* i)))
-        (setq slot i)))
+      (when (and (< slot 0) (not (aref *balive* i))) (setq slot i)))
     (when (and (>= slot 0) (> len 0.0001))
       (setf (aref *bpos* slot) pos)
       (setf (aref *bvel* slot) (linalg:mul dir (/ speed len)))
@@ -1163,8 +1288,7 @@ void main() {
 
 (defun update-flashes (dt)
   (dotimes (i +nflash+)
-    (when (> (aref *ft* i) 0.0)
-      (setf (aref *ft* i) (- (aref *ft* i) dt)))))
+    (when (> (aref *ft* i) 0.0) (setf (aref *ft* i) (- (aref *ft* i) dt)))))
 
 ;; --- victory fireworks --------------------------------------------------------
 ;;
@@ -1175,12 +1299,12 @@ void main() {
 (defconstant +nfw+ 128)
 (defvar *fwpos* (make-array +nfw+ :initial-element nil))
 (defvar *fwvel* (make-array +nfw+ :initial-element nil))
-(defvar *fwt* (make-array +nfw+ :initial-element 0.0))     ; life left
+(defvar *fwt* (make-array +nfw+ :initial-element 0.0)) ; life left
 (defvar *fwmax* (make-array +nfw+ :initial-element 1.0))
 (defvar *fwr* (make-array +nfw+ :initial-element 1.0))
 (defvar *fwg* (make-array +nfw+ :initial-element 1.0))
 (defvar *fwb* (make-array +nfw+ :initial-element 1.0))
-(defvar *fw-launch* 0.0)                ; time to the next burst
+(defvar *fw-launch* 0.0) ; time to the next burst
 
 (defun spawn-firework (center r g b)
   ;; scatter a shell of sparks from the burst point
@@ -1189,13 +1313,13 @@ void main() {
       (dotimes (i +nfw+)
         (when (and (< slot 0) (<= (aref *fwt* i) 0.0)) (setq slot i)))
       (when (>= slot 0)
-        (let ((spd (rand-range 3.5 7.5))
-              (life (rand-range 1.3 2.2)))
+        (let ((spd (rand-range 3.5 7.5)) (life (rand-range 1.3 2.2)))
           (setf (aref *fwpos* slot) center)
           (setf (aref *fwvel* slot)
                 (linalg:from-list (list (* (- (rand01) 0.5) 2.0 spd)
-                      (* (- (rand01) 0.35) 2.0 spd)
-                      (* (- (rand01) 0.5) 2.0 spd)) 'single-float))
+                                        (* (- (rand01) 0.35) 2.0 spd)
+                                        (* (- (rand01) 0.5) 2.0 spd))
+                                  'single-float))
           (setf (aref *fwt* slot) life)
           (setf (aref *fwmax* slot) life)
           (setf (aref *fwr* slot) r)
@@ -1205,43 +1329,45 @@ void main() {
 (defun launch-firework ()
   ;; a burst in view above the arena, in one of a few bright colors -- kept low
   ;; and near the player so it fills the frame rather than drifting off-screen
-  (let ((center (linalg:from-list (list (+ (aref *ppos* 0) (rand-range -9.0 9.0))
-                      (rand-range 3.5 7.5)
-                      (+ (aref *ppos* 2) (rand-range -9.0 9.0))) 'single-float))
+  (let ((center
+         (linalg:from-list (list (+ (aref *ppos* 0) (rand-range -9.0 9.0))
+                                 (rand-range 3.5 7.5)
+                                 (+ (aref *ppos* 2) (rand-range -9.0 9.0)))
+                           'single-float))
         (c (floor (* 6.0 (rand01)))))
-    (cond ((= c 0) (spawn-firework center 1.0 0.28 0.28))     ; red
-          ((= c 1) (spawn-firework center 1.0 0.78 0.20))     ; gold
-          ((= c 2) (spawn-firework center 0.30 0.68 1.0))     ; blue
-          ((= c 3) (spawn-firework center 0.35 1.0 0.40))     ; green
-          ((= c 4) (spawn-firework center 0.82 0.40 1.0))     ; violet
-          (t       (spawn-firework center 1.0 1.0 0.9)))))     ; white
+    (cond ((= c 0) (spawn-firework center 1.0 0.28 0.28)) ; red
+          ((= c 1) (spawn-firework center 1.0 0.78 0.20)) ; gold
+          ((= c 2) (spawn-firework center 0.30 0.68 1.0)) ; blue
+          ((= c 3) (spawn-firework center 0.35 1.0 0.40)) ; green
+          ((= c 4) (spawn-firework center 0.82 0.40 1.0)) ; violet
+          (t (spawn-firework center 1.0 1.0 0.9)))))      ; white
 
 (defun update-fireworks (dt)
-  (let ((g (linalg:from-list (list 0.0 (* -3.2 dt) 0.0) 'single-float)))    ; one gravity impulse, reused
+  (let ((g (linalg:from-list (list 0.0 (* -3.2 dt) 0.0) 'single-float))) ; one gravity impulse, reused
     (dotimes (i +nfw+)
       (when (> (aref *fwt* i) 0.0)
         (setf (aref *fwvel* i) (linalg:add (aref *fwvel* i) g))
-        (setf (aref *fwpos* i) (linalg:add (aref *fwpos* i) (linalg:mul (aref *fwvel* i) dt)))
+        (setf (aref *fwpos* i)
+              (linalg:add (aref *fwpos* i) (linalg:mul (aref *fwvel* i) dt)))
         (setf (aref *fwt* i) (- (aref *fwt* i) dt))))))
 
 ;; --- stormtroopers ------------------------------------------------------------
 
 (defconstant +trooper-list+
-  '((11.0 -5.0) (15.0 4.0) (13.0 -1.0)
-    (20.0 -7.0) (19.0 8.0) (25.0 2.0)))
+  '((11.0 -5.0) (15.0 4.0) (13.0 -1.0) (20.0 -7.0) (19.0 8.0) (25.0 2.0)))
 
 (defconstant +trooper-hp+ 20.0)
 (defconstant +trooper-speed+ 2.6)
-(defconstant +trooper-standoff+ 5.5)   ; how close they press before holding
+(defconstant +trooper-standoff+ 5.5) ; how close they press before holding
 
 (defvar *ntrooper* 0)
-(defvar *tpos* nil)                     ; array of ground positions (#f vectors)
+(defvar *tpos* nil) ; array of ground positions (#f vectors)
 (defvar *thp* nil)
 (defvar *tyaw* nil)
-(defvar *tfire* nil)                    ; cooldown to the next shot
+(defvar *tfire* nil) ; cooldown to the next shot
 (defvar *talive* nil)
-(defvar *tstep* nil)                    ; walk-cycle phase
-(defvar *thit* nil)                     ; damage-flash timer
+(defvar *tstep* nil) ; walk-cycle phase
+(defvar *thit* nil)  ; damage-flash timer
 
 (defun parse-troopers ()
   (setq *ntrooper* (length +trooper-list+))
@@ -1256,7 +1382,8 @@ void main() {
 (defun reset-troopers ()
   (let ((i 0))
     (dolist (e +trooper-list+)
-      (setf (aref *tpos* i) (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e)) 'single-float))
+      (setf (aref *tpos* i)
+            (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e)) 'single-float))
       (setf (aref *thp* i) +trooper-hp+)
       (setf (aref *tyaw* i) 0.0)
       (setf (aref *tfire* i) (rand-range 1.4 3.4))
@@ -1267,8 +1394,7 @@ void main() {
 
 (defun troopers-alive ()
   (let ((n 0))
-    (dotimes (i *ntrooper*)
-      (when (aref *talive* i) (setq n (+ n 1))))
+    (dotimes (i *ntrooper*) (when (aref *talive* i) (setq n (+ n 1))))
     n))
 
 ;; Your ground position (y = 0), shared by the enemy AI: distances and
@@ -1281,14 +1407,14 @@ void main() {
     (dotimes (i *ntrooper*)
       (when (aref *talive* i)
         (let* ((p (aref *tpos* i))
-               (to (linalg:sub pg p))       ; horizontal offset to the player
+               (to (linalg:sub pg p)) ; horizontal offset to the player
                (d (linalg:norm to)))
           (setf (aref *tyaw* i) (atan2 (- 0.0 (aref to 2)) (aref to 0)))
           (when (> d 0.001)
             (if (> d +trooper-standoff+)
-                (progn                     ; press in toward the player
+                (progn ; press in toward the player
                   (setf (aref *tpos* i)
-                        (linalg:add p (linalg:mul to (/ (* +trooper-speed+ dt) d))))
+                   (linalg:add p (linalg:mul to (/ (* +trooper-speed+ dt) d))))
                   (setf (aref *tstep* i) (+ (aref *tstep* i) (* 7.0 dt))))
                 (setf (aref *tstep* i) 0.0)))
           ;; fire at your chest when in range (a slower, lighter cadence so the
@@ -1296,31 +1422,36 @@ void main() {
           (setf (aref *tfire* i) (- (aref *tfire* i) dt))
           (when (and (<= (aref *tfire* i) 0.0) (< d 22.0))
             (setf (aref *tfire* i) (rand-range 1.9 3.6))
-            (let ((muzzle (linalg:from-list (list (aref p 0) 1.02 (aref p 2)) 'single-float)))
+            (let ((muzzle
+                   (linalg:from-list (list (aref p 0) 1.02 (aref p 2))
+                                     'single-float)))
               (spawn-bolt muzzle
-                          (linalg:sub (linalg:from-list (list (+ (aref *ppos* 0) (rand-range -0.5 0.5))
-                                            (+ (aref *ppos* 1) 1.0)
-                                            (+ (aref *ppos* 2) (rand-range -0.5 0.5))) 'single-float)
-                                      muzzle)
+                          (linalg:sub (linalg:from-list (list
+                                                         (+ (aref *ppos* 0)
+                                                          (rand-range -0.5 0.5))
+                                                         (+ (aref *ppos* 1) 1.0)
+                                                         (+ (aref *ppos* 2)
+                                                            (rand-range -0.5
+                                                                        0.5)))
+                                                        'single-float) muzzle)
                           24.0 1 4.0 1.0 1.0 0.28 0.20)
               (spawn-flash muzzle 0.08 0.35 1.0 0.4 0.25))))))))
 
 ;; --- AT-AT walkers ------------------------------------------------------------
 
-(defconstant +atat-list+
-  '((30.0 -6.0) (36.0 9.0)))
+(defconstant +atat-list+ '((30.0 -6.0) (36.0 9.0)))
 
 (defconstant +atat-hp+ 150.0)
 (defconstant +atat-speed+ 0.9)
 
 (defvar *natat* 0)
-(defvar *apos* nil)                     ; array of ground positions (#f vectors)
+(defvar *apos* nil) ; array of ground positions (#f vectors)
 (defvar *ahp* nil)
 (defvar *ayaw* nil)
 (defvar *afire* nil)
 (defvar *aalive* nil)
-(defvar *awreck* nil)                   ; collapse animation timer
-(defvar *ahit* nil)                     ; damage-flash timer
+(defvar *awreck* nil) ; collapse animation timer
+(defvar *ahit* nil)   ; damage-flash timer
 
 (defun parse-atats ()
   (setq *natat* (length +atat-list+))
@@ -1335,7 +1466,8 @@ void main() {
 (defun reset-atats ()
   (let ((i 0))
     (dolist (e +atat-list+)
-      (setf (aref *apos* i) (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e)) 'single-float))
+      (setf (aref *apos* i)
+            (linalg:from-list (list (nth 0 e) 0.0 (nth 1 e)) 'single-float))
       (setf (aref *ahp* i) +atat-hp+)
       (setf (aref *ayaw* i) 0.0)
       (setf (aref *afire* i) (rand-range 1.0 2.5))
@@ -1346,8 +1478,7 @@ void main() {
 
 (defun atats-alive ()
   (let ((n 0))
-    (dotimes (i *natat*)
-      (when (aref *aalive* i) (setq n (+ n 1))))
+    (dotimes (i *natat*) (when (aref *aalive* i) (setq n (+ n 1))))
     n))
 
 (defun update-atats (dt)
@@ -1358,20 +1489,33 @@ void main() {
                  (to (linalg:sub pg p))
                  (d (linalg:norm to)))
             (setf (aref *ayaw* i) (atan2 (- 0.0 (aref to 2)) (aref to 0)))
-            (when (> d 13.0)               ; a ranged behemoth: keep its stand-off
-              (setf (aref *apos* i) (linalg:add p (linalg:mul to (/ (* +atat-speed+ dt) d)))))
+            (when (> d 13.0) ; a ranged behemoth: keep its stand-off
+              (setf (aref *apos* i)
+                    (linalg:add p (linalg:mul to (/ (* +atat-speed+ dt) d)))))
             (setf (aref *afire* i) (- (aref *afire* i) dt))
             (when (<= (aref *afire* i) 0.0)
               (setf (aref *afire* i) (rand-range 3.0 4.6))
               ;; the muzzle is the tip of the chin blasters (local x 3.4, y 3.04)
-              (let ((muzzle (linalg:from-list (list (+ (aref p 0) (* (cos (aref *ayaw* i)) 3.4))
-                                  3.04
-                                  (- (aref p 2) (* (sin (aref *ayaw* i)) 3.4))) 'single-float)))
+              (let ((muzzle
+                     (linalg:from-list (list (+ (aref p 0)
+                                                (* (cos (aref *ayaw* i)) 3.4))
+                                             3.04
+                                             (- (aref p 2)
+                                                (* (sin (aref *ayaw* i)) 3.4)))
+                                       'single-float)))
                 (spawn-bolt muzzle
-                            (linalg:sub (linalg:from-list (list (+ (aref *ppos* 0) (rand-range -0.7 0.7))
-                                              (+ (aref *ppos* 1) 1.0)
-                                              (+ (aref *ppos* 2) (rand-range -0.7 0.7))) 'single-float)
-                                        muzzle)
+                            (linalg:sub (linalg:from-list (list (+
+                                                                 (aref *ppos* 0)
+                                                                 (rand-range
+                                                                  -0.7 0.7))
+                                                                (+
+                                                                 (aref *ppos* 1)
+                                                                 1.0)
+                                                                (+
+                                                                 (aref *ppos* 2)
+                                                                 (rand-range
+                                                                  -0.7 0.7)))
+                                                          'single-float) muzzle)
                             26.0 1 9.0 1.8 1.0 0.32 0.16)
                 (spawn-flash muzzle 0.14 0.7 1.0 0.5 0.2))))
           (when (< (aref *awreck* i) 3.0)
@@ -1386,15 +1530,15 @@ void main() {
 (defconstant +vader-hp+ 160.0)
 (defconstant +vader-speed+ 3.0)
 
-(defvar *vpos* #f(44.0 0.0 0.0))        ; Vader's ground position
+(defvar *vpos* #f(44.0 0.0 0.0)) ; Vader's ground position
 (defvar *vhp* 160.0)
 (defvar *vyaw* 0.0)
 (defvar *vactive* nil)
 (defvar *valive* t)
-(defvar *vswing* 0.0)                   ; melee swing animation / hit window
-(defvar *vcd* 0.0)                      ; melee cooldown
+(defvar *vswing* 0.0) ; melee swing animation / hit window
+(defvar *vcd* 0.0)    ; melee cooldown
 (defvar *vhit* nil)
-(defvar *vhitf* 0.0)                    ; damage-flash timer
+(defvar *vhitf* 0.0) ; damage-flash timer
 
 (defun reset-vader ()
   (setq *vpos* #f(46.0 0.0 0.0))
@@ -1410,9 +1554,11 @@ void main() {
 (defun update-enemy-flashes (dt)
   ;; decay every enemy's damage-flash timer, alive or not
   (dotimes (i *ntrooper*)
-    (when (> (aref *thit* i) 0.0) (setf (aref *thit* i) (- (aref *thit* i) dt))))
+    (when (> (aref *thit* i) 0.0)
+      (setf (aref *thit* i) (- (aref *thit* i) dt))))
   (dotimes (i *natat*)
-    (when (> (aref *ahit* i) 0.0) (setf (aref *ahit* i) (- (aref *ahit* i) dt))))
+    (when (> (aref *ahit* i) 0.0)
+      (setf (aref *ahit* i) (- (aref *ahit* i) dt))))
   (when (> *vhitf* 0.0) (setq *vhitf* (- *vhitf* dt))))
 
 (defun update-vader (dt)
@@ -1421,16 +1567,23 @@ void main() {
       (when (= (atats-alive) 0)
         (setq *vactive* t)
         ;; a dramatic entrance: Vader strides in ahead of the player
-        (setq *vpos* (linalg:add (player-ground)
-                                 (linalg:from-list (list (* (cos *cam-yaw*) 15.0) 0.0 (* (sin *cam-yaw*) 15.0)) 'single-float)))
-        (spawn-flash (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float) 1.1 3.8 1.0 0.2 0.18)
-        (spawn-flash (linalg:from-list (list (aref *vpos* 0) 0.5 (aref *vpos* 2)) 'single-float) 0.9 3.0 0.9 0.15 0.15)))
+        (setq *vpos*
+              (linalg:add (player-ground)
+                          (linalg:from-list (list (* (cos *cam-yaw*) 15.0) 0.0
+                                                  (* (sin *cam-yaw*) 15.0))
+                                            'single-float)))
+        (spawn-flash (linalg:from-list
+                      (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float)
+                     1.1 3.8 1.0 0.2 0.18)
+        (spawn-flash (linalg:from-list
+                      (list (aref *vpos* 0) 0.5 (aref *vpos* 2)) 'single-float)
+                     0.9 3.0 0.9 0.15 0.15)))
     (when *vactive*
-      (let* ((to (linalg:sub (player-ground) *vpos*))
-             (d (linalg:norm to)))
+      (let* ((to (linalg:sub (player-ground) *vpos*)) (d (linalg:norm to)))
         (setq *vyaw* (atan2 (- 0.0 (aref to 2)) (aref to 0)))
         (when (> d 2.1)
-          (setq *vpos* (linalg:add *vpos* (linalg:mul to (/ (* +vader-speed+ dt) d)))))
+          (setq *vpos*
+                (linalg:add *vpos* (linalg:mul to (/ (* +vader-speed+ dt) d)))))
         (when (> *vcd* 0.0) (setq *vcd* (- *vcd* dt)))
         (when (> *vswing* 0.0) (setq *vswing* (- *vswing* dt)))
         ;; open a melee swing when in reach
@@ -1458,32 +1611,45 @@ void main() {
 
 (defun hit-trooper (i dmg)
   (setf (aref *thp* i) (- (aref *thp* i) dmg))
-  (setf (aref *thit* i) 0.16)                 ; flash red
+  (setf (aref *thit* i) 0.16) ; flash red
   (when (<= (aref *thp* i) 0.0)
     (setf (aref *talive* i) nil)
     (let ((p (aref *tpos* i)))
-      (spawn-flash (linalg:from-list (list (aref p 0) 0.7 (aref p 2)) 'single-float) 0.4 1.1 1.0 0.7 0.4))))
+      (spawn-flash
+       (linalg:from-list (list (aref p 0) 0.7 (aref p 2)) 'single-float) 0.4 1.1
+       1.0 0.7 0.4))))
 
 (defun hit-atat (i dmg)
   (setf (aref *ahp* i) (- (aref *ahp* i) dmg))
-  (setf (aref *ahit* i) 0.16)                 ; flash red
+  (setf (aref *ahit* i) 0.16) ; flash red
   (when (<= (aref *ahp* i) 0.0)
     (setf (aref *aalive* i) nil)
     (setf (aref *awreck* i) 0.0)
     (let ((p (aref *apos* i)))
-      (spawn-flash (linalg:from-list (list (aref p 0) 3.0 (aref p 2)) 'single-float) 0.7 3.2 1.0 0.7 0.3)
-      (spawn-flash (linalg:from-list (list (aref p 0) 5.0 (aref p 2)) 'single-float) 0.6 2.2 1.0 0.5 0.2))))
+      (spawn-flash
+       (linalg:from-list (list (aref p 0) 3.0 (aref p 2)) 'single-float) 0.7 3.2
+       1.0 0.7 0.3)
+      (spawn-flash
+       (linalg:from-list (list (aref p 0) 5.0 (aref p 2)) 'single-float) 0.6 2.2
+       1.0 0.5 0.2))))
 
 (defun hit-vader (dmg)
   (setq *vhp* (- *vhp* dmg))
-  (setq *vhitf* 0.16)                          ; flash red
-  (spawn-flash (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float) 0.25 0.8 1.0 0.4 0.3)
+  (setq *vhitf* 0.16) ; flash red
+  (spawn-flash
+   (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float)
+   0.25 0.8 1.0 0.4 0.3)
   (when (<= *vhp* 0.0)
     (setq *vhp* 0.0)
     (setq *valive* nil)
-    (spawn-flash (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float) 0.9 3.0 1.0 0.6 0.3)
-    (launch-firework) (launch-firework) (launch-firework)   ; an instant volley
-    (launch-firework) (launch-firework)
+    (spawn-flash
+     (linalg:from-list (list (aref *vpos* 0) 1.4 (aref *vpos* 2)) 'single-float)
+     0.9 3.0 1.0 0.6 0.3)
+    (launch-firework)
+    (launch-firework)
+    (launch-firework) ; an instant volley
+    (launch-firework)
+    (launch-firework)
     (setq *state* 1)
     (setq *state-t* 0.0)))
 
@@ -1491,13 +1657,15 @@ void main() {
 
 (defun bolt-hits-enemies (i)
   ;; a player bolt: test the troopers, the walkers and Vader; return t on a hit.
-  (let ((bp (aref *bpos* i))
-        (hit nil))
+  (let ((bp (aref *bpos* i)) (hit nil))
     ;; troopers -- a generous body capsule so aimed fire connects
     (dotimes (j *ntrooper*)
       (when (and (not hit) (aref *talive* j))
         (let* ((tp (aref *tpos* j))
-               (diff (linalg:sub bp (linalg:from-list (list (aref tp 0) 1.0 (aref tp 2)) 'single-float))))
+               (diff
+                (linalg:sub bp
+                            (linalg:from-list (list (aref tp 0) 1.0 (aref tp 2))
+                                              'single-float))))
           (when (< (linalg:dot diff diff) 0.45)
             (hit-trooper j (aref *bdmg* i))
             (spawn-flash bp 0.16 0.45 1.0 0.7 0.4)
@@ -1508,21 +1676,27 @@ void main() {
         (let* ((ap (aref *apos* j))
                (dx (- (aref bp 0) (aref ap 0)))
                (dz (- (aref bp 2) (aref ap 2))))
-          (when (and (< (+ (* dx dx) (* dz dz)) 3.6)
-                     (> (aref bp 1) 0.5) (< (aref bp 1) 6.2))
+          (when (and (< (+ (* dx dx) (* dz dz)) 3.6) (> (aref bp 1) 0.5)
+                     (< (aref bp 1) 6.2))
             (hit-atat j (aref *bdmg* i))
             (spawn-flash bp 0.18 0.5 1.0 0.7 0.4)
             (setq hit t)))))
     ;; Vader deflects blaster fire with his blade
     (when (and (not hit) *valive* *vactive*)
-      (let ((diff (linalg:sub bp (linalg:from-list (list (aref *vpos* 0) 1.3 (aref *vpos* 2)) 'single-float))))
+      (let ((diff
+             (linalg:sub bp
+                         (linalg:from-list
+                          (list (aref *vpos* 0) 1.3 (aref *vpos* 2))
+                          'single-float))))
         (when (< (linalg:dot diff diff) 1.3)
           (spawn-flash bp 0.2 0.5 1.0 0.3 0.25)
           (setq hit t))))
     hit))
 
 (defun player-chest ()
-  (linalg:from-list (list (aref *ppos* 0) (+ (aref *ppos* 1) 1.0) (aref *ppos* 2)) 'single-float))
+  (linalg:from-list
+   (list (aref *ppos* 0) (+ (aref *ppos* 1) 1.0) (aref *ppos* 2))
+   'single-float))
 
 (defun bolt-hits-player (i)
   (let ((diff (linalg:sub (aref *bpos* i) (player-chest))))
@@ -1535,25 +1709,25 @@ void main() {
 (defun update-bolts (dt)
   (dotimes (i +nbolt+)
     (when (aref *balive* i)
-      (setf (aref *bpos* i) (linalg:add (aref *bpos* i) (linalg:mul (aref *bvel* i) dt)))
+      (setf (aref *bpos* i)
+            (linalg:add (aref *bpos* i) (linalg:mul (aref *bvel* i) dt)))
       (setf (aref *bt* i) (- (aref *bt* i) dt))
-      (cond
-        ((<= (aref *bt* i) 0.0) (setf (aref *balive* i) nil))
-        ((< (aref (aref *bpos* i) 1) 0.05) (setf (aref *balive* i) nil))
-        ((= (aref *bown* i) 0)
-         (when (bolt-hits-enemies i) (setf (aref *balive* i) nil)))
-        (t                              ; enemy bolt
-         (cond
-           ((and (deflecting-p)
-                 (let ((diff (linalg:sub (aref *bpos* i) (player-chest))))
-                   (< (linalg:dot diff diff) 2.5)))
-            ;; deflected: bat it away as a harmless spark
-            (spawn-flash (aref *bpos* i) 0.18 0.5 0.6 0.85 1.0)
-            (setf (aref *balive* i) nil))
-           ((bolt-hits-player i)
-            (hurt-player (aref *bdmg* i))
-            (spawn-flash (aref *bpos* i) 0.14 0.4 1.0 0.5 0.3)
-            (setf (aref *balive* i) nil))))))))
+      (cond ((<= (aref *bt* i) 0.0) (setf (aref *balive* i) nil))
+            ((< (aref (aref *bpos* i) 1) 0.05) (setf (aref *balive* i) nil))
+            ((= (aref *bown* i) 0)
+             (when (bolt-hits-enemies i) (setf (aref *balive* i) nil)))
+            (t ; enemy bolt
+             (cond ((and (deflecting-p)
+                         (let ((diff
+                                (linalg:sub (aref *bpos* i) (player-chest))))
+                           (< (linalg:dot diff diff) 2.5)))
+                    ;; deflected: bat it away as a harmless spark
+                    (spawn-flash (aref *bpos* i) 0.18 0.5 0.6 0.85 1.0)
+                    (setf (aref *balive* i) nil))
+                   ((bolt-hits-player i)
+                    (hurt-player (aref *bdmg* i))
+                    (spawn-flash (aref *bpos* i) 0.14 0.4 1.0 0.5 0.3)
+                    (setf (aref *balive* i) nil))))))))
 
 ;; --- your attacks -----------------------------------------------------------
 
@@ -1562,8 +1736,7 @@ void main() {
 ;; connects even when the aim is a little off. `epos` is the enemy's ground
 ;; position (a vector, y = 0).
 (defun in-saber-arc-p (epos reach)
-  (let* ((to (linalg:sub epos (player-ground)))
-         (d (linalg:norm to)))
+  (let* ((to (linalg:sub epos (player-ground))) (d (linalg:norm to)))
     (and (< d reach) (> (linalg:dot to *aimf*) (* d -0.5)))))
 
 (defun saber-strike ()
@@ -1574,8 +1747,7 @@ void main() {
   (dotimes (j *natat*)
     (when (and (aref *aalive* j) (in-saber-arc-p (aref *apos* j) 3.7))
       (hit-atat j 20.0)))
-  (when (and *valive* *vactive* (in-saber-arc-p *vpos* 3.1))
-    (hit-vader 20.0)))
+  (when (and *valive* *vactive* (in-saber-arc-p *vpos* 3.1)) (hit-vader 20.0)))
 
 (defun update-attack (dt)
   (when (> *swing-cd* 0.0) (setq *swing-cd* (- *swing-cd* dt)))
@@ -1595,9 +1767,10 @@ void main() {
         ;; blaster: automatic fire on a short cadence
         (when (and held (<= *fire-cd* 0.0))
           (setq *fire-cd* 0.16)
-          (let ((muzzle (linalg:add (player-chest)
-                                    (linalg:add (linalg:mul *aimf* 0.55)
-                                                (linalg:mul *aimr* 0.16)))))
+          (let ((muzzle
+                 (linalg:add (player-chest)
+                             (linalg:add (linalg:mul *aimf* 0.55)
+                                         (linalg:mul *aimr* 0.16)))))
             (spawn-bolt muzzle *aimf* 46.0 0 12.0 1.0 0.35 1.0 0.45)
             (spawn-flash muzzle 0.06 0.3 0.5 1.0 0.5)))))
   (setq *attack-prev* (> *attack* 0.5)))
@@ -1615,29 +1788,41 @@ void main() {
          (acc (* dt 40.0)))
     ;; accelerate the horizontal velocity toward the steer target, capped by acc
     (setq *pvel*
-          (linalg:from-list (list (+ (aref *pvel* 0) (max (- 0.0 acc) (min acc (- tx (aref *pvel* 0)))))
-                (aref *pvel* 1)
-                (+ (aref *pvel* 2) (max (- 0.0 acc) (min acc (- tz (aref *pvel* 2)))))) 'single-float))))
+          (linalg:from-list (list (+ (aref *pvel* 0)
+                                     (max (- 0.0 acc)
+                                          (min acc (- tx (aref *pvel* 0)))))
+                                  (aref *pvel* 1)
+                                  (+ (aref *pvel* 2)
+                                     (max (- 0.0 acc)
+                                          (min acc (- tz (aref *pvel* 2))))))
+                            'single-float))))
 
 (defun jump-control (dt)
   ;; Space jumps off the ground; a real hop, gravity does the rest
   (let ((held (> *in-jump* 0.5)))
     (when (and held (not *jump-prev*) *grounded*)
-      (setq *pvel* (linalg:from-list (list (aref *pvel* 0) +jump-v+ (aref *pvel* 2)) 'single-float))
+      (setq *pvel*
+            (linalg:from-list (list (aref *pvel* 0) +jump-v+ (aref *pvel* 2))
+                              'single-float))
       (setq *grounded* nil))
     (setq *jump-prev* held)))
 
 (defun move-player (dt)
   ;; integrate gravity on the vertical component, then advance and clamp
   (let* ((vy (max -32.0 (- (aref *pvel* 1) (* +gravity+ dt))))
-         (nx (max +field-min-x+ (min +field-max-x+ (+ (aref *ppos* 0) (* (aref *pvel* 0) dt)))))
-         (nz (max +field-min-z+ (min +field-max-z+ (+ (aref *ppos* 2) (* (aref *pvel* 2) dt)))))
+         (nx
+          (max +field-min-x+
+               (min +field-max-x+ (+ (aref *ppos* 0) (* (aref *pvel* 0) dt)))))
+         (nz
+          (max +field-min-z+
+               (min +field-max-z+ (+ (aref *ppos* 2) (* (aref *pvel* 2) dt)))))
          (ny (+ (aref *ppos* 1) (* vy dt))))
-    (when (<= ny 0.0)                    ; landed on the snow at y = 0
+    (when (<= ny 0.0) ; landed on the snow at y = 0
       (setq ny 0.0)
       (setq vy 0.0)
       (setq *grounded* t))
-    (setq *pvel* (linalg:from-list (list (aref *pvel* 0) vy (aref *pvel* 2)) 'single-float))
+    (setq *pvel*
+     (linalg:from-list (list (aref *pvel* 0) vy (aref *pvel* 2)) 'single-float))
     (setq *ppos* (linalg:from-list (list nx ny nz) 'single-float))))
 
 (defun step-playing (dt)
@@ -1645,9 +1830,11 @@ void main() {
   (steer dt)
   (jump-control dt)
   (move-player dt)
-  (setq *pyaw* (- 0.0 *cam-yaw*))       ; face the aim
-  (let ((sp (sqrt (+ (* (aref *pvel* 0) (aref *pvel* 0))
-                     (* (aref *pvel* 2) (aref *pvel* 2))))))
+  (setq *pyaw* (- 0.0 *cam-yaw*)) ; face the aim
+  (let ((sp
+         (sqrt
+          (+ (* (aref *pvel* 0) (aref *pvel* 0))
+             (* (aref *pvel* 2) (aref *pvel* 2))))))
     (if (and *grounded* (> sp 0.4))
         (setq *run-phase* (+ *run-phase* (* sp 1.9 dt)))
         (setq *run-phase* 0.0)))
@@ -1655,8 +1842,7 @@ void main() {
   (update-troopers dt)
   (update-atats dt)
   (update-vader dt)
-  (when (> *hurt-flash* 0.0)
-    (setq *hurt-flash* (- *hurt-flash* dt))))
+  (when (> *hurt-flash* 0.0) (setq *hurt-flash* (- *hurt-flash* dt))))
 
 (defun step-victory (dt)
   ;; the celebration: keep launching fireworks over the arena, and let you
@@ -1667,7 +1853,7 @@ void main() {
   (setq *fw-launch* (- *fw-launch* dt))
   (when (<= *fw-launch* 0.0)
     (setq *fw-launch* (rand-range 0.16 0.32))
-    (launch-firework)                    ; two bursts at a time for a fuller sky
+    (launch-firework) ; two bursts at a time for a fuller sky
     (launch-firework))
   (update-fireworks dt))
 
@@ -1720,8 +1906,7 @@ void main() {
   ;; heuristic coarsen you
   (setq *lod* 2)
   (set-origin (aref *ppos* 0) (aref *ppos* 1) (aref *ppos* 2) *pyaw*)
-  (let* ((sw (sin *run-phase*))
-         (arm (* -0.13 sw)))
+  (let* ((sw (sin *run-phase*)) (arm (* -0.13 sw)))
     ;; legs: dark olive trousers over the articulated frame, then the boots
     (col 0.44 0.41 0.31)
     (humanoid-leg -0.105 sw 0.80 1.0)
@@ -1739,17 +1924,17 @@ void main() {
     (col 0.26 0.22 0.17)
     (part-rbox 0.0 0.75 0.0 0.158 0.042 0.130 0.028)
     (metal 0.55 0.47 0.28)
-    (part-rbox 0.15 0.75 0.0 0.022 0.032 0.040 0.012)   ; buckle
-    (col 0.22 0.19 0.15)                                 ; holster
+    (part-rbox 0.15 0.75 0.0 0.022 0.032 0.040 0.012) ; buckle
+    (col 0.22 0.19 0.15)                              ; holster
     (part-rbox 0.02 0.70 -0.145 0.045 0.075 0.035 0.022)
     ;; the tan quilted jacket: a chest and a slightly narrower waist, so the
     ;; torso has a taper instead of being one carton
     (col 0.80 0.70 0.52)
     (part-rbox 0.0 1.14 0.0 0.185 0.135 0.140 0.075)
     (part-rbox 0.0 0.97 0.0 0.163 0.115 0.125 0.065)
-    (col 0.62 0.53 0.38)                                 ; the vest panel
+    (col 0.62 0.53 0.38) ; the vest panel
     (part-rbox 0.075 1.08 0.0 0.115 0.155 0.118 0.055)
-    (col 0.86 0.78 0.62)                                 ; the fur collar
+    (col 0.86 0.78 0.62) ; the fur collar
     (part-cyl 0.0 1.29 0.0 0.112 0.048 10)
     ;; the Hoth field pack, its straps and a canteen
     (col 0.33 0.31 0.27)
@@ -1776,9 +1961,9 @@ void main() {
     (part-cyl 0.0 1.335 0.0 0.05 0.05)
     (col 0.86 0.70 0.58)
     (part-ellipsoid 0.012 1.455 0.0 0.092 0.103 0.092 10 6)
-    (part-ellipsoid 0.088 1.445 0.0 0.026 0.022 0.024 6 4)  ; nose
+    (part-ellipsoid 0.088 1.445 0.0 0.026 0.022 0.024 6 4) ; nose
     (col 0.34 0.27 0.21)
-    (part-rbox 0.078 1.492 0.0 0.022 0.016 0.070 0.008)     ; brow
+    (part-rbox 0.078 1.492 0.0 0.022 0.016 0.070 0.008) ; brow
     ;; the knit cap, its band, and the snow goggles pushed up onto it
     (col 0.70 0.62 0.46)
     (part-ellipsoid 0.0 1.545 0.0 0.108 0.075 0.108 10 5)
@@ -1789,9 +1974,7 @@ void main() {
     (col 0.30 0.42 0.48)
     (part-ellipsoid 0.082 1.560 -0.048 0.020 0.026 0.030 6 4)
     (part-ellipsoid 0.082 1.560 0.048 0.020 0.026 0.030 6 4))
-  (if (= *weapon* 0)
-      (emit-player-saber tm)
-      (emit-player-blaster)))
+  (if (= *weapon* 0) (emit-player-saber tm) (emit-player-blaster)))
 
 ;; The weapon arm, reaching from the weapon-side shoulder to the (animated)
 ;; weapon hand. It is a real two-segment arm: the elbow sits off the straight
@@ -1800,9 +1983,9 @@ void main() {
 ;; shoulder to the fist. Everything here is WORLD space -- the hand is already
 ;; solved in the aim frame by the caller, not in the figure's local frame.
 (defun emit-arm-to (hx hy hz r g b)
-  (let* ((arrx (- 0.0 (sin *cam-yaw*)))       ; aim-right
+  (let* ((arrx (- 0.0 (sin *cam-yaw*))) ; aim-right
          (arrz (cos *cam-yaw*))
-         (sx (+ (aref *ppos* 0) (* arrx -0.18)))   ; weapon-side shoulder
+         (sx (+ (aref *ppos* 0) (* arrx -0.18))) ; weapon-side shoulder
          (sz (+ (aref *ppos* 2) (* arrz -0.18)))
          (sy (+ (aref *ppos* 1) 1.16))
          ;; the elbow: midway, sagging, and bowed out along the aim-right axis
@@ -1810,7 +1993,7 @@ void main() {
          (ez (+ (* 0.5 (+ sz hz)) (* arrz -0.07)))
          (ey (- (* 0.5 (+ sy hy)) 0.085)))
     (col r g b)
-    (limb-caps nil)                     ; shoulder ball, elbow ball, then a fist
+    (limb-caps nil) ; shoulder ball, elbow ball, then a fist
     (emit-ellipsoid sx sy sz 0.070 0.070 0.070 0.0 (segs 6) (segs 3))
     (taper 0.042)
     (emit-limb sx sy sz ex ey ez 0.052)
@@ -1827,34 +2010,36 @@ void main() {
   ;; a compact grey blaster pistol, held out along the aim: a stepped barrel
   ;; with a muzzle collar, a receiver block, a sight rib and a raked grip
   (let* ((theta *cam-yaw*)
-         (fwx (cos theta)) (fwz (sin theta))
-         (arx (- 0.0 (sin theta))) (arz (cos theta))
+         (fwx (cos theta))
+         (fwz (sin theta))
+         (arx (- 0.0 (sin theta)))
+         (arz (cos theta))
          (hx (+ (aref *ppos* 0) (* fwx 0.40) (* arx -0.15)))
          (hz (+ (aref *ppos* 2) (* fwz 0.40) (* arz -0.15)))
          (hy (+ (aref *ppos* 1) 0.98)))
     (emit-arm-to hx hy hz 0.74 0.64 0.47)
     (col 0.15 0.12 0.10)
-    (emit-ellipsoid hx hy hz 0.052 0.055 0.052 0.0 (segs 8) (segs 5))  ; fist
+    (emit-ellipsoid hx hy hz 0.052 0.055 0.052 0.0 (segs 8) (segs 5)) ; fist
     ;; the pistol's blocks are centimetres across -- plain soft-edged boxes,
     ;; never rounded ones; only the round parts of it are round
     (soften 0.5)
-    (emit-box (+ hx (* fwx 0.03)) (+ hy 0.015) (+ hz (* fwz 0.03))
-              0.075 0.045 0.032 *pyaw*)
-    (metal 0.20 0.21 0.24)                                ; barrel
+    (emit-box (+ hx (* fwx 0.03)) (+ hy 0.015) (+ hz (* fwz 0.03)) 0.075 0.045
+              0.032 *pyaw*)
+    (metal 0.20 0.21 0.24) ; barrel
     (taper 0.026)
     (emit-limb (+ hx (* fwx 0.07)) (+ hy 0.022) (+ hz (* fwz 0.07))
                (+ hx (* fwx 0.25)) (+ hy 0.022) (+ hz (* fwz 0.25)) 0.030)
-    (metal 0.34 0.35 0.38)                                ; muzzle collar
+    (metal 0.34 0.35 0.38) ; muzzle collar
     (emit-limb (+ hx (* fwx 0.23)) (+ hy 0.022) (+ hz (* fwz 0.23))
                (+ hx (* fwx 0.26)) (+ hy 0.022) (+ hz (* fwz 0.26)) 0.037)
-    (col 0.11 0.11 0.13)                                  ; sight rib
+    (col 0.11 0.11 0.13) ; sight rib
     (soften 0.5)
-    (emit-box (+ hx (* fwx 0.10)) (+ hy 0.062) (+ hz (* fwz 0.10))
-              0.055 0.012 0.010 *pyaw*)
-    (col 0.13 0.13 0.15)                                  ; grip
+    (emit-box (+ hx (* fwx 0.10)) (+ hy 0.062) (+ hz (* fwz 0.10)) 0.055 0.012
+              0.010 *pyaw*)
+    (col 0.13 0.13 0.15) ; grip
     (soften 0.5)
-    (emit-box (- hx (* fwx 0.015)) (- hy 0.075) (- hz (* fwz 0.015))
-              0.030 0.062 0.028 *pyaw*)))
+    (emit-box (- hx (* fwx 0.015)) (- hy 0.075) (- hz (* fwz 0.015)) 0.030 0.062
+              0.028 *pyaw*)))
 
 ;; The lightsaber is stored as a generic oriented box (center + half-extents +
 ;; yaw) so both the opaque core pass and the additive bloom pass can redraw it,
@@ -1869,9 +2054,9 @@ void main() {
 (defvar *sab-vis* nil)
 
 (defun emit-hilt (x y z)
-  (col 0.16 0.13 0.11)                          ; fist
+  (col 0.16 0.13 0.11) ; fist
   (emit-ellipsoid x y z 0.05 0.05 0.05 0.0 8 5)
-  (metal 0.76 0.77 0.81)                        ; metal hilt -- a round rod
+  (metal 0.76 0.77 0.81) ; metal hilt -- a round rod
   (emit-cylinder x (+ y 0.05) z 0.028 0.055 0.0 8))
 
 (defun emit-player-blade ()
@@ -1880,30 +2065,30 @@ void main() {
   (glow-col 0.55 0.78 1.0)
   (emit-cylinder *sab-cx* *sab-cy* *sab-cz* *sab-hx* *sab-hy* *sab-yaw* 8)
   (glow-col 0.92 0.97 1.0)
-  (emit-cylinder *sab-cx* *sab-cy* *sab-cz*
-                 (max 0.012 (- *sab-hx* 0.016)) (max 0.012 (- *sab-hy* 0.016))
-                 *sab-yaw* 8))
+  (emit-cylinder *sab-cx* *sab-cy* *sab-cz* (max 0.012 (- *sab-hx* 0.016))
+                 (max 0.012 (- *sab-hy* 0.016)) *sab-yaw* 8))
 
 (defun emit-player-saber (tm)
   (let* ((theta *cam-yaw*)
-         (fwx (cos theta)) (fwz (sin theta))
-         (arx (- 0.0 (sin theta))) (arz (cos theta)))
+         (fwx (cos theta))
+         (fwz (sin theta))
+         (arx (- 0.0 (sin theta)))
+         (arz (cos theta)))
     (if (> *swing-t* 0.0)
         ;; a diagonal downward slash: the blade stays upright while the hand
         ;; arcs from upper-right to lower-left across the front, reaching out at
         ;; mid-swing -- the arm tracks it, so the whole strike reads cleanly
         (let* ((p (- 1.0 (/ *swing-t* 0.32)))
-               (side (- 0.44 (* 0.88 p)))                ; right -> left
+               (side (- 0.44 (* 0.88 p))) ; right -> left
                (reachf (+ 0.34 (* 0.24 (sin (* p +pi+)))))
-               (hh (+ (aref *ppos* 1) (- 1.16 (* 0.40 p))))  ; high -> low
+               (hh (+ (aref *ppos* 1) (- 1.16 (* 0.40 p)))) ; high -> low
                (hx (+ (aref *ppos* 0) (* fwx reachf) (* arx side)))
                (hz (+ (aref *ppos* 2) (* fwz reachf) (* arz side)))
                (half 0.6))
           (emit-arm-to hx hh hz 0.74 0.64 0.47)
           (emit-hilt hx hh hz)
-          (setq *sab-cx* hx *sab-cy* (+ hh 0.12 half) *sab-cz* hz
-                *sab-hx* 0.032 *sab-hy* half *sab-hz* 0.032
-                *sab-yaw* 0.0 *sab-vis* t)
+          (setq *sab-cx* hx *sab-cy* (+ hh 0.12 half) *sab-cz* hz *sab-hx* 0.032
+                *sab-hy* half *sab-hz* 0.032 *sab-yaw* 0.0 *sab-vis* t)
           (emit-player-blade))
         ;; idle: held upright in the weapon hand
         (let* ((hx (+ (aref *ppos* 0) (* fwx 0.40) (* arx -0.18)))
@@ -1912,19 +2097,18 @@ void main() {
                (half 0.62))
           (emit-arm-to hx (+ hh 0.08) hz 0.74 0.64 0.47)
           (emit-hilt hx hh hz)
-          (setq *sab-cx* hx *sab-cy* (+ hh 0.14 half) *sab-cz* hz
-                *sab-hx* 0.032 *sab-hy* half *sab-hz* 0.032
-                *sab-yaw* 0.0 *sab-vis* t)
+          (setq *sab-cx* hx *sab-cy* (+ hh 0.14 half) *sab-cz* hz *sab-hx* 0.032
+                *sab-hy* half *sab-hz* 0.032 *sab-yaw* 0.0 *sab-vis* t)
           (emit-player-blade)))))
 
 (defun emit-player-saber-glow ()
   (when *sab-vis*
     (glow-col 0.28 0.5 1.0)
-    (emit-cylinder *sab-cx* *sab-cy* *sab-cz*
-                   (glowh *sab-hx*) (glowh *sab-hy*) *sab-yaw* 8)
+    (emit-cylinder *sab-cx* *sab-cy* *sab-cz* (glowh *sab-hx*) (glowh *sab-hy*)
+                   *sab-yaw* 8)
     (glow-col 0.12 0.28 0.85)
-    (emit-cylinder *sab-cx* *sab-cy* *sab-cz*
-                   (glowh2 *sab-hx*) (glowh2 *sab-hy*) *sab-yaw* 8)))
+    (emit-cylinder *sab-cx* *sab-cy* *sab-cz* (glowh2 *sab-hx*)
+                   (glowh2 *sab-hy*) *sab-yaw* 8)))
 
 ;; A stormtrooper: white armour over a black bodysuit. The armour is a SET OF
 ;; SEPARATE ROUNDED PLATES riding on the black limbs underneath -- chest, abdo,
@@ -1934,12 +2118,11 @@ void main() {
 ;; actually recognise it by: the dome, the brow band, the two eye lenses, the
 ;; frown grille and the tube stripes on the cheeks. ~1.68 tall.
 (defun emit-trooper (i tm)
-  (setq *hit-tint* (min 1.0 (* (aref *thit* i) 6.0)))   ; red when just struck
+  (setq *hit-tint* (min 1.0 (* (aref *thit* i) 6.0))) ; red when just struck
   (let ((p (aref *tpos* i)))
     (set-lod (aref p 0) (aref p 2) 1.68)
     (if (aref *talive* i)
-        (let* ((sw (sin (aref *tstep* i)))
-               (arm (* -0.11 sw)))
+        (let* ((sw (sin (aref *tstep* i))) (arm (* -0.11 sw)))
           (set-origin (aref p 0) 0.0 (aref p 2) (aref *tyaw* i))
           (emit-shadow (aref p 0) (aref p 2) 0.34)
           ;; the black bodysuit legs, then the white plates over them
@@ -1947,8 +2130,8 @@ void main() {
           (humanoid-leg -0.10 sw 0.78 0.95)
           (let ((ax *cp-x*) (ay *cp-y*))
             (col 0.93 0.94 0.97)
-            (part-rbox (* 0.06 sw) 0.58 -0.10 0.088 0.13 0.088 0.045)   ; thigh
-            (part-rbox (* 0.18 sw) 0.28 -0.10 0.082 0.13 0.082 0.040)   ; shin
+            (part-rbox (* 0.06 sw) 0.58 -0.10 0.088 0.13 0.088 0.045) ; thigh
+            (part-rbox (* 0.18 sw) 0.28 -0.10 0.082 0.13 0.082 0.040) ; shin
             (part-rbox (+ ax 0.03) (- ay 0.035) -0.10 0.098 0.062 0.088 0.032))
           (col 0.11 0.11 0.13)
           (humanoid-leg 0.10 (- 0.0 sw) 0.78 0.95)
@@ -1971,7 +2154,7 @@ void main() {
           (part-rbox 0.02 0.935 0.0 0.140 0.055 0.108 0.035)
           (col 0.90 0.91 0.95)
           (part-rbox -0.06 1.05 0.0 0.095 0.145 0.108 0.05)
-          (col 0.11 0.11 0.13)                       ; the chest control panel
+          (col 0.11 0.11 0.13) ; the chest control panel
           (part-rbox 0.15 1.115 -0.045 0.020 0.030 0.038 0.008)
           (col 0.70 0.20 0.18)
           (part-rbox 0.15 1.115 0.030 0.020 0.014 0.020 0.006)
@@ -1995,7 +2178,7 @@ void main() {
           (part-rbox (* -0.25 arm) 1.115 0.208 0.062 0.060 0.062 0.030)
           (part-rbox (* 0.8 arm) 0.925 -0.218 0.058 0.058 0.058 0.028)
           (part-rbox (* -0.8 arm) 0.925 0.218 0.058 0.058 0.058 0.028)
-          (col 0.10 0.10 0.12)                       ; gloves
+          (col 0.10 0.10 0.12) ; gloves
           (part-ellipsoid arm 0.815 -0.222 0.048 0.052 0.048 7 4)
           (part-ellipsoid (- 0.0 arm) 0.815 0.222 0.048 0.052 0.048 7 4)
           ;; the black neck seal
@@ -2004,18 +2187,18 @@ void main() {
           ;; the helmet
           (metal 0.95 0.96 0.99)
           (part-ellipsoid -0.005 1.375 0.0 0.098 0.105 0.100 10 6)
-          (part-rbox 0.062 1.360 0.0 0.048 0.082 0.086 0.030)   ; faceplate
-          (col 0.09 0.09 0.11)                                  ; brow band
+          (part-rbox 0.062 1.360 0.0 0.048 0.082 0.086 0.030) ; faceplate
+          (col 0.09 0.09 0.11)                                ; brow band
           (part-rbox 0.090 1.408 0.0 0.032 0.020 0.080 0.008)
           (part-rbox 0.098 1.372 -0.042 0.026 0.026 0.028 0.008) ; eye lenses
           (part-rbox 0.098 1.372 0.042 0.026 0.026 0.028 0.008)
-          (part-rbox 0.096 1.312 0.0 0.028 0.024 0.040 0.010)    ; frown grille
-          (metal 0.20 0.20 0.22)                                 ; cheek tubes
+          (part-rbox 0.096 1.312 0.0 0.028 0.024 0.040 0.010) ; frown grille
+          (metal 0.20 0.20 0.22)                              ; cheek tubes
           (taper 0.008)
           (part-limb 0.086 1.330 -0.062 0.062 1.296 -0.075 0.011)
           (taper 0.008)
           (part-limb 0.086 1.330 0.062 0.062 1.296 0.075 0.011)
-          (col 0.88 0.89 0.93)                                   ; ear vents
+          (col 0.88 0.89 0.93) ; ear vents
           (part-rbox 0.010 1.345 -0.095 0.038 0.040 0.014 0.010)
           (part-rbox 0.010 1.345 0.095 0.038 0.040 0.014 0.010)
           ;; the E-11 held across the body: barrel, receiver, folding stock,
@@ -2026,10 +2209,10 @@ void main() {
           (taper 0.020)
           (part-limb 0.27 0.912 -0.20 0.46 0.912 -0.20 0.024)
           (col 0.10 0.10 0.12)
-          (part-rbox 0.19 0.845 -0.20 0.026 0.045 0.024 0.010)   ; magazine
-          (part-rbox 0.08 0.905 -0.20 0.060 0.024 0.022 0.010)   ; stock
+          (part-rbox 0.19 0.845 -0.20 0.026 0.045 0.024 0.010) ; magazine
+          (part-rbox 0.08 0.905 -0.20 0.060 0.024 0.022 0.010) ; stock
           (metal 0.22 0.22 0.25)
-          (part-rbox 0.24 0.955 -0.20 0.048 0.014 0.014 0.006))  ; scope rail
+          (part-rbox 0.24 0.955 -0.20 0.048 0.014 0.014 0.006)) ; scope rail
         ;; a fallen trooper: face down in the snow, one arm flung out and the
         ;; helmet rolled clear of the body
         (progn
@@ -2078,14 +2261,17 @@ void main() {
          (anky (+ 0.44 lift))
          (dx (- ankx fx))
          (dy (- anky +atat-hip-y+))
-         (d (min (* 0.995 (+ +atat-thigh+ +atat-shin+))
-                 (max 0.3 (sqrt (+ (* dx dx) (* dy dy))))))
-         (ux (/ dx d)) (uy (/ dy d))
+         (d
+          (min (* 0.995 (+ +atat-thigh+ +atat-shin+))
+               (max 0.3 (sqrt (+ (* dx dx) (* dy dy))))))
+         (ux (/ dx d))
+         (uy (/ dy d))
          ;; cosine rule: how far along hip->ankle the knee's foot-point lies,
          ;; and how far it stands off that line
-         (a (/ (+ (* d d) (- (* +atat-thigh+ +atat-thigh+)
-                             (* +atat-shin+ +atat-shin+)))
-               (* 2.0 d)))
+         (a
+          (/ (+ (* d d)
+                (- (* +atat-thigh+ +atat-thigh+) (* +atat-shin+ +atat-shin+)))
+             (* 2.0 d)))
          (hh (sqrt (max 0.0 (- (* +atat-thigh+ +atat-thigh+) (* a a)))))
          ;; the offset direction, chosen to put the knee FORWARD (+x local)
          (kx (+ fx (* a ux) (* hh (- 0.0 uy))))
@@ -2113,16 +2299,14 @@ void main() {
     (part-rbox (+ ankx 0.05) (+ lift 0.16) fz 0.40 0.15 0.33 0.11)))
 
 (defun emit-atat (i tm)
-  (setq *hit-tint* (min 1.0 (* (aref *ahit* i) 6.0)))   ; red when just struck
+  (setq *hit-tint* (min 1.0 (* (aref *ahit* i) 6.0))) ; red when just struck
   (let* ((p (aref *apos* i))
          (dx (- (aref *ppos* 0) (aref p 0)))
          (dz (- (aref *ppos* 2) (aref p 2)))
-         (far2 (+ (* dx dx) (* dz dz))))    ; squared horizontal distance to you
+         (far2 (+ (* dx dx) (* dz dz)))) ; squared horizontal distance to you
     (set-lod (aref p 0) (aref p 2) 5.5)
     (if (aref *aalive* i)
-        (let* ((yaw (aref *ayaw* i))
-               (walking (> far2 170.0))
-               (th (* tm 2.1)))
+        (let* ((yaw (aref *ayaw* i)) (walking (> far2 170.0)) (th (* tm 2.1)))
           (set-origin (aref p 0) 0.0 (aref p 2) yaw)
           ;; the four legs, on the diagonal gait a quadruped actually uses:
           ;; front-left with rear-right, front-right with rear-left
@@ -2177,8 +2361,7 @@ void main() {
           (part-limb 2.70 3.08 0.20 3.34 3.04 0.20 0.085))
         ;; a smoking wreck: the hull slumped into the snow with its neck bent
         ;; under it, and a column of soot still lifting off the engine block
-        (let* ((k (min 1.0 (/ (aref *awreck* i) 1.2)))
-               (drop (* 0.9 k)))
+        (let* ((k (min 1.0 (/ (aref *awreck* i) 1.2))) (drop (* 0.9 k)))
           (set-origin (aref p 0) 0.0 (aref p 2) (aref *ayaw* i))
           (metal 0.34 0.34 0.35)
           (part-rbox 0.0 (- 1.5 drop) 0.0 1.5 0.55 0.95 0.24)
@@ -2228,20 +2411,18 @@ void main() {
 ;; Normals come from finite differences of the same function, so the folds
 ;; catch the light instead of being painted-on stripes. The patch is emitted in
 ;; the figure's local frame like everything else.
-(defconstant +cape-u+ 7)                ; bands from collar to hem
-(defconstant +cape-v+ 9)                ; panels across the back
+(defconstant +cape-u+ 7) ; bands from collar to hem
+(defconstant +cape-v+ 9) ; panels across the back
 
 (defun cape-set (u v ph)
-  (let* ((spread (+ 0.80 (* 0.45 u)))          ; half-angle around the body
+  (let* ((spread (+ 0.80 (* 0.45 u))) ; half-angle around the body
          (ang (* v spread))
          (fold (* 0.05 u (sin (+ (* 4.0 v) ph))))
          (rad (+ 0.21 (* 0.26 u u) fold))
          ;; the top edge follows the shoulder line down towards the front
          ;; instead of running level, or the collar reads as a shelf
          (yy (- (- 1.58 (* 0.13 v v)) (* 1.40 u))))
-    (setq *cp-x* (- 0.0 (* rad (cos ang)))
-          *cp-y* yy
-          *cp-z* (* rad (sin ang)))))
+    (setq *cp-x* (- 0.0 (* rad (cos ang))) *cp-y* yy *cp-z* (* rad (sin ang)))))
 
 (defun cape-vertex (u v ph)
   (cape-set u v ph)
@@ -2249,7 +2430,9 @@ void main() {
     (cape-set (min 1.0 (+ u 0.03)) v ph)
     (let ((ax (- *cp-x* px)) (ay (- *cp-y* py)) (az (- *cp-z* pz)))
       (cape-set u (min 1.0 (+ v 0.03)) ph)
-      (let* ((bx (- *cp-x* px)) (by (- *cp-y* py)) (bz (- *cp-z* pz))
+      (let* ((bx (- *cp-x* px))
+             (by (- *cp-y* py))
+             (bz (- *cp-z* pz))
              (nx (- (* ay bz) (* az by)))
              (ny (- (* az bx) (* ax bz)))
              (nz (- (* ax by) (* ay bx)))
@@ -2257,9 +2440,12 @@ void main() {
              ;; face the normal AWAY from the body axis -- the cross product's
              ;; sign flips as v crosses the back's centre line
              (sgn (if (< (+ (* nx px) (* nz pz)) 0.0) (- 0.0 1.0) 1.0))
-             (mx (* sgn (/ nx nl))) (my (* sgn (/ ny nl))) (mz (* sgn (/ nz nl))))
+             (mx (* sgn (/ nx nl)))
+             (my (* sgn (/ ny nl)))
+             (mz (* sgn (/ nz nl))))
         (emit-vertex (lwx px pz) (lwy py) (lwz px pz)
-                     (+ (* *oc* mx) (* *os* mz)) my (- (* *oc* mz) (* *os* mx)))))))
+                     (+ (* *oc* mx) (* *os* mz)) my
+                     (- (* *oc* mz) (* *os* mx)))))))
 
 (defun emit-cape (ph)
   (dotimes (j +cape-u+)
@@ -2280,7 +2466,7 @@ void main() {
 ;; Only shown once he engages -- dormant until the walkers fall.
 (defun emit-vader (tm)
   (setq *vsab-vis* nil)
-  (setq *hit-tint* (min 1.0 (* *vhitf* 6.0)))          ; red when just struck
+  (setq *hit-tint* (min 1.0 (* *vhitf* 6.0))) ; red when just struck
   (when (and *valive* *vactive*)
     (let ((vdx (aref *vpos* 0)) (vdz (aref *vpos* 2)))
       (set-lod vdx vdz 1.95)
@@ -2316,7 +2502,7 @@ void main() {
       (part-ellipsoid 0.215 1.300 -0.045 0.016 0.016 0.016 6 3)
       (glow-col 0.2 0.85 0.3)
       (part-ellipsoid 0.215 1.338 0.040 0.015 0.015 0.015 6 3)
-      (metal 0.18 0.18 0.20)                   ; the shoulder-strap clasps
+      (metal 0.18 0.18 0.20) ; the shoulder-strap clasps
       (part-limb -0.02 1.55 -0.085 0.13 1.20 -0.075 0.022)
       (part-limb -0.02 1.55 0.085 0.13 1.20 0.075 0.022)
       ;; shoulder mantles, arms and gloved fists
@@ -2348,15 +2534,15 @@ void main() {
       (part-ellipsoid -0.012 1.815 0.0 0.122 0.128 0.126 10 6)
       (taper 0.152)
       (part-limb -0.012 1.815 0.0 -0.012 1.640 0.0 0.118)
-      (metal 0.14 0.14 0.16)                   ; the raked face plate
+      (metal 0.14 0.14 0.16) ; the raked face plate
       (part-rbox 0.088 1.800 0.0 0.062 0.105 0.100 0.030)
       (part-rbox 0.070 1.690 0.0 0.070 0.055 0.078 0.026)
-      (col 0.02 0.02 0.03)                     ; the eye lenses
+      (col 0.02 0.02 0.03) ; the eye lenses
       (part-rbox 0.140 1.828 -0.050 0.022 0.030 0.034 0.010)
       (part-rbox 0.140 1.828 0.050 0.022 0.030 0.034 0.010)
-      (col 0.05 0.05 0.06)                     ; the brow ridge between them
+      (col 0.05 0.05 0.06) ; the brow ridge between them
       (part-rbox 0.142 1.872 0.0 0.020 0.020 0.088 0.008)
-      (col 0.13 0.13 0.14)                     ; the mouth grille
+      (col 0.13 0.13 0.14) ; the mouth grille
       (part-rbox 0.140 1.712 0.0 0.028 0.042 0.052 0.014)
       (metal 0.24 0.24 0.26)
       (part-limb 0.166 1.752 -0.030 0.166 1.674 -0.030 0.008)
@@ -2367,8 +2553,10 @@ void main() {
       (emit-cape (* tm 1.4))
       ;; the red blade -- swept horizontally during a melee strike, like yours
       (let* ((theta (- 0.0 *vyaw*))
-             (fwx (cos theta)) (fwz (sin theta))
-             (arx (- 0.0 (sin theta))) (arz (cos theta)))
+             (fwx (cos theta))
+             (fwz (sin theta))
+             (arx (- 0.0 (sin theta)))
+             (arz (cos theta)))
         (if (> *vswing* 0.0)
             ;; the same upright diagonal slash as yours
             (let* ((p (- 1.0 (/ *vswing* 0.45)))
@@ -2381,17 +2569,18 @@ void main() {
               (metal 0.18 0.18 0.20)
               (emit-cylinder hx hh hz 0.028 0.06 0.0 8)
               (setq *vsab-cx* hx *vsab-cy* (+ hh 0.12 half) *vsab-cz* hz
-                    *vsab-hx* 0.032 *vsab-hy* half *vsab-hz* 0.032
-                    *vsab-yaw* 0.0 *vsab-vis* t)
+                    *vsab-hx* 0.032 *vsab-hy* half *vsab-hz* 0.032 *vsab-yaw*
+                    0.0 *vsab-vis* t)
               (emit-vader-blade))
             (let* ((hx (+ vdx (* fwx 0.44) (* arx 0.14)))
                    (hz (+ vdz (* fwz 0.44) (* arz 0.14)))
-                   (hh 1.06) (half 0.66))
+                   (hh 1.06)
+                   (half 0.66))
               (metal 0.18 0.18 0.20)
               (emit-cylinder hx hh hz 0.028 0.09 0.0 8)
               (setq *vsab-cx* hx *vsab-cy* (+ hh 0.12 half) *vsab-cz* hz
-                    *vsab-hx* 0.032 *vsab-hy* half *vsab-hz* 0.032
-                    *vsab-yaw* 0.0 *vsab-vis* t)
+                    *vsab-hx* 0.032 *vsab-hy* half *vsab-hz* 0.032 *vsab-yaw*
+                    0.0 *vsab-vis* t)
               (emit-vader-blade))))))
   (setq *hit-tint* 0.0))
 
@@ -2399,18 +2588,17 @@ void main() {
   (glow-col 1.0 0.24 0.20)
   (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz* *vsab-hx* *vsab-hy* *vsab-yaw* 8)
   (glow-col 1.0 0.82 0.80)
-  (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz*
-                 (max 0.012 (- *vsab-hx* 0.016)) (max 0.012 (- *vsab-hy* 0.016))
-                 *vsab-yaw* 8))
+  (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz* (max 0.012 (- *vsab-hx* 0.016))
+                 (max 0.012 (- *vsab-hy* 0.016)) *vsab-yaw* 8))
 
 (defun emit-vader-glow ()
   (when *vsab-vis*
     (glow-col 1.0 0.16 0.12)
-    (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz*
-                   (glowh *vsab-hx*) (glowh *vsab-hy*) *vsab-yaw* 8)
+    (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz* (glowh *vsab-hx*)
+                   (glowh *vsab-hy*) *vsab-yaw* 8)
     (glow-col 0.55 0.05 0.04)
-    (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz*
-                   (glowh2 *vsab-hx*) (glowh2 *vsab-hy*) *vsab-yaw* 8)))
+    (emit-cylinder *vsab-cx* *vsab-cy* *vsab-cz* (glowh2 *vsab-hx*)
+                   (glowh2 *vsab-hy*) *vsab-yaw* 8)))
 
 ;; round sparks (a low-segment sphere, cheap enough for a per-frame particle)
 ;; instead of glowing cubes.
@@ -2421,16 +2609,18 @@ void main() {
     (when (> (aref *fwt* i) 0.0)
       (let ((p (aref *fwpos* i)))
         (glow-col (aref *fwr* i) (aref *fwg* i) (aref *fwb* i))
-        (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) 0.14 0.14 0.14 0.0 6 3)))))
+        (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) 0.14 0.14 0.14 0.0 6
+                        3)))))
 
 (defun emit-fireworks ()
   ;; an additive halo around each spark, fading as it dies -> the bloom
   (dotimes (i +nfw+)
     (when (> (aref *fwt* i) 0.0)
-      (let ((k (/ (aref *fwt* i) (aref *fwmax* i)))
-            (p (aref *fwpos* i)))
-        (glow-col (* 0.7 k (aref *fwr* i)) (* 0.7 k (aref *fwg* i)) (* 0.7 k (aref *fwb* i)))
-        (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) 0.26 0.26 0.26 0.0 6 3)))))
+      (let ((k (/ (aref *fwt* i) (aref *fwmax* i))) (p (aref *fwpos* i)))
+        (glow-col (* 0.7 k (aref *fwr* i)) (* 0.7 k (aref *fwg* i))
+                  (* 0.7 k (aref *fwb* i)))
+        (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) 0.26 0.26 0.26 0.0 6
+                        3)))))
 
 ;; a round beam instead of a box -- reads as a glowing capsule (per the
 ;; README) rather than a spinning rectangular slab.
@@ -2440,8 +2630,8 @@ void main() {
          (yaw (atan2 (- 0.0 (aref v 2)) (aref v 0)))
          (sz (aref *bsz* i)))
     (glow-col (aref *br* i) (aref *bg* i) (aref *bb* i))
-    (emit-cyl-beam (aref p 0) (aref p 1) (aref p 2)
-                   (* 0.30 sz) (* 0.05 sz) yaw 6)))
+    (emit-cyl-beam (aref p 0) (aref p 1) (aref p 2) (* 0.30 sz) (* 0.05 sz) yaw
+                   6)))
 
 (defun emit-bolt-glow (i)
   (let* ((v (aref *bvel* i))
@@ -2449,12 +2639,11 @@ void main() {
          (yaw (atan2 (- 0.0 (aref v 2)) (aref v 0)))
          (sz (aref *bsz* i)))
     (glow-col (* 0.5 (aref *br* i)) (* 0.5 (aref *bg* i)) (* 0.5 (aref *bb* i)))
-    (emit-cyl-beam (aref p 0) (aref p 1) (aref p 2)
-                   (* 0.42 sz) (* 0.13 sz) yaw 6)))
+    (emit-cyl-beam (aref p 0) (aref p 1) (aref p 2) (* 0.42 sz) (* 0.13 sz) yaw
+                   6)))
 
 (defun emit-flash (i)
-  (let ((k (/ (aref *ft* i) (aref *fttl* i)))
-        (p (aref *fpos* i)))
+  (let ((k (/ (aref *ft* i) (aref *fttl* i))) (p (aref *fpos* i)))
     (glow-col (* k (aref *fr* i)) (* k (aref *fg* i)) (* k (aref *fb* i)))
     (let ((r (* (aref *fsz* i) (+ 0.4 (* 0.6 (- 1.0 k))))))
       (emit-ellipsoid (aref p 0) (aref p 1) (aref p 2) r r r 0.0 6 3))))
@@ -2462,8 +2651,7 @@ void main() {
 ;; --- the frame ----------------------------------------------------------------
 
 (defun draw (tm)
-  (let ((w (canvas-width))
-        (h (canvas-height)))
+  (let ((w (canvas-width)) (h (canvas-height)))
     (gl:viewport 0 0 (floor w) (floor h)))
   (gl:clear-color 0.74 0.83 0.93 1.0)
   (gl:clear (+ gl:+color-buffer-bit+ gl:+depth-buffer-bit+))
@@ -2477,17 +2665,14 @@ void main() {
   (dotimes (i *ntrooper*) (emit-trooper i tm))
   (dotimes (i *natat*) (emit-atat i tm))
   (emit-vader tm)
-  (dotimes (i +nbolt+)
-    (when (aref *balive* i) (emit-bolt-core i)))
+  (dotimes (i +nbolt+) (when (aref *balive* i) (emit-bolt-core i)))
   (emit-firework-cores)
   (let ((opaque-end *v*))
     ;; --- bloom pass: additive blade shells, bolt halos, flashes -----------
     (emit-player-saber-glow)
     (emit-vader-glow)
-    (dotimes (i +nbolt+)
-      (when (aref *balive* i) (emit-bolt-glow i)))
-    (dotimes (i +nflash+)
-      (when (> (aref *ft* i) 0.0) (emit-flash i)))
+    (dotimes (i +nbolt+) (when (aref *balive* i) (emit-bolt-glow i)))
+    (dotimes (i +nflash+) (when (> (aref *ft* i) 0.0) (emit-flash i)))
     (emit-fireworks)
     (gl:bind-buffer gl:+array-buffer+ *buf*)
     (gl-upload-vertices (* *static-verts* 11) (* (- *v* *static-verts*) 11))
@@ -2510,7 +2695,7 @@ void main() {
   (setq *jump-prev* nil)
   (setq *inv-t* 0.0)
   (setq *php* +player-max-hp+)
-  (setq *weapon* 1)                     ; start armed with the blaster
+  (setq *weapon* 1) ; start armed with the blaster
   (setq *attack* 0.0)
   (setq *swing-t* 0.0)
   (setq *swing-cd* 0.0)
@@ -2539,8 +2724,7 @@ void main() {
     (setq *aspect* (/ (canvas-width) (canvas-height)))
     (setq *state-t* (+ *state-t* dt))
     (update-aim)
-    (cond ((= *state* 0) (step-playing dt))
-          ((= *state* 1) (step-victory dt)))
+    (cond ((= *state* 0) (step-playing dt)) ((= *state* 1) (step-victory dt)))
     (update-bolts dt)
     (update-flashes dt)
     (update-enemy-flashes dt)
@@ -2551,12 +2735,12 @@ void main() {
 
 (defun get-state () *state*)
 (defun get-weapon () *weapon*)
-(defun get-hp ()                        ; 0..100 percentage, for the HP bar
+(defun get-hp () ; 0..100 percentage, for the HP bar
   (floor (* 100.0 (/ *php* +player-max-hp+))))
 (defun get-troopers () (troopers-alive))
 (defun get-walkers () (atats-alive))
-(defun boss-active () (if (and *vactive* *valive*) 1 0))   ; hide the bar once he falls
-(defun boss-hp ()                       ; 0..100, for the boss bar
+(defun boss-active () (if (and *vactive* *valive*) 1 0)) ; hide the bar once he falls
+(defun boss-hp ()                                        ; 0..100, for the boss bar
   (if *valive* (floor (* 100.0 (/ *vhp* +vader-hp+))) 0))
 (defun get-hurt () *hurt-flash*)
 (defun get-px () (aref *ppos* 0))
@@ -2574,16 +2758,28 @@ void main() {
 (reset-game)
 
 (rontolisp:wasm-export 'frame :params '(:float) :returns :void)
-(rontolisp:wasm-export 'set-key :as "setKey" :params '(:int :int) :returns :void)
-(rontolisp:wasm-export 'set-attack :as "setAttack" :params '(:int) :returns :void)
-(rontolisp:wasm-export 'switch-weapon :as "switchWeapon" :params '() :returns :void)
+(rontolisp:wasm-export 'set-key
+                       :as "setKey"
+                       :params '(:int :int)
+                       :returns :void)
+(rontolisp:wasm-export 'set-attack
+                       :as "setAttack"
+                       :params '(:int)
+                       :returns :void)
+(rontolisp:wasm-export 'switch-weapon
+                       :as "switchWeapon"
+                       :params '()
+                       :returns :void)
 (rontolisp:wasm-export 'orbit :params '(:float :float) :returns :void)
 (rontolisp:wasm-export 'zoom :params '(:float) :returns :void)
 (rontolisp:wasm-export 'restart :params '() :returns :void)
 (rontolisp:wasm-export 'get-state :as "getState" :params '() :returns :int)
 (rontolisp:wasm-export 'get-weapon :as "getWeapon" :params '() :returns :int)
 (rontolisp:wasm-export 'get-hp :as "getHp" :params '() :returns :int)
-(rontolisp:wasm-export 'get-troopers :as "getTroopers" :params '() :returns :int)
+(rontolisp:wasm-export 'get-troopers
+                       :as "getTroopers"
+                       :params '()
+                       :returns :int)
 (rontolisp:wasm-export 'get-walkers :as "getWalkers" :params '() :returns :int)
 (rontolisp:wasm-export 'boss-active :as "bossActive" :params '() :returns :int)
 (rontolisp:wasm-export 'boss-hp :as "bossHp" :params '() :returns :int)

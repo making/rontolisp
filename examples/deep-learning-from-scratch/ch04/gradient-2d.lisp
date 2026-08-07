@@ -15,5 +15,5 @@
 
 (dolist (pt '((3.0 4.0) (0.0 2.0) (3.0 0.0)))
   (let ((g (numerical-gradient (function function-2) (linalg:from-list pt))))
-    (format t "grad at (~a, ~a) = (~,4f, ~,4f)~%"
-            (car pt) (cadr pt) (aref g 0) (aref g 1))))
+    (format t "grad at (~a, ~a) = (~,4f, ~,4f)~%" (car pt) (cadr pt) (aref g 0)
+            (aref g 1))))

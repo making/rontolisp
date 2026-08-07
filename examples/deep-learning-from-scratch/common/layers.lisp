@@ -22,8 +22,7 @@
 
 ;; --- Relu ----------------------------------------------------------------------
 
-(defclass relu-layer ()
-  ((mask :initform nil :accessor relu-mask)))
+(defclass relu-layer () ((mask :initform nil :accessor relu-mask)))
 
 (defmethod forward ((layer relu-layer) x)
   ;; The book keeps mask = (x <= 0) and zeroes through it; the equivalent
@@ -37,8 +36,7 @@
 
 ;; --- Sigmoid -------------------------------------------------------------------
 
-(defclass sigmoid-layer ()
-  ((out :initform nil :accessor sigmoid-out)))
+(defclass sigmoid-layer () ((out :initform nil :accessor sigmoid-out)))
 
 (defmethod forward ((layer sigmoid-layer) x)
   (let ((out (sigmoid x)))
@@ -52,9 +50,8 @@
 ;; --- Affine --------------------------------------------------------------------
 
 (defclass affine ()
-  ((w :initarg :w :accessor affine-w)     ; SHARED with params["W<i>"]
-   (b :initarg :b :accessor affine-b)
-   (x :initform nil :accessor affine-x)
+  ((w :initarg :w :accessor affine-w) ; SHARED with params["W<i>"]
+   (b :initarg :b :accessor affine-b) (x :initform nil :accessor affine-x)
    (original-shape :initform nil :accessor affine-original-shape)
    (dw :initform nil :accessor affine-dw)
    (db :initform nil :accessor affine-db)))
@@ -63,9 +60,7 @@
   ;; Tensor support like the book: a rank > 2 input is flattened to
   ;; (N, -1) for the product and restored in backward.
   (let* ((shape (linalg:shape x))
-         (x2 (if (cdr (cdr shape))
-                 (linalg:reshape x (list (car shape) -1))
-                 x)))
+         (x2 (if (cdr (cdr shape)) (linalg:reshape x (list (car shape) -1)) x)))
     (setf (affine-original-shape layer) shape)
     (setf (affine-x layer) x2)
     (linalg:add (linalg:matmul x2 (affine-w layer)) (affine-b layer))))
@@ -80,8 +75,7 @@
 ;; --- SoftmaxWithLoss -----------------------------------------------------------
 
 (defclass softmax-with-loss ()
-  ((loss :initform nil :accessor swl-loss)
-   (y :initform nil :accessor swl-y)
+  ((loss :initform nil :accessor swl-loss) (y :initform nil :accessor swl-y)
    (target :initform nil :accessor swl-target)))
 
 (defgeneric loss-forward (layer x target))
@@ -101,9 +95,10 @@
   (let* ((y (swl-y layer))
          (target (swl-target layer))
          (batch (car (linalg:shape y)))
-         (hot (if (= (linalg:size target) (linalg:size y))
-                  target
-                  (linalg:one-hot target (car (cdr (linalg:shape y)))))))
+         (hot
+          (if (= (linalg:size target) (linalg:size y))
+              target
+              (linalg:one-hot target (car (cdr (linalg:shape y)))))))
     (linalg:div (linalg:sub y hot) batch)))
 
 ;; --- Dropout -------------------------------------------------------------------
@@ -114,8 +109,9 @@
 
 (defmethod forward ((layer dropout) x)
   (if *train-p*
-      (let ((mask (linalg:greater (linalg:rand (linalg:shape x))
-                                  (dropout-ratio layer))))
+      (let ((mask
+             (linalg:greater (linalg:rand (linalg:shape x))
+                             (dropout-ratio layer))))
         (setf (dropout-mask layer) mask)
         (linalg:mul x mask))
       (linalg:mul x (- 1.0 (dropout-ratio layer)))))
@@ -126,15 +122,13 @@
 ;; --- Convolution (ch07) ----------------------------------------------------------
 
 (defclass convolution ()
-  ((w :initarg :w :accessor conv-w)         ; (FN C FH FW), SHARED with params
-   (b :initarg :b :accessor conv-b)         ; (FN)
+  ((w :initarg :w :accessor conv-w) ; (FN C FH FW), SHARED with params
+   (b :initarg :b :accessor conv-b) ; (FN)
    (stride :initarg :stride :initform 1 :accessor conv-stride)
    (pad :initarg :pad :initform 0 :accessor conv-pad)
-   (x :initform nil :accessor conv-x)
-   (col :initform nil :accessor conv-col)
+   (x :initform nil :accessor conv-x) (col :initform nil :accessor conv-col)
    (col-w :initform nil :accessor conv-col-w)
-   (dw :initform nil :accessor conv-dw)
-   (db :initform nil :accessor conv-db)))
+   (dw :initform nil :accessor conv-dw) (db :initform nil :accessor conv-db)))
 
 (defmethod forward ((layer convolution) x)
   ;; im2col turns the convolution into one (N*oh*ow, C*FH*FW) x
@@ -168,16 +162,16 @@
          (c (nth 1 wd))
          (fh (nth 2 wd))
          (fw (nth 3 wd))
-         (dout2 (linalg:reshape (linalg:transpose dout '(0 2 3 1)) (list -1 fn))))
+         (dout2
+          (linalg:reshape (linalg:transpose dout '(0 2 3 1)) (list -1 fn))))
     (setf (conv-db layer) (linalg:sum dout2 0))
     (setf (conv-dw layer)
-          (linalg:reshape
-           (linalg:transpose
-            (linalg:matmul (linalg:transpose (conv-col layer)) dout2))
-           (list fn c fh fw)))
+          (linalg:reshape (linalg:transpose
+                           (linalg:matmul (linalg:transpose (conv-col layer))
+                                          dout2)) (list fn c fh fw)))
     (col2im (linalg:matmul dout2 (linalg:transpose (conv-col-w layer)))
-            (linalg:shape (conv-x layer)) fh fw
-            (conv-stride layer) (conv-pad layer))))
+            (linalg:shape (conv-x layer)) fh fw (conv-stride layer)
+            (conv-pad layer))))
 
 ;; --- Pooling (ch07) --------------------------------------------------------------
 
@@ -203,8 +197,9 @@
          (stride (pool-stride layer))
          (out-h (+ 1 (floor (- h ph) stride)))
          (out-w (+ 1 (floor (- w pw) stride)))
-         (col (linalg:reshape (im2col x ph pw stride (pool-pad layer))
-                              (list -1 (* ph pw))))
+         (col
+          (linalg:reshape (im2col x ph pw stride (pool-pad layer))
+                          (list -1 (* ph pw))))
          (am (linalg:argmax col 1))
          (out (linalg:amax col 1)))
     (setf (pool-x layer) x)
@@ -222,7 +217,8 @@
          (ow (nth 3 dd))
          (pool-size (* (pool-h layer) (pool-w layer)))
          (flat (linalg:reshape (linalg:transpose dout '(0 2 3 1)) (list -1 1)))
-         (dmax (linalg:mul (linalg:one-hot (pool-arg-max layer) pool-size) flat))
+         (dmax
+          (linalg:mul (linalg:one-hot (pool-arg-max layer) pool-size) flat))
          (dcol (linalg:reshape dmax (list (* n oh ow) -1))))
     (col2im dcol (linalg:shape (pool-x layer)) (pool-h layer) (pool-w layer)
             (pool-stride layer) (pool-pad layer))))
@@ -230,24 +226,24 @@
 ;; --- BatchNormalization ---------------------------------------------------------
 
 (defclass batch-normalization ()
-  ((gamma :initarg :gamma :accessor bn-gamma)   ; SHARED with params["gamma<i>"]
+  ((gamma :initarg :gamma :accessor bn-gamma) ; SHARED with params["gamma<i>"]
    (beta :initarg :beta :accessor bn-beta)
    (momentum :initarg :momentum :initform 0.9 :accessor bn-momentum)
    (input-shape :initform nil :accessor bn-input-shape)
    (running-mean :initform nil :accessor bn-running-mean)
    (running-var :initform nil :accessor bn-running-var)
    (batch-size :initform nil :accessor bn-batch-size)
-   (xc :initform nil :accessor bn-xc)
-   (xn :initform nil :accessor bn-xn)
+   (xc :initform nil :accessor bn-xc) (xn :initform nil :accessor bn-xn)
    (std :initform nil :accessor bn-std)
    (dgamma :initform nil :accessor bn-dgamma)
    (dbeta :initform nil :accessor bn-dbeta)))
 
 (defmethod forward ((layer batch-normalization) x)
   (setf (bn-input-shape layer) (linalg:shape x))
-  (let* ((x2 (if (/= (linalg:ndim x) 2)
-                 (linalg:reshape x (list (car (linalg:shape x)) -1))
-                 x))
+  (let* ((x2
+          (if (/= (linalg:ndim x) 2)
+              (linalg:reshape x (list (car (linalg:shape x)) -1))
+              x))
          (d (car (cdr (linalg:shape x2)))))
     (unless (bn-running-mean layer)
       (setf (bn-running-mean layer) (linalg:zeros d))
@@ -272,16 +268,16 @@
                                    (linalg:mul (- 1 m) var)))
                  xn)
                (linalg:div (linalg:sub x2 (bn-running-mean layer))
-                           (linalg:sqrt (linalg:add (bn-running-var layer)
-                                                    10.0e-7))))))
-      (linalg:reshape (linalg:add (linalg:mul (bn-gamma layer) out)
-                                  (bn-beta layer))
-                      (bn-input-shape layer)))))
+                (linalg:sqrt (linalg:add (bn-running-var layer) 10.0e-7))))))
+      (linalg:reshape
+       (linalg:add (linalg:mul (bn-gamma layer) out) (bn-beta layer))
+       (bn-input-shape layer)))))
 
 (defmethod backward ((layer batch-normalization) dout)
-  (let* ((dout2 (if (/= (linalg:ndim dout) 2)
-                    (linalg:reshape dout (list (car (linalg:shape dout)) -1))
-                    dout))
+  (let* ((dout2
+          (if (/= (linalg:ndim dout) 2)
+              (linalg:reshape dout (list (car (linalg:shape dout)) -1))
+              dout))
          (xn (bn-xn layer))
          (xc (bn-xc layer))
          (std (bn-std layer))
@@ -290,14 +286,12 @@
          (dgamma (linalg:sum (linalg:mul xn dout2) 0))
          (dxn (linalg:mul (bn-gamma layer) dout2))
          (dxc (linalg:div dxn std))
-         (dstd (linalg:negative
-                (linalg:sum (linalg:div (linalg:mul dxn xc)
-                                        (linalg:mul std std))
-                            0)))
+         (dstd
+          (linalg:negative
+           (linalg:sum (linalg:div (linalg:mul dxn xc) (linalg:mul std std))
+                       0)))
          (dvar (linalg:div (linalg:mul 0.5 dstd) std))
-         (dxc2 (linalg:add dxc
-                           (linalg:mul (/ 2.0 batch)
-                                       (linalg:mul xc dvar))))
+         (dxc2 (linalg:add dxc (linalg:mul (/ 2.0 batch) (linalg:mul xc dvar))))
          (dmu (linalg:sum dxc2 0))
          (dx (linalg:sub dxc2 (linalg:div dmu batch))))
     (setf (bn-dgamma layer) dgamma)

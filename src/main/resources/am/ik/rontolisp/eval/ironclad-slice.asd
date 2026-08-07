@@ -15,51 +15,46 @@
 
 (defsystem "ironclad/core"
   :components ((:module "src"
-                :serial t
-                :components ((:file "package")
-                             (:file "conditions")
-                             (:file "generic")
-                             (:file "macro-utils")
-                             (:file "util")
-                             (:file "common")
-                             (:module "digests"
-                              :serial t
-                              :components ((:file "digest")))
-                             (:module "macs"
-                              :serial t
-                              :components ((:file "mac")))
-                             ;; prng/prng.lisp and public-key/public-key.lisp are
-                             ;; ironclad/core components in the real .asd too, and are
-                             ;; kept here in the same position -- but as LEAF-MODULE
-                             ;; substitutions (eval/ShimLibraries): the real files pull
-                             ;; in the Fortuna CSPRNG resp. 3,065 lines of RSA/DSA/ECC.
-                             ;; The shims expose the three names the slice actually
-                             ;; needs: random-data (signals), octets-to-integer and
-                             ;; integer-to-octets (verbatim from the original).
-                             (:module "prng"
-                              :serial t
-                              :components ((:file "prng")))
-                             (:module "public-key"
-                              :serial t
-                              :components ((:file "public-key")))))))
+                        :serial t
+                        :components ((:file "package") (:file "conditions")
+                                     (:file "generic") (:file "macro-utils")
+                                     (:file "util") (:file "common")
+                                     (:module "digests"
+                                              :serial t
+                                              :components ((:file "digest")))
+                                     (:module "macs"
+                                              :serial t
+                                              :components ((:file "mac")))
+                                     ;; prng/prng.lisp and public-key/public-key.lisp are
+                                     ;; ironclad/core components in the real .asd too, and are
+                                     ;; kept here in the same position -- but as LEAF-MODULE
+                                     ;; substitutions (eval/ShimLibraries): the real files pull
+                                     ;; in the Fortuna CSPRNG resp. 3,065 lines of RSA/DSA/ECC.
+                                     ;; The shims expose the three names the slice actually
+                                     ;; needs: random-data (signals), octets-to-integer and
+                                     ;; integer-to-octets (verbatim from the original).
+                                     (:module "prng"
+                                              :serial t
+                                              :components ((:file "prng")))
+                                     (:module "public-key"
+                                      :serial t
+                                      :components ((:file "public-key")))))))
 
 (defsystem "ironclad/digest/sha256"
   :depends-on ("ironclad/core")
   :components ((:module "src"
-                :components ((:module "digests"
-                              :components ((:file "sha256")))))))
+                        :components ((:module "digests"
+                                      :components ((:file "sha256")))))))
 
 (defsystem "ironclad/mac/hmac"
   :depends-on ("ironclad/core")
   :components ((:module "src"
-                :components ((:module "macs"
-                              :components ((:file "hmac")))))))
+                :components ((:module "macs" :components ((:file "hmac")))))))
 
 (defsystem "ironclad/kdf/pkcs5"
   :depends-on ("ironclad/core" "ironclad/mac/hmac")
   :components ((:module "src"
-                :components ((:module "kdf"
-                              :components ((:file "pkcs5")))))))
+                :components ((:module "kdf" :components ((:file "pkcs5")))))))
 
 ;;; kdf.lisp (make-kdf) is loaded LAST, not with the core as real ASDF does: it
 ;;; make-instances every KDF class, and the compile paths expand a make-instance
@@ -71,28 +66,22 @@
 (defsystem "ironclad/kdf/hmac"
   :depends-on ("ironclad/core" "ironclad/mac/hmac")
   :components ((:module "src"
-                :components ((:module "kdf"
-                              :components ((:file "hmac")))))))
+                :components ((:module "kdf" :components ((:file "hmac")))))))
 
 ;;; password-hash.lisp is the real file, unmodified: its pbkdf2-hash-password is
 ;;; the entry point cl-postgres' SCRAM-SHA-256 authentication calls.
 (defsystem "ironclad/kdf/password-hash"
   :depends-on ("ironclad/core" "ironclad/digest/sha256" "ironclad/kdf/pkcs5")
   :components ((:module "src"
-                :components ((:module "kdf"
-                              :components ((:file "password-hash")))))))
+                        :components ((:module "kdf"
+                                      :components ((:file "password-hash")))))))
 
 (defsystem "ironclad/kdfs"
   :depends-on ("ironclad/core" "ironclad/kdf/pkcs5" "ironclad/kdf/hmac")
   :components ((:module "src"
-                :components ((:module "kdf"
-                              :components ((:file "kdf")))))))
+                :components ((:module "kdf" :components ((:file "kdf")))))))
 
 (defsystem "ironclad"
-  :depends-on ("ironclad/core"
-               "ironclad/digest/sha256"
-               "ironclad/mac/hmac"
-               "ironclad/kdf/pkcs5"
-               "ironclad/kdf/hmac"
-               "ironclad/kdf/password-hash"
-               "ironclad/kdfs"))
+  :depends-on ("ironclad/core" "ironclad/digest/sha256" "ironclad/mac/hmac"
+               "ironclad/kdf/pkcs5" "ironclad/kdf/hmac"
+               "ironclad/kdf/password-hash" "ironclad/kdfs"))

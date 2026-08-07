@@ -24,15 +24,20 @@
 
 (linalg:seed 42)
 
-(let* ((x-train (linalg:reshape
-                 (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*)
-                 (list *train-limit* 1 28 28)))
-       (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
-       (x-test (linalg:reshape
-                (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*)
-                (list *test-limit* 1 28 28)))
-       (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t))
+(let* ((x-train
+        (linalg:reshape
+         (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*)
+         (list *train-limit* 1 28 28)))
+       (t-train
+        (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
+       (x-test
+        (linalg:reshape
+         (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*)
+         (list *test-limit* 1 28 28)))
+       (t-test
+        (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t))
        (net (make-deep-convnet :hidden-size 50 :output-size 10)))
   (train net (dcn-params net) x-train t-train x-test t-test
-         :epochs *epochs* :mini-batch-size *batch-size*
+         :epochs *epochs*
+         :mini-batch-size *batch-size*
          :optimizer (make-instance 'adam :lr 0.001)))

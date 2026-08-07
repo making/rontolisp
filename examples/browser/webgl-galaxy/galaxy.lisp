@@ -37,19 +37,34 @@
 ;; writes one star's (x y hue size) record into it; gl-buffer-sub-data uploads
 ;; the first COUNT floats of it to the bound buffer. These two are the only
 ;; imports that are not literal WebGL2 API entries.
-(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
-                       :params '(:int :float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-buffer-sub-data :from "gl" :as "bufferSubData"
-                       :params '(:int :int :int) :returns :void)
+(rontolisp:wasm-import 'set-vertex
+                       :from "gl"
+                       :as "setVertex"
+                       :params '(:int :float :float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-buffer-sub-data
+                       :from "gl"
+                       :as "bufferSubData"
+                       :params '(:int :int :int)
+                       :returns :void)
 
 ;; Canvas metrics, owned by the page (it resizes the backing store on window
 ;; resize; Lisp reads the result every frame and sets the viewport itself).
-(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'device-pixel-ratio :from "canvas" :as "devicePixelRatio"
-                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-width
+                       :from "canvas"
+                       :as "width"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'canvas-height
+                       :from "canvas"
+                       :as "height"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'device-pixel-ratio
+                       :from "canvas"
+                       :as "devicePixelRatio"
+                       :params '()
+                       :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's:
 ;; these two lines are literally Math.sin / Math.cos on the JavaScript side.
@@ -61,7 +76,8 @@
 ;; gl:shader-source (a :string parameter crossing the boundary as (ptr,len)
 ;; into this module's linear memory).
 
-(defconstant +vertex-shader-source+ "#version 300 es
+(defconstant +vertex-shader-source+
+  "#version 300 es
 layout(location=0) in vec2 aPos;    // clip-space position from Lisp
 layout(location=1) in float aHue;   // 0..1 hue from Lisp
 layout(location=2) in float aSize;  // point size from Lisp
@@ -73,7 +89,8 @@ void main() {
   vHue = aHue;
 }")
 
-(defconstant +fragment-shader-source+ "#version 300 es
+(defconstant +fragment-shader-source+
+  "#version 300 es
 precision mediump float;
 in float vHue;
 out vec4 color;
@@ -94,10 +111,11 @@ void main() {
 
 ;; --- GL pipeline setup ------------------------------------------------------
 
-(defvar *u-dpr* 0)                      ; uniform location handle for uDpr
+(defvar *u-dpr* 0) ; uniform location handle for uDpr
 
 (defun setup-gl ()
-  (let ((program (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
+  (let ((program
+         (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
     (gl:use-program program)
     (setq *u-dpr* (gl:get-uniform-location program "uDpr"))
     ;; additive blending: overlapping stars glow
@@ -117,10 +135,10 @@ void main() {
 
 ;; Per-star orbit parameters, filled by `init`.
 (defvar *n* 0)
-(defvar *radius* nil)                   ; semi-major axis of the orbit
-(defvar *phase* nil)                    ; where on the orbit the star starts
-(defvar *speed* nil)                    ; angular speed (inner orbits run faster)
-(defvar *tilt* nil)                     ; orientation of the ellipse
+(defvar *radius* nil) ; semi-major axis of the orbit
+(defvar *phase* nil)  ; where on the orbit the star starts
+(defvar *speed* nil)  ; angular speed (inner orbits run faster)
+(defvar *tilt* nil)   ; orientation of the ellipse
 
 ;; The golden angle scatters the stars' orbit phases evenly; sqrt(2)-1
 ;; scatters their radii. (The radius sequence must not be built on the golden
@@ -137,8 +155,7 @@ void main() {
 (defconstant +twist+ 5.4)
 
 ;; The fractional part of X (X non-negative).
-(defun frac (x)
-  (- x (floor x)))
+(defun frac (x) (- x (floor x)))
 
 (defun init (n)
   (setq *n* n)
@@ -160,9 +177,7 @@ void main() {
       (setf (aref *tilt* i) (* r +twist+)))))
 
 (defun frame (tm)
-  (let* ((w (canvas-width))
-         (h (canvas-height))
-         (aspect (/ w h)))
+  (let* ((w (canvas-width)) (h (canvas-height)) (aspect (/ w h)))
     (gl:viewport 0 0 (floor w) (floor h))
     (gl:uniform1f *u-dpr* (device-pixel-ratio))
     (gl:clear-color 0.012 0.016 0.045 1.0)

@@ -25,9 +25,10 @@
    (balance :initarg :balance :reader available-balance))
   ;; The :report lambda renders the message an UNCAUGHT error would print,
   ;; e.g. "Error: cannot withdraw 200: only 70 available".
-  (:report (lambda (c s)
-             (format s "cannot withdraw ~a: only ~a available"
-                     (requested-amount c) (available-balance c)))))
+  (:report
+   (lambda (c s)
+     (format s "cannot withdraw ~a: only ~a available" (requested-amount c)
+             (available-balance c)))))
 
 (defvar *balance* 100)
 (defvar *audit-log* nil)
@@ -42,8 +43,7 @@
 (defun audited-withdraw (amount)
   "Record every attempt -- unwind-protect runs the cleanup on success AND
 when `withdraw` signals, so refused withdrawals reach the audit log too."
-  (unwind-protect
-      (withdraw amount)
+  (unwind-protect (withdraw amount)
     (setq *audit-log* (cons amount *audit-log*))))
 
 (defun try-withdraw (amount)
@@ -54,14 +54,13 @@ runs on normal completion with the protected form's value."
     (insufficient-funds (e)
       (format t "  refused: wanted ~a but only ~a available~%"
               (requested-amount e) (available-balance e)))
-    (:no-error (balance)
-      (format t "  ok, new balance ~a~%" balance))))
+    (:no-error (balance) (format t "  ok, new balance ~a~%" balance))))
 
 (format t "Error handling: conditions + handler-case + unwind-protect~%~%")
 
-(try-withdraw 30)                       ; succeeds
-(try-withdraw 200)                      ; refused, but still audited
-(try-withdraw 60)                       ; succeeds again
+(try-withdraw 30)  ; succeeds
+(try-withdraw 200) ; refused, but still audited
+(try-withdraw 60)  ; succeeds again
 
 ;; ignore-errors = handler-case sugar: nil instead of an unwind.
 (format t "ignore-errors on withdraw 999 -> ~a~%"
@@ -81,7 +80,9 @@ runs on normal completion with the protected form's value."
 
 ;; ...but handler-case catches a raised signal like any other condition.
 (format t "signal with a handler    -> ~a~%"
-        (handler-case (progn (signal "balance is getting low") :not-reached)
+        (handler-case (progn
+                        (signal "balance is getting low")
+                        :not-reached)
           (condition (c) :noticed)))
 
 ;; Condition objects are ordinary values: typecase dispatches on their class

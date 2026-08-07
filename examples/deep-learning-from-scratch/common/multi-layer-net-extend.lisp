@@ -24,22 +24,21 @@
    (use-batchnorm :initarg :use-batchnorm :accessor mlne-use-batchnorm)
    (last-layer :initarg :last-layer :accessor mlne-last-layer)))
 
-(defun make-multi-layer-net-extend (input-size hidden-size-list output-size
-                                    &key (activation 'relu)
-                                    (weight-init-std 'relu)
-                                    (weight-decay-lambda 0)
-                                    use-dropout (dropout-ratio 0.5)
-                                    use-batchnorm)
-  (let* ((all-sizes (append (list input-size) hidden-size-list
-                            (list output-size)))
+(defun make-multi-layer-net-extend (input-size hidden-size-list output-size &key
+                                               (activation 'relu)
+                                               (weight-init-std 'relu)
+                                               (weight-decay-lambda 0)
+                                               use-dropout (dropout-ratio 0.5)
+                                               use-batchnorm)
+  (let* ((all-sizes
+          (append (list input-size) hidden-size-list (list output-size)))
          (n-hidden (length hidden-size-list))
          (params (make-hash-table :test 'equal))
          (keys nil)
          (affines nil)
          (batchnorms nil)
          (layer-list nil))
-    (do ((idx 1 (+ idx 1))
-         (sizes all-sizes (cdr sizes)))
+    (do ((idx 1 (+ idx 1)) (sizes all-sizes (cdr sizes)))
         ((null (cdr sizes)))
       (let ((prev (car sizes))
             (next (cadr sizes))
@@ -52,9 +51,10 @@
         (setq keys (cons bk (cons wk keys)))))
     (do ((idx 1 (+ idx 1)))
         ((> idx (+ n-hidden 1)))
-      (let ((aff (make-instance 'affine
-                                :w (gethash (format nil "W~a" idx) params)
-                                :b (gethash (format nil "b~a" idx) params))))
+      (let ((aff
+             (make-instance 'affine
+                            :w (gethash (format nil "W~a" idx) params)
+                            :b (gethash (format nil "b~a" idx) params))))
         (setq affines (cons aff affines))
         (setq layer-list (cons aff layer-list))
         (when (<= idx n-hidden)
@@ -65,16 +65,16 @@
               (setf (gethash gk params) (linalg:ones size))
               (setf (gethash bk2 params) (linalg:zeros size))
               (setq keys (append keys (list gk bk2)))
-              (let ((bn (make-instance 'batch-normalization
-                                       :gamma (gethash gk params)
-                                       :beta (gethash bk2 params))))
+              (let ((bn
+                     (make-instance 'batch-normalization
+                                    :gamma (gethash gk params)
+                                    :beta (gethash bk2 params))))
                 (setq batchnorms (cons bn batchnorms))
                 (setq layer-list (cons bn layer-list)))))
           (setq layer-list
                 (cons (if (eq activation 'sigmoid)
                           (make-instance 'sigmoid-layer)
-                          (make-instance 'relu-layer))
-                      layer-list))
+                          (make-instance 'relu-layer)) layer-list))
           (when use-dropout
             (setq layer-list
                   (cons (make-instance 'dropout :ratio dropout-ratio)
@@ -109,24 +109,20 @@
 
 (defmethod predict ((net multi-layer-net-extend) x)
   (let ((out x))
-    (dolist (layer (mlne-layers net))
-      (setq out (forward layer out)))
+    (dolist (layer (mlne-layers net)) (setq out (forward layer out)))
     out))
 
 (defmethod net-loss ((net multi-layer-net-extend) x target)
-  (let ((decay 0)
-        (lam (mlne-weight-decay-lambda net)))
+  (let ((decay 0) (lam (mlne-weight-decay-lambda net)))
     (dolist (aff (mlne-affines net))
-      (setq decay (+ decay (* 0.5 lam (linalg:sum (linalg:square (affine-w aff)))))))
+      (setq decay
+            (+ decay (* 0.5 lam (linalg:sum (linalg:square (affine-w aff)))))))
     (+ (loss-forward (mlne-last-layer net) (predict net x) target) decay)))
 
 (defmethod net-accuracy-count ((net multi-layer-net-extend) x target)
-  (let* ((y (let ((*train-p* nil))
-              (predict net x)))
+  (let* ((y (let ((*train-p* nil)) (predict net x)))
          (yl (linalg:argmax y 1))
-         (tl (if (= (linalg:ndim target) 1)
-                 target
-                 (linalg:argmax target 1))))
+         (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
     (truncate (linalg:sum (linalg:equal yl tl)))))
 
 (defmethod net-gradient ((net multi-layer-net-extend) x target)
@@ -152,9 +148,7 @@
 
 (defmethod net-numerical-gradient ((net multi-layer-net-extend) x target)
   (let ((grads (make-hash-table :test 'equal))
-        (loss-w (lambda (w)
-                  (let ((*train-p* t))
-                    (net-loss net x target)))))
+        (loss-w (lambda (w) (let ((*train-p* t)) (net-loss net x target)))))
     (dolist (key (mlne-keys net))
       (setf (gethash key grads)
             (numerical-gradient loss-w (gethash key (mlne-params net)))))

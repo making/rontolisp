@@ -25,7 +25,9 @@
 ;; WitImportDirective.lower itself), so this directive never reaches WitImportInliner
 ;; -- but it is written here, in environment.lisp's own source, so the file reads as
 ;; the program it is.
-(rontolisp:wit-import "environment.wit" :interface "wasi:cli/environment@0.3.0" :package %environ)
+(rontolisp:wit-import "environment.wit"
+                      :interface "wasi:cli/environment@0.3.0"
+                      :package %environ)
 
 (defun uiop:getenv (%getenv-name)
   (do ((%getenv-rest (%environ:get-environment) (cdr %getenv-rest)))

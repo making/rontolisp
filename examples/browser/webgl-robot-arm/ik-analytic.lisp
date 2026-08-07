@@ -17,15 +17,12 @@
 
 (defun mat-eye4 ()
   (let ((m (linalg:full '(4 4) 0.0)))
-    (dotimes (k 4)
-      (setf (aref m k k) 1.0))
+    (dotimes (k 4) (setf (aref m k k) 1.0))
     m))
 
 (defun mat-yaw (q)
   ;; local +x -> the horizontal direction (sin q, 0, cos q); +y stays up
-  (let ((m (mat-eye4))
-        (c (cos q))
-        (s (sin q)))
+  (let ((m (mat-eye4)) (c (cos q)) (s (sin q)))
     (setf (aref m 0 0) s)
     (setf (aref m 2 0) c)
     (setf (aref m 0 2) (- 0.0 c))
@@ -34,9 +31,7 @@
 
 (defun mat-rot-z (q)
   ;; rotates local +x toward +y: the shoulder / elbow pitch in the arm plane
-  (let ((m (mat-eye4))
-        (c (cos q))
-        (s (sin q)))
+  (let ((m (mat-eye4)) (c (cos q)) (s (sin q)))
     (setf (aref m 0 0) c)
     (setf (aref m 0 1) (- 0.0 s))
     (setf (aref m 1 0) s)
@@ -68,17 +63,12 @@
          (lb *gb*)
          (dmin (+ (if (> la lb) (- la lb) (- lb la)) 0.001))
          (dmax (- (+ la lb) 0.001))
-         (dc (cond ((< d dmin) dmin)
-                   ((> d dmax) dmax)
-                   (t d)))
+         (dc (cond ((< d dmin) dmin) ((> d dmax) dmax) (t d)))
          (ce (/ (- (* dc dc) (* la la) (* lb lb)) (* 2.0 la lb)))
-         (q2 (- 0.0 (acos (cond ((> ce 1.0) 1.0)
-                                ((< ce -1.0) -1.0)
-                                (t ce)))))
+         (q2 (- 0.0 (acos (cond ((> ce 1.0) 1.0) ((< ce -1.0) -1.0) (t ce)))))
          (q1 (- (atan2 h r) (atan2 (* lb (sin q2)) (+ la (* lb (cos q2)))))))
     ;; FORWARD kinematics: walk the transform chain and place every joint.
-    (let ((t1 (linalg:matmul (mat-yaw q0) (mat-rot-z q1)))
-          (s 0.0))
+    (let ((t1 (linalg:matmul (mat-yaw q0) (mat-rot-z q1))) (s 0.0))
       (setf (aref *jx* 0) 0.0)
       (setf (aref *jy* 0) 0.0)
       (setf (aref *jz* 0) 0.0)
@@ -86,7 +76,9 @@
           ((> i *split*))
         (setq s (+ s (aref *len* (- i 1))))
         (%fk-place (linalg:matmul t1 (mat-trans-x s)) i))
-      (let ((t2 (linalg:matmul t1 (linalg:matmul (mat-trans-x la) (mat-rot-z q2)))))
+      (let ((t2
+             (linalg:matmul t1
+                            (linalg:matmul (mat-trans-x la) (mat-rot-z q2)))))
         (setq s 0.0)
         (do ((i (+ *split* 1) (+ i 1)))
             ((> i tip))

@@ -44,14 +44,12 @@
 
 (format t "(vec:dot v v) over ~a doubles~%" (length *v*))
 
-(let ((start (get-internal-real-time))
-      (sum 0.0))
+(let ((start (get-internal-real-time)) (sum 0.0))
   (dotimes (i *cold-reps*) (setq sum (vec:dot *v* *v*)))
   (format t "cold: ~a reps in ~a ms (JIT warmup included), sum = ~a~%"
           *cold-reps* (- (get-internal-real-time) start) (round sum)))
 
-(let ((start (get-internal-real-time))
-      (sum 0.0))
+(let ((start (get-internal-real-time)) (sum 0.0))
   (dotimes (i *warm-reps*) (setq sum (vec:dot *v* *v*)))
-  (format t "warm: ~a reps in ~a ms (steady state), sum = ~a~%"
-          *warm-reps* (- (get-internal-real-time) start) (round sum)))
+  (format t "warm: ~a reps in ~a ms (steady state), sum = ~a~%" *warm-reps*
+          (- (get-internal-real-time) start) (round sum)))

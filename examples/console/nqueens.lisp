@@ -17,8 +17,7 @@
   (let ((ok t) (d 1) (rest cols))
     (while rest
       (let ((c (car rest)))
-        (when (or (= c col) (= (abs (- c col)) d))
-          (setq ok nil)))
+        (when (or (= c col) (= (abs (- c col)) d)) (setq ok nil)))
       (setq d (+ d 1))
       (setq rest (cdr rest)))
     ok))
@@ -40,8 +39,7 @@
 ;;; Print a board given a list of column positions, one per row.
 (defun print-board (n cols)
   (dolist (c cols)
-    (dotimes (i n)
-      (princ (if (= i c) "Q " ". ")))
+    (dotimes (i n) (princ (if (= i c) "Q " ". ")))
     (terpri)))
 
 (defparameter *n* 6)

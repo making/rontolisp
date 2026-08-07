@@ -14,10 +14,8 @@
 
 (defun vandermonde (xs degree)
   ;; One row per sample: (1 x x^2 ... x^degree).
-  (let* ((n (length xs))
-         (m (make-array (list n (+ degree 1)))))
-    (do ((row 0 (+ row 1))
-         (rest xs (cdr rest)))
+  (let* ((n (length xs)) (m (make-array (list n (+ degree 1)))))
+    (do ((row 0 (+ row 1)) (rest xs (cdr rest)))
         ((>= row n) m)
       (do ((col 0 (+ col 1)))
           ((> col degree))
@@ -64,15 +62,13 @@
             (< (linalg:norm (linalg:sub (linalg:dot ata coeffs) aty)) 0.000001))
     (terpri)
     (format t "    x   y   fitted x1000   residual x1000~%")
-    (do ((px xs (cdr px))
-         (py ys (cdr py)))
+    (do ((px xs (cdr px)) (py ys (cdr py)))
         ((null px))
       (let ((fitted (poly-eval coeffs (car px))))
-        (format t "  ~a  ~a  ~a  ~a~%"
-                (car px) (car py) (scaled fitted) (scaled (- (car py) fitted)))))
+        (format t "  ~a  ~a  ~a  ~a~%" (car px) (car py) (scaled fitted)
+                (scaled (- (car py) fitted)))))
     (terpri)
-    (let ((residual (linalg:sub (linalg:from-list ys)
-                                (linalg:dot a coeffs))))
+    (let ((residual (linalg:sub (linalg:from-list ys) (linalg:dot a coeffs))))
       (format t "squared residual norm x1000: ~a~%"
               (scaled (linalg:dot residual residual))))))
 

@@ -25,11 +25,12 @@
 
 (ql:quickload "clack")
 
-(clack:clackup
- (lambda (env)
-   (list 200 '(:content-type "text/plain")
-         (list (format nil "Hello, Clack on rontolisp! ~A ~A~%"
-                       (getf env :request-method) (getf env :path-info)))))
- :server :rontolisp
- :port 5000
- :use-thread nil)
+(clack:clackup (lambda (env)
+                 (list 200 '(:content-type "text/plain")
+                       (list
+                        (format nil "Hello, Clack on rontolisp! ~A ~A~%"
+                                (getf env :request-method)
+                                (getf env :path-info)))))
+               :server :rontolisp
+               :port 5000
+               :use-thread nil)

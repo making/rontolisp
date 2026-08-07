@@ -33,18 +33,33 @@
 ;; The vertex staging path (see webgl-galaxy): per-voxel floats cannot cross
 ;; into GPU memory one call at a time, so the page keeps one Float32Array
 ;; that set-vertex fills and gl-buffer-sub-data uploads.
-(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
-                       :params '(:int :float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-buffer-sub-data :from "gl" :as "bufferSubData"
-                       :params '(:int :int :int) :returns :void)
+(rontolisp:wasm-import 'set-vertex
+                       :from "gl"
+                       :as "setVertex"
+                       :params '(:int :float :float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-buffer-sub-data
+                       :from "gl"
+                       :as "bufferSubData"
+                       :params '(:int :int :int)
+                       :returns :void)
 
 ;; Canvas metrics, owned by the page.
-(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'device-pixel-ratio :from "canvas" :as "devicePixelRatio"
-                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-width
+                       :from "canvas"
+                       :as "width"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'canvas-height
+                       :from "canvas"
+                       :as "height"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'device-pixel-ratio
+                       :from "canvas"
+                       :as "devicePixelRatio"
+                       :params '()
+                       :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's.
 (rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
@@ -52,7 +67,8 @@
 
 ;; --- shaders ----------------------------------------------------------------
 
-(defconstant +vertex-shader-source+ "#version 300 es
+(defconstant +vertex-shader-source+
+  "#version 300 es
 layout(location=0) in vec2 aPos;    // clip-space position from Lisp
 layout(location=1) in float aHeat;  // 0..1 normalized heat from Lisp
 layout(location=2) in float aSize;  // point size from Lisp
@@ -64,7 +80,8 @@ void main() {
   vHeat = aHeat;
 }")
 
-(defconstant +fragment-shader-source+ "#version 300 es
+(defconstant +fragment-shader-source+
+  "#version 300 es
 precision mediump float;
 in float vHeat;
 out vec4 color;
@@ -85,10 +102,11 @@ void main() {
 
 ;; --- GL pipeline setup ------------------------------------------------------
 
-(defvar *u-dpr* 0)                      ; uniform location handle for uDpr
+(defvar *u-dpr* 0) ; uniform location handle for uDpr
 
 (defun setup-gl ()
-  (let ((program (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
+  (let ((program
+         (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
     (gl:use-program program)
     (setq *u-dpr* (gl:get-uniform-location program "uDpr"))
     ;; additive blending: overlapping voxels glow, no depth sorting needed
@@ -112,12 +130,12 @@ void main() {
 ;; into the vertex buffer, so vertex v is the voxel at
 ;; (array-row-major-index grid i j k) = v.
 
-(defvar *n* 0)                          ; lattice side
-(defvar *grid* nil)                     ; rank-3 (n n n) array of floats
-(defvar *next* nil)                     ; the double buffer
+(defvar *n* 0)      ; lattice side
+(defvar *grid* nil) ; rank-3 (n n n) array of floats
+(defvar *next* nil) ; the double buffer
 
-(defconstant +alpha+ 0.16)              ; diffusion rate (stable: alpha <= 1/6)
-(defconstant +cool+ 0.988)              ; per-step global cooling
+(defconstant +alpha+ 0.16) ; diffusion rate (stable: alpha <= 1/6)
+(defconstant +cool+ 0.988) ; per-step global cooling
 
 (defun init (n)
   (setq *n* n)
@@ -128,58 +146,41 @@ void main() {
 
 (defun add-heat (fi fj fk amount)
   ;; Deposits heat at the voxel containing the (float) lattice point.
-  (let ((i (floor fi))
-        (j (floor fj))
-        (k (floor fk)))
+  (let ((i (floor fi)) (j (floor fj)) (k (floor fk)))
     (setf (aref *grid* i j k) (+ (aref *grid* i j k) amount))))
 
 (defun inject (tm)
   ;; Two counter-rotating heat sources orbit inside the cube. Their orbit
   ;; radius keeps the (floored) indices strictly inside the lattice, so no
   ;; bounds clamping is needed.
-  (let* ((mid (* 0.5 (- *n* 1)))
-         (r (- mid 1.5)))
-    (add-heat (+ mid (* r (cos (* tm 1.1))))
-              (+ mid (* 0.6 r (sin (* tm 0.7))))
-              (+ mid (* r (sin (* tm 1.1))))
-              900.0)
-    (add-heat (+ mid (* 0.7 r (cos (* tm -0.6))))
-              (+ mid (* r (sin (* tm 0.5))))
-              (+ mid (* 0.7 r (sin (* tm -0.6))))
-              600.0)))
+  (let* ((mid (* 0.5 (- *n* 1))) (r (- mid 1.5)))
+    (add-heat (+ mid (* r (cos (* tm 1.1)))) (+ mid (* 0.6 r (sin (* tm 0.7))))
+              (+ mid (* r (sin (* tm 1.1)))) 900.0)
+    (add-heat (+ mid (* 0.7 r (cos (* tm -0.6)))) (+ mid (* r (sin (* tm 0.5))))
+              (+ mid (* 0.7 r (sin (* tm -0.6)))) 600.0)))
 
 (defun diffuse ()
   ;; One explicit Euler step with insulated boundaries into the double
   ;; buffer, exactly as in examples/ml/heat3d.lisp -- three-subscript aref all
   ;; the way -- plus a mild global cooling so the sources and the walls reach
   ;; a moving equilibrium.
-  (let ((n *n*)
-        (g *grid*)
-        (out *next*))
+  (let ((n *n*) (g *grid*) (out *next*))
     (dotimes (i n)
       (dotimes (j n)
         (dotimes (k n)
-          (let ((c (aref g i j k))
-                (acc 0.0))
-            (when (> i 0)
-              (setq acc (+ acc (- (aref g (- i 1) j k) c))))
-            (when (< i (- n 1))
-              (setq acc (+ acc (- (aref g (+ i 1) j k) c))))
-            (when (> j 0)
-              (setq acc (+ acc (- (aref g i (- j 1) k) c))))
-            (when (< j (- n 1))
-              (setq acc (+ acc (- (aref g i (+ j 1) k) c))))
-            (when (> k 0)
-              (setq acc (+ acc (- (aref g i j (- k 1)) c))))
-            (when (< k (- n 1))
-              (setq acc (+ acc (- (aref g i j (+ k 1)) c))))
+          (let ((c (aref g i j k)) (acc 0.0))
+            (when (> i 0) (setq acc (+ acc (- (aref g (- i 1) j k) c))))
+            (when (< i (- n 1)) (setq acc (+ acc (- (aref g (+ i 1) j k) c))))
+            (when (> j 0) (setq acc (+ acc (- (aref g i (- j 1) k) c))))
+            (when (< j (- n 1)) (setq acc (+ acc (- (aref g i (+ j 1) k) c))))
+            (when (> k 0) (setq acc (+ acc (- (aref g i j (- k 1)) c))))
+            (when (< k (- n 1)) (setq acc (+ acc (- (aref g i j (+ k 1)) c))))
             (setf (aref out i j k) (* +cool+ (+ c (* +alpha+ acc))))))))
     (setq *grid* out)
     (setq *next* g)))
 
 ;; The HUD polls this: the rank-generic linalg reduction over the rank-3 grid.
-(defun total-heat ()
-  (linalg:sum *grid*))
+(defun total-heat () (linalg:sum *grid*))
 
 ;; --- rendering --------------------------------------------------------------
 
@@ -191,7 +192,7 @@ void main() {
          (aspect (/ w h))
          (n *n*)
          (mid (* 0.5 (- n 1)))
-         (scale (/ 1.6 n))              ; lattice -> model units (cube ~[-0.8, 0.8]^3)
+         (scale (/ 1.6 n)) ; lattice -> model units (cube ~[-0.8, 0.8]^3)
          ;; a slow spin around Y plus a gently wobbling tilt around X
          (ry (* tm 0.4))
          (cy (cos ry))

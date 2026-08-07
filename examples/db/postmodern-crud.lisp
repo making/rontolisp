@@ -39,8 +39,10 @@
 ;; is a literal the whole translation happens while the program is being read,
 ;; and the statement reaches the server as a constant; when one is not, s-sql
 ;; assembles the string while the program runs. pomo:sql shows either.
-(format t "sql: ~a~%" (pomo:sql (:select 'name :from 'fruits :where (:< 'price 100))))
-(format t "sql: ~a~%" (pomo:sql (:insert-rows-into 'fruits :columns 'id :values '((1) (2)))))
+(format t "sql: ~a~%"
+        (pomo:sql (:select 'name :from 'fruits :where (:< 'price 100))))
+(format t "sql: ~a~%"
+        (pomo:sql (:insert-rows-into 'fruits :columns 'id :values '((1) (2)))))
 
 ;; The connection is bound for the whole body -- every query below finds it
 ;; through pomo:*database* -- and closed on the way out, however the body ends.
@@ -49,9 +51,10 @@
   ;; CREATE. execute is query with no result; the leading drop makes the
   ;; example re-runnable.
   (pomo:execute (:drop-table :if-exists 'fruits))
-  (pomo:execute (:create-table 'fruits ((id :type integer :primary-key t)
-                                        (name :type text)
-                                        (price :type integer))))
+  (pomo:execute
+   (:create-table 'fruits
+                  ((id :type integer :primary-key t) (name :type text)
+                   (price :type integer))))
 
   ;; INSERT. :set takes alternating column and value forms.
   (pomo:execute (:insert-into 'fruits :set 'id 1 'name "apple" 'price 120))
@@ -59,20 +62,22 @@
   ;; A value that is not a literal -- here an expression, but a variable reads
   ;; the same -- is what makes s-sql assemble the statement while the program
   ;; runs rather than while it is read. pomo:sql shows the difference.
-  (pomo:execute (:insert-into 'fruits :set 'id 3 'name "cherry" 'price (* 3 100)))
+  (pomo:execute
+   (:insert-into 'fruits :set 'id 3 'name "cherry" 'price (* 3 100)))
 
   ;; :insert-rows-into writes several rows at once, and is likewise assembled
   ;; at run time.
-  (pomo:execute (:insert-rows-into 'fruits
-                                   :columns 'id 'name 'price
-                                   :values '((4 "durian" 900) (5 "elderberry" 60))))
+  (pomo:execute
+   (:insert-rows-into 'fruits
+                      :columns 'id 'name 'price
+                      :values '((4 "durian" 900) (5 "elderberry" 60))))
 
   ;; READ. The result format is an argument: the default is a list of rows...
   (format t "rows: ~a~%"
           (pomo:query (:order-by (:select '* :from 'fruits) 'id)))
   ;; ...:alists labels each column with its name...
   (format t "alists: ~a~%"
-          (pomo:query (:select 'name 'price :from 'fruits :where (:= 'id 2)) :alists))
+   (pomo:query (:select 'name 'price :from 'fruits :where (:= 'id 2)) :alists))
   ;; ...and :single takes the one value out of a one-row, one-column result.
   (format t "count: ~a~%"
           (pomo:query (:select (:count '*) :from 'fruits) :single))
@@ -92,7 +97,7 @@
   ;; A parameterised statement, prepared once on the server and then called
   ;; like any other function. $1 is the placeholder.
   (pomo:defprepared cheaper-than
-      (:select 'name :from 'fruits :where (:< 'price '$1))
+    (:select 'name :from 'fruits :where (:< 'price '$1))
     :column)
   (format t "under 100: ~a~%" (cheaper-than 100))
   (format t "under 200: ~a~%" (cheaper-than 200)))

@@ -31,8 +31,12 @@
 ;; The WIT interfaces are lowered by HttpLibrary (which calls WitImportDirective.lower
 ;; itself), so these directives never reach WitImportInliner -- but they are written
 ;; here, in http.lisp's own source, so the file reads as the program it is.
-(rontolisp:wit-import "http.wit" :interface "wasi:http/types@0.3.0" :package %http)
-(rontolisp:wit-import "http.wit" :interface "wasi:http/client@0.3.0" :package %http-client)
+(rontolisp:wit-import "http.wit"
+                      :interface "wasi:http/types@0.3.0"
+                      :package %http)
+(rontolisp:wit-import "http.wit"
+                      :interface "wasi:http/client@0.3.0"
+                      :package %http-client)
 
 ;;; --- headers (shared) ---
 
@@ -41,8 +45,7 @@
   ;; field-value (list<u8>), which crosses as a byte string.
   (when headers
     (let ((pair (car headers)))
-      (when (consp pair)
-        (%http:fields-append fields (car pair) (cdr pair))))
+      (when (consp pair) (%http:fields-append fields (car pair) (cdr pair))))
     (%http-add-headers fields (cdr headers))))
 
 (defun %http-header-alist (fields)
@@ -68,14 +71,16 @@
          (stream (car pair))
          (trailers (car (cdr pair))))
     (rontolisp::%wasi-stream-new
-     ;; One built-in read per call: the next chunk, nil = EOF, or -- when the host
-     ;; reports the read in flight -- a PENDING future the scheduler settles (the
-     ;; stream runtime passes it through, so the task keeps running meanwhile).
-     (lambda () (%http:body-stream-read stream))
-     (lambda ()
-       (%http:body-stream-drop-readable stream)
-       (%http:trailers-future-drop-readable trailers)
-       (%http:transmit-future-write (cdr res) :ok)))))
+                                 ;; One built-in read per call: the next chunk, nil = EOF, or -- when the host
+                                 ;; reports the read in flight -- a PENDING future the scheduler settles (the
+                                 ;; stream runtime passes it through, so the task keeps running meanwhile).
+                                 (lambda () (%http:body-stream-read stream))
+                                 (lambda ()
+                                   (%http:body-stream-drop-readable stream)
+                                   (%http:trailers-future-drop-readable
+                                    trailers)
+                                   (%http:transmit-future-write (cdr res)
+                                                                :ok)))))
 
 ;;; --- body writing (shared): stream the bytes, close, resolve the trailers ---
 
@@ -83,8 +88,7 @@
   ;; The synchronous stream.write built-in blocks until the peer has taken the bytes
   ;; (rendezvous), so one call carries the whole body; dropping the writable end is the
   ;; end-of-stream signal.
-  (when (> (length body) 0)
-    (%http:body-stream-write writable body))
+  (when (> (length body) 0) (%http:body-stream-write writable body))
   (%http:body-stream-drop-writable writable))
 
 ;;; --- fetch (outgoing): build request -> async send -> read the response ---
@@ -106,8 +110,10 @@
           ((string= m "DELETE") :delete)
           ((string= m "OPTIONS") :options)
           ((string= m "PATCH") :patch)
-          (t (error 'rontolisp:wit-error :payload :other
-                    :message (concatenate 'string "fetch: unsupported method: " m))))))
+          (t
+           (error 'rontolisp:wit-error
+            :payload :other
+            :message (concatenate 'string "fetch: unsupported method: " m))))))
 
 (defun %fetch-send (url options)
   ;; scheme://authority/path -- the scheme's colon is the first colon. Returns the
@@ -116,7 +122,8 @@
   ;; with the host's eager reads before this function returns.
   (let ((colon (position #\: url)))
     (when (null colon)
-      (error 'rontolisp:wit-error :payload :other
+      (error 'rontolisp:wit-error
+             :payload :other
              :message (concatenate 'string "fetch: no scheme in URL: " url)))
     (let* ((rest (subseq url (+ colon 3)))
            (slash (position #\/ rest))
@@ -127,18 +134,17 @@
       (%http-add-headers fields (getf options :HEADERS))
       (let* ((bodypair (if body (%http:body-stream-new) nil))
              (trailers (%http:trailers-future-new))
-             (reqpair (%http:request-new fields
-                                         (if bodypair (car bodypair) nil)
-                                         (car trailers)
-                                         nil))
+             (reqpair
+              (%http:request-new fields (if bodypair (car bodypair) nil)
+                                 (car trailers) nil))
              (req (car reqpair)))
-        (%http:request-set-method req (%fetch-method-variant (getf options :METHOD)))
+        (%http:request-set-method req
+         (%fetch-method-variant (getf options :METHOD)))
         (%http:request-set-scheme req (%fetch-scheme-keyword url colon))
         (%http:request-set-authority req authority)
         (%http:request-set-path-with-query req path)
         (let ((future (%http-client:send req)))
-          (when bodypair
-            (%http-write-body (cdr bodypair) body))
+          (when bodypair (%http-write-body (cdr bodypair) body))
           (%http:trailers-future-write (cdr trailers) (cons :ok nil))
           (%http:transmit-future-drop-readable (car (cdr reqpair)))
           future)))))
@@ -153,7 +159,8 @@
   (let* ((status (%http:response-get-status-code response))
          (rheaders (%http:response-get-headers response))
          (headers (%http-header-alist rheaders))
-         (body (%http-body-value (function %http:response-consume-body) response)))
+         (body
+          (%http-body-value (function %http:response-consume-body) response)))
     (%http:fields-drop rheaders)
     (%http-response-plist status headers body)))
 
@@ -171,8 +178,7 @@
   ;; malformed URL, an unsupported method -- returns nil rather than a future; a
   ;; transport failure signals rontolisp:wit-error at await time, matching the
   ;; interpreter/JVM.
-  (handler-case
-      (%fetch-run (%fetch-send url (if options (car options) nil)))
+  (handler-case (%fetch-run (%fetch-send url (if options (car options) nil)))
     (rontolisp:wit-error () nil)))
 
 ;;; --- serve (incoming): read the request, dispatch, deliver, stream the body ---
@@ -182,9 +188,7 @@
   ;; known method, or (:other . "FOO") for a custom one. The lifted case name reads
   ;; UPCASED on the component backend (:GET/:POST/...), which is exactly the Clack
   ;; :request-method value, so only the custom arm needs work.
-  (if (consp m)
-      (intern (string-upcase (cdr m)) :keyword)
-      m))
+  (if (consp m) (intern (string-upcase (cdr m)) :keyword) m))
 
 ;; %serve-request-body -- the request body in the shape the directive asked for
 ;; -- is SYNTHESIZED by the serve inliner (HttpLibrary), beside %serve-dispatch:
@@ -212,7 +216,8 @@
          (target (or (%http:request-get-path-with-query request) "/"))
          (rheaders (%http:request-get-headers request))
          (headers (%http-header-alist rheaders))
-         (stream (%http-body-value (function %http:request-consume-body) request)))
+         (stream
+          (%http-body-value (function %http:request-consume-body) request)))
     (%http:fields-drop rheaders)
     (let* ((body (rontolisp:await (%serve-request-body stream)))
            ;; The raw tuple %http-make-env consumes. wasi:http@0.3.0 exposes no peer
@@ -220,9 +225,11 @@
            ;; are nil here while the interpreter and the JVM carry the real peer; the
            ;; scheme and the protocol are likewise not readable from the pruned
            ;; import block. See .kb/http-server.md for the re-evaluation trigger.
-           (raw (list method target headers body "HTTP/1.1" "http" nil 80 nil nil))
-           (res (rontolisp:await
-                 (rontolisp::%http-serve-request (function %serve-dispatch) raw)))
+           (raw
+            (list method target headers body "HTTP/1.1" "http" nil 80 nil nil))
+           (res
+            (rontolisp:await
+             (rontolisp::%http-serve-request (function %serve-dispatch) raw)))
            (fields (%http:fields-new)))
       (%http-add-headers fields (car (cdr res)))
       (rontolisp:stream-close stream)

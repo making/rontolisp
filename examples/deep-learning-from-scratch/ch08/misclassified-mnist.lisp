@@ -26,7 +26,7 @@
 (load "deep-convnet.lisp")
 (load "../dataset/mnist.lisp")
 
-(defparameter *sampled* 1000)   ; the book evaluates all 10000
+(defparameter *sampled* 1000) ; the book evaluates all 10000
 (defparameter *batch-size* 100)
 (defparameter *max-view* 20)
 
@@ -38,27 +38,28 @@
   (dotimes (y 28)
     (let ((line ""))
       (dotimes (col 28)
-        (let* ((v (aref x i 0 y col))
-               (idx (min 9 (truncate (* v 10)))))
+        (let* ((v (aref x i 0 y col)) (idx (min 9 (truncate (* v 10)))))
           (setq line (concatenate 'string line (subseq *ramp* idx (+ idx 1))))))
       (write-line line))))
 
-(let* ((x-test (linalg:reshape
-                (mnist-load-images "dataset/t10k-images-idx3-ubyte" *sampled*)
-                (list *sampled* 1 28 28)))
+(let* ((x-test
+        (linalg:reshape
+         (mnist-load-images "dataset/t10k-images-idx3-ubyte" *sampled*)
+         (list *sampled* 1 28 28)))
        (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *sampled*))
        (net (make-deep-convnet :hidden-size 50 :output-size 10)))
   (net-load-params net "ch08/deep-convnet-params.bin" nil)
   (write-line "calculating test accuracy ...")
-  (let ((classified (make-array *sampled* :element-type 'double-float
-                                :initial-element 0.0))
+  (let ((classified
+         (make-array *sampled*
+                     :element-type 'double-float
+                     :initial-element 0.0))
         (acc 0))
     (do ((start 0 (+ start *batch-size*)))
         ((>= start *sampled*))
       (let* ((idx (linalg:arange start (+ start *batch-size*)))
              (tx (linalg:take-rows x-test idx))
-             (y (let ((*train-p* nil))
-                  (predict net tx)))
+             (y (let ((*train-p* nil)) (predict net tx)))
              (yl (linalg:argmax y 1)))
         (dotimes (k *batch-size*)
           (setf (aref classified (+ start k)) (aref yl k))
@@ -70,9 +71,7 @@
       (dotimes (i *sampled*)
         (when (and (<= view *max-view*)
                    (/= (aref classified i) (aref t-test i)))
-          (format t "view ~a: label ~a, inference ~a~%"
-                  view
-                  (truncate (aref t-test i))
-                  (truncate (aref classified i)))
+          (format t "view ~a: label ~a, inference ~a~%" view
+                  (truncate (aref t-test i)) (truncate (aref classified i)))
           (render-digit x-test i)
           (setq view (+ view 1)))))))

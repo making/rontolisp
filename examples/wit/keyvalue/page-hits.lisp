@@ -67,16 +67,14 @@
 ;;; ...and it is swappable. On the JVM, bind a store backed by a real Java map
 ;;; instead -- the same one line that would bind a Redis client. This is the only
 ;;; backend-specific line in the whole example, and the program never sees it.
-#+rontolisp-jvm
-(require :kv-java "java-store.lisp")
+#+rontolisp-jvm (require :kv-java "java-store.lisp")
 
 ;;; ---------------------------------------------------------------------------
 ;;; The program. Every line below is store-agnostic: it knows the WIT, and
 ;;; nothing else.
 ;;; ---------------------------------------------------------------------------
 
-(defvar *requests*
-  '("/index" "/pricing" "/index" "/docs" "/index" "/pricing"))
+(defvar *requests* '("/index" "/pricing" "/index" "/docs" "/index" "/pricing"))
 
 ;;; The default store, which every wasi:keyvalue host recognizes under the empty
 ;;; identifier. An identifier a host does NOT recognize is the `no-such-store`
@@ -101,16 +99,17 @@
 ;;; `open` answers a result<bucket, error>: the ok arm IS the value, so the
 ;;; handle comes straight back. (The error arm would signal -- see below.)
 (let ((bucket (kv:open *store*)))
-  (dolist (page *requests*)
-    (record-hit bucket page))
+  (dolist (page *requests*) (record-hit bucket page))
 
   (format t "~%hits per page:~%")
   (dolist (key (sorted-keys bucket))
     (format t "  ~a = ~a~%" key (kv:bucket-get bucket key)))
 
-  (format t "~%/docs exists?      ~a~%" (if (kv:bucket-exists bucket "/docs") "yes" "no"))
+  (format t "~%/docs exists?      ~a~%"
+          (if (kv:bucket-exists bucket "/docs") "yes" "no"))
   (kv:bucket-delete bucket "/docs")
-  (format t "/docs exists now?  ~a~%" (if (kv:bucket-exists bucket "/docs") "yes" "no"))
+  (format t "/docs exists now?  ~a~%"
+          (if (kv:bucket-exists bucket "/docs") "yes" "no"))
   (format t "keys:              ~s~%" (sorted-keys bucket))
   (format t "/nope:             ~s~%" (kv:bucket-get bucket "/nope")))
 
@@ -118,18 +117,16 @@
 ;;; failures are caught with handler-case like any other condition, and the WIT
 ;;; variant that failed is the payload. No host recognizes this store identifier:
 ;;; the same no-such-store comes back from three completely different providers.
-(handler-case
-    (kv:open "not-a-store-anyone-has")
+(handler-case (kv:open "not-a-store-anyone-has")
   (rontolisp:wit-error (e)
     (format t "bad store:         ~a~%" (rontolisp:wit-error-payload e))))
 
 ;;; Each binding is an ordinary defun, so it is an ordinary function VALUE too:
 ;;; #'kv:bucket-set is a first-class function, funcall takes it, mapcar maps it.
 ;;; Nothing about the WIT boundary leaks into the call sites.
-(let ((bucket (kv:open *store*))
-      (set-key #'kv:bucket-set))
-  (mapcar (lambda (key) (funcall set-key bucket key "seeded"))
-          '("/a" "/b"))
+(let ((bucket (kv:open *store*)) (set-key #'kv:bucket-set))
+  (mapcar (lambda (key) (funcall set-key bucket key "seeded")) '("/a" "/b"))
   (format t "seeded:            ~s~%"
-          (remove-if-not (lambda (key) (string= "seeded" (kv:bucket-get bucket key)))
-                         (sorted-keys bucket))))
+          (remove-if-not
+           (lambda (key) (string= "seeded" (kv:bucket-get bucket key)))
+           (sorted-keys bucket))))

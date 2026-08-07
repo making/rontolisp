@@ -23,18 +23,15 @@
 ;;; The words of TEXT: the runs of characters between spaces. Leading, trailing
 ;;; and repeated spaces produce no empty words.
 (defun split-words (text)
-  (let ((words '())
-        (current ""))
+  (let ((words '()) (current ""))
     (dotimes (i (length text))
       (let ((c (char text i)))
         (if (char= c #\Space)
             (progn
-              (when (> (length current) 0)
-                (setq words (cons current words)))
+              (when (> (length current) 0) (setq words (cons current words)))
               (setq current ""))
             (setq current (concatenate 'string current (string c))))))
-    (when (> (length current) 0)
-      (setq words (cons current words)))
+    (when (> (length current) 0) (setq words (cons current words)))
     (reverse words)))
 
 ;;; The letters and digits of TEXT, folded to lower case: what a palindrome test
@@ -54,24 +51,21 @@
 ;;; Count the words in the text. A word is a run of characters separated by
 ;;; spaces; leading, trailing and repeated spaces do not count.
 ;;; WIT: word-count: func(text: string) -> s32
-(defun word-count (text)
-  (length (split-words text)))
+(defun word-count (text) (length (split-words text)))
 
 ;;; Return the longest word in the text, or the empty string when it has none.
 ;;; WIT: longest-word: func(text: string) -> string
 (defun longest-word (text)
   (let ((best ""))
     (dolist (word (split-words text))
-      (when (> (length word) (length best))
-        (setq best word)))
+      (when (> (length word) (length best)) (setq best word)))
     best))
 
 ;;; Report whether the text reads the same backwards, ignoring letter case and
 ;;; every character that is not a letter or a digit.
 ;;; WIT: is-palindrome: func(text: string) -> bool
 (defun is-palindrome (text)
-  (let ((s (letters-and-digits text)))
-    (string= s (reverse s))))
+  (let ((s (letters-and-digits text))) (string= s (reverse s))))
 
 ;;; Print a human-readable report about the text to standard output. It is
 ;;; declared async because it performs I/O: a synchronous export may not block,

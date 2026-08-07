@@ -44,8 +44,7 @@
           ((char= lc #\l) #\1)
           (t c))))
 
-(defun to-leet-speak (s)
-  (map 'string #'leet-char s))
+(defun to-leet-speak (s) (map 'string #'leet-char s))
 
 ;; The explicit loopback host matters on wasmCloud (wash rejects a 0.0.0.0
 ;; bind from a service); everywhere else it just narrows the listener.
@@ -53,10 +52,13 @@
   (if listener
       (progn
         (write-line "leet service listening on 127.0.0.1:7777")
-        (do ((n 1 (+ n 1))) (nil)
+        (do ((n 1 (+ n 1)))
+            (nil)
           (let ((sock (rontolisp:tcp-accept listener)))
             (write-line (format nil "client ~a connected" n))
             (do ((line (read-line sock) (read-line sock)))
-                ((null line) (close sock) (write-line "client disconnected"))
+                ((null line)
+                 (close sock)
+                 (write-line "client disconnected"))
               (write-line (to-leet-speak line) sock)))))
       (write-line "tcp-listen failed (is port 7777 already in use?)")))

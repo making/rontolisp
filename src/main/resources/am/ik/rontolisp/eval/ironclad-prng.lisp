@@ -45,7 +45,7 @@
 (defun ironclad:random-bits (num-bits &optional prng)
   (declare (ignore prng))
   (logand (- (expt 2 num-bits) 1)
-          (ironclad:octets-to-integer (rontolisp:random-bytes (ceiling num-bits 8)))))
+   (ironclad:octets-to-integer (rontolisp:random-bytes (ceiling num-bits 8)))))
 
 (defun ironclad:strong-random (limit &optional prng)
   (declare (ignore prng))
@@ -59,8 +59,8 @@
              (%icp-mask (- (ash 1 %icp-bits) 1))
              (%icp-value nil))
         (while (null %icp-value)
-          (let ((%icp-draw (logand (ironclad:octets-to-integer
-                                    (rontolisp:random-bytes %icp-bytes))
-                                   %icp-mask)))
+          (let ((%icp-draw
+                 (logand (ironclad:octets-to-integer
+                          (rontolisp:random-bytes %icp-bytes)) %icp-mask)))
             (if (< %icp-draw limit) (setq %icp-value %icp-draw) nil)))
         %icp-value)))

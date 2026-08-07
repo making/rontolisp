@@ -76,54 +76,51 @@
         ((eq form t) t)
         ((keywordp form) form)
         ((symbolp form)
-         (error "bt2:make-thread: unsupported :initial-bindings value form: ~A" form))
+         (error "bt2:make-thread: unsupported :initial-bindings value form: ~A"
+                form))
         ((consp form)
-         (error "bt2:make-thread: unsupported :initial-bindings value form: ~A" form))
+         (error "bt2:make-thread: unsupported :initial-bindings value form: ~A"
+                form))
         (t form)))
 
 #-rontolisp-wasm
-(defun bt2:make-thread (function &key name (initial-bindings bt2:*default-special-bindings*) trap-conditions)
+(defun bt2:make-thread (function &key name
+                        (initial-bindings bt2:*default-special-bindings*)
+                        trap-conditions)
   (rontolisp:make-thread function
                          (mapcar (lambda (pair)
-                                   (cons (car pair) (bt2::resolve-binding-value (cdr pair))))
+                                   (cons (car pair)
+                                    (bt2::resolve-binding-value (cdr pair))))
                                  initial-bindings)))
 
-#-rontolisp-wasm
-(defun bt2:join-thread (thread)
-  (rontolisp:join-thread thread))
+#-rontolisp-wasm (defun bt2:join-thread (thread) (rontolisp:join-thread thread))
+
+#-rontolisp-wasm (defun bt2:threadp (object) (rontolisp:threadp object))
 
 #-rontolisp-wasm
-(defun bt2:threadp (object)
-  (rontolisp:threadp object))
+(defun bt2:thread-alive-p (thread) (rontolisp:thread-alive-p thread))
 
 #-rontolisp-wasm
-(defun bt2:thread-alive-p (thread)
-  (rontolisp:thread-alive-p thread))
-
-#-rontolisp-wasm
-(defun bt2:destroy-thread (thread)
-  (rontolisp:destroy-thread thread))
+(defun bt2:destroy-thread (thread) (rontolisp:destroy-thread thread))
 
 ;; The calling thread's own handle, EQ-stable per thread (the primitive caches
 ;; it in a ThreadLocal), so it can key an eq hash table -- dbi's per-thread
 ;; connection cache (cache/thread.lisp's steal-cache-table) is the driving
 ;; consumer. Works for the main thread and served requests too, not only
 ;; make-thread spawns.
-#-rontolisp-wasm
-(defun bt2:current-thread ()
-  (rontolisp:current-thread))
+#-rontolisp-wasm (defun bt2:current-thread () (rontolisp:current-thread))
 
 #+rontolisp-wasm
 (defun bt2:make-thread (function &key name initial-bindings trap-conditions)
-  (error "bt2:make-thread: the WASM backends are single-threaded by construction; run without threads (clack:clackup takes :use-thread nil)"))
+  (error
+   "bt2:make-thread: the WASM backends are single-threaded by construction; run without threads (clack:clackup takes :use-thread nil)"))
 
 #+rontolisp-wasm
 (defun bt2:join-thread (thread)
-  (error "bt2:join-thread: the WASM backends are single-threaded by construction"))
+  (error
+   "bt2:join-thread: the WASM backends are single-threaded by construction"))
 
-#+rontolisp-wasm
-(defun bt2:threadp (object)
-  nil)
+#+rontolisp-wasm (defun bt2:threadp (object) nil)
 
 #+rontolisp-wasm
 (defun bt2:thread-alive-p (thread)
@@ -134,11 +131,13 @@
 
 #+rontolisp-wasm
 (defun bt2:destroy-thread (thread)
-  (error "bt2:destroy-thread: the WASM backends are single-threaded by construction"))
+  (error
+   "bt2:destroy-thread: the WASM backends are single-threaded by construction"))
 
 ;; Signals like the other wasm thread entry points. Nothing bundled reaches it:
 ;; the dbi override .asd selects the single-threaded cache there (single.lisp,
 ;; upstream's own choice for a threadless implementation), which never asks.
 #+rontolisp-wasm
 (defun bt2:current-thread ()
-  (error "bt2:current-thread: the WASM backends are single-threaded by construction"))
+  (error
+   "bt2:current-thread: the WASM backends are single-threaded by construction"))

@@ -65,9 +65,8 @@
 ;; for the whole run, while wasmCloud starts a fresh one per request. A drop
 ;; here would empty the table on every request there.
 (let ((db (connect)))
-  (unwind-protect
-      (cl-postgres:exec-query
-       db "create table if not exists notes (id serial primary key, body text)")
+  (unwind-protect (cl-postgres:exec-query db
+                                          "create table if not exists notes (id serial primary key, body text)")
     (cl-postgres:close-database db)))
 
 (defun all-notes (db)
@@ -80,24 +79,24 @@
   "One note, through the extended query protocol. $1 is a placeholder, so what
    the visitor typed stays data and never becomes SQL. The statement is
    prepared on this connection; the next request's connection starts fresh."
-  (cl-postgres:prepare-query db "add-note" "insert into notes (body) values ($1)")
+  (cl-postgres:prepare-query db "add-note"
+                             "insert into notes (body) values ($1)")
   (cl-postgres:exec-prepared db "add-note" (list body)))
 
 (defun page (db)
   "The whole site: the form, then the notes."
   (cl-who:with-html-output-to-string (s)
-    (:html
-     (:head (:title "Notes"))
-     (:body
-      (:h1 "Notes")
-      (:form :method "post" :action "/add"
-             (:input :name "body" :size "40" :autofocus t)
-             (:button "Add"))
-      (:ul
-       ;; Markup inside a plain Lisp form needs an htm to go back into the
-       ;; markup DSL; esc escapes whatever the visitor typed.
-       (dolist (note (all-notes db))
-         (cl-who:htm (:li (cl-who:esc (first note))))))))))
+    (:html (:head (:title "Notes"))
+           (:body (:h1 "Notes")
+                  (:form :method "post"
+                         :action "/add"
+                         (:input :name "body" :size "40" :autofocus t)
+                         (:button "Add"))
+                  (:ul
+                       ;; Markup inside a plain Lisp form needs an htm to go back into the
+                       ;; markup DSL; esc escapes whatever the visitor typed.
+                       (dolist (note (all-notes db))
+                         (cl-who:htm (:li (cl-who:esc (first note))))))))))
 
 ;; async-defun because the env :raw-body is a stream: read-all drains it and
 ;; await waits for the whole thing. Draining comes first, and taking a
@@ -105,17 +104,16 @@
 (rontolisp:async-defun handle (env)
   (let* ((form (rontolisp:await (rontolisp:read-all (getf env :raw-body))))
          (db (connect)))
-    (unwind-protect
-        (if (string= (getf env :path-info) "/add")
-            ;; What arrived is url-encoded, the same shape as a query string.
-            (let ((body (rontolisp:query-param form "body")))
-              (when (and body (string/= body ""))
-                (add-note db body))
-              ;; 303 + Location: back to the list, so a reload does not
-              ;; re-post; a two-element response is a bodyless one.
-              '(303 (:location "/")))
-            (list 200 '(:content-type "text/html; charset=utf-8")
-                  (list (page db))))
+    (unwind-protect (if (string= (getf env :path-info) "/add")
+                        ;; What arrived is url-encoded, the same shape as a query string.
+                        (let ((body (rontolisp:query-param form "body")))
+                          (when (and body (string/= body ""))
+                            (add-note db body))
+                          ;; 303 + Location: back to the list, so a reload does not
+                          ;; re-post; a two-element response is a bodyless one.
+                          '(303 (:location "/")))
+                        (list 200 '(:content-type "text/html; charset=utf-8")
+                              (list (page db))))
       ;; Handed back even if a query signals.
       (cl-postgres:close-database db))))
 

@@ -48,21 +48,24 @@
   ;; the payload is the WIT variant.
   (let ((identifier (gethash handle *kv-handles*)))
     (if (null identifier)
-        (error 'rontolisp:wit-error :payload :no-such-store
+        (error 'rontolisp:wit-error
+               :payload :no-such-store
                :message "memory store: not an open bucket handle")
         (gethash identifier *kv-stores*))))
 
 (defun kv-open (identifier)
   (if (not (member identifier *kv-identifiers* :test #'string=))
-      (error 'rontolisp:wit-error :payload :no-such-store
-             :message (concatenate 'string "memory store: no such store " identifier))
+      (error 'rontolisp:wit-error
+       :payload :no-such-store
+       :message (concatenate 'string "memory store: no such store " identifier))
       ;; Every open hands out a FRESH handle -- what a real host does, each one an
       ;; owned resource the guest gives back on its own -- onto the one store the
       ;; identifier names, created on first sight.
       (let ((handle *kv-next-handle*))
         (setq *kv-next-handle* (+ handle 1))
         (if (null (gethash identifier *kv-stores*))
-            (setf (gethash identifier *kv-stores*) (make-hash-table :test #'equal)))
+            (setf (gethash identifier *kv-stores*)
+                  (make-hash-table :test #'equal)))
         (setf (gethash handle *kv-handles*) identifier)
         handle)))
 
@@ -71,8 +74,7 @@
   ;; `get` answers option<list<u8>>, which is the value string or nil; the three
   ;; result<_, error> writers answer nil; and `list-keys` answers the record
   ;; key-response, which is a keyword plist.
-  (cond ((string= member "open")
-         (kv-open (nth 0 args)))
+  (cond ((string= member "open") (kv-open (nth 0 args)))
         ((string= member "bucket-get")
          (gethash (nth 1 args) (kv-bucket (nth 0 args))))
         ((string= member "bucket-set")
@@ -87,8 +89,9 @@
          ;; The cursor (arg 1, an option<u64>) is nil here and stays nil: this
          ;; store hands back every key at once, so there is never a next page.
          (let ((keys nil))
-           (maphash (lambda (key value) value (push key keys))
-                    (kv-bucket (nth 0 args)))
+           (maphash (lambda (key value)
+                      value
+                      (push key keys)) (kv-bucket (nth 0 args)))
            (list :keys (nreverse keys) :cursor nil)))
         ((string= member "bucket-drop")
          ;; A resource is released by its interface's `drop`, which WIT declares no
@@ -98,8 +101,11 @@
          ;; open sees it all. A provider with nothing to release just answers nil.
          (remhash (nth 0 args) *kv-handles*)
          nil)
-        (t (error 'rontolisp:wit-error :payload :other :message
-                  (concatenate 'string "memory store: no such member " member)))))
+        (t
+         (error 'rontolisp:wit-error
+                :payload :other
+                :message (concatenate 'string "memory store: no such member "
+                                      member)))))
 
 ;;; This is the whole binding: the interface id from the .wit, and a function.
 (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft" #'memory-store)

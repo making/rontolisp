@@ -11,9 +11,7 @@
 
 (defun take (n lst)
   "Return the first N elements of LST."
-  (if (or (<= n 0) (null lst))
-      nil
-      (cons (car lst) (take (1- n) (cdr lst)))))
+  (if (or (<= n 0) (null lst)) nil (cons (car lst) (take (1- n) (cdr lst)))))
 
 (defun count-moves (n)
   "Return the number of moves for N disks: 2^n - 1."
@@ -32,21 +30,19 @@
   "Move N disks, returning a list of (from to) pairs instead of printing."
   (if (= n 1)
       (list (list source destination))
-      (append
-       (hanoi-moves (1- n) source auxiliary destination)
-       (list (list source destination))
-       (hanoi-moves (1- n) auxiliary destination source))))
+      (append (hanoi-moves (1- n) source auxiliary destination)
+              (list (list source destination))
+              (hanoi-moves (1- n) auxiliary destination source))))
 
 (format t "Tower of Hanoi (3 disks):~%")
 (hanoi 3 "A" "B" "C")
 (format t "~%Total moves: ~d (expected: ~d = 2^3 - 1)~%"
-        (length (hanoi-moves 3 "A" "B" "C"))
-        (count-moves 3))
+        (length (hanoi-moves 3 "A" "B" "C")) (count-moves 3))
 
 (format t "~%Tower of Hanoi (4 disks) — first 5 moves:~%")
 (let ((move-list (hanoi-moves 4 "α" "β" "γ")))
-  (format t "Total: ~d moves (expected: ~d)~%" (length move-list) (count-moves 4))
-  (dolist (m (take 5 move-list))
-    (format t "  ~a -> ~a~%" (car m) (cadr m)))
+  (format t "Total: ~d moves (expected: ~d)~%" (length move-list)
+          (count-moves 4))
+  (dolist (m (take 5 move-list)) (format t "  ~a -> ~a~%" (car m) (cadr m)))
   (when (> (length move-list) 5)
     (format t "  ... (~d more)~%" (- (length move-list) 5))))

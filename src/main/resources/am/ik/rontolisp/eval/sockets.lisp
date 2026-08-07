@@ -32,7 +32,9 @@
 ;; WitImportDirective.lower itself), so this directive never reaches
 ;; WitImportInliner -- but it is written here, in sockets.lisp's own source, so the
 ;; file reads as the program it is.
-(rontolisp:wit-import "sockets.wit" :interface "wasi:sockets/types@0.3.0" :package %sock)
+(rontolisp:wit-import "sockets.wit"
+                      :interface "wasi:sockets/types@0.3.0"
+                      :package %sock)
 
 ;;; --- the socket table: fd -> (socket kind recv tx buf cursor eof) ---
 ;;; kind 1 = connected, 2 = listener; recv = the recv byte stream (or, for a
@@ -44,8 +46,7 @@
 (defun rontolisp::%sock-entry (fd)
   (if (integerp fd) (gethash fd rontolisp::*sock-table*) nil))
 
-(defun rontolisp::%sock-handle-p (fd)
-  (if (rontolisp::%sock-entry fd) t nil))
+(defun rontolisp::%sock-handle-p (fd) (if (rontolisp::%sock-entry fd) t nil))
 
 (defun rontolisp::%sock-e-sock (e) (car e))
 (defun rontolisp::%sock-e-kind (e) (car (cdr e)))
@@ -65,7 +66,8 @@
 (defun rontolisp::%sock-register (sock kind recv tx)
   (let ((fd rontolisp::*sock-next-fd*))
     (setq rontolisp::*sock-next-fd* (+ fd 1))
-    (setf (gethash fd rontolisp::*sock-table*) (list sock kind recv tx nil 0 nil))
+    (setf (gethash fd rontolisp::*sock-table*)
+          (list sock kind recv tx nil 0 nil))
     fd))
 
 ;;; --- IPv4 literal parsing (hostname lookup is not wired; dotted quads only,
@@ -83,12 +85,21 @@
             (let ((c (char-code (char host i))))
               (if (= c 46)
                   (if (or (= digits 0) (> n 255))
-                      (progn (setq bad t) (setq i len))
-                      (progn (setq octets (cons n octets)) (setq n 0) (setq digits 0)))
+                      (progn
+                        (setq bad t)
+                        (setq i len))
+                      (progn
+                        (setq octets (cons n octets))
+                        (setq n 0)
+                        (setq digits 0)))
                   (let ((d (- c 48)))
                     (if (or (< d 0) (> d 9) (> digits 2))
-                        (progn (setq bad t) (setq i len))
-                        (progn (setq n (+ (* n 10) d)) (setq digits (+ digits 1))))))
+                        (progn
+                          (setq bad t)
+                          (setq i len))
+                        (progn
+                          (setq n (+ (* n 10) d))
+                          (setq digits (+ digits 1))))))
               (setq i (+ i 1))))
           (if (or bad (= digits 0) (> n 255))
               nil
@@ -97,18 +108,19 @@
 
 (defun rontolisp::%sock-addr (host port)
   ;; localhost is resolved as a literal, like the old adapter's callers did.
-  (let ((quad (rontolisp::%sock-parse-ipv4
-               (if (string= host "localhost") "127.0.0.1" host))))
+  (let ((quad
+         (rontolisp::%sock-parse-ipv4
+          (if (string= host "localhost") "127.0.0.1" host))))
     (if quad
         (cons :ipv4 (list :port port :address quad))
-        (error 'rontolisp:wit-error :payload :invalid-argument
-               :message (concatenate 'string "tcp: not an IPv4 literal: " host)))))
+        (error 'rontolisp:wit-error
+         :payload :invalid-argument
+         :message (concatenate 'string "tcp: not an IPv4 literal: " host)))))
 
 ;;; --- plumbing (the old adapter's $plumb): recv stream + send pair, eagerly ---
 
 (defun rontolisp::%sock-plumb (sock kind)
-  (let* ((rpair (%sock:tcp-socket-receive sock))
-         (recv (car rpair)))
+  (let* ((rpair (%sock:tcp-socket-receive sock)) (recv (car rpair)))
     (%sock:sock-future-drop-readable (car (cdr rpair)))
     (let ((spair (%sock:sock-stream-new)))
       (%sock:sock-future-drop-readable (%sock:tcp-socket-send sock (car spair)))
@@ -122,31 +134,36 @@
   ;; nil, the WASM error convention -- matching fetch. The nil convention lives
   ;; HERE so the sync surface (a %future-force of this) and an async body's
   ;; promoted (await (%tcp-connect-f ...)) behave identically.
-  (handler-case
-      (let ((sock (%sock:tcp-socket-create :ipv4)))
-        (rontolisp:await (%sock:tcp-socket-connect sock (rontolisp::%sock-addr host port)))
-        (rontolisp::%sock-plumb sock 1))
+  (handler-case (let ((sock (%sock:tcp-socket-create :ipv4)))
+                  (rontolisp:await
+                   (%sock:tcp-socket-connect sock
+                                             (rontolisp::%sock-addr host port)))
+                  (rontolisp::%sock-plumb sock 1))
     (rontolisp:wit-error () nil)))
 
 (defun rontolisp:tcp-connect (host port)
   (rontolisp::%future-force (rontolisp::%tcp-connect-f host port)))
 
 (defun rontolisp:tcp-listen (port &optional host)
-  (handler-case
-      (let ((sock (%sock:tcp-socket-create :ipv4)))
-        (%sock:tcp-socket-bind sock (rontolisp::%sock-addr (if host host "0.0.0.0") port))
-        (rontolisp::%sock-register sock 2 (%sock:tcp-socket-listen sock) nil))
+  (handler-case (let ((sock (%sock:tcp-socket-create :ipv4)))
+                  (%sock:tcp-socket-bind sock
+                   (rontolisp::%sock-addr (if host host "0.0.0.0") port))
+                  (rontolisp::%sock-register sock 2
+                                             (%sock:tcp-socket-listen sock)
+                                             nil))
     (rontolisp:wit-error () nil)))
 
 (rontolisp:async-defun rontolisp::%tcp-accept-f (listener)
   ;; A non-listener handle (or a host error) yields nil, like the old adapter's
   ;; errno convention.
-  (handler-case
-      (let ((e (rontolisp::%sock-entry listener)))
-        (if (and e (= (rontolisp::%sock-e-kind e) 2))
-            (let ((sock (rontolisp:await (%sock:accept-stream-read (rontolisp::%sock-e-recv e)))))
-              (if sock (rontolisp::%sock-plumb sock 1) nil))
-            nil))
+  (handler-case (let ((e (rontolisp::%sock-entry listener)))
+                  (if (and e (= (rontolisp::%sock-e-kind e) 2))
+                      (let ((sock
+                             (rontolisp:await
+                              (%sock:accept-stream-read
+                               (rontolisp::%sock-e-recv e)))))
+                        (if sock (rontolisp::%sock-plumb sock 1) nil))
+                      nil))
     (rontolisp:wit-error () nil)))
 
 (defun rontolisp:tcp-accept (listener)
@@ -155,22 +172,21 @@
 (defun rontolisp::%sock-local-address (fd)
   (let ((e (rontolisp::%sock-entry fd)))
     (if e
-        (handler-case
-            (%sock:tcp-socket-get-local-address (rontolisp::%sock-e-sock e))
+        (handler-case (%sock:tcp-socket-get-local-address
+                       (rontolisp::%sock-e-sock e))
           (rontolisp:wit-error () nil))
         nil)))
 
 (defun rontolisp::%sock-remote-address (fd)
   (let ((e (rontolisp::%sock-entry fd)))
     (if e
-        (handler-case
-            (%sock:tcp-socket-get-remote-address (rontolisp::%sock-e-sock e))
+        (handler-case (%sock:tcp-socket-get-remote-address
+                       (rontolisp::%sock-e-sock e))
           (rontolisp:wit-error () nil))
         nil)))
 
 (defun rontolisp::%sock-format-quad (quad)
-  (concatenate 'string
-               (rontolisp::%sock-octet-string (car quad)) "."
+  (concatenate 'string (rontolisp::%sock-octet-string (car quad)) "."
                (rontolisp::%sock-octet-string (car (cdr quad))) "."
                (rontolisp::%sock-octet-string (car (cdr (cdr quad)))) "."
                (rontolisp::%sock-octet-string (car (cdr (cdr (cdr quad)))))))
@@ -181,8 +197,10 @@
         "0"
         (progn
           (while (> n 0)
-            (setq s (concatenate 'string
-                                 (princ-to-string (code-char (+ 48 (mod n 10)))) s))
+            (setq s
+                  (concatenate 'string
+                               (princ-to-string (code-char (+ 48 (mod n 10))))
+                               s))
             (setq n (floor n 10)))
           s))))
 
@@ -218,14 +236,21 @@
 
 (rontolisp:async-defun rontolisp::%sock-fill (e)
   ;; Refill the chunk buffer from the recv stream; nil (and the eof mark) at FIN.
-  (let ((chunk (rontolisp:await (%sock:sock-stream-read (rontolisp::%sock-e-recv e)))))
+  (let ((chunk
+         (rontolisp:await
+          (%sock:sock-stream-read (rontolisp::%sock-e-recv e)))))
     (if (and chunk (> (rontolisp::%str-byte-length chunk) 0))
-        (progn (rontolisp::%sock-set-buf e chunk 0) t)
-        (progn (rontolisp::%sock-set-eof e) nil))))
+        (progn
+          (rontolisp::%sock-set-buf e chunk 0)
+          t)
+        (progn
+          (rontolisp::%sock-set-eof e)
+          nil))))
 
 (defun rontolisp::%sock-buf-ready (e)
   (let ((buf (rontolisp::%sock-e-buf e)))
-    (and buf (< (rontolisp::%sock-e-cursor e) (rontolisp::%str-byte-length buf)))))
+    (and buf
+         (< (rontolisp::%sock-e-cursor e) (rontolisp::%str-byte-length buf)))))
 
 (defun rontolisp::%sock-pop-byte (e)
   (let* ((buf (rontolisp::%sock-e-buf e))
@@ -260,7 +285,9 @@
                   (if (null bn)
                       (setq n 0)
                       (progn
-                        (setq acc (concatenate 'string acc (rontolisp::%str-from-byte bn)))
+                        (setq acc
+                              (concatenate 'string acc
+                                           (rontolisp::%str-from-byte bn)))
                         (setq n (- n 1))))))
               (char acc 0))))))
 
@@ -280,12 +307,17 @@
               (if (= b 10)
                   (setq done t)
                   (progn
-                    (if cr (setq acc (concatenate 'string acc (rontolisp::%str-from-byte 13))))
+                    (if cr
+                        (setq acc
+                              (concatenate 'string acc
+                                           (rontolisp::%str-from-byte 13))))
                     (if (= b 13)
                         (setq cr t)
                         (progn
                           (setq cr nil)
-                          (setq acc (concatenate 'string acc (rontolisp::%str-from-byte b)))))))))))
+                          (setq acc
+                                (concatenate 'string acc
+                                 (rontolisp::%str-from-byte b)))))))))))
     (if got acc nil)))
 
 ;;; --- the %io-* dispatch defuns (the compiler rewrite's targets; the %...-raw
@@ -377,22 +409,23 @@
       (subseq seq start end)
       (let ((acc "") (i start))
         (while (< i end)
-          (setq acc (concatenate 'string acc (rontolisp::%str-from-byte (aref seq i))))
+          (setq acc
+           (concatenate 'string acc (rontolisp::%str-from-byte (aref seq i))))
           (setq i (+ i 1)))
         acc)))
 
-(rontolisp:async-defun rontolisp::%read-byte-eof-future (s eof-error-p &optional eof-value)
+(rontolisp:async-defun rontolisp::%read-byte-eof-future
+    (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (let ((b (rontolisp:await (rontolisp::%sock-read-byte-f e))))
-          (if b
-              b
-              (if eof-error-p (error 'end-of-file) eof-value)))
+          (if b b (if eof-error-p (error 'end-of-file) eof-value)))
         (rontolisp::%read-byte-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-byte-eof (s eof-error-p &optional eof-value)
   (if (rontolisp::%sock-entry s)
-      (rontolisp::%future-force (rontolisp::%read-byte-eof-future s eof-error-p eof-value))
+      (rontolisp::%future-force
+       (rontolisp::%read-byte-eof-future s eof-error-p eof-value))
       (rontolisp::%read-byte-raw s eof-error-p eof-value)))
 
 ;;; read-char / read-line with the eof parameters, the %io-read-byte-eof shape: the
@@ -400,40 +433,41 @@
 ;;; The signalled condition is the SAME end-of-file class the native lowering uses
 ;;; (LispMacroExpander.endOfFileSignal), so handler-case behaves identically whether
 ;;; or not the designator turned out to be a socket.
-(rontolisp:async-defun rontolisp::%read-char-eof-future (s eof-error-p &optional eof-value)
+(rontolisp:async-defun rontolisp::%read-char-eof-future
+    (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (let ((c (rontolisp:await (rontolisp::%sock-read-char-f e))))
-          (if c
-              c
-              (if eof-error-p (error 'end-of-file) eof-value)))
+          (if c c (if eof-error-p (error 'end-of-file) eof-value)))
         (rontolisp::%read-char-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
   (let ((in (or s *standard-input*)))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
-        (rontolisp::%future-force (rontolisp::%read-char-eof-future in eof-error-p eof-value))
+        (rontolisp::%future-force
+         (rontolisp::%read-char-eof-future in eof-error-p eof-value))
         (rontolisp::%read-char-raw in eof-error-p eof-value))))
 
-(rontolisp:async-defun rontolisp::%read-line-eof-future (s eof-error-p &optional eof-value)
+(rontolisp:async-defun rontolisp::%read-line-eof-future
+    (s eof-error-p &optional eof-value)
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (let ((l (rontolisp:await (rontolisp::%sock-read-line-f e))))
-          (if l
-              l
-              (if eof-error-p (error 'end-of-file) eof-value)))
+          (if l l (if eof-error-p (error 'end-of-file) eof-value)))
         (rontolisp::%read-line-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
   (let ((in (or s *standard-input*)))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
-        (rontolisp::%future-force (rontolisp::%read-line-eof-future in eof-error-p eof-value))
+        (rontolisp::%future-force
+         (rontolisp::%read-line-eof-future in eof-error-p eof-value))
         (rontolisp::%read-line-raw in eof-error-p eof-value))))
 
 ;;; The sequence ops carry :start / :end all the way down: the bounds are NOT a
 ;;; caller convenience here, they are the shape the Gray-streams fall-through arm
 ;;; emits, and an unbounded-only dispatch left that arm on the native built-in.
-(rontolisp:async-defun rontolisp::%read-sequence-future (seq s &optional start end)
+(rontolisp:async-defun rontolisp::%read-sequence-future
+    (seq s &optional start end)
   (let ((a (if start start 0)) (b (if end end (length seq))))
     (let ((e (rontolisp::%sock-entry s)))
       (if e
@@ -451,7 +485,8 @@
     (let ((e (rontolisp::%sock-entry s)))
       (if e
           (progn
-            (rontolisp::%sock-write-string e (rontolisp::%sock-seq-string seq a b))
+            (rontolisp::%sock-write-string e
+             (rontolisp::%sock-seq-string seq a b))
             seq)
           (rontolisp::%write-sequence-raw seq s :start a :end b)))))
 
@@ -468,14 +503,18 @@
 (defun rontolisp::%io-write-line (s &optional stream)
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
-        (progn (rontolisp::%sock-write-string e (concatenate 'string s (princ-to-string #\Newline)))
-               s)
+        (progn
+          (rontolisp::%sock-write-string e
+           (concatenate 'string s (princ-to-string #\Newline)))
+          s)
         (rontolisp::%write-line-raw s stream))))
 
 (defun rontolisp::%io-write-string (s &optional stream)
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
-        (progn (rontolisp::%sock-write-string e s) s)
+        (progn
+          (rontolisp::%sock-write-string e s)
+          s)
         (rontolisp::%write-string-raw s stream))))
 
 (defun rontolisp::%io-write-byte (b stream)
@@ -483,8 +522,9 @@
   ;; bytes onto the wire, and a code point >= 128 is a TWO-byte UTF-8 sequence.
   (let ((e (rontolisp::%sock-entry stream)))
     (if e
-        (progn (rontolisp::%sock-write-string e (rontolisp::%str-from-byte b))
-               b)
+        (progn
+          (rontolisp::%sock-write-string e (rontolisp::%str-from-byte b))
+          b)
         (rontolisp::%write-byte-raw b stream))))
 
 (defun rontolisp::%io-listen (&optional s)
@@ -494,9 +534,7 @@
   ;; wait host-side (documented divergence -- the chunk IS the readahead
   ;; buffer here). A non-socket designator answers nil.
   (let ((e (rontolisp::%sock-entry s)))
-    (if e
-        (if (rontolisp::%sock-buf-ready e) t nil)
-        nil)))
+    (if e (if (rontolisp::%sock-buf-ready e) t nil) nil)))
 
 (defun rontolisp::%io-open-stream-p (s)
   ;; A socket entry lives in *sock-table* until %io-close drops it, so table

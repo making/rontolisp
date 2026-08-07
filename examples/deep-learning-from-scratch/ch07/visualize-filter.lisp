@@ -22,22 +22,18 @@
 
 (defun %filter-min (w i)
   ;; Smallest weight of filter i's first channel.
-  (let* ((d (linalg:shape w))
-         (mn (aref w i 0 0 0)))
+  (let* ((d (linalg:shape w)) (mn (aref w i 0 0 0)))
     (dotimes (y (nth 2 d))
       (dotimes (x (nth 3 d))
-        (when (< (aref w i 0 y x) mn)
-          (setq mn (aref w i 0 y x)))))
+        (when (< (aref w i 0 y x) mn) (setq mn (aref w i 0 y x)))))
     mn))
 
 (defun %filter-max (w i)
   ;; Largest weight of filter i's first channel.
-  (let* ((d (linalg:shape w))
-         (mx (aref w i 0 0 0)))
+  (let* ((d (linalg:shape w)) (mx (aref w i 0 0 0)))
     (dotimes (y (nth 2 d))
       (dotimes (x (nth 3 d))
-        (when (> (aref w i 0 y x) mx)
-          (setq mx (aref w i 0 y x)))))
+        (when (> (aref w i 0 y x) mx) (setq mx (aref w i 0 y x)))))
     mx))
 
 (defun render-filters (w)
@@ -45,10 +41,7 @@
   ;; first-channel plane min-max normalized to the 10-step intensity ramp
   ;; (the book's per-image imshow scaling; denser character = larger
   ;; weight, so the ramp is the book's gray_r inverted).
-  (let* ((d (linalg:shape w))
-         (fn (car d))
-         (fh (nth 2 d))
-         (fw (nth 3 d)))
+  (let* ((d (linalg:shape w)) (fn (car d)) (fh (nth 2 d)) (fw (nth 3 d)))
     (do ((base 0 (+ base 8)))
         ((>= base fn))
       (let ((n (min 8 (- fn base))))
@@ -61,10 +54,13 @@
                      (span (- mx mn)))
                 (dotimes (x fw)
                   (let* ((v (aref w i 0 y x))
-                         (r (if (= span 0.0) 0 (truncate (* (/ (- v mn) span) 10))))
+                         (r
+                          (if (= span 0.0)
+                              0
+                              (truncate (* (/ (- v mn) span) 10))))
                          (idx (min 9 r)))
-                    (setq line (concatenate 'string line
-                                            (subseq *ramp* idx (+ idx 1))))))
+                    (setq line
+                     (concatenate 'string line (subseq *ramp* idx (+ idx 1))))))
                 (setq line (concatenate 'string line " "))))
             (write-line line)))
         (terpri)))))

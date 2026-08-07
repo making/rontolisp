@@ -21,7 +21,10 @@
 (print (codes (uax-15:normalize (string (code-char #x00C5)) :nfd)))
 
 ;; NFKC compatibility-composes: U+2460 (circled 1) -> 1, U+00BD -> 1 / 2.
-(print (codes (uax-15:normalize (format nil "~C~C" (code-char #x2460) (code-char #x00BD)) :nfkc)))
+(print
+ (codes
+  (uax-15:normalize (format nil "~C~C" (code-char #x2460) (code-char #x00BD))
+                    :nfkc)))
 
 ;; NFKD of U+FB00 (LATIN SMALL LIGATURE FF) -> two 'f' characters.
 (print (codes (uax-15:normalize (string (code-char #xFB00)) :nfkd)))
@@ -40,5 +43,6 @@
 ;; rontolisp answers T for the letters; the upstream load answers NIL for every
 ;; character outside nine hardcoded ranges (its key computation reads #+utf-32,
 ;; a feature a file's own pushnew never gets to the reader).
-(print (mapcar (lambda (code) (uax-15:unicode-letter-p (code-char code)))
-               (list #x41 #x3042 #x30 #x4E00)))
+(print
+ (mapcar (lambda (code) (uax-15:unicode-letter-p (code-char code)))
+         (list #x41 #x3042 #x30 #x4E00)))

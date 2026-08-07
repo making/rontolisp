@@ -39,16 +39,16 @@
 
 ;; Appends the carriage return of a RESP CRLF line ending (write-line then
 ;; appends the newline).
-(defun crlf (s)
-  (concatenate 'string s (format nil "~a" (code-char 13))))
+(defun crlf (s) (concatenate 'string s (format nil "~a" (code-char 13))))
 
 ;; "SET key value" -> ("SET" "key" "value")
 (defun split-words (s)
   (cond ((string= s "") nil)
-        (t (let ((p (position #\space s)))
-             (if p
-                 (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
-                 (list s))))))
+        (t
+         (let ((p (position #\space s)))
+           (if p
+               (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
+               (list s))))))
 
 ;; ("hello" "world") -> "hello world"
 (defun join-words (ws)
@@ -58,12 +58,10 @@
 
 ;; t when s is a non-empty run of decimal digits (with an optional leading -).
 (defun integer-string-p (s)
-  (let* ((n (length s))
-         (start (if (and (> n 0) (char= (char s 0) #\-)) 1 0)))
+  (let* ((n (length s)) (start (if (and (> n 0) (char= (char s 0) #\-)) 1 0)))
     (and (> n start)
          (do ((i start (+ i 1)))
-             ((or (>= i n) (not (digit-char-p (char s i))))
-              (>= i n))))))
+             ((or (>= i n) (not (digit-char-p (char s i)))) (>= i n))))))
 
 ;; --- RESP replies -----------------------------------------------------------
 
@@ -73,8 +71,7 @@
 (defun reply-error (s sock)
   (write-line (crlf (concatenate 'string "-ERR " s)) sock))
 
-(defun reply-int (n sock)
-  (write-line (crlf (format nil ":~a" n)) sock))
+(defun reply-int (n sock) (write-line (crlf (format nil ":~a" n)) sock))
 
 (defun reply-bulk (s sock)
   (if s
@@ -91,16 +88,13 @@
 ;; Reads one RESP bulk-string element: the "$<len>" header line, then the
 ;; payload line (the payload must not contain a newline).
 (defun read-bulk (sock)
-  (let ((header (read-line sock)))
-    (if header (read-line sock) nil)))
+  (let ((header (read-line sock))) (if header (read-line sock) nil)))
 
 (defun read-resp-array (count sock acc)
   (if (<= count 0)
       (reverse acc)
       (let ((arg (read-bulk sock)))
-        (if arg
-            (read-resp-array (- count 1) sock (cons arg acc))
-            nil))))
+        (if arg (read-resp-array (- count 1) sock (cons arg acc)) nil))))
 
 ;; Reads one command as a list of argument strings: a "*<n>" line starts a
 ;; RESP2 array (what redis-cli sends); anything else is an inline command
@@ -120,83 +114,85 @@
 
 ;; Handles one command; returns nil after QUIT (closing the session).
 (defun handle-command (args store sock)
-  (let ((cmd (string-upcase (car args)))
-        (key (cadr args)))
-    (cond ((string= cmd "PING")
-           (if key (reply-bulk key sock) (reply-simple "PONG" sock))
-           t)
-          ((string= cmd "SET")
-           (if (and key (cddr args))
-               (progn
-                 (setf (gethash key store) (join-words (cddr args)))
-                 (reply-simple "OK" sock))
-               (reply-error "wrong number of arguments for 'set' command" sock))
-           t)
-          ((string= cmd "GET")
-           (if key
-               (reply-bulk (gethash key store) sock)
-               (reply-error "wrong number of arguments for 'get' command" sock))
-           t)
-          ((string= cmd "DEL")
-           (let ((removed 0))
-             (dolist (k (cdr args))
-               (when (gethash k store)
-                 (remhash k store)
-                 (incf removed)))
-             (reply-int removed sock))
-           t)
-          ((string= cmd "EXISTS")
-           (reply-int (if (and key (gethash key store)) 1 0) sock)
-           t)
-          ((string= cmd "INCR")
-           (let ((current (if key (or (gethash key store) "0") "0")))
-             (cond ((null key)
-                    (reply-error "wrong number of arguments for 'incr' command" sock))
-                   ((integer-string-p current)
-                    (let ((n (+ (parse-integer current) 1)))
-                      (setf (gethash key store) (format nil "~a" n))
-                      (reply-int n sock)))
-                   (t (reply-error "value is not an integer or out of range" sock))))
-           t)
-          ((string= cmd "KEYS")
-           (let ((pattern (or key "*"))
-                 (keys nil))
-             (maphash (lambda (k v)
-                        (if (or (string= pattern "*") (string= pattern k))
-                            (push k keys)))
-                      store)
-             (reply-array-header (length keys) sock)
-             (dolist (k keys)
-               (reply-bulk k sock)))
-           t)
-          ((string= cmd "DBSIZE")
-           (reply-int (hash-table-count store) sock)
-           t)
-          ((string= cmd "COMMAND")
-           ;; redis-cli asks COMMAND DOCS on connect; an empty array satisfies it.
-           (reply-array-header 0 sock)
-           t)
-          ((string= cmd "QUIT")
-           (reply-simple "OK" sock)
-           nil)
-          (t (reply-error (format nil "unknown command '~a'" (car args)) sock)
-             t))))
+  (let ((cmd (string-upcase (car args))) (key (cadr args)))
+    (cond
+     ((string= cmd "PING")
+      (if key (reply-bulk key sock) (reply-simple "PONG" sock))
+      t)
+     ((string= cmd "SET")
+      (if (and key (cddr args))
+          (progn
+            (setf (gethash key store) (join-words (cddr args)))
+            (reply-simple "OK" sock))
+          (reply-error "wrong number of arguments for 'set' command" sock))
+      t)
+     ((string= cmd "GET")
+      (if key
+          (reply-bulk (gethash key store) sock)
+          (reply-error "wrong number of arguments for 'get' command" sock))
+      t)
+     ((string= cmd "DEL")
+      (let ((removed 0))
+        (dolist (k (cdr args))
+          (when (gethash k store)
+            (remhash k store)
+            (incf removed)))
+        (reply-int removed sock))
+      t)
+     ((string= cmd "EXISTS")
+      (reply-int (if (and key (gethash key store)) 1 0) sock)
+      t)
+     ((string= cmd "INCR")
+      (let ((current (if key (or (gethash key store) "0") "0")))
+        (cond ((null key)
+               (reply-error "wrong number of arguments for 'incr' command"
+                            sock))
+              ((integer-string-p current)
+               (let ((n (+ (parse-integer current) 1)))
+                 (setf (gethash key store) (format nil "~a" n))
+                 (reply-int n sock)))
+              (t (reply-error "value is not an integer or out of range" sock))))
+      t)
+     ((string= cmd "KEYS")
+      (let ((pattern (or key "*")) (keys nil))
+        (maphash (lambda (k v)
+                   (if (or (string= pattern "*") (string= pattern k))
+                       (push k keys))) store)
+        (reply-array-header (length keys) sock)
+        (dolist (k keys) (reply-bulk k sock)))
+      t)
+     ((string= cmd "DBSIZE")
+      (reply-int (hash-table-count store) sock)
+      t)
+     ((string= cmd "COMMAND")
+      ;; redis-cli asks COMMAND DOCS on connect; an empty array satisfies it.
+      (reply-array-header 0 sock)
+      t)
+     ((string= cmd "QUIT")
+      (reply-simple "OK" sock)
+      nil)
+     (t
+      (reply-error (format nil "unknown command '~a'" (car args)) sock)
+      t))))
 
 ;; --- server loop ------------------------------------------------------------
 
 (let ((store (make-hash-table)))
   (handler-case
-      ;; usocket:socket-listen takes host first, then port (the reverse of
-      ;; rontolisp:tcp-listen); on failure it signals usocket:socket-error
-      ;; rather than returning nil.
-      (let ((listener (usocket:socket-listen "127.0.0.1" 6379 :reuse-address t)))
-        (write-line "mini-redis listening on 127.0.0.1:6379 (try: redis-cli -p 6379 ping)")
-        (do ((n 1 (+ n 1))) (nil)
-          ;; with-server-socket closes the accepted socket on every exit.
-          (usocket:with-server-socket (sock (usocket:socket-accept listener))
-            (let ((stream (usocket:socket-stream sock)))
-              (do ((args (read-command stream) (read-command stream)))
-                  ((or (null args) (not (handle-command args store stream)))))))))
+    ;; usocket:socket-listen takes host first, then port (the reverse of
+    ;; rontolisp:tcp-listen); on failure it signals usocket:socket-error
+    ;; rather than returning nil.
+    (let ((listener (usocket:socket-listen "127.0.0.1" 6379 :reuse-address t)))
+      (write-line
+       "mini-redis listening on 127.0.0.1:6379 (try: redis-cli -p 6379 ping)")
+      (do ((n 1 (+ n 1)))
+          (nil)
+        ;; with-server-socket closes the accepted socket on every exit.
+        (usocket:with-server-socket (sock (usocket:socket-accept listener))
+          (let ((stream (usocket:socket-stream sock)))
+            (do ((args (read-command stream) (read-command stream)))
+                ((or (null args) (not (handle-command args store stream)))))))))
     (usocket:socket-error (e)
       (declare (ignore e))
-      (write-line "socket-listen failed (is port 6379 already in use? a real redis, perhaps)"))))
+      (write-line
+       "socket-listen failed (is port 6379 already in use? a real redis, perhaps)"))))

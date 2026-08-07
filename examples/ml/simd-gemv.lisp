@@ -68,8 +68,7 @@
   *lcg-state*)
 
 ;;; a single-float in [-1, 1)
-(defun lcg-uniform ()
-  (- (/ (mod (lcg-next) 2048) 1024.0) 1.0))
+(defun lcg-uniform () (- (/ (mod (lcg-next) 2048) 1024.0) 1.0))
 
 ;;; --- the packed float arrays -------------------------------------------------
 ;;; `:element-type 'single-float` is what makes these packed (unboxed) arrays --
@@ -77,8 +76,7 @@
 ;;; array is the matrix; a rank-1 array is the vector.
 (defun random-matrix (rows cols)
   (let ((m (make-array (list rows cols) :element-type 'single-float)))
-    (dotimes (i rows m)
-      (dotimes (j cols) (setf (aref m i j) (lcg-uniform))))))
+    (dotimes (i rows m) (dotimes (j cols) (setf (aref m i j) (lcg-uniform))))))
 
 (defun random-vector (n)
   (let ((v (vec:zeros n 'single-float)))
@@ -92,8 +90,7 @@
 
 ;;; One step: a GEMV, then the normalization. In a transformer this pair is a
 ;;; projection followed by a layer norm; here it is the whole program.
-(defun step-once (w x)
-  (rms-normalize (vec:matvec w x)))
+(defun step-once (w x) (rms-normalize (vec:matvec w x)))
 
 ;;; --- the fingerprint ---------------------------------------------------------
 ;;; Which component is the largest. Repeating the same matrix drives the vector
@@ -115,8 +112,9 @@
 (defparameter *w* (random-matrix *dim* *dim*))
 (defparameter *x* (random-vector *dim*))
 
-(format t "simd-gemv: ~a steps of (vec:matvec w x) on a ~ax~a single-float matrix~%"
-        *steps* *dim* *dim*)
+(format t
+ "simd-gemv: ~a steps of (vec:matvec w x) on a ~ax~a single-float matrix~%"
+ *steps* *dim* *dim*)
 (format t "~a multiply-adds, every one of them inside vec:matvec or vec:dot~%"
         (* *steps* (+ (* *dim* *dim*) *dim*)))
 
@@ -124,7 +122,8 @@
        (indices (iterate *w* *x* *steps*))
        (elapsed (- (get-internal-real-time) start)))
   (format t "argmax after steps 1-10: ~a~%" (subseq indices 0 10))
-  (format t "argmax after step ~a:   ~a  (the dominant direction)~%"
-          *steps* (nth (- *steps* 1) indices))
+  (format t "argmax after step ~a:   ~a  (the dominant direction)~%" *steps*
+          (nth (- *steps* 1) indices))
   (format t "elapsed: ~a ms~%" elapsed)
-  (format t "(re-run with --simd; the indices must not change, the time should)~%"))
+  (format t
+   "(re-run with --simd; the indices must not change, the time should)~%"))

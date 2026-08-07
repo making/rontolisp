@@ -9,8 +9,7 @@
 (defun hex (digest)
   (string-downcase
    (with-output-to-string (s)
-     (dotimes (i (length digest))
-       (format s "~2,'0X" (aref digest i))))))
+     (dotimes (i (length digest)) (format s "~2,'0X" (aref digest i))))))
 
 ;; RFC 1321 A.5 test vectors
 (print (hex (md5:md5sum-sequence "")))
@@ -18,7 +17,10 @@
 (print (hex (md5:md5sum-sequence "message digest")))
 
 ;; the (unsigned-byte 8) vector shape (what a database driver hands it)
-(let ((v (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(97 98 99))))
+(let ((v
+       (make-array 3
+                   :element-type '(unsigned-byte 8)
+                   :initial-contents '(97 98 99))))
   (print (hex (md5:md5sum-sequence v))))
 
 ;; md5sum-string UTF-8-encodes through the flexi-streams shim first

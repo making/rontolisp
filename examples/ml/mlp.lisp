@@ -16,7 +16,7 @@
 ;;; on WASM from the WASI random_get host function (so every run differs).
 ;;; ---------------------------------------------------------------------------
 
-(defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)
+(defun random-weight () (- (random 1.0) 0.5)) ; -> (-0.5, 0.5)
 
 ;;; ---------------------------------------------------------------------------
 ;;; Array construction
@@ -29,14 +29,14 @@
 
 (defun random-matrix (rows cols)
   (let ((m (make-array (list rows cols) :initial-element 0.0)))
-    (dotimes (i rows)
-      (dotimes (j cols) (setf (aref m i j) (random-weight))))
+    (dotimes (i rows) (dotimes (j cols) (setf (aref m i j) (random-weight))))
     m))
 
-(defun list->vector (lst)                ; pack a list into a rank-1 array
-  (let ((v (make-array (length lst) :initial-element 0.0))
-        (i 0))
-    (dolist (e lst) (setf (aref v i) e) (setq i (+ i 1)))
+(defun list->vector (lst) ; pack a list into a rank-1 array
+  (let ((v (make-array (length lst) :initial-element 0.0)) (i 0))
+    (dolist (e lst)
+      (setf (aref v i) e)
+      (setq i (+ i 1)))
     v))
 
 ;;; ---------------------------------------------------------------------------
@@ -67,8 +67,7 @@
   (if (null (rest sizes))
       nil
       (cons (list (random-matrix (second sizes) (first sizes))
-                  (random-vector (second sizes)))
-            (init-layers (rest sizes)))))
+                  (random-vector (second sizes))) (init-layers (rest sizes)))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Forward pass.  Collect every activation, input first: (a0=x a1 ... aL)
@@ -81,7 +80,7 @@
       (setq acts (cons a acts)))
     (reverse acts)))
 
-(defun predict (layers x)                ; output activation vector
+(defun predict (layers x) ; output activation vector
   (car (last (forward-all layers x))))
 
 ;;; ---------------------------------------------------------------------------
@@ -90,24 +89,25 @@
 ;;; The new delta must be computed from W before W is updated.
 ;;; ---------------------------------------------------------------------------
 
-(defun output-delta (aL y)               ; (aL - y) * aL * (1 - aL)
-  (let* ((n (length aL))
-         (delta (make-array n :initial-element 0.0)))
+(defun output-delta (aL y) ; (aL - y) * aL * (1 - aL)
+  (let* ((n (length aL)) (delta (make-array n :initial-element 0.0)))
     (dotimes (i n)
       (setf (aref delta i)
             (* (- (aref aL i) (aref y i)) (aref aL i) (- 1.0 (aref aL i)))))
     delta))
 
 (defun train-example (layers x y lr)
-  (let* ((acts (forward-all layers x))            ; (a0 ... aL)
-         (rev-layers (reverse layers))            ; (layerL ... layer1)
-         (rev-acts (reverse acts))                ; (aL ... a0)
+  (let* ((acts (forward-all layers x)) ; (a0 ... aL)
+         (rev-layers (reverse layers)) ; (layerL ... layer1)
+         (rev-acts (reverse acts))     ; (aL ... a0)
          (delta (output-delta (first rev-acts) y))
-         (cur (rest rev-acts)))                   ; (a_{prev} ... a0)
+         (cur (rest rev-acts))) ; (a_{prev} ... a0)
     (dolist (layer rev-layers)
-      (let* ((w (layer-w layer)) (b (layer-b layer))
+      (let* ((w (layer-w layer))
+             (b (layer-b layer))
              (a-prev (first cur))
-             (rows (length b)) (cols (length a-prev))
+             (rows (length b))
+             (cols (length a-prev))
              (new-delta (make-array cols :initial-element 0.0)))
         ;; new-delta = (W^T delta) * a-prev * (1 - a-prev), read W before updating
         (dotimes (j cols)
@@ -129,9 +129,7 @@
 ;;; ---------------------------------------------------------------------------
 
 (defun example-loss (layers ex)
-  (let* ((a (predict layers (first ex)))
-         (y (second ex))
-         (s 0.0))
+  (let* ((a (predict layers (first ex))) (y (second ex)) (s 0.0))
     (dotimes (i (length a))
       (let ((d (- (aref a i) (aref y i)))) (incf s (* d d))))
     (* 0.5 s)))
@@ -141,7 +139,7 @@
     (dolist (ex data) (incf s (example-loss layers ex)))
     s))
 
-(defun classify (layers x)               ; threshold the single output
+(defun classify (layers x) ; threshold the single output
   (if (> (aref (predict layers x) 0) 0.5) 1.0 0.0))
 
 (defun accuracy (layers data)
@@ -154,11 +152,10 @@
 (defun train (layers data epochs lr)
   (let ((e 0))
     (while (< e epochs)
-      (dolist (ex data)
-        (train-example layers (first ex) (second ex) lr))
+      (dolist (ex data) (train-example layers (first ex) (second ex) lr))
       (when (zerop (mod e 200))
-        (format t "epoch ~a  loss ~a  train-acc ~a~%"
-                e (total-loss layers data) (accuracy layers data)))
+        (format t "epoch ~a  loss ~a  train-acc ~a~%" e (total-loss layers data)
+                (accuracy layers data)))
       (setq e (+ e 1))))
   layers)
 
@@ -186,11 +183,11 @@
 ;;; ---------------------------------------------------------------------------
 
 (defparameter *train* (make-dataset 150))
-(defparameter *test*  (make-dataset 60))
+(defparameter *test* (make-dataset 60))
 
 (format t "Circle classification, 2-8-1 MLP~%")
-(format t "train=~a examples, test=~a examples~%~%"
-        (length *train*) (length *test*))
+(format t "train=~a examples, test=~a examples~%~%" (length *train*)
+        (length *test*))
 
 (defparameter *net* (init-layers (list 2 8 1)))
 (setq *net* (train *net* *train* 2000 0.5))

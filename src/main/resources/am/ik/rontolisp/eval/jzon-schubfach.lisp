@@ -10,9 +10,7 @@
 
 (defpackage #:com.inuoe.jzon/schubfach
   (:use #:cl)
-  (:export
-    #:write-float
-    #:write-double))
+  (:export #:write-float #:write-double))
 
 (defun com.inuoe.jzon/schubfach:write-double (x stream)
   (check-type stream stream)

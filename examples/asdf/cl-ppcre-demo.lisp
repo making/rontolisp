@@ -10,7 +10,9 @@
 (print (multiple-value-list (cl-ppcre:scan "(a)*b" "xaaabd")))
 
 ;; scan-to-strings: the whole match plus a register vector
-(print (multiple-value-list (cl-ppcre:scan-to-strings "(\\d+)-(\\d+)" "phone 03-1234")))
+(print
+ (multiple-value-list
+  (cl-ppcre:scan-to-strings "(\\d+)-(\\d+)" "phone 03-1234")))
 
 ;; split, with a regex separator
 (print (cl-ppcre:split "\\s+" "foo bar   baz"))
@@ -24,17 +26,18 @@
 
 ;; the iteration macros (do-scans family builds on &environment + get-setf-expansion)
 (let ((acc nil))
-  (cl-ppcre:do-matches-as-strings (m "[0-9]+" "a1 b22 c333")
-    (push m acc))
+  (cl-ppcre:do-matches-as-strings (m "[0-9]+" "a1 b22 c333") (push m acc))
   (print (nreverse acc)))
 
 ;; register-groups-bind destructures the registers by name
-(print (cl-ppcre:register-groups-bind (area num)
-           ("(\\d+)-(\\d+)" "tel 03-1234 end")
-         (list area num)))
+(print
+ (cl-ppcre:register-groups-bind (area num) ("(\\d+)-(\\d+)" "tel 03-1234 end")
+                                (list area num)))
 
 ;; a parse tree instead of a regex string
-(print (cl-ppcre:scan-to-strings '(:sequence "b" (:greedy-repetition 1 nil #\a)) "xbaaay"))
+(print
+ (cl-ppcre:scan-to-strings '(:sequence "b" (:greedy-repetition 1 nil #\a))
+                           "xbaaay"))
 
 ;; (?i) inline modifier
 (print (cl-ppcre:scan-to-strings "(?i)hello|bye" "say HELLO now"))

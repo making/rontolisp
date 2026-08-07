@@ -32,13 +32,19 @@
   (print (assoc-utils:hash-alist h)))
 
 ;; with-keys (the alist equivalent of with-slots)
-(print (assoc-utils:with-keys ((nm "name") (lc "loc")) *a*
-         (format nil "~a in ~a" nm lc)))
+(print
+ (assoc-utils:with-keys ((nm "name") (lc "loc"))
+   *a*
+   (format nil "~a in ~a" nm lc)))
 
 ;; alist-get (reduce #'aget* over a key path; integer keys index into lists)
-(print (assoc-utils:alist-get (list (cons "user" (list (cons "age" 42)))) (list "user" "age")))
+(print
+ (assoc-utils:alist-get (list (cons "user" (list (cons "age" 42))))
+                        (list "user" "age")))
 
 ;; alist= (equalp over string< :key #'car sorted copies)
-(print (if (assoc-utils:alist= (list (cons "a" "1") (cons "b" "2"))
-                               (list (cons "b" "2") (cons "a" "1")))
-           "equal" "different"))
+(print
+ (if (assoc-utils:alist= (list (cons "a" "1") (cons "b" "2"))
+                         (list (cons "b" "2") (cons "a" "1")))
+     "equal"
+     "different"))

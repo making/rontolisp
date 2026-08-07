@@ -48,8 +48,9 @@
   (json-response 400 (rontolisp:plist-hash-table (list :error message))))
 
 (defun method-not-allowed ()
-  (json-response 405 (rontolisp:plist-hash-table
-                      (list :error "method not allowed" :allowed "POST"))))
+  (json-response 405
+                 (rontolisp:plist-hash-table
+                  (list :error "method not allowed" :allowed "POST"))))
 
 ;; Parse the body as a JSON object into a hash table (string keys), or nil
 ;; when the body is not a JSON object (the cheap guard answers 400 without
@@ -74,17 +75,11 @@
 
 ;; True when row is a list of exactly n numbers (n > 0).
 (defun number-row-p (row n)
-  (and (listp row)
-       row
-       (= (length row) n)
-       (every (lambda (v) (numberp v)) row)))
+  (and (listp row) row (= (length row) n) (every (lambda (v) (numberp v)) row)))
 
 ;; True when rows is a non-empty list of equal-length number rows.
 (defun matrix-spec-p (rows)
-  (and (listp rows)
-       rows
-       (listp (first rows))
-       (first rows)
+  (and (listp rows) rows (listp (first rows)) (first rows)
        (every (lambda (row) (number-row-p row (length (first rows)))) rows)))
 
 ;; --- POST /solve : solve a.x = b -------------------------------------------
@@ -94,30 +89,27 @@
          (a (and spec (json-array->list (gethash "a" spec))))
          (b (and spec (json-array->list (gethash "b" spec)))))
     (cond ((null spec) (bad-request "the body must be a JSON object"))
-          ((not (matrix-spec-p a))
-           (bad-request "a must be a non-empty array of equal-length number rows"))
-          ((not (= (length a) (length (first a))))
-           (bad-request "a must be square"))
-          ((not (number-row-p b (length a)))
-           (bad-request "b must be a number array as long as a"))
-          (t (let* ((m (linalg:from-list a))
-                    (det (linalg:det m)))
-               (if (= det 0)
-                   (bad-request "a is singular")
-                   (json-response 200
-                                  (rontolisp:plist-hash-table
-                                   (list :x (linalg:to-list
-                                             (linalg:solve m (linalg:from-list b)))
-                                         :det det)))))))))
+     ((not (matrix-spec-p a))
+      (bad-request "a must be a non-empty array of equal-length number rows"))
+     ((not (= (length a) (length (first a)))) (bad-request "a must be square"))
+     ((not (number-row-p b (length a)))
+      (bad-request "b must be a number array as long as a"))
+     (t
+      (let* ((m (linalg:from-list a)) (det (linalg:det m)))
+        (if (= det 0)
+            (bad-request "a is singular")
+            (json-response 200
+                           (rontolisp:plist-hash-table
+                            (list :x (linalg:to-list
+                                      (linalg:solve m (linalg:from-list b)))
+                                  :det det)))))))))
 
 ;; --- POST /fit : least-squares polynomial fitting ---------------------------
 
 ;; One row per sample x: (1 x x^2 ... x^degree).
 (defun vandermonde (xs degree)
-  (let* ((n (length xs))
-         (m (make-array (list n (+ degree 1)))))
-    (do ((row 0 (+ row 1))
-         (rest xs (cdr rest)))
+  (let* ((n (length xs)) (m (make-array (list n (+ degree 1)))))
+    (do ((row 0 (+ row 1)) (rest xs (cdr rest)))
         ((>= row n) m)
       (do ((col 0 (+ col 1)))
           ((> col degree))
@@ -130,28 +122,34 @@
     (cond ((null spec) (bad-request "the body must be a JSON object"))
           ((not (and (integerp degree) (>= degree 0)))
            (bad-request "degree must be a non-negative integer"))
-          ((not (and (listp points)
-                     points
-                     (every (lambda (p) (number-row-p p 2)) points)))
+          ((not
+            (and (listp points) points
+                 (every (lambda (p) (number-row-p p 2)) points)))
            (bad-request "points must be a non-empty array of [x, y] pairs"))
           ((< (length points) (+ degree 1))
            (bad-request "need at least degree + 1 points"))
-          (t (let* ((xs (mapcar (lambda (p) (first p)) points))
-                    (ys (mapcar (lambda (p) (nth 1 p)) points))
-                    (a (vandermonde xs degree))
-                    (at (linalg:transpose a))
-                    (ata (linalg:matmul at a)))
-               (if (= (linalg:det ata) 0)
-                   (bad-request "points do not determine the polynomial (duplicate xs?)")
-                   (let* ((coeffs (linalg:solve ata (linalg:dot at (linalg:from-list ys))))
-                          (fitted (linalg:dot a coeffs))
-                          (residuals (linalg:sub (linalg:from-list ys) fitted)))
-                     (json-response 200
-                                    (rontolisp:plist-hash-table
-                                     (list :coefficients (linalg:to-list coeffs)
-                                           :fitted (linalg:to-list fitted)
-                                           :residuals (linalg:to-list residuals)
-                                           :squared-error (linalg:dot residuals residuals)))))))))))
+          (t
+           (let* ((xs (mapcar (lambda (p) (first p)) points))
+                  (ys (mapcar (lambda (p) (nth 1 p)) points))
+                  (a (vandermonde xs degree))
+                  (at (linalg:transpose a))
+                  (ata (linalg:matmul at a)))
+             (if (= (linalg:det ata) 0)
+                 (bad-request
+                  "points do not determine the polynomial (duplicate xs?)")
+                 (let* ((coeffs
+                         (linalg:solve ata
+                                       (linalg:dot at (linalg:from-list ys))))
+                        (fitted (linalg:dot a coeffs))
+                        (residuals (linalg:sub (linalg:from-list ys) fitted)))
+                   (json-response 200
+                                  (rontolisp:plist-hash-table
+                                   (list :coefficients (linalg:to-list coeffs)
+                                         :fitted (linalg:to-list fitted)
+                                         :residuals (linalg:to-list residuals)
+                                         :squared-error
+                                         (linalg:dot residuals
+                                                     residuals)))))))))))
 
 ;; --- routing ----------------------------------------------------------------
 
@@ -159,27 +157,31 @@
   (json-response 200
                  (rontolisp:plist-hash-table
                   (list :service "linalg-api"
-                        :endpoints
-                        (list (rontolisp:plist-hash-table
-                               (list :method "POST" :path "/solve"
-                                     :body "{\"a\": [[2,1],[1,3]], \"b\": [5,10]}"))
-                              (rontolisp:plist-hash-table
-                               (list :method "POST" :path "/fit"
-                                     :body "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))))
+                        :endpoints (list (rontolisp:plist-hash-table
+                                          (list :method "POST"
+                                                :path "/solve"
+                                                :body
+                                                "{\"a\": [[2,1],[1,3]], \"b\": [5,10]}"))
+                                         (rontolisp:plist-hash-table
+                                          (list :method "POST"
+                                                :path "/fit"
+                                                :body
+                                                "{\"degree\": 1, \"points\": [[0,1],[1,2],[2,5],[3,5]]}")))))))
 
 ;; The env plist's :path-info carries the (percent-decoded) path only (any
 ;; query string arrives separately as :query-string), so the comparisons are
 ;; exact; :request-method is an interned keyword, so the comparison is eq.
 (defun route (env)
-  (let ((path (getf env :path-info))
-        (method (getf env :request-method)))
+  (let ((path (getf env :path-info)) (method (getf env :request-method)))
     (cond ((string= path "/solve")
            (if (eq method :POST) (handle-solve env) (method-not-allowed)))
           ((string= path "/fit")
            (if (eq method :POST) (handle-fit env) (method-not-allowed)))
           ((string= path "/") (usage))
-          (t (json-response 404 (rontolisp:plist-hash-table
-                                 (list :error "not found" :path path)))))))
+          (t
+           (json-response 404
+                          (rontolisp:plist-hash-table
+                           (list :error "not found" :path path)))))))
 
 ;; The env :raw-body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers an env whose :body is the whole string (getf

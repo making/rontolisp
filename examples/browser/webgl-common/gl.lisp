@@ -36,23 +36,17 @@
 
 (defpackage gl
   (:use cl)
-  (:export create-shader shader-source compile-shader
-           get-shader-parameter get-shader-info-log
-           create-program attach-shader link-program
+  (:export create-shader shader-source compile-shader get-shader-parameter
+           get-shader-info-log create-program attach-shader link-program
            get-program-parameter get-program-info-log use-program
-           get-uniform-location uniform1f uniform3f
-           enable disable depth-mask blend-func
-           create-buffer bind-buffer buffer-data
-           create-vertex-array bind-vertex-array
-           enable-vertex-attrib-array vertex-attrib-pointer
-           viewport clear-color clear draw-arrays
-           make-shader build-program
-           +vertex-shader+ +fragment-shader+
-           +compile-status+ +link-status+
-           +array-buffer+ +static-draw+ +dynamic-draw+
-           +float+ +blend+ +depth-test+ +one+
-           +color-buffer-bit+ +depth-buffer-bit+
-           +points+ +triangles+))
+           get-uniform-location uniform1f uniform3f enable disable depth-mask
+           blend-func create-buffer bind-buffer buffer-data create-vertex-array
+           bind-vertex-array enable-vertex-attrib-array vertex-attrib-pointer
+           viewport clear-color clear draw-arrays make-shader build-program
+           +vertex-shader+ +fragment-shader+ +compile-status+ +link-status+
+           +array-buffer+ +static-draw+ +dynamic-draw+ +float+ +blend+
+           +depth-test+ +one+ +color-buffer-bit+ +depth-buffer-bit+ +points+
+           +triangles+))
 
 (in-package gl)
 
@@ -67,19 +61,19 @@
 ;; --- WebGL constants -----------------------------------------------------------
 ;; The numeric enum values from the WebGL specification.
 
-(defconstant +vertex-shader+ 35633)             ; 0x8B31
-(defconstant +fragment-shader+ 35632)           ; 0x8B30
-(defconstant +compile-status+ 35713)            ; 0x8B81
-(defconstant +link-status+ 35714)               ; 0x8B82
-(defconstant +array-buffer+ 34962)              ; 0x8892
-(defconstant +static-draw+ 35044)               ; 0x88E4
-(defconstant +dynamic-draw+ 35048)              ; 0x88E8
-(defconstant +float+ 5126)                      ; 0x1406
-(defconstant +blend+ 3042)                      ; 0x0BE2
-(defconstant +depth-test+ 2929)                 ; 0x0B71
+(defconstant +vertex-shader+ 35633)   ; 0x8B31
+(defconstant +fragment-shader+ 35632) ; 0x8B30
+(defconstant +compile-status+ 35713)  ; 0x8B81
+(defconstant +link-status+ 35714)     ; 0x8B82
+(defconstant +array-buffer+ 34962)    ; 0x8892
+(defconstant +static-draw+ 35044)     ; 0x88E4
+(defconstant +dynamic-draw+ 35048)    ; 0x88E8
+(defconstant +float+ 5126)            ; 0x1406
+(defconstant +blend+ 3042)            ; 0x0BE2
+(defconstant +depth-test+ 2929)       ; 0x0B71
 (defconstant +one+ 1)
-(defconstant +color-buffer-bit+ 16384)          ; 0x4000
-(defconstant +depth-buffer-bit+ 256)            ; 0x0100
+(defconstant +color-buffer-bit+ 16384) ; 0x4000
+(defconstant +depth-buffer-bit+ 256)   ; 0x0100
 (defconstant +points+ 0)
 (defconstant +triangles+ 4)
 

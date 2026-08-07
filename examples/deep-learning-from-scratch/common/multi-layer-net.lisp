@@ -15,8 +15,8 @@
 (defclass multi-layer-net ()
   ((params :initarg :params :accessor mln-params)
    (layers :initarg :layers :accessor mln-layers)
-   (affines :initarg :affines :accessor mln-affines)   ; ordered, 1..n+1
-   (keys :initarg :keys :accessor mln-keys)            ; ("W1" "b1" ...)
+   (affines :initarg :affines :accessor mln-affines) ; ordered, 1..n+1
+   (keys :initarg :keys :accessor mln-keys)          ; ("W1" "b1" ...)
    (weight-decay-lambda :initarg :weight-decay-lambda
                         :accessor mln-weight-decay-lambda)
    (last-layer :initarg :last-layer :accessor mln-last-layer)))
@@ -29,19 +29,19 @@
         ((member weight-init-std '(sigmoid xavier)) (sqrt (/ 1.0 prev-size)))
         (t (error "unknown weight-init-std"))))
 
-(defun make-multi-layer-net (input-size hidden-size-list output-size
-                             &key (activation 'relu) (weight-init-std 'relu)
-                             (weight-decay-lambda 0))
-  (let* ((all-sizes (append (list input-size) hidden-size-list
-                            (list output-size)))
+(defun make-multi-layer-net (input-size hidden-size-list output-size &key
+                                        (activation 'relu)
+                                        (weight-init-std 'relu)
+                                        (weight-decay-lambda 0))
+  (let* ((all-sizes
+          (append (list input-size) hidden-size-list (list output-size)))
          (n-hidden (length hidden-size-list))
          (params (make-hash-table :test 'equal))
          (keys nil)
          (affines nil)
          (layer-list nil))
     ;; weights: W_idx is (all-sizes[idx-1] x all-sizes[idx])
-    (do ((idx 1 (+ idx 1))
-         (sizes all-sizes (cdr sizes)))
+    (do ((idx 1 (+ idx 1)) (sizes all-sizes (cdr sizes)))
         ((null (cdr sizes)))
       (let ((prev (car sizes))
             (next (cadr sizes))
@@ -56,17 +56,17 @@
     ;; layers: Affine -> activation per hidden layer, final Affine
     (do ((idx 1 (+ idx 1)))
         ((> idx (+ n-hidden 1)))
-      (let ((aff (make-instance 'affine
-                                :w (gethash (format nil "W~a" idx) params)
-                                :b (gethash (format nil "b~a" idx) params))))
+      (let ((aff
+             (make-instance 'affine
+                            :w (gethash (format nil "W~a" idx) params)
+                            :b (gethash (format nil "b~a" idx) params))))
         (setq affines (cons aff affines))
         (setq layer-list (cons aff layer-list))
         (when (<= idx n-hidden)
           (setq layer-list
                 (cons (if (eq activation 'sigmoid)
                           (make-instance 'sigmoid-layer)
-                          (make-instance 'relu-layer))
-                      layer-list)))))
+                          (make-instance 'relu-layer)) layer-list)))))
     (make-instance 'multi-layer-net
                    :params params
                    :layers (reverse layer-list)
@@ -87,27 +87,22 @@
 
 (defmethod predict ((net multi-layer-net) x)
   (let ((out x))
-    (dolist (layer (mln-layers net))
-      (setq out (forward layer out)))
+    (dolist (layer (mln-layers net)) (setq out (forward layer out)))
     out))
 
 (defmethod net-loss ((net multi-layer-net) x target)
   ;; cross-entropy + the 0.5 * lambda * sum(W^2) L2 penalty per weight.
-  (let ((decay 0)
-        (lam (mln-weight-decay-lambda net))
-        (idx 0))
+  (let ((decay 0) (lam (mln-weight-decay-lambda net)) (idx 0))
     (dolist (aff (mln-affines net))
       (setq idx (+ idx 1))
-      (setq decay (+ decay (* 0.5 lam (linalg:sum (linalg:square (affine-w aff)))))))
+      (setq decay
+            (+ decay (* 0.5 lam (linalg:sum (linalg:square (affine-w aff)))))))
     (+ (loss-forward (mln-last-layer net) (predict net x) target) decay)))
 
 (defmethod net-accuracy-count ((net multi-layer-net) x target)
-  (let* ((y (let ((*train-p* nil))
-              (predict net x)))
+  (let* ((y (let ((*train-p* nil)) (predict net x)))
          (yl (linalg:argmax y 1))
-         (tl (if (= (linalg:ndim target) 1)
-                 target
-                 (linalg:argmax target 1))))
+         (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
     (truncate (linalg:sum (linalg:equal yl tl)))))
 
 (defmethod net-gradient ((net multi-layer-net) x target)

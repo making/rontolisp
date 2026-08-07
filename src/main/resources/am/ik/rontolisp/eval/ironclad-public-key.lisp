@@ -14,21 +14,25 @@
 ;; IRONCLAD package is already registered by src/package.lisp, which the core
 ;; loads first, and both names are in its :export list.
 
-(defun ironclad:octets-to-integer (octet-vec &key (start 0) end (big-endian t) n-bits)
+(defun ironclad:octets-to-integer
+    (octet-vec &key (start 0) end (big-endian t) n-bits)
   (let ((end (or end (length octet-vec))))
-    (multiple-value-bind (n-bits n-bytes)
-        (let ((size (- end start)))
-          (if n-bits
-              (values n-bits (min (ceiling n-bits 8) size))
-              (values (* 8 size) size)))
-      (let ((sum (if big-endian
-                     (loop with sum = 0
-                           for i from (- end n-bytes) below end
-                           do (setf sum (+ (ash sum 8) (aref octet-vec i)))
-                           finally (return sum))
-                     (loop for i from start below (+ start n-bytes)
-                           for j from 0 by 8
-                           sum (ash (aref octet-vec i) j)))))
+    (multiple-value-bind (n-bits n-bytes) (let ((size (- end start)))
+                                            (if n-bits
+                                                (values n-bits
+                                                 (min (ceiling n-bits 8) size))
+                                                (values (* 8 size) size)))
+      (let ((sum
+             (if big-endian
+                 (loop with
+                       sum = 0
+                       for i from (- end n-bytes) below
+                       end
+                       do (setf sum (+ (ash sum 8) (aref octet-vec i)))
+                       finally (return sum))
+                 (loop for i from start below (+ start n-bytes)
+                       for j from 0 by 8
+                       sum (ash (aref octet-vec i) j)))))
         (ldb (byte n-bits 0) sum)))))
 
 (defun ironclad:integer-to-octets (bignum &key n-bits (big-endian t))

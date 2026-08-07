@@ -38,8 +38,8 @@
   (with-open-file (in *src*)
     (with-open-file (out *dst* :direction :output)
       (setq counts (number-file in out))))
-  (format t "Wrote ~d lines (~d characters) to ~a~%~%"
-          (car counts) (cdr counts) *dst*)
+  (format t "Wrote ~d lines (~d characters) to ~a~%~%" (car counts) (cdr counts)
+          *dst*)
   (format t "Contents of ~a:~%" *dst*)
   (with-open-file (in *dst*)
     (let ((line (read-line in)))

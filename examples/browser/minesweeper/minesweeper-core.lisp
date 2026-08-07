@@ -49,9 +49,7 @@
 
 ;;; The indices of the (up to eight) neighbours of cell I on a W x H board.
 (defun neighbors (i w h)
-  (let ((r (floor (/ i w)))
-        (c (mod i w))
-        (result nil))
+  (let ((r (floor (/ i w))) (c (mod i w)) (result nil))
     (dolist (dr (list -1 0 1))
       (dolist (dc (list -1 0 1))
         (unless (and (= dr 0) (= dc 0))
@@ -64,18 +62,17 @@
 (defun adjacent-count (mines i w h)
   (let ((count 0))
     (dolist (n (neighbors i w h))
-      (when (= (nth n mines) 1)
-        (setq count (1+ count))))
+      (when (= (nth n mines) 1) (setq count (1+ count))))
     count))
 
 ;;; --- state accessors ---------------------------------------------------------
 
-(defun st-status   (state) (nth 0 state))
-(defun st-w        (state) (nth 1 state))
-(defun st-h        (state) (nth 2 state))
-(defun st-mines    (state) (nth 3 state))
+(defun st-status (state) (nth 0 state))
+(defun st-w (state) (nth 1 state))
+(defun st-h (state) (nth 2 state))
+(defun st-mines (state) (nth 3 state))
 (defun st-revealed (state) (nth 4 state))
-(defun st-flags    (state) (nth 5 state))
+(defun st-flags (state) (nth 5 state))
 
 ;;; The game is won once every non-mine cell has been revealed.
 (defun won-p (state)
@@ -86,8 +83,7 @@
 
 ;;; Build the initial state. MINES is a w*h list of 0/1 supplied by the host.
 (defun new-game (w h mines)
-  (let ((n (* w h)))
-    (list 0 w h mines (zeros n) (zeros n))))
+  (let ((n (* w h))) (list 0 w h mines (zeros n) (zeros n))))
 
 ;;; Reveal cell IDX. A safe cell floods outward through all connected zero-count
 ;;; cells (classic Minesweeper auto-open); a mine ends the game.
@@ -97,8 +93,7 @@
         (mines (st-mines state))
         (revealed (st-revealed state))
         (flags (st-flags state)))
-    (when (and (= (st-status state) 0)
-               (= (nth idx flags) 0)
+    (when (and (= (st-status state) 0) (= (nth idx flags) 0)
                (= (nth idx revealed) 0))
       (if (= (nth idx mines) 1)
           ;; Stepped on a mine: uncover it and lose.
@@ -107,18 +102,16 @@
             (set-nth state 0 2))
           ;; Safe: iterative flood fill using an explicit stack of indices.
           (let ((stack (list idx)))
-            (loop while stack do
-              (let ((j (pop stack)))
-                (when (and (= (nth j revealed) 0)
-                           (= (nth j flags) 0))
-                  (set-nth revealed j 1)
-                  ;; Only keep spreading out of blank (zero-count) cells.
-                  (when (= (adjacent-count mines j w h) 0)
-                    (dolist (nb (neighbors j w h))
-                      (when (= (nth nb revealed) 0)
-                        (push nb stack)))))))
-            (when (won-p state)
-              (set-nth state 0 1)))))
+            (loop while stack
+                  do
+                    (let ((j (pop stack)))
+                      (when (and (= (nth j revealed) 0) (= (nth j flags) 0))
+                        (set-nth revealed j 1)
+                        ;; Only keep spreading out of blank (zero-count) cells.
+                        (when (= (adjacent-count mines j w h) 0)
+                          (dolist (nb (neighbors j w h))
+                            (when (= (nth nb revealed) 0) (push nb stack)))))))
+            (when (won-p state) (set-nth state 0 1)))))
     state))
 
 ;;; A w*h mine bit-list with COUNT mines, placed at the first COUNT cells of
@@ -133,18 +126,15 @@
         (forbidden (cons safe (neighbors safe w h)))
         (placed 0))
     (dolist (idx order)
-      (when (and (< placed count)
-                 (not (member idx forbidden)))
+      (when (and (< placed count) (not (member idx forbidden)))
         (set-nth mines idx 1)
         (setq placed (1+ placed))))
     mines))
 
 ;;; Toggle a flag on cell IDX (only while playing and still covered).
 (defun toggle-flag (state idx)
-  (let ((revealed (st-revealed state))
-        (flags (st-flags state)))
-    (when (and (= (st-status state) 0)
-               (= (nth idx revealed) 0))
+  (let ((revealed (st-revealed state)) (flags (st-flags state)))
+    (when (and (= (st-status state) 0) (= (nth idx revealed) 0))
       (set-nth flags idx (- 1 (nth idx flags))))
     state))
 

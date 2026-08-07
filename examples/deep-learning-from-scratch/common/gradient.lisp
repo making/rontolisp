@@ -8,8 +8,7 @@
 (defun numerical-gradient (f x)
   ;; grad[k] = (f(x + h*e_k) - f(x - h*e_k)) / 2h, central differences with
   ;; h = 1e-4. x is temporarily mutated and restored; f takes x itself.
-  (let ((h 1.0e-4)
-        (grad (linalg:zeros-like x)))
+  (let ((h 1.0e-4) (grad (linalg:zeros-like x)))
     (dotimes (k (linalg:size x))
       (let ((tmp (row-major-aref x k)))
         (setf (row-major-aref x k) (+ tmp h))

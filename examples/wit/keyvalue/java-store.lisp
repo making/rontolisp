@@ -32,26 +32,28 @@
   ;; An unknown handle -- never opened, or already dropped.
   (let ((identifier (java:call *java-handles* "get" handle)))
     (if (null identifier)
-        (error 'rontolisp:wit-error :payload :no-such-store
+        (error 'rontolisp:wit-error
+               :payload :no-such-store
                :message "java store: not an open bucket handle")
         (java:call *java-stores* "get" identifier))))
 
 (defun java-open (identifier)
   (if (not (member identifier *java-identifiers* :test #'string=))
-      (error 'rontolisp:wit-error :payload :no-such-store
-             :message (concatenate 'string "java store: no such store " identifier))
+      (error 'rontolisp:wit-error
+       :payload :no-such-store
+       :message (concatenate 'string "java store: no such store " identifier))
       ;; A fresh handle per open, onto the one store the identifier names.
       (let ((handle *java-next-handle*))
         (setq *java-next-handle* (+ handle 1))
         (if (null (java:call *java-stores* "get" identifier))
-            (java:call *java-stores* "put" identifier (java:new "java.util.LinkedHashMap")))
+            (java:call *java-stores* "put" identifier
+                       (java:new "java.util.LinkedHashMap")))
         (java:call *java-handles* "put" handle identifier)
         (format t ";; [java store] open ~s -> handle ~a~%" identifier handle)
         handle)))
 
 (defun java-store (member &rest args)
-  (cond ((string= member "open")
-         (java-open (nth 0 args)))
+  (cond ((string= member "open") (java-open (nth 0 args)))
         ((string= member "bucket-get")
          (java:call (java-bucket (nth 0 args)) "get" (nth 1 args)))
         ((string= member "bucket-set")
@@ -63,13 +65,16 @@
          (java:call (java-bucket (nth 0 args)) "remove" (nth 1 args))
          nil)
         ((string= member "bucket-exists")
-         (if (java:call (java-bucket (nth 0 args)) "containsKey" (nth 1 args)) t nil))
+         (if (java:call (java-bucket (nth 0 args)) "containsKey" (nth 1 args))
+             t
+             nil))
         ((string= member "bucket-list-keys")
          ;; java.util.LinkedHashMap keeps insertion order, so the keys come back
          ;; in the order they were first written. The cursor (arg 1) stays nil:
          ;; this store hands back every key at once, so there is no next page --
          ;; and the key-response record crosses as a keyword plist.
-         (list :keys (java:call (java:call (java-bucket (nth 0 args)) "keySet") "toArray")
+         (list :keys (java:call (java:call (java-bucket (nth 0 args)) "keySet")
+                                "toArray")
                :cursor nil))
         ((string= member "bucket-drop")
          ;; Releasing the reference, not the store: the LinkedHashMap stays, and the
@@ -77,8 +82,11 @@
          (format t ";; [java store] drop handle ~a~%" (nth 0 args))
          (java:call *java-handles* "remove" (nth 0 args))
          nil)
-        (t (error 'rontolisp:wit-error :payload :other :message
-                  (concatenate 'string "java store: no such member " member)))))
+        (t
+         (error 'rontolisp:wit-error
+                :payload :other
+                :message (concatenate 'string "java store: no such member "
+                                      member)))))
 
 ;;; Bound AFTER the memory store, so this one wins: rontolisp:wit-provide replaces
 ;;; whatever was bound for the interface before it.

@@ -19,20 +19,27 @@
 (defparameter *train-limit* 300)
 (defparameter *test-limit* 300)
 
-(let ((x-train (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-      (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
+(let ((x-train
+       (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+      (t-train
+       (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
       (x-test (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*))
-      (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t)))
+      (t-test
+       (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t)))
   (format t "without dropout (overfits):~%")
   (linalg:seed 42)
   (let ((net (make-multi-layer-net-extend 784 '(20 20) 10)))
     (train net (mlne-params net) x-train t-train x-test t-test
-           :epochs 20 :mini-batch-size 32
+           :epochs 20
+           :mini-batch-size 32
            :optimizer (make-instance 'sgd :lr 0.2)))
   (format t "with dropout 0.2:~%")
   (linalg:seed 42)
-  (let ((net (make-multi-layer-net-extend 784 '(20 20) 10
-                                          :use-dropout t :dropout-ratio 0.2)))
+  (let ((net
+         (make-multi-layer-net-extend 784 '(20 20) 10
+                                      :use-dropout t
+                                      :dropout-ratio 0.2)))
     (train net (mlne-params net) x-train t-train x-test t-test
-           :epochs 20 :mini-batch-size 32
+           :epochs 20
+           :mini-batch-size 32
            :optimizer (make-instance 'sgd :lr 0.2))))

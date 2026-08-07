@@ -17,10 +17,10 @@
 ;; real flexi-streams' simple-array: an adjustable array does not carry its
 ;; declared element type here, and md5's etypecase dispatches the result on
 ;; (typep x '(array (unsigned-byte 8) (*))), which tests the element type.
-(defun flexi-streams:string-to-octets (string &key (external-format :utf-8) (start 0) end)
+(defun flexi-streams:string-to-octets
+    (string &key (external-format :utf-8) (start 0) end)
   (declare (ignore external-format))
-  (let ((limit (or end (length string)))
-        (bytes nil))
+  (let ((limit (or end (length string))) (bytes nil))
     (do ((i start (+ i 1)))
         ((>= i limit))
       (let ((c (char-code (char string i))))
@@ -45,7 +45,8 @@
           (setq i (+ i 1))))
       out)))
 
-(defun flexi-streams:octets-to-string (octets &key (external-format :utf-8) (start 0) end)
+(defun flexi-streams:octets-to-string
+    (octets &key (external-format :utf-8) (start 0) end)
   (declare (ignore external-format))
   (let ((limit (or end (length octets))))
     (with-output-to-string (s)
@@ -56,22 +57,22 @@
                  (write-char (code-char b) s)
                  (setq i (+ i 1)))
                 ((< b #xE0)
-                 (write-char (code-char (logior (ash (logand b #x1F) 6)
-                                                (logand (aref octets (+ i 1)) #x3F)))
-                             s)
+                 (write-char (code-char
+                              (logior (ash (logand b #x1F) 6)
+                                      (logand (aref octets (+ i 1)) #x3F))) s)
                  (setq i (+ i 2)))
                 ((< b #xF0)
-                 (write-char (code-char (logior (ash (logand b #x0F) 12)
-                                                (ash (logand (aref octets (+ i 1)) #x3F) 6)
-                                                (logand (aref octets (+ i 2)) #x3F)))
-                             s)
+                 (write-char (code-char
+                              (logior (ash (logand b #x0F) 12)
+                               (ash (logand (aref octets (+ i 1)) #x3F) 6)
+                               (logand (aref octets (+ i 2)) #x3F))) s)
                  (setq i (+ i 3)))
                 (t
-                 (write-char (code-char (logior (ash (logand b #x07) 18)
-                                                (ash (logand (aref octets (+ i 1)) #x3F) 12)
-                                                (ash (logand (aref octets (+ i 2)) #x3F) 6)
-                                                (logand (aref octets (+ i 3)) #x3F)))
-                             s)
+                 (write-char (code-char
+                              (logior (ash (logand b #x07) 18)
+                               (ash (logand (aref octets (+ i 1)) #x3F) 12)
+                               (ash (logand (aref octets (+ i 2)) #x3F) 6)
+                               (logand (aref octets (+ i 3)) #x3F))) s)
                  (setq i (+ i 4)))))))))
 
 ;; The in-memory octet streams, over rontolisp's own Gray protocol
@@ -81,12 +82,16 @@
 ;; slurp-stream type-tests against to take its no-copy fast path; the slot
 ;; accessors are internal, as upstream.
 
-(defclass flexi-streams:vector-stream (rontolisp:fundamental-binary-input-stream)
-  ((flexi-streams::vec :initarg :vec :initform nil
+(defclass flexi-streams:vector-stream
+    (rontolisp:fundamental-binary-input-stream)
+  ((flexi-streams::vec :initarg :vec
+                       :initform nil
                        :accessor flexi-streams::vector-stream-vector)
-   (flexi-streams::index :initarg :index :initform 0
+   (flexi-streams::index :initarg :index
+                         :initform 0
                          :accessor flexi-streams::vector-stream-index)
-   (flexi-streams::end :initarg :end :initform 0
+   (flexi-streams::end :initarg :end
+                       :initform 0
                        :accessor flexi-streams::vector-stream-end)))
 
 (defclass flexi-streams::vector-input-stream (flexi-streams:vector-stream) ())
@@ -94,7 +99,8 @@
 ;; :transformer is accepted and ignored: it exists upstream to re-map each
 ;; element on the way out, and no caller in the lack/http-body chain passes
 ;; one.
-(defun flexi-streams:make-in-memory-input-stream (vector &key (start 0) end transformer)
+(defun flexi-streams:make-in-memory-input-stream
+    (vector &key (start 0) end transformer)
   (declare (ignore transformer))
   (make-instance 'flexi-streams::vector-input-stream
                  :vec vector
@@ -104,10 +110,9 @@
 (defmethod rontolisp:stream-read-byte ((stream flexi-streams:vector-stream))
   (let ((i (flexi-streams::vector-stream-index stream)))
     (if (>= i (flexi-streams::vector-stream-end stream))
-        :eof
-        (progn
-          (setf (flexi-streams::vector-stream-index stream) (+ i 1))
-          (aref (flexi-streams::vector-stream-vector stream) i)))))
+        :eof (progn
+               (setf (flexi-streams::vector-stream-index stream) (+ i 1))
+               (aref (flexi-streams::vector-stream-vector stream) i)))))
 
 (defmethod rontolisp:stream-listen ((stream flexi-streams:vector-stream))
   (< (flexi-streams::vector-stream-index stream)
@@ -119,5 +124,6 @@
 (defmethod rontolisp:stream-file-position ((stream flexi-streams:vector-stream))
   (flexi-streams::vector-stream-index stream))
 
-(defmethod (setf rontolisp:stream-file-position) (position (stream flexi-streams:vector-stream))
+(defmethod (setf rontolisp:stream-file-position)
+    (position (stream flexi-streams:vector-stream))
   (setf (flexi-streams::vector-stream-index stream) position))

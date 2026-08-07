@@ -37,8 +37,7 @@
 (format t "(vec:dot v v) over ~a doubles, ~a times = ~a multiply-adds~%"
         (length *v*) *reps* (* (length *v*) *reps*))
 
-(let ((start (get-internal-real-time))
-      (sum 0.0))
+(let ((start (get-internal-real-time)) (sum 0.0))
   (dotimes (i *reps*) (setq sum (vec:dot *v* *v*)))
   (format t "sum of squares below 1024 = ~a~%" (round sum))
   (format t "elapsed: ~a ms~%" (- (get-internal-real-time) start)))

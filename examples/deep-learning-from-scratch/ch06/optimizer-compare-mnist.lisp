@@ -18,16 +18,18 @@
 (defparameter *batch-size* 16)
 (defparameter *iters* 100)
 
-(let ((x-train (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-      (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t)))
+(let ((x-train
+       (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+      (t-train
+       (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t)))
   ;; the book compares the optimizers at their class defaults
   ;; (SGD/Momentum/AdaGrad lr 0.01, Adam lr 0.001)
-  (dolist (entry (list (list "SGD" (make-instance 'sgd))
-                       (list "Momentum" (make-instance 'momentum))
-                       (list "AdaGrad" (make-instance 'adagrad))
-                       (list "Adam" (make-instance 'adam))))
-    (let ((name (car entry))
-          (opt (cadr entry)))
+  (dolist (entry
+           (list (list "SGD" (make-instance 'sgd))
+                 (list "Momentum" (make-instance 'momentum))
+                 (list "AdaGrad" (make-instance 'adagrad))
+                 (list "Adam" (make-instance 'adam))))
+    (let ((name (car entry)) (opt (cadr entry)))
       (linalg:seed 42)
       (let ((net (make-multi-layer-net 784 '(30 30) 10)))
         (format t "~a:~%" name)
@@ -38,11 +40,10 @@
                  (grads (net-gradient net x-batch t-batch)))
             (update opt (mln-params net) grads)
             (when (= (mod i 20) 0)
-              (format t "  iter ~3d  loss ~,4f~%"
-                      i (net-loss net x-batch t-batch)))))
+              (format t "  iter ~3d  loss ~,4f~%" i
+                      (net-loss net x-batch t-batch)))))
         (let ((mask (linalg:arange *train-limit*)))
           (format t "  final train acc: ~a/~a~%"
-                  (net-accuracy-count net
-                                      (linalg:take-rows x-train mask)
+                  (net-accuracy-count net (linalg:take-rows x-train mask)
                                       (linalg:take-rows t-train mask))
                   *train-limit*))))))

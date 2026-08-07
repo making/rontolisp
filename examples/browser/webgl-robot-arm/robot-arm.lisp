@@ -43,34 +43,66 @@
 ;; constant per mesh, so set-color latches the current color and set-vertex
 ;; stages position + normal + that color (functions cross the WASM boundary
 ;; with at most 7 parameters).
-(rontolisp:wasm-import 'set-color :from "gl" :as "setColor"
-                       :params '(:float :float :float) :returns :void)
-(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
+(rontolisp:wasm-import 'set-color
+                       :from "gl"
+                       :as "setColor"
+                       :params '(:float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'set-vertex
+                       :from "gl"
+                       :as "setVertex"
                        :params '(:int :float :float :float :float :float :float)
                        :returns :void)
-(rontolisp:wasm-import 'set-sprite :from "gl" :as "setSprite"
-                       :params '(:int :float :float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-upload-vertices :from "gl" :as "uploadVertices"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-upload-sprites :from "gl" :as "uploadSprites"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'set-float :from "gl" :as "setFloat"
-                       :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'gl-uniform-matrix4fv :from "gl" :as "uniformMatrix4fv"
-                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'set-sprite
+                       :from "gl"
+                       :as "setSprite"
+                       :params '(:int :float :float :float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-upload-vertices
+                       :from "gl"
+                       :as "uploadVertices"
+                       :params '(:int :int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-upload-sprites
+                       :from "gl"
+                       :as "uploadSprites"
+                       :params '(:int)
+                       :returns :void)
+(rontolisp:wasm-import 'set-float
+                       :from "gl"
+                       :as "setFloat"
+                       :params '(:int :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-uniform-matrix4fv
+                       :from "gl"
+                       :as "uniformMatrix4fv"
+                       :params '(:int)
+                       :returns :void)
 
 ;; Canvas metrics, owned by the page.
-(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'device-pixel-ratio :from "canvas" :as "devicePixelRatio"
-                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-width
+                       :from "canvas"
+                       :as "width"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'canvas-height
+                       :from "canvas"
+                       :as "height"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'device-pixel-ratio
+                       :from "canvas"
+                       :as "devicePixelRatio"
+                       :params '()
+                       :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's.
 (rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
 (rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
-(rontolisp:wasm-import 'atan2 :from "math" :params '(:float :float) :returns :float)
+(rontolisp:wasm-import 'atan2
+                       :from "math"
+                       :params '(:float :float)
+                       :returns :float)
 (rontolisp:wasm-import 'acos :from "math" :params '(:float) :returns :float)
 
 (defconstant +pi+ 3.141592653589793)
@@ -81,7 +113,8 @@
 ;; Two programs: lit triangles for the solid machine (arm, joints, pedestal,
 ;; axis arrows) and additive point sprites for the glow (target ring, trail).
 
-(defconstant +solid-vs+ "#version 300 es
+(defconstant +solid-vs+
+  "#version 300 es
 layout(location=0) in vec3 aPos;     // world-space position from Lisp
 layout(location=1) in vec3 aNormal;  // world-space normal from Lisp
 layout(location=2) in vec3 aColor;
@@ -96,7 +129,8 @@ void main() {
   vW = aPos;
 }")
 
-(defconstant +solid-fs+ "#version 300 es
+(defconstant +solid-fs+
+  "#version 300 es
 precision mediump float;
 in vec3 vN;
 in vec3 vC;
@@ -116,7 +150,8 @@ void main() {
   color = vec4(vC * (amb + 0.75 * diff) + vec3(spec) + vec3(0.35, 0.55, 0.9) * rim, 1.0);
 }")
 
-(defconstant +sprite-vs+ "#version 300 es
+(defconstant +sprite-vs+
+  "#version 300 es
 layout(location=0) in vec3 aPos;    // world-space position from Lisp
 layout(location=1) in float aTone;  // 0..1 palette position from Lisp
 layout(location=2) in float aSize;
@@ -130,7 +165,8 @@ void main() {
   vTone = aTone;
 }")
 
-(defconstant +sprite-fs+ "#version 300 es
+(defconstant +sprite-fs+
+  "#version 300 es
 precision mediump float;
 in float vTone;
 out vec4 color;
@@ -158,7 +194,7 @@ void main() {
 ;; convention, and VP = P x V is one linalg:matmul; upload-vp transposes
 ;; into the column-major order WebGL expects as it stages the floats.
 
-(defconstant +half-fov+ 0.39269908169872414)    ; pi/8: half the 45-degree fov
+(defconstant +half-fov+ 0.39269908169872414) ; pi/8: half the 45-degree fov
 
 (defun mat4-perspective (aspect near far)
   (let* ((f (/ (cos +half-fov+) (sin +half-fov+)))
@@ -189,35 +225,30 @@ void main() {
 (defvar *ex* 0.0)
 (defvar *ey* 0.0)
 (defvar *ez* 0.0)
-(defvar *fx* 0.0)                       ; forward (eye -> centre)
+(defvar *fx* 0.0) ; forward (eye -> centre)
 (defvar *fy* 0.0)
 (defvar *fz* -1.0)
-(defvar *rx* 1.0)                       ; right
+(defvar *rx* 1.0) ; right
 (defvar *ry* 0.0)
 (defvar *rz* 0.0)
-(defvar *ux* 0.0)                       ; up
+(defvar *ux* 0.0) ; up
 (defvar *uy* 1.0)
 (defvar *uz* 0.0)
-(defvar *vp* nil)                       ; the current view-projection matrix
+(defvar *vp* nil) ; the current view-projection matrix
 
 (defun orbit (dx dy)
   ;; Exported: drag deltas, normalized by the canvas height.
   (setq *yaw* (- *yaw* (* 3.4 dx)))
   (let ((p (+ *pitch* (* 2.6 dy))))
-    (setq *pitch* (cond ((< p -0.45) -0.45)
-                        ((> p 1.45) 1.45)
-                        (t p)))))
+    (setq *pitch* (cond ((< p -0.45) -0.45) ((> p 1.45) 1.45) (t p)))))
 
 (defun zoom (dz)
   ;; Exported: scroll-wheel deltas.
   (let ((r (+ *radius* dz)))
-    (setq *radius* (cond ((< r 1.6) 1.6)
-                         ((> r 5.5) 5.5)
-                         (t r)))))
+    (setq *radius* (cond ((< r 1.6) 1.6) ((> r 5.5) 5.5) (t r)))))
 
 (defun update-camera ()
-  (let ((cp (cos *pitch*))
-        (sp (sin *pitch*)))
+  (let ((cp (cos *pitch*)) (sp (sin *pitch*)))
     (setq *ex* (+ +ctr-x+ (* *radius* cp (sin *yaw*))))
     (setq *ey* (+ +ctr-y+ (* *radius* sp)))
     (setq *ez* (+ +ctr-z+ (* *radius* cp (cos *yaw*)))))
@@ -230,9 +261,7 @@ void main() {
     (setq *fy* (/ fy fl))
     (setq *fz* (/ fz fl)))
   ;; right = normalize(cross(forward, world-up)); up = cross(right, forward)
-  (let* ((rx (- 0.0 *fz*))
-         (rz *fx*)
-         (rl (sqrt (+ (* rx rx) (* rz rz)))))
+  (let* ((rx (- 0.0 *fz*)) (rz *fx*) (rl (sqrt (+ (* rx rx) (* rz rz)))))
     (setq *rx* (/ rx rl))
     (setq *ry* 0.0)
     (setq *rz* (/ rz rl)))
@@ -270,8 +299,8 @@ void main() {
 (defvar *u-vp-sprite* 0)
 (defvar *u-dpr* 0)
 
-(defconstant +max-verts+ 8192)          ; lit-triangle vertex capacity
-(defconstant +max-sprites+ 2048)        ; glow sprite capacity
+(defconstant +max-verts+ 8192)   ; lit-triangle vertex capacity
+(defconstant +max-sprites+ 2048) ; glow sprite capacity
 
 (defun setup-gl ()
   (setq *prog-solid* (gl:build-program +solid-vs+ +solid-fs+))
@@ -314,18 +343,18 @@ void main() {
 ;; per-vertex normals. A 12-slot sin/cos table drives every ring; the unit
 ;; sphere is precomputed once into a rank-2 (verts 3) array.
 
-(defconstant +seg+ 12)                  ; ring segments
-(defvar *ctab* nil)                     ; cos table, +seg+ entries
+(defconstant +seg+ 12) ; ring segments
+(defvar *ctab* nil)    ; cos table, +seg+ entries
 (defvar *stab* nil)
 
 (defconstant +sph-stacks+ 5)
 (defconstant +sph-slices+ 8)
-(defconstant +sph-verts+ 240)           ; +sph-stacks+ * +sph-slices+ * 6
-(defvar *sph* nil)                      ; rank-2 (vertex . xyz) unit sphere
+(defconstant +sph-verts+ 240) ; +sph-stacks+ * +sph-slices+ * 6
+(defvar *sph* nil)            ; rank-2 (vertex . xyz) unit sphere
 
-(defvar *v* 0)                          ; solid vertex write cursor
-(defvar *s* 0)                          ; sprite write cursor
-(defvar *static-verts* 0)               ; axes + pedestal, uploaded once
+(defvar *v* 0)            ; solid vertex write cursor
+(defvar *s* 0)            ; sprite write cursor
+(defvar *static-verts* 0) ; axes + pedestal, uploaded once
 
 (defun emit-v (x y z nx ny nz)
   ;; stages one vertex with the color latched by the last set-color call
@@ -363,8 +392,8 @@ void main() {
 
 ;; Tube radii travel through globals (set-radii) rather than parameters,
 ;; keeping every function within the WASM backend's 7-parameter limit.
-(defvar *r-a* 0.0)                      ; tube start / disc radius
-(defvar *r-b* 0.0)                      ; tube end radius (0 = cone)
+(defvar *r-a* 0.0) ; tube start / disc radius
+(defvar *r-b* 0.0) ; tube end radius (0 = cone)
 
 (defun set-radii (a b)
   (setq *r-a* a)
@@ -383,11 +412,10 @@ void main() {
          (tx (/ ax l))
          (ty (/ ay l))
          (tz (/ az l))
-         (k (/ (- r0 r1) l))            ; radius change per unit length
+         (k (/ (- r0 r1) l)) ; radius change per unit length
          (nf (/ 1.0 (sqrt (+ 1.0 (* k k))))))
     (perp-basis tx ty tz)
-    (let ((ux *pux*) (uy *puy*) (uz *puz*)
-          (vx *pvx*) (vy *pvy*) (vz *pvz*))
+    (let ((ux *pux*) (uy *puy*) (uz *puz*) (vx *pvx*) (vy *pvy*) (vz *pvz*))
       (dotimes (seg +seg+)
         (let* ((s2 (mod (+ seg 1) +seg+))
                (ca (aref *ctab* seg))
@@ -408,19 +436,29 @@ void main() {
                (nbx (* nf (+ dbx (* k tx))))
                (nby (* nf (+ dby (* k ty))))
                (nbz (* nf (+ dbz (* k tz)))))
-          (emit-v (+ x0 (* r0 dax)) (+ y0 (* r0 day)) (+ z0 (* r0 daz)) nax nay naz)
-          (emit-v (+ x0 (* r0 dbx)) (+ y0 (* r0 dby)) (+ z0 (* r0 dbz)) nbx nby nbz)
-          (emit-v (+ x1 (* r1 dbx)) (+ y1 (* r1 dby)) (+ z1 (* r1 dbz)) nbx nby nbz)
-          (emit-v (+ x0 (* r0 dax)) (+ y0 (* r0 day)) (+ z0 (* r0 daz)) nax nay naz)
-          (emit-v (+ x1 (* r1 dbx)) (+ y1 (* r1 dby)) (+ z1 (* r1 dbz)) nbx nby nbz)
-          (emit-v (+ x1 (* r1 dax)) (+ y1 (* r1 day)) (+ z1 (* r1 daz)) nax nay naz))))))
+          (emit-v (+ x0 (* r0 dax)) (+ y0 (* r0 day)) (+ z0 (* r0 daz)) nax nay
+                  naz)
+          (emit-v (+ x0 (* r0 dbx)) (+ y0 (* r0 dby)) (+ z0 (* r0 dbz)) nbx nby
+                  nbz)
+          (emit-v (+ x1 (* r1 dbx)) (+ y1 (* r1 dby)) (+ z1 (* r1 dbz)) nbx nby
+                  nbz)
+          (emit-v (+ x0 (* r0 dax)) (+ y0 (* r0 day)) (+ z0 (* r0 daz)) nax nay
+                  naz)
+          (emit-v (+ x1 (* r1 dbx)) (+ y1 (* r1 dby)) (+ z1 (* r1 dbz)) nbx nby
+                  nbz)
+          (emit-v (+ x1 (* r1 dax)) (+ y1 (* r1 day)) (+ z1 (* r1 daz)) nax nay
+                  naz))))))
 
 (defun emit-disc (cx cy cz nx ny nz)
   ;; A filled circle of radius *r-a* at c with the given face normal.
   (perp-basis nx ny nz)
   (let ((r *r-a*)
-        (ux *pux*) (uy *puy*) (uz *puz*)
-        (vx *pvx*) (vy *pvy*) (vz *pvz*))
+        (ux *pux*)
+        (uy *puy*)
+        (uz *puz*)
+        (vx *pvx*)
+        (vy *pvy*)
+        (vz *pvz*))
     (dotimes (seg +seg+)
       (let* ((s2 (mod (+ seg 1) +seg+))
              (ca (aref *ctab* seg))
@@ -430,18 +468,14 @@ void main() {
         (emit-v cx cy cz nx ny nz)
         (emit-v (+ cx (* r (+ (* ca ux) (* sa vx))))
                 (+ cy (* r (+ (* ca uy) (* sa vy))))
-                (+ cz (* r (+ (* ca uz) (* sa vz))))
-                nx ny nz)
+                (+ cz (* r (+ (* ca uz) (* sa vz)))) nx ny nz)
         (emit-v (+ cx (* r (+ (* cb2 ux) (* sb2 vx))))
                 (+ cy (* r (+ (* cb2 uy) (* sb2 vy))))
-                (+ cz (* r (+ (* cb2 uz) (* sb2 vz))))
-                nx ny nz)))))
+                (+ cz (* r (+ (* cb2 uz) (* sb2 vz)))) nx ny nz)))))
 
 (defun emit-sphere (cx cy cz r)
   (dotimes (i +sph-verts+)
-    (let ((nx (aref *sph* i 0))
-          (ny (aref *sph* i 1))
-          (nz (aref *sph* i 2)))
+    (let ((nx (aref *sph* i 0)) (ny (aref *sph* i 1)) (nz (aref *sph* i 2)))
       (emit-v (+ cx (* r nx)) (+ cy (* r ny)) (+ cz (* r nz)) nx ny nz))))
 
 (defun %sph-write (w b s)
@@ -477,14 +511,14 @@ void main() {
 (defun emit-arrow (dx dy dz cr cg cb)
   ;; A unit-axis arrow from the origin: shaft, cone base cap, cone tip.
   (set-color cr cg cb)
-  (let ((s 0.52)                        ; shaft length
-        (tip 0.15))                     ; cone length
+  (let ((s 0.52)    ; shaft length
+        (tip 0.15)) ; cone length
     (set-radii 0.011 0.011)
     (emit-tube 0.0 0.0 0.0 (* dx s) (* dy s) (* dz s))
     (set-radii 0.034 0.0)
     (emit-disc (* dx s) (* dy s) (* dz s) (- 0.0 dx) (- 0.0 dy) (- 0.0 dz))
-    (emit-tube (* dx s) (* dy s) (* dz s)
-               (* dx (+ s tip)) (* dy (+ s tip)) (* dz (+ s tip)))))
+    (emit-tube (* dx s) (* dy s) (* dz s) (* dx (+ s tip)) (* dy (+ s tip))
+               (* dz (+ s tip)))))
 
 (defun emit-static-scene ()
   ;; the pedestal column under the base joint
@@ -494,9 +528,9 @@ void main() {
   (set-color 0.16 0.18 0.25)
   (emit-disc 0.0 -0.30 0.0 0.0 -1.0 0.0)
   ;; the RGB = XYZ axis arrows at the origin
-  (emit-arrow 1.0 0.0 0.0 0.90 0.25 0.31)          ; +X red
-  (emit-arrow 0.0 1.0 0.0 0.30 0.82 0.42)          ; +Y green
-  (emit-arrow 0.0 0.0 1.0 0.32 0.53 0.96))         ; +Z blue
+  (emit-arrow 1.0 0.0 0.0 0.90 0.25 0.31)  ; +X red
+  (emit-arrow 0.0 1.0 0.0 0.30 0.82 0.42)  ; +Y green
+  (emit-arrow 0.0 0.0 1.0 0.32 0.53 0.96)) ; +Z blue
 
 ;; --- the arm ------------------------------------------------------------------
 ;;
@@ -505,7 +539,7 @@ void main() {
 ;; +reach+, so every link count has the same workspace.
 
 (defconstant +reach+ 1.25)
-(defconstant +tool+ 0.115)              ; wrist -> grasp point (the gripper)
+(defconstant +tool+ 0.115) ; wrist -> grasp point (the gripper)
 (defconstant +trail+ 90)
 
 ;; The gripper rides the chain as one extra "tool" link: FABRIK solves the
@@ -513,10 +547,10 @@ void main() {
 ;; close exactly on the clicked goal and the approach direction comes out
 ;; of the solver for free.
 (defvar *links* 0)
-(defvar *len* nil)                      ; rank-1 array: link lengths + the tool
-(defvar *jx* nil)                       ; joint positions, *links* + 2 entries;
-(defvar *jy* nil)                       ; joint 0 is the base, joint *links*
-(defvar *jz* nil)                       ; the wrist, joint *links*+1 the TCP
+(defvar *len* nil) ; rank-1 array: link lengths + the tool
+(defvar *jx* nil)  ; joint positions, *links* + 2 entries;
+(defvar *jy* nil)  ; joint 0 is the base, joint *links*
+(defvar *jz* nil)  ; the wrist, joint *links*+1 the TCP
 
 ;; The minimum-jerk trajectory state: the commanded hand position
 ;; (*tx* *ty* *tz*) travels from (*sx* ..) to the goal (*gx* ..) over *dur*
@@ -555,36 +589,28 @@ void main() {
   (setq *jz* (make-array (+ n 2) :initial-element 0.0))
   ;; each link is 0.82x the previous, normalized to the fixed total reach;
   ;; the rigid tool link (wrist -> grasp point) rides at the end
-  (let ((sum 0.0)
-        (l 1.0))
+  (let ((sum 0.0) (l 1.0))
     (dotimes (i n)
       (setf (aref *len* i) l)
       (setq sum (+ sum l))
       (setq l (* l 0.82)))
-    (dotimes (i n)
-      (setf (aref *len* i) (* (aref *len* i) (/ +reach+ sum)))))
+    (dotimes (i n) (setf (aref *len* i) (* (aref *len* i) (/ +reach+ sum)))))
   (setf (aref *len* n) +tool+)
   ;; the analytic solver's elbow: split the chain (tool included) into two
   ;; rigid groups at the joint that best balances their lengths
-  (let ((total 0.0)
-        (best 1)
-        (bestd 999.0)
-        (sa 0.0))
-    (dotimes (i (+ n 1))
-      (setq total (+ total (aref *len* i))))
+  (let ((total 0.0) (best 1) (bestd 999.0) (sa 0.0))
+    (dotimes (i (+ n 1)) (setq total (+ total (aref *len* i))))
     (do ((k 1 (+ k 1)))
         ((> k (- n 1)))
       (setq sa (+ sa (aref *len* (- k 1))))
       (let ((dd (- (* 2.0 sa) total)))
-        (when (< dd 0.0)
-          (setq dd (- 0.0 dd)))
+        (when (< dd 0.0) (setq dd (- 0.0 dd)))
         (when (< dd bestd)
           (setq bestd dd)
           (setq best k))))
     (setq *split* best)
     (setq *ga* 0.0)
-    (dotimes (i best)
-      (setq *ga* (+ *ga* (aref *len* i))))
+    (dotimes (i best) (setq *ga* (+ *ga* (aref *len* i))))
     (setq *gb* (- total *ga*)))
   ;; initial pose: straight up, grasp point at full extension
   (dotimes (i (+ n 1))
@@ -633,17 +659,14 @@ void main() {
   ;; above the pedestal), then restart the min-jerk clock. A click mid-flight
   ;; restarts the profile from the currently commanded point, so the hand
   ;; never jumps.
-  (when (< my 0.05)
-    (setq my 0.05))
+  (when (< my 0.05) (setq my 0.05))
   (let* ((d (sqrt (+ (* mx mx) (* my my) (* mz mz))))
          (lo (* 0.18 +reach+))
          (hi (* 0.985 (+ +reach+ +tool+))))
     (when (< d 0.0001)
       (setq my 1.0)
       (setq d 1.0))
-    (let ((r (cond ((< d lo) (/ lo d))
-                   ((> d hi) (/ hi d))
-                   (t 1.0))))
+    (let ((r (cond ((< d lo) (/ lo d)) ((> d hi) (/ hi d)) (t 1.0))))
       (setq *sx* *tx*)
       (setq *sy* *ty*)
       (setq *sz* *tz*)
@@ -669,10 +692,9 @@ void main() {
          (dy (+ *fy* (* hx *ry*) (* hy *uy*)))
          (dz (+ *fz* (* hx *rz*) (* hy *uz*)))
          (denom (+ (* dx *fx*) (* dy *fy*) (* dz *fz*)))
-         (tt (/ (+ (* (- +ctr-x+ *ex*) *fx*)
-                   (* (- +ctr-y+ *ey*) *fy*)
-                   (* (- +ctr-z+ *ez*) *fz*))
-                denom)))
+         (tt
+          (/ (+ (* (- +ctr-x+ *ex*) *fx*) (* (- +ctr-y+ *ey*) *fy*)
+                (* (- +ctr-z+ *ez*) *fz*)) denom)))
     (set-goal (+ *ex* (* tt dx)) (+ *ey* (* tt dy)) (+ *ez* (* tt dz)) tm)))
 
 (defun update-target (tm)
@@ -706,11 +728,11 @@ void main() {
 ;;                         + forward kinematics through 4x4 homogeneous
 ;;                         transforms (linalg:matmul, exact, no iteration)
 
-(defvar *solver* 0)                     ; 0 = jacobian, 1 = FABRIK, 2 = analytic
+(defvar *solver* 0) ; 0 = jacobian, 1 = FABRIK, 2 = analytic
 
-(defvar *split* 1)                      ; the analytic elbow: joint index
-(defvar *ga* 0.0)                       ; upper-group length (base -> elbow)
-(defvar *gb* 0.0)                       ; lower-group length (elbow -> grasp)
+(defvar *split* 1) ; the analytic elbow: joint index
+(defvar *ga* 0.0)  ; upper-group length (base -> elbow)
+(defvar *gb* 0.0)  ; lower-group length (elbow -> grasp)
 
 (defun set-solver (s)
   ;; Exported: the HUD's solver selector.
@@ -757,8 +779,7 @@ void main() {
     (setf (aref *trail-y* *trail-head*) (aref *jy* tip))
     (setf (aref *trail-z* *trail-head*) (aref *jz* tip)))
   (setq *trail-head* (mod (+ *trail-head* 1) +trail+))
-  (when (< *trail-count* +trail+)
-    (setq *trail-count* (+ *trail-count* 1))))
+  (when (< *trail-count* +trail+) (setq *trail-count* (+ *trail-count* 1))))
 
 ;; --- the gripper ---------------------------------------------------------------
 ;;
@@ -768,16 +789,14 @@ void main() {
 ;; that make the tips meet exactly at the grasp point, +tool+ ahead of the
 ;; wrist -- the very point FABRIK pins to the goal.
 
-(defvar *grip* 1.0)                     ; 0 open .. 1 closed
+(defvar *grip* 1.0) ; 0 open .. 1 closed
 (defvar *last-tm* 0.0)
 
 (defun update-grip (tm)
   ;; open while the min-jerk flight is in progress, close on arrival;
   ;; eased with a time-based rate so the motion is frame-rate independent
   (let* ((dt0 (- tm *last-tm*))
-         (dt (cond ((< dt0 0.0) 0.0)
-                   ((> dt0 0.05) 0.05)
-                   (t dt0)))
+         (dt (cond ((< dt0 0.0) 0.0) ((> dt0 0.05) 0.05) (t dt0)))
          (target (if (>= (/ (- tm *t0*) *dur*) 1.0) 1.0 0.0))
          (k (* dt (if (> target *grip*) 10.0 7.0)))
          (kk (if (> k 1.0) 1.0 k)))
@@ -786,7 +805,7 @@ void main() {
 
 (defun emit-gripper ()
   (let* ((n *links*)
-         (wx (aref *jx* n))             ; the wrist
+         (wx (aref *jx* n)) ; the wrist
          (wy (aref *jy* n))
          (wz (aref *jz* n))
          ;; approach axis: the solved tool link, wrist -> grasp point
@@ -802,13 +821,18 @@ void main() {
          (c2 (cos a2))
          (s2 (sin a2)))
     (perp-basis ax ay az)
-    (let ((ux *pux*) (uy *puy*) (uz *puz*)   ; capture: emit-tube reuses
-          (vx *pvx*) (vy *pvy*) (vz *pvz*))  ; the perp-basis globals
+    (let ((ux *pux*)
+          (uy *puy*)
+          (uz *puz*) ; capture: emit-tube reuses
+          (vx *pvx*)
+          (vy *pvy*)
+          (vz *pvz*)) ; the perp-basis globals
       ;; the wrist ball and the palm
       (set-color 0.30 0.34 0.44)
       (emit-sphere wx wy wz (* 1.35 (link-radius n)))
       (set-radii 0.030 0.036)
-      (emit-tube wx wy wz (+ wx (* 0.035 ax)) (+ wy (* 0.035 ay)) (+ wz (* 0.035 az)))
+      (emit-tube wx wy wz (+ wx (* 0.035 ax)) (+ wy (* 0.035 ay))
+                 (+ wz (* 0.035 az)))
       ;; three fingers, at ring-table angles 0, 120, 240 degrees
       (dotimes (f 3)
         (let* ((ca (aref *ctab* (* f 4)))
@@ -848,8 +872,8 @@ void main() {
   (set-color 0.72 0.76 0.84)
   (dotimes (i *links*)
     (set-radii (link-radius i) (link-radius (+ i 1)))
-    (emit-tube (aref *jx* i) (aref *jy* i) (aref *jz* i)
-               (aref *jx* (+ i 1)) (aref *jy* (+ i 1)) (aref *jz* (+ i 1))))
+    (emit-tube (aref *jx* i) (aref *jy* i) (aref *jz* i) (aref *jx* (+ i 1))
+               (aref *jy* (+ i 1)) (aref *jz* (+ i 1))))
   (set-color 0.30 0.34 0.44)
   (dotimes (i *links*)
     (emit-sphere (aref *jx* i) (aref *jy* i) (aref *jz* i)
@@ -860,33 +884,27 @@ void main() {
   ;; the trail: the hand's recent path, fading with age
   (dotimes (m *trail-count*)
     (let* ((idx (mod (+ (- *trail-head* *trail-count*) m +trail+) +trail+))
-           (age (/ (* 1.0 (+ m 1)) *trail-count*))  ; 0 oldest .. 1 newest
+           (age (/ (* 1.0 (+ m 1)) *trail-count*)) ; 0 oldest .. 1 newest
            (fade (* age age)))
       (emit-s (aref *trail-x* idx) (aref *trail-y* idx) (aref *trail-z* idx)
               (+ 0.50 (* 0.20 fade)) (+ 5.0 (* 12.0 fade)))))
   ;; the goal: a slowly turning, pulsing ring billboarded on the camera basis
   (let ((r (+ 0.045 (* 0.010 (sin (* tm 5.0))))))
     (dotimes (m 36)
-      (let* ((a (+ (* tm 0.8) (/ (* +two-pi+ m) 36)))
-             (ca (cos a))
-             (sa (sin a)))
+      (let* ((a (+ (* tm 0.8) (/ (* +two-pi+ m) 36))) (ca (cos a)) (sa (sin a)))
         (emit-s (+ *gx* (* r (+ (* ca *rx*) (* sa *ux*))))
                 (+ *gy* (* r (+ (* ca *ry*) (* sa *uy*))))
-                (+ *gz* (* r (+ (* ca *rz*) (* sa *uz*))))
-                1.0 9.0)))
+                (+ *gz* (* r (+ (* ca *rz*) (* sa *uz*)))) 1.0 9.0)))
     (emit-s *gx* *gy* *gz* 1.0 14.0)))
 
 (defun upload-vp (loc)
   ;; WebGL wants column-major: element (row, col) lands at row + col*4
-  (dotimes (c 4)
-    (dotimes (r 4)
-      (set-float (+ r (* c 4)) (aref *vp* r c))))
+  (dotimes (c 4) (dotimes (r 4) (set-float (+ r (* c 4)) (aref *vp* r c))))
   (gl-uniform-matrix4fv loc))
 
 (defun draw (tm)
   (update-camera)
-  (let ((w (canvas-width))
-        (h (canvas-height)))
+  (let ((w (canvas-width)) (h (canvas-height)))
     (gl:viewport 0 0 (floor w) (floor h)))
   (gl:clear-color 0.012 0.016 0.045 1.0)
   (gl:clear (+ gl:+color-buffer-bit+ gl:+depth-buffer-bit+))
@@ -936,5 +954,8 @@ void main() {
 (rontolisp:wasm-export 'pointer :params '(:float :float) :returns :void)
 (rontolisp:wasm-export 'orbit :params '(:float :float) :returns :void)
 (rontolisp:wasm-export 'zoom :params '(:float) :returns :void)
-(rontolisp:wasm-export 'set-solver :as "setSolver" :params '(:int) :returns :void)
+(rontolisp:wasm-export 'set-solver
+                       :as "setSolver"
+                       :params '(:int)
+                       :returns :void)
 (rontolisp:wasm-export 'ik-error :as "ikError" :params '() :returns :float)

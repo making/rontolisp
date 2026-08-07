@@ -12,7 +12,7 @@
 ;;; random returns a value in [0, limit) of the limit's type. On the interpreter
 ;;; and JVM backends it draws from Math.random(); on WASM it draws real entropy
 ;;; from the WASI random_get host function (so every run differs).
-(defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)
+(defun random-weight () (- (random 1.0) 0.5)) ; -> (-0.5, 0.5)
 
 ;;; --- array helpers ---
 (defun random-vector (n)
@@ -21,8 +21,7 @@
     v))
 (defun random-matrix (rows cols)
   (let ((m (make-array (list rows cols) :initial-element 0.0)))
-    (dotimes (i rows)
-      (dotimes (j cols) (setf (aref m i j) (random-weight))))
+    (dotimes (i rows) (dotimes (j cols) (setf (aref m i j) (random-weight))))
     m))
 
 ;;; --- activation ---
@@ -55,9 +54,13 @@
 
 ;;; --- one backprop / SGD step over a single example (updates net in place) ---
 (defun train-example (net x y lr)
-  (let* ((w1 (net-w1 net)) (b1 (net-b1 net))
-         (w2 (net-w2 net)) (b2 (net-b2 net))
-         (n-in (length x)) (n-hid (length b1)) (n-out (length b2))
+  (let* ((w1 (net-w1 net))
+         (b1 (net-b1 net))
+         (w2 (net-w2 net))
+         (b2 (net-b2 net))
+         (n-in (length x))
+         (n-hid (length b1))
+         (n-out (length b2))
          (a1 (layer-forward w1 b1 x))
          (a2 (layer-forward w2 b2 a1))
          (d2 (make-array n-out :initial-element 0.0))
@@ -82,9 +85,7 @@
 
 ;;; --- loss + training loop ---
 (defun example-loss (net ex)
-  (let* ((a (forward-output net (first ex)))
-         (y (second ex))
-         (s 0.0))
+  (let* ((a (forward-output net (first ex))) (y (second ex)) (s 0.0))
     (dotimes (i (length a))
       (let ((d (- (aref a i) (aref y i)))) (incf s (* d d))))
     (* 0.5 s)))
@@ -95,8 +96,7 @@
 (defun train (net data epochs lr)
   (let ((e 0))
     (while (< e epochs)
-      (dolist (ex data)
-        (train-example net (first ex) (second ex) lr))
+      (dolist (ex data) (train-example net (first ex) (second ex) lr))
       (when (zerop (mod e 1000))
         (format t "epoch ~a  loss ~a~%" e (total-loss net data)))
       (setq e (+ e 1))))
@@ -106,10 +106,8 @@
 ;;; Inputs and targets are vector literals (#(...)) read directly as rank-1
 ;;; arrays. They are never mutated -- only the network's weights change.
 (defparameter *xor-data*
-  (list (list #(0.0 0.0) #(0.0))
-        (list #(0.0 1.0) #(1.0))
-        (list #(1.0 0.0) #(1.0))
-        (list #(1.0 1.0) #(0.0))))
+  (list (list #(0.0 0.0) #(0.0)) (list #(0.0 1.0) #(1.0))
+        (list #(1.0 0.0) #(1.0)) (list #(1.0 1.0) #(0.0))))
 
 (defparameter *net* (init-net 2 4 1))
 (format t "Training XOR (2-4-1 network)...~%")
@@ -118,7 +116,5 @@
 (format t "~%Predictions after training:~%")
 (dolist (ex *xor-data*)
   (let ((x (first ex)))
-    (format t "  ~a ~a -> ~a  (target ~a)~%"
-            (aref x 0) (aref x 1)
-            (aref (forward-output *net* x) 0)
-            (aref (second ex) 0))))
+    (format t "  ~a ~a -> ~a  (target ~a)~%" (aref x 0) (aref x 1)
+            (aref (forward-output *net* x) 0) (aref (second ex) 0))))

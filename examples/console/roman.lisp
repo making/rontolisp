@@ -11,8 +11,8 @@
 ;;; Mapping of integer values to Roman numeral strings, sorted descending.
 (defparameter *roman-values*
   (list (cons 1000 "M") (cons 900 "CM") (cons 500 "D") (cons 400 "CD")
-        (cons 100 "C") (cons 90 "XC") (cons 50 "L") (cons 40 "XL")
-        (cons 10 "X") (cons 9 "IX") (cons 5 "V") (cons 4 "IV") (cons 1 "I")))
+        (cons 100 "C") (cons 90 "XC") (cons 50 "L") (cons 40 "XL") (cons 10 "X")
+        (cons 9 "IX") (cons 5 "V") (cons 4 "IV") (cons 1 "I")))
 
 ;;; Mapping of Roman numeral characters to integer values.
 (defparameter *roman-char-table*
@@ -25,8 +25,7 @@
     (error "INTEGER-TO-ROMAN: ~d is out of range (1-3999)" n))
   (let ((result ""))
     (dolist (pair *roman-values*)
-      (let ((value (car pair))
-            (numeral (cdr pair)))
+      (let ((value (car pair)) (numeral (cdr pair)))
         (while (>= n value)
           (setq result (concatenate 'string result numeral))
           (setq n (- n value)))))
@@ -35,9 +34,7 @@
 (defun roman-to-integer (s)
   "Convert a Roman numeral string to an integer.
    Algorithm: scan right-to-left; add if current >= last, else subtract."
-  (let ((result 0)
-        (last 0)
-        (i (1- (length s))))
+  (let ((result 0) (last 0) (i (1- (length s))))
     (while (>= i 0)
       (let ((ch (char-upcase (char s i))))
         (setq i (1- i))
@@ -65,5 +62,4 @@
       (when (not (= n (roman-to-integer (integer-to-roman n))))
         (format t "  MISMATCH at ~d!~%" n)
         (setq all-match nil))))
-  (when all-match
-    (format t "  All 3999 round-trips passed!~%")))
+  (when all-match (format t "  All 3999 round-trips passed!~%")))

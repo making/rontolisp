@@ -24,13 +24,10 @@
 
 (defmethod backward2 ((layer mul-layer) dout)
   ;; dx = dout * y, dy = dout * x -- the swap is the point of the chapter.
-  (list (* dout (mul-layer-y layer))
-        (* dout (mul-layer-x layer))))
+  (list (* dout (mul-layer-y layer)) (* dout (mul-layer-x layer))))
 
 (defclass add-layer ())
 
-(defmethod forward2 ((layer add-layer) x y)
-  (+ x y))
+(defmethod forward2 ((layer add-layer) x y) (+ x y))
 
-(defmethod backward2 ((layer add-layer) dout)
-  (list dout dout))
+(defmethod backward2 ((layer add-layer) dout) (list dout dout))

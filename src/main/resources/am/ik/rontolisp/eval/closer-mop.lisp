@@ -17,20 +17,16 @@
 ;; its nickname (c2mop) are seeded in PackageRegistry, as is the flat
 ;; closer-common-lisp (nickname c2cl) re-export package over cl + this one.
 
-(defun closer-mop:classp (class)
-  (typep class 'standard-class))
+(defun closer-mop:classp (class) (typep class 'standard-class))
 
-(defun closer-mop:ensure-finalized (class)
-  class)
+(defun closer-mop:ensure-finalized (class) class)
 
-(defun closer-mop:class-name (class)
-  (slot-value class 'name))
+(defun closer-mop:class-name (class) (slot-value class 'name))
 
 (defun closer-mop:class-direct-superclasses (class)
   (slot-value class 'direct-superclasses))
 
-(defun closer-mop:class-finalized-p (class)
-  (slot-value class 'finalized-p))
+(defun closer-mop:class-finalized-p (class) (slot-value class 'finalized-p))
 
 (defun closer-mop:class-slots (class)
   (if (closer-mop:classp class)
@@ -51,33 +47,23 @@
   (error "generic-function-lambda-list is not supported: ~S" fn))
 
 (defun closer-mop:slot-definition-name (slot)
-  (if (%obj-p slot)
-      (slot-value slot 'name)
-      (car slot)))
+  (if (%obj-p slot) (slot-value slot 'name) (car slot)))
 
 (defun closer-mop:slot-definition-initargs (slot)
-  (if (%obj-p slot)
-      (slot-value slot 'initargs)
-      nil))
+  (if (%obj-p slot) (slot-value slot 'initargs) nil))
 
 (defun closer-mop:slot-definition-type (slot)
-  (if (%obj-p slot)
-      (slot-value slot 'type)
-      (car (cdr slot))))
+  (if (%obj-p slot) (slot-value slot 'type) (car (cdr slot))))
 
 (defun closer-mop:slot-definition-readers (slot)
-  (if (%obj-p slot)
-      (slot-value slot 'readers)
-      nil))
+  (if (%obj-p slot) (slot-value slot 'readers) nil))
 
 (defun closer-mop:slot-definition-initfunction (slot)
   ;; The initfunction slot (appended 2026-08-03): a live (lambda () initform)
   ;; thunk on DRIVER-built definitions (a :metaclass class's canonicalized
   ;; specs carry one); nil on materialized plain views and on slots with no
   ;; :initform -- mito's migration diffing branches on exactly that truthiness.
-  (if (%obj-p slot)
-      (slot-value slot 'initfunction)
-      nil))
+  (if (%obj-p slot) (slot-value slot 'initfunction) nil))
 
 (defun closer-mop:class-direct-slots (class)
   ;; Direct-slot-definition metaobjects; nil on a materialized plain view (the

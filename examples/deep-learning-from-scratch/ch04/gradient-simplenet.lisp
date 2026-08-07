@@ -16,8 +16,7 @@
 
 (defparameter *w* (linalg:randn '(2 3)))
 
-(defun net-predict (x)
-  (linalg:dot x *w*))
+(defun net-predict (x) (linalg:dot x *w*))
 
 (defun net-loss (x target)
   (cross-entropy-error (softmax (net-predict x)) target))
@@ -28,7 +27,8 @@
        (dw (numerical-gradient f *w*)))
   (format t "W:~%")
   (dotimes (i 2)
-    (format t "  ~,6f ~,6f ~,6f~%" (aref *w* i 0) (aref *w* i 1) (aref *w* i 2)))
+    (format t "  ~,6f ~,6f ~,6f~%" (aref *w* i 0) (aref *w* i 1)
+            (aref *w* i 2)))
   (format t "loss: ~,6f~%" (net-loss x target))
   (format t "dW:~%")
   (dotimes (i 2)

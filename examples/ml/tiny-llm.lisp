@@ -82,8 +82,7 @@
   *lcg-state*)
 
 ;;; A single-float in [-scale, scale).
-(defun lcg-uniform (scale)
-  (* scale (- (/ (mod (lcg-next) 2048) 1024.0) 1.0)))
+(defun lcg-uniform (scale) (* scale (- (/ (mod (lcg-next) 2048) 1024.0) 1.0)))
 
 (defun random-matrix (rows cols scale)
   (let ((m (linalg:zeros (list rows cols) 'single-float)))
@@ -139,8 +138,7 @@
           (setf (aref w u) e)
           (setq z (+ z e))))
       ;; the weighted sum of the value vectors, then the output projection
-      (vec:matvec (getf l :wo)
-                  (vec:matvec vt (vec:scale w (/ 1.0 z)))))))
+      (vec:matvec (getf l :wo) (vec:matvec vt (vec:scale w (/ 1.0 z)))))))
 
 ;;; --- SwiGLU feed-forward: w2 (silu(w1 h) * w3 h) ----------------------------
 (defun silu (x) (/ x (+ 1.0 (exp (- 0.0 x)))))
@@ -156,8 +154,9 @@
     (vec:add h (feed-forward l (rmsnorm h (getf l :ng2))))))
 
 ;;; --- the model --------------------------------------------------------------
-(defparameter *net* (let ((ls '()))
-                      (dotimes (i *layers* (reverse ls)) (setq ls (cons (make-layer) ls)))))
+(defparameter *net*
+  (let ((ls '()))
+    (dotimes (i *layers* (reverse ls)) (setq ls (cons (make-layer) ls)))))
 (defparameter *emb* (random-matrix *vocab* *dim* 0.5))
 (defparameter *pos-emb* (random-matrix *n-ctx* *dim* 0.1))
 (defparameter *ng-final* (vec:ones *dim* 'single-float))
@@ -172,8 +171,7 @@
 ;;; one full forward pass -> the logits over the vocabulary
 (defun forward (tok pos)
   (let ((x (embed tok pos)))
-    (dolist (l *net*)
-      (setq x (layer-forward l x pos)))
+    (dolist (l *net*) (setq x (layer-forward l x pos)))
     (vec:matvec *w-cls* (rmsnorm x *ng-final*))))
 
 ;;; --- greedy decode ----------------------------------------------------------
@@ -183,35 +181,39 @@
 (defparameter *prompt* '(3 14 1 5))
 
 (defun generate ()
-  (let ((tok (first *prompt*))
-        (out '()))
+  (let ((tok (first *prompt*)) (out '()))
     (dotimes (pos *n-ctx* (reverse out))
       (let ((next (linalg:argmax (forward tok pos))))
         (if (< (+ pos 1) (length *prompt*))
             (setq tok (nth (+ pos 1) *prompt*))
-            (progn (setq out (cons next out))
-                   (setq tok next)))))))
+            (progn
+              (setq out (cons next out))
+              (setq tok next)))))))
 
 ;;; --- run --------------------------------------------------------------------
 ;;; Every count below is an exact integer, so it prints identically everywhere.
 (defun gemvs-per-token () (+ (* *layers* 6) 1))
 
 (defun macs-per-token ()
-  (+ (* *layers* (+ (* 4 *dim* *dim*)             ; wq wk wv wo
-                    (* 3 *dim* *hidden*)          ; w1 w3 w2
-                    (* 2 *n-ctx* *dim*)))         ; the two attention GEMVs
-     (* *vocab* *dim*)))                          ; the classifier
+  (+ (* *layers*
+        (+ (* 4 *dim* *dim*)     ; wq wk wv wo
+           (* 3 *dim* *hidden*)  ; w1 w3 w2
+           (* 2 *n-ctx* *dim*))) ; the two attention GEMVs
+     (* *vocab* *dim*)))         ; the classifier
 
-(format t "tiny-llm: ~a-layer transformer decoder, dim=~a hidden=~a ctx=~a vocab=~a, single-float~%"
+(format t
+        "tiny-llm: ~a-layer transformer decoder, dim=~a hidden=~a ctx=~a vocab=~a, single-float~%"
         *layers* *dim* *hidden* *n-ctx* *vocab*)
-(format t "~a GEMVs and ~a multiply-adds per forward pass, nearly all of it vec:matvec~%"
-        (gemvs-per-token) (macs-per-token))
+(format t
+ "~a GEMVs and ~a multiply-adds per forward pass, nearly all of it vec:matvec~%"
+ (gemvs-per-token) (macs-per-token))
 (format t "prompt:    ~a~%" *prompt*)
 
 (let* ((start (get-internal-real-time))
        (tokens (generate))
        (elapsed (- (get-internal-real-time) start)))
   (format t "generated: ~a~%" tokens)
-  (format t "~a forward passes (~a prompt + ~a generated) in ~a ms~%"
-          *n-ctx* (length *prompt*) (length tokens) elapsed)
-  (format t "(re-run with --simd; the tokens must not change, the time should)~%"))
+  (format t "~a forward passes (~a prompt + ~a generated) in ~a ms~%" *n-ctx*
+          (length *prompt*) (length tokens) elapsed)
+  (format t
+   "(re-run with --simd; the tokens must not change, the time should)~%"))

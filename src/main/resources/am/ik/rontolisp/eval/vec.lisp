@@ -34,40 +34,35 @@
       (make-array n :element-type 'single-float :initial-element init)
       (make-array n :element-type 'double-float :initial-element init)))
 
-(defun vec:zeros (n &optional element-type)
-  (vec::%make n 0.0 element-type))
+(defun vec:zeros (n &optional element-type) (vec::%make n 0.0 element-type))
 
-(defun vec:ones (n &optional element-type)
-  (vec::%make n 1.0 element-type))
+(defun vec:ones (n &optional element-type) (vec::%make n 1.0 element-type))
 
 (defun vec:arange (n &optional element-type)
   (let ((v (vec::%make n 0.0 element-type)))
-    (dotimes (i n v)
-      (setf (aref v i) (float i)))))
+    (dotimes (i n v) (setf (aref v i) (float i)))))
 
 (defun vec:from-list (xs)
-  (let ((v (make-array (length xs) :element-type 'double-float :initial-element 0.0))
+  (let ((v
+         (make-array (length xs)
+                     :element-type 'double-float
+                     :initial-element 0.0))
         (i 0))
     (dolist (x xs v)
       (setf (aref v i) (float x))
       (setq i (+ i 1)))))
 
 (defun vec:to-list (v)
-  (let ((acc nil)
-        (n (length v)))
-    (dotimes (i n acc)
-      (setq acc (cons (aref v (- n 1 i)) acc)))))
+  (let ((acc nil) (n (length v)))
+    (dotimes (i n acc) (setq acc (cons (aref v (- n 1 i)) acc)))))
 
 ;; --- element access (thin wrappers so vec:aref / vec:length resolve) --------
 
-(defun vec:aref (v i)
-  (aref v i))
+(defun vec:aref (v i) (aref v i))
 
-(defun vec:aset (v i x)
-  (setf (aref v i) (float x)))
+(defun vec:aset (v i x) (setf (aref v i) (float x)))
 
-(defun vec:length (v)
-  (length v))
+(defun vec:length (v) (length v))
 
 ;; --- element-wise kernels (return a fresh vector) ----------------------------
 
@@ -94,19 +89,15 @@
     (dotimes (i (length %vec-a) out)
       (setf (aref out i) (funcall %vec-op (aref %vec-a i) (aref %vec-b i))))))
 
-(defun vec:add (a b)
-  (vec::%map2 #'+ a b))
+(defun vec:add (a b) (vec::%map2 #'+ a b))
 
-(defun vec:sub (a b)
-  (vec::%map2 #'- a b))
+(defun vec:sub (a b) (vec::%map2 #'- a b))
 
-(defun vec:mul (a b)
-  (vec::%map2 #'* a b))
+(defun vec:mul (a b) (vec::%map2 #'* a b))
 
 (defun vec:scale (v s)
   (let ((out (vec::%make-like v (length v))))
-    (dotimes (i (length v) out)
-      (setf (aref out i) (* (aref v i) s)))))
+    (dotimes (i (length v) out) (setf (aref out i) (* (aref v i) s)))))
 
 ;; --- element-wise unary ufuncs (numpy parity) ---------------------------------
 
@@ -118,44 +109,31 @@
     (dotimes (i (length %vec-v) out)
       (setf (aref out i) (funcall %vec-op (aref %vec-v i))))))
 
-(defun vec:exp (v)
-  (vec::%map1 #'exp v))
+(defun vec:exp (v) (vec::%map1 #'exp v))
 
-(defun vec:log (v)
-  (vec::%map1 #'log v))
+(defun vec:log (v) (vec::%map1 #'log v))
 
-(defun vec:tanh (v)
-  (vec::%map1 #'tanh v))
+(defun vec:tanh (v) (vec::%map1 #'tanh v))
 
-(defun vec:sin (v)
-  (vec::%map1 #'sin v))
+(defun vec:sin (v) (vec::%map1 #'sin v))
 
-(defun vec:cos (v)
-  (vec::%map1 #'cos v))
+(defun vec:cos (v) (vec::%map1 #'cos v))
 
-(defun vec:tan (v)
-  (vec::%map1 #'tan v))
+(defun vec:tan (v) (vec::%map1 #'tan v))
 
-(defun vec:asin (v)
-  (vec::%map1 #'asin v))
+(defun vec:asin (v) (vec::%map1 #'asin v))
 
-(defun vec:acos (v)
-  (vec::%map1 #'acos v))
+(defun vec:acos (v) (vec::%map1 #'acos v))
 
-(defun vec:atan (v)
-  (vec::%map1 #'atan v))
+(defun vec:atan (v) (vec::%map1 #'atan v))
 
-(defun vec:sinh (v)
-  (vec::%map1 #'sinh v))
+(defun vec:sinh (v) (vec::%map1 #'sinh v))
 
-(defun vec:cosh (v)
-  (vec::%map1 #'cosh v))
+(defun vec:cosh (v) (vec::%map1 #'cosh v))
 
-(defun vec:sqrt (v)
-  (vec::%map1 #'sqrt v))
+(defun vec:sqrt (v) (vec::%map1 #'sqrt v))
 
-(defun vec:abs (v)
-  (vec::%map1 #'abs v))
+(defun vec:abs (v) (vec::%map1 #'abs v))
 
 (defun vec:square (v)
   ;; x * x is vec:mul with itself, so it rides the mul kernels under --simd.
@@ -165,11 +143,9 @@
   ;; (- x) is true negation, so (vec:negative #d(0.0)) is #d(-0.0).
   (vec::%map1 (lambda (x) (- x)) v))
 
-(defun vec:sign (v)
-  (vec::%map1 #'signum v))
+(defun vec:sign (v) (vec::%map1 #'signum v))
 
-(defun vec:reciprocal (v)
-  (vec::%map1 (lambda (x) (/ 1.0 x)) v))
+(defun vec:reciprocal (v) (vec::%map1 (lambda (x) (/ 1.0 x)) v))
 
 ;; --- comparison-select ufuncs (numpy parity) ----------------------------------
 ;;
@@ -183,24 +159,20 @@
 ;; --simd kernels mirror the comparison (a lane gt mask + bitselect, never the
 ;; IEEE lane min/max whose NaN/-0.0 semantics differ).
 
-(defun vec:maximum (a b)
-  (vec::%map2 (lambda (x y) (if (> x y) x y)) a b))
+(defun vec:maximum (a b) (vec::%map2 (lambda (x y) (if (> x y) x y)) a b))
 
-(defun vec:minimum (a b)
-  (vec::%map2 (lambda (x y) (if (< x y) x y)) a b))
+(defun vec:minimum (a b) (vec::%map2 (lambda (x y) (if (< x y) x y)) a b))
 
-(defun vec:relu (v)
-  (vec::%map1 (lambda (x) (if (> x 0.0) x 0.0)) v))
+(defun vec:relu (v) (vec::%map1 (lambda (x) (if (> x 0.0) x 0.0)) v))
 
 ;; min(max(x, lo), hi) as the same nested selects linalg:clip composes from
 ;; linalg:maximum / linalg:minimum, so the two clips agree on every input --
 ;; including a NaN element (the first select's comparison is false, so it
 ;; becomes lo) and inverted bounds (lo > hi ends at hi).
 (defun vec:clip (v lo hi)
-  (vec::%map1 (lambda (x)
-                (let ((%vec-t (if (> x lo) x lo)))
-                  (if (< %vec-t hi) %vec-t hi)))
-              v))
+  (vec::%map1
+   (lambda (x) (let ((%vec-t (if (> x lo) x lo))) (if (< %vec-t hi) %vec-t hi)))
+   v))
 
 ;; --- destination-passing kernels (write into out, allocate nothing) ----------
 
@@ -222,18 +194,14 @@
   (dotimes (i (length %vec-a) %vec-out)
     (setf (aref %vec-out i) (funcall %vec-op (aref %vec-a i) (aref %vec-b i)))))
 
-(defun vec:add-into (out a b)
-  (vec::%map2-into out #'+ a b))
+(defun vec:add-into (out a b) (vec::%map2-into out #'+ a b))
 
-(defun vec:sub-into (out a b)
-  (vec::%map2-into out #'- a b))
+(defun vec:sub-into (out a b) (vec::%map2-into out #'- a b))
 
-(defun vec:mul-into (out a b)
-  (vec::%map2-into out #'* a b))
+(defun vec:mul-into (out a b) (vec::%map2-into out #'* a b))
 
 (defun vec:scale-into (out v s)
-  (dotimes (i (length v) out)
-    (setf (aref out i) (* (aref v i) s))))
+  (dotimes (i (length v) out) (setf (aref out i) (* (aref v i) s))))
 
 ;; The unary -into siblings. out MAY alias v (element i depends only on element
 ;; i, the add-into rule -- NOT the matvec-into one), so (vec:exp-into v v) is the
@@ -243,53 +211,37 @@
   (dotimes (i (length %vec-v) %vec-out)
     (setf (aref %vec-out i) (funcall %vec-op (aref %vec-v i)))))
 
-(defun vec:exp-into (out v)
-  (vec::%map1-into out #'exp v))
+(defun vec:exp-into (out v) (vec::%map1-into out #'exp v))
 
-(defun vec:log-into (out v)
-  (vec::%map1-into out #'log v))
+(defun vec:log-into (out v) (vec::%map1-into out #'log v))
 
-(defun vec:tanh-into (out v)
-  (vec::%map1-into out #'tanh v))
+(defun vec:tanh-into (out v) (vec::%map1-into out #'tanh v))
 
-(defun vec:sin-into (out v)
-  (vec::%map1-into out #'sin v))
+(defun vec:sin-into (out v) (vec::%map1-into out #'sin v))
 
-(defun vec:cos-into (out v)
-  (vec::%map1-into out #'cos v))
+(defun vec:cos-into (out v) (vec::%map1-into out #'cos v))
 
-(defun vec:tan-into (out v)
-  (vec::%map1-into out #'tan v))
+(defun vec:tan-into (out v) (vec::%map1-into out #'tan v))
 
-(defun vec:asin-into (out v)
-  (vec::%map1-into out #'asin v))
+(defun vec:asin-into (out v) (vec::%map1-into out #'asin v))
 
-(defun vec:acos-into (out v)
-  (vec::%map1-into out #'acos v))
+(defun vec:acos-into (out v) (vec::%map1-into out #'acos v))
 
-(defun vec:atan-into (out v)
-  (vec::%map1-into out #'atan v))
+(defun vec:atan-into (out v) (vec::%map1-into out #'atan v))
 
-(defun vec:sinh-into (out v)
-  (vec::%map1-into out #'sinh v))
+(defun vec:sinh-into (out v) (vec::%map1-into out #'sinh v))
 
-(defun vec:cosh-into (out v)
-  (vec::%map1-into out #'cosh v))
+(defun vec:cosh-into (out v) (vec::%map1-into out #'cosh v))
 
-(defun vec:sqrt-into (out v)
-  (vec::%map1-into out #'sqrt v))
+(defun vec:sqrt-into (out v) (vec::%map1-into out #'sqrt v))
 
-(defun vec:abs-into (out v)
-  (vec::%map1-into out #'abs v))
+(defun vec:abs-into (out v) (vec::%map1-into out #'abs v))
 
-(defun vec:square-into (out v)
-  (vec:mul-into out v v))
+(defun vec:square-into (out v) (vec:mul-into out v v))
 
-(defun vec:negative-into (out v)
-  (vec::%map1-into out (lambda (x) (- x)) v))
+(defun vec:negative-into (out v) (vec::%map1-into out (lambda (x) (- x)) v))
 
-(defun vec:sign-into (out v)
-  (vec::%map1-into out #'signum v))
+(defun vec:sign-into (out v) (vec::%map1-into out #'signum v))
 
 (defun vec:reciprocal-into (out v)
   (vec::%map1-into out (lambda (x) (/ 1.0 x)) v))
@@ -305,28 +257,21 @@
 
 (defun vec:clip-into (out v lo hi)
   (vec::%map1-into out
-                   (lambda (x)
-                     (let ((%vec-t (if (> x lo) x lo)))
-                       (if (< %vec-t hi) %vec-t hi)))
-                   v))
+   (lambda (x) (let ((%vec-t (if (> x lo) x lo))) (if (< %vec-t hi) %vec-t hi)))
+   v))
 
 ;; --- reductions (return a scalar) --------------------------------------------
 
 (defun vec:sum (v)
-  (let ((acc 0.0))
-    (dotimes (i (length v) acc)
-      (setq acc (+ acc (aref v i))))))
+  (let ((acc 0.0)) (dotimes (i (length v) acc) (setq acc (+ acc (aref v i))))))
 
 (defun vec:dot (a b)
   (let ((acc 0.0))
-    (dotimes (i (length a) acc)
-      (setq acc (+ acc (* (aref a i) (aref b i)))))))
+    (dotimes (i (length a) acc) (setq acc (+ acc (* (aref a i) (aref b i)))))))
 
-(defun vec:mean (v)
-  (/ (vec:sum v) (length v)))
+(defun vec:mean (v) (/ (vec:sum v) (length v)))
 
-(defun vec:norm (v)
-  (sqrt (vec:dot v v)))
+(defun vec:norm (v) (sqrt (vec:dot v v)))
 
 ;; --- matrix x vector (GEMV) --------------------------------------------------
 
@@ -345,8 +290,7 @@
          (out (vec::%make-like x d)))
     (dotimes (i d out)
       (let ((acc 0.0))
-        (dotimes (j n)
-          (setq acc (+ acc (* (aref w i j) (aref x j)))))
+        (dotimes (j n) (setq acc (+ acc (* (aref w i j) (aref x j)))))
         (setf (aref out i) acc)))))
 
 ;; y = W x written into out (returned), allocating nothing -- the destination-passing
@@ -359,11 +303,8 @@
     (error "vec:matvec-into: out must not be the same vector as x"))
   (when (eq out w)
     (error "vec:matvec-into: out must not be the same array as w"))
-  (let* ((dims (array-dimensions w))
-         (d (car dims))
-         (n (cadr dims)))
+  (let* ((dims (array-dimensions w)) (d (car dims)) (n (cadr dims)))
     (dotimes (i d out)
       (let ((acc 0.0))
-        (dotimes (j n)
-          (setq acc (+ acc (* (aref w i j) (aref x j)))))
+        (dotimes (j n) (setq acc (+ acc (* (aref w i j) (aref x j)))))
         (setf (aref out i) acc)))))

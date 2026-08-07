@@ -24,8 +24,8 @@
 
 (load "../../deep-learning-from-scratch/ch07/simple-convnet.lisp")
 
-(defparameter *grid* 24)                ; bitmap edge; the input is *grid* x *grid*
-(defparameter *pixels* 576)             ; *grid* * *grid*
+(defparameter *grid* 24)    ; bitmap edge; the input is *grid* x *grid*
+(defparameter *pixels* 576) ; *grid* * *grid*
 (defparameter *nclasses* 46)
 
 ;; Class index -> romaji label, the output-unit order (must match *romaji* in
@@ -42,9 +42,12 @@
   ;; The ch07 SimpleConvNet at this demo's geometry.  weight-init-std 0.01 is
   ;; the book's; Adam copes with it (see train.lisp).
   (make-simple-convnet :input-dim (list 1 *grid* *grid*)
-                       :filter-num 16 :filter-size 5
-                       :filter-pad 2 :filter-stride 1
-                       :hidden-size 64 :output-size *nclasses*
+                       :filter-num 16
+                       :filter-size 5
+                       :filter-pad 2
+                       :filter-stride 1
+                       :hidden-size 64
+                       :output-size *nclasses*
                        :weight-init-std 0.01))
 
 (defun load-hiragana-net (path)
@@ -73,39 +76,41 @@
   ;; sign, the exponent and the 23-bit mantissa are computed in arithmetic and
   ;; packed, so every intermediate stays small (the i31-safe style of
   ;; dataset/rlw1.lisp's reader, which this inverts).
-  (let* ((sign (if (< x 0.0) 128 0))
-         (a (abs x)))
+  (let* ((sign (if (< x 0.0) 128 0)) (a (abs x)))
     (if (= a 0.0)
         (list sign 0 0 0)
         (let ((e 0))
           ;; Normalize a into [1, 2) tracking the unbiased exponent.
-          (while (>= a 2.0) (setq a (/ a 2.0)) (setq e (+ e 1)))
-          (while (< a 1.0) (setq a (* a 2.0)) (setq e (- e 1)))
+          (while (>= a 2.0)
+            (setq a (/ a 2.0))
+            (setq e (+ e 1)))
+          (while (< a 1.0)
+            (setq a (* a 2.0))
+            (setq e (- e 1)))
           (let ((m (round (* (- a 1.0) 8388608.0))))
             ;; Rounding the mantissa up to 2^23 carries into the exponent.
             (when (>= m 8388608)
               (setq m 0)
               (setq e (+ e 1)))
-            (cond
-              ((> e 127)                ; overflow -> +/- infinity
-               (list (+ sign 127) 128 0 0))
-              ((< e -126)               ; underflow -> signed zero (no subnormals)
-               (list sign 0 0 0))
-              (t
-               (let ((be (+ e 127)))
-                 (list (+ sign (floor be 2))
-                       (+ (* (mod be 2) 128) (floor m 65536))
-                       (mod (floor m 256) 256)
-                       (mod m 256))))))))))
+            (cond ((> e 127) ; overflow -> +/- infinity
+                   (list (+ sign 127) 128 0 0))
+                  ((< e -126) ; underflow -> signed zero (no subnormals)
+                   (list sign 0 0 0))
+                  (t
+                   (let ((be (+ e 127)))
+                     (list (+ sign (floor be 2))
+                           (+ (* (mod be 2) 128) (floor m 65536))
+                           (mod (floor m 256) 256) (mod m 256))))))))))
 
-(defun %write-f32 (x s)
-  (dolist (b (%f32-bits x))
-    (write-byte b s)))
+(defun %write-f32 (x s) (dolist (b (%f32-bits x)) (write-byte b s)))
 
 (defun save-rlw1 (path arrays)
   ;; Write ARRAYS (a list of packed arrays, any rank) to PATH as one RLW1 file.
   (with-open-file (s path :direction :output :element-type '(unsigned-byte 8))
-    (write-byte 82 s) (write-byte 76 s) (write-byte 87 s) (write-byte 49 s)
+    (write-byte 82 s)
+    (write-byte 76 s)
+    (write-byte 87 s)
+    (write-byte 49 s)
     (write-byte (length arrays) s)
     (dolist (a arrays)
       (let ((dims (array-dimensions a)))

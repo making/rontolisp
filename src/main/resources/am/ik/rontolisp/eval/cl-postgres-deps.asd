@@ -23,26 +23,18 @@
 
 (defsystem "cl-postgres"
   :description "Low-level client library for PostgreSQL"
-  :depends-on ("md5" "split-sequence" "ironclad" "cl-base64" "uax-15"
-               "cl-ppcre" "alexandria" "usocket")
-  :components
-  ((:module "cl-postgres"
-    :serial t
-    :components ((:file "package")
-                 (:file "features")
-                 (:file "config")
-                 (:file "oid")
-                 (:file "errors")
-                 (:file "data-types")
-                 (:file "sql-string")
-                 (:file "trivial-utf-8")
-                 (:file "strings-utf-8")
-                 (:file "communicate")
-                 (:file "messages")
-                 (:file "ieee-floats")
-                 (:file "interpret")
-                 (:file "saslprep")
-                 (:file "scram")
-                 (:file "protocol")
-                 (:file "public")
-                 (:file "bulk-copy")))))
+  :depends-on ("md5" "split-sequence" "ironclad" "cl-base64" "uax-15" "cl-ppcre"
+               "alexandria" "usocket")
+  :components ((:module "cl-postgres"
+                        :serial t
+                        :components ((:file "package") (:file "features")
+                                     (:file "config") (:file "oid")
+                                     (:file "errors") (:file "data-types")
+                                     (:file "sql-string")
+                                     (:file "trivial-utf-8")
+                                     (:file "strings-utf-8")
+                                     (:file "communicate") (:file "messages")
+                                     (:file "ieee-floats") (:file "interpret")
+                                     (:file "saslprep") (:file "scram")
+                                     (:file "protocol") (:file "public")
+                                     (:file "bulk-copy")))))

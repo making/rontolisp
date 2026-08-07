@@ -26,14 +26,16 @@
 (load "deep-convnet.lisp")
 (load "../dataset/mnist.lisp")
 
-(defparameter *sampled* 1000)   ; the book samples 10000
+(defparameter *sampled* 1000) ; the book samples 10000
 (defparameter *batch-size* 100)
 
 (defun astype-single (a)
   ;; numpy's x.astype(np.float16) analog: copy into a packed #f array (the
   ;; store narrows each double to single precision).
-  (let ((out (make-array (linalg:shape a) :element-type 'single-float
-                         :initial-element 0.0)))
+  (let ((out
+         (make-array (linalg:shape a)
+                     :element-type 'single-float
+                     :initial-element 0.0)))
     (dotimes (i (array-total-size a))
       (setf (row-major-aref out i) (row-major-aref a i)))
     out))
@@ -45,13 +47,15 @@
     (do ((start 0 (+ start *batch-size*)))
         ((>= start *sampled*) acc)
       (let ((idx (linalg:arange start (+ start *batch-size*))))
-        (setq acc (+ acc (net-accuracy-count net
-                                             (linalg:take-rows x idx)
-                                             (linalg:take-rows target idx))))))))
+        (setq acc
+              (+ acc
+                 (net-accuracy-count net (linalg:take-rows x idx)
+                                     (linalg:take-rows target idx))))))))
 
-(let* ((x-test (linalg:reshape
-                (mnist-load-images "dataset/t10k-images-idx3-ubyte" *sampled*)
-                (list *sampled* 1 28 28)))
+(let* ((x-test
+        (linalg:reshape
+         (mnist-load-images "dataset/t10k-images-idx3-ubyte" *sampled*)
+         (list *sampled* 1 28 28)))
        (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *sampled*))
        (net (make-deep-convnet :hidden-size 50 :output-size 10)))
   (net-load-params net "ch08/deep-convnet-params.bin" nil)

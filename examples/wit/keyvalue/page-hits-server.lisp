@@ -44,8 +44,7 @@
 ;;; simply go unused.
 (require :kv-memory "memory-store.lisp")
 
-#+rontolisp-jvm
-(require :kv-java "java-store.lisp")
+#+rontolisp-jvm (require :kv-java "java-store.lisp")
 
 ;;; The default store, which every wasi:keyvalue host recognizes under the empty
 ;;; identifier.
@@ -55,8 +54,10 @@
 ;;; page-hits.lisp, answering the new count. A value is a list<u8>, which crosses
 ;;; as a string; an absent key is nil, so the first hit starts from 0.
 (defun record-hit (bucket page)
-  (let ((hits (+ 1 (let ((seen (kv:bucket-get bucket page)))
-                     (if seen (parse-integer seen) 0)))))
+  (let ((hits
+         (+ 1
+            (let ((seen (kv:bucket-get bucket page)))
+              (if seen (parse-integer seen) 0)))))
     (kv:bucket-set bucket page (princ-to-string hits))
     hits))
 
@@ -67,8 +68,9 @@
 (defun report (bucket)
   (let ((body ""))
     (dolist (key (sorted-keys bucket))
-      (setq body (concatenate 'string body
-                              (format nil "~a = ~a~%" key (kv:bucket-get bucket key)))))
+      (setq body
+            (concatenate 'string body
+             (format nil "~a = ~a~%" key (kv:bucket-get bucket key)))))
     body))
 
 ;;; The handler: one request = one hit. Nothing in it knows where the counts live,
@@ -79,8 +81,9 @@
          (bucket (kv:open *store*))
          (hits (record-hit bucket page)))
     (list 200 '(:content-type "text/plain")
-          (list (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a"
-                        page hits (= hits 1) (report bucket))))))
+          (list
+           (format nil "~a -> ~a hit~:[s~;~]~%~%hits per page:~%~a" page hits
+                   (= hits 1) (report bucket))))))
 
 ;;; On the interpreter / JVM this blocks and serves on port 8080; under --component
 ;;; the port is ignored (the host provides the socket).

@@ -29,7 +29,7 @@
 ;;; random returns a value in [0, limit) of the limit's type. On the interpreter
 ;;; and JVM backends it draws from Math.random(); on WASM it draws real entropy
 ;;; from the WASI random_get host function (so every run differs).
-(defun random-weight () (- (random 1.0) 0.5))   ; -> (-0.5, 0.5)
+(defun random-weight () (- (random 1.0) 0.5)) ; -> (-0.5, 0.5)
 
 ;;; --- array construction (packed single-float #f, shared by vec and linalg) ---
 ;;; A weight matrix is a rank-2 linalg array; a bias vector is a rank-1 array. Both
@@ -54,8 +54,10 @@
 
 ;;; --- network = the plist (:w1 W1 :b1 b1 :w2 W2 :b2 b2), read with getf ---
 (defun init-net (n-in n-hid n-out)
-  (list :w1 (random-matrix n-hid n-in) :b1 (random-vector n-hid)
-        :w2 (random-matrix n-out n-hid) :b2 (random-vector n-out)))
+  (list :w1 (random-matrix n-hid n-in)
+        :b1 (random-vector n-hid)
+        :w2 (random-matrix n-out n-hid)
+        :b2 (random-vector n-out)))
 
 (defun forward-output (net x)
   (layer-forward (getf net :w2) (getf net :b2)
@@ -67,13 +69,16 @@
 ;;; W -= lr * (delta (x) input)                    [outer product, linalg]
 ;;; b -= lr * delta                                [vec]
 (defun train-example (net x y lr)
-  (let* ((w1 (getf net :w1)) (b1 (getf net :b1))
-         (w2 (getf net :w2)) (b2 (getf net :b2))
+  (let* ((w1 (getf net :w1))
+         (b1 (getf net :b1))
+         (w2 (getf net :w2))
+         (b2 (getf net :b2))
          (a1 (layer-forward w1 b1 x))
          (a2 (layer-forward w2 b2 a1))
          (d2 (vec:mul (vec:mul (vec:sub a2 y) a2) (linalg:sub 1.0 a2)))
-         (d1 (vec:mul (vec:mul (linalg:dot (linalg:transpose w2) d2) a1)
-                      (linalg:sub 1.0 a1))))
+         (d1
+          (vec:mul (vec:mul (linalg:dot (linalg:transpose w2) d2) a1)
+                   (linalg:sub 1.0 a1))))
     (list :w1 (linalg:sub w1 (linalg:mul (linalg:outer d1 x) lr))
           :b1 (vec:sub b1 (vec:scale d1 lr))
           :w2 (linalg:sub w2 (linalg:mul (linalg:outer d2 a1) lr))
@@ -85,8 +90,7 @@
   (let ((diff (vec:sub (forward-output net (first ex)) (second ex))))
     (* 0.5 (vec:dot diff diff))))
 (defun total-loss (net data)
-  (let ((s 0.0))
-    (dolist (ex data s) (incf s (example-loss net ex)))))
+  (let ((s 0.0)) (dolist (ex data s) (incf s (example-loss net ex)))))
 (defun train (net data epochs lr)
   (let ((e 0))
     (while (< e epochs)
@@ -101,10 +105,8 @@
 ;;; Inputs and targets are packed single-float vector literals (#f(...)) read
 ;;; directly as rank-1 arrays. They are never mutated -- only the weights change.
 (defparameter *xor-data*
-  (list (list #f(0.0 0.0) #f(0.0))
-        (list #f(0.0 1.0) #f(1.0))
-        (list #f(1.0 0.0) #f(1.0))
-        (list #f(1.0 1.0) #f(0.0))))
+  (list (list #f(0.0 0.0) #f(0.0)) (list #f(0.0 1.0) #f(1.0))
+        (list #f(1.0 0.0) #f(1.0)) (list #f(1.0 1.0) #f(0.0))))
 
 (defparameter *net* (init-net 2 4 1))
 (format t "Training XOR (2-4-1 network, vec + linalg)...~%")
@@ -113,7 +115,5 @@
 (format t "~%Predictions after training:~%")
 (dolist (ex *xor-data*)
   (let ((x (first ex)))
-    (format t "  ~a ~a -> ~a  (target ~a)~%"
-            (aref x 0) (aref x 1)
-            (aref (forward-output *net* x) 0)
-            (aref (second ex) 0))))
+    (format t "  ~a ~a -> ~a  (target ~a)~%" (aref x 0) (aref x 1)
+            (aref (forward-output *net* x) 0) (aref (second ex) 0))))

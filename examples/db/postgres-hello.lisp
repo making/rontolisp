@@ -42,8 +42,10 @@
   (let ((conn (cl-postgres:open-database database user password host port)))
     ;; A row reader turns the result rows into Lisp data; list-row-reader gives a
     ;; list of lists.
-    (print (cl-postgres:exec-query conn "select 42, 'hello'"
-                                   'cl-postgres:list-row-reader))
-    (print (cl-postgres:exec-query conn "select generate_series(1, 3) as n"
-                                   'cl-postgres:list-row-reader))
+    (print
+     (cl-postgres:exec-query conn "select 42, 'hello'"
+                             'cl-postgres:list-row-reader))
+    (print
+     (cl-postgres:exec-query conn "select generate_series(1, 3) as n"
+                             'cl-postgres:list-row-reader))
     (cl-postgres:close-database conn)))

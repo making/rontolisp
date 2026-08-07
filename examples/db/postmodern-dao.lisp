@@ -80,7 +80,8 @@
 
   ;; DELETE takes the instance too.
   (pomo:delete-dao (pomo:get-dao 'fruit 3))
-  (format t "count: ~a~%" (pomo:query (:select (:count '*) :from 'fruit) :single)))
+  (format t "count: ~a~%"
+          (pomo:query (:select (:count '*) :from 'fruit) :single)))
 
 ;; The table is left behind on purpose, so you can look at it with psql after
 ;; the run; the drop at the top is what makes the next run start clean.

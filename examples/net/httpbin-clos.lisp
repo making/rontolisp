@@ -41,8 +41,7 @@
 ;; Parse the body as JSON when it looks like a JSON object or array, else the
 ;; symbol null (which stringifies to JSON null).
 (defun body-json (body)
-  (if (and (stringp body)
-           (> (length body) 0)
+  (if (and (stringp body) (> (length body) 0)
            (or (eql (char body 0) #\{) (eql (char body 0) #\[)))
       (rontolisp:json-parse body)
       'null))
@@ -53,14 +52,11 @@
 ;; POST-family responses add the body fields, so they extend the base class --
 ;; inherited slots come first, giving args/headers/method/path/data/json.
 (defclass echo-response ()
-  ((args :initarg :args)
-   (headers :initarg :headers)
-   (method :initarg :method)
+  ((args :initarg :args) (headers :initarg :headers) (method :initarg :method)
    (path :initarg :path)))
 
 (defclass echo-with-body-response (echo-response)
-  ((data :initarg :data)
-   (json :initarg :json)))
+  ((data :initarg :data) (json :initarg :json)))
 
 (defun json-response (status obj)
   (list status '(:content-type "application/json")
@@ -69,27 +65,36 @@
 ;; The index page: a plain cl-who template, no request data to escape.
 (defun index-page ()
   (list 200 '(:content-type "text/html; charset=utf-8")
-        (list (cl-who:with-html-output-to-string (s)
-                (:html
-                 (:head (:title "rontolisp httpbin"))
-                 (:body
-                  (:h1 "rontolisp httpbin")
-                  (:p "A miniature httpbin: every route below echoes the "
-                      "request back as JSON.")
-                  (:ul
-                   (:li (:code "GET /get") " -- args, headers, method, path")
-                   (:li (:code "POST /post") " -- ditto, plus the request body (raw and parsed JSON)")
-                   (:li (:code "PUT /put") " -- ditto")
-                   (:li (:code "PATCH /patch") " -- ditto")
-                   (:li (:code "DELETE /delete") " -- ditto"))
-                  (:p "Try it:")
-                  (:pre (:code (cl-who:esc "curl 'http://127.0.0.1:8080/get?a=1&b=two'")))
-                  (:pre (:code (cl-who:esc "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post")))))))))
+        (list
+         (cl-who:with-html-output-to-string (s)
+           (:html (:head (:title "rontolisp httpbin"))
+                  (:body (:h1 "rontolisp httpbin")
+                         (:p
+                          "A miniature httpbin: every route below echoes the "
+                          "request back as JSON.")
+                         (:ul (:li (:code "GET /get")
+                                   " -- args, headers, method, path")
+                              (:li (:code "POST /post")
+                                   " -- ditto, plus the request body (raw and parsed JSON)")
+                              (:li (:code "PUT /put") " -- ditto")
+                              (:li (:code "PATCH /patch") " -- ditto")
+                              (:li (:code "DELETE /delete") " -- ditto"))
+                         (:p "Try it:")
+                         (:pre
+                          (:code
+                           (cl-who:esc
+                            "curl 'http://127.0.0.1:8080/get?a=1&b=two'")))
+                         (:pre
+                          (:code
+                           (cl-who:esc
+                            "curl -X POST -d '{\"name\":\"rontolisp\"}' http://127.0.0.1:8080/post")))))))))
 
 (defun echo (env)
   (json-response 200
                  (make-instance 'echo-response
-                                :args (rontolisp:alist-hash-table (rontolisp:query-params (getf env :query-string)))
+                                :args (rontolisp:alist-hash-table
+                                       (rontolisp:query-params
+                                        (getf env :query-string)))
                                 :headers (getf env :headers)
                                 :method (symbol-name (getf env :request-method))
                                 :path (getf env :path-info))))
@@ -97,7 +102,9 @@
 (defun echo-with-body (env)
   (json-response 200
                  (make-instance 'echo-with-body-response
-                                :args (rontolisp:alist-hash-table (rontolisp:query-params (getf env :query-string)))
+                                :args (rontolisp:alist-hash-table
+                                       (rontolisp:query-params
+                                        (getf env :query-string)))
                                 :headers (getf env :headers)
                                 :method (symbol-name (getf env :request-method))
                                 :path (getf env :path-info)
@@ -111,9 +118,10 @@
 ;; a shape that is not worth a class.
 (defun echo-when (env expected with-body)
   (cond ((not (eq (getf env :request-method) expected))
-         (json-response 405 (rontolisp:plist-hash-table
-                             (list :error "method not allowed"
-                                   :allowed (symbol-name expected)))))
+         (json-response 405
+                        (rontolisp:plist-hash-table
+                         (list :error "method not allowed"
+                               :allowed (symbol-name expected)))))
         (with-body (echo-with-body env))
         (t (echo env))))
 
@@ -127,8 +135,10 @@
           ((string= path "/put") (echo-when env :PUT t))
           ((string= path "/patch") (echo-when env :PATCH t))
           ((string= path "/delete") (echo-when env :DELETE t))
-          (t (json-response 404 (rontolisp:plist-hash-table
-                                 (list :error "not found" :path path)))))))
+          (t
+           (json-response 404
+                          (rontolisp:plist-hash-table
+                           (list :error "not found" :path path)))))))
 
 ;; The env :raw-body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers an env whose :body is the whole string.

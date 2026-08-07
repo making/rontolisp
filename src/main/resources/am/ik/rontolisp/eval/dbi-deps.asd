@@ -26,19 +26,18 @@
 
 (defsystem "dbi"
   :description "Database independent interface for Common Lisp"
-  :depends-on ("split-sequence"
-               "closer-mop"
-               "cl-ppcre"
-               "bordeaux-threads")
+  :depends-on ("split-sequence" "closer-mop" "cl-ppcre" "bordeaux-threads")
   :components ((:module "src"
-                :depends-on ("src/utils")
-                :components
-                ((:file "dbi" :depends-on ("driver" "cache" "logger"))
-                 (:file "driver" :depends-on ("error"))
-                 (:module "cache"
-                  :components
-                  ((:file "thread" :if-feature (:not :rontolisp-wasm))
-                   (:file "single" :if-feature :rontolisp-wasm)))
-                 (:file "logger")
-                 (:file "error")))
+                        :depends-on ("src/utils")
+                        :components ((:file "dbi"
+                                      :depends-on ("driver" "cache" "logger"))
+                                     (:file "driver" :depends-on ("error"))
+                                     (:module "cache"
+                                              :components
+                                              ((:file "thread"
+                                                      :if-feature
+                                                      (:not :rontolisp-wasm))
+                                               (:file "single"
+                                                :if-feature :rontolisp-wasm)))
+                                     (:file "logger") (:file "error")))
                (:file "src/utils")))

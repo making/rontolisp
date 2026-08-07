@@ -25,5 +25,4 @@
       (setf (aref *jx* 0) 0.0)
       (setf (aref *jy* 0) 0.0)
       (setf (aref *jz* 0) 0.0)
-      (dotimes (i tip)
-        (place (+ i 1) i (aref *len* i))))))
+      (dotimes (i tip) (place (+ i 1) i (aref *len* i))))))

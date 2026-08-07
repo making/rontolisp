@@ -14,8 +14,7 @@
 
 (defvar babel-encodings:*default-character-encoding* :utf-8)
 
-(defun babel:list-character-encodings ()
-  (list :utf-8 :latin-1 :us-ascii))
+(defun babel:list-character-encodings () (list :utf-8 :latin-1 :us-ascii))
 
 ;; A caller's :encoding is normalized to one of the three names above. Anything
 ;; else is an error at the call: mis-coding silently is worse than not coding.
@@ -24,8 +23,10 @@
         ((member encoding '(:utf-8 :utf8 :|utf-8| :default)) :utf-8)
         ((member encoding '(:latin-1 :latin1 :iso-8859-1 :iso8859-1)) :latin-1)
         ((member encoding '(:us-ascii :ascii :usascii)) :us-ascii)
-        (t (error "babel: unsupported character encoding ~S (this build implements ~S)"
-                  encoding (babel:list-character-encodings)))))
+        (t
+         (error
+          "babel: unsupported character encoding ~S (this build implements ~S)"
+          encoding (babel:list-character-encodings)))))
 
 (defun babel:string-to-octets (string &key encoding (start 0) end)
   (let ((enc (babel::normalize-encoding encoding))
@@ -49,7 +50,9 @@
                       (push (logior #x80 (logand (ash c -6) #x3F)) bytes)
                       (push (logior #x80 (logand c #x3F)) bytes))))
               ((< c (if (eq enc :us-ascii) 128 256)) (push c bytes))
-              (t (error "babel: character ~S is not encodable in ~S" (char string i) enc)))))
+              (t
+               (error "babel: character ~S is not encodable in ~S"
+                      (char string i) enc)))))
     (setq bytes (nreverse bytes))
     ;; A PACKED (unsigned-byte 8) array, like real babel's simple-array result:
     ;; an adjustable array does not carry its declared element type here, and a
@@ -62,7 +65,8 @@
       out)))
 
 (defun babel:string-size-in-octets (string &key encoding (start 0) end)
-  (length (babel:string-to-octets string :encoding encoding :start start :end end)))
+  (length
+   (babel:string-to-octets string :encoding encoding :start start :end end)))
 
 ;; :errorp defaults to t like real babel's. When nil, a malformed sequence
 ;; yields the replacement character instead of signalling -- quri's :lenient
@@ -74,49 +78,60 @@
       (do ((i start))
           ((>= i limit))
         (let ((b (aref octets i)))
-          (cond
-            ((not (eq enc :utf-8))
-             (when (and (eq enc :us-ascii) (> b 127))
-               (if errorp
-                   (error "babel: octet ~S is not decodable in ~S" b enc)
-                   (setq b 65533)))
-             (write-char (code-char b) s)
-             (setq i (+ i 1)))
-            ((< b #x80)
-             (write-char (code-char b) s)
-             (setq i (+ i 1)))
-            (t
-             (let* ((width (cond ((and (>= b #xC2) (< b #xE0)) 2)
-                                 ((and (>= b #xE0) (< b #xF0)) 3)
-                                 ((and (>= b #xF0) (< b #xF5)) 4)
-                                 (t 0)))
-                    (ok (and (> width 0) (<= (+ i width) limit))))
-               (when ok
-                 (do ((k 1 (+ k 1)))
-                     ((>= k width))
-                   (let ((cb (aref octets (+ i k))))
-                     (unless (and (>= cb #x80) (< cb #xC0))
-                       (setq ok nil)))))
-               (cond
-                 ((not ok)
-                  (if errorp
-                      (error "babel: invalid UTF-8 sequence at position ~S" i)
-                      (progn (write-char (code-char 65533) s)
-                             (setq i (+ i 1)))))
-                 (t
-                  (write-char
-                   (code-char
-                    (cond ((= width 2)
-                           (logior (ash (logand b #x1F) 6)
-                                   (logand (aref octets (+ i 1)) #x3F)))
-                          ((= width 3)
-                           (logior (ash (logand b #x0F) 12)
-                                   (ash (logand (aref octets (+ i 1)) #x3F) 6)
-                                   (logand (aref octets (+ i 2)) #x3F)))
-                          (t
-                           (logior (ash (logand b #x07) 18)
-                                   (ash (logand (aref octets (+ i 1)) #x3F) 12)
-                                   (ash (logand (aref octets (+ i 2)) #x3F) 6)
-                                   (logand (aref octets (+ i 3)) #x3F)))))
-                   s)
-                  (setq i (+ i width))))))))))))
+          (cond ((not (eq enc :utf-8))
+                 (when (and (eq enc :us-ascii) (> b 127))
+                   (if errorp
+                       (error "babel: octet ~S is not decodable in ~S" b enc)
+                       (setq b 65533)))
+                 (write-char (code-char b) s)
+                 (setq i (+ i 1)))
+                ((< b #x80)
+                 (write-char (code-char b) s)
+                 (setq i (+ i 1)))
+                (t
+                 (let* ((width
+                         (cond ((and (>= b #xC2) (< b #xE0)) 2)
+                               ((and (>= b #xE0) (< b #xF0)) 3)
+                               ((and (>= b #xF0) (< b #xF5)) 4)
+                               (t 0)))
+                        (ok (and (> width 0) (<= (+ i width) limit))))
+                   (when ok
+                     (do ((k 1 (+ k 1)))
+                         ((>= k width))
+                       (let ((cb (aref octets (+ i k))))
+                         (unless (and (>= cb #x80) (< cb #xC0))
+                           (setq ok nil)))))
+                   (cond ((not ok)
+                          (if errorp
+                              (error
+                               "babel: invalid UTF-8 sequence at position ~S" i)
+                              (progn
+                                (write-char (code-char 65533) s)
+                                (setq i (+ i 1)))))
+                         (t
+                          (write-char (code-char
+                                       (cond ((= width 2)
+                                              (logior (ash (logand b #x1F) 6)
+                                                      (logand
+                                                       (aref octets (+ i 1))
+                                                       #x3F)))
+                                             ((= width 3)
+                                              (logior (ash (logand b #x0F) 12)
+                                                      (ash (logand (aref octets
+                                                                    (+ i 1))
+                                                                   #x3F) 6)
+                                                      (logand
+                                                       (aref octets (+ i 2))
+                                                       #x3F)))
+                                             (t
+                                              (logior (ash (logand b #x07) 18)
+                                                      (ash (logand (aref octets
+                                                                    (+ i 1))
+                                                                   #x3F) 12)
+                                                      (ash (logand (aref octets
+                                                                    (+ i 2))
+                                                                   #x3F) 6)
+                                                      (logand
+                                                       (aref octets (+ i 3))
+                                                       #x3F))))) s)
+                          (setq i (+ i width))))))))))))

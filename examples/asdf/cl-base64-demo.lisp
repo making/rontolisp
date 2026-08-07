@@ -18,8 +18,9 @@
 (print (cl-base64:base64-string-to-string "SGVsbG8_Pj4." :uri t))
 
 ;; (unsigned-byte 8) arrays
-(print (cl-base64:usb8-array-to-base64-string
-        (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))))
+(print
+ (cl-base64:usb8-array-to-base64-string
+  (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))))
 (print (cl-base64:base64-string-to-usb8-array "AQID"))
 
 ;; integers (exact on every backend within the signed 64-bit range the
@@ -28,5 +29,6 @@
 (print (cl-base64:base64-string-to-integer "EtaH"))
 
 ;; a bad input character signals bad-base64-character, caught by handler-case
-(print (handler-case (cl-base64:base64-string-to-string "SGVsbG8@")
-         (error (e) :caught-bad-char)))
+(print
+ (handler-case (cl-base64:base64-string-to-string "SGVsbG8@")
+   (error (e) :caught-bad-char)))

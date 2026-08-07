@@ -17,17 +17,17 @@
 
 ;; A full document: nested tags, an attribute, and text nodes. Attributes
 ;; render with single quotes; :xml (the default) self-closes empty tags.
-(princ (cl-who:with-html-output-to-string (s)
-  (:html (:head (:title "Hi"))
-         (:body (:p "Hello" (:a :href "/x" "link"))))))
+(princ
+ (cl-who:with-html-output-to-string (s)
+   (:html (:head (:title "Hi")) (:body (:p "Hello" (:a :href "/x" "link"))))))
 (terpri)
 
 ;; str evaluates a Lisp form and inserts its princ output; esc HTML-escapes
 ;; the special characters; fmt is an inline (format nil ...).
-(princ (cl-who:with-html-output-to-string (s)
-  (:div (:span (cl-who:str (+ 1 2)))
-        (:span (cl-who:esc "<a&b>"))
-        (:span (cl-who:fmt "~a-~a" 3 4)))))
+(princ
+ (cl-who:with-html-output-to-string (s)
+   (:div (:span (cl-who:str (+ 1 2))) (:span (cl-who:esc "<a&b>"))
+         (:span (cl-who:fmt "~a-~a" 3 4)))))
 (terpri)
 
 ;; Default :xml mode -- empty elements self-close as "<br />".
@@ -41,6 +41,7 @@
 
 ;; Back to :xml; esc emits a numeric character reference for non-ASCII.
 (setf (cl-who:html-mode) :xml)
-(princ (cl-who:with-html-output-to-string (s)
-  (:p (cl-who:esc (string (code-char 233))))))
+(princ
+ (cl-who:with-html-output-to-string (s)
+   (:p (cl-who:esc (string (code-char 233))))))
 (terpri)

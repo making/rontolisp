@@ -20,19 +20,15 @@
 (defun text-response (status body)
   (list status '(:content-type "text/plain") (list body)))
 
-(defun home (env)
-  (text-response 200 (format nil "Hello from wasmCloud!~%")))
+(defun home (env) (text-response 200 (format nil "Hello from wasmCloud!~%")))
 
-(defun not-found (env)
-  (text-response 404 (format nil "Not found~%")))
+(defun not-found (env) (text-response 404 (format nil "Not found~%")))
 
 ;; The env plist's :path-info carries the (percent-decoded) path only (any
 ;; query string arrives separately as :query-string), so the comparison is
 ;; exact.
 (defun handle (env)
-  (if (string= (getf env :path-info) "/")
-      (home env)
-      (not-found env)))
+  (if (string= (getf env :path-info) "/") (home env) (not-found env)))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

@@ -28,7 +28,8 @@
          (pred (linalg:argmax scores))
          (out (format nil "pred ~a ~a~%" pred (nth pred *labels*))))
     (dotimes (i *nclasses*)
-      (setq out (format nil "~ascore ~a ~a~%" out (nth i *labels*) (aref scores i))))
+      (setq out
+       (format nil "~ascore ~a ~a~%" out (nth i *labels*) (aref scores i))))
     out))
 
 (rontolisp:wasm-export 'recognize :params '(:s-expr) :returns :string)

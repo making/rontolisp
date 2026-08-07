@@ -22,25 +22,26 @@
 ;;; Matched by code point so the reader never sees the tricky #\" / #\' literals.
 (defun escape-char (ch)
   (let ((c (char-code ch)))
-    (cond ((= c 38) "&amp;")    ; &
-          ((= c 60) "&lt;")     ; <
-          ((= c 62) "&gt;")     ; >
-          ((= c 34) "&quot;")   ; "
-          ((= c 39) "&#39;")    ; '
+    (cond ((= c 38) "&amp;")  ; &
+          ((= c 60) "&lt;")   ; <
+          ((= c 62) "&gt;")   ; >
+          ((= c 34) "&quot;") ; "
+          ((= c 39) "&#39;")  ; '
           (t (princ-to-string ch)))))
 
 ;;; Escape every HTML-special character in a string (& < > " '), so any cell
 ;;; label is safe to drop into markup. Same helper as rainbow.lisp.
 (defun html-escape (s)
   (reduce (lambda (acc piece) (concatenate 'string acc piece))
-          (map 'list #'escape-char s) :initial-value ""))
+          (map 'list #'escape-char s)
+          :initial-value ""))
 
 ;;; One <div> for a cell: a class the CSS styles and a data-i the host reads back
 ;;; on click. HTML attributes use single quotes so the Lisp string needs no
 ;;; escapes (double quotes would); the cell label is HTML-escaped defensively.
 (defun cell-div (i cls txt)
-  (concatenate 'string
-    "<div class='" cls "' data-i='" (princ-to-string i) "'>" (html-escape txt) "</div>"))
+  (concatenate 'string "<div class='" cls "' data-i='" (princ-to-string i) "'>"
+               (html-escape txt) "</div>"))
 
 ;;; The class/label for cell I given the whole state (which decides how covered
 ;;; cells and mines are shown once the game is over).
@@ -51,42 +52,43 @@
          (mines (st-mines state))
          (over (> status 0))
          (is-mine (= (nth i mines) 1))
-         (is-rev  (= (nth i (st-revealed state)) 1))
+         (is-rev (= (nth i (st-revealed state)) 1))
          (is-flag (= (nth i (st-flags state)) 1)))
     (cond
-      ;; The mine you actually stepped on (revealed) -- highlight it.
-      ((and is-rev is-mine) (cell-div i "cell mine boom" ""))
-      ;; A normally revealed cell: blank, or a neighbour count 1..8.
-      (is-rev
-       (let ((cnt (adjacent-count mines i w h)))
-         (if (= cnt 0)
-             (cell-div i "cell open" "")
-             (cell-div i (concatenate 'string "cell open n" (princ-to-string cnt))
-                       (princ-to-string cnt)))))
-      ;; Game over: reveal every remaining mine.
-      ((and over is-mine) (cell-div i "cell mine" ""))
-      ;; Game over: a flag that turned out to be wrong.
-      ((and over is-flag) (cell-div i "cell wrongflag" ""))
-      ;; A flag still standing.
-      (is-flag (cell-div i "cell flag" ""))
-      ;; An ordinary covered cell.
-      (t (cell-div i "cell hidden" "")))))
+          ;; The mine you actually stepped on (revealed) -- highlight it.
+          ((and is-rev is-mine) (cell-div i "cell mine boom" ""))
+          ;; A normally revealed cell: blank, or a neighbour count 1..8.
+          (is-rev
+           (let ((cnt (adjacent-count mines i w h)))
+             (if (= cnt 0)
+                 (cell-div i "cell open" "")
+                 (cell-div i
+                  (concatenate 'string "cell open n" (princ-to-string cnt))
+                  (princ-to-string cnt)))))
+          ;; Game over: reveal every remaining mine.
+          ((and over is-mine) (cell-div i "cell mine" ""))
+          ;; Game over: a flag that turned out to be wrong.
+          ((and over is-flag) (cell-div i "cell wrongflag" ""))
+          ;; A flag still standing.
+          (is-flag (cell-div i "cell flag" ""))
+          ;; An ordinary covered cell.
+          (t (cell-div i "cell hidden" "")))))
 
 ;;; The whole board as a run of cell <div>s (the host wraps them in a CSS grid
 ;;; sized to the board width).
 (defun render (state)
-  (let ((n (* (st-w state) (st-h state)))
-        (out ""))
-    (dotimes (i n)
-      (setq out (concatenate 'string out (cell-html state i))))
+  (let ((n (* (st-w state) (st-h state))) (out ""))
+    (dotimes (i n) (setq out (concatenate 'string out (cell-html state i))))
     out))
 
 ;;; --- host-callable exports ---------------------------------------------------
 
-(rontolisp:wasm-export 'place-mines     :params '(:int :int :int :int :s-expr) :returns :s-expr)
-(rontolisp:wasm-export 'new-game        :params '(:int :int :s-expr) :returns :s-expr)
-(rontolisp:wasm-export 'reveal          :params '(:s-expr :int)      :returns :s-expr)
-(rontolisp:wasm-export 'toggle-flag     :params '(:s-expr :int)      :returns :s-expr)
-(rontolisp:wasm-export 'render          :params '(:s-expr)           :returns :string)
-(rontolisp:wasm-export 'game-status     :params '(:s-expr)           :returns :int)
-(rontolisp:wasm-export 'mines-remaining :params '(:s-expr)           :returns :int)
+(rontolisp:wasm-export 'place-mines
+                       :params '(:int :int :int :int :s-expr)
+                       :returns :s-expr)
+(rontolisp:wasm-export 'new-game :params '(:int :int :s-expr) :returns :s-expr)
+(rontolisp:wasm-export 'reveal :params '(:s-expr :int) :returns :s-expr)
+(rontolisp:wasm-export 'toggle-flag :params '(:s-expr :int) :returns :s-expr)
+(rontolisp:wasm-export 'render :params '(:s-expr) :returns :string)
+(rontolisp:wasm-export 'game-status :params '(:s-expr) :returns :int)
+(rontolisp:wasm-export 'mines-remaining :params '(:s-expr) :returns :int)

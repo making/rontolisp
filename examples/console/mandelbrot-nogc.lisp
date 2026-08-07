@@ -59,23 +59,21 @@
 
 ;;; Map an escape time to a single-character shading string.
 (defun shade (i max-iter)
-  (cond ((>= i max-iter) "#")
-        ((>= i 10) "+")
-        ((>= i 5) ".")
-        (t " ")))
+  (cond ((>= i max-iter) "#") ((>= i 10) "+") ((>= i 5) ".") (t " ")))
 
 ;;; Render the region [x0,x1] x [y0,y1] as a cols x rows grid, accumulating the
 ;;; characters (and a newline per row) into a single string that is returned.
 (defun mandelbrot (x0 x1 y0 y1 cols rows max-iter)
-  (let ((dx (/ (- x1 x0) cols))
-        (dy (/ (- y1 y0) rows))
-        (out ""))
+  (let ((dx (/ (- x1 x0) cols)) (dy (/ (- y1 y0) rows)) (out ""))
     (dotimes (r rows)
       (let ((cy (+ y0 (* dy r))))
         (dotimes (c cols)
-          (setq out (concatenate 'string out
-                                 (shade (escape-time (+ x0 (* dx c)) cy max-iter) max-iter))))
-        (setq out (concatenate 'string out "
+          (setq out
+                (concatenate 'string out
+                 (shade (escape-time (+ x0 (* dx c)) cy max-iter) max-iter))))
+        (setq out
+              (concatenate 'string out
+                           "
 "))))
     out))
 

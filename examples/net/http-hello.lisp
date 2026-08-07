@@ -21,33 +21,41 @@
 
 ;; Appends the carriage return of an HTTP CRLF line ending (write-line then
 ;; appends the newline).
-(defun crlf (s)
-  (concatenate 'string s (format nil "~a" (code-char 13))))
+(defun crlf (s) (concatenate 'string s (format nil "~a" (code-char 13))))
 
 ;; Consumes the request headers up to the blank line that ends them.
 (defun drain-headers (sock)
   (do ((line (read-line sock) (read-line sock)))
       ((or (null line) (string= line "")))))
 
-(handler-case
-    (let ((listener (usocket:socket-listen "127.0.0.1" 8080 :reuse-address t)))
-      (write-line "http server listening on http://127.0.0.1:8080/")
-      (do ((n 1 (+ n 1))) (nil)
-        ;; with-server-socket closes the accepted socket on every exit.
-        (usocket:with-server-socket (sock (usocket:socket-accept listener))
-          (let* ((stream (usocket:socket-stream sock))
-                 (request (read-line stream)))
-            (if request
-                (let ((body (format nil "<h1>hello from rontolisp</h1><p>request ~a: ~a</p>" n request)))
-                  (drain-headers stream)
-                  (write-line (crlf "HTTP/1.1 200 OK") stream)
-                  (write-line (crlf "Content-Type: text/html") stream)
-                  ;; + 1: write-line terminates the body with a newline
-                  (write-line (crlf (format nil "Content-Length: ~a" (+ (length body) 1))) stream)
-                  (write-line (crlf "Connection: close") stream)
-                  (write-line (crlf "") stream)
-                  (write-line body stream)
-                  (write-line (format nil "served request ~a: ~a" n request))))))))
+(handler-case (let ((listener
+                     (usocket:socket-listen "127.0.0.1" 8080 :reuse-address t)))
+                (write-line "http server listening on http://127.0.0.1:8080/")
+                (do ((n 1 (+ n 1)))
+                    (nil)
+                  ;; with-server-socket closes the accepted socket on every exit.
+                  (usocket:with-server-socket (sock
+                                               (usocket:socket-accept listener))
+                    (let* ((stream (usocket:socket-stream sock))
+                           (request (read-line stream)))
+                      (if request
+                          (let ((body
+                                 (format nil
+                                         "<h1>hello from rontolisp</h1><p>request ~a: ~a</p>"
+                                         n request)))
+                            (drain-headers stream)
+                            (write-line (crlf "HTTP/1.1 200 OK") stream)
+                            (write-line (crlf "Content-Type: text/html") stream)
+                            ;; + 1: write-line terminates the body with a newline
+                            (write-line (crlf
+                                         (format nil "Content-Length: ~a"
+                                                 (+ (length body) 1))) stream)
+                            (write-line (crlf "Connection: close") stream)
+                            (write-line (crlf "") stream)
+                            (write-line body stream)
+                            (write-line
+                             (format nil "served request ~a: ~a" n
+                                     request))))))))
   (usocket:socket-error (e)
     (declare (ignore e))
     (write-line "socket-listen failed (is port 8080 already in use?)")))

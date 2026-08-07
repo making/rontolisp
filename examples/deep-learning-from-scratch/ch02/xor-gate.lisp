@@ -22,9 +22,7 @@
 (defun or-gate (x1 x2) (%gate x1 x2 0.5 0.5 -0.2))
 
 (defun xor-gate (x1 x2)
-  (let ((s1 (nand-gate x1 x2))
-        (s2 (or-gate x1 x2)))
-    (and-gate s1 s2)))
+  (let ((s1 (nand-gate x1 x2)) (s2 (or-gate x1 x2))) (and-gate s1 s2)))
 
 (dolist (xs '((0 0) (1 0) (0 1) (1 1)))
   (format t "(~a, ~a) -> ~a~%" (car xs) (cadr xs)

@@ -23,8 +23,7 @@
 
 (defun train-once (x-train t-train x-test t-test lam)
   (linalg:seed 42)
-  (let ((net (make-multi-layer-net 784 '(20 20) 10
-                                   :weight-decay-lambda lam))
+  (let ((net (make-multi-layer-net 784 '(20 20) 10 :weight-decay-lambda lam))
         (opt (make-instance 'sgd :lr 0.2))
         (iter-per-epoch (floor *train-limit* *batch-size*))
         (epoch 0))
@@ -37,15 +36,17 @@
         (when (= (mod (+ i 1) iter-per-epoch) 0)
           (setq epoch (+ epoch 1))
           (when (= (mod epoch 6) 0)
-            (format t "  epoch ~2d: train ~a/~a, test ~a/~a~%"
-                    epoch
+            (format t "  epoch ~2d: train ~a/~a, test ~a/~a~%" epoch
                     (net-accuracy-count net x-train t-train) *train-limit*
                     (net-accuracy-count net x-test t-test) *test-limit*)))))))
 
-(let ((x-train (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-      (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
+(let ((x-train
+       (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+      (t-train
+       (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
       (x-test (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*))
-      (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t)))
+      (t-test
+       (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t)))
   (format t "weight decay lambda = 0 (overfits):~%")
   (train-once x-train t-train x-test t-test 0)
   (format t "weight decay lambda = 0.05:~%")

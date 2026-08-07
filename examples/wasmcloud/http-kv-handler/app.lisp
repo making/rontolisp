@@ -50,9 +50,14 @@
           (if (and (stringp key) (stringp value))
               (progn
                 (setf (gethash key *store*) value)
-                (text-response 200 (format nil "[in_memory] Stored key '~a'~%" key)))
-              (text-response 400 (format nil "Invalid JSON (expected key and value string fields)~%"))))
-        (text-response 400 (format nil "Invalid JSON (expected key and value string fields)~%")))))
+                (text-response 200
+                 (format nil "[in_memory] Stored key '~a'~%" key)))
+              (text-response 400
+                             (format nil
+                                     "Invalid JSON (expected key and value string fields)~%"))))
+        (text-response 400
+                       (format nil
+                               "Invalid JSON (expected key and value string fields)~%")))))
 
 ;; GET /?key=<key> answers the stored value, or 404 when the key is unknown.
 ;; The raw query string arrives as :query-string; rontolisp:query-param
@@ -63,8 +68,10 @@
         (let ((value (gethash key *store*)))
           (if value
               (text-response 200 (format nil "[in_memory] ~a~%" value))
-              (text-response 404 (format nil "[in_memory] Key '~a' not found~%" key))))
-        (text-response 400 (format nil "Missing required query parameter: key~%")))))
+              (text-response 404
+               (format nil "[in_memory] Key '~a' not found~%" key))))
+        (text-response 400
+         (format nil "Missing required query parameter: key~%")))))
 
 ;; :request-method is an interned keyword, so the comparisons are eq.
 (defun route (env)

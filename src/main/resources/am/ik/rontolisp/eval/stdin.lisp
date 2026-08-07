@@ -23,7 +23,9 @@
 ;; file reads as the program it is. The component binds the interface against the
 ;; fixed import block's own stdin instance (WasmComponentBuilder lowers it FROM
 ;; the block; a second import of the same interface would be invalid).
-(rontolisp:wit-import "stdin.wit" :interface "wasi:cli/stdin@0.3.0" :package %stdin)
+(rontolisp:wit-import "stdin.wit"
+                      :interface "wasi:cli/stdin@0.3.0"
+                      :package %stdin)
 
 ;;; --- the cached stdin stream + chunk buffer (the adapter's cache, in Lisp) ---
 
@@ -42,12 +44,17 @@
 
 (rontolisp:async-defun rontolisp::%stdin-fill ()
   ;; Refill the chunk buffer from the stdin stream; nil (and the eof mark) at EOF.
-  (let ((chunk (rontolisp:await (%stdin:stdin-stream-read (rontolisp::%stdin-ensure)))))
+  (let ((chunk
+         (rontolisp:await
+          (%stdin:stdin-stream-read (rontolisp::%stdin-ensure)))))
     (if (and chunk (> (length chunk) 0))
-        (progn (setq rontolisp::*stdin-buf* chunk)
-               (setq rontolisp::*stdin-cursor* 0)
-               t)
-        (progn (setq rontolisp::*stdin-eof* t) nil))))
+        (progn
+          (setq rontolisp::*stdin-buf* chunk)
+          (setq rontolisp::*stdin-cursor* 0)
+          t)
+        (progn
+          (setq rontolisp::*stdin-eof* t)
+          nil))))
 
 (defun rontolisp::%stdin-buf-ready ()
   (if rontolisp::*stdin-buf*

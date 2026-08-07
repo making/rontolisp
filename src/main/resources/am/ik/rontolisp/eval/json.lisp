@@ -44,9 +44,12 @@
     (do ((dummy nil))
         ((null todo) (nreverse out))
       (if (null (cdr todo))
-          (progn (setq out (cons (car todo) out)) (setq todo nil))
           (progn
-            (setq out (cons (concatenate 'string (car todo) (car (cdr todo))) out))
+            (setq out (cons (car todo) out))
+            (setq todo nil))
+          (progn
+            (setq out
+                  (cons (concatenate 'string (car todo) (car (cdr todo))) out))
             (setq todo (cdr (cdr todo))))))))
 
 (defun rontolisp::%json-concat (parts)
@@ -66,8 +69,7 @@
 
 (defun rontolisp::%json-scan-digits (s j n)
   (do ((k j (+ k 1)))
-      ((or (>= k n)
-           (let ((c (char-code (char s k)))) (or (< c 48) (> c 57))))
+      ((or (>= k n) (let ((c (char-code (char s k)))) (or (< c 48) (> c 57))))
        k)))
 
 (defun rontolisp::%json-hex-digit (c)
@@ -81,7 +83,9 @@
   (let ((v 0))
     (do ((k 0 (+ k 1)))
         ((>= k 4) v)
-      (setq v (+ (* v 16) (rontolisp::%json-hex-digit (char-code (char s (+ i k)))))))))
+      (setq v
+            (+ (* v 16)
+               (rontolisp::%json-hex-digit (char-code (char s (+ i k)))))))))
 
 (defun rontolisp::%json-encode-char (cp)
   ;; One CHARACTER string for the given code point. Prior to the code-point
@@ -99,8 +103,8 @@
              (= (char-code (char s (+ next 1))) 117))
         (let ((lo (rontolisp::%json-hex4 s (+ next 2) n)))
           (if (and (>= lo 56320) (<= lo 57343))
-              (cons (rontolisp::%json-encode-char (+ 65536 (* 1024 (- cp 55296)) (- lo 56320)))
-                    (+ next 6))
+              (cons (rontolisp::%json-encode-char
+                     (+ 65536 (* 1024 (- cp 55296)) (- lo 56320))) (+ next 6))
               (cons (concatenate 'string (rontolisp::%json-encode-char cp)
                                  (rontolisp::%json-encode-char lo))
                     (+ next 6))))
@@ -130,7 +134,8 @@
       (let ((c (char-code (char s j))))
         (cond ((= c 34)
                (when (> j start) (setq parts (cons (subseq s start j) parts)))
-               (return (cons (rontolisp::%json-concat (nreverse parts)) (+ j 1))))
+               (return
+                (cons (rontolisp::%json-concat (nreverse parts)) (+ j 1))))
               ((= c 92)
                (when (> j start) (setq parts (cons (subseq s start j) parts)))
                (let ((esc (rontolisp::%json-escape s j n)))
@@ -139,7 +144,8 @@
                  (setq start j)))
               (t (setq j (+ j 1))))))))
 
-(defun rontolisp::%json-float (s tok-start int-start int-end frac-start frac-end tok-end)
+(defun rontolisp::%json-float
+    (s tok-start int-start int-end frac-start frac-end tok-end)
   (let ((m 0.0) (fd 0) (e 0))
     (do ((k int-start (+ k 1)))
         ((>= k int-end))
@@ -192,7 +198,8 @@
             (when (= k es) (error "json-parse: invalid number"))))
         (if (and (null frac-start) (not exp-p) (<= (- int-end int-start) 18))
             (cons (parse-integer (subseq s i int-end)) k)
-            (cons (rontolisp::%json-float s i int-start int-end frac-start frac-end k) k))))))
+            (cons (rontolisp::%json-float s i int-start int-end frac-start
+                                          frac-end k) k))))))
 
 (defun rontolisp::%json-list->vector (rev-items count)
   ;; rev-items holds the elements in REVERSE order; build a forward simple
@@ -224,7 +231,10 @@
               (when (>= j n) (error "json-parse: unterminated array"))
               (let ((c (char-code (char s j))))
                 (cond ((= c 44) (setq j (+ j 1)))
-                      ((= c 93) (return (cons (rontolisp::%json-list->vector items count) (+ j 1))))
+                      ((= c 93)
+                       (return
+                        (cons (rontolisp::%json-list->vector items count)
+                              (+ j 1))))
                       (t (error "json-parse: expected , or ] in array"))))))))))
 
 (defun rontolisp::%json-object (s i n)
@@ -250,8 +260,8 @@
                 (when (>= j n) (error "json-parse: unterminated object"))
                 (let ((c (char-code (char s j))))
                   (cond ((= c 44) (setq j (+ j 1)))
-                        ((= c 125) (return (cons h (+ j 1))))
-                        (t (error "json-parse: expected , or } in object")))))))))))
+                   ((= c 125) (return (cons h (+ j 1))))
+                   (t (error "json-parse: expected , or } in object")))))))))))
 
 (defun rontolisp::%json-value (s i n)
   ;; Returns (value . next-index).
@@ -259,13 +269,13 @@
     (when (>= j n) (error "json-parse: unexpected end of input"))
     (let ((c (char-code (char s j))))
       (cond ((= c 34) (rontolisp::%json-string s j n))
-            ((= c 123) (rontolisp::%json-object s j n))
-            ((= c 91) (rontolisp::%json-array s j n))
-            ((= c 116) (rontolisp::%json-literal s j n "true" t))
-            ((= c 102) (rontolisp::%json-literal s j n "false" nil))
-            ((= c 110) (rontolisp::%json-literal s j n "null" 'null))
-            ((or (= c 45) (and (>= c 48) (<= c 57))) (rontolisp::%json-number s j n))
-            (t (error "json-parse: unexpected character"))))))
+       ((= c 123) (rontolisp::%json-object s j n))
+       ((= c 91) (rontolisp::%json-array s j n))
+       ((= c 116) (rontolisp::%json-literal s j n "true" t))
+       ((= c 102) (rontolisp::%json-literal s j n "false" nil))
+       ((= c 110) (rontolisp::%json-literal s j n "null" 'null))
+       ((or (= c 45) (and (>= c 48) (<= c 57))) (rontolisp::%json-number s j n))
+       (t (error "json-parse: unexpected character"))))))
 
 (defun rontolisp::%json-parse (s)
   (when (not (stringp s)) (error "json-parse expects a string"))
@@ -285,9 +295,10 @@
         ((= c 9) "\\t")
         ((= c 8) "\\b")
         ((= c 12) "\\f")
-        (t (concatenate 'string "\\u00"
-                        (subseq "0123456789abcdef" (ash c -4) (+ (ash c -4) 1))
-                        (subseq "0123456789abcdef" (logand c 15) (+ (logand c 15) 1))))))
+        (t
+         (concatenate 'string "\\u00"
+          (subseq "0123456789abcdef" (ash c -4) (+ (ash c -4) 1))
+          (subseq "0123456789abcdef" (logand c 15) (+ (logand c 15) 1))))))
 
 (defun rontolisp::%json-out-string (s acc)
   ;; Conses the JSON representation of string s onto acc (fragments in
@@ -323,8 +334,10 @@
               ((>= i n))
             (let ((c (char-code (char name i))))
               (when (and (>= c 65) (<= c 90))
-                (when (> i start) (setq parts (cons (subseq name start i) parts)))
-                (setq parts (cons (rontolisp::%json-char-string (+ c 32)) parts))
+                (when (> i start)
+                  (setq parts (cons (subseq name start i) parts)))
+                (setq parts
+                      (cons (rontolisp::%json-char-string (+ c 32)) parts))
                 (setq start (+ i 1)))))
           (when (> n start) (setq parts (cons (subseq name start n) parts)))
           (rontolisp::%json-concat (nreverse parts))))))
@@ -366,10 +379,10 @@
                    (setq %json-hash-first nil)
                    (setq %json-hash-acc (cons "," %json-hash-acc)))
                (setq %json-hash-acc
-                     (rontolisp::%json-out-string (rontolisp::%json-key-name k) %json-hash-acc))
+                     (rontolisp::%json-out-string (rontolisp::%json-key-name k)
+                                                  %json-hash-acc))
                (setq %json-hash-acc (cons ":" %json-hash-acc))
-               (setq %json-hash-acc (rontolisp::%json-out v %json-hash-acc)))
-             h)
+               (setq %json-hash-acc (rontolisp::%json-out v %json-hash-acc))) h)
     (cons "}" %json-hash-acc)))
 
 (defun rontolisp::%json-out-instance (v acc)
@@ -386,7 +399,8 @@
       (let ((name (car (car defs))))
         (when (slot-boundp v name)
           (if firstp (setq firstp nil) (setq a (cons "," a)))
-          (setq a (rontolisp::%json-out-string (rontolisp::%json-key-name name) a))
+          (setq a
+           (rontolisp::%json-out-string (rontolisp::%json-key-name name) a))
           (setq a (cons ":" a))
           (setq a (rontolisp::%json-out (slot-value v name) a)))))
     (cons "}" a)))

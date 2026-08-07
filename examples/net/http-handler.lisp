@@ -28,9 +28,10 @@
 ;; into the bare method name for the text body.
 (defun handle (env)
   (list 200 '(:content-type "text/plain")
-        (list (format nil "Hello from rontolisp!~%~a ~a~%"
-                      (symbol-name (getf env :request-method))
-                      (getf env :path-info)))))
+        (list
+         (format nil "Hello from rontolisp!~%~a ~a~%"
+                 (symbol-name (getf env :request-method))
+                 (getf env :path-info)))))
 
 ;; On the interpreter / JVM this blocks and serves on port 8080; under
 ;; --component the port argument is ignored (the host provides the socket).

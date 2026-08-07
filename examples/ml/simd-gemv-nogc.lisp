@@ -44,8 +44,7 @@
 ;;; Which component of the vector is the largest.
 (defun argmax (v)
   (let ((best 0))
-    (dotimes (i (length v))
-      (when (> (aref v i) (aref v best)) (setq best i)))
+    (dotimes (i (length v)) (when (> (aref v i) (aref v best)) (setq best i)))
     best))
 
 ;;; n steps of x <- rms-normalize(W x) over the fixed-seed matrix; returns
@@ -53,9 +52,7 @@
 ;;; the LCG state is a plain local: s <- (75 s + 74) mod 65537, and each draw
 ;;; maps to a single-float in [-1, 1) exactly as simd-gemv.lisp's lcg-uniform.
 (defun fingerprint (n)
-  (let ((dim 256)
-        (eps 0.00001)
-        (s 7))
+  (let ((dim 256) (eps 0.00001) (s 7))
     (let ((w (make-array (list dim dim) :element-type 'single-float))
           (x (vec:zeros dim 'single-float))
           (y (vec:zeros dim 'single-float)))

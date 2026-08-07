@@ -13,9 +13,7 @@
 ;; in-package); the defpackage form registers the package for the following
 ;; jzon.lisp, exactly like the replaced file's own header did.
 
-(defpackage #:com.inuoe.jzon/eisel-lemire
-  (:use #:cl)
-  (:export #:make-double))
+(defpackage #:com.inuoe.jzon/eisel-lemire (:use #:cl) (:export #:make-double))
 
 (defun com.inuoe.jzon/eisel-lemire::%pow10-exact (e)
   (do ((p 1.0d0) (i 0))
@@ -38,6 +36,7 @@
              (setq e (- e 22)))))))
 
 (defun com.inuoe.jzon/eisel-lemire:make-double (mantissa exp10 neg)
-  (let ((d (com.inuoe.jzon/eisel-lemire::%scale-by-pow10
-            (coerce mantissa 'double-float) exp10)))
+  (let ((d
+         (com.inuoe.jzon/eisel-lemire::%scale-by-pow10
+          (coerce mantissa 'double-float) exp10)))
     (if neg (- d) d)))

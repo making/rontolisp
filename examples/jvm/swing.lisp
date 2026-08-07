@@ -41,24 +41,19 @@
 
 (defpackage swing
   (:use cl)
-  (:export rgb grid-window label-grid-window
-           cell paint fill status
-           cell-text cell-fg on-cell-click
-           animate))
+  (:export rgb grid-window label-grid-window cell paint fill status cell-text
+           cell-fg on-cell-click animate))
 
 (in-package swing)
 
 ;; A window handle is a small symbol-keyed hash table.
 (defun rgb (r g b) (java:new "java.awt.Color" r g b))
 
-(defun cell (win r c)
-  (gethash (list r c) (gethash 'cells win)))
+(defun cell (win r c) (gethash (list r c) (gethash 'cells win)))
 
-(defun paint (win r c color)
-  (java:call (cell win r c) "setBackground" color))
+(defun paint (win r c color) (java:call (cell win r c) "setBackground" color))
 
-(defun status (win text)
-  (java:call (gethash 'status win) "setText" text))
+(defun status (win text) (java:call (gethash 'status win) "setText" text))
 
 (defun fill (win color)
   (let ((rows (gethash 'rows win)) (cols (gethash 'cols win)) (r 0))
@@ -71,8 +66,9 @@
 
 (defun grid-window (title rows cols size)
   (let ((frame (java:new "javax.swing.JFrame" title))
-        (grid (java:new "javax.swing.JPanel"
-                        (java:new "java.awt.GridLayout" rows cols 1 1)))
+        (grid
+         (java:new "javax.swing.JPanel"
+                   (java:new "java.awt.GridLayout" rows cols 1 1)))
         (status (java:new "javax.swing.JLabel" " "))
         (cells (make-hash-table :test 'equal))
         (win (make-hash-table :test 'equal)))
@@ -120,12 +116,14 @@
 ;; text (cell-text) and receive per-cell clicks (on-cell-click).
 (defun label-grid-window (title rows cols size)
   (let ((frame (java:new "javax.swing.JFrame" title))
-        (grid (java:new "javax.swing.JPanel"
-                        (java:new "java.awt.GridLayout" rows cols 1 1)))
+        (grid
+         (java:new "javax.swing.JPanel"
+                   (java:new "java.awt.GridLayout" rows cols 1 1)))
         (status (java:new "javax.swing.JLabel" " "))
         (cells (make-hash-table :test 'equal))
         (win (make-hash-table :test 'equal))
-        (font (java:new "java.awt.Font" "SansSerif" 1 (floor (/ (* size 6) 10)))))
+        (font
+         (java:new "java.awt.Font" "SansSerif" 1 (floor (/ (* size 6) 10)))))
     (java:call grid "setBackground" (rgb 120 120 120))
     (let ((r 0))
       (while (< r rows)
@@ -159,12 +157,10 @@
     win))
 
 ;; Set the centred text of a label cell (e.g. a mine count).
-(defun cell-text (win r c text)
-  (java:call (cell win r c) "setText" text))
+(defun cell-text (win r c text) (java:call (cell win r c) "setText" text))
 
 ;; Set a label cell's text colour.
-(defun cell-fg (win r c color)
-  (java:call (cell win r c) "setForeground" color))
+(defun cell-fg (win r c color) (java:call (cell win r c) "setForeground" color))
 
 ;; Call HANDLER with (row col button) on every click of any cell, where button
 ;; is the java.awt.event.MouseEvent button code (1 = left, 2 = middle, 3 = right).
@@ -181,7 +177,7 @@
                                    (lambda (method event)
                                      (when (equal method "mouseClicked")
                                        (funcall handler cr cc
-                                                (java:call event "getButton")))))))
+                                        (java:call event "getButton")))))))
           (setq c (+ c 1))))
       (setq r (+ r 1)))))
 

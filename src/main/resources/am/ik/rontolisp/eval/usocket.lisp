@@ -31,9 +31,11 @@
 (defparameter usocket:*auto-port* 0)
 
 (define-condition usocket:socket-condition (condition)
-  ((message :initarg :message :initform "socket error"
+  ((message :initarg :message
+            :initform "socket error"
             :reader usocket::%socket-condition-message))
-  (:report (lambda (c s) (write-string (usocket::%socket-condition-message c) s))))
+  (:report
+   (lambda (c s) (write-string (usocket::%socket-condition-message c) s))))
 
 (define-condition usocket:socket-error (usocket:socket-condition error) ())
 
@@ -52,17 +54,15 @@
   ;; the original message (the format-control of the synthesized simple-error the
   ;; handler receives); the :report echoes it, so an uncaught error prints
   ;; unchanged.
-  (error 'usocket:socket-error :message
-         (if (stringp (simple-condition-format-control c))
-             (simple-condition-format-control c)
-             "socket error")))
+  (error 'usocket:socket-error
+         :message (if (stringp (simple-condition-format-control c))
+                      (simple-condition-format-control c)
+                      "socket error")))
 
 (defun usocket::%usock-listen-host (host)
   ;; usocket passes the host first and uses *wildcard-host* / nil for "all
   ;; interfaces"; rontolisp:tcp-listen expresses that as a nil host argument.
-  (if (null host)
-      nil
-      (if (string= host "0.0.0.0") nil host)))
+  (if (null host) nil (if (string= host "0.0.0.0") nil host)))
 
 (defun usocket:socket-connect (host port &key protocol element-type timeout
                                     deadline nodelay local-host local-port
@@ -73,11 +73,12 @@
   ;; :datagram reads :DATAGRAM under the reader's upcase premise, as does a
   ;; user's :protocol :datagram argument, so one arm suffices.
   (when (eql protocol :datagram)
-    (error "usocket:socket-connect: :protocol :datagram (UDP) is not supported"))
+    (error
+     "usocket:socket-connect: :protocol :datagram (UDP) is not supported"))
   (usocket::%usock-guard (rontolisp:tcp-connect host port)))
 
-(defun usocket:socket-listen (host port &key reuse-address backlog element-type
-                                   &allow-other-keys)
+(defun usocket:socket-listen
+    (host port &key reuse-address backlog element-type &allow-other-keys)
   ;; Note the flipped argument order vs rontolisp:tcp-listen (port &optional
   ;; host). reuse-address/backlog/element-type are accepted and ignored
   ;; (the backlog is the runtime default). tcp-listen rejects an explicit nil
@@ -96,27 +97,23 @@
   ;; work on it directly.
   socket)
 
-(defun usocket:socket-close (socket)
-  (close socket))
+(defun usocket:socket-close (socket) (close socket))
 
-(defun usocket:get-local-port (socket)
-  (rontolisp:tcp-local-port socket))
+(defun usocket:get-local-port (socket) (rontolisp:tcp-local-port socket))
 
-(defun usocket:get-local-address (socket)
-  (rontolisp:tcp-local-address socket))
+(defun usocket:get-local-address (socket) (rontolisp:tcp-local-address socket))
 
-(defun usocket:get-peer-port (socket)
-  (rontolisp:tcp-peer-port socket))
+(defun usocket:get-peer-port (socket) (rontolisp:tcp-peer-port socket))
 
-(defun usocket:get-peer-address (socket)
-  (rontolisp:tcp-peer-address socket))
+(defun usocket:get-peer-address (socket) (rontolisp:tcp-peer-address socket))
 
 (defun usocket:get-local-name (socket)
   ;; The literal (values ...) tail flows through the syntactic multiple-values
   ;; tier's user-function channel (see .kb/multiple-values.md), so a caller's
   ;; multiple-value-bind receives both the address and the port; an ordinary
   ;; single-value context receives the address.
-  (values (rontolisp:tcp-local-address socket) (rontolisp:tcp-local-port socket)))
+  (values (rontolisp:tcp-local-address socket)
+          (rontolisp:tcp-local-port socket)))
 
 (defun usocket:get-peer-name (socket)
   (values (rontolisp:tcp-peer-address socket) (rontolisp:tcp-peer-port socket)))
@@ -129,14 +126,12 @@
   (cond ((null host) "0.0.0.0")
         ((stringp host) host)
         ((integerp host)
-         (format nil "~D.~D.~D.~D"
-                 (logand (ash host -24) 255)
-                 (logand (ash host -16) 255)
-                 (logand (ash host -8) 255)
+         (format nil "~D.~D.~D.~D" (logand (ash host -24) 255)
+                 (logand (ash host -16) 255) (logand (ash host -8) 255)
                  (logand host 255)))
         ((or (vectorp host) (consp host))
-         (format nil "~D.~D.~D.~D"
-                 (elt host 0) (elt host 1) (elt host 2) (elt host 3)))
+         (format nil "~D.~D.~D.~D" (elt host 0) (elt host 1) (elt host 2)
+                 (elt host 3)))
         (t (string host))))
 
 (defun usocket:get-host-by-name (name)

@@ -29,8 +29,7 @@
 
 ;; Appends the carriage return of an HTTP CRLF line ending (write-line then
 ;; appends the newline).
-(defun crlf (s)
-  (concatenate 'string s (format nil "~a" (code-char 13))))
+(defun crlf (s) (concatenate 'string s (format nil "~a" (code-char 13))))
 
 ;; Consumes the request headers up to the blank line that ends them.
 (defun drain-headers (sock)
@@ -42,18 +41,23 @@
 ;; (interpreter and JVM both signal), so there is no nil check here.
 (let ((listener (rontolisp:tls-listen "tls-server.p12" "changeit" 8443)))
   (write-line "https server listening on https://127.0.0.1:8443/")
-  (do ((n 1 (+ n 1))) (nil)
+  (do ((n 1 (+ n 1)))
+      (nil)
     ;; with-server-socket closes the accepted socket on every exit.
     (usocket:with-server-socket (sock (usocket:socket-accept listener))
-      (let* ((stream (usocket:socket-stream sock))
-             (request (read-line stream)))
+      (let* ((stream (usocket:socket-stream sock)) (request (read-line stream)))
         (if request
-            (let ((body (format nil "<h1>hello from rontolisp over TLS</h1><p>request ~a: ~a</p>" n request)))
+            (let ((body
+                   (format nil
+                           "<h1>hello from rontolisp over TLS</h1><p>request ~a: ~a</p>"
+                           n request)))
               (drain-headers stream)
               (write-line (crlf "HTTP/1.1 200 OK") stream)
               (write-line (crlf "Content-Type: text/html") stream)
               ;; + 1: write-line terminates the body with a newline
-              (write-line (crlf (format nil "Content-Length: ~a" (+ (length body) 1))) stream)
+              (write-line
+               (crlf (format nil "Content-Length: ~a" (+ (length body) 1)))
+               stream)
               (write-line (crlf "Connection: close") stream)
               (write-line (crlf "") stream)
               (write-line body stream)

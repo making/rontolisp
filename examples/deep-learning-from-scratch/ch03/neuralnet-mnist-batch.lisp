@@ -17,11 +17,15 @@
 
 (defun predict (network x)
   ;; x: an (N x 784) batch.
-  (let* ((a1 (linalg:add (linalg:matmul x (getf network :w1)) (getf network :b1)))
+  (let* ((a1
+          (linalg:add (linalg:matmul x (getf network :w1)) (getf network :b1)))
          (z1 (sigmoid a1))
-         (a2 (linalg:add (linalg:matmul z1 (getf network :w2)) (getf network :b2)))
+         (a2
+          (linalg:add (linalg:matmul z1 (getf network :w2)) (getf network :b2)))
          (z2 (sigmoid a2))
-         (a3 (linalg:add (linalg:matmul z2 (getf network :w3)) (getf network :b3))))
+         (a3
+          (linalg:add (linalg:matmul z2 (getf network :w3))
+                      (getf network :b3))))
     (softmax a3)))
 
 (let ((x (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*))

@@ -22,9 +22,7 @@
 ;;; WIT: vowel-count: func(text: string) -> s32
 (defun vowel-count (text)
   (let ((n 0))
-    (dotimes (i (length text))
-      (when (vowelp (char text i))
-        (incf n)))
+    (dotimes (i (length text)) (when (vowelp (char text i)) (incf n)))
     n))
 
 (rontolisp:wit-export "wit/vowels.wit" :world counter)

@@ -36,4 +36,5 @@
 
 ;; Custom :test and :key designators.
 (print (split-sequence:split-sequence 2 '(1 2 3 2 4) :test #'eql))
-(print (split-sequence:split-sequence #\A "aAbAc" :key #'char-upcase :test #'char=))
+(print
+ (split-sequence:split-sequence #\A "aAbAc" :key #'char-upcase :test #'char=))

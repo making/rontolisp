@@ -64,22 +64,22 @@
                  (write-char (code-char b) s)
                  (setq rest (cdr rest)))
                 ((and (>= b #xC0) (< b #xE0) b1)
-                 (write-char (code-char (logior (ash (logand b #x1F) 6)
-                                                (logand b1 #x3F)))
-                             s)
+                 (write-char
+                  (code-char (logior (ash (logand b #x1F) 6) (logand b1 #x3F)))
+                  s)
                  (setq rest (cdr (cdr rest))))
                 ((and (>= b #xE0) (< b #xF0) b1 b2)
-                 (write-char (code-char (logior (ash (logand b #x0F) 12)
-                                                (ash (logand b1 #x3F) 6)
-                                                (logand b2 #x3F)))
-                             s)
+                 (write-char (code-char
+                              (logior (ash (logand b #x0F) 12)
+                                      (ash (logand b1 #x3F) 6)
+                                      (logand b2 #x3F))) s)
                  (setq rest (cdr (cdr (cdr rest)))))
                 ((and (>= b #xF0) b1 b2 b3)
-                 (write-char (code-char (logior (ash (logand b #x07) 18)
-                                                (ash (logand b1 #x3F) 12)
-                                                (ash (logand b2 #x3F) 6)
-                                                (logand b3 #x3F)))
-                             s)
+                 (write-char (code-char
+                              (logior (ash (logand b #x07) 18)
+                                      (ash (logand b1 #x3F) 12)
+                                      (ash (logand b2 #x3F) 6)
+                                      (logand b3 #x3F))) s)
                  (setq rest (cdr (cdr (cdr (cdr rest))))))
                 (t
                  (write-char (code-char b) s)
@@ -127,17 +127,14 @@
   ;; the LOWERCASED name. Repeated headers of one name join with ", " in wire
   ;; order, which is what a Clack handler backend is required to do (and what
   ;; makes a repeated Cookie or X-Forwarded-For readable at all).
-  (let ((table (make-hash-table :test 'equal))
-        (rest alist))
+  (let ((table (make-hash-table :test 'equal)) (rest alist))
     (while rest
       (let ((pair (car rest)))
         (when (consp pair)
           (let* ((name (string-downcase (car pair)))
                  (seen (gethash name table)))
             (setf (gethash name table)
-                  (if seen
-                      (concatenate 'string seen ", " (cdr pair))
-                      (cdr pair))))))
+             (if seen (concatenate 'string seen ", " (cdr pair)) (cdr pair))))))
       (setq rest (cdr rest)))
     table))
 
@@ -146,8 +143,7 @@
 (defun rontolisp::%http-last-colon (s)
   (let ((idx -1) (i 0) (n (length s)))
     (while (< i n)
-      (when (= (char-code (char s i)) 58)
-        (setq idx i))
+      (when (= (char-code (char s i)) 58) (setq idx i))
       (setq i (+ i 1)))
     idx))
 
@@ -155,8 +151,7 @@
   (let ((ok (> (length s) 0)) (i 0) (n (length s)))
     (while (< i n)
       (let ((c (char-code (char s i))))
-        (when (or (< c 48) (> c 57))
-          (setq ok nil)))
+        (when (or (< c 48) (> c 57)) (setq ok nil)))
       (setq i (+ i 1)))
     ok))
 
@@ -181,8 +176,7 @@
   (let ((bytes nil) (i 0) (n (length string)))
     (while (< i n)
       (let ((c (char-code (char string i))))
-        (cond ((< c #x80)
-               (setq bytes (cons c bytes)))
+        (cond ((< c #x80) (setq bytes (cons c bytes)))
               ((< c #x800)
                (setq bytes (cons (logior #xC0 (ash c -6)) bytes))
                (setq bytes (cons (logior #x80 (logand c #x3F)) bytes)))
@@ -211,23 +205,28 @@
 ;; lack-request has already parsed. Nothing here is a stream HANDLE, so a
 ;; request costs no entry in any backend's stream table and the object is
 ;; simply collected when the request ends.
-(defclass rontolisp::http-request-body-stream (rontolisp:fundamental-binary-input-stream)
-  ((rontolisp::octets :initarg :octets :initform nil
+(defclass rontolisp::http-request-body-stream
+    (rontolisp:fundamental-binary-input-stream)
+  ((rontolisp::octets :initarg :octets
+                      :initform nil
                       :accessor rontolisp::%http-body-octets)
-   (rontolisp::index :initarg :index :initform 0
+   (rontolisp::index :initarg :index
+                     :initform 0
                      :accessor rontolisp::%http-body-index)
-   (rontolisp::end :initarg :end :initform 0
+   (rontolisp::end :initarg :end
+                   :initform 0
                    :accessor rontolisp::%http-body-end)))
 
-(defmethod rontolisp:stream-read-byte ((stream rontolisp::http-request-body-stream))
+(defmethod rontolisp:stream-read-byte
+    ((stream rontolisp::http-request-body-stream))
   (let ((i (rontolisp::%http-body-index stream)))
     (if (>= i (rontolisp::%http-body-end stream))
-        :eof
-        (progn
-          (setf (rontolisp::%http-body-index stream) (+ i 1))
-          (aref (rontolisp::%http-body-octets stream) i)))))
+        :eof (progn
+               (setf (rontolisp::%http-body-index stream) (+ i 1))
+               (aref (rontolisp::%http-body-octets stream) i)))))
 
-(defmethod rontolisp:stream-read-char ((stream rontolisp::http-request-body-stream))
+(defmethod rontolisp:stream-read-char
+    ((stream rontolisp::http-request-body-stream))
   ;; Decodes one UTF-8 sequence at the cursor. A byte that starts no valid
   ;; sequence answers its own character and advances by one, so a binary body
   ;; read as characters degrades instead of signalling.
@@ -235,40 +234,46 @@
         (i (rontolisp::%http-body-index stream))
         (e (rontolisp::%http-body-end stream)))
     (if (>= i e)
-        :eof
-        (let ((b (aref v i)))
-          (cond ((< b #x80)
-                 (setf (rontolisp::%http-body-index stream) (+ i 1))
-                 (code-char b))
-                ((and (>= b #xC0) (< b #xE0) (< (+ i 1) e))
-                 (setf (rontolisp::%http-body-index stream) (+ i 2))
-                 (code-char (logior (ash (logand b #x1F) 6)
-                                    (logand (aref v (+ i 1)) #x3F))))
-                ((and (>= b #xE0) (< b #xF0) (< (+ i 2) e))
-                 (setf (rontolisp::%http-body-index stream) (+ i 3))
-                 (code-char (logior (ash (logand b #x0F) 12)
-                                    (ash (logand (aref v (+ i 1)) #x3F) 6)
-                                    (logand (aref v (+ i 2)) #x3F))))
-                ((and (>= b #xF0) (< (+ i 3) e))
-                 (setf (rontolisp::%http-body-index stream) (+ i 4))
-                 (code-char (logior (ash (logand b #x07) 18)
-                                    (ash (logand (aref v (+ i 1)) #x3F) 12)
-                                    (ash (logand (aref v (+ i 2)) #x3F) 6)
-                                    (logand (aref v (+ i 3)) #x3F))))
-                (t
-                 (setf (rontolisp::%http-body-index stream) (+ i 1))
-                 (code-char b)))))))
+        :eof (let ((b (aref v i)))
+               (cond ((< b #x80)
+                      (setf (rontolisp::%http-body-index stream) (+ i 1))
+                      (code-char b))
+                     ((and (>= b #xC0) (< b #xE0) (< (+ i 1) e))
+                      (setf (rontolisp::%http-body-index stream) (+ i 2))
+                      (code-char
+                       (logior (ash (logand b #x1F) 6)
+                               (logand (aref v (+ i 1)) #x3F))))
+                     ((and (>= b #xE0) (< b #xF0) (< (+ i 2) e))
+                      (setf (rontolisp::%http-body-index stream) (+ i 3))
+                      (code-char
+                       (logior (ash (logand b #x0F) 12)
+                               (ash (logand (aref v (+ i 1)) #x3F) 6)
+                               (logand (aref v (+ i 2)) #x3F))))
+                     ((and (>= b #xF0) (< (+ i 3) e))
+                      (setf (rontolisp::%http-body-index stream) (+ i 4))
+                      (code-char
+                       (logior (ash (logand b #x07) 18)
+                               (ash (logand (aref v (+ i 1)) #x3F) 12)
+                               (ash (logand (aref v (+ i 2)) #x3F) 6)
+                               (logand (aref v (+ i 3)) #x3F))))
+                     (t
+                      (setf (rontolisp::%http-body-index stream) (+ i 1))
+                      (code-char b)))))))
 
-(defmethod rontolisp:stream-listen ((stream rontolisp::http-request-body-stream))
+(defmethod rontolisp:stream-listen
+    ((stream rontolisp::http-request-body-stream))
   (< (rontolisp::%http-body-index stream) (rontolisp::%http-body-end stream)))
 
-(defmethod rontolisp:stream-file-position ((stream rontolisp::http-request-body-stream))
+(defmethod rontolisp:stream-file-position
+    ((stream rontolisp::http-request-body-stream))
   (rontolisp::%http-body-index stream))
 
-(defmethod (setf rontolisp:stream-file-position) (position (stream rontolisp::http-request-body-stream))
+(defmethod (setf rontolisp:stream-file-position)
+    (position (stream rontolisp::http-request-body-stream))
   (setf (rontolisp::%http-body-index stream) position))
 
-(defmethod rontolisp:stream-read-line ((stream rontolisp::http-request-body-stream))
+(defmethod rontolisp:stream-read-line
+    ((stream rontolisp::http-request-body-stream))
   ;; One pass over the octets to the terminator. The inherited default dispatches
   ;; stream-read-char PER CHARACTER, which on the interpreter cost a measured 36%
   ;; of the POST throughput before the Java-backed body stream replaced this class
@@ -280,46 +285,54 @@
         (i (rontolisp::%http-body-index stream))
         (e (rontolisp::%http-body-end stream)))
     (if (>= i e)
-        :eof
-        (let ((line
-               (with-output-to-string (out)
-                 (let ((done nil))
-                   (while (and (not done) (< i e))
-                     (let ((b (aref v i)))
-                       (cond ((= b 10)
-                              (setq i (+ i 1))
-                              (setq done t))
-                             ((= b 13)
-                              (setq i (+ i 1))
-                              (when (and (< i e) (= (aref v i) 10))
-                                (setq i (+ i 1)))
-                              (setq done t))
-                             ((< b #x80)
-                              (write-char (code-char b) out)
-                              (setq i (+ i 1)))
-                             ((and (>= b #xC0) (< b #xE0) (< (+ i 1) e))
-                              (write-char (code-char (logior (ash (logand b #x1F) 6)
-                                                             (logand (aref v (+ i 1)) #x3F)))
-                                          out)
-                              (setq i (+ i 2)))
-                             ((and (>= b #xE0) (< b #xF0) (< (+ i 2) e))
-                              (write-char (code-char (logior (ash (logand b #x0F) 12)
-                                                             (ash (logand (aref v (+ i 1)) #x3F) 6)
-                                                             (logand (aref v (+ i 2)) #x3F)))
-                                          out)
-                              (setq i (+ i 3)))
-                             ((and (>= b #xF0) (< (+ i 3) e))
-                              (write-char (code-char (logior (ash (logand b #x07) 18)
-                                                             (ash (logand (aref v (+ i 1)) #x3F) 12)
-                                                             (ash (logand (aref v (+ i 2)) #x3F) 6)
-                                                             (logand (aref v (+ i 3)) #x3F)))
-                                          out)
-                              (setq i (+ i 4)))
-                             (t
-                              (write-char (code-char b) out)
-                              (setq i (+ i 1))))))))))
-          (setf (rontolisp::%http-body-index stream) i)
-          line))))
+        :eof (let ((line
+                    (with-output-to-string (out)
+                      (let ((done nil))
+                        (while (and (not done) (< i e))
+                          (let ((b (aref v i)))
+                            (cond ((= b 10)
+                                   (setq i (+ i 1))
+                                   (setq done t))
+                                  ((= b 13)
+                                   (setq i (+ i 1))
+                                   (when (and (< i e) (= (aref v i) 10))
+                                     (setq i (+ i 1)))
+                                   (setq done t))
+                                  ((< b #x80)
+                                   (write-char (code-char b) out)
+                                   (setq i (+ i 1)))
+                                  ((and (>= b #xC0) (< b #xE0) (< (+ i 1) e))
+                                   (write-char (code-char
+                                                (logior (ash (logand b #x1F) 6)
+                                                        (logand (aref v (+ i 1))
+                                                                #x3F))) out)
+                                   (setq i (+ i 2)))
+                                  ((and (>= b #xE0) (< b #xF0) (< (+ i 2) e))
+                                   (write-char (code-char
+                                                (logior (ash (logand b #x0F) 12)
+                                                        (ash (logand
+                                                              (aref v (+ i 1))
+                                                              #x3F) 6)
+                                                        (logand (aref v (+ i 2))
+                                                                #x3F))) out)
+                                   (setq i (+ i 3)))
+                                  ((and (>= b #xF0) (< (+ i 3) e))
+                                   (write-char (code-char
+                                                (logior (ash (logand b #x07) 18)
+                                                        (ash (logand
+                                                              (aref v (+ i 1))
+                                                              #x3F) 12)
+                                                        (ash (logand
+                                                              (aref v (+ i 2))
+                                                              #x3F) 6)
+                                                        (logand (aref v (+ i 3))
+                                                                #x3F))) out)
+                                   (setq i (+ i 4)))
+                                  (t
+                                   (write-char (code-char b) out)
+                                   (setq i (+ i 1))))))))))
+               (setf (rontolisp::%http-body-index stream) i)
+               line))))
 
 (defun rontolisp::%http-body-stream (body)
   ;; nil for an absent or empty body -- upstream guards :raw-body with
@@ -340,14 +353,10 @@
   ;; component -- whose lifted `method` variant case already IS one -- the
   ;; keyword itself. Clack wants an upcased keyword either way, and it must be
   ;; interned so (eq method :POST) works in a router.
-  (if (stringp m)
-      (intern (string-upcase m) :keyword)
-      m))
+  (if (stringp m) (intern (string-upcase m) :keyword) m))
 
 (defun rontolisp::%http-protocol-keyword (p)
-  (if (stringp p)
-      (intern (string-upcase p) :keyword)
-      :HTTP/1.1))
+  (if (stringp p) (intern (string-upcase p) :keyword) :HTTP/1.1))
 
 (defun rontolisp::%http-make-env (raw)
   ;; THE shape declaration: the Clack environment, in cons order. The list is
@@ -364,32 +373,31 @@
          (clen (gethash "content-length" headers))
          (body (nth 3 raw)))
     (list :REQUEST-METHOD (rontolisp::%http-method-keyword (nth 0 raw))
-          :SCRIPT-NAME ""
-          :PATH-INFO (rontolisp::%http-percent-decode path)
-          :QUERY-STRING query
-          :SERVER-NAME (or (if hostpair (car hostpair) nil) (nth 6 raw) "localhost")
-          :SERVER-PORT (or (if hostpair (cdr hostpair) nil) (nth 7 raw) 80)
-          :SERVER-PROTOCOL (rontolisp::%http-protocol-keyword (nth 4 raw))
-          :REQUEST-URI target
-          :URL-SCHEME (or (nth 5 raw) "http")
-          :REMOTE-ADDR (nth 8 raw)
-          :REMOTE-PORT (nth 9 raw)
-          :HEADERS headers
-          :CONTENT-TYPE (gethash "content-type" headers)
-          :CONTENT-LENGTH (if clen (parse-integer clen :junk-allowed t) nil)
-          ;; The transport hands the FINAL :raw-body value (its stream, the
-          ;; buffered Gray stream via %http-body-stream, or nil): wrapping here
-          ;; would tie every environment build to the buffered-body machinery,
-          ;; which a default-mode component deliberately does not carry.
-          :RAW-BODY body)))
+     :SCRIPT-NAME ""
+     :PATH-INFO (rontolisp::%http-percent-decode path)
+     :QUERY-STRING query
+     :SERVER-NAME (or (if hostpair (car hostpair) nil) (nth 6 raw) "localhost")
+     :SERVER-PORT (or (if hostpair (cdr hostpair) nil) (nth 7 raw) 80)
+     :SERVER-PROTOCOL (rontolisp::%http-protocol-keyword (nth 4 raw))
+     :REQUEST-URI target
+     :URL-SCHEME (or (nth 5 raw) "http")
+     :REMOTE-ADDR (nth 8 raw)
+     :REMOTE-PORT (nth 9 raw)
+     :HEADERS headers
+     :CONTENT-TYPE (gethash "content-type" headers)
+     :CONTENT-LENGTH (if clen (parse-integer clen :junk-allowed t) nil)
+     ;; The transport hands the FINAL :raw-body value (its stream, the
+     ;; buffered Gray stream via %http-body-stream, or nil): wrapping here
+     ;; would tie every environment build to the buffered-body machinery,
+     ;; which a default-mode component deliberately does not carry.
+     :RAW-BODY body)))
 
 ;;; --- the response ------------------------------------------------------------
 
 (defun rontolisp::%http-header-name (k)
   (if (stringp k) (string-downcase k) (string-downcase (symbol-name k))))
 
-(defun rontolisp::%http-header-value (v)
-  (if (stringp v) v (princ-to-string v)))
+(defun rontolisp::%http-header-value (v) (if (stringp v) v (princ-to-string v)))
 
 (defun rontolisp::%http-drop-header-p (name)
   ;; The transport computes the framing headers from the body it is about to
@@ -415,7 +423,10 @@
                (when (consp pair)
                  (let ((name (rontolisp::%http-header-name (car pair))))
                    (unless (rontolisp::%http-drop-header-p name)
-                     (setq out (cons (cons name (rontolisp::%http-header-value (cdr pair))) out))))))
+                     (setq out
+                           (cons (cons name
+                                  (rontolisp::%http-header-value (cdr pair)))
+                                 out))))))
              (setq rest (cdr rest)))
            (nreverse out)))
         (t
@@ -423,7 +434,10 @@
            (while (and rest (cdr rest))
              (let ((name (rontolisp::%http-header-name (car rest))))
                (unless (rontolisp::%http-drop-header-p name)
-                 (setq out (cons (cons name (rontolisp::%http-header-value (car (cdr rest)))) out))))
+                 (setq out
+                       (cons (cons name
+                              (rontolisp::%http-header-value (car (cdr rest))))
+                             out))))
              (setq rest (cdr (cdr rest))))
            (nreverse out)))))
 
@@ -440,8 +454,7 @@
     (get-output-stream-string out)))
 
 (defun rontolisp::%http-join-strings (parts)
-  (let ((out (make-string-output-stream))
-        (rest parts))
+  (let ((out (make-string-output-stream)) (rest parts))
     (while rest
       (let ((part (car rest)))
         (if (stringp part)
@@ -453,9 +466,7 @@
 (defun rontolisp::%http-octets-string (v)
   ;; An (unsigned-byte 8) vector body: one character per octet. The transport
   ;; writes those characters back out one byte each, so the bytes survive.
-  (let ((out (make-string-output-stream))
-        (i 0)
-        (n (length v)))
+  (let ((out (make-string-output-stream)) (i 0) (n (length v)))
     (while (< i n)
       (write-char (code-char (aref v i)) out)
       (setq i (+ i 1)))
@@ -478,13 +489,16 @@
   (cond ((null body) "")
         ((consp body) (rontolisp::%http-join-strings body))
         ((stringp body)
-         (error "http-handler: a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)"))
-        ((typep body '(vector (unsigned-byte 8))) (rontolisp::%http-octets-string body))
+         (error
+          "http-handler: a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)"))
+        ((typep body '(vector (unsigned-byte 8)))
+         (rontolisp::%http-octets-string body))
         ((rontolisp:streamp body) body)
         (t (error "http-handler: unsupported response body type"))))
 
 (defun rontolisp::%http-writer-refused ()
-  (error "http-handler: the streaming writer response protocol is not supported"))
+  (error
+   "http-handler: the streaming writer response protocol is not supported"))
 
 (defun rontolisp::%http-normalize-response (res)
   ;; (status headers) or (status headers body) -> (status header-alist
@@ -500,17 +514,19 @@
   ;; closure the responder returns.
   (if (functionp res)
       (let ((captured nil))
-        (funcall res (lambda (r)
-                       (setq captured r)
-                       (lambda (&rest ignored)
-                         (declare (ignore ignored))
-                         (rontolisp::%http-writer-refused))))
+        (funcall res
+                 (lambda (r)
+                   (setq captured r)
+                   (lambda (&rest ignored)
+                     (declare (ignore ignored))
+                     (rontolisp::%http-writer-refused))))
         (if (null captured)
             (error "http-handler: a delayed response delivered no response")
             (rontolisp::%http-normalize-response captured)))
       (progn
         (unless (and (consp res) (integerp (car res)))
-          (error "http-handler: a handler must return (status headers) or (status headers body)"))
+          (error
+           "http-handler: a handler must return (status headers) or (status headers body)"))
         (list (car res)
               (rontolisp::%http-response-headers-alist (car (cdr res)))
               (rontolisp::%http-body-string (car (cdr (cdr res))))))))

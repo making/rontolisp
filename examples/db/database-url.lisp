@@ -34,15 +34,15 @@
              (hi (if escapep (db-url-hex-value (char s (+ i 1))) nil))
              (lo (if escapep (db-url-hex-value (char s (+ i 2))) nil))
              (escaped (and hi lo)))
-        (setq out (concatenate 'string out
-                               (string (if escaped
-                                           (code-char (+ (* 16 hi) lo))
-                                           (char s i)))))
+        (setq out
+              (concatenate 'string out
+               (string (if escaped (code-char (+ (* 16 hi) lo)) (char s i)))))
         (setq i (+ i (if escaped 3 1)))))))
 
 (defun db-url-error (reason url)
   "REASON, the offending URL, and a reminder of the shape one has."
-  (error "~a: ~a~%Expected postgresql://user:password@host:port/database" reason url))
+  (error "~a: ~a~%Expected postgresql://user:password@host:port/database" reason
+         url))
 
 (defun db-url-part (s empty-reason url)
   "S, or an error naming URL when S is empty. Nothing in a connection URL is
@@ -66,14 +66,15 @@
    variable is an error here rather than a fallback address, because a default
    would be the hardcoded connection this file exists to remove."
   (when (or (null url) (string= url ""))
-    (error "no database URL given.~%Expected postgresql://user:password@host:port/database"))
+    (error
+     "no database URL given.~%Expected postgresql://user:password@host:port/database"))
   (let ((mark (search "://" url)))
-    (when (null mark)
-      (db-url-error "not a URL" url))
+    (when (null mark) (db-url-error "not a URL" url))
     (let ((scheme (string-downcase (subseq url 0 mark))))
       (when (and (string/= scheme "postgresql") (string/= scheme "postgres"))
-        (db-url-error (concatenate 'string "the scheme is " scheme "://, not postgresql://")
-                      url)))
+        (db-url-error
+         (concatenate 'string "the scheme is " scheme "://, not postgresql://")
+         url)))
     (let* ((body (subseq url (+ mark 3)))
            ;; A trailing ?sslmode=... and friends is not part of the authority.
            (query (position #\? body))
@@ -88,8 +89,10 @@
            (userinfo (if at (subseq authority 0 at) ""))
            (hostport (if at (subseq authority (+ at 1)) authority))
            (user-end (position #\: userinfo))
-           (user (db-url-decode (if user-end (subseq userinfo 0 user-end) userinfo)))
-           (secret (if user-end (db-url-decode (subseq userinfo (+ user-end 1))) ""))
+           (user
+            (db-url-decode (if user-end (subseq userinfo 0 user-end) userinfo)))
+           (secret
+            (if user-end (db-url-decode (subseq userinfo (+ user-end 1))) ""))
            (host-end (position #\: hostport :from-end t))
            (host (if host-end (subseq hostport 0 host-end) hostport))
            (port-text (if host-end (subseq hostport (+ host-end 1)) "5432"))
@@ -98,5 +101,4 @@
               (db-url-part user "no user in the URL" url)
               ;; nil, not "": a server on trust auth wants no password at all.
               (if (string= secret "") nil secret)
-              (db-url-part host "no host in the URL" url)
-              port))))
+              (db-url-part host "no host in the URL" url) port))))

@@ -92,15 +92,17 @@
 (defun mandelbrot-row (y x0 step cols max-iter)
   (let ((row ""))
     (dotimes (c cols)
-      (setq row (concatenate 'string row
-                             (shade (iterate 0.0 0.0 (+ x0 (* step c)) y max-iter) max-iter))))
+      (setq row
+            (concatenate 'string row
+             (shade (iterate 0.0 0.0 (+ x0 (* step c)) y max-iter) max-iter))))
     row))
 
 (defun julia-row (y x0 step cols max-iter cx cy)
   (let ((row ""))
     (dotimes (c cols)
-      (setq row (concatenate 'string row
-                             (shade (iterate (+ x0 (* step c)) y cx cy max-iter) max-iter))))
+      (setq row
+            (concatenate 'string row
+             (shade (iterate (+ x0 (* step c)) y cx cy max-iter) max-iter))))
     row))
 
 ;;; Render the Mandelbrot set as a cols x rows grid, row-major, as a single string
@@ -108,38 +110,35 @@
 ;;; complex-plane units; the height follows from the grid's aspect ratio.
 ;;; WIT: mandelbrot: func(center-x: f64, center-y: f64, scale: f64, cols: s32, rows: s32, max-iter: s32) -> string
 (defun mandelbrot (center-x center-y scale cols rows max-iter)
-  (let ((step (/ scale cols))
-        (out ""))
+  (let ((step (/ scale cols)) (out ""))
     (let ((x0 (- center-x (/ scale 2.0)))
           (y0 (- center-y (/ (* step rows) 2.0))))
       (dotimes (r rows)
-        (setq out (concatenate 'string out
-                               (mandelbrot-row (+ y0 (* step r)) x0 step cols max-iter)))))
+        (setq out
+              (concatenate 'string out
+               (mandelbrot-row (+ y0 (* step r)) x0 step cols max-iter)))))
     out))
 
 ;;; Render the Julia set of the constant cx + cy*i the same way, as a view of
 ;;; width scale centered on the origin.
 ;;; WIT: julia: func(cx: f64, cy: f64, scale: f64, cols: s32, rows: s32, max-iter: s32) -> string
 (defun julia (cx cy scale cols rows max-iter)
-  (let ((step (/ scale cols))
-        (out ""))
-    (let ((x0 (- 0.0 (/ scale 2.0)))
-          (y0 (- 0.0 (/ (* step rows) 2.0))))
+  (let ((step (/ scale cols)) (out ""))
+    (let ((x0 (- 0.0 (/ scale 2.0))) (y0 (- 0.0 (/ (* step rows) 2.0))))
       (dotimes (r rows)
-        (setq out (concatenate 'string out
-                               (julia-row (+ y0 (* step r)) x0 step cols max-iter cx cy)))))
+        (setq out
+              (concatenate 'string out
+               (julia-row (+ y0 (* step r)) x0 step cols max-iter cx cy)))))
     out))
 
 ;;; The escape time of one point of the Mandelbrot set -- what the page shows for
 ;;; the point under the cursor.
 ;;; WIT: escape-time: func(x: f64, y: f64, max-iter: s32) -> s32
-(defun escape-time (x y max-iter)
-  (iterate 0.0 0.0 x y max-iter))
+(defun escape-time (x y max-iter) (iterate 0.0 0.0 x y max-iter))
 
 ;;; Whether the point is in the Mandelbrot set: it survives every iteration.
 ;;; WIT: in-set: func(x: f64, y: f64, max-iter: s32) -> bool
-(defun in-set (x y max-iter)
-  (>= (escape-time x y max-iter) max-iter))
+(defun in-set (x y max-iter) (>= (escape-time x y max-iter) max-iter))
 
 ;;; Implement wit/fractal.wit -- the contract this program is checked against,
 ;;; and the exports it gets. Nothing else in this file is visible to the host.

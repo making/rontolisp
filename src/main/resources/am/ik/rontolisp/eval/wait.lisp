@@ -15,14 +15,17 @@
 ;; The WIT interface is lowered by WaitForLibrary (which calls WitImportDirective.lower
 ;; itself), so this directive never reaches WitImportInliner -- but it is written here,
 ;; in wait.lisp's own source, so the file reads as the program it is.
-(rontolisp:wit-import "clocks.wit" :interface "wasi:clocks/monotonic-clock@0.3.0" :package %mono-clock)
+(rontolisp:wit-import "clocks.wit"
+                      :interface "wasi:clocks/monotonic-clock@0.3.0"
+                      :package %mono-clock)
 
 (defun rontolisp:wait-for (%wait-for-ms)
   ;; The host timer takes nanoseconds (duration = u64); the Lisp surface takes
   ;; non-negative integer milliseconds, like the interpreter/JVM built-in.
   (if (if (integerp %wait-for-ms) (>= %wait-for-ms 0) nil)
       (%mono-clock:wait-for (* %wait-for-ms 1000000))
-      (error "rontolisp:wait-for expects a non-negative integer (milliseconds)")))
+      (error
+       "rontolisp:wait-for expects a non-negative integer (milliseconds)")))
 
 ;; cl:sleep on this backend, over the same host timer. It FORCES the timer future
 ;; rather than awaiting it, which is what lets it stay an ordinary synchronous defun:
@@ -38,4 +41,6 @@
 ;; host round trip, and matches the interpreter/JVM lowering exactly.
 (defun sleep (%sleep-seconds)
   (let ((%sleep-ms (round (* %sleep-seconds 1000))))
-    (if (> %sleep-ms 0) (rontolisp::%future-force (rontolisp:wait-for %sleep-ms)) nil)))
+    (if (> %sleep-ms 0)
+        (rontolisp::%future-force (rontolisp:wait-for %sleep-ms))
+        nil)))

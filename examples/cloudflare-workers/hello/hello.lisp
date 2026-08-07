@@ -19,8 +19,7 @@
 (rontolisp:wasm-export 'fib :params '(:s32) :returns :s32)
 (rontolisp:wasm-export 'greet :params '() :returns :string)
 
-(defun add (a b)
-  (+ a b))
+(defun add (a b) (+ a b))
 
 (defun fib (n)
   "The nth Fibonacci number, computed iteratively."
@@ -31,5 +30,4 @@
         (setq b next)))
     a))
 
-(defun greet ()
-  "Hello from Lisp, compiled to WebAssembly!")
+(defun greet () "Hello from Lisp, compiled to WebAssembly!")

@@ -17,11 +17,13 @@
 (defparameter *batch-size* 16)
 (defparameter *iters* 100)
 
-(let ((x-train (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-      (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t)))
-  (dolist (entry (list (list "std=0.01" 0.01)
-                       (list "Xavier" 'xavier)
-                       (list "He" 'he)))
+(let ((x-train
+       (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+      (t-train
+       (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t)))
+  (dolist (entry
+           (list (list "std=0.01" 0.01) (list "Xavier" 'xavier)
+                 (list "He" 'he)))
     (let ((name (car entry))
           (init (cadr entry))
           (opt (make-instance 'sgd :lr 0.5)))
@@ -35,5 +37,5 @@
                  (grads (net-gradient net x-batch t-batch)))
             (update opt (mln-params net) grads)
             (when (= (mod i 20) 0)
-              (format t "  iter ~3d  loss ~,4f~%"
-                      i (net-loss net x-batch t-batch)))))))))
+              (format t "  iter ~3d  loss ~,4f~%" i
+                      (net-loss net x-batch t-batch)))))))))

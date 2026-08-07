@@ -32,8 +32,7 @@
 
 ;; Parse the body as JSON when it looks like a JSON object or array.
 (defun body-json (body)
-  (if (and (stringp body)
-           (> (length body) 0)
+  (if (and (stringp body) (> (length body) 0)
            (or (eql (char body 0) #\{) (eql (char body 0) #\[)))
       (rontolisp:json-parse body)
       'null))
@@ -54,13 +53,13 @@
 ;; conversion: the env :headers is already a string-keyed hash table.
 (defun request-info (env)
   (rontolisp:plist-hash-table
-   (list :args (rontolisp:alist-hash-table (rontolisp:query-params (getf env :query-string)))
+   (list :args (rontolisp:alist-hash-table
+                (rontolisp:query-params (getf env :query-string)))
          :headers (getf env :headers)
          :method (symbol-name (getf env :request-method))
          :path (getf env :path-info))))
 
-(defun echo (env)
-  (json-response 200 (request-info env)))
+(defun echo (env) (json-response 200 (request-info env)))
 
 (defun echo-with-body (env)
   (let ((info (request-info env)))
@@ -73,9 +72,10 @@
 ;; is an interned keyword, so the comparison is eq.
 (defun echo-when (env expected with-body)
   (cond ((not (eq (getf env :request-method) expected))
-         (json-response 405 (rontolisp:plist-hash-table
-                             (list :error "method not allowed"
-                                   :allowed (symbol-name expected)))))
+         (json-response 405
+                        (rontolisp:plist-hash-table
+                         (list :error "method not allowed"
+                               :allowed (symbol-name expected)))))
         (with-body (echo-with-body env))
         (t (echo env))))
 
@@ -91,8 +91,10 @@
           ((string= path "/put") (echo-when env :PUT t))
           ((string= path "/patch") (echo-when env :PATCH t))
           ((string= path "/delete") (echo-when env :DELETE t))
-          (t (json-response 404 (rontolisp:plist-hash-table
-                                 (list :error "not found" :path path)))))))
+          (t
+           (json-response 404
+                          (rontolisp:plist-hash-table
+                           (list :error "not found" :path path)))))))
 
 ;; The env :raw-body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers an env whose :body is the whole string (getf

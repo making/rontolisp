@@ -11,8 +11,7 @@
   "Build a hash table from alternating key-value pairs."
   (let ((table (make-hash-table)))
     (dotimes (i (/ (length pairs) 2))
-      (setf (gethash (nth (* i 2) pairs) table)
-            (nth (1+ (* i 2)) pairs)))
+      (setf (gethash (nth (* i 2) pairs) table) (nth (1+ (* i 2)) pairs)))
     table))
 
 (defun l-system-step (current rules)
@@ -20,16 +19,15 @@
   (let ((next ""))
     (dotimes (i (length current))
       (let ((ch (char current i)))
-        (setq next (concatenate 'string next
-                                (or (gethash ch rules)
-                                    (format nil "~a" ch))))))
+        (setq next
+              (concatenate 'string next
+                           (or (gethash ch rules) (format nil "~a" ch))))))
     next))
 
 (defun l-system-string (axiom rules iterations)
   "Generate the L-system string after N iterations."
   (let ((current axiom))
-    (dotimes (_ iterations)
-      (setq current (l-system-step current rules)))
+    (dotimes (_ iterations) (setq current (l-system-step current rules)))
     current))
 
 ;;; Count occurrences of each character in a string
@@ -55,9 +53,7 @@
   (let ((s (l-system-string "F-X" rules 6)))
     (format t "  Total length: ~d~%" (length s))
     (let ((counts (char-counts s)))
-      (maphash (lambda (ch count)
-                 (format t "  ~a: ~d~%" ch count))
-               counts))))
+      (maphash (lambda (ch count) (format t "  ~a: ~d~%" ch count)) counts))))
 
 (format t "~%")
 
@@ -91,6 +87,4 @@
   (let ((s (l-system-string "FX" rules 12)))
     (format t "  Length: ~d characters~%" (length s))
     (let ((counts (char-counts s)))
-      (maphash (lambda (ch count)
-                 (format t "  ~a: ~d~%" ch count))
-               counts))))
+      (maphash (lambda (ch count) (format t "  ~a: ~d~%" ch count)) counts))))

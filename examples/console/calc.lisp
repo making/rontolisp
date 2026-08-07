@@ -14,9 +14,7 @@
 ;;; Symbols compare by eql, so plain `assoc` is enough -- no :test needed.
 (defun lookup (sym env)
   (let ((pair (assoc sym env)))
-    (if pair
-        (cdr pair)
-        (error "unbound variable: ~a" sym))))
+    (if pair (cdr pair) (error "unbound variable: ~a" sym))))
 
 ;;; Evaluate `expr` in `env`. The language is: numbers, variables (symbols), and
 ;;; binary applications (op a b) where op is one of + - * mod.
@@ -39,13 +37,9 @@
 (defparameter *env* (list (cons 'x 10) (cons 'y 3)))
 
 (format t "Evaluating with env x=10, y=3:~%")
-(dolist (p '((+ 1 (* 2 3))
-             (- (* x x) (* y y))
-             (mod (+ x y) 5)))
+(dolist (p '((+ 1 (* 2 3)) (- (* x x) (* y y)) (mod (+ x y) 5)))
   (format t "  ~a => ~a~%" p (my-eval p *env*)))
 
 (format t "~%Cross-check against the built-in eval (constant expressions):~%")
-(dolist (p '((+ 1 (* 2 3))
-             (- 100 (* 7 8))
-             (* (+ 1 2) (+ 3 4))))
+(dolist (p '((+ 1 (* 2 3)) (- 100 (* 7 8)) (* (+ 1 2) (+ 3 4))))
   (format t "  ~a : my-eval=~a  eval=~a~%" p (my-eval p nil) (eval p)))

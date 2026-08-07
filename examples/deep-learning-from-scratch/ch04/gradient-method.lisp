@@ -10,8 +10,7 @@
 
 (load "../common/gradient.lisp")
 
-(defun function-2 (x)
-  (linalg:sum (linalg:square x)))
+(defun function-2 (x) (linalg:sum (linalg:square x)))
 
 (defun gradient-descent (f init-x lr step-num &optional print-steps)
   ;; Returns x after step-num updates x <- x - lr * grad; with print-steps,
@@ -25,17 +24,20 @@
     x))
 
 (format t "lr = 0.1 (well-tuned):~%")
-(let ((x (gradient-descent (function function-2)
-                           (linalg:from-list '(-3.0 4.0)) 0.1 20 t)))
+(let ((x
+       (gradient-descent (function function-2) (linalg:from-list '(-3.0 4.0))
+                         0.1 20 t)))
   (format t "  final:   (~,6f, ~,6f)~%" (aref x 0) (aref x 1)))
 
 ;; Too large a learning rate diverges; too small barely moves (the book's
 ;; lr=10.0 / lr=1e-10 comparison, 100 steps each).
-(let ((x (gradient-descent (function function-2)
-                           (linalg:from-list '(-3.0 4.0)) 10.0 100)))
+(let ((x
+       (gradient-descent (function function-2) (linalg:from-list '(-3.0 4.0))
+                         10.0 100)))
   (format t "lr = 10.0:  |x| ~a 1e10 after 100 steps~%"
           (if (> (linalg:norm x) 1.0e10) "diverged beyond" "stayed under")))
-(let ((x (gradient-descent (function function-2)
-                           (linalg:from-list '(-3.0 4.0)) 1.0e-10 100)))
-  (format t "lr = 1e-10: still at (~,4f, ~,4f) after 100 steps~%"
-          (aref x 0) (aref x 1)))
+(let ((x
+       (gradient-descent (function function-2) (linalg:from-list '(-3.0 4.0))
+                         1.0e-10 100)))
+  (format t "lr = 1e-10: still at (~,4f, ~,4f) after 100 steps~%" (aref x 0)
+          (aref x 1)))

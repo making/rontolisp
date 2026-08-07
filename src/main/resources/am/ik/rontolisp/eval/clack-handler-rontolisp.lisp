@@ -49,9 +49,7 @@
 ;;   function-response protocol only the DELAYED form is supported. All of that
 ;;   is http-server.lisp's contract now, identical on every backend.
 
-(defpackage :clack.handler.rontolisp
-  (:use :cl)
-  (:export :run :stop))
+(defpackage :clack.handler.rontolisp (:use :cl) (:export :run :stop))
 
 (defvar clack.handler.rontolisp::*app* nil)
 
@@ -61,13 +59,15 @@
   (funcall clack.handler.rontolisp::*app* env))
 
 #-rontolisp-wasm
-(defun clack.handler.rontolisp:run (app &key (port 5000) (address "127.0.0.1") debug
-                                        &allow-other-keys)
+(defun clack.handler.rontolisp:run
+    (app &key (port 5000) (address "127.0.0.1") debug &allow-other-keys)
   (declare (ignore debug))
   (setf clack.handler.rontolisp::*app* app)
-  (let ((server (rontolisp::%http-server-start app port address :raw-body :buffered)))
-    (unwind-protect
-        (progn (rontolisp::%http-server-join server) server)
+  (let ((server
+         (rontolisp::%http-server-start app port address :raw-body :buffered)))
+    (unwind-protect (progn
+                      (rontolisp::%http-server-join server)
+                      server)
       (rontolisp::%http-server-stop server))))
 
 #-rontolisp-wasm
@@ -76,11 +76,12 @@
   t)
 
 #+rontolisp-wasm
-(defun clack.handler.rontolisp:run (app &key (port 5000) (address "127.0.0.1") debug
-                                        &allow-other-keys)
+(defun clack.handler.rontolisp:run
+    (app &key (port 5000) (address "127.0.0.1") debug &allow-other-keys)
   (declare (ignore debug address))
   (setf clack.handler.rontolisp::*app* app)
-  (rontolisp:http-handler 'clack.handler.rontolisp::%app port :raw-body :buffered))
+  (rontolisp:http-handler 'clack.handler.rontolisp::%app port
+                          :raw-body :buffered))
 
 #+rontolisp-wasm
 (defun clack.handler.rontolisp:stop (server)

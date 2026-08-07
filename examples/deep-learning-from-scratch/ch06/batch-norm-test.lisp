@@ -21,9 +21,10 @@
 (defun train-once (x-train t-train w-scale use-bn)
   ;; Returns the list of per-epoch train-accuracy counts.
   (linalg:seed 42)
-  (let ((net (make-multi-layer-net-extend 784 '(20 20) 10
-                                          :weight-init-std w-scale
-                                          :use-batchnorm use-bn))
+  (let ((net
+         (make-multi-layer-net-extend 784 '(20 20) 10
+                                      :weight-init-std w-scale
+                                      :use-batchnorm use-bn))
         (opt (make-instance 'sgd :lr 0.5))
         (iter-per-epoch (floor *train-limit* *batch-size*))
         (accs nil))
@@ -37,9 +38,14 @@
           (setq accs (cons (net-accuracy-count net x-train t-train) accs)))))
     (reverse accs)))
 
-(let ((x-train (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-      (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t)))
+(let ((x-train
+       (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+      (t-train
+       (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t)))
   (dolist (w-scale '(0.1 0.01))
-    (format t "w-scale = ~a (train acc per epoch, of ~a):~%" w-scale *train-limit*)
-    (format t "  with BatchNorm:    ~a~%" (train-once x-train t-train w-scale t))
-    (format t "  without BatchNorm: ~a~%" (train-once x-train t-train w-scale nil))))
+    (format t "w-scale = ~a (train acc per epoch, of ~a):~%" w-scale
+            *train-limit*)
+    (format t "  with BatchNorm:    ~a~%"
+            (train-once x-train t-train w-scale t))
+    (format t "  without BatchNorm: ~a~%"
+            (train-once x-train t-train w-scale nil))))

@@ -15,12 +15,12 @@
 ;; Run (WASM component):     java -jar $JAR examples/net/echo-client.lisp -o echo-client.wasm --component && \
 ;;                           echo hello | wasmtime run -W gc=y -W exceptions=y \
 ;;                             -S tcp=y -S inherit-network=y echo-client.wasm
-(handler-case
-    (usocket:with-client-socket (sock stream "127.0.0.1" 7777)
-      (do ((line (read-line) (read-line)))
-          ((null line))
-        (write-line line stream)
-        (write-line (read-line stream))))
+(handler-case (usocket:with-client-socket (sock stream "127.0.0.1" 7777)
+                (do ((line (read-line) (read-line)))
+                    ((null line))
+                  (write-line line stream)
+                  (write-line (read-line stream))))
   (usocket:socket-error (e)
     (declare (ignore e))
-    (write-line "cannot connect to 127.0.0.1:7777 (is echo-server.lisp running?)")))
+    (write-line
+     "cannot connect to 127.0.0.1:7777 (is echo-server.lisp running?)")))

@@ -43,8 +43,7 @@
 
 (defun %skip-bytes (s n)
   ;; Consumes n bytes (there is no seek in the stream API).
-  (dotimes (i n)
-    (read-byte s)))
+  (dotimes (i n) (read-byte s)))
 
 (defun %rlw1-make (shape element-type)
   ;; Both branches take a LITERAL :element-type, so every backend picks the
@@ -59,16 +58,13 @@
   ;; of the requested width (nil = double-float). An f32 value is exact in
   ;; both widths, so 'single-float loses nothing over the file content.
   (with-open-file (s path :element-type '(unsigned-byte 8))
-    (unless (and (= (read-byte s) 82) (= (read-byte s) 76)
-                 (= (read-byte s) 87) (= (read-byte s) 49))
+    (unless (and (= (read-byte s) 82) (= (read-byte s) 76) (= (read-byte s) 87)
+                 (= (read-byte s) 49))
       (error "not an RLW1 weight file (see tools/export-sample-weight.py)"))
-    (let ((count (read-byte s))
-          (arrays nil))
+    (let ((count (read-byte s)) (arrays nil))
       (dotimes (k count)
-        (let* ((ndim (read-byte s))
-               (dims nil))
-          (dotimes (d ndim)
-            (setq dims (cons (%read-be32 s) dims)))
+        (let* ((ndim (read-byte s)) (dims nil))
+          (dotimes (d ndim) (setq dims (cons (%read-be32 s) dims)))
           (setq dims (reverse dims))
           (let* ((shape (if (cdr dims) dims (car dims)))
                  (a (%rlw1-make shape element-type)))

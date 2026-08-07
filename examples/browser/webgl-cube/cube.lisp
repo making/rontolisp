@@ -26,18 +26,33 @@
 ;; slot; gl-buffer-data-floats uploads the first COUNT floats as buffer data;
 ;; gl-uniform-matrix4fv hands the first 16 to a mat4 uniform. These three are
 ;; the only imports that are not literal WebGL2 API entries.
-(rontolisp:wasm-import 'set-float :from "gl" :as "setFloat"
-                       :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'gl-buffer-data-floats :from "gl" :as "bufferDataFloats"
-                       :params '(:int :int :int) :returns :void)
-(rontolisp:wasm-import 'gl-uniform-matrix4fv :from "gl" :as "uniformMatrix4fv"
-                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'set-float
+                       :from "gl"
+                       :as "setFloat"
+                       :params '(:int :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-buffer-data-floats
+                       :from "gl"
+                       :as "bufferDataFloats"
+                       :params '(:int :int :int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-uniform-matrix4fv
+                       :from "gl"
+                       :as "uniformMatrix4fv"
+                       :params '(:int)
+                       :returns :void)
 
 ;; Canvas metrics (the backing store is fixed, read once for the aspect ratio).
-(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
-                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-width
+                       :from "canvas"
+                       :as "width"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'canvas-height
+                       :from "canvas"
+                       :as "height"
+                       :params '()
+                       :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's:
 ;; these two lines are literally Math.sin / Math.cos on the JavaScript side.
@@ -46,7 +61,8 @@
 
 ;; --- shaders ----------------------------------------------------------------
 
-(defconstant +vertex-shader-source+ "#version 300 es
+(defconstant +vertex-shader-source+
+  "#version 300 es
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aColor;
 uniform mat4 uMvp;   // model-view-projection, computed in Lisp every frame
@@ -56,7 +72,8 @@ void main() {
   vColor = aColor;
 }")
 
-(defconstant +fragment-shader-source+ "#version 300 es
+(defconstant +fragment-shader-source+
+  "#version 300 es
 precision mediump float;
 in vec3 vColor;
 out vec4 color;
@@ -70,8 +87,7 @@ void main() {
 
 (defconstant +pi+ 3.141592653589793)
 
-(defun mat4-zero ()
-  (make-array 16))
+(defun mat4-zero () (make-array 16))
 
 (defun mat4-mul (a b)
   (let ((out (mat4-zero)))
@@ -79,8 +95,8 @@ void main() {
       (dotimes (row 4)
         (let ((sum 0.0))
           (dotimes (k 4)
-            (setq sum (+ sum (* (aref a (+ row (* k 4)))
-                                (aref b (+ k (* col 4)))))))
+            (setq sum
+             (+ sum (* (aref a (+ row (* k 4))) (aref b (+ k (* col 4)))))))
           (setf (aref out (+ row (* col 4))) sum))))
     out))
 
@@ -115,9 +131,7 @@ void main() {
     m))
 
 (defun mat4-rotation-x (angle)
-  (let ((m (mat4-identity))
-        (c (cos angle))
-        (s (sin angle)))
+  (let ((m (mat4-identity)) (c (cos angle)) (s (sin angle)))
     (setf (aref m 5) c)
     (setf (aref m 6) s)
     (setf (aref m 9) (- 0.0 s))
@@ -125,9 +139,7 @@ void main() {
     m))
 
 (defun mat4-rotation-y (angle)
-  (let ((m (mat4-identity))
-        (c (cos angle))
-        (s (sin angle)))
+  (let ((m (mat4-identity)) (c (cos angle)) (s (sin angle)))
     (setf (aref m 0) c)
     (setf (aref m 2) (- 0.0 s))
     (setf (aref m 8) s)
@@ -145,15 +157,15 @@ void main() {
 ;; Each face: the corner indices of its quad (counter-clockwise seen from
 ;; outside) and its color.
 (defconstant +faces+
-  '(((4 5 6 7) (0.94 0.42 0.48))        ; front  (+z) rose
-    ((1 0 3 2) (0.42 0.72 0.94))        ; back   (-z) sky
-    ((5 1 2 6) (0.55 0.48 0.94))        ; right  (+x) violet
-    ((0 4 7 3) (0.44 0.88 0.72))        ; left   (-x) mint
-    ((7 6 2 3) (0.93 0.90 0.72))        ; top    (+y) cream
-    ((0 1 5 4) (0.36 0.40 0.62))        ; bottom (-y) slate
+  '(((4 5 6 7) (0.94 0.42 0.48)) ; front  (+z) rose
+    ((1 0 3 2) (0.42 0.72 0.94)) ; back   (-z) sky
+    ((5 1 2 6) (0.55 0.48 0.94)) ; right  (+x) violet
+    ((0 4 7 3) (0.44 0.88 0.72)) ; left   (-x) mint
+    ((7 6 2 3) (0.93 0.90 0.72)) ; top    (+y) cream
+    ((0 1 5 4) (0.36 0.40 0.62)) ; bottom (-y) slate
     ))
 
-(defvar *float-index* 0)                ; write cursor into the staging array
+(defvar *float-index* 0) ; write cursor into the staging array
 
 (defun push-float (v)
   (set-float *float-index* v)
@@ -171,16 +183,21 @@ void main() {
          (c2 (nth (nth 2 quad) +corners+))
          (c3 (nth (nth 3 quad) +corners+)))
     ;; the quad c0-c1-c2-c3 as two triangles
-    (push-vertex c0 color) (push-vertex c1 color) (push-vertex c2 color)
-    (push-vertex c0 color) (push-vertex c2 color) (push-vertex c3 color)))
+    (push-vertex c0 color)
+    (push-vertex c1 color)
+    (push-vertex c2 color)
+    (push-vertex c0 color)
+    (push-vertex c2 color)
+    (push-vertex c3 color)))
 
 ;; --- setup ------------------------------------------------------------------
 
-(defvar *u-mvp* 0)                      ; uniform location handle for uMvp
-(defvar *projection* nil)               ; fixed: the canvas size does not change
+(defvar *u-mvp* 0)        ; uniform location handle for uMvp
+(defvar *projection* nil) ; fixed: the canvas size does not change
 
 (defun setup-gl ()
-  (let ((program (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
+  (let ((program
+         (gl:build-program +vertex-shader-source+ +fragment-shader-source+)))
     (gl:use-program program)
     (setq *u-mvp* (gl:get-uniform-location program "uMvp"))
     (gl:enable gl:+depth-test+)
@@ -195,7 +212,8 @@ void main() {
     (gl:enable-vertex-attrib-array 1)
     (gl:vertex-attrib-pointer 1 3 gl:+float+ nil 24 12)
     (setq *projection*
-          (mat4-perspective (/ +pi+ 4.0) (/ (canvas-width) (canvas-height)) 0.1 100.0))))
+          (mat4-perspective (/ +pi+ 4.0) (/ (canvas-width) (canvas-height)) 0.1
+                            100.0))))
 
 ;; --- the frame --------------------------------------------------------------
 

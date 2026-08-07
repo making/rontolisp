@@ -24,8 +24,10 @@
 
 (linalg:seed 42)
 
-(let* ((x-all (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-       (t-all (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
+(let* ((x-all
+        (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+       (t-all
+        (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
        ;; shuffle, then split off the validation set (the book's
        ;; shuffle_dataset + slicing)
        (perm (linalg:permutation *train-limit*))
@@ -34,23 +36,26 @@
        (val-num (truncate (* *train-limit* *validation-rate*)))
        (x-val (linalg:take-rows x-shuffled (linalg:arange val-num)))
        (t-val (linalg:take-rows t-shuffled (linalg:arange val-num)))
-       (x-train (linalg:take-rows x-shuffled (linalg:arange val-num *train-limit*)))
-       (t-train (linalg:take-rows t-shuffled (linalg:arange val-num *train-limit*)))
+       (x-train
+        (linalg:take-rows x-shuffled (linalg:arange val-num *train-limit*)))
+       (t-train
+        (linalg:take-rows t-shuffled (linalg:arange val-num *train-limit*)))
        (results nil))
   (dotimes (trial *trials*)
     (let* ((lr (expt 10.0 (aref (linalg:uniform -3.0 0.0 1) 0)))
            (lam (expt 10.0 (aref (linalg:uniform -8.0 -4.0 1) 0)))
-           (net (make-multi-layer-net 784 '(10 10) 10
-                                      :weight-decay-lambda lam))
-           (accs (train net (mln-params net) x-train t-train x-val t-val
-                        :epochs *epochs* :mini-batch-size 16
-                        :optimizer (make-instance 'sgd :lr lr)
-                        :verbose nil))
+           (net (make-multi-layer-net 784 '(10 10) 10 :weight-decay-lambda lam))
+           (accs
+            (train net (mln-params net) x-train t-train x-val t-val
+                   :epochs *epochs*
+                   :mini-batch-size 16
+                   :optimizer (make-instance 'sgd :lr lr)
+                   :verbose nil))
            (final-val (cadr (car (last accs)))))
       (format t "trial ~a: val acc ~a/~a | lr ~,6f, weight decay ~,10f~%"
               (+ trial 1) final-val val-num lr lam)
       (setq results (cons (list final-val (+ trial 1) lr) results))))
   (format t "=========== ranking (by val acc) ===========~%")
   (dolist (r (sort results (lambda (a b) (> (car a) (car b)))))
-    (format t "trial ~a: val acc ~a/~a (lr ~,6f)~%"
-            (cadr r) (car r) val-num (caddr r))))
+    (format t "trial ~a: val acc ~a/~a (lr ~,6f)~%" (cadr r) (car r) val-num
+            (caddr r))))

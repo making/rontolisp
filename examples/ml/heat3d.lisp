@@ -27,18 +27,14 @@
     (dotimes (i nx)
       (dotimes (j ny)
         (dotimes (k nz)
-          (let ((c (aref grid i j k))
-                (acc 0))
-            (when (> i 0)
-              (setq acc (+ acc (- (aref grid (- i 1) j k) c))))
+          (let ((c (aref grid i j k)) (acc 0))
+            (when (> i 0) (setq acc (+ acc (- (aref grid (- i 1) j k) c))))
             (when (< i (- nx 1))
               (setq acc (+ acc (- (aref grid (+ i 1) j k) c))))
-            (when (> j 0)
-              (setq acc (+ acc (- (aref grid i (- j 1) k) c))))
+            (when (> j 0) (setq acc (+ acc (- (aref grid i (- j 1) k) c))))
             (when (< j (- ny 1))
               (setq acc (+ acc (- (aref grid i (+ j 1) k) c))))
-            (when (> k 0)
-              (setq acc (+ acc (- (aref grid i j (- k 1)) c))))
+            (when (> k 0) (setq acc (+ acc (- (aref grid i j (- k 1)) c))))
             (when (< k (- nz 1))
               (setq acc (+ acc (- (aref grid i j (+ k 1)) c))))
             (setf (aref out i j k) (+ c (* alpha acc)))))))
@@ -48,8 +44,7 @@
   ;; The (i j k) of the hottest voxel: a flat row-major scan with
   ;; row-major-aref (no nested subscript loops), then the flat index decoded
   ;; back into subscripts. array-row-major-index is the inverse direction.
-  (let ((n (array-total-size grid))
-        (best 0))
+  (let ((n (array-total-size grid)) (best 0))
     (do ((f 1 (+ f 1)))
         ((>= f n))
       (when (> (row-major-aref grid f) (row-major-aref grid best))
@@ -65,10 +60,7 @@
 
 (defun heat-char (v top)
   ;; A one-character heat map bucket for v relative to the hottest value.
-  (cond ((= v 0) " ")
-        ((>= v (/ top 2)) "#")
-        ((>= v (/ top 8)) "+")
-        (t ".")))
+  (cond ((= v 0) " ") ((>= v (/ top 2)) "#") ((>= v (/ top 8)) "+") (t ".")))
 
 (defun print-middle-slice (grid)
   ;; ASCII rendering of the z = middle slice.
@@ -78,8 +70,7 @@
          (mid (/ (- (car (cdr (cdr d))) 1) 2))
          (top (linalg:amax grid)))
     (dotimes (i nx)
-      (dotimes (j ny)
-        (princ (heat-char (aref grid i j mid) top)))
+      (dotimes (j ny) (princ (heat-char (aref grid i j mid) top)))
       (terpri))))
 
 (defun main ()
@@ -94,10 +85,10 @@
             (array-row-major-index tensor 1 0 1)
             (row-major-aref tensor (array-row-major-index tensor 1 0 1)))
     (format t "round trip:  ~a~%~%"
-            (linalg:array-equal (linalg:reshape (linalg:flatten tensor) '(2 2 2)) tensor)))
+            (linalg:array-equal
+             (linalg:reshape (linalg:flatten tensor) '(2 2 2)) tensor)))
   ;; The simulation: all heat starts in the centre voxel.
-  (let ((grid (make-array '(5 5 5) :initial-element 0))
-        (alpha (/ 1 8)))
+  (let ((grid (make-array '(5 5 5) :initial-element 0)) (alpha (/ 1 8)))
     (setf (aref grid 2 2 2) 1000)
     (dotimes (step 4)
       (format t "step ~a: total ~a, centre ~a, hottest ~a~%" step

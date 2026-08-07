@@ -13,23 +13,25 @@
 
 (defparameter *tln-keys* '("W1" "b1" "W2" "b2"))
 
-(defun make-two-layer-net (input-size hidden-size output-size
-                           &optional (weight-init-std 0.01))
+(defun make-two-layer-net
+    (input-size hidden-size output-size &optional (weight-init-std 0.01))
   (let ((params (make-hash-table :test 'equal)))
     (setf (gethash "W1" params)
-          (linalg:mul weight-init-std (linalg:randn (list input-size hidden-size))))
+     (linalg:mul weight-init-std (linalg:randn (list input-size hidden-size))))
     (setf (gethash "b1" params) (linalg:zeros hidden-size))
     (setf (gethash "W2" params)
-          (linalg:mul weight-init-std (linalg:randn (list hidden-size output-size))))
+     (linalg:mul weight-init-std (linalg:randn (list hidden-size output-size))))
     (setf (gethash "b2" params) (linalg:zeros output-size))
     params))
 
 (defun tln-predict (params x)
-  (let* ((a1 (linalg:add (linalg:matmul x (gethash "W1" params))
-                         (gethash "b1" params)))
+  (let* ((a1
+          (linalg:add (linalg:matmul x (gethash "W1" params))
+                      (gethash "b1" params)))
          (z1 (sigmoid a1))
-         (a2 (linalg:add (linalg:matmul z1 (gethash "W2" params))
-                         (gethash "b2" params))))
+         (a2
+          (linalg:add (linalg:matmul z1 (gethash "W2" params))
+                      (gethash "b2" params))))
     (softmax a2)))
 
 (defun tln-loss (params x target)
@@ -58,8 +60,9 @@
   ;; through sigmoid_grad -- the un-abstracted form of ch05's backprop.
   (let* ((w2 (gethash "W2" params))
          (batch (car (linalg:shape x)))
-         (a1 (linalg:add (linalg:matmul x (gethash "W1" params))
-                         (gethash "b1" params)))
+         (a1
+          (linalg:add (linalg:matmul x (gethash "W1" params))
+                      (gethash "b1" params)))
          (z1 (sigmoid a1))
          (a2 (linalg:add (linalg:matmul z1 w2) (gethash "b2" params)))
          (y (softmax a2))
@@ -77,8 +80,7 @@
   ;; params[key] -= lr * grads[key], element-wise IN PLACE like the book's
   ;; training loops (ch05's layers alias these same arrays).
   (dolist (key *tln-keys*)
-    (let ((p (gethash key params))
-          (g (gethash key grads)))
+    (let ((p (gethash key params)) (g (gethash key grads)))
       (dotimes (k (linalg:size p))
         (setf (row-major-aref p k)
               (- (row-major-aref p k) (* lr (row-major-aref g k))))))))

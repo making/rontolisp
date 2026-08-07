@@ -29,9 +29,9 @@
 (defvar rontolisp::*wit-providers* (make-hash-table :test #'equal))
 
 (define-condition rontolisp:wit-error (error)
-  ((payload :initarg :payload :initform nil
-            :reader rontolisp:wit-error-payload)
-   (message :initarg :message :initform "WIT call failed"
+  ((payload :initarg :payload :initform nil :reader rontolisp:wit-error-payload)
+   (message :initarg :message
+            :initform "WIT call failed"
             :reader rontolisp::%wit-error-message))
   (:report (lambda (c s) (write-string (rontolisp::%wit-error-message c) s))))
 
@@ -45,9 +45,11 @@
 (defun rontolisp::%wit-call (interface member &rest args)
   (let ((provider (gethash interface rontolisp::*wit-providers*)))
     (if (null provider)
-        (error 'rontolisp:wit-error :payload interface :message
-               (concatenate 'string "No provider is bound for the WIT interface "
-                            interface " -- bind one with rontolisp:wit-provide"))
+        (error 'rontolisp:wit-error
+               :payload interface
+               :message (concatenate 'string
+                         "No provider is bound for the WIT interface " interface
+                         " -- bind one with rontolisp:wit-provide"))
         (apply provider member args))))
 
 (defun rontolisp::%wit-result (envelope)
@@ -62,7 +64,9 @@
   (if (and (consp envelope) (eq (car envelope) :ok))
       (cdr envelope)
       (if (and (consp envelope) (eq (car envelope) :error))
-          (error 'rontolisp:wit-error :payload (cdr envelope)
-                 :message (concatenate 'string "the WIT call answered its error arm: "
+          (error 'rontolisp:wit-error
+                 :payload (cdr envelope)
+                 :message (concatenate 'string
+                                       "the WIT call answered its error arm: "
                                        (prin1-to-string (cdr envelope))))
           envelope)))

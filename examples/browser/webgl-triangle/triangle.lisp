@@ -20,33 +20,63 @@
 ;; :int handles into a table the page keeps; the GLSL source crosses as
 ;; :string.
 
-(rontolisp:wasm-import 'gl-create-shader :from "gl" :as "createShader"
-                       :params '(:int) :returns :int)
-(rontolisp:wasm-import 'gl-shader-source :from "gl" :as "shaderSource"
-                       :params '(:int :string) :returns :void)
-(rontolisp:wasm-import 'gl-compile-shader :from "gl" :as "compileShader"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-create-program :from "gl" :as "createProgram"
-                       :params '() :returns :int)
-(rontolisp:wasm-import 'gl-attach-shader :from "gl" :as "attachShader"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'gl-link-program :from "gl" :as "linkProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-use-program :from "gl" :as "useProgram"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-clear-color :from "gl" :as "clearColor"
-                       :params '(:float :float :float :float) :returns :void)
-(rontolisp:wasm-import 'gl-clear :from "gl" :as "clear"
-                       :params '(:int) :returns :void)
-(rontolisp:wasm-import 'gl-draw-arrays :from "gl" :as "drawArrays"
-                       :params '(:int :int :int) :returns :void)
+(rontolisp:wasm-import 'gl-create-shader
+                       :from "gl"
+                       :as "createShader"
+                       :params '(:int)
+                       :returns :int)
+(rontolisp:wasm-import 'gl-shader-source
+                       :from "gl"
+                       :as "shaderSource"
+                       :params '(:int :string)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-compile-shader
+                       :from "gl"
+                       :as "compileShader"
+                       :params '(:int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-create-program
+                       :from "gl"
+                       :as "createProgram"
+                       :params '()
+                       :returns :int)
+(rontolisp:wasm-import 'gl-attach-shader
+                       :from "gl"
+                       :as "attachShader"
+                       :params '(:int :int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-link-program
+                       :from "gl"
+                       :as "linkProgram"
+                       :params '(:int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-use-program
+                       :from "gl"
+                       :as "useProgram"
+                       :params '(:int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-clear-color
+                       :from "gl"
+                       :as "clearColor"
+                       :params '(:float :float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-clear
+                       :from "gl"
+                       :as "clear"
+                       :params '(:int)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-draw-arrays
+                       :from "gl"
+                       :as "drawArrays"
+                       :params '(:int :int :int)
+                       :returns :void)
 
 ;; --- WebGL constants --------------------------------------------------------
 ;; The numeric enum values from the WebGL specification.
 
-(defconstant +gl-vertex-shader+ 35633)          ; 0x8B31
-(defconstant +gl-fragment-shader+ 35632)        ; 0x8B30
-(defconstant +gl-color-buffer-bit+ 16384)       ; 0x4000
+(defconstant +gl-vertex-shader+ 35633)    ; 0x8B31
+(defconstant +gl-fragment-shader+ 35632)  ; 0x8B30
+(defconstant +gl-color-buffer-bit+ 16384) ; 0x4000
 (defconstant +gl-triangles+ 4)
 
 ;; --- shaders ----------------------------------------------------------------
@@ -54,7 +84,8 @@
 ;; gl-shader-source (a :string parameter crossing the boundary as (ptr,len)
 ;; into this module's linear memory).
 
-(defconstant +vertex-shader-source+ "#version 300 es
+(defconstant +vertex-shader-source+
+  "#version 300 es
 // the classic hello-world triangle: positions and colors baked into the
 // shader, looked up by gl_VertexID -- no vertex buffer needed
 const vec2 POSITION[3] = vec2[3](
@@ -73,7 +104,8 @@ void main() {
   vColor = COLOR[gl_VertexID];
 }")
 
-(defconstant +fragment-shader-source+ "#version 300 es
+(defconstant +fragment-shader-source+
+  "#version 300 es
 precision mediump float;
 in vec3 vColor;
 out vec4 color;
@@ -91,8 +123,10 @@ void main() {
 
 (defun main ()
   (let ((program (gl-create-program)))
-    (gl-attach-shader program (make-shader +gl-vertex-shader+ +vertex-shader-source+))
-    (gl-attach-shader program (make-shader +gl-fragment-shader+ +fragment-shader-source+))
+    (gl-attach-shader program
+                      (make-shader +gl-vertex-shader+ +vertex-shader-source+))
+    (gl-attach-shader program
+     (make-shader +gl-fragment-shader+ +fragment-shader-source+))
     (gl-link-program program)
     (gl-use-program program)
     (gl-clear-color 0.07 0.08 0.12 1.0)

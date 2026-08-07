@@ -37,47 +37,49 @@
 (let ((conn (connect)))
   ;; close-database in the cleanup, so the connection goes back even if a query
   ;; signals.
-  (unwind-protect
-      (progn
-        ;; One transaction, rolled back at the end: the example leaves the
-        ;; server exactly as it found it, so it can be re-run as often as you
-        ;; like -- and a run that dies halfway leaves nothing behind either.
-        (cl-postgres:exec-query conn "begin")
+  (unwind-protect (progn
+                    ;; One transaction, rolled back at the end: the example leaves the
+                    ;; server exactly as it found it, so it can be re-run as often as you
+                    ;; like -- and a run that dies halfway leaves nothing behind either.
+                    (cl-postgres:exec-query conn "begin")
 
-        ;; CREATE. A statement with no result needs no row reader.
-        (cl-postgres:exec-query
-         conn "create table fruits (id integer primary key, name text, price integer)")
+                    ;; CREATE. A statement with no result needs no row reader.
+                    (cl-postgres:exec-query conn
+                                            "create table fruits (id integer primary key, name text, price integer)")
 
-        ;; INSERT
-        (cl-postgres:exec-query
-         conn "insert into fruits (id, name, price)
+                    ;; INSERT
+                    (cl-postgres:exec-query conn
+                                            "insert into fruits (id, name, price)
                values (1, 'apple', 120), (2, 'banana', 80), (3, 'cherry', 300)")
-        (format t "inserted: ~a~%" (fruits conn))
+                    (format t "inserted: ~a~%" (fruits conn))
 
-        ;; READ. The row reader decides the shape: alist-row-reader labels each
-        ;; column with its name, where list-row-reader gives bare lists.
-        (format t "as alists: ~a~%"
-                (cl-postgres:exec-query conn "select name, price from fruits where id = 2"
-                                        'cl-postgres:alist-row-reader))
+                    ;; READ. The row reader decides the shape: alist-row-reader labels each
+                    ;; column with its name, where list-row-reader gives bare lists.
+                    (format t "as alists: ~a~%"
+                            (cl-postgres:exec-query conn
+                             "select name, price from fruits where id = 2"
+                             'cl-postgres:alist-row-reader))
 
-        ;; UPDATE
-        (cl-postgres:exec-query conn "update fruits set price = 150 where name = 'apple'")
-        (format t "after update: ~a~%" (fruits conn))
+                    ;; UPDATE
+                    (cl-postgres:exec-query conn
+                     "update fruits set price = 150 where name = 'apple'")
+                    (format t "after update: ~a~%" (fruits conn))
 
-        ;; DELETE
-        (cl-postgres:exec-query conn "delete from fruits where price > 200")
-        (format t "after delete: ~a~%" (fruits conn))
+                    ;; DELETE
+                    (cl-postgres:exec-query conn
+                     "delete from fruits where price > 200")
+                    (format t "after delete: ~a~%" (fruits conn))
 
-        ;; A parameterised statement: prepared once on the server, then run with
-        ;; different arguments. $1 is the placeholder; the arguments are a list.
-        (cl-postgres:prepare-query conn "cheaper-than"
-                                   "select name from fruits where price < $1 order by name")
-        (format t "under 100: ~a~%"
-                (cl-postgres:exec-prepared conn "cheaper-than" (list 100)
-                                           'cl-postgres:list-row-reader))
-        (format t "under 200: ~a~%"
-                (cl-postgres:exec-prepared conn "cheaper-than" (list 200)
-                                           'cl-postgres:list-row-reader))
+                    ;; A parameterised statement: prepared once on the server, then run with
+                    ;; different arguments. $1 is the placeholder; the arguments are a list.
+                    (cl-postgres:prepare-query conn "cheaper-than"
+                     "select name from fruits where price < $1 order by name")
+                    (format t "under 100: ~a~%"
+                            (cl-postgres:exec-prepared conn "cheaper-than"
+                             (list 100) 'cl-postgres:list-row-reader))
+                    (format t "under 200: ~a~%"
+                            (cl-postgres:exec-prepared conn "cheaper-than"
+                             (list 200) 'cl-postgres:list-row-reader))
 
-        (cl-postgres:exec-query conn "rollback"))
+                    (cl-postgres:exec-query conn "rollback"))
     (cl-postgres:close-database conn)))

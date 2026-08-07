@@ -21,19 +21,23 @@
 
 (defparameter *tln-keys* '("W1" "b1" "W2" "b2"))
 
-(defun make-two-layer-net (input-size hidden-size output-size
-                           &optional (weight-init-std 0.01))
+(defun make-two-layer-net
+    (input-size hidden-size output-size &optional (weight-init-std 0.01))
   (let ((params (make-hash-table :test 'equal)))
     (setf (gethash "W1" params)
-          (linalg:mul weight-init-std (linalg:randn (list input-size hidden-size))))
+     (linalg:mul weight-init-std (linalg:randn (list input-size hidden-size))))
     (setf (gethash "b1" params) (linalg:zeros hidden-size))
     (setf (gethash "W2" params)
-          (linalg:mul weight-init-std (linalg:randn (list hidden-size output-size))))
+     (linalg:mul weight-init-std (linalg:randn (list hidden-size output-size))))
     (setf (gethash "b2" params) (linalg:zeros output-size))
-    (let ((affine1 (make-instance 'affine :w (gethash "W1" params)
-                                  :b (gethash "b1" params)))
-          (affine2 (make-instance 'affine :w (gethash "W2" params)
-                                  :b (gethash "b2" params))))
+    (let ((affine1
+           (make-instance 'affine
+                          :w (gethash "W1" params)
+                          :b (gethash "b1" params)))
+          (affine2
+           (make-instance 'affine
+                          :w (gethash "W2" params)
+                          :b (gethash "b2" params))))
       (make-instance 'two-layer-net
                      :params params
                      :layers (list affine1 (make-instance 'relu-layer) affine2)
@@ -53,8 +57,7 @@
 
 (defmethod predict ((net two-layer-net) x)
   (let ((out x))
-    (dolist (layer (net-layers net))
-      (setq out (forward layer out)))
+    (dolist (layer (net-layers net)) (setq out (forward layer out)))
     out))
 
 (defmethod net-loss ((net two-layer-net) x target)
@@ -63,9 +66,7 @@
 (defmethod net-accuracy-count ((net two-layer-net) x target)
   ;; Correctly classified rows; target may be one-hot or a label vector.
   (let ((y (linalg:argmax (predict net x) 1))
-        (tl (if (= (linalg:ndim target) 1)
-                target
-                (linalg:argmax target 1))))
+        (tl (if (= (linalg:ndim target) 1) target (linalg:argmax target 1))))
     (truncate (linalg:sum (linalg:equal y tl)))))
 
 (defmethod net-gradient ((net two-layer-net) x target)

@@ -33,5 +33,4 @@
 (defsystem "chipz"
   :version "0.8"
   :serial t
-  :components ((:file "package")
-               (:file "crc32")))
+  :components ((:file "package") (:file "crc32")))

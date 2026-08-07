@@ -15,17 +15,19 @@
 ;;                           wasmtime run -W gc=y -W exceptions=y \
 ;;                             -S tcp=y -S inherit-network=y echo-server.wasm
 ;; Talk to it with:          nc 127.0.0.1 7777   (or examples/net/echo-client.lisp)
-(handler-case
-    (let ((listener (usocket:socket-listen "127.0.0.1" 7777 :reuse-address t)))
-      (write-line "echo server listening on 127.0.0.1:7777")
-      (do ((n 1 (+ n 1))) (nil)
-        ;; with-server-socket closes the accepted socket on every exit.
-        (usocket:with-server-socket (sock (usocket:socket-accept listener))
-          (let ((stream (usocket:socket-stream sock)))
-            (write-line (format nil "client ~a connected" n))
-            (do ((line (read-line stream) (read-line stream)))
-                ((null line) (write-line "client disconnected"))
-              (write-line line stream))))))
+(handler-case (let ((listener
+                     (usocket:socket-listen "127.0.0.1" 7777 :reuse-address t)))
+                (write-line "echo server listening on 127.0.0.1:7777")
+                (do ((n 1 (+ n 1)))
+                    (nil)
+                  ;; with-server-socket closes the accepted socket on every exit.
+                  (usocket:with-server-socket (sock
+                                               (usocket:socket-accept listener))
+                    (let ((stream (usocket:socket-stream sock)))
+                      (write-line (format nil "client ~a connected" n))
+                      (do ((line (read-line stream) (read-line stream)))
+                          ((null line) (write-line "client disconnected"))
+                        (write-line line stream))))))
   (usocket:socket-error (e)
     (declare (ignore e))
     (write-line "socket-listen failed (is port 7777 already in use?)")))

@@ -26,23 +26,18 @@
 (defun lerp (a b f) (+ a (* f (- b a))))
 
 ;;; A 0..1 float color component to an integer 0..255, clamped.
-(defun clamp255 (x)
-  (let ((n (round (* x 255.0))))
-    (max 0 (min 255 n))))
+(defun clamp255 (x) (let ((n (round (* x 255.0)))) (max 0 (min 255 n))))
 
 ;;; An integer 0..255 to a two-digit lowercase hex string.
 (defun hex2 (n)
-  (let ((digits "0123456789abcdef")
-        (hi (floor (/ n 16)))
-        (lo (mod n 16)))
-    (concatenate 'string
-      (subseq digits hi (1+ hi))
-      (subseq digits lo (1+ lo)))))
+  (let ((digits "0123456789abcdef") (hi (floor (/ n 16))) (lo (mod n 16)))
+    (concatenate 'string (subseq digits hi (1+ hi))
+                 (subseq digits lo (1+ lo)))))
 
 ;;; An (r g b) list (0..255 each) to a "#rrggbb" CSS color string.
 (defun rgb-hex (rgb)
-  (concatenate 'string "#"
-    (hex2 (first rgb)) (hex2 (second rgb)) (hex2 (third rgb))))
+  (concatenate 'string "#" (hex2 (first rgb)) (hex2 (second rgb))
+               (hex2 (third rgb))))
 
 ;;; --- color-space conversion --------------------------------------------------
 
@@ -56,10 +51,11 @@
          (d (- mx mn))
          (v mx)
          (s (if (= mx 0.0) 0.0 (/ d mx)))
-         (h (cond ((= d 0.0) 0.0)
-                  ((= mx r) (* 60.0 (mod (/ (- g b) d) 6.0)))
-                  ((= mx g) (* 60.0 (+ (/ (- b r) d) 2.0)))
-                  (t        (* 60.0 (+ (/ (- r g) d) 4.0))))))
+         (h
+          (cond ((= d 0.0) 0.0)
+                ((= mx r) (* 60.0 (mod (/ (- g b) d) 6.0)))
+                ((= mx g) (* 60.0 (+ (/ (- b r) d) 2.0)))
+                (t (* 60.0 (+ (/ (- r g) d) 4.0))))))
     (list h s v)))
 
 ;;; (h s v)  ->  (r g b) with each component an integer 0..255.
@@ -68,14 +64,14 @@
          (x (* c (- 1.0 (abs (- (mod (/ h 60.0) 2.0) 1.0)))))
          (m (- v c))
          ;; (r g b) for this 60-degree sector, before adding the m offset.
-         (rgb (cond ((< h 60.0)  (list c x 0.0))
-                    ((< h 120.0) (list x c 0.0))
-                    ((< h 180.0) (list 0.0 c x))
-                    ((< h 240.0) (list 0.0 x c))
-                    ((< h 300.0) (list x 0.0 c))
-                    (t           (list c 0.0 x)))))
-    (list (clamp255 (+ (first rgb) m))
-          (clamp255 (+ (second rgb) m))
+         (rgb
+          (cond ((< h 60.0) (list c x 0.0))
+                ((< h 120.0) (list x c 0.0))
+                ((< h 180.0) (list 0.0 c x))
+                ((< h 240.0) (list 0.0 x c))
+                ((< h 300.0) (list x 0.0 c))
+                (t (list c 0.0 x)))))
+    (list (clamp255 (+ (first rgb) m)) (clamp255 (+ (second rgb) m))
           (clamp255 (+ (third rgb) m)))))
 
 ;;; --- interpolation -----------------------------------------------------------
@@ -85,26 +81,25 @@
 (defun interpolate-hue (h0 h1 f)
   (let* ((raw (- h1 h0))
          ;; the signed delta taken the short way around the 360-degree wheel
-         (d (cond ((> raw 180.0) (- raw 360.0))
-                  ((< raw -180.0) (+ raw 360.0))
-                  (t raw))))
+         (d
+          (cond ((> raw 180.0) (- raw 360.0))
+                ((< raw -180.0) (+ raw 360.0))
+                (t raw))))
     (mod (+ h0 (* f d)) 360.0)))
 
 ;;; Interpolate a whole color: hue on the short arc, saturation/value linearly.
 ;;; a and b are (h s v) lists.
 (defun interpolate-hsv (a b f)
-  (list (interpolate-hue (first a) (first b) f)
-        (lerp (second a) (second b) f)
+  (list (interpolate-hue (first a) (first b) f) (lerp (second a) (second b) f)
         (lerp (third a) (third b) f)))
 
 ;;; --- palette -----------------------------------------------------------------
 
 ;;; The anchor colors (RGB 0..255), in gradient order.
 (defun rainbow-anchors ()
-  (list (list 153 50 204) (list 71 111 240) (list 69 139 116)
-        (list 50 205 50) (list 255 215 0) (list 255 127 0)
-        (list 238 99 99) (list 238 64 0) (list 205 38 38)
-        (list 139 26 26)))
+  (list (list 153 50 204) (list 71 111 240) (list 69 139 116) (list 50 205 50)
+        (list 255 215 0) (list 255 127 0) (list 238 99 99) (list 238 64 0)
+        (list 205 38 38) (list 139 26 26)))
 
 ;;; The interpolated "#rrggbb" color at position p in [0,1] across the palette.
 (defun color-at (p)
@@ -127,18 +122,19 @@
 (defun rainbow-text (s)
   (let ((len (length s)))
     (loop for i below len
-          collect (cons (char s i)
-                        (color-at (if (<= len 1) 0.0 (/ (float i) (float (1- len)))))))))
+          collect
+            (cons (char s i)
+             (color-at (if (<= len 1) 0.0 (/ (float i) (float (1- len)))))))))
 
 ;;; HTML-escape one character to safe markup; ordinary characters pass through.
 ;;; Matched by code point so the reader never sees the tricky #\" / #\' literals.
 (defun escape-char (ch)
   (let ((c (char-code ch)))
-    (cond ((= c 38) "&amp;")    ; &
-          ((= c 60) "&lt;")     ; <
-          ((= c 62) "&gt;")     ; >
-          ((= c 34) "&quot;")   ; "
-          ((= c 39) "&#39;")    ; '
+    (cond ((= c 38) "&amp;")  ; &
+          ((= c 60) "&lt;")   ; <
+          ((= c 62) "&gt;")   ; >
+          ((= c 34) "&quot;") ; "
+          ((= c 39) "&#39;")  ; '
           (t (princ-to-string ch)))))
 
 ;;; Escape every HTML-special character in a string (& < > " '), so arbitrary
@@ -146,14 +142,14 @@
 ;;; string, then reduce joins the pieces.
 (defun html-escape (s)
   (reduce (lambda (acc piece) (concatenate 'string acc piece))
-          (map 'list #'escape-char s) :initial-value ""))
+          (map 'list #'escape-char s)
+          :initial-value ""))
 
 ;;; One (character . color) pair to its colored <span> string, with the
 ;;; character HTML-escaped.
 (defun span-html (pair)
-  (concatenate 'string
-    "<span style='color:" (cdr pair) "'>"
-    (html-escape (princ-to-string (car pair))) "</span>"))
+  (concatenate 'string "<span style='color:" (cdr pair) "'>"
+               (html-escape (princ-to-string (car pair))) "</span>"))
 
 ;;; An alist of (character . color) to a string of colored <span> elements:
 ;;; mapcar each pair to its span, then reduce the spans into one string. (The
@@ -166,12 +162,9 @@
           :initial-value ""))
 
 ;;; A string straight to its rainbow HTML (rainbow-text then decorate-html).
-(defun rainbow-html (s)
-  (decorate-html (rainbow-text s)))
+(defun rainbow-html (s) (decorate-html (rainbow-text s)))
 
 ;;; Export rainbow-html as a host-callable WASM function (string in, string out).
 ;;; A no-op on the interpreter/JVM; under --no-wasi it makes a Node-loadable
 ;;; WASM-GC reactor.
-(rontolisp:wasm-export 'rainbow-html
-  :params '(:string)
-  :returns :string)
+(rontolisp:wasm-export 'rainbow-html :params '(:string) :returns :string)

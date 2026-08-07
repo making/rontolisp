@@ -9,12 +9,9 @@
 
 (defun numerical-diff (f x)
   ;; (f(x+h) - f(x-h)) / 2h with h = 1e-4.
-  (let ((h 1.0e-4))
-    (/ (- (funcall f (+ x h)) (funcall f (- x h)))
-       (* 2 h))))
+  (let ((h 1.0e-4)) (/ (- (funcall f (+ x h)) (funcall f (- x h))) (* 2 h))))
 
-(defun function-1 (x)
-  (+ (* 0.01 x x) (* 0.1 x)))
+(defun function-1 (x) (+ (* 0.01 x x) (* 0.1 x)))
 
 ;; The central difference of a quadratic is exact up to float rounding;
 ;; round to 8 decimals so the output is identical on every backend (the

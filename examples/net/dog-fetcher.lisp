@@ -30,8 +30,9 @@
 (rontolisp:async-defun fetch-dog ()
   ;; awaiting needs an async-defun; the response :body is an asynchronous
   ;; stream on every backend, drained with read-all.
-  (let* ((res (rontolisp:await
-               (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
+  (let* ((res
+          (rontolisp:await
+           (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
          (status (getf res :status))
          (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
     (if (and (integerp status) (= status 200))
@@ -42,8 +43,7 @@
   (if (string= (getf env :path-info) "/")
       (let ((dog (rontolisp:await (fetch-dog))))
         (if dog
-            (json-response 200
-                           (rontolisp:plist-hash-table (list :dog dog)))
+            (json-response 200 (rontolisp:plist-hash-table (list :dog dog)))
             (json-response 502
                            (rontolisp:plist-hash-table
                             (list :error "the dog API did not answer")))))

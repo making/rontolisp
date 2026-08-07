@@ -16,10 +16,7 @@
                       :interface "example:pipeline/shout"
                       :package sh)
 
-(defvar *phrases*
-  '("hello world"
-    "component model"
-    "rust and lisp"))
+(defvar *phrases* '("hello world" "component model" "rust and lisp"))
 
 (dolist (phrase *phrases*)
   (format t "~a  ->  ~a~%" phrase (sh:emphasize phrase)))

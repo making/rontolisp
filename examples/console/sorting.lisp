@@ -18,23 +18,19 @@
              (rest (cdr lst))
              (smaller (remove-if-not (lambda (x) (funcall less x pivot)) rest))
              (larger (remove-if (lambda (x) (funcall less x pivot)) rest)))
-        (append (quicksort less smaller)
-                (list pivot)
+        (append (quicksort less smaller) (list pivot)
                 (quicksort less larger)))))
 
 ;;; Merge two already-sorted lists under `less`.
 (defun merge2 (less a b)
   (cond ((null a) b)
         ((null b) a)
-        ((funcall less (car a) (car b))
-         (cons (car a) (merge2 less (cdr a) b)))
+        ((funcall less (car a) (car b)) (cons (car a) (merge2 less (cdr a) b)))
         (t (cons (car b) (merge2 less a (cdr b))))))
 
 ;;; Front `n` elements of a list.
 (defun take (n lst)
-  (if (or (= n 0) (null lst))
-      nil
-      (cons (car lst) (take (- n 1) (cdr lst)))))
+  (if (or (= n 0) (null lst)) nil (cons (car lst) (take (- n 1) (cdr lst)))))
 
 ;;; Merge sort: split in half (using ash for portable integer halving), sort
 ;;; each half, then merge.

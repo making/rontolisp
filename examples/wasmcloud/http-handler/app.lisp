@@ -41,8 +41,7 @@
 
 ;; --- handlers ----------------------------------------------------------------
 
-(defun hello (env)
-  (text-response 200 (format nil "Hello from wasmCloud!~%")))
+(defun hello (env) (text-response 200 (format nil "Hello from wasmCloud!~%")))
 
 ;; The raw query string arrives as :query-string; rontolisp:query-param
 ;; url-decodes the value.
@@ -59,16 +58,17 @@
         (let ((message (gethash "message" (rontolisp:json-parse body))))
           (if (stringp message)
               (json-response 200
-                             (rontolisp:plist-hash-table (list :message message)))
+               (rontolisp:plist-hash-table (list :message message)))
               (json-response 400
                              (rontolisp:plist-hash-table
-                              (list :error "expected a JSON object with a string message field")))))
+                              (list :error
+                                    "expected a JSON object with a string message field")))))
         (json-response 400
                        (rontolisp:plist-hash-table
-                        (list :error "expected a JSON object with a string message field"))))))
+                        (list :error
+                              "expected a JSON object with a string message field"))))))
 
-(defun not-found (env)
-  (text-response 404 (format nil "Not found~%")))
+(defun not-found (env) (text-response 404 (format nil "Not found~%")))
 
 (defun method-not-allowed (env)
   (text-response 405 (format nil "Method Not Allowed~%")))
@@ -80,8 +80,7 @@
 ;; plist's :path-info carries the path only, so the comparisons are exact;
 ;; :request-method is an interned keyword, so the comparisons are eq.
 (defun handle (env)
-  (let ((path (getf env :path-info))
-        (method (getf env :request-method)))
+  (let ((path (getf env :path-info)) (method (getf env :request-method)))
     (cond ((string= path "/")
            (if (eq method :GET) (hello env) (method-not-allowed env)))
           ((string= path "/api/greet")

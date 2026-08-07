@@ -47,9 +47,7 @@
 ;;; no cons, list, hash or I/O, so it stays inside the --no-gc subset.
 (defun count-vowels (s)
   (let ((n 0))
-    (dotimes (i (length s))
-      (when (vowelp (char s i))
-        (setq n (+ n 1))))
+    (dotimes (i (length s)) (when (vowelp (char s i)) (setq n (+ n 1))))
     n))
 
 ;;; Implement count_vowels_component.wit, whose world declares

@@ -13,5 +13,4 @@
     (if (<= tmp 0) 0 1)))
 
 (dolist (xs '((0 0) (1 0) (0 1) (1 1)))
-  (format t "(~a, ~a) -> ~a~%" (car xs) (cadr xs)
-          (or-gate (car xs) (cadr xs))))
+  (format t "(~a, ~a) -> ~a~%" (car xs) (cadr xs) (or-gate (car xs) (cadr xs))))

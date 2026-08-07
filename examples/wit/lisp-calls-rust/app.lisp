@@ -26,14 +26,12 @@
 ;;; there too.
 (rontolisp:wit-provide "example:textkit/casing"
                        #'(lambda (member &rest args)
-                           (cond ((string= member "shout")
-                                  (concatenate 'string (string-upcase (first args)) "!"))
-                                 (t (error "casing: unknown member ~a" member)))))
+                           (cond
+                            ((string= member "shout")
+                             (concatenate 'string (string-upcase (first args))
+                                          "!"))
+                            (t (error "casing: unknown member ~a" member)))))
 
-(defvar *phrases*
-  '("hello world"
-    "component model"
-    "rust and lisp"))
+(defvar *phrases* '("hello world" "component model" "rust and lisp"))
 
-(dolist (phrase *phrases*)
-  (format t "~a  ->  ~a~%" phrase (tk:shout phrase)))
+(dolist (phrase *phrases*) (format t "~a  ->  ~a~%" phrase (tk:shout phrase)))

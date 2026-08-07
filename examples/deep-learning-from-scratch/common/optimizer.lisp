@@ -12,8 +12,7 @@
 (defun %opt-state (params)
   ;; A fresh state dict: one zero array per parameter, matching shapes.
   (let ((state (make-hash-table :test 'equal)))
-    (maphash (lambda (key p)
-               (setf (gethash key state) (linalg:zeros-like p)))
+    (maphash (lambda (key p) (setf (gethash key state) (linalg:zeros-like p)))
              params)
     state))
 
@@ -21,8 +20,7 @@
 
 ;; --- SGD -----------------------------------------------------------------------
 
-(defclass sgd ()
-  ((lr :initarg :lr :initform 0.01 :accessor sgd-lr)))
+(defclass sgd () ((lr :initarg :lr :initform 0.01 :accessor sgd-lr)))
 
 (defmethod update ((opt sgd) params grads)
   (let ((lr (sgd-lr opt)))
@@ -30,8 +28,7 @@
                (let ((g (gethash key grads)))
                  (dotimes (k (linalg:size p))
                    (setf (row-major-aref p k)
-                         (- (row-major-aref p k)
-                            (* lr (row-major-aref g k)))))))
+                    (- (row-major-aref p k) (* lr (row-major-aref g k)))))))
              params)))
 
 ;; --- Momentum ------------------------------------------------------------------
@@ -42,16 +39,14 @@
    (v :initform nil :accessor mom-v)))
 
 (defmethod update ((opt momentum) params grads)
-  (unless (mom-v opt)
-    (setf (mom-v opt) (%opt-state params)))
-  (let ((lr (mom-lr opt))
-        (m (mom-momentum opt)))
+  (unless (mom-v opt) (setf (mom-v opt) (%opt-state params)))
+  (let ((lr (mom-lr opt)) (m (mom-momentum opt)))
     (maphash (lambda (key p)
-               (let ((g (gethash key grads))
-                     (v (gethash key (mom-v opt))))
+               (let ((g (gethash key grads)) (v (gethash key (mom-v opt))))
                  (dotimes (k (linalg:size p))
-                   (let ((vk (- (* m (row-major-aref v k))
-                                (* lr (row-major-aref g k)))))
+                   (let ((vk
+                          (- (* m (row-major-aref v k))
+                             (* lr (row-major-aref g k)))))
                      (setf (row-major-aref v k) vk)
                      (setf (row-major-aref p k) (+ (row-major-aref p k) vk))))))
              params)))
@@ -64,19 +59,14 @@
    (v :initform nil :accessor nes-v)))
 
 (defmethod update ((opt nesterov) params grads)
-  (unless (nes-v opt)
-    (setf (nes-v opt) (%opt-state params)))
-  (let ((lr (nes-lr opt))
-        (m (nes-momentum opt)))
+  (unless (nes-v opt) (setf (nes-v opt) (%opt-state params)))
+  (let ((lr (nes-lr opt)) (m (nes-momentum opt)))
     (maphash (lambda (key p)
-               (let ((g (gethash key grads))
-                     (v (gethash key (nes-v opt))))
+               (let ((g (gethash key grads)) (v (gethash key (nes-v opt))))
                  (dotimes (k (linalg:size p))
-                   (let ((vk (row-major-aref v k))
-                         (gk (row-major-aref g k)))
+                   (let ((vk (row-major-aref v k)) (gk (row-major-aref g k)))
                      (setf (row-major-aref p k)
-                           (- (+ (row-major-aref p k) (* m m vk))
-                              (* (+ 1 m) lr gk)))
+                      (- (+ (row-major-aref p k) (* m m vk)) (* (+ 1 m) lr gk)))
                      (setf (row-major-aref v k) (- (* m vk) (* lr gk)))))))
              params)))
 
@@ -87,20 +77,17 @@
    (h :initform nil :accessor ada-h)))
 
 (defmethod update ((opt adagrad) params grads)
-  (unless (ada-h opt)
-    (setf (ada-h opt) (%opt-state params)))
+  (unless (ada-h opt) (setf (ada-h opt) (%opt-state params)))
   (let ((lr (ada-lr opt)))
     (maphash (lambda (key p)
-               (let ((g (gethash key grads))
-                     (h (gethash key (ada-h opt))))
+               (let ((g (gethash key grads)) (h (gethash key (ada-h opt))))
                  (dotimes (k (linalg:size p))
                    (let* ((gk (row-major-aref g k))
                           (hk (+ (row-major-aref h k) (* gk gk))))
                      (setf (row-major-aref h k) hk)
                      (setf (row-major-aref p k)
                            (- (row-major-aref p k)
-                              (/ (* lr gk) (+ (sqrt hk) 1.0e-7))))))))
-             params)))
+                              (/ (* lr gk) (+ (sqrt hk) 1.0e-7)))))))) params)))
 
 ;; --- RMSprop -------------------------------------------------------------------
 
@@ -110,22 +97,17 @@
    (h :initform nil :accessor rms-h)))
 
 (defmethod update ((opt rmsprop) params grads)
-  (unless (rms-h opt)
-    (setf (rms-h opt) (%opt-state params)))
-  (let ((lr (rms-lr opt))
-        (d (rms-decay-rate opt)))
+  (unless (rms-h opt) (setf (rms-h opt) (%opt-state params)))
+  (let ((lr (rms-lr opt)) (d (rms-decay-rate opt)))
     (maphash (lambda (key p)
-               (let ((g (gethash key grads))
-                     (h (gethash key (rms-h opt))))
+               (let ((g (gethash key grads)) (h (gethash key (rms-h opt))))
                  (dotimes (k (linalg:size p))
                    (let* ((gk (row-major-aref g k))
-                          (hk (+ (* d (row-major-aref h k))
-                                 (* (- 1 d) gk gk))))
+                          (hk (+ (* d (row-major-aref h k)) (* (- 1 d) gk gk))))
                      (setf (row-major-aref h k) hk)
                      (setf (row-major-aref p k)
                            (- (row-major-aref p k)
-                              (/ (* lr gk) (+ (sqrt hk) 1.0e-7))))))))
-             params)))
+                              (/ (* lr gk) (+ (sqrt hk) 1.0e-7)))))))) params)))
 
 ;; --- Adam ----------------------------------------------------------------------
 
@@ -133,8 +115,7 @@
   ((lr :initarg :lr :initform 0.001 :accessor adam-lr)
    (beta1 :initarg :beta1 :initform 0.9 :accessor adam-beta1)
    (beta2 :initarg :beta2 :initform 0.999 :accessor adam-beta2)
-   (iter :initform 0 :accessor adam-iter)
-   (m :initform nil :accessor adam-m)
+   (iter :initform 0 :accessor adam-iter) (m :initform nil :accessor adam-m)
    (v :initform nil :accessor adam-v)))
 
 (defmethod update ((opt adam) params grads)
@@ -146,18 +127,21 @@
          (b2 (adam-beta2 opt))
          (iter (adam-iter opt))
          ;; the book's bias-corrected step size
-         (lr-t (/ (* (adam-lr opt) (sqrt (- 1.0 (expt b2 iter))))
-                  (- 1.0 (expt b1 iter)))))
+         (lr-t
+          (/ (* (adam-lr opt) (sqrt (- 1.0 (expt b2 iter))))
+             (- 1.0 (expt b1 iter)))))
     (maphash (lambda (key p)
                (let ((g (gethash key grads))
                      (m (gethash key (adam-m opt)))
                      (v (gethash key (adam-v opt))))
                  (dotimes (k (linalg:size p))
                    (let* ((gk (row-major-aref g k))
-                          (mk (+ (row-major-aref m k)
-                                 (* (- 1 b1) (- gk (row-major-aref m k)))))
-                          (vk (+ (row-major-aref v k)
-                                 (* (- 1 b2) (- (* gk gk) (row-major-aref v k))))))
+                          (mk
+                           (+ (row-major-aref m k)
+                              (* (- 1 b1) (- gk (row-major-aref m k)))))
+                          (vk
+                           (+ (row-major-aref v k)
+                              (* (- 1 b2) (- (* gk gk) (row-major-aref v k))))))
                      (setf (row-major-aref m k) mk)
                      (setf (row-major-aref v k) vk)
                      (setf (row-major-aref p k)

@@ -27,10 +27,14 @@
 
 (linalg:seed 42)
 
-(let* ((x-train (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
-       (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
-       (x-test (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*))
-       (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t))
+(let* ((x-train
+        (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*))
+       (t-train
+        (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
+       (x-test
+        (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*))
+       (t-test
+        (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t))
        (params (make-two-layer-net 784 50 10))
        (iter-per-epoch (floor *train-limit* *batch-size*))
        (iters-num (* *epochs* iter-per-epoch)))

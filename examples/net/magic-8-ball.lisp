@@ -23,13 +23,12 @@
 ;; The twenty canonical answers: ten affirmative, five non-committal,
 ;; five negative.
 (defvar *answers*
-  '("It is certain." "It is decidedly so." "Without a doubt."
-    "Yes definitely." "You may rely on it." "As I see it, yes."
-    "Most likely." "Outlook good." "Yes." "Signs point to yes."
-    "Reply hazy, try again." "Ask again later." "Better not tell you now."
-    "Cannot predict now." "Concentrate and ask again."
-    "Don't count on it." "My reply is no." "My sources say no."
-    "Outlook not so good." "Very doubtful."))
+  '("It is certain." "It is decidedly so." "Without a doubt." "Yes definitely."
+    "You may rely on it." "As I see it, yes." "Most likely." "Outlook good."
+    "Yes." "Signs point to yes." "Reply hazy, try again." "Ask again later."
+    "Better not tell you now." "Cannot predict now."
+    "Concentrate and ask again." "Don't count on it." "My reply is no."
+    "My sources say no." "Outlook not so good." "Very doubtful."))
 
 (defun json-response (status obj)
   (list status '(:content-type "application/json")
@@ -53,8 +52,7 @@
 
 ;; A fresh random draw per shake, like the real thing -- asking the same
 ;; question twice may answer differently.
-(defun consult ()
-  (nth (random (length *answers*)) *answers*))
+(defun consult () (nth (random (length *answers*)) *answers*))
 
 ;; The env plist's :path-info carries the (percent-decoded) path only (the
 ;; query string arrives separately as :query-string), so the comparisons are
@@ -70,10 +68,10 @@
               (json-response 400
                              (rontolisp:plist-hash-table
                               (list :error "ask the ball a question"
-                                    :usage "GET /?question=... or POST a question body")))))
+                                    :usage
+                                    "GET /?question=... or POST a question body")))))
         (json-response 404
-                       (rontolisp:plist-hash-table
-                        (list :error "not found" :path path))))))
+         (rontolisp:plist-hash-table (list :error "not found" :path path))))))
 
 ;; The env :raw-body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers an env whose :body is the whole string (getf

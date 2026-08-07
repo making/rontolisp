@@ -53,20 +53,35 @@
   :depends-on ("alexandria" "bordeaux-threads" "cl-postgres" "s-sql"
                "split-sequence" "uiop" "cl-ppcre" "uax-15"
                (:feature :postmodern-use-mop "closer-mop"))
-  :components
-  ((:module "postmodern"
-    :components ((:file "package")
-                 (:file "config")
-                 (:file "connect" :depends-on ("package" "config"))
-                 (:file "json-encoder" :depends-on ("package" "config"))
-                 (:file "query" :depends-on ("connect" "json-encoder" "config"))
-                 (:file "prepare" :depends-on ("query" "config"))
-                 (:file "roles" :depends-on ("query" "config"))
-                 (:file "util" :depends-on ("query" "roles" "config"))
-                 (:file "transaction" :depends-on ("query" "config"))
-                 (:file "namespace" :depends-on ("query" "config"))
-                 (:file "execute-file" :depends-on ("query" "config"))
-                 (:file "table" :depends-on ("util" "transaction" "query" "config")
-                  :if-feature :postmodern-use-mop)
-                 (:file "deftable" :depends-on
-                        ("query" (:feature :postmodern-use-mop "table" "config")))))))
+  :components ((:module "postmodern"
+                        :components ((:file "package") (:file "config")
+                                     (:file "connect"
+                                            :depends-on ("package" "config"))
+                                     (:file "json-encoder"
+                                            :depends-on ("package" "config"))
+                                     (:file "query"
+                                            :depends-on
+                                            ("connect" "json-encoder" "config"))
+                                     (:file "prepare"
+                                            :depends-on ("query" "config"))
+                                     (:file "roles"
+                                            :depends-on ("query" "config"))
+                                     (:file "util"
+                                      :depends-on ("query" "roles" "config"))
+                                     (:file "transaction"
+                                            :depends-on ("query" "config"))
+                                     (:file "namespace"
+                                            :depends-on ("query" "config"))
+                                     (:file "execute-file"
+                                            :depends-on ("query" "config"))
+                                     (:file "table"
+                                            :depends-on
+                                            ("util" "transaction" "query"
+                                             "config")
+                                            :if-feature :postmodern-use-mop)
+                                     (:file "deftable"
+                                            :depends-on
+                                            ("query"
+                                             (:feature
+                                              :postmodern-use-mop "table"
+                                              "config")))))))

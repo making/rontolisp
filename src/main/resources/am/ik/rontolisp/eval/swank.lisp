@@ -17,7 +17,7 @@
 ;;   calls it whenever a swank port was recorded, and nothing was ever started.
 
 (defun swank:create-server (&rest args)
-  (error "swank:create-server is not supported: rontolisp cannot serve a remote REPL"))
+  (error
+   "swank:create-server is not supported: rontolisp cannot serve a remote REPL"))
 
-(defun swank:stop-server (&rest args)
-  nil)
+(defun swank:stop-server (&rest args) nil)

@@ -33,28 +33,51 @@
 ;; scratch for the mat4 uniform. Colors are constant per box, so set-color
 ;; latches the current color and set-vertex stages position + normal + that
 ;; color (functions cross the WASM boundary with at most 7 parameters).
-(rontolisp:wasm-import 'set-color :from "gl" :as "setColor"
-                       :params '(:float :float :float) :returns :void)
-(rontolisp:wasm-import 'set-vertex :from "gl" :as "setVertex"
+(rontolisp:wasm-import 'set-color
+                       :from "gl"
+                       :as "setColor"
+                       :params '(:float :float :float)
+                       :returns :void)
+(rontolisp:wasm-import 'set-vertex
+                       :from "gl"
+                       :as "setVertex"
                        :params '(:int :float :float :float :float :float :float)
                        :returns :void)
-(rontolisp:wasm-import 'gl-upload-vertices :from "gl" :as "uploadVertices"
-                       :params '(:int :int) :returns :void)
-(rontolisp:wasm-import 'set-float :from "gl" :as "setFloat"
-                       :params '(:int :float) :returns :void)
-(rontolisp:wasm-import 'gl-uniform-matrix4fv :from "gl" :as "uniformMatrix4fv"
-                       :params '(:int) :returns :void)
+(rontolisp:wasm-import 'gl-upload-vertices
+                       :from "gl"
+                       :as "uploadVertices"
+                       :params '(:int :int)
+                       :returns :void)
+(rontolisp:wasm-import 'set-float
+                       :from "gl"
+                       :as "setFloat"
+                       :params '(:int :float)
+                       :returns :void)
+(rontolisp:wasm-import 'gl-uniform-matrix4fv
+                       :from "gl"
+                       :as "uniformMatrix4fv"
+                       :params '(:int)
+                       :returns :void)
 
 ;; Canvas metrics, owned by the page.
-(rontolisp:wasm-import 'canvas-width :from "canvas" :as "width"
-                       :params '() :returns :float)
-(rontolisp:wasm-import 'canvas-height :from "canvas" :as "height"
-                       :params '() :returns :float)
+(rontolisp:wasm-import 'canvas-width
+                       :from "canvas"
+                       :as "width"
+                       :params '()
+                       :returns :float)
+(rontolisp:wasm-import 'canvas-height
+                       :from "canvas"
+                       :as "height"
+                       :params '()
+                       :returns :float)
 
 ;; The WASM backend has no transcendental built-ins, so borrow the host's.
 (rontolisp:wasm-import 'sin :from "math" :params '(:float) :returns :float)
 (rontolisp:wasm-import 'cos :from "math" :params '(:float) :returns :float)
-(rontolisp:wasm-import 'atan2 :from "math" :params '(:float :float) :returns :float)
+(rontolisp:wasm-import 'atan2
+                       :from "math"
+                       :params '(:float :float)
+                       :returns :float)
 
 (defconstant +pi+ 3.141592653589793)
 (defconstant +two-pi+ 6.283185307179586)
@@ -65,7 +88,8 @@
 ;; hemisphere ambient and a distance fog that fades the far scenery into the
 ;; sky color.
 
-(defconstant +solid-vs+ "#version 300 es
+(defconstant +solid-vs+
+  "#version 300 es
 layout(location=0) in vec3 aPos;     // world-space position from Lisp
 layout(location=1) in vec3 aNormal;  // world-space normal from Lisp
 layout(location=2) in vec3 aColor;
@@ -80,7 +104,8 @@ void main() {
   vW = aPos;
 }")
 
-(defconstant +solid-fs+ "#version 300 es
+(defconstant +solid-fs+
+  "#version 300 es
 precision mediump float;
 in vec3 vN;
 in vec3 vC;
@@ -102,8 +127,7 @@ void main() {
 ;; Column-major flat 16-element arrays (the OpenGL convention, as in
 ;; webgl-cube): element (row, col) lives at index (+ row (* col 4)).
 
-(defun mat4-zero ()
-  (make-array 16 :initial-element 0.0))
+(defun mat4-zero () (make-array 16 :initial-element 0.0))
 
 (defun mat4-mul (a b)
   (let ((out (mat4-zero)))
@@ -111,12 +135,12 @@ void main() {
       (dotimes (row 4)
         (let ((sum 0.0))
           (dotimes (k 4)
-            (setq sum (+ sum (* (aref a (+ row (* k 4)))
-                                (aref b (+ k (* col 4)))))))
+            (setq sum
+             (+ sum (* (aref a (+ row (* k 4))) (aref b (+ k (* col 4)))))))
           (setf (aref out (+ row (* col 4))) sum))))
     out))
 
-(defconstant +half-fov+ 0.39269908169872414)    ; pi/8: half the 45-degree fov
+(defconstant +half-fov+ 0.39269908169872414) ; pi/8: half the 45-degree fov
 
 (defun mat4-perspective (aspect near far)
   (let* ((f (/ (cos +half-fov+) (sin +half-fov+)))
@@ -137,12 +161,12 @@ void main() {
 ;; the course, so W runs toward the flag in the distance -- and steering is
 ;; camera-relative, so W stays "into the screen" from any angle.
 
-(defvar *camx* 0.0)                     ; the smoothed follow point
+(defvar *camx* 0.0) ; the smoothed follow point
 (defvar *camy* 0.0)
 (defvar *camz* 0.0)
 ;; The default orbit reproduces the original fixed follow camera: 7.2 back,
 ;; 3.3 up, looking down the course. A restart puts the orbit back here.
-(defconstant +cam-yaw-0+ 0.0)           ; 0 looks along +x, down the course
+(defconstant +cam-yaw-0+ 0.0) ; 0 looks along +x, down the course
 (defconstant +cam-pitch-0+ 0.43)
 (defconstant +cam-dist-0+ 7.9)
 
@@ -153,7 +177,7 @@ void main() {
 (defvar *eyey* 0.0)
 (defvar *eyez* 0.0)
 (defvar *aspect* 1.0)
-(defvar *vp* nil)                       ; the current view-projection matrix
+(defvar *vp* nil) ; the current view-projection matrix
 
 (defun build-view (tx ty tz)
   ;; The look-at view matrix for eye -> target, straight into column-major
@@ -204,8 +228,7 @@ void main() {
 (defun update-camera (dt)
   ;; Ease the follow point toward the player (never below the horizon while
   ;; falling into a pit), then place the eye on its orbit around it.
-  (let ((k (min 1.0 (* 5.0 dt)))
-        (ty (max *py* -0.5)))
+  (let ((k (min 1.0 (* 5.0 dt))) (ty (max *py* -0.5)))
     (setq *camx* (+ *camx* (* k (- *px* *camx*))))
     (setq *camy* (+ *camy* (* k (- ty *camy*))))
     (setq *camz* (+ *camz* (* k (- *pz* *camz*)))))
@@ -216,10 +239,10 @@ void main() {
     (setq *eyex* (- *camx* (* *cam-dist* cp cy)))
     (setq *eyey* (+ *camy* (* *cam-dist* sp)))
     (setq *eyez* (- *camz* (* *cam-dist* cp sy)))
-    (setq *vp* (mat4-mul (mat4-perspective *aspect* 0.1 90.0)
-                         (build-view (+ *camx* (* 1.5 cy))
-                                     (+ *camy* 1.0)
-                                     (+ *camz* (* 1.5 sy)))))))
+    (setq *vp*
+          (mat4-mul (mat4-perspective *aspect* 0.1 90.0)
+                    (build-view (+ *camx* (* 1.5 cy)) (+ *camy* 1.0)
+                                (+ *camz* (* 1.5 sy)))))))
 
 ;; --- GL pipeline setup --------------------------------------------------------
 
@@ -229,7 +252,7 @@ void main() {
 (defvar *vao* 0)
 (defvar *buf* 0)
 
-(defconstant +max-verts+ 8192)          ; lit-triangle vertex capacity
+(defconstant +max-verts+ 8192) ; lit-triangle vertex capacity
 
 (defun setup-gl ()
   (setq *prog* (gl:build-program +solid-vs+ +solid-fs+))
@@ -256,8 +279,8 @@ void main() {
 ;; face normals rotated by the same yaw. Corner index bits: bit 0 = +x,
 ;; bit 1 = +y, bit 2 = +z in local space.
 
-(defvar *v* 0)                          ; vertex write cursor
-(defvar *static-verts* 0)               ; level + scenery, uploaded once
+(defvar *v* 0)            ; vertex write cursor
+(defvar *static-verts* 0) ; level + scenery, uploaded once
 
 (defvar *cwx* (make-array 8 :initial-element 0.0))
 (defvar *cwy* (make-array 8 :initial-element 0.0))
@@ -280,8 +303,7 @@ void main() {
 (defun emit-box (cx cy cz hx hy hz yaw)
   ;; a box centered at c with half extents h, rotated around y by yaw;
   ;; local +x rotates to world (cos yaw, 0, -sin yaw)
-  (let ((c (cos yaw))
-        (s (sin yaw)))
+  (let ((c (cos yaw)) (s (sin yaw)))
     (dotimes (i 8)
       (let ((lx (if (= (logand i 1) 1) hx (- 0.0 hx)))
             (ly (if (= (logand i 2) 2) hy (- 0.0 hy)))
@@ -289,12 +311,12 @@ void main() {
         (setf (aref *cwx* i) (+ cx (* lx c) (* lz s)))
         (setf (aref *cwy* i) (+ cy ly))
         (setf (aref *cwz* i) (+ cz (- (* lz c) (* lx s))))))
-    (emit-face 4 5 7 6 s 0.0 c)                           ; +z
-    (emit-face 1 0 2 3 (- 0.0 s) 0.0 (- 0.0 c))           ; -z
-    (emit-face 5 1 3 7 c 0.0 (- 0.0 s))                   ; +x
-    (emit-face 0 4 6 2 (- 0.0 c) 0.0 s)                   ; -x
-    (emit-face 6 7 3 2 0.0 1.0 0.0)                       ; +y
-    (emit-face 0 1 5 4 0.0 -1.0 0.0)))                    ; -y
+    (emit-face 4 5 7 6 s 0.0 c)                 ; +z
+    (emit-face 1 0 2 3 (- 0.0 s) 0.0 (- 0.0 c)) ; -z
+    (emit-face 5 1 3 7 c 0.0 (- 0.0 s))         ; +x
+    (emit-face 0 4 6 2 (- 0.0 c) 0.0 s)         ; -x
+    (emit-face 6 7 3 2 0.0 1.0 0.0)             ; +y
+    (emit-face 0 1 5 4 0.0 -1.0 0.0)))          ; -y
 
 ;; A local frame for composite figures (the player, the enemies, the coins):
 ;; set-origin latches a world position + yaw, and part emits one box given in
@@ -315,10 +337,8 @@ void main() {
   (setq *os* (sin yaw)))
 
 (defun part (lx ly lz hx hy hz)
-  (emit-box (+ *ox* (* lx *oc*) (* lz *os*))
-            (+ *oy* ly)
-            (+ *oz* (- (* lz *oc*) (* lx *os*)))
-            hx hy hz *oyaw*))
+  (emit-box (+ *ox* (* lx *oc*) (* lz *os*)) (+ *oy* ly)
+            (+ *oz* (- (* lz *oc*) (* lx *os*))) hx hy hz *oyaw*))
 
 ;; --- the stage ------------------------------------------------------------------
 ;;
@@ -329,43 +349,43 @@ void main() {
 ;; but nothing collides with them.
 
 (defconstant +solids+
-  '((-4.0 -1.0 -3.5 14.0 0.0 3.5 0.38 0.70 0.34)          ; grass run A
-    (-4.0 -2.2 -3.5 14.0 -1.0 3.5 0.47 0.34 0.24)         ; its dirt band
-    (7.0 1.2 0.6 9.5 1.8 2.6 0.76 0.47 0.29)              ; brick platform
-    (16.0 -1.0 -3.5 31.0 0.0 3.5 0.38 0.70 0.34)          ; grass run B
+  '((-4.0 -1.0 -3.5 14.0 0.0 3.5 0.38 0.70 0.34)  ; grass run A
+    (-4.0 -2.2 -3.5 14.0 -1.0 3.5 0.47 0.34 0.24) ; its dirt band
+    (7.0 1.2 0.6 9.5 1.8 2.6 0.76 0.47 0.29)      ; brick platform
+    (16.0 -1.0 -3.5 31.0 0.0 3.5 0.38 0.70 0.34)  ; grass run B
     (16.0 -2.2 -3.5 31.0 -1.0 3.5 0.47 0.34 0.24)
-    (20.0 0.0 -2.6 21.6 1.3 -1.0 0.22 0.62 0.30)          ; the pipe body
-    (19.85 1.3 -2.75 21.75 1.75 -0.85 0.26 0.70 0.34)     ; the pipe lip
-    (23.0 1.6 -3.0 26.0 2.2 -0.5 0.76 0.47 0.29)          ; high bricks
-    (32.0 0.5 -0.7 33.4 1.1 0.9 0.64 0.62 0.60)           ; stone step, pit B
-    (34.0 -1.0 -3.5 48.0 0.0 3.5 0.38 0.70 0.34)          ; grass run C
+    (20.0 0.0 -2.6 21.6 1.3 -1.0 0.22 0.62 0.30)      ; the pipe body
+    (19.85 1.3 -2.75 21.75 1.75 -0.85 0.26 0.70 0.34) ; the pipe lip
+    (23.0 1.6 -3.0 26.0 2.2 -0.5 0.76 0.47 0.29)      ; high bricks
+    (32.0 0.5 -0.7 33.4 1.1 0.9 0.64 0.62 0.60)       ; stone step, pit B
+    (34.0 -1.0 -3.5 48.0 0.0 3.5 0.38 0.70 0.34)      ; grass run C
     (34.0 -2.2 -3.5 48.0 -1.0 3.5 0.47 0.34 0.24)
-    (49.0 0.4 -0.8 50.4 1.0 0.8 0.64 0.62 0.60)           ; stone step, pit C
-    (51.0 -1.0 -3.5 68.0 0.0 3.5 0.38 0.70 0.34)          ; goal ground
+    (49.0 0.4 -0.8 50.4 1.0 0.8 0.64 0.62 0.60)  ; stone step, pit C
+    (51.0 -1.0 -3.5 68.0 0.0 3.5 0.38 0.70 0.34) ; goal ground
     (51.0 -2.2 -3.5 68.0 -1.0 3.5 0.47 0.34 0.24)
-    (55.0 0.0 -2.2 59.0 0.7 0.2 0.82 0.66 0.40)           ; the staircase
+    (55.0 0.0 -2.2 59.0 0.7 0.2 0.82 0.66 0.40) ; the staircase
     (56.0 0.7 -2.2 59.0 1.4 0.2 0.82 0.66 0.40)
     (57.0 1.4 -2.2 59.0 2.1 0.2 0.82 0.66 0.40)
     (58.0 2.1 -2.2 59.0 2.8 0.2 0.82 0.66 0.40)
-    (61.4 0.0 -1.6 62.6 0.5 -0.4 0.64 0.62 0.60)          ; flag pole base
-    (64.6 0.0 -3.4 67.6 2.4 -0.9 0.86 0.83 0.78)          ; castle keep
-    (65.6 2.4 -2.7 66.6 3.4 -1.6 0.86 0.83 0.78)))        ; castle tower
+    (61.4 0.0 -1.6 62.6 0.5 -0.4 0.64 0.62 0.60)   ; flag pole base
+    (64.6 0.0 -3.4 67.6 2.4 -0.9 0.86 0.83 0.78)   ; castle keep
+    (65.6 2.4 -2.7 66.6 3.4 -1.6 0.86 0.83 0.78))) ; castle tower
 
 (defconstant +scenery+
-  '((61.95 0.5 -1.03 62.05 4.4 -0.97 0.80 0.83 0.88)      ; the flag pole
-    (61.97 4.4 -1.05 62.03 4.52 -0.95 1.00 0.83 0.25)     ; its finial
-    (61.99 3.65 -0.95 62.01 4.15 -0.25 0.24 0.70 0.34)    ; the flag, facing the camera
-    (64.55 0.0 -2.5 64.65 1.1 -1.7 0.35 0.25 0.18)        ; castle door
-    (65.9 3.4 -2.17 65.98 4.1 -2.13 0.80 0.83 0.88)       ; castle banner pole
-    (65.92 3.75 -2.13 65.96 4.1 -1.61 0.90 0.30 0.24)     ; castle banner
-    (6.0 -1.0 -13.0 18.0 2.6 -7.5 0.30 0.58 0.31)         ; hills, left bank
+  '((61.95 0.5 -1.03 62.05 4.4 -0.97 0.80 0.83 0.88)   ; the flag pole
+    (61.97 4.4 -1.05 62.03 4.52 -0.95 1.00 0.83 0.25)  ; its finial
+    (61.99 3.65 -0.95 62.01 4.15 -0.25 0.24 0.70 0.34) ; the flag, facing the camera
+    (64.55 0.0 -2.5 64.65 1.1 -1.7 0.35 0.25 0.18)     ; castle door
+    (65.9 3.4 -2.17 65.98 4.1 -2.13 0.80 0.83 0.88)    ; castle banner pole
+    (65.92 3.75 -2.13 65.96 4.1 -1.61 0.90 0.30 0.24)  ; castle banner
+    (6.0 -1.0 -13.0 18.0 2.6 -7.5 0.30 0.58 0.31)      ; hills, left bank
     (24.0 -1.0 -15.0 42.0 4.2 -9.0 0.27 0.53 0.30)
     (46.0 -1.0 -13.0 60.0 2.2 -7.8 0.30 0.58 0.31)
-    (10.0 -1.0 7.5 22.0 3.0 12.5 0.28 0.55 0.30)          ; hills, right bank
+    (10.0 -1.0 7.5 22.0 3.0 12.5 0.28 0.55 0.30) ; hills, right bank
     (30.0 -1.0 8.0 44.0 2.4 13.0 0.30 0.58 0.31)
     (52.0 -1.0 7.5 64.0 3.4 12.5 0.28 0.55 0.30)
-    (76.0 -1.0 -16.0 100.0 8.0 16.0 0.26 0.50 0.29)       ; the far range ahead
-    (2.0 5.6 -11.0 6.0 6.6 -9.6 0.99 0.99 0.99)           ; clouds
+    (76.0 -1.0 -16.0 100.0 8.0 16.0 0.26 0.50 0.29) ; the far range ahead
+    (2.0 5.6 -11.0 6.0 6.6 -9.6 0.99 0.99 0.99)     ; clouds
     (20.0 6.8 -13.0 25.5 7.9 -11.4 0.99 0.99 0.99)
     (37.0 5.9 -11.5 41.5 6.9 -10.1 0.99 0.99 0.99)
     (54.0 6.7 -13.5 59.0 7.8 -11.9 0.99 0.99 0.99)
@@ -402,12 +422,9 @@ void main() {
 (defun emit-block (b)
   ;; one static block: an axis-aligned box from its corner list entry
   (set-color (nth 6 b) (nth 7 b) (nth 8 b))
-  (emit-box (* 0.5 (+ (nth 0 b) (nth 3 b)))
-            (* 0.5 (+ (nth 1 b) (nth 4 b)))
-            (* 0.5 (+ (nth 2 b) (nth 5 b)))
-            (* 0.5 (- (nth 3 b) (nth 0 b)))
-            (* 0.5 (- (nth 4 b) (nth 1 b)))
-            (* 0.5 (- (nth 5 b) (nth 2 b)))
+  (emit-box (* 0.5 (+ (nth 0 b) (nth 3 b))) (* 0.5 (+ (nth 1 b) (nth 4 b)))
+            (* 0.5 (+ (nth 2 b) (nth 5 b))) (* 0.5 (- (nth 3 b) (nth 0 b)))
+            (* 0.5 (- (nth 4 b) (nth 1 b))) (* 0.5 (- (nth 5 b) (nth 2 b)))
             0.0))
 
 (defun bake-static ()
@@ -422,18 +439,18 @@ void main() {
 ;; --- coins ----------------------------------------------------------------------
 
 (defconstant +coins+
-  '((7.6 2.4 1.6) (8.4 2.4 1.6) (9.2 2.4 1.6)             ; over the bricks
-    (14.6 1.1 0.0) (15.2 1.5 0.0) (15.8 1.1 0.0)          ; the arc over pit A
-    (23.6 2.9 -1.7) (24.5 2.9 -1.7) (25.4 2.9 -1.7)       ; on the high bricks
-    (41.0 0.7 0.5) (42.0 0.7 0.5) (43.0 0.7 0.5)          ; the run-C row
-    (49.2 1.8 0.0) (50.2 1.8 0.0)))                       ; the arc over pit C
+  '((7.6 2.4 1.6) (8.4 2.4 1.6) (9.2 2.4 1.6)       ; over the bricks
+    (14.6 1.1 0.0) (15.2 1.5 0.0) (15.8 1.1 0.0)    ; the arc over pit A
+    (23.6 2.9 -1.7) (24.5 2.9 -1.7) (25.4 2.9 -1.7) ; on the high bricks
+    (41.0 0.7 0.5) (42.0 0.7 0.5) (43.0 0.7 0.5)    ; the run-C row
+    (49.2 1.8 0.0) (50.2 1.8 0.0)))                 ; the arc over pit C
 
 (defvar *ncoin* 0)
 (defvar *coinx* nil)
 (defvar *coiny* nil)
 (defvar *coinz* nil)
-(defvar *ctaken* nil)                   ; t once collected
-(defvar *coins* 0)                      ; the HUD counter
+(defvar *ctaken* nil) ; t once collected
+(defvar *coins* 0)    ; the HUD counter
 
 (defun parse-coins ()
   (setq *ncoin* (length +coins+))
@@ -455,9 +472,7 @@ void main() {
 ;; touch it any other way and you lose a life.
 
 (defconstant +enemy-list+
-  '((18.0 1.2 17.2 28.5)
-    (36.0 -1.5 35.0 46.5)
-    (43.0 1.8 36.5 47.0)
+  '((18.0 1.2 17.2 28.5) (36.0 -1.5 35.0 46.5) (43.0 1.8 36.5 47.0)
     (53.0 1.6 51.8 54.4)))
 
 (defconstant +enemy-speed+ 1.4)
@@ -467,9 +482,9 @@ void main() {
 (defvar *ez* nil)
 (defvar *eminx* nil)
 (defvar *emaxx* nil)
-(defvar *edir* nil)                     ; +1.0 / -1.0
-(defvar *ealive* nil)                   ; t while walking
-(defvar *esquash* nil)                  ; squashed-remains countdown
+(defvar *edir* nil)    ; +1.0 / -1.0
+(defvar *ealive* nil)  ; t while walking
+(defvar *esquash* nil) ; squashed-remains countdown
 
 (defun parse-enemies ()
   (setq *nenemy* (length +enemy-list+))
@@ -512,14 +527,14 @@ void main() {
 
 (defconstant +p-hx+ 0.30)
 (defconstant +p-hz+ 0.30)
-(defconstant +p-h+ 0.95)                ; standing height
+(defconstant +p-h+ 0.95) ; standing height
 (defconstant +run-speed+ 4.6)
 (defconstant +gravity+ 26.0)
-(defconstant +jump-v+ 10.0)             ; apex ~1.9, just over two blocks
+(defconstant +jump-v+ 10.0) ; apex ~1.9, just over two blocks
 (defconstant +spawn-x+ 0.0)
 (defconstant +spawn-y+ 0.5)
 (defconstant +spawn-z+ 0.0)
-(defconstant +goal-x+ 62.0)             ; the flag pole
+(defconstant +goal-x+ 62.0) ; the flag pole
 (defconstant +goal-z+ -1.0)
 
 (defvar *px* 0.0)
@@ -529,26 +544,26 @@ void main() {
 (defvar *vy* 0.0)
 (defvar *vz* 0.0)
 (defvar *grounded* nil)
-(defvar *coyote* 0.0)                   ; grace after running off an edge
-(defvar *jump-buf* 0.0)                 ; grace before landing
-(defvar *yaw* 0.0)                      ; facing; 0 looks along +x
-(defvar *run-phase* 0.0)                ; the run-cycle oscillator
+(defvar *coyote* 0.0)    ; grace after running off an edge
+(defvar *jump-buf* 0.0)  ; grace before landing
+(defvar *yaw* 0.0)       ; facing; 0 looks along +x
+(defvar *run-phase* 0.0) ; the run-cycle oscillator
 
 ;; game state: 0 playing, 1 dying, 2 course clear
 (defvar *state* 0)
-(defvar *state-t* 0.0)                  ; time in the current state
+(defvar *state-t* 0.0) ; time in the current state
 (defvar *deaths* 0)
-(defvar *start-tm* -1.0)                ; wall time when the run started
-(defvar *elapsed* 0.0)                  ; frozen at the moment of clearing
+(defvar *start-tm* -1.0) ; wall time when the run started
+(defvar *elapsed* 0.0)   ; frozen at the moment of clearing
 (defvar *last-tm* 0.0)
 (defvar *pending-reset* nil)
 
 ;; keyboard state, forwarded by the page: 1.0 while held
-(defvar *in-l* 0.0)                     ; A
-(defvar *in-r* 0.0)                     ; D
-(defvar *in-f* 0.0)                     ; W (away from the camera)
-(defvar *in-b* 0.0)                     ; S (toward the camera)
-(defvar *in-jump* 0.0)                  ; Space
+(defvar *in-l* 0.0)    ; A
+(defvar *in-r* 0.0)    ; D
+(defvar *in-f* 0.0)    ; W (away from the camera)
+(defvar *in-b* 0.0)    ; S (toward the camera)
+(defvar *in-jump* 0.0) ; Space
 (defvar *jump-prev* nil)
 
 (defun set-key (code down)
@@ -590,8 +605,7 @@ void main() {
   (setq *deaths* 0)
   (setq *start-tm* tm)
   (setq *elapsed* 0.0)
-  (dotimes (i *ncoin*)
-    (setf (aref *ctaken* i) nil))
+  (dotimes (i *ncoin*) (setf (aref *ctaken* i) nil))
   (dotimes (i *nenemy*)
     (setf (aref *ex* i) (nth 0 (nth i +enemy-list+)))
     (setf (aref *edir* i) 1.0)
@@ -602,7 +616,7 @@ void main() {
   (setq *state* 1)
   (setq *state-t* 0.0)
   (setq *deaths* (+ *deaths* 1))
-  (setq *vy* 8.0))                      ; the little farewell hop
+  (setq *vy* 8.0)) ; the little farewell hop
 
 ;; --- collision -------------------------------------------------------------------
 ;;
@@ -665,8 +679,7 @@ void main() {
          (tx (* +run-speed+ n (- (* f cy) (* r sy))))
          (tz (* +run-speed+ n (+ (* f sy) (* r cy))))
          (acc (* dt (if *grounded* 34.0 16.0))))
-    (let ((dx (- tx *vx*))
-          (dz (- tz *vz*)))
+    (let ((dx (- tx *vx*)) (dz (- tz *vz*)))
       (setq *vx* (+ *vx* (max (- 0.0 acc) (min acc dx))))
       (setq *vz* (+ *vz* (max (- 0.0 acc) (min acc dz)))))))
 
@@ -682,23 +695,19 @@ void main() {
 (defun jump-control (dt)
   ;; Buffered, coyote-timed, variable-height jumping.
   (let ((held (> *in-jump* 0.5)))
-    (when (and held (not *jump-prev*))
-      (setq *jump-buf* 0.12))
+    (when (and held (not *jump-prev*)) (setq *jump-buf* 0.12))
     (setq *jump-prev* held)
-    (when (> *jump-buf* 0.0)
-      (setq *jump-buf* (- *jump-buf* dt)))
+    (when (> *jump-buf* 0.0) (setq *jump-buf* (- *jump-buf* dt)))
     (if *grounded*
         (setq *coyote* 0.10)
-        (when (> *coyote* 0.0)
-          (setq *coyote* (- *coyote* dt))))
+        (when (> *coyote* 0.0) (setq *coyote* (- *coyote* dt))))
     (when (and (> *jump-buf* 0.0) (or *grounded* (> *coyote* 0.0)))
       (setq *vy* +jump-v+)
       (setq *grounded* nil)
       (setq *coyote* 0.0)
       (setq *jump-buf* 0.0))
     ;; release early for a shorter hop
-    (when (and (not held) (> *vy* 3.5))
-      (setq *vy* 3.5))))
+    (when (and (not held) (> *vy* 3.5)) (setq *vy* 3.5))))
 
 (defun check-coins ()
   (dotimes (i *ncoin*)
@@ -713,14 +722,11 @@ void main() {
 (defun check-enemies ()
   (dotimes (i *nenemy*)
     (when (aref *ealive* i)
-      (let ((dx (- *px* (aref *ex* i)))
-            (dz (- *pz* (aref *ez* i))))
-        (when (and (< (abs dx) (+ +p-hx+ 0.27))
-                   (< (abs dz) (+ +p-hz+ 0.25))
-                   (> (+ *py* +p-h+) 0.05)
-                   (< *py* 0.58))
+      (let ((dx (- *px* (aref *ex* i))) (dz (- *pz* (aref *ez* i))))
+        (when (and (< (abs dx) (+ +p-hx+ 0.27)) (< (abs dz) (+ +p-hz+ 0.25))
+                   (> (+ *py* +p-h+) 0.05) (< *py* 0.58))
           (if (and (< *vy* -0.5) (> *py* 0.12))
-              (progn                     ; the stomp
+              (progn ; the stomp
                 (setf (aref *ealive* i) nil)
                 (setf (aref *esquash* i) 0.6)
                 (setq *vy* 8.0))
@@ -728,8 +734,7 @@ void main() {
 
 (defun check-goal ()
   (when (and (> *px* (- +goal-x+ 0.95)) (< *px* (+ +goal-x+ 0.95))
-             (> *pz* (- +goal-z+ 1.3)) (< *pz* (+ +goal-z+ 1.3))
-             (< *py* 4.4))
+             (> *pz* (- +goal-z+ 1.3)) (< *pz* (+ +goal-z+ 1.3)) (< *py* 4.4))
     (setq *state* 2)
     (setq *state-t* 0.0)
     (setq *elapsed* (- *last-tm* *start-tm*))))
@@ -750,15 +755,14 @@ void main() {
   (check-goal)
   (when (< *py* -7.0)
     (die)
-    (setq *vy* 0.0)))                   ; already falling: no farewell hop
+    (setq *vy* 0.0))) ; already falling: no farewell hop
 
 (defun step-dying (dt)
   ;; a spin and a fall, free of the world, then back to the start
   (setq *vy* (- *vy* (* +gravity+ dt)))
   (setq *py* (+ *py* (* *vy* dt)))
   (setq *yaw* (+ *yaw* (* 12.0 dt)))
-  (when (> *state-t* 1.4)
-    (respawn)))
+  (when (> *state-t* 1.4) (respawn)))
 
 (defun step-clear (dt)
   ;; land, stop and face the camera for the bow
@@ -780,14 +784,12 @@ void main() {
     (dotimes (i *nsolid*)
       (when (and (> (+ *px* 0.2) (aref *sx0* i)) (< (- *px* 0.2) (aref *sx1* i))
                  (> (+ *pz* 0.2) (aref *sz0* i)) (< (- *pz* 0.2) (aref *sz1* i))
-                 (<= (aref *sy1* i) (+ *py* 0.05))
-                 (> (aref *sy1* i) top))
+                 (<= (aref *sy1* i) (+ *py* 0.05)) (> (aref *sy1* i) top))
         (setq top (aref *sy1* i))))
     (when (> top -50.0)
       (let ((k (max 0.3 (- 1.0 (* 0.16 (- *py* top))))))
         (set-color 0.16 0.28 0.16)
-        (emit-box *px* (+ top 0.02) *pz*
-                  (* 0.30 k) 0.008 (* 0.30 k) 0.0)))))
+        (emit-box *px* (+ top 0.02) *pz* (* 0.30 k) 0.008 (* 0.30 k) 0.0)))))
 
 (defun emit-player (tm)
   ;; the robot explorer: teal chassis, white head with a wraparound visor,
@@ -851,8 +853,7 @@ void main() {
   (unless (aref *ctaken* i)
     (set-origin (aref *coinx* i)
                 (+ (aref *coiny* i) (* 0.07 (sin (+ (* tm 2.4) (* 0.9 i)))))
-                (aref *coinz* i)
-                (* tm 3.0))
+                (aref *coinz* i) (* tm 3.0))
     (set-color 1.0 0.82 0.25)
     (part 0.0 0.0 0.0 0.16 0.16 0.03)
     (set-color 1.0 0.92 0.55)
@@ -861,8 +862,7 @@ void main() {
 ;; --- the frame --------------------------------------------------------------------
 
 (defun draw (tm)
-  (let ((w (canvas-width))
-        (h (canvas-height)))
+  (let ((w (canvas-width)) (h (canvas-height)))
     (gl:viewport 0 0 (floor w) (floor h)))
   (gl:clear-color 0.52 0.74 0.98 1.0)
   (gl:clear (+ gl:+color-buffer-bit+ gl:+depth-buffer-bit+))
@@ -872,8 +872,7 @@ void main() {
   (gl:uniform3f *u-eye* *eyex* *eyey* *eyez*)
   ;; the dynamic cast goes in the buffer right after the baked level
   (setq *v* *static-verts*)
-  (when (= *state* 0)
-    (emit-shadow))
+  (when (= *state* 0) (emit-shadow))
   (emit-player tm)
   (dotimes (i *nenemy*) (emit-enemy i tm))
   (dotimes (i *ncoin*) (emit-coin i tm))
@@ -925,7 +924,10 @@ void main() {
 (respawn)
 
 (rontolisp:wasm-export 'frame :params '(:float) :returns :void)
-(rontolisp:wasm-export 'set-key :as "setKey" :params '(:int :int) :returns :void)
+(rontolisp:wasm-export 'set-key
+                       :as "setKey"
+                       :params '(:int :int)
+                       :returns :void)
 (rontolisp:wasm-export 'orbit :params '(:float :float) :returns :void)
 (rontolisp:wasm-export 'zoom :params '(:float) :returns :void)
 (rontolisp:wasm-export 'restart :params '() :returns :void)

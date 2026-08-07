@@ -16,10 +16,10 @@
 
 (defun activation-histogram (init-name w-scale)
   (linalg:seed 1)
-  (let ((x (linalg:randn '(1000 100)))
-        (activations nil))
+  (let ((x (linalg:randn '(1000 100))) (activations nil))
     (dotimes (i *hidden-layer-num*)
-      (let* ((w (linalg:mul w-scale (linalg:randn (list *node-num* *node-num*))))
+      (let* ((w
+              (linalg:mul w-scale (linalg:randn (list *node-num* *node-num*))))
              (a (linalg:matmul x w))
              (z (sigmoid a)))
         (setq activations (cons z activations))
@@ -34,8 +34,7 @@
             (let ((b (min 9 (truncate (* 10 (row-major-aref z k))))))
               (setf (aref counts b) (+ (aref counts b) 1))))
           (format t "  layer ~a:" idx)
-          (dotimes (b 10)
-            (format t " ~5d" (aref counts b)))
+          (dotimes (b 10) (format t " ~5d" (aref counts b)))
           (format t "~%"))))))
 
 (activation-histogram "std = 1.0" 1.0)

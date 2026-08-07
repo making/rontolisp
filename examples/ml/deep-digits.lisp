@@ -84,24 +84,23 @@
   ;; The derivative of leaky-relu: 1 for positive pre-activations, else 0.1.
   (linalg:emap (lambda (x) (if (> x 0) 1 0.1)) m))
 
-(defun sq-sum (m)
-  (linalg:sum (linalg:emap (lambda (x) (* x x)) m)))
+(defun sq-sum (m) (linalg:sum (linalg:emap (lambda (x) (* x x)) m)))
 
 ;; --- the dataset: 5x3 pixel bitmaps of the digits 0-9 ------------------------
 
 (defun digit-bitmaps ()
   ;; One row per digit, 15 pixels each (row-major 5x3).
   (linalg:from-list
-   '((1 1 1  1 0 1  1 0 1  1 0 1  1 1 1)    ; 0
-     (0 1 0  1 1 0  0 1 0  0 1 0  1 1 1)    ; 1
-     (1 1 1  0 0 1  1 1 1  1 0 0  1 1 1)    ; 2
-     (1 1 1  0 0 1  1 1 1  0 0 1  1 1 1)    ; 3
-     (1 0 1  1 0 1  1 1 1  0 0 1  0 0 1)    ; 4
-     (1 1 1  1 0 0  1 1 1  0 0 1  1 1 1)    ; 5
-     (1 1 1  1 0 0  1 1 1  1 0 1  1 1 1)    ; 6
-     (1 1 1  0 0 1  0 0 1  0 0 1  0 0 1)    ; 7
-     (1 1 1  1 0 1  1 1 1  1 0 1  1 1 1)    ; 8
-     (1 1 1  1 0 1  1 1 1  0 0 1  1 1 1)))) ; 9
+   '((1 1 1 1 0 1 1 0 1 1 0 1 1 1 1)    ; 0
+     (0 1 0 1 1 0 0 1 0 0 1 0 1 1 1)    ; 1
+     (1 1 1 0 0 1 1 1 1 1 0 0 1 1 1)    ; 2
+     (1 1 1 0 0 1 1 1 1 0 0 1 1 1 1)    ; 3
+     (1 0 1 1 0 1 1 1 1 0 0 1 0 0 1)    ; 4
+     (1 1 1 1 0 0 1 1 1 0 0 1 1 1 1)    ; 5
+     (1 1 1 1 0 0 1 1 1 1 0 1 1 1 1)    ; 6
+     (1 1 1 0 0 1 0 0 1 0 0 1 0 0 1)    ; 7
+     (1 1 1 1 0 1 1 1 1 1 0 1 1 1 1)    ; 8
+     (1 1 1 1 0 1 1 1 1 0 0 1 1 1 1)))) ; 9
 
 (defun one-hot-targets ()
   (let ((y (make-array '(10 10) :initial-element 0)))
@@ -133,17 +132,18 @@
 (defun main ()
   (let* ((x (digit-bitmaps))
          (y (one-hot-targets))
-         (a0 (with-bias x))                 ; 10x16 input batch
+         (a0 (with-bias x)) ; 10x16 input batch
          (n (car (linalg:shape x)))
          (lr0 0.25)
-         (w1 (rand-matrix 16 16))           ; 15 pixels + bias -> 16
-         (w2 (rand-matrix 17 16))           ; 16 hidden + bias -> 16
-         (w3 (rand-matrix 17 10)))          ; 16 hidden + bias -> 10 classes
-    (format t "network: 15 -> 16 (leaky relu) -> 16 (leaky relu) -> 10, ~a samples~%" n)
+         (w1 (rand-matrix 16 16))  ; 15 pixels + bias -> 16
+         (w2 (rand-matrix 17 16))  ; 16 hidden + bias -> 16
+         (w3 (rand-matrix 17 10))) ; 16 hidden + bias -> 10 classes
+    (format t
+     "network: 15 -> 16 (leaky relu) -> 16 (leaky relu) -> 10, ~a samples~%" n)
     (format t "input batch shape (with bias): ~a~%~%" (linalg:shape a0))
     (do ((epoch 1 (+ epoch 1)))
         ((> epoch 500))
-      (let* ((lr (/ lr0 (+ 1 (/ epoch 100.0))))   ; 1/t learning-rate decay
+      (let* ((lr (/ lr0 (+ 1 (/ epoch 100.0)))) ; 1/t learning-rate decay
              (state (forward a0 w1 w2 w3))
              (z1 (nth 0 state))
              (a1b (nth 1 state))
@@ -155,11 +155,15 @@
              ;; dOut = 2/n * (out - y)
              (dout (linalg:mul (/ 2.0 n) diff))
              (dw3 (linalg:matmul (linalg:transpose a2b) dout))
-             (dz2 (linalg:mul (drop-last-col (linalg:matmul dout (linalg:transpose w3)))
-                              (leaky-relu-mask z2)))
+             (dz2
+              (linalg:mul
+               (drop-last-col (linalg:matmul dout (linalg:transpose w3)))
+               (leaky-relu-mask z2)))
              (dw2 (linalg:matmul (linalg:transpose a1b) dz2))
-             (dz1 (linalg:mul (drop-last-col (linalg:matmul dz2 (linalg:transpose w2)))
-                              (leaky-relu-mask z1)))
+             (dz1
+              (linalg:mul
+               (drop-last-col (linalg:matmul dz2 (linalg:transpose w2)))
+               (leaky-relu-mask z1)))
              (dw1 (linalg:matmul (linalg:transpose a0) dz1)))
         (setq w3 (linalg:sub w3 (linalg:mul lr dw3)))
         (setq w2 (linalg:sub w2 (linalg:mul lr dw2)))
@@ -167,16 +171,13 @@
         (when (= (mod epoch 100) 0)
           ;; MSE loss, scaled to an integer so the output is identical on
           ;; every backend (float printing differs, float arithmetic does not).
-          (format t "epoch ~a  loss (x1e6): ~a~%"
-                  epoch (round (* 1000000 (/ (sq-sum diff) n)))))))
+          (format t "epoch ~a  loss (x1e6): ~a~%" epoch
+                  (round (* 1000000 (/ (sq-sum diff) n)))))))
     (terpri)
-    (let ((preds (predict x w1 w2 w3))
-          (correct 0))
-      (do ((i 0 (+ i 1))
-           (rest preds (cdr rest)))
+    (let ((preds (predict x w1 w2 w3)) (correct 0))
+      (do ((i 0 (+ i 1)) (rest preds (cdr rest)))
           ((>= i 10))
-        (when (= (car rest) i)
-          (setq correct (+ correct 1))))
+        (when (= (car rest) i) (setq correct (+ correct 1))))
       (format t "predictions on the training digits: ~a~%" preds)
       (format t "accuracy: ~a/10~%~%" correct))
     ;; Generalization: flip one deterministic pixel per bitmap and classify

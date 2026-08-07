@@ -24,7 +24,8 @@
 
 (let ((g (life-seed)) (gen 0))
   (while (<= gen 6)
-    (format t "Generation ~d (population ~d):~%" gen (population g *rows* *cols*))
+    (format t "Generation ~d (population ~d):~%" gen
+            (population g *rows* *cols*))
     (print-grid g *rows* *cols*)
     (terpri)
     (setq g (next-gen g *rows* *cols*))

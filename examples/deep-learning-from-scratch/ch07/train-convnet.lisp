@@ -24,19 +24,28 @@
 
 (linalg:seed 42)
 
-(let* ((x-train (linalg:reshape
-                 (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*)
-                 (list *train-limit* 1 28 28)))
-       (t-train (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
-       (x-test (linalg:reshape
-                (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*)
-                (list *test-limit* 1 28 28)))
-       (t-test (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t))
-       (net (make-simple-convnet :input-dim '(1 28 28)
-                                 :filter-num 30 :filter-size 5
-                                 :filter-pad 0 :filter-stride 1
-                                 :hidden-size 100 :output-size 10
-                                 :weight-init-std 0.01)))
+(let* ((x-train
+        (linalg:reshape
+         (mnist-load-images "dataset/train-images-idx3-ubyte" *train-limit*)
+         (list *train-limit* 1 28 28)))
+       (t-train
+        (mnist-load-labels "dataset/train-labels-idx1-ubyte" *train-limit* 0 t))
+       (x-test
+        (linalg:reshape
+         (mnist-load-images "dataset/t10k-images-idx3-ubyte" *test-limit*)
+         (list *test-limit* 1 28 28)))
+       (t-test
+        (mnist-load-labels "dataset/t10k-labels-idx1-ubyte" *test-limit* 0 t))
+       (net
+        (make-simple-convnet :input-dim '(1 28 28)
+                             :filter-num 30
+                             :filter-size 5
+                             :filter-pad 0
+                             :filter-stride 1
+                             :hidden-size 100
+                             :output-size 10
+                             :weight-init-std 0.01)))
   (train net (scn-params net) x-train t-train x-test t-test
-         :epochs *epochs* :mini-batch-size *batch-size*
+         :epochs *epochs*
+         :mini-batch-size *batch-size*
          :optimizer (make-instance 'adam :lr 0.001)))

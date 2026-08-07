@@ -21,4 +21,5 @@
 ;;; so spelling the directive here would make reporting this error re-enter this
 ;;; very stub, outside whatever handler-case caught the first one.
 (defun %fmt-user-function (ctrl end all out pos i colon at)
-  (error "format: this program was compiled without the tilde-slash (call a named function) arm of the runtime renderer, because no control string the compile could see spelled that directive. Compile with --dynamic to keep it."))
+  (error
+   "format: this program was compiled without the tilde-slash (call a named function) arm of the runtime renderer, because no control string the compile could see spelled that directive. Compile with --dynamic to keep it."))

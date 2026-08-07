@@ -49,8 +49,7 @@
 (defun rontolisp::%io-write-byte (b stream)
   (rontolisp::%write-byte-raw b stream))
 
-(defun rontolisp::%io-close (stream)
-  (rontolisp::%close-raw stream))
+(defun rontolisp::%io-close (stream) (rontolisp::%close-raw stream))
 
 ;;; open-stream-p and listen are redirected by the same rewrite, so they need
 ;;; definitions here too or the call compiles to a call-time error and TRAPS --
@@ -60,11 +59,9 @@
 ;;; designator, and nil for the immediately-available probe (the host receive
 ;;; buffer is not observable without blocking on this backend -- the same
 ;;; documented divergence, see .kb/tcp-sockets.md).
-(defun rontolisp::%io-open-stream-p (s)
-  (if s t nil))
+(defun rontolisp::%io-open-stream-p (s) (if s t nil))
 
-(defun rontolisp::%io-listen (&optional s)
-  (if s nil nil))
+(defun rontolisp::%io-listen (&optional s) (if s nil nil))
 
 ;;; The bounded sequence ops and the eof-tolerant reads the rewrite also
 ;;; redirects: raw passthroughs here (no socket can exist). The %...-future twins
@@ -96,13 +93,16 @@
   (rontolisp::%read-line-raw s eof-error-p eof-value))
 
 (defun rontolisp::%io-read-sequence (seq s &optional start end)
-  (rontolisp::%read-sequence-raw seq s :start (if start start 0)
-                                :end (if end end (length seq))))
+  (rontolisp::%read-sequence-raw seq s
+                                 :start (if start start 0)
+                                 :end (if end end (length seq))))
 
 (defun rontolisp::%read-sequence-future (seq s &optional start end)
-  (rontolisp::%read-sequence-raw seq s :start (if start start 0)
-                                :end (if end end (length seq))))
+  (rontolisp::%read-sequence-raw seq s
+                                 :start (if start start 0)
+                                 :end (if end end (length seq))))
 
 (defun rontolisp::%io-write-sequence (seq s &optional start end)
-  (rontolisp::%write-sequence-raw seq s :start (if start start 0)
-                                 :end (if end end (length seq))))
+  (rontolisp::%write-sequence-raw seq s
+                                  :start (if start start 0)
+                                  :end (if end end (length seq))))

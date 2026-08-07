@@ -13,26 +13,32 @@
 ;; input/output root, covers every adapter subclass.
 ;; Written in canonical shape; the package is seeded in PackageRegistry.
 
-(defclass trivial-gray-streams:fundamental-stream
-  (rontolisp:fundamental-stream) ())
+(defclass trivial-gray-streams:fundamental-stream (rontolisp:fundamental-stream)
+  ())
 
 (defclass trivial-gray-streams:fundamental-input-stream
-  (trivial-gray-streams:fundamental-stream rontolisp:fundamental-input-stream) ())
+    (trivial-gray-streams:fundamental-stream rontolisp:fundamental-input-stream)
+  ())
 
-(defclass trivial-gray-streams:fundamental-output-stream
-  (trivial-gray-streams:fundamental-stream rontolisp:fundamental-output-stream) ())
+(defclass trivial-gray-streams:fundamental-output-stream (trivial-gray-streams:fundamental-stream
+                                                          rontolisp:fundamental-output-stream)
+  ())
 
-(defclass trivial-gray-streams:fundamental-character-output-stream
-  (trivial-gray-streams:fundamental-output-stream rontolisp:fundamental-character-output-stream) ())
+(defclass trivial-gray-streams:fundamental-character-output-stream (trivial-gray-streams:fundamental-output-stream
+                                                                    rontolisp:fundamental-character-output-stream)
+  ())
 
-(defclass trivial-gray-streams:fundamental-character-input-stream
-  (trivial-gray-streams:fundamental-input-stream rontolisp:fundamental-character-input-stream) ())
+(defclass trivial-gray-streams:fundamental-character-input-stream (trivial-gray-streams:fundamental-input-stream
+                                                                   rontolisp:fundamental-character-input-stream)
+  ())
 
-(defclass trivial-gray-streams:fundamental-binary-input-stream
-  (trivial-gray-streams:fundamental-input-stream rontolisp:fundamental-binary-input-stream) ())
+(defclass trivial-gray-streams:fundamental-binary-input-stream (trivial-gray-streams:fundamental-input-stream
+                                                                rontolisp:fundamental-binary-input-stream)
+  ())
 
-(defclass trivial-gray-streams:fundamental-binary-output-stream
-  (trivial-gray-streams:fundamental-output-stream rontolisp:fundamental-binary-output-stream) ())
+(defclass trivial-gray-streams:fundamental-binary-output-stream (trivial-gray-streams:fundamental-output-stream
+                                                                 rontolisp:fundamental-binary-output-stream)
+  ())
 
 ;; The portable mixin (upstream trivial-gray-streams' own class): carries no
 ;; behavior here because the sequence and file-position generics it exists
@@ -44,7 +50,8 @@
 
 (defgeneric trivial-gray-streams:stream-write-char (stream character))
 
-(defgeneric trivial-gray-streams:stream-write-string (stream string &optional start end))
+(defgeneric trivial-gray-streams:stream-write-string
+    (stream string &optional start end))
 
 (defgeneric trivial-gray-streams:stream-write-byte (stream byte))
 
@@ -58,9 +65,11 @@
 
 (defgeneric trivial-gray-streams:stream-listen (stream))
 
-(defgeneric trivial-gray-streams:stream-read-sequence (stream sequence start end &key))
+(defgeneric trivial-gray-streams:stream-read-sequence
+    (stream sequence start end &key))
 
-(defgeneric trivial-gray-streams:stream-write-sequence (stream sequence start end &key))
+(defgeneric trivial-gray-streams:stream-write-sequence
+    (stream sequence start end &key))
 
 (defgeneric trivial-gray-streams:stream-file-position (stream))
 
@@ -69,51 +78,52 @@
 ;; Delegations: rontolisp's protocol routes into the portable generics.
 
 (defmethod rontolisp:stream-write-char
-  ((stream trivial-gray-streams:fundamental-output-stream) character)
+    ((stream trivial-gray-streams:fundamental-output-stream) character)
   (trivial-gray-streams:stream-write-char stream character))
 
-(defmethod rontolisp:stream-write-string
-  ((stream trivial-gray-streams:fundamental-output-stream) string &optional start end)
+(defmethod rontolisp:stream-write-string ((stream
+                                           trivial-gray-streams:fundamental-output-stream)
+                                          string &optional start end)
   (trivial-gray-streams:stream-write-string stream string start end))
 
 (defmethod rontolisp:stream-write-byte
-  ((stream trivial-gray-streams:fundamental-output-stream) byte)
+    ((stream trivial-gray-streams:fundamental-output-stream) byte)
   (trivial-gray-streams:stream-write-byte stream byte))
 
 (defmethod rontolisp:stream-read-byte
-  ((stream trivial-gray-streams:fundamental-input-stream))
+    ((stream trivial-gray-streams:fundamental-input-stream))
   (trivial-gray-streams:stream-read-byte stream))
 
 (defmethod rontolisp:stream-read-char
-  ((stream trivial-gray-streams:fundamental-input-stream))
+    ((stream trivial-gray-streams:fundamental-input-stream))
   (trivial-gray-streams:stream-read-char stream))
 
 (defmethod rontolisp:stream-unread-char
-  ((stream trivial-gray-streams:fundamental-input-stream) character)
+    ((stream trivial-gray-streams:fundamental-input-stream) character)
   (trivial-gray-streams:stream-unread-char stream character))
 
 (defmethod rontolisp:stream-read-line
-  ((stream trivial-gray-streams:fundamental-input-stream))
+    ((stream trivial-gray-streams:fundamental-input-stream))
   (trivial-gray-streams:stream-read-line stream))
 
 (defmethod rontolisp:stream-listen
-  ((stream trivial-gray-streams:fundamental-input-stream))
+    ((stream trivial-gray-streams:fundamental-input-stream))
   (trivial-gray-streams:stream-listen stream))
 
 (defmethod rontolisp:stream-read-sequence
-  ((stream trivial-gray-streams:fundamental-input-stream) sequence start end)
+    ((stream trivial-gray-streams:fundamental-input-stream) sequence start end)
   (trivial-gray-streams:stream-read-sequence stream sequence start end))
 
 (defmethod rontolisp:stream-write-sequence
-  ((stream trivial-gray-streams:fundamental-output-stream) sequence start end)
+    ((stream trivial-gray-streams:fundamental-output-stream) sequence start end)
   (trivial-gray-streams:stream-write-sequence stream sequence start end))
 
 (defmethod rontolisp:stream-file-position
-  ((stream trivial-gray-streams:fundamental-stream))
+    ((stream trivial-gray-streams:fundamental-stream))
   (trivial-gray-streams:stream-file-position stream))
 
 (defmethod (setf rontolisp:stream-file-position)
-  (position (stream trivial-gray-streams:fundamental-stream))
+    (position (stream trivial-gray-streams:fundamental-stream))
   (setf (trivial-gray-streams:stream-file-position stream) position))
 
 ;; Portable-side defaults, reusing gray.lisp's element-at-a-time loops --
@@ -122,25 +132,27 @@
 ;; generics.
 
 (defmethod trivial-gray-streams:stream-read-line
-  ((stream trivial-gray-streams:fundamental-input-stream))
+    ((stream trivial-gray-streams:fundamental-input-stream))
   (rontolisp::%gray-default-read-line stream))
 
 (defmethod trivial-gray-streams:stream-listen
-  ((stream trivial-gray-streams:fundamental-input-stream))
+    ((stream trivial-gray-streams:fundamental-input-stream))
   nil)
 
-(defmethod trivial-gray-streams:stream-read-sequence
-  ((stream trivial-gray-streams:fundamental-input-stream) sequence start end &key)
+(defmethod trivial-gray-streams:stream-read-sequence ((stream
+                                                       trivial-gray-streams:fundamental-input-stream)
+                                                      sequence start end &key)
   (rontolisp::%gray-default-read-sequence stream sequence start end))
 
-(defmethod trivial-gray-streams:stream-write-sequence
-  ((stream trivial-gray-streams:fundamental-output-stream) sequence start end &key)
+(defmethod trivial-gray-streams:stream-write-sequence ((stream
+                                                        trivial-gray-streams:fundamental-output-stream)
+                                                       sequence start end &key)
   (rontolisp::%gray-default-write-sequence stream sequence start end))
 
 (defmethod trivial-gray-streams:stream-file-position
-  ((stream trivial-gray-streams:fundamental-stream))
+    ((stream trivial-gray-streams:fundamental-stream))
   nil)
 
 (defmethod (setf trivial-gray-streams:stream-file-position)
-  (position (stream trivial-gray-streams:fundamental-stream))
+    (position (stream trivial-gray-streams:fundamental-stream))
   nil)

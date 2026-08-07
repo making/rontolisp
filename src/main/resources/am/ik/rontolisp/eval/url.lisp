@@ -37,9 +37,12 @@
     (do ((dummy nil))
         ((null todo) (nreverse out))
       (if (null (cdr todo))
-          (progn (setq out (cons (car todo) out)) (setq todo nil))
           (progn
-            (setq out (cons (concatenate 'string (car todo) (car (cdr todo))) out))
+            (setq out (cons (car todo) out))
+            (setq todo nil))
+          (progn
+            (setq out
+                  (cons (concatenate 'string (car todo) (car (cdr todo))) out))
             (setq todo (cdr (cdr todo))))))))
 
 (defun rontolisp::%url-concat (parts)
@@ -66,9 +69,11 @@
         ((or (>= k n) (not (= (char-code (char s k)) 37)))
          (cons (nreverse bytes) k))
       (when (> (+ k 3) n) (error "url-decode: unterminated percent escape"))
-      (setq bytes (cons (+ (* 16 (rontolisp::%url-hex-digit (char-code (char s (+ k 1)))))
-                           (rontolisp::%url-hex-digit (char-code (char s (+ k 2)))))
-                        bytes))
+      (setq bytes
+            (cons (+ (* 16
+                      (rontolisp::%url-hex-digit (char-code (char s (+ k 1)))))
+                     (rontolisp::%url-hex-digit (char-code (char s (+ k 2)))))
+                  bytes))
       (setq k (+ k 3)))))
 
 (defun rontolisp::%url-utf16-string (cp)
@@ -98,25 +103,27 @@
                (setq parts (cons (rontolisp::%url-char-string b) parts))
                (setq x (cdr x)))
               ((and (>= b 192) (< b 224))
-               (setq parts (cons (rontolisp::%url-utf16-string
-                                  (+ (* 64 (logand b 31))
-                                     (rontolisp::%url-cont-byte (cdr x))))
-                                 parts))
+               (setq parts
+                     (cons (rontolisp::%url-utf16-string
+                            (+ (* 64 (logand b 31))
+                               (rontolisp::%url-cont-byte (cdr x)))) parts))
                (setq x (cdr (cdr x))))
               ((and (>= b 224) (< b 240))
-               (setq parts (cons (rontolisp::%url-utf16-string
-                                  (+ (* 4096 (logand b 15))
-                                     (* 64 (rontolisp::%url-cont-byte (cdr x)))
-                                     (rontolisp::%url-cont-byte (cdr (cdr x)))))
-                                 parts))
+               (setq parts
+                     (cons (rontolisp::%url-utf16-string
+                            (+ (* 4096 (logand b 15))
+                               (* 64 (rontolisp::%url-cont-byte (cdr x)))
+                               (rontolisp::%url-cont-byte (cdr (cdr x)))))
+                           parts))
                (setq x (cdr (cdr (cdr x)))))
               ((and (>= b 240) (< b 248))
-               (setq parts (cons (rontolisp::%url-utf16-string
-                                  (+ (* 262144 (logand b 7))
-                                     (* 4096 (rontolisp::%url-cont-byte (cdr x)))
-                                     (* 64 (rontolisp::%url-cont-byte (cdr (cdr x))))
-                                     (rontolisp::%url-cont-byte (cdr (cdr (cdr x))))))
-                                 parts))
+               (setq parts
+                     (cons (rontolisp::%url-utf16-string
+                            (+ (* 262144 (logand b 7))
+                               (* 4096 (rontolisp::%url-cont-byte (cdr x)))
+                               (* 64 (rontolisp::%url-cont-byte (cdr (cdr x))))
+                               (rontolisp::%url-cont-byte (cdr (cdr (cdr x))))))
+                           parts))
                (setq x (cdr (cdr (cdr (cdr x))))))
               (t (error "url-decode: invalid UTF-8 in percent escape")))))))
 
@@ -148,7 +155,8 @@
               ((= c 37)
                (when (> j start) (setq parts (cons (subseq s start j) parts)))
                (let ((r (rontolisp::%url-escape-bytes s j n)))
-                 (setq parts (cons (rontolisp::%url-bytes-string (car r)) parts))
+                 (setq parts
+                       (cons (rontolisp::%url-bytes-string (car r)) parts))
                  (setq j (cdr r))
                  (setq start j)))
               (t (setq j (+ j 1))))))
@@ -174,16 +182,14 @@
                       (rontolisp::%url-hex-byte (+ 128 (logand cp 63)))))
         (t
          (concatenate 'string (rontolisp::%url-hex-byte (+ 240 (ash cp -18)))
-                      (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -12) 63)))
-                      (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -6) 63)))
-                      (rontolisp::%url-hex-byte (+ 128 (logand cp 63)))))))
+          (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -12) 63)))
+          (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -6) 63)))
+          (rontolisp::%url-hex-byte (+ 128 (logand cp 63)))))))
 
 (defun rontolisp::%url-unreserved-p (c)
   ;; RFC 3986 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
-  (or (and (>= c 65) (<= c 90))
-      (and (>= c 97) (<= c 122))
-      (and (>= c 48) (<= c 57))
-      (= c 45) (= c 46) (= c 95) (= c 126)))
+  (or (and (>= c 65) (<= c 90)) (and (>= c 97) (<= c 122))
+      (and (>= c 48) (<= c 57)) (= c 45) (= c 46) (= c 95) (= c 126)))
 
 (defun rontolisp:url-encode (s)
   (when (not (stringp s)) (error "url-encode expects a string"))
@@ -206,9 +212,10 @@
                      (let ((lo (char-code (char s (+ j 1)))))
                        (when (not (and (>= lo 56320) (<= lo 57343)))
                          (error "url-encode: lone surrogate"))
-                       (setq parts (cons (rontolisp::%url-encode-cp
-                                          (+ 65536 (* 1024 (- c 55296)) (- lo 56320)))
-                                         parts)))
+                       (setq parts
+                             (cons (rontolisp::%url-encode-cp
+                                    (+ 65536 (* 1024 (- c 55296)) (- lo 56320)))
+                                   parts)))
                      (setq j (+ j 2)))
                     ((and (>= c 56320) (<= c 57343))
                      (error "url-encode: lone surrogate"))
@@ -237,7 +244,8 @@
       (if (or (= j n) (= (char-code (char q j)) 38))
           (progn
             (when (> j start)
-              (setq acc (cons (rontolisp::%url-parse-pair (subseq q start j)) acc)))
+              (setq acc
+                    (cons (rontolisp::%url-parse-pair (subseq q start j)) acc)))
             (setq j (+ j 1))
             (setq start j))
           (setq j (+ j 1))))))
@@ -251,20 +259,18 @@
   (when (not (stringp name)) (error "query-param expects a string name"))
   (cond ((null q) nil)
         ((not (stringp q)) (error "query-param expects a string or nil query"))
-        (t (let ((params (rontolisp::%url-parse-query q)))
-             (do ((x params (cdr x)))
-                 ((null x) nil)
-               (when (string= (car (car x)) name)
-                 (return (cdr (car x)))))))))
+        (t
+         (let ((params (rontolisp::%url-parse-query q)))
+           (do ((x params (cdr x)))
+               ((null x) nil)
+             (when (string= (car (car x)) name) (return (cdr (car x)))))))))
 
 ;; --- splitting ---------------------------------------------------------------
 
 (defun rontolisp:url-path (s)
   (when (not (stringp s)) (error "url-path expects a string"))
-  (let ((q (position #\? s)))
-    (if q (subseq s 0 q) s)))
+  (let ((q (position #\? s))) (if q (subseq s 0 q) s)))
 
 (defun rontolisp:url-query (s)
   (when (not (stringp s)) (error "url-query expects a string"))
-  (let ((q (position #\? s)))
-    (if q (subseq s (+ q 1)) nil)))
+  (let ((q (position #\? s))) (if q (subseq s (+ q 1)) nil)))

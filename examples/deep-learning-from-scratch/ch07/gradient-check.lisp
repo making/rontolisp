@@ -21,11 +21,15 @@
 
 (linalg:seed 42)
 
-(let* ((net (make-simple-convnet :input-dim '(1 10 10)
-                                 :filter-num 3 :filter-size 3
-                                 :filter-pad 0 :filter-stride 1
-                                 :hidden-size 10 :output-size 10
-                                 :weight-init-std 0.1))
+(let* ((net
+        (make-simple-convnet :input-dim '(1 10 10)
+                             :filter-num 3
+                             :filter-size 3
+                             :filter-pad 0
+                             :filter-stride 1
+                             :hidden-size 10
+                             :output-size 10
+                             :weight-init-std 0.1))
        (x-batch (linalg:reshape (linalg:rand 100) '(1 1 10 10)))
        (t-batch (linalg:one-hot #(1) 10))
        (grad-numerical (net-numerical-gradient net x-batch t-batch))
@@ -33,7 +37,7 @@
   (dolist (key *scn-keys*)
     (let* ((gn (gethash key grad-numerical))
            (gb (gethash key grad-backprop))
-           (diff (/ (linalg:sum (linalg:abs (linalg:sub gb gn)))
-                    (linalg:size gn))))
+           (diff
+            (/ (linalg:sum (linalg:abs (linalg:sub gb gn))) (linalg:size gn))))
       (format t "~a: ~a~%" key
               (if (< diff 1.0e-6) "PASS (mean |diff| < 1e-6)" "FAIL")))))

@@ -9,35 +9,27 @@
 
 (defun take (n lst)
   "Return the first N elements of LST."
-  (if (or (<= n 0) (null lst))
-      nil
-      (cons (car lst) (take (1- n) (cdr lst)))))
+  (if (or (<= n 0) (null lst)) nil (cons (car lst) (take (1- n) (cdr lst)))))
 
 (defun string-lessp (a b)
   "Lexicographic string comparison using char<."
-  (let ((len-a (length a))
-        (len-b (length b))
-        (j 0)
-        (result nil)
-        (decided nil))
+  (let ((len-a (length a)) (len-b (length b)) (j 0) (result nil) (decided nil))
     ;; Compare character by character
     (while (and (not decided) (< j len-a) (< j len-b))
       (when (char< (char a j) (char b j))
-        (setq result t) (setq decided t))
+        (setq result t)
+        (setq decided t))
       (when (and (not decided) (char< (char b j) (char a j)))
-        (setq result nil) (setq decided t))
+        (setq result nil)
+        (setq decided t))
       (setq j (1+ j)))
     ;; If all compared characters are equal, shorter string is less
-    (when (not decided)
-      (setq result (< len-a len-b)))
+    (when (not decided) (setq result (< len-a len-b)))
     result))
 
 (defun word-frequency (text)
   "Count word occurrences in TEXT, returning a hash table of word -> count."
-  (let ((freq (make-hash-table))
-        (len (length text))
-        (pos 0)
-        (done nil))
+  (let ((freq (make-hash-table)) (len (length text)) (pos 0) (done nil))
     (while (and (not done) (< pos len))
       ;; Skip non-alpha characters
       (while (and (< pos len) (not (alpha-char-p (char text pos))))
@@ -55,9 +47,7 @@
 (defun top-words (freq-table &optional (n 10))
   "Return the N most frequent words from FREQ-TABLE as a sorted list of (word . count) pairs."
   (let ((pairs nil))
-    (maphash (lambda (word count)
-               (push (cons word count) pairs))
-             freq-table)
+    (maphash (lambda (word count) (push (cons word count) pairs)) freq-table)
     (setq pairs (sort pairs (lambda (a b) (> (cdr a) (cdr b)))))
     (take n pairs)))
 
@@ -78,8 +68,6 @@ And by opposing end them")
       (setq rank (1+ rank))))
   (format t "~%Words appearing exactly once:~%")
   (let ((singletons nil))
-    (maphash (lambda (word count)
-               (when (= count 1)
-                 (push word singletons)))
+    (maphash (lambda (word count) (when (= count 1) (push word singletons)))
              freq)
     (format t "  ~a~%" (sort (copy-list singletons) #'string-lessp))))

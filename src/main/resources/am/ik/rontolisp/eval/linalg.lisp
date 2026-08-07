@@ -63,23 +63,18 @@
   ;; axis counts as 1); the output extent is the larger one. Any other
   ;; disagreement is the shape-mismatch error.
   (let ((out nil))
-    (do ((px (reverse dx) (cdr px))
-         (py (reverse dy) (cdr py)))
+    (do ((px (reverse dx) (cdr px)) (py (reverse dy) (cdr py)))
         ((and (null px) (null py)) out)
-      (let ((a (if px (car px) 1))
-            (b (if py (car py) 1)))
-        (unless (or (= a b) (= a 1) (= b 1))
-          (error "linalg: shape mismatch"))
+      (let ((a (if px (car px) 1)) (b (if py (car py) 1)))
+        (unless (or (= a b) (= a 1) (= b 1)) (error "linalg: shape mismatch"))
         (setq out (cons (max a b) out))))))
 
 (defun linalg::%la-bcast-strides (d od)
   ;; Row-major strides of the dims-d operand aligned to the broadcast shape od,
   ;; INNERMOST-FIRST, with 0 on every stretched axis (extent 1 or missing) so
   ;; the odometer walk in %la-bcast-loop re-reads the same element across it.
-  (let ((acc 1)
-        (out nil))
-    (do ((pd (reverse d) (cdr pd))
-         (po (reverse od) (cdr po)))
+  (let ((acc 1) (out nil))
+    (do ((pd (reverse d) (cdr pd)) (po (reverse od) (cdr po)))
         ((null po) (reverse out))
       (let ((n (if pd (car pd) 1)))
         (setq out (cons (if (= n 1) 0 acc) out))
@@ -94,8 +89,7 @@
 
 (defun linalg::%la-strides (dims)
   ;; The row-major strides of a dims list, aligned with it (innermost = 1).
-  (let ((acc 1)
-        (out nil))
+  (let ((acc 1) (out nil))
     (do ((p (reverse dims) (cdr p)))
         ((null p) out)
       (setq out (cons acc out))
@@ -118,7 +112,7 @@
     (do ((k 0 (+ k 1)))
         ((>= k n) out)
       (setf (row-major-aref out k)
-            (funcall %la-op (row-major-aref %la-x ox) (row-major-aref %la-y oy)))
+       (funcall %la-op (row-major-aref %la-x ox) (row-major-aref %la-y oy)))
       (do ((pc idx (cdr pc))
            (pd rdims (cdr pd))
            (psx rsx (cdr psx))
@@ -130,9 +124,10 @@
         (setq oy (+ oy (car psy)))
         (if (< (car pc) (car pd))
             (setq carry nil)
-            (progn (rplaca pc 0)
-                   (setq ox (- ox (* (car pd) (car psx))))
-                   (setq oy (- oy (* (car pd) (car psy))))))))))
+            (progn
+              (rplaca pc 0)
+              (setq ox (- ox (* (car pd) (car psx))))
+              (setq oy (- oy (* (car pd) (car psy))))))))))
 
 (defun linalg::%la-bcast (%la-op %la-x %la-y)
   ;; Applies the binary function %la-op elementwise, broadcasting a scalar
@@ -143,27 +138,22 @@
   ;; names from when the compiled backends resolved a captured name against a
   ;; same-named user global (fixed 2026-07-03); the prefix is harmless and stays.
   (cond ((and (numberp %la-x) (numberp %la-y)) (funcall %la-op %la-x %la-y))
-        ((numberp %la-x)
-         (linalg:emap (lambda (v) (funcall %la-op %la-x v)) %la-y))
-        ((numberp %la-y)
-         (linalg:emap (lambda (v) (funcall %la-op v %la-y)) %la-x))
-        ((equal (array-dimensions %la-x) (array-dimensions %la-y))
-         (let ((n (array-total-size %la-x))
-               (out (linalg::%la-like %la-x)))
-           (do ((k 0 (+ k 1)))
-               ((>= k n) out)
-             (setf (row-major-aref out k)
-                   (funcall %la-op (row-major-aref %la-x k)
-                            (row-major-aref %la-y k))))))
-        (t (linalg::%la-bcast-loop %la-op %la-x %la-y
-                                   (linalg::%la-bcast-shape
-                                    (array-dimensions %la-x)
-                                    (array-dimensions %la-y))))))
+   ((numberp %la-x) (linalg:emap (lambda (v) (funcall %la-op %la-x v)) %la-y))
+   ((numberp %la-y) (linalg:emap (lambda (v) (funcall %la-op v %la-y)) %la-x))
+   ((equal (array-dimensions %la-x) (array-dimensions %la-y))
+    (let ((n (array-total-size %la-x)) (out (linalg::%la-like %la-x)))
+      (do ((k 0 (+ k 1)))
+          ((>= k n) out)
+        (setf (row-major-aref out k)
+         (funcall %la-op (row-major-aref %la-x k) (row-major-aref %la-y k))))))
+   (t
+    (linalg::%la-bcast-loop %la-op %la-x %la-y
+                            (linalg::%la-bcast-shape (array-dimensions %la-x)
+                             (array-dimensions %la-y))))))
 
 (defun linalg::%la-reduce (f a init)
   ;; Folds f over every element of a (row-major), starting from init.
-  (let ((n (array-total-size a))
-        (acc init))
+  (let ((n (array-total-size a)) (acc init))
     (do ((k 0 (+ k 1)))
         ((>= k n) acc)
       (setq acc (funcall f acc (row-major-aref a k))))))
@@ -171,36 +161,30 @@
 (defun linalg::%la-norm-axis (d axis)
   ;; Normalizes a possibly negative axis against the dims list d (numpy's
   ;; axis + rank rule) and errors when out of range.
-  (let* ((rank (length d))
-         (ax (if (< axis 0) (+ axis rank) axis)))
-    (unless (and (>= ax 0) (< ax rank))
-      (error "linalg: axis out of range"))
+  (let* ((rank (length d)) (ax (if (< axis 0) (+ axis rank) axis)))
+    (unless (and (>= ax 0) (< ax rank)) (error "linalg: axis out of range"))
     ax))
 
 (defun linalg::%la-head-size (d ax)
   ;; The product of the dims-list entries before axis ax.
   (let ((acc 1))
-    (do ((p d (cdr p))
-         (k 0 (+ k 1)))
+    (do ((p d (cdr p)) (k 0 (+ k 1)))
         ((>= k ax) acc)
       (setq acc (* acc (car p))))))
 
 (defun linalg::%la-tail-size (d ax)
   ;; The product of the dims-list entries after axis ax.
   (let ((acc 1))
-    (do ((p d (cdr p))
-         (k 0 (+ k 1)))
+    (do ((p d (cdr p)) (k 0 (+ k 1)))
         ((null p) acc)
-      (when (> k ax)
-        (setq acc (* acc (car p)))))))
+      (when (> k ax) (setq acc (* acc (car p)))))))
 
 (defun linalg::%la-axis-shape (d ax keepdims)
   ;; The dims list with axis ax dropped -- or kept as extent 1 under keepdims.
   ;; nil (rank 0) when a vector's only axis is dropped: the caller returns the
   ;; reduced scalar itself in that case.
   (let ((out nil))
-    (do ((p (reverse d) (cdr p))
-         (k (- (length d) 1) (- k 1)))
+    (do ((p (reverse d) (cdr p)) (k (- (length d) 1) (- k 1)))
         ((null p) out)
       (cond ((/= k ax) (setq out (cons (car p) out)))
             (keepdims (setq out (cons 1 out)))))))
@@ -246,13 +230,12 @@
               ((>= o outer) out)
             (do ((i 0 (+ i 1)))
                 ((>= i inner))
-              (let ((base (+ (* o axlen inner) i))
-                    (acc init))
-                (unless acc
-                  (setq acc (row-major-aref a base)))
+              (let ((base (+ (* o axlen inner) i)) (acc init))
+                (unless acc (setq acc (row-major-aref a base)))
                 (do ((j (if init 0 1) (+ j 1)))
                     ((>= j axlen))
-                  (setq acc (funcall f acc (row-major-aref a (+ base (* j inner))))))
+                  (setq acc
+                   (funcall f acc (row-major-aref a (+ base (* j inner))))))
                 (setf (row-major-aref out (+ (* o inner) i)) acc))))))))
 
 (defun linalg::%la-argfold-axis (a ax cmp)
@@ -266,8 +249,7 @@
          (inner (linalg::%la-tail-size d ax))
          (outer (linalg::%la-head-size d ax))
          (od (linalg::%la-axis-shape d ax nil)))
-    (when (= axlen 0)
-      (error "linalg: reduction of an empty axis"))
+    (when (= axlen 0) (error "linalg: reduction of an empty axis"))
     (if (null od)
         (let ((best (aref a 0)) (bi 0))
           (do ((j 1 (+ j 1)))
@@ -335,8 +317,7 @@
 (defun linalg::%la-dot-vv (u v)
   ;; The inner product of two equal-length vectors.
   (let ((n (length u)))
-    (unless (= n (length v))
-      (error "linalg: dot expects equal-length vectors"))
+    (unless (= n (length v)) (error "linalg: dot expects equal-length vectors"))
     (let ((acc 0))
       (do ((i 0 (+ i 1)))
           ((>= i n) acc)
@@ -344,11 +325,8 @@
 
 (defun linalg::%la-dot-mv (a v)
   ;; Matrix times column vector -> vector.
-  (let* ((d (array-dimensions a))
-         (n (car d))
-         (m (car (cdr d))))
-    (unless (= m (length v))
-      (error "linalg: dot dimension mismatch"))
+  (let* ((d (array-dimensions a)) (n (car d)) (m (car (cdr d))))
+    (unless (= m (length v)) (error "linalg: dot dimension mismatch"))
     (let ((out (linalg::%la-make n 0.0 (linalg::%la-etype a))))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
@@ -360,11 +338,8 @@
 
 (defun linalg::%la-dot-vm (v a)
   ;; Row vector times matrix -> vector.
-  (let* ((d (array-dimensions a))
-         (n (car d))
-         (m (car (cdr d))))
-    (unless (= n (length v))
-      (error "linalg: dot dimension mismatch"))
+  (let* ((d (array-dimensions a)) (n (car d)) (m (car (cdr d))))
+    (unless (= n (length v)) (error "linalg: dot dimension mismatch"))
     (let ((out (linalg::%la-make m 0.0 (linalg::%la-etype v))))
       (do ((j 0 (+ j 1)))
           ((>= j m) out)
@@ -381,8 +356,7 @@
          (n (car da))
          (m (car (cdr da)))
          (p (car (cdr db))))
-    (unless (= m (car db))
-      (error "linalg: matmul inner dimensions differ"))
+    (unless (= m (car db)) (error "linalg: matmul inner dimensions differ"))
     (let ((out (linalg::%la-make (list n p) 0.0 (linalg::%la-etype a))))
       (do ((i 0 (+ i 1)))
           ((>= i n) out)
@@ -403,8 +377,9 @@
          (rd (reverse d))
          (c (car rd))
          (w (max 0 (- c 1)))
-         (out (linalg::%la-make (reverse (cons w (cdr rd))) 0.0
-                                (linalg::%la-etype a)))
+         (out
+          (linalg::%la-make (reverse (cons w (cdr rd))) 0.0
+                            (linalg::%la-etype a)))
          (rows (if (= c 0) 0 (/ (array-total-size a) c))))
     (do ((i 0 (+ i 1)))
         ((>= i rows) out)
@@ -456,8 +431,7 @@
          (count (ceiling (/ (- stop start) d)))
          (n (max 0 count))
          (out (linalg::%la-make n 0.0 et)))
-    (do ((i 0 (+ i 1))
-         (x start (+ x d)))
+    (do ((i 0 (+ i 1)) (x start (+ x d)))
         ((>= i n) out)
       (setf (aref out i) x))))
 
@@ -466,7 +440,9 @@
   ;; default; pass 'single-float for a packed single-float (#f) result).
   (let ((out (linalg::%la-make n 0.0 element-type)))
     (if (= n 1)
-        (progn (setf (aref out 0) start) out)
+        (progn
+          (setf (aref out 0) start)
+          out)
         (let ((step (/ (- stop start) (- n 1))))
           (do ((i 0 (+ i 1)))
               ((>= i n) out)
@@ -479,17 +455,13 @@
       (let* ((r (length lst))
              (c (length (car lst)))
              (m (linalg::%la-make (list r c) 0.0 element-type)))
-        (do ((rows lst (cdr rows))
-             (i 0 (+ i 1)))
+        (do ((rows lst (cdr rows)) (i 0 (+ i 1)))
             ((null rows) m)
-          (do ((cells (car rows) (cdr cells))
-               (j 0 (+ j 1)))
+          (do ((cells (car rows) (cdr cells)) (j 0 (+ j 1)))
               ((null cells))
             (setf (aref m i j) (car cells)))))
-      (let* ((n (length lst))
-             (v (linalg::%la-make n 0.0 element-type)))
-        (do ((cells lst (cdr cells))
-             (i 0 (+ i 1)))
+      (let* ((n (length lst)) (v (linalg::%la-make n 0.0 element-type)))
+        (do ((cells lst (cdr cells)) (i 0 (+ i 1)))
             ((null cells) v)
           (setf (aref v i) (car cells))))))
 
@@ -517,9 +489,7 @@
 (defun linalg:ndim (a)
   ;; The number of dimensions (numpy's np.ndim): 0 for a plain number, else the
   ;; array's rank.
-  (if (numberp a)
-      0
-      (length (array-dimensions a))))
+  (if (numberp a) 0 (length (array-dimensions a))))
 
 (defun linalg:size (a)
   ;; The total element count.
@@ -530,8 +500,7 @@
   ;; against the total element count; a bare -1 flattens.
   (if (numberp shape)
       (if (= shape -1) total shape)
-      (let ((known 1)
-            (minus 0))
+      (let ((known 1) (minus 0))
         (do ((p shape (cdr p)))
             ((null p))
           (if (= (car p) -1)
@@ -541,20 +510,21 @@
               ((> minus 1) (error "linalg: reshape allows at most one -1"))
               ((or (= known 0) (/= (mod total known) 0))
                (error "linalg: reshape size mismatch"))
-              (t (let ((inferred (/ total known))
-                       (out nil))
-                   (do ((p (reverse shape) (cdr p)))
-                       ((null p) out)
-                     (setq out (cons (if (= (car p) -1) inferred (car p))
-                                     out)))))))))
+              (t
+               (let ((inferred (/ total known)) (out nil))
+                 (do ((p (reverse shape) (cdr p)))
+                     ((null p) out)
+                   (setq out
+                         (cons (if (= (car p) -1) inferred (car p)) out)))))))))
 
 (defun linalg:reshape (a shape)
   ;; A fresh array with the given shape and the same row-major elements (same
   ;; width as a: a #f reshapes to #f, a #d to #d). One extent may be -1 and is
   ;; inferred from the element count (numpy); a bare -1 shape flattens.
   (let* ((n (array-total-size a))
-         (out (linalg::%la-make (linalg::%la-infer-shape shape n) 0.0
-                                (linalg::%la-etype a))))
+         (out
+          (linalg::%la-make (linalg::%la-infer-shape shape n) 0.0
+                            (linalg::%la-etype a))))
     (unless (= n (array-total-size out))
       (error "linalg: reshape size mismatch"))
     (do ((k 0 (+ k 1)))
@@ -608,8 +578,9 @@
           (setq src (+ src (car ps)))
           (if (< (car pc) (car pd))
               (setq carry nil)
-              (progn (rplaca pc 0)
-                     (setq src (- src (* (car pd) (car ps)))))))))))
+              (progn
+                (rplaca pc 0)
+                (setq src (- src (* (car pd) (car ps)))))))))))
 
 (defun linalg:transpose (a &optional axes)
   ;; With no axes, the transpose of a matrix; a vector is returned unchanged
@@ -639,20 +610,19 @@
   ;; %la-bcast-loop.
   (let* ((d (array-dimensions a))
          (rank (length d))
-         (pp (if (numberp pads)
-                 (let ((out nil))
-                   (do ((k 0 (+ k 1)))
-                       ((>= k rank) out)
-                     (setq out (cons (list pads pads) out))))
-                 pads)))
+         (pp
+          (if (numberp pads)
+              (let ((out nil))
+                (do ((k 0 (+ k 1)))
+                    ((>= k rank) out)
+                  (setq out (cons (list pads pads) out))))
+              pads)))
     (unless (= (length pp) rank)
       (error "linalg: pad expects one (before after) pair per axis"))
     (let ((od nil))
-      (do ((pd (reverse d) (cdr pd))
-           (pq (reverse pp) (cdr pq)))
+      (do ((pd (reverse d) (cdr pd)) (pq (reverse pp) (cdr pq)))
           ((null pd))
-        (let ((b (car (car pq)))
-              (f (car (cdr (car pq)))))
+        (let ((b (car (car pq))) (f (car (cdr (car pq)))))
           (unless (and (numberp b) (numberp f) (>= b 0) (>= f 0))
             (error "linalg: pad widths must be non-negative"))
           (setq od (cons (+ (car pd) b f) od))))
@@ -664,8 +634,7 @@
              (idx (linalg::%la-zero-counters rank))
              (dst 0))
         ;; Start dst at the all-before corner of the output.
-        (do ((pq pp (cdr pq))
-             (ps so (cdr ps)))
+        (do ((pq pp (cdr pq)) (ps so (cdr ps)))
             ((null pq))
           (setq dst (+ dst (* (car (car pq)) (car ps)))))
         (do ((k 0 (+ k 1)))
@@ -680,8 +649,9 @@
             (setq dst (+ dst (car ps)))
             (if (< (car pc) (car pd))
                 (setq carry nil)
-                (progn (rplaca pc 0)
-                       (setq dst (- dst (* (car pd) (car ps))))))))))))
+                (progn
+                  (rplaca pc 0)
+                  (setq dst (- dst (* (car pd) (car ps))))))))))))
 
 ;; --- elementwise arithmetic (scalar broadcasting) ----------------------------
 
@@ -703,8 +673,7 @@
 
 (defun linalg:emap (f a)
   ;; A fresh array with f applied to every element of a.
-  (let ((n (array-total-size a))
-        (out (linalg::%la-like a)))
+  (let ((n (array-total-size a)) (out (linalg::%la-like a)))
     (do ((k 0 (+ k 1)))
         ((>= k n) out)
       (setf (row-major-aref out k) (funcall f (row-major-aref a k))))))
@@ -815,17 +784,16 @@
   ;; vector . matrix -> vector, matrix . matrix -> matrix; a scalar operand
   ;; multiplies elementwise.
   (cond ((or (numberp a) (numberp b)) (linalg:mul a b))
-        (t (let ((ra (cdr (array-dimensions a)))
-                 (rb (cdr (array-dimensions b))))
-             (cond ((and (null ra) (null rb)) (linalg::%la-dot-vv a b))
-                   ((and ra (null rb)) (linalg::%la-dot-mv a b))
-                   ((and (null ra) rb) (linalg::%la-dot-vm a b))
-                   (t (linalg::%la-matmul a b)))))))
+        (t
+         (let ((ra (cdr (array-dimensions a))) (rb (cdr (array-dimensions b))))
+           (cond ((and (null ra) (null rb)) (linalg::%la-dot-vv a b))
+                 ((and ra (null rb)) (linalg::%la-dot-mv a b))
+                 ((and (null ra) rb) (linalg::%la-dot-vm a b))
+                 (t (linalg::%la-matmul a b)))))))
 
 (defun linalg:matmul (a b)
   ;; Matrix product (also matrix . vector); rejects scalar operands.
-  (when (or (numberp a) (numberp b))
-    (error "linalg: matmul expects arrays"))
+  (when (or (numberp a) (numberp b)) (error "linalg: matmul expects arrays"))
   (linalg:dot a b))
 
 (defun linalg:outer (u v)
@@ -861,8 +829,7 @@
   (if (null axis)
       (linalg::%la-wrap-scalar a (/ (linalg:sum a) (linalg:size a)) keepdims)
       (let ((ax (linalg::%la-norm-axis (array-dimensions a) axis)))
-        (linalg:div (linalg:sum a ax keepdims)
-                    (nth ax (array-dimensions a))))))
+        (linalg:div (linalg:sum a ax keepdims) (nth ax (array-dimensions a))))))
 
 (defun linalg:amax (a &optional axis keepdims)
   ;; The largest element, of the whole array (no axis) or along an integer
@@ -871,32 +838,28 @@
   ;; Errors on an empty array or axis.
   (if (null axis)
       (let ((n (array-total-size a)))
-        (when (= n 0)
-          (error "linalg: amax of an empty array"))
+        (when (= n 0) (error "linalg: amax of an empty array"))
         (let ((best (row-major-aref a 0)))
           (do ((k 1 (+ k 1)))
               ((>= k n) (linalg::%la-wrap-scalar a best keepdims))
-            (let ((x (row-major-aref a k)))
-              (when (> x best)
-                (setq best x))))))
+            (let ((x (row-major-aref a k))) (when (> x best) (setq best x))))))
       (linalg::%la-fold-axis a (linalg::%la-norm-axis (array-dimensions a) axis)
-                             (lambda (acc x) (if (> x acc) x acc)) nil keepdims)))
+                             (lambda (acc x) (if (> x acc) x acc)) nil
+                             keepdims)))
 
 (defun linalg:amin (a &optional axis keepdims)
   ;; The smallest element, of the whole array (no axis) or along an integer
   ;; axis; the linalg:amax rules with the comparison flipped.
   (if (null axis)
       (let ((n (array-total-size a)))
-        (when (= n 0)
-          (error "linalg: amin of an empty array"))
+        (when (= n 0) (error "linalg: amin of an empty array"))
         (let ((best (row-major-aref a 0)))
           (do ((k 1 (+ k 1)))
               ((>= k n) (linalg::%la-wrap-scalar a best keepdims))
-            (let ((x (row-major-aref a k)))
-              (when (< x best)
-                (setq best x))))))
+            (let ((x (row-major-aref a k))) (when (< x best) (setq best x))))))
       (linalg::%la-fold-axis a (linalg::%la-norm-axis (array-dimensions a) axis)
-                             (lambda (acc x) (if (< x acc) x acc)) nil keepdims)))
+                             (lambda (acc x) (if (< x acc) x acc)) nil
+                             keepdims)))
 
 (defun linalg:argmax (v &optional axis)
   ;; With no axis: the index of the largest element of a vector (first on
@@ -907,32 +870,30 @@
   ;; integer index itself.
   (if (null axis)
       (let ((n (length v)))
-        (when (= n 0)
-          (error "linalg: argmax of an empty vector"))
+        (when (= n 0) (error "linalg: argmax of an empty vector"))
         (let ((best (aref v 0)) (bi 0))
           (do ((i 1 (+ i 1)))
               ((>= i n) bi)
             (when (> (aref v i) best)
               (setq best (aref v i))
               (setq bi i)))))
-      (linalg::%la-argfold-axis v (linalg::%la-norm-axis (array-dimensions v) axis)
-                                (function >))))
+      (linalg::%la-argfold-axis v
+       (linalg::%la-norm-axis (array-dimensions v) axis) (function >))))
 
 (defun linalg:argmin (v &optional axis)
   ;; The index of the smallest element; the linalg:argmax rules with the
   ;; comparison flipped.
   (if (null axis)
       (let ((n (length v)))
-        (when (= n 0)
-          (error "linalg: argmin of an empty vector"))
+        (when (= n 0) (error "linalg: argmin of an empty vector"))
         (let ((best (aref v 0)) (bi 0))
           (do ((i 1 (+ i 1)))
               ((>= i n) bi)
             (when (< (aref v i) best)
               (setq best (aref v i))
               (setq bi i)))))
-      (linalg::%la-argfold-axis v (linalg::%la-norm-axis (array-dimensions v) axis)
-                                (function <))))
+      (linalg::%la-argfold-axis v
+       (linalg::%la-norm-axis (array-dimensions v) axis) (function <))))
 
 (defun linalg:norm (a)
   ;; The Euclidean (L2 / Frobenius) norm.
@@ -940,8 +901,7 @@
 
 (defun linalg:trace (a)
   ;; The sum of the main-diagonal elements of a square matrix.
-  (let ((n (linalg::%la-square-size a))
-        (acc 0))
+  (let ((n (linalg::%la-square-size a)) (acc 0))
     (do ((i 0 (+ i 1)))
         ((>= i n) acc)
       (setq acc (+ acc (aref a i i))))))
@@ -955,8 +915,7 @@
   ;; any rank; the result is a fresh packed array of a's width (so n = 0
   ;; returns a packed COPY, where numpy returns the input itself).
   (let ((times (if n n 1)))
-    (when (< times 0)
-      (error "linalg: diff order must be non-negative"))
+    (when (< times 0) (error "linalg: diff order must be non-negative"))
     (if (= times 0)
         (linalg::%la-copy a)
         (let ((out (linalg::%la-diff-1 a)))
@@ -974,11 +933,9 @@
   ;; formula). Vectors only -- numpy's rank-2 gradient returns one array per
   ;; axis, which has no lite representation here. Needs at least 2 samples.
   (let ((d (array-dimensions f)))
-    (when (cdr d)
-      (error "linalg: gradient expects a vector"))
+    (when (cdr d) (error "linalg: gradient expects a vector"))
     (let ((n (car d)))
-      (when (< n 2)
-        (error "linalg: gradient needs at least 2 samples"))
+      (when (< n 2) (error "linalg: gradient needs at least 2 samples"))
       (let ((out (linalg::%la-like f)))
         (if (or (null x) (numberp x))
             (let ((h (if x x 1)))
@@ -994,7 +951,8 @@
                       (/ (- (aref f (+ i 1)) (aref f (- i 1))) (* 2 h)))))
             (progn
               (unless (= (length x) n)
-                (error "linalg: gradient coordinates must match the sample length"))
+                (error
+                 "linalg: gradient coordinates must match the sample length"))
               (setf (aref out 0)
                     (/ (- (aref f 1) (aref f 0)) (- (aref x 1) (aref x 0))))
               (setf (aref out (- n 1))
@@ -1021,8 +979,7 @@
   ;; The determinant, by Gaussian elimination with partial pivoting (in
   ;; floating point).
   (let ((n (linalg::%la-square-size a)))
-    (let ((m (linalg::%la-copy a))
-          (det 1))
+    (let ((m (linalg::%la-copy a)) (det 1))
       (do ((col 0 (+ col 1)))
           ((or (>= col n) (= det 0)) det)
         (let ((p (linalg::%la-pivot m col n)))
@@ -1052,10 +1009,8 @@
     (do ((col 0 (+ col 1)))
         ((>= col n))
       (let ((p (linalg::%la-pivot m col n)))
-        (when (null p)
-          (error "linalg: inv of a singular matrix"))
-        (unless (= p col)
-          (linalg::%la-swap-rows m p col w))
+        (when (null p) (error "linalg: inv of a singular matrix"))
+        (unless (= p col) (linalg::%la-swap-rows m p col w))
         (linalg::%la-eliminate m col n w)))
     (do ((col (- n 1) (- col 1)))
         ((< col 0))
@@ -1088,12 +1043,10 @@
   ;; t when a and b have the same shape and numerically equal elements
   ;; (like numpy array_equal: 1 and 1.0 compare equal).
   (if (equal (array-dimensions a) (array-dimensions b))
-      (let ((n (array-total-size a))
-            (ok t))
+      (let ((n (array-total-size a)) (ok t))
         (do ((k 0 (+ k 1)))
             ((or (>= k n) (null ok)) ok)
-          (let ((x (row-major-aref a k))
-                (y (row-major-aref b k)))
+          (let ((x (row-major-aref a k)) (y (row-major-aref b k)))
             (unless (if (and (numberp x) (numberp y)) (= x y) (equal x y))
               (setq ok nil)))))
       nil))
@@ -1138,8 +1091,7 @@
          (out (linalg::%la-make (cons m (cdr d)) 0.0 (linalg::%la-etype a))))
     (do ((i 0 (+ i 1)))
         ((>= i m) out)
-      (let ((src (* (truncate (aref idx i)) slab))
-            (dst (* i slab)))
+      (let ((src (* (truncate (aref idx i)) slab)) (dst (* i slab)))
         (do ((k 0 (+ k 1)))
             ((>= k slab))
           (setf (row-major-aref out (+ dst k))
@@ -1179,8 +1131,7 @@
   ;; The (length idx) x n one-hot matrix: row i holds 1.0 in column idx[i]
   ;; (truncated to an integer) and 0.0 elsewhere (double by default;
   ;; 'single-float for #f).
-  (let* ((m (length idx))
-         (out (linalg::%la-make (list m n) 0.0 element-type)))
+  (let* ((m (length idx)) (out (linalg::%la-make (list m n) 0.0 element-type)))
     (do ((i 0 (+ i 1)))
         ((>= i m) out)
       (setf (aref out i (truncate (aref idx i))) 1))))
@@ -1204,8 +1155,9 @@
          (w (car (cdr (cdr (cdr d)))))
          (oh (+ 1 (floor (- (+ h (* 2 pad)) fh) stride)))
          (ow (+ 1 (floor (- (+ w (* 2 pad)) fw) stride)))
-         (out (linalg::%la-make (list (* n oh ow) (* c fh fw)) 0.0
-                                (linalg::%la-etype x)))
+         (out
+          (linalg::%la-make (list (* n oh ow) (* c fh fw)) 0.0
+                            (linalg::%la-etype x)))
          (dst 0))
     (do ((ni 0 (+ ni 1)))
         ((>= ni n) out)
@@ -1290,18 +1242,15 @@
   (setq linalg::%la-rng-s1 (mod (* 171 linalg::%la-rng-s1) 30269))
   (setq linalg::%la-rng-s2 (mod (* 172 linalg::%la-rng-s2) 30307))
   (setq linalg::%la-rng-s3 (mod (* 170 linalg::%la-rng-s3) 30323))
-  (let ((u (+ (/ linalg::%la-rng-s1 30269.0)
-              (/ linalg::%la-rng-s2 30307.0)
-              (/ linalg::%la-rng-s3 30323.0))))
+  (let ((u
+         (+ (/ linalg::%la-rng-s1 30269.0) (/ linalg::%la-rng-s2 30307.0)
+            (/ linalg::%la-rng-s3 30323.0))))
     ;; frac(u) for u in [0, 3), by compares only (no float mod needed).
-    (if (>= u 2.0)
-        (- u 2.0)
-        (if (>= u 1.0) (- u 1.0) u))))
+    (if (>= u 2.0) (- u 2.0) (if (>= u 1.0) (- u 1.0) u))))
 
 (defun linalg::%la-rng-int (n)
   ;; A uniform integer in [0, n).
-  (let ((i (floor (* (linalg::%la-rng-next) n))))
-    (if (>= i n) (- n 1) i)))
+  (let ((i (floor (* (linalg::%la-rng-next) n)))) (if (>= i n) (- n 1) i)))
 
 (defun linalg:seed (n)
   ;; Resets the generator deterministically from a non-negative integer seed,
@@ -1367,7 +1316,6 @@
       (setf (aref out i) i))
     (do ((i (- n 1) (- i 1)))
         ((< i 1) out)
-      (let* ((j (linalg::%la-rng-int (+ i 1)))
-             (tmp (aref out i)))
+      (let* ((j (linalg::%la-rng-int (+ i 1))) (tmp (aref out i)))
         (setf (aref out i) (aref out j))
         (setf (aref out j) tmp)))))

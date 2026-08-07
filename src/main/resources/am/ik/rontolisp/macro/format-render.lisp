@@ -18,8 +18,7 @@
 
 ;;; ---------------------------------------------------------------- primitives
 
-(defun %fmt-cat (a b)
-  (concatenate 'string a b))
+(defun %fmt-cat (a b) (concatenate 'string a b))
 
 (defun %fmt-repeat (s n)
   (let ((out "") (k 0))
@@ -28,13 +27,14 @@
       (setq k (+ k 1)))
     out))
 
-(defun %fmt-digitp (c)
-  (and (char>= c #\0) (char<= c #\9)))
+(defun %fmt-digitp (c) (and (char>= c #\0) (char<= c #\9)))
 
 (defun %fmt-parse-int (s)
   (let ((i 0) (n (length s)) (neg nil) (acc 0))
     (if (and (> n 0) (char= (char s 0) #\-))
-        (progn (setq neg t) (setq i 1)))
+        (progn
+          (setq neg t)
+          (setq i 1)))
     (while (< i n)
       (setq acc (+ (* acc 10) (- (char-code (char s i)) 48)))
       (setq i (+ i 1)))
@@ -51,8 +51,7 @@
 ;;; A parameter is an integer, a character ('c or a runtime v), or nil for an
 ;;; omitted slot -- the same three shapes the static parser records.
 
-(defun %fmt-nth (params k)
-  (if (< k (length params)) (nth k params) nil))
+(defun %fmt-nth (params k) (if (< k (length params)) (nth k params) nil))
 
 (defun %fmt-int (params k default)
   (let ((p (%fmt-nth params k)))
@@ -69,7 +68,8 @@
           (t (princ-to-string p)))))
 
 (defun %fmt-param-start-p (c)
-  (or (%fmt-digitp c) (char= c #\-) (char= c #\') (char= c #\v) (char= c #\V) (char= c #\#) (char= c #\,)))
+  (or (%fmt-digitp c) (char= c #\-) (char= c #\') (char= c #\v) (char= c #\V)
+      (char= c #\#) (char= c #\,)))
 
 ;;; (list params pos i)
 (defun %fmt-params (ctrl pos end all i)
@@ -92,18 +92,16 @@
 ;;; (list value pos i)
 (defun %fmt-param (ctrl pos end all i)
   (let ((c (if (< pos end) (char ctrl pos) #\,)))
-    (cond ((char= c #\')
-           (list (if (< (+ pos 1) end) (char ctrl (+ pos 1)) #\Space) (+ pos 2) i))
-          ((or (char= c #\v) (char= c #\V))
-           (list (nth i all) (+ pos 1) (+ i 1)))
-          ((char= c #\#)
-           (list (- (length all) i) (+ pos 1) i))
-          ((or (%fmt-digitp c) (char= c #\-))
-           (let ((start pos) (p (+ pos 1)))
-             (while (and (< p end) (%fmt-digitp (char ctrl p)))
-               (setq p (+ p 1)))
-             (list (%fmt-parse-int (subseq ctrl start p)) p i)))
-          (t (list nil pos i)))))
+    (cond
+     ((char= c #\')
+      (list (if (< (+ pos 1) end) (char ctrl (+ pos 1)) #\Space) (+ pos 2) i))
+     ((or (char= c #\v) (char= c #\V)) (list (nth i all) (+ pos 1) (+ i 1)))
+     ((char= c #\#) (list (- (length all) i) (+ pos 1) i))
+     ((or (%fmt-digitp c) (char= c #\-))
+      (let ((start pos) (p (+ pos 1)))
+        (while (and (< p end) (%fmt-digitp (char ctrl p))) (setq p (+ p 1)))
+        (list (%fmt-parse-int (subseq ctrl start p)) p i)))
+     (t (list nil pos i)))))
 
 ;;; --------------------------------------------------------------- the tokens
 ;;; (list pos params colon at directive-char i) for the directive whose ~ is at
@@ -116,7 +114,8 @@
          (p (nth 1 st))
          (colon nil)
          (at nil))
-    (while (and (< p end) (or (char= (char ctrl p) #\:) (char= (char ctrl p) #\@)))
+    (while (and (< p end)
+                (or (char= (char ctrl p) #\:) (char= (char ctrl p) #\@)))
       (if (char= (char ctrl p) #\:) (setq colon t) (setq at t))
       (setq p (+ p 1)))
     (if (>= p end)
@@ -163,8 +162,8 @@
                  (d (nth 1 sh))
                  (inner (%fmt-closer-of d)))
             (cond ((char= d close) (setq res p))
-                  ((null inner) (setq p np))
-                  (t (setq p (%fmt-after ctrl (%fmt-match ctrl np end inner) end)))))
+             ((null inner) (setq p np))
+             (t (setq p (%fmt-after ctrl (%fmt-match ctrl np end inner) end)))))
           (setq p (+ p 1))))
     (if (< res 0) end res)))
 
@@ -175,8 +174,7 @@
 ;;; (list clauses close-pos); a clause is (start end default-p), default-p being
 ;;; the : of the ~:; separator that introduced it. Used for ~[ ... ~] and, with
 ;;; closer #\>, for the ~< ... ~> section list.
-(defun %fmt-clauses (ctrl pos end)
-  (%fmt-clauses-until ctrl pos end #\]))
+(defun %fmt-clauses (ctrl pos end) (%fmt-clauses-until ctrl pos end #\]))
 
 (defun %fmt-clauses-until (ctrl pos end closer)
   (let ((segs nil) (start pos) (p pos) (defnext nil) (close end) (done nil))
@@ -186,17 +184,18 @@
                  (np (nth 0 sh))
                  (d (nth 1 sh))
                  (inner (%fmt-closer-of d)))
-            (cond ((char= d closer)
-                   (setq segs (append segs (list (list start p defnext))))
-                   (setq close p)
-                   (setq done t))
-                  ((char= d #\;)
-                   (setq segs (append segs (list (list start p defnext))))
-                   (setq defnext (nth 2 sh))
-                   (setq start np)
-                   (setq p np))
-                  ((null inner) (setq p np))
-                  (t (setq p (%fmt-after ctrl (%fmt-match ctrl np end inner) end)))))
+            (cond
+             ((char= d closer)
+              (setq segs (append segs (list (list start p defnext))))
+              (setq close p)
+              (setq done t))
+             ((char= d #\;)
+              (setq segs (append segs (list (list start p defnext))))
+              (setq defnext (nth 2 sh))
+              (setq start np)
+              (setq p np))
+             ((null inner) (setq p np))
+             (t (setq p (%fmt-after ctrl (%fmt-match ctrl np end inner) end)))))
           (setq p (+ p 1))))
     (if (not done) (setq segs (append segs (list (list start end defnext)))))
     (list segs close)))
@@ -238,12 +237,11 @@
 (defun %fmt-radix (n base colon comma interval at)
   (if (not (integerp n))
       (princ-to-string n)
-      (let* ((neg (< n 0))
-             (m (if neg (- 0 n) n))
-             (s ""))
+      (let* ((neg (< n 0)) (m (if neg (- 0 n) n)) (s ""))
         (while (> m 0)
           (let ((d (mod m base)))
-            (setq s (%fmt-cat (string (code-char (if (< d 10) (+ 48 d) (+ 55 d)))) s)))
+            (setq s
+             (%fmt-cat (string (code-char (if (< d 10) (+ 48 d) (+ 55 d)))) s)))
           (setq m (truncate (/ m base))))
         (let* ((g (if (string= s "") "0" s))
                (grouped (if colon (%fmt-group g comma interval) g)))
@@ -265,7 +263,8 @@
              (sign (if neg "-" (if at "+" ""))))
         (if (= places 0)
             (%fmt-cat sign ip)
-            (%fmt-cat sign (%fmt-cat (%fmt-cat ip ".") (subseq s (- len places))))))))
+            (%fmt-cat sign
+             (%fmt-cat (%fmt-cat ip ".") (subseq s (- len places))))))))
 
 (defun %fmt-strip-zeros (s)
   (let ((g s))
@@ -279,20 +278,21 @@
 (defun %fmt-exp (x places strip at expdigits marker)
   (if (not (numberp x))
       (princ-to-string x)
-      (let* ((v (* x 1.0))
-             (neg (< v 0.0))
-             (a (if neg (- 0.0 v) v)))
+      (let* ((v (* x 1.0)) (neg (< v 0.0)) (a (if neg (- 0.0 v) v)))
         (if (= a 0.0)
             (%fmt-exp-zero places strip at expdigits marker)
             (%fmt-exp-value a neg places strip at expdigits marker)))))
 
 (defun %fmt-exp-zero (places strip at expdigits marker)
-  (let ((mant (cond ((= places 0) "0")
-                    (strip "0.0")
-                    (t (%fmt-cat "0." (%fmt-repeat "0" places)))))
+  (let ((mant
+         (cond ((= places 0) "0")
+               (strip "0.0")
+               (t (%fmt-cat "0." (%fmt-repeat "0" places)))))
         (ed (if (> expdigits 1) expdigits 1)))
     (%fmt-cat (if at "+" "")
-              (%fmt-cat mant (%fmt-cat (string marker) (%fmt-cat "+" (%fmt-repeat "0" ed)))))))
+              (%fmt-cat mant
+                        (%fmt-cat (string marker)
+                                  (%fmt-cat "+" (%fmt-repeat "0" ed)))))))
 
 (defun %fmt-exp-value (a neg places strip at expdigits marker)
   (let ((m a) (ee 0))
@@ -313,18 +313,20 @@
            (fr (if strip (%fmt-strip-zeros fr0) fr0))
            (eneg (< eef 0))
            (eabs0 (princ-to-string (if eneg (- 0 eef) eef)))
-           (eabs (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0))
+           (eabs
+            (if (> expdigits 0) (%fmt-pad eabs0 expdigits 1 0 "0" t) eabs0))
            (mant (if (= places 0) ip (%fmt-cat (%fmt-cat ip ".") fr))))
       (%fmt-cat (if neg "-" (if at "+" ""))
-                (%fmt-cat mant (%fmt-cat (string marker) (%fmt-cat (if eneg "-" "+") eabs)))))))
+                (%fmt-cat mant
+                          (%fmt-cat (string marker)
+                                    (%fmt-cat (if eneg "-" "+") eabs)))))))
 
 ;;; ~G: the plain float representation inside [0.1, 1e16) (and for zero), the ~E
 ;;; default form outside it.
 (defun %fmt-general (x at)
   (if (not (numberp x))
       (princ-to-string x)
-      (let* ((v (* x 1.0))
-             (a (if (< v 0.0) (- 0.0 v) v)))
+      (let* ((v (* x 1.0)) (a (if (< v 0.0) (- 0.0 v) v)))
         (if (or (= a 0.0) (and (>= a 0.1) (< a 1.0e16)))
             (if at
                 (%fmt-cat (if (< v 0.0) "" "+") (princ-to-string v))
@@ -333,14 +335,11 @@
 
 ;;; ~@(: downcase, then upcase the first alphabetic character.
 (defun %fmt-cap-first (str)
-  (let* ((s (string-downcase str))
-         (n (length s))
-         (i 0))
-    (while (and (< i n) (not (alpha-char-p (char s i))))
-      (setq i (+ i 1)))
+  (let* ((s (string-downcase str)) (n (length s)) (i 0))
+    (while (and (< i n) (not (alpha-char-p (char s i)))) (setq i (+ i 1)))
     (if (< i n)
         (%fmt-cat (subseq s 0 i)
-                  (%fmt-cat (string-upcase (subseq s i (+ i 1))) (subseq s (+ i 1))))
+         (%fmt-cat (string-upcase (subseq s i (+ i 1))) (subseq s (+ i 1))))
         s)))
 
 ;;; The column the accumulated output ends at (for ~& and ~T). A renderer builds
@@ -351,7 +350,9 @@
     (while (and (> i 0) (not done))
       (if (char= (char out (- i 1)) #\Newline)
           (setq done t)
-          (progn (setq col (+ col 1)) (setq i (- i 1)))))
+          (progn
+            (setq col (+ col 1))
+            (setq i (- i 1)))))
     col))
 
 (defun %fmt-fresh (out n)
@@ -361,12 +362,15 @@
 (defun %fmt-tab (out colnum colinc relative)
   (let* ((col (%fmt-column out))
          (inc (if (< colinc 1) 1 colinc))
-         (target (if relative
-                     (let ((base (+ col colnum)))
-                       (if (= (mod base inc) 0) base (* (+ (truncate (/ base inc)) 1) inc)))
-                     (if (< col colnum)
-                         colnum
-                         (+ colnum (* inc (+ (truncate (/ (- col colnum) inc)) 1)))))))
+         (target
+          (if relative
+              (let ((base (+ col colnum)))
+                (if (= (mod base inc) 0)
+                    base
+                    (* (+ (truncate (/ base inc)) 1) inc)))
+              (if (< col colnum)
+                  colnum
+                  (+ colnum (* inc (+ (truncate (/ (- col colnum) inc)) 1)))))))
     (%fmt-cat out (%fmt-repeat " " (- target col)))))
 
 ;;; ------------------------------------------------------------- the renderer
@@ -401,28 +405,41 @@
          (raw (nth 4 tk))
          (d (char-downcase raw))
          (idx (nth 5 tk)))
-    (cond ((%fmt-value-directive-p d) (%fmt-value ctrl end all out np idx params colon at d))
+    (cond ((%fmt-value-directive-p d)
+           (%fmt-value ctrl end all out np idx params colon at d))
           ((char= d #\() (%fmt-case ctrl end all out np idx colon at))
-          ((char= d #\[) (%fmt-cond-directive ctrl end all out np idx params colon at))
+          ((char= d #\[)
+           (%fmt-cond-directive ctrl end all out np idx params colon at))
           ((char= d #\{) (%fmt-iterate ctrl end all out np idx params colon at))
           ((char= d #\<) (%fmt-block ctrl end all out np idx at))
           ((char= d #\/) (%fmt-user-function ctrl end all out np idx colon at))
           (t (%fmt-control ctrl end all out np idx params colon at d raw)))))
 
 (defun %fmt-value-directive-p (d)
-  (or (char= d #\a) (char= d #\s) (char= d #\d) (char= d #\x) (char= d #\o) (char= d #\b)
-      (char= d #\r) (char= d #\c) (char= d #\f) (char= d #\e) (char= d #\g) (char= d #\$)
-      (char= d #\p) (char= d #\?)))
+  (or (char= d #\a) (char= d #\s) (char= d #\d) (char= d #\x) (char= d #\o)
+      (char= d #\b) (char= d #\r) (char= d #\c) (char= d #\f) (char= d #\e)
+      (char= d #\g) (char= d #\$) (char= d #\p) (char= d #\?)))
 
 ;;; Directives that consume no argument (and the ones that only move the cursor).
 (defun %fmt-control (ctrl end all out pos i params colon at d raw)
-  (cond ((char= d #\~) (list (%fmt-cat out (%fmt-repeat "~" (%fmt-int params 0 1))) pos i nil))
-        ((char= d #\%) (list (%fmt-cat out (%fmt-repeat (string #\Newline) (%fmt-int params 0 1))) pos i nil))
+  (cond ((char= d #\~)
+         (list (%fmt-cat out (%fmt-repeat "~" (%fmt-int params 0 1))) pos i
+               nil))
+        ((char= d #\%)
+         (list
+          (%fmt-cat out (%fmt-repeat (string #\Newline) (%fmt-int params 0 1)))
+          pos i nil))
         ((char= d #\&) (list (%fmt-fresh out (%fmt-int params 0 1)) pos i nil))
-        ((char= d #\|) (list (%fmt-cat out (%fmt-repeat (string #\Page) (%fmt-int params 0 1))) pos i nil))
+        ((char= d #\|)
+         (list
+          (%fmt-cat out (%fmt-repeat (string #\Page) (%fmt-int params 0 1))) pos
+          i nil))
         ((char= d #\Newline)
-         (list (if at (%fmt-cat out (string #\Newline)) out) (%fmt-skip-indent ctrl end pos colon) i nil))
-        ((char= d #\t) (list (%fmt-tab out (%fmt-int params 0 1) (%fmt-int params 1 1) at) pos i nil))
+         (list (if at (%fmt-cat out (string #\Newline)) out)
+               (%fmt-skip-indent ctrl end pos colon) i nil))
+        ((char= d #\t)
+         (list (%fmt-tab out (%fmt-int params 0 1) (%fmt-int params 1 1) at) pos
+               i nil))
         ((char= d #\*) (list out pos (%fmt-jump all i params colon at) nil))
         ((char= d #\^) (list out pos i (%fmt-escape all i params)))
         ;; Conditional newline. Only the MANDATORY kind (~:@_) breaks a line: the
@@ -430,7 +447,9 @@
         ;; tracks one (.kb/pretty-printer.md). ~i (indent) is inert for the same
         ;; reason. Both obey *print-pretty*, like pprint-newline.
         ((char= d #\_)
-         (list (if (and colon at *print-pretty*) (%fmt-cat out (string #\Newline)) out) pos i nil))
+         (list (if (and colon at *print-pretty*)
+                   (%fmt-cat out (string #\Newline))
+                   out) pos i nil))
         ((char= d #\i) (list out pos i nil))
         (t (list (%fmt-cat out (%fmt-cat "~" (string raw))) pos i nil))))
 
@@ -481,9 +500,15 @@
          (start (if at i 0))
          (r (%fmt-run ctrl (nth 0 body) (nth 1 body) items start))
          (acc out))
-    (if pre (setq acc (%fmt-cat acc (nth 0 (%fmt-run ctrl (nth 0 pre) (nth 1 pre) items start)))))
+    (if pre
+        (setq acc
+              (%fmt-cat acc
+               (nth 0 (%fmt-run ctrl (nth 0 pre) (nth 1 pre) items start)))))
     (setq acc (%fmt-cat acc (nth 0 r)))
-    (if suf (setq acc (%fmt-cat acc (nth 0 (%fmt-run ctrl (nth 0 suf) (nth 1 suf) items start)))))
+    (if suf
+        (setq acc
+              (%fmt-cat acc
+               (nth 0 (%fmt-run ctrl (nth 0 suf) (nth 1 suf) items start)))))
     (list acc after (if at (nth 1 r) (+ i 1)) nil)))
 
 ;;; The ~/name/ arm -- %fmt-user-function -- is NOT here: it is the one part of
@@ -497,15 +522,14 @@
 (defun %fmt-skip-indent (ctrl end pos colon)
   (let ((p pos))
     (if (not colon)
-        (while (and (< p end) (or (char= (char ctrl p) #\Space) (char= (char ctrl p) #\Tab)))
+        (while (and (< p end)
+                (or (char= (char ctrl p) #\Space) (char= (char ctrl p) #\Tab)))
           (setq p (+ p 1))))
     p))
 
 (defun %fmt-jump (all i params colon at)
   (let ((n (%fmt-int params 0 (if at 0 1))))
-    (cond (at n)
-          (colon (let ((k (- i n))) (if (< k 0) 0 k)))
-          (t (+ i n)))))
+    (cond (at n) (colon (let ((k (- i n))) (if (< k 0) 0 k))) (t (+ i n)))))
 
 ;;; ~^ fires when the current argument list is exhausted; ~n^ when n is zero and
 ;;; ~n,m^ when n and m are equal.
@@ -519,7 +543,9 @@
 (defun %fmt-value (ctrl end all out pos i params colon at d)
   (cond ((char= d #\?) (%fmt-recursive ctrl end all out pos i at))
         ((char= d #\p) (%fmt-plural out pos all i colon at))
-        (t (list (%fmt-cat out (%fmt-field (nth i all) params colon at d)) pos (+ i 1) nil))))
+        (t
+         (list (%fmt-cat out (%fmt-field (nth i all) params colon at d)) pos
+               (+ i 1) nil))))
 
 ;;; ~? / ~@?: the next argument is a control string. Plain ~? takes its arguments
 ;;; from the following argument (a list); ~@? takes them from the remaining
@@ -529,7 +555,8 @@
     (if at
         (let ((r (%fmt-run inner 0 (length inner) all (+ i 1))))
           (list (%fmt-cat out (nth 0 r)) pos (nth 1 r) nil))
-        (list (%fmt-cat out (%fmt-render inner (nth (+ i 1) all))) pos (+ i 2) nil))))
+        (list (%fmt-cat out (%fmt-render inner (nth (+ i 1) all))) pos (+ i 2)
+              nil))))
 
 ;;; ~P: ~:P re-uses the preceding argument instead of consuming a new one.
 (defun %fmt-plural (out pos all i colon at)
@@ -542,48 +569,57 @@
 ;;; One padded field. The directive-specific rendering happens in %fmt-body; the
 ;;; width/pad parameters live at different indices per directive.
 (defun %fmt-field (v params colon at d)
-  (cond ((or (char= d #\a) (char= d #\s)) (%fmt-field-aesthetic v params colon at d))
-        ((char= d #\c) (%fmt-char-directive v colon at))
-        ((char= d #\f) (%fmt-field-fixed v params at))
-        ((char= d #\e) (%fmt-field-exp v params at))
-        ((char= d #\g) (%fmt-general v at))
-        ((char= d #\$) (%fmt-field-money v params at))
-        ((char= d #\r) (%fmt-field-radix v params colon at))
-        ((char= d #\d) (%fmt-field-decimal v params colon at))
-        (t (%fmt-field-integer v params colon at d))))
+  (cond
+   ((or (char= d #\a) (char= d #\s)) (%fmt-field-aesthetic v params colon at d))
+   ((char= d #\c) (%fmt-char-directive v colon at))
+   ((char= d #\f) (%fmt-field-fixed v params at))
+   ((char= d #\e) (%fmt-field-exp v params at))
+   ((char= d #\g) (%fmt-general v at))
+   ((char= d #\$) (%fmt-field-money v params at))
+   ((char= d #\r) (%fmt-field-radix v params colon at))
+   ((char= d #\d) (%fmt-field-decimal v params colon at))
+   (t (%fmt-field-integer v params colon at d))))
 
 ;;; ~mincol,colinc,minpad,padchar A / S -- padded on the right (left with @).
 (defun %fmt-field-aesthetic (v params colon at d)
   (let* ((base0 (if (char= d #\s) (prin1-to-string v) (princ-to-string v)))
          (base (if (and colon (null v)) "()" base0)))
-    (%fmt-pad base (%fmt-int params 0 0) (%fmt-int params 1 1) (%fmt-int params 2 0)
-              (%fmt-pad-char params 3 " ") at)))
+    (%fmt-pad base (%fmt-int params 0 0) (%fmt-int params 1 1)
+              (%fmt-int params 2 0) (%fmt-pad-char params 3 " ") at)))
 
 ;;; ~mincol,padchar,commachar,comma-interval D -- numbers pad on the left.
 (defun %fmt-field-decimal (v params colon at)
-  (%fmt-pad (%fmt-dec v colon (%fmt-pad-char params 2 ",") (%fmt-int params 3 3) at)
-            (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 1 " ") t))
+  (%fmt-pad
+   (%fmt-dec v colon (%fmt-pad-char params 2 ",") (%fmt-int params 3 3) at)
+   (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 1 " ") t))
 
 (defun %fmt-field-integer (v params colon at d)
   (let ((base (cond ((char= d #\x) 16) ((char= d #\o) 8) (t 2))))
-    (%fmt-pad (%fmt-radix v base colon (%fmt-pad-char params 2 ",") (%fmt-int params 3 3) at)
-              (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 1 " ") t)))
+    (%fmt-pad (%fmt-radix v base colon (%fmt-pad-char params 2 ",")
+                          (%fmt-int params 3 3) at) (%fmt-int params 0 0) 1 0
+              (%fmt-pad-char params 1 " ") t)))
 
 ;;; ~radix,mincol,padchar,commachar,comma-interval R. Without a radix parameter
 ;;; Common Lisp spells the number in English; rontolisp prints the decimal digits
 ;;; instead (see the doc's format limitations).
 (defun %fmt-field-radix (v params colon at)
   (let ((base (%fmt-int params 0 10)))
-    (%fmt-pad (%fmt-radix v base colon (%fmt-pad-char params 3 ",") (%fmt-int params 4 3) at)
-              (%fmt-int params 1 0) 1 0 (%fmt-pad-char params 2 " ") t)))
+    (%fmt-pad (%fmt-radix v base colon (%fmt-pad-char params 3 ",")
+                          (%fmt-int params 4 3) at) (%fmt-int params 1 0) 1 0
+              (%fmt-pad-char params 2 " ") t)))
 
 ;;; ~w,d,k,overflowchar,padchar F
 (defun %fmt-field-fixed (v params at)
   (let* ((k (%fmt-int params 2 0))
          (scaled (if (or (= k 0) (not (numberp v))) v (* v (expt 10.0 k))))
          (d (%fmt-nth params 1))
-         (base (if (null d) (princ-to-string scaled) (%fmt-fixed scaled (%fmt-int params 1 0) nil at)))
-         (padded (%fmt-pad base (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 4 " ") t)))
+         (base
+          (if (null d)
+              (princ-to-string scaled)
+              (%fmt-fixed scaled (%fmt-int params 1 0) nil at)))
+         (padded
+          (%fmt-pad base (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 4 " ")
+                    t)))
     (%fmt-overflow padded params 0 3)))
 
 ;;; ~w,d,e,k,overflowchar,padchar,exponentchar E. The scale factor k is fixed at
@@ -591,14 +627,16 @@
 (defun %fmt-field-exp (v params at)
   (let* ((d (%fmt-nth params 1))
          (places (if (null d) 6 (%fmt-int params 1 6)))
-         (base (%fmt-exp v places (null d) at (%fmt-int params 2 0)
-                         (%fmt-marker params 6)))
-         (padded (%fmt-pad base (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 5 " ") t)))
+         (base
+          (%fmt-exp v places (null d) at (%fmt-int params 2 0)
+                    (%fmt-marker params 6)))
+         (padded
+          (%fmt-pad base (%fmt-int params 0 0) 1 0 (%fmt-pad-char params 5 " ")
+                    t)))
     (%fmt-overflow padded params 0 4)))
 
 (defun %fmt-marker (params k)
-  (let ((p (%fmt-nth params k)))
-    (if (characterp p) p #\e)))
+  (let ((p (%fmt-nth params k))) (if (characterp p) p #\e)))
 
 ;;; ~d,n,w,padchar $
 (defun %fmt-field-money (v params at)
@@ -607,8 +645,7 @@
 
 ;;; A field wider than w collapses to w copies of the overflow character.
 (defun %fmt-overflow (s params width-idx ovf-idx)
-  (let ((ovf (%fmt-nth params ovf-idx))
-        (w (%fmt-nth params width-idx)))
+  (let ((ovf (%fmt-nth params ovf-idx)) (w (%fmt-nth params width-idx)))
     (if (and (characterp ovf) (integerp w) (> (length s) w))
         (%fmt-repeat (string ovf) w)
         s)))
@@ -617,9 +654,8 @@
 ;;; non-graphic characters.
 (defun %fmt-char-directive (v colon at)
   (cond (at (prin1-to-string v))
-        (colon (let ((s (prin1-to-string v)))
-                 (if (> (length s) 2) (subseq s 2) s)))
-        (t (princ-to-string v))))
+   (colon (let ((s (prin1-to-string v))) (if (> (length s) 2) (subseq s 2) s)))
+   (t (princ-to-string v))))
 
 ;;; ------------------------------------------------------------- composites
 
@@ -628,10 +664,11 @@
   (let* ((close (%fmt-match ctrl pos end #\)))
          (r (%fmt-run ctrl pos close all i))
          (body (nth 0 r))
-         (conv (cond ((and colon at) (string-upcase body))
-                     (colon (string-capitalize body))
-                     (at (%fmt-cap-first body))
-                     (t (string-downcase body)))))
+         (conv
+          (cond ((and colon at) (string-upcase body))
+                (colon (string-capitalize body))
+                (at (%fmt-cap-first body))
+                (t (string-downcase body)))))
     (list (%fmt-cat out conv) (%fmt-after ctrl close end) (nth 1 r) (nth 2 r))))
 
 ;;; ~[...~]: ~@[ processes its clause only for a true argument (which it leaves
@@ -694,7 +731,8 @@
          (maxn (if (integerp maxp) maxp -1)))
     (if at
         (%fmt-iterate-args body bstart bend all out after bi maxn force colon)
-        (%fmt-iterate-list body bstart bend (nth bi all) out after (+ bi 1) maxn force colon))))
+        (%fmt-iterate-list body bstart bend (nth bi all) out after (+ bi 1) maxn
+                           force colon))))
 
 ;;; ~{ over one list argument (~:{ over a list of sublists).
 (defun %fmt-iterate-list (ctrl start end items out after i maxn force sublists)
@@ -704,9 +742,10 @@
           (setq go nil)
           (if (and (>= maxn 0) (>= passes maxn))
               (setq go nil)
-              (let* ((r (if sublists
-                            (%fmt-run ctrl start end (nth cur items) 0)
-                            (%fmt-run ctrl start end items cur)))
+              (let* ((r
+                      (if sublists
+                          (%fmt-run ctrl start end (nth cur items) 0)
+                          (%fmt-run ctrl start end items cur)))
                      (next (if sublists (+ cur 1) (nth 1 r))))
                 (setq acc (%fmt-cat acc (nth 0 r)))
                 (setq passes (+ passes 1))
@@ -723,9 +762,10 @@
           (setq go nil)
           (if (and (>= maxn 0) (>= passes maxn))
               (setq go nil)
-              (let* ((r (if sublists
-                            (%fmt-run ctrl start end (nth cur all) 0)
-                            (%fmt-run ctrl start end all cur)))
+              (let* ((r
+                      (if sublists
+                          (%fmt-run ctrl start end (nth cur all) 0)
+                          (%fmt-run ctrl start end all cur)))
                      (next (if sublists (+ cur 1) (nth 1 r))))
                 (setq acc (%fmt-cat acc (nth 0 r)))
                 (setq passes (+ passes 1))
@@ -733,4 +773,3 @@
                     (setq go nil))
                 (setq cur next)))))
     (list acc after cur nil)))
-

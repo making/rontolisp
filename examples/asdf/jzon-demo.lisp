@@ -25,7 +25,9 @@
 
 ;; An array parses to a vector, an object to a hash table.
 (print (jzon:parse "[1, 2, 3]"))
-(let ((obj (jzon:parse "{\"name\": \"rontolisp\", \"tags\": [\"lisp\", \"wasm\"]}")))
+(let ((obj
+       (jzon:parse
+        "{\"name\": \"rontolisp\", \"tags\": [\"lisp\", \"wasm\"]}")))
   (print (gethash "name" obj))
   (print (gethash "tags" obj)))
 

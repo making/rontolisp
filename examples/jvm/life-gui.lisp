@@ -50,18 +50,20 @@
 (render-life *g*)
 
 (swing:animate 120
-  (lambda ()
-    (when (>= *gen* *reseed-at*)
-      (setq *g* (life-seed))
-      (sprinkle *g* 140)
-      (setq *gen* 0))
-    (swing:status *win*
-                  (concatenate 'string "  generation: " (princ-to-string *gen*)
-                               "   population: "
-                               (princ-to-string (population *g* *rows* *cols*))))
-    (render-life *g*)
-    (setq *g* (next-gen *g* *rows* *cols*))
-    (setq *gen* (+ *gen* 1))
-    t))
+               (lambda ()
+                 (when (>= *gen* *reseed-at*)
+                   (setq *g* (life-seed))
+                   (sprinkle *g* 140)
+                   (setq *gen* 0))
+                 (swing:status *win*
+                               (concatenate 'string "  generation: "
+                                            (princ-to-string *gen*)
+                                            "   population: "
+                                            (princ-to-string
+                                             (population *g* *rows* *cols*))))
+                 (render-life *g*)
+                 (setq *g* (next-gen *g* *rows* *cols*))
+                 (setq *gen* (+ *gen* 1))
+                 t))
 
 (print "life window is open; close it to stop the simulation")
