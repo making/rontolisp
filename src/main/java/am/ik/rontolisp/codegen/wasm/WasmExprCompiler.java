@@ -533,6 +533,32 @@ final class WasmExprCompiler {
 				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, ctx.ehMode), ctx);
 				return;
 			}
+			// The other uiop MACROS with real expansions, same reason: the binding trio
+			// and with-deprecation (whose top-level occurrences the flattening pass has
+			// already spliced -- this reaches the ones nested in an expression).
+			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())) {
+				switch (qn.member()) {
+					case LispNames.IF_LET -> {
+						compileExpr(LispMacroExpander.expandUiopIfLet(cons), ctx);
+						return;
+					}
+					case LispNames.WHEN_LET -> {
+						compileExpr(LispMacroExpander.expandUiopWhenLet(cons), ctx);
+						return;
+					}
+					case LispNames.WHEN_LET_STAR -> {
+						compileExpr(LispMacroExpander.expandUiopWhenLetStar(cons), ctx);
+						return;
+					}
+					case LispNames.WITH_DEPRECATION -> {
+						compileExpr(LispMacroExpander.expandUiopWithDeprecation(cons), ctx);
+						return;
+					}
+					default -> {
+						// Other uiop members fall through to the stub lowering.
+					}
+				}
+			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander
 			// expansions (the rontolisp:with-arena pattern) over the usocket.lisp defuns.
 			if (qn != null && LispNames.USOCKET_PKG.equals(qn.pkg())) {

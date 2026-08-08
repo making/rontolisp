@@ -64,7 +64,11 @@ public final class IndentRules {
 				"unwind-protect", "prog1", "multiple-value-prog1", "dolist", "dotimes", "do-symbols",
 				"do-external-symbols", "do-all-symbols", "with-open-file", "with-open-stream", "with-input-from-string",
 				"with-output-to-string", "with-simple-restart", "with-mutex", "with-lock-held", "with-arena",
-				"eval-when", "with-hash-table-iterator", "print-unreadable-object", "pprint-logical-block")) {
+				"eval-when", "with-hash-table-iterator", "print-unreadable-object", "pprint-logical-block",
+				// (uiop:with-deprecation (LEVEL) definitions...): the level list is the
+				// distinguished argument. Spelled out rather than left to the with-
+				// guess.
+				"with-deprecation")) {
 			rules.put(name, Style.body(1, 2));
 		}
 		// No distinguished argument: every subform is a body form.
@@ -83,8 +87,12 @@ public final class IndentRules {
 		// (if test then else): the branches line up under the test, not under the body
 		// indent, so a two-armed if never reads as a three-form body.
 		rules.put("if", Style.operands(1, 4));
-		// Binding forms: the binding list is a sequence of same-shaped lists.
-		for (String name : List.of("let", "let*", "symbol-macrolet", "handler-bind", "restart-bind")) {
+		// Binding forms: the binding list is a sequence of same-shaped lists. The
+		// if-let/when-let family takes one too, and its tail is a body (if-let's is the
+		// then/else pair) -- laid out as a call, the whole body would align under the
+		// binding list's own width.
+		for (String name : List.of("let", "let*", "symbol-macrolet", "handler-bind", "restart-bind", "if-let",
+				"when-let", "when-let*")) {
 			rules.put(name, Style.body(1, 2, BINDING));
 		}
 		for (String name : List.of("flet", "labels", "macrolet")) {

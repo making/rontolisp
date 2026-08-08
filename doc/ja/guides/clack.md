@@ -77,6 +77,51 @@ pathname はその namestring です) — は明確なエラーを送出しま�
 (responder が最終的なレスポンスリストで呼ばれる形) に対応し、streaming
 writer 形はエラーを送出します。
 
+## 1 つのハンドラからルートの集合へ
+
+上のアプリケーションはサイト全体で 1 つの関数です。それをルートの集合にするのが
+ルーティングライブラリで、[tiny-routes](https://github.com/jeko2000/tiny-routes)
+は無改変でロードできます ([ASDF システムガイド](asdf-systems.md)を参照):
+
+```console
+$ cat routes.lisp
+(ql:quickload "clack")
+(ql:quickload "tiny-routes")
+
+(defpackage :demo (:use :cl :tiny-routes))
+(in-package :demo)
+
+(define-routes *app*
+  (define-get "/hello" () (ok "hello world"))
+  (define-get "/users/:id" (req) (ok (format nil "user ~A" (path-parameter req :id))))
+  (define-post "/echo" (req) (ok (format nil "echo:~A" (request-body req))))
+  (define-any "*" () (not-found "nope")))
+
+(clack:clackup (pipe *app* (wrap-request-body) (wrap-query-parameters))
+               :server :rontolisp :port 5000 :use-thread nil)
+$ rontolisp routes.lisp
+$ curl http://127.0.0.1:5000/hello
+hello world
+$ curl http://127.0.0.1:5000/users/42
+user 42
+$ curl -XPOST -d abc http://127.0.0.1:5000/echo
+echo:abc
+$ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
+404
+```
+
+このライブラリのリクエストは上の env プリストそのもの、レスポンスはレスポンス
+リストそのものなので、境界で何も変換されません: `wrap-request-body` は
+`:raw-body` ストリームを読み、`wrap-query-parameters` は `:query-string` を
+解析し、パステンプレートは `:path-info` に対して照合し、`ok`/`not-found` は
+`(status headers body)` を組み立てます。ルートはアプリケーション自身のパッケージ
+の中で読まれます — このライブラリが本来使われる場所です。
+
+同じルートはサーバなしで全バックエンドで動きます — 自分で組み立てたリクエスト
+プリストで合成済みハンドラを呼ぶだけで、
+[`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/tiny-routes-demo.lisp)
+がそれをしています。serve する場合は下記のバックエンド制約が付きます。
+
 ## バックエンド
 
 - **インタプリタ** — 上記のすべて。

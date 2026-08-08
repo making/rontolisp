@@ -76,6 +76,52 @@ strings. A function body is supported in Clack's delayed-response form (the
 responder is called with the final response list); the streaming-writer form
 signals.
 
+## Getting from one handler to a set of routes
+
+The application above is ONE function for the whole site. A routing library is
+what turns it into a set of routes, and
+[tiny-routes](https://github.com/jeko2000/tiny-routes) loads unmodified (see the
+[ASDF systems guide](asdf-systems.md)):
+
+```console
+$ cat routes.lisp
+(ql:quickload "clack")
+(ql:quickload "tiny-routes")
+
+(defpackage :demo (:use :cl :tiny-routes))
+(in-package :demo)
+
+(define-routes *app*
+  (define-get "/hello" () (ok "hello world"))
+  (define-get "/users/:id" (req) (ok (format nil "user ~A" (path-parameter req :id))))
+  (define-post "/echo" (req) (ok (format nil "echo:~A" (request-body req))))
+  (define-any "*" () (not-found "nope")))
+
+(clack:clackup (pipe *app* (wrap-request-body) (wrap-query-parameters))
+               :server :rontolisp :port 5000 :use-thread nil)
+$ rontolisp routes.lisp
+$ curl http://127.0.0.1:5000/hello
+hello world
+$ curl http://127.0.0.1:5000/users/42
+user 42
+$ curl -XPOST -d abc http://127.0.0.1:5000/echo
+echo:abc
+$ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
+404
+```
+
+Its request IS the env plist above and its response IS the response list, so
+nothing is converted at the boundary: `wrap-request-body` reads the `:raw-body`
+stream, `wrap-query-parameters` parses `:query-string`, the path template
+matches `:path-info`, and `ok`/`not-found` build `(status headers body)`. The
+routes are read inside the application's own package, which is where the library
+is meant to be used from.
+
+The same routes run WITHOUT a server on every backend — call the composed
+handler with a request plist you build yourself, which is what
+[`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/tiny-routes-demo.lisp)
+does. Serving them has the backend constraints below.
+
 ## Backends
 
 - **Interpreter** — everything above.

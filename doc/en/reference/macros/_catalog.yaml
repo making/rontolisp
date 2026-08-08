@@ -87,6 +87,10 @@ categories:
       - { slug: rontolisp-with-arena, name: "rontolisp:with-arena" }
       - { slug: rontolisp-with-mutex, name: "rontolisp:with-mutex" }
       - { slug: usocket-with-macros, name: "usocket:with-client-socket usocket:with-connected-socket usocket:with-server-socket usocket:with-socket-listener" }
+      - { slug: uiop-if-let, name: "uiop:if-let" }
+      - { slug: uiop-when-let, name: "uiop:when-let" }
+      - { slug: uiop-when-let-star, name: "uiop:when-let*" }
+      - { slug: uiop-with-deprecation, name: "uiop:with-deprecation" }
       - { slug: prog, name: prog }
       - { slug: prog-star, name: "prog*" }
       - { slug: shiftf, name: shiftf }

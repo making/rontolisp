@@ -1514,6 +1514,30 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopBindingMacrosAndWithDeprecation() throws Exception {
+		// with-deprecation wraps top-level defuns in the wild, so its expansion has to
+		// SPLICE at top level -- burying them in an expression would stop Pass 1 from
+		// collecting them at all.
+		assertThat(compileAndRun("""
+				(uiop:with-deprecation (:style-warning)
+				  (defun dep-a (x) (* x 2))
+				  (defun dep-b (x) (+ x 1)))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (uiop:with-deprecation (:style-warning)
+				    (defun dep-c (x) (- x 1))))
+				(print (list (uiop:if-let ((a 1) (b 2)) (list a b) 0)
+				             (uiop:if-let ((a 1) (b nil)) (list a b) 0)
+				             (uiop:if-let (x (+ 1 2)) (* x 10) 0)
+				             (uiop:if-let ((a nil)) 7)
+				             (uiop:when-let ((a 3) (b 4)) (+ a b) (* a b))
+				             (uiop:when-let ((a 3) (b nil)) (+ a 1))
+				             (uiop:when-let* ((a 5) (b (* a 2))) (+ a b))
+				             (uiop:when-let* ((a nil) (b (error "no"))) b)
+				             (dep-a 3) (dep-b 3) (dep-c 3)))
+				""")).isEqualTo("((1 2) 0 30 NIL 12 NIL 15 NIL 6 4 2)");
+	}
+
+	@Test
 	void compileAndRunApplyOfAnUndefinedRuntimeSymbolSignals() {
 		// _apply's symbol-designator miss used to return nil SILENTLY; it must fail
 		// loudly like the funcall dispatcher (the tree-shaker carve-out contract:
@@ -2039,6 +2063,24 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(
 				"(print (loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish)) finally (return (length xs))))"))
 			.isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunLoopAnaphoricItOutsideClUser() throws Exception {
+		// Read outside cl-user the anaphor arrives package-qualified; missing it here
+		// fails at COMPILE time, not at run time.
+		assertThat(compileAndRun("""
+				(defpackage :zzit (:use :cl))
+				(in-package :zzit)
+				(print (list (loop for x in '(nil nil 3 4) when x return it)
+				             (loop for x in '(1 nil 3 nil 5) when x collect it)
+				             (let ((acc nil)) (loop for x in '(1 nil 2) when x do (push it acc)) (nreverse acc))
+				             (loop for x in '(1 nil 3) when x collect it else collect 0)
+				             (loop for x in '(4 nil 6) when x when (* x 10) collect it)
+				             (loop for x in '(1 nil) when x collect (loop for y in '(5 nil 6) when y collect it))
+				             (loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish))
+				                   finally (return (length xs)))))
+				""")).isEqualTo("(3 (1 3 5) (1 2) (1 0 3) (40 60) ((5 6)) 3)");
 	}
 
 	@Test

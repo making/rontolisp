@@ -3773,6 +3773,16 @@ public final class LispEvaluator {
 					// The one uiop with-* macro with a real expansion (smart-buffer's
 					// disk-spill path runs it), the usocket:with-* pattern.
 					return eval(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), env);
+				case LispNames.UIOP_IF_LET_QUALIFIED:
+					return eval(LispMacroExpander.expandUiopIfLet(cons), env);
+				case LispNames.UIOP_WHEN_LET_QUALIFIED:
+					return eval(LispMacroExpander.expandUiopWhenLet(cons), env);
+				case LispNames.UIOP_WHEN_LET_STAR_QUALIFIED:
+					return eval(LispMacroExpander.expandUiopWhenLetStar(cons), env);
+				case LispNames.UIOP_WITH_DEPRECATION_QUALIFIED:
+					// A progn of the definitions: rontolisp has no deprecation-warning
+					// channel, so the level form is ignored (documented, not silent).
+					return eval(LispMacroExpander.expandUiopWithDeprecation(cons), env);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:

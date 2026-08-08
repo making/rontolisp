@@ -55,6 +55,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code handler-case}.
  *
  * <p>
+ * The same three legs run once more over a REAL application with routes: tiny-routes
+ * v0.1.1 plus its cookie middleware, both quickloaded UNPATCHED, composed with
+ * {@code pipe} and served through the same {@code clackup}. That pair is the answer to
+ * "what do I write after {@code clackup}", and it covers what the transport-free
+ * {@link TinyRoutesE2eTest} cannot: the live {@code ql:quickload} of the upstream dist
+ * (rather than the vendored copy), the cookie system's own dependency graph (cl-cookie /
+ * quri / local-time / proc-parse) and the Clack request environment reaching the
+ * middleware chain as it really arrives -- {@code :raw-body} stream, {@code :headers}
+ * table and all. The routes are read inside the application's OWN package, which is what
+ * a compiled serve component needs {@code HttpLibrary}'s synthesized bridge to survive.
+ *
+ * <p>
  * Opt-in ({@code RONTOLISP_CLACK_E2E=1}): it needs Docker (the pinned wasmtime image)
  * and, on the first run, network access ({@code ql:quickload} downloads clack, lack and
  * their dependencies into {@code ~/.rontolisp/quicklisp}).
@@ -141,6 +153,99 @@ class ClackE2eTest {
 			 :port 8080)
 			""";
 
+	// The tiny-routes application every leg below serves: the route macros, the :id path
+	// template, the method matcher, wrap-request-body over the Clack :raw-body stream,
+	// wrap-query-parameters, and the cookie middleware in both directions (the request
+	// Cookie header parsed into :cookies, a Set-Cookie written onto every response).
+	// Read inside :tr-app -- an application uses a routing library from its own package,
+	// and that is what the compile paths have to keep working.
+	private static final String TINY_ROUTES_APP = """
+			(ql:quickload "clack")
+			(ql:quickload "tiny-routes")
+			(ql:quickload "tiny-routes-middleware-cookie")
+
+			(defpackage :tr-app (:use :cl :tiny-routes :tiny-routes.middleware.cookie))
+			(in-package :tr-app)
+
+			(define-routes *app*
+			  (define-get "/hello" () (ok "hello world"))
+			  (define-get "/users/:id" (req) (ok (format nil "user ~A" (path-parameter req :id))))
+			  (define-post "/echo" (req) (ok (format nil "echo:~A" (request-body req))))
+			  (define-get "/cookies" (req)
+			    (ok (format nil "~{~A=~A~^,~}"
+			                (loop for c in (request-get req :cookies)
+			                      append (list (cl-cookie:cookie-name c) (cl-cookie:cookie-value c))))))
+			  (define-any "*" () (not-found "nope")))
+
+			(defparameter *routes*
+			  (pipe *app*
+			    (wrap-request-body)
+			    (wrap-query-parameters)
+			    (wrap-request-cookies)
+			    (wrap-response-cookies (cl-cookie:make-cookie :name "sid" :value "42" :path "/"))))
+			""";
+
+	// What the four probes echo back, then the stop proofs. The Set-Cookie line is the
+	// response half of the cookie middleware, read off the real HTTP response.
+	private static final String TINY_ROUTES_EXPECTED = """
+			200
+			"hello world"
+			"sid=42; Path=/"
+			200
+			"user 42"
+			200
+			"echo:abc"
+			200
+			"a=1,b=2"
+			404
+			T
+			NIL
+			""";
+
+	/**
+	 * The self-driving tiny-routes program the interpreter and JVM legs run. The fetches
+	 * are spelled out at top level rather than through a helper: rontolisp:await is only
+	 * allowed there or inside an async-defun/async-lambda.
+	 */
+	private static String tinyRoutesExercise(int port) {
+		return TINY_ROUTES_APP + """
+				(defvar *server*
+				  (clack:clackup *routes* :server :rontolisp :port %d :silent t :debug nil))
+
+				(defvar *hello* (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/hello")))
+				(print (getf *hello* :status))
+				(print (rontolisp:await (rontolisp:read-all (getf *hello* :body))))
+				;; The Set-Cookie header wrap-response-cookies added, off the wire.
+				(print (cdr (assoc "set-cookie" (getf *hello* :headers) :test #'string-equal)))
+
+				(defvar *user* (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/users/42")))
+				(print (getf *user* :status))
+				(print (rontolisp:await (rontolisp:read-all (getf *user* :body))))
+
+				(defvar *echo* (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/echo"
+				                                                 '(:method "POST" :body "abc"))))
+				(print (getf *echo* :status))
+				(print (rontolisp:await (rontolisp:read-all (getf *echo* :body))))
+
+				(defvar *cookies*
+				  (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/cookies"
+				                                    '(:headers (("cookie" . "a=1; b=2"))))))
+				(print (getf *cookies* :status))
+				(print (rontolisp:await (rontolisp:read-all (getf *cookies* :body))))
+
+				(defvar *missing* (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/zzz")))
+				(print (getf *missing* :status))
+
+				(print (clack:stop *server*))
+				(print (ignore-errors (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/hello"))))
+				""".formatted(port, port, port, port, port, port, port);
+	}
+
+	/** The serve-shaped tiny-routes program the component leg compiles. */
+	private static final String TINY_ROUTES_COMPONENT_EXERCISE = TINY_ROUTES_APP + """
+			(clack:clackup *routes* :server :rontolisp :port 8080)
+			""";
+
 	@Test
 	void clackupRoundTripOnTheInterpreter(@TempDir Path workDir) throws Exception {
 		Path program = writeProgram(workDir, selfDrivingExercise(freePort()));
@@ -179,6 +284,60 @@ class ClackE2eTest {
 					.build(), HttpResponse.BodyHandlers.ofString());
 			assertThat(response.statusCode()).isEqualTo(200);
 			assertThat(response.body()).isEqualTo("clack GET /echo q=a=1");
+		}
+	}
+
+	@Test
+	void tinyRoutesRoundTripOnTheInterpreter(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, tinyRoutesExercise(freePort()));
+		assertThat(runCli(workDir, program.getFileName().toString()))
+			.isEqualToNormalizingWhitespace(TINY_ROUTES_EXPECTED);
+	}
+
+	@Test
+	void tinyRoutesRoundTripOnJvm(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, tinyRoutesExercise(freePort()));
+		runCli(workDir, program.getFileName().toString(), "-o", "TinyRoutesProbe.class");
+		assertThat(runSuccessfully(workDir, JAVA, "-cp", CLASSPATH + java.io.File.pathSeparator + workDir,
+				"TinyRoutesProbe"))
+			.isEqualToNormalizingWhitespace(TINY_ROUTES_EXPECTED);
+	}
+
+	@Test
+	void tinyRoutesServesOnWasmComponentUnderWasmtimeServe(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, TINY_ROUTES_COMPONENT_EXERCISE);
+		runCli(workDir, program.getFileName().toString(), "-o", "tiny-routes.wasm", "--component");
+		byte[] component = Files.readAllBytes(workDir.resolve("tiny-routes.wasm"));
+		try (GenericContainer<?> serve = new GenericContainer<>(WasmtimeSupport.IMAGE)
+			.withImagePullPolicy(PullPolicy.alwaysPull())
+			.withCopyToContainer(Transferable.of(component), "/tiny-routes.wasm")
+			.withExposedPorts(8080)
+			.withCommand("wasmtime", "serve", "-W", "gc=y", "-W", "exceptions=y", "-S", "cli=y", "-S", "tcp=y", "-S",
+					"inherit-network=y", "--addr", "0.0.0.0:8080", "/tiny-routes.wasm")
+			.waitingFor(Wait.forListeningPort())) {
+			serve.start();
+			String base = "http://" + serve.getHost() + ":" + serve.getMappedPort(8080);
+			HttpClient client = HttpClient.newHttpClient();
+			HttpResponse<String> hello = client.send(HttpRequest.newBuilder(URI.create(base + "/hello")).GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(hello.statusCode()).isEqualTo(200);
+			assertThat(hello.body()).isEqualTo("hello world");
+			assertThat(hello.headers().firstValue("set-cookie")).contains("sid=42; Path=/");
+			HttpResponse<String> user = client.send(
+					HttpRequest.newBuilder(URI.create(base + "/users/42")).GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(user.body()).isEqualTo("user 42");
+			HttpResponse<String> echo = client.send(HttpRequest.newBuilder(URI.create(base + "/echo"))
+				.POST(HttpRequest.BodyPublishers.ofString("abc"))
+				.build(), HttpResponse.BodyHandlers.ofString());
+			assertThat(echo.body()).isEqualTo("echo:abc");
+			HttpResponse<String> cookies = client.send(
+					HttpRequest.newBuilder(URI.create(base + "/cookies")).header("cookie", "a=1; b=2").GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(cookies.body()).isEqualTo("a=1,b=2");
+			HttpResponse<String> missing = client.send(HttpRequest.newBuilder(URI.create(base + "/zzz")).GET().build(),
+					HttpResponse.BodyHandlers.ofString());
+			assertThat(missing.statusCode()).isEqualTo(404);
 		}
 	}
 

@@ -368,6 +368,21 @@ public final class FreeVarAnalyzer {
 						case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED ->
 							collectFreeVars(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), boundVars,
 									knownFunctions, globals, specialNames, freeVars);
+						// The uiop binding trio BINDS the variables of its binding list,
+						// which the default walk would read as call forms ((a (f)) as a
+						// call to a); with-deprecation's level list would read the same
+						// way.
+						case LispNames.UIOP_IF_LET_QUALIFIED -> collectFreeVars(LispMacroExpander.expandUiopIfLet(cons),
+								boundVars, knownFunctions, globals, specialNames, freeVars);
+						case LispNames.UIOP_WHEN_LET_QUALIFIED ->
+							collectFreeVars(LispMacroExpander.expandUiopWhenLet(cons), boundVars, knownFunctions,
+									globals, specialNames, freeVars);
+						case LispNames.UIOP_WHEN_LET_STAR_QUALIFIED ->
+							collectFreeVars(LispMacroExpander.expandUiopWhenLetStar(cons), boundVars, knownFunctions,
+									globals, specialNames, freeVars);
+						case LispNames.UIOP_WITH_DEPRECATION_QUALIFIED ->
+							collectFreeVars(LispMacroExpander.expandUiopWithDeprecation(cons), boundVars,
+									knownFunctions, globals, specialNames, freeVars);
 						// with-mutex / with-lock-held is the OPPOSITE shape of the with-*
 						// stream macros: its one-element spec holds a VALUE, not a
 						// binding, so the default walk would read (lock) as a call and
@@ -548,6 +563,20 @@ public final class FreeVarAnalyzer {
 						// reason as in collectFreeVars).
 						case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED ->
 							collectCapturedVars(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), localVars,
+									knownFunctions, captured, insideLambda);
+						// The uiop binding trio binds its binding list, with-deprecation
+						// carries a level list (same reason as in collectFreeVars).
+						case LispNames.UIOP_IF_LET_QUALIFIED ->
+							collectCapturedVars(LispMacroExpander.expandUiopIfLet(cons), localVars, knownFunctions,
+									captured, insideLambda);
+						case LispNames.UIOP_WHEN_LET_QUALIFIED ->
+							collectCapturedVars(LispMacroExpander.expandUiopWhenLet(cons), localVars, knownFunctions,
+									captured, insideLambda);
+						case LispNames.UIOP_WHEN_LET_STAR_QUALIFIED ->
+							collectCapturedVars(LispMacroExpander.expandUiopWhenLetStar(cons), localVars,
+									knownFunctions, captured, insideLambda);
+						case LispNames.UIOP_WITH_DEPRECATION_QUALIFIED ->
+							collectCapturedVars(LispMacroExpander.expandUiopWithDeprecation(cons), localVars,
 									knownFunctions, captured, insideLambda);
 						// The lock spec holds a VALUE, not a binding (same reason as in
 						// collectFreeVars).

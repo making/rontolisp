@@ -527,6 +527,11 @@ public final class PackageRegistry {
 				// with-temporary-file one is a macro, expanded like usocket:with-*).
 				LispNames.ENSURE_DIRECTORY_PATHNAME, LispNames.DEFAULT_TEMPORARY_DIRECTORY,
 				LispNames.DELETE_FILE_IF_EXISTS, LispNames.WITH_TEMPORARY_FILE,
+				// Four more MACROS with real expansions (same pattern): the binding trio
+				// UIOP re-exports from its own alexandria-style utilities, and
+				// with-deprecation, which wraps a library's deprecated defuns and is a
+				// LOAD-time failure when it is merely absent.
+				LispNames.IF_LET, LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION,
 				// define-package is external in real uiop too; a literal top-level call
 				// is consumed by PackageResolver.resolve like defpackage (dbi's package
 				// headers spell it uiop:define-package).

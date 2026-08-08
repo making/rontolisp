@@ -2183,13 +2183,28 @@ public final class LispMacroExpander {
 			if (v instanceof LispSymbol s && EPILOGUE_MARKER.name().equals(s.name())) {
 				return true;
 			}
-			return v instanceof LispCons c && c.car() instanceof LispSymbol head && head.name().equals("LOOP-FINISH");
+			return v instanceof LispCons c && c.car() instanceof LispSymbol head && namesMember(head, "LOOP-FINISH");
 		}
 
 		/** Substitutes the anaphoric {@code it} symbol with the given variable. */
 		private static LispVal substituteIt(LispVal tree, LispSymbol itVar) {
 			return substituteTree(tree, IT_SKIP_HEADS,
-					v -> (v instanceof LispSymbol s && s.name().equals("IT")) ? itVar : null);
+					v -> (v instanceof LispSymbol s && namesMember(s, "IT")) ? itVar : null);
+		}
+
+		/**
+		 * Whether a symbol names the given loop anaphor/marker MEMBER, in whatever
+		 * package the loop was read in. The expander runs after {@code PackageResolver},
+		 * so a loop read outside {@code cl-user} carries the qualifier
+		 * ({@code tiny-routes::it}, {@code zz::loop-finish}) and a raw-name compare would
+		 * only ever match the {@code cl-user} spelling. Neither name exists in
+		 * {@code cl}, so there is nothing for a package-blind match to collide with.
+		 * Keywords never match: {@code :it} is a datum, not the anaphor.
+		 */
+		private static boolean namesMember(LispSymbol sym, String member) {
+			String name = sym.name();
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+			return member.equals(qn != null ? qn.member() : name);
 		}
 
 		/**
@@ -7522,6 +7537,160 @@ public final class LispMacroExpander {
 		LispVal innerLet = listToCons(List.of(new LispSymbol(LispNames.LET),
 				new LispCons(listToCons(List.of(result, bodyExpr)), LispNil.INSTANCE), cleanupExpr, result));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, innerLet));
+	}
+
+	/**
+	 * Normalizes a UIOP binding-macro's binding specification into a list of
+	 * {@code (var form)} pairs. UIOP (and alexandria, whose macros these are) accept a
+	 * single un-nested binding -- {@code (if-let (x (f))...)} -- and detect it exactly
+	 * this way: a binding list whose car is a SYMBOL is itself the one binding. A binding
+	 * may also be a bare variable, which binds it to nil like {@code let} does.
+	 * @param spec the binding specification form
+	 * @param who the qualified macro name, for error messages
+	 * @return the normalized {@code (var form)} pairs
+	 */
+	private static List<LispVal> uiopLetBindings(LispVal spec, String who) {
+		if (spec instanceof LispNil) {
+			return List.of();
+		}
+		if (!(spec instanceof LispCons bindings) || !bindings.isProperList()) {
+			throw new UnsupportedOperationException(who + " expects a binding list, got: " + spec.print());
+		}
+		List<LispVal> raw = bindings.car() instanceof LispSymbol ? List.of(bindings) : bindings.toList();
+		List<LispVal> out = new java.util.ArrayList<>(raw.size());
+		for (LispVal binding : raw) {
+			if (binding instanceof LispSymbol) {
+				out.add(listToCons(List.of(binding, LispNil.INSTANCE)));
+				continue;
+			}
+			if (!(binding instanceof LispCons pair) || !(pair.car() instanceof LispSymbol)) {
+				throw new UnsupportedOperationException(who + " expects (var form) bindings, got: " + binding.print());
+			}
+			LispVal form = pair.cdr() instanceof LispCons rest ? rest.car() : LispNil.INSTANCE;
+			out.add(listToCons(List.of(pair.car(), form)));
+		}
+		return out;
+	}
+
+	/** The variable of a binding {@link #uiopLetBindings} normalized. */
+	private static LispVal uiopBindingVar(LispVal binding) {
+		return ((LispCons) binding).car();
+	}
+
+	/**
+	 * The "every variable came out non-nil" test over normalized bindings: {@code (and v1
+	 * v2 ...)}, the single variable alone, and {@code t} for no bindings at all (which is
+	 * what {@code (and)} answers).
+	 */
+	private static LispVal uiopAllBoundTest(List<LispVal> bindings) {
+		if (bindings.isEmpty()) {
+			return LispTrue.INSTANCE;
+		}
+		if (bindings.size() == 1) {
+			return uiopBindingVar(bindings.get(0));
+		}
+		List<LispVal> test = new java.util.ArrayList<>(bindings.size() + 1);
+		test.add(new LispSymbol(LispNames.AND));
+		bindings.forEach(binding -> test.add(uiopBindingVar(binding)));
+		return listToCons(test);
+	}
+
+	private static LispVal uiopBindingList(List<LispVal> bindings) {
+		return bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings);
+	}
+
+	/**
+	 * Expands {@code (uiop:if-let bindings then [else])} -- UIOP's own copy of
+	 * alexandria's -- into a parallel {@code let} whose body tests every bound variable:
+	 *
+	 * <pre>
+	 * (uiop:if-let ((a X) (b Y)) then else) -&gt;
+	 *   (let ((a X) (b Y)) (if (and a b) then else))
+	 * </pre>
+	 *
+	 * The bindings are established whichever branch runs (that is what makes it a
+	 * {@code let} and not a chain of tests), and the single un-nested spelling
+	 * {@code (if-let (a X) ...)} is accepted -- see {@link #uiopLetBindings}.
+	 * @param cons the if-let expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopIfLet(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() > 4) {
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_IF_LET_QUALIFIED + " expects (if-let bindings then [else]): " + cons.print());
+		}
+		List<LispVal> bindings = uiopLetBindings(parts.get(1), LispNames.UIOP_IF_LET_QUALIFIED);
+		LispVal elseForm = parts.size() == 4 ? parts.get(3) : LispNil.INSTANCE;
+		LispVal body = listToCons(
+				List.of(new LispSymbol(LispNames.IF), uiopAllBoundTest(bindings), parts.get(2), elseForm));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), uiopBindingList(bindings), body));
+	}
+
+	/**
+	 * Expands {@code (uiop:when-let bindings body...)}: {@link #expandUiopIfLet} with an
+	 * implicit {@code progn} body and no else branch.
+	 * @param cons the when-let expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWhenLet(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_WHEN_LET_QUALIFIED + " expects (when-let bindings body...): " + cons.print());
+		}
+		List<LispVal> bindings = uiopLetBindings(parts.get(1), LispNames.UIOP_WHEN_LET_QUALIFIED);
+		LispVal body = listToCons(List.of(new LispSymbol(LispNames.IF), uiopAllBoundTest(bindings),
+				prognOrNil(parts.subList(2, parts.size())), LispNil.INSTANCE));
+		return listToCons(List.of(new LispSymbol(LispNames.LET), uiopBindingList(bindings), body));
+	}
+
+	/**
+	 * Expands {@code (uiop:when-let* bindings body...)}, the SEQUENTIAL {@code when-let}:
+	 * each binding's form sees the ones before it, and the first nil binding
+	 * short-circuits without evaluating the rest.
+	 *
+	 * <pre>
+	 * (uiop:when-let* ((a X) (b Y)) body...) -&gt;
+	 *   (let ((a X)) (if a (let ((b Y)) (if b (progn body...) nil)) nil))
+	 * </pre>
+	 * @param cons the when-let* expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWhenLetStar(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new UnsupportedOperationException(
+					LispNames.UIOP_WHEN_LET_STAR_QUALIFIED + " expects (when-let* bindings body...): " + cons.print());
+		}
+		List<LispVal> bindings = uiopLetBindings(parts.get(1), LispNames.UIOP_WHEN_LET_STAR_QUALIFIED);
+		LispVal expansion = prognOrNil(parts.subList(2, parts.size()));
+		for (int i = bindings.size() - 1; i >= 0; i--) {
+			LispVal binding = bindings.get(i);
+			LispVal guarded = listToCons(
+					List.of(new LispSymbol(LispNames.IF), uiopBindingVar(binding), expansion, LispNil.INSTANCE));
+			expansion = listToCons(
+					List.of(new LispSymbol(LispNames.LET), new LispCons(binding, LispNil.INSTANCE), guarded));
+		}
+		return expansion;
+	}
+
+	/**
+	 * Expands {@code (uiop:with-deprecation (level) definitions...)} into
+	 * {@code (progn definitions...)}. Upstream marks the definitions it wraps as
+	 * deprecated so that a later caller gets a style warning; rontolisp has no
+	 * deprecation-warning machinery and no compile-time warning channel to route one
+	 * through, so the honest lowering establishes every definition exactly as written and
+	 * ignores the level form. Documented as such -- a silently dropped diagnostic that is
+	 * not written down reads as a bug later. The {@code progn} is what
+	 * {@link #flattenTopLevel} splices, so a wrapped top-level {@code defun} stays a
+	 * top-level definition on the compile paths.
+	 * @param cons the with-deprecation expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithDeprecation(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return prognOrNil(parts.subList(Math.min(2, parts.size()), parts.size()));
 	}
 
 	/**
@@ -25975,7 +26144,9 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
-						|| (LispNames.EVAL_WHEN.equals(sym.name()) && cons.toList().size() >= 2));
+						|| ((LispNames.EVAL_WHEN.equals(sym.name())
+								|| LispNames.UIOP_WITH_DEPRECATION_QUALIFIED.equals(sym.name()))
+								&& cons.toList().size() >= 2));
 	}
 
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
@@ -25989,7 +26160,12 @@ public final class LispMacroExpander {
 				}
 				return;
 			}
-			if (LispNames.EVAL_WHEN.equals(sym.name())) {
+			// eval-when drops its situation list; uiop:with-deprecation drops its level
+			// list the same way -- it wraps a library's deprecated top-level defuns
+			// (tiny-routes' response.lisp does, inside an eval-when), and burying those
+			// in an expression would stop them being definitions at all.
+			if (LispNames.EVAL_WHEN.equals(sym.name())
+					|| LispNames.UIOP_WITH_DEPRECATION_QUALIFIED.equals(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
 					for (int i = 2; i < parts.size(); i++) {

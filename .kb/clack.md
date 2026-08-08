@@ -7,7 +7,11 @@ the WASM `--component` backend. Preview 1 has no incoming TCP by design
 (`.kb/tcp-sockets.md`): the program COMPILES and `clackup` signals the standard
 `http-handler` message at CALL time (see the policy note below). Pinned by
 `ClackE2eTest` (opt-in `RONTOLISP_CLACK_E2E=1`: Docker for the pinned wasmtime,
-network for the first quickload).
+network for the first quickload) — which runs its three legs twice: once over a
+bare handler lambda, and once over a real ROUTING application (tiny-routes plus
+its cookie middleware, both quickloaded unpatched; `.kb/asdf.md`), because "one
+handler function" is not what an application looks like and the routes are read
+inside the application's own package.
 
 ## The handler backend is a built-in shim system, found LATE-BOUND by name
 
@@ -113,8 +117,26 @@ extract the static handler name for the `%serve-handle` export wiring, and
 lower the call site to nil: instantiation runs the top-level program (clackup
 stores `*app*`, `run` returns at once), then requests arrive through the
 exported `handle`. The generated `%serve-dispatch` bridge + `wasm-export` are
-appended AFTER the program so the package-qualified handler name resolves
-against the shim's own (spliced) defpackage. Run flags: `wasmtime serve -W
+appended AFTER the program so the handler NAME resolves where the directive was
+written — against the shim's own (spliced) defpackage for the qualified `'%app`,
+and against the current package for a user's own unqualified top-level
+`(rontolisp:http-handler 'my-handler)`.
+
+That position is also why the three names the bridge SYNTHESIZES —
+`%serve-dispatch`, `%serve-request-body` and the exported `%serve-handle` — carry
+an explicit `cl-user::` qualifier. The program's last `in-package` is still in
+effect at the append point, so unqualified they came out as
+`MY-APP::%SERVE-DISPATCH` while http.lisp — spliced at the HEAD, where `cl-user`
+is current — calls the unqualified ones, and the `--component` compile of any
+application that ends inside its own package died with `Cannot compile:
+%SERVE-DISPATCH`. `cl-user::` normalizes to the bare name in every package, so
+the two spellings meet whatever the program did (found 2026-08-08 by the
+tiny-routes serve leg, whose routes are read in `:tr-app`; pinned by
+`ClackE2eTest.tinyRoutesServesOnWasmComponentUnderWasmtimeServe`). The handler
+reference deliberately stays unqualified — qualifying it would break the
+user-directive case above.
+
+Run flags: `wasmtime serve -W
 gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y` — the socket
 flags because the spliced usocket shim (a clack dependency) wit-imports
 wasi:sockets. `:use-thread` is effectively nil (no `:thread-support` on WASM)

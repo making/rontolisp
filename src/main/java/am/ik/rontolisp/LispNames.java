@@ -6140,6 +6140,53 @@ public final class LispNames {
 	public static final String GET_PATHNAME_DEFAULTS = "GET-PATHNAME-DEFAULTS";
 
 	/**
+	 * {@code uiop:if-let bindings then [else]} -- real UIOP's own copy of alexandria's:
+	 * binds like {@code let} (in parallel) and takes the {@code then} branch only when
+	 * EVERY variable came out non-nil. A single un-nested binding
+	 * ({@code (if-let (x form) ...)}) is accepted too, exactly as upstream, which detects
+	 * it by the binding list's car being a symbol. A built-in {@code LispMacroExpander}
+	 * expansion, like {@link #WITH_TEMPORARY_FILE}.
+	 */
+	public static final String IF_LET = "IF-LET";
+
+	/** The canonical package-qualified spelling of {@link #IF_LET}. */
+	public static final String UIOP_IF_LET_QUALIFIED = UIOP_PKG + ":" + IF_LET;
+
+	/**
+	 * {@code uiop:when-let bindings body...} -- {@link #IF_LET} with an implicit
+	 * {@code progn} body and no else branch.
+	 */
+	public static final String WHEN_LET = "WHEN-LET";
+
+	/** The canonical package-qualified spelling of {@link #WHEN_LET}. */
+	public static final String UIOP_WHEN_LET_QUALIFIED = UIOP_PKG + ":" + WHEN_LET;
+
+	/**
+	 * {@code uiop:when-let* bindings body...} -- the sequential {@link #WHEN_LET}: each
+	 * binding's form sees the ones before it, and the first nil binding short-circuits
+	 * the whole form to nil without evaluating the rest.
+	 */
+	public static final String WHEN_LET_STAR = "WHEN-LET*";
+
+	/** The canonical package-qualified spelling of {@link #WHEN_LET_STAR}. */
+	public static final String UIOP_WHEN_LET_STAR_QUALIFIED = UIOP_PKG + ":" + WHEN_LET_STAR;
+
+	/**
+	 * {@code uiop:with-deprecation (level) definitions...} -- upstream marks the
+	 * definitions it wraps as deprecated so a later caller gets a style warning.
+	 * rontolisp has no deprecation-warning machinery and no compile-time warning channel
+	 * to route one through, so the honest lowering is {@code (progn definitions...)}:
+	 * every definition is established exactly as written and the level form is ignored.
+	 * It wraps top-level {@code defun}s in the wild, so the expansion also splices at top
+	 * level ({@code LispMacroExpander.flattenTopLevel}) rather than burying them in an
+	 * expression.
+	 */
+	public static final String WITH_DEPRECATION = "WITH-DEPRECATION";
+
+	/** The canonical package-qualified spelling of {@link #WITH_DEPRECATION}. */
+	public static final String UIOP_WITH_DEPRECATION_QUALIFIED = UIOP_PKG + ":" + WITH_DEPRECATION;
+
+	/**
 	 * {@code uiop:symbol-call package name &rest args} -- real UIOP's late-binding call:
 	 * look the name up in the package at RUN time and apply it. Not a stub on the
 	 * interpreter (a global function in {@code LispEvaluator} over the package resolver's

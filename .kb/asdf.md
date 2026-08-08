@@ -187,6 +187,59 @@ What alexandria still does NOT get (the list is user-visible in `doc/*/guides/as
 
 Residue, both dead in esrap and warned about at compile time: `set` and `break` are undefined (a swank-hook branch and the rule-tracing debugger entry). `char-name` answers nil for a graphic character, which is CL; SBCL's Unicode NAME (`DIGIT_ZERO`) is an extension, and it is the only difference between esrap's parse-error report here and on SBCL.
 
+**tiny-routes (2026-08-08)**: Johnny Ruiz's Clack-targeting routing library
+(BSD 3-Clause, tiny-routes-20241012-git) loads verbatim via
+`(ql:quickload "tiny-routes")` / `asdf:load-system` over cl-ppcre and the uiop
+shim, and routes on ALL FOUR backends -- routing is pure computation, so
+Preview 1 runs it; only SERVING the routes needs `clackup` (`.kb/clack.md`).
+Pinned by **`TinyRoutesE2eTest`** (vendored under `src/test/resources/tiny-routes`,
+`extraSystemPath` = the vendored cl-ppcre; the route macros, `define-routes`
+dispatch, `path-parameter`, the method matcher, the regex template,
+`wrap-request-body` over a `:raw-body` stream, `wrap-query-parameters`, the
+response wrappers and the six deprecated constructors) plus the three tiny-routes
+legs of `ClackE2eTest`, which serve the same routes over real HTTP and are the
+only coverage of the LIVE `ql:quickload` and of the companion system
+`tiny-routes-middleware-cookie` (cl-cookie / quri / local-time / proc-parse --
+more than the hermetic driver vendors). NOTHING tiny-routes-specific landed; the
+three general gaps it found did, each its own item and each a hard failure rather
+than a wrong answer:
+
+1. **The LOOP anaphoric `it` was unbound in any package but `cl-user`**
+   (`LispMacroExpander.LoopExpander`): the substitution matched the symbol by RAW
+   name, and the expander runs AFTER `PackageResolver`, so only the unqualified
+   `cl-user` spelling ever hit. `tiny:routes` -- the dispatch function every
+   application goes through -- is `(loop ... when (funcall handler request) return
+   it)` inside `(in-package :tiny-routes)`. Both compile paths failed at COMPILE
+   time, so a cold `it` branch refused to compile. Matching the MEMBER
+   (`splitQualified`) in any package is the rule: no `cl:it` exists to collide
+   with. `(loop-finish)` carried the identical raw-name compare and was fixed with
+   the same helper.
+2. **`uiop:if-let` / `when-let` / `when-let*` / `with-deprecation`** joined the
+   uiop externals as built-in macro expansions (the `with-temporary-file` pattern
+   above): `tiny-routes.lisp` imports `if-let`, and `response.lisp` wraps its six
+   deprecated constructors in `with-deprecation`, which was a LOAD-time failure
+   ("not external in the UIOP package"). `with-deprecation` lowers to
+   `(progn definitions...)` -- rontolisp has no deprecation-warning machinery and
+   no compile-time warning channel to route one through, so the level form is
+   ignored, and that is stated in its doc page rather than left silent. It also
+   joined `flattenTopLevel`'s splice forms beside `eval-when`: it wraps top-level
+   `defun`s in the wild, and burying those in an expression would stop Pass 1
+   collecting them.
+3. **A serve component whose program ends in a non-`cl-user` package**: the
+   handler bridge `eval/HttpLibrary` synthesizes is appended AFTER the program (so
+   the handler NAME resolves where the directive was written), which left
+   `%serve-dispatch` / `%serve-request-body` / `%serve-handle` resolving in the
+   application's own package while http.lisp -- spliced at the head -- calls the
+   unqualified ones. `(in-package :demo)` before `clack:clackup` therefore failed
+   the `--component` compile with "Cannot compile: %SERVE-DISPATCH". The three
+   synthesized names now carry an explicit `cl-user::` qualifier, which normalizes
+   to the bare name in every package; the handler reference is deliberately left
+   unqualified. See `.kb/clack.md`.
+
+The test system is NOT in scope: `tiny-routes/test` depends on fiveam, whose own
+dependency `net.didierverna.asdf-flv` stops on the unsupported `:long-name`
+defsystem option, and how much of fiveam follows is unmeasured.
+
 Docs: `doc/*/guides/asdf-systems.md` + `reference/functions/asdf-{defsystem,load-system}.md` (+ catalog/nav/packages.md); phased roadmap in `.todo/054-asdf-support.md`.
 
 ## Built-in systems have `:depends-on` edges of their own (todo-231)

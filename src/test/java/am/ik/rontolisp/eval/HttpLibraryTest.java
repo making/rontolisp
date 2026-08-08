@@ -73,8 +73,11 @@ class HttpLibraryTest {
 				(my.pkg:run (lambda (env) env) 5000)
 				""");
 		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, true);
-		// The bridge defun dispatches to the extracted handler name.
-		assertThat(definesDefun(out, "%SERVE-DISPATCH")).isTrue();
+		// The bridge defun dispatches to the extracted handler name. Its own name is
+		// synthesized with an explicit cl-user qualifier -- these forms are appended
+		// after the program, where the program's last in-package is still current, and
+		// cl-user:: is what normalizes to the bare name http.lisp calls (.kb/clack.md).
+		assertThat(definesDefun(out, "CL-USER::%SERVE-DISPATCH")).isTrue();
 		String printed = printAll(out);
 		assertThat(printed).contains("(MY.PKG::%BRIDGE %SERVE-REQ)");
 		// The nested call site itself is gone (only the bridge references the
@@ -99,7 +102,10 @@ class HttpLibraryTest {
 				(rontolisp:http-handler 'my-handler 8080)
 				""");
 		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, true);
-		assertThat(definesDefun(out, "%SERVE-DISPATCH")).isTrue();
+		assertThat(definesDefun(out, "CL-USER::%SERVE-DISPATCH")).isTrue();
+		// The handler reference stays UNqualified: an unqualified name in a user's own
+		// top-level directive has to resolve in the package that directive was written
+		// in, which is exactly what appending after the program gives it.
 		assertThat(printAll(out)).contains("(MY-HANDLER %SERVE-REQ)");
 	}
 

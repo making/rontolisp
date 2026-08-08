@@ -165,7 +165,15 @@ public final class HttpLibrary {
 			// the task-return built-in, so the core function returns nothing). Appended
 			// AFTER the program so a package-qualified nested handler name (the
 			// clack-handler-rontolisp shim's %app) resolves against the shim's own
-			// defpackage, which the program splices ahead of it.
+			// defpackage, which the program splices ahead of it -- and so that an
+			// UNqualified handler name from a user's own top-level directive resolves in
+			// the package that directive was written in.
+			// That is also why the three synthesized names carry an explicit cl-user
+			// qualifier: the program's last in-package is still in effect here, so a
+			// bare %serve-dispatch would come out as MY-APP::%SERVE-DISPATCH while
+			// http.lisp -- spliced at the head, where cl-user is current -- calls the
+			// unqualified one. cl-user:: normalizes to the bare name in every package,
+			// so the two spellings meet whatever the program did.
 			// %serve-request-body is the directive's :raw-body mode, frozen at compile
 			// time: the default passes rontolisp's asynchronous request stream through
 			// untouched (nothing is buffered, the body streams from the host), while
@@ -175,16 +183,16 @@ public final class HttpLibrary {
 			// free of http-server.lisp's buffered-body machinery entirely (the
 			// HttpServerLibrary splice filters on the same mode).
 			String requestBody = bufferBody ? """
-					(rontolisp:async-defun %serve-request-body (%serve-body-stream)
+					(rontolisp:async-defun cl-user::%serve-request-body (%serve-body-stream)
 					  (let ((%serve-body-drained (rontolisp:await (rontolisp::%http-drain %serve-body-stream))))
 					    (rontolisp::%http-body-stream %serve-body-drained)))
 					""" : """
-					(rontolisp:async-defun %serve-request-body (%serve-body-stream) %serve-body-stream)
+					(rontolisp:async-defun cl-user::%serve-request-body (%serve-body-stream) %serve-body-stream)
 					""";
 			out.addAll(LispReader.readAllFromString("""
-					(defun %%serve-dispatch (%%serve-req) (%s %%serve-req))
+					(defun cl-user::%%serve-dispatch (%%serve-req) (%s %%serve-req))
 					%s
-					(rontolisp:wasm-export '%%serve-handle :as "handle" :params '(:int) :returns :void)
+					(rontolisp:wasm-export 'cl-user::%%serve-handle :as "handle" :params '(:int) :returns :void)
 					""".formatted(handler, requestBody), Features.INTERPRETER));
 		}
 		return out;

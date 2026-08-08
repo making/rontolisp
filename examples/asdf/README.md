@@ -7,7 +7,7 @@ WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
 tests pin (`AlexandriaE2eTest` / `SplitSequenceE2eTest` / `ParseNumberE2eTest`
 / `ClUtilitiesE2eTest` / `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest`
 / `JzonE2eTest` / `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest`
-/ `Uax15E2eTest`).
+/ `Uax15E2eTest` / `TinyRoutesE2eTest`).
 jzon's three numeric leaf components (the eisel-lemire float reader and
 Schubfach float printer) are replaced at load time by built-in shims over
 rontolisp's native float arithmetic, so float text takes rontolisp's
@@ -32,6 +32,7 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
 | [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
 | [`uax-15-demo.lisp`](uax-15-demo.lisp) | uax-15 v0.1.3 (MIT) | <https://github.com/sabracrolleton/uax-15> |
+| [`tiny-routes-demo.lisp`](tiny-routes-demo.lisp) | tiny-routes v0.1.1 (BSD 3-Clause) | <https://github.com/jeko2000/tiny-routes> |
 | [`clack-hello.lisp`](clack-hello.lisp) | clack v2.1.0 + lack (MIT), served by the built-in `clack-handler-rontolisp` backend; loads via `ql:quickload` (network on the first run), serves HTTP on the interpreter / JVM / WASM component | <https://github.com/fukamachi/clack> |
 
 ## Where the libraries come from
@@ -51,8 +52,9 @@ the demos run out of the box from the repository root:
 - `src/test/resources/cl-ppcre/`
 - `src/test/resources/ironclad/` (the SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice only; its executable
   `ironclad.asd` is kept for provenance but a bundled replacement is what loads)
-- `src/test/resources/uax-15/` (the only demo whose library depends on others, so its
-  `--system-path` also needs `src/test/resources/split-sequence` and
+- `src/test/resources/uax-15/` (its `--system-path` also needs
+  `src/test/resources/split-sequence` and `src/test/resources/cl-ppcre`)
+- `src/test/resources/tiny-routes/` (its `--system-path` also needs
   `src/test/resources/cl-ppcre`)
 
 Alternatively, download the same versions from upstream and point
@@ -93,12 +95,15 @@ rontolisp examples/asdf/split-sequence-demo.lisp -o demo-comp.wasm --component -
 ```
 
 `--system-path` takes ONE value, a `:`-joined list of directories, so a library
-with dependencies of its own names them all in the same argument. uax-15 is the
-only demo here that needs it:
+with dependencies of its own names them all in the same argument. uax-15 and
+tiny-routes are the demos here that need it:
 
 ```bash
 SYS=src/test/resources/uax-15:src/test/resources/split-sequence:src/test/resources/cl-ppcre
 rontolisp examples/asdf/uax-15-demo.lisp --system-path $SYS
+
+SYS=src/test/resources/tiny-routes:src/test/resources/cl-ppcre
+rontolisp examples/asdf/tiny-routes-demo.lisp --system-path $SYS
 ```
 
 The compile path splices the system's component files in at compile time
@@ -107,7 +112,8 @@ is self-contained -- running it needs no library files.
 
 A demo that uses `handler-case`/`unwind-protect` compiles in EH mode, so BOTH
 wasm run commands need `-W exceptions=y` (wasmtime 37+) -- `alexandria-demo.lisp`
-is one:
+is one, and so is `tiny-routes-demo.lisp` (`with-input-from-string` expands to an
+`unwind-protect`):
 
 ```bash
 SYS=src/test/resources/alexandria
@@ -239,6 +245,21 @@ null
 230
 (1231 (832 NIL) (71984 T))
 (T T NIL T)
+```
+
+`tiny-routes-demo.lisp`:
+
+```console
+200 hello world NIL
+200 user 42 NIL
+200 q=lisp NIL
+200 pong NIL
+201 made (LOCATION /put)
+404 nope NIL
+404 nope NIL
+200 echo:abc NIL
+200 y (CONTENT-TYPE text/plain)
+202 x NIL
 ```
 
 ## What can be loaded today

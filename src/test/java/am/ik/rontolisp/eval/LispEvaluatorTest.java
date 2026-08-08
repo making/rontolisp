@@ -2618,6 +2618,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLoopAnaphoricItOutsideClUser() {
+		// The anaphor is whatever symbol named IT the loop was read with: read outside
+		// cl-user it arrives package-qualified (ZZ::IT), and every selectable-clause
+		// shape must still see it.
+		assertThat(evalMulti("""
+				(defpackage :zzit (:use :cl))
+				(in-package :zzit)
+				(list (loop for x in '(nil nil 3 4) when x return it)
+				      (loop for x in '(1 nil 3 nil 5) when x collect it)
+				      (let ((acc nil)) (loop for x in '(1 nil 2) when x do (push it acc)) (nreverse acc))
+				      (loop for x in '(1 nil 3) when x collect it else collect :none)
+				      (loop for x in '(4 nil 6) when x when (* x 10) collect it))
+				""").print()).isEqualTo("(3 (1 3 5) (1 2) (1 :NONE 3) (40 60))");
+		// A nested loop's conditionals still own their it in a foreign package too.
+		assertThat(evalMulti("""
+				(defpackage :zzit2 (:use :cl))
+				(in-package :zzit2)
+				(loop for x in '(1 nil) when x collect (loop for y in '(5 nil 6) when y collect it))
+				""").print()).isEqualTo("((5 6))");
+		// (loop-finish) is read the same way and must terminate normally there too.
+		assertThat(evalMulti("""
+				(defpackage :zzit3 (:use :cl))
+				(in-package :zzit3)
+				(loop for i from 1 collect i into xs do (when (>= i 3) (loop-finish)) finally (return (length xs)))
+				""")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
 	void evalLoopFinish() {
 		assertThat(eval("(loop for i from 1 do (when (> i 3) (loop-finish)) collect i)").print()).isEqualTo("(1 2 3)");
 		// Unlike return, loop-finish runs finally and yields the loop result.
@@ -11890,6 +11918,32 @@ class LispEvaluatorTest {
 				                    p)))
 				        (and (probe-file gone) t)))
 				""".formatted(dir, dir)).print()).isEqualTo("(T NIL)");
+	}
+
+	@Test
+	void evalUiopBindingMacrosAndWithDeprecation() {
+		// if-let binds like let and takes the then branch only when EVERY variable came
+		// out non-nil; a single un-nested binding is accepted; when-let* is sequential
+		// and short-circuits before evaluating the rest. with-deprecation establishes
+		// its definitions verbatim (the level form is ignored -- rontolisp has no
+		// deprecation-warning channel) both at top level and inside eval-when.
+		assertThat(evalMulti("""
+				(uiop:with-deprecation (:style-warning)
+				  (defun dep-a (x) (* x 2))
+				  (defun dep-b (x) (+ x 1)))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (uiop:with-deprecation (:style-warning)
+				    (defun dep-c (x) (- x 1))))
+				(list (uiop:if-let ((a 1) (b 2)) (list a b) 0)
+				      (uiop:if-let ((a 1) (b nil)) (list a b) 0)
+				      (uiop:if-let (x (+ 1 2)) (* x 10) 0)
+				      (uiop:if-let ((a nil)) 7)
+				      (uiop:when-let ((a 3) (b 4)) (+ a b) (* a b))
+				      (uiop:when-let ((a 3) (b nil)) (+ a 1))
+				      (uiop:when-let* ((a 5) (b (* a 2))) (+ a b))
+				      (uiop:when-let* ((a nil) (b (error "no"))) b)
+				      (dep-a 3) (dep-b 3) (dep-c 3))
+				""").print()).isEqualTo("((1 2) 0 30 NIL 12 NIL 15 NIL 6 4 2)");
 	}
 
 	@Test
