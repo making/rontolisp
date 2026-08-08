@@ -2868,7 +2868,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// callable. See buildNameRegistrySet -- and note it runs BEFORE the registry
 		// blob is built, since building it interns every surviving name.
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, stringTable,
-				usesEval || usesRuntimeDesignator, anyNameResolvable(program, usesRead, usesLoad));
+				usesEval || usesRuntimeDesignator, anyNameResolvable(program, usesRead, usesLoad),
+				RuntimeNameProducers.anySymbolBuilder(program));
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
@@ -3061,6 +3062,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		final byte[] rdFlatBody;
 		final byte[] rdInferBody;
 		final byte[] rdMemeqBody;
+		// The intern table's base and row order also feed the tree shaker: each candidate
+		// string range is paired with its own (offset, length) row so a dead entry's row
+		// is cut with its bytes -- what lets an interning program offer per-entry
+		// droppable ranges at all (see the stringRanges computation below).
+		final List<StringTable.StringEntry> internRows;
+		final int internBase;
 		if (usesIntern) {
 			// Intern NIL/quote/function before snapshotting so the runtime resolves them
 			// to the same offsets the eval runtime uses (uppercase-canonical: the
@@ -3072,9 +3079,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			int nilOffset = stringTable.addString("NIL").offset();
 			int quoteOffset = stringTable.addString(LispNames.QUOTE).offset();
 			int functionOffset = stringTable.addString(LispNames.FUNCTION).offset();
-			java.util.Collection<StringTable.StringEntry> internEntries = stringTable.entries();
-			int internCount = internEntries.size();
-			int internBase = stringTable.appendBlob(buildInternBlob(internEntries));
+			List<StringTable.StringEntry> internEntries = new ArrayList<>(stringTable.entries());
+			// Rows sorted by string offset so a run of dead entries drops as ONE cut of
+			// rows next to one cut of bytes (cache order would interleave live and dead
+			// rows and fragment the re-emitted segment); _intern scans for the unique
+			// byte-equal row, so the order is free to choose.
+			internEntries.sort(java.util.Comparator.comparingInt(StringTable.StringEntry::offset));
+			internRows = internEntries;
+			int internCount = internRows.size();
+			internBase = stringTable.appendBlob(buildInternBlob(internRows));
 			internBody = WasmReadRuntimeBuilder.buildInternBody(internBase, internCount, hostArena);
 			if (usesRead) {
 				WasmReadRuntimeBuilder.ReadCtx readCtx = WasmReadRuntimeBuilder.buildReadCtx(stringTable, nilOffset,
@@ -3119,6 +3132,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		else {
+			internRows = List.of();
+			internBase = -1;
 			internBody = WasmReadRuntimeBuilder.buildInternStub();
 			readExprBody = WasmReadRuntimeBuilder.buildReadExprStub();
 			readListBody = WasmReadRuntimeBuilder.buildReadListStub();
@@ -4674,11 +4689,16 @@ public final class WasmLispCompiler implements LispCompiler {
 						new int[] { FUNC_CHAR_ALNUM_P + hostImports.size() }));
 		// A string interned by a body Pass 2a-2c emitted, and by nothing else, goes when
 		// that body does. One blob cites EVERY entry -- the runtime intern table, which
-		// _intern scans by offset -- so a program that interns at run time keeps the
-		// whole string blob and offers no candidates at all.
+		// _intern scans by offset -- so under usesIntern each candidate's (offset,
+		// length) row is offered as a range of its own, probed on the STRING interval:
+		// row and bytes fall together, and _intern skips the zeroed hole a cut row
+		// leaves (WasmReadRuntimeBuilder.emitInternScan). A candidate interned after the
+		// blob snapshot has no row and offers only its bytes -- such an entry is
+		// runtime-invisible by construction (T is interned BEFORE the snapshot for
+		// exactly that reason).
 		int stringDataSegIndex = upperFoldSegIndex - 1;
-		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = usesIntern || stringData.length == 0
-				? List.of() : stringTable.shakeableRanges(stringDataSegIndex, dataBase);
+		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = stringData.length == 0 ? List.of()
+				: stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows);
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
 				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges);
@@ -4825,10 +4845,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @param valueFuncIds the funcIds Pass 2 materialized as closures
 	 * @param stringTable the interned strings, BEFORE the registry adds its own names
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
+	 * @param symbolBuilders whether the program contains a symbol BUILDER
+	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
+	 * literal or keyword spelling become a designator, so only then are those probes
+	 * applied
 	 * @return the funcIds that need a ladder case (and a registry row)
 	 */
 	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds, StringTable stringTable,
-			boolean registryLive, boolean anyNameResolvable) {
+			boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time, so nothing is provably
@@ -4854,11 +4878,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				// full name are probed in that spelling too -- (intern "RUN" pkg) is how
 				// clack's handler protocol resolves its entry point. The ":member"
 				// spelling is a keyword designator (uiop:symbol-call :pkg :member).
+				// Both widened spellings need a symbol BUILDER to become designators, so
+				// they are probed only when one is present -- without it a defun whose
+				// member name collides with an unrelated literal stays call-only.
 				String member = name.substring(colon + 1);
-				if (stringTable.isInterned(name) || stringTable.isInterned("\"" + name + "\"")
+				if (stringTable.isInterned(name)
 						|| (q > 0 && stringTable.isInterned(name.substring(0, q) + name.substring(q + 1)))
 						|| (colon >= 0 && stringTable.isInterned(member))
-						|| stringTable.isInterned("\"" + member + "\"") || stringTable.isInterned(":" + member)) {
+						|| (symbolBuilders && (stringTable.isInterned("\"" + name + "\"")
+								|| stringTable.isInterned("\"" + member + "\"")
+								|| stringTable.isInterned(":" + member)))) {
 					dispatchable.add(i);
 				}
 			}
@@ -6270,21 +6299,43 @@ public final class WasmLispCompiler implements LispCompiler {
 		/**
 		 * The byte ranges (relative to the string data segment's own base) the tree
 		 * shaker may cut out when no surviving function body addresses them. Ordered by
-		 * offset so the emitted module stays deterministic.
+		 * offset so the emitted module stays deterministic. When the runtime intern table
+		 * exists ({@code internBase >= 0}), a candidate that has a row in it offers that
+		 * row as a second range PROBED ON THE STRING's interval, so the
+		 * {@code (offset, length)} pair is cut together with the bytes it describes --
+		 * the citation from data that used to disqualify every candidate of an interning
+		 * program, resolved structurally instead ({@code _intern} skips the zeroed hole a
+		 * cut row leaves).
 		 * @param segmentIndex the data segment index the string data occupies
 		 * @param dataBase the linear-memory address the segment starts at
-		 * @return the candidate ranges, ascending
+		 * @param internBase the runtime intern table's absolute base address, or -1 when
+		 * the program does not intern
+		 * @param internRows the intern table's rows in blob order (empty when absent)
+		 * @return the candidate ranges, each string range followed by its row range (the
+		 * shaker orders cuts itself; this order is fixed so the module is deterministic)
 		 */
-		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> shakeableRanges(int segmentIndex, int dataBase) {
+		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> shakeableRanges(int segmentIndex, int dataBase,
+				int internBase, List<StringEntry> internRows) {
 			List<StringEntry> entries = new ArrayList<>(this.shakeable.size());
 			for (String s : this.shakeable) {
 				entries.add(this.cache.get(s));
 			}
 			entries.sort(java.util.Comparator.comparingInt(StringEntry::offset));
+			Map<Integer, Integer> rowIndexByOffset = new HashMap<>();
+			for (int i = 0; i < internRows.size(); i++) {
+				rowIndexByOffset.put(internRows.get(i).offset(), i);
+			}
 			List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> ranges = new ArrayList<>(entries.size());
 			for (StringEntry e : entries) {
-				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, e.offset() - dataBase,
-						e.offset() - dataBase + e.length()));
+				int start = e.offset() - dataBase;
+				int end = start + e.length();
+				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, end));
+				Integer row = internBase >= 0 ? rowIndexByOffset.get(e.offset()) : null;
+				if (row != null) {
+					int rowStart = internBase - dataBase + row * 8;
+					ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, rowStart, rowStart + 8,
+							start, end));
+				}
 			}
 			return ranges;
 		}

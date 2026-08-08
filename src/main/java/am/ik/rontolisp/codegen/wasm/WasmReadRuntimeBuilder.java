@@ -686,10 +686,17 @@ final class WasmReadRuntimeBuilder {
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_LOAD, 0x02, 0x00);
 		setLocal(w, ELEN);
-		// if ELEN == len: compare bytes
+		// if ELEN == len AND EOFF != 0: compare bytes. No real entry sits at address 0
+		// (static entries start at the data base, runtime ones in the heap), so a zero
+		// EOFF is the hole a tree-shaken row reads as -- skipping it keeps a cut entry
+		// from matching a zero-length probe.
 		getLocal(w, ELEN);
 		getLocal(w, LEN);
 		w.write(Instruction.I32_EQ);
+		getLocal(w, EOFF);
+		i32(w, 0);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_AND);
 		ifVoid(w);
 		i32(w, 0);
 		setLocal(w, K);

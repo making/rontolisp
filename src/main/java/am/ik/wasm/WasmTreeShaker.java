@@ -138,6 +138,14 @@ public final class WasmTreeShaker {
 	 * conservative in the safe direction: an unrelated constant that happens to land
 	 * inside a range only KEEPS bytes.
 	 * <p>
+	 * The observed interval may differ from the cut one: a range built with the
+	 * five-argument form is cut when {@code [probeStart, probeEnd)} is uncited, which is
+	 * how a caller ties a RECORD to the bytes it describes (the runtime intern table's
+	 * {@code (offset, length)} row falls with the string it points at). That form is a
+	 * caller CLAIM in the {@code OwnedDataSegment} sense: the only reader of the cut
+	 * bytes must tolerate them reading as zeros once the probed interval is dead --
+	 * citations of the cut interval itself do not keep it.
+	 * <p>
 	 * What the caller still owes: a range must not be cited from anywhere the scan cannot
 	 * see -- notably a word inside another DATA blob. Dropping cuts the range out and
 	 * re-emits the segment as one active segment per surviving run, each at the absolute
@@ -146,8 +154,20 @@ public final class WasmTreeShaker {
 	 * @param segmentIndex index of the segment within the data section
 	 * @param start offset of the range within that segment's bytes
 	 * @param end end offset (exclusive) of the range within that segment's bytes
+	 * @param probeStart offset within the segment's bytes whose citations decide the fate
+	 * @param probeEnd end offset (exclusive) of the decided interval
 	 */
-	public record DroppableDataRange(int segmentIndex, int start, int end) {
+	public record DroppableDataRange(int segmentIndex, int start, int end, int probeStart, int probeEnd) {
+
+		/**
+		 * The self-probed form: the range is cut exactly when its own bytes are uncited.
+		 * @param segmentIndex index of the segment within the data section
+		 * @param start offset of the range within that segment's bytes
+		 * @param end end offset (exclusive) of the range within that segment's bytes
+		 */
+		public DroppableDataRange(int segmentIndex, int start, int end) {
+			this(segmentIndex, start, end, start, end);
+		}
 	}
 
 	/**
@@ -832,14 +852,15 @@ public final class WasmTreeShaker {
 	}
 
 	// The droppable ranges no surviving function body (nor a global initializer) still
-	// addresses. A range survives when some live i32.const lands in
+	// addresses. A range survives when some live i32.const lands in its PROBED interval
 	// [address, address + length) -- the HALF-OPEN interval: a start or interior pointer
 	// keeps its range, a bare one-past-the-end pointer does not. A body cannot use a
 	// range from its end alone (it needs the base to read from), so every real consumer
 	// holds a const inside the range as well, and an end pointer that is also the next
 	// range's start would otherwise pin a genuinely dead neighbour -- which is what kept
 	// the printer prologue's " . " alive behind "\n", and a dead builtin-wrapper literal
-	// alive behind the one the program actually prints.
+	// alive behind the one the program actually prints. The probed interval is the
+	// range's own bytes unless the caller tied it to another (see DroppableDataRange).
 	private static List<DroppableDataRange> deadRanges(List<DroppableDataRange> candidates, List<DataSegment> segments,
 			List<Integer> deadSegments, boolean[] reachable, int numImportedFuncs,
 			List<@Nullable IntList> bodyConstants, IntList globalConstants) {
@@ -857,11 +878,11 @@ public final class WasmTreeShaker {
 		int[] sorted = live.toSortedArray();
 		List<DroppableDataRange> dead = new ArrayList<>();
 		for (DroppableDataRange r : candidates) {
-			if (r.end() <= r.start() || deadSegments.contains(r.segmentIndex())) {
+			if (r.end() <= r.start() || r.probeEnd() <= r.probeStart() || deadSegments.contains(r.segmentIndex())) {
 				continue;
 			}
-			int address = segments.get(r.segmentIndex()).offset() + r.start();
-			if (!containsInRange(sorted, address, address + (r.end() - r.start()) - 1)) {
+			int address = segments.get(r.segmentIndex()).offset() + r.probeStart();
+			if (!containsInRange(sorted, address, address + (r.probeEnd() - r.probeStart()) - 1)) {
 				dead.add(r);
 			}
 		}

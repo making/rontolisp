@@ -1376,7 +1376,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// called directly, and dropping its dispatcher case is what lets
 		// JvmClassShaker reach the library code an ASDF system splices.
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, cp, needsLookup,
-				anyNameResolvable(program, usesRead, usesLoad));
+				anyNameResolvable(program, usesRead, usesLoad), RuntimeNameProducers.anySymbolBuilder(program));
 		if (needsLookup) {
 			MethodrefConstant evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc));
 			MethodrefConstant applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc));
@@ -2720,10 +2720,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @param valueFuncIds the funcIds Pass 2 materialized as function values
 	 * @param cp the constant pool, holding every string the emitted code can load
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
+	 * @param symbolBuilders whether the program contains a symbol BUILDER
+	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
+	 * literal or keyword spelling become a designator, so only then are those probes
+	 * applied
 	 * @return the funcIds that need a dispatcher case (and a registry row)
 	 */
 	private Set<Integer> dispatchableFuncIds(Map<String, FunctionInfo> functions, Set<Integer> valueFuncIds,
-			ConstantPool cp, boolean registryLive, boolean anyNameResolvable) {
+			ConstantPool cp, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time.
@@ -2748,12 +2752,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				// member and the full name are probed in that spelling too -- (intern
 				// "RUN" pkg) is how clack's handler protocol resolves its entry point.
 				// The ":member" spelling is a keyword designator (uiop:symbol-call :pkg
-				// :member).
+				// :member). Both widened spellings need a symbol BUILDER to become
+				// designators, so they are probed only when one is present -- without it
+				// a defun whose member name collides with an unrelated literal stays
+				// call-only.
 				String member = name.substring(colon + 1);
-				if (cp.hasStringConstant(name) || cp.hasStringConstant("\"" + name + "\"")
+				if (cp.hasStringConstant(name)
 						|| (q > 0 && cp.hasStringConstant(name.substring(0, q) + name.substring(q + 1)))
-						|| (colon >= 0 && cp.hasStringConstant(member)) || cp.hasStringConstant("\"" + member + "\"")
-						|| cp.hasStringConstant(":" + member)) {
+						|| (colon >= 0 && cp.hasStringConstant(member))
+						|| (symbolBuilders && (cp.hasStringConstant("\"" + name + "\"")
+								|| cp.hasStringConstant("\"" + member + "\"") || cp.hasStringConstant(":" + member)))) {
 					dispatchable.add(entry.getValue().funcId());
 				}
 			}

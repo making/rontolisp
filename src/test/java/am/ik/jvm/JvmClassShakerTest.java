@@ -163,6 +163,27 @@ class JvmClassShakerTest {
 	}
 
 	@Test
+	void aFramedSpellingWithoutABuilderDoesNotHoldARow() throws Exception {
+		// The framed-string and keyword probes exist for the symbol BUILDERS
+		// (intern/find-symbol/make-symbol/uiop:symbol-call): only a builder can turn a
+		// string constant into a designator at run time. Without one, a defun whose
+		// member name merely collides with an unrelated string literal stays call-only
+		// and shakes; the same program plus an intern of something unrelated widens the
+		// probes again, and the row keeps the defun alive.
+		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall 'f)) (print \"RUNTASK\") ";
+		byte[] builderless = compile(collide, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(builderless)).contains("F").doesNotContain("RUNTASK");
+		assertThat(run(builderless)).isEqualTo("1\n\"RUNTASK\"");
+		byte[] withBuilder = compile(collide + "(print (intern (string-upcase \"zz\")))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(withBuilder)).contains("RUNTASK");
+		// The compiler's own keyword-package intern shape does not widen the probes:
+		// it can only produce a keyword, which can never name a defun.
+		byte[] keywordShape = compile(collide + "(print (eq (intern (string-upcase \"zz\") :keyword) :zz))",
+				OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(keywordShape)).doesNotContain("RUNTASK");
+	}
+
+	@Test
 	void keepsTheReflectiveApplyRootForJavaInterop() throws Exception {
 		// The java: bridge looks up _apply reflectively (no bytecode edge); the shaker is
 		// invoked with _apply as an extra root, so a proxy callback still works.

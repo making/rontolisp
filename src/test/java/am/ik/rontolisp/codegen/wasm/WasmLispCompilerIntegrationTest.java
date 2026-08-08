@@ -2561,8 +2561,12 @@ class WasmLispCompilerIntegrationTest {
 		// not as a trap, so the guard has to be a differential run rather than a
 		// validity check. Each program below prints values whose text comes out of the
 		// string blob (symbols, strings, struct/keyword printing, a format control, a
-		// hash-table key) on a shape where the funcall-dispatch gate applies -- a
-		// program that interns at run time offers no droppable ranges at all.
+		// hash-table key) on a shape where the funcall-dispatch gate applies. The
+		// interning programs pin the per-entry range pairing: a runtime intern must
+		// still canonicalize to a LIVE literal's offset, a name the module never spells
+		// must stay self-consistent through the runtime table with cut holes present,
+		// and a zero-length probe must not match a cut row (which reads as (0,0) --
+		// _intern's skip arm; '|| holds a live zero-length entry to diverge onto).
 		List<String> programs = List.of("(print (list 'a \"b\" #\\c :d 1/2 2.5 (list 1 2)))",
 				"(defstruct pt x y) (let ((p (make-pt :x 1 :y 2))) (print p) (print (pt-x p)))",
 				"(print (format nil \"~a/~s/~d\" 'sym \"str\" 42))",
@@ -2570,7 +2574,11 @@ class WasmLispCompilerIntegrationTest {
 				"(print (assoc \"b\" (list (cons \"a\" 1) (cons \"b\" 2)) :test #'equal))",
 				"(print (handler-case (error \"boom\") (error (e) 'caught)))",
 				"(let ((h (make-hash-table :test 'equal))) (setf (gethash \"k\" h) 'v) (print (gethash \"k\" h)))",
-				"(print (with-output-to-string (s) (princ 'hello s) (princ \" \" s) (princ 42 s)))");
+				"(print (with-output-to-string (s) (princ 'hello s) (princ \" \" s) (princ 42 s)))",
+				"(defun up (s) (intern (string-upcase s))) (print (eq (up \"alpha\") 'alpha)) (print (up \"alpha\"))",
+				"(defun mk (a b) (intern (concatenate 'string a b)))"
+						+ " (print (eq (mk \"ZE\" \"TA\") (mk \"ZE\" \"TA\"))) (print (mk \"ZE\" \"TA\"))",
+				"(defun cut-of (s) (subseq s 1 1)) (print (eq (intern (cut-of \"x\")) '||))");
 		for (String program : programs) {
 			List<LispVal> parsed = LispReader.readAllFromString(program);
 			String plain = runOptimizeLevel(parsed, OptimizeLevel.NONE);

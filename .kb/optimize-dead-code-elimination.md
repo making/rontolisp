@@ -156,10 +156,27 @@ printer prologue below, and the cached symbol `T` its four helper sites share). 
 string with the window CLOSED retracts its candidacy for good, whichever came first — and
 that is exactly what every blob-citing caller does: the instance-layout blob (built BEFORE
 Pass 2a), the `_lookup` registry rows (`stringTable.addString(defun.name)` after it), the
-`eval` special-form offsets, the reader's char-name and struct-directory tables. The one
-blob that cites EVERY entry is the runtime intern table (`buildInternBlob` over
-`stringTable.entries()`, scanned by `_intern` on offset equality), so a program with
-`usesIntern` offers no candidates at all — `WasmLispCompiler.compile`, "stringRanges".
+`eval` special-form offsets, the reader's char-name and struct-directory tables.
+
+**The runtime intern table is handled structurally, not by standing down (2026-08-09).**
+The one blob that cites EVERY entry is the intern table (`buildInternBlob`, scanned by
+`_intern` on offset equality), and until 2026-08-09 that citation disqualified every
+candidate of a program with `usesIntern` wholesale. Now each candidate's 8-byte
+`(offset, length)` row is offered as a droppable range OF ITS OWN, probed on the STRING's
+interval — the five-argument `DroppableDataRange` form, whose extra interval is a
+caller claim in the `OwnedDataSegment` sense: the only reader of the cut bytes must
+tolerate them reading as zeros once the probed interval is dead. Row and bytes therefore
+fall together, and `_intern` skips any row whose offset word is 0 (no real entry sits at
+address 0 — static entries start at the data base, runtime ones in the heap; without the
+skip a zero-length probe would match the first hole, and `'||` holds a live zero-length
+entry to diverge onto). Rows are sorted by string offset before the blob is built, so a
+run of dead entries cuts as one hole beside its bytes instead of fragmenting the
+re-emitted segment into per-row runs (`_intern` matches at most one row, so the order is
+free to choose). A candidate first interned AFTER the blob snapshot has no row and offers
+only its bytes — such an entry is runtime-invisible by construction, which is why `T` is
+interned before the snapshot. What a runtime intern can still need stays pinned exactly
+as before, by the closed-window retraction: registry row names, the special-form offsets,
+the reader tables.
 
 **The printer prologue is not exempt (todo-271, 2026-08-07).** `StringTable`'s constructor
 interns 28 fixed entries — `NIL`, the list punctuation `(` `)` ` ` `" . "`, `\n`, the
@@ -175,11 +192,25 @@ directly, `WasmLiteralPrint.emitNewline`). The ordinary retraction rule still co
 blob citers: the reader's char-name table re-interns `Space`..`Rubout` with the window
 closed, and `_lookup`/the intern blob do the same for `T`.
 
-**Re-evaluation trigger:** the `usesIntern` bail is the coarse half. It could become
-per-entry (drop a range when `_intern` itself is unreachable, or filter the intern blob's
-rows post-shake), but `usesIntern` and a live `_intern` almost always coincide, so it was
-not worth the machinery; revisit only with numbers showing a program that interns AND has a
-large dead-wrapper string set.
+**The trigger this section used to carry fired 2026-08-09** (the clack Workers were
+exactly "a program that interns AND has a large dead-wrapper string set"), and the
+per-entry form above is what it became. What it is worth, measured that day at each
+example's own build settings against a same-day develop baseline (NOTE: those baselines
+are well under the 2026-08-08 tables elsewhere in this file — the seq-conversion and
+CLOS-lowering sessions moved every clack module in between):
+`examples/cloudflare-workers/hello-clack` 370,901 -> 365,865 B (-5,036, gzip -1,386),
+`httpbin-clack` 383,804 -> 378,768 (-5,036), `httpbin` 182,767 -> 180,350 (-2,417), the
+todo-295 routed probe at `--optimize` 1,080,837 -> 1,076,014 (-4,823) — all verified
+request-for-request on node against the baseline modules, and the hello-clack
+`check.lisp` full stack prints byte-identically at `--optimize=size` and no flag under
+wasmtime. The structural pin moved with it:
+`anInterningProgramOffersPerEntryRangesRowsFallingWithTheirBytes` (WasmTreeShakerTest)
+replaced `keepsEveryStringAProgramCanInternAtRunTime`, which pinned the old bail (the
+interning hello's data section: >24 KB then, 431 B now), and
+`optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo` gained three interning programs —
+a runtime intern canonicalizing to a LIVE literal, a never-spelled name staying
+self-consistent through the runtime table with cut holes present, and the zero-length
+probe against `'||`.
 
 `(print "Hello World!")` at `--optimize`: data 909 B -> 168 B, module 1,886 B -> 645 B
 (**622 B** once the encoding shrank too, **511 B** once the prologue and the half-open
@@ -189,7 +220,7 @@ moved 625 B -> 514 B the same way, and its component 1,668 B; the whole spelling
 below re-measured 430-560 B core / 1,583-1,718 B component. A program on
 the same gate that reaches the runtime `find-package` keeps the alist. Pinned
 by `WasmTreeShakerTest.dropsStringsOnlyDeadBodiesInterned` /
-`keepsEveryStringAProgramCanInternAtRunTime` /
+`anInterningProgramOffersPerEntryRangesRowsFallingWithTheirBytes` /
 `dropsThePrinterPrologueNoLiveBodyReads` / `aBareOnePastTheEndPointerDoesNotKeepARange`,
 and behaviorally by
 `WasmLispCompilerIntegrationTest.optimizedProgramKeepsEveryStringALiveBodyStillAddresses`
@@ -554,6 +585,30 @@ Two sources, both EXACT rather than heuristic:
   **Trap, and it bit once:** `WasmAsyncEmit.freshCtx` rebuilds a `Ctx` field by field and also builds the SYNCHRONOUS top level. Omitting `valueFuncIds` there silently lost every closure the top level makes, and `(funcall f 1)` trapped. Any module-wide MUTABLE `Ctx` field must be listed there.
 - **the names a runtime SYMBOL designator can resolve.** `_lookup` matches interned offsets (WASM) / string constants (JVM), so a registry row is reachable only when the program already put that exact name there for another reason — a quoted symbol, a string literal, an `intern` of a literal. `StringTable.isInterned` and `ConstantPool.hasStringConstant` are the two probes, and the name is tried six ways: canonical, the `::`->`:` alias row's spelling, the bare member name after the last colon — and (2026-08-08) the FRAMED string-literal spelling of the full name and of the member (`"NAME"`, quotes included: a string literal interns via `LispString.literal()`, so `(intern "RUN" pkg)` — clack's handler discovery — spells `"RUN"`, not `RUN`; before this the probe missed every literal-string designator on both backends), plus the keyword spelling `:member` (`uiop:symbol-call :pkg :member` spells both halves as keywords).
 
+  **The three widened spellings apply only while the program contains a symbol BUILDER
+  at all (2026-08-09)** — `RuntimeNameProducers.anySymbolBuilder`: `intern`,
+  `find-symbol`, `make-symbol`, `uiop:symbol-call`. Without one, no runtime path can turn
+  a string or keyword constant into a designator, so a gate-closed program stops paying
+  rows for defuns whose member name merely collides with an unrelated literal (the
+  over-approximation cost the 2026-08-08 table below records as its two `+` rows).
+  `make-symbol` is in the set as the safe over-approximation: its product can never match
+  a registry row on WASM (a fresh, never-canonicalized offset), but the JVM registry
+  compares string VALUES. Two of the compiler's own emissions are shape-exempt from the
+  trigger, each provably unable to produce a FUNCTION designator: the literal
+  keyword-package intern `(intern X :keyword)` (http-server.lisp interns the request
+  method and protocol this way, which otherwise holds the probes open for every
+  Worker/serve program — it only makes keywords, and no row key begins with a colon) and
+  the injected `(defun %slot-name-key (n) (intern (symbol-name n)))` (the identity
+  exemption that fold was made a separate defun to allow,
+  `LispMacroExpander.slotNameKeyDefun`). Claw-back measured on the gate-closed `httpbin`
+  worker: `--no-wasi --optimize=size` 180,350 -> 178,971, `--component --optimize=size`
+  194,801 -> 193,430; the clack workers are BYTE-identical (lack's `find-symbol` is a
+  real builder, and their probes must stay on). Pinned by
+  `widenedProbesApplyOnlyWithASymbolBuilderPresent` and
+  `theCompilersOwnInternShapesDoNotWidenTheProbes` (WasmTreeShakerTest, paired-difference
+  function counts) plus `aFramedSpellingWithoutABuilderDoesNotHoldARow`
+  (JvmClassShakerTest, method survival + the run).
+
 **The gate turns itself off entirely** (every function stays dispatchable) under `--dynamic` and whenever `compiler/RuntimeNameProducers.anyNameResolvable` holds — the program contains a DATA EVALUATOR: `eval`/`read`/`read-from-string`/`load`, whose function names arrive from outside the module, or the injected `~/name/` renderer arm (`FormatRenderer.FUNCTION_DESIGNATOR` — a control string is runtime data, and the arm is injected exactly when a control string in the program spells the directive, so its presence IS the trigger; the stub a directive-free program gets never fires it). That class is shared by both backends on purpose: a name that stops resolving on one has to stop resolving on the other. Compile with `-Drontolisp.debug.dispatchgate=true` to have the offending operator NAMED, and to see how many functions stayed dispatchable.
 
 **The symbol BUILDERS no longer bail (2026-08-08)** — `intern`, `find-symbol`, `make-symbol`, `symbol-function`, `fdefinition`, `fboundp`, `uiop:symbol-call` used to turn the gate off wholesale, and were the reason a clack program shipped every defun dispatchable (lack's `locate-symbol` is `(find-symbol "RUN" pkg)`, and it is LIVE — clack's whole handler-discovery protocol runs through it). The split is sound against the probes rather than by intuition: a symbol a builder produces is built FROM A STRING, and any string the program holds is a compile-time constant the widened probes above already read, in every spelling the lowerings emit. What escapes them is a name assembled out of COMPUTED pieces, and that is verbatim `LibraryDefunPruner`'s documented carve-out — the ordinary undefined-function error, `--dynamic` to restore late binding. This retired both scan exemptions with the trigger that made them necessary: the slot-name-fold identity match (`%slot-name-key`'s `intern` is just an intern now) and the keyword-package-intern shape (todo-260) — an `(intern NAME :keyword)` is as gate-neutral as any other intern, and funcalling a runtime-built keyword still fails because no row key begins with a colon (a keyword can never name a defun; the defun's implicit block rejects it). Pinning tests: `internDoesNotHoldTheFuncallDispatchGateOpen` (WasmTreeShakerTest — computed intern shakes like keyword intern; `(eval (read))` still bails), `internDoesNotHoldTheDispatchGateOpen` (JvmClassShakerTest — incl. the quoted-intern shape now shaking, the framed-string resolution of a literal-intern funcall, and the eval bail), `keywordInternStaysInternedInAGateShakenModule` (WasmLispCompilerIntegrationTest).
@@ -569,7 +624,7 @@ Without the data-evaluator bail the gate is not sound, and the failure is a trap
 | `examples/cloudflare-workers/httpbin` (no clack; its gate already closed) | 245,525 | 248,956 (+1.4%) |
 | the same `worker.lisp` at `--component` | 260,134 | 263,557 (+1.3%) |
 
-The two + rows are the price of the widened probes: a program whose gate was already closed now keeps a few more rows (any defun whose member name coincides with a keyword or string literal somewhere in the module). That over-approximation is the safe direction — a kept row costs bytes, a missing one costs a resolution. The clack runtime path this all exists for — `clackup` → `find-handler` → `find-package-or-load` → `(find-symbol "RUN" pkg)` → `apply` — resolves through the framed-string probe (`"RUN"` is a string literal in `clack.handler:run`), verified request-for-request on node against the shaken module, on the JVM, and on the interpreter, plus the full `ci-spec.yaml` native run (1,300 cases, 4 backends).
+The two + rows are the price of the widened probes: a program whose gate was already closed now keeps a few more rows (any defun whose member name coincides with a keyword or string literal somewhere in the module). That over-approximation is the safe direction — a kept row costs bytes, a missing one costs a resolution — and 2026-08-09 clawed most of it back by probing the widened spellings only when a symbol BUILDER is present at all (the bullet above): the same `httpbin` worker gave back 1,379 B (`=size`) / 1,371 B (`--component =size`) while the clack modules stayed byte-identical. The clack runtime path this all exists for — `clackup` → `find-handler` → `find-package-or-load` → `(find-symbol "RUN" pkg)` → `apply` — resolves through the framed-string probe (`"RUN"` is a string literal in `clack.handler:run`), verified request-for-request on node against the shaken module, on the JVM, and on the interpreter, plus the full `ci-spec.yaml` native run (1,300 cases, 4 backends).
 
 **What the bail costs, measured 2026-08-06** (`--optimize`, wasm-GC), after todo-261 retired the two blockers rontolisp itself was contributing:
 
@@ -674,10 +729,13 @@ the reason so they are not re-derived:
    method body is materialized as a closure at load time, so it is in
    `valueFuncIds`, dispatchable, and live through the ladders. The shim-vs-nodep
    delta — 648 functions, 800,319 B code, 22,392 B data — is therefore the
-   measured ceiling of `.todo/290`'s CLOS-aware-shaking lever on this module.
-   The other `.todo/290` lever share, for scale: the string blob (`usesIntern`
-   stand-down) is the 58,756 B `data[3]` segment of an 81,003 B data section —
-   an order of magnitude smaller.
+   measured ceiling of the CLOS-aware-shaking lever on this module (now tracked
+   as `.todo/299`; it was collected in todo-290, whose other levers all landed
+   2026-08-09). The string-blob lever's cap was the 58,756 B `data[3]` segment
+   of an 81,003 B data section — an order of magnitude smaller, and the landed
+   per-entry form (see "String blob" above) took 4,823 B of it on this probe:
+   most of the segment is LIVE rows and literals, so the ceiling was never
+   collectable.
 5. **Splitting cl-ppcre's parse half from its match half: investigated, not a
    plan.** It would pay only if a scanner could be built at COMPILE time and the
    builder left out of the module; a cl-ppcre scanner is a tree of closures

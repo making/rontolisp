@@ -168,6 +168,45 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void widenedProbesApplyOnlyWithASymbolBuilderPresent() {
+		// The framed-string and keyword probes exist for the symbol BUILDERS: without
+		// one, no runtime path can turn a string constant into a designator, so a
+		// defun whose member name merely collides with an unrelated string literal
+		// keeps no registry row and shakes out. Pinned as a paired difference: the
+		// colliding literal and a non-colliding one must yield the same function
+		// count (an unconditional framed probe would keep RUNTASK alive in the first).
+		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall 'f)) (print \"RUNTASK\")";
+		String noCollide = "(defun runtask () 2) (defun f () 1) (print (funcall 'f)) (print \"RUNTASX\")";
+		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
+		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
+	void theCompilersOwnInternShapesDoNotWidenTheProbes() {
+		// Two intern spellings ride into every Worker/serve program from the
+		// compiler's own emissions, and neither can produce a FUNCTION designator, so
+		// neither may hold the widened probes open (RuntimeNameProducers): the
+		// keyword-package shape (http-server.lisp interns the request method) only
+		// makes keywords, and the injected %slot-name-key defun (the slot-name fold
+		// every slot-value dispatcher calls) only re-interns a name the program
+		// already holds as a symbol. Same paired-difference pin as above, with each
+		// shape present.
+		String keyword = " (print (eq (intern (string-upcase \"post\") :keyword) :post))";
+		String slots = " (defstruct pt (x 0)) (print (slot-value (make-pt :x 7) 'x))";
+		for (String shape : new String[] { keyword, slots }) {
+			String base = "(defun runtask () 2) (defun f () 1) (print (funcall 'f))" + shape;
+			byte[] colliding = compile(base + " (print \"RUNTASK\")", false, OptimizeLevel.DEFAULT);
+			byte[] plain = compile(base + " (print \"RUNTASX\")", false, OptimizeLevel.DEFAULT);
+			Module.parse(colliding).assertWellFormed();
+			assertThat(Module.parse(colliding).definedFunctionCount()).describedAs(shape)
+				.isEqualTo(Module.parse(plain).definedFunctionCount());
+		}
+	}
+
+	@Test
 	void orphanedCaseFoldTableSegmentsAreDropped() {
 		// The ~16 KB Unicode case-fold tables ride in their own data segments owned by
 		// _char_upcase/_char_downcase. A program that never case-folds loses both
@@ -388,13 +427,29 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
-	void keepsEveryStringAProgramCanInternAtRunTime() {
+	void anInterningProgramOffersPerEntryRangesRowsFallingWithTheirBytes() {
 		// _intern scans a blob citing EVERY interned entry by offset, and that citation
-		// lives in DATA where the i32.const scan cannot see it -- so a program that
-		// interns at run time offers no droppable ranges at all.
+		// lives in DATA where the i32.const scan cannot see it -- which used to
+		// disqualify every candidate of an interning program wholesale. The citation is
+		// resolved structurally now: each candidate's (offset, length) row is its own
+		// droppable range PROBED on the string's interval, so row and bytes fall
+		// together, and _intern skips the zeroed hole a cut row reads as. An interning
+		// program therefore keeps only what live bodies still address: printing the
+		// runtime-made symbol keeps the whole generic printer and with it the prologue,
+		// while the dead wrapper literals (the sequence keywords, the find-package
+		// alias alist) go, rows included -- the module was over 24 KB of data before.
 		byte[] interning = compile("(print (intern (string-upcase \"foo\")))", false, OptimizeLevel.DEFAULT);
 		Module.parse(interning).assertWellFormed();
-		assertThat(dataSectionSize(interning)).isGreaterThan(1024);
+		assertThat(dataSectionSize(interning)).isLessThan(1024);
+		byte[] data = dataSectionPayload(interning);
+		for (String dead : new String[] { ":FROM-END", "\"ASDF\"", "keyword" }) {
+			assertThat(contains(data, dead)).as("dead wrapper literal %s survived the interning program", dead)
+				.isFalse();
+		}
+		for (String live : new String[] { "\"FOO\"", "Rubout", "#<FUTURE>" }) {
+			assertThat(contains(data, live)).as("the interning program lost %s", live).isTrue();
+		}
+		assertThat(WasmTreeShaker.shake(interning)).isEqualTo(interning);
 	}
 
 	// Total payload size of the data section (0 when absent).

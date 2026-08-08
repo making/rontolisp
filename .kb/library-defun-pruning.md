@@ -195,7 +195,9 @@ likewise expands to a literal `(F value)` call. Making the four CLOS forms
 non-roots individually buys 0-13 extra dead definitions across the whole
 vendored corpus; only `defmethod` is a big anchor (it would roughly double the
 yield) and it is exactly the one that cannot move. A CLOS-aware shaker is a
-separate item, not a tweak here.
+separate item, not a tweak here — tracked as `.todo/299`, with the measured
+823,589 B zero-reference ceiling and the reason both this pass's roots AND the
+backends' `valueFuncIds` must learn CLOS together.
 
 `defmacro`, `define-compiler-macro`, `define-modify-macro`, `defsetf`,
 `define-setf-expander` and `macrolet` need no rule at all: `UserMacroExpander`
