@@ -1,16 +1,17 @@
 # rontolisp on Cloudflare Workers
 
-Six ways to run a Common Lisp program, compiled to WebAssembly by rontolisp,
-on Cloudflare Workers. Each directory is a complete, independent Worker project:
+Ways to run a Common Lisp program, compiled to WebAssembly by rontolisp, on
+Cloudflare Workers. Each directory is a complete, independent Worker project:
 `./build.sh && npx wrangler dev`, then `npx wrangler deploy`.
 
 | Directory | What it is | Module | Host glue |
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
 | [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 362 KB (**100 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
+| [`hello-tiny-routes/`](hello-tiny-routes) | **`hello-clack` with the application composed instead of written.** Three routes through [tiny-routes](https://github.com/jeko2000/tiny-routes) — a `/hello/:name` path template, route declining into a catch-all 404 — and the same `clackup` line. Loaded as **`tiny-routes/lite`**, so no regex engine ships. | 385 KB (**105 KB gzip**), `--no-wasi` wasm-GC, zero imports | `hello-clack/src/index.js`, byte-identical |
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **179 KB** (55 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
 | [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.1× the module, because clack and lack (tree-shaken) ship inside it. | 375 KB (**103 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | **`httpbin-clack` with a real routing library.** The same endpoints routed through [tiny-routes](https://github.com/jeko2000/tiny-routes) — `define-routes`, a `/status/:code` path template, route declining — loaded as **`tiny-routes/lite`**, the opt-in system whose ppcre-free path-template matcher keeps cl-ppcre (and 553 KB) out of the module. | 397 KB (**109 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | **`httpbin-clack` with a real routing library.** The same endpoints routed through [tiny-routes](https://github.com/jeko2000/tiny-routes) — `define-routes`, a `/status/:code` path template, route declining — loaded as **`tiny-routes/lite`**, the opt-in system whose ppcre-free path-template matcher keeps cl-ppcre (and 553 KB) out of the module. | 399 KB (**109 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (190 KB) | 49 hand-written lines + 293 KB of generated glue |
 
 ## Which one should I copy?
@@ -26,6 +27,12 @@ put it on Cloudflare are right there in the file rather than in a library.
 nothing else in the way — three forms, and the `:server` designator is the only
 thing that mentions Cloudflare. It is `httpbin-clack/` with the endpoints,
 the body handling and the second `clackup` target removed.
+
+`hello-tiny-routes/` if you are starting a routed application rather than
+studying one. It is `hello-clack/` with the `defun` replaced by `define-routes`
+— a path template, a decline, a catch-all — and nothing else changed, so what
+the routing library costs (+23 KB raw over `hello-clack/`) is the only
+difference between the two directories.
 
 `httpbin-clack/` when you would rather the file read like every other Clack
 program than save the space. It runs the *same application* as `httpbin/` — the
@@ -143,13 +150,13 @@ iterating on them, narrow the suite:
 ```bash
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
        -Drontolisp.examples=true -Drontolisp.examples.only=cloudflare test
-# Tests run: 14, instead of 235 in ~7min
+# Tests run: 17, instead of 238 in ~7min
 ```
 
 ## Deploying
 
-All but `httpbin-tiny-routes` (verified under `wrangler dev`) were deployed
-to the real edge and verified there, not only under
+All but the two tiny-routes directories (verified under `wrangler dev`) were
+deployed to the real edge and verified there, not only under
 `wrangler dev`:
 
 | | Upload | gzip | Worker Startup Time |
@@ -165,9 +172,9 @@ since — most recently by the 2026-08-08 dispatch-gate refinement, which halved
 the two clack builds, by the builds moving to `--optimize=size` the same day,
 and by the CLOS-lowering pass that followed. Locally the modules are now
 `httpbin` **179 KiB / 55 KiB gzip**, `httpbin-clack` **375 KiB / 103 KiB
-gzip**, `hello-clack` **362 KiB / 100 KiB gzip**, `httpbin-tiny-routes`
-**397 KiB / 109 KiB gzip**, and the component build's three core modules
-**190 KiB**. Startup
+gzip**, `hello-clack` **362 KiB / 100 KiB gzip**, `hello-tiny-routes`
+**385 KiB / 105 KiB gzip**, `httpbin-tiny-routes` **399 KiB / 109 KiB gzip**,
+and the component build's three core modules **190 KiB**. Startup
 time is only reported by a real `wrangler deploy`, so those cells stand until
 the next one.
 

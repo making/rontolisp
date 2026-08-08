@@ -2,16 +2,15 @@
 # Compile worker.lisp -- clack, tiny-routes/lite, the routes and the clackup
 # call -- to the .wasm module the Worker imports.
 #
-# --no-wasi: the Worker calls the exported `handle-request` directly, it never
-#   runs the module as a program, and the handler does no I/O -- so the module
-#   needs no WASI imports at all. It becomes a reactor: nothing to shim on the
-#   JavaScript side, and `_initialize` instead of `_start`.
+# --no-wasi: the Worker calls the exported entry point directly and never runs
+#   the module as a program, so it needs no WASI imports at all. It becomes a
+#   reactor: nothing to shim on the JavaScript side, and `_initialize` instead
+#   of `_start`. clackup's own start-up banner is not a problem there -- under
+#   --no-wasi standard output is a sink, so the bytes are discarded.
 # --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
-#   what keeps the module small. It matters most in THIS example: the routes
-#   go through tiny-routes/lite, whose ppcre-free path-template matcher is
-#   what keeps the module ~0.41 MB -- the full "tiny-routes" spells the same
-#   routes but ships the whole cl-ppcre engine, 974,530 B raw on this
-#   same file (see the README's table).
+#   what keeps the module down. Routing adds to what it has to keep, which is
+#   why worker.lisp asks for "tiny-routes/lite": the full system reaches
+#   cl-ppcre at RUN time, so the whole regex engine would ship with it.
 #
 # The first run downloads clack/lack/tiny-routes into ~/.rontolisp/quicklisp;
 # after that the build is offline.

@@ -1,36 +1,21 @@
 ;;; worker.lisp -- ../httpbin-clack with a real routing library on top.
 ;;;
-;;; The helpers and the five echo endpoints are ../httpbin-clack/worker.lisp's,
-;;; unchanged; what replaces its hand-written `cond` over :path-info is
-;;; tiny-routes -- define-routes, define-any, a "/status/:code" path template
-;;; and the route-decline protocol. The interesting line is the FIRST one:
+;;; The helpers are ../httpbin-clack/worker.lisp's, and so are its clackup call
+;;; and synthesized `handle-request` export; what replaces its hand-written
+;;; `cond` over :path-info -- and its method check with it -- is tiny-routes.
 ;;;
-;;;   (ql:quickload "tiny-routes/lite")
-;;;
-;;; "tiny-routes/lite" is the same tiny-routes source tree with ONE component
-;;; swapped: path-template.lisp's cl-ppcre-backed matcher is replaced by a
-;;; ppcre-free one, and the :cl-ppcre dependency is dropped with it. That is
-;;; an OPT-IN, and it is what keeps this module ~0.41 MB: a route template
-;;; compiles to a regex scanner at RUN time, so with the full system the whole
-;;; regex engine is genuinely reachable and ships -- 972,756 B raw where
-;;; this build is 406,698 B (the numbers in the README). The trade is loud,
-;;; never silent: the lite matcher accepts exactly the templates made of
-;;; literal characters and :name tokens (what almost every routed application
-;;; uses), matches them exactly as the full system does -- pinned
-;;; template-for-template against the real cl-ppcre engine -- and REFUSES at
-;;; route-build time (a clear error, not a wrong match) on a regex
-;;; metacharacter or a :regex t template. A program that needs those loads
-;;; the full "tiny-routes" instead and pays for the engine.
-;;;
-;;; Everything said in ../httpbin-clack/worker.lisp's header about the
-;;; clackup call, the synthesized `handle-request` export and the two keyword
-;;; arguments holds here verbatim.
+;;; The FIRST line decides the module size. "tiny-routes/lite" swaps one
+;;; component of the library: the cl-ppcre-backed path-template matcher, and
+;;; the :cl-ppcre dependency with it. A template compiles to a scanner at RUN
+;;; time, so the full system ships the whole regex engine -- 974,530 B raw
+;;; where this build is 408,448 B. The lite matcher takes literal characters
+;;; and :name tokens and refuses a regex-shaped template when the route is
+;;; built. The README has the numbers and the subset.
 
 (ql:quickload '("clack" "clack-handler-cloudflare-workers" "tiny-routes/lite"))
 
-;; The application lives in its own package, like any real consumer of a
-;; routing library -- the route macros and path-parameter come from
-;; tiny-routes' exports.
+;; Its own package, like any consumer of a routing library: the route macros
+;; and path-parameter come from tiny-routes' exports.
 (defpackage :httpbin-tiny-routes (:use :cl :tiny-routes))
 (in-package :httpbin-tiny-routes)
 
@@ -64,6 +49,12 @@
          :method (symbol-name (getf env :request-method))
          :path (getf env :path-info))))
 
+;; --- the handlers ----------------------------------------------------------
+
+;; A tiny-routes request IS the Clack environment plist, so these are
+;; ../httpbin-clack/worker.lisp's handlers. Gone is its `echo-when`: no handler
+;; checks a method any more, because the ROUTE does.
+
 (defun echo (env) (json-response 200 (request-info env)))
 
 (defun echo-with-body (env)
@@ -72,42 +63,62 @@
     (setf (gethash "json" info) (body-json body))
     (json-response 200 info)))
 
-(defun echo-when (env expected with-body)
-  (cond ((not (eq (getf env :request-method) expected))
-         (json-response 405
-                        (rontolisp:plist-hash-table
-                         (list :error "method not allowed"
-                               :allowed (symbol-name expected)))))
-        (with-body (echo-with-body env))
-        (t (echo env))))
+;; The echo endpoints and the ONE method each answers -- not a second dispatch,
+;; but what the catch-all reads to tell a request that DECLINED on its method
+;; (405, naming the method that works) from an unknown path (404).
+(defparameter *endpoints*
+  '(("/get" . :GET) ("/post" . :POST) ("/put" . :PUT) ("/patch" . :PATCH)
+    ("/delete" . :DELETE)))
+
+(defun no-route (req)
+  (let* ((path (path-info req))
+         (allowed (cdr (assoc path *endpoints* :test #'string=))))
+    (if allowed
+        (json-response 405
+                       (rontolisp:plist-hash-table
+                        (list :error "method not allowed"
+                              :allowed (symbol-name allowed))))
+        (json-response 404
+         (rontolisp:plist-hash-table (list :error "not found" :path path))))))
 
 ;; --- the routes ------------------------------------------------------------
 
-;; A tiny-routes request IS the Clack environment plist, so echo-when takes it
-;; unchanged. define-any (any method) + echo-when keeps httpbin's own
-;; behavior: the wrong method on a known path answers 405, where define-get
-;; would DECLINE and fall through to the 404.
+;; One macro per endpoint, for the ONE method it answers: a wrong method
+;; DECLINES, no route claims it, and it reaches the single catch-all -- so the
+;; 405 needs no route of its own per path.
 ;;
-;; /status/:code is the route the hand-written cond could not spell: :code
-;; binds whatever the segment holds, path-parameter reads it, and a value that
-;; does not parse as an integer makes the route answer nil -- a DECLINE, so
-;; the request falls through to the catch-all 404.
+;; /status/:code is the route the hand-written cond could not spell, and it
+;; declines too, on a :code that is not a number. The table above tells the two
+;; declines apart: it has no /status entry, so that one gets the 404.
 (define-routes *app*
-  (define-any "/get" (req) (echo-when req :GET nil))
-  (define-any "/post" (req) (echo-when req :POST t))
-  (define-any "/put" (req) (echo-when req :PUT t))
-  (define-any "/patch" (req) (echo-when req :PATCH t))
-  (define-any "/delete" (req) (echo-when req :DELETE t))
-  (define-any "/status/:code" (req)
-    (let ((code (handler-case (parse-integer (path-parameter req :code))
-                  (error () nil))))
+  (define-get "/get"
+    (req)
+    (echo req))
+  (define-post "/post"
+    (req)
+    (echo-with-body req))
+  (define-put "/put"
+    (req)
+    (echo-with-body req))
+  ;; tiny-routes has no define-patch; its method matcher is exported, and that
+  ;; is all the other macros add over define-any.
+  (wrap-request-matches-method (define-any "/patch"
+                                 (req)
+                                 (echo-with-body req)) :patch)
+  (define-delete "/delete"
+    (req)
+    (echo-with-body req))
+  (define-get "/status/:code"
+    (req)
+    (let ((code
+           (handler-case (parse-integer (path-parameter req :code))
+             (error () nil))))
       (when code
         (list code '(:content-type "text/plain; charset=utf-8")
               (list (format nil "~a~%" code))))))
-  (define-any "*" (req)
-    (json-response 404
-                   (rontolisp:plist-hash-table
-                    (list :error "not found" :path (path-info req))))))
+  (define-any "*"
+    (req)
+    (no-route req)))
 
 (clack:clackup *app*
                :server :cloudflare-workers

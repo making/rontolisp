@@ -45,7 +45,8 @@
        :headers (json-headers "{\"name\":\"rontolisp\"}")
        :body "{\"name\":\"rontolisp\"}"))
 
-;; The wrong method for an endpoint -- define-any + echo-when answers 405.
+;; The wrong method for an endpoint -- the method-specific route declines and
+;; the define-any right after it answers 405.
 (try
  (list :method "GET"
        :target "/post"
