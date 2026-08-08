@@ -92,7 +92,8 @@ exports.__ronto_alloc_reset(mark);
 const result = lisp.handleRequest(input);
 ```
 
-That is the whole benefit. The costs, all measured on the identical `app.lisp`:
+That is the whole benefit. The costs, all measured on the identical
+`httpbin/worker.lisp`:
 
 | | `httpbin` (`--no-wasi`) | `httpbin-component` (`--component` + jco) |
 | --- | --- | --- |
@@ -114,10 +115,11 @@ Three findings behind that table, none of them obvious:
    refuses the component outright: `exceptions proposal not enabled`.
 3. **A component's top-level forms cannot be run through jco.** They live in the
    component's `wasi:cli/run` export, and calling it fails with `task exited
-   without resolution` (jco cannot drive a stackful-async export). `app.lisp`
-   therefore keeps its state inside functions rather than in a `defparameter` —
-   which costs nothing here, but is a hard constraint on that path. The
-   `--no-wasi` build has no such problem: `_initialize` is an ordinary call.
+   without resolution` (jco cannot drive a stackful-async export).
+   `httpbin/worker.lisp` therefore keeps its state inside functions rather than
+   in a `defparameter` — which costs nothing here, but is a hard constraint on
+   that path. The `--no-wasi` build has no such problem: `_initialize` is an
+   ordinary call.
 
 A wasm-GC component also imports `wasi:cli/stdout`, `wasi:cli/types` and
 `wasi:filesystem/types` whether or not the program does any I/O, because it is a

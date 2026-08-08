@@ -1,4 +1,4 @@
-;;; check.lisp -- drive app.lisp's handler without Cloudflare.
+;;; check.lisp -- drive worker.lisp's handler without Cloudflare.
 ;;;
 ;;; `handle-request` is an ordinary function of a string, so the whole Worker --
 ;;; the Clack application and the reactor adapter under it together -- can be
@@ -16,7 +16,7 @@
 ;;; and both fail quietly rather than loudly if you get them wrong -- see the
 ;;; README.
 
-(load "app.lisp")
+(load "worker.lisp")
 
 (defun try (request-plist)
   (let ((request

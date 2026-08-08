@@ -5,7 +5,7 @@
 // directories differ only in how the Lisp half is written. All speak the same
 // JSON envelope, and on the other side of it sits a Clack application; what
 // differs is only what builds the Clack environment from the envelope --
-// thirty hand-written lines in ../app.lisp in httpbin, the built-in
+// thirty hand-written lines in ../worker.lisp in httpbin, the built-in
 // clack-handler-cloudflare-workers handler backend that `clackup` installs in
 // the other two. None of it is visible from JavaScript.
 //
@@ -14,7 +14,7 @@
 // The envelope is documented in ../../httpbin/README.md; two of its fields are
 // easy to get wrong, and requestToJson below says which.
 
-import module from "./app.wasm";
+import module from "./worker.wasm";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

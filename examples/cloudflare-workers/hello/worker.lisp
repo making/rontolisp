@@ -1,4 +1,4 @@
-;;; hello.lisp -- the smallest useful thing: three Lisp functions the Worker
+;;; worker.lisp -- the smallest useful thing: three Lisp functions the Worker
 ;;; calls like ordinary JavaScript functions.
 ;;;
 ;;; `rontolisp:wasm-export` gives each one a host-callable WASM signature. The

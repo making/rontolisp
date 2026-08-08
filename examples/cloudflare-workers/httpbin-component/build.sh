@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build ../httpbin/app.lisp -- the SAME Lisp source -- as a WebAssembly
+# Build ../httpbin/worker.lisp -- the SAME Lisp source -- as a WebAssembly
 # component, and transpile it for Cloudflare Workers with jco.
 #
 # Workers has no native component-model support, so `jco transpile` lowers the
@@ -27,14 +27,14 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling ../httpbin/app.lisp -> app.wasm (component)"
+echo "compiling ../httpbin/worker.lisp -> worker.wasm (component)"
 # --optimize=size: same trade as the sibling builds -- smaller core modules for
 # a per-request cost of a few microseconds.
-java -jar "$jar" "$here/../httpbin/app.lisp" -o "$here/app.wasm" --component --optimize=size
+java -jar "$jar" "$here/../httpbin/worker.lisp" -o "$here/worker.wasm" --component --optimize=size
 
-echo "transpiling app.wasm -> src/dist/"
+echo "transpiling worker.wasm -> src/dist/"
 rm -rf "$here/src/dist"
-npx -y @bytecodealliance/jco transpile "$here/app.wasm" -o "$here/src/dist" \
+npx -y @bytecodealliance/jco transpile "$here/worker.wasm" -o "$here/src/dist" \
   --instantiation sync -b 0 --bindgen-enable-wasm-exnref
 
 echo

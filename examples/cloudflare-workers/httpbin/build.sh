@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile app.lisp to the .wasm module the Worker imports.
+# Compile worker.lisp to the .wasm module the Worker imports.
 #
 # --no-wasi: the Worker calls the exported `handle-request` directly, it never
 #   runs the module as a program, and the handler does no I/O -- so the module
@@ -22,8 +22,8 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling app.lisp -> src/app.wasm"
-java -jar "$jar" "$here/app.lisp" -o "$here/src/app.wasm" --no-wasi --optimize=size
+echo "compiling worker.lisp -> src/worker.wasm"
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --optimize=size
 
-ls -l "$here/src/app.wasm"
+ls -l "$here/src/worker.wasm"
 echo "done. Run it with:  npx wrangler dev"

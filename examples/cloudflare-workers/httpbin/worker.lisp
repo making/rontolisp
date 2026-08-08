@@ -1,5 +1,5 @@
-;;; app.lisp -- a miniature httpbin (https://httpbin.org) for Cloudflare Workers,
-;;; as a Clack application with the reactor adapter written out by hand.
+;;; worker.lisp -- a miniature httpbin (https://httpbin.org) for Cloudflare
+;;; Workers, as a Clack application with the reactor adapter written out by hand.
 ;;;
 ;;; Everything from `read-body` down to `app` is
 ;;; ../httpbin-clack/worker.lisp -- that is, ../../net/httpbin-clack.lisp --

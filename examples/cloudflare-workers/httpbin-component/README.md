@@ -1,12 +1,12 @@
 # httpbin-component — the same handler, through the component model
 
-This directory compiles **[`../httpbin/app.lisp`](../httpbin/app.lisp)** — the
-same file, not a copy — as a WebAssembly component and runs it on Cloudflare
+This directory compiles **[`../httpbin/worker.lisp`](../httpbin/worker.lisp)** —
+the same file, not a copy — as a WebAssembly component and runs it on Cloudflare
 Workers through `jco transpile`. Same routes, same responses; a different way of
 crossing the boundary.
 
 ```bash
-./build.sh          # ../httpbin/app.lisp -> app.wasm -> src/dist/
+./build.sh          # ../httpbin/worker.lisp -> worker.wasm -> src/dist/
 npx wrangler dev    # http://localhost:8787
 ```
 
@@ -34,7 +34,7 @@ disappears here. It is the entire benefit, and it is a genuine one.
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` (195 KB) | 3 × `.wasm` (207 KB) + `app.js` (293 KB) |
+| Files the Worker imports | 1 × `.wasm` (195 KB) | 3 × `.wasm` (207 KB) + `worker.js` (293 KB) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | 3 interfaces, stubbed by hand |
 | Top-level `defparameter` | works, via `_initialize` | does not work at all |
@@ -60,7 +60,7 @@ anything, it asks the host for each already-compiled core module through a
 `src/index.js` hands them over:
 
 ```js
-import core0 from "./dist/app.core.wasm";
+import core0 from "./dist/worker.core.wasm";
 // ...
 instantiate((path) => CORE_MODULES[path], WASI_STUBS);
 ```
@@ -84,7 +84,7 @@ Error: (component [0]) task [1] exited without resolution
 ```
 
 — jco cannot drive a stackful-async export. So there is no `_initialize`
-equivalent on this path, and `app.lisp` is only buildable here because every
+equivalent on this path, and `worker.lisp` is only buildable here because every
 piece of its state lives inside a `defun` — there is not one `defparameter` in
 it, and adding one would be a constraint of this directory rather than of the
 Lisp. Miss that and every top-level definition is silently `nil`: the symptom is
@@ -95,7 +95,8 @@ a route quietly answering `false`.
 A wasm-GC component is a `wasi:cli/run` command by construction, so it imports
 `wasi:cli/stdout`, `wasi:cli/types` and `wasi:filesystem/types` whether or not
 the program does any I/O. With `--instantiation sync` those become an import
-object the host supplies, and since `app.lisp` never prints, stubs are enough:
+object the host supplies, and since `worker.lisp` never prints, stubs are
+enough:
 
 ```js
 const WASI_STUBS = {
@@ -115,15 +116,18 @@ component build of its own, but try it: `--no-gc --component` is an 834-byte
 component that imports *nothing*, so there are no stubs and no exnref flag, and
 the glue has no dependencies:
 
+The output name says which build it is, so it cannot be confused with the
+`worker.wasm` this directory's own `build.sh` produces:
+
 ```bash
 JAR=../../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar
-java -jar $JAR ../hello/hello.lisp -o hello.wasm --no-gc --component --optimize
-npx -y @bytecodealliance/jco transpile hello.wasm -o hello-dist
+java -jar $JAR ../hello/worker.lisp -o worker-no-gc.wasm --no-gc --component --optimize
+npx -y @bytecodealliance/jco transpile worker-no-gc.wasm -o worker-no-gc-dist
 ```
 
 ```console
 $ node --input-type=module -e '
-    import { add, fib, greet } from "./hello-dist/hello.js";
+    import { add, fib, greet } from "./worker-no-gc-dist/worker-no-gc.js";
     console.log(add(2, 3), fib(20), greet());'
 5 6765 Hello from Lisp, compiled to WebAssembly!
 ```

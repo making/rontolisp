@@ -11,7 +11,7 @@ route-decline protocol. And one line that decides the module size:
 ```
 
 ```bash
-./build.sh          # worker.lisp -> src/app.wasm
+./build.sh          # worker.lisp -> src/worker.wasm
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -98,7 +98,7 @@ fall through to the 404 instead of answering 405).
 | [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the `../httpbin-clack` helpers verbatim, the routes, `clackup`. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` and `../httpbin-clack/src/index.js`. |
-| `src/app.wasm` | The compiled module (~407 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~407 KB). A build product — run `./build.sh` first. |
 
 ## Developing without Cloudflare
 

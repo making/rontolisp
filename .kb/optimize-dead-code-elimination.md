@@ -567,7 +567,7 @@ Without the data-evaluator bail the gate is not sound, and the failure is a trap
 | `examples/cloudflare-workers/hello-clack` | 1,133,471 | **514,999 (-54.6%)** — 172 of 750 defuns dispatchable |
 | `examples/cloudflare-workers/httpbin-clack` | 1,156,633 | **534,777 (-53.8%)** |
 | `examples/cloudflare-workers/httpbin` (no clack; its gate already closed) | 245,525 | 248,956 (+1.4%) |
-| the same `app.lisp` at `--component` | 260,134 | 263,557 (+1.3%) |
+| the same `worker.lisp` at `--component` | 260,134 | 263,557 (+1.3%) |
 
 The two + rows are the price of the widened probes: a program whose gate was already closed now keeps a few more rows (any defun whose member name coincides with a keyword or string literal somewhere in the module). That over-approximation is the safe direction — a kept row costs bytes, a missing one costs a resolution. The clack runtime path this all exists for — `clackup` → `find-handler` → `find-package-or-load` → `(find-symbol "RUN" pkg)` → `apply` — resolves through the framed-string probe (`"RUN"` is a string literal in `clack.handler:run`), verified request-for-request on node against the shaken module, on the JVM, and on the interpreter, plus the full `ci-spec.yaml` native run (1,300 cases, 4 backends).
 

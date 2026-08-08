@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile hello.lisp to the .wasm module the Worker imports.
+# Compile worker.lisp to the .wasm module the Worker imports.
 #
 # --no-gc: this program is inside the non-GC subset (integers and a string
 #   literal, no cons cells or hash tables), so it compiles to a plain MVP module
@@ -17,8 +17,8 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling hello.lisp -> src/hello.wasm"
-java -jar "$jar" "$here/hello.lisp" -o "$here/src/hello.wasm" --no-gc --optimize
+echo "compiling worker.lisp -> src/worker.wasm"
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-gc --optimize
 
-ls -l "$here/src/hello.wasm"
+ls -l "$here/src/worker.wasm"
 echo "done. Run it with:  npx wrangler dev"

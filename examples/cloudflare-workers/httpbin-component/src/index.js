@@ -2,22 +2,22 @@
 // model. The one line worth comparing is the `handleRequest` call below: plain
 // JavaScript strings in and out. What that costs is in ../README.md.
 
-import core0 from "./dist/app.core.wasm";
-import core1 from "./dist/app.core2.wasm";
-import core2 from "./dist/app.core3.wasm";
-import { instantiate } from "./dist/app.js";
+import core0 from "./dist/worker.core.wasm";
+import core1 from "./dist/worker.core2.wasm";
+import core2 from "./dist/worker.core3.wasm";
+import { instantiate } from "./dist/worker.js";
 
 // jco's glue asks the host for each core module by the file name it emitted.
 // Rebuild after changing the Lisp and check these still match -- the count can
 // change with the program.
 const CORE_MODULES = {
-  "app.core.wasm": core0,
-  "app.core2.wasm": core1,
-  "app.core3.wasm": core2,
+  "worker.core.wasm": core0,
+  "worker.core2.wasm": core1,
+  "worker.core3.wasm": core2,
 };
 
 // A wasm-GC component imports these whether or not the program does any I/O.
-// app.lisp never prints, so stubs are enough.
+// worker.lisp never prints, so stubs are enough.
 const WASI_STUBS = {
   "wasi:cli/stdout": { writeViaStream: async () => ({ tag: "ok", val: undefined }) },
   "wasi:cli/types": {},
@@ -27,13 +27,13 @@ const WASI_STUBS = {
 // jco's `instantiate` is the whole of it, and there is no initialisation call
 // to follow it with: this path has no `_initialize`, and the `wasi:cli/run`
 // export that would stand in for one cannot be driven through jco -- which is
-// why app.lisp keeps its state inside functions.
+// why worker.lisp keeps its state inside functions.
 //
 // At module scope, so the cost is isolate startup rather than request work.
 const getCoreModule = (path) => CORE_MODULES[path];
 let lisp = instantiate(getCoreModule, WASI_STUBS);
 
-// The envelope is app.lisp's, not this directory's, so this function is
+// The envelope is worker.lisp's, not this directory's, so this function is
 // ../../httpbin/src/index.js's unchanged -- the component model moves the
 // boundary, not the contract. Its two load-bearing fields (the RAW target and
 // the forwarded content-length) are commented there.

@@ -6,7 +6,7 @@
 // small allocation the module's own heap absorbs. Read that directory's
 // index.js if you want the full version -- the envelope is identical.
 
-import module from "./app.wasm";
+import module from "./worker.wasm";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

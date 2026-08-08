@@ -5,7 +5,7 @@ The smallest thing this repository can show that is still a real
 `ql:quickload`, one `defun`, and `clack:clackup`.
 
 ```bash
-./build.sh          # worker.lisp -> src/app.wasm
+./build.sh          # worker.lisp -> src/worker.wasm
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -76,7 +76,8 @@ and lack being in the module so that `app` can be an ordinary Clack application.
 | warm request | | **0.015 ms** | 0.024 ms |
 
 Measured on node 24 (V8, the same engine family as workerd, 2026-08-08) driving
-[`src/index.js`](src/index.js)'s boundary code against this exact `src/app.wasm`.
+[`src/index.js`](src/index.js)'s boundary code against this exact
+`src/worker.wasm`.
 On the real edge, `wrangler deploy` reported **1608.77 KiB upload / 358.27 KiB
 gzip** and a **Worker Startup Time of 30 ms** — measured before the module
 shrank to today's 450 KB; the next deploy will report the smaller bundle — and
@@ -120,7 +121,7 @@ Pass `:silent t :debug nil` to quiet them.
 | [`worker.lisp`](worker.lisp) | The whole program — three forms. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend — and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`. |
-| `src/app.wasm` | The compiled module. A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module. A build product — run `./build.sh` first. |
 
 [`../httpbin-clack`](../httpbin-clack) is this example grown up: the same
 handler backend and the same envelope, but with five endpoints, a request body,

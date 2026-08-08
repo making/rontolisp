@@ -1,13 +1,13 @@
 // index.js -- the whole Worker. There is nothing else in this directory's
 // JavaScript: no WASI shim, no allocator, no bindings library.
 
-import module from "./hello.wasm";
+import module from "./worker.wasm";
 
 // The module imports nothing, so instantiating it is one synchronous line with
 // an empty import object -- and it happens once per isolate, not per request.
 //
 // One line, unlike ../httpbin: this module exports no `_initialize` (--no-gc,
-// and hello.lisp has no top-level forms, so there is nothing to run), and none
+// and worker.lisp has no top-level forms, so there is nothing to run), and none
 // of these three functions can trap and leave the instance unusable.
 const lisp = new WebAssembly.Instance(module, {}).exports;
 

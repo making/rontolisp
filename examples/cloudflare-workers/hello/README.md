@@ -1,12 +1,12 @@
 # hello — the smallest rontolisp Worker
 
-Three Lisp functions ([`hello.lisp`](hello.lisp)) that the Worker calls the way
-it would call any JavaScript function. The compiled module is **563 bytes**,
-imports **nothing**, and needs no WASI shim, no allocator and no bindings
-library — [`src/index.js`](src/index.js) is the entire host side.
+Three Lisp functions ([`worker.lisp`](worker.lisp)) that the Worker calls the
+way it would call any JavaScript function. The compiled module is
+**563 bytes**, imports **nothing**, and needs no WASI shim, no allocator and no
+bindings library — [`src/index.js`](src/index.js) is the entire host side.
 
 ```bash
-./build.sh          # hello.lisp -> src/hello.wasm
+./build.sh          # worker.lisp -> src/worker.wasm
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -32,7 +32,7 @@ Compiled with `--no-gc --optimize`, that is a plain MVP module — no wasm-GC, n
 WASI, nothing to link against:
 
 ```console
-$ node -e 'const m = new WebAssembly.Module(require("fs").readFileSync("src/hello.wasm"));
+$ node -e 'const m = new WebAssembly.Module(require("fs").readFileSync("src/worker.wasm"));
            console.log(WebAssembly.Module.imports(m), WebAssembly.Module.exports(m).map(e => e.name))'
 [] [ 'add', 'fib', 'greet', 'memory', '__ronto_alloc', '__ronto_alloc_mark', '__ronto_alloc_reset' ]
 ```
@@ -84,7 +84,7 @@ never the collector's business.)
 ## The non-GC subset
 
 `--no-gc` is what makes this module half a kilobyte and dependency-free, and it
-is available because `hello.lisp` stays inside the
+is available because `worker.lisp` stays inside the
 [numeric/string subset](../../../doc/en/guides/wasm-nogc.md): integers, a string
 literal, `dotimes`. Add a cons cell, a hash table or the JSON library and the
 build needs the full language — `--no-wasi` instead of `--no-gc`, which is

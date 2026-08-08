@@ -2,12 +2,12 @@
 
 The five echo endpoints of [httpbin.org](https://httpbin.org), written as a
 [Clack](https://github.com/fukamachi/clack) application
-([`app.lisp`](app.lisp)), compiled to WebAssembly and served from a Worker — with
-the adapter that puts it there **written out by hand** instead of installed by
-`clack:clackup`.
+([`worker.lisp`](worker.lisp)), compiled to WebAssembly and served from a
+Worker — with the adapter that puts it there **written out by hand** instead of
+installed by `clack:clackup`.
 
 ```bash
-./build.sh          # app.lisp -> src/app.wasm
+./build.sh          # worker.lisp -> src/worker.wasm
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -41,8 +41,8 @@ curl         http://localhost:8787/nope                   # 404
 
 ## The application is not from here, and neither is the adapter's logic
 
-[`app.lisp`](app.lisp) is two halves with a line of dashes between them, and
-neither half is code this directory invented.
+[`worker.lisp`](worker.lisp) is two halves with a line of dashes between them,
+and neither half is code this directory invented.
 
 Everything from `read-body` down to `app` is
 [`../httpbin-clack/worker.lisp`](../httpbin-clack/worker.lisp) — that is,
@@ -54,7 +54,7 @@ unchanged — and `rontolisp ../../net/httpbin-clack.lisp` serves this exact tex
 on a real socket.
 
 ```console
-$ diff <(sed -n '/^;; --- request helpers/,/^;; --- the reactor adapter/p' app.lisp | sed '$d') \
+$ diff <(sed -n '/^;; --- request helpers/,/^;; --- the reactor adapter/p' worker.lisp | sed '$d') \
        <(sed -n '/^;; --- request helpers/,$p' ../httpbin-clack/worker.lisp | sed '/^(ql:quickload/,$d')
 $                                          # no output: identical
 ```
@@ -100,10 +100,10 @@ size matters more than that.
 
 | File | Purpose |
 | --- | --- |
-| [`app.lisp`](app.lisp) | **The whole program.** The Clack application (verbatim from upstream) plus the reactor adapter. |
+| [`worker.lisp`](worker.lisp) | **The whole program.** The Clack application (verbatim from upstream) plus the reactor adapter. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`, including the string boundary. |
-| `src/app.wasm` | The compiled module (~195 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~195 KB). A build product — run `./build.sh` first. |
 
 ## How it works
 
@@ -111,7 +111,7 @@ size matters more than that.
 
 A WASI command has no interface but stdout, which makes for an awkward request
 handler. A Worker also hands over a request JavaScript has already parsed rather
-than a socket, so there is no server to run either. `app.lisp` declares a
+than a socket, so there is no server to run either. `worker.lisp` declares a
 **host-callable export** instead:
 
 ```lisp
@@ -178,7 +178,7 @@ the handler does no I/O, `build.sh` compiles with `--no-wasi`. The module then
 imports nothing whatsoever:
 
 ```console
-$ node -e 'const m = new WebAssembly.Module(require("fs").readFileSync("src/app.wasm"));
+$ node -e 'const m = new WebAssembly.Module(require("fs").readFileSync("src/worker.wasm"));
            console.log(WebAssembly.Module.imports(m))'
 []
 ```
@@ -201,7 +201,7 @@ not. A rontolisp module has **two** memories:
 
 | | The Lisp heap | Linear memory |
 | --- | --- | --- |
-| What lives there | every cons cell, hash table, CLOS instance and Lisp string `app.lisp` builds — including the Clack environment and the reply it renders | *only* the bytes of a string crossing the boundary, plus the compiler's own static data |
+| What lives there | every cons cell, hash table, CLOS instance and Lisp string `worker.lisp` builds — including the Clack environment and the reply it renders | *only* the bytes of a string crossing the boundary, plus the compiler's own static data |
 | Managed by | **the engine.** It is wasm-GC: objects become unreachable and V8 reclaims them. Nothing in `src/index.js` touches it. | **you.** The engine never traces it, so nothing in there is ever freed on its own. |
 | Grows with | nothing, over time | every argument you write in, forever, unless you reclaim it |
 
@@ -220,8 +220,8 @@ That only matters because the instance is **resident**: importing a `.wasm` file
 in a Worker yields a compiled `WebAssembly.Module` (Cloudflare compiles it at
 deploy time, so no request pays for compilation), instantiating is per-isolate
 work, and `src/index.js` therefore does it once and caches it. One isolate serves
-many requests. Measured over 44 000 requests, driving this same `src/app.wasm`
-from Node:
+many requests. Measured over 44 000 requests, driving this same
+`src/worker.wasm` from Node:
 
 | | linear memory after 44 000 requests |
 | --- | --- |
@@ -244,9 +244,9 @@ the bracket.
 crosses *into* that module, so there is nothing to reclaim and no bracket to
 write. The allocator arrives with the first string argument, not with wasm-GC.
 
-[`../httpbin-component`](../httpbin-component) is this same `app.lisp` with that
-whole section replaced by the canonical ABI — and with a different set of costs;
-the [directory README](../README.md#would-the-component-model-be-simpler)
+[`../httpbin-component`](../httpbin-component) is this same `worker.lisp` with
+that whole section replaced by the canonical ABI — and with a different set of
+costs; the [directory README](../README.md#would-the-component-model-be-simpler)
 compares them.
 
 The Lisp side keeps its own globals across requests within an isolate — that is
@@ -311,7 +311,7 @@ it is **58,793 B**, about 1.9% of the free plan's 3 MB.
 
 Measured on node 24 (2026-08-08, the `=size` builds) driving
 [`src/index.js`](src/index.js)'s boundary code against this exact
-`src/app.wasm`, next to `../httpbin-clack`'s — the same application, the same
+`src/worker.wasm`, next to `../httpbin-clack`'s — the same application, the same
 envelope, the same requests, `clackup` and clack instead of the hand-written
 adapter:
 

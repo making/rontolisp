@@ -10,7 +10,7 @@ file: [`worker.lisp`](worker.lisp) *is* the upstream example, down to the last
 form.
 
 ```bash
-./build.sh          # worker.lisp -> src/app.wasm
+./build.sh          # worker.lisp -> src/worker.wasm
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -101,7 +101,7 @@ curl         http://localhost:8787/nope                   # 404
 | [`worker.lisp`](worker.lisp) | **The whole program.** `net/httpbin-clack.lisp` verbatim, with its `clackup` line's arguments changed. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` — same envelope, same boundary code, same file. |
-| `src/app.wasm` | The compiled module (~465 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~465 KB). A build product — run `./build.sh` first. |
 
 The directory used to split the application into an `app.lisp` and the transport
 into a `worker.lisp` and a `serve.lisp`, because the transport was a
@@ -255,7 +255,7 @@ constructor; an object would have collapsed the duplicates.
 
 Measured on node 24 (V8, the same engine family as workerd, 2026-08-08) driving
 the byte-identical boundary code of [`src/index.js`](src/index.js) against each
-directory's `src/app.wasm`, over the same requests:
+directory's `src/worker.wasm`, over the same requests:
 
 | | `../httpbin` | this |
 | --- | --- | --- |
