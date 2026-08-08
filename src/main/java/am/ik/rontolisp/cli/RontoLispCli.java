@@ -32,6 +32,7 @@ import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.HttpReactorInliner;
+import am.ik.rontolisp.eval.HttpReactorLibrary;
 import am.ik.rontolisp.eval.HttpServerLibrary;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
@@ -358,8 +359,15 @@ public final class RontoLispCli {
 		// when the program references rontolisp:url-* / query-param* (the
 		// interpreter path instead loads the libraries lazily inside LispEvaluator).
 		// The whole frontend reads with the target backend's feature set, so
-		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code.
-		Features features = outputFile.endsWith(".wasm") ? Features.WASM : Features.JVM;
+		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code --
+		// and #+rontolisp-reactor selects reactor-mode code: the
+		// clack-handler-rontolisp shim's run picks the http-handler directive or the
+		// %http-reactor marker with it. Reactor mode is --no-wasi (Preview 1 only:
+		// the compiler ignores the flag under --component, so the feature must too)
+		// or --no-gc (a pure-compute reactor with or without the component wrap).
+		boolean reactor = (noWasi && !component) || noGc;
+		Features features = outputFile.endsWith(".wasm") ? (reactor ? Features.WASM_REACTOR : Features.WASM)
+				: Features.JVM;
 		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc, component);
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
@@ -408,12 +416,21 @@ public final class RontoLispCli {
 		loaded = HttpLibrary.process(loaded, witBackend, serveGlue);
 		// The host-driven reactor's counterpart of that splice: a Clack handler
 		// backend whose run stores the app and leaves a rontolisp::%http-reactor
-		// marker (the clack-handler-cloudflare-workers shim) gets the marker lowered
-		// to nil and the wasm-export of a bridge to its dispatcher synthesized -- so
-		// a Worker source is (clack:clackup #'app :server :cloudflare-workers) and
-		// nothing else. A no-op on the interpreter and the JVM (the shim does not
-		// even read the marker there).
+		// marker (the clack-handler-cloudflare-workers shim always; the
+		// clack-handler-rontolisp shim under #+rontolisp-reactor) gets the marker
+		// lowered to nil and the wasm-export of a bridge to its dispatcher
+		// synthesized -- so a Worker source is (clack:clackup #'app :server
+		// :rontolisp) and nothing else. A no-op on the interpreter and the JVM (the
+		// shims do not even read the marker there).
 		loaded = HttpReactorInliner.process(loaded, witBackend);
+		// The shared reactor machinery behind BOTH handler backends
+		// (http-reactor.lisp: the one app store, the JSON envelope over
+		// %http-make-env / %http-normalize-response): spliced for EVERY backend
+		// whenever the program references it -- the synthesized bridge above does,
+		// and so do the backends' run/handle/dispatch. Before HttpServerLibrary,
+		// whose entry points the machinery calls; JsonLibrary later picks up its
+		// json-parse / json-stringify call sites.
+		loaded = HttpReactorLibrary.process(loaded);
 		// The server-side HTTP value model (http-server.lisp): the Clack environment a
 		// handler receives and the Clack response it returns, written once in rontolisp
 		// so every backend agrees by construction. Spliced for EVERY backend (unlike

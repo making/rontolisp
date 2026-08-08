@@ -1,14 +1,15 @@
 ;;; worker.lisp -- ../httpbin-clack with a real routing library on top.
 ;;;
-;;; The helpers are ../httpbin-clack/worker.lisp's, and so are its clackup call
-;;; and synthesized `handle-request` export; what replaces its hand-written
-;;; `cond` over :path-info -- and its method check with it -- is tiny-routes.
+;;; The helpers are ../../net/httpbin-clack.lisp's (the file ../httpbin-clack
+;;; deploys), and so are the clackup call and the synthesized `handle-request`
+;;; export; what replaces its hand-written `cond` over :path-info -- and its
+;;; method check with it -- is tiny-routes.
 ;;;
 ;;; The FIRST line decides the module size. "tiny-routes/lite" swaps one
 ;;; component of the library: the cl-ppcre-backed path-template matcher, and
 ;;; the :cl-ppcre dependency with it. A template compiles to a scanner at RUN
-;;; time, so the full system ships the whole regex engine -- 974,530 B raw
-;;; where this build is 408,448 B. The lite matcher takes literal characters
+;;; time, so the full system ships the whole regex engine -- 974,448 B raw
+;;; where this build is 408,355 B. The lite matcher takes literal characters
 ;;; and :name tokens and refuses a regex-shaped template when the route is
 ;;; built. The README has the numbers and the subset.
 
@@ -110,5 +111,4 @@
 
 (clack:clackup *app*
                :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+               :use-thread nil)

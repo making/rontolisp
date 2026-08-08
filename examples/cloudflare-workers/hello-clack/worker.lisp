@@ -14,14 +14,13 @@
 ;;; Nothing here declares that export, because rontolisp:wasm-export needs a
 ;;; literal name at compile time and a clackup call has none to give.
 ;;;
-;;; The two keywords are what this host is, not boilerplate:
-;;;   :use-thread nil             -- already the default on WASM; on the
-;;;                                  interpreter and the JVM it stops clackup
-;;;                                  from storing the application on a thread
-;;;                                  the next form would race.
-;;;   :use-default-middlewares nil -- lack's backtrace middleware prints to
-;;;                                  *error-output*, which a reactor does not
-;;;                                  have.
+;;; The one keyword is what this host is, not boilerplate:
+;;;   :use-thread nil -- already the default on WASM; on the interpreter and
+;;;                      the JVM it stops clackup from storing the application
+;;;                      on a thread the next form would race.
+;;; clackup's default middlewares stay on: lack's backtrace middleware prints
+;;; its report to *error-output*, which under --no-wasi is a sink -- discarded,
+;;; not a trap -- and on every other backend is real standard error.
 ;;;
 ;;; ../hello is the other end of the same spectrum: three exported functions,
 ;;; no clack, 563 bytes. This one is ~362 KB because what the tree-shaker keeps
@@ -37,5 +36,4 @@
 
 (clack:clackup #'app
                :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+               :use-thread nil)

@@ -156,6 +156,12 @@ If you need the text, return it from the export instead.
 
 It is Preview 1 only — `--no-wasi` is ignored under `--component`.
 
+A `--no-wasi` compile also reads the source with the `:rontolisp-reactor`
+feature active, which is how a `clack:clackup ... :server :rontolisp` program
+becomes a **served** reactor here: the handler backend stores the application
+and the compiler synthesizes a `handle-request` export the host calls per
+request — see [the Clack guide](clack.md#a-host-that-calls-you-the-reactor-build).
+
 Because the module is a reactor (not a WASI command), its top-level
 initializer is exported as **`_initialize`** rather than `_start`. A host
 should call `_initialize` once after instantiation to run top-level forms

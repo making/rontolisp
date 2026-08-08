@@ -106,9 +106,45 @@ protocol the DELAYED form is supported and the streaming writer refused.
 Still out of scope per `.todo/223`: WebSocket (`clack.socket`) and
 `:swank-port`.
 
+## How the `:rontolisp` backend picks its transport (the one-clackup-source rule)
+
+`:server :rontolisp` means "serve on THIS target's native inbound transport",
+and the choice is made at COMPILE time by the reader features — which is what
+lets ONE source (`examples/net/httpbin-clack.lisp`, clackup line included) run
+unchanged on the interpreter, the JVM, `wasmtime serve` AND a reactor host
+(verified on all four, workerd via `wrangler dev` for the reactor leg,
+2026-08-09):
+
+- `#-rontolisp-wasm` (interpreter / JVM): the stoppable socket server above.
+- `#+(and rontolisp-wasm (not rontolisp-reactor))`: the
+  `rontolisp:http-handler` directive leg below — `wasmtime serve` under
+  `--component`, the call-time error on Preview 1.
+- `#+rontolisp-reactor` (`--no-wasi` — Preview 1 only, the compiler ignores it
+  under `--component` so the feature does too — and `--no-gc`;
+  `Features.WASM_REACTOR`, selected in `RontoLispCli.compileRecorded`): run
+  stores the app in the SHARED reactor store and leaves the
+  `rontolisp::%http-reactor` marker; the compiler answers with the synthesized
+  `handle-request` export. `:port`/`:address` are ignored, run returns at
+  once. Pinned by `RontoLispCliTest.clackRontolispBackendUnderNoWasi*` and its
+  without-`--no-wasi` twin.
+
+WHY a reader feature and not a front-end rewrite: the shim is the ONE place
+that already branches per target (`#+rontolisp-wasm`), builtin-shim sources are
+read with the target's features (`ShimLibraries.forms`), and keeping both legs
+in the shim means the directive simply does not EXIST in a reactor compile — no
+Java pass has to coordinate "directive present AND marker present" or dodge a
+duplicate-export synthesis. WHY not `:server :auto`: it would leave
+`:rontolisp` meaning "owns a socket" and cost every ported program a source
+edit, which is the asymmetry the rule exists to remove. The reactor leg rides
+the same shared machinery as the explicit `:cloudflare-workers` backend (see
+below), so the two designators cannot drift. If a future host type cannot be
+told apart by compile flags, this scheme is the thing to re-evaluate — the
+feature reflects the TARGET, not the deployment vendor.
+
 ## WASM component / Preview 1
 
-The shim's `#+rontolisp-wasm` `run` stores the app and calls the
+The shim's WASI-wasm `run` (`#+(and rontolisp-wasm (not rontolisp-reactor))`)
+stores the app and calls the
 `rontolisp:http-handler` DIRECTIVE with the literal quoted `'%app` (a one-line
 `(funcall *app* env)` indirection — the directive requires a literal quoted
 name) plus `:raw-body :buffered` — inside a defun body. `HttpLibrary.process` (and `HttpHandlerInliner.usesHttpHandler`)
@@ -151,31 +187,59 @@ and so are `stream-read`/`stream-close`/`streamp` when no stream type exists
 loads. An uncaught error is a silent trap on Preview 1, so the E2E pins the
 message through `handler-case`.
 
-## The host-driven reactor: `clack-handler-cloudflare-workers` (`clackup`, with the export synthesized)
+## The host-driven reactor: `http-reactor.lisp` + two thin designators
 
-A SECOND built-in handler backend, `clack-handler-cloudflare-workers.lisp` (package
-`clack.handler.cloudflare-workers`, both system spellings in `ShimLibraries.RESOURCES` /
-`BuiltinSystems` / `resource-config.json`, again NOT seeded in `PackageRegistry`).
-It exists for the hosts that call an EXPORTED FUNCTION instead of handing the
-program a socket — a Cloudflare Worker, and any other `wasm-export` /
-`--no-wasi` reactor embedding (the browser, node, a JVM host).
+The reactor TRANSPORT — the one application store, the JSON envelope over
+`%http-make-env` / `%http-normalize-response`, the handler-case that answers
+500, and the compile-time marker — is the SHARED internal library
+`http-reactor.lisp` (`rontolisp::%http-reactor-register` / `-handle` /
+`-dispatch`; `eval/HttpReactorLibrary`; envelope documented in that file's
+header). It exists for the hosts that call an EXPORTED FUNCTION instead of
+handing the program a socket — a Cloudflare Worker, and any other
+`wasm-export` / `--no-wasi` reactor embedding (the browser, node, a JVM host).
+The compile path splices it whenever the program references a
+`%http-reactor-*` name (`RontoLispCli`, right after `HttpReactorInliner` and
+BEFORE `HttpServerLibrary`, whose entry points it calls; `JsonLibrary` later
+picks up its json call sites); the interpreter lazy-loads it through the
+`RONTOLISP::%HTTP-REACTOR-` function-lookup hook, which must sit BEFORE the
+broader `%HTTP-` hook (every public entry is a function, so the first touch is
+always a call). Unlike the builtin shims it is NOT excluded from
+`LibraryDefunPruner` — but its consumers are the (unprunable) shim runs, so in
+practice it is present exactly when a reactor designator is.
 
-It is driven by **`clackup`**, like every other handler backend:
+TWO designators reach it, and that is deliberate:
+
+- **`:server :rontolisp` under `#+rontolisp-reactor`** — the one-source rule
+  above: reactor when the TARGET is a reactor.
+- **`:server :cloudflare-workers`** (`clack-handler-cloudflare-workers.lisp`,
+  package `clack.handler.cloudflare-workers`, both system spellings in
+  `ShimLibraries.RESOURCES` / `BuiltinSystems` / `resource-config.json`, again
+  NOT seeded in `PackageRegistry`) — host-driven on EVERY backend: its `run`
+  stores the app where `:rontolisp` would bind a socket, which is what lets a
+  Worker be developed and driven through `dispatch` on the interpreter
+  (`hello-clack/check.lisp`), and it keeps the ecosystem-conventional per-host
+  name a Clack user looks for. Since the `:rontolisp` reactor leg landed it is
+  no longer NEEDED for a Worker — one `:rontolisp` source covers every host —
+  and both designators store into the ONE shared `%http-reactor-app`, so a
+  program that mixes them (clack always splices `clack-handler-rontolisp`;
+  the user quickloads the cloudflare one on top) stays coherent.
+
+The explicit designator is driven by **`clackup`**, like every other handler
+backend:
 
 ```lisp
 (ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")
-(clack:clackup #'app
-               :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+(clack:clackup #'app :server :cloudflare-workers :use-thread nil)
 ```
 
 Below `clackup` sit two functions, and BOTH are public: `handle`
 `(app request-json) -> response-json` is the adapter, and `dispatch`
-`(request-json) -> response-json` runs it over the application `run` stored. A
-program that wants no clack at all can still call `handle` directly with its own
-`wasm-export` — that is the shape this shim shipped with, and it still works.
+`(request-json) -> response-json` runs it over the application `run` stored —
+both thin names over the shared `%http-reactor-handle` / `-dispatch`, so the
+designators cannot drift. A program that wants no clack at all can still call
+`handle` directly with its own `wasm-export` — that is the shape this shim
+shipped with, and it still works.
 
 **And a program can skip the shim too.** `handle` is thirty lines over
 `%http-make-env` / `%http-normalize-response` plus the JSON envelope, so a
@@ -183,9 +247,9 @@ reactor that wants NO clack package in the module at all can write those lines
 itself and export its own `handle-request`.
 `examples/cloudflare-workers/httpbin` is exactly that, and it is deliberately
 the SAME application as `examples/cloudflare-workers/httpbin-clack`
-(`net/httpbin-clack.lisp` verbatim down to `app`, pinned by the `diff` in its
-README) with the SAME envelope (one `src/index.js`, byte-identical between the
-two directories). The pair is therefore a controlled measurement of what clack
+(`net/httpbin-clack.lisp` verbatim down to `app` — the clack directory now
+deploys that FILE, so there is no copy left to diff) with the SAME envelope
+(one `src/index.js`, byte-identical between the two directories). The pair is therefore a controlled measurement of what clack
 costs on a reactor, and the answer is size and a little startup — node 24, same
 machine, `--no-wasi --optimize`, re-measured 2026-08-08 after the dispatch-gate
 refinement halved the clack build (`.kb/optimize-dead-code-elimination.md`,
@@ -203,8 +267,9 @@ moved to 200,155 / 58,793 and 474,150 / 124,756 gzip that day, for a
 warm-request price of 3-11 µs — `.kb/optimize-dead-code-elimination.md`, "What
 ROUTING costs a clack module". The `--optimize` columns above stay as the
 controlled clack-vs-no-clack measurement. Both tables are RECORDS of their own
-experiment, not the current build: the CLOS-lowering pass that landed after
-them took the same pair to **182,767 / 55,895** and **384,366 / 105,447** —
+experiment, not the current build: after the CLOS-lowering pass and the
+one-source cutover (middlewares default-ON, the thin shim) the pair stands at
+**182,767 / 55,895** and **383,668 / 105,361** (gzip -9 -n, 2026-08-09) —
 what the example READMEs now carry, and what `build.sh` reproduces.)
 
 The hand-written half still pays for being a PORTABLE Clack application: naming
@@ -215,11 +280,11 @@ mentions `%http-body-stream`). Measured when that shape landed (both builds were
 roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
 (283,200 B).
 
-- `handle` is `(app request-json) -> response-json`. It converts nothing itself:
-  it builds the raw tuple and calls `rontolisp::%http-make-env` /
-  `%http-normalize-response`, exactly as every other transport does, so it
-  cannot drift from what a SERVED request sees. All that is left in the shim is
-  the JSON envelope, documented in the file's own header.
+- `%http-reactor-handle` is `(app request-json) -> response-json`. It converts
+  nothing itself: it builds the raw tuple and calls `rontolisp::%http-make-env`
+  / `%http-normalize-response`, exactly as every other transport does, so it
+  cannot drift from what a SERVED request sees. All that is left in the library
+  is the JSON envelope, documented in `http-reactor.lisp`'s own header.
 - **The envelope is an API now** — `{method, target, headers, body, scheme,
   remote-addr}` in, `{status, headers, body}` out. Two parts of it are
   load-bearing and were both found by measurement: `target` is the RAW request
@@ -227,39 +292,46 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   that split, and a pre-split path leaves `:query-string` nil), and the response
   `headers` cross as an ARRAY of `[name, value]` pairs, not an object, so a
   repeated `Set-Cookie` survives. The pairs are built into a VECTOR
-  (`%header-pairs`, todo-296): a headerless Clack response — tiny-routes'
+  (`%http-reactor-header-pairs`, todo-296): a headerless Clack response — tiny-routes'
   `(ok "x")` is one — must cross as `[]`, and json-stringify renders an empty
   LIST as `false`, which the Headers constructor on the JS side throws on. No
   shipped example had ever produced a headerless response, which is why this
   survived until a routed one did.
-- **`handle` CATCHES and answers 500.** On a reactor an uncaught Lisp error is a
-  trap that takes the whole instance down and the host must throw the instance
-  away; catching is what every other rontolisp transport already does with a
-  handler error. The consequence to know: loading this shim puts `handler-case`
-  in the module, so the program compiles in EH mode.
+- **`%http-reactor-handle` CATCHES and answers 500.** On a reactor an uncaught
+  Lisp error is a trap that takes the whole instance down and the host must
+  throw the instance away; catching is what every other rontolisp transport
+  already does with a handler error. The consequence to know: loading the
+  reactor library puts `handler-case` in the module, so the program compiles in
+  EH mode.
 - **`run` stores the app; the EXPORT is synthesized by the compiler.** A reactor
-  owns no socket, so `run` binds nothing: it `setq`s `*app*` and returns nil
-  (`stop` is nil too). What replaces the socket is an export, and
+  owns no socket, so `run` binds nothing: it calls `%http-reactor-register` and
+  returns nil (`stop` is nil too). What replaces the socket is an export, and
   `rontolisp:wasm-export` needs a LITERAL name at compile time — which a program
   whose whole body is a `clackup` call cannot supply. So `run` carries a marker,
-  `(rontolisp::%http-reactor 'dispatch "handle-request")`, that
-  `eval/HttpReactorInliner` lowers to nil on the WASM backends and answers by
-  APPENDING `(defun %reactor-dispatch (json) (…:dispatch json))` plus its
-  `wasm-export` after the program (appended, so the package-qualified name
-  resolves against the shim's own spliced `defpackage`). The precedent is exact:
+  `(rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
+  "handle-request")`, that `eval/HttpReactorInliner` lowers to nil on the WASM
+  backends and answers by APPENDING
+  `(defun %reactor-dispatch (json) (rontolisp::%http-reactor-dispatch json))`
+  plus its `wasm-export` after the program. BOTH shims' runs carry that marker
+  (the cloudflare one on every WASM read, the `:rontolisp` one under the
+  reactor feature) naming the SAME shared dispatcher, so when a program
+  splices both the two markers are identical and the inliner's first-wins is
+  not a choice (`HttpReactorInlinerTest.twoIdenticalMarkersSynthesizeOneBridge`).
+  The precedent is exact:
   `HttpLibrary` reads the `http-handler` directive nested in the
   `clack-handler-rontolisp` shim's `run` the same way. It is a SEPARATE marker,
   not an overload of `http-handler`, because that directive means "bind a
-  socket" everywhere else — which is exactly what made the `:rontolisp` backend
-  trap here (`.todo/281`'s `_initialize TRAPPED` was that directive, not
-  `clackup`).
-- **The marker is `#+rontolisp-wasm` and nothing defines it.** On the
-  interpreter and the JVM the shim never reads the form, because there is no
-  export to synthesize: the host calls `dispatch` as an ordinary function. That
-  is why `dispatch` is EXPORTED from the package rather than being a
-  compiler-only internal, and why `run` does not `defun` a `handle-request` of
-  its own — a library defining a function into the user's namespace is
-  surprising, and `check.lisp` would then pin a name only one backend needs.
+  socket" on the WASI targets — which is exactly what made the `:rontolisp`
+  backend trap on reactors before its reactor leg existed (`.todo/281`'s
+  original `_initialize TRAPPED` symptom was that directive, not `clackup`).
+- **The cloudflare shim's marker is `#+rontolisp-wasm` and nothing defines it.**
+  On the interpreter and the JVM the shims never read the form, because there
+  is no export to synthesize: the host calls `dispatch` as an ordinary
+  function. That is why `dispatch` is EXPORTED from the package rather than
+  being a compiler-only internal, and why `run` does not `defun` a
+  `handle-request` of its own — a library defining a function into the user's
+  namespace is surprising, and `check.lisp` would then pin a name only one
+  backend needs.
   Consequence, and the reason `HttpReactorInliner.declaresExport` exists: the
   marker fires for any WASM program that merely quickloads the shim, `clackup`
   called or not — exactly like `HttpLibrary`'s nested-directive detection. For
@@ -282,42 +354,50 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   BEFORE `run` is applied), so the fix went where the cause is: under
   `--no-wasi` the `fd_write` stub discards instead of trapping
   (`.kb/wasm-export-no-wasi.md` has the full reason and the output-only rule).
-- **The two keywords the example still passes are per-HOST facts, not
+- **The one keyword the examples still pass is a per-HOST fact, not
   incantation.** `:use-thread nil` because the interpreter and the JVM HAVE
-  `:thread-support`, so clackup would otherwise apply `run` — the `*app*` store
-  — on another thread and race the next form (on WASM it is already the
-  default). `:use-default-middlewares nil` because lack's `backtrace` middleware
-  exists to print a report to `*error-output*`, which a reactor does not have;
-  it also prints on an error the application CATCHES, and
-  `(symbol-value '*error-output*)` is unbound on the compile paths today
-  (`.todo/283`), which turns a handled error into a WASM trap. Drop the second
-  keyword when `.todo/283` lands.
+  `:thread-support`, so clackup would otherwise apply `run` — the app store —
+  on another thread and race the next form (on WASM it is already the
+  default). `:use-default-middlewares nil` was dropped everywhere when
+  `.todo/283` landed (the standard-stream `symbol-value`s are bound on the
+  compile paths now): lack's `backtrace` middleware — which prints even on an
+  error the application CATCHES, via its handler-bind — writes its report to
+  `*error-output*`, a discarding sink under `--no-wasi` and real stderr
+  everywhere else, and the response stays correct (verified end to end on
+  workerd with an unparseable-JSON body: the report is discarded, the 200
+  `"json":null` answer comes back).
 
-Why the vendor name is in a shim system rather than in `rontolisp:`: nothing in
-the envelope is Cloudflare-specific, but a `rontolisp:`-level function would
-have had to be named for the mechanism and would then not be findable by the
-people who need it. A handler backend is where the ecosystem already puts
-per-host names (`clack-handler-hunchentoot`, `clack-handler-woo`), and it keeps
-the core package vendor-free. Pinned by `LispEvaluatorAsdfTest`
-(`theCloudflareHandlerShim*`), by `HttpReactorInlinerTest` (the marker lowering
-and the synthesized export) and by `examples/cloudflare-workers/httpbin-clack/`,
-whose `check.lisp` runs it on the interpreter, the JVM and wasm-GC
-(`examples/examples.yaml`) and whose `worker.lisp` is the deployed Worker --
-and by `examples/cloudflare-workers/hello-clack/`, the three-form floor. The
-clack-free half of the pair, `examples/cloudflare-workers/httpbin/`, is pinned
-the same way by its `check.lisp`: same three backends, same requests, so a
-divergence between the shim's `handle` and a hand-written one shows up as two
-manifest cases disagreeing.
+Why the VENDOR name stays a shim system while the machinery is
+`rontolisp::`-internal: the user-facing surface is the `:server` designator,
+and a handler backend is where the ecosystem already puts per-host names
+(`clack-handler-hunchentoot`, `clack-handler-woo`) — findable, and it keeps the
+core package vendor-free. The internals (`%http-reactor-*`) are named for the
+mechanism because no user names them, exactly like `%http-server-*`. Pinned by
+`LispEvaluatorAsdfTest`
+(`theCloudflareHandlerShim*` — now exercising the delegation and the
+interpreter's lazy reactor-library hook), by `HttpReactorInlinerTest` (the
+marker lowering and the synthesized export), by `RontoLispCliTest` (the
+`:rontolisp` reactor leg end to end through the CLI compile), and by
+`examples/cloudflare-workers/hello-clack/` +
+`examples/cloudflare-workers/httpbin-tiny-routes/`, whose `check.lisp`s drive
+`dispatch` on the interpreter, the JVM and wasm-GC (`examples/examples.yaml`).
+The clack-free half of the measured pair,
+`examples/cloudflare-workers/httpbin/`, is pinned the same way by its
+`check.lisp`: same three backends, same requests, so a divergence between the
+shared `handle` and a hand-written one shows up as two manifest cases
+disagreeing.
 
-**The example directory collapsed to ONE Lisp file when this landed, and that is
-the readable proof the abstraction is at the Clack level**: `worker.lisp` is now
-`examples/net/httpbin-clack.lisp` VERBATIM down to `app`, with that file's
-`clackup` line carrying different arguments. The old `app.lisp` / `worker.lisp`
-/ `serve.lisp` split existed because the transport was a hand-written adapter
-that had to be kept out of the application; a `:server` designator needs no such
-quarantine. `net/httpbin-clack.lisp` gained the manifest entry `serve.lisp` used
-to carry, so the "it still serves for real" leg is pinned on the real file
-rather than on a copy.
+**The example directory collapsed to ONE Lisp file when the backend landed, and
+to ZERO when the `:rontolisp` reactor leg did**: first `worker.lisp` became
+`examples/net/httpbin-clack.lisp` verbatim with only the `clackup` arguments
+changed; now `httpbin-clack/build.sh` compiles `net/httpbin-clack.lisp` ITSELF
+and the directory holds no Lisp at all (its `check.lisp` went with the copy —
+the reactor-machinery-over-a-real-app pin lives in `httpbin-tiny-routes/`,
+and the one source's serve legs in its own manifest entry). The old
+`app.lisp` / `worker.lisp` / `serve.lisp` split existed because the transport
+was a hand-written adapter that had to be kept out of the application; a
+`:server` designator needs no such quarantine, and one designator for every
+host needs no second file.
 
 Measured on the deployed Worker when `clackup` replaced the hand-written
 `wasm-export` + `defun` (node 24, same machine, `--no-wasi --optimize`;

@@ -33,33 +33,41 @@ GET /anything
 
 (clack:clackup #'app
                :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+               :use-thread nil)
 ```
 
 There is **no Worker-specific code in it**. `app` takes the Clack environment
 plist and returns the Clack `(status headers body)` list, so the same function
 runs on hunchentoot, on woo, under `wasmtime serve` and on the JVM, unchanged.
-What makes it a Worker is the `:server` designator, and nothing else.
 
-`:cloudflare-workers` is a built-in handler backend for a host that **calls you**
-instead of handing you a socket. Its `run` binds nothing — it stores the
-application and returns — and what replaces the socket is one WASM export,
-`handle-request` (a JSON request string in, a JSON response string out), which
+`:cloudflare-workers` is a built-in handler backend that is **host-driven on
+every backend**: its `run` binds nothing — it stores the application and
+returns — and what replaces the socket is one WASM export, `handle-request` (a
+JSON request string in, a JSON response string out), which
 [`src/index.js`](src/index.js) calls. You do not declare that export:
 `rontolisp:wasm-export` needs a literal name at compile time, which a `clackup`
 call has none to give, so the compiler synthesizes it from a marker the handler
 backend leaves behind. The [Clack guide](../../../doc/en/guides/clack.md) has
 the full story.
 
-The two keywords are properties of this host rather than boilerplate:
+A Worker does not strictly need this designator any more: `:server :rontolisp`
+serves on every target's own transport — a socket on the interpreter and the
+JVM, `wasmtime serve` under `--component`, and this same synthesized export
+under `--no-wasi` — which is how [`../httpbin-clack`](../httpbin-clack) deploys
+`examples/net/httpbin-clack.lisp` unchanged. What `:cloudflare-workers` still
+says is "host-driven *everywhere*": on the interpreter it stores the
+application instead of binding a socket, which is what lets
+[`check.lisp`](check.lisp) drive the whole Worker through `dispatch` with no
+Cloudflare in sight.
 
-- **`:use-thread nil`.** Already the default on the WASM backends
-  (single-threaded by construction) — but the interpreter and the JVM have
-  threads, and `clackup` would otherwise store the application on one of them,
-  racing the next form.
-- **`:use-default-middlewares nil`.** lack's `backtrace` middleware exists to
-  print a report to `*error-output*`, which a host-driven reactor does not have.
+The one keyword is a property of the other backends rather than boilerplate:
+**`:use-thread nil`** is already the default on the WASM backends
+(single-threaded by construction) — but the interpreter and the JVM have
+threads, and `clackup` would otherwise store the application on one of them,
+racing the next form. `clackup`'s default middlewares stay on: lack's
+`backtrace` middleware prints its report to `*error-output*`, which under
+`--no-wasi` is a sink (discarded, not a trap) and everywhere else is real
+standard error.
 
 ## What it costs
 
@@ -70,12 +78,12 @@ and lack being in the module so that `app` can be an ordinary Clack application.
 | | [`../hello`](../hello) | this | [`../httpbin-clack`](../httpbin-clack) |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | the same, with five echo endpoints |
-| module | 563 B | 370,858 B raw / **102,254 B gzip** | 384,366 B / 105,447 B gzip |
+| module | 563 B | 370,765 B raw / **102,172 B gzip** | 383,668 B / 105,361 B gzip |
 | imports | zero | **zero** — instantiated with `{}`, no WASI shim | zero |
-| `_initialize` | none (no top-level forms) | ~12 ms — clack's load time, `clackup` included | ~12 ms |
-| warm request | | **0.015 ms** | 0.024 ms |
+| `_initialize` | none (no top-level forms) | ~5 ms — clack's load time, `clackup` included | ~5 ms |
+| warm request | | **0.013 ms** | 0.038 ms |
 
-Measured on node 24 (V8, the same engine family as workerd, 2026-08-08) driving
+Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
 [`src/index.js`](src/index.js)'s boundary code against this exact
 `src/worker.wasm`.
 On the real edge, `wrangler deploy` reported **1608.77 KiB upload / 358.27 KiB
@@ -123,12 +131,11 @@ Pass `:silent t :debug nil` to quiet them.
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`. |
 | `src/worker.wasm` | The compiled module. A build product — run `./build.sh` first. |
 
-[`../httpbin-clack`](../httpbin-clack) is this example grown up: the same
-handler backend and the same envelope, but with five endpoints, a request body,
-and an application that is byte-identical to
-[`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) — which serves
-the very same code on a real HTTP server, so the two can be compared with
-`curl`.
+[`../httpbin-clack`](../httpbin-clack) is this example grown up — and one step
+further: it has no `worker.lisp` at all. Its `build.sh` compiles
+[`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) — the file
+that serves the same five endpoints on a real HTTP server — as the Worker,
+unchanged, on `:server :rontolisp`.
 
 ## Limitations
 

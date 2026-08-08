@@ -47,6 +47,22 @@ public final class Features {
 	/** The features active when compiling to WASM (Preview 1, component and no-gc). */
 	public static final Features WASM = new Features(List.of("rontolisp", "rontolisp-wasm", "unicode"), true);
 
+	/**
+	 * The features active when compiling to WASM in REACTOR mode -- {@code --no-wasi}
+	 * (Preview 1 only: the compiler ignores that flag under {@code --component}, so this
+	 * set is not selected there either), and {@code --no-gc}, which is a pure-compute
+	 * reactor with or without the component wrap. The module owns no WASI world; its
+	 * entry points are exports a host calls. {@code :rontolisp-reactor} is a
+	 * target-describing feature like {@code :thread-support}, not a flag echo: it is what
+	 * lets a shim choose its transport per target -- the {@code clack-handler-rontolisp}
+	 * backend's {@code run} serves through the {@code rontolisp:http-handler} directive
+	 * on the WASI targets and leaves the {@code rontolisp::%http-reactor} marker (the
+	 * synthesized {@code handle-request} export) here, which is what makes ONE
+	 * {@code clackup} source run on every host ({@code .kb/clack.md}).
+	 */
+	public static final Features WASM_REACTOR = new Features(
+			List.of("rontolisp", "rontolisp-wasm", "unicode", "rontolisp-reactor"), true);
+
 	private final List<String> names;
 
 	private final boolean substituteFeaturesVar;

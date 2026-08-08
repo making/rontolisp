@@ -5,9 +5,10 @@
 // directories differ only in how the Lisp half is written. All speak the same
 // JSON envelope, and on the other side of it sits a Clack application; what
 // differs is only what builds the Clack environment from the envelope --
-// thirty hand-written lines in ../worker.lisp in httpbin, the built-in
-// clack-handler-cloudflare-workers handler backend that `clackup` installs in
-// the other two. None of it is visible from JavaScript.
+// thirty hand-written lines in ../worker.lisp in httpbin, the built-in Clack
+// handler backend that `clackup` installs in the other two (:rontolisp
+// compiled --no-wasi, or :cloudflare-workers -- the same shared machinery).
+// None of it is visible from JavaScript.
 //
 //   diff ../../httpbin/src/index.js ../../httpbin-clack/src/index.js   # no output
 //

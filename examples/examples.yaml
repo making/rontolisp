@@ -497,13 +497,16 @@ examples:
   - path: net/httpbin-clack.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
-      the SAME application both Cloudflare httpbin Workers compile
-      (cloudflare-workers/httpbin-clack/worker.lisp and
-      cloudflare-workers/httpbin/worker.lisp carry everything down to `app`
-      verbatim), served by the real clack:clackup on :server :rontolisp instead.
-      What this pins is that the file those Workers ship is still a portable
-      Clack application, on the two backends where clackup can actually bind (a
-      blocking server, hence compile-only; Preview 1 has no incoming TCP).
+      the ONE Clack source for every host: cloudflare-workers/httpbin-clack
+      compiles THIS file (not a copy) as its deployed Worker -- :server
+      :rontolisp takes the reactor shape under --no-wasi -- and
+      cloudflare-workers/httpbin/worker.lisp carries everything down to `app`
+      verbatim under a hand-written adapter. What this pins is that the file
+      the Worker ships is still a portable Clack application, on the two
+      backends where clackup can actually bind (a blocking server, hence
+      compile-only; Preview 1 has no incoming TCP). The --no-wasi leg has no
+      backend token here; RontoLispCliTest pins the synthesized handle-request
+      export.
   - path: net/httpbin-tiny-routes.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
@@ -582,14 +585,14 @@ examples:
     backends: [interpreter, jvm, wasm]
     note: >-
       loads worker.lisp -- the CLACK-FREE flavour of the Worker: the application
-      down to `app` is net/httpbin-clack.lisp VERBATIM (the same text
-      cloudflare-workers/httpbin-clack/worker.lisp deploys), and what puts it on
+      down to `app` is net/httpbin-clack.lisp VERBATIM (the same file
+      cloudflare-workers/httpbin-clack deploys whole), and what puts it on
       a reactor is thirty lines written out under it rather than
       clack:clackup -- and drives it over the requests the README curls. So the
       two directories differ in exactly one thing, and this case is the
       clackup-free half of the pair: the adapter calls the same
       rontolisp::%http-make-env / %http-normalize-response entry points the
-      handler backend does, so what it pins is that a hand-written adapter
+      handler backends do, so what it pins is that a hand-written adapter
       builds the same environment on every backend -- the "?" split and the
       percent-decoding of the raw target (/%67et answers "path":"/get"), the
       content-length the buffered :raw-body needs, and the response header ALIST
@@ -608,40 +611,6 @@ examples:
         - '\"json\":null'
         - '\"allowed\":\"POST\"'
         - '"status":404'
-  - path: cloudflare-workers/httpbin-clack/check.lisp
-    backends: [interpreter, jvm, wasm]
-    note: >-
-      loads worker.lisp -- the CLACK flavour of the Worker, and the whole of it:
-      everything from the quickload down to `app` is net/httpbin-clack.lisp
-      VERBATIM (a Clack environment in, a Clack response out), and the Cloudflare
-      port is that file's clackup line with different ARGUMENTS -- :server
-      :cloudflare-workers, the built-in handler backend that stores the app and
-      whose exported entry point the compiler synthesizes. What this pins is
-      that the adapter builds the same environment on every backend: the "?"
-      split and the percent-decoding of the raw target (/%67et answers
-      "path":"/get"), the content-length the buffered :raw-body needs, and the
-      response header ALIST crossing as a JSON array of pairs rather than an
-      object. It also pins the clackup route itself, since the demo drives the
-      handler backend's `dispatch` -- the same function the synthesized
-      wasm-export calls -- on all three backends. The Worker calls that export
-      (handle-request) from JavaScript and is built by the directory's build.sh
-      (--no-wasi --optimize). Checked with contains, not equals: the key ORDER
-      inside a JSON object follows hash-table iteration order, which differs per
-      backend.
-    expect:
-      contains:
-        # The response body is a JSON string nested in the outer JSON, so its
-        # own quotes arrive backslash-escaped. One key per needle: a needle
-        # spanning two keys would depend on their order.
-        - '\"path\":\"/get\"'
-        - '\"a\":\"1\"'
-        - '\"b\":\"two\"'
-        - '\"json\":{\"name\":\"rontolisp\"}'
-        - '\"json\":null'
-        - '\"allowed\":\"POST\"'
-        - '"status":404'
-        - '[["content-type","application/json"]]'
-
   - path: cloudflare-workers/httpbin-tiny-routes/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-

@@ -1,24 +1,25 @@
 ;;; worker.lisp -- a miniature httpbin (https://httpbin.org) for Cloudflare
 ;;; Workers, as a Clack application with the reactor adapter written out by hand.
 ;;;
-;;; Everything from `read-body` down to `app` is
-;;; ../httpbin-clack/worker.lisp -- that is, ../../net/httpbin-clack.lisp --
-;;; VERBATIM: the same five echo endpoints, the same helpers, no Cloudflare
-;;; anywhere in them. `app` takes the Clack environment plist and returns the
-;;; Clack (status headers body) list, so it is the same function that runs on
-;;; hunchentoot, on woo, under `wasmtime serve` and on the JVM, unchanged.
+;;; Everything from `read-body` down to `app` is ../../net/httpbin-clack.lisp
+;;; -- the file ../httpbin-clack deploys as its Worker -- VERBATIM: the same
+;;; five echo endpoints, the same helpers, no Cloudflare anywhere in them.
+;;; `app` takes the Clack environment plist and returns the Clack (status
+;;; headers body) list, so it is the same function that runs on hunchentoot,
+;;; on woo, under `wasmtime serve` and on the JVM, unchanged.
 ;;;
 ;;; What differs from ../httpbin-clack is the LAST section of this file rather
-;;; than the application. That directory's whole Worker half is
+;;; than the application. That directory ships the upstream file whole, whose
+;;; Worker half is its ordinary
 ;;;
-;;;   (clack:clackup #'app :server :cloudflare-workers ...)
+;;;   (clack:clackup #'app :server :rontolisp ...)
 ;;;
-;;; and the built-in clack-handler-cloudflare-workers backend is what bridges the
-;;; host's JSON envelope to the Clack environment. Here that bridge is the thirty
-;;; lines under "the reactor adapter" and clack is never loaded at all -- which is
-;;; the whole point of this directory: the module is ~4x smaller (see the README's
-;;; size table). The envelope both sides speak is the same one, so
-;;; src/index.js is byte-for-byte ../httpbin-clack/src/index.js.
+;;; -- under --no-wasi the built-in handler backend takes its reactor shape and
+;;; bridges the host's JSON envelope to the Clack environment. Here that bridge
+;;; is the thirty lines under "the reactor adapter" and clack is never loaded at
+;;; all -- which is the whole point of this directory: the module is ~2x smaller
+;;; (see the README's size table). The envelope both sides speak is the same
+;;; one, so src/index.js is byte-for-byte ../httpbin-clack/src/index.js.
 ;;;
 ;;; The adapter converts nothing itself. rontolisp's own server protocol IS
 ;;; Clack's, and both halves of that boundary are backend-free entry points in

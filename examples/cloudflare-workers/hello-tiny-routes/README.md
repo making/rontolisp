@@ -47,17 +47,17 @@ no route for /anything
 
 (clack:clackup *app*
                :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+               :use-thread nil)
 ```
 
 Still **no Worker-specific code**. `*app*` is an ordinary Clack application — the
 environment plist in, the `(status headers body)` list out — so it runs on
-hunchentoot, on woo, under `wasmtime serve` and on the JVM unchanged, and what
-makes it a Worker is the `:server` designator and nothing else. The
-[`../hello-clack` README](../hello-clack/README.md) explains that half: the
-handler backend stores the application and the compiler synthesizes the
-`handle-request` export `src/index.js` calls.
+hunchentoot, on woo, under `wasmtime serve` and on the JVM unchanged. The
+[`../hello-clack` README](../hello-clack/README.md) explains the designator
+half: the handler backend stores the application on every backend, the compiler
+synthesizes the `handle-request` export `src/index.js` calls — and why a Worker
+could also just use `:server :rontolisp`, the way
+[`../httpbin-clack`](../httpbin-clack) now does.
 
 What the routing library adds is three things worth naming:
 
@@ -96,18 +96,18 @@ guide](../../../doc/en/guides/asdf-systems.md) has the exact accepted subset.
 | | [`../hello`](../hello) | [`../hello-clack`](../hello-clack) | this |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | three routes + `clackup` |
-| module | 563 B | 370,858 B raw / **102,254 B gzip** | 393,921 B raw / **107,568 B gzip** |
+| module | 563 B | 370,765 B raw / **102,172 B gzip** | 393,828 B raw / **107,334 B gzip** |
 | imports | zero | zero | **zero** — instantiated with `{}`, no WASI shim |
-| `_initialize` | none (no top-level forms) | ~11 ms | ~11 ms |
-| warm request | | 0.015 ms | **0.015 ms** |
+| `_initialize` | none (no top-level forms) | ~5 ms | ~5 ms |
+| warm request | | 0.013 ms | **0.013 ms** |
 
-Measured on node 24 (V8, the same engine family as workerd, 2026-08-08) driving
+Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
 [`src/index.js`](src/index.js)'s boundary code against these exact modules.
 
-So routing costs **+23,063 B raw / +5,314 B gzip** over the hand-written
+So routing costs **+23,063 B raw / +5,162 B gzip** over the hand-written
 `defun`, paid once in the bundle, and nothing per request — the route list is
 walked in Lisp, and at three routes that disappears into the string boundary.
-105 KB gzip is 3.4% of the free plan's 3 MB compressed bundle limit.
+107 KB gzip is 3.4% of the free plan's 3 MB compressed bundle limit.
 
 ## Developing without Cloudflare
 

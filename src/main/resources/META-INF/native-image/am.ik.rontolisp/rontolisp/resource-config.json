@@ -117,6 +117,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.HttpReactorLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/http-reactor\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.HttpLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/http\\.wit"

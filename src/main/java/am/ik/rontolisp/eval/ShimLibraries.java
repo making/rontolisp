@@ -92,10 +92,12 @@ public final class ShimLibraries {
 			// find-package-or-load derives from the package name at clackup time.
 			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, "clack-handler-rontolisp.lisp"),
 			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp"),
-			// The Clack handler backend for a HOST-DRIVEN REACTOR (a Cloudflare
-			// Worker and friends): a JSON request string in, a JSON response
-			// string out, over the same %http-make-env / %http-normalize-response
-			// entry points every other transport meets in. Both spellings again.
+			// The Clack handler backend that is a HOST-DRIVEN REACTOR on every
+			// backend (a Cloudflare Worker and friends): a JSON request string in,
+			// a JSON response string out. Thin public names over the shared
+			// rontolisp::%http-reactor-* transport (http-reactor.lisp,
+			// HttpReactorLibrary), which :server :rontolisp's #+rontolisp-reactor
+			// leg rides too. Both spellings again.
 			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM, "clack-handler-cloudflare-workers.lisp"),
 			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM,
 					"clack-handler-cloudflare-workers.lisp"));

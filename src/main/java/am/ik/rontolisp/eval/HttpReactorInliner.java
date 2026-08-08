@@ -19,26 +19,32 @@ import org.jspecify.annotations.Nullable;
 /**
  * The compile-path answer to a HOST-DRIVEN REACTOR served by {@code clack:clackup}: turns
  * the {@code rontolisp::%http-reactor} marker a Clack handler backend's {@code run}
- * carries into the {@code rontolisp:wasm-export} the host actually calls.
+ * carries into the {@code rontolisp:wasm-export} the host actually calls. Two backends
+ * carry it: {@code clack-handler-cloudflare-workers} on every WASM compile (that backend
+ * IS the reactor shape, on every target), and {@code clack-handler-rontolisp} under
+ * {@code #+rontolisp-reactor} ({@code --no-wasi} / {@code --no-gc}) -- both naming the
+ * ONE shared dispatcher, {@code rontolisp::%http-reactor-dispatch}
+ * ({@code http-reactor.lisp}), so a program that splices both shims yields two IDENTICAL
+ * markers and first-wins below is not a choice.
  *
  * <p>
  * A reactor's entry point is an EXPORT, and {@link LispNames#WASM_EXPORT} needs a literal
  * quoted name at compile time -- so a program whose whole body is
- * {@code (clack:clackup #'app :server :cloudflare-workers)} can no longer declare it: the
- * name only exists inside the handler backend, and the decision to export at all is taken
- * at run time, when clackup applies {@code run}. This pass reads the decision out of the
+ * {@code (clack:clackup #'app :server :rontolisp)} can no longer declare it: the name
+ * only exists inside the handler backend, and the decision to export at all is taken at
+ * run time, when clackup applies {@code run}. This pass reads the decision out of the
  * source instead: the shim's {@code run} contains
- * {@code (rontolisp::%http-reactor 'dispatch "handle-request")}, which is lowered to
- * {@code nil} (nothing to do at run time; the app store around it stays) and answered
- * with
+ * {@code (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch "handle-request")},
+ * which is lowered to {@code nil} (nothing to do at run time; the app store around it
+ * stays) and answered with
  *
  * <pre>{@code
- * (defun %reactor-dispatch (%reactor-json) (clack.handler.cloudflare-workers:dispatch %reactor-json))
+ * (defun %reactor-dispatch (%reactor-json) (rontolisp::%http-reactor-dispatch %reactor-json))
  * (rontolisp:wasm-export '%reactor-dispatch :as "handle-request" :params '(:string) :returns :string)
  * }</pre>
  *
- * appended AFTER the program, so the package-qualified dispatcher name resolves against
- * the shim's own spliced {@code defpackage}.
+ * appended AFTER the program, so a package-qualified dispatcher name resolves against the
+ * spliced definitions whatever package the program ended in.
  *
  * <p>
  * The precedent is exact and deliberate: {@link HttpLibrary} reads the
@@ -48,9 +54,9 @@ import org.jspecify.annotations.Nullable;
  * on every other backend, which is precisely what a reactor does not do.
  *
  * <p>
- * A no-op on the interpreter and the JVM backend -- there the shim never even reads the
- * marker ({@code #+rontolisp-wasm}) because the host calls the dispatcher as an ordinary
- * function.
+ * A no-op on the interpreter and the JVM backend -- there the shims never even read the
+ * marker ({@code #+rontolisp-wasm} / {@code #+rontolisp-reactor}) because the host calls
+ * the dispatcher as an ordinary function.
  */
 public final class HttpReactorInliner {
 

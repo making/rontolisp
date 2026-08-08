@@ -3297,6 +3297,8 @@ public final class LispEvaluator {
 
 	private boolean httpServerLoaded;
 
+	private boolean httpReactorLoaded;
+
 	/**
 	 * Evaluates rontolisp's Gray-stream protocol ({@code gray.lisp}) once, on the first
 	 * write to a CLOS-instance stream (or before the trivial-gray-streams shim system's
@@ -3441,6 +3443,25 @@ public final class LispEvaluator {
 			// races every other in-flight request (.kb/concurrent-served-requests.md).
 			ensureGrayStreamsLoaded();
 			for (LispVal form : HttpServerLibrary.forms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * Evaluates the host-driven-reactor transport ({@code http-reactor.lisp}) into the
+	 * global environment once, on the first {@code rontolisp::%http-reactor-*} function
+	 * lookup -- a Clack handler backend's {@code run}/{@code handle}/{@code dispatch}
+	 * delegating there. Its bodies call {@code %http-make-env} and friends, which the
+	 * {@code RONTOLISP::%HTTP-} hook loads on their own first call.
+	 */
+	private void ensureHttpReactorLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.httpReactorLoaded) {
+				return;
+			}
+			this.httpReactorLoaded = true;
+			for (LispVal form : HttpReactorLibrary.forms()) {
 				eval(form, this.globalEnv);
 			}
 		}
@@ -5791,6 +5812,19 @@ public final class LispEvaluator {
 			if (!this.formatRendererLoaded && name.startsWith(FormatRenderer.NAME_PREFIX)
 					&& FormatRenderer.definesFunction(name)) {
 				ensureFormatRendererLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The host-driven-reactor transport (http-reactor.lisp): a Clack handler
+			// backend's run/handle/dispatch delegate to it, so its first touch is
+			// always a function call. Before the broader %HTTP- hook below, which
+			// would answer the same prefix by loading http-server.lisp (and the Gray
+			// protocol with it) for nothing -- a reactor loads that model on the
+			// first %http-make-env call, not on the run that stores the app.
+			if (!this.httpReactorLoaded && name.startsWith("RONTOLISP::%HTTP-REACTOR-")) {
+				ensureHttpReactorLoaded();
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;

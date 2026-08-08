@@ -124,6 +124,10 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
 
 ## バックエンド
 
+`:server :rontolisp` の行はどのバックエンドでも変わりません — 「このターゲット
+本来の着信トランスポートで serve する」という意味で、選択はコンパイル時に
+行われます:
+
 - **インタプリタ** — 上記のすべて。
 - **JVM クラス** — 同じプログラムを `-o App.class` でコンパイルします。serve
   するプログラムの常として実行時クラスパスに rontolisp の jar が必要です
@@ -134,49 +138,64 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
   `:use-thread` は実質 `nil` (WASM バックエンドはシングルスレッドなので、
   そこではデフォルトが `nil`)、`clack:stop` は意味を持ちません — サーバの
   ライフサイクルはホストが制御します。
+- **WASM リアクタ** (`--no-wasi` または `--no-gc`) — ホストが
+  ソケットを渡す代わりにモジュールを**呼び出します**: 同じプログラムが
+  `handle-request` (JSON のリクエスト文字列を受け取り JSON のレスポンス文字列を
+  返す)をエクスポートするモジュールにコンパイルされ、Cloudflare Workers、
+  ブラウザのページ、node、JVM ホストがリクエストごとにそれを呼びます。`:port`
+  は無視され、`clackup` は即座に戻ります — 詳細は次のセクションで。
 - **WASM Preview 1** は設計上着信 TCP を持ちません: プログラムはコンパイル
   でき、`clackup` は実行時に `HTTP-HANDLER requires --component ...` を送出
   します (`handler-case` で捕捉可能)。
 
-## ホストから呼ばれる場合: `clack-handler-cloudflare-workers`
+## ホストから呼ばれる場合: リアクタビルド
 
 ソケットを渡してこないホストもあります。Cloudflare Workers、ブラウザのページ、
 node、JVM への埋め込みは、いずれもホスト側でリクエストを解析し、**エクスポート
 された関数を呼び出します**。そこでは `clackup` に起動するものがありません —
-それでも書くのは `clackup` であり、アプリケーションもソースの形も変える必要は
-ありません。2 つ目の組み込みハンドラバックエンドが両者を橋渡しします。
+それでも書くのは `clackup` であり、`:server :rontolisp` がターゲットごとに
+トランスポートを選ぶので、ソースは*何も*変える必要がありません。まったく同じ
+プログラムを `--no-wasi` でコンパイルすれば、ハンドラバックエンドがリアクタの
+形を取ります。
+
+```console
+$ rontolisp app.lisp -o worker.wasm --no-wasi --optimize=size
+```
+
+ここでの `run` は何も起動しません。アプリケーションを保存するだけで、ホストが
+呼ぶエクスポート(`handle-request` — JSON のリクエスト文字列を受け取り JSON の
+レスポンス文字列を返す)は、ハンドラバックエンドが残したマーカーからコンパイラが
+合成します。ソース側でその名前に触れる箇所はなく、モジュールは何もインポート
+しません — JavaScript 側に WASI シムは不要です。
+
+1 つのキーワードは*他の*バックエンドの性質であって、定型句ではありません:
+`:use-thread nil` — インタプリタと JVM では `clackup` はバックエンドを別スレッド
+で実行するのが既定ですが、スクリプトはフォアグラウンドで serve したいからです。
+`clackup` のデフォルトミドルウェアはどこでも有効のままです: lack の `backtrace`
+ミドルウェアはレポートを `*error-output*` に書きますが、これは `--no-wasi` では
+破棄されるシンクで、それ以外のバックエンドでは本物の標準エラー出力です。
+
+### リアクタを手で駆動する: `clack-handler-cloudflare-workers`
+
+2 つ目の組み込みハンドラバックエンドは、リアクタの形を**明示的に、すべての
+バックエンドでホスト駆動に**します:
 
 ```console
 $ cat worker.lisp
 (ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
-(clack:clackup #'app
-               :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+(clack:clackup #'app :server :cloudflare-workers :use-thread nil)
 ```
 
-(`app` は通常の Clack アプリケーションです。)
-
-ここでの `run` は何も起動しません。アプリケーションを保存するだけで、ホストが
-呼ぶエクスポート(`handle-request` — JSON のリクエスト文字列を受け取り JSON の
-レスポンス文字列を返す)は、ハンドラバックエンドが残したマーカーからコンパイラが
-合成します。ソース側でその名前に触れる箇所はなく、`--no-wasi` もそのまま使えます
-— モジュールは何もインポートしません。
-
-2 つのキーワードは暗記すべき定型句ではなく、このホストの性質そのものです:
-
-- `:use-thread nil` — インタプリタと JVM では `clackup` はバックエンドを別スレッド
-  で実行するのが既定で、そのままだとアプリケーションの保存が次のフォームより後に
-  なります。WASM バックエンドでは元から既定値が nil です。
-- `:use-default-middlewares nil` — lack の `backtrace` ミドルウェアはレポートを
-  `*error-output*` に書きますが、ホスト駆動のリアクターにそれはありません。
-
-インタプリタと JVM には合成すべきエクスポートがないので、ホストは合成された
-エクスポートが呼ぶのと同じ関数を
+`:rontolisp` がインタプリタと JVM でソケットを bind するのに対し、この
+designator はそこでもアプリケーションを保存し、ホストは合成されたエクスポートが
+呼ぶのと同じ関数を
 `(clack.handler.cloudflare-workers:dispatch request-json)` と直接呼びます。
-Worker なしで Worker を開発・テストできるのはこれによります。
+Worker なしで Worker を開発・テストできるのはこれによります: 編集・実行ループ
+全体がインタプリタ上で回ります。Worker 自体にこの designator はもう必須では
+ありません。両者は同じ機構と同じアプリケーション格納を使うので、乖離しようが
+ありません。
 
 その下にあるのが `handle` で、こちらは `clackup` も Worker も要りません。
 2 引数の普通の関数です:
@@ -228,16 +247,18 @@ report を載せた 500 を返します。
 レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
 
-この方法で作った完全な Worker — アプリケーション、`worker.lisp`、JavaScript 側、
-そして実測値 —は
+この方法で作った完全な Worker —
+[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/main/examples/net/httpbin-clack.lisp)
+そのものをデプロイし、JavaScript 側と実測値を添えたもの — は
 [`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack)
-にあります。
+にあります: 1 つのソースで 4 つのホスト、そしてディレクトリには Lisp ファイルが
+1 つもありません。
 
 `clackup` の 1 行よりモジュールサイズが重要なら、このアダプタは手書きできる程度
 の量なので、clack のロード自体を省けます。
 [`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin)
 がそれです。同じアプリケーション、同じエンベロープ、同じ JavaScript 側で、
-モジュールは約 4 分の 1 になります。2 つのディレクトリは実測用のペアであり、
+モジュールは約半分になります。2 つのディレクトリは実測用のペアであり、
 リクエストあたりのコストは同じで、このようなホストで clack が要求するのは
 モジュールサイズとアイソレートの起動時間だけだと分かります。
 

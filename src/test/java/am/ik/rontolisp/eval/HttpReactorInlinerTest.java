@@ -12,13 +12,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class HttpReactorInlinerTest {
 
-	// The shape the clack-handler-cloudflare-workers shim's run has: the marker is
-	// NESTED in a defun, not a top-level directive.
+	// The shape BOTH Clack handler backends' run has (clack-handler-cloudflare-workers
+	// on every WASM compile, clack-handler-rontolisp under #+rontolisp-reactor): the
+	// marker is NESTED in a defun, not a top-level directive, and it names the ONE
+	// shared dispatcher of http-reactor.lisp.
 	private static final String SHIM = """
 			(defun clack.handler.cloudflare-workers:run (app &rest ignored)
 			  (declare (ignore ignored))
-			  (setq clack.handler.cloudflare-workers::*app* app)
-			  (rontolisp::%http-reactor 'clack.handler.cloudflare-workers:dispatch
+			  (rontolisp::%http-reactor-register app)
+			  (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
 			                            "handle-request")
 			  nil)
 			""";
@@ -28,10 +30,10 @@ class HttpReactorInlinerTest {
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
 				WitExportDirective.Backend.WASM_GC);
 		String printed = print(out);
-		// The bridge and its export are APPENDED, so a package-qualified dispatcher
-		// name resolves against the shim's own defpackage.
-		assertThat(printed).contains("(DEFUN %REACTOR-DISPATCH (%REACTOR-JSON) "
-				+ "(CLACK.HANDLER.CLOUDFLARE-WORKERS:DISPATCH %REACTOR-JSON))");
+		// The bridge and its export are APPENDED after the program, so a
+		// package-qualified dispatcher name resolves whatever package it ended in.
+		assertThat(printed).contains(
+				"(DEFUN %REACTOR-DISPATCH (%REACTOR-JSON) " + "(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON))");
 		assertThat(printed).contains("(RONTOLISP:WASM-EXPORT (QUOTE %REACTOR-DISPATCH) :AS \"handle-request\" "
 				+ ":PARAMS (QUOTE (:STRING)) :RETURNS :STRING)");
 	}
@@ -41,9 +43,30 @@ class HttpReactorInlinerTest {
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
 				WitExportDirective.Backend.WASM_GC);
 		// Nothing defines %http-reactor -- leaving the call in would be an undefined
-		// function at run time. The setq around it must survive.
-		assertThat(print(out)).doesNotContain("%HTTP-REACTOR")
-			.contains("(SETQ CLACK.HANDLER.CLOUDFLARE-WORKERS::*APP* APP)");
+		// function at run time. The register call around it must survive; the marker
+		// itself (the name with no trailing dash) must be gone.
+		assertThat(print(out)).doesNotContain("(RONTOLISP::%HTTP-REACTOR (QUOTE")
+			.contains("(RONTOLISP::%HTTP-REACTOR-REGISTER APP)");
+	}
+
+	@Test
+	void twoIdenticalMarkersSynthesizeOneBridge() {
+		// A program can splice BOTH handler backends (clack always brings
+		// clack-handler-rontolisp; the user quickloads the cloudflare one on top).
+		// Under a reactor compile each run carries the marker, both naming the shared
+		// dispatcher -- one bridge, one export, whichever is read first.
+		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM + """
+				(defun clack.handler.rontolisp:run (app &rest ignored)
+				  (declare (ignore ignored))
+				  (rontolisp::%http-reactor-register app)
+				  (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
+				                            "handle-request"))
+				"""), WitExportDirective.Backend.WASM_GC);
+		String printed = print(out);
+		assertThat(printed).doesNotContain("(RONTOLISP::%HTTP-REACTOR (QUOTE");
+		int first = printed.indexOf("(DEFUN %REACTOR-DISPATCH");
+		assertThat(first).isNotNegative();
+		assertThat(printed.indexOf("(DEFUN %REACTOR-DISPATCH", first + 1)).isNegative();
 	}
 
 	@Test
@@ -57,8 +80,10 @@ class HttpReactorInlinerTest {
 				"""), WitExportDirective.Backend.WASM_GC);
 		String printed = print(out);
 		assertThat(printed).doesNotContain("%REACTOR-DISPATCH");
-		// The marker still has to go: nothing defines it.
-		assertThat(printed).doesNotContain("%HTTP-REACTOR");
+		// The marker still has to go: nothing defines it. (The register call and the
+		// dispatcher NAME legitimately stay -- only the marker form itself, the bare
+		// %HTTP-REACTOR operator, must be gone.)
+		assertThat(printed).doesNotContain("(RONTOLISP::%HTTP-REACTOR (QUOTE");
 	}
 
 	@Test

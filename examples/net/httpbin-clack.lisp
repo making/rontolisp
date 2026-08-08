@@ -13,14 +13,14 @@
 ;; :use-thread nil serves in the foreground (Ctrl-C to stop); the default
 ;; :use-thread t returns a handler for (clack:stop handler) instead.
 ;;
-;; Everything from the quickload down to `app` is also, verbatim,
-;; examples/cloudflare-workers/httpbin-clack/worker.lisp -- a Cloudflare Worker
-;; hands over a parsed request instead of a socket, so there the clackup line
-;; below carries different ARGUMENTS (:server :cloudflare-workers, the built-in
-;; handler backend for a host that calls an export instead of connecting) and
-;; nothing else differs. That is the point of writing the handler as a Clack
-;; application rather than as a server: it is the same function on every host,
-;; and swapping the host swaps only the handler backend.
+;; This ONE file, unchanged, is every host's program. :server :rontolisp means
+;; "serve on this target's native inbound transport", chosen at compile time:
+;; the interpreter and the JVM bind the socket themselves, a WASI component is
+;; served by `wasmtime serve`, and a --no-wasi build is a REACTOR -- the host
+;; calls the synthesized handle-request export with a parsed request, which is
+;; how examples/cloudflare-workers/httpbin-clack deploys THIS file (not a
+;; copy) to Cloudflare Workers. :port applies where the program owns the
+;; socket and is ignored where the host does.
 ;;
 ;; Run (the first run downloads clack/lack into ~/.rontolisp/quicklisp):
 ;;   rontolisp examples/net/httpbin-clack.lisp
@@ -29,8 +29,11 @@
 ;;   rontolisp examples/net/httpbin-clack.lisp -o httpbin-clack.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
 ;;       httpbin-clack.wasm
+;;   rontolisp examples/net/httpbin-clack.lisp -o worker.wasm --no-wasi --optimize=size
+;;     (then a host calls the handle-request export -- see
+;;      examples/cloudflare-workers/httpbin-clack/)
 ;; Preview 1 has no incoming TCP: the program compiles, clackup fails at run
-;; time. Under --component the host owns the socket, so :port is ignored.
+;; time.
 ;;
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
 ;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post

@@ -102,6 +102,45 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void clackRontolispBackendUnderNoWasiSynthesizesTheReactorExport() throws Exception {
+		// The one-clackup-source contract (.kb/clack.md): under --no-wasi the
+		// clack-handler-rontolisp shim is read with #+rontolisp-reactor, its run
+		// carries the %http-reactor marker instead of the http-handler directive, and
+		// the compiler answers with the synthesized handle-request export over the
+		// shared http-reactor.lisp dispatcher. quickloading the shim directly (a
+		// BUILT-IN system, no network) and calling its run is the clackup shape
+		// minus the clack dist.
+		Path file = tempDir.resolve("worker.lisp");
+		Files.writeString(file, """
+				(ql:quickload "clack-handler-rontolisp")
+				(defun app (env) (list 200 (list :content-type "text/plain") (list "ok")))
+				(clack.handler.rontolisp:run #'app :port 8080)
+				""");
+		Path wasmFile = tempDir.resolve("worker.wasm");
+		runCli("", file.toString(), "-o", wasmFile.toString(), "--no-wasi");
+		String bytes = new String(Files.readAllBytes(wasmFile), StandardCharsets.ISO_8859_1);
+		// The export section carries the name; the marker string itself is consumed.
+		assertThat(bytes).contains("handle-request");
+	}
+
+	@Test
+	void clackRontolispBackendWithoutNoWasiKeepsTheSocketDirective() throws Exception {
+		// The same source on a WASI target reads the #-rontolisp-reactor leg: the
+		// http-handler directive (a call-time error on Preview 1, the wasi:http
+		// serve wiring under --component) and no reactor export.
+		Path file = tempDir.resolve("worker.lisp");
+		Files.writeString(file, """
+				(ql:quickload "clack-handler-rontolisp")
+				(defun app (env) (list 200 (list :content-type "text/plain") (list "ok")))
+				(clack.handler.rontolisp:run #'app :port 8080)
+				""");
+		Path wasmFile = tempDir.resolve("worker.wasm");
+		runCli("", file.toString(), "-o", wasmFile.toString());
+		String bytes = new String(Files.readAllBytes(wasmFile), StandardCharsets.ISO_8859_1);
+		assertThat(bytes).doesNotContain("handle-request");
+	}
+
+	@Test
 	void compileToComponentWithWitWritesTheWitFileNextToTheWasm() throws Exception {
 		Path file = tempDir.resolve("test.lisp");
 		Files.writeString(file, """

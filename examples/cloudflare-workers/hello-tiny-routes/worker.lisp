@@ -27,5 +27,4 @@
 
 (clack:clackup *app*
                :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+               :use-thread nil)

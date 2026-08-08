@@ -9,8 +9,8 @@ Cloudflare Workers. Each directory is a complete, independent Worker project:
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
 | [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 362 KB (**100 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
 | [`hello-tiny-routes/`](hello-tiny-routes) | **`hello-clack` with the application composed instead of written.** Three routes through [tiny-routes](https://github.com/jeko2000/tiny-routes) — a `/hello/:name` path template, route declining into a catch-all 404 — and the same `clackup` line. Loaded as **`tiny-routes/lite`**, so no regex engine ships. | 385 KB (**105 KB gzip**), `--no-wasi` wasm-GC, zero imports | `hello-clack/src/index.js`, byte-identical |
-| [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **179 KB** (55 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
-| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.1× the module, because clack and lack (tree-shaken) ship inside it. | 375 KB (**103 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
+| [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same file `httpbin-clack/` deploys whole. | **179 KB** (55 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
+| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup` — and there is no `worker.lisp` at all.** `build.sh` compiles [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) — the file that serves on the interpreter, the JVM and under `wasmtime serve` — unchanged: under `--no-wasi` the `:server :rontolisp` handler backend takes its reactor shape and the compiler synthesizes the export. One source, four hosts, no adapter written anywhere — for 2.1× the module, because clack and lack (tree-shaken) ship inside it. | 375 KB (**103 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | **`httpbin-clack` with a real routing library.** The same endpoints routed through [tiny-routes](https://github.com/jeko2000/tiny-routes) — `define-routes`, a `/status/:code` path template, route declining — loaded as **`tiny-routes/lite`**, the opt-in system whose ppcre-free path-template matcher keeps cl-ppcre (and 553 KB) out of the module. | 399 KB (**109 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (190 KB) | 49 hand-written lines + 293 KB of generated glue |
 
@@ -24,9 +24,10 @@ Workers, its handler is a portable Clack application, and the thirty lines that
 put it on Cloudflare are right there in the file rather than in a library.
 
 `hello-clack/` to see what a Clack application on a Worker looks like with
-nothing else in the way — three forms, and the `:server` designator is the only
-thing that mentions Cloudflare. It is `httpbin-clack/` with the endpoints,
-the body handling and the second `clackup` target removed.
+nothing else in the way — three forms, and the `:server :cloudflare-workers`
+designator is the only thing that mentions Cloudflare. That designator means
+"host-driven on every backend", which is also what lets its `check.lisp` drive
+the Worker through `dispatch` on the interpreter.
 
 `hello-tiny-routes/` if you are starting a routed application rather than
 studying one. It is `hello-clack/` with the `defun` replaced by `define-routes`
@@ -35,11 +36,13 @@ the routing library costs (+23 KB raw over `hello-clack/`) is the only
 difference between the two directories.
 
 `httpbin-clack/` when you would rather the file read like every other Clack
-program than save the space. It runs the *same application* as `httpbin/` — the
-same text, the same envelope, the same `src/index.js` — and the only difference
-is that `clack:clackup` installs the adapter instead of the program carrying it,
-for 1.9× the compressed module. Measured there: the per-request cost is
-identical; what clack costs is module size and a little isolate startup.
+program than save the space — or already have one. It deploys the *same
+application* as `httpbin/` — the same text, the same envelope, the same
+`src/index.js` — as the unchanged `examples/net/httpbin-clack.lisp`, `:server
+:rontolisp` and all: `clack:clackup` installs the adapter instead of the
+program carrying it, for 1.9× the compressed module. Measured there: the
+per-request cost is identical; what clack costs is module size and a little
+isolate startup.
 
 `httpbin-tiny-routes/` when the routes deserve a library: path templates
 (`/status/:code`), route declining, the middleware combinators — the real
@@ -141,16 +144,17 @@ Even there it is 92 KB of generated JavaScript to replace about ten lines.
 
 The Lisp in every one of these is an ordinary function, so the whole edit/run
 loop happens locally — [`httpbin/check.lisp`](httpbin/check.lisp) and
-[`httpbin-clack/check.lisp`](httpbin-clack/check.lisp) drive their handlers on the
-interpreter, the JVM and wasmtime, and `httpbin-clack/`'s application can also be
-served for real with `rontolisp ../net/httpbin-clack.lisp` — no Cloudflare, no
-JavaScript. Every Lisp source here is pinned by `examples/examples.yaml`; while
-iterating on them, narrow the suite:
+[`httpbin-tiny-routes/check.lisp`](httpbin-tiny-routes/check.lisp) drive their
+handlers on the interpreter, the JVM and wasmtime, and `httpbin-clack/`'s
+program IS `../net/httpbin-clack.lisp`, so its loop is `rontolisp
+../net/httpbin-clack.lisp` and `curl` — no Cloudflare, no JavaScript. Every
+Lisp source here is pinned by `examples/examples.yaml`; while iterating on
+them, narrow the suite:
 
 ```bash
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
        -Drontolisp.examples=true -Drontolisp.examples.only=cloudflare test
-# Tests run: 17, instead of 238 in ~7min
+# Tests run: 14, instead of 235 in ~7min
 ```
 
 ## Deploying

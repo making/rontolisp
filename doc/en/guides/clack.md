@@ -124,6 +124,9 @@ does. Serving them has the backend constraints below.
 
 ## Backends
 
+The `:server :rontolisp` line does not change between these — it means "serve
+on this target's native inbound transport", chosen at compile time:
+
 - **Interpreter** — everything above.
 - **JVM class** — the same program compiled with `-o App.class`; like every
   served program it needs the rontolisp jar on the runtime classpath
@@ -134,47 +137,63 @@ does. Serving them has the backend constraints below.
   `:use-thread` is effectively `nil` (the WASM backends are single-threaded,
   so it defaults to `nil` there) and `clack:stop` is meaningless — the host
   controls the server's lifecycle.
+- **WASM reactor** (`--no-wasi`, or `--no-gc`) — the host
+  **calls** the module instead of handing it a socket: the same program
+  compiles to a module exporting `handle-request` (a JSON request string in, a
+  JSON response string out), which a Cloudflare Worker, a browser page, node
+  or a JVM host calls per request. `:port` is ignored and `clackup` returns at
+  once — the next section has the details.
 - **WASM Preview 1** has no incoming TCP by design: the program compiles, and
   `clackup` signals `HTTP-HANDLER requires --component ...` at run time
   (catchable with `handler-case`).
 
-## A host that calls you: `clack-handler-cloudflare-workers`
+## A host that calls you: the reactor build
 
 Some hosts never hand you a socket. A Cloudflare Worker, a browser page, node
-and a JVM embedding all parse the request themselves and then **call an exported
-function**. There is nothing for `clackup` to start there — but you still write
-`clackup`, and neither the application nor the shape of the source has to
-change: a second built-in handler backend bridges the two.
+and a JVM embedding all parse the request themselves and then **call an
+exported function**. There is nothing for `clackup` to start there — but you
+still write `clackup`, and since `:server :rontolisp` picks the transport per
+target, *nothing* in the source has to change: compile the very same program
+with `--no-wasi` and the handler backend takes its reactor shape.
+
+```console
+$ rontolisp app.lisp -o worker.wasm --no-wasi --optimize=size
+```
+
+`run` starts nothing here: it stores the application, and the compiler
+synthesizes the export the host calls (`handle-request`, a JSON request string
+in and a JSON response string out) from a marker the handler backend leaves
+behind. Nothing in your source names it, and the module imports nothing — no
+WASI shim on the JavaScript side.
+
+One keyword is a property of the *other* backends, not boilerplate:
+`:use-thread nil` — on the interpreter and the JVM `clackup` defaults to
+running the backend on its own thread, and a script wants to serve in the
+foreground. `clackup`'s default middlewares stay on everywhere: lack's
+`backtrace` middleware writes its report to `*error-output*`, which under
+`--no-wasi` is a discarding sink and on every other backend is real standard
+error.
+
+### Driving the reactor by hand: `clack-handler-cloudflare-workers`
+
+A second built-in handler backend makes the reactor shape **explicit and
+host-driven on every backend**:
 
 ```console
 $ cat worker.lisp
 (ql:quickload "clack-handler-cloudflare-workers")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
-(clack:clackup #'app
-               :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+(clack:clackup #'app :server :cloudflare-workers :use-thread nil)
 ```
 
-`run` starts nothing here: it stores the application, and the compiler
-synthesizes the export the host calls (`handle-request`, a JSON request string
-in and a JSON response string out) from a marker the handler backend leaves
-behind. Nothing in your source names it, and `--no-wasi` still applies — the
-module imports nothing.
-
-The two keywords are properties of this host, not boilerplate to memorize:
-
-- `:use-thread nil` — on the interpreter and the JVM `clackup` defaults to
-  running the backend on its own thread, which would store the application
-  *after* the next form runs. On the WASM backends it is already the default.
-- `:use-default-middlewares nil` — lack's `backtrace` middleware writes its
-  report to `*error-output*`, which a host-driven reactor does not have.
-
-On the interpreter and the JVM there is no export to synthesize, so the host
-calls `(clack.handler.cloudflare-workers:dispatch request-json)` — the same
-function the synthesized export calls — directly, which is how a Worker can be
-developed and tested without the Worker.
+Where `:rontolisp` binds a socket on the interpreter and the JVM, this
+designator stores the application there too, and the host calls
+`(clack.handler.cloudflare-workers:dispatch request-json)` — the same function
+the synthesized export calls — directly. That is how a Worker can be developed
+and tested without the Worker: the whole edit/run loop happens on the
+interpreter. A Worker itself no longer needs this designator; both ride the
+same machinery and the same application store, so the two cannot drift.
 
 Underneath both is `handle`, and it needs no `clackup` and no Worker to try —
 it is an ordinary function of two arguments:
@@ -226,15 +245,17 @@ Two details the host side must get right:
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.
 
-A complete Worker built this way — application, `worker.lisp`, the JavaScript
-side and the measurements — is
-[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack).
+A complete Worker built this way — deploying
+[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/main/examples/net/httpbin-clack.lisp)
+itself, with the JavaScript side and the measurements — is
+[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack):
+one source, four hosts, and the directory contains no Lisp file at all.
 
 If the module size matters more than the `clackup` line, this adapter is small
 enough to write out by hand and skip loading clack entirely.
 [`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin)
 is that: the same application, the same envelope, the same JavaScript side, and
-about a quarter of the module. The two directories are a measured pair — the
+about half the module. The two directories are a measured pair — the
 per-request cost turns out to be identical, and what clack costs on a host like
 this is module size and isolate startup.
 
