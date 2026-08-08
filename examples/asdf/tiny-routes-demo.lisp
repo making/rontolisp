@@ -22,32 +22,22 @@
 ;; wrapped in the method matcher and the path-template matcher, so its arguments
 ;; are the path template, the request lambda list and a body.
 (define-routes *app*
-  (define-get "/hello"
-    ()
-    (ok "hello world"))
+  (define-get "/hello" () (ok "hello world"))
   ;; A :name segment in the template binds a path parameter.
-  (define-get "/users/:id"
-    (req)
+  (define-get "/users/:id" (req)
     (ok (format nil "user ~A" (path-parameter req :id))))
   ;; wrap-query-parameters below parses the query string; its keys are interned
   ;; VERBATIM, so "q" is the |q| keyword, not :Q.
-  (define-get "/search"
-    (req)
+  (define-get "/search" (req)
     (ok (format nil "q=~A" (getf (request-get req :query-parameters) :|q|))))
   ;; wrap-request-body below reads the request body stream into a string.
-  (define-post "/echo"
-    (req)
-    (ok (format nil "echo:~A" (request-body req))))
-  (define-put "/put"
-    ()
-    (created "/put" "made"))
+  (define-post "/echo" (req) (ok (format nil "echo:~A" (request-body req))))
+  (define-put "/put" () (created "/put" "made"))
   ;; A route with no template at all: match on anything you like.
   (define-route (req)
     (when (ppcre:scan "^/v[0-9]+/ping$" (path-info req)) (ok "pong")))
   ;; "*" matches every path and :any every method, so this is the fallback.
-  (define-any "*"
-    ()
-    (not-found "nope")))
+  (define-any "*" () (not-found "nope")))
 
 ;; pipe threads the handler through middleware left to right.
 (defparameter *handler*
@@ -82,10 +72,7 @@
 
 ;; Response combinators, as middleware and directly. A route is an ordinary
 ;; value, so it can be named and wrapped on its own.
-(defparameter *ct-route*
-  (define-get "/ct"
-    ()
-    (ok "y")))
+(defparameter *ct-route* (define-get "/ct" () (ok "y")))
 
 (defparameter *typed* (wrap-response-content-type *ct-route* "text/plain"))
 

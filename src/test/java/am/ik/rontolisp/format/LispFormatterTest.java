@@ -300,6 +300,89 @@ class LispFormatterTest {
 	}
 
 	@Test
+	void givesAnUnknownDefinitionMacroWrittenLikeADefunTheShapeOfOne() {
+		// A route macro and a pattern macro. With one distinguished argument the lambda
+		// list becomes a body form, and a body of two never shares a line -- so a
+		// 43-column definition took three.
+		assertThat(LispFormatter.format("""
+				(define-get "/hello" () (ok "hello world"))
+				(define-get "/users/:id" (req) (ok (format nil "user ~A" (path-parameter req :id))))
+				(defpattern class (name &rest slots) "Synonym to STRUCTURE pattern." `(structure ,name ,@slots))
+				""")).isEqualTo("""
+				(define-get "/hello" () (ok "hello world"))
+				(define-get "/users/:id" (req)
+				  (ok (format nil "user ~A" (path-parameter req :id))))
+				(defpattern class (name &rest slots)
+				  "Synonym to STRUCTURE pattern."
+				  `(structure ,name ,@slots))
+				""");
+	}
+
+	@Test
+	void keepsABodyFormOffTheHeaderLineOfAnUnknownDefinitionMacro() {
+		// (define-routes name &body routes): the second element is a route, not a lambda
+		// list, and pulling it up beside the operator would align the rest under it.
+		assertThat(LispFormatter.format("""
+				(define-routes *app*
+				(define-get "/hello" () (ok "hello world"))
+				(define-any "*" () (not-found "nope")))
+				""")).isEqualTo("""
+				(define-routes *app*
+				  (define-get "/hello" () (ok "hello world"))
+				  (define-any "*" () (not-found "nope")))
+				""");
+	}
+
+	@Test
+	void keepsALambdaListFirstDefinitionMacroAtOneDistinguishedArgument() {
+		// (define-route lambda-list &body body): the lambda list is already the FIRST
+		// argument, so there is no name in front of it and nothing else belongs up there.
+		assertThat(LispFormatter.format("""
+				(define-route (req)
+				(when (ppcre:scan "^/ping$" (path-info req)) (ok "pong") (log-it req)))
+				""")).isEqualTo("""
+				(define-route (req)
+				  (when (ppcre:scan "^/ping$" (path-info req))
+				    (ok "pong")
+				    (log-it req)))
+				""");
+	}
+
+	@Test
+	void readsAListHoldingNilOrTAsAFormRatherThanALambdaList() {
+		// The counter-example the guess exists to protect: alexandria's
+		// (deftest NAME form values...) puts a FORM exactly where defun puts its lambda
+		// list. In xor.3 that form is written entirely in bare symbols, and what still
+		// tells it from a lambda list is that a lambda list may not bind a constant.
+		assertThat(LispFormatter.format("""
+				(deftest setp.1 (let ((x 1)) (setp x)) t)
+				(deftest xor.3 (xor nil nil nil) nil t)
+				""")).isEqualTo("""
+				(deftest setp.1
+				  (let ((x 1)) (setp x))
+				  t)
+				(deftest xor.3
+				  (xor nil nil nil)
+				  nil
+				  t)
+				""");
+	}
+
+	@Test
+	void keepsAnOptionListOffTheHeaderLineOfAnUnknownDefinitionMacro() {
+		// split-sequence's (define-test NAME (:input ... :output ...) body...): a keyword
+		// cannot name a parameter, so the second element is an option list, not a lambda
+		// list.
+		assertThat(LispFormatter.format("""
+				(define-test t1 (:input (in "") :output (out (""))) (is (epmv (split in) (values out))))
+				""")).isEqualTo("""
+				(define-test t1
+				  (:input (in "") :output (out ("")))
+				  (is (epmv (split in) (values out))))
+				""");
+	}
+
+	@Test
 	void keepsAnOwnLineCommentOnItsOwnLine() {
 		assertThat(LispFormatter.format("""
 				(defun f (x)

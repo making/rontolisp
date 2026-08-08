@@ -157,7 +157,22 @@ string, a deeply nested expression with no shorter arrangement -- may therefore
 end up past the margin.
 
 A macro the formatter has not been told about is laid out from its name:
-`with-...` and `do-...` take one argument then a body, `def...` takes a name then
-a body, and anything else is laid out as a function call. If your own macro takes
-a different shape, write it in the layout you want and the formatter will keep it
-as long as it fits on one line.
+`with-...` and `do-...` take one argument then a body, `def...` takes a name and
+then a body, and anything else is laid out as a function call.
+
+A `def...` macro keeps a lambda list on its first line the way `defun` does, but
+only when its second element could BE a lambda list -- a list of plain parameter
+names, possibly empty or with `&optional`/`&rest`/`&key` markers. A keyword, a
+string, a number, `nil`, `t` or a nested form in that position means the element is
+the first form of the body instead, and it gets a line of its own:
+
+```console
+(define-get "/hello" () (ok "hello world"))
+
+(define-routes *app*
+  (define-get "/hello" () (ok "hello world"))
+  (define-any "*" () (not-found "nope")))
+```
+
+If your own macro takes a different shape, write it in the layout you want and the
+formatter will keep it as long as it fits on one line.

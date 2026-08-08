@@ -103,33 +103,21 @@
 ;; declines too, on a :code that is not a number. The table above tells the two
 ;; declines apart: it has no /status entry, so that one gets the 404.
 (define-routes *app*
-  (define-get "/get"
-    (req)
-    (echo req))
-  (define-post "/post"
-    (req)
-    (echo-with-body req))
-  (define-put "/put"
-    (req)
-    (echo-with-body req))
+  (define-get "/get" (req) (echo req))
+  (define-post "/post" (req) (echo-with-body req))
+  (define-put "/put" (req) (echo-with-body req))
   ;; tiny-routes has no define-patch; its method matcher is exported, and that
   ;; is all the other macros add over define-any.
-  (wrap-request-matches-method (define-any "/patch"
-                                 (req)
-                                 (echo-with-body req)) :patch)
-  (define-delete "/delete"
-    (req)
-    (echo-with-body req))
-  (define-get "/status/:code"
-    (req)
+  (wrap-request-matches-method (define-any "/patch" (req) (echo-with-body req))
+                               :patch)
+  (define-delete "/delete" (req) (echo-with-body req))
+  (define-get "/status/:code" (req)
     (let ((code
            (handler-case (parse-integer (path-parameter req :code))
              (error () nil))))
       (when code
         (list code '(:content-type "text/plain; charset=utf-8")
               (list (format nil "~a~%" code))))))
-  (define-any "*"
-    (req)
-    (no-route req)))
+  (define-any "*" (req) (no-route req)))
 
 (clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)

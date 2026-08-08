@@ -133,7 +133,7 @@ public final class IndentRules {
 		}
 		String key = operatorKey(head.text());
 		Style rule = RULES.get(key);
-		return rule != null ? rule : byNamingConvention(key);
+		return rule != null ? rule : byNamingConvention(key, items);
 	}
 
 	/**
@@ -147,9 +147,10 @@ public final class IndentRules {
 	 * has always treated any {@code def}-prefixed symbol as a definition for exactly this
 	 * reason -- and a macro that follows none of them is no worse off than before.
 	 * @param key the operator name, lowercased and stripped of its package prefix
+	 * @param items the form's items, with the operator at index 0
 	 * @return the guessed style
 	 */
-	private static Style byNamingConvention(String key) {
+	private static Style byNamingConvention(String key, List<CstNode> items) {
 		// with-FOO (spec) body..., do-FOO (spec) body...
 		if (key.startsWith("with-") || key.startsWith("do-") || key.startsWith("dolist-")) {
 			return Style.body(1, 2);
@@ -158,16 +159,75 @@ public final class IndentRules {
 		if (key.startsWith("without-")) {
 			return Style.body(0, 2);
 		}
-		// defFOO name body... -- one distinguished argument, not two. A definition macro
-		// whose second element is a lambda list would read better with two, but nothing
-		// tells the two apart: alexandria's (deftest NAME form... values) puts a form
-		// exactly where defun puts its lambda list. Guessing one is the safe half of the
-		// choice, since guessing two pulls a body form up onto the header line and aligns
-		// the rest of the body under it.
+		// defFOO name lambda-list body... when the form is written that way,
+		// defFOO name body... otherwise. Nothing but the form's own contents tells
+		// the two apart, so the number of distinguished arguments is READ OFF it
+		// rather than fixed: at one, a lambda list is stranded on a line of its own
+		// (a header plus a body of two is two statements, and two statements never
+		// share a line); at two, a body form is pulled up beside the operator and
+		// the rest of the body aligns under it.
 		if (key.startsWith("def") && key.length() > 3) {
-			return Style.body(1, 2);
+			return isDefunShaped(items) ? Style.body(2, 2) : Style.body(1, 2);
 		}
 		return Style.call();
+	}
+
+	/**
+	 * Whether the form may be laid out the way {@code defun} is: a NAME, then a LAMBDA
+	 * LIST, then a body. A body has to follow, or there is no reason to prefer either
+	 * reading and no line to be saved by preferring one.
+	 * @param items the form's items, with the operator at index 0
+	 * @return {@code true} if the form has a name and a lambda list
+	 */
+	private static boolean isDefunShaped(List<CstNode> items) {
+		return items.size() > 3 && items.get(1) instanceof CstNode.Atom && isLambdaList(items.get(2));
+	}
+
+	/**
+	 * Whether a node could be a lambda list rather than a form. Nothing SAYS which it is
+	 * -- {@code (req)} is equally a one-parameter lambda list and a call of no arguments
+	 * -- so the question is asked the only way it can be answered: every element has to
+	 * be something a lambda list is allowed to hold. A string, a number, a keyword or a
+	 * nested form settles it the other way, and so, decisively, do {@code nil} and
+	 * {@code t} -- a lambda list may not bind a constant, which is what tells
+	 * alexandria's {@code (deftest xor.3 (xor nil nil nil) nil t)} from a definition
+	 * written in the same bare symbols. The empty list is the one case that needs no
+	 * reasoning at all: a call with no operator does not exist.
+	 * <p>
+	 * The remaining ambiguity is real and is decided in favour of the lambda list: a
+	 * {@code (deftest NAME (foo bar) ...)} whose second element is a two-symbol CALL is
+	 * laid out as though it were a header. Over every {@code .lisp} and {@code .asd} in
+	 * the repository, all 90 forms the rule re-laid out are genuine definitions -- but
+	 * the reading is a guess, not a deduction, and an operator that matters belongs in
+	 * {@link #RULES}.
+	 * @param node the node
+	 * @return {@code true} if the node could be a lambda list
+	 */
+	private static boolean isLambdaList(CstNode node) {
+		if (!(node instanceof CstNode.Listing listing) || !"(".equals(listing.open())) {
+			return false;
+		}
+		for (CstNode item : listing.items()) {
+			if (!(item instanceof CstNode.Atom atom) || !isVariableName(atom.text())) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// A token that can name a lambda-list parameter: a plain symbol, or an &-marker. A
+	// keyword, a string, a number, a character, a #-literal or one of the two constants
+	// nil and t cannot be one.
+	private static boolean isVariableName(String text) {
+		char first = text.charAt(0);
+		if (first == ':' || first == '"' || first == '#' || first == '.' || isDigit(first)) {
+			return false;
+		}
+		if ((first == '+' || first == '-') && text.length() > 1 && isDigit(text.charAt(1))) {
+			return false;
+		}
+		String lower = text.toLowerCase(Locale.ROOT);
+		return !"nil".equals(lower) && !"t".equals(lower);
 	}
 
 	/**

@@ -18,14 +18,11 @@
 ;; is all "*" needs to be the 404. ok/not-found set no headers, so
 ;; src/index.js's `new Response` supplies the text/plain content type.
 (define-routes *app*
-  (define-get "/"
-    ()
+  (define-get "/" ()
     (ok (format nil "Hello from tiny-routes on Cloudflare Workers!~%")))
-  (define-get "/hello/:name"
-    (req)
+  (define-get "/hello/:name" (req)
     (ok (format nil "Hello, ~a!~%" (path-parameter req :name))))
-  (define-any "*"
-    (req)
+  (define-any "*" (req)
     (not-found (format nil "no route for ~a~%" (path-info req)))))
 
 (clack:clackup *app*

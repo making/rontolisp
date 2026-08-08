@@ -130,16 +130,41 @@ which of them is which.
 ### Unknown operators are guessed from their name
 
 `IndentRules.byNamingConvention`: `with-*`/`do-*` take one argument then a body,
-`without-*` a body, `def*` a name then a body, anything else is a call. This is
-not cosmetic. A body-taking macro laid out as a CALL aligns its whole body under
-its first argument, so one `usocket:with-server-socket` pushes everything inside
-it thirty columns right and every line of it past the margin.
+`without-*` a body, `def*` a name and (if it is written with one) a lambda list
+then a body, anything else is a call. This is not cosmetic. A body-taking macro
+laid out as a CALL aligns its whole body under its first argument, so one
+`usocket:with-server-socket` pushes everything inside it thirty columns right and
+every line of it past the margin.
 
-`def*` deliberately guesses ONE distinguished argument, not two, even though
-`defun`-shaped macros want two: nothing distinguishes them structurally
-(alexandria's `(deftest NAME form... values)` puts a form exactly where `defun`
-puts its lambda list), and guessing two pulls a body form up onto the header line.
-Guessing one is the harmless half of the choice.
+`def*` is the one guess that is not made from the name alone, because the name does
+not carry the answer. A definition macro has two shapes -- `(define-get "/x" (req)
+BODY)` wants `defun`'s two distinguished arguments, alexandria's `(deftest NAME
+form... values)` wants one, and the operator is spelled the same way in both. So
+`isDefunShaped` reads the number off the FORM: a name (an atom), then a second
+element that could be a lambda list, then at least one more element. Both halves of
+getting it wrong are real -- at one, a lambda list becomes a body form and a body of
+two never shares a line, so `(define-get "/hello" () (ok "hello world"))` took three
+lines to say 43 columns; at two, a body form is pulled up beside the operator and the
+rest of the body aligns under it.
+
+"Could be a lambda list" is a negative test (`isLambdaList`), since nothing ever
+says positively that `(req)` is one rather than a call: every element must be
+something a lambda list is allowed to hold. A string, a number, a keyword or a nested
+form rules it out -- which is what keeps split-sequence's `(define-test NAME (:input
+...) ...)` and tiny-routes' `(define-routes *app* (define-get ...) ...)` at one
+argument -- and so, decisively, do **`nil` and `t`**: a lambda list may not bind a
+constant. That last clause is what tells alexandria's `(deftest xor.3 (xor nil nil
+nil) nil t)` from a definition written in the same bare symbols, and it is the reason
+the rule can cover the whole `def*` family instead of only the hyphenated
+`define-*` half.
+
+What remains ambiguous is decided in favour of the lambda list: a `(deftest NAME (foo
+bar) ...)` whose second element is a two-symbol CALL is laid out as a header. No such
+form exists in the corpus, but the reading is a guess and not a deduction -- an
+operator that matters belongs in `RULES`. The rule moved 90 forms in 18 files when it
+landed (43 `defpattern`, 17 `define-modify-macro`, 10 `define-get`, ...), every one of
+them a genuine definition that had been splitting its lambda list off; the
+over-margin count below did not move.
 
 ## Deliberate divergences from trivial-formatter
 
