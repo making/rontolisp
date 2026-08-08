@@ -504,6 +504,16 @@ examples:
       What this pins is that the file those Workers ship is still a portable
       Clack application, on the two backends where clackup can actually bind (a
       blocking server, hence compile-only; Preview 1 has no incoming TCP).
+  - path: net/httpbin-tiny-routes.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      httpbin-clack.lisp routed by tiny-routes instead of a `cond` over
+      :path-info: everything below the quickload is
+      cloudflare-workers/httpbin-tiny-routes/worker.lisp verbatim down to
+      *app*, so what this pins is that the routed Worker's application is a
+      portable Clack application too -- on the two backends where clackup can
+      bind (a blocking server, hence compile-only). It also pins that the lite
+      system's ql:quickload spelling resolves on both compile paths.
   - path: net/httpbin-clos.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/httpbin-jzon.lisp

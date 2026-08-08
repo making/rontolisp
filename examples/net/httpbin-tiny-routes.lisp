@@ -1,21 +1,33 @@
-;;; worker.lisp -- ../httpbin-clack with a real routing library on top.
-;;;
-;;; The helpers are ../httpbin-clack/worker.lisp's, and so are its clackup call
-;;; and synthesized `handle-request` export; what replaces its hand-written
-;;; `cond` over :path-info -- and its method check with it -- is tiny-routes.
-;;;
-;;; The FIRST line decides the module size. "tiny-routes/lite" swaps one
-;;; component of the library: the cl-ppcre-backed path-template matcher, and
-;;; the :cl-ppcre dependency with it. A template compiles to a scanner at RUN
-;;; time, so the full system ships the whole regex engine -- 974,530 B raw
-;;; where this build is 408,448 B. The lite matcher takes literal characters
-;;; and :name tokens and refuses a regex-shaped template when the route is
-;;; built. The README has the numbers and the subset.
+;; The routed flavour of httpbin-clack.lisp: the same five echo endpoints, with
+;; the hand-written `cond` over :path-info -- and its method check with it --
+;; replaced by tiny-routes. A route is declared with the macro for the one
+;; method it answers, so a wrong method DECLINES and reaches the catch-all,
+;; which is where the 405 and the 404 are told apart.
+;;
+;; "tiny-routes/lite" is the ppcre-free opt-in system; the full "tiny-routes"
+;; runs this file unchanged and costs a regex engine. Everything below the
+;; quickload is examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp
+;; verbatim down to *app*, where the clackup line carries :server
+;; :cloudflare-workers instead.
+;;
+;; Run (the first run downloads clack/lack/tiny-routes into ~/.rontolisp/quicklisp):
+;;   rontolisp examples/net/httpbin-tiny-routes.lisp
+;;   rontolisp examples/net/httpbin-tiny-routes.lisp -o HttpbinTinyRoutes.class && \
+;;     java -cp rontolisp-exec.jar:. HttpbinTinyRoutes
+;;   rontolisp examples/net/httpbin-tiny-routes.lisp -o httpbin-tiny-routes.wasm --component && \
+;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
+;;       httpbin-tiny-routes.wasm
+;; Preview 1 has no incoming TCP: the program compiles, clackup fails at run
+;; time. Under --component the host owns the socket, so :port is ignored -- and
+;; a condition signaled and caught inside a served request traps there today,
+;; which /status/teapot (a :code that is not a number) is the one route to hit.
+;;
+;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
+;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
+;;   curl http://127.0.0.1:8080/status/418
 
-(ql:quickload '("clack" "clack-handler-cloudflare-workers" "tiny-routes/lite"))
+(ql:quickload '("clack" "tiny-routes/lite"))
 
-;; Its own package, like any consumer of a routing library: the route macros
-;; and path-parameter come from tiny-routes' exports.
 (defpackage :httpbin-tiny-routes (:use :cl :tiny-routes))
 (in-package :httpbin-tiny-routes)
 
@@ -120,7 +132,4 @@
     (req)
     (no-route req)))
 
-(clack:clackup *app*
-               :server :cloudflare-workers
-               :use-thread nil
-               :use-default-middlewares nil)
+(clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)
