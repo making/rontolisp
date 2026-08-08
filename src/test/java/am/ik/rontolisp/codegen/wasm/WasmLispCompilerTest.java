@@ -998,6 +998,22 @@ class WasmLispCompilerTest {
 		assertThat(marginalBytesPerSite("(subseq *v* i)")).isLessThan(60);
 	}
 
+	@Test
+	void aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions() {
+		// Same budget idea as the element-access test above, for the
+		// .kb/seq-conversion-runtime.md trio. A literal coerce site is one call; the
+		// conversion it used to inline -- a full map loop per arm, the string builder
+		// dragging the value printer -- was ~8-10 KB per site. Measured 66.
+		assertThat(marginalBytesPerSite("(coerce *v* 'list)")).isLessThan(150);
+		// The generic sequence lowerings funnel their string/vector dispatch into the
+		// same trio, so what stays at a site is its own scan loop. Measured 489
+		// (reverse), 852 (remove), 591 (position); pre-trio these inlined the whole
+		// dispatch at 6,699-7,656 bytes per site.
+		assertThat(marginalBytesPerSite("(reverse *v*)")).isLessThan(1200);
+		assertThat(marginalBytesPerSite("(remove i *v*)")).isLessThan(1600);
+		assertThat(marginalBytesPerSite("(position i *v*)")).isLessThan(1200);
+	}
+
 	// The bytes one more occurrence of `site` adds to a module that already has four of
 	// them, so the shared runtime each of them calls is paid for in both measurements.
 	private static int marginalBytesPerSite(String site) {

@@ -203,4 +203,76 @@ class LispMacroExpanderTest {
 		return LispMacroExpander.programUsesGeneralArrayOp(LispReader.readAllFromString(source));
 	}
 
+	@Test
+	void aCoerceSiteIsOneCallWhenTheProgramCarriesTheSharedConversions() {
+		// Every generic sequence lowering (reverse / remove / position / count / sort /
+		// ...) wraps its scan in the string/vector dispatch whose arms are literal
+		// coerce forms, and each conversion inlines a whole map loop (the string
+		// builder drags the value printer too) -- 8-10 KB of wasm PER SITE. If those
+		// shapes come back into the site, the cost comes back with it.
+		LispCons toList = (LispCons) LispReader.readAllFromString("(coerce x 'list)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toList, true, true).print()).isEqualTo("(%SEQ-TO-LIST X)");
+		LispCons toString = (LispCons) LispReader.readAllFromString("(coerce x 'string)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toString, true, true).print()).isEqualTo("(%SEQ-TO-STRING X)");
+		LispCons toVector = (LispCons) LispReader.readAllFromString("(coerce x 'vector)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toVector, true, true).print()).isEqualTo("(%SEQ-TO-VECTOR X)");
+		// Without the trio the site keeps the pre-existing inline lowering, so a gate
+		// that under-predicts costs sharing and never correctness.
+		String inline = LispMacroExpander.expandCoerce(toList, true, false).print();
+		assertThat(inline).contains("(MAP ").doesNotContain("%SEQ-TO-LIST");
+		// A float result type is not a sequence conversion and never routes.
+		LispCons toFloat = (LispCons) LispReader.readAllFromString("(coerce x 'double-float)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(toFloat, true, true).print()).doesNotContain("%SEQ-TO");
+		// A computed type dispatches at runtime over the same three helpers.
+		LispCons computed = (LispCons) LispReader.readAllFromString("(coerce x ty)").get(0);
+		assertThat(LispMacroExpander.expandCoerce(computed, true, true).print()).contains("(%SEQ-TO-LIST ")
+			.contains("(%SEQ-TO-STRING ")
+			.contains("(%SEQ-TO-VECTOR ");
+	}
+
+	@Test
+	void theSharedConversionsAnswerTheSameThingAsTheInlinedOnes() {
+		// One body, two homes each: the trio defuns carry the same conversion the
+		// inline lowering spells, so routing a site to them cannot change what it
+		// answers. None may contain a literal coerce, or compiling the helper would
+		// re-enter the routing forever.
+		List<LispVal> trio = LispMacroExpander.seqConversionWrappers();
+		assertThat(trio).hasSize(3);
+		String toList = trio.get(0).print();
+		// The parameter names are spelled in lower case on purpose: the reader upcases,
+		// so a name in this shape cannot collide with anything the program can write.
+		assertThat(toList).startsWith("(SETQ %SEQ-TO-LIST (LAMBDA (%stl_x)");
+		assertThat(toList).contains("LISTP").contains("STRINGP").contains("(MAP ");
+		String toString = trio.get(1).print();
+		assertThat(toString).startsWith("(SETQ %SEQ-TO-STRING (LAMBDA (%sts_x)");
+		assertThat(toString).contains("STRINGP").contains("(MAP ");
+		String toVector = trio.get(2).print();
+		assertThat(toVector).startsWith("(SETQ %SEQ-TO-VECTOR (LAMBDA (%stv_x)");
+		assertThat(toVector).contains("MAKE-ARRAY").contains("%ASET");
+		for (LispVal helper : trio) {
+			assertThat(helper.print()).doesNotContain("(COERCE ");
+		}
+	}
+
+	@Test
+	void theSeqConversionGateNamesTheOperatorsThatCanReachAConversion() {
+		// The injection gate for the trio: a program (or a generated wrapper body)
+		// naming any generic sequence operator can hold a conversion site.
+		// Over-predicting costs three unreachable defuns, which --optimize drops;
+		// under-predicting costs the module its sharing and never its correctness.
+		assertThat(usesSeqConversion("(defun f (x) (coerce x 'list))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (reverse x))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (position 1 x))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (sort x #'<))")).isTrue();
+		assertThat(usesSeqConversion("(defun f (x) (remove-duplicates x))")).isTrue();
+		// nreverse is an in-place cons-chain splice with no representation dispatch,
+		// and plain list operators reach no conversion at all.
+		assertThat(usesSeqConversion("(defun f (l) (nreverse l))")).isFalse();
+		assertThat(usesSeqConversion("(defun f (l) (car l))")).isFalse();
+	}
+
+	private static boolean usesSeqConversion(String source) {
+		return LispMacroExpander.programUsesSeqConversion(LispReader.readAllFromString(source));
+	}
+
 }

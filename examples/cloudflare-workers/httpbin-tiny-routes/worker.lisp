@@ -10,10 +10,10 @@
 ;;; "tiny-routes/lite" is the same tiny-routes source tree with ONE component
 ;;; swapped: path-template.lisp's cl-ppcre-backed matcher is replaced by a
 ;;; ppcre-free one, and the :cl-ppcre dependency is dropped with it. That is
-;;; an OPT-IN, and it is what keeps this module ~0.5 MB: a route template
+;;; an OPT-IN, and it is what keeps this module ~0.45 MB: a route template
 ;;; compiles to a regex scanner at RUN time, so with the full system the whole
-;;; regex engine is genuinely reachable and ships -- 1,236,811 B raw where
-;;; this build is 501,689 B (the numbers in the README). The trade is loud,
+;;; regex engine is genuinely reachable and ships -- 1,118,916 B raw where
+;;; this build is 449,411 B (the numbers in the README). The trade is loud,
 ;;; never silent: the lite matcher accepts exactly the templates made of
 ;;; literal characters and :name tokens (what almost every routed application
 ;;; uses), matches them exactly as the full system does -- pinned

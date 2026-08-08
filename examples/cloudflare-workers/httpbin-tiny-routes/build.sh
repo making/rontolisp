@@ -9,8 +9,8 @@
 # --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
 #   what keeps the module small. It matters most in THIS example: the routes
 #   go through tiny-routes/lite, whose ppcre-free path-template matcher is
-#   what keeps the module ~0.5 MB -- the full "tiny-routes" spells the same
-#   routes but ships the whole cl-ppcre engine, 1,236,811 B raw on this
+#   what keeps the module ~0.45 MB -- the full "tiny-routes" spells the same
+#   routes but ships the whole cl-ppcre engine, 1,118,916 B raw on this
 #   same file (see the README's table).
 #
 # The first run downloads clack/lack/tiny-routes into ~/.rontolisp/quicklisp;

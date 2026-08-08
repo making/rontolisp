@@ -140,3 +140,19 @@ the only backend that runs its scan sequences per the standard until the
   governs) and the cl-ppcre probes re-measured here show the yield -- or a
   measured reason it cannot pay on this module is recorded.
 - The `.kb` cost-map section stays consistent with whatever lands.
+
+## 2026-08-08: todo-288 LANDED; the yield on this module, measured
+
+The `%seq-to-*` conversion trio (`.kb/seq-conversion-runtime.md`) re-measured on
+probe (a) (`ql:quickload` + one literal scan, `--optimize=size`): **748,091 ->
+678,977 raw, -69,114 B (-9.2%)** -- real but bounded, where wrapper-catalog-heavy
+modules halved (minesweeper -45%). The bound is structural: this module's sites
+are spread across ~440 KB of engine defun bodies, and what stays per site is the
+operator's own scan loop (0.5-0.9 KB) with only the conversion arms outlined;
+the frequency table above also over-credited the reverse family (16 sites are
+mostly `nreverse`, which was always a cheap in-place splice, ~0.2 KB -- only
+plain `reverse` carried the 7 KB dispatch). The next density lever, if this
+module's share is still worth chasing, is per-OPERATOR callees with runtime
+`:test`/`:key` parameters stacked on the trio (the seq-conversion-runtime
+re-evaluation trigger); the wrapper-catalog bucket (172 KB on the JVM twin) is
+already collapsed by the trio itself.

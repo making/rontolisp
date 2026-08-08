@@ -234,7 +234,7 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 どんな tree-shaking も cl-ppcre を除去できず、サイズ制限のあるターゲット
 ではそれがモジュールの大半を占めます —
 [ルーティング版 Worker の例](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-tiny-routes)
-の計測では、フルシステムで 1,236,811 B raw、lite で 501,689 B。ルートも
+の計測では、フルシステムで 1,118,916 B raw、lite で 449,411 B。ルートも
 応答もリクエスト単位で同一です。
 
 この置換はテンプレートが*何にマッチするか*を決して変えません — フル

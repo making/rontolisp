@@ -714,6 +714,11 @@ wasm run lines need `-W exceptions=y`); gzip = `gzip -9 -n`:
 823,589 B zero-reference anchor, which was a delta between two routed modules
 at `--optimize`.)
 
+The absolute numbers above are PRE-`%seq-to-*`-trio; the same probe (a)
+measures 678,977 raw after the trio landed (same day,
+`.kb/seq-conversion-runtime.md`). The per-feature DELTAS and every verdict
+below are unchanged — the trio moves the shared floor, not the increments.
+
 **The map's verdict is the branch the item predicted: scanner building is live
 even for (a), so the whole engine cost IS the anchor and the shaking levers
 cannot pay.** A single literal `scan` costs +286 B over merely loading the
@@ -748,16 +753,21 @@ engine; the spread between the cheapest and the richest API usage is 22 KB on a
 - **What CAN move a module that keeps the REAL engine is code DENSITY, not
   shaking** (user-redirected goal, 2026-08-08): the probe's wasm composition
   is 93% code section (696,108 B in 863 functions, five of them 93 KB
-  together), and the diagnosed mechanism is `.todo/288`'s per-site
-  sequence-dispatch inlining — the per-method profile, the operator
-  frequency×cost table and the injection mechanics are recorded in
-  `.todo/297`, which now rides on 288. An opt-in engine subset in the
-  todo-296 pattern was built, parity-pinned (a five-feature probe was
-  135,476 B raw / 43,893 gzip against the real engine's 770,201 / 183,182,
-  zero-reference 542 B, no EH mode — the numbers stand as the measured cost
-  of a subset engine) and then REJECTED by user decision the same day; the
-  record is in `.todo/297`. Lever 5 (compile-time lowering of
-  literal regexes so no runtime builder ships) stays un-taken: identical
+  together), and the diagnosed mechanism was `.todo/288`'s per-site
+  sequence-dispatch inlining. **That lever LANDED the same day**
+  (`.kb/seq-conversion-runtime.md`, the `%seq-to-*` conversion trio): probe
+  (a) went 748,091 -> 678,977 raw (-9.2%) — the yield is bounded by the
+  engine's sites being spread across ~440 KB of defun bodies whose residual
+  scan loops (0.5-0.9 KB/site) stay inline, where the wrapper-catalog-heavy
+  modules halved. The remaining density lever, if ever needed, is
+  per-OPERATOR callees with runtime `:test`/`:key` parameters, stacked on the
+  trio (the seq-conversion-runtime re-evaluation trigger). An opt-in engine
+  subset in the todo-296 pattern was built, parity-pinned (a five-feature
+  probe was 135,476 B raw / 43,893 gzip against the real engine's
+  770,201 / 183,182, zero-reference 542 B, no EH mode — the numbers stand as
+  the measured cost of a subset engine) and then REJECTED by user decision
+  the same day; the record is in `.todo/297`. Lever 5 (compile-time lowering
+  of literal regexes so no runtime builder ships) stays un-taken: identical
   semantics cannot be promised beyond a pinned subset, and the
   one-dynamic-regex cliff brings the whole engine back silently.
 

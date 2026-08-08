@@ -952,8 +952,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);
 				case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);
 				case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
-				case LispNames.COERCE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons, ctx.usesArrays), ctx, className);
+				case LispNames.COERCE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons,
+						ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx, className);
 				case LispNames.MAP_INTO ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);

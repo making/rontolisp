@@ -2006,6 +2006,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers))) {
 			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
 		}
+		// The shared sequence-conversion trio, once per program whose lowerings can
+		// reach a literal coerce -- every generic sequence operator's dispatch does, and
+		// most sites live in the wrapper bodies just added, so this sits beside the
+		// subseq helper for the same reason. No array gate here either; the compilers'
+		// coerce case routes a site to the trio exactly when it is present
+		// (.kb/seq-conversion-runtime.md).
+		if (!userDefinedNames.contains(LispNames.SEQ_TO_LIST) && (LispMacroExpander.programUsesSeqConversion(program)
+				|| LispMacroExpander.programUsesSeqConversion(wrappers))) {
+			for (LispVal helper : LispMacroExpander.seqConversionWrappers()) {
+				defuns.add(extractSetqLambda(helper));
+			}
+		}
 
 		// Collect top-level global variables and give each its own module-level wasm
 		// global (mut (ref null eq)), placed after GLOBAL_ENV/GLOBAL_FENV (indices 2+).

@@ -2,6 +2,34 @@
 
 Difficulty: Medium
 
+**LANDED 2026-08-08 (this working tree; every "Done when" item met — mechanics and
+measurements in `.kb/seq-conversion-runtime.md`).** The shape that paid was one level
+below this file's per-operator recipe: the 5-8 KB per lowering was almost entirely the
+literal `(coerce x 'list/'string/'vector)` conversions the shared dispatch builders
+spell (each an inlined `map` loop), so ONE shared trio (`%seq-to-list` /
+`%seq-to-string` / `%seq-to-vector`) plus one routing point at the compilers' `coerce`
+case took every operator's sites down at once -- no per-operator helpers, no expander
+signature changes, `:test`/`:key` inlining untouched. minesweeper 255,102 -> 140,192
+(-45%), un-shaken hello 257,475 -> 124,959 (-51.5%), hiragana infer -31.6%, cl-ppcre
+probe -9.2%; conversion-free programs byte-identical. 4-backend ci-spec (1300) +
+ExamplesE2eTest (235) green; all 13 checked-in browser artifacts rebuilt and verified
+in a real browser. Remaining leads, so they survive this file's deletion:
+
+- **Per-operator callees** (this file's original recipe; also "The other half"'s
+  wrapper-roots question) are STILL AVAILABLE stacked on the trio, now worth it only
+  where one operator recurs many times in user code -- residual site cost is the scan
+  loop, 489-852 B (was 6.7-7.7 KB). Recorded as the re-evaluation trigger in
+  `.kb/seq-conversion-runtime.md`.
+- **Compile-path temps are never released** (`ctx.allocTemp()`): still true, still a
+  size-only issue on wasm; `.todo/137` is the JVM twin where it is a correctness bug
+  past 255 slots.
+- **String-only wasm programs still pay subseq's array arm**: recorded as a
+  re-evaluation trigger in `.kb/subseq-runtime.md` (separate decision).
+
+Original finding below, kept for the record.
+
+---
+
 Split out of todo-276, whose own five items are closed. What is left of that item's
 "wasm-GC modules grew several-fold" measurement is ONE mechanism, and this is it.
 

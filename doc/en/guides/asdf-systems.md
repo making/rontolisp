@@ -241,7 +241,7 @@ a scanner when the route is *built*, so in a compiled module no amount of
 tree-shaking can remove cl-ppcre, and on a size-limited target that is most of
 the module — the
 [routed Worker example](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-tiny-routes)
-measures 1,236,811 B raw with the full system and 501,689 B with the lite
+measures 1,118,916 B raw with the full system and 449,411 B with the lite
 one, same routes, same answers, request for request.
 
 The substitution never changes what a template *matches* — it matches

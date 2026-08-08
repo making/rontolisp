@@ -1174,7 +1174,9 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);
 				case LispNames.ARRAY_DISP_TARGET -> WasmArrayCompiler.compileDispTarget(cons, ctx);
 				case LispNames.ARRAY_DISP_OFFSET -> WasmArrayCompiler.compileDispOffset(cons, ctx);
-				case LispNames.COERCE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons), ctx);
+				case LispNames.COERCE -> WasmExprCompiler.compileExpr(
+						LispMacroExpander.expandCoerce(cons, true, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)),
+						ctx);
 				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> {

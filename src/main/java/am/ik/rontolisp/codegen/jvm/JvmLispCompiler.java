@@ -820,6 +820,21 @@ public final class JvmLispCompiler implements LispCompiler {
 				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers))) {
 			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
 		}
+		// The shared sequence-conversion trio, beside the subseq helper for the same
+		// reason (most conversion sites live in the wrapper bodies just added). Gated on
+		// the array runtime the same way: the trio's vector arms name aref/%aset/
+		// make-array, so injecting it into an array-free program would pull the array
+		// runtime into a class with no use for it. When the gate is off the compilers'
+		// coerce case inlines the (vector-arm-free) dispatch as before, so nothing calls
+		// the missing trio (.kb/seq-conversion-runtime.md).
+		if (!userDefinedNames.contains(LispNames.SEQ_TO_LIST)
+				&& (programUsesAnyArrayOp(program) || forcedGroups.contains(GROUP_ARRAYS))
+				&& (LispMacroExpander.programUsesSeqConversion(program)
+						|| LispMacroExpander.programUsesSeqConversion(wrappers))) {
+			for (LispVal helper : LispMacroExpander.seqConversionWrappers()) {
+				defuns.add(extractSetqLambda(helper));
+			}
+		}
 
 		// Collect top-level global variables and give each a dedicated static field.
 		// A reference compiles to getstatic from any method body, so a global is

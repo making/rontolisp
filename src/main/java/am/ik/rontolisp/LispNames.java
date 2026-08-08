@@ -2231,6 +2231,24 @@ public final class LispNames {
 	public static final String SUBSEQ_RUNTIME = "%SUBSEQ-RUNTIME";
 
 	/**
+	 * The {@code %seq-to-list} internal helper: the literal {@code (coerce x 'list)}
+	 * conversion body as ONE defun. Injected once per program by each compiler backend as
+	 * a trio with {@link #SEQ_TO_STRING} and {@link #SEQ_TO_VECTOR}, beside the builtin
+	 * wrappers, so every generic sequence lowering's representation dispatch
+	 * ({@code seqResultDispatchForm} / {@code seqAsListForm} and every literal
+	 * {@code coerce} site) is a call rather than an inlined {@code map} loop; see
+	 * {@code .kb/seq-conversion-runtime.md}. The interpreter never sees it (its
+	 * {@code coerce} expands the inline form).
+	 */
+	public static final String SEQ_TO_LIST = "%SEQ-TO-LIST";
+
+	/** The {@code %seq-to-string} internal helper; see {@link #SEQ_TO_LIST}. */
+	public static final String SEQ_TO_STRING = "%SEQ-TO-STRING";
+
+	/** The {@code %seq-to-vector} internal helper; see {@link #SEQ_TO_LIST}. */
+	public static final String SEQ_TO_VECTOR = "%SEQ-TO-VECTOR";
+
+	/**
 	 * The {@code make-string} built-in function ({@code (make-string n &key
 	 * initial-element element-type)}). Lowered to a fill loop over {@code concatenate};
 	 * {@code element-type} is parsed and ignored (single string representation).

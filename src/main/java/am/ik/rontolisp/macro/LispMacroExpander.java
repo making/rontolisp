@@ -8103,6 +8103,92 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.SUBSEQ_RUNTIME), lambda));
 	}
 
+	/**
+	 * Builds the shared sequence-conversion trio -- {@code %seq-to-list},
+	 * {@code %seq-to-string}, {@code %seq-to-vector} -- each the body a literal
+	 * {@code (coerce x 'list/'string/'vector)} used to inline at every site.
+	 *
+	 * <p>
+	 * <strong>Why calls and not the bodies inline.</strong> Every generic sequence
+	 * lowering ({@code reverse}, {@code remove}, {@code substitute}, {@code position},
+	 * {@code count}, {@code sort}, ...) wraps its scan in the string/vector dispatch of
+	 * {@code seqResultDispatchForm} / {@code seqAsListForm}, whose arms are these
+	 * conversions -- and each conversion inlines a whole {@code map} loop (the string
+	 * builder drags the value printer too), 8-10 KB of wasm PER SITE. A program taking
+	 * any function as a value carries the whole {@code BuiltinFunctionWrappers} catalog,
+	 * each wrapper body one such lowering: 217 KB of a 261 KB minesweeper. Emitted once,
+	 * a conversion is a call. Same lesson as {@code .kb/subseq-runtime.md}; do not inline
+	 * them back.
+	 * <p>
+	 * Answered in the {@code (setq name (lambda ...))} shape
+	 * {@code BuiltinFunctionWrappers.generate} uses, because a backend injects them in
+	 * the same loop and for the same reason as {@link #subseqRuntimeWrapper()}: the
+	 * wrapper bodies are where most of a program's conversion sites live, and they do not
+	 * exist until the backend generates them. The trio always travels together -- which
+	 * arm of a dispatch runs is a runtime fact, so gating them apart would trade a
+	 * correctness hole for bytes.
+	 * @return the three helper definitions, wrapper-shaped
+	 */
+	public static List<LispVal> seqConversionWrappers() {
+		LispSymbol xl = new LispSymbol("%stl_x");
+		LispSymbol xs = new LispSymbol("%sts_x");
+		LispSymbol xv = new LispSymbol("%stv_x");
+		return List.of(conversionWrapper(LispNames.SEQ_TO_LIST, xl, coerceToListBody(xl, true)),
+				conversionWrapper(LispNames.SEQ_TO_STRING, xs, coerceToStringBody(xs, true)),
+				conversionWrapper(LispNames.SEQ_TO_VECTOR, xv, coerceToVectorBody(xv)));
+	}
+
+	// One (setq name (lambda (param) body)) helper definition of the conversion trio.
+	private static LispVal conversionWrapper(String name, LispSymbol param, LispVal body) {
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), listToCons(List.of(param)), body));
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(name), lambda));
+	}
+
+	/**
+	 * The operators whose lowering reaches a literal sequence conversion -- a
+	 * {@code coerce} form of its own, or the {@code seqResultDispatchForm} /
+	 * {@code seqAsListForm} dispatch every generic sequence expansion wraps its scan in.
+	 * This is the injection gate's list for {@link #seqConversionWrappers()}: a program
+	 * (or a generated wrapper body) naming any of these can hold a conversion site.
+	 * Over-predicting costs three unreachable defuns, which {@code --optimize} drops;
+	 * under-predicting costs the module its sharing and never its correctness (a site
+	 * without the helpers inlines the dispatch as before).
+	 */
+	private static final java.util.Set<String> SEQ_CONVERSION_USERS = java.util.Set.of(LispNames.COERCE, LispNames.MAP,
+			LispNames.REDUCE, LispNames.SORT, LispNames.STABLE_SORT, LispNames.REVERSE, LispNames.REMOVE,
+			LispNames.REMOVE_IF, LispNames.REMOVE_IF_NOT, LispNames.SUBSTITUTE, LispNames.SUBSTITUTE_IF,
+			LispNames.SUBSTITUTE_IF_NOT, LispNames.REMOVE_DUPLICATES, LispNames.DELETE_DUPLICATES, LispNames.POSITION,
+			LispNames.POSITION_IF, LispNames.POSITION_IF_NOT, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT,
+			LispNames.COUNT, LispNames.COUNT_IF, LispNames.EVERY, LispNames.SOME, LispNames.NOTANY, LispNames.NOTEVERY);
+
+	/**
+	 * Whether any form names an operator whose lowering can reach a literal sequence
+	 * conversion, i.e. whether injecting {@link #seqConversionWrappers()} could give the
+	 * conversion sites a shared callee. The same pre-expansion name scan as
+	 * {@link #programUsesSubseq(List)}, and used the same way by both compiler backends.
+	 * @param forms the program's (or the generated wrappers') top-level forms
+	 * @return true when a conversion site can occur
+	 */
+	public static boolean programUsesSeqConversion(List<LispVal> forms) {
+		for (LispVal form : forms) {
+			if (namesAnySymbol(form, SEQ_CONVERSION_USERS)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// namesSymbol over a set: any symbol anywhere in the form that is a member.
+	private static boolean namesAnySymbol(LispVal form, java.util.Set<String> names) {
+		if (form instanceof LispSymbol sym) {
+			return names.contains(sym.name());
+		}
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		return namesAnySymbol(cons.car(), names) || namesAnySymbol(cons.cdr(), names);
+	}
+
 	// The string / general-array / cons-chain dispatch shared by the inline lowering and
 	// the %subseq-runtime defun. passEnd tells whether the %subseq-core lane is handed
 	// the end at all: the two-argument inline form has no end variable worth passing,
@@ -18211,6 +18297,31 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCoerce(LispCons cons, boolean arraysExist) {
+		return expandCoerce(cons, arraysExist, false);
+	}
+
+	/**
+	 * Like {@link #expandCoerce(LispCons, boolean)}, but answers a CALL to the matching
+	 * member of the shared {@link #seqConversionWrappers()} trio when the program carries
+	 * it ({@code helpersPresent}) instead of inlining the conversion body.
+	 *
+	 * <p>
+	 * The two answers are the same conversion; the caller decides only where it lives. A
+	 * compiler passes {@code helpersPresent} true exactly when {@code %seq-to-list} is
+	 * among the program's functions (the trio travels together), so a gate that
+	 * under-predicts costs the module the sharing and nothing else -- the inline form is
+	 * still correct. Every generic sequence lowering funnels here: the
+	 * {@code seqResultDispatchForm} / {@code seqAsListForm} dispatch emits literal
+	 * {@code coerce} forms, which the compilers re-enter through their {@code coerce}
+	 * case, so one routing point serves {@code reverse} / {@code remove} /
+	 * {@code position} / {@code count} / {@code sort} / ... sites and the generated
+	 * wrapper bodies alike.
+	 * @param cons the coerce expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @param helpersPresent whether the program defines the conversion trio
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCoerce(LispCons cons, boolean arraysExist, boolean helpersPresent) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 3) {
 			throw new UnsupportedOperationException("coerce expects a value and a result type");
@@ -18244,7 +18355,22 @@ public final class LispMacroExpander {
 			return mvCall(LispNames.FLOAT, parts.get(1));
 		}
 		if (type == null && !(parts.get(2) instanceof LispString)) {
-			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist);
+			return expandComputedCoerce(parts.get(1), parts.get(2), arraysExist, helpersPresent);
+		}
+		if (helpersPresent) {
+			// The trio member is a one-argument function, so the call IS the one-shot
+			// binding the let below exists for.
+			if ("LIST".equals(type)) {
+				return listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_LIST), parts.get(1)));
+			}
+			if ("STRING".equals(type)) {
+				return listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), parts.get(1)));
+			}
+			if (type != null) {
+				// VECTOR and the unresolved-deftype default, the same pairing as the
+				// inline arms below.
+				return listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), parts.get(1)));
+			}
 		}
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispVal body;
@@ -18302,12 +18428,16 @@ public final class LispMacroExpander {
 	 * The float-only restriction this replaced is what kept
 	 * {@code alexandria:copy-sequence} / {@code median} / {@code coercef} dark: they are
 	 * all {@code (coerce sequence type)} with the type in a variable ({@code .todo/219}).
+	 * With the {@link #seqConversionWrappers()} trio present each conversion arm is a
+	 * call to it, the same routing as the literal path.
 	 * @param valueForm the value expression
 	 * @param typeForm the result-type expression
 	 * @param arraysExist whether a general array can exist in this program
+	 * @param helpersPresent whether the program defines the conversion trio
 	 * @return the expanded expression
 	 */
-	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist) {
+	private static LispVal expandComputedCoerce(LispVal valueForm, LispVal typeForm, boolean arraysExist,
+			boolean helpersPresent) {
 		LispSymbol x = new LispSymbol("__coerce_x");
 		LispSymbol spec = new LispSymbol("__coerce_spec");
 		LispSymbol t = new LispSymbol("__coerce_t");
@@ -18316,11 +18446,17 @@ public final class LispMacroExpander {
 		// (coerce x t) is the identity in CL; t is the value LispTrue, not a symbol, so
 		// it needs its own eq test rather than a member of the name lists.
 		LispVal identity = makeIf(mvCall(LispNames.EQ_GENERAL, t, LispTrue.INSTANCE), x, errorCall);
+		LispVal toVector = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_VECTOR), x))
+				: coerceToVectorBody(x);
+		LispVal toString = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_STRING), x))
+				: coerceToStringBody(x, arraysExist);
+		LispVal toList = helpersPresent ? listToCons(List.of(new LispSymbol(LispNames.SEQ_TO_LIST), x))
+				: coerceToListBody(x, arraysExist);
 		LispVal vectorArm = makeIf(memberOfTypeNames(t, "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
-				"BIT-VECTOR", "SIMPLE-BIT-VECTOR"), coerceToVectorBody(x), identity);
+				"BIT-VECTOR", "SIMPLE-BIT-VECTOR"), toVector, identity);
 		LispVal stringArm = makeIf(memberOfTypeNames(t, "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING"),
-				coerceToStringBody(x, arraysExist), vectorArm);
-		LispVal listArm = makeIf(memberOfTypeNames(t, "LIST", "CONS"), coerceToListBody(x, arraysExist), stringArm);
+				toString, vectorArm);
+		LispVal listArm = makeIf(memberOfTypeNames(t, "LIST", "CONS"), toList, stringArm);
 		LispVal body = makeIf(memberOfTypeNames(t, FLOAT_TYPE_NAMES.toArray(new String[0])), mvCall(LispNames.FLOAT, x),
 				listArm);
 		LispVal head = makeIf(callOf(LispNames.CONSP, spec), callOf(LispNames.CAR, spec), spec);
@@ -18983,11 +19119,13 @@ public final class LispMacroExpander {
 		}
 		if ("VECTOR".equals(resultType) || "SIMPLE-VECTOR".equals(resultType) || "ARRAY".equals(resultType)) {
 			// (map 'vector fn seq...) -> (coerce (map 'list fn seq...) 'vector): the
-			// list expansion below does the walking, coerce fills a fresh vector.
+			// list expansion below does the walking, coerce fills a fresh vector. Left
+			// as a coerce FORM (not pre-expanded) so the compilers re-enter it through
+			// their coerce case, where the shared-conversion routing lives.
 			List<LispVal> mapList = new java.util.ArrayList<>(parts);
 			mapList.set(1, listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("LIST"))));
-			return expandCoerce((LispCons) listToCons(List.of(new LispSymbol(LispNames.COERCE), listToCons(mapList),
-					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR"))))));
+			return listToCons(List.of(new LispSymbol(LispNames.COERCE), listToCons(mapList),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), new LispSymbol("VECTOR")))));
 		}
 		if (resultType == null && !nilResult) {
 			// A COMPUTED result type -- mito's (map (type-of value) #'f value): walk
