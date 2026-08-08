@@ -270,10 +270,15 @@ compatibility flag and no `wrangler.jsonc` setting, and rontolisp compiles
   throw it away. The `clack-handler-cloudflare-workers` backend catches in exactly
   the same place, for exactly the same reason.
 
-Exception handling is not free: it pulls the condition system into the module and
-roughly doubles its size here. `src/index.js` still catches whatever escapes —
-that would be a real WASM trap — and drops the instance, since a trapped
-instance's Lisp heap cannot be trusted afterwards.
+Exception handling is nearly free here (re-measured 2026-08-09): stripping both
+`handler-case` forms shrinks this build by ~1.6 KB — 0.9% at `--optimize=size` —
+because the spliced HTTP machinery (`%http-make-env` and friends) compiles in EH
+mode for its own stream forms regardless, and the optimizer keeps only the
+condition machinery the program actually reaches. An earlier revision of this
+page said EH "roughly doubles" the module; that predates the dispatch-gate work
+that made the condition system shakeable. `src/index.js` still catches whatever
+escapes — that would be a real WASM trap — and drops the instance, since a
+trapped instance's Lisp heap cannot be trusted afterwards.
 
 ## Developing the handler without Cloudflare
 
