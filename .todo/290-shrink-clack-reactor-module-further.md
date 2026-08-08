@@ -25,7 +25,9 @@ genuinely reachable from `clackup`'s call graph plus the ~170 dispatchable rows.
    The recorded re-evaluation trigger applies: make it per-entry (drop a range
    when `_intern` is unreachable, or filter the intern blob's rows post-shake).
    A clack module is exactly the case the trigger asks for: interns AND has a
-   large dead-wrapper string set.
+   large dead-wrapper string set. Share measured 2026-08-08 on the ROUTED
+   worker probe (todo-295): the blob segment is 58,756 B of an 81,003 B data
+   section -- the cap on this lever, an order of magnitude under lever 3.
 2. **Probe over-approximation on gate-closed programs.** The widened probes
    (framed string literal, keyword member) cost a gate-closed program a few KB
    of extra rows (`httpbin` 245,525 -> 248,956; the `--component` build
@@ -38,6 +40,13 @@ genuinely reachable from `clackup`'s call graph plus the ~170 dispatchable rows.
    `defclass`/`defgeneric`/`defmethod` as a root (`.kb/library-defun-pruning.md`,
    "What stays a root"); lack-component's CLOS surface rides into every clack
    module through it. Already recorded there as "a separate item, not a tweak".
+   Ceiling measured 2026-08-08 (todo-295): a clack+tiny-routes worker whose
+   cl-ppcre is loaded but ZERO-referenced sheds only 0.9% -- 823,589 B
+   (648 functions) stay anchored through CLOS roots at the AST level plus
+   load-time method closures at the module level
+   (`.kb/optimize-dead-code-elimination.md`, "What ROUTING costs a clack
+   module"). Both halves (pruner roots AND `valueFuncIds`) must learn CLOS
+   for the bytes to move.
 4. **EH mode.** The cloudflare shim's `handler-case` puts the module in EH mode
    (condition system + tags). Inherent to "handle answers 500", not removable --
    but its cost has never been measured on the POST-gate-split module; measure

@@ -7,10 +7,14 @@
 #   reactor: nothing to shim on the JavaScript side, and `_initialize` instead
 #   of `_start`. clackup's own start-up banner is not a problem there -- under
 #   --no-wasi standard output is a sink, so the bytes are discarded.
-# --optimize: a Worker bundle has a size limit, and the tree-shaker is what
-#   keeps the module down -- only the functions the program actually reaches
-#   end up in the output. It matters here because quickloading clack pulls in
-#   the whole of clack and lack.
+# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
+#   what keeps the module down -- only the functions the program actually
+#   reaches end up in the output. It matters here because quickloading clack
+#   pulls in the whole of clack and lack. The =size level additionally declines
+#   the two speed-over-size emissions, which is the right trade on a Worker:
+#   -11% raw / -14% gzip and a slightly FASTER isolate startup, for a
+#   per-request cost measured in single-digit microseconds (0.011 -> 0.015 ms
+#   on this module, node 24).
 #
 # The first run downloads clack/lack into ~/.rontolisp/quicklisp; after that the
 # build is offline.
@@ -27,7 +31,7 @@ if [[ ! -f "$jar" ]]; then
 fi
 
 echo "compiling worker.lisp -> src/app.wasm"
-java -jar "$jar" "$here/worker.lisp" -o "$here/src/app.wasm" --no-wasi --optimize
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/app.wasm" --no-wasi --optimize=size
 
 ls -l "$here/src/app.wasm"
 echo "done. Run it with:  npx wrangler dev"

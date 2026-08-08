@@ -28,7 +28,9 @@ if [[ ! -f "$jar" ]]; then
 fi
 
 echo "compiling ../httpbin/app.lisp -> app.wasm (component)"
-java -jar "$jar" "$here/../httpbin/app.lisp" -o "$here/app.wasm" --component --optimize
+# --optimize=size: same trade as the sibling builds -- smaller core modules for
+# a per-request cost of a few microseconds.
+java -jar "$jar" "$here/../httpbin/app.lisp" -o "$here/app.wasm" --component --optimize=size
 
 echo "transpiling app.wasm -> src/dist/"
 rm -rf "$here/src/dist"

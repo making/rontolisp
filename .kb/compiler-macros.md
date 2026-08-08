@@ -43,6 +43,13 @@ amortizes one scanner over 16 scans: `(cl-ppcre:scan "…" line)` was 146x the h
 control on the interpreter and `do-matches-as-strings` 80x. After the change the
 three compiled backends are at or below the hoisted control on every shape.
 
+What they are NOT worth is module SIZE: a fired rewrite ADDS ~179 B (the
+`load-time-value` slot) and removes nothing, because the scanner BUILDER still
+ships to run at load time — and on a call whose regex is a variable or computed
+(tiny-routes' whole routing path) they do not fire at all, measured
+byte-identical with all eight stripped
+(`.kb/optimize-dead-code-elimination.md`, "What ROUTING costs a clack module").
+
 **The one gap left is interpreter-side and has a different cause**: the interpreter
 re-expands a user macro on every evaluation, so a literal regex inside `do-matches`
 gets a FRESH `(scan …)` cons per iteration, which misses the per-call-site memos

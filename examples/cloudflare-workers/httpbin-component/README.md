@@ -34,7 +34,7 @@ disappears here. It is the entire benefit, and it is a genuine one.
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` (243 KB) | 3 × `.wasm` (255 KB) + `app.js` (293 KB) |
+| Files the Worker imports | 1 × `.wasm` (195 KB) | 3 × `.wasm` (207 KB) + `app.js` (293 KB) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | 3 interfaces, stubbed by hand |
 | Top-level `defparameter` | works, via `_initialize` | does not work at all |

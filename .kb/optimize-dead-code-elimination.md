@@ -595,6 +595,82 @@ One refinement was tried and REJECTED on measurement, and its lesson is now bake
 
 Tests: `componentCoreIsTreeShakenUnderOptimize` (shrinkage + a scalar and a string-returning export invoked under wasmtime, i.e. the canonical-ABI helpers survived) and `optimizedServeComponentStillServesUnderWasmtimeServe` (a shaken serve component actually answers a request), both in `WasmLispCompilerIntegrationTest`; `FormatRendererTest.theFunctionDesignatorArmIsInjectedOnlyForAProgramThatSpellsTheDirective` for the renderer half.
 
+## What ROUTING costs a clack module: cl-ppcre, measured and decided (todo-295, 2026-08-08)
+
+Adding tiny-routes to a Clack reactor nearly triples the module, and the extra is
+not tiny-routes (72 functions, ~72 KB of code) — it is **cl-ppcre, its only
+dependency**: a route template is compiled to a scanner at RUN time
+(`path-template.lisp` even builds one at LOAD time, `*path-token-scanner*`), so
+the whole regex pipeline (lexer -> parser -> converter -> optimizer -> closure
+compiler) is genuinely reachable and the shaker is right to keep it. Probe =
+`examples/cloudflare-workers/hello-clack`'s worker plus three tiny-routes routes
+(one `:id` template), compiled on that example's own build line (`--no-wasi`),
+node-verified request-for-request; gzip = `gzip -9 -n`:
+
+| routed Worker probe | raw | gzip | functions | code | data |
+| --- | --- | --- | --- | --- | --- |
+| clack base (`hello-clack`, `--optimize`) | 514,999 | 140,786 | 544 | 457,849 | 55,943 |
+| + tiny-routes, `--optimize` | 1,373,470 | 336,399 | 1,229 | 1,290,334 | 81,003 |
+| + tiny-routes, `--optimize=size` | 1,219,894 | 286,621 | 1,223 | 1,136,783 | 81,003 |
+
+Five levers were measured in one session; one taken, the rest recorded here with
+the reason so they are not re-derived:
+
+1. **TAKEN — the Worker examples build at `--optimize=size` now** (all four
+   wasm-GC `build.sh` lines; `hello` stays `--optimize` because it is `--no-gc`,
+   where the level is a documented no-op). Same day, same machine, node 24, the
+   `httpbin` README's own harness: `httpbin` 248,956 -> 200,155 raw / 76,063 ->
+   58,793 gzip, `httpbin-clack` 534,777 -> 474,150 / 146,688 -> 124,756,
+   `hello-clack` 514,999 -> 459,059 / 140,786 -> 121,525, the component build's
+   three core modules -> 212,219 B. The price on a Worker is the right trade in
+   both directions: warm requests +24-42% RELATIVE but 3-11 µs ABSOLUTE
+   (`httpbin-clack` GET 0.0179 -> 0.0241 ms, POST 0.0418 -> 0.0531 ms; the
+   routed probe 0.0095 -> 0.0124 ms), while `_initialize` gets FASTER (13.3 ->
+   12.5 ms; the routed probe 53 -> 47 ms) because V8 has less code to compile —
+   and isolate startup, not the microseconds, is what Cloudflare budget-checks.
+2. **cl-ppcre's eight `define-compiler-macro`s never fire on the routing path,
+   and firing would not shrink anything.** The routed module is BYTE-IDENTICAL
+   with all eight stripped from the source: every regex designator
+   `path-template.lisp` passes is a variable or a computed `concatenate`, never
+   `constantp`. And where one does fire (a user's literal `(ppcre:scan "…" x)`),
+   it ADDS 179 B — the `load-time-value` slot — and removes nothing, because the
+   scanner BUILDER still ships to run at load time. They are worth having for
+   run/start-up time (`.kb/compiler-macros.md`), never for size.
+3. **REJECTED — a leaf-module substitution of tiny-routes' `path-template.lisp`**
+   (the `ShimLibraries.leafModuleForms` tier, `.kb/asdf.md`). Measured with a
+   ppcre-free segment matcher swapped into the quicklisp tree: the shim ALONE
+   buys **-0.9%** (1,373,470 -> 1,360,484) — see the next lever for why — so
+   delivering the win also requires a replacement `.asd` that DROPS the
+   `:cl-ppcre` dependency. That two-tier substitution reaches 536,895 / 146,809
+   (-60.9%, routing then costs +21,896 B over the clack base, and `_initialize`
+   drops 54 -> 14 ms) — but it breaks `:regex t` (documented upstream API, would
+   have to signal), silently changes keyword-template semantics (upstream
+   interprets the NON-token template text as regex — mid-segment tokens,
+   metachars), and any program that touches `ppcre:` anywhere gets the engine
+   back WITH routes now matching by different rules than the user's own regexes.
+   On a library whose value is loading verbatim (the point of the ASDF work),
+   that is the wrong trade for bytes the next lever can recover generally.
+4. **Where the bytes really are: loaded-but-unreferenced cl-ppcre is anchored by
+   its CLOS surface — 823,589 B on this module.** With the ppcre-free shim in
+   place and the dependency still loaded, ZERO references remain, yet only 0.9%
+   leaves: `LibraryDefunPruner` keeps every `defgeneric`/`defmethod`/`defclass`/
+   `define-condition`/`defstruct` as a root (`.kb/library-defun-pruning.md`) and
+   cl-ppcre's API and node tree are exactly that; at the module level every
+   method body is materialized as a closure at load time, so it is in
+   `valueFuncIds`, dispatchable, and live through the ladders. The shim-vs-nodep
+   delta — 648 functions, 800,319 B code, 22,392 B data — is therefore the
+   measured ceiling of `.todo/290`'s CLOS-aware-shaking lever on this module.
+   The other `.todo/290` lever share, for scale: the string blob (`usesIntern`
+   stand-down) is the 58,756 B `data[3]` segment of an 81,003 B data section —
+   an order of magnitude smaller.
+5. **Splitting cl-ppcre's parse half from its match half: investigated, not a
+   plan.** It would pay only if a scanner could be built at COMPILE time and the
+   builder left out of the module; a cl-ppcre scanner is a tree of closures
+   closing over each other (`closures.lisp`), which no mechanism can serialize
+   into an artifact — `load-time-value` runs INSIDE the module at load time, so
+   the builder ships regardless (that is also why lever 2 cannot shrink
+   anything).
+
 ## JVM
 
 The counterpart post-pass is `am.ik.jvm.JvmClassShaker`, run at the end of `JvmLispCompiler.compile`. It parses the finished class, builds the call graph from the `invoke*` constant-pool immediates, keeps methods reachable from `main` (plus `_apply` as an extra root when the program uses `java:` interop — the embedded bridge looks `_apply` up REFLECTIVELY, an edge bytecode cannot show), drops unreachable methods and any static field only they referenced, and **compacts the constant pool**, rewriting every CP index immediate in the surviving bytecode in place (sizes never change: u2 stays u2, an `ldc` u1 index only shrinks because compaction preserves order — so exception-table pcs and switch padding stay valid; no method renumbering is needed since JVM methods are referenced by name). Dispatch methods keep eval/funcall/`#'` targets alive exactly as on WASM. The shaker throws on anything it does not recognize (unknown opcode/constant tag, any attribute other than a single `Code` per method) rather than emit a corrupt class; `fact` drops ~46 KB -> ~4.6 KB.

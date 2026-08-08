@@ -7,10 +7,10 @@ on Cloudflare Workers. Each directory is a complete, independent Worker project:
 | Directory | What it is | Module | Host glue |
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
-| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 503 KB (**138 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
-| [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **243 KB** (74 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
-| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.1× the module, because clack and lack (tree-shaken) ship inside it. | 522 KB (**143 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (255 KB) | 49 hand-written lines + 293 KB of generated glue |
+| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 448 KB (**119 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
+| [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **195 KB** (57 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
+| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.4× the module, because clack and lack (tree-shaken) ship inside it. | 463 KB (**122 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (207 KB) | 49 hand-written lines + 293 KB of generated glue |
 
 ## Which one should I copy?
 
@@ -30,7 +30,7 @@ the body handling and the second `clackup` target removed.
 program than save the space. It runs the *same application* as `httpbin/` — the
 same text, the same envelope, the same `src/index.js` — and the only difference
 is that `clack:clackup` installs the adapter instead of the program carrying it,
-for 1.9× the compressed module. Measured there: the per-request cost is
+for 2.1× the compressed module. Measured there: the per-request cost is
 identical; what clack costs is module size and a little isolate startup.
 
 `httpbin-component/` answers a question rather than being a recommendation:
@@ -151,9 +151,11 @@ All five were deployed to the real edge and verified there, not only under
 
 \* the whole table records the last real deploys, and every module has shrunk
 since — most recently by the 2026-08-08 dispatch-gate refinement, which halved
-the two clack builds. Locally the modules are now `httpbin` **243 KiB / 74 KiB
-gzip**, `httpbin-clack` **522 KiB / 143 KiB gzip**, `hello-clack` **503 KiB /
-138 KiB gzip**, and the component build's three core modules **255 KB**. Startup
+the two clack builds, and by the builds moving to `--optimize=size` the same
+day (about -11% raw / -14% gzip more, for a per-request price of a few
+microseconds). Locally the modules are now `httpbin` **195 KiB / 57 KiB gzip**,
+`httpbin-clack` **463 KiB / 122 KiB gzip**, `hello-clack` **448 KiB / 119 KiB
+gzip**, and the component build's three core modules **207 KiB**. Startup
 time is only reported by a real `wrangler deploy`, so those cells stand until
 the next one.
 
