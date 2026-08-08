@@ -4496,6 +4496,12 @@ public final class LispEvaluator {
 	 * @param env the environment to evaluate the dispatcher defun in
 	 */
 	private void defineDispatcher(String genericName, Environment env) {
+		// The dispatcher's last-resort signal is a call of the shared
+		// %no-applicable-method defun (one AST shape on every backend), so define it
+		// before the first dispatcher that may reach it.
+		if (this.globalEnv.lookupFunctionOrNull(LispNames.NO_APPLICABLE_METHOD_RUNTIME) == null) {
+			eval(LispMacroExpander.noApplicableMethodDefun(), env);
+		}
 		String fallback = builtinDefaultMethodFor(genericName);
 		eval(LispMacroExpander.generateDispatcher(genericName, this.closRegistry, fallback), env);
 	}

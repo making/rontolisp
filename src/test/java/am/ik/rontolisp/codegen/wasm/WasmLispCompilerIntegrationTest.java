@@ -7035,6 +7035,27 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void applyAlignedVariadicTarget() throws Exception {
+		// The aligned fast path: a literal #'f target whose required parameters are all
+		// covered by the leading arguments takes them directly -- the rest parameter is
+		// the tail verbatim (same list object) or the excess consed onto it. Fewer
+		// leading arguments than required parameters keeps the build-then-unpack path.
+		assertThat(compileAndRun("(defun g (a b &rest r) (list a b r)) (print (apply #'g 1 2 '(3 4)))"))
+			.isEqualTo("(1 2 (3 4))");
+		assertThat(compileAndRun("(defun g (a b &rest r) (list a b r)) (print (apply #'g 1 2 3 '(4)))"))
+			.isEqualTo("(1 2 (3 4))");
+		assertThat(compileAndRun("(defun g (a b &rest r) (list a b r)) (print (apply #'g 1 '(2 3)))"))
+			.isEqualTo("(1 2 (3))");
+		assertThat(compileAndRun(
+				"(defun tailof (a &rest r) r) (defvar *l* (list 1 2)) (print (eq *l* (apply #'tailof 0 *l*)))"))
+			.isEqualTo("T");
+		assertThat(compileAndRun(
+				"(defvar *o* nil) (defun n (x) (setq *o* (cons x *o*)) x)" + " (defun g (a &rest r) (cons a r))"
+						+ " (print (apply #'g (n 1) (n 2) (list (n 3)))) (print (reverse *o*))"))
+			.isEqualTo("(1 2 3)\n(1 2 3)");
+	}
+
+	@Test
 	void sequenceFunctionsAsFirstClass() throws Exception {
 		assertThat(compileAndRun("(print (funcall #'length '(7 8 9))) (print (mapcar #'reverse '((1 2) (3 4))))"))
 			.isEqualTo("3\n((2 1) (4 3))");

@@ -156,3 +156,46 @@ module's share is still worth chasing, is per-OPERATOR callees with runtime
 `:test`/`:key` parameters stacked on the trio (the seq-conversion-runtime
 re-evaluation trigger); the wrapper-catalog bucket (172 KB on the JVM twin) is
 already collapsed by the trio itself.
+
+## 2026-08-08 follow-up session: per-operator lever OUT, CLOS lowering IN
+
+Both new levers landed, probe (a) **678,977 -> 585,940
+(-13.7%; cumulative 748,091 -> 585,940, -21.7%)**, JVM twin 1,120,321 ->
+843,568 (-24.7%). All four backends verified on the probe and on a
+no-applicable-method error program (identical output).
+
+- **Per-operator callees cannot pay HERE (measured):** the engine's 17 files
+  hold only ~28 generic-sequence call sites (grep of head positions: reverse 4,
+  nreverse 9 [always cheap], mapcar 6, position family 3, find 3, count 4,
+  remove-if/replace/search/member/every 1-2 each) and the post-trio per-site
+  residual is 0.1-0.9 KB (measured by 1-vs-3-site probe deltas: substitute 812,
+  remove 810, find 564, position 544, count 444, reverse 444, mapcar 120) -- a
+  ~2% bound. Verdict recorded in `.kb/seq-conversion-runtime.md`'s
+  re-evaluation trigger; re-open only for a module with dozens of sites of ONE
+  operator.
+- **The real density was the CLOS lowering** (found by re-bucketing the JVM
+  twin: 54 dispatcher bases were 91,325 B, 18% of all method bytes; each slot
+  reader 1,721 B for a semantic `(if (%obj-is ...) (%obj-ref ...) (error ...))`).
+  Two levers, both landed this session:
+  1. **Shared no-applicable-method tail** (`%no-applicable-method`, injected by
+     `expandTopLevelDefinitions`, interpreter defines it in
+     `defineDispatcher`): the inlined error tail (condition construction + the
+     class-naming render, 4 `PRINT-OBJECT-STR` sites per accessor) became one
+     call; readers 1,721 -> 389 B, probe -85,266 B. Mechanics `.kb/clos.md`.
+  2. **Aligned apply fast path** (`Jvm/WasmApplyCompiler`): a literal `#'m`
+     apply whose leading arguments cover the callee's required parameters now
+     passes them directly, rest = tail verbatim (or excess consed on) -- the
+     build-then-unpack round trip (230 of the probe's 259 `-mN` branch calls,
+     ~80-300 B each) is gone. Probe -7,771 B; every variadic dispatcher branch
+     and next-chain lambda has this shape. Mechanics `.kb/clos.md`.
+- Checked-in browser artifacts rebuilt: 12 of 13 byte-identical (no CLOS, no
+  aligned apply); `hiragana/infer.wasm` 540,291 -> 411,770 (-23.8%, the convnet
+  layers are CLOS). NOTE: `webgl-battlefront/build.sh` prefers a `rontolisp` on
+  PATH -- a stale `/usr/local/bin/rontolisp` (2026-08-07) silently produced a
+  1.37 MB module; rebuilt with the repo jar, byte-identical.
+- What remains in the probe module (JVM twin buckets after both levers):
+  engine defun bodies 151 KB, lambdas 98 KB, %-helpers 72 KB (slot-value
+  runtimes 18 KB, SBR-1 8.4 KB), wrapper catalog 48 KB, invoke ladders 25 KB.
+  No single identified lever above ~2% is left on this module; the next
+  candidates would be the `_invoke` ladders or the per-branch `%obj-is` tag
+  ladders, neither measured further.

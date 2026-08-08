@@ -63,12 +63,41 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   required params (`&optional`/`&rest`) gets a variadic dispatcher that
   forwards the tail to the selected method via `apply` (and `call-next-method`
   there forwards that tail too -- see the argument-forwarding note below).
+  That `apply` shape -- a literal `#'m` target whose required parameters are
+  all covered by the leading arguments -- is the compile backends' ALIGNED
+  fast path (`Jvm/WasmApplyCompiler`): the required parameters pass directly
+  and the rest parameter takes the tail verbatim (or the excess consed onto
+  it), no argument-list build-then-unpack round trip. Every variadic
+  dispatcher branch and every next-chain lambda is this shape, ~80-300 B of
+  ceremony each before the peephole (230 of the cl-ppcre probe's 259 method
+  calls carried it). Fewer leading arguments than required parameters, or a
+  non-variadic target, keep the build-then-unpack path. Pinned by
+  `JvmLispCompilerTest.compileAndRunApplyAlignedVariadicTarget` /
+  `WasmLispCompilerIntegrationTest.applyAlignedVariadicTarget` (tail identity
+  -- the rest parameter IS the applied list -- and source evaluation order
+  included).
   `defgeneric` inline
   `(:method [qualifier] (params) body...)` clauses register like separate
   defmethods (`registerDefgeneric` collects their method defuns;
   `expandTopLevelDefinitions` splices them on the compile path). Falls back to
-  the default method or
-  `(error "No applicable method: <name>")`. eql/built-in tests reuse
+  the default method or the no-applicable-method signal, which is ONE call of
+  the shared `%no-applicable-method` defun (`noApplicableMethodDefun`), the
+  per-generic message half traveling as a literal prefix argument -- the error
+  tail (condition construction plus the class-naming render) re-inlined per
+  dispatcher cost over a KB of code EACH across a library's synthesized slot
+  accessors (cl-ppcre's probe module dropped 85 KB of wasm when it was
+  outlined, `.kb/optimize-dead-code-elimination.md`). The defun is appended
+  once by `expandTopLevelDefinitions` (a `referencesFunction` scan just before
+  the format-renderer scan, which must see its error form), and the
+  interpreter defines it before its first dispatcher
+  (`LispEvaluator.defineDispatcher`), so the dispatcher AST is one shape
+  everywhere -- `ShadowedBuiltins`' structural dead-dispatcher comparison
+  relies on that. Pinned by
+  `LispMacroExpanderTest.theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal`
+  and
+  `WasmLispCompilerTest.aSlotAccessorDispatcherDoesNotCarryItsOwnCopyOfTheNoApplicableMethodTail`;
+  the rendered message is byte-identical to the inline tail it replaced.
+  eql/built-in tests reuse
   `makeTypeTest`-family helpers (`makeEqlSpecializerTest`: symbols/keywords
   compare with `equal` — content-safe on WASM — numbers/characters with `eql`);
   a class test is `(%obj-is x '%class-C ...)` over the statically-known

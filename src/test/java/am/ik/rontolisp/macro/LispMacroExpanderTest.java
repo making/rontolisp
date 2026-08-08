@@ -275,4 +275,30 @@ class LispMacroExpanderTest {
 		return LispMacroExpander.programUsesSeqConversion(LispReader.readAllFromString(source));
 	}
 
+	@Test
+	void theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal() {
+		// The last-resort error tail (condition construction plus the class-naming
+		// render) re-inlined per dispatcher costs over a kilobyte EACH across a
+		// library's synthesized slot accessors; a dispatcher instead calls the shared
+		// signal defun, carrying its half of the message as the literal prefix, and
+		// expandTopLevelDefinitions appends that defun exactly once.
+		String source = "(defclass box () ((v :accessor box-v))) (defgeneric poke (x))"
+				+ " (defmethod poke ((x box)) x)";
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), new ClosRegistry());
+		String printed = expanded.stream().map(LispVal::print).reduce("", (a, b) -> a + "\n" + b);
+		assertThat(printed).contains("(%NO-APPLICABLE-METHOD \"No applicable method: POKE on \" X)");
+		assertThat(expanded.stream().filter(LispMacroExpanderTest::isNoApplicableMethodDefun)).hasSize(1);
+		// A program without a generic in reach carries nothing.
+		List<LispVal> plain = LispMacroExpander.expandTopLevelDefinitions(
+				LispReader.readAllFromString("(defun f (x) x) (print (f 1))"), new HashMap<>(), new ClosRegistry());
+		assertThat(plain.stream().filter(LispMacroExpanderTest::isNoApplicableMethodDefun)).isEmpty();
+	}
+
+	private static boolean isNoApplicableMethodDefun(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name
+				&& LispNames.NO_APPLICABLE_METHOD_RUNTIME.equals(name.name());
+	}
+
 }

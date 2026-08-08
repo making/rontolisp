@@ -59,6 +59,23 @@ final class WasmApplyCompiler {
 		String target = n >= 3 ? am.ik.rontolisp.macro.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
 		if (target != null) {
 			WasmLispCompiler.WasmFunctionInfo fi = ctx.functions.get(target);
+			if (fi != null && fi.variadic() && n - 3 >= fi.paramCount() - 1) {
+				// Aligned: the leading arguments cover every required parameter, so
+				// the argument list needs no build-then-unpack round trip -- required
+				// parameters are the leading expressions and the rest parameter takes
+				// the tail verbatim (or the excess consed onto it), in source order.
+				int required = fi.paramCount() - 1;
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				for (int i = 0; i < required; i++) {
+					WasmExprCompiler.compileExpr(args.get(2 + i), ctx);
+				}
+				WasmExprCompiler
+					.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(fi.funcIndex());
+				return;
+			}
 			if (fi != null) {
 				WasmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx);
 				int argsSlot = ctx.allocTemp();

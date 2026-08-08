@@ -114,12 +114,16 @@ injected, then fully shaken out). The JVM wrapper catalog's biggest bodies went
   `seqResultDispatchForm` already skips the call entirely for a list input; only
   `seqAsListForm` sites call unconditionally, and the helper's `listp` arm returns the
   input untouched.
-- **If the residual per-site scan loops (0.5-0.9 KB) ever matter** -- cl-ppcre keeps
-  ~440 KB of defun bodies whose sites are now this shape -- the next lever is
+- **If the residual per-site scan loops (0.5-0.9 KB) ever matter**, the next lever is
   per-OPERATOR callees with the `:test`/`:key` designators as runtime parameters
   (nil = default), stacked on top of this mechanism. That was `.todo/288`'s "other
   half"; it pays only where one operator recurs many times in USER code, because each
-  wrapper body is already one definition.
+  wrapper body is already one definition. Measured for cl-ppcre (todo-297 follow-up,
+  2026-08-08): the engine has only ~28 such sites (reverse 4, mapcar 6, position
+  family 3, find 3, count 4, one or two each of the rest), a ~2% bound on that
+  module -- the real density there was the CLOS dispatcher tails, taken instead
+  (`.kb/clos.md`, `.kb/optimize-dead-code-elimination.md`). Re-open this lever only
+  for a module measured to have dozens of sites of ONE operator.
 - **A string-only JVM program keeps the inline (vector-arm-free) dispatch** because
   the array gate keeps the trio out. Same trade as `%subseq-runtime`, same answer: the
   gate under-predicting costs bytes, never correctness.

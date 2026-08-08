@@ -1014,6 +1014,30 @@ class WasmLispCompilerTest {
 		assertThat(marginalBytesPerSite("(position i *v*)")).isLessThan(1200);
 	}
 
+	@Test
+	void aSlotAccessorDispatcherDoesNotCarryItsOwnCopyOfTheNoApplicableMethodTail() {
+		// Every synthesized accessor is a pair of dispatchers (reader + %setf- writer)
+		// whose last resort used to inline the whole error tail -- condition
+		// construction plus the class-naming render, well over a kilobyte each; it is
+		// one call of the shared %no-applicable-method defun now. Measured 597 per
+		// accessor (both dispatchers plus the call site).
+		assertThat(compileWithAccessors(5).length - compileWithAccessors(4).length).isLessThan(1500);
+	}
+
+	private static byte[] compileWithAccessors(int count) {
+		StringBuilder source = new StringBuilder("(defclass c () (");
+		for (int k = 0; k < count; k++) {
+			source.append("(s").append(k).append(" :initform 0 :accessor c-s").append(k).append(") ");
+		}
+		source.append("))\n(defvar *o* (make-instance 'c))\n(print (list");
+		for (int k = 0; k < count; k++) {
+			source.append(" (c-s").append(k).append(" *o*)");
+		}
+		source.append("))");
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
 	// The bytes one more occurrence of `site` adds to a module that already has four of
 	// them, so the shared runtime each of them calls is paid for in both measurements.
 	private static int marginalBytesPerSite(String site) {

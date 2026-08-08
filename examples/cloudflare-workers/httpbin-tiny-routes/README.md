@@ -34,23 +34,23 @@ the same `gzip -9 -n`, node 24 for `_initialize` (2026-08-08):
 
 | Worker | routing | raw | gzip | `_initialize` |
 | --- | --- | --- | --- | --- |
-| [`../httpbin`](../httpbin) | hand-written `cond`, no clack in the module | 188,843 B | 56,848 B | 4.7 ms |
-| [`../httpbin-clack`](../httpbin-clack) | hand-written `cond`, `clackup` | 427,079 B | 108,557 B | 10.0 ms |
-| **this** | **tiny-routes/lite**, `clackup` | **449,411 B** | **114,854 B** | 11.1 ms |
-| this with the full `"tiny-routes"` | tiny-routes over **cl-ppcre** | 1,118,916 B | 249,309 B | 39.0 ms |
+| [`../httpbin`](../httpbin) | hand-written `cond`, no clack in the module | 182,767 B | 55,895 B | 4.5 ms |
+| [`../httpbin-clack`](../httpbin-clack) | hand-written `cond`, `clackup` | 384,366 B | 105,447 B | 4.8 ms |
+| **this** | **tiny-routes/lite**, `clackup` | **406,698 B** | **111,441 B** | 4.8 ms |
+| this with the full `"tiny-routes"` | tiny-routes over **cl-ppcre** | 972,756 B | 235,391 B | 6.1 ms |
 
-Read bottom-up. The full library nearly triples the clack build — not because
+Read bottom-up. The full library is 2.5× the clack build — not because
 of tiny-routes itself (~72 KB of routing code) but because its one dependency
 is **cl-ppcre**: a route template compiles to a regex scanner at *run* time, so
 the whole regex engine is genuinely reachable and the tree-shaker is right to
 keep it. `tiny-routes/lite` swaps one file of the library — the
 cl-ppcre-backed `path-template.lisp` — for a ppcre-free matcher and drops the
 `:cl-ppcre` dependency with it, and the library API costs **+22,332 B raw**
-over the hand-written `cond` (+1.1 ms of isolate startup). The last row was
+over the hand-written `cond`. The last row was
 built from this very `worker.lisp` with only the `ql:quickload` line changed,
-and answers the same six probes byte-for-byte — for 2.5× the module.
+and answers the same six probes byte-for-byte — for 2.4× the module.
 
-114,854 B gzip is **3.7%** of the free plan's 3 MB compressed bundle limit.
+111,441 B gzip is **3.5%** of the free plan's 3 MB compressed bundle limit.
 
 ## What `tiny-routes/lite` is
 
@@ -98,7 +98,7 @@ fall through to the 404 instead of answering 405).
 | [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the `../httpbin-clack` helpers verbatim, the routes, `clackup`. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` and `../httpbin-clack/src/index.js`. |
-| `src/app.wasm` | The compiled module (~450 KB). A build product — run `./build.sh` first. |
+| `src/app.wasm` | The compiled module (~407 KB). A build product — run `./build.sh` first. |
 
 ## Developing without Cloudflare
 

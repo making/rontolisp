@@ -35,6 +35,21 @@ final class JvmApplyCompiler {
 		String target = n >= 3 ? am.ik.rontolisp.macro.LispMacroExpander.applyLiteralTargetName(args.get(1)) : null;
 		if (target != null) {
 			JvmLispCompiler.FunctionInfo fi = ctx.functions.get(target);
+			if (fi != null && fi.variadic() && n - 3 >= fi.paramCount() - 1) {
+				// Aligned: the leading arguments cover every required parameter, so
+				// the argument list needs no build-then-unpack round trip -- required
+				// parameters are the leading expressions and the rest parameter takes
+				// the tail verbatim (or the excess consed onto it), in source order.
+				int required = fi.paramCount() - 1;
+				for (int i = 0; i < required; i++) {
+					JvmExprCompiler.compileExpr(args.get(2 + i), ctx, className);
+				}
+				JvmExprCompiler.compileExpr(
+						am.ik.rontolisp.macro.LispMacroExpander.applyAlignedRestExpr(cons, required), ctx, className);
+				ctx.emit(Opcode.INVOKESTATIC);
+				ctx.emitU2(fi.methodref().index());
+				return;
+			}
 			if (fi != null) {
 				JvmExprCompiler.compileExpr(am.ik.rontolisp.macro.LispMacroExpander.applyArgumentListExpr(cons), ctx,
 						className);

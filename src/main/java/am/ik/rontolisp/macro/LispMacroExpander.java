@@ -8287,6 +8287,32 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The rest-parameter expression of the backends' ALIGNED apply fast path: when a
+	 * literal {@code (apply #'f a1 ... ak lst)} target is variadic and its required
+	 * parameters are all covered by the leading arguments ({@code k >= required}), the
+	 * call needs no argument-list round trip at all -- the required parameters are the
+	 * leading expressions verbatim and the rest parameter is this expression: {@code lst}
+	 * itself when {@code k == required} (same object, same tail identity as the cdr-walk
+	 * it replaces), or {@code (list* a<sub>required+1</sub> ... ak lst)} for the excess.
+	 * Left-to-right argument evaluation order is the source order either way. The
+	 * unaligned shapes (fewer leading arguments than required parameters, or a
+	 * non-variadic target) keep the build-then-unpack path.
+	 * @param cons the apply expression
+	 * @param required the callee's required (non-rest) parameter count
+	 * @return the rest-argument expression
+	 */
+	public static LispVal applyAlignedRestExpr(LispCons cons, int required) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() - 3 == required) {
+			return parts.get(parts.size() - 1);
+		}
+		List<LispVal> listStar = new java.util.ArrayList<>();
+		listStar.add(new LispSymbol(LispNames.LIST_STAR));
+		listStar.addAll(parts.subList(2 + required, parts.size()));
+		return listToCons(listStar);
+	}
+
+	/**
 	 * The literal function name of an {@code apply} designator ({@code #'f} or
 	 * {@code 'f}), or null when the designator is a computed expression.
 	 * @param designator the first apply argument
@@ -13900,16 +13926,40 @@ public final class LispMacroExpander {
 			return listToCons(
 					List.of(new LispSymbol(LispNames.ERROR), new LispString("No applicable method: " + genericName)));
 		}
-		// Name the first argument's class: "No applicable method: X" alone made a
-		// cross-package generic-name collision (two `:reader message` generics)
-		// undiagnosable at run time. The DESIGNATOR (tag symbol), not class-of: the
-		// message needs a name, and class-of would drag the metaobject runtime into
-		// every program with a generic function.
-		LispVal classOf = listToCons(List.of(new LispSymbol(LispNames.CLASS_DESIGNATOR_INTERNAL), params.get(0)));
-		LispVal message = listToCons(List.of(new LispSymbol(LispNames.STRING_CONCAT),
-				new LispString("No applicable method: " + genericName + " on "),
-				callOf(LispNames.PRINC_TO_STRING, classOf)));
-		return listToCons(List.of(new LispSymbol(LispNames.ERROR), message));
+		// One call of the shared signal helper (see noApplicableMethodDefun); the
+		// per-generic half of the message travels as the literal prefix argument, so the
+		// rendered message is byte-identical to the inline tail this replaces.
+		return listToCons(List.of(new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME),
+				new LispString("No applicable method: " + genericName + " on "), params.get(0)));
+	}
+
+	/**
+	 * The shared last-resort signal every dispatcher's {@code noApplicableMethod} call
+	 * targets: {@code (defun %no-applicable-method (prefix arg) (error (%string-concat
+	 * prefix (princ-to-string (%class-designator arg)))))}. The error tail is anything
+	 * but small once expanded -- condition construction plus the class-naming render --
+	 * and a library's synthesized slot readers/writers give it to EVERY accessor
+	 * dispatcher, so it is emitted once per program instead
+	 * ({@code expandTopLevelDefinitions} appends it when any dispatcher references it;
+	 * {@code LispEvaluator.defineDispatcher} defines it before its first dispatcher).
+	 *
+	 * <p>
+	 * Naming the first argument's class in the message is deliberate: "No applicable
+	 * method: X" alone made a cross-package generic-name collision (two
+	 * {@code :reader message} generics) undiagnosable at run time. The DESIGNATOR (tag
+	 * symbol), not class-of: the message needs a name, and class-of would drag the
+	 * metaobject runtime into every program with a generic function.
+	 * @return the defun form
+	 */
+	public static LispVal noApplicableMethodDefun() {
+		LispSymbol prefix = new LispSymbol("%nam_prefix");
+		LispSymbol arg = new LispSymbol("%nam_arg");
+		LispVal classOf = listToCons(List.of(new LispSymbol(LispNames.CLASS_DESIGNATOR_INTERNAL), arg));
+		LispVal message = listToCons(
+				List.of(new LispSymbol(LispNames.STRING_CONCAT), prefix, callOf(LispNames.PRINC_TO_STRING, classOf)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFUN),
+				new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME), listToCons(List.of((LispVal) prefix, arg)),
+				listToCons(List.of(new LispSymbol(LispNames.ERROR), message))));
 	}
 
 	/**
@@ -14605,6 +14655,13 @@ public final class LispMacroExpander {
 		// simple-condition's format-control THROUGH the renderer), and gated so a program
 		// whose every format call has a literal control -- the overwhelming majority --
 		// carries none of it.
+		// The shared no-applicable-method signal, once per program with a dispatcher that
+		// can reach it: without this defun every dispatcher (each synthesized slot
+		// reader/writer included) re-inlines the whole error tail. Before the format
+		// renderer, whose scan must see this defun's error form.
+		if (out.stream().anyMatch(f -> referencesFunction(f, LispNames.NO_APPLICABLE_METHOD_RUNTIME))) {
+			out.add(noApplicableMethodDefun());
+		}
 		out = withFormatRenderer(out, dynamic);
 		// The shared (setf (aref var i) x) / (setf (char s i) c) string writer, once per
 		// program that can reach it. LAST, so its scan covers every definition injected

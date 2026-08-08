@@ -716,8 +716,10 @@ at `--optimize`.)
 
 The absolute numbers above are PRE-`%seq-to-*`-trio; the same probe (a)
 measures 678,977 raw after the trio landed (same day,
-`.kb/seq-conversion-runtime.md`). The per-feature DELTAS and every verdict
-below are unchanged — the trio moves the shared floor, not the increments.
+`.kb/seq-conversion-runtime.md`), and 585,940 raw after the follow-up session
+outlined the dispatchers' no-applicable-method tail and aligned the CLOS
+`apply` forwarding (below). The per-feature DELTAS and every verdict below are
+unchanged — these levers move the shared floor, not the increments.
 
 **The map's verdict is the branch the item predicted: scanner building is live
 even for (a), so the whole engine cost IS the anchor and the shaking levers
@@ -759,9 +761,24 @@ engine; the spread between the cheapest and the richest API usage is 22 KB on a
   (a) went 748,091 -> 678,977 raw (-9.2%) — the yield is bounded by the
   engine's sites being spread across ~440 KB of defun bodies whose residual
   scan loops (0.5-0.9 KB/site) stay inline, where the wrapper-catalog-heavy
-  modules halved. The remaining density lever, if ever needed, is
-  per-OPERATOR callees with runtime `:test`/`:key` parameters, stacked on the
-  trio (the seq-conversion-runtime re-evaluation trigger). An opt-in engine
+  modules halved. The follow-up session (2026-08-08, same todo) measured the
+  candidate per-OPERATOR callee lever OUT for this module — the engine has
+  only ~28 generic-sequence call sites (reverse 4, mapcar 6, position family
+  3, find 3, count 4, one or two each of the rest) at 0.1-0.9 KB residual
+  each, a ~2% bound — and found the REAL remaining density in the CLOS
+  lowering instead, both halves landed the same session: (1) the generic
+  dispatchers' inlined no-applicable-method error tail became the shared
+  `%no-applicable-method` defun (each synthesized slot accessor carried its
+  own condition-construction + class-naming render, 1,721 -> 389 B of
+  bytecode per reader on the JVM twin), and (2) the variadic dispatchers'
+  `apply` forwarding stopped building-then-unpacking its argument list (the
+  ALIGNED apply fast path, `.kb/clos.md`; 230 of the probe's 259 method-call
+  branches carried the ceremony). Probe (a): 678,977 -> 585,940 raw
+  (-13.7% on top; cumulative 748,091 -> 585,940, **-21.7%**), JVM twin
+  1,120,321 -> 843,568 class bytes (-24.7%). The residual per-OPERATOR
+  callee idea stays recorded in `.kb/seq-conversion-runtime.md`'s
+  re-evaluation trigger for a module whose sites are denser than this one's.
+  An opt-in engine
   subset in the todo-296 pattern was built, parity-pinned (a five-feature
   probe was 135,476 B raw / 43,893 gzip against the real engine's
   770,201 / 183,182, zero-reference 542 B, no EH mode — the numbers stand as

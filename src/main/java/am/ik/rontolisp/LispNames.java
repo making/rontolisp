@@ -2249,6 +2249,19 @@ public final class LispNames {
 	public static final String SEQ_TO_VECTOR = "%SEQ-TO-VECTOR";
 
 	/**
+	 * The {@code %no-applicable-method} internal helper: the generic-function
+	 * dispatchers' shared last-resort signal, {@code (error (%string-concat prefix
+	 * (princ-to-string (%class-designator arg))))} as ONE defun. Injected once per
+	 * program whose dispatchers can reach it ({@code expandTopLevelDefinitions}); without
+	 * it every dispatcher -- including each synthesized slot reader/writer -- re-inlines
+	 * the whole error tail (condition construction plus the class-naming render). The
+	 * interpreter defines it before its first dispatcher
+	 * ({@code LispEvaluator.defineDispatcher}), so the dispatcher AST is one shape
+	 * everywhere.
+	 */
+	public static final String NO_APPLICABLE_METHOD_RUNTIME = "%NO-APPLICABLE-METHOD";
+
+	/**
 	 * The {@code make-string} built-in function ({@code (make-string n &key
 	 * initial-element element-type)}). Lowered to a fill loop over {@code concatenate};
 	 * {@code element-type} is parsed and ignored (single string representation).
