@@ -686,6 +686,11 @@ the reason so they are not re-derived:
    the builder ships regardless (that is also why lever 2 cannot shrink
    anything).
 
+The half these levers leave OPEN — an application that calls `ppcre:` itself
+and therefore cannot drop the engine the way a routed one now can — is
+`.todo/297`, which starts from the numbers above (the engine's measured module
+share, the 823,589 B zero-reference anchor, and the two settled non-levers).
+
 ## JVM
 
 The counterpart post-pass is `am.ik.jvm.JvmClassShaker`, run at the end of `JvmLispCompiler.compile`. It parses the finished class, builds the call graph from the `invoke*` constant-pool immediates, keeps methods reachable from `main` (plus `_apply` as an extra root when the program uses `java:` interop — the embedded bridge looks `_apply` up REFLECTIVELY, an edge bytecode cannot show), drops unreachable methods and any static field only they referenced, and **compacts the constant pool**, rewriting every CP index immediate in the surviving bytecode in place (sizes never change: u2 stays u2, an `ldc` u1 index only shrinks because compaction preserves order — so exception-table pcs and switch padding stay valid; no method renumbering is needed since JVM methods are referenced by name). Dispatch methods keep eval/funcall/`#'` targets alive exactly as on WASM. The shaker throws on anything it does not recognize (unknown opcode/constant tag, any attribute other than a single `Code` per method) rather than emit a corrupt class; `fact` drops ~46 KB -> ~4.6 KB.
