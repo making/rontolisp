@@ -4958,6 +4958,18 @@ cases:
                    (string-capitalize 'sym-api-other::test)
                    (string-downcase :sym-api-kw)
                    (string-downcase "AbC")))
+      ;; The three standard stream variables are BOUND to their seeded defaults
+      ;; through the symbol API too, not only to a direct read: the compile
+      ;; backends keep a special in two homes (the global cell / the eval
+      ;; runtime's mirror) and only the first one used to be seeded, so
+      ;; symbol-value signalled "unbound" here while the interpreter answered.
+      ;; lack's backtrace middleware reaches *error-output* exactly this way --
+      ;; it carries the SYMBOL and reports through (symbol-value output).
+      (print (list (boundp '*error-output*) (symbol-value '*error-output*)
+                   (boundp '*standard-output*) (symbol-value '*standard-output*)
+                   (boundp '*standard-input*) (symbol-value '*standard-input*)))
+      (defvar *sym-api-stream-name* '*error-output*)
+      (print (symbol-value *sym-api-stream-name*))
     expected: |
       "FOO"
       "BAR"
@@ -4986,6 +4998,8 @@ cases:
       "z"
       ("A" "B")
       ("test" "TEST" "Test" "sym-api-kw" "abc")
+      (T 2 T T T T)
+      2
   - name: setf-symbol-function-and-fdefinition
     source: |
       (defun csf-orig (x) (* x 2))

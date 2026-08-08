@@ -242,6 +242,47 @@ final class LackE2eSupport {
 			T
 			""";
 
+	/** The condition the backtrace-middleware exercise's handler signals. */
+	static final String BACKTRACE_CONDITION = "lack-backtrace-boom";
+
+	/**
+	 * The DEFAULT middleware every {@code clack:clackup} application is wrapped in:
+	 * lack's {@code :backtrace}, which reports a failing handler to
+	 * {@code *error-output*}.
+	 *
+	 * <p>
+	 * It reaches that stream the awkward way -- its {@code output} parameter defaults to
+	 * the SYMBOL {@code '*error-output*} and the report goes to {@code (symbol-value
+	 * output)} -- so on a compiled backend, whose {@code symbol-value} reads the eval
+	 * runtime's global-environment mirror rather than the variable's own global cell, the
+	 * middleware used to signal {@code The variable *ERROR-OUTPUT* is unbound} and
+	 * REPLACE the application's real error with it. Both homes now seed from
+	 * {@code compiler.StreamDesignators}' one table ({@code .kb/symbol-runtime-api.md}).
+	 * @param port a free TCP port
+	 * @return the program source
+	 */
+	static String backtraceMiddlewareExercise(int port) {
+		return """
+				(ql:quickload "clack")
+				(ql:quickload "lack-middleware-backtrace")
+				(defvar *handler*
+				  (clack:clackup
+				   (lambda (env) env (error "%s"))
+				   :server :rontolisp
+				   :port %d
+				   :silent t
+				   :debug nil))
+				(defvar *get* (rontolisp:await (rontolisp:fetch "http://127.0.0.1:%d/boom")))
+				(print (getf *get* :status))
+				(print (clack:stop *handler*))
+				""".formatted(BACKTRACE_CONDITION, port, port);
+	}
+
+	static final String BACKTRACE_MIDDLEWARE_EXPECTED = """
+			500
+			T
+			""";
+
 	/**
 	 * A free TCP port (bound then released; a tiny race, acceptable for tests).
 	 * @return the port
@@ -260,9 +301,16 @@ final class LackE2eSupport {
 	}
 
 	static String runCli(Path workDir, String... args) throws Exception {
+		Result result = runCliResult(workDir, args);
+		assertThat(result.exitCode()).as("%s", result).isZero();
+		return result.out();
+	}
+
+	/** {@link #runCli} keeping the subprocess's STDERR, which some legs assert on. */
+	static Result runCliResult(Path workDir, String... args) throws Exception {
 		List<String> command = new ArrayList<>(List.of(JAVA, "-cp", CLASSPATH, "am.ik.rontolisp.cli.RontoLispCli"));
 		command.addAll(List.of(args));
-		return runSuccessfully(workDir, command.toArray(String[]::new));
+		return run(workDir, command.toArray(String[]::new));
 	}
 
 	static String runSuccessfully(Path workDir, String... command) throws Exception {

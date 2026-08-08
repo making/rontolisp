@@ -258,6 +258,62 @@ Tests: the *Fmakunbound* / *FindPackage* / *FindSymbol* groups in the three back
 tests, the `runtime-package-symbol-ops` ci-spec case, and the 325 count pinned in
 ci-spec + LispEvaluatorTest + JvmLispCompilerTest (x2) + WasmLispCompilerIntegrationTest.
 
+## The standard stream variables are bound in the MIRROR too (todo-283, 2026-08-08)
+
+`(symbol-value '*error-output*)` answered `2` on the interpreter and signalled
+`The variable *ERROR-OUTPUT* is unbound` on all three compile backends (a trap on
+wasm), same for `*standard-output*` / `*standard-input*` and their `boundp`. Cause: a
+compiled program keeps a special in **two homes that did not know about each other** --
+the per-name global field (JVM) / module global (WASM) a direct read uses, seeded with
+the stream defaults, and the `_genv` / `GLOBAL_ENV` mirror `symbol-value`/`boundp`/
+`eval` probe, which only a top-level assignment ever writes. The seeding never reached
+the mirror.
+
+Both homes now seed from ONE table, `compiler.StreamDesignators.standardStreamDefaults()`
+(`*standard-output*` and `*standard-input*` -> the `t` designator, `*error-output*` ->
+the reserved handle `2`), so they cannot drift apart:
+
+- **JVM**: `<clinit>` emits `_genv = new Object[]{new Object[]{name, default}, _genv}` --
+  the binding shape `_store` prepends, so a later top-level assignment MUTATES that cell
+  instead of shadowing it. **WASM**: `_start` emits the same as
+  `GLOBAL_ENV = cons(cons(name, default), GLOBAL_ENV)`, the name through the string table
+  so its offset is the one `_env_lookup` compares an interned symbol against.
+- **The gate is per variable: `usesEval` AND the NAME APPEARS IN THE SOURCE**
+  (`programUsesSymbol`, which counts quoted data -- lack's `(output '*error-output*)`).
+  Two reasons, and the second is the load-bearing one: a program that never mentions a
+  stream variable stays byte-identical, and it is the SAME scan the `--component` stderr
+  narrowing uses (`.kb/standard-output-redirect.md`), so the mirror seed cannot
+  materialize handle 2 in a component whose `wasi:cli/stderr` was pruned away.
+- **Limit, and why**: a name the source never spells -- `(symbol-value (intern
+  "*ERROR-OUTPUT*"))` -- is still unbound on the compile paths. Seeding unconditionally
+  would cost byte-identity and would defeat the narrowing scan above. Re-evaluate if a
+  library ever builds one of the three names at run time.
+- The dynamic-scope divergence is UNCHANGED: `symbol-value` still reads the global
+  default, not an active `let` binding, on the compile paths
+  (`.kb/dynamic-special-variables.md` point 3). This was about the global default being
+  MISSING.
+
+**The consumer**: lack's `:backtrace` middleware -- the default `clack:clackup` wraps
+every application in -- carries `(output '*error-output*)`, a SYMBOL, and reports a
+failing handler through `(symbol-value output)`. On a compiled backend that call was
+itself an error, so the application's ACTUAL condition was replaced by "The variable
+*ERROR-OUTPUT* is unbound" behind a bare 500.
+
+Enabling it exposed one **latent JVM bug** underneath (the reason the first green run
+still failed, with an NPE): `_writeString`'s socket probe indexes `_streams` from the
+raw handle BEFORE delegating to `_writeStr`, where the stderr branch lives -- and
+`_streams` was created lazily by `_addStream`, so in a program that opens nothing (a
+served handler writing a report to `*error-output*`) the table was still null.
+`<clinit>` now allocates it with the reserved slots empty whenever the handles are
+reserved (`usesErrorOutput`), which is what `_addStream`'s `_streamCount = 3` reservation
+always assumed. Do not make it lazy again.
+
+Tests: `LispEvaluatorTest#standardStreamVariablesAreBoundToTheirDefaultsThroughTheSymbolApi`,
+the `standardStreamVariables*` pair in `JvmLispCompilerTest` and
+`WasmLispCompilerIntegrationTest`, the `symbol-runtime-api` ci-spec case (all four
+backends), and `LackEcosystemE2eTest#backtraceMiddlewareReportsTheApplicationsRealError*`
+(interpreter + JVM, opt-in).
+
 ## Runtime-interned symbols as function designators (todo-229, 2026-08-02)
 
 Clack's handler protocol is late-bound by NAME — `(apply (intern #.(string '#:run)

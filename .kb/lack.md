@@ -95,6 +95,22 @@ incoming TCP and a clack program under `--component` is a `wasmtime serve`
 component, not a runnable CLI one (`.kb/clack.md`). The clackup-and-fetch
 spelling of the same chain is pinned on the interpreter and the JVM.
 
+## The DEFAULT middleware has to report the APPLICATION's error (todo-283)
+
+`clack:clackup` wraps every application in lack's `:backtrace` middleware unless
+`:use-default-middlewares nil`. That middleware defaults its `output` parameter to the
+SYMBOL `'*error-output*` and reports through `(symbol-value output)` -- and on all three
+compile backends that call was itself an error, so a failing handler's ACTUAL condition
+was replaced by `The variable *ERROR-OUTPUT* is unbound` behind a bare 500 (finding the
+real fault meant re-running with `:use-default-middlewares nil` to get the middleware out
+of the way). Two general fixes, neither lack-shaped: the eval runtime's variable mirror
+now seeds the standard stream defaults (`.kb/symbol-runtime-api.md`), and the JVM's
+stream table exists from the start when the standard handles are reserved
+(`.kb/standard-output-redirect.md`). Pinned by
+`LackEcosystemE2eTest#backtraceMiddlewareReportsTheApplicationsRealError*` (interpreter
+and JVM -- it needs a real socket, like the clackup legs), which asserts the 500 AND that
+stderr names the handler's own condition.
+
 ## Tests
 
 `LackEcosystemE2eTest` -- the interpreter and JVM legs, NO container -- and
@@ -107,8 +123,9 @@ machine without Docker skipped the container-free legs too, and reported
 served-body regression never ran. Anything Docker-gated belongs in the Wasm
 class and nowhere else.
 
-Fourteen legs -- the lack chain, the substrate and the served body, each on all
-four backends, plus the clackup-and-fetch spelling on the two that can serve.
+Sixteen legs -- the lack chain, the substrate and the served body, each on all
+four backends, plus the clackup-and-fetch spelling and the backtrace-middleware report
+on the two that can serve.
 The splice ORDERING itself is pinned separately by `GrayStreamsLibraryTest`,
 which needs neither Docker nor network and therefore runs in a plain
 `./mvnw test`. The language-level pins live

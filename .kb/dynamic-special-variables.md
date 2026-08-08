@@ -197,6 +197,11 @@ outright, so a special can never be declared there
    Self-heals after the `let` (both stores agree again). Narrow: only bites a
    program that both dynamically binds a special AND introspects it via
    `symbol-value`/`eval` on a compiled backend.
+   The mirror at least HAS the global default now: the three standard stream
+   variables used to be missing from it entirely, so `symbol-value` of one signalled
+   "unbound" instead of answering the seeded designator (todo-283,
+   `.kb/symbol-runtime-api.md`). That was the global default being absent, not this
+   dynamic-scope gap, which is unchanged.
 4. **A lambda/defun parameter named like a special is still lexical** (both
    interpreter and compilers). Naming a parameter with a special name and expecting
    the parameter binding to be dynamic is unsupported (rare).

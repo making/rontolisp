@@ -18,6 +18,7 @@ import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -36,6 +37,7 @@ import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
+import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Section;
@@ -2309,26 +2311,41 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		// A program that redirects *standard-output* / *standard-input* (the variable has
 		// a module global only then) seeds its global default with the designator t (the
-		// process standard stream), matching the interpreter's permanent value.
-		for (String streamVar : new String[] { LispNames.STANDARD_OUTPUT_VAR, LispNames.STANDARD_INPUT_VAR }) {
-			Integer streamGlobal = ctx.globalIndices.get(streamVar);
+		// process standard stream), matching the interpreter's permanent value;
+		// *error-output*'s default is the handle 2 instead -- the process standard ERROR,
+		// which the t designator does not name; here it is literally the WASI fd the
+		// write helpers send stderr to. One table (StreamDesignators) for both.
+		for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
+			Integer streamGlobal = ctx.globalIndices.get(streamVar.getKey());
 			if (streamGlobal != null) {
-				startWriter.write(Instruction.CALL);
-				startWriter.writeUnsignedLeb128(FUNC_T_SYM);
+				emitStandardStreamDefault(startWriter, streamVar.getValue());
 				startWriter.write(Instruction.SET_GLOBAL);
 				startWriter.writeUnsignedLeb128(streamGlobal);
 			}
-		}
-		// *error-output*'s default is the handle 2 instead -- the process standard ERROR,
-		// which the t designator does not name; here it is literally the WASI fd the
-		// write helpers send stderr to.
-		Integer errorOutputGlobal = ctx.globalIndices.get(LispNames.ERROR_OUTPUT_VAR);
-		if (errorOutputGlobal != null) {
-			startWriter.write(Instruction.I32_CONST);
-			startWriter.writeSignedLeb128((int) am.ik.rontolisp.compiler.StreamDesignators.STANDARD_ERROR_HANDLE);
-			startWriter.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			// The eval runtime's global-environment mirror is the SECOND home of the same
+			// value, and symbol-value/boundp/eval read only that one -- so it seeds from
+			// the same table, or a variable the module global just took reads back as
+			// unbound there and symbol-value traps (.kb/symbol-runtime-api.md). Gated on
+			// the name appearing in the source, which keeps a program that never mentions
+			// one byte-identical AND is the very scan the --component stderr narrowing
+			// uses, so the two cannot disagree about whether handle 2 is reachable.
+			if (!usesEval || !programUsesSymbol(program, streamVar.getKey())) {
+				continue;
+			}
+			// GLOBAL_ENV = cons(cons(name, default), GLOBAL_ENV) -- the binding shape
+			// _store prepends, so a later top-level assignment MUTATES this cell rather
+			// than shadowing it. The name goes through the string table, so its offset is
+			// the one _env_lookup compares a runtime-interned symbol against.
+			WasmEmitHelper.compileStringLiteral(streamVar.getKey(), ctx);
+			emitStandardStreamDefault(startWriter, streamVar.getValue());
+			startWriter.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			startWriter.writeUnsignedLeb128(TYPE_CONS);
+			startWriter.write(Instruction.GET_GLOBAL);
+			startWriter.writeUnsignedLeb128(GLOBAL_ENV);
+			startWriter.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			startWriter.writeUnsignedLeb128(TYPE_CONS);
 			startWriter.write(Instruction.SET_GLOBAL);
-			startWriter.writeUnsignedLeb128(errorOutputGlobal);
+			startWriter.writeUnsignedLeb128(GLOBAL_ENV);
 		}
 
 		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep
@@ -4826,6 +4843,25 @@ public final class WasmLispCompiler implements LispCompiler {
 			return true;
 		}
 		return usesEval(cons.car()) || usesEval(cons.cdr());
+	}
+
+	/**
+	 * Pushes a standard stream variable's seeded default onto the {@code _start} body:
+	 * the designator {@code t} (the interned {@code t} symbol) for the two stdio
+	 * variables, an i31 stream handle for {@code *error-output*}. The two homes that need
+	 * the value -- the variable's module global and the eval runtime's {@code GLOBAL_ENV}
+	 * mirror -- both push it through here, so neither can drift from
+	 * {@link StreamDesignators}' table.
+	 */
+	private static void emitStandardStreamDefault(WasmWriter w, LispVal value) {
+		if (value instanceof LispInteger handle) {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128((int) handle.value());
+			w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			return;
+		}
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(FUNC_T_SYM);
 	}
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {

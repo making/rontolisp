@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.macro.FoldDifferential;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
@@ -8294,6 +8295,25 @@ class LispEvaluatorTest {
 		assertThat(evalMulti("(symbol-value nil)")).isEqualTo(LispNil.INSTANCE);
 		assertThatThrownBy(() -> evalMulti("(symbol-value '*sv-unbound*)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("The variable *SV-UNBOUND* is unbound");
+	}
+
+	@Test
+	void standardStreamVariablesAreBoundToTheirDefaultsThroughTheSymbolApi() {
+		// The reference answers the three compile backends had to grow (their
+		// eval-runtime
+		// mirror knew nothing of the global seeding, so symbol-value signalled
+		// "unbound").
+		// lack's backtrace middleware reaches *error-output* exactly this way: it carries
+		// the SYMBOL and reports through (symbol-value output).
+		assertThat(evalMulti("(boundp '*error-output*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(symbol-value '*error-output*)"))
+			.isEqualTo(new LispInteger(StreamDesignators.STANDARD_ERROR_HANDLE));
+		assertThat(evalMulti("(boundp '*standard-output*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(symbol-value '*standard-output*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(boundp '*standard-input*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(symbol-value '*standard-input*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(evalMulti("(defvar *sv-stream-name* '*error-output*) (symbol-value *sv-stream-name*)"))
+			.isEqualTo(new LispInteger(StreamDesignators.STANDARD_ERROR_HANDLE));
 	}
 
 	@Test

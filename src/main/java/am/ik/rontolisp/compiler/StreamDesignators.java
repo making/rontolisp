@@ -1,5 +1,9 @@
 package am.ik.rontolisp.compiler;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNames;
@@ -103,6 +107,37 @@ public final class StreamDesignators {
 	 */
 	public static LispVal standardInput() {
 		return new LispSymbol(LispNames.STANDARD_INPUT_VAR);
+	}
+
+	private static final Map<String, LispVal> STANDARD_STREAM_DEFAULTS = standardStreamDefaultTable();
+
+	private static Map<String, LispVal> standardStreamDefaultTable() {
+		Map<String, LispVal> defaults = new LinkedHashMap<>();
+		defaults.put(LispNames.STANDARD_OUTPUT_VAR, LispTrue.INSTANCE);
+		defaults.put(LispNames.STANDARD_INPUT_VAR, LispTrue.INSTANCE);
+		defaults.put(LispNames.ERROR_OUTPUT_VAR, standardError());
+		return Collections.unmodifiableMap(defaults);
+	}
+
+	/**
+	 * The three standard stream variables, each paired with the designator its global
+	 * default holds: {@code t} (the process standard stream) for
+	 * {@code *standard-output*} and {@code *standard-input*}, the reserved handle
+	 * {@link #STANDARD_ERROR_HANDLE} for {@code *error-output*}, which {@code t} cannot
+	 * name. Iteration order is fixed.
+	 *
+	 * <p>
+	 * ONE table, because a compiled program keeps the value in TWO homes: the per-name
+	 * global field (JVM) / module global (WASM) that direct reads use, and the eval
+	 * runtime's global-environment mirror that {@code symbol-value} / {@code boundp} /
+	 * {@code eval} probe. Both seed from here, so a name cannot end up bound in one home
+	 * and unbound in the other -- which is exactly what it used to be: the mirror knew
+	 * nothing of the seeding, so {@code (symbol-value '*error-output*)} signalled
+	 * "unbound" on every compile backend while the interpreter answered the handle.
+	 * @return the variable name to seeded default mapping
+	 */
+	public static Map<String, LispVal> standardStreamDefaults() {
+		return STANDARD_STREAM_DEFAULTS;
 	}
 
 	/**

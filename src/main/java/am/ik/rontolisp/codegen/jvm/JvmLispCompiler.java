@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -20,10 +21,12 @@ import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.macro.LispAsync;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
@@ -36,6 +39,7 @@ import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
+import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.WasmImportDirective;
 
 import am.ik.jvm.AccessFlag;
@@ -1800,20 +1804,46 @@ public final class JvmLispCompiler implements LispCompiler {
 		final List<Integer> layoutClinitCode = new ArrayList<>();
 		mainCtx.layoutPool.emitClinitInit(layoutClinitCode, cp);
 		// A program that redirects *standard-output* (the variable is in globals only
-		// then) seeds its global default with the designator t = stdout, matching the
-		// interpreter's permanent value; the constants are minted here for the same
-		// serialization-order reason as above.
-		final FieldrefConstant standardOutputGlobalField = globalFields.get(LispNames.STANDARD_OUTPUT_VAR);
-		final FieldrefConstant standardInputGlobalField = globalFields.get(LispNames.STANDARD_INPUT_VAR);
-		// *error-output* seeds the stream HANDLE 2 instead (the process standard error);
-		// t already names the process standard OUTPUT.
-		final FieldrefConstant errorOutputGlobalField = globalFields.get(LispNames.ERROR_OUTPUT_VAR);
-		final boolean seedsStandardStream = standardOutputGlobalField != null || standardInputGlobalField != null
-				|| errorOutputGlobalField != null;
-		final ConstantPool.StringConstant standardOutputTStr = (standardOutputGlobalField != null
-				|| standardInputGlobalField != null) ? cp.addString("T") : null;
-		final Utf8Constant standardOutputClinitName = seedsStandardStream ? cp.addUtf8("<clinit>") : null;
-		final Utf8Constant standardOutputClinitDesc = seedsStandardStream ? cp.addUtf8("()V") : null;
+		// then) seeds its global default from StreamDesignators' table -- the designator
+		// t = stdout for the two stdio variables, the stream HANDLE 2 for
+		// *error-output*, which t cannot name; the constants are minted here for the
+		// same serialization-order reason as above.
+		final Map<String, FieldrefConstant> streamGlobalSeeds = new LinkedHashMap<>();
+		// The eval runtime's global-environment mirror is the SECOND home of the same
+		// value, and symbol-value/boundp/eval read only that one -- so it seeds from the
+		// same table, or a variable the field seeding just bound reads back as unbound
+		// there (.kb/symbol-runtime-api.md). Gated on the name appearing in the source,
+		// which keeps a program that never mentions one byte-identical AND is the very
+		// scan the --component stderr narrowing uses, so the two cannot disagree about
+		// whether the reserved handle 2 is reachable.
+		final Map<String, ConstantPool.StringConstant> streamGenvSeeds = new LinkedHashMap<>();
+		boolean seedsTDesignator = false;
+		for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
+			FieldrefConstant globalField = globalFields.get(streamVar.getKey());
+			if (globalField != null) {
+				streamGlobalSeeds.put(streamVar.getKey(), globalField);
+			}
+			if (usesEval && programUsesSymbol(program, streamVar.getKey())) {
+				streamGenvSeeds.put(streamVar.getKey(), cp.addString(streamVar.getKey()));
+			}
+			seedsTDesignator |= streamVar.getValue() instanceof LispTrue
+					&& (globalField != null || streamGenvSeeds.containsKey(streamVar.getKey()));
+		}
+		final boolean seedsStandardStream = !streamGlobalSeeds.isEmpty() || !streamGenvSeeds.isEmpty();
+		final ConstantPool.StringConstant standardOutputTStr = seedsTDesignator ? cp.addString("T") : null;
+		// When the standard-stream handles are reserved, the stream table must EXIST
+		// from the start with those slots empty. _addStream reserves the COUNT, but it
+		// runs only when something is opened -- while the reserved handle 2 is a live
+		// stream designator in a program that opens nothing. A helper that indexes the
+		// table from a raw handle ahead of its stderr branch (the socket probes in
+		// _writeString) then reads an empty slot instead of a null table.
+		final @Nullable FieldrefConstant streamsFieldRef = usesErrorOutput
+				? cp.addFieldref(thisClass, cp.addNameAndType(streamsFieldName, streamsFieldDesc)) : null;
+		final @Nullable FieldrefConstant streamCountFieldRef = usesErrorOutput
+				? cp.addFieldref(thisClass, cp.addNameAndType(streamCountFieldName, streamCountFieldDesc)) : null;
+		final boolean initsClinit = seedsStandardStream || usesErrorOutput;
+		final Utf8Constant standardOutputClinitName = initsClinit ? cp.addUtf8("<clinit>") : null;
+		final Utf8Constant standardOutputClinitDesc = initsClinit ? cp.addUtf8("()V") : null;
 
 		// Branch relaxation: any Ctx-compiled body whose patchBranch overflowed the
 		// signed 16-bit encoding is rewritten over goto_w here, before assembly
@@ -2071,7 +2101,7 @@ public final class JvmLispCompiler implements LispCompiler {
 							})));
 				}
 				if (mainCtx.conditionChannel.used || mainCtx.conditionChannel.nleUsed || !mainCtx.layoutPool.isEmpty()
-						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null || seedsStandardStream) {
+						|| !structTableClinitFinal.isEmpty() || dynVarRuntime != null || initsClinit) {
 					// <clinit>: _condTl = new ThreadLocal(); (initialValue null, so get()
 					// on a thread with no pending condition returns null). The async
 					// runtime's _handoffTl (the eager-start handoff) joins the same
@@ -2116,28 +2146,62 @@ public final class JvmLispCompiler implements LispCompiler {
 						// binding.
 						clinitCode.addAll(dynVarRuntime.clinitCode());
 					}
-					for (FieldrefConstant streamGlobal : new FieldrefConstant[] { standardOutputGlobalField,
-							standardInputGlobalField }) {
-						if (streamGlobal == null) {
-							continue;
-						}
-						// *standard-output* / *standard-input*'s global default is the
-						// designator t (the process standard stream).
-						clinitCode.add(Opcode.LDC_W);
+					if (streamsFieldRef != null) {
+						// _streams = new Object[16]; _streamCount = 3 -- the reserved
+						// standard-stream handles as empty table slots (see above).
+						clinitCode.add(Opcode.BIPUSH);
+						clinitCode.add(16);
+						clinitCode.add(Opcode.ANEWARRAY);
+						JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
+						clinitCode.add(Opcode.PUTSTATIC);
+						JvmRuntimeBuilder.emitU2(clinitCode, streamsFieldRef.index());
+						clinitCode.add(Opcode.ICONST_3);
+						clinitCode.add(Opcode.PUTSTATIC);
 						JvmRuntimeBuilder.emitU2(clinitCode,
-								java.util.Objects.requireNonNull(standardOutputTStr).index());
-						clinitCode.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, streamGlobal.index());
+								java.util.Objects.requireNonNull(streamCountFieldRef).index());
 					}
-					if (errorOutputGlobalField != null) {
-						// *error-output*'s global default is the reserved handle 2 -- the
-						// process standard error (t already names standard OUTPUT).
-						clinitCode.add(Opcode.ICONST_2);
-						clinitCode.add(Opcode.I2L);
-						clinitCode.add(Opcode.INVOKESTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, longValueOf.index());
-						clinitCode.add(Opcode.PUTSTATIC);
-						JvmRuntimeBuilder.emitU2(clinitCode, errorOutputGlobalField.index());
+					// The standard stream variables' defaults, one table
+					// (StreamDesignators) feeding BOTH homes: the per-name global field
+					// a direct read uses, and the eval runtime's _genv mirror that
+					// symbol-value / boundp / eval probe.
+					for (Map.Entry<String, LispVal> streamVar : StreamDesignators.standardStreamDefaults().entrySet()) {
+						FieldrefConstant globalField = streamGlobalSeeds.get(streamVar.getKey());
+						if (globalField != null) {
+							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf);
+							clinitCode.add(Opcode.PUTSTATIC);
+							JvmRuntimeBuilder.emitU2(clinitCode, globalField.index());
+						}
+						ConstantPool.StringConstant seedName = streamGenvSeeds.get(streamVar.getKey());
+						if (seedName != null) {
+							// _genv = {{name, default}, _genv} -- the binding shape
+							// _store prepends, so a later top-level assignment MUTATES
+							// this cell rather than shadowing it.
+							clinitCode.add(Opcode.ICONST_2);
+							clinitCode.add(Opcode.ANEWARRAY);
+							JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
+							clinitCode.add(Opcode.DUP);
+							clinitCode.add(Opcode.ICONST_0);
+							clinitCode.add(Opcode.ICONST_2);
+							clinitCode.add(Opcode.ANEWARRAY);
+							JvmRuntimeBuilder.emitU2(clinitCode, objectClass.index());
+							clinitCode.add(Opcode.DUP);
+							clinitCode.add(Opcode.ICONST_0);
+							clinitCode.add(Opcode.LDC_W);
+							JvmRuntimeBuilder.emitU2(clinitCode, seedName.index());
+							clinitCode.add(Opcode.AASTORE);
+							clinitCode.add(Opcode.DUP);
+							clinitCode.add(Opcode.ICONST_1);
+							emitStreamDefault(clinitCode, streamVar.getValue(), standardOutputTStr, longValueOf);
+							clinitCode.add(Opcode.AASTORE);
+							clinitCode.add(Opcode.AASTORE);
+							clinitCode.add(Opcode.DUP);
+							clinitCode.add(Opcode.ICONST_1);
+							clinitCode.add(Opcode.GETSTATIC);
+							JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
+							clinitCode.add(Opcode.AASTORE);
+							clinitCode.add(Opcode.PUTSTATIC);
+							JvmRuntimeBuilder.emitU2(clinitCode, genvField.index());
+						}
 					}
 					clinitCode.addAll(layoutClinitCode);
 					clinitCode.addAll(structTableClinitFinal);
@@ -2145,11 +2209,13 @@ public final class JvmLispCompiler implements LispCompiler {
 					// max_stack: the ThreadLocal group peaks at 2 (NEW; DUP), the layout
 					// group at 4 (array; DUP; index; LDC), the reader's struct directory
 					// at 10 (outer array, entry, initTexts nested builds each keep a DUP
-					// and an index live). StackMapAugmenter copies the declared maximum
-					// verbatim, so an under-declaration is a VerifyError at class load,
-					// not a compile error.
-					final int clinitMaxStack = !structTableClinitFinal.isEmpty() ? 10
-							: (mainCtx.layoutPool.isEmpty() ? 2 : 4);
+					// and an index live), a _genv seed at 8 (outer array plus index under
+					// the inner array build, whose boxed handle is briefly a long).
+					// StackMapAugmenter copies the declared maximum verbatim, so an
+					// under-declaration is a VerifyError at class load, not a compile
+					// error.
+					final int clinitMaxStack = Math.max(streamGenvSeeds.isEmpty() ? 0 : 8,
+							!structTableClinitFinal.isEmpty() ? 10 : (mainCtx.layoutPool.isEmpty() ? 2 : 4));
 					// A layout-only program never runs ensureThreadLocalInfra, so the
 					// channel's <clinit> name constants are null there; a
 					// bound-special-only
@@ -2750,6 +2816,29 @@ public final class JvmLispCompiler implements LispCompiler {
 			entries.add(new ByteCodeWriter.ExceptionTableEntry(e[0], e[1], e[2], e[3]));
 		}
 		attr.writeExceptionTable(entries);
+	}
+
+	/**
+	 * Pushes a standard stream variable's seeded default onto a {@code <clinit>} body:
+	 * the designator {@code t} (a bare {@code "T"} symbol) for the two stdio variables, a
+	 * boxed stream handle for {@code *error-output*}. The two homes that need the value
+	 * -- the variable's global field and the eval runtime's {@code _genv} mirror -- both
+	 * push it through here, so neither can drift from {@code StreamDesignators}' table.
+	 */
+	private static void emitStreamDefault(List<Integer> code, LispVal value,
+			ConstantPool.@Nullable StringConstant tDesignator, MethodrefConstant longValueOf) {
+		if (value instanceof LispInteger handle) {
+			JvmRuntimeBuilder.emitIntConstStatic(code, (int) handle.value());
+			code.add(Opcode.I2L);
+			code.add(Opcode.INVOKESTATIC);
+			JvmRuntimeBuilder.emitU2(code, longValueOf.index());
+			return;
+		}
+		// LDC_W, not the narrow LDC: this is the emission a redirecting program had
+		// before the two seed sites were merged, and its bytes are pinned by the
+		// byte-identity rule in .kb/standard-output-redirect.md.
+		code.add(Opcode.LDC_W);
+		JvmRuntimeBuilder.emitU2(code, java.util.Objects.requireNonNull(tDesignator).index());
 	}
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {

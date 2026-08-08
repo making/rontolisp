@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.api.io.TempDir;
 
+import static am.ik.rontolisp.e2e.LackE2eSupport.BACKTRACE_CONDITION;
+import static am.ik.rontolisp.e2e.LackE2eSupport.BACKTRACE_MIDDLEWARE_EXPECTED;
 import static am.ik.rontolisp.e2e.LackE2eSupport.BUILDER_OVER_CLACKUP_EXPECTED;
 import static am.ik.rontolisp.e2e.LackE2eSupport.CLASSPATH;
 import static am.ik.rontolisp.e2e.LackE2eSupport.JAVA;
@@ -15,9 +17,12 @@ import static am.ik.rontolisp.e2e.LackE2eSupport.SERVED_BODY_EXERCISE;
 import static am.ik.rontolisp.e2e.LackE2eSupport.SERVED_BODY_EXPECTED;
 import static am.ik.rontolisp.e2e.LackE2eSupport.SUBSTRATE_EXERCISE;
 import static am.ik.rontolisp.e2e.LackE2eSupport.SUBSTRATE_EXPECTED_SPILLING;
+import static am.ik.rontolisp.e2e.LackE2eSupport.backtraceMiddlewareExercise;
 import static am.ik.rontolisp.e2e.LackE2eSupport.builderOverClackupExercise;
 import static am.ik.rontolisp.e2e.LackE2eSupport.freePort;
+import static am.ik.rontolisp.e2e.LackE2eSupport.run;
 import static am.ik.rontolisp.e2e.LackE2eSupport.runCli;
+import static am.ik.rontolisp.e2e.LackE2eSupport.runCliResult;
 import static am.ik.rontolisp.e2e.LackE2eSupport.runSuccessfully;
 import static am.ik.rontolisp.e2e.LackE2eSupport.writeProgram;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,6 +65,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * plus {@code fetch} (here only), and transport-free over
  * {@code rontolisp::%http-serve-request} (every backend, see
  * {@link LackE2eSupport#SERVED_BODY_EXERCISE}).</li>
+ * <li><b>the DEFAULT middleware's error report</b> ({@code backtraceMiddleware*}) -- a
+ * handler that signals, wrapped by the {@code :backtrace} middleware every
+ * {@code clack:clackup} adds. What it reports has to be the application's condition, not
+ * a diagnostic about the middleware itself; see
+ * {@link LackE2eSupport#backtraceMiddlewareExercise}.</li>
  * </ol>
  *
  * Opt-in ({@code RONTOLISP_LACK_E2E=1}): on the first run it needs network access
@@ -87,6 +97,27 @@ class LackEcosystemE2eTest {
 		assertThat(runSuccessfully(workDir, JAVA, "-cp", CLASSPATH + java.io.File.pathSeparator + workDir,
 				"BuilderClackup"))
 			.isEqualToNormalizingWhitespace(BUILDER_OVER_CLACKUP_EXPECTED);
+	}
+
+	@Test
+	void backtraceMiddlewareReportsTheApplicationsRealErrorOnTheInterpreter(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, "backtrace-mw.lisp", backtraceMiddlewareExercise(freePort()));
+		assertBacktraceMiddlewareReport(runCliResult(workDir, program.getFileName().toString()));
+	}
+
+	@Test
+	void backtraceMiddlewareReportsTheApplicationsRealErrorOnJvm(@TempDir Path workDir) throws Exception {
+		Path program = writeProgram(workDir, "backtrace-mw.lisp", backtraceMiddlewareExercise(freePort()));
+		runCli(workDir, program.getFileName().toString(), "-o", "BacktraceMw.class");
+		assertBacktraceMiddlewareReport(
+				run(workDir, JAVA, "-cp", CLASSPATH + java.io.File.pathSeparator + workDir, "BacktraceMw"));
+	}
+
+	// The 500 comes back either way; what regressed was WHICH condition the report names.
+	private static void assertBacktraceMiddlewareReport(LackE2eSupport.Result result) {
+		assertThat(result.exitCode()).as("%s", result).isZero();
+		assertThat(result.out()).isEqualToNormalizingWhitespace(BACKTRACE_MIDDLEWARE_EXPECTED);
+		assertThat(result.err()).as("%s", result).contains(BACKTRACE_CONDITION).doesNotContain("is unbound");
 	}
 
 	@Test

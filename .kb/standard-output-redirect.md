@@ -114,13 +114,33 @@ be handed the designator: `Environment.registerIO` starts `nextStreamHandle` at
 `write-string`/`write-line`, `fresh-line`, `force-output`, `open-stream-p`) needs no
 special case -- and the JVM's `_addStream` starts `_streamCount` at 3.
 
+**On the JVM the reserved SLOTS have to exist from the start, not just the count**
+(todo-283, and the reservation always assumed it): `_addStream` created `_streams`
+lazily, so in a program that opens nothing the table was null while handle 2 was
+already a live designator -- and the helpers whose socket probe indexes the table from
+the raw handle AHEAD of their `_writeStr` delegation (`_writeString`) dereferenced it.
+`<clinit>` now allocates `_streams` with the three reserved slots empty whenever
+`usesErrorOutput`, so such a probe reads an empty slot and falls through to the stderr
+branch. A served handler reporting through `*error-output*` -- lack's `:backtrace`
+middleware -- is the shape that hits it. Do not make the allocation lazy again.
+
+What that does NOT fix, deliberately (no consumer, and each would need its own guard):
+the helpers with no stderr branch at all still take a reserved handle down their table
+path and dereference the empty slot -- `(write-byte b *error-output*)` and the read
+family (`read-char`/`read-byte`/`read-line`) on any of 0/1/2. Neither backend
+SUPPORTS those (the interpreter answers `WRITE-BYTE expects a binary output stream`);
+what differs is the shape of the failure, an NPE instead of that error. Give them the
+branch, or a `>= FIRST_USER_HANDLE` guard, when something needs one.
+
 - **JVM**: there is no JDK `Writer` over `System.err` that writes THROUGH (a
   `PrintWriter` buffers, and a warning lost at exit is worse than the branch), so the
   handle is intercepted instead: `JvmIoRuntimeBuilder.emitStderrBranch` prepends
   `if (handle instanceof Long && (int) handle == 2) { ... }` to `_writeStr`,
   `_writeLine`, `_freshLine`, `_forceOutput`, `_close` and `_openStreamP`
-  (`_writeString` inherits it through `_writeStr`). The whole group -- branches AND the
-  table reservation -- is gated on `programUsesSymbol(program, *ERROR-OUTPUT*)`, so a
+  (`_writeString` inherits it through `_writeStr` -- but only for code AFTER its own
+  socket probe, which is why that probe needs the table to exist; see above). The whole
+  group -- branches AND the table reservation -- is gated on
+  `programUsesSymbol(program, *ERROR-OUTPUT*)`, so a
   program that never mentions the variable is byte-identical to before.
   `JvmWarnCompiler` keeps its direct `System.err.println` unless the program BINDS the
   variable, in which case the report goes through `_writeLine` with the dynamic-first
@@ -130,7 +150,7 @@ special case -- and the JVM's `_addStream` starts `_streamCount` at 3.
   `wasi:cli/stderr`. `WasmWarnCompiler` passes the constant i31 2 unless the program
   binds the variable (then the global read), and `_start` seeds the global with i31 2
   rather than `_t_sym`.
-  **Those three are the COMPLETE list of ways a compiled wasm module can put handle 2
+  **Those are the COMPLETE list of ways a compiled wasm module can put handle 2
   into a stream designator, and `--component` now depends on that** (todo-273): a
   descriptor is a value in the core module, not an edge, so the wrapper cannot see it and
   asks the SOURCE instead -- `WasmLispCompiler` scans for `*ERROR-OUTPUT*` / `WARN` /
@@ -140,7 +160,12 @@ special case -- and the JVM's `_addStream` starts `_streamCount` at 3.
   must join that scan (`WasmComponentBuilder.Narrowing`,
   `.kb/optimize-dead-code-elimination.md`); miss it and `--optimize` turns that write
   into a trap. It traps rather than misdirects by design -- the stdout-only half answers
-  fd 1 and `unreachable`s the rest.
+  fd 1 and `unreachable`s the rest. A fourth materializer joined in todo-283 -- the
+  `_start` seed of the eval runtime's `GLOBAL_ENV` mirror, which is what makes
+  `(symbol-value '*error-output*)` answer the handle (`.kb/symbol-runtime-api.md`) --
+  and it is safe by CONSTRUCTION rather than by remembering: its own gate is the very
+  `programUsesSymbol(*ERROR-OUTPUT*)` scan above, so it cannot exist in a module the
+  narrowing pruned. Keep any future one on that gate for the same reason.
 - **`_close` on a standard stream is a no-op on every backend.** The wasm `_close`'s
   guard is now `fd >= FIRST_USER_HANDLE` instead of `fd >= 0`: it used to `fd_close(2)`
   for real, so a `(close *error-output*)` silenced every later `warn` on wasm-GC while
@@ -180,6 +205,13 @@ hard-coded stdio paths, and the JVM/WASM ExprCompilers keep compiling a bare
 read of `*standard-output*`/`*standard-input*` to the constant `t` (and one of
 `*error-output*` to the constant handle 2). Gate everywhere: the variable is in `ctx.globals` (JVM) /
 `ctx.globalIndices` (WASM) only when the redirect is active.
+
+A SECOND, independent gate rides alongside it since todo-283: the eval runtime's
+global-environment mirror is seeded with the same defaults when the program has that
+runtime AND merely NAMES the variable (`.kb/symbol-runtime-api.md`). Naming is weaker
+than binding, so a program that only writes to `*error-output*` pays that seed while its
+reads stay the constant; a program mentioning none of the three is untouched by either
+gate.
 
 ## Per backend
 

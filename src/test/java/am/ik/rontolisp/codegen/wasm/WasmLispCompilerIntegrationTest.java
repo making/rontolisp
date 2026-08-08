@@ -8937,6 +8937,29 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void standardStreamVariablesAreBoundToTheirDefaultsThroughTheSymbolApi() throws Exception {
+		// The two homes of a special -- the module global a direct read uses and the eval
+		// runtime's GLOBAL_ENV mirror symbol-value/boundp probe -- seed from one table,
+		// so the three stream variables answer here exactly what the interpreter does
+		// (before this, symbol-value missed the mirror and TRAPPED).
+		assertThat(compileAndRun("(print (boundp '*error-output*)) (print (symbol-value '*error-output*))"
+				+ "(print (boundp '*standard-output*)) (print (symbol-value '*standard-output*))"
+				+ "(print (boundp '*standard-input*)) (print (symbol-value '*standard-input*))"))
+			.isEqualTo("T\n2\nT\nT\nT\nT");
+	}
+
+	@Test
+	void standardStreamVariablesResolveThroughAComputedSymbolAndAfterAssignment() throws Exception {
+		// lack's backtrace middleware carries the SYMBOL '*error-output* in a variable,
+		// reporting through (symbol-value output). A top-level assignment must still
+		// win over the seeded default: the seed IS the binding cell _store mutates.
+		assertThat(compileAndRun("(defvar *sv-stream-name* '*error-output*)"
+				+ "(print (boundp *sv-stream-name*)) (print (symbol-value *sv-stream-name*))"
+				+ "(setq *error-output* 7) (print (symbol-value '*error-output*))"))
+			.isEqualTo("T\n2\n7");
+	}
+
+	@Test
 	void fboundpChecksFunctionsMacrosAndSpecialForms() throws Exception {
 		// literal arguments resolve at compile time (macros/special forms included);
 		// computed arguments probe the runtime _fenv/_lookup registries (functions only).
