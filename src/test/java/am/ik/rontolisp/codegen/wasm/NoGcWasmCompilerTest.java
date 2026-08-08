@@ -2022,6 +2022,102 @@ class NoGcWasmCompilerTest {
 	}
 
 	@Test
+	void noWasiReplacesTheFdWriteImportWithADiscardingSink() {
+		// --no-wasi on a PRINTING program: the single fd_write import becomes an
+		// internal sink DEFINED at function index 0 (funcBase stays 1, so every planned
+		// index holds), and the module keeps zero imports -- the GC backend's contract
+		// (output discarded, nothing traps) applied unchanged. A print-free program
+		// never had the import, so the flag is a byte-exact no-op there.
+		String printing = """
+				(defun show (n) (print n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""";
+		byte[] noWasi = new NoGcWasmCompiler(OptimizeLevel.NONE, false, false, true)
+			.compile(LispReader.readAllFromString(printing));
+		assertThat(sections(noWasi)).as("import section").doesNotContainKey(2);
+		// The sink body: 0 locals; local.get 3 ; local.get 1 ; i32.load off=4 ;
+		// i32.store ; i32.const 0 (the same body the GC backend pins).
+		byte[] sink = { 0x00, 0x20, 0x03, 0x20, 0x01, 0x28, 0x02, 0x04, 0x36, 0x02, 0x00, 0x41, 0x00, 0x0b };
+		assertThat(containsBytes(noWasi, sink)).as("the fd_write sink body").isTrue();
+		// The index shift is unchanged: the exported wrapper sits at the printing
+		// build's index, one above the silent build's (the sink occupies index 0 the
+		// way the import did).
+		byte[] importing = compile(printing);
+		assertThat(exportedFuncIndex(Objects.requireNonNull(sections(noWasi).get(7)), "show"))
+			.isEqualTo(exportedFuncIndex(Objects.requireNonNull(sections(importing).get(7)), "show"));
+		String silent = """
+				(defun show (n) n)
+				(rontolisp:wasm-export 'show :params '(:int) :returns :int)
+				""";
+		assertThat(new NoGcWasmCompiler(OptimizeLevel.NONE, false, false, true)
+			.compile(LispReader.readAllFromString(silent))).isEqualTo(compile(silent));
+	}
+
+	@Test
+	void componentNoWasiPrintingProgramTakesThePrintFreeShape() {
+		// --no-gc --no-wasi --component on a PRINTING program: the core carries the
+		// sink instead of the import, so the wrap never wires the print micro-adapter
+		// -- ONE core module, no wasi:cli/stdout anywhere, and the exports lift SYNC
+		// again (the WIT says `func`, not `async func`, over the same empty world as a
+		// print-free reactor). A printing program collapses back onto the print-free
+		// shape rather than merely losing its imports.
+		NoGcWasmCompiler compiler = new NoGcWasmCompiler(OptimizeLevel.NONE, false, true, true);
+		byte[] component = compiler.compile(LispReader.readAllFromString("""
+				(defun show (n) (print n) (* n 2))
+				(rontolisp:wasm-export 'show :params '(:s64) :returns :s64)
+				"""));
+		assertThat(containsAscii(component, "wasi:cli/stdout")).isFalse();
+		assertThat(countCoreModuleSections(component)).isEqualTo(1);
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  export show: func(p0: s64) -> s64;
+				}
+				""");
+	}
+
+	private static boolean containsAscii(byte[] bytes, String needle) {
+		return new String(bytes, StandardCharsets.ISO_8859_1).contains(needle);
+	}
+
+	private static boolean containsBytes(byte[] haystack, byte[] needle) {
+		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (haystack[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+
+	// The number of core-module sections (component section id 1) in a component.
+	private static int countCoreModuleSections(byte[] component) {
+		int count = 0;
+		int pos = 8;
+		while (pos < component.length) {
+			int id = component[pos++];
+			int size = 0;
+			int shift = 0;
+			while (true) {
+				int b = component[pos++] & 0xFF;
+				size |= (b & 0x7F) << shift;
+				if ((b & 0x80) == 0) {
+					break;
+				}
+				shift += 7;
+			}
+			if (id == 1) {
+				count++;
+			}
+			pos += size;
+		}
+		return count;
+	}
+
+	@Test
 	void theSizeLevelIsADocumentedNoOpOnThisBackend() {
 		// Same statement as on the JVM: this lowering is i64-native, so it never emits
 		// the boxed/unboxed pair --optimize=size declines on wasm-GC. Accepted, equal,

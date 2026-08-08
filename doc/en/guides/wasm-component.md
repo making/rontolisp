@@ -218,9 +218,61 @@ Current limitations of component exports:
   you to rename it with `:as`.
 - Invoking an export does not run the program's top level first, so an
   export that reads a `defvar`/`defparameter` global would see it
-  uninitialized (this matches the Preview 1 `--invoke` behavior).
+  uninitialized (this matches the Preview 1 `--invoke` behavior). The
+  [reactor shape below](#reactor-components---component---no-wasi) removes
+  this: its top level runs at instantiation.
 
 For a pure-compute export kit, the compact
 [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component)
 variant emits the same typed exports (minus `:s-expr`) in a component of a
 few hundred bytes that needs no wasmtime flags at all.
+
+## Reactor Components (`--component --no-wasi`)
+
+Add `--no-wasi` to emit a **reactor component**: a component that imports
+**nothing**. There is no WASI surface at all — `wasm-tools component wit`
+shows not a single `import` line, with or without `--optimize` — so any
+component host instantiates it with an empty import object, and its only
+exports are the lifted `wasm-export` functions (there is no `wasi:cli/run`
+entry):
+
+```lisp
+;; greet-reactor.lisp
+(defparameter *greeting* "hello, ")
+(defun greet (name) (concatenate 'string *greeting* name))
+(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+```
+
+```console
+$ rontolisp greet-reactor.lisp --component --no-wasi -o greet.wasm
+$ wasm-tools component wit greet.wasm
+package root:component;
+
+world root {
+  export greet: func(p0: string) -> string;
+}
+$ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
+"hello, world"
+```
+
+Unlike every other component shape, the **top-level forms run at
+instantiation** (the core module's start section), so the `defparameter`
+above is already assigned when the first export call arrives — no host
+cooperation needed. The flip side: a top-level form that traps now prevents
+instantiation itself.
+
+The I/O contract is the Preview 1 reactor's, unchanged: output (`print`,
+`format t`) is **discarded**, input/time/`random` **trap**, and
+`with-open-file`/`open` **signal** a catchable error. Anything that would put
+an import back refuses to compile with `--no-wasi` — `rontolisp:fetch`,
+`rontolisp:http-handler`, `rontolisp:wait-for` and `rontolisp:wit-import`
+each report the conflict by name.
+
+For a JavaScript embedder this is the component shape that needs no WASI
+shim at all: `jco transpile greet.wasm --instantiation sync` generates glue
+whose `ImportObject` type is literally empty (`{}`). The same applies to a
+`clack:clackup ... :server :rontolisp` application — the reactor build's
+`handle-request` export (see
+[the Clack guide](clack.md#a-host-that-calls-you-the-reactor-build)) works
+under `--component --no-wasi` too, giving a Clack application a typed
+`handle-request: func(p0: string) -> string` component export.

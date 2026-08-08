@@ -208,6 +208,11 @@ Two things to know:
   module no longer instantiates with an empty `{}` import object the way
   the [Mandelbrot snippet](#strings) does — a raw JavaScript embedder must
   supply `{ wasi_snapshot_preview1: { fd_write } }` (or use `node:wasi`).
+  Add `--no-wasi` to trade the output for the imports: the `fd_write`
+  import becomes a built-in sink (printed bytes are discarded, nothing
+  traps), the module keeps zero imports, and — under `--component` — a
+  printing program takes the print-free component shape again (one core
+  module, no imports, sync exports, callable through jco on plain Node).
 - **Booleans print by literal only.** The value model has no runtime
   boolean type: `(print t)` / `(print nil)` print `t` / `nil`, but a
   *computed* boolean such as `(print (> a b))` prints its `0`/`1` integer.

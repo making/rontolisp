@@ -12,7 +12,7 @@ Cloudflare Workers. Each directory is a complete, independent Worker project:
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same file `httpbin-clack/` deploys whole. | **179 KB** (55 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
 | [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup` — and there is no `worker.lisp` at all.** `build.sh` compiles [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) — the file that serves on the interpreter, the JVM and under `wasmtime serve` — unchanged: under `--no-wasi` the `:server :rontolisp` handler backend takes its reactor shape and the compiler synthesizes the export. One source, four hosts, no adapter written anywhere — for 2.1× the module, because clack and lack (tree-shaken) ship inside it. | 375 KB (**103 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | **`httpbin-clack` with a real routing library.** The same endpoints routed through [tiny-routes](https://github.com/jeko2000/tiny-routes) — `define-routes`, a `/status/:code` path template, route declining — loaded as **`tiny-routes/lite`**, the opt-in system whose ppcre-free path-template matcher keeps cl-ppcre (and 553 KB) out of the module. | 399 KB (**109 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (190 KB) | 49 hand-written lines + 293 KB of generated glue |
+| [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory. | 1 core module (179 KB), zero imports | 37 hand-written lines + 95 KB of generated glue |
 
 ## Which one should I copy?
 
@@ -105,15 +105,15 @@ const result = lisp.handleRequest(input);
 That is the whole benefit. The costs, all measured on the identical
 `httpbin/worker.lisp`:
 
-| | `httpbin` (`--no-wasi`) | `httpbin-component` (`--component` + jco) |
+| | `httpbin` (`--no-wasi`) | `httpbin-component` (`--component --no-wasi` + jco) |
 | --- | --- | --- |
-| Files the Worker imports | 1 `.wasm` | 3 `.wasm` + 293 KB generated `.js` |
+| Files the Worker imports | 1 `.wasm` | 1 `.wasm` + 95 KB generated `.js` |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
-| WASI imports to satisfy | none | 3 interfaces, stubbed by hand |
-| Top-level forms (`defparameter`) | run via `_initialize` | **cannot run** — see below |
-| Hand-written glue | 54 lines, boundary included | 49 lines, stubs included |
+| WASI imports to satisfy | none | none |
+| Top-level forms (`defparameter`) | run via `_initialize` | run at instantiation |
+| Hand-written glue | 54 lines, boundary included | 37 lines |
 
-Three findings behind that table, none of them obvious:
+Two findings behind that table, neither of them obvious:
 
 1. **jco's default output does not run on Workers.** It calls
    `WebAssembly.compile()` on a base64 blob at module scope, and workerd rejects
@@ -123,20 +123,18 @@ Three findings behind that table, none of them obvious:
    module — which is exactly a `.wasm` import.
 2. **`handler-case` needs `--bindgen-enable-wasm-exnref`.** Without it jco
    refuses the component outright: `exceptions proposal not enabled`.
-3. **A component's top-level forms cannot be run through jco.** They live in the
-   component's `wasi:cli/run` export, and calling it fails with `task exited
-   without resolution` (jco cannot drive a stackful-async export).
-   `httpbin/worker.lisp` therefore keeps its state inside functions rather than
-   in a `defparameter` — which costs nothing here, but is a hard constraint on
-   that path. The `--no-wasi` build has no such problem: `_initialize` is an
-   ordinary call.
 
-A wasm-GC component also imports `wasi:cli/stdout`, `wasi:cli/types` and
-`wasi:filesystem/types` whether or not the program does any I/O, because it is a
-`wasi:cli/run` command by construction. Those are the three stubs.
+`--no-wasi` is doing quiet work in that table. Without it, a wasm-GC component
+is a `wasi:cli/run` command by construction: it imports `wasi:cli/stdout`,
+`wasi:cli/types` and `wasi:filesystem/types` whether or not the program does
+any I/O (three stubs to hand-write), ships two extra core modules, and its
+top-level forms live in a `run` export jco cannot drive (`task exited without
+resolution`) — so a `defparameter` was a hard constraint on this path. With it,
+the compiler emits a **reactor component** that imports nothing, and the top
+level runs from the core module's start section inside `instantiate`.
 
-`hello/` is the case where the component model is genuinely clean: because the
-program fits the `--no-gc` subset the component imports nothing at all, and
+`hello/` composes the same way from the other direction: because the program
+fits the `--no-gc` subset the component imports nothing at all, and
 `jco transpile --instantiation sync -b 0` produces glue with no dependencies.
 Even there it is 92 KB of generated JavaScript to replace about ten lines.
 
@@ -174,13 +172,14 @@ deployed to the real edge and verified there, not only under
 \* the whole table records the last real deploys, and every module has shrunk
 since — most recently by the 2026-08-08 dispatch-gate refinement, which halved
 the two clack builds, by the builds moving to `--optimize=size` the same day,
-and by the CLOS-lowering pass that followed. Locally the modules are now
-`httpbin` **179 KiB / 55 KiB gzip**, `httpbin-clack` **375 KiB / 103 KiB
-gzip**, `hello-clack` **362 KiB / 100 KiB gzip**, `hello-tiny-routes`
-**385 KiB / 105 KiB gzip**, `httpbin-tiny-routes` **399 KiB / 109 KiB gzip**,
-and the component build's three core modules **190 KiB**. Startup
-time is only reported by a real `wrangler deploy`, so those cells stand until
-the next one.
+the CLOS-lowering pass that followed, and the component build becoming a
+`--no-wasi` reactor (one core module, a third of the glue). Locally the
+modules are now `httpbin` **179 KiB / 55 KiB gzip**, `httpbin-clack`
+**375 KiB / 103 KiB gzip**, `hello-clack` **362 KiB / 100 KiB gzip**,
+`hello-tiny-routes` **385 KiB / 105 KiB gzip**, `httpbin-tiny-routes`
+**399 KiB / 109 KiB gzip**, and the component build's single core module
+**179 KiB**. Startup time is only reported by a real `wrangler deploy`, so
+those cells stand until the next one.
 
 The gzip column is the one that counts: the Worker size limit applies to the
 compressed bundle, so even the component build sits well under 5% of the free

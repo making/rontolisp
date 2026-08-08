@@ -329,6 +329,21 @@ public final class WasmWriter {
 	}
 
 	/**
+	 * Write the start section (id 8): the single function the engine runs at
+	 * instantiation, after the data segments install and before any export can be called.
+	 * In the binary encoding it belongs between the export section (7) and the
+	 * element/code sections (9/10). The named function's type must be {@code () -> ()}.
+	 * @param funcIndex the start function's index
+	 * @return this instance for chaining
+	 */
+	public WasmWriter writeStartSection(int funcIndex) {
+		final java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+		new WasmWriter(body).writeUnsignedLeb128(funcIndex);
+		final byte[] bytes = body.toByteArray();
+		return this.write(Section.START).writeUnsignedLeb128(bytes.length).write(bytes);
+	}
+
+	/**
 	 * Write the code section.
 	 * @param consumer a consumer that populates the code definitions
 	 * @return this instance for chaining

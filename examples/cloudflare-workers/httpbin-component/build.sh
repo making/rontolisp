@@ -27,10 +27,13 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling ../httpbin/worker.lisp -> worker.wasm (component)"
+echo "compiling ../httpbin/worker.lisp -> worker.wasm (reactor component)"
 # --optimize=size: same trade as the sibling builds -- smaller core modules for
 # a per-request cost of a few microseconds.
-java -jar "$jar" "$here/../httpbin/worker.lisp" -o "$here/worker.wasm" --component --optimize=size
+# --no-wasi: worker.lisp does no I/O, so ask for the REACTOR component -- it
+# imports NOTHING (no WASI stubs to hand-write on the JavaScript side) and its
+# top-level forms run at instantiation, exactly like ../httpbin's _initialize.
+java -jar "$jar" "$here/../httpbin/worker.lisp" -o "$here/worker.wasm" --component --no-wasi --optimize=size
 
 echo "transpiling worker.wasm -> src/dist/"
 rm -rf "$here/src/dist"
@@ -38,6 +41,6 @@ npx -y @bytecodealliance/jco transpile "$here/worker.wasm" -o "$here/src/dist" \
   --instantiation sync -b 0 --bindgen-enable-wasm-exnref
 
 echo
-echo "core modules src/index.js must import:"
+echo "core modules src/index.js must import (a reactor component has ONE):"
 ls -1 "$here/src/dist"/*.wasm | xargs -n1 basename
 echo "done. Run it with:  npx wrangler dev"

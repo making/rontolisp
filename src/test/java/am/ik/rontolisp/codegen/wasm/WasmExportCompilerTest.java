@@ -309,13 +309,110 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
-	void noWasiIsIgnoredInComponentMode() {
-		// Component mode has its own (lowered) import story; no-wasi must not apply.
-		List<LispVal> program = LispReader.readAllFromString("(print (+ 1 2))");
-		byte[] component = new WasmLispCompiler(false, true, true).compile(program);
-		// The component wraps a core module that still imports the preview1-style
-		// functions.
-		assertThat(containsAscii(component, "wasi_snapshot_preview1")).isTrue();
+	void componentNoWasiIsAReactorThatImportsNothing() {
+		// --no-wasi under --component: a REACTOR component. No component-level import
+		// section (the import block, the adapter and the shared memory module are all
+		// gone), no wasi:cli/run export, ONE core module whose START SECTION runs the
+		// top level at instantiation. Asserted on the component's structure, not on an
+		// ASCII needle: the bundled adapter used to carry "wasi_snapshot_preview1" in
+		// its own export names, which made the needle-based predecessor of this test
+		// pass whatever the compiler did. The zero-import property must hold with AND
+		// without --optimize -- it is the flag's contract, not a narrowing outcome.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(print (+ 1 2))
+				(defparameter *base* 41)
+				(defun bump () (+ *base* 1))
+				(rontolisp:wasm-export 'bump :params '() :returns :int)
+				""");
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT)) {
+			byte[] component = new WasmLispCompiler(false, true, true, level).compile(program);
+			assertThat(componentSectionIds(component)).as("component import section under " + level)
+				.doesNotContain(am.ik.wasm.ComponentWriter.SEC_IMPORT);
+			assertThat(containsAscii(component, "wasi:cli/run")).as("run export under " + level).isFalse();
+			List<byte[]> cores = componentCoreModules(component);
+			assertThat(cores).as("core modules under " + level).hasSize(1);
+			// Core section id 8 = start: the engine runs the top level at instantiation.
+			assertThat(componentSectionIds(cores.get(0))).as("core start section under " + level).contains(8);
+			assertThat(containsAscii(component, "bump")).isTrue();
+		}
+	}
+
+	@Test
+	void componentNoWasiReactorRecordsTheEmptyWorldWit() {
+		// The reactor's --emit-wit world: no imports, no fixed export -- exactly the
+		// appended wasm-export items (byte-diffed against wasm-tools component wit in
+		// WitOracleE2eTest). Exact equality is the point: it proves no import line and
+		// no wasi:cli/run survive.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(defparameter *greeting* "hello, ")
+				(defun greet (name) (concatenate 'string *greeting* name))
+				(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+				""");
+		WasmLispCompiler compiler = new WasmLispCompiler(false, true, true);
+		compiler.compile(program);
+		assertThat(compiler.componentWit()).isEqualTo("""
+				package root:component;
+
+				world root {
+				  export greet: func(p0: string) -> string;
+				}
+				""");
+	}
+
+	@Test
+	void componentNoWasiRejectsServeAndWitImports() {
+		// A serve component's entire surface is wasi:http, and any WIT interface
+		// binding is a component-level import: both contradict "imports nothing", so
+		// both must refuse by name instead of quietly dropping a flag.
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, true))
+			.hasMessageContaining("--no-wasi")
+			.hasMessageContaining("rontolisp:http-handler");
+	}
+
+	// The (id, size, payload) section ids of a component OR a core module (both share
+	// the same section framing after the 8-byte magic/version preamble).
+	private static List<Integer> componentSectionIds(byte[] binary) {
+		List<Integer> ids = new java.util.ArrayList<>();
+		int pos = 8;
+		while (pos < binary.length) {
+			ids.add((int) binary[pos++]);
+			int size = 0;
+			int shift = 0;
+			while (true) {
+				int b = binary[pos++] & 0xFF;
+				size |= (b & 0x7F) << shift;
+				if ((b & 0x80) == 0) {
+					break;
+				}
+				shift += 7;
+			}
+			pos += size;
+		}
+		return ids;
+	}
+
+	// The payloads of a component's core-module sections (each a whole core module).
+	private static List<byte[]> componentCoreModules(byte[] component) {
+		List<byte[]> modules = new java.util.ArrayList<>();
+		int pos = 8;
+		while (pos < component.length) {
+			int id = component[pos++];
+			int size = 0;
+			int shift = 0;
+			while (true) {
+				int b = component[pos++] & 0xFF;
+				size |= (b & 0x7F) << shift;
+				if ((b & 0x80) == 0) {
+					break;
+				}
+				shift += 7;
+			}
+			if (id == am.ik.wasm.ComponentWriter.SEC_CORE_MODULE) {
+				modules.add(java.util.Arrays.copyOfRange(component, pos, pos + size));
+			}
+			pos += size;
+		}
+		return modules;
 	}
 
 	@Test

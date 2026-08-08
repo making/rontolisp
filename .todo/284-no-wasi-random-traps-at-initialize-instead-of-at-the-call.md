@@ -108,3 +108,11 @@ makes `lack-request` load.
 in the "Middleware" section), `examples/cloudflare-workers/httpbin/README.md`
 (the "Limitations" list this contradicts in spirit), `.todo/280`, `.todo/281`
 (the other reason a Worker cannot just call `clackup`).
+
+Since `--component --no-wasi` landed (todo-298), the same failure class also
+exists one step EARLIER on the reactor component: its top level runs from the
+core start section, so this trap kills **instantiation itself** (`wasmtime`
+reports it before any export exists, and jco's `instantiate(...)` throws) --
+there is no `_initialize` call to place a try/catch around. Whatever fix is
+chosen here must cover both entry shapes; the diagnosis option (1) is
+entry-shape-independent, which is one more reason to start there.

@@ -154,7 +154,10 @@ normally. That is what lets a library that logs while it loads be quickloaded
 into a reactor at all — the alternative was killing the instance for a log line.
 If you need the text, return it from the export instead.
 
-It is Preview 1 only — `--no-wasi` is ignored under `--component`.
+Combined with `--component`, the same contract produces a **reactor
+component** — a component that imports nothing, whose top-level forms run at
+instantiation — see
+[the component guide](wasm-component.md#reactor-components---component---no-wasi).
 
 A `--no-wasi` compile also reads the source with the `:rontolisp-reactor`
 feature active, which is how a `clack:clackup ... :server :rontolisp` program

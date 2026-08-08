@@ -423,6 +423,58 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStdout().trim();
 	}
 
+	// Compiles a --component --no-wasi REACTOR (zero imports; the top level runs from
+	// the core start section at instantiation) and invokes a component-model export.
+	private static ExecResult reactorComponentInvoke(String lispCode, OptimizeLevel optimize, String invocation)
+			throws Exception {
+		byte[] component = new WasmLispCompiler(false, true, true, optimize)
+			.compile(LispReader.readAllFromString(lispCode));
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "--invoke", invocation,
+				path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result;
+	}
+
+	@Test
+	void componentNoWasiReactorRunsTopLevelAtInstantiationAndInvokesExports() throws Exception {
+		// The headline of the reactor shape: the top level lives in the core START
+		// SECTION, so a defparameter is already assigned when the very first export
+		// call arrives -- under the run-lifted component the same read answers nil
+		// (--invoke never drives wasi:cli/run). With and without --optimize, since
+		// the zero-import property must not ride on the tree shaker.
+		String program = """
+				(defparameter *greeting* "hello, ")
+				(defun greet (name) (concatenate 'string *greeting* name))
+				(defun fact (n) (if (<= n 1) 1 (* n (fact (- n 1)))))
+				(rontolisp:wasm-export 'greet :params '(:string) :returns :string)
+				(rontolisp:wasm-export 'fact :params '(:int) :returns :int)
+				""";
+		for (OptimizeLevel level : List.of(OptimizeLevel.NONE, OptimizeLevel.DEFAULT)) {
+			assertThat(reactorComponentInvoke(program, level, "greet(\"world\")").getStdout().trim())
+				.as("greet under " + level)
+				.isEqualTo("\"hello, world\"");
+		}
+		assertThat(reactorComponentInvoke(program, OptimizeLevel.DEFAULT, "fact(10)").getStdout().trim())
+			.isEqualTo("3628800");
+	}
+
+	@Test
+	void componentNoWasiReactorDiscardsOutputInsteadOfTrapping() throws Exception {
+		// The Preview 1 --no-wasi contract carried through the component wrap: the
+		// fd_write sink discards a top-level print (which now runs at INSTANTIATION,
+		// where a trap would kill the instance before any invoke) and an in-export
+		// print alike; stdout carries only the invoke's result.
+		String program = """
+				(print "boot message")
+				(defparameter *base* 41)
+				(defun bump () (print "called") (+ *base* 1))
+				(rontolisp:wasm-export 'bump :params '() :returns :int)
+				""";
+		ExecResult result = reactorComponentInvoke(program, OptimizeLevel.DEFAULT, "bump()");
+		assertThat(result.getStdout().trim()).isEqualTo("42");
+	}
+
 	@Test
 	void interfaceExportIsCallableAsAComponentInstance() throws Exception {
 		// A world's interface export (`export docs:adder/add;`, the idiomatic separated

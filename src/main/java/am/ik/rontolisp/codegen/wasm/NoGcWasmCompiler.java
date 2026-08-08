@@ -233,6 +233,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 */
 	private final boolean component;
 
+	/**
+	 * Whether to honor the {@code --no-wasi} contract: a printing program's
+	 * {@code fd_write} import becomes an internal discarding sink, so the module (and its
+	 * component wrap) imports nothing. See the four-argument constructor.
+	 */
+	private final boolean noWasi;
+
 	/** Creates a new non-GC WASM compiler (no optimize, scalar {@code vec:} kernels). */
 	public NoGcWasmCompiler() {
 		this(OptimizeLevel.NONE, false);
@@ -277,9 +284,31 @@ public final class NoGcWasmCompiler implements LispCompiler {
 	 * {@code :async} is rejected
 	 */
 	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd, boolean component) {
+		this(optimize, simd, component, false);
+	}
+
+	/**
+	 * Creates a new non-GC WASM compiler.
+	 * @param optimize see {@link #NoGcWasmCompiler(OptimizeLevel)}
+	 * @param simd see {@link #NoGcWasmCompiler(OptimizeLevel, boolean, boolean)}
+	 * @param component see {@link #NoGcWasmCompiler(OptimizeLevel, boolean, boolean)}
+	 * @param noWasi when {@code true}, a PRINTING program's single
+	 * {@code wasi_snapshot_preview1.fd_write} import is replaced by an internal
+	 * discarding sink (the GC backend's {@code --no-wasi} contract: the whole iovec is
+	 * reported written, errno 0, output lost -- nothing traps), keeping the module at
+	 * zero imports. Function index 0 stays the sink, so every planned index holds. A
+	 * print-free program never had the import, so the flag is a byte-exact no-op there.
+	 * Under {@code component} the wrap then never needs the print micro-adapter: the
+	 * component has ONE core module, no imports, and its exports lift
+	 * <strong>sync</strong> again -- a printing program collapses back onto the
+	 * print-free shape instead of merely losing its imports. Output-only, like the GC
+	 * backend: {@code --no-gc} rejects every other I/O at compile time already.
+	 */
+	public NoGcWasmCompiler(OptimizeLevel optimize, boolean simd, boolean component, boolean noWasi) {
 		this.optimize = optimize;
 		this.simd = simd;
 		this.component = component;
+		this.noWasi = noWasi;
 	}
 
 	/**
@@ -446,10 +475,14 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// boundary additionally aliases the canonical string ABI helpers appended by
 			// assemble() above, and a printing program (the print micro-adapter) wires
 			// the fixed shim/bridge/fixup modules implementing the fd_write import over
-			// WASI 0.3 (async lifts + the blocking waitable-set park).
-			this.componentWit = WitEmitter
-				.emit(mem.printUsed() ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC, exportDecls);
-			return NoGcWasmComponentBuilder.build(module, exportDecls, mem.printUsed());
+			// WASI 0.3 (async lifts + the blocking waitable-set park). Under --no-wasi
+			// the core carries the fd_write sink instead of the import, so a printing
+			// program takes the print-FREE shape: one core module, no imports, SYNC
+			// lifts -- and the nogc (empty-world) WIT.
+			final boolean printAdapter = mem.printUsed() && !this.noWasi;
+			this.componentWit = WitEmitter.emit(printAdapter ? WitEmitter.VARIANT_NOGC_PRINT : WitEmitter.VARIANT_NOGC,
+					exportDecls);
+			return NoGcWasmComponentBuilder.build(module, exportDecls, printAdapter);
 		}
 		return module;
 	}
@@ -1262,15 +1295,22 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			});
 		// Import section: exactly the one fd_write, and only when the program prints.
 		// A print-free module keeps zero imports, so its --component wrap needs no
-		// adapter.
-		if (mem.printUsed()) {
+		// adapter. Under --no-wasi the import is replaced by an internal discarding
+		// sink DEFINED at the same function index 0 (below), so the module keeps zero
+		// imports while every planned index (funcBase stays 1) holds.
+		final boolean fdWriteSink = mem.printUsed() && this.noWasi;
+		if (mem.printUsed() && !this.noWasi) {
 			// Type index 0: the fd_write signature was added first above.
 			w.writeImportSection(
 					imports -> imports.addImport("wasi_snapshot_preview1", "fd_write", ExternalKind.FUNCTION, 0));
 		}
 		// Function section: local function index (funcBase + k) uses type index
-		// (funcBase + k), mirroring the type-section shift above.
+		// (funcBase + k), mirroring the type-section shift above. The --no-wasi sink
+		// occupies index 0 with the fd_write type.
 		w.writeFunction(func -> {
+			if (fdWriteSink) {
+				func.addFunction(0);
+			}
 			for (int k = 0; k < totalFuncCount; k++) {
 				func.addFunction(k + mem.funcBase());
 			}
@@ -1323,6 +1363,13 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			// the
 			// function section order.
 			.writeCode(code -> {
+				if (fdWriteSink) {
+					// The --no-wasi fd_write sink at index 0: *nwritten = iovs[0].len,
+					// errno 0 -- output is discarded, nothing traps (the GC backend's
+					// contract, .kb/wasm-export-no-wasi.md). __write_stdout's call
+					// target is unchanged.
+					code.addFunction(WasmIoRuntimeBuilder.buildNoWasiFdWriteSinkBody());
+				}
 				for (byte[] body : internalBodies) {
 					code.addFunction(body);
 				}

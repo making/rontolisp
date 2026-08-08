@@ -101,13 +101,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * Creates a new WASM compiler.
 	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
 	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
-	 * @param noWasi when {@code true} (Preview 1 only; ignored in component mode), the
-	 * output module imports <strong>no</strong> {@code wasi_snapshot_preview1} functions,
-	 * so a host can instantiate it with no import object (a "reactor"/library module).
-	 * The eight WASI import slots (function indices 0-7) are filled with internal
-	 * {@code unreachable} trap stubs so every fixed {@code FUNC_*} index stays valid.
-	 * Only pure-compute {@code (rontolisp:wasm-export ...)} functions work; any I/O
-	 * (print/read/open/getenv/time/random) traps.
+	 * @param noWasi when {@code true}, the output imports <strong>no</strong>
+	 * {@code wasi_snapshot_preview1} functions, so a host can instantiate it with no
+	 * import object (a "reactor"/library module). The nine WASI import slots (function
+	 * indices 0-8) are filled with internal stubs so every fixed {@code FUNC_*} index
+	 * stays valid: {@code fd_write} is a sink (print/format-t output is discarded), the
+	 * other eight are {@code unreachable} traps (read/open/getenv/time/random trap).
+	 * Combined with {@code component}, the output is a <strong>reactor component</strong>
+	 * that imports nothing at all: the core module keeps this exact Preview 1 no-WASI
+	 * contract, declares its own memory, runs its top-level forms from the core start
+	 * section at instantiation (there is no {@code wasi:cli/run} export), and only the
+	 * {@code (rontolisp:wasm-export ...)} functions are lifted as typed component-model
+	 * exports.
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi) {
 		this(dynamic, component, noWasi, OptimizeLevel.NONE);
@@ -177,12 +182,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			boolean simd) {
 		this.dynamic = dynamic;
 		this.component = component;
-		// no-wasi is a Preview 1-only mode; a component has its own (lowered) import
-		// story.
-		this.noWasi = noWasi && !component;
+		this.noWasi = noWasi;
 		this.optimize = optimize;
 		this.serve = serve && component;
 		this.simd = simd;
+		// A serve component's entire surface is wasi:http -- its imports AND its
+		// handler export -- so a serve build cannot promise "no WASI imports".
+		if (this.serve && noWasi) {
+			throw new UnsupportedOperationException(
+					"--no-wasi cannot be combined with rontolisp:http-handler: a serve component's entire surface is "
+							+ "wasi:http (its imports and the wasi:http/handler export), which --no-wasi excludes; "
+							+ "drop --no-wasi");
+		}
 	}
 
 	/**
@@ -1581,7 +1592,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.ASYNC_LAMBDA_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.AWAIT_QUALIFIED)
 				|| programUsesSymbol(program, LispNames.SUBTASK_FUTURE_INTERNAL_QUALIFIED);
-		this.asyncMode = this.component && usesAsync;
+		// A --no-wasi reactor component has no host I/O to suspend on (its import
+		// surface is empty by contract), so it keeps the Preview 1 degenerate lowering:
+		// every future settles immediately.
+		this.asyncMode = this.component && !this.noWasi && usesAsync;
 		// The callback-task runtime (per-task waitable-sets over context slots +
 		// doorbell streams) exists exactly when the module has a CALLBACK-lifted export:
 		// serve's `handle` (its %serve-handle target is an async-defun, so serve implies
@@ -1781,6 +1795,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if (!componentImports.isEmpty() && !this.component) {
 			throw new UnsupportedOperationException("the canonical-ABI import lowering requires --component");
+		}
+		// The one shared enforcement point of the --no-wasi contract on this path: a
+		// reactor component imports NOTHING, and every WIT interface binding -- a user
+		// rontolisp:wit-import or a wasi:*-binding library splice the CLI failed to
+		// gate -- would become a component-level instance import.
+		if (!componentImports.isEmpty() && this.component && this.noWasi) {
+			throw new UnsupportedOperationException(
+					"--no-wasi asks for a component that imports nothing, but the program binds the WIT interface '"
+							+ componentImports.get(0).ifaceId()
+							+ "' (rontolisp:wit-import); drop --no-wasi or the import");
 		}
 		// Register each import as a synthetic defun so ordinary calls, #'name, funcall
 		// and eval all reach it through the regular defun machinery; Pass 2a swaps in
@@ -2073,8 +2097,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				: this.asyncMode ? taskSeqGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount);
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
 
-		// Create string table
-		int dataBase = this.component ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
+		// Create string table. The page-6 component base exists to keep the static data
+		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
+		// the serve cabi window); a --no-wasi reactor has no adapter and owns its whole
+		// memory, so it keeps the Preview 1 base and stops reserving 384 KB of address
+		// space per instance.
+		int dataBase = this.component && !this.noWasi ? COMPONENT_DATA_BASE_OFFSET : DATA_BASE_OFFSET;
 		StringTable stringTable = new StringTable(dataBase);
 		StringTable.StringEntry tSymEntry = stringTable.addBodyString("T");
 		// Bake the instance layouts into the data segment BEFORE Pass 2a: %obj-new
@@ -2177,7 +2205,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.optimize(this.optimize)
-			.component(this.component)
+			// Every ctx.component dispatch asks "are the wasi:*-binding library splices
+			// (http.lisp / wait.lisp / sockets.lisp / environment.lisp) here to resolve
+			// this primitive?". A --no-wasi reactor deliberately has none of them -- its
+			// primitives keep the Preview 1 --no-wasi contract -- so the expression
+			// compilers see the Preview 1 answer; ctx.noWasi tells the reject sites the
+			// reason so their messages name the actual conflict.
+			.component(this.component && !this.noWasi)
+			.noWasi(this.noWasi)
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
@@ -2377,8 +2412,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			// program un-runnable rather than slow. See .kb/wasm-function-body-size.md.
 			WasmToplevelEmit.emit(topLevelExprs, ctx);
 		}
-		if (this.component) {
-			// _start returns i32 (0 = ok) so it can be lifted as wasi:cli/run `run`
+		if (this.component && !this.noWasi) {
+			// _start returns i32 (0 = ok) so it can be lifted as wasi:cli/run `run`.
+			// A --no-wasi reactor exports no run at all -- its top level is the core
+			// START SECTION, whose function must be () -> () -- so it keeps the
+			// Preview 1 void shape.
 			startWriter.write(Instruction.I32_CONST);
 			startWriter.writeSignedLeb128(0);
 		}
@@ -2706,8 +2744,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					}
 					// The core module already exports "run" (the lifted wasi:cli/run
 					// entry); a second core export under the same name would make the
-					// module invalid.
-					if ("run".equals(decl.exportName())) {
+					// module invalid. A --no-wasi reactor exports no run at all, so the
+					// name is free there.
+					if ("run".equals(decl.exportName()) && !this.noWasi) {
 						throw new UnsupportedOperationException("rontolisp:wasm-export name 'run' collides with the"
 								+ " component's wasi:cli/run entry; rename it with :as");
 					}
@@ -3155,9 +3194,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// type 0: fd_write
 				types.addFunc(new Type[] { Type.I32, Type.I32, Type.I32, Type.I32 }, new Type[] { Type.I32 });
 				// type 1: _start -- in component mode it returns i32 (0 = ok) so it can
-				// be
-				// lifted as the wasi:cli/run `run` entry
-				types.addFunc(new Type[] {}, this.component ? new Type[] { Type.I32 } : new Type[] {});
+				// be lifted as the wasi:cli/run `run` entry. A --no-wasi reactor keeps
+				// the Preview 1 () -> () shape: its top level runs from the core START
+				// SECTION, whose function type must be empty.
+				types.addFunc(new Type[] {}, this.component && !this.noWasi ? new Type[] { Type.I32 } : new Type[] {});
 				// type 2: print_i32 / _print_i32_no_nl
 				types.addFunc(new Type[] { Type.I32 }, new Type[] {});
 				// types 3-7: struct types in rec group
@@ -3755,7 +3795,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						// over wasi:filesystem's read-directory.
 						.addImport("wasi_snapshot_preview1", "fd_readdir", ExternalKind.FUNCTION, TYPE_FD_READDIR);
 				}
-				if (this.component) {
+				if (this.component && !this.noWasi) {
 					// Import the linear memory from the shared canonical-memory module so
 					// the lowered WASI imports and this module share one memory. The min
 					// page count matches the P1 own-memory declaration (heap base rounded
@@ -3763,6 +3803,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					// static data / intern pool needs more than the mem module's default
 					// six pages tells its component builder to grow that module too --
 					// otherwise instantiation traps on the first data-segment write.
+					// A --no-wasi reactor is this module's ONLY writer of linear memory,
+					// so it declares and exports its own (the memory section below),
+					// exactly like the Preview 1 build.
 					final int componentMemMinPages = Math.max(4, (heapBase + 65535) / 65536 + 3);
 					imports.add(w -> {
 						w.write("mem".length(), "mem", "memory".length(), "memory");
@@ -4043,10 +4086,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			})
 			// Memory section -- in component mode the memory is imported (above), so this
-			// section is empty. 4 pages so getenv can place the environ buffer in page 3
+			// section is empty; a --no-wasi reactor declares its own like Preview 1.
+			// 4 pages so getenv can place the environ buffer in page 3
 			// (the canonical realloc heap is page 1+ in component mode).
 			.writeMemory(memories -> {
-				if (!this.component) {
+				if (!this.component || this.noWasi) {
 					// At least 4 pages (getenv places the environ buffer in page 3); a
 					// program whose computed heap base approaches that keeps the same
 					// ~3.7 pages of heap headroom the fixed 16384 base used to leave.
@@ -4197,7 +4241,30 @@ public final class WasmLispCompiler implements LispCompiler {
 			// for
 			// the lifted wasi:cli/run entry; the memory is imported, not exported
 			.writeExport(exports -> {
-				if (this.component) {
+				if (this.component && this.noWasi) {
+					// A --no-wasi REACTOR component: no `run` (the top level is the core
+					// start section, run by the engine at instantiation, after the data
+					// segments install) and no `_initialize` (nothing would call it). The
+					// component wrap aliases `memory` (the canonical string options name
+					// it) and lifts each wasm-export wrapper -- a :string/:s-expr-
+					// returning one through its retptr shim -- plus the canonical string
+					// ABI helpers, exactly like the base component below.
+					exports.addExport("memory", ExternalKind.MEMORY, 0);
+					for (ExportPlan p : exportPlans) {
+						int shim = retptrShimPlans.indexOf(p);
+						exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION,
+								shim >= 0 ? retptrShimFuncBase + shim : p.funcIndex());
+					}
+					if (componentStringAbi) {
+						exports.addExport(WasmExportCompiler.CABI_REALLOC, ExternalKind.FUNCTION, cabiReallocFuncIndex);
+						int k = 0;
+						for (String kind : componentPostKinds.keySet()) {
+							exports.addExport(WasmExportCompiler.cabiPostExportName(kind), ExternalKind.FUNCTION,
+									cabiPostFuncBase + k++);
+						}
+					}
+				}
+				else if (this.component) {
 					exports.addExport("run", ExternalKind.FUNCTION, FUNC_START);
 					// The REAL callback of a callback-lifted export (serve's handle):
 					// the component builder aliases it as the `callback` canonical
@@ -4273,7 +4340,16 @@ public final class WasmLispCompiler implements LispCompiler {
 						exports.addExport(p.decl().exportName(), ExternalKind.FUNCTION, p.funcIndex());
 					}
 				}
-			})
+			});
+		// Start section (--no-wasi reactor component only): the engine runs the
+		// top-level init at instantiation, after the data segments install -- so a
+		// top-level (defparameter ...) is readable from the very first export call,
+		// which the host-driven `run` export could never guarantee. The tree shaker
+		// treats it as a root and renumbers it like any function reference.
+		if (this.component && this.noWasi) {
+			mainWriter.writeStartSection(FUNC_START);
+		}
+		mainWriter
 			// Code section
 			.writeCode(code -> {
 				// No-wasi mode: bodies for the nine stubs at indices 0-8. All but
@@ -4636,6 +4712,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			List<WasmExportCompiler.Decl> componentExportDecls = new ArrayList<>();
 			for (ExportPlan p : exportPlans) {
 				componentExportDecls.add(p.decl());
+			}
+			if (this.noWasi) {
+				// --no-wasi: a REACTOR component that imports nothing -- no import
+				// block, no adapter, no shared memory module, with or without
+				// --optimize (the zero-import property is the flag's contract, not a
+				// narrowing outcome). Its WIT world is the same empty world as the
+				// --no-gc reactor's.
+				this.componentWit = WitEmitter.emit(WitEmitter.VARIANT_REACTOR, componentExportDecls);
+				return WasmComponentBuilder.buildReactor(coreModule, componentExportDecls);
 			}
 			// This is the non-serve component path (serve returned above), where
 			// emitHttpImport is always false: rontolisp:fetch here is the http.lisp
@@ -5296,7 +5381,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		OptimizeLevel optimize = OptimizeLevel.NONE;
 
+		/**
+		 * True when the wasi:*-binding library splices back this build's I/O primitives
+		 * (http.lisp / wait.lisp / sockets.lisp / environment.lisp over their
+		 * wit-imported wasi:* surfaces) -- i.e. {@code --component} WITHOUT
+		 * {@code --no-wasi}. A {@code --component --no-wasi} reactor deliberately sets
+		 * this false: its primitives keep the Preview 1 {@code --no-wasi} contract (print
+		 * discards, the rest trap or signal), and only the final wrap differs.
+		 */
 		boolean component = false;
+
+		/**
+		 * True under {@code --no-wasi} (Preview 1 reactor or reactor component): the WASI
+		 * import slots are internal stubs. Read by the reject sites whose "requires
+		 * --component" messages would otherwise mislead a reactor build.
+		 */
+		boolean noWasi = false;
 
 		// True in a rontolisp:http-handler (serve-mode) component.
 		boolean serve = false;
@@ -5589,6 +5689,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.dynamic = builder.dynamic;
 			this.optimize = builder.optimize;
 			this.component = builder.component;
+			this.noWasi = builder.noWasi;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
 			this.blockExitTag = builder.blockExitTag;
@@ -5649,6 +5750,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private OptimizeLevel optimize = OptimizeLevel.NONE;
 
 			private boolean component = false;
+
+			private boolean noWasi = false;
 
 			private boolean serve = false;
 
@@ -5763,6 +5866,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder component(boolean component) {
 				this.component = component;
+				return this;
+			}
+
+			Builder noWasi(boolean noWasi) {
+				this.noWasi = noWasi;
 				return this;
 			}
 

@@ -759,6 +759,7 @@ final class WasmAsyncEmit {
 			// --optimize=size while the same form in a defun did not.
 			.optimize(proto.optimize)
 			.component(proto.component)
+			.noWasi(proto.noWasi)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)
 			.blockExitTag(proto.blockExitTag)

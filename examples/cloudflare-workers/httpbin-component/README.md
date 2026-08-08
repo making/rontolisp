@@ -1,9 +1,10 @@
 # httpbin-component — the same handler, through the component model
 
 This directory compiles **[`../httpbin/worker.lisp`](../httpbin/worker.lisp)** —
-the same file, not a copy — as a WebAssembly component and runs it on Cloudflare
-Workers through `jco transpile`. Same routes, same responses; a different way of
-crossing the boundary.
+the same file, not a copy — as a WebAssembly **reactor component**
+(`--component --no-wasi`) and runs it on Cloudflare Workers through
+`jco transpile`. Same routes, same responses; a different way of crossing the
+boundary.
 
 ```bash
 ./build.sh          # ../httpbin/worker.lisp -> worker.wasm -> src/dist/
@@ -34,12 +35,23 @@ disappears here. It is the entire benefit, and it is a genuine one.
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` (179 KB) | 3 × `.wasm` (190 KB) + `worker.js` (293 KB) |
+| Files the Worker imports | 1 × `.wasm` (179 KB) | 1 × `.wasm` (179 KB) + `worker.js` (95 KB) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
-| WASI imports to satisfy | none | 3 interfaces, stubbed by hand |
-| Top-level `defparameter` | works, via `_initialize` | does not work at all |
+| WASI imports to satisfy | none | none |
+| Top-level `defparameter` | works, via `_initialize` | works, at instantiation |
 
-## The three things that are not obvious
+`--no-wasi` is what makes the right column read that way: it asks for a
+component that **imports nothing** (`wasm-tools component wit` shows not a
+single `import` line), so the generated glue's `ImportObject` type is literally
+empty and `src/index.js` instantiates with `{}`. The Lisp top level runs from
+the core module's *start section* inside `instantiate` — the reactor
+counterpart of `../httpbin` calling `_initialize` — so a `defparameter` is
+assigned before the first request. Without the flag, the same build imports
+three WASI interfaces that must be stubbed by hand, ships two extra (empty)
+core modules, and cannot run its top-level forms at all, because they live in a
+`wasi:cli/run` export jco cannot drive.
+
+## The two things that are not obvious
 
 Each of these was found the hard way; `build.sh` and `src/index.js` carry the
 answers.
@@ -57,12 +69,12 @@ Worker starts and then every request hangs until the runtime cancels it. The mod
 that works is **`--instantiation sync`**: the generated glue does not compile
 anything, it asks the host for each already-compiled core module through a
 `getCoreModule(path)` callback. A `.wasm` import is exactly that, so
-`src/index.js` hands them over:
+`src/index.js` hands it over:
 
 ```js
 import core0 from "./dist/worker.core.wasm";
 // ...
-instantiate((path) => CORE_MODULES[path], WASI_STUBS);
+instantiate(() => core0, {});
 ```
 
 `-b 0` goes with it, to stop jco inlining a small core module as base64 rather
@@ -76,47 +88,13 @@ ComponentError: failed to translate component
 Caused by: exceptions proposal not enabled (at offset 0xb4e)
 ```
 
-**3. Top-level forms cannot be run.** A component's top-level forms live in its
-`wasi:cli/run` export, and calling that through jco fails:
-
-```
-Error: (component [0]) task [1] exited without resolution
-```
-
-— jco cannot drive a stackful-async export. So there is no `_initialize`
-equivalent on this path, and `worker.lisp` is only buildable here because every
-piece of its state lives inside a `defun` — there is not one `defparameter` in
-it, and adding one would be a constraint of this directory rather than of the
-Lisp. Miss that and every top-level definition is silently `nil`: the symptom is
-a route quietly answering `false`.
-
-## The WASI stubs
-
-A wasm-GC component is a `wasi:cli/run` command by construction, so it imports
-`wasi:cli/stdout`, `wasi:cli/types` and `wasi:filesystem/types` whether or not
-the program does any I/O. With `--instantiation sync` those become an import
-object the host supplies, and since `worker.lisp` never prints, stubs are
-enough:
-
-```js
-const WASI_STUBS = {
-  "wasi:cli/stdout": { writeViaStream: async () => ({ tag: "ok", val: undefined }) },
-  "wasi:cli/types": {},
-  "wasi:filesystem/types": { Descriptor: class Descriptor {} },
-};
-```
-
-Note the keys are the **unversioned** interface names, even though the generated
-`.d.ts` writes them with `@0.3.0`.
-
 ## When this path is actually clean
 
 When the program fits the `--no-gc` subset. [`../hello`](../hello) has no
 component build of its own, but try it: `--no-gc --component` is an 834-byte
-component that imports *nothing*, so there are no stubs and no exnref flag, and
-the glue has no dependencies. The output name says which build it is, so it
-cannot be confused with the `worker.wasm` this directory's own `build.sh`
-produces:
+component that imports *nothing*, so there is no exnref flag, and the glue has
+no dependencies. The output name says which build it is, so it cannot be
+confused with the `worker.wasm` this directory's own `build.sh` produces:
 
 ```bash
 JAR=../../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar
@@ -144,6 +122,7 @@ hand-written glue — which is the honest summary of this whole directory.
 examples/cloudflare-workers/httpbin-component/build.sh
 ```
 
-`build.sh` prints the core-module file names it produced. If they ever differ
-from the three `src/index.js` imports — the count can change with the program —
-update that list.
+`build.sh` prints the core-module file names it produced. A reactor component
+has exactly one; if a rebuild ever prints more, the program stopped being
+import-free (or the flag went missing) and `src/index.js` needs to hear about
+it.

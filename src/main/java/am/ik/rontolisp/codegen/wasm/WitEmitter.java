@@ -44,6 +44,13 @@ final class WitEmitter {
 	/** The adapter-free {@code --no-gc} reactor variant. */
 	static final String VARIANT_NOGC = "nogc";
 
+	/**
+	 * The {@code --component --no-wasi} reactor on the GC backend: the same empty world
+	 * as the adapter-free {@code --no-gc} reactor (no imports, no fixed export -- only
+	 * the appended {@code wasm-export} items), so it shares that variant's document.
+	 */
+	static final String VARIANT_REACTOR = VARIANT_NOGC;
+
 	/** The {@code --no-gc} print-micro-adapter variant. */
 	static final String VARIANT_NOGC_PRINT = "nogc-print";
 

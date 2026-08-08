@@ -34,18 +34,20 @@ Two independent choices determine the shape of the output:
 - **Packaging.** By default the output is a **WASI Preview 1 core module**.
   `--component` wraps it as a **component**: on the GC path a WASI 0.3
   component with full I/O over the async canonical ABI, on the `--no-gc` path a
-  compact typed reactor component that runs with no host flags at all. On the
-  Preview 1 GC path, `--no-wasi` instead drops the WASI imports, turning the
-  module into a pure-compute library ("reactor") a host can instantiate with no
-  import object.
+  compact typed reactor component that runs with no host flags at all.
+  `--no-wasi` drops the WASI imports, turning either packaging into a
+  pure-compute library ("reactor"): a Preview 1 module a host instantiates
+  with no import object, or — with `--component` — a **reactor component
+  that imports nothing** and runs its top-level forms at instantiation.
 
-Crossing the two axes gives the five shapes:
+Crossing the two axes gives the six shapes:
 
 | Output shape | Flags | Language | Runs on | Details |
 | --- | --- | --- | --- | --- |
 | WASI command module | (none) | full | wasm-GC engine with WASI Preview 1 (`wasmtime run -W gc`) | [wasm-GC core module](../guides/wasm-gc-module.md) |
 | Library (reactor) module | `--no-wasi` | full (pure-compute exports) | any wasm-GC engine, no imports needed (Node 22+, current browsers) | [`--no-wasi` reactor mode](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
 | WASI 0.3 component | `--component` | full, plus component-only I/O (`rontolisp:fetch`, TCP sockets) | wasmtime 46+ or another component host with wasm-GC | [WASI 0.3 component](../guides/wasm-component.md) |
+| Reactor component | `--component --no-wasi` | full (pure-compute exports) | any component host with wasm-GC, empty import object | [Reactor components](../guides/wasm-component.md#reactor-components---component---no-wasi) |
 | Plain core module | `--no-gc` | numeric/string [subset](../guides/wasm-nogc.md#eligible-subset) | **any** WebAssembly engine, even without wasm-GC or SIMD | [Non-GC output](../guides/wasm-nogc.md) |
 | Compact typed component | `--no-gc --component` | numeric/string [subset](../guides/wasm-nogc.md#eligible-subset) | any component host, **zero flags** | [Compact component output](../guides/wasm-nogc.md#compact-component-output---no-gc---component) |
 

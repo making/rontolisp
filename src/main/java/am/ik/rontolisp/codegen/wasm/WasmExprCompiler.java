@@ -279,7 +279,7 @@ final class WasmExprCompiler {
 						WasmFetchCompiler.validate(cons);
 					}
 					else {
-						WasmFetchCompiler.reject();
+						WasmFetchCompiler.reject(ctx.noWasi);
 					}
 				}
 				if (LispNames.HTTP_HANDLER.equals(qn.member())) {
@@ -419,7 +419,13 @@ final class WasmExprCompiler {
 					// the wit-imported wasi:clocks monotonic-clock, a pending future the
 					// scheduler settles) -- the symbol falls through to the ordinary
 					// call path, which resolves the defun. Preview 1 keeps the special
-					// form (the compile error: no host timer).
+					// form (the compile error: no host timer), and so does a --no-wasi
+					// build of either shape, whose message names the actual conflict.
+					if (ctx.noWasi) {
+						throw new UnsupportedOperationException("rontolisp:" + qn.member()
+								+ " requires the component's wasi:clocks timer import, which --no-wasi excludes"
+								+ " (a --no-wasi build imports nothing); drop --no-wasi");
+					}
 					throw new UnsupportedOperationException(
 							"rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
 									+ " (no host timer is wired on Preview 1 WASM)");
@@ -463,8 +469,12 @@ final class WasmExprCompiler {
 					// library whose socket layer is dead code still compiles -- s-sql
 					// depends on cl-postgres but never opens a connection, and the
 					// pruner cannot drop cl-postgres' defmethod-anchored socket chain.
-					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
-							"rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
+					// A --no-wasi build (either shape) keeps the same call-time policy
+					// with a message naming the actual conflict.
+					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(ctx.noWasi
+							? "rontolisp:" + qn.member() + " requires the component's wasi:sockets imports, which"
+									+ " --no-wasi excludes (a --no-wasi build imports nothing); drop --no-wasi"
+							: "rontolisp:" + qn.member() + " requires the interpreter, the JVM backend or --component"
 									+ " (no host socket API is wired on Preview 1 WASM)"),
 							ctx);
 					return;

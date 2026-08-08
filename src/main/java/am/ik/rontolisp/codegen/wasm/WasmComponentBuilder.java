@@ -1323,6 +1323,46 @@ public final class WasmComponentBuilder {
 	}
 
 	/**
+	 * Assemble the {@code --no-wasi} REACTOR component: the single rontolisp core module
+	 * -- which imports <strong>nothing</strong> (its nine {@code wasi_snapshot_preview1}
+	 * slots are internal stubs and it declares its own memory) and runs its top-level
+	 * forms from its core <em>start section</em> at instantiation -- instantiated with no
+	 * arguments and wrapped as {@code alias / type / lift / export} per
+	 * {@code wasm-export}, exactly the {@link NoGcWasmComponentBuilder} print-free shape
+	 * on the GC backend. There is no import block, no WASI adapter, no shared memory
+	 * module and no {@code wasi:cli/run} export, with or without {@code --optimize}: the
+	 * zero-import surface is the flag's contract, not a narrowing outcome. A
+	 * {@code :string}/{@code :s-expr} boundary lifts through the canonical string ABI
+	 * over the core's <em>own</em> exported memory and its own {@code cabi_realloc} /
+	 * {@code cabi_post_*} helpers ({@link #appendFuncExports} aliases them off the
+	 * rontolisp instance -- instance 0 here).
+	 * @param coreModule the rontolisp core module compiled in component no-wasi mode
+	 * @param funcExports the {@code wasm-export} directives to lift and export
+	 * @return the reactor component binary
+	 */
+	static byte[] buildReactor(byte[] coreModule, List<WasmExportCompiler.Decl> funcExports) {
+		final ComponentWriter c = new ComponentWriter();
+		// Core module 0 = the whole program; core instance 0 = instantiate it with no
+		// arguments (it has no imports). The engine runs its start section here, so the
+		// top-level initializers are in place before any lifted export can be called.
+		c.rawSection(ComponentWriter.SEC_CORE_MODULE, coreModule);
+		c.rawSection(ComponentWriter.SEC_CORE_INSTANCE,
+				ComponentWriter.vec(List.of(ComponentWriter.coreInstanceInstantiate(0, List.of(), List.of()))));
+		// The canonical string options name core memory 0: on this shape that is the
+		// core's own exported memory (there is no shared memory module), aliased before
+		// the export wiring so it takes index 0. A scalar-only reactor aliases nothing.
+		if (funcExports.stream().anyMatch(WasmExportCompiler::usesMemory)) {
+			c.rawSection(ComponentWriter.SEC_ALIAS,
+					ComponentWriter.vec(List.of(ComponentWriter.aliasCoreMemory(0, "memory"))));
+		}
+		// Every index space starts from zero: no run wiring, no fixed surface, no user
+		// imports precede the export wiring (the +1/+1/+2 cursor shifts of the base
+		// build are the run alias/lift/instance-pair, none of which exist here).
+		appendFuncExports(c, funcExports, 0, 0, 0, 0, 0);
+		return c.toByteArray();
+	}
+
+	/**
 	 * Assemble the serve-variant component for a {@code rontolisp:http-handler} program:
 	 * wrap the rontolisp core (compiled in serve mode, exporting http.lisp's
 	 * {@code handle} and its real callback {@code async_cb}) with the preview1 bridge

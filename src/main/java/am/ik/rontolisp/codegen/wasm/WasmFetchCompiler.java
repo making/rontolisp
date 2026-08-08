@@ -44,8 +44,18 @@ final class WasmFetchCompiler {
 		checkMethod(staticMethod(args.size() == 3 ? args.get(2) : null));
 	}
 
-	/** Raises the Preview-1 compile error: fetch is component-only on WASM. */
-	static void reject() {
+	/**
+	 * Raises the compile error for a build with no {@code wasi:http} surface: Preview 1,
+	 * or any {@code --no-wasi} build (fetch IS the component's wasi:http import surface,
+	 * which that flag excludes).
+	 * @param noWasi whether the build passed {@code --no-wasi} (names the actual conflict
+	 * instead of suggesting a flag the user already typed)
+	 */
+	static void reject(boolean noWasi) {
+		if (noWasi) {
+			throw new UnsupportedOperationException("rontolisp:fetch requires the component's wasi:http imports, "
+					+ "which --no-wasi excludes (a --no-wasi build imports nothing); drop --no-wasi");
+		}
 		throw new UnsupportedOperationException(
 				"rontolisp:fetch is only available in WASM component mode (--component), not Preview 1 WASM");
 	}

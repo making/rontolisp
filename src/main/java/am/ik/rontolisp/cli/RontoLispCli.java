@@ -362,10 +362,11 @@ public final class RontoLispCli {
 		// #+rontolisp-jvm / #+rontolisp-wasm conditionals select per-backend code --
 		// and #+rontolisp-reactor selects reactor-mode code: the
 		// clack-handler-rontolisp shim's run picks the http-handler directive or the
-		// %http-reactor marker with it. Reactor mode is --no-wasi (Preview 1 only:
-		// the compiler ignores the flag under --component, so the feature must too)
-		// or --no-gc (a pure-compute reactor with or without the component wrap).
-		boolean reactor = (noWasi && !component) || noGc;
+		// %http-reactor marker with it. Reactor mode is --no-wasi (a Preview 1 module
+		// with no WASI imports, or -- with --component -- a reactor component that
+		// imports nothing) or --no-gc (a pure-compute reactor with or without the
+		// component wrap).
+		boolean reactor = noWasi || noGc;
 		Features features = outputFile.endsWith(".wasm") ? (reactor ? Features.WASM_REACTOR : Features.WASM)
 				: Features.JVM;
 		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc, component);
@@ -402,6 +403,18 @@ public final class RontoLispCli {
 		// member and vice versa. The interpreter/JVM keep java.net.http / HttpServer;
 		// Preview 1 has neither.
 		boolean serve = component && HttpHandlerInliner.usesHttpHandler(loaded);
+		// --no-wasi under --component asks for a component that imports NOTHING, and
+		// the wasi:*-binding library splices below exist precisely to give a component
+		// its WASI surface (http.lisp / wait.lisp / sockets.lisp / stdin.lisp /
+		// environment.lisp are each the wit-imported wasi:* surface of their
+		// primitives). ONE decision here gates all five: they see the Preview 1
+		// backend, whose primitives already honor the --no-wasi contract (the fd_write
+		// sink discards output, the rest trap or signal at call time;
+		// .kb/wasm-export-no-wasi.md). wit-import/wit-export lowering keeps the real
+		// backend -- a USER wit-import under --no-wasi is rejected by the compiler,
+		// with a message naming both sides.
+		WitExportDirective.Backend spliceBackend = component && noWasi ? WitExportDirective.Backend.WASM_GC
+				: witBackend;
 		// serve + rontolisp:wit-export is an error (a serve component's only export is
 		// wasi:http/handler); the check fires below on the macro-expanded program.
 		// Splicing http.lisp's %serve-handle wasm-export first would surface as a
@@ -413,7 +426,7 @@ public final class RontoLispCli {
 		// away (the wasm path drops it); it decides both the synthesized
 		// %serve-request-body in there and the splice filter below.
 		boolean bufferBody = HttpLibrary.usesBufferedBody(loaded);
-		loaded = HttpLibrary.process(loaded, witBackend, serveGlue);
+		loaded = HttpLibrary.process(loaded, spliceBackend, serveGlue);
 		// The host-driven reactor's counterpart of that splice: a Clack handler
 		// backend whose run stores the app and leaves a rontolisp::%http-reactor
 		// marker (the clack-handler-cloudflare-workers shim always; the
@@ -444,14 +457,14 @@ public final class RontoLispCli {
 		// scheduler settles). Spliced like http.lisp; a no-op elsewhere (the
 		// interpreter/JVM keep their CompletableFuture timer, Preview 1 keeps the
 		// compile error).
-		loaded = WaitForLibrary.process(loaded, witBackend);
+		loaded = WaitForLibrary.process(loaded, spliceBackend);
 		// The rontolisp:tcp-* built-ins on the --component path are the sockets.lisp
 		// library over a wit-imported wasi:sockets/types@0.3.0 (this splice replaced
 		// the hand-written sockets adapter). Spliced like http.lisp; a no-op elsewhere
 		// (the interpreter/JVM keep java.net.Socket, Preview 1 keeps the compile
 		// error). The trigger includes any usocket: reference: the usocket shim rides
 		// tcp-*, and its own splice runs later in this pipeline.
-		loaded = SocketsLibrary.process(loaded, witBackend);
+		loaded = SocketsLibrary.process(loaded, spliceBackend);
 		// Component stdin over wit-imported wasi:cli/stdin@0.3.0 (stdin.lisp), bound
 		// FROM the fixed import block. Two shapes: the %stdin-*-or-raw-f helpers
 		// sockets.lisp's dispatchers fall through to (a serve program gets the
@@ -460,7 +473,7 @@ public final class RontoLispCli {
 		// reads then promote to awaits. A non-async stdin program is left on the
 		// preview1 adapter's stdin branch, byte-identical. Must run AFTER
 		// SocketsLibrary (it keys on sockets.lisp's dispatchers being present).
-		loaded = StdinLibrary.process(loaded, witBackend, serve);
+		loaded = StdinLibrary.process(loaded, spliceBackend, serve);
 		// The WIT runtime (wit.lisp: the provider registry, rontolisp:wit-provide and the
 		// rontolisp:wit-error condition -- the provider MECHANISM, and no provider for
 		// any
@@ -485,7 +498,7 @@ public final class RontoLispCli {
 		// to be seen too: the prelude's uiop:default-temporary-directory reads TMPDIR,
 		// and with this pass upstream of the splice a smart-buffer program failed the
 		// component compile with "compiled without EnvironmentLibrary.process".
-		program = EnvironmentLibrary.process(program, witBackend);
+		program = EnvironmentLibrary.process(program, spliceBackend);
 		// Splice the Lisp-source vec library (the scalar reference over the packed
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and
@@ -516,15 +529,17 @@ public final class RontoLispCli {
 				// --no-gc selects the separate scalar (non-GC) lowering: a plain MVP
 				// module
 				// with no wasm-GC types, no imports and no memory, for pure-numeric
-				// rontolisp:wasm-export functions. It is a pure-compute reactor, so it
-				// implies --no-wasi. With --component the same core module is wrapped as
-				// a compact reactor-style component (typed scalar exports, no adapter,
-				// no wasm-GC requirement) instead of the GC component pipeline.
+				// rontolisp:wasm-export functions. A PRINT-FREE program is a pure-compute
+				// reactor already; a printing one imports the single fd_write, which
+				// --no-wasi replaces with the discarding sink (the GC contract), so the
+				// module keeps zero imports. With --component the same core module is
+				// wrapped as a compact reactor-style component (typed scalar exports, no
+				// adapter, no wasm-GC requirement) instead of the GC component pipeline.
 				// --simd is the orthogonal acceleration switch: with it the vec: kernels
 				// lower to native v128 (f64x2/f32x4); without it to plain scalar loops
 				// that
 				// run on a runtime lacking the SIMD proposal.
-				NoGcWasmCompiler compiler = new NoGcWasmCompiler(optimize, simd, component);
+				NoGcWasmCompiler compiler = new NoGcWasmCompiler(optimize, simd, component, noWasi);
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 			}
@@ -680,10 +695,12 @@ public final class RontoLispCli {
 		this.out.println("                     world with --world NAME when the file declares several.");
 		this.out.println("                     The program then IMPLEMENTS the .wit: the compiler checks every");
 		this.out.println("                     defun against it, so no :params/:returns list is written by hand");
-		this.out.println("  --no-wasi          Emit a WASM module with no WASI imports (reactor mode)");
-		this.out.println("                     Preview 1 only; instantiates without an import object (beyond");
-		this.out.println("                     any rontolisp:wasm-import host functions), only pure-compute");
-		this.out.println("                     rontolisp:wasm-export functions work (I/O traps)");
+		this.out.println("  --no-wasi          Emit WASM with no WASI imports (reactor mode)");
+		this.out.println("                     Instantiates without an import object (beyond any");
+		this.out.println("                     rontolisp:wasm-import host functions); pure-compute");
+		this.out.println("                     rontolisp:wasm-export functions work, print is discarded,");
+		this.out.println("                     other I/O traps. With --component: a reactor component that");
+		this.out.println("                     imports NOTHING and runs its top level at instantiation");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");
