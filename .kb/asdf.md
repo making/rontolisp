@@ -296,6 +296,12 @@ any Worker example ever produced. Docs: the `tiny-routes/lite` subsection of
 `examples/cloudflare-workers/httpbin-tiny-routes` example (the four-way size
 table), the `examples/asdf/README.md` row.
 
+**A cl-ppcre/lite in the same pattern was built, parity-pinned and then REJECTED
+(user decision 2026-08-08, todo-297)** -- do not re-propose it as the answer to
+the engine's module share. The decision record, the measured sizes and the
+mechanism notes are in `.todo/297`; the direction for that item is shrinking the
+REAL engine's compiled share (`.todo/288`).
+
 Docs: `doc/*/guides/asdf-systems.md` + `reference/functions/asdf-{defsystem,load-system}.md` (+ catalog/nav/packages.md); phased roadmap in `.todo/054-asdf-support.md`.
 
 ## Built-in systems have `:depends-on` edges of their own (todo-231)

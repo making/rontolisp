@@ -2,114 +2,141 @@
 
 Difficulty: High
 
-An application that calls `ppcre:` itself -- `scan`, `scan-to-strings`,
-`regex-replace-all`, a `create-scanner` over runtime input -- pays the whole
-engine in its compiled module. Measured twice on 2026-08-08 (same jar, `--no-wasi
---optimize=size`, `.kb/optimize-dead-code-elimination.md` "What ROUTING costs a
-clack module"): the engine's share is **732,748 B raw** on the routed Worker
-probe (1,219,894 with it, 487,146 without) and **735,122 B** on the
-httpbin-tiny-routes example (1,236,811 vs 501,689); gzip roughly 290 KB vs
-130 KB. This item is about shrinking that share for a program where the engine
-is THE FEATURE and cannot simply leave.
+REDIRECTED 2026-08-08 (user instruction, mid-session): the goal is to shrink
+the module of a program that loads the REAL cl-ppcre -- not to substitute a
+lite engine. The opt-in `cl-ppcre/lite` system (the original lever 4) was
+built and parity-pinned by the time of the redirect and then REJECTED by the
+user and reverted (record near the end of this file). What remains open here
+is the real engine's module share, and this file now carries the measured
+composition of that share and the identified levers.
 
-## How this differs from the tiny-routes case (todo-296) -- and what it can reuse
+## Where the real engine's bytes are (measured 2026-08-08, this session)
 
-The routing case is SOLVED, by removal: tiny-routes needed only the
-`:name`-token template subset, so `tiny-routes/lite` (todo-296) swaps
-`path-template.lisp` for a ppcre-free matcher, drops the `:cl-ppcre`
-dependency, and the engine leaves whole. That lever does not exist here -- a
-program that spells `ppcre:` wants regexes. What todo-296 DID build and this
-item can reuse verbatim is the OPT-IN MECHANISM and its contract:
+Probe = `(ql:quickload "cl-ppcre")` + one literal `ppcre:scan`, wasm-GC
+Preview 1 at `--optimize=size` (the per-feature cost map with all probes is in
+`.kb/optimize-dead-code-elimination.md`, "What a cl-ppcre-USING application
+costs"). Headline: usage barely matters -- zero-reference 747,882 B, one scan
++286 B, all five API features +22,319 B. The composition of the 748,168 B:
 
-- the delivery: an `AsdOverrides` replacement `.asd` declaring the primary
-  system verbatim plus an opt-in secondary system, a substitution keyed by
-  that system name only, `ShimLibraries.conflictingSystem` refusing the
-  co-load in both orders, and `QuicklispClient`'s slash-name fallback so the
-  `ql:quickload` spelling resolves;
-- the contract: "matches identically or refuses loudly at build time", pinned
-  by ONE corpus run against BOTH engines (`TinyRoutesLiteCorpus` /
-  `TinyRoutesLiteE2eTest` / `TinyRoutesLiteUpstreamParityTest` are the
-  template);
-- the docs shape: an asdf-systems-guide subsection (en+ja) stating the exact
-  accepted subset and the escape, a Worker example with the size table.
+- **wasm sections**: code 696,108 B (93%) in 863 functions; data 50,439 B
+  (string blob 28,184 + three registry segments 8,280/8,088/5,824); everything
+  else under 1.6 KB combined. The lever is CODE, not data.
+- **top wasm functions**: 24,076 / 18,458 / 17,523 / 17,077 / 15,959 B --
+  five functions are 93 KB. 468 functions are under 300 B (44,950 B total),
+  so per-function fixed overhead is NOT the story either.
+- **JVM twin of the same probe** (methods are named there; class total
+  1,057,403 B, 849 methods, 971,011 B of method bytes):
 
-## Already measured -- do not re-derive
+  | bucket | bytes | methods |
+  | --- | ---: | ---: |
+  | cl-ppcre defun/defmethod bodies | 562,523 | 379 |
+  | CL builtin wrapper catalog + prelude (`SEARCH`, `STRING=`, ...) | 172,108 | 164 |
+  | lambdas (scanner closures, method bodies) | 170,879 | 220 |
+  | funcall dispatch ladders (`_invoke_v$*`) | 37,092 | 12 |
+  | runtime helpers / infra | 23,649 | 73 |
 
-All in `.kb/optimize-dead-code-elimination.md` (todo-295, 2026-08-08):
+  Top methods: `%END-STRING-AUX--m1` 22,649, `%GATHER-STRINGS--m0` 20,137,
+  `GET-TOKEN` 17,482, `MAYBE-ACCUMULATE` 16,272, `BUILD-REPLACEMENT` 12,660 --
+  these are 40-80-line Lisp functions compiling to ~300-550 B per source line.
 
-- **The 8 `define-compiler-macro`s are not a size lever.** The routed module is
-  byte-identical with all eight stripped; where one fires (a literal
-  `(ppcre:scan "..." x)`) it ADDS 179 B and removes nothing, because the
-  scanner BUILDER still ships to run at load time.
-- **Parse-half/match-half splitting cannot pay.** A cl-ppcre scanner is a tree
-  of closures closing over each other (`closures.lisp`); no mechanism can
-  serialize one into an artifact, and `load-time-value` runs INSIDE the module,
-  so the builder ships whatever the call sites look like.
-- **The zero-reference anchor is 823,589 B**: with the engine loaded but
-  unreferenced, only 0.9% leaves, because `LibraryDefunPruner` keeps every
-  `defgeneric`/`defmethod`/`defclass`/`defstruct` as a root and every method
-  body is a load-time closure in `valueFuncIds`, dispatchable through the
-  funcall ladders. That number is the measured ceiling of `.todo/290`'s
-  CLOS-aware-shaking lever ON THAT MODULE -- but it is the ZERO-reference
-  case; a USING app keeps some of it genuinely live.
+## The diagnosis: per-site sequence-dispatch inlining (`.todo/288`)
 
-## The levers to measure and design (the item)
+The density has a known mechanism, already filed as `.todo/288`: every generic
+sequence lowering (`reverse`, `remove`, `position`, `substitute`, `count`,
+`find`, `mapcar`, `sort`, ...) inlines a whole list/string/general-array
+representation dispatch AT EVERY CALL SITE, including the other generic
+operators it calls -- measured there at 5-8 KB per expansion, and `subseq` was
+already fixed by the shared-callee recipe (2,316 -> 11 B per site,
+`.kb/subseq-runtime.md`). cl-ppcre's engine sources are saturated with exactly
+these operators. Call-site counts over the 17 engine files (this session):
 
-1. **The per-feature cost map comes first.** Probe programs, each built at
-   `--optimize=size` on wasm-GC: (a) one literal `ppcre:scan`; (b) plus
-   `scan-to-strings` + registers; (c) plus `regex-replace-all` with `\1`
-   substitutions; (d) `create-scanner` over runtime input; (e) `split`.
-   Today's numbers measure ROUTING's usage only. Everything below is decided
-   by this map -- e.g. if scanner building (lexer -> parser -> converter ->
-   optimizer -> closure compiler) dominates and is live even for (a), the
-   shaking levers cannot pay and only 4/5 can.
-2. **CLOS-aware shaking (`.todo/290`'s lever) on a LIVE engine.** How much of
-   the node-class/method surface is reachable from ONE used entry point?
-   Measure against the 823,589 B zero-reference ceiling; expect much less
-   yield here, since building any scanner walks the whole pipeline. Measure,
-   do not assume.
-3. **`LibraryDefunPruner` over ASDF-spliced third-party trees.** Today the
-   pruner covers only rontolisp's own bundled libraries
-   (`.kb/library-defun-pruning.md`); extending it to spliced trees is
-   defun-level only, and cl-ppcre's core is CLOS-anchored, so expect modest
-   yield alone -- but it composes with 2 and helps every other library too.
-4. **An opt-in engine-subset substitution, `cl-ppcre/lite` in the todo-296
-   pattern.** A compact scanner -- no CLOS node tree, no closure compiler; a
-   direct matcher over a parsed tree -- for the common syntax subset
-   (literals, `[...]` classes incl. ranges/negation, `.`, the `* + ? {m,n}`
-   quantifiers incl. lazy variants, `^ $`, groups + alternation,
-   `\d \w \s \b` escapes, the `:case-insensitive-mode` keyword), SIGNALING at
-   `create-scanner` time on everything else (lookaround, backreferences,
-   properties, embedded-flag groups, filters, ...). The mechanism is already
-   built (above); the ENGINE and its corpus are the work, and the parity bar
-   is far higher than path templates: greedy/lazy backtracking order, class
-   edge cases, case folding, `scan-to-strings`/`regex-replace-all` register
-   semantics -- all pinned against the real engine on all four backends
-   before it may ship.
-5. **Compile-time lowering of LITERAL regexes into emitted code.** Not the
-   rejected compiler-macro route: the point would be that when EVERY `ppcre:`
-   call site in the program carries a literal regex, the lowered matchers are
-   emitted as code and NO runtime builder ships at all. Shares the
-   semantics/corpus work of 4; its advantage is that identical semantics need
-   no opt-in (behavior does not change, only bytes), its risk is the cliff --
-   one dynamic regex anywhere brings the whole engine back -- which must at
-   least be visible, not silent.
+| operator | sites | ~cost/site (todo-288 table) |
+| --- | ---: | ---: |
+| `nreverse` + `reverse` | 16 | ~7.2 KB |
+| `mapcar` | 6 | ~8.1 KB |
+| `char-equal`/`char=`-heavy scans, `schar`/`aref`/`char` | 45+38+24 | (already shared: `_arr_get`, ~0.2 KB) |
+| `map` | 4 | dispatch-shaped |
+| `count` | 4 | ~6-7 KB |
+| `concatenate` / `coerce` / `copy-seq` | 4+4+3 | dispatch-shaped |
+| `position` + `position-if` | 5 | ~4.9-6.7 KB |
+| `find` | 3 | ~5-7 KB |
+| `substitute` | 2 | ~7.7 KB |
+| `remove-if` / `replace` / `search` / `sort` | 1 each | ~7 KB |
 
-## Non-goals
+Frequency x cost puts the reverse family alone near 100 KB on this module, and
+the same inlining sits inside the 172 KB wrapper-catalog bucket (a `mapcar`
+wrapper body re-inlines `reverse`, ...). **Implementing `.todo/288`'s
+shared-callee outlining is therefore THE lever for this item** -- it shrinks
+every library-carrying module, with cl-ppcre the headline beneficiary. The
+mechanics found this session for whoever implements it: the JVM injects
+`%subseq-runtime` in `JvmLispCompiler` (~line 818) right after
+`BuiltinFunctionWrappers.generate`; site routing is per-backend
+(`Jvm/WasmSubseqCompiler` consult `ctx.functions.containsKey`); the wasm
+backend has NO injection site for the subseq helper today (its array arm
+reaches the helper only if the program defines it) -- locating/creating the
+wasm-side wrapper+helper injection loop is the first mechanical step. The JVM
+array-runtime gate (`programUsesAnyArrayOp`, ~120 KB if mis-fired) applies to
+every new helper whose body names `aref`/`%aset`.
 
-- Changing what plain `(ql:quickload "cl-ppcre")` loads. The verbatim library
-  stays the default; substitution is opt-in only (the todo-295/296
-  principle).
-- Re-opening the routing case: a routed application opts into
-  `tiny-routes/lite`, not into anything here.
-- Shrinking the clack base itself (`.todo/290`).
+## What shaking CANNOT do (settled this session; do not re-derive)
 
-## Done when
+- The pruner already covers ASDF-spliced third-party trees (the filed item's
+  premise was stale); its residual on a USING app is ~zero -- the per-feature
+  map's tiny increments (+286 B for scan) are it working.
+- CLOS-aware shaking cannot pay on a USING app: the 27 defgenerics ARE the
+  build pipeline and the parse tree is runtime data, so every node class is
+  instantiable from `create-scanner` and every method reachable. The 823,589 B
+  zero-reference ceiling collapses once one entry point is real. Full argument
+  in the `.kb` section.
+- Parse-half/match-half splitting and the compiler macros: settled by
+  todo-295, still true.
+- Compile-time lowering of literal regexes (old lever 5): un-taken -- identical
+  semantics cannot be promised beyond a pinned subset, and one dynamic regex
+  anywhere silently brings the engine back.
 
-- The per-feature cost map (lever 1) exists and is recorded in
-  `.kb/optimize-dead-code-elimination.md` beside the routing numbers.
-- Each lever above has a measured yield or a recorded reason it cannot pay.
-- Whatever ships meets the todo-296 bar: identical-or-loud, one corpus pinned
-  against the real engine on all four backends, opt-in spelling documented in
-  the asdf-systems guide (en+ja) -- or the item is re-filed with the
-  measurements and a chosen direction.
+## Residual non-code observations (record, low yield)
+
+- Data section 50,439 B total; the string blob is 28,184 B (whether its dead
+  ranges stand down via `usesIntern` was not isolated -- the engine's parser
+  interns for named groups).
+- Any module loading the real engine is EH-mode (`-W exceptions=y`): the
+  scanner closures' `return-from scan` crosses the `advance-fn`/`match-fn`
+  lambdas. Intrinsic to the engine's shape; also the trigger of the `.todo/192`
+  fourth hole (below).
+
+## Found along the way: the compile paths corrupt the real engine's scanners
+
+The probe sequences exposed a compile-path correctness hole, recorded as
+`.todo/192`'s FOURTH hole with a ppcre-free reproducer: a `return-from`
+crossing a lambda boundary skips the special-binding restore, so after any
+failing/looping scan over a register regex (`all-matches`, `regex-replace-all`,
+`split`), a later zero-register scan returns stale `*reg-starts*`
+(`(1 4 #(NIL) #(NIL))` where the interpreter answers `(1 4 #() #())`).
+`ClPpcreE2eTest` passes only by case order. Fixing it needs the save-stack
+design sketched in 192; until then the interpreter is the only backend that
+runs the real engine's scan sequences per the standard.
+
+## The opt-in `cl-ppcre/lite`: built, parity-proven, REJECTED (2026-08-08)
+
+The original lever 4 was fully built during this session (todo-296 delivery
+mechanism: an `AsdOverrides` replacement `.asd` adding the secondary system, a
+`ShimLibraries` leaf-module substitution carrying a CLOS-free
+special-variable-free CPS backtracking engine, co-load refusal, a 194-row
+corpus generated from and pinned against the real engine, 4-backend E2E green)
+and measured: a five-feature probe was 135,476 B raw / 43,893 gzip against the
+real engine's 770,201 / 183,182, zero-reference 542 B, no EH mode. **The user
+rejected it the same day -- the wanted outcome is a smaller module for the
+REAL engine, not a substitute -- and the implementation was reverted without
+ever being committed.** Recorded so a subset engine is not re-proposed as this
+item's answer; the numbers above stand as the measured cost of one. (If a
+subset engine is ever wanted after all, the corpus method is the part worth
+repeating: generate expectations from the real engine on the interpreter --
+the only backend that runs its scan sequences per the standard until the
+`.todo/192` fourth hole is fixed -- and pin both engines to the same rows.)
+
+## Done when (redirected)
+
+- `.todo/288`'s shared-callee outlining lands (its own item; its "Done when"
+  governs) and the cl-ppcre probes re-measured here show the yield -- or a
+  measured reason it cannot pay on this module is recorded.
+- The `.kb` cost-map section stays consistent with whatever lands.

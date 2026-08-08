@@ -691,6 +691,86 @@ and therefore cannot drop the engine the way a routed one now can — is
 `.todo/297`, which starts from the numbers above (the engine's measured module
 share, the 823,589 B zero-reference anchor, and the two settled non-levers).
 
+## What a cl-ppcre-USING application costs, per feature (todo-297, 2026-08-08)
+
+Per-feature probes, each `(ql:quickload "cl-ppcre")` plus the named calls,
+compiled to wasm-GC Preview 1 at `--optimize=size` and node/wasmtime-verified
+(**EH mode: quickloading cl-ppcre alone puts the module in EH mode**, so both
+wasm run lines need `-W exceptions=y`); gzip = `gzip -9 -n`:
+
+| probe | raw | gzip | Δ raw over zero-reference |
+| --- | --- | --- | --- |
+| no-ppcre baseline (`(print "loaded")`) | 505 | 385 | — |
+| zero-reference (quickload only, no call) | 747,882 | 175,635 | 0 |
+| (a) one literal `ppcre:scan` | 748,168 | 175,749 | +286 |
+| (b) = a + `scan-to-strings` (register groups) | 757,373 | 178,905 | +9,491 |
+| (c) = b + `regex-replace-all` with `\1` | 757,664 | 179,051 | +9,782 |
+| (d) `create-scanner` over runtime input + `scan` | 748,060 | 175,755 | +178 |
+| (e) `split` | 761,050 | 179,785 | +13,168 |
+| all five together | 770,201 | 183,182 | +22,319 |
+
+(At `--optimize` instead of `=size`: zero-reference 859,012, probe (a)
+859,297 — the same +285 B story. Consistent with the routing session's
+823,589 B zero-reference anchor, which was a delta between two routed modules
+at `--optimize`.)
+
+**The map's verdict is the branch the item predicted: scanner building is live
+even for (a), so the whole engine cost IS the anchor and the shaking levers
+cannot pay.** A single literal `scan` costs +286 B over merely loading the
+engine; the spread between the cheapest and the richest API usage is 22 KB on a
+~748 KB module. Consequences, lever by lever (the todo-297 numbering):
+
+- **Lever 3 (defun-level pruning over spliced trees) is ALREADY DEPLOYED and
+  is why the increments are this small.** `LibraryDefunPruner` has covered
+  ASDF-spliced third-party trees since 2026-07-27 (`.kb/library-defun-pruning.md`,
+  "Prunable set, part 2"; measured -2.8% on a cl-ppcre demo) — the todo's
+  "today the pruner covers only rontolisp's own bundled libraries" premise was
+  stale when filed. Behaviorally visible above: probe (a) does not pay split's
+  +13,168 or the replace machinery — the unused API surface leaves at the AST
+  level (and the funcall gate + shaker behind it). Its residual on a USING app
+  is ~zero: what stays is CLOS-anchored, not defun-anchored.
+- **Lever 2 (CLOS-aware shaking) cannot pay on a USING app.** The engine's 27
+  defgenerics (`convert-compound-parse-tree`/`convert-simple-parse-tree` keyed
+  by parse-tree token, the `flatten`/`gather-strings`/`compute-min-rest`/
+  `compute-offsets`/`start-anchored-p`/`end-string-aux` optimize walkers,
+  `create-matcher-aux` + the seven repetition-closures matcher builders,
+  `copy-regex`/`regex-length`/`case-mode`/..., and the `scan`/`create-scanner`
+  API generics themselves) ARE the build pipeline. A method-aware reachability
+  from any one used entry point keeps essentially all of them, because the
+  parse tree is runtime data — every node class is instantiable from
+  `create-scanner`, so every method is reachable. The only method surface a
+  scan-only app could shed is the replace family's
+  (`build-replacement-template`, a few KB) — against a ~748 KB live core. The
+  823,589 B zero-reference ceiling collapses to noise the moment one entry
+  point is real. (For a program that loads the engine but never calls it, the
+  answer is not a shaker — it is not loading the engine; that is the solved
+  todo-296 routing case.)
+- **What CAN move a module that keeps the REAL engine is code DENSITY, not
+  shaking** (user-redirected goal, 2026-08-08): the probe's wasm composition
+  is 93% code section (696,108 B in 863 functions, five of them 93 KB
+  together), and the diagnosed mechanism is `.todo/288`'s per-site
+  sequence-dispatch inlining — the per-method profile, the operator
+  frequency×cost table and the injection mechanics are recorded in
+  `.todo/297`, which now rides on 288. An opt-in engine subset in the
+  todo-296 pattern was built, parity-pinned (a five-feature probe was
+  135,476 B raw / 43,893 gzip against the real engine's 770,201 / 183,182,
+  zero-reference 542 B, no EH mode — the numbers stand as the measured cost
+  of a subset engine) and then REJECTED by user decision the same day; the
+  record is in `.todo/297`. Lever 5 (compile-time lowering of
+  literal regexes so no runtime builder ships) stays un-taken: identical
+  semantics cannot be promised beyond a pinned subset, and the
+  one-dynamic-regex cliff brings the whole engine back silently.
+
+**A finding these probes surfaced, distinct from size:** running the map's
+probe sequences exposed a compile-path correctness hole — a `return-from`
+crossing a lambda boundary skips the special-binding restore, which corrupts
+cl-ppcre's own scanners (a zero-register scan after a failing register-regex
+loop returns stale `*reg-starts*`; interpreter correct, JVM + both wasm-GC
+wrong). Reproducer, mechanism and the reason `ClPpcreE2eTest` still passes (case
+order) are recorded in `.todo/192` (fourth hole). Until it is fixed, the
+interpreter is the only backend that runs the real engine's scan SEQUENCES per
+the standard.
+
 ## JVM
 
 The counterpart post-pass is `am.ik.jvm.JvmClassShaker`, run at the end of `JvmLispCompiler.compile`. It parses the finished class, builds the call graph from the `invoke*` constant-pool immediates, keeps methods reachable from `main` (plus `_apply` as an extra root when the program uses `java:` interop — the embedded bridge looks `_apply` up REFLECTIVELY, an edge bytecode cannot show), drops unreachable methods and any static field only they referenced, and **compacts the constant pool**, rewriting every CP index immediate in the surviving bytecode in place (sizes never change: u2 stays u2, an `ldc` u1 index only shrinks because compaction preserves order — so exception-table pcs and switch padding stay valid; no method renumbering is needed since JVM methods are referenced by name). Dispatch methods keep eval/funcall/`#'` targets alive exactly as on WASM. The shaker throws on anything it does not recognize (unknown opcode/constant tag, any attribute other than a single `Code` per method) rather than emit a corrupt class; `fact` drops ~46 KB -> ~4.6 KB.

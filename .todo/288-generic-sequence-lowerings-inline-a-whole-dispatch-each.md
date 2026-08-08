@@ -5,6 +5,15 @@ Difficulty: Medium
 Split out of todo-276, whose own five items are closed. What is left of that item's
 "wasm-GC modules grew several-fold" measurement is ONE mechanism, and this is it.
 
+**2026-08-08: this item is now also the main lever of `.todo/297`** (shrinking a
+module that loads the REAL cl-ppcre, a user-redirected goal): the engine probe is
+748,168 B at `--optimize=size` and 93% of it is the code section, with the same
+per-site dispatch inlining this item describes as the diagnosed mechanism --
+per-method profile, operator frequency x cost table (the reverse family alone is
+~100 KB there) and the injection-mechanics notes (JVM injects `%subseq-runtime` in
+`JvmLispCompiler` ~818; the WASM backend has NO helper-injection site yet and needs
+one) are recorded in `.todo/297`. Re-measure its probes when this lands.
+
 ## The finding
 
 A program that takes any function as a value carries the whole
