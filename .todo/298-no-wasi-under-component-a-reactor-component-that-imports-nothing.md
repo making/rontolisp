@@ -143,9 +143,48 @@ reassuring as it sounds.
    component's entire surface is `wasi:http`. The spike silently ignored the flag
    there (`noWasi && !serve`); the real thing should name both flags and refuse.
 
-7. **`--no-gc --component`** already is a reactor and must keep `--no-wasi` a
-   no-op (it goes through `NoGcWasmCompiler`, so nothing here touches it) --
-   worth an assertion so the two reactor paths cannot drift.
+7. **`--no-gc` ignores `--no-wasi` entirely, and one `print` is what that
+   costs.** The flag never reaches the scalar backend
+   (`new NoGcWasmCompiler(optimize, simd, component)` -- no `noWasi`
+   parameter), so adding it changes nothing at all. Measured byte-for-byte on
+   2026-08-09, `--optimize`, one `(defun f (n) (* n 2))` plus a `:s64`
+   `wasm-export`:
+
+   | shape | `--no-gc ...` | `--no-gc --no-wasi ...` |
+   | --- | --- | --- |
+   | Preview 1, printing | 581 B | 581 B (identical) |
+   | `--component`, print-free | 91 B | 91 B (identical) |
+   | `--component`, printing | 2,036 B | 2,036 B (identical) |
+
+   For a **print-free** program the no-op is correct and there is nothing to
+   do: `--no-gc --component` is already the ideal shape -- 91 B, ONE core
+   module, zero imports, `export f: func(p0: s64) -> s64` lifted **sync**, and
+   `jco transpile` output (88 KB) that runs on plain `node` with no shim
+   (`m.f(21n)` -> `42n`).
+
+   Adding a single `(print n)` inside the export body loses all four
+   properties at once: 2,036 B, **four** core modules (core + the
+   shim/bridge/fixup print micro-adapter), `wasi:cli/{types,stdout}` imported,
+   and -- because only an async-typed task may block -- the export becomes
+   `export f: async func(...)`. Downstream that is the expensive half: jco's
+   glue goes 88 KB -> 219 KB and the output now imports
+   `@bytecodealliance/preview3-shim/cli`, so it no longer runs on bare node.
+
+   So `--no-wasi` DOES have work to do here, and it is the GC path's contract
+   applied unchanged: `fd_write` is a SINK, output is discarded, nothing traps
+   (`.kb/wasm-export-no-wasi.md`). On Preview 1 that replaces the scalar
+   backend's one `wasi_snapshot_preview1.fd_write` import (the
+   `__write_stdout` seam) with the sink body. Under `--component` it lets
+   `NoGcWasmComponentBuilder` skip the whole `printUsed` branch --
+   `IMPORT_BLOCK_PRINT`, the three fixed modules, the lowering -- and, since
+   nothing in the module can block any more, **lift the exports sync again**:
+   a printing program collapses back onto the print-free shape rather than
+   merely losing its imports. The input asymmetry is untouched: this is
+   output-only, exactly as on the GC path.
+
+   Do this in the same pass as the GC half, not after it. The two reactor
+   paths answer the same question ("what does a module with no WASI do when it
+   prints?") and the answer must not differ between them.
 
 8. **`WasmExportCompilerTest.noWasiIsIgnoredInComponentMode` passes vacuously.**
    It asserts the ASCII `wasi_snapshot_preview1` appears somewhere in the
@@ -177,6 +216,9 @@ reassuring as it sounds.
 - `--component` (no `--no-wasi`) and `--no-wasi` (no `--component`) outputs stay
   byte-identical -- both were verified in the spike and are the cheap regression
   gate.
+- A **printing** `--no-gc --no-wasi --component` build has one core module, no
+  imports and a SYNC export -- i.e. it matches the print-free build's shape --
+  and its jco output runs on bare `node` with no preview-shim dependency.
 - `wasm-tools component wit` on a `--component --no-wasi` build shows no `import`
   line, **with and without `--optimize`**, for: a scalar export, a `:string`
   export, the httpbin worker, and `examples/net/httpbin-clack.lisp`.
