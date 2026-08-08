@@ -139,9 +139,13 @@ A complete, copy-paste runnable Node + browser example is in the
 
 The WASI import slots are filled with internal stubs so every function index
 stays fixed (no other codegen changes). This mode is for **pure-compute**
-exports: any INPUT, file, time or `random` call (`read`/`open`/`uiop:getenv`/
+exports: any INPUT, time or `random` call (`read`/`uiop:getenv`/
 `get-universal-time`/`random`, including from a top-level form) hits a stub and
-**traps**, because a stub could only answer by inventing data.
+**traps**, because a stub could only answer by inventing data. The file-opening
+forms are the diagnosable half of that rule: `with-open-file` and `open` compile
+to stubs that **signal a catchable error** ("requires WASI; a `--no-wasi` module
+has no filesystem") instead of trapping, so a library whose file-loading branch
+is dead code still compiles and runs.
 
 Output is the exception. `print`, `format t` and everything else that writes to
 standard output or standard error go to a **sink**: a reactor host hands the

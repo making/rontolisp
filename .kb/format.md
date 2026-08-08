@@ -166,13 +166,18 @@ resource, `format-render-slash.lisp`, and `withFormatRenderer` appends either it
 or `format-render-slash-stub.lisp` -- never both, never neither, since
 `%fmt-directive`'s `#\/` arm calls the name unconditionally.
 
-**Why**: that arm's `find-symbol`/`intern`/`fboundp` can name ANY function, which
-is precisely the condition under which `--optimize`'s funcall-dispatch gate has to
-keep every function dispatchable (`.kb/optimize-dead-code-elimination.md`). The
-renderer is spliced into every program that formats a computed control, so ONE
+**Why**: that arm resolves a function out of a CONTROL STRING -- runtime data --
+which is precisely the condition under which `--optimize`'s funcall-dispatch gate
+has to keep every function dispatchable (`.kb/optimize-dead-code-elimination.md`).
+The renderer is spliced into every program that formats a computed control, so ONE
 directive's arm was holding the gate open for every library program: with it
 split out, a `(ql:quickload "split-sequence")` module went 619,722 -> 234,745
-(**-62%**).
+(**-62%**). Since the 2026-08-08 gate split (an `intern`/`find-symbol` no longer
+bails by itself), the arm's presence is signalled to the gate by NAME:
+`FormatRenderer.FUNCTION_DESIGNATOR` (`%fmt-function-designator`, defined only by
+the real arm, never by the stub) is in `RuntimeNameProducers`' trigger set, so
+injecting the arm still keeps every function dispatchable -- by design, not as a
+side effect of the operators inside it.
 
 **The gate**: `FormatRenderer.namesFunctionDesignator` -- does any STRING LITERAL
 in the program (post-splice, post-prune) spell a `~/name/` directive -- plus

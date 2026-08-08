@@ -7,10 +7,10 @@ on Cloudflare Workers. Each directory is a complete, independent Worker project:
 | Directory | What it is | Module | Host glue |
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
-| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 1.65 MB (**351 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
-| [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **414 KB** (132 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
-| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 4× the module, because the whole of clack and lack ships inside it. | 1.69 MB (**367 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (429 KB) | 49 hand-written lines + 293 KB of generated glue |
+| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 503 KB (**138 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
+| [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **243 KB** (74 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
+| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.1× the module, because clack and lack (tree-shaken) ship inside it. | 522 KB (**143 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (255 KB) | 49 hand-written lines + 293 KB of generated glue |
 
 ## Which one should I copy?
 
@@ -30,8 +30,8 @@ the body handling and the second `clackup` target removed.
 program than save the space. It runs the *same application* as `httpbin/` — the
 same text, the same envelope, the same `src/index.js` — and the only difference
 is that `clack:clackup` installs the adapter instead of the program carrying it,
-for 2.8× the compressed module. Measured there: the per-request cost is
-identical; what clack costs is module size and isolate startup.
+for 1.9× the compressed module. Measured there: the per-request cost is
+identical; what clack costs is module size and a little isolate startup.
 
 `httpbin-component/` answers a question rather than being a recommendation:
 *wouldn't the component model be simpler?* For the string marshalling, yes — see
@@ -149,11 +149,13 @@ All five were deployed to the real edge and verified there, not only under
 | `hello-clack` | 1608.77 KiB | **358.27 KiB** | 30 ms |
 | `httpbin-clack` | 1654.60 KiB | **371.94 KiB** | 26 ms |
 
-\* measured before `httpbin/` became a Clack application with a hand-written
-adapter, which grew its module. The two rows have not been re-deployed since;
-locally that module is now **413.6 KiB / 132.3 KiB gzip**, and the component
-build's three core modules **429 KB**. Startup time is only reported by a real
-`wrangler deploy`, so those two cells stand until the next one.
+\* the whole table records the last real deploys, and every module has shrunk
+since — most recently by the 2026-08-08 dispatch-gate refinement, which halved
+the two clack builds. Locally the modules are now `httpbin` **243 KiB / 74 KiB
+gzip**, `httpbin-clack` **522 KiB / 143 KiB gzip**, `hello-clack` **503 KiB /
+138 KiB gzip**, and the component build's three core modules **255 KB**. Startup
+time is only reported by a real `wrangler deploy`, so those cells stand until
+the next one.
 
 The gzip column is the one that counts: the Worker size limit applies to the
 compressed bundle, so even the component build sits well under 5% of the free

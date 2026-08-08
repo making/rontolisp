@@ -2661,11 +2661,18 @@ public final class JvmLispCompiler implements LispCompiler {
 				// runtime-interned symbol carries that spelling, so an interned ALIAS
 				// reaches the function just as its canonical name does.
 				int colon = name.lastIndexOf(':');
-				if (cp.hasStringConstant(name)
+				// (intern "EX-FN" :pkg) spells only the MEMBER name at compile time; the
+				// run time assembles the qualified one. A STRING literal lands in the
+				// pool FRAMED (LispString.literal(), quotes included), so both the
+				// member and the full name are probed in that spelling too -- (intern
+				// "RUN" pkg) is how clack's handler protocol resolves its entry point.
+				// The ":member" spelling is a keyword designator (uiop:symbol-call :pkg
+				// :member).
+				String member = name.substring(colon + 1);
+				if (cp.hasStringConstant(name) || cp.hasStringConstant("\"" + name + "\"")
 						|| (q > 0 && cp.hasStringConstant(name.substring(0, q) + name.substring(q + 1)))
-						// (intern "EX-FN" :pkg) spells only the MEMBER name at compile
-						// time; the run time assembles the qualified one.
-						|| (colon >= 0 && cp.hasStringConstant(name.substring(colon + 1)))) {
+						|| (colon >= 0 && cp.hasStringConstant(member)) || cp.hasStringConstant("\"" + member + "\"")
+						|| cp.hasStringConstant(":" + member)) {
 					dispatchable.add(entry.getValue().funcId());
 				}
 			}
@@ -2680,9 +2687,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	/**
 	 * Whether the program can produce a function NAME this compile never sees spelled out
 	 * -- in which case {@link #dispatchableFuncIds} must keep every function
-	 * dispatchable. The WASM twin is {@code WasmLispCompiler.anyNameResolvable} and the
-	 * two lists must stay identical, or the backends disagree about which program still
-	 * resolves a run-time-built designator.
+	 * dispatchable. Only the data evaluators ({@code eval}/{@code read}/
+	 * {@code read-from-string}/{@code load}) answer yes; the symbol builders
+	 * ({@code intern}, {@code find-symbol}, ...) are covered by the probes instead -- see
+	 * the WASM twin {@code WasmLispCompiler.anyNameResolvable}, whose doc carries the
+	 * reasoning. The two trigger lists must stay identical, or the backends disagree
+	 * about which program still resolves a run-time-built designator.
 	 * @param program the program, after every AST pass
 	 * @param usesRead whether the reader runtime is emitted
 	 * @param usesLoad whether a runtime load survived the inliner

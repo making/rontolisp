@@ -164,22 +164,25 @@ the SAME application as `examples/cloudflare-workers/httpbin-clack`
 (`net/httpbin-clack.lisp` verbatim down to `app`, pinned by the `diff` in its
 README) with the SAME envelope (one `src/index.js`, byte-identical between the
 two directories). The pair is therefore a controlled measurement of what clack
-costs on a reactor, and the answer is startup and size only — node 24, same
-machine, `--no-wasi --optimize`:
+costs on a reactor, and the answer is size and a little startup — node 24, same
+machine, `--no-wasi --optimize`, re-measured 2026-08-08 after the dispatch-gate
+refinement halved the clack build (`.kb/optimize-dead-code-elimination.md`,
+"The symbol BUILDERS no longer bail"; the clack column stood at 1,691,678 B /
+376,239 B gzip with a 19.4 ms `_initialize` before it):
 
 | | hand-written adapter | `clackup` + clack |
 | --- | --- | --- |
-| module | 423,536 B / 135,519 B gzip | 1,691,678 B / 376,239 B gzip |
-| `_initialize`, cold | 4.5 ms | 19.4 ms |
-| warm `GET` / `POST` | 0.028 / 0.048 ms | 0.028 / 0.049 ms |
+| module | 248,956 B / 76,076 B gzip | 534,777 B / 146,707 B gzip |
+| `_initialize`, cold | 4.5 ms | 4.8 ms |
+| warm `GET` / `POST` | 0.023 / 0.038 ms | 0.024 / 0.039 ms |
 
-The hand-written half costs ~140 KB more than the pre-Clack Worker handler that
-directory used to carry (283,200 B), because naming `%http-make-env` splices
-`http-server.lisp` — env builder, response normalizer, and the buffered
-`:raw-body` Gray stream (`HttpServerLibrary.referencesBufferedBody` keeps that
-half when the program mentions `%http-body-stream`). That is the price of the
-application being a portable Clack application, and it is about a third of what
-clack costs.
+The hand-written half still pays for being a PORTABLE Clack application: naming
+`%http-make-env` splices `http-server.lisp` — env builder, response normalizer,
+and the buffered `:raw-body` Gray stream
+(`HttpServerLibrary.referencesBufferedBody` keeps that half when the program
+mentions `%http-body-stream`). Measured when that shape landed (both builds were
+roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
+(283,200 B).
 
 - `handle` is `(app request-json) -> response-json`. It converts nothing itself:
   it builds the raw tuple and calls `rontolisp::%http-make-env` /
@@ -281,7 +284,9 @@ to carry, so the "it still serves for real" leg is pinned on the real file
 rather than on a copy.
 
 Measured on the deployed Worker when `clackup` replaced the hand-written
-`wasm-export` + `defun` (node 24, same machine, `--no-wasi --optimize`): the
+`wasm-export` + `defun` (node 24, same machine, `--no-wasi --optimize`;
+absolute sizes predate the 2026-08-08 gate refinement that later halved the
+build — the +9% ratio is what this paragraph records): the
 module grew 1,575,467 -> 1,691,678 B raw (342,761 -> 373,999 B gzip, +9%) and
 `_initialize` went 23 -> 56 ms (median of five runs each), while the per-request cost did not move
 (warm `GET` 0.071 -> 0.068 ms, warm `POST` 0.121 ms both). So `clackup` is a

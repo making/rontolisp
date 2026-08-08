@@ -70,6 +70,16 @@ public final class FormatRenderer {
 	 */
 	public static final String NAME_PREFIX = "%FMT-";
 
+	/**
+	 * The {@code ~/name/} designator resolver, defined ONLY by the real arm
+	 * ({@link #functionDesignatorDefuns()}), never by the stub. Its presence in a program
+	 * is therefore exactly "this program resolves function names out of control strings
+	 * at run time", which is what {@code compiler/RuntimeNameProducers} keys the
+	 * funcall-dispatch bail on -- a control string is runtime data, so no probe of the
+	 * module's constants can bound what the arm resolves.
+	 */
+	public static final String FUNCTION_DESIGNATOR = "%FMT-FUNCTION-DESIGNATOR";
+
 	@Nullable private static volatile List<LispVal> forms;
 
 	@Nullable private static volatile List<LispVal> slashForms;

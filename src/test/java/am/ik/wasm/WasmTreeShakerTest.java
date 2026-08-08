@@ -140,21 +140,30 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
-	void keywordInternDoesNotHoldTheFuncallDispatchGateOpen() {
-		// (intern NAME :keyword) lowers to a leading-colon spelling
-		// (LispMacroExpander.internKeywordForm), and no _lookup row key can begin with a
-		// colon (a keyword can never name a defun), so the funcall-dispatch gate stays
-		// exact and the builtin wrappers shake out. The same intern WITHOUT the keyword
-		// package can forge any function name, so it must keep every wrapper
-		// dispatchable.
+	void internDoesNotHoldTheFuncallDispatchGateOpen() {
+		// A symbol BUILDER no longer bails the funcall-dispatch gate: whatever an intern
+		// can produce that resolves is a spelling the module holds, and the
+		// dispatchableFuncIds probes read every such spelling (symbol, framed string
+		// literal, keyword, alias, bare member). A name forged out of computed pieces is
+		// the LibraryDefunPruner carve-out -- the ordinary undefined-function error --
+		// so the computed-intern module shakes exactly like the keyword-intern one.
+		// Only the data evaluators (eval/read/read-from-string/load) still keep every
+		// function dispatchable, because their names arrive from OUTSIDE the module.
 		// The funcall keeps the dispatch machinery emitted at all -- without one there
-		// are no ladders and both modules would be tiny whatever the gate decides.
+		// are no ladders and every module would be tiny whatever the gate decides.
 		String funcall = "(defun f () 1) (print (funcall 'f)) ";
 		String keyword = funcall + "(print (eq (intern (string-upcase \"post\") :keyword) :post))";
 		String forging = funcall + "(print (intern (string-upcase \"post\")))";
+		String reading = funcall + "(print (eval (read)))";
 		byte[] gated = compile(keyword, false, OptimizeLevel.DEFAULT);
-		byte[] bailed = compile(forging, false, OptimizeLevel.DEFAULT);
+		byte[] computed = compile(forging, false, OptimizeLevel.DEFAULT);
+		byte[] bailed = compile(reading, false, OptimizeLevel.DEFAULT);
 		Module.parse(gated).assertWellFormed();
+		Module.parse(computed).assertWellFormed();
+		// The computed intern shakes like the keyword one (within the few hundred bytes
+		// its own string handling costs)...
+		assertThat((double) computed.length).isLessThan(gated.length * 1.5);
+		// ...while a data evaluator still keeps every wrapper dispatchable.
 		assertThat(gated.length).isLessThan(bailed.length / 2);
 	}
 

@@ -83,14 +83,16 @@ served request sees**. All that is left to write is the JSON envelope.
 | --- | --- | --- | --- |
 | The application | a Clack application | **the same file**, verbatim | a `rontolisp:http-handler` handler (also the Clack shapes) |
 | How it is installed | thirty hand-written lines | `clack:clackup :server :cloudflare-workers` | `(rontolisp:http-handler 'handle 8080)`, blocking on a socket |
-| clack in the module | **none** | the whole of clack and lack | none |
-| Module | **414 KB** (132 KB gzip) | 1.61 MB (367 KB gzip) | n/a, it is a server |
+| clack in the module | **none** | what the tree-shaker keeps of clack and lack | none |
+| Module | **243 KB** (74 KB gzip) | 522 KB (143 KB gzip) | n/a, it is a server |
 
 So this directory and `../httpbin-clack` ship *the same application* and answer
 *the same JSON*; `src/index.js` is byte-identical between them. What differs is
-only who builds the Clack environment — and that is worth **4× the module** raw,
-2.8× compressed, which
-is what this directory exists to show. Copy `../httpbin-clack` when you want the
+only who builds the Clack environment — and that is worth **2.1× the module**
+raw, 1.9× compressed, which is what this directory exists to show. (It used to
+be 4×, until the `--optimize` funcall-dispatch gate learned to stay closed
+across clack's handler discovery and to drop its dead file-loader — the clack
+build shrank by more than half.) Copy `../httpbin-clack` when you want the
 program to look like every other Clack program; copy this one when the module
 size matters more than that.
 
@@ -101,7 +103,7 @@ size matters more than that.
 | [`app.lisp`](app.lisp) | **The whole program.** The Clack application (verbatim from upstream) plus the reactor adapter. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`, including the string boundary. |
-| `src/app.wasm` | The compiled module (~414 KB). A build product — run `./build.sh` first. |
+| `src/app.wasm` | The compiled module (~243 KB). A build product — run `./build.sh` first. |
 
 ## How it works
 
@@ -300,40 +302,41 @@ diff of two backends' output will show it.
 
 `--optimize` is not optional here. A Worker bundle has a size limit (see
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)),
-and the tree-shaker is what keeps this module at **423,536 B** instead of
-**813,639 B** — it ships only the functions the program actually reaches, for no
-behaviour difference. Compressed it is **135,519 B**, about 4% of the free plan's
-3 MB.
+and the tree-shaker is what keeps this module at **248,956 B** instead of
+**521,925 B** — it ships only the functions the program actually reaches, for no
+behaviour difference. Compressed it is **76,076 B**, about 2.5% of the free
+plan's 3 MB.
 
-Measured on node 24 driving [`src/index.js`](src/index.js)'s boundary code
-against this exact `src/app.wasm`, next to `../httpbin-clack`'s — the same
-application, the same envelope, the same requests, `clackup` and clack instead of
-the hand-written adapter:
+Measured on node 24 (2026-08-08) driving [`src/index.js`](src/index.js)'s
+boundary code against this exact `src/app.wasm`, next to `../httpbin-clack`'s —
+the same application, the same envelope, the same requests, `clackup` and clack
+instead of the hand-written adapter:
 
 | | this | [`../httpbin-clack`](../httpbin-clack) |
 | --- | --- | --- |
 | imports | **zero** | zero |
-| module | **423,536 B** raw / **135,519 B** gzip | 1,691,678 B raw / 376,239 B gzip |
-| `WebAssembly.Module` compile | 0.6 ms | 1.9 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
-| `_initialize`, cold | **4.5 ms** | 19.4 ms — clack's entire load time, `clackup` included |
-| warm `GET /get` | 0.028 ms | 0.028 ms |
-| warm `POST /post` | 0.048 ms | 0.049 ms |
+| module | **248,956 B** raw / **76,076 B** gzip | 534,777 B raw / 146,707 B gzip |
+| `WebAssembly.Module` compile | 0.4 ms | 0.7 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
+| `_initialize`, cold | **4.5 ms** | 4.8 ms — clack's entire load time, `clackup` included |
+| warm `GET /get` | 0.023 ms | 0.024 ms |
+| warm `POST /post` | 0.038 ms | 0.039 ms |
 | linear memory after 44 000 requests | 262 144 B | 327 680 B |
 
 **The per-request cost is the same to three decimal places.** What clack costs on
-a reactor is module size and *startup* — and on Cloudflare startup is paid once
-per isolate, not once per request, which is why `../httpbin-clack` is a perfectly
-reasonable thing to deploy. This directory is the version to reach for when the
-4× module is the thing you cannot afford.
+a reactor is module size and a little startup — and on Cloudflare startup is paid
+once per isolate, not once per request, which is why `../httpbin-clack` is a
+perfectly reasonable thing to deploy. This directory is the version to reach for
+when the 2× module is the thing you cannot afford.
 
 Being a Clack application is not free either: the module carries
 `http-server.lisp` — the environment builder, the response normalizer and the
 buffered `:raw-body` Gray stream — which a handler taking a pre-parsed JSON hash
-table would not need. Measured against exactly that shape, this directory's
-previous one: 283,200 B raw, and a warm `POST` of 0.038 ms rather than 0.048 ms
-(the body now arrives as a stream `read-body` drains with `read-char`, instead of
-as a string field). That is the price of the application being portable, and it
-is about a third of what clack costs.
+table would not need. Measured against exactly that shape (this directory's
+previous one, back when both builds were roughly twice their current size):
+carrying the portable protocol cost about 140 KB and moved a warm `POST` from
+0.038 ms to 0.048 ms, because the body arrives as a stream `read-body` drains
+with `read-char` instead of as a string field. That is the price of the
+application being portable.
 
 ## Limitations
 
@@ -350,9 +353,10 @@ itself:
   to print for real, drop `--no-wasi`, supply a WASI shim, and call `_start`
   instead of `_initialize`.
 - **No filesystem.** Even with WASI shimmed, a Worker has no files:
-  `with-open-file` and a runtime `load` cannot work. A compile-time
-  `(load "...")` is fine — it is inlined into the module before it ever reaches
-  Cloudflare.
+  `with-open-file` and `open` compile to call-time error stubs under `--no-wasi`
+  (a catchable, self-describing error rather than a trap), and a runtime `load`
+  cannot work either. A compile-time `(load "...")` is fine — it is inlined into
+  the module before it ever reaches Cloudflare.
 - **No outgoing HTTP from the Lisp.** `rontolisp:fetch` needs a WASI HTTP host;
   a Worker has JavaScript's `fetch()` instead. Call it in `src/index.js` and pass
   the result into the handler.

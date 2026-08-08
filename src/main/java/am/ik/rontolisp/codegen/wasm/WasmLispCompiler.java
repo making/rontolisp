@@ -32,6 +32,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
+import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
@@ -1535,6 +1536,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
+		if (this.noWasi) {
+			// A --no-wasi module has no filesystem, so file-opening forms lower to
+			// call-time error stubs. First, so every scan below (usesRead/usesEval,
+			// EH mode, the funcall-dispatch gate) reads the program that is actually
+			// compiled: clack's dead (read)/(eval) file loader otherwise holds the
+			// gate open and pulls the reader+eval runtimes into every Worker module.
+			program = NoWasiFilesystemStubs.rewrite(program);
+		}
 		// rontolisp:await placement is checked on the raw forms; then every
 		// async-defun/async-lambda lowers to an ordinary defun/lambda over the
 		// %async-run primitive. On this backend %async-run runs the body immediately
@@ -4725,11 +4734,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				// runtime-interned symbol carries that spelling -- so an interned ALIAS
 				// reaches the defun just as its canonical name does.
 				int colon = name.lastIndexOf(':');
-				if (stringTable.isInterned(name)
+				// (intern "EX-FN" :pkg) spells only the MEMBER name at compile time; the
+				// run time assembles the qualified one. A STRING literal interns FRAMED
+				// (LispString.literal(), quotes included), so both the member and the
+				// full name are probed in that spelling too -- (intern "RUN" pkg) is how
+				// clack's handler protocol resolves its entry point. The ":member"
+				// spelling is a keyword designator (uiop:symbol-call :pkg :member).
+				String member = name.substring(colon + 1);
+				if (stringTable.isInterned(name) || stringTable.isInterned("\"" + name + "\"")
 						|| (q > 0 && stringTable.isInterned(name.substring(0, q) + name.substring(q + 1)))
-						// (intern "EX-FN" :pkg) spells only the MEMBER name at compile
-						// time; the run time assembles the qualified one.
-						|| (colon >= 0 && stringTable.isInterned(name.substring(colon + 1)))) {
+						|| (colon >= 0 && stringTable.isInterned(member))
+						|| stringTable.isInterned("\"" + member + "\"") || stringTable.isInterned(":" + member)) {
 					dispatchable.add(i);
 				}
 			}
@@ -4754,18 +4769,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * dispatchable, because {@code _lookup} may be asked for any of them.
 	 *
 	 * <p>
-	 * Two ways that happens, and both are TRIGGER-shaped rather than dataflow-shaped on
-	 * purpose: a dataflow answer would have to prove that no symbol out of one of these
-	 * reaches a funcall, and being wrong is a trap rather than a diagnosis.
-	 * <ul>
-	 * <li>the program evaluates data -- {@code eval}, {@code read},
+	 * Only the DATA EVALUATORS answer yes -- {@code eval}, {@code read},
 	 * {@code read-from-string}, a runtime {@code load}: {@code (eval (read))} calls a
-	 * function whose name exists only in the input;</li>
-	 * <li>the program builds a symbol -- {@code intern}, {@code find-symbol},
-	 * {@code make-symbol}, {@code symbol-function}, {@code fdefinition}, {@code fboundp},
-	 * {@code uiop:symbol-call}: the qualified name is assembled at run time out of a
-	 * package part and a member part, so neither half spells it.</li>
-	 * </ul>
+	 * function whose name exists only in the input, which no probe of the module's own
+	 * constants can cover. The symbol builders ({@code intern}, {@code find-symbol},
+	 * {@code uiop:symbol-call}, ...) no longer bail: whatever they can produce that
+	 * RESOLVES is a spelling the module holds, and {@link #dispatchableFuncIds} probes
+	 * every such spelling (symbol, framed string literal, keyword, alias, bare member). A
+	 * name forged out of computed pieces is {@code LibraryDefunPruner}'s documented
+	 * carve-out -- the ordinary undefined-function error, {@code --dynamic} to restore.
+	 * The trigger stays syntactic rather than dataflow-shaped on purpose: a dataflow
+	 * answer would have to prove no symbol out of {@code read} reaches a funcall, and
+	 * being wrong is a trap rather than a diagnosis.
 	 * @param program the program, after every AST pass
 	 * @param usesRead whether the reader runtime is emitted
 	 * @param usesLoad whether a runtime load survived the inliner

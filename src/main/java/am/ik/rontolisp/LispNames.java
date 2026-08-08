@@ -2692,9 +2692,12 @@ public final class LispNames {
 	 * which re-spells a symbol arriving in the caller's package as the bare base name the
 	 * dispatch arms quote. Generated as its own defun rather than inlined in each
 	 * dispatcher so that the ONE {@code intern} rontolisp itself puts in every such
-	 * program is a single, identifiable form -- {@code compiler/RuntimeNameProducers}
-	 * matches it structurally and does not read it as the program being able to forge a
-	 * function name ({@code .kb/optimize-dead-code-elimination.md}).
+	 * program is a single, identifiable form. (An {@code intern} no longer holds the
+	 * {@code --optimize} funcall-dispatch gate open at all --
+	 * {@code compiler/RuntimeNameProducers},
+	 * {@code .kb/optimize-dead-code-elimination.md} -- so the identifiability is history
+	 * rather than load-bearing now; the single defun stays because it is also simply
+	 * smaller than one inlined copy per dispatcher.)
 	 */
 	public static final String SLOT_NAME_KEY = "%SLOT-NAME-KEY";
 

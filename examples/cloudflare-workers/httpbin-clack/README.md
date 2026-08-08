@@ -65,15 +65,17 @@ directories.
 | The application | a Clack application | **the same file**, verbatim |
 | How it reaches the Worker | thirty hand-written lines and an explicit `wasm-export` | `clackup`, plus a `:server` designator and a synthesized export |
 | Reads as | a Worker program that happens to speak Clack | **every other Clack program** |
-| clack in the module | none | the whole of clack and lack |
-| Module | 414 KB raw / **132 KB gzip** | 1.61 MB raw / **367 KB gzip** |
+| clack in the module | none | what the tree-shaker keeps of clack and lack |
+| Module | 243 KB raw / **74 KB gzip** | 522 KB raw / **143 KB gzip** |
 
-367 KB gzip is about **12%** of the free plan's 3 MB bundle limit, so it fits
-with room — but it is **2.8×** the hand-written adapter compressed (4× raw), and that is the honest
-trade: you are paying for the whole of clack and lack to be in the module so that
-the file reads like an ordinary Clack program rather than like a Worker. The
-[cost table below](#what-it-costs) shows where that goes — module size and
-startup, not per-request time.
+143 KB gzip is about **4.7%** of the free plan's 3 MB bundle limit, so it fits
+with plenty of room — but it is **1.9×** the hand-written adapter compressed
+(2.1× raw), and that is the honest trade: you are paying for clack and lack to
+be in the module so that the file reads like an ordinary Clack program rather
+than like a Worker. (The factor used to be 4× raw, until `--optimize`'s
+funcall-dispatch gate learned to stay closed across clack's handler discovery —
+this build shrank by more than half.) The [cost table below](#what-it-costs)
+shows where the rest goes — module size, not per-request time.
 
 ## The endpoints
 
@@ -99,7 +101,7 @@ curl         http://localhost:8787/nope                   # 404
 | [`worker.lisp`](worker.lisp) | **The whole program.** `net/httpbin-clack.lisp` verbatim, with its `clackup` line's arguments changed. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` — same envelope, same boundary code, same file. |
-| `src/app.wasm` | The compiled module (~1.69 MB). A build product — run `./build.sh` first. |
+| `src/app.wasm` | The compiled module (~522 KB). A build product — run `./build.sh` first. |
 
 The directory used to split the application into an `app.lisp` and the transport
 into a `worker.lisp` and a `serve.lisp`, because the transport was a
@@ -188,8 +190,8 @@ present: a program can call `handle` from its own `wasm-export`ed function and
 never quickload clack. That is what the size table below should be read against,
 and [`../httpbin`](../httpbin) is that build on this exact application, with the
 handful of lines under `handle` written out rather than quickloaded:
-**423,536 B raw / 135,519 B gzip**. So the 1.69 MB this directory ships is not
-the adapter — it is clack and lack, which the program quickloads so that it
+**248,956 B raw / 76,076 B gzip**. So the extra ~286 KB this directory ships is
+not the adapter — it is clack and lack, which the program quickloads so that it
 stays byte-identical to the upstream example.
 
 ### It converts nothing
@@ -251,19 +253,19 @@ constructor; an object would have collapsed the duplicates.
 
 ## What it costs
 
-Measured on node 24 (V8, the same engine family as workerd) driving the
-byte-identical boundary code of [`src/index.js`](src/index.js) against each
+Measured on node 24 (V8, the same engine family as workerd, 2026-08-08) driving
+the byte-identical boundary code of [`src/index.js`](src/index.js) against each
 directory's `src/app.wasm`, over the same requests:
 
 | | `../httpbin` | this |
 | --- | --- | --- |
 | imports | zero | **zero** — the Worker instantiates with `{}`, no WASI shim |
 | exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why one `src/index.js` serves both |
-| module | 423,536 B raw / 135,519 B gzip | 1,691,678 B raw / **376,239 B gzip** |
-| `WebAssembly.Module` compile | 0.6 ms | 1.9 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
-| `_initialize`, cold | 4.5 ms | **19.4 ms** — clack's entire load time, `clackup` included |
-| warm `GET /get` | 0.028 ms | **0.028 ms** |
-| warm `POST /post` | 0.048 ms | **0.049 ms** |
+| module | 248,956 B raw / 76,076 B gzip | 534,777 B raw / **146,707 B gzip** |
+| `WebAssembly.Module` compile | 0.4 ms | 0.7 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
+| `_initialize`, cold | 4.5 ms | **4.8 ms** — clack's entire load time, `clackup` included |
+| warm `GET /get` | 0.023 ms | **0.024 ms** |
+| warm `POST /post` | 0.038 ms | **0.039 ms** |
 | linear memory after 44,000 requests | 262,144 B | 327,680 B |
 
 **The per-request rows are the same to three decimal places.** Everything clack
@@ -274,16 +276,18 @@ on Cloudflare startup is paid once per isolate, not once per request.
 measured when this directory switched from calling `handle` behind a hand-written
 export to calling `clackup`, the module grew 1,575,467 → 1,691,678 B (**+9%**)
 and `_initialize` roughly doubled, while warm `GET` and warm `POST` did not move
-at all.
+at all. (Both absolute sizes predate the 2026-08-08 dispatch-gate refinement
+that later halved this build; the +9% ratio is what the paragraph records.)
 
 Those per-request figures are the Lisp call plus the string boundary, with V8
 warm; the first call of a fresh isolate is ~40 ms while V8 tiers the module up.
 
-On the real edge, `wrangler deploy` reports **1654.60 KiB upload / 371.94 KiB
-gzip** and a **Worker Startup Time of 26 ms** (14 ms before `clackup`), and all
-five endpoints (plus the 405, the 404, the unparseable body and a
-percent-encoded path) answer correctly there — verified after deploying, not
-inferred. End-to-end
+On the real edge, `wrangler deploy` reported **1654.60 KiB upload / 371.94 KiB
+gzip** and a **Worker Startup Time of 26 ms** (14 ms before `clackup`) — measured
+before the module shrank to today's 522 KB; the next deploy will report the
+smaller bundle — and all five endpoints (plus the 405, the 404, the unparseable
+body and a percent-encoded path) answer correctly there — verified after
+deploying, not inferred. End-to-end
 `curl` from this side of the Pacific settles at 50-85 ms, which is network time:
 the Lisp share of it is the 0.05 ms above.
 
@@ -420,8 +424,9 @@ them.
 Everything below is the Worker sandbox or the `--no-wasi` build, and every one
 of them applies to [`../httpbin`](../httpbin/README.md#limitations) identically:
 no input, time or `random` in the Lisp (they trap; `print` and `format t` do
-not, but their output is discarded), no filesystem, no `rontolisp:fetch` (use
-JavaScript's `fetch()` in `src/index.js`).
+not, but their output is discarded), no filesystem (`with-open-file` and `open`
+signal a catchable error), no `rontolisp:fetch` (use JavaScript's `fetch()` in
+`src/index.js`).
 One more is specific to this directory: a runtime `(ql:quickload ...)` cannot
 work either — the two `ql:quickload` forms in `worker.lisp` are resolved at
 **compile** time and inlined into the module, which is why the first

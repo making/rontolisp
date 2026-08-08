@@ -132,14 +132,15 @@ class JvmClassShakerTest {
 	}
 
 	@Test
-	void keywordInternDoesNotHoldTheDispatchGateOpen() throws Exception {
-		// (intern NAME :keyword) spells its result ":NAME", and no _lookup row key can
-		// begin with a colon (a keyword can never name a defun), so the dispatch gate
-		// stays exact: an uncalled defun still shakes out while the runtime-interned
-		// keyword stays eq to its literal. A one-argument intern of the same computed
-		// name can forge any function name, so it keeps the uncalled defun alive -- and
-		// so does the keyword shape inside QUOTED data, where the intern symbol itself
-		// can be extracted and funcalled.
+	void internDoesNotHoldTheDispatchGateOpen() throws Exception {
+		// A symbol BUILDER no longer bails the dispatch gate: whatever an intern can
+		// produce that resolves is a spelling the class holds, and the
+		// dispatchableFuncIds probes read every such spelling (symbol, framed string
+		// literal, keyword, alias, bare member). A name forged out of computed pieces
+		// is the LibraryDefunPruner carve-out (the ordinary undefined-function error),
+		// so the computed intern and the quoted intern shape both leave UNUSED
+		// shakeable. Only the data evaluators (eval/read/read-from-string/load) still
+		// keep every function dispatchable -- their names arrive from OUTSIDE.
 		// The funcall keeps the dispatch machinery emitted at all -- without one there
 		// are no dispatch methods and UNUSED is dropped whatever the gate decides.
 		String prefix = "(defun unused (x) (car x)) (defun f () 1) (print (funcall 'f)) ";
@@ -148,9 +149,17 @@ class JvmClassShakerTest {
 		assertThat(declaredMethodNames(gated)).contains("F").doesNotContain("UNUSED");
 		assertThat(run(gated)).isEqualTo("1\nT");
 		byte[] forging = compile(prefix + "(print (intern (string-upcase \"post\")))", OptimizeLevel.DEFAULT);
-		assertThat(declaredMethodNames(forging)).contains("UNUSED");
+		assertThat(declaredMethodNames(forging)).doesNotContain("UNUSED");
 		byte[] quoted = compile(prefix + "(print (cadr '(intern \"POST\" :keyword)))", OptimizeLevel.DEFAULT);
-		assertThat(declaredMethodNames(quoted)).contains("UNUSED");
+		assertThat(declaredMethodNames(quoted)).doesNotContain("UNUSED");
+		// A SPELLED name still resolves through the framed-string probe: the module
+		// holds "F" as a string literal, so the row survives and the funcall lands.
+		byte[] spelled = compile("(defun unused (x) (car x)) (defun f () 1) (print (funcall (intern \"F\")))",
+				OptimizeLevel.DEFAULT);
+		assertThat(run(spelled)).isEqualTo("1");
+		// A data evaluator still keeps every function dispatchable.
+		byte[] bailed = compile(prefix + "(eval (car '(f)))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(bailed)).contains("UNUSED");
 	}
 
 	@Test

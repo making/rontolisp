@@ -5,10 +5,9 @@ import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.macro.LispMacroExpander;
+import am.ik.rontolisp.macro.FormatRenderer;
 
 /**
  * Whether a program can name a function at run time with a spelling this compile never
@@ -26,50 +25,29 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * other is the divergence one shared answer exists to prevent.
  *
  * <p>
+ * <strong>Only the data evaluators hold the gate open.</strong> {@code (eval (read))}
+ * calls a function whose name exists only in the input stream, so no probe of the
+ * module's own constants can cover it -- every function must stay dispatchable. The
+ * symbol BUILDERS ({@code intern}, {@code find-symbol}, {@code make-symbol},
+ * {@code symbol-function}, {@code fdefinition}, {@code fboundp},
+ * {@code uiop:symbol-call}) used to force the same full bail, and no longer do: a symbol
+ * they produce is built FROM A STRING, and any string the program holds is a compile-time
+ * constant the {@code dispatchableFuncIds} probes already read -- the canonical name, its
+ * alias spelling, the bare member, each in symbol, framed-string-literal and keyword
+ * spelling. What escapes those probes is a name assembled out of COMPUTED pieces
+ * ({@code concatenate} et al.), and that is precisely the carve-out
+ * {@code LibraryDefunPruner} has always documented: the forged name gets the ordinary
+ * undefined-function error, and {@code --dynamic} restores late binding. Splitting the
+ * two classes is what lets a clack Worker module -- whose handler discovery is
+ * {@code (find-symbol "RUN" pkg)} over names the module spells -- keep its call-only
+ * defuns shakeable instead of keeping all of them dispatchable.
+ *
+ * <p>
  * <strong>Trigger-shaped, not dataflow-shaped, and deliberately so.</strong> The precise
  * question is whether a symbol out of one of these operators can reach a funcall; getting
  * that wrong is a trap at run time rather than a diagnosis, so the rule stays syntactic
- * and over-approximates. One refinement was tried and rejected on measurement: judging
- * the {@code intern} ARGUMENT shape ({@code (intern "EX-FN" :pkg)} spells its name)
- * shrank nothing -- every real program reaching here computes the name anyway -- and it
- * broke {@code internIntoALiteralPackage} on both backends, because the two-argument
- * lowering folds the literal into the qualified symbol before the constant probe can see
- * either half.
- *
- * <p>
- * <strong>Exemption 1 is rontolisp's own scaffolding</strong>, and it is matched by
- * IDENTITY rather than by shape: {@link #isCompilerScaffolding} skips the generated
- * slot-name fold defun ({@link LispMacroExpander#slotNameKeyDefun()}), whose
- * {@code (intern (symbol-name n))} re-spells a symbol the program already holds and whose
- * result reaches nothing but a {@code member} test. Structural equality against the
- * builder's own output is what keeps the two from drifting. This was rejected once, on
- * the ground that the real blocker was the format renderer's {@code ~/name/} arm; with
- * that arm now injected only for a program that spells the directive
- * ({@code .kb/format.md}), the fold is what remains, and it is worth 21% of a
- * {@code cl-ppcre} module.
- *
- * <p>
- * <strong>Exemption 2 is the keyword-package intern</strong>, {@code (intern NAME
- * :keyword)} in evaluated position, and unlike the rejected NAME-argument refinement
- * above it judges the PACKAGE argument -- by the same predicate the compile-path lowering
- * itself uses ({@link LispMacroExpander#isKeywordPackageDesignator}), so the two cannot
- * disagree about which forms it covers. It is sound against {@code _lookup}'s probes
- * rather than by intuition: the lowering ({@link LispMacroExpander#internKeywordForm})
- * spells the result {@code ":" + NAME}, the runtime match is exact-spelling equality
- * against the registry's row keys, and no row key can begin with a colon because a
- * keyword can never name a function on any backend (the defun's implicit block rejects it
- * -- {@code BLOCK: block name must be a symbol,
- * got :FOO} -- in {@code LispMacroExpander.blockName} and {@code
- * LispEvaluator.blockName}). So whatever NAME computes, the interned symbol resolves no
- * function row, and gating stays exact. The form is exempt only as evaluated CODE: inside
- * quoted data the scan stays trigger-shaped, so extracting the {@code intern} symbol out
- * of such a list still turns the gate off.
- *
- * <p>
- * The boundary, stated plainly: a program that CALLS {@code %slot-name-key} itself and
- * funcalls the answer forges a name the gate no longer sees. That is the carve-out the
- * gate already documents for a name assembled out of computed strings, and the escape is
- * the same one -- compile with {@code --dynamic}.
+ * and over-approximates -- an {@code eval}/{@code read} occurrence counts anywhere,
+ * quoted data included (the operator could be extracted out of the data and applied).
  *
  * <p>
  * Run any compile with {@code -Drontolisp.debug.dispatchgate=true} to have the offending
@@ -82,19 +60,19 @@ public final class RuntimeNameProducers {
 
 	/**
 	 * Operators that turn data into code: {@code (eval (read))} calls a function whose
-	 * name exists only in the input stream.
+	 * name exists only in the input stream. ({@code read}/{@code load} occurrences also
+	 * reach the gate through the backends' own {@code usesRead}/{@code usesLoad} flags;
+	 * this scan additionally counts them inside quoted data.)
+	 *
+	 * <p>
+	 * {@link FormatRenderer#FUNCTION_DESIGNATOR} is in the set for the same reason it
+	 * exists at all: the {@code ~/name/} arm resolves a function out of a CONTROL STRING,
+	 * which is runtime data, and the arm is injected precisely when the program can be
+	 * seen to render one -- so its presence is the trigger, and the stub a directive-free
+	 * program gets instead never fires it.
 	 */
 	private static final Set<String> EVALUATES_DATA = Set.of(LispNames.EVAL, LispNames.READ, LispNames.READ_FROM_STRING,
-			LispNames.LOAD);
-
-	/**
-	 * Operators that produce a symbol -- or its function -- from a name, plus
-	 * {@code uiop:symbol-call}, which assembles a qualified spelling out of a package
-	 * part and a member part so that neither half carries it.
-	 */
-	private static final Set<String> BUILDS_A_NAME = Set.of(LispNames.INTERN, LispNames.FIND_SYMBOL,
-			LispNames.MAKE_SYMBOL, LispNames.SYMBOL_FUNCTION, LispNames.FDEFINITION, LispNames.FBOUNDP,
-			LispNames.UIOP_SYMBOL_CALL);
+			LispNames.LOAD, FormatRenderer.FUNCTION_DESIGNATOR);
 
 	/**
 	 * Whether the program can resolve a function name this compile never sees spelled
@@ -104,7 +82,7 @@ public final class RuntimeNameProducers {
 	 */
 	public static boolean anyNameResolvable(List<LispVal> program) {
 		for (LispVal form : program) {
-			if (!isCompilerScaffolding(form) && scan(form, false)) {
+			if (scan(form)) {
 				return true;
 			}
 		}
@@ -112,62 +90,27 @@ public final class RuntimeNameProducers {
 	}
 
 	/**
-	 * Whether the top-level form is one the compiler generated and whose name-producing
-	 * operator it therefore vouches for. Exactly one form qualifies today -- the
-	 * runtime-slot-name fold -- and it is compared against the builder that emits it, so
-	 * an edit there cannot leave a stale pattern here.
-	 * @param form a top-level form of the program
-	 * @return true when the scan must skip it
-	 */
-	private static boolean isCompilerScaffolding(LispVal form) {
-		// Name first, so an ordinary form costs one string compare rather than a rebuild
-		// of the canonical definition.
-		return form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
-				&& rest.car() instanceof LispSymbol name && LispNames.SLOT_NAME_KEY.equals(name.name())
-				&& LispMacroExpander.slotNameKeyDefun().equals(form);
-	}
-
-	/**
 	 * Any occurrence of one of the names anywhere in the form -- operator position,
 	 * argument position, {@code #'} reference, quoted data. Position does not narrow it:
-	 * a {@code #'intern} handed to a higher-order function resolves just as much as a
-	 * call does. The one positional judgment is exemption 2 (class doc): an evaluated
-	 * {@code (intern NAME :keyword)} call scans only its NAME argument, while the same
-	 * shape under {@code quote} stays a plain occurrence.
+	 * a {@code #'eval} handed to a higher-order function evaluates just as much as a call
+	 * does.
 	 */
-	private static boolean scan(LispVal val, boolean quoted) {
+	private static boolean scan(LispVal val) {
 		if (val instanceof LispSymbol sym) {
-			if (EVALUATES_DATA.contains(sym.name()) || BUILDS_A_NAME.contains(sym.name())) {
+			if (EVALUATES_DATA.contains(sym.name())) {
 				report(sym.name());
 				return true;
 			}
 			return false;
 		}
-		if (!quoted && isKeywordIntern(val)) {
-			return scan(((LispCons) ((LispCons) val).cdr()).car(), false);
-		}
-		boolean inData = quoted || (val instanceof LispCons cons && cons.car() instanceof LispSymbol op
-				&& LispNames.QUOTE.equals(op.name()));
 		LispVal cur = val;
 		while (cur instanceof LispCons cell) {
-			if (scan(cell.car(), inData)) {
+			if (scan(cell.car())) {
 				return true;
 			}
 			cur = cell.cdr();
 		}
-		return cur instanceof LispSymbol && scan(cur, inData);
-	}
-
-	/**
-	 * The three-part {@code (intern NAME PKG)} call whose package designates
-	 * {@code keyword} -- judged by the predicate the compile-path lowering itself
-	 * branches on, so the exemption covers exactly the forms that lower to
-	 * {@link LispMacroExpander#internKeywordForm} and nothing else.
-	 */
-	private static boolean isKeywordIntern(LispVal val) {
-		return val instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.INTERN.equals(op.name())
-				&& cons.cdr() instanceof LispCons nameCell && nameCell.cdr() instanceof LispCons pkgCell
-				&& pkgCell.cdr() instanceof LispNil && LispMacroExpander.isKeywordPackageDesignator(pkgCell.car());
+		return cur instanceof LispSymbol && scan(cur);
 	}
 
 	/**

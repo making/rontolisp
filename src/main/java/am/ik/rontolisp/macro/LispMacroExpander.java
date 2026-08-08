@@ -10099,12 +10099,12 @@ public final class LispMacroExpander {
 	 * {@code expandTopLevelDefinitions} appends it once when any of them is injected.
 	 *
 	 * <p>
-	 * It is a defun of its own so that {@code compiler/RuntimeNameProducers} can match
-	 * it: that {@code intern} is rontolisp's own scaffolding, re-spelling a symbol the
-	 * program already holds, and reading it as "this program can forge a function name"
-	 * costs every runtime-slot-name program the {@code --optimize} funcall-dispatch gate
-	 * ({@code .kb/optimize-dead-code-elimination.md}). The match is against THIS
-	 * builder's output, so a change here cannot silently stop matching there.
+	 * It was originally a defun of its own so that {@code compiler/RuntimeNameProducers}
+	 * could exempt it by identity -- an {@code intern} used to hold the
+	 * {@code --optimize} funcall-dispatch gate open, and this one is rontolisp's own
+	 * scaffolding. The gate no longer bails on {@code intern} at all
+	 * ({@code .kb/optimize-dead-code-elimination.md}), so the single defun stays only
+	 * because it is smaller than one inlined copy per dispatcher.
 	 * @return the fold's definition
 	 */
 	public static LispVal slotNameKeyDefun() {

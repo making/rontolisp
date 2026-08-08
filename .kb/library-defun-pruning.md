@@ -276,9 +276,10 @@ forms; the extra came from `defconstant`, the `declaim` rule and the
 that is correct -- all 18 of its definitions are genuinely reachable.
 
 `--optimize` cannot substitute for any of this: the WASM/JVM shakers root at
-exports and every compiled Lisp defun is reachable from the funcall dispatcher,
-so the reduction they achieve is the same with and without the dead defuns
-present.
+exports, and a defun the funcall-dispatch gate keeps dispatchable
+(`.kb/optimize-dead-code-elimination.md`) stays reachable through the ladders —
+pruning at the AST level is what removes a definition regardless of how the
+gate classifies it, and it also shrinks the UNOPTIMIZED artifact.
 
 ### Why the "dead top-level `let`" rule was rejected
 
