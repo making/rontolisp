@@ -207,11 +207,12 @@ its output and prints the table.
 
 The short version: `hello_world` is **518 bytes** with `--optimize=size` (one
 import, `fd_write`) and **406 bytes** as a `--no-gc` MVP module; `pi_approx` is
-**3,420 bytes** — smaller than every other entry in the cross-language table,
+**2,781 bytes** — smaller than every other entry in the cross-language table,
 including wado's 6,034-byte component — of which the million-iteration loop is
-2,547 and printing the answer to 15 decimal places is 993, less than printing the
-same float through `princ` would cost. Without `--optimize` both are ~307 KB of
-un-tree-shaken prelude, which is the one number on that page worth remembering.
+1,770 and printing the answer to 15 decimal places is 1,011, more than printing
+the same float through `princ` would cost. Without `--optimize` both are ~124 KB
+of un-tree-shaken prelude, which is the one number on that page worth
+remembering.
 
 ## Running
 
