@@ -171,17 +171,24 @@ outright, so a special can never be declared there
    to save/restore. Would need the name-indexable `_genv`/`GLOBAL_ENV` runtime
    store.
 2. **Exit restores are covered for `return`/`return-from`** since 2026-07-19
-   (`Ctx.specialBindScopes`, see above). Remaining holes (all tracked in
+   (`Ctx.specialBindScopes`, see above) -- for exits compiled as a DIRECT branch
+   inside the binding function. Remaining holes (all tracked in
    `.todo/192`): a WASM plain `return` that ALSO crosses an
    `unwind-protect`/`handler-case` region goes through the trampoline cascade,
    which does not know the save slots and skips the restores; `go` across a
-   special `let` does not restore either; and an ERROR caught by a
+   special `let` does not restore either; an ERROR caught by a
    `handler-case` outside the `let` skips the restore too (measured 2026-07-27:
    `(handler-case (let ((*x* 2)) (error "boom")) (error (e) *x*))` answers 2 on
    the JVM and leaves 2 bound after the handler; on the JVM the leak lands in
    the THREAD's dynamic store, so a per-request virtual thread takes it to the
-   grave -- before thread-scoping it leaked into the process global). The
-   interpreter's `finally` covers every exit.
+   grave -- before thread-scoping it leaked into the process global); and a
+   `return-from` that crosses a LAMBDA boundary (the block-exit throw/catch
+   lowering) skips the restore on the JVM and both wasm-GC backends (found
+   2026-08-08; reproducer and the cl-ppcre scanner corruption it causes --
+   stale `*reg-starts*` returned by any zero-register scan after a failing
+   register-regex loop -- are in `.todo/192`, which also records why the fix
+   needs a save STACK, not catch-site slot restores: the slots live in the
+   thrower's dead frames). The interpreter's `finally` covers every exit.
 3. **`symbol-value`/`boundp`/`eval` see the global default, not a dynamic binding,
    on the compile path.** Those read the `_genv`/`GLOBAL_ENV` eval mirror, which
    the shallow save/restore does not update (it touches only the JVM thread-local
