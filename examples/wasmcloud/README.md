@@ -46,7 +46,7 @@ rontolisp examples/wasmcloud/http-hello-world/app.lisp
 rontolisp examples/wasmcloud/http-hello-world/app.lisp -o App.class
 java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. App
 
-# WASI HTTP component under wasmtime serve (wasmtime 46+)
+# WASI HTTP component under wasmtime serve (wasmtime 47+ for concurrent throughput)
 rontolisp examples/wasmcloud/http-hello-world/app.lisp -o app.wasm --component
 wasmtime serve -W gc=y -W exceptions=y app.wasm
 ```

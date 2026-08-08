@@ -254,7 +254,9 @@ does not need rebuilding unless Java sources changed).
   `:latest` and always re-pulled) that `.github/workflows/wasmtime-image.yaml` builds from
   `.github/docker/wasmtime/Dockerfile` and pushes to GHCR. Bump the wasmtime version in the
   Dockerfile ARG and the workflow `WASMTIME_VERSION` together, then re-run the workflow --
-  no test change needed. Keep it >= 46 for the `--component` tests.
+  no test change needed. Keep it >= 47: 46 still runs the `--component` tests, but only
+  47+ inlines final-type casts, without which serve throughput collapses under
+  concurrency (`.kb/wasm-gc-final-types.md`).
 
 ### After Task Completion
 

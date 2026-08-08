@@ -4,7 +4,9 @@
 # wasmtime on every run -- the on-the-fly install was the slow step that made the
 # Unit Tests job look stuck.
 #
-# The pin must stay >= 46: the `--component` (WASI 0.3) tests need wasmtime 46+.
+# The pin must stay >= 47: the `--component` (WASI 0.3) tests need wasmtime 46+ to
+# run at all, and 47+ additionally inlines final-type casts, without which serve
+# throughput collapses under concurrency (.kb/wasm-gc-final-types.md).
 # Bump WASMTIME_VERSION here and the tag in WasmtimeSupport.IMAGE together.
 FROM debian:bookworm-slim
 

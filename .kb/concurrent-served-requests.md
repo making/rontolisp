@@ -3,7 +3,8 @@
 **The invariant: any process-wide mutable state a request handler can reach must be
 thread-safe, because `rontolisp:http-handler` / `serve` runs ONE VIRTUAL THREAD PER
 REQUEST on the interpreter and the JVM** (`.kb/fetch-http.md`; the WASM backends are
-single-threaded by construction and are exempt from everything here). A handler is
+single-threaded by construction and are exempt from everything here -- their
+concurrent-serve story is the HOST's cast lowering, `.kb/wasm-gc-final-types.md`). A handler is
 ordinary Lisp, so "state a handler can reach" is broad: the stream table, the global
 function/variable namespaces, every lazily loaded library, the condition/CLOS registries.
 Sequential requests never see any of it -- **only a burst does**, which is why every bug

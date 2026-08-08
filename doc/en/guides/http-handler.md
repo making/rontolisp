@@ -118,7 +118,8 @@ GET /hello
 ## Compiled to a WASI HTTP component
 
 It also compiles to a **WASI HTTP component** that runs under
-`wasmtime serve` (wasmtime 46+):
+`wasmtime serve` (wasmtime 47+ — 46 also serves it, but collapses under
+concurrent load; see the throughput section below):
 
 ```console
 $ rontolisp app.lisp -o app.wasm --component
@@ -332,6 +333,14 @@ machine (16 concurrent connections, 10 s closed loop, a handler that answers
 | interpreter | 33 900 | 0.47 ms | 0.99 ms |
 | JVM class | 36 600 | 0.44 ms | 0.88 ms |
 | WASI component | 24 500 | 0.65 ms | 1.19 ms |
+
+The component row needs **wasmtime 47 or newer**. On wasmtime 46 a *failing*
+runtime type test — the ordinary misses of a dynamic language's type dispatch —
+is a call into the host that takes an engine-global lock. One connection merely
+pays it (about 10%); concurrent connections contend for it, and throughput
+*falls* as connections are added — to roughly a fifteenth at 16 connections.
+wasmtime 47 checks these types inline (every type rontolisp emits is final,
+which is exactly the shape its fast path needs), and the collapse disappears.
 
 The component's gap is **instantiation**, not the handler: the host runs the
 whole top level (`_start`) once per instance, and it retires an instance every
