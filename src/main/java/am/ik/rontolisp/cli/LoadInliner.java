@@ -367,6 +367,11 @@ public final class LoadInliner {
 			throw new IllegalStateException("Circular system :depends-on detected: "
 					+ String.join(" -> ", ctx.loadingSystems()) + " -> " + name);
 		}
+		String conflict = ShimLibraries.conflictingSystem(name);
+		if (conflict != null && ctx.loadedSystems().contains(conflict)) {
+			throw new IllegalStateException("Cannot load system '" + name + "': it defines the same packages as '"
+					+ conflict + "', which is already loaded -- load one of the two, not both");
+		}
 		if (BuiltinSystems.isBuiltin(name)) {
 			// A system rontolisp provides itself (e.g. "usocket"): splice the embedded
 			// library instead of locating a NAME.asd. Splice rather than just mark

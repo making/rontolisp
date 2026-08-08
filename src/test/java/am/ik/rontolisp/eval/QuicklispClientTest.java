@@ -95,4 +95,28 @@ class QuicklispClientTest {
 			.hasMessageContaining("Quicklisp distribution");
 	}
 
+	@Test
+	void resolvesAnUnlistedSecondarySystemThroughItsPrimaryRelease(@TempDir Path home) throws IOException {
+		// A NAME/SUB the dist index does not list individually lives in NAME.asd by
+		// ASDF's naming rule, so the primary's release is downloaded -- this is how
+		// (ql:quickload "tiny-routes/lite"), a system the replacement .asd adds,
+		// fetches the tiny-routes release. The asdf loader then locates the slash
+		// name against that same file and reports loudly if it is not defined there.
+		QuicklispTestSupport.RecordingDownloader downloader = QuicklispTestSupport.dist(//
+				"mylib mylib mylib\n", //
+				"mylib " + MYLIB_TARBALL_URL + " 100 md5 sha1 mylib-1.0 mylib\n", //
+				Map.of(MYLIB_TARBALL_URL, QuicklispTestSupport.tarGz(Map.of(//
+						"mylib-1.0/mylib.asd", "(defsystem \"mylib\" :components ((:file \"mylib\")))", //
+						"mylib-1.0/mylib.lisp", "(defun mylib-answer () 42)"))));
+		QuicklispClient client = new QuicklispClient(home, downloader);
+
+		List<String> asdDirs = client.ensureAvailable("mylib/extra");
+
+		assertThat(asdDirs).anyMatch(dir -> dir.endsWith("mylib-1.0"));
+		// A slash name whose PRIMARY is unknown still fails loudly.
+		assertThatThrownBy(() -> client.ensureAvailable("nope/extra")).isInstanceOf(IOException.class)
+			.hasMessageContaining("nope/extra")
+			.hasMessageContaining("Quicklisp distribution");
+	}
+
 }

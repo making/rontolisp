@@ -57,7 +57,13 @@ public final class AsdOverrides {
 			// closure is mito-migration's advisory-lock id, which needs the three
 			// crc32 entry points and nothing else. The replacement declares just
 			// package.lisp + crc32.lisp; the inflate/bzip2 decompressor stays out.
-			Map.entry("chipz.asd", "chipz-crc32-slice.asd"));
+			Map.entry("chipz.asd", "chipz-crc32-slice.asd"),
+			// Not unparseable at all -- replaced only to ADD the opt-in
+			// "tiny-routes/lite" secondary system (same components, no :cl-ppcre,
+			// path-template.lisp substituted with the ppcre-free matcher via
+			// ShimLibraries.leafModuleForms). The primary system is declared
+			// verbatim, so plain (ql:quickload "tiny-routes") is unchanged.
+			Map.entry("tiny-routes.asd", "tiny-routes-lite.asd"));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 

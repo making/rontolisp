@@ -1,12 +1,13 @@
 // index.js -- the whole Worker: Request -> JSON -> Lisp -> JSON -> Response.
 //
-// This file is BYTE-IDENTICAL in ../../httpbin and ../../httpbin-clack, and that
-// is the readable proof that the two directories differ only in how the Lisp
-// half is written. Both speak the same JSON envelope, and on both sides of it
-// sits the same Clack application; what differs is only what builds the Clack
-// environment from the envelope -- thirty hand-written lines in ../app.lisp
-// there, the built-in clack-handler-cloudflare-workers handler backend that
-// `clackup` installs here. Neither is visible from JavaScript.
+// This file is BYTE-IDENTICAL in ../../httpbin, ../../httpbin-clack and
+// ../../httpbin-tiny-routes, and that is the readable proof that the
+// directories differ only in how the Lisp half is written. All speak the same
+// JSON envelope, and on the other side of it sits a Clack application; what
+// differs is only what builds the Clack environment from the envelope --
+// thirty hand-written lines in ../app.lisp in httpbin, the built-in
+// clack-handler-cloudflare-workers handler backend that `clackup` installs in
+// the other two. None of it is visible from JavaScript.
 //
 //   diff ../../httpbin/src/index.js ../../httpbin-clack/src/index.js   # no output
 //

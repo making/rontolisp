@@ -107,10 +107,13 @@
 
 (defun clack.handler.cloudflare-workers::%header-pairs (alist)
   ;; The response header alist -> a JSON array of [name, value]. See the
-  ;; envelope note above for why this is not an object.
+  ;; envelope note above for why this is not an object. A VECTOR, not a list:
+  ;; a response without headers (tiny-routes' (ok "...") builds one) must
+  ;; reach the host as [], and json-stringify renders an empty LIST as false,
+  ;; which the Headers constructor on the other side rejects.
   (let ((out nil))
     (dolist (pair alist) (setq out (cons (list (car pair) (cdr pair)) out)))
-    (nreverse out)))
+    (coerce (nreverse out) 'vector)))
 
 (defun clack.handler.cloudflare-workers::%request-tuple (req)
   ;; The positional raw tuple %http-make-env consumes:

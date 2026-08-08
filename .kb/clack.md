@@ -223,7 +223,12 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   target (path and query still joined, still encoded — `%http-make-env` owns
   that split, and a pre-split path leaves `:query-string` nil), and the response
   `headers` cross as an ARRAY of `[name, value]` pairs, not an object, so a
-  repeated `Set-Cookie` survives.
+  repeated `Set-Cookie` survives. The pairs are built into a VECTOR
+  (`%header-pairs`, todo-296): a headerless Clack response — tiny-routes'
+  `(ok "x")` is one — must cross as `[]`, and json-stringify renders an empty
+  LIST as `false`, which the Headers constructor on the JS side throws on. No
+  shipped example had ever produced a headerless response, which is why this
+  survived until a routed one did.
 - **`handle` CATCHES and answers 500.** On a reactor an uncaught Lisp error is a
   trap that takes the whole instance down and the host must throw the instance
   away; catching is what every other rontolisp transport already does with a

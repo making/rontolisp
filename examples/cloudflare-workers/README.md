@@ -1,15 +1,16 @@
 # rontolisp on Cloudflare Workers
 
-Five ways to run a Common Lisp program, compiled to WebAssembly by rontolisp,
+Six ways to run a Common Lisp program, compiled to WebAssembly by rontolisp,
 on Cloudflare Workers. Each directory is a complete, independent Worker project:
 `./build.sh && npx wrangler dev`, then `npx wrangler deploy`.
 
 | Directory | What it is | Module | Host glue |
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
-| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 448 KB (**119 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
+| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 450 KB (**119 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same text `httpbin-clack/` deploys. | **195 KB** (57 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
-| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.4× the module, because clack and lack (tree-shaken) ship inside it. | 463 KB (**122 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup`.** The Cloudflare port is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp)'s `clackup` line with different ARGUMENTS: `worker.lisp` carries the upstream example verbatim down to `app`, then hands it to `:server :cloudflare-workers`, the built-in handler backend whose export the compiler synthesizes. No adapter is written anywhere — for 2.4× the module, because clack and lack (tree-shaken) ship inside it. | 465 KB (**122 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | **`httpbin-clack` with a real routing library.** The same endpoints routed through [tiny-routes](https://github.com/jeko2000/tiny-routes) — `define-routes`, a `/status/:code` path template, route declining — loaded as **`tiny-routes/lite`**, the opt-in system whose ppcre-free path-template matcher keeps cl-ppcre (and 735 KB) out of the module. | 489 KB (**129 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | **The same `httpbin` Lisp source**, reached through the component model (`--component` + `jco transpile`) instead of raw linear memory. | 3 core modules (207 KB) | 49 hand-written lines + 293 KB of generated glue |
 
 ## Which one should I copy?
@@ -32,6 +33,13 @@ same text, the same envelope, the same `src/index.js` — and the only differenc
 is that `clack:clackup` installs the adapter instead of the program carrying it,
 for 2.1× the compressed module. Measured there: the per-request cost is
 identical; what clack costs is module size and a little isolate startup.
+
+`httpbin-tiny-routes/` when the routes deserve a library: path templates
+(`/status/:code`), route declining, the middleware combinators — the real
+tiny-routes API for +25 KB over `httpbin-clack/`, *provided* it is loaded as
+`tiny-routes/lite`. The full `"tiny-routes"` spells the same routes but ships
+cl-ppcre, which takes the same module to 1.18 MB — its README holds the
+four-way size table.
 
 `httpbin-component/` answers a question rather than being a recommendation:
 *wouldn't the component model be simpler?* For the string marshalling, yes — see
@@ -138,7 +146,8 @@ iterating on them, narrow the suite:
 
 ## Deploying
 
-All five were deployed to the real edge and verified there, not only under
+All but `httpbin-tiny-routes` (verified under `wrangler dev`) were deployed
+to the real edge and verified there, not only under
 `wrangler dev`:
 
 | | Upload | gzip | Worker Startup Time |
@@ -154,14 +163,15 @@ since — most recently by the 2026-08-08 dispatch-gate refinement, which halved
 the two clack builds, and by the builds moving to `--optimize=size` the same
 day (about -11% raw / -14% gzip more, for a per-request price of a few
 microseconds). Locally the modules are now `httpbin` **195 KiB / 57 KiB gzip**,
-`httpbin-clack` **463 KiB / 122 KiB gzip**, `hello-clack` **448 KiB / 119 KiB
-gzip**, and the component build's three core modules **207 KiB**. Startup
+`httpbin-clack` **465 KiB / 122 KiB gzip**, `hello-clack` **450 KiB / 119 KiB
+gzip**, `httpbin-tiny-routes` **489 KiB / 129 KiB gzip**, and the component
+build's three core modules **207 KiB**. Startup
 time is only reported by a real `wrangler deploy`, so those cells stand until
 the next one.
 
 The gzip column is the one that counts: the Worker size limit applies to the
 compressed bundle, so even the component build sits well under 5% of the free
-plan's 3 MB, and `httpbin-clack` — the largest of the five by a wide margin,
+plan's 3 MB, and `httpbin-clack` — the largest of the deployed five by a wide margin,
 because the whole of clack and lack is inside it — at about 12%. Its startup
 time is also the one that moved when it went through `clack:clackup` instead of
 calling the handler backend directly (14 → 25 ms); the per-request cost did not.

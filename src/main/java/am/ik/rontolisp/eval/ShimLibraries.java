@@ -102,13 +102,31 @@ public final class ShimLibraries {
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's
-	 * base directory, shim classpath resource).
+	 * base directory, shim classpath resource). {@code tiny-routes/lite} is the one
+	 * OPT-IN entry: the key is a system name that exists solely to carry this
+	 * substitution (declared by the {@code tiny-routes-lite.asd} replacement, see
+	 * {@link AsdOverrides}), so the full {@code tiny-routes} system keeps the real
+	 * cl-ppcre-backed {@code path-template.lisp} and the user chooses the ppcre-free
+	 * matcher by naming the lite system in their own source.
 	 */
 	private static final Map<String, Map<String, String>> LEAF_MODULES = Map.of("com.inuoe.jzon",
 			Map.of("eisel-lemire.lisp", "jzon-eisel-lemire.lisp", "ratio-to-double.lisp", "jzon-ratio-to-double.lisp",
 					"schubfach.lisp", "jzon-schubfach.lisp"),
-			"ironclad/core", Map.of("src/prng/prng.lisp", "ironclad-prng.lisp", "src/public-key/public-key.lisp",
-					"ironclad-public-key.lisp"));
+			"ironclad/core",
+			Map.of("src/prng/prng.lisp", "ironclad-prng.lisp", "src/public-key/public-key.lisp",
+					"ironclad-public-key.lisp"),
+			"tiny-routes/lite", Map.of("src/middleware/path-template.lisp", "tiny-routes-lite-path-template.lisp"));
+
+	/**
+	 * System pairs that must not be loaded into one program: both define the same
+	 * packages, so whichever loads LAST silently redefines the other's functions --
+	 * {@code tiny-routes/lite}'s ppcre-free matcher versus the full system's cl-ppcre
+	 * one. Both loaders refuse the second load loudly instead (the lite system's whole
+	 * contract is "matches identically or refuses loudly", and a program that wants both
+	 * has its answer: load the full system only).
+	 */
+	private static final Map<String, String> CONFLICTS = Map.of("tiny-routes/lite", "tiny-routes", "tiny-routes",
+			"tiny-routes/lite");
 
 	private static final Map<String, List<LispVal>> CACHE = new ConcurrentHashMap<>();
 
@@ -122,6 +140,18 @@ public final class ShimLibraries {
 	 */
 	public static boolean isShim(String name) {
 		return RESOURCES.containsKey(name);
+	}
+
+	/**
+	 * Returns the system the named one must not be loaded alongside, or {@code null} when
+	 * there is no such conflict. Both loaders check the answer against their
+	 * loaded-systems set before loading {@code name} and refuse with a clear error -- see
+	 * {@code CONFLICTS} for why redefinition is not an acceptable fallback.
+	 * @param name the system name about to be loaded (canonical lower-case)
+	 * @return the conflicting system's name, or {@code null}
+	 */
+	@Nullable public static String conflictingSystem(String name) {
+		return CONFLICTS.get(name);
 	}
 
 	/**

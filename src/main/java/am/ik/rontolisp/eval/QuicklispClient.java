@@ -134,12 +134,24 @@ public final class QuicklispClient {
 		ensureIndex();
 		Map<String, SystemEntry> systems = java.util.Objects.requireNonNull(this.systemsIndex);
 		Map<String, ReleaseEntry> releases = java.util.Objects.requireNonNull(this.releasesIndex);
-		if (!systems.containsKey(systemName)) {
-			throw new IOException(
-					"ql:quickload: system '" + systemName + "' is not in the Quicklisp distribution (systems.txt)");
+		String lookupName = systemName;
+		if (!systems.containsKey(lookupName)) {
+			// A secondary system (NAME/SUB) the dist index does not list individually
+			// lives in NAME.asd by ASDF's naming rule, so the primary's release is the
+			// one to download; AsdfSystems.locate resolves the slash name against that
+			// same file, and reports loudly if it does not define the secondary system
+			// after all. This is how "tiny-routes/lite" -- a system the replacement
+			// .asd adds -- downloads the tiny-routes release.
+			int slash = lookupName.indexOf('/');
+			String primary = slash > 0 ? lookupName.substring(0, slash) : null;
+			if (primary == null || !systems.containsKey(primary)) {
+				throw new IOException(
+						"ql:quickload: system '" + systemName + "' is not in the Quicklisp distribution (systems.txt)");
+			}
+			lookupName = primary;
 		}
 		LinkedHashSet<String> projects = new LinkedHashSet<>();
-		collectProjects(systemName, projects, new HashSet<>(), true, systems);
+		collectProjects(lookupName, projects, new HashSet<>(), true, systems);
 		List<String> searchDirs = new ArrayList<>();
 		Set<String> seen = new HashSet<>();
 		for (String project : projects) {

@@ -219,9 +219,48 @@ Preview 1、`--component` を意味します。**特筆事項**列はロード�
 | [esrap](https://github.com/scymtym/esrap) 0.19 | 4 つ全て | パックラット / PEG パーサを、改変なしの実ソースから `(ql:quickload "esrap")` で読み込みます。インライン式または名前付きルールに対する `esrap:parse`、`:lambda` / `:destructure` / `:text` 変換を伴う `defrule`、`add-rule` / `make-instance 'esrap:rule`、大文字小文字を区別しない `(~ "lit")` 終端、`and` / `or` / `not` / `*` / `+` / `?` の連結、意味述語（`(oddp decimal)`）、`:junk-allowed`、そして正確なパースエラー報告（`esrap:esrap-parse-error`。そのテキストは SBCL 独自の Unicode 文字名を除いて SBCL とバイト単位で一致します）が動作します。パーサは純粋な計算なので **Preview 1 WASM も対象**です（ソケット不要、`-W gc` 以外のフラグも不要）。依存する alexandria と trivial-with-current-source-form も一緒に読み込まれます。`esrap:trace-rule` は存在しない `break` を、swank のインデントフックは `set` を必要としますが、どちらも呼ばない限り到達しません |
 | [postmodern](https://github.com/marijnh/Postmodern) v1.33.12 (MOP ビルド) | インタプリタ、JVM、WASM コンポーネント | PostgreSQL スタック (s-sql を含む) を、無改変の上流ソースから `(ql:quickload "postmodern")` でロードします: `with-connection`/`connect` とコネクションプール、S-SQL フォームまたは文字列に対する `query`/`execute` (結果スタイルは全て)、`doquery`、`:reconnect`/`reset-prepared-statement` リスタート付きのプリペアドステートメント、トランザクションとセーブポイント、`execute-file`、`deftable`。`:postmodern-thread-safe` は ON なのでロックは実際に直列化します。**DAO 層が入っています**: ビルドは `:postmodern-use-mop` を ON にしており、`table.lisp` が静的メタオブジェクトサブセットの上で無改変のままロードされます — `:col-type`/`:keys`/`:table-name` を持つ `(defclass ... (:metaclass pomo:dao-class))`、`dao-table-definition`、`deftable` の `!dao-def`、`insert-dao`/`get-dao`/`update-dao`/`upsert-dao`/`delete-dao`/`save-dao`/`select-dao`/`query-dao`、`make-dao`。メタクラスプロトコルは定義時に実行されるため、DAO クラスはリテラルなオプションを持つトップレベルの `defclass` でなければならず (実行時データからのクラス構築はエラーを通知)、`finalize-inheritance` は初回使用時ではなくクラス定義時に即座に実行されます — 定義エラーが早く表面化するだけで、結果は変わりません。接続には cl-postgres のソケット層が必要なため **Preview 1 WASM は対象外**で、どちらの wasm 実行コマンドにも `-W exceptions=y` が、`--component` にはさらに `-S tcp=y -S inherit-network=y` が必要です。s-sql の層だけ (`(ql:quickload "s-sql")`) はソケットを開かず、4 つ全てのバックエンドで同一の SQL を生成します |
 | [clack](https://github.com/fukamachi/clack) v2.1.0 ([lack](https://github.com/fukamachi/lack) 同梱) | インタプリタ、JVM、WASM コンポーネント | Web アプリケーション環境を無改変の上流ソースから `(ql:quickload "clack")` でロードし、組み込みの `clack-handler-rontolisp` バックエンドで serve します — [Clack ガイド](clack.md)を参照。lack 側もロードされます: `lack:builder`、(ironclad スライス上の) `lack-util` の `generate-random-id`、そして `clackup` のデフォルト `:use-default-middlewares t` がエンドツーエンドで通すバックトレースミドルウェア。`clackup` のデフォルト `:use-thread t` はインタプリタと JVM でアクセプタを本物のスレッド ([`rontolisp:make-thread`](../reference/functions/rontolisp-make-thread.md)) で実行します。WASM コンポーネントは代わりに `wasmtime serve` の下で serve します (ソケットはホストが所有)。Preview 1 WASM は設計上着信 TCP を持たないため、`clackup` は呼び出し時にエラーを送出します |
-| [tiny-routes](https://github.com/jeko2000/tiny-routes) v0.1.1 | 4 つ全て | Clack アプリケーション向けのルーティング層を無改変のソースから `(ql:quickload "tiny-routes")` でロードします — `clack:clackup` とルートを持つアプリケーションの間を埋める部品です。`define-get`/`define-post`/`define-put`/`define-delete`/`define-any`/`define-route` と `define-routes`、cl-ppcre 上の `:id` 形式のパステンプレート (`:regex t` で正規表現も)、`path-parameter`、`with-request`/`with-path-parameters`、`wrap-request-body` (Clack の `:raw-body` ストリーム)・`wrap-query-parameters`・`wrap-request-predicate`/`-mapper`・レスポンス系ラッパを繋ぐ `pipe` コンビネータ、そして `ok`/`created`/`not-found`/… のコンストラクタ一式。姉妹システム `tiny-routes-middleware-cookie` もロードでき (`parse-cookie-header`、`write-set-cookie-header`、`wrap-request-cookies`、`wrap-response-cookies`)、cl-cookie・quri・local-time・proc-parse を引き込みます。ルーティング自体は純粋な計算なので**4 つ全てのバックエンドが対象**です。ルートを serve するには `clackup` が要るため Preview 1 は外れます — [Clack ガイド](clack.md)を参照。依存は cl-ppcre だけなので、ディスクからロードする場合 `--system-path` には 2 ディレクトリが必要です。テストシステムは fiveam を要求しますが、fiveam はロードできません |
+| [tiny-routes](https://github.com/jeko2000/tiny-routes) v0.1.1 | 4 つ全て | Clack アプリケーション向けのルーティング層を無改変のソースから `(ql:quickload "tiny-routes")` でロードします — `clack:clackup` とルートを持つアプリケーションの間を埋める部品です。`define-get`/`define-post`/`define-put`/`define-delete`/`define-any`/`define-route` と `define-routes`、cl-ppcre 上の `:id` 形式のパステンプレート (`:regex t` で正規表現も)、`path-parameter`、`with-request`/`with-path-parameters`、`wrap-request-body` (Clack の `:raw-body` ストリーム)・`wrap-query-parameters`・`wrap-request-predicate`/`-mapper`・レスポンス系ラッパを繋ぐ `pipe` コンビネータ、そして `ok`/`created`/`not-found`/… のコンストラクタ一式。姉妹システム `tiny-routes-middleware-cookie` もロードでき (`parse-cookie-header`、`write-set-cookie-header`、`wrap-request-cookies`、`wrap-response-cookies`)、cl-cookie・quri・local-time・proc-parse を引き込みます。ルーティング自体は純粋な計算なので**4 つ全てのバックエンドが対象**です。ルートを serve するには `clackup` が要るため Preview 1 は外れます — [Clack ガイド](clack.md)を参照。依存は cl-ppcre だけなので、ディスクからロードする場合 `--system-path` には 2 ディレクトリが必要です。テストシステムは fiveam を要求しますが、fiveam はロードできません。サイズ制約のあるコンパイル済みモジュール向けには ppcre 不要の**オプトイン** `tiny-routes/lite` があります — 直下の節を参照 |
 | [cl-dbi](https://github.com/fukamachi/cl-dbi) 0.11.1 (`dbd-postgres` のみ) | インタプリタ、JVM、WASM コンポーネント | データベース非依存インターフェイスを無改変ソースから `(ql:quickload "dbd-postgres")` でロードします: `dbi:connect` (ドライバはロード済みシステム上で解決されます — コンパイルされたプログラムは実行時にシステムをロードできないため、プログラム自身に `ql:quickload` を含める必要があります)、`dbi:do-sql`、`dbi:prepare`/`execute`/`fetch`/`fetch-all`、`dbi:with-transaction` (commit と rollback)、`dbi:connect-cached`、`dbi:disconnect`。`:mysql` と `:sqlite3` ドライバは FFI を要するため存在しません。スレッド対応バックエンドではコネクションキャッシュはスレッド別です (`bt2` シムの実ロックと [`rontolisp:current-thread`](../reference/functions/rontolisp-current-thread.md) 上の `cache/thread.lisp`)。シングルスレッドの WASM バックエンドは upstream 自身のスレッドなしキャッシュを使います。依存の `trivial-garbage` は上記の no-op ファイナライザシムに解決されるので、`dbi:disconnect` を明示的に呼んでください。ソケット制約は postmodern と同じです: Preview 1 WASM は対象外、コンポーネントは `-W exceptions=y -S tcp=y -S inherit-network=y` が必要です |
 | [mito](https://github.com/fukamachi/mito) 0.2.0 | インタプリタ、JVM、WASM コンポーネント | O/R マッパーを無改変ソースから `(ql:quickload "mito")` でロードします — **システム全体** (`mito-core` + `mito-migration` + `lack-middleware-mito`) が入ります。詳細は[O/R マッピングガイド](mito.md)を参照してください。DAO 層: `connect-toplevel`/`disconnect-toplevel`、`deftable` (静的メタオブジェクトプロトコル上の `dao-table-class` メタクラス — auto-pk `:serial` と `:uuid`、`record-timestamps-mixin` の `created-at`/`updated-at`)、`table-definition`、`ensure-table-exists`、`create-dao`/`insert-dao`/`save-dao`/`delete-dao`、`find-dao`、sxql 句付きの `select-dao`、`object-id`、`retrieve-by-sql`、`execute-sql`。マイグレーション層: `migration-expressions` と `migrate-table` によるクラスと実スキーマの差分は 3 バックエンドすべてで動作し、マイグレーション**ファイル**を扱う `generate-migrations` / `migrate` はインタプリタ + JVM です (WASM バックエンドはディレクトリ作成とファイル削除の呼び出しをインポートしていないため、呼び出し時にエラーになります)。`migrate` は生成された `.sql` を esrap で読み直し、アドバイザリロックは chipz の CRC32 だけを切り出したスライスに乗ります。PostgreSQL のみ (`dbd-postgres` を明示的に quickload する必要があります)。他のメタクラス利用ライブラリと同様、`deftable` はリテラルオプションのトップレベルフォームである必要があります。既知のギャップ (いずれもガイドに記載): `:conc-name` アクセサは生成されません (`slot-value` は動作します)。sxql の SQL 関数オペレータ — `(:count ...)`、したがって `mito:count-dao` — はインタプリタ限定です。次の 2 つは SBCL でも同一に失敗する上流の不具合であり、ギャップではありません: `:col-type` のない `:references` 単独、および `:initform` を持つ NOT NULL カラムの追加。依存の uuid もロードされます (v1/v4 の生成はバックエンド自身のエントロピーを使います)。`dissect` のスタック内省は no-op インターフェイスです。ソケット制約は cl-dbi と同じです: Preview 1 WASM は対象外、コンポーネントは `-W exceptions=y -S tcp=y -S inherit-network=y` が必要です |
+
+### サイズ向けオプトイン: `tiny-routes/lite`
+
+`(ql:quickload "tiny-routes/lite")` は、同じ tiny-routes のソースツリーを 1
+コンポーネントだけ差し替えてロードします — upstream では cl-ppcre のスキャナ
+だった `path-template.lisp` を ppcre 不要のマッチャーに置き換え、`:cl-ppcre`
+依存もあわせて落とします。これが存在する理由は、ルーティングが正規表現
+エンジンを**生かしたまま**にするからです: ルートのテンプレートはルート
+*構築*時にスキャナへとコンパイルされるため、コンパイル済みモジュールでは
+どんな tree-shaking も cl-ppcre を除去できず、サイズ制限のあるターゲット
+ではそれがモジュールの大半を占めます —
+[ルーティング版 Worker の例](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-tiny-routes)
+の計測では、フルシステムで 1,236,811 B raw、lite で 501,689 B。ルートも
+応答もリクエスト単位で同一です。
+
+この置換はテンプレートが*何にマッチするか*を決して変えません — フル
+システムと同一にマッチするか、ルート構築時に大きな音を立てて拒否するかの
+どちらかです:
+
+- **受理**: リテラル文字と `:name` トークンだけから成るテンプレート —
+  トークンは `:` の後に英字または `_`、以降は英数字・`_`・`-` が続くもの
+  で、テンプレート内のどこにでも置けます: `/users/:id`、`/files/v:version`、
+  `/pair/:a/:b`。このサブセット内では lite マッチャーはフルシステムの意味論
+  を正確に再現します。貪欲なバックトラッキングも、upstream の貪欲な
+  トークン*名*走査も含めてです (`/a/:x-:y` の最初のトークン名は `x-` に
+  なります)。2 つのエンジンはテストスイートがテンプレート単位でピン留め
+  しています。
+- **ルート構築時に拒否** (逃げ道を明示するエラー): 正規表現メタ文字 —
+  `.` `\` `[` `]` `(` `)` `{` `}` `|` `^` `$` `*` `+` `?` — を含む
+  テンプレートと、すべての `:regex t` テンプレート。(`:name` トークンを
+  含まないテンプレートは upstream でも正規表現にならず `string=` で比較
+  されるため、そこにメタ文字があっても両システムとも問題ありません。)
+
+素の `(ql:quickload "tiny-routes")` は手つかずのまま — cl-ppcre 込みの
+無改変ライブラリ — で、2 つのシステムを 1 つのプログラムにロードすることは
+どちらの順でも拒否されます (後からロードした側がマッチャーを黙って再定義
+してしまうため)。`tiny-routes/lite` は Quicklisp のインデックスには
+ありません。この名前は tiny-routes のリリースをダウンロードし、その
+`.asd` に対して解決されます。
 
 cl-ppcre のロードはこれまでで最大の機能バッチ — ローカル
 `(declare (special ...))`、ジェネリック化された CLOS スロットアクセサ、

@@ -66,7 +66,7 @@ directories.
 | How it reaches the Worker | thirty hand-written lines and an explicit `wasm-export` | `clackup`, plus a `:server` designator and a synthesized export |
 | Reads as | a Worker program that happens to speak Clack | **every other Clack program** |
 | clack in the module | none | what the tree-shaker keeps of clack and lack |
-| Module | 195 KB raw / **57 KB gzip** | 463 KB raw / **122 KB gzip** |
+| Module | 195 KB raw / **57 KB gzip** | 465 KB raw / **122 KB gzip** |
 
 122 KB gzip is about **4.0%** of the free plan's 3 MB bundle limit, so it fits
 with plenty of room — but it is **2.1×** the hand-written adapter compressed
@@ -101,7 +101,7 @@ curl         http://localhost:8787/nope                   # 404
 | [`worker.lisp`](worker.lisp) | **The whole program.** `net/httpbin-clack.lisp` verbatim, with its `clackup` line's arguments changed. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` — same envelope, same boundary code, same file. |
-| `src/app.wasm` | The compiled module (~463 KB). A build product — run `./build.sh` first. |
+| `src/app.wasm` | The compiled module (~465 KB). A build product — run `./build.sh` first. |
 
 The directory used to split the application into an `app.lisp` and the transport
 into a `worker.lisp` and a `serve.lisp`, because the transport was a
@@ -261,7 +261,7 @@ directory's `src/app.wasm`, over the same requests:
 | --- | --- | --- |
 | imports | zero | **zero** — the Worker instantiates with `{}`, no WASI shim |
 | exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why one `src/index.js` serves both |
-| module | 200,155 B raw / 58,793 B gzip | 474,150 B raw / **124,756 B gzip** |
+| module | 200,155 B raw / 58,793 B gzip | 476,187 B raw / **125,609 B gzip** |
 | `WebAssembly.Module` compile | 0.3 ms | 0.6 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
 | `_initialize`, cold | 4.5 ms | **12.5 ms** — clack's entire load time, `clackup` included |
 | warm `GET /get` | 0.024 ms | **0.024 ms** |
@@ -284,7 +284,7 @@ warm; the first call of a fresh isolate is ~40 ms while V8 tiers the module up.
 
 On the real edge, `wrangler deploy` reported **1654.60 KiB upload / 371.94 KiB
 gzip** and a **Worker Startup Time of 26 ms** (14 ms before `clackup`) — measured
-before the module shrank to today's 463 KB; the next deploy will report the
+before the module shrank to today's 465 KB; the next deploy will report the
 smaller bundle — and all five endpoints (plus the 405, the 404, the unparseable
 body and a percent-encoded path) answer correctly there — verified after
 deploying, not inferred. End-to-end

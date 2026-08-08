@@ -285,6 +285,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.ShimLibraries"
+        },
+        "pattern": "am/ik/rontolisp/eval/tiny-routes-lite-path-template\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
         },
         "pattern": "am/ik/rontolisp/eval/ironclad-slice\\.asd"
@@ -318,6 +324,12 @@
           "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
         },
         "pattern": "am/ik/rontolisp/eval/chipz-crc32-slice\\.asd"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.AsdOverrides"
+        },
+        "pattern": "am/ik/rontolisp/eval/tiny-routes-lite\\.asd"
       },
       {
         "condition": {

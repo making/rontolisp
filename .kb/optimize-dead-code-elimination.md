@@ -636,20 +636,35 @@ the reason so they are not re-derived:
    it ADDS 179 B — the `load-time-value` slot — and removes nothing, because the
    scanner BUILDER still ships to run at load time. They are worth having for
    run/start-up time (`.kb/compiler-macros.md`), never for size.
-3. **REJECTED — a leaf-module substitution of tiny-routes' `path-template.lisp`**
+3. **REJECTED AS A DEFAULT, then delivered AS AN OPT-IN (todo-296) — a
+   leaf-module substitution of tiny-routes' `path-template.lisp`**
    (the `ShimLibraries.leafModuleForms` tier, `.kb/asdf.md`). Measured with a
    ppcre-free segment matcher swapped into the quicklisp tree: the shim ALONE
    buys **-0.9%** (1,373,470 -> 1,360,484) — see the next lever for why — so
    delivering the win also requires a replacement `.asd` that DROPS the
    `:cl-ppcre` dependency. That two-tier substitution reaches 536,895 / 146,809
    (-60.9%, routing then costs +21,896 B over the clack base, and `_initialize`
-   drops 54 -> 14 ms) — but it breaks `:regex t` (documented upstream API, would
-   have to signal), silently changes keyword-template semantics (upstream
-   interprets the NON-token template text as regex — mid-segment tokens,
-   metachars), and any program that touches `ppcre:` anywhere gets the engine
-   back WITH routes now matching by different rules than the user's own regexes.
-   On a library whose value is loading verbatim (the point of the ASDF work),
-   that is the wrong trade for bytes the next lever can recover generally.
+   drops 54 -> 14 ms) — but as a DEFAULT it breaks `:regex t` (documented
+   upstream API, would have to signal), silently changes keyword-template
+   semantics (upstream interprets the NON-token template text as regex —
+   mid-segment tokens, metachars), and any program that touches `ppcre:`
+   anywhere gets the engine back WITH routes now matching by different rules
+   than the user's own regexes. On a library whose value is loading verbatim
+   (the point of the ASDF work), that is the wrong trade for a silent change —
+   so todo-296 shipped exactly this two-tier substitution as the OPT-IN system
+   **`tiny-routes/lite`**, with both objections dissolved by construction: the
+   user asks for it by name in their own source, the matcher signals at
+   route-build time on everything it does not reproduce (metachar templates,
+   `:regex t`), the accepted `:name`-token subset is pinned
+   template-for-template against the real engine, and co-loading the two
+   systems is refused. Mechanics + pinning tests in `.kb/asdf.md`; user docs in
+   the asdf-systems guide. Measured 2026-08-08 on this same probe:
+   **1,219,894 -> 487,146 B raw / 286,621 -> 128,888 B gzip**, and the
+   committed `examples/cloudflare-workers/httpbin-tiny-routes` Worker
+   (httpbin-clack's endpoints + a `/status/:code` template) is
+   **501,689 / 132,886** where the identical file over full tiny-routes is
+   1,236,811 / 290,230 — the under-1,000,000-B-raw target met with ~0.5 MB of
+   headroom.
 4. **Where the bytes really are: loaded-but-unreferenced cl-ppcre is anchored by
    its CLOS surface — 823,589 B on this module.** With the ppcre-free shim in
    place and the dependency still loaded, ZERO references remain, yet only 0.9%

@@ -2869,6 +2869,11 @@ public final class LispEvaluator {
 			throw new LispEvalException("Circular system :depends-on detected: "
 					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
 		}
+		String conflict = ShimLibraries.conflictingSystem(name);
+		if (conflict != null && this.loadedSystems.contains(conflict)) {
+			throw new LispEvalException("Cannot load system '" + name + "': it defines the same packages as '"
+					+ conflict + "', which is already loaded -- load one of the two, not both");
+		}
 		if (BuiltinSystems.isBuiltin(name)) {
 			// A system rontolisp provides itself (e.g. "usocket" or a dependency shim):
 			// evaluate the embedded library instead of locating a NAME.asd. Its own

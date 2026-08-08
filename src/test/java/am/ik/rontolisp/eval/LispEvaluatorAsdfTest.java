@@ -164,6 +164,21 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void theCloudflareHandlerShimAnswersAHeaderlessResponseAsAnEmptyJsonArray() {
+		// A Clack response may carry no headers at all (tiny-routes' (ok "x") builds
+		// one), and the envelope's headers must still cross as [] -- an empty LIST
+		// would stringify as JSON false, which the Headers constructor on the
+		// JavaScript side rejects. %header-pairs answers a vector for exactly this.
+		String output = run("""
+				(ql:quickload "clack-handler-cloudflare-workers")
+				(defun app (env) (declare (ignore env)) (list 200 nil (list "bare")))
+				(print (clack.handler.cloudflare-workers:handle
+				        #'app "{\\"method\\":\\"GET\\",\\"target\\":\\"/\\"}"))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"headers\\\":[]").doesNotContain("\\\"headers\\\":false");
+	}
+
+	@Test
 	void theCloudflareHandlerShimAnswers500RatherThanLettingAnErrorEscape() {
 		// On a reactor an uncaught error is a trap that takes the whole instance
 		// down, so the transport catches -- as every other rontolisp transport does

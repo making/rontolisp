@@ -614,6 +614,30 @@ examples:
         - '"status":404'
         - '[["content-type","application/json"]]'
 
+  - path: cloudflare-workers/httpbin-tiny-routes/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- httpbin-clack's endpoints routed through the REAL
+      tiny-routes API, loaded as "tiny-routes/lite": the opt-in system whose
+      ppcre-free path-template matcher keeps cl-ppcre out of the module
+      (.kb/asdf.md; the corpus pinning lite == full is TinyRoutesLiteE2eTest).
+      What this pins beyond httpbin-clack's case is the routed Worker end to
+      end on every backend the compiler has: define-any + echo-when answering
+      httpbin's own 405, the /status/:code path template binding a parameter
+      through the lite matcher, a non-numeric :code DECLINING into the
+      catch-all 404, and the ql:quickload spelling of the lite system
+      resolving on the compile paths. Checked with contains, not equals: JSON
+      key order follows hash-table iteration order, which differs per backend.
+    expect:
+      contains:
+        - '\"path\":\"/get\"'
+        - '\"json\":{\"name\":\"rontolisp\"}'
+        - '\"allowed\":\"POST\"'
+        - '"status":418'
+        - '\"path\":\"/status/teapot\"'
+        - '"status":404'
+        - '[["content-type","text/plain; charset=utf-8"]]'
+
   # --- wasm-size: the same two programs the cross-language size table measures ---
   - path: wasm-size/hello_world/hello_world.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
