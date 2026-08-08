@@ -48,7 +48,7 @@ cl-ppcre-backed `path-template.lisp` — for a ppcre-free matcher and drops the
 `:cl-ppcre` dependency with it, and the library API costs **+22,332 B raw**
 over the hand-written `cond`. The last row was
 built from this very `worker.lisp` with only the `ql:quickload` line changed,
-and answers the same six probes byte-for-byte — for 2.4× the module.
+and answers the same six probes byte-for-byte — for 2.2× the module.
 
 111,441 B gzip is **3.5%** of the free plan's 3 MB compressed bundle limit.
 
@@ -98,7 +98,7 @@ fall through to the 404 instead of answering 405).
 | [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the `../httpbin-clack` helpers verbatim, the routes, `clackup`. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` and `../httpbin-clack/src/index.js`. |
-| `src/worker.wasm` | The compiled module (~407 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~397 KB). A build product — run `./build.sh` first. |
 
 ## Developing without Cloudflare
 

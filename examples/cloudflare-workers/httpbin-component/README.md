@@ -34,7 +34,7 @@ disappears here. It is the entire benefit, and it is a genuine one.
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` (195 KB) | 3 × `.wasm` (207 KB) + `worker.js` (293 KB) |
+| Files the Worker imports | 1 × `.wasm` (179 KB) | 3 × `.wasm` (190 KB) + `worker.js` (293 KB) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | 3 interfaces, stubbed by hand |
 | Top-level `defparameter` | works, via `_initialize` | does not work at all |
@@ -114,10 +114,9 @@ Note the keys are the **unversioned** interface names, even though the generated
 When the program fits the `--no-gc` subset. [`../hello`](../hello) has no
 component build of its own, but try it: `--no-gc --component` is an 834-byte
 component that imports *nothing*, so there are no stubs and no exnref flag, and
-the glue has no dependencies:
-
-The output name says which build it is, so it cannot be confused with the
-`worker.wasm` this directory's own `build.sh` produces:
+the glue has no dependencies. The output name says which build it is, so it
+cannot be confused with the `worker.wasm` this directory's own `build.sh`
+produces:
 
 ```bash
 JAR=../../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar

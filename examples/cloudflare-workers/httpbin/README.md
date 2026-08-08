@@ -84,12 +84,12 @@ served request sees**. All that is left to write is the JSON envelope.
 | The application | a Clack application | **the same file**, verbatim | a `rontolisp:http-handler` handler (also the Clack shapes) |
 | How it is installed | thirty hand-written lines | `clack:clackup :server :cloudflare-workers` | `(rontolisp:http-handler 'handle 8080)`, blocking on a socket |
 | clack in the module | **none** | what the tree-shaker keeps of clack and lack | none |
-| Module | **195 KB** (57 KB gzip) | 463 KB (122 KB gzip) | n/a, it is a server |
+| Module | **179 KB** (55 KB gzip) | 375 KB (103 KB gzip) | n/a, it is a server |
 
 So this directory and `../httpbin-clack` ship *the same application* and answer
 *the same JSON*; `src/index.js` is byte-identical between them. What differs is
-only who builds the Clack environment — and that is worth **2.4× the module**
-raw, 2.1× compressed, which is what this directory exists to show. (It used to
+only who builds the Clack environment — and that is worth **2.1× the module**
+raw, 1.9× compressed, which is what this directory exists to show. (It used to
 be 4×, until the `--optimize` funcall-dispatch gate learned to stay closed
 across clack's handler discovery and to drop its dead file-loader — the clack
 build shrank by more than half.) Copy `../httpbin-clack` when you want the
@@ -103,7 +103,7 @@ size matters more than that.
 | [`worker.lisp`](worker.lisp) | **The whole program.** The Clack application (verbatim from upstream) plus the reactor adapter. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`, including the string boundary. |
-| `src/worker.wasm` | The compiled module (~195 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~179 KB). A build product — run `./build.sh` first. |
 
 ## How it works
 
@@ -302,12 +302,12 @@ diff of two backends' output will show it.
 
 `--optimize=size` is not optional here. A Worker bundle has a size limit (see
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)),
-and the tree-shaker is what keeps this module at **200,155 B** instead of
-**521,925 B** — it ships only the functions the program actually reaches, for no
+and the tree-shaker is what keeps this module at **182,767 B** instead of
+**351,950 B** — it ships only the functions the program actually reaches, for no
 behaviour difference — with the `=size` level declining the two
 speed-over-size emissions on top (that part costs a few microseconds per
 request, measured below against `--optimize`: +0.006 ms on a GET). Compressed
-it is **58,793 B**, about 1.9% of the free plan's 3 MB.
+it is **55,895 B**, about 1.8% of the free plan's 3 MB.
 
 Measured on node 24 (2026-08-08, the `=size` builds) driving
 [`src/index.js`](src/index.js)'s boundary code against this exact
@@ -318,7 +318,7 @@ adapter:
 | | this | [`../httpbin-clack`](../httpbin-clack) |
 | --- | --- | --- |
 | imports | **zero** | zero |
-| module | **200,155 B** raw / **58,793 B** gzip | 474,150 B raw / 124,756 B gzip |
+| module | **182,767 B** raw / **55,895 B** gzip | 384,366 B raw / 105,447 B gzip |
 | `WebAssembly.Module` compile | 0.3 ms | 0.6 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
 | `_initialize`, cold | **4.5 ms** | 12.5 ms — clack's entire load time, `clackup` included |
 | warm `GET /get` | 0.024 ms | 0.024 ms |
@@ -329,7 +329,7 @@ adapter:
 a reactor is module size and a little startup — and on Cloudflare startup is paid
 once per isolate, not once per request, which is why `../httpbin-clack` is a
 perfectly reasonable thing to deploy. This directory is the version to reach for
-when the 2.4× module is the thing you cannot afford.
+when the 2.1× module is the thing you cannot afford.
 
 Being a Clack application is not free either: the module carries
 `http-server.lisp` — the environment builder, the response normalizer and the

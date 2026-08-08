@@ -199,10 +199,13 @@ refinement halved the clack build (`.kb/optimize-dead-code-elimination.md`,
 | warm `GET` / `POST` | 0.023 / 0.038 ms | 0.024 / 0.039 ms |
 
 (The example `build.sh` lines pass `--optimize=size` since todo-295: the pair
-moves to 200,155 / 58,793 and 474,150 / 124,756 gzip, for a warm-request price
-of 3-11 µs — `.kb/optimize-dead-code-elimination.md`, "What ROUTING costs a
-clack module". The `--optimize` columns above stay as the controlled
-clack-vs-no-clack measurement.)
+moved to 200,155 / 58,793 and 474,150 / 124,756 gzip that day, for a
+warm-request price of 3-11 µs — `.kb/optimize-dead-code-elimination.md`, "What
+ROUTING costs a clack module". The `--optimize` columns above stay as the
+controlled clack-vs-no-clack measurement. Both tables are RECORDS of their own
+experiment, not the current build: the CLOS-lowering pass that landed after
+them took the same pair to **182,767 / 55,895** and **384,366 / 105,447** —
+what the example READMEs now carry, and what `build.sh` reproduces.)
 
 The hand-written half still pays for being a PORTABLE Clack application: naming
 `%http-make-env` splices `http-server.lisp` — env builder, response normalizer,
