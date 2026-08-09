@@ -109,6 +109,4 @@
               (list (format nil "~a~%" code))))))
   (define-any "*" (req) (no-route req)))
 
-(clack:clackup *app*
-               :server :reactor
-               :use-thread nil)
+(clack:clackup *app* :server :reactor :use-thread nil)

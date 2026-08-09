@@ -76,8 +76,7 @@ directly."
   (declare (ignore ignored))
   (rontolisp::%http-reactor-register app)
   #+rontolisp-wasm
-  (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
-                            "handle-request")
+  (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch "handle-request")
   nil)
 
 (defun clack.handler.reactor:stop (server)

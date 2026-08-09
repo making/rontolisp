@@ -34,6 +34,4 @@
          (format nil "Hello from Clack on Cloudflare Workers!~%~a ~a~%"
                  (getf env :request-method) (getf env :path-info)))))
 
-(clack:clackup #'app
-               :server :reactor
-               :use-thread nil)
+(clack:clackup #'app :server :reactor :use-thread nil)

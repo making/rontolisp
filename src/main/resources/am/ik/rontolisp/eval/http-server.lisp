@@ -463,8 +463,8 @@
     (while rest
       (let ((part (car rest)))
         (cond ((stringp part) (write-string part out))
-              ((null part) nil)
-              (t (error "http-handler: a list response body must hold strings"))))
+         ((null part) nil)
+         (t (error "http-handler: a list response body must hold strings"))))
       (setq rest (cdr rest)))
     (get-output-stream-string out)))
 

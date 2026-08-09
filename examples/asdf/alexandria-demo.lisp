@@ -7,8 +7,14 @@
 (asdf:load-system :alexandria)
 
 ;; binding constructs
-(print (alexandria:if-let ((x (find 3 '(1 2 3)))) (* x 10) :none))
-(print (alexandria:if-let ((x (find 9 '(1 2 3)))) (* x 10) :none))
+(print
+ (alexandria:if-let ((x (find 3 '(1 2 3))))
+   (* x 10)
+   :none))
+(print
+ (alexandria:if-let ((x (find 9 '(1 2 3))))
+   (* x 10)
+   :none))
 (print (alexandria:when-let ((x 5)) (* x 2)))
 (print (alexandria:when-let* ((x 1) (y (+ x 1))) (list x y)))
 

@@ -25,6 +25,4 @@
   (define-any "*" (req)
     (not-found (format nil "no route for ~a~%" (path-info req)))))
 
-(clack:clackup *app*
-               :server :reactor
-               :use-thread nil)
+(clack:clackup *app* :server :reactor :use-thread nil)

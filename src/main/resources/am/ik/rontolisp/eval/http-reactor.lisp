@@ -94,9 +94,9 @@
   ;; The Host header supplies :server-name / :server-port, so the two
   ;; placeholders below never win when the host sends one.
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
-   (rontolisp::%http-reactor-header-alist (gethash "headers" req))
-   (rontolisp::%http-body-stream (gethash "body" req)) "HTTP/1.1"
-   (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
+        (rontolisp::%http-reactor-header-alist (gethash "headers" req))
+        (rontolisp::%http-body-stream (gethash "body" req)) "HTTP/1.1"
+        (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
 
 (defun rontolisp::%http-reactor-envelope (status headers body)
   (rontolisp:json-stringify
@@ -113,9 +113,11 @@ answer the JSON response. See the envelope in this file's header."
                         (rontolisp::%http-make-env
                          (rontolisp::%http-reactor-request-tuple req)))
                        (triple
-                        (rontolisp::%http-normalize-response (funcall app env))))
+                        (rontolisp::%http-normalize-response
+                         (funcall app env))))
                   (rontolisp::%http-reactor-envelope (car triple)
-                   (car (cdr triple)) (car (cdr (cdr triple)))))
+                                                     (car (cdr triple))
+                                                     (car (cdr (cdr triple)))))
     (error (e)
       (rontolisp::%http-reactor-envelope 500
        (list (cons "content-type" "application/json"))

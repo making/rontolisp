@@ -30,39 +30,32 @@
   :serial t
   :depends-on (:cl-ppcre :uiop)
   :pathname "src/"
-  :components ((:file "util")
-               (:file "request")
-               (:file "response")
+  :components ((:file "util") (:file "request") (:file "response")
                (:module "middleware"
-                :serial t
-                :components ((:file "builder")
-                             (:file "method")
-                             (:file "path-template")
-                             (:file "query-parameters")
-                             (:file "request-body")
-                             (:file "response")
-                             (:file "middleware")))
+                        :serial t
+                        :components ((:file "builder") (:file "method")
+                                     (:file "path-template")
+                                     (:file "query-parameters")
+                                     (:file "request-body") (:file "response")
+                                     (:file "middleware")))
                (:file "tiny-routes"))
   :in-order-to ((test-op (test-op :tiny-routes/test))))
 
 (defsystem "tiny-routes/lite"
-  :description "tiny-routes with a ppcre-free path-template matcher (no :cl-ppcre)"
+  :description
+  "tiny-routes with a ppcre-free path-template matcher (no :cl-ppcre)"
   :license "BSD 3-Clause"
   :serial t
   :depends-on (:uiop)
   :pathname "src/"
-  :components ((:file "util")
-               (:file "request")
-               (:file "response")
+  :components ((:file "util") (:file "request") (:file "response")
                (:module "middleware"
-                :serial t
-                :components ((:file "builder")
-                             (:file "method")
-                             (:file "path-template")
-                             (:file "query-parameters")
-                             (:file "request-body")
-                             (:file "response")
-                             (:file "middleware")))
+                        :serial t
+                        :components ((:file "builder") (:file "method")
+                                     (:file "path-template")
+                                     (:file "query-parameters")
+                                     (:file "request-body") (:file "response")
+                                     (:file "middleware")))
                (:file "tiny-routes")))
 
 (defsystem "tiny-routes/test"
