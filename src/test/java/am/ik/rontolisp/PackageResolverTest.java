@@ -3,6 +3,7 @@ package am.ik.rontolisp;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
 
@@ -871,6 +872,38 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :gl (:use :cl) (:export :create-shader))");
 		resolve(resolver, "(in-package :gl)");
 		assertThat(resolver.resolve(new LispSymbol("create-shader"))).isEqualTo(new LispSymbol("GL:CREATE-SHADER"));
+	}
+
+	@Test
+	void aRewrittenFormKeepsTheSourcePositionOfTheFormItResolved() {
+		// The cons-identity rule (.kb/source-positions.md) covers a form nothing
+		// resolved differently; this is the other half. Under (in-package :probe)
+		// essentially every form IS rewritten -- an unqualified name resolves to the
+		// package's canonical spelling, *package* to a quoted package name -- so
+		// without inheritance the whole file, from the top-level form down, is conses
+		// the provenance table has never seen, and every post-read error about it
+		// reports with no position at all.
+		SourceProvenance.startRecording();
+		try {
+			List<LispVal> program = LispReader.readAllFromString("""
+					(defpackage :probe
+					  (:use :cl))
+					(in-package :probe)
+					(defun g (x)
+					  (list *package* (helper x)))
+					""", Features.JVM, "prog.lisp");
+			List<LispVal> resolved = new PackageResolver().resolveProgram(program);
+			LispVal defun = resolved.get(2);
+			assertThat(defun.print())
+				.isEqualTo("(DEFUN PROBE::G (PROBE::X) (LIST (QUOTE PROBE) (PROBE::HELPER PROBE::X)))");
+			assertThat(SourceProvenance.locate(defun)).isEqualTo(new SourceLocation("prog.lisp", 4, 1));
+			LispVal body = ((LispCons) ((LispCons) ((LispCons) defun).cdr()).cdr()).cdr();
+			assertThat(SourceProvenance.locate(((LispCons) body).car()))
+				.isEqualTo(new SourceLocation("prog.lisp", 5, 3));
+		}
+		finally {
+			SourceProvenance.stopRecording();
+		}
 	}
 
 }

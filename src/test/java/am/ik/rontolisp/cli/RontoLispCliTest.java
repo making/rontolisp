@@ -299,6 +299,34 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aMalformedFormKeepsItsLineInsideAPackageQualifiedFile() throws Exception {
+		// The OTHER half of the same rule: the package resolver genuinely REWRITES
+		// every form that names something the current package resolves differently
+		// -- *package*, an unqualified name of a non-cl-user package -- so the rebuilt
+		// cons has to INHERIT the position of the one it replaces. That is not a rare
+		// shape: it is every form of every file that says (in-package :foo) and then
+		// names anything qualified, i.e. the whole of every quickloaded library, which
+		// used to report with no position at all -- neither its own line nor the
+		// top-level one.
+		Path file = this.tempDir.resolve("bad.lisp");
+		Files.writeString(file, """
+				(defpackage :probe
+				  (:use :cl))
+				(in-package :probe)
+				(defun g (x)
+				  (let ((a *package*) (b (helper x)) 2)
+				    (list a b)))
+				(defun helper (x) x)
+				(print (g 1))
+				""");
+		for (String output : new String[] { "Bad.class", "bad.wasm" }) {
+			assertThatThrownBy(() -> runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString()))
+				.isInstanceOf(LispCompileException.class)
+				.hasMessageContaining("bad.lisp:5:3:");
+		}
+	}
+
+	@Test
 	void aMalformedTopLevelCheckTypeNamesItsOwnLine() throws Exception {
 		// A top-level check-type/assert is expanded by the free-variable walk, before any
 		// pass with a position hook has looked at it, so its complaint used to arrive

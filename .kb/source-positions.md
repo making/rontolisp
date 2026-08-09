@@ -125,10 +125,11 @@ DOTTED original, whose proper-list rebuild would have dropped the tail
 
 Made identity-preserving for this (each has a comment saying so at the rebuild
 site): `CompileTimePathnameFolder.recurseCons`/`foldDefParam`/`foldWithOpenFile`,
-`PackageResolver.resolveCons` (generic walk + the `quote` branch) and
-`resolveSymbol` (a name that resolves to itself hands back the symbol as read --
-symbols carry no identity here, there is no intern table, so a fresh copy is
-indistinguishable in behavior but forces the enclosing cons to be rebuilt),
+`PackageResolver.resolveCons` (generic walk + the `quote` branch + `resolveQuotedDatum`,
+which used to copy every quoted list of every program) and its `resolveSymbol` (a name
+that resolves to itself hands back the symbol as read -- symbols carry no identity here,
+there is no intern table, so a fresh copy is indistinguishable in behavior but forces the
+enclosing cons to be rebuilt),
 `TlsPemInliner.rewrite`, `LambdaLists.desugar`, `CrossLambdaExitLowering`
 (`structural` plus `transformLambda`/`transformDefun`/`transformFunction`),
 `JsonLibrary`'s call-site walk, `GrayStreamsLibrary.rewriteBindingForm`,
@@ -167,6 +168,23 @@ recording). `PureBuiltinFolder` -- whose folds land in essentially every real pr
 -- routes every rebuild through it, and it is the general answer for the next
 rewriting pass. Pinned by
 `PureBuiltinFolderTest.aFoldedFormKeepsTheSourcePositionItReplaced`.
+
+**A pass can owe BOTH halves, and `PackageResolver` is the one that owes them most.**
+It satisfied the identity half and not the inheriting one, which made it the widest
+position hole there was: a form in which a single symbol resolves to a different name
+is genuinely rewritten, so it -- and every ancestor up to the top-level form -- became
+a cons the table had never seen, and the innermost-located-ancestor fallback found
+nothing to report against. That is not a rare shape; it is every form of every file
+that says `(in-package :foo)` and then names anything qualified (or just reads
+`*package*`), i.e. the whole of every quickloaded library. Every rebuild site of
+`resolveCons` -- the generic walk, the `quote`/`defmacro`/`macrolet`/`case` branches,
+the `find-package` fold, the wasm/wit directives and the introspection normalizer --
+now inherits. What legitimately still coarsens is a CONSUMED top-level directive
+(`in-package`, `defpackage`, `export`), which is replaced by a constant no later pass
+can fail inside. Pinned by
+`RontoLispCliTest#aMalformedFormKeepsItsLineInsideAPackageQualifiedFile` (without it
+the failure has no position at all, so the compile boundary does not even wrap it --
+a raw `ClassCastException` reaches the user).
 
 ## Phase 3 -- the source position literals a PROGRAM can read
 
@@ -227,6 +245,7 @@ helpers), `RontoLispCliTest`
 (`aMacroThatSignalsWhileExpandingNamesItsCallSiteInTheLoadedFile`,
 `aMalformedFormDeepInsideADefunNamesItsOwnLineOnBothCompileBackends`,
 `aMalformedFormKeepsItsLineWhenTheProgramAlsoTriggersALibrarySplice`,
+`aMalformedFormKeepsItsLineInsideAPackageQualifiedFile`,
 `aMalformedTopLevelCheckTypeNamesItsOwnLine`,
 `aCallToAnUndefinedFunctionWarnsAtItsCallSite`,
 `anUndefinedFunctionWarnsExactlyOncePerCallSite`,

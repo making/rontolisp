@@ -826,7 +826,7 @@ public final class PackageResolver {
 				resolved.add(cell.car() instanceof LispSymbol el ? resolveSymbol(el) : cell.car());
 				tail = cell.cdr();
 			}
-			return properListOf(resolved);
+			return SourceProvenance.inherit(keyList, LispCons.rebuiltList(keyList, resolved));
 		}
 		return key;
 	}
@@ -861,7 +861,8 @@ public final class PackageResolver {
 			if (datum == datumCons.car() && LispNames.QUOTE.equals(op.name())) {
 				return cons;
 			}
-			return new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE));
+			return SourceProvenance.inherit(cons,
+					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(datum, LispNil.INSTANCE)));
 		}
 		if (cons.car() instanceof LispSymbol rawOp && LispNames.DEFPACKAGE.equals(operatorMember(rawOp))) {
 			// resolveCons only sees non-top-level forms (resolve() consumes the
@@ -880,7 +881,8 @@ public final class PackageResolver {
 			boolean saved = this.inMacroDefinition;
 			this.inMacroDefinition = true;
 			try {
-				return new LispCons(resolveForm(cons.car()), resolveForm(cons.cdr()));
+				return SourceProvenance.inherit(cons,
+						LispCons.rebuilt(cons, resolveForm(cons.car()), resolveForm(cons.cdr())));
 			}
 			finally {
 				this.inMacroDefinition = saved;
@@ -899,7 +901,8 @@ public final class PackageResolver {
 			finally {
 				this.inMacroDefinition = saved;
 			}
-			return new LispCons(resolveForm(cons.car()), new LispCons(defs, resolveForm(defsCell.cdr())));
+			return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, resolveForm(cons.car()),
+					LispCons.rebuilt(defsCell, defs, resolveForm(defsCell.cdr()))));
 		}
 		if (cons.car() instanceof LispSymbol caseOp && (LispNames.CASE.equals(operatorMember(caseOp))
 				|| LispNames.ECASE.equals(operatorMember(caseOp)) || LispNames.CCASE.equals(operatorMember(caseOp)))
@@ -928,14 +931,15 @@ public final class PackageResolver {
 						newClause.add(resolveForm(bodyCell.car()));
 						body = bodyCell.cdr();
 					}
-					resolvedParts.add(properListOf(newClause));
+					resolvedParts
+						.add(SourceProvenance.inherit(clauseCons, LispCons.rebuiltList(clauseCons, newClause)));
 				}
 				else {
 					resolvedParts.add(resolveForm(clauseCell.car()));
 				}
 				clauses = clauseCell.cdr();
 			}
-			return properListOf(resolvedParts);
+			return SourceProvenance.inherit(cons, LispCons.rebuiltList(cons, resolvedParts));
 		}
 		if (cons.car() instanceof LispSymbol findPkgOp && LispNames.FIND_PACKAGE.equals(operatorMember(findPkgOp))
 				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil) {
@@ -947,7 +951,8 @@ public final class PackageResolver {
 			String designator = literalDesignator(argCell.car());
 			if (designator != null) {
 				String found = findPackageName(designator);
-				return found == null ? LispNil.INSTANCE : quotedSymbol(":" + found.toUpperCase(java.util.Locale.ROOT));
+				return SourceProvenance.inherit(cons, found == null ? LispNil.INSTANCE
+						: quotedSymbol(":" + found.toUpperCase(java.util.Locale.ROOT)));
 			}
 		}
 		LispVal car = resolveForm(cons.car());
@@ -970,7 +975,7 @@ public final class PackageResolver {
 					// a
 					// special form, and in both cases the names it BINDS are canonical
 					// already.
-					return new LispCons(op, cons.cdr());
+					return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, op, cons.cdr()));
 				}
 			}
 		}
@@ -1003,7 +1008,13 @@ public final class PackageResolver {
 		for (int i = rest.size() - 1; i >= 0; i--) {
 			result = new LispCons(rest.get(i), result);
 		}
-		return new LispCons(car, result);
+		// The other half of the rule: a form something DID resolve differently is a
+		// genuine REWRITE, and every cons from here down to that symbol is a fresh key
+		// in the identity-keyed table. The rewritten form stands for the same source
+		// text, so it takes the original's position. Otherwise every form of every file
+		// that says (in-package :foo) and then names anything qualified -- the whole of
+		// every quickloaded library -- reports with no position at all.
+		return SourceProvenance.inherit(cons, new LispCons(car, result));
 	}
 
 	/**
@@ -1027,17 +1038,18 @@ public final class PackageResolver {
 				if (nameArg instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
 						&& LispNames.QUOTE.equals(operatorMember(quoteOp)) && quoted.cdr() instanceof LispCons datumCell
 						&& datumCell.car() instanceof LispSymbol nameSym && !nameSym.isKeyword()) {
-					resolvedName = new LispCons(new LispSymbol(LispNames.QUOTE),
-							new LispCons(resolveSymbol(nameSym), LispNil.INSTANCE));
+					resolvedName = SourceProvenance.inherit(quoted, new LispCons(new LispSymbol(LispNames.QUOTE),
+							new LispCons(resolveSymbol(nameSym), LispNil.INSTANCE)));
 				}
 				else {
 					resolvedName = resolveForm(nameArg);
 				}
 				this.inHostFacingData = true;
-				return new LispCons(op, new LispCons(resolvedName, resolveForm(nameCell.cdr())));
+				return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, op,
+						LispCons.rebuilt(nameCell, resolvedName, resolveForm(nameCell.cdr()))));
 			}
 			this.inHostFacingData = true;
-			return new LispCons(op, resolveForm(cons.cdr()));
+			return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, op, resolveForm(cons.cdr())));
 		}
 		finally {
 			this.inHostFacingData = saved;
@@ -1058,7 +1070,7 @@ public final class PackageResolver {
 	private LispVal resolveIntrospection(LispSymbol op, String member, LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() == 1) {
-			return new LispCons(op, LispNil.INSTANCE);
+			return SourceProvenance.inherit(cons, LispCons.rebuilt(cons, op, LispNil.INSTANCE));
 		}
 		if (parts.size() > 2) {
 			throw new LispPackageException(member + " expects at most one package-designator argument");
@@ -1072,7 +1084,8 @@ public final class PackageResolver {
 		if (!this.registry.contains(name)) {
 			throw new LispPackageException("No such package: " + name);
 		}
-		return new LispCons(op, new LispCons(new LispSymbol(":" + name), LispNil.INSTANCE));
+		return SourceProvenance.inherit(cons,
+				new LispCons(op, new LispCons(new LispSymbol(":" + name), LispNil.INSTANCE)));
 	}
 
 	// Resolves every symbol inside a quoted datum (recursively through conses);
@@ -1094,7 +1107,12 @@ public final class PackageResolver {
 	private LispVal resolveQuotedDatum(LispVal datum) {
 		return switch (datum) {
 			case LispSymbol sym -> resolveSymbol(sym);
-			case LispCons c -> new LispCons(resolveQuotedDatum(c.car()), resolveQuotedDatum(c.cdr()));
+			// Identity-preserving, and inheriting when it is not. A datum whose symbols
+			// all resolve to themselves is EVERY quoted list of an ordinary cl-user
+			// file, and rebuilding one used to make its (quote ...) form -- and every
+			// ancestor of that -- a fresh cons the provenance table has never seen.
+			case LispCons c -> SourceProvenance.inherit(c,
+					LispCons.rebuilt(c, resolveQuotedDatum(c.car()), resolveQuotedDatum(c.cdr())));
 			default -> datum;
 		};
 	}
@@ -1615,15 +1633,6 @@ public final class PackageResolver {
 	private static String operatorMember(LispSymbol op) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 		return qn == null ? op.name() : qn.member();
-	}
-
-	/** Builds a proper list from the given elements. */
-	private static LispVal properListOf(List<LispVal> elements) {
-		LispVal result = LispNil.INSTANCE;
-		for (int i = elements.size() - 1; i >= 0; i--) {
-			result = new LispCons(elements.get(i), result);
-		}
-		return result;
 	}
 
 	private static LispVal quotedSymbol(String name) {
