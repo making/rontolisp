@@ -122,6 +122,59 @@ handler with a request plist you build yourself, which is what
 [`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/tiny-routes-demo.lisp)
 does. Serving them has the backend constraints below.
 
+### The other answer: ningle
+
+[ningle](https://github.com/fukamachi/ningle) loads unmodified too, and it is a
+different model rather than a different spelling. The application is a CLOS
+**object** you hang routes on, each route is a `setf`, a controller receives the
+matched **parameters** (the request itself is in a special variable), and a
+controller that is not a function at all is answered as the body:
+
+```console
+$ cat ningle-app.lisp
+(ql:quickload "clack")
+(ql:quickload "ningle")
+
+(defpackage :demo (:use :cl))
+(in-package :demo)
+
+(defvar *app* (make-instance 'ningle:app))
+
+(setf (ningle:route *app* "/") "Welcome to ningle!")
+(setf (ningle:route *app* "/hello/:name")
+      (lambda (params) (format nil "Hello, ~A" (cdr (assoc :name params)))))
+(setf (ningle:route *app* "/submit" :method :POST)
+      (lambda (params) (format nil "posted ~A" (cdr (assoc "q" params :test #'string=)))))
+
+(clack:clackup *app* :server :rontolisp :port 5000 :use-thread nil)
+$ rontolisp ningle-app.lisp
+$ curl http://127.0.0.1:5000/
+Welcome to ningle!
+$ curl http://127.0.0.1:5000/hello/Eitaro
+Hello, Eitaro
+$ curl -XPOST -d q=abc http://127.0.0.1:5000/submit
+posted abc
+$ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
+404
+```
+
+Four differences are worth knowing before picking one:
+
+- **Routes are added, not listed.** `(setf (ningle:route ...))` mutates the
+  application, so routes can come from anywhere — including from run-time data.
+- **Query and body parameters arrive in the same alist** as the template's
+  `:name` bindings (keyed by the string name), because ningle reads every
+  request through `lack-request`. tiny-routes never touches that chain, and that
+  is most of the size difference in a compiled module — an order of magnitude
+  for the same two routes, with no ppcre-free opt-in to fall back on, since
+  ningle's router compiles every rule to a scanner.
+- **The 404 is a method**, `ningle:not-found`, rather than a catch-all route,
+  and `ningle:*response*` is mutable — which is how a controller answers a
+  status other than 200.
+- **A route can be chosen by something that is not the path.** `:accept`
+  negotiation is built in, and `(setf (ningle:requirement app :key) fn)`
+  registers your own; the closure runs on every dispatch.
+
 ## Backends
 
 The `:server :rontolisp` line does not change between these — it means "serve

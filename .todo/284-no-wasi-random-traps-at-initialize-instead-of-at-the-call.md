@@ -102,6 +102,22 @@ makes `lack-request` load.
 - The `.kb` file for the `--no-wasi` backend records what `random` does there
   and why, so the next visitor can tell whether the reason still holds.
 
+## A second consumer is now blocked on this (2026-08-09, todo-300)
+
+`examples/cloudflare-workers/hello-ningle/` is a complete, working ningle
+application -- interpreter, JVM and Preview 1 all green through its
+`check.lisp`, and the same routes serve under `wasmtime serve` -- whose
+`--no-wasi` Worker build is the ONE thing that does not run: ningle reads every
+request through `lack-request`, so it inherits exactly the chain measured above
+and `_initialize` traps. Its README and the `cloudflare-workers/README.md` row
+say so and point at `httpbin-clack`'s measurement rather than repeating it.
+
+So the "Done when" below now has a second, sharper acceptance case: when
+`lack-request` instantiates, that directory becomes deployable with no source
+change, and its README loses the blockquote at the top. It also raises the
+stakes on option 2 -- the routing library a Clack user is most likely to reach
+for cannot be put on a Worker at all today.
+
 ## Related
 
 `examples/cloudflare-workers/httpbin-clack/README.md` (the measurement above,

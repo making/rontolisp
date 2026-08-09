@@ -13,6 +13,41 @@ its cookie middleware, both quickloaded unpatched; `.kb/asdf.md`), because "one
 handler function" is not what an application looks like and the routes are read
 inside the application's own package.
 
+## Two routing layers are verified, and they are a different test
+
+**tiny-routes** (`ClackE2eTest`'s second trio) and **ningle** v0.3.0 +
+myway + map-set (`NingleE2eTest`, opt-in `RONTOLISP_NINGLE_E2E=1`, same three
+legs) both load unpatched and both serve on the interpreter, the JVM and the
+`--component` build. Keeping the second one is not redundancy — it exercises
+machinery the first has no counterpart for, and each of these is what broke
+while it was being made to work:
+
+- **The application is a CLOS object**, a `lack-component`, so serving it goes
+  through `defmethod call :around` + `call-next-method` and
+  `(setf (find-class '<app>) (find-class 'app))` rather than through funcalling
+  a composed closure.
+- **Dispatch runs REQUIREMENT closures compiled at route-DEFINITION time**
+  (`ningle/route::compile-requirements` closes over a `loop for (name val) on
+  ... by #'cddr` pair), so a route can be selected by something that is not the
+  path — `:accept` negotiation, or a user's `(setf (ningle:requirement app
+  :key) fn)`. That closure is what the `.kb/loop-iteration-heads.md` fix exists
+  for: before it, every requirement answered "unsatisfied".
+- **ningle reads every request through `lack-request`**, which tiny-routes
+  never touches: the http-body / fast-http / smart-buffer / circular-streams /
+  quri / yason / trivial-mimes chain is compiled and run by these legs. That
+  chain is also ~2 MB of a ~2.7 MB module, and the reason a ningle Worker
+  cannot be built today — its load-time `random` is `.todo/284`, not ningle's
+  doing. There is no size opt-in to offer either (myway compiles every rule to
+  a cl-ppcre scanner), which is the deliberate difference from
+  `tiny-routes/lite`.
+- **`ningle:not-found` sets the status and returns nil**, so lack's
+  `finalize-response` answers a body LIST holding NIL and every ningle 404 has
+  that shape — the response-contract arm in `.kb/http-server.md`.
+
+Preview 1 cannot serve either of them, but ningle's ROUTING runs there:
+`examples/cloudflare-workers/hello-ningle/check.lisp` drives it through the
+reactor path on the interpreter, the JVM and Preview 1 (`examples/examples.yaml`).
+
 ## The handler backend is a built-in shim system, found LATE-BOUND by name
 
 `clack-handler-rontolisp.lisp` (`ShimLibraries`/`BuiltinSystems` +

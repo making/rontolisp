@@ -297,7 +297,7 @@ class HttpHandlerTest {
 	@Test
 	void directiveServesTheTwoElementBodylessResponse() throws Exception {
 		// lack's finalize-response answers (status headers) for a bodyless response --
-		// every ningle 404 has that shape.
+		// the shape it takes when make-response was given no body argument at all.
 		int port = freePort();
 		serveInBackground("""
 				(defun handle (env) (list 204 nil))
@@ -306,6 +306,25 @@ class HttpHandlerTest {
 		HttpResponse<String> response = get(port, "/");
 		assertThat(response.statusCode()).isEqualTo(204);
 		assertThat(response.body()).isEmpty();
+	}
+
+	@Test
+	void directiveServesABodyListHoldingNil() throws Exception {
+		// A controller that returns nil: lack's finalize-response answers a body LIST
+		// whose one element is NIL, which is every ningle 404. Upstream renders a NIL
+		// chunk as nothing, so it contributes the empty string here too.
+		int port = freePort();
+		serveInBackground("""
+				(defun handle (env)
+				  (if (string= (getf env :path-info) "/mixed")
+				      (list 200 nil (list "a" nil "b"))
+				      (list 404 nil (list nil))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> missing = get(port, "/");
+		assertThat(missing.statusCode()).isEqualTo(404);
+		assertThat(missing.body()).isEmpty();
+		assertThat(get(port, "/mixed").body()).isEqualTo("ab");
 	}
 
 	// The wasi:keyvalue store, cut to what a page-hit counter binds. The component built

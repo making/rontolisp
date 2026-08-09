@@ -7445,11 +7445,18 @@ public final class LispEvaluator {
 			case LispCons parts -> {
 				StringBuilder out = new StringBuilder();
 				for (LispVal cursor = parts; cursor instanceof LispCons cons; cursor = cons.cdr()) {
-					if (!(cons.car() instanceof LispString part)) {
-						throw new LispEvalException(
+					switch (cons.car()) {
+						case LispString part -> out.append(part.value());
+						// A NIL element contributes the empty string, as upstream
+						// renders it: clack-handler-hunchentoot writes every chunk
+						// through flex:string-to-octets, which answers #() for NIL.
+						// A controller that returns nil reaches lack's
+						// finalize-response, which answers the body list (NIL).
+						case LispNil ignored -> {
+						}
+						default -> throw new LispEvalException(
 								LispNames.HTTP_HANDLER + ": a list response body must hold strings");
 					}
-					out.append(part.value());
 				}
 				return out.toString();
 			}

@@ -7794,6 +7794,13 @@ cases:
       ;; THREE-element (404 () (NIL)) instead -- its make-context passes the body
       ;; argument, so has-body is true
       (print (rontolisp::%http-normalize-response (list 404 nil)))
+      ;; that (404 () (NIL)): a body LIST holding NIL, which is what a controller
+      ;; returning nil comes to. Upstream renders a NIL chunk as nothing --
+      ;; clack-handler-hunchentoot writes every chunk through
+      ;; flex:string-to-octets and that answers #() for NIL -- so it contributes
+      ;; the empty string here too, mixed among strings as well
+      (print (rontolisp::%http-normalize-response (list 404 nil (list nil))))
+      (print (rontolisp::%http-normalize-response (list 200 nil (list "a" nil "b"))))
       ;; dotted-alist headers pass through (a proxied fetch result's :headers),
       ;; values are stringified, repeated names stay repeated
       (print (rontolisp::%http-normalize-response
@@ -7816,6 +7823,8 @@ cases:
     expected: |
       (200 (("content-type" . "text/plain")) "abc")
       (404 NIL "")
+      (404 NIL "")
+      (200 NIL "ab")
       (200 (("x-a" . "1") ("set-cookie" . "a=1") ("set-cookie" . "b=2")) "")
       (200 NIL "hi")
       (201 NIL "later")

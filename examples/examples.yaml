@@ -517,6 +517,18 @@ examples:
       portable Clack application too -- on the two backends where clackup can
       bind (a blocking server, hence compile-only). It also pins that the lite
       system's ql:quickload spelling resolves on both compile paths.
+  - path: net/httpbin-ningle.lisp
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      the same endpoints again, routed by ningle: an application OBJECT with a
+      route per method, a /status/:code path template, and the 405/404 split
+      answered by an overridden ningle:not-found METHOD rather than a catch-all
+      route. What it pins beyond the tiny-routes case is the other routing
+      model on the two backends where clackup can bind (a blocking server,
+      hence compile-only) -- a CLOS library generic specialized from the
+      application's own package, requirement closures compiled when the route
+      is defined, and the whole lack-request chain (http-body / fast-http /
+      smart-buffer) compiling, which ningle reads every request through.
   - path: net/httpbin-clos.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/httpbin-jzon.lisp
@@ -578,6 +590,28 @@ examples:
     expect:
       contains:
         - 'Hello from tiny-routes on Cloudflare Workers'
+        - 'Hello, rontolisp!'
+        - 'no route for /anything'
+        - '"status":404'
+  - path: cloudflare-workers/hello-ningle/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      the same Worker a third way: ningle, where the application is a CLOS
+      OBJECT and each route is a `setf` on it. What it pins beyond
+      hello-tiny-routes' case is ningle's own model on every backend the
+      compiler has -- a bare STRING as a controller (ningle answers it as the
+      body), the "/hello/:name" template binding a parameter through myway's
+      ppcre scanner, and the 404 coming from an overridden ningle:not-found
+      METHOD, which is a defmethod on a library generic from the application's
+      package. The --no-wasi Worker build itself is NOT covered here and does
+      not instantiate today (ningle reads requests through lack-request, whose
+      chain draws random at load time); the reactor path this drives is the
+      same one, minus that. Checked with contains, not equals:
+      the demo prints clackup's own start-up banner, and JSON key order differs
+      per backend.
+    expect:
+      contains:
+        - 'Hello from ningle on Cloudflare Workers'
         - 'Hello, rontolisp!'
         - 'no route for /anything'
         - '"status":404'

@@ -185,6 +185,25 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
+	void compiledDirectiveServesABodyListHoldingNil() throws Exception {
+		// The compiled half of the same contract: lack's finalize-response answers a
+		// body LIST holding NIL for a controller that returned nil (every ningle 404),
+		// and a NIL chunk contributes the empty string.
+		int port = freePort();
+		compileAndServeInBackground("""
+				(defun handle (env)
+				  (if (string= (getf env :path-info) "/mixed")
+				      (list 200 nil (list "a" nil "b"))
+				      (list 404 nil (list nil))))
+				(rontolisp:http-handler 'handle %d)
+				""".formatted(port), port);
+		HttpResponse<String> missing = get(port, "/");
+		assertThat(missing.statusCode()).isEqualTo(404);
+		assertThat(missing.body()).isEmpty();
+		assertThat(get(port, "/mixed").body()).isEqualTo("ab");
+	}
+
+	@Test
 	void compiledDirectiveSurvivesOptimize() throws Exception {
 		// --optimize (JvmClassShaker) must keep handle(): HttpHandlerSupport invokes it
 		// through the Handler interface, an edge the call-graph shaker cannot see.

@@ -122,6 +122,60 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
 [`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/tiny-routes-demo.lisp)
 がそれをしています。serve する場合は下記のバックエンド制約が付きます。
 
+### もう 1 つの答え: ningle
+
+[ningle](https://github.com/fukamachi/ningle) も無改変でロードでき、こちらは
+書き方の違いではなくモデルそのものが異なります。アプリケーションはルートを
+ぶら下げる CLOS の**オブジェクト**で、各ルートは `setf`、コントローラは環境では
+なくマッチした**パラメータ**を受け取り (リクエスト自体はスペシャル変数にあり
+ます)、そもそも関数でないコントローラはそのままボディとして返されます:
+
+```console
+$ cat ningle-app.lisp
+(ql:quickload "clack")
+(ql:quickload "ningle")
+
+(defpackage :demo (:use :cl))
+(in-package :demo)
+
+(defvar *app* (make-instance 'ningle:app))
+
+(setf (ningle:route *app* "/") "Welcome to ningle!")
+(setf (ningle:route *app* "/hello/:name")
+      (lambda (params) (format nil "Hello, ~A" (cdr (assoc :name params)))))
+(setf (ningle:route *app* "/submit" :method :POST)
+      (lambda (params) (format nil "posted ~A" (cdr (assoc "q" params :test #'string=)))))
+
+(clack:clackup *app* :server :rontolisp :port 5000 :use-thread nil)
+$ rontolisp ningle-app.lisp
+$ curl http://127.0.0.1:5000/
+Welcome to ningle!
+$ curl http://127.0.0.1:5000/hello/Eitaro
+Hello, Eitaro
+$ curl -XPOST -d q=abc http://127.0.0.1:5000/submit
+posted abc
+$ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
+404
+```
+
+どちらを選ぶかの前に知っておく価値のある違いが 4 つあります:
+
+- **ルートは列挙するのではなく追加します。** `(setf (ningle:route ...))` は
+  アプリケーションを破壊的に変更するので、ルートはどこからでも — 実行時の
+  データからでも — 追加できます。
+- **クエリとボディのパラメータはテンプレートの `:name` 束縛と同じ alist に
+  入ります** (キーは文字列名)。ningle が毎リクエストを `lack-request` 経由で
+  読むためです。tiny-routes はこのチェーンに一切触れず、コンパイル済みモジュール
+  のサイズ差はほぼそこから来ます — 同じ 2 ルートで一桁違い、しかも ningle の
+  ルータは全ルールをスキャナにコンパイルするため、ppcre なしのオプトインという
+  逃げ道もありません。
+- **404 はキャッチオールのルートではなくメソッド** `ningle:not-found` です。
+  また `ningle:*response*` は変更可能で、コントローラが 200 以外のステータスを
+  返すのはこの経路です。
+- **パス以外の条件でルートを選べます。** `:accept` ネゴシエーションは組み込み
+  で、`(setf (ningle:requirement app :key) fn)` で独自の条件を登録できます。
+  そのクロージャは毎回のディスパッチで実行されます。
+
 ## バックエンド
 
 `:server :rontolisp` の行はどのバックエンドでも変わりません — 「このターゲット

@@ -18,9 +18,7 @@
 ;;     wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y \
 ;;       httpbin-tiny-routes.wasm
 ;; Preview 1 has no incoming TCP: the program compiles, clackup fails at run
-;; time. Under --component the host owns the socket, so :port is ignored -- and
-;; a condition signaled and caught inside a served request traps there today,
-;; which /status/teapot (a :code that is not a number) is the one route to hit.
+;; time. Under --component the host owns the socket, so :port is ignored.
 ;;
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
 ;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post

@@ -454,12 +454,17 @@
     (get-output-stream-string out)))
 
 (defun rontolisp::%http-join-strings (parts)
+  ;; A NIL element contributes the empty string, as upstream renders it:
+  ;; clack-handler-hunchentoot writes every chunk through flex:string-to-octets,
+  ;; and that answers #() for NIL. It is not an exotic body either -- a
+  ;; controller that returns nil (ningle's not-found does) reaches lack's
+  ;; finalize-response, which answers the body list (NIL).
   (let ((out (make-string-output-stream)) (rest parts))
     (while rest
       (let ((part (car rest)))
-        (if (stringp part)
-            (write-string part out)
-            (error "http-handler: a list response body must hold strings")))
+        (cond ((stringp part) (write-string part out))
+              ((null part) nil)
+              (t (error "http-handler: a list response body must hold strings"))))
       (setq rest (cdr rest)))
     (get-output-stream-string out)))
 

@@ -146,7 +146,12 @@ keeps it regardless.
   `transfer-encoding` are dropped (the transport computes framing).
 - `body`: a LIST of strings (joined), nil, an `(unsigned-byte 8)` vector (one
   char per octet; see the known non-byte-exact bug below), or a rontolisp
-  stream (drained — the one extra await). **A BARE STRING SIGNALS**,
+  stream (drained — the one extra await). A **NIL element inside the list**
+  contributes the empty string rather than signalling: that is how upstream
+  renders it (clack-handler-hunchentoot writes every chunk through
+  `flex:string-to-octets`, which answers `#()` for NIL), and it is the ordinary
+  shape of a controller that returned nil — every ningle 404 is
+  `(404 () (NIL))`. **A BARE STRING SIGNALS**,
   upstream-faithful: lack's `finalize-response` wraps a string controller
   result in a list (its `(pathnamep body)` branch stopped claiming strings
   when the pathname became a distinct value, todo-304 / `.kb/pathnames.md`),
