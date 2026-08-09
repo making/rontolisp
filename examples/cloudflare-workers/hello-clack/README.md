@@ -89,7 +89,11 @@ Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
 On the real edge, `wrangler deploy` reported **1608.77 KiB upload / 358.27 KiB
 gzip** and a **Worker Startup Time of 30 ms** — measured before the module
 shrank to today's 248 KB; the next deploy will report the smaller bundle — and
-both routes answer there — verified after deploying, not inferred.
+both routes answer there — verified after deploying, not inferred. That startup
+figure was taken while `src/index.js` instantiated at module scope; it now
+instantiates on the first request (a Worker forbids generating random values in
+the global scope, and the module has to be seeded before `_initialize`), so the
+same work is now paid by request one.
 
 So the cost of "it is a real Clack application" is startup and bundle size, paid
 once per isolate; the per-request cost is the Lisp call plus the string
@@ -140,10 +144,12 @@ unchanged, on `:server :rontolisp`.
 ## Limitations
 
 The Worker sandbox and the `--no-wasi` build, exactly as in
-[`../httpbin`](../httpbin/README.md#limitations): no standard input and no
-clock in the Lisp, no filesystem, no `rontolisp:fetch` (use JavaScript's
-`fetch()` in `src/index.js`). Printing does not trap — it is discarded — and
-`random` works, on a generator `src/index.js` seeds from `crypto`. And a
+[`../httpbin`](../httpbin/README.md#limitations): no standard input, no
+filesystem, no `rontolisp:fetch` (use JavaScript's `fetch()` in
+`src/index.js`). Printing does not trap — it is discarded — `random` works on a
+generator `src/index.js` seeds from `crypto`, and the clock reads whatever
+`src/index.js` hands to `__ronto_set_time` (per request here, so it advances
+between requests and holds still inside one). And a
 runtime `(ql:quickload ...)` cannot work: the one at the top of `worker.lisp` is
 resolved at **compile** time and inlined into the module, which is why the first
 `./build.sh` needs network and later ones do not.

@@ -245,7 +245,7 @@ page.
 | `decode-universal-time` | `(decode-universal-time 2208988800 0)` | the nine decoded values (second, minute, hour, date, month, year, day-of-week, daylight-p, zone); `daylight-p` is always nil |
 | `get-internal-real-time` | `(get-internal-real-time)` | elapsed real time in milliseconds (integer on every backend) |
 | `get-internal-run-time` | `(get-internal-run-time)` | consumed run time in milliseconds (integer on every backend) |
-| `sleep` | `(sleep 0.5)` | block for a non-negative number of seconds and return `nil` (a real host timer everywhere but WASM Preview 1, which busy-waits on the clock) |
+| `sleep` | `(sleep 0.5)` | block for a non-negative number of seconds and return `nil` (a real host timer everywhere but WASM Preview 1, which busy-waits on the clock, and `--no-wasi`, which signals) |
 | `exp` | `(exp 0)` | `1.0` (interpreter/JVM use `Math.exp`; WASM uses a software approximation) |
 | `log` | `(log 1)` | `0.0` (natural log; interpreter/JVM use `Math.log`, WASM a software approximation) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0` (interpreter/JVM use `Math.sin`/`cos`/`tan`, WASM a software approximation) |

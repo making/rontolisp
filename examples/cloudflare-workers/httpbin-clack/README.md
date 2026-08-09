@@ -240,7 +240,11 @@ gzip** and a **Worker Startup Time of 26 ms** (14 ms before `clackup`) — measu
 before the module shrank to today's 264 KB; the next deploy will report the
 smaller bundle — and all five endpoints (plus the 405, the 404, the unparseable
 body and a percent-encoded path) answer correctly there — verified after
-deploying, not inferred. End-to-end
+deploying, not inferred. That startup figure was taken while `src/index.js`
+instantiated at module scope; it now instantiates on the first request (a Worker
+forbids generating random values in the global scope, and the module has to be
+seeded before `_initialize`), so the same work is now paid by request one and
+`Worker Startup Time` no longer reports it. End-to-end
 `curl` from this side of the Pacific settles at 50-85 ms, which is network time:
 the Lisp share of it is the 0.05 ms above.
 
@@ -336,11 +340,15 @@ now answered on both counts: the module carries its own `random` generator
 the empty environment a reactor really has. The rule that keeps `read-line`
 trapping is unchanged — see [Limitations](#limitations) for where the line is.
 
-One thing in that stack is still out of reach, and it is now a *visible* one
-rather than a bare trap: `lack-middleware-session` reads the clock while it
-loads, and a clock is the one service a module with no imports cannot answer
-truthfully. It signals `GET-UNIVERSAL-TIME requires a host clock ...` instead of
-trapping namelessly.
+The rest of that stack followed the same rule to the same place.
+`lack-middleware-session` reads the clock while it *loads* — upstream defaults a
+cookie's `expires` slot to `(get-universal-time)` — and a module with no imports
+cannot answer that by itself either. It does not have to: the host knows the
+time, so [`src/index.js`](src/index.js) hands it over through the exported
+`__ronto_set_time` next to the entropy seed, and the middleware loads. Add
+`--host-random` (the session id is `rontolisp:random-bytes`, which a fixed-seed
+generator must not stand in for) and a `(:session)` builder serves a real
+session cookie and recognises it on the next request.
 
 ## Why `clackup` prints, and why that is fine here
 
@@ -366,12 +374,14 @@ see them.
 
 Everything below is the Worker sandbox or the `--no-wasi` build, and every one
 of them applies to [`../httpbin`](../httpbin/README.md#limitations) identically:
-no standard input (it traps) and no clock (it signals), no filesystem
-(`with-open-file` and `open` signal a catchable error; `probe-file` and
-`directory` answer nothing), no `rontolisp:fetch` (use JavaScript's `fetch()` in
-`src/index.js`). `print` and `format t` do not trap, but their output is
-discarded, and `random` works on a module-local generator that `src/index.js`
-seeds from `crypto`.
+no standard input (it traps), no filesystem (`with-open-file` and `open` signal
+a catchable error; `probe-file` and `directory` answer nothing), no
+`rontolisp:fetch` (use JavaScript's `fetch()` in `src/index.js`). `print` and
+`format t` do not trap, but their output is discarded; `random` works on a
+module-local generator that `src/index.js` seeds from `crypto`; and the clock is
+whatever `src/index.js` writes through `__ronto_set_time` — it advances between
+requests, holds still inside one, and `(sleep n)` signals because nothing here
+can make an interval elapse.
 One more is specific to this directory: a runtime `(ql:quickload ...)` cannot
 work either — the `ql:quickload` form in the source is resolved at
 **compile** time and inlined into the module, which is why the first

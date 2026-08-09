@@ -242,7 +242,7 @@
 | `decode-universal-time` | `(decode-universal-time 2208988800 0)` | 9 個の分解値 (秒・分・時・日・月・年・曜日・夏時間・ゾーン)。`daylight-p` は常に nil |
 | `get-internal-real-time` | `(get-internal-real-time)` | 経過実時間(ミリ秒)(すべてのバックエンドで整数) |
 | `get-internal-run-time` | `(get-internal-run-time)` | 消費した実行時間(ミリ秒)(すべてのバックエンドで整数) |
-| `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(WASM Preview 1 以外は本物のホストタイマー。Preview 1 のみクロックをビジーウェイト) |
+| `sleep` | `(sleep 0.5)` | 非負の秒数だけブロックして `nil` を返します(WASM Preview 1 と `--no-wasi` 以外は本物のホストタイマー。Preview 1 はクロックをビジーウェイト、`--no-wasi` はシグナル) |
 | `exp` | `(exp 0)` | `1.0`(インタプリタ/JVMは `Math.exp` を使用。WASMはソフトウェア近似を使用) |
 | `log` | `(log 1)` | `0.0`(自然対数。インタプリタ/JVM は `Math.log`、WASM はソフトウェア近似) |
 | `sin` `cos` `tan` | `(sin 0)`, `(cos 0)` | `0.0`, `1.0`(インタプリタ/JVM は `Math.sin`/`cos`/`tan`、WASM はソフトウェア近似) |

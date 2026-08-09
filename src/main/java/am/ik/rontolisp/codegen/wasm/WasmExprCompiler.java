@@ -656,6 +656,22 @@ final class WasmExprCompiler {
 					if (redefinedClFunction) {
 						warnClRedefinition(sym.name(), cons, ctx);
 					}
+					if (ctx.noWasi) {
+						// Preview 1 elapses an interval by SPINNING on the clock (its
+						// nine imports carry no timer). A --no-wasi module has neither:
+						// its clock is a cell only the host writes, and no host can
+						// write it while a call is running -- so the spin would be an
+						// infinite loop rather than a wait. Signalling names that; the
+						// argument still evaluates for effect, and the condition is
+						// catchable like every other --no-wasi refusal.
+						compileExpr(LispMacroExpander.expandConstantResult(cons,
+								LispMacroExpander.callTimeUnsupportedStub(sym.name()
+										+ " cannot wait on a --no-wasi module: it imports no timer, and its clock"
+										+ " cannot advance while a call is running (only a host write moves it), so"
+										+ " no interval could elapse here")),
+								ctx);
+						return;
+					}
 					compileExpr(LispMacroExpander.expandSleep(cons, true), ctx);
 					return;
 				}
@@ -1388,26 +1404,12 @@ final class WasmExprCompiler {
 				}
 				case LispNames.MAKE_RANDOM_STATE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
-				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME,
-						LispNames.GET_INTERNAL_RUN_TIME -> {
-					if (ctx.noWasi) {
-						// The clock is the one WASI service with no true answer for a
-						// module that has none: an empty environment IS the environment
-						// and a missing file IS missing, but there is no reading that
-						// means "there is no time" -- answering 0 would name 1970 and a
-						// program cannot tell that from the real clock. So this signals,
-						// where the filesystem answers nil and `random` generates. A
-						// call-time error, not a compile error, and (unlike the bare
-						// `unreachable` the clock_time_get stub still is) catchable, so
-						// a library that reads the clock inside ignore-errors loads.
-						WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(sym.name()
-								+ " requires a host clock, which --no-wasi excludes (a --no-wasi module imports"
-								+ " nothing, and no value it could invent would be the time)"), ctx);
-					}
-					else {
-						WasmTimeCompiler.compile(cons, ctx, sym.name());
-					}
-				}
+				// Under --no-wasi these read the cell a host writes through the exported
+				// __ronto_set_time hook instead of the (unimported) clock, and signal
+				// while it is unset -- the branch is WasmTimeCompiler's, which is also
+				// where the reason lives.
+				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
+					WasmTimeCompiler.compile(cons, ctx, sym.name());
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.EXP -> WasmExpCompiler.compile(cons, ctx);
 				case LispNames.LOG -> WasmLogCompiler.compile(cons, ctx);

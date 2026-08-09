@@ -52,6 +52,18 @@ class WasmExportCompilerTest {
 		return new String(bytes, StandardCharsets.ISO_8859_1).contains(needle);
 	}
 
+	// A wasm name is length-prefixed, so an EXPORT of `name` is the LEB128 length byte
+	// (one byte for anything under 128 chars) followed by the bytes. That prefix is what
+	// separates a real export from the same spelling occurring inside an error message
+	// in the data section, which is where a build that refuses names its own hook.
+	private static boolean containsExportName(byte[] module, String name) {
+		byte[] ascii = name.getBytes(StandardCharsets.US_ASCII);
+		byte[] needle = new byte[ascii.length + 1];
+		needle[0] = (byte) ascii.length;
+		System.arraycopy(ascii, 0, needle, 1, ascii.length);
+		return containsBytes(module, needle);
+	}
+
 	@Test
 	void parsesScalarDirective() {
 		WasmExportCompiler.Decl decl = parse("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)");
@@ -396,6 +408,48 @@ class WasmExportCompilerTest {
 		assertThat(containsAscii(new WasmLispCompiler(false, true, true).compile(program), "__ronto_seed_random"))
 			.as("--component --no-wasi reactor")
 			.isFalse();
+	}
+
+	@Test
+	void noWasiCoreModuleExportsTheHostClockHook() {
+		// The same move as the seed hook, for the one service a module with no imports
+		// cannot answer on its own: the host writes the time it really knows (nanos
+		// since the Unix epoch) and the clock built-ins report it. Calling it before
+		// _initialize is what makes a library that timestamps while it LOADS -- the
+		// lack-middleware-session case -- loadable on a reactor at all.
+		// ignore-errors puts the module in EH mode, which is what materializes the
+		// refusal MESSAGE in the data section (outside it, %error is a bare
+		// `unreachable` and the text is never emitted) -- the shape the assertions on
+		// the message below need.
+		String source = """
+				(defun t0 () (or (ignore-errors (get-universal-time)) 0))
+				(rontolisp:wasm-export 't0 :returns :s64)
+				""";
+		List<LispVal> program = LispReader.readAllFromString(source);
+		byte[] core = new WasmLispCompiler(false, false, true).compile(program);
+		assertThat(containsExportName(core, "__ronto_set_time")).as("--no-wasi core module").isTrue();
+		// Until it is called the cell is zero, which names 1970 rather than "no time",
+		// so the built-ins refuse -- and say which hook fills it.
+		assertThat(containsAscii(core, "hands to the exported __ronto_set_time hook")).as("the refusal names it")
+			.isTrue();
+		// It survives --host-random, which retires only the seed hook: entropy and the
+		// clock are independent services, and only one of them has a module-local
+		// generator to make redundant.
+		byte[] hostRandom = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true)
+			.compile(program);
+		assertThat(containsExportName(hostRandom, "__ronto_set_time")).as("--host-random").isTrue();
+		assertThat(containsAscii(hostRandom, "__ronto_seed_random")).as("--host-random retires the seed hook")
+			.isFalse();
+		// Not on a WASI-carrying build (the clock is the host's there) ...
+		assertThat(containsAscii(compile(source), "__ronto_set_time")).as("Preview 1").isFalse();
+		// ... and not on the reactor COMPONENT: its top level runs at instantiation, so
+		// there is no window in which a host could set the time before the first read,
+		// and exposing the hook would mean lifting it into the WIT world. The clock
+		// there keeps signalling, with a message that says so instead of naming a hook
+		// the build does not have (the export name only appears inside that text).
+		byte[] reactor = new WasmLispCompiler(false, true, true).compile(program);
+		assertThat(containsExportName(reactor, "__ronto_set_time")).as("--component --no-wasi reactor").isFalse();
+		assertThat(containsAscii(reactor, "reactor component imports nothing")).as("it says so instead").isTrue();
 	}
 
 	@Test

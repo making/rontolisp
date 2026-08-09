@@ -20,11 +20,14 @@ import module from "./worker.wasm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-// Instantiated here at module scope, so the cost lands on isolate startup
-// rather than on a request -- `wrangler deploy` then reports and budget-checks
-// it ("Worker Startup Time: 12 ms"). Doing it lazily on the first request also
-// works, measured, but then nothing checks the cost at deploy time.
-let lisp = instantiate();
+// Instantiated on the FIRST REQUEST, not at module scope. Module scope would be
+// the nicer place -- `wrangler deploy` reports and budget-checks what happens
+// there as "Worker Startup Time" -- but a Worker forbids GENERATING RANDOM
+// VALUES in the global scope, and the seed below has to be handed over before
+// `_initialize` runs the Lisp top level. So the cost lands on one request
+// instead, and nothing checks it at deploy time.
+let lisp = null;
+const lispInstance = () => (lisp ??= instantiate());
 
 // `_initialize` is where the Lisp program's top-level forms run. ../../hello has
 // no such entry point at all -- it is --no-gc with nothing to initialise --
@@ -38,6 +41,12 @@ function instantiate() {
   instance.exports.__ronto_seed_random(
     new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0],
   );
+  // And a clock, the same way and for the same reason: a --no-wasi build
+  // imports none, so its time is whatever a host writes through
+  // __ronto_set_time (nanoseconds since the Unix epoch). Before _initialize,
+  // so a library that timestamps while it LOADS sees one -- unset, the clock
+  // built-ins signal rather than report 1970.
+  instance.exports.__ronto_set_time(BigInt(Date.now()) * 1000000n);
   instance.exports._initialize();
   return instance.exports;
 }
@@ -45,6 +54,11 @@ function instantiate() {
 // Synchronous on purpose: a Worker isolate interleaves concurrent requests only
 // at `await` points, so nothing else can allocate inside the bracket.
 function handleRequest(lisp, input) {
+  // The module's clock moves only when we move it, so move it per request. That
+  // is not a workaround for a frozen clock -- a Worker's own `Date.now()` is
+  // frozen for the duration of a request as a timing-attack mitigation, so a
+  // value that changes exactly once per request is what this platform has.
+  lisp.__ronto_set_time(BigInt(Date.now()) * 1000000n);
   const bytes = encoder.encode(input);
   const mark = lisp.__ronto_alloc_mark();
 
@@ -96,7 +110,7 @@ export default {
     const input = await requestToJson(request);
     let reply;
     try {
-      reply = JSON.parse(handleRequest(lisp, input));
+      reply = JSON.parse(handleRequest(lispInstance(), input));
     } catch (error) {
       // The Lisp side answers 500 for Lisp errors itself, so reaching here
       // means a WASM trap -- which skipped the arena reset and may have left

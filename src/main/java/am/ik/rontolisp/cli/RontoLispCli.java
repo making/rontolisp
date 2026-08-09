@@ -717,7 +717,10 @@ public final class RontoLispCli {
 		this.out.println("                     Instantiates without an import object (beyond any");
 		this.out.println("                     rontolisp:wasm-import host functions); pure-compute");
 		this.out.println("                     rontolisp:wasm-export functions work, print is discarded,");
-		this.out.println("                     other I/O traps. With --component: a reactor component that");
+		this.out.println("                     other I/O traps. The core module also exports two host hooks,");
+		this.out.println("                     __ronto_seed_random and __ronto_set_time (nanos since the Unix");
+		this.out.println("                     epoch), for the two services it cannot answer alone -- call them");
+		this.out.println("                     before _initialize. With --component: a reactor component that");
 		this.out.println("                     imports NOTHING and runs its top level at instantiation");
 		this.out.println("  --host-random      With --no-wasi (core module only): draw `random` from the HOST");
 		this.out.println("                     instead of the built-in generator. The module then imports");

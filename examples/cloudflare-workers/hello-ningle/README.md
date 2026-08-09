@@ -140,10 +140,10 @@ six routes instead of two.
 ## Limitations
 
 The same ones as [`../hello-clack`](../hello-clack/README.md#limitations): no
-standard input and no clock in the Lisp, no filesystem, no `rontolisp:fetch`
-(use JavaScript's `fetch()` in `src/index.js`). Printing does not trap — it is
-discarded — and `random` works, on a generator `src/index.js` seeds from
-`crypto`.
+standard input, no filesystem, no `rontolisp:fetch` (use JavaScript's `fetch()`
+in `src/index.js`). Printing does not trap — it is discarded — `random` works on
+a generator `src/index.js` seeds from `crypto`, and the clock reads whatever
+`src/index.js` hands to `__ronto_set_time`.
 
 This directory used to open with a blockquote saying it did not run on
 Cloudflare at all: `lack-request -> http-body -> fast-http -> smart-buffer`

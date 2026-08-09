@@ -140,10 +140,11 @@ A complete, copy-paste runnable Node + browser example is in the
 The WASI import slots are filled with internal stubs so every function index
 stays fixed (no other codegen changes). What those stubs do follows one rule:
 **a stub answers when the answer is true of the module, and refuses when
-answering would mean inventing a value you could not tell from a real one.** A
-reactor really has no output destination, no environment variables and no
-files, so those are answered; nothing about it makes a byte of input or a
-reading of the clock true, so those are not.
+answering would mean inventing a value you could not tell from a real one** —
+though a value the *host* hands in is not an invention, which is how the clock
+and randomness are served. A reactor really has no output destination, no
+environment variables and no files, so those are answered; nothing about it
+makes a byte of input true, so that is not.
 
 | what your program does | on `--no-wasi` |
 | --- | --- |
@@ -153,7 +154,8 @@ reading of the clock true, so those are not.
 | `with-open-file`, `open` | **signals** a catchable error naming WASI |
 | `(random n)`, `(random 1.0)` | works — a built-in generator, or the host's with `--host-random` |
 | `rontolisp:random-bytes` | **signals**, unless `--host-random` supplies real entropy |
-| `get-universal-time` and the other clocks | **signals** — no value would be the time |
+| `get-universal-time` and the other clocks | the time the host set through `__ronto_set_time`; **signals** until it does |
+| `(sleep n)` | **signals** — nothing here can make an interval elapse |
 | `read`, `read-line`, `read-char` (standard input) | **traps** |
 
 Everything that signals does so at CALL time, so an `ignore-errors` or
@@ -166,11 +168,18 @@ Output being a sink is what lets a library that logs while it loads be
 quickloaded into a reactor at all — the alternative was killing the instance for
 a log line. If you need the text, return it from the export instead.
 
-Randomness is the one service with a choice to make: the module carries its own
-generator (so unseeded, every instance produces the same sequence), a host can
-seed it through the exported `__ronto_seed_random`, and `--host-random` routes
-`random` at a host import instead — which is also what makes
-`rontolisp:random-bytes` work here. See the [randomness guide](random.md).
+The clock and randomness are the two services with a choice to make, because
+both are values the module cannot produce for itself. A core module exports one
+hook for each — `__ronto_set_time` (nanoseconds since the Unix epoch) and
+`__ronto_seed_random` — to be called **before `_initialize`**, which is what
+makes a library that timestamps or draws while it *loads* loadable at all; and
+`--host-random` routes `random` at a host import instead. Unseeded, the
+generator repeats one sequence; unset, the clock signals rather than report
+1970, and it holds the value you wrote until you write another (so `(sleep n)`
+signals here — nothing can make an interval elapse). A **reactor component** has
+neither hook: its top level runs at instantiation, so there is no window in
+which a host could go first. All of it, with the JavaScript, is in the
+[clock and randomness guide](clock-and-random.md).
 
 Combined with `--component`, the same contract produces a **reactor
 component** — a component that imports nothing, whose top-level forms run at

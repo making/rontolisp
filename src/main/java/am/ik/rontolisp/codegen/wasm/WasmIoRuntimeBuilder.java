@@ -1566,6 +1566,56 @@ final class WasmIoRuntimeBuilder {
 	}
 
 	/**
+	 * Builds the body of {@code __ronto_set_time (i64) -> ()}, the host's way to give a
+	 * {@code --no-wasi} module a clock: it stores the argument -- nanoseconds since the
+	 * Unix epoch, preview1's own {@code clock_time_get} unit -- into
+	 * {@link WasmLispCompiler#HOST_TIME_ADDR}, which is what {@code get-universal-time} /
+	 * {@code get-internal-real-time} / {@code get-internal-run-time} read from there on.
+	 *
+	 * <p>
+	 * <strong>Why this does not break the "a stub may not invent a value" rule -- it is
+	 * the rule's other half.</strong> A stub answering 0 would name 1970; a stub counting
+	 * its own calls would hand back numbers that look like milliseconds and are not. The
+	 * host, though, genuinely knows the time, and handing it over is the same move
+	 * {@link #buildSeedRandomBody()} already makes for entropy: the value the program
+	 * reads IS a real reading, taken by the only party in a position to take one. Until
+	 * the host calls this, the cell is zero and the three built-ins keep signalling --
+	 * the constant start state that is harmless for {@code random} would be exactly the
+	 * 1970 lie here.
+	 *
+	 * <p>
+	 * The clock does not ADVANCE between host calls, and that is the honest shape rather
+	 * than a degraded one: a Cloudflare Worker's own clock is frozen for the duration of
+	 * a request (a deliberate timing-attack mitigation), so a value that only moves when
+	 * the host moves it is exactly what that platform has. A host that wants it to
+	 * advance calls the setter again -- per request is the natural rhythm, next to the
+	 * seed hook in every {@code examples/cloudflare-workers/*}{@code /src/index.js}.
+	 * Nothing inside the module can move it, which is why {@code sleep} SIGNALS on
+	 * {@code --no-wasi} instead of spinning on the clock the way Preview 1 does: with no
+	 * timer to park on and no clock that can advance while a call is running, the spin
+	 * could never end.
+	 *
+	 * <p>
+	 * Core-module shape only ({@code --no-wasi} without {@code --component}), for the
+	 * seed hook's reason: a reactor component runs its top level at INSTANTIATION, so
+	 * there is no window in which a host could set the time before the load-time reads,
+	 * and exposing it there would mean lifting it into the WIT world -- a world-shape
+	 * decision, not a core export.
+	 * @return the function body bytes
+	 */
+	static byte[] buildSetTimeBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: NANOS=0 (i64); no locals.
+		w.write(0);
+		i32(w, WasmLispCompiler.HOST_TIME_ADDR);
+		getLocal(w, 0);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds the {@code --no-wasi --host-random} {@code random_get} slot: instead of the
 	 * module-local generator below, the slot FORWARDS its two parameters to a host import
 	 * and returns the host's errno, so every {@code random} draw -- including one in a

@@ -14,9 +14,13 @@ import module from "./worker.wasm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-// Instantiated at module scope, so the cost lands on isolate startup rather
-// than on a request. `_initialize` is where clack loads and clackup runs.
-let lisp = instantiate();
+// Instantiated on the FIRST REQUEST, not at module scope: a Worker forbids
+// generating random values in the global scope, and the seed below has to be in
+// before `_initialize` runs the Lisp top level. So the cost lands on one
+// request instead of on isolate startup, where `wrangler deploy` would have
+// reported it as "Worker Startup Time".
+let lisp = null;
+const lispInstance = () => (lisp ??= instantiate());
 
 function instantiate() {
   const instance = new WebAssembly.Instance(module, {});
@@ -27,11 +31,22 @@ function instantiate() {
   instance.exports.__ronto_seed_random(
     new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0],
   );
+  // And a clock, the same way and for the same reason: a --no-wasi build
+  // imports none, so its time is whatever a host writes through
+  // __ronto_set_time (nanoseconds since the Unix epoch). Before _initialize,
+  // so a library that timestamps while it LOADS sees one -- unset, the clock
+  // built-ins signal rather than report 1970.
+  instance.exports.__ronto_set_time(BigInt(Date.now()) * 1000000n);
   instance.exports._initialize();
   return instance.exports;
 }
 
-function handleRequest(input) {
+function handleRequest(lisp, input) {
+  // The module's clock moves only when we move it, so move it per request. That
+  // is not a workaround for a frozen clock -- a Worker's own `Date.now()` is
+  // frozen for the duration of a request as a timing-attack mitigation, so a
+  // value that changes exactly once per request is what this platform has.
+  lisp.__ronto_set_time(BigInt(Date.now()) * 1000000n);
   const bytes = encoder.encode(input);
   const ptr = lisp.__ronto_alloc(bytes.length);
   new Uint8Array(lisp.memory.buffer, ptr, bytes.length).set(bytes);
@@ -58,7 +73,7 @@ export default {
 
     let reply;
     try {
-      reply = JSON.parse(handleRequest(input));
+      reply = JSON.parse(handleRequest(lispInstance(), input));
     } catch (error) {
       // The handler backend answers 500 for Lisp errors itself, so reaching
       // here means a WASM trap, which may have left Lisp state half-written.

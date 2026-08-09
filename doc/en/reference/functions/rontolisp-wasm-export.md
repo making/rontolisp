@@ -94,8 +94,9 @@ way.
   and file access (from the function or from a top-level form) are unsupported.
   Under `--no-wasi` each of those has its own defined answer rather than a bare
   trap — output is discarded, `getenv` and file lookups answer nothing, the
-  clock and `rontolisp:random-bytes` signal a catchable error, `random` runs on
-  a built-in generator, and only standard input traps; see
+  clock reports what a host wrote through `__ronto_set_time` (and signals until
+  one does), `rontolisp:random-bytes` signals a catchable error, `random` runs
+  on a built-in generator, and only standard input traps; see
   [No-WASI (reactor) mode](../../guides/wasm-gc-module.md#no-wasi-reactor-mode).
   One more exception: under `--no-gc`,
   `print`/`princ`/`terpri` work through a single `fd_write` import that is

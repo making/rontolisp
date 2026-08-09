@@ -95,6 +95,30 @@ incoming TCP and a clack program under `--component` is a `wasmtime serve`
 component, not a runnable CLI one (`.kb/clack.md`). The clackup-and-fetch
 spelling of the same chain is pinned on the interpreter and the JVM.
 
+## `-session` on a `--no-wasi` reactor needs BOTH host hooks (2026-08-09)
+
+The session middleware is the one member of the set that a zero-import reactor
+cannot serve on its own, and it needs the two hooks for two DIFFERENT reasons at
+two different times (`.kb/wasm-export-no-wasi.md` has both):
+
+- **Load time, the clock.** `lack.middleware.session.state.cookie` defaults its
+  `expires` slot to `(get-universal-time)` -- a top-level read while the system
+  loads -- so without `__ronto_set_time` called before `_initialize` the module
+  dies during initialization, not at the first request.
+- **Request time, real entropy.** The session id is `rontolisp:random-bytes`,
+  which a `--no-wasi` build refuses unless `--host-random` points `random_get`
+  at the host: the module-local generator must not be passed off as
+  cryptographic entropy, and a session id is exactly the case that rule is
+  about.
+
+With both, the whole `clack` + `lack:builder (:session)` stack instantiates,
+answers, sets `lack.session=<id>` and recognises the cookie on the next request
+(measured on node 24). Worth knowing while reading that cookie: upstream's
+`expires` DEFAULT is a timestamp rather than a duration and the header is
+`(+ (get-universal-time) expires)`, so a default-configured cookie expires
+roughly twice the current universal time from now -- around 2153. That is
+upstream's arithmetic, identical on every backend, not a clock artifact.
+
 ## The DEFAULT middleware has to report the APPLICATION's error (todo-283)
 
 `clack:clackup` wraps every application in lack's `:backtrace` middleware unless

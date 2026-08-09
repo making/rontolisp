@@ -1530,6 +1530,18 @@ public final class WasmLispCompiler implements LispCompiler {
 	// .kb/wasm-export-no-wasi.md).
 	static final int RANDOM_STATE_ADDR = 216;
 
+	// The --no-wasi module's ONE clock: nanoseconds since the Unix epoch, handed over by
+	// the exported __ronto_set_time hook (8-aligned at 224..231, still below the
+	// DATA_BASE_OFFSET=256 headroom). Zero -- the state of untouched linear memory -- is
+	// the UNSET sentinel, so no data segment seeds it, and the three clock built-ins
+	// SIGNAL over that state instead of reporting the 1970 it literally names: a host
+	// that never called the hook has handed over no time, and inventing one is what the
+	// --no-wasi stub rule forbids. A host that did call it hands over its own real time,
+	// which is not an invention at all -- see .kb/wasm-export-no-wasi.md. Only a
+	// --no-wasi module reads this cell; every other build calls the clock_time_get
+	// import, whose slot here stays the trapping backstop.
+	static final int HOST_TIME_ADDR = 224;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
@@ -1585,7 +1597,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// and
 	// the time built-ins (TIME_SCRATCH_ADDR=128 .. 135) would clobber shared string bytes
 	// (notably the newline at the old base+9). The highest scratch byte
-	// (BYTE_SCRATCH_ADDR=148) ends at 148, so 256
+	// (HOST_TIME_ADDR=224 .. 231) ends at 231, so 256
 	// gives headroom; the next fixed region (RT_INTERN_BASE=8192) is far above realistic
 	// string-segment sizes. Shifting this base does not move any function/import index,
 	// so
@@ -2285,6 +2297,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// reason so their messages name the actual conflict.
 			.component(this.component && !this.noWasi)
 			.noWasi(this.noWasi)
+			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
 			.serve(this.serve)
 			.simd(this.simd)
@@ -2624,7 +2637,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		// could reasonably read as "seeding still matters here".
 		boolean seedRandom = this.noWasi && !this.component && !this.hostRandom;
 		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount : -1;
-		int helperFuncCount = memoryHelperCount + (seedRandom ? 1 : 0);
+		// __ronto_set_time (i64) -> (): the same move for the clock -- the host hands
+		// over the one value it really knows and the module could never invent
+		// (WasmIoRuntimeBuilder.buildSetTimeBody). Emitted on every --no-wasi CORE
+		// module, independently of the seed hook (--host-random retires that one but
+		// leaves the clock exactly as it was), and NOT on the reactor component, for the
+		// same reason: its top level runs at instantiation, so there is no window in
+		// which a host could set the time before the load-time reads.
+		boolean setTime = this.noWasi && !this.component;
+		int setTimeFuncIndex = setTime ? exportHelperBase + memoryHelperCount + (seedRandom ? 1 : 0) : -1;
+		int helperFuncCount = memoryHelperCount + (seedRandom ? 1 : 0) + (setTime ? 1 : 0);
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
 		// a serve+fetch program's two spliced halves may each call
 		// wasi:http/types.fields-append, body-stream-read, ... in their own
@@ -3870,10 +3892,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addFunc(new Type[0], new Type[] { Type.I32 });
 					types.addFunc(new Type[] { Type.I32 }, new Type[0]);
 				}
-				// __ronto_seed_random (i64) -> (), last of the appended block (a
-				// --no-wasi
-				// core module never takes the component string-ABI branch above).
-				if (seedRandom) {
+				// The host hooks' shared (i64) -> () signature, last of the appended
+				// block (a --no-wasi core module never takes the component string-ABI
+				// branch above). __ronto_seed_random and __ronto_set_time have the same
+				// shape -- one i64 the host hands in -- so they share ONE type entry
+				// however many of them this module emits.
+				if (seedRandom || setTime) {
 					types.addFunc(new Type[] { Type.I64 }, new Type[0]);
 				}
 			})
@@ -4184,8 +4208,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						fnDef.addFunction(abiTypeBase + 1);
 					}
 				}
-				// __ronto_seed_random, whose (i64)->() signature follows them.
+				// The host hooks, which share the (i64)->() signature following them.
 				if (seedRandom) {
+					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
+				}
+				if (setTime) {
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 				}
 				// Export wrapper functions (host-callable), one per
@@ -4462,6 +4489,14 @@ public final class WasmLispCompiler implements LispCompiler {
 					if (seedRandom) {
 						exports.addExport("__ronto_seed_random", ExternalKind.FUNCTION, seedRandomFuncIndex);
 					}
+					// The host's clock hook, the same move for the one service a module
+					// with no imports cannot answer on its own: the host writes the time
+					// it really knows (nanoseconds since the Unix epoch) and the clock
+					// built-ins report it. Until it is called they signal, because a
+					// zero cell names 1970 rather than reporting "no time".
+					if (setTime) {
+						exports.addExport("__ronto_set_time", ExternalKind.FUNCTION, setTimeFuncIndex);
+					}
 					// Host-callable Lisp functions requested via (rontolisp:wasm-export
 					// ...), each under its :as alias (default: the Lisp name).
 					for (ExportPlan p : exportPlans) {
@@ -4494,7 +4529,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				// The line the last two keep trapping over: a stub may discard output,
 				// draw a pseudo-random number, or report a state the module really is
 				// in (no environment, no files) -- but it may not invent INPUT, and it
-				// may not name a time that is not the time.
+				// may not name a time that is not the time. clock_time_get is a
+				// BACKSTOP rather than the clock now: the three clock built-ins read
+				// the host-set HOST_TIME_ADDR cell directly (WasmTimeCompiler), so
+				// nothing reaches this slot unless a future path calls it without
+				// going through them.
 				// --host-random opts ONE slot out of all this: random_get stops being a
 				// stub and forwards to a host import, which is the only way an answer
 				// here can be the host's rather than a fact about the module.
@@ -4758,6 +4797,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				// constant start state, matching the function-section order.
 				if (seedRandom) {
 					code.addFunction(WasmIoRuntimeBuilder.buildSeedRandomBody());
+				}
+				// __ronto_set_time: the host's clock, same order.
+				if (setTime) {
+					code.addFunction(WasmIoRuntimeBuilder.buildSetTimeBody());
 				}
 				// Export wrapper bodies (host-callable), one per (rontolisp:wasm-export
 				// ...).
@@ -5575,6 +5618,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean noWasi = false;
 
 		/**
+		 * True under {@code --component --no-wasi}: the zero-import REACTOR COMPONENT,
+		 * which {@link #component} deliberately reports as false (it carries none of the
+		 * wasi:*-binding splices). What distinguishes it here is its entry shape: its top
+		 * level runs at INSTANTIATION, so the host hooks a core module offers -- and can
+		 * be told to call before {@code _initialize} -- do not exist on it.
+		 */
+		boolean reactorComponent = false;
+
+		/**
 		 * True under {@code --no-wasi --host-random}: the {@code random_get} slot
 		 * forwards to a host import instead of the module-local generator, so the entropy
 		 * behind {@code random} really is the host's. Read by the one site that must not
@@ -5875,6 +5927,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.optimize = builder.optimize;
 			this.component = builder.component;
 			this.noWasi = builder.noWasi;
+			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
@@ -5940,6 +5993,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean component = false;
 
 			private boolean noWasi = false;
+
+			private boolean reactorComponent = false;
 
 			private boolean hostRandom = false;
 
@@ -6066,6 +6121,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder noWasi(boolean noWasi) {
 				this.noWasi = noWasi;
+				return this;
+			}
+
+			Builder reactorComponent(boolean reactorComponent) {
+				this.reactorComponent = reactorComponent;
 				return this;
 			}
 

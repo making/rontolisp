@@ -2715,11 +2715,14 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void noWasiModuleSignalsForTheClockAndForRealEntropy() throws Exception {
-		// The other side of the same rule, for the two services that have no true
-		// answer: no value would BE the time, and a fixed-seed generator is not
-		// cryptographic entropy. Both signal a catchable Lisp condition naming what is
-		// missing rather than trapping, so a library that probes either one inside
-		// ignore-errors still loads.
+		// The other side of the same rule, for the two services a module with no imports
+		// cannot answer by itself: a clock reading it invented would not BE the time,
+		// and a fixed-seed generator is not cryptographic entropy. Both signal a
+		// catchable Lisp condition naming what is missing rather than trapping, so a
+		// library that probes either one inside ignore-errors still loads. Each has a
+		// host-supplied way out -- __ronto_set_time here, --host-random for the entropy
+		// -- and this is the state BEFORE it is used: no host has set the clock, so
+		// there is no time to report and the built-in refuses rather than naming 1970.
 		String program = """
 				(defun clockp () (if (ignore-errors (get-universal-time)) 1 0))
 				(rontolisp:wasm-export 'clockp :returns :int)
@@ -2728,6 +2731,27 @@ class WasmLispCompilerIntegrationTest {
 				""";
 		assertThat(compileNoWasiAndInvoke(program, "clockp")).isEqualTo("0");
 		assertThat(compileNoWasiAndInvoke(program, "entropyp")).isEqualTo("0");
+		// The clock hook is a plain export the host calls before anything else -- before
+		// _initialize, so that even a library's LOAD-TIME timestamp reads it. Driving it
+		// from wasmtime needs a second --invoke (one run calls one export), so this leg
+		// pins that it exists and is callable; the behavioural check -- set it and the
+		// three built-ins report that instant, frozen until the host moves it again --
+		// is the Node one in .kb/wasm-export-no-wasi.md and examples/cloudflare-workers/.
+		assertThat(compileNoWasiAndInvoke(program, "__ronto_set_time", "1786000000000000000")).isEmpty();
+	}
+
+	@Test
+	void noWasiModuleRefusesToSleepInsteadOfSpinningForever() throws Exception {
+		// Preview 1 elapses a sleep by SPINNING on the clock (its nine imports carry no
+		// timer). A --no-wasi module has neither a timer nor a clock that can advance
+		// while a call runs -- only a host write moves it, and no host can write it from
+		// inside the call -- so the same spin would hang the instance rather than wait.
+		// It signals instead, which is catchable and immediate.
+		String program = """
+				(defun nap (n) (if (ignore-errors (progn (sleep n) t)) 1 0))
+				(rontolisp:wasm-export 'nap :params '(:int) :returns :int)
+				""";
+		assertThat(compileNoWasiAndInvoke(program, "nap", "2")).isEqualTo("0");
 	}
 
 	@Test

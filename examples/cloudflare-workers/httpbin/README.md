@@ -351,12 +351,19 @@ application being portable.
 Everything below is the Worker sandbox or the `--no-wasi` build, not rontolisp
 itself:
 
-- **No standard input and no clock in the Lisp.** A `--no-wasi` stub answers
-  only when the answer is true of the module. It is true that a reactor has no
-  environment and no files, so `uiop:getenv` and `probe-file` answer nothing;
-  it is not true that input ended or that the time is anything in particular, so
-  `read-line` traps and `get-universal-time` signals a catchable error. Return
-  values instead.
+- **No standard input in the Lisp.** A `--no-wasi` stub answers only when the
+  answer is true of the module. It is true that a reactor has no environment and
+  no files, so `uiop:getenv` and `probe-file` answer nothing; it is not true that
+  input ended, so `read-line` traps. Pass what the handler needs in through the
+  envelope instead.
+- **The clock is the one JavaScript sets.** A reactor imports no clock, so
+  [`src/index.js`](src/index.js) writes one through the exported
+  `__ronto_set_time` — before `_initialize`, so a library that timestamps while
+  it loads sees it, and again per request, so it advances between requests. It
+  does not tick inside a request, which is also true of a Worker's own
+  `Date.now()`; `(sleep n)` therefore signals rather than waiting. Until a host
+  sets it, the clock built-ins signal a catchable error instead of reporting
+  1970.
 - **`random` works; `rontolisp:random-bytes` does not.** The module carries its
   own generator, which [`src/index.js`](src/index.js) seeds from
   `crypto.getRandomValues` through the exported `__ronto_seed_random` before

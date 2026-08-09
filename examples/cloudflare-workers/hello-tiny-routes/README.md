@@ -143,10 +143,11 @@ template, and a single catch-all that answers both the 405 and the 404.
 ## Limitations
 
 The Worker sandbox and the `--no-wasi` build, exactly as in
-[`../hello-clack`](../hello-clack/README.md#limitations): no standard input and
-no clock in the Lisp, no filesystem, no `rontolisp:fetch` (use JavaScript's
-`fetch()` in `src/index.js`). Printing does not trap — it is discarded — and
-`random` works, on a generator `src/index.js` seeds from `crypto`. One more is
+[`../hello-clack`](../hello-clack/README.md#limitations): no standard input, no
+filesystem, no `rontolisp:fetch` (use JavaScript's `fetch()` in
+`src/index.js`). Printing does not trap — it is discarded — `random` works on a
+generator `src/index.js` seeds from `crypto`, and the clock reads whatever
+`src/index.js` hands to `__ronto_set_time`. One more is
 the lite matcher's: a regex-shaped template signals when
 the route is built, which under `--no-wasi` means at `_initialize`, so it is a
 build-time decision rather than a request-time surprise.
