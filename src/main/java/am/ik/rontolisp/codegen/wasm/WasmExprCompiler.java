@@ -12,6 +12,8 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.wasm.Instruction;
@@ -408,7 +410,7 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
-					if (ctx.noWasi) {
+					if (ctx.noWasi && !ctx.hostRandom) {
 						// The one place where --no-wasi's PRNG must NOT stand in for the
 						// host. `random` there is a self-contained SplitMix64 (CL's
 						// random is a pseudo-random draw from *random-state*, so a fixed
@@ -418,16 +420,21 @@ final class WasmExprCompiler {
 						// real" the trapping stubs exist to avoid. A call-time error, not
 						// a compile error: the site may be dead code in a spliced
 						// library.
+						// --host-random lifts exactly this: the random_get slot then
+						// forwards to a host import, so the bytes ARE the host's and
+						// nothing is being passed off as something it is not.
 						WasmExprCompiler
 							.compileExpr(LispMacroExpander.callTimeUnsupportedStub("rontolisp:" + LispNames.RANDOM_BYTES
 									+ " requires a host entropy source, which --no-wasi excludes (a --no-wasi module"
 									+ " imports nothing; its `random` is a deterministic generator and must not be"
-									+ " passed off as cryptographic entropy)"), ctx);
+									+ " passed off as cryptographic entropy). Add --host-random to route random_get"
+									+ " at a host import (env.random_get) and this works again"), ctx);
 						return;
 					}
 					// One cryptographically strong byte: the low byte of a WASI
 					// random_get draw (real host entropy in Preview 1, wasi:random
-					// under --component), boxed as an i31 fixnum.
+					// under --component, the env.random_get host import under
+					// --no-wasi --host-random), boxed as an i31 fixnum.
 					WasmRandomCompiler.compileRandomByte(cons, ctx);
 					return;
 				}
@@ -636,8 +643,19 @@ final class WasmExprCompiler {
 			// and this compiler runs long after it. Reaching here with no such defun
 			// means
 			// the pipeline skipped the splice.
+			// A program that defines its own function on a cl name loses every call site
+			// the operator dispatch below claims -- silently, until this. Armed here and
+			// disarmed in the switch's default arm (the ordinary call path, which DOES
+			// resolve the defun), so a cl name this backend never intercepts stays
+			// quiet: wait.lisp's `sleep` under --component, compile-runtime.lisp's
+			// `compile`. See compiler/ClRedefinitionWarnings for why the answer is a
+			// diagnostic rather than honouring the definition.
+			boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(sym.name(), ctx.userDefunNames);
 			if (LispNames.SLEEP.equals(sym.name())) {
 				if (!ctx.component) {
+					if (redefinedClFunction) {
+						warnClRedefinition(sym.name(), cons, ctx);
+					}
 					compileExpr(LispMacroExpander.expandSleep(cons, true), ctx);
 					return;
 				}
@@ -1535,6 +1553,9 @@ final class WasmExprCompiler {
 				case LispNames.FOURTH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx);
 				case LispNames.NOT -> WasmNullPredCompiler.compile(cons, ctx);
 				default -> {
+					// The ordinary call path resolves the program's own defun, so
+					// nothing was overridden here.
+					redefinedClFunction = false;
 					if (LispNames.isCarCdrComposition(sym.name())) {
 						WasmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx);
 					}
@@ -1548,6 +1569,9 @@ final class WasmExprCompiler {
 					}
 				}
 			}
+			if (redefinedClFunction) {
+				warnClRedefinition(sym.name(), cons, ctx);
+			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
 				&& LispNames.LAMBDA.equals(headSym.name())) {
@@ -1555,6 +1579,18 @@ final class WasmExprCompiler {
 		}
 		else {
 			throw new UnsupportedOperationException("Cannot compile: " + cons.print());
+		}
+	}
+
+	/**
+	 * Reports, ONCE per name, that an operator interception overrode the program's own
+	 * {@code defun} of a {@code cl} function. The first call site names the position, and
+	 * the rest of them stay quiet -- a program that redefines {@code length} and then
+	 * calls it fifty times has one thing wrong with it, not fifty.
+	 */
+	private static void warnClRedefinition(String name, LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (ctx.warnedClRedefinitions.add(name)) {
+			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
 		}
 	}
 

@@ -17,6 +17,8 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.StreamDesignators;
 
@@ -407,6 +409,14 @@ final class JvmExprCompiler {
 				JvmLinalgSimdCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
+			// A program that defines its own function on a cl name loses every call site
+			// the operator dispatch below claims -- silently, until this. Armed here and
+			// disarmed in the default arm (the ordinary call path, which DOES resolve
+			// the defun), so a cl name this backend never intercepts stays quiet:
+			// compile-runtime.lisp's `compile`, a deliberate Lisp-source definition of a
+			// standard function. See compiler/ClRedefinitionWarnings for why the answer
+			// is a diagnostic rather than honouring the definition.
+			boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(sym.name(), ctx.userDefunNames);
 			switch (sym.name()) {
 				case LispNames.ADD ->
 					JvmArithCompiler.compile(cons, ctx, JvmNumericRuntimeBuilder.ADD, Opcode.DADD, className);
@@ -1321,6 +1331,9 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandFourth(cons), ctx, className);
 				case LispNames.NOT -> JvmNullPredCompiler.compile(cons, ctx, className);
 				default -> {
+					// The ordinary call path resolves the program's own defun, so
+					// nothing was overridden here.
+					redefinedClFunction = false;
 					if (LispNames.isCarCdrComposition(sym.name())) {
 						JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
 					}
@@ -1329,6 +1342,9 @@ final class JvmExprCompiler {
 					}
 				}
 			}
+			if (redefinedClFunction) {
+				warnClRedefinition(sym.name(), cons, ctx);
+			}
 		}
 		else if (head instanceof LispCons headCons && headCons.car() instanceof LispSymbol headSym
 				&& LispNames.LAMBDA.equals(headSym.name())) {
@@ -1336,6 +1352,19 @@ final class JvmExprCompiler {
 		}
 		else {
 			JvmFunctionCallCompiler.compileGeneralIndirect(cons, ctx, className);
+		}
+	}
+
+	/**
+	 * Reports, ONCE per compile attempt and per name, that an operator interception
+	 * overrode the program's own {@code defun} of a {@code cl} function. The first call
+	 * site names the position, and the rest of them stay quiet -- a program that
+	 * redefines {@code length} and then calls it fifty times has one thing wrong with it,
+	 * not fifty.
+	 */
+	private static void warnClRedefinition(String name, LispCons cons, JvmLispCompiler.Ctx ctx) {
+		if (ctx.warnedClRedefinitions.add(name)) {
+			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
 		}
 	}
 

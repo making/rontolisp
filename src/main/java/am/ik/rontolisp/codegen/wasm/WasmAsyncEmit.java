@@ -760,6 +760,7 @@ final class WasmAsyncEmit {
 			.optimize(proto.optimize)
 			.component(proto.component)
 			.noWasi(proto.noWasi)
+			.hostRandom(proto.hostRandom)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)
 			.blockExitTag(proto.blockExitTag)

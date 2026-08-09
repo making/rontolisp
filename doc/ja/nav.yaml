@@ -65,6 +65,8 @@ sections:
         title: リーダーのケース（大文字化）
       - file: guides/math-backends.md
         title: 数学関数のバックエンド
+      - file: guides/random.md
+        title: 乱数（random）
       - file: guides/wasm-host-boundary.md
         title: WASM ホスト境界（wasm-export / wasm-import）
       - file: guides/wit-contracts.md

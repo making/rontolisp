@@ -362,7 +362,11 @@ itself:
   `crypto.getRandomValues` through the exported `__ronto_seed_random` before
   `_initialize`. That makes the sequence unpredictable per isolate but not
   cryptographically strong, so the API that promises entropy keeps signalling —
-  mint tokens with `crypto.randomUUID()` in JavaScript and pass them in.
+  mint tokens with `crypto.randomUUID()` in JavaScript and pass them in. This
+  build keeps the advertised `imports: zero`; if you would rather draw every
+  number from the isolate, compile with `--host-random` and provide the one
+  `env.random_get` import it then declares, which also turns
+  `rontolisp:random-bytes` on.
 - **Printing is discarded, not trapped.** `print` and `format t` reach a sink
   under `--no-wasi` (a reactor host hands the module no file descriptors), so
   they cost nothing and lose everything. Do the logging in `src/index.js` with

@@ -144,7 +144,7 @@ public final class RontoLispCli {
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
-					inputFile);
+					options.contains("--host-random"), inputFile);
 		}
 		else {
 			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
@@ -294,7 +294,7 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, @Nullable String entryFile) {
+			boolean noPrune, boolean wit, boolean hostRandom, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -304,7 +304,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
-					noPrune, wit, entryFile);
+					noPrune, wit, hostRandom, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -335,13 +335,26 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, @Nullable String entryFile) {
+			boolean noPrune, boolean wit, boolean hostRandom, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
 		if (wit && !(component && outputFile.endsWith(".wasm"))) {
 			throw new UnsupportedOperationException(
 					"--emit-wit requires --component and a .wasm output (e.g. -o out.wasm --component --emit-wit)");
+		}
+		// --host-random routes the wasm-GC backend's random_get slot at a host import,
+		// so it means nothing anywhere else. The backend-selection half is checked here
+		// (the other two backends never see the flag); the --no-wasi / --component half
+		// is the compiler's own guard, next to the contract it protects.
+		if (hostRandom && !outputFile.endsWith(".wasm")) {
+			throw new UnsupportedOperationException(
+					"--host-random requires a .wasm output: it routes the WASM random_get slot at a host import "
+							+ "(the interpreter and the JVM backend draw from the JVM's own generator)");
+		}
+		if (hostRandom && noGc) {
+			throw new UnsupportedOperationException("--host-random cannot be combined with --no-gc: the scalar "
+					+ "(non-GC) backend has no `random` at all, so there is no draw to route");
 		}
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
@@ -569,7 +582,12 @@ public final class RontoLispCli {
 				// groups -- still a GC object the engine collects, so memory behaves as
 				// it
 				// does without the flag.
-				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd);
+				// --host-random: the one opt-in out of "instantiate with nothing". The
+				// module then imports env.random_get(buf, len) -> errno and every
+				// `random` draw is the host's entropy, which is also what makes
+				// rontolisp:random-bytes sound again.
+				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd,
+						hostRandom);
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 			}
@@ -701,6 +719,12 @@ public final class RontoLispCli {
 		this.out.println("                     rontolisp:wasm-export functions work, print is discarded,");
 		this.out.println("                     other I/O traps. With --component: a reactor component that");
 		this.out.println("                     imports NOTHING and runs its top level at instantiation");
+		this.out.println("  --host-random      With --no-wasi (core module only): draw `random` from the HOST");
+		this.out.println("                     instead of the built-in generator. The module then imports");
+		this.out.println("                     exactly one function, env.random_get(buf, len) -> errno (the");
+		this.out.println("                     preview1 signature), so a JS host adds one line to its import");
+		this.out.println("                     object; rontolisp:random-bytes works, and no");
+		this.out.println("                     __ronto_seed_random export is emitted (nothing left to seed)");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");

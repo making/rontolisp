@@ -138,6 +138,61 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void hostRandomJoinsTheOrdinalSpaceLastAndIsTheOnlyImportOnItsOwn() {
+		// --host-random reaches the host through the same injector, so it costs one
+		// import entry and nothing else. It is appended LAST so a program that also
+		// declares wasm-imports keeps their ordinals -- and their bytes -- exactly as
+		// they were.
+		List<LispVal> program = LispReader.readAllFromString("""
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int)
+				(defun roll (n) (add (random n) 10))
+				(rontolisp:wasm-export 'roll :params '(:int) :returns :int)
+				""");
+		List<String[]> imports = functionImports(
+				new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true).compile(program));
+		assertThat(imports).hasSize(2);
+		assertThat(imports.get(0)).containsExactly("host", "add");
+		assertThat(imports.get(1)).containsExactly("env", "random_get");
+
+		// Alone it is the whole import list; and without the flag the module keeps the
+		// zero-import default even though it draws random.
+		List<LispVal> plain = LispReader.readAllFromString("""
+				(defun roll (n) (random n))
+				(rontolisp:wasm-export 'roll :params '(:int) :returns :int)
+				""");
+		assertThat(functionImports(
+				new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true).compile(plain)))
+			.singleElement()
+			.satisfies(entry -> assertThat(entry).containsExactly("env", "random_get"));
+		assertThat(functionImports(new WasmLispCompiler(false, false, true).compile(plain))).isEmpty();
+	}
+
+	@Test
+	void underHostRandomTheEntropyApiReachesTheHostAndAnUnusedImportIsStillShaken() {
+		// The surviving import IS the proof that rontolisp:random-bytes is un-gated:
+		// %random-byte is the only thing this program does, so if it still compiled to
+		// the "--no-wasi has no entropy source" call-time error, nothing would call the
+		// random_get slot and --optimize would shake the import away with it.
+		List<LispVal> entropyOnly = LispReader.readAllFromString("""
+				(defun secret () (rontolisp::%random-byte))
+				(rontolisp:wasm-export 'secret :params '() :returns :int)
+				""");
+		assertThat(functionImports(new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT, false, false, true)
+			.compile(entropyOnly))).singleElement()
+			.satisfies(entry -> assertThat(entry).containsExactly("env", "random_get"));
+
+		// And the same shake is what keeps the flag honest for a program that never
+		// draws: asking for host entropy costs an import only where entropy is used.
+		List<LispVal> noDraw = LispReader.readAllFromString("""
+				(defun nothing () 1)
+				(rontolisp:wasm-export 'nothing :params '() :returns :int)
+				""");
+		assertThat(functionImports(
+				new WasmLispCompiler(false, false, true, OptimizeLevel.DEFAULT, false, false, true).compile(noDraw)))
+			.isEmpty();
+	}
+
+	@Test
 	void stringResultExportsTheAllocator() {
 		// A :string result is written into linear memory by the host via __ronto_alloc,
 		// so the allocator must be exported even without any memory-typed export.

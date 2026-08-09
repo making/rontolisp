@@ -1004,6 +1004,21 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUsesTheStandardOperatorWhenAProgramRedefinesACommonLispFunction() throws Exception {
+		// The compiled call site is the standard LENGTH, not the definition above it --
+		// the interpreter would answer 42. That divergence is CL-legal (CLHS 11.1.2.1.2)
+		// and stays; what changed is that the compile paths no longer do it in silence.
+		// #'LENGTH still names the definition, which is why the warning says so.
+		String source = """
+				(defun length (&rest args) (declare (ignore args)) 42)
+				(print (length '(1 2 3)))
+				(print (funcall #'length '(1 2 3)))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo("3\n42");
+		assertThat(compileAndRunCapturingErr(source)).contains("redefines the COMMON-LISP function LENGTH");
+	}
+
+	@Test
 	void compileAndRunRuntimeControlStringDatumRendersItsFormatArgumentsUnderWarn() throws Exception {
 		assertThat(compileAndRunCapturingErr("(let ((c \"rt ~a/~a\")) (warn c 1 2))")).isEqualTo("WARNING: rt 1/2");
 	}

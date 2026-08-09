@@ -80,3 +80,21 @@ count. Every other multi-argument built-in keeps a fixed wrapper arity: `#'cons`
 them to a different count is unsupported on the compile path (matching the
 [Compiled `eval` limitations](../guides/eval-limitations.md)); use a user-defined function
 or a `lambda` for other arities. The interpreter has no such restriction.
+
+## Redefining a COMMON-LISP function
+
+`(defun random ...)`, `(defun length ...)` and the like are **undefined behavior** in
+Common Lisp (CLHS 11.1.2.1.2), and rontolisp's backends genuinely differ:
+
+- the **interpreter** resolves the call through the function cell, so your definition
+  runs;
+- the **JVM and WASM compilers** recognize the standard operator at the call site and
+  compile it inline, so your definition does not run there. They print a compile-time
+  warning naming the operator and the position of the first such call site, so the
+  divergence is never silent.
+
+`#'random` names your definition on every backend, which is why the warning says the
+definition is still reachable that way. To have one definition everywhere, give it a
+name of your own or `shadow` the symbol into a package of your own. A `defmethod` on a
+built-in name is a different case and does work on every backend: it becomes the
+generic's default method.

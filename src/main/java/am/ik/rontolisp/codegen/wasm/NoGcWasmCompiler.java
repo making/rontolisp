@@ -27,8 +27,11 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BoundaryType;
+import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
@@ -402,6 +405,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 						+ decl.paramTypes().size());
 			}
 		}
+
+		// Every name the program DEFINES, which is not the same as the reachable set
+		// below: a (defun sqrt ...) is never enqueued, because every (sqrt ...) call
+		// site compiles to the built-in -- that is exactly the override the dispatcher
+		// warns about.
+		this.definedNames = Set.copyOf(defuns.keySet());
 
 		// Determine the reachable, eligible functions and assign each a stable index in
 		// discovery (BFS) order. collectCalls both validates eligibility (throwing on an
@@ -2507,7 +2516,12 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			return compileSimd(name, args, fn);
 		}
 
-		return switch (name) {
+		// A program that defines its own function on a cl name loses every call site
+		// the operator dispatch below claims. Armed here and disarmed in the default
+		// arm (compileUserCall, which DOES resolve the defun), like both wasm-GC
+		// dispatchers -- see compiler/ClRedefinitionWarnings.
+		boolean redefinedClFunction = ClRedefinitionWarnings.redefinesClFunction(name, this.definedNames);
+		Ty result = switch (name) {
 			case LispNames.IF -> compileIf(args, fn);
 			case LispNames.PROGN -> compileProgn(args.subList(1, args.size()), fn);
 			case LispNames.LET -> compileLet(cons, fn);
@@ -2573,9 +2587,23 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			case LispNames.GT -> compileComparison(cons, args, fn, Instruction.I64_GT_S, Instruction.F64_GT);
 			case LispNames.GE -> compileComparison(cons, args, fn, Instruction.I64_GE_S, Instruction.F64_GE);
 			case LispNames.NOT -> compileNot(args, fn);
-			default -> compileUserCall(name, args, fn);
+			default -> {
+				redefinedClFunction = false;
+				yield compileUserCall(name, args, fn);
+			}
 		};
+		if (redefinedClFunction && this.warnedClRedefinitions.add(name)) {
+			CompileWarnings.warn(SourceProvenance.prefix(cons) + ClRedefinitionWarnings.message(name));
+		}
+		return result;
 	}
+
+	// The cl function names this compile has already warned about, so an override that
+	// happens at fifty call sites reports once, and every top-level defun name (the
+	// warning's other half -- see compileCall).
+	private final java.util.Set<String> warnedClRedefinitions = new java.util.HashSet<>();
+
+	private Set<String> definedNames = Set.of();
 
 	private Ty compileUserCall(String name, List<LispVal> args, Fn fn) {
 		Ty[] paramTypes = fn.types.params().get(name);

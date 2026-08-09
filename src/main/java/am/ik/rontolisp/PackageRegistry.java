@@ -694,6 +694,19 @@ public final class PackageRegistry {
 	}
 
 	/**
+	 * Returns whether the given unqualified name is a {@code cl} FUNCTION -- a standard
+	 * name usable as a function value, as opposed to a macro or special operator. The
+	 * distinction is what tells a redefinition that a backend can reason about
+	 * ({@code (defun random ...)}) from one no dispatch could honour anywhere
+	 * ({@code (defun if ...)}).
+	 * @param name the canonical (upper-case, unqualified) name
+	 * @return {@code true} if it names a {@code cl} function
+	 */
+	public static boolean isClFunctionName(String name) {
+		return CL_FUNCTIONS.contains(name);
+	}
+
+	/**
 	 * Returns the names of the {@code cl} macros, sorted alphabetically.
 	 * @return the sorted macro names
 	 */

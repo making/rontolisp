@@ -1103,6 +1103,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.warnedClRedefinitions(new HashSet<>())
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.packageTable(packageResolver.runtimePackageTable())
 			.globals(globals)
@@ -3827,6 +3828,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		Set<String> userDefunNames = Set.of();
 
 		/**
+		 * The {@code cl} function names this compile ATTEMPT has already warned about, so
+		 * an override that happens at fifty call sites reports once -- and a retried
+		 * attempt (a mispredicted helper gate) warns again, because
+		 * {@code CompileWarnings} threw the first attempt's messages away. See
+		 * {@link am.ik.rontolisp.compiler.ClRedefinitionWarnings}.
+		 */
+		Set<String> warnedClRedefinitions = new HashSet<>();
+
+		/**
 		 * Whether the program calls {@code fmakunbound} anywhere. When it does, a LITERAL
 		 * {@code (fboundp 'x)} may no longer be folded to a bare constant: the retired
 		 * name must answer nil, so the fold is emitted behind a runtime tombstone probe
@@ -3978,6 +3988,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.mayUseInstances = builder.mayUseInstances;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
+			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.packageTable = builder.packageTable;
 			this.structAccessors = builder.structAccessors;
@@ -4217,6 +4228,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private String className = "";
 
 			private Set<String> userDefunNames = Set.of();
+
+			private Set<String> warnedClRedefinitions = new HashSet<>();
 
 			private boolean usesFmakunbound = false;
 
@@ -4602,6 +4615,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder userDefunNames(Set<String> userDefunNames) {
 				this.userDefunNames = userDefunNames;
+				return this;
+			}
+
+			Builder warnedClRedefinitions(Set<String> warnedClRedefinitions) {
+				this.warnedClRedefinitions = warnedClRedefinitions;
 				return this;
 			}
 

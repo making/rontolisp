@@ -66,6 +66,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean simd;
 
+	private final boolean hostRandom;
+
+	/**
+	 * The one import a {@code --host-random} module carries: preview1's
+	 * {@code random_get(buf, len) -> errno} signature exactly (so a host can forward its
+	 * own WASI implementation unchanged), under the conventional host module name rather
+	 * than {@code wasi_snapshot_preview1} -- the module still imports no WASI function,
+	 * it imports the one host function the flag asked for.
+	 */
+	static final String HOST_RANDOM_MODULE = "env";
+
+	/** The import field name of the {@code --host-random} entropy source. */
+	static final String HOST_RANDOM_FIELD = "random_get";
+
 	/** Creates a new WASM compiler. */
 	public WasmLispCompiler() {
 		this(false);
@@ -180,12 +194,40 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
 			boolean simd) {
+		this(dynamic, component, noWasi, optimize, serve, simd, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
+	 * @param optimize see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
+	 * @param serve see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
+	 * @param simd see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean)}
+	 * @param hostRandom when {@code true} (the CLI's {@code --host-random}, which
+	 * requires {@code noWasi} and rejects {@code component}), the {@code random_get} slot
+	 * forwards to a single host import {@code env.random_get(buf, len) -> errno} instead
+	 * of running the module-local SplitMix64 generator. The module then imports exactly
+	 * that one function -- the zero-import default is unchanged, this is the opt-in --
+	 * and in exchange {@code random} draws the host's entropy (so a quickloaded library's
+	 * {@code (random ...)} does too, without the library knowing) and
+	 * {@code rontolisp:random-bytes} works instead of signalling. No
+	 * {@code __ronto_seed_random} is exported, because no module-local generator state is
+	 * left to seed.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
+			boolean simd, boolean hostRandom) {
 		this.dynamic = dynamic;
 		this.component = component;
 		this.noWasi = noWasi;
 		this.optimize = optimize;
 		this.serve = serve && component;
 		this.simd = simd;
+		this.hostRandom = hostRandom;
 		// A serve component's entire surface is wasi:http -- its imports AND its
 		// handler export -- so a serve build cannot promise "no WASI imports".
 		if (this.serve && noWasi) {
@@ -193,6 +235,22 @@ public final class WasmLispCompiler implements LispCompiler {
 					"--no-wasi cannot be combined with rontolisp:http-handler: a serve component's entire surface is "
 							+ "wasi:http (its imports and the wasi:http/handler export), which --no-wasi excludes; "
 							+ "drop --no-wasi");
+		}
+		// --host-random routes ONE WASI slot at a host function, so it only means
+		// anything where that slot is a module-local stub in the first place.
+		if (hostRandom && !noWasi) {
+			throw new UnsupportedOperationException("--host-random requires --no-wasi: every other WASM build already "
+					+ "draws `random` from the host's wasi_snapshot_preview1 random_get");
+		}
+		// The reactor component's contract is that it imports NOTHING; a lifted
+		// entropy import would be a WIT world-shape decision, not a core export one.
+		// Plain --component already has the host's entropy (wasi:random), so the
+		// answer there is to drop --no-wasi rather than to grow the world.
+		if (hostRandom && component) {
+			throw new UnsupportedOperationException(
+					"--host-random cannot be combined with --component: a --no-wasi reactor component imports nothing "
+							+ "at all, and a plain --component build already draws `random` from wasi:random; "
+							+ "drop --component (core module) or drop --no-wasi (component)");
 		}
 	}
 
@@ -2170,6 +2228,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Ctx.valueFuncIds). Filled while the bodies are emitted, read below to size the
 		// dispatch ladders.
 		Set<Integer> valueFuncIds = new HashSet<>();
+		// The cl functions whose user defun an operator interception already warned
+		// about: the warning is per NAME, not per call site (see
+		// Ctx.warnedClRedefinitions).
+		Set<String> warnedClRedefinitions = new HashSet<>();
 		Set<Integer> indirectCallArities = new HashSet<>();
 		// The async waiter wake-up goes through the arity-1 dispatch (the resume
 		// functions are arity-1 lambdas), and the wasi-stream read/close thunks
@@ -2223,11 +2285,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			// reason so their messages name the actual conflict.
 			.component(this.component && !this.noWasi)
 			.noWasi(this.noWasi)
+			.hostRandom(this.hostRandom)
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
 			.numDefuns(defuns.size())
 			.userDefunNames(Set.copyOf(userDefinedNames))
+			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.packageTable(packageResolver.runtimePackageTable())
 			.structAccessors(structAccessors)
@@ -2555,7 +2619,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Appended after the memory helpers, so it shifts only the COMPUTED wrapper/ABI
 		// bases below -- every fixed FUNC_* constant is under userFuncBase(). Core-module
 		// shape only: a reactor component would have to LIFT it to expose it at all.
-		boolean seedRandom = this.noWasi && !this.component;
+		// Under --host-random there is no module-local generator state left to seed, so
+		// the hook is not emitted at all rather than exported as a no-op that a host
+		// could reasonably read as "seeding still matters here".
+		boolean seedRandom = this.noWasi && !this.component && !this.hostRandom;
 		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount : -1;
 		int helperFuncCount = memoryHelperCount + (seedRandom ? 1 : 0);
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
@@ -2868,6 +2935,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		for (ImportSlot slot : importSlots) {
 			hostImports
 				.add(new am.ik.wasm.WasmImportInjector.HostImport(slot.module(), slot.field(), importTypeIndex++));
+		}
+		// --host-random: the entropy source joins the same ordinal space, LAST, so a
+		// program that also declares rontolisp:wasm-import functions keeps their
+		// ordinals (and its bytes) exactly as they were. It needs no appended type
+		// entry -- preview1's random_get is (i32, i32) -> i32, which is TYPE_INTERN's
+		// shape, and the fixed types are emitted by every module -- so abiTypeBase,
+		// planned over importSlots above, is unaffected too.
+		final int hostRandomOrdinal = this.hostRandom ? hostImports.size() : -1;
+		if (this.hostRandom) {
+			hostImports
+				.add(new am.ik.wasm.WasmImportInjector.HostImport(HOST_RANDOM_MODULE, HOST_RANDOM_FIELD, TYPE_INTERN));
 		}
 
 		// Which funcIds the arity ladders (and the name registry below) must carry a case
@@ -4417,11 +4495,17 @@ public final class WasmLispCompiler implements LispCompiler {
 				// draw a pseudo-random number, or report a state the module really is
 				// in (no environment, no files) -- but it may not invent INPUT, and it
 				// may not name a time that is not the time.
+				// --host-random opts ONE slot out of all this: random_get stops being a
+				// stub and forwards to a host import, which is the only way an answer
+				// here can be the host's rather than a fact about the module.
 				if (this.noWasi) {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
 						code.addFunction(switch (i) {
 							case FUNC_FD_WRITE -> WasmIoRuntimeBuilder.buildNoWasiFdWriteSinkBody();
-							case FUNC_RANDOM_GET -> WasmIoRuntimeBuilder.buildNoWasiRandomGetBody();
+							case FUNC_RANDOM_GET -> this.hostRandom
+									? WasmIoRuntimeBuilder.buildNoWasiHostRandomGetBody(
+											WasmImportCompiler.PLACEHOLDER_FUNC_BASE + hostRandomOrdinal)
+									: WasmIoRuntimeBuilder.buildNoWasiRandomGetBody();
 							case FUNC_ENVIRON_SIZES_GET -> WasmIoRuntimeBuilder.buildNoWasiEnvironSizesGetBody();
 							case FUNC_ENVIRON_GET -> WasmIoRuntimeBuilder.buildNoWasiErrnoBody(0);
 							case FUNC_PATH_OPEN ->
@@ -5449,6 +5533,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		Set<Integer> valueFuncIds;
 
+		/**
+		 * The {@code cl} function names this compile has already warned about, so an
+		 * override that happens at fifty call sites reports once (one mutable set shared
+		 * by every {@code Ctx}, like {@link #valueFuncIds}). See
+		 * {@link am.ik.rontolisp.compiler.ClRedefinitionWarnings}.
+		 */
+		Set<String> warnedClRedefinitions = new HashSet<>();
+
 		int[] nextFuncId;
 
 		int nextLocal = 0;
@@ -5481,6 +5573,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * --component" messages would otherwise mislead a reactor build.
 		 */
 		boolean noWasi = false;
+
+		/**
+		 * True under {@code --no-wasi --host-random}: the {@code random_get} slot
+		 * forwards to a host import instead of the module-local generator, so the entropy
+		 * behind {@code random} really is the host's. Read by the one site that must not
+		 * stand in for a host, {@code rontolisp::%random-byte}.
+		 */
+		boolean hostRandom = false;
 
 		// True in a rontolisp:http-handler (serve-mode) component.
 		boolean serve = false;
@@ -5769,11 +5869,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.valueFuncIds = builder.valueFuncIds;
+			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
 			this.optimize = builder.optimize;
 			this.component = builder.component;
 			this.noWasi = builder.noWasi;
+			this.hostRandom = builder.hostRandom;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
 			this.blockExitTag = builder.blockExitTag;
@@ -5827,6 +5929,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			private Set<Integer> valueFuncIds = new HashSet<>();
 
+			private Set<String> warnedClRedefinitions = new HashSet<>();
+
 			private int[] nextFuncId = new int[1];
 
 			private boolean dynamic = false;
@@ -5836,6 +5940,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean component = false;
 
 			private boolean noWasi = false;
+
+			private boolean hostRandom = false;
 
 			private boolean serve = false;
 
@@ -5933,6 +6039,11 @@ public final class WasmLispCompiler implements LispCompiler {
 				return this;
 			}
 
+			Builder warnedClRedefinitions(Set<String> warnedClRedefinitions) {
+				this.warnedClRedefinitions = warnedClRedefinitions;
+				return this;
+			}
+
 			Builder nextFuncId(int[] nextFuncId) {
 				this.nextFuncId = nextFuncId;
 				return this;
@@ -5955,6 +6066,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder noWasi(boolean noWasi) {
 				this.noWasi = noWasi;
+				return this;
+			}
+
+			Builder hostRandom(boolean hostRandom) {
+				this.hostRandom = hostRandom;
 				return this;
 			}
 

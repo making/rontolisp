@@ -223,6 +223,34 @@ program defines `+`. Names are matched by both the exact spelling and the
 package-stripped member name, so a library's `(defun cl-user::length ...)` blocks
 `length` too.
 
+**The plain `(defun length ...)` is DIAGNOSED, not honoured (decided 2026-08-09,
+`compiler.ClRedefinitionWarnings`)**: the fold declines it, but the expression
+dispatchers still compile the standard operator at the call site, so the definition
+runs on the interpreter and not on the compile paths. All THREE dispatchers (wasm-GC,
+JVM, `--no-gc`) now arm a flag before their operator switch (`redefinesClFunction` = the
+name is a top-level defun AND `PackageRegistry.isClFunctionName`) and disarm it in the
+`default` arm -- the ordinary call path, which DOES resolve the defun -- then report
+through `CompileWarnings`, once per name, at the first call site's position. On
+`--no-gc` the armed set is the program's DEFINED names, not its reachable index: a
+`(defun sqrt ...)` is never enqueued there precisely because every `(sqrt ...)` site
+compiles to the built-in. Armed/disarmed rather than pre-computed
+because "does this backend intercept this name" is only knowable at the dispatch: a `cl`
+name that falls through stays silent, which is what keeps `wait.lisp`'s `(defun sleep
+...)` and `compile-runtime.lisp`'s `(defun compile ...)` -- deliberate Lisp-source
+definitions of standard functions -- from warning in every program that splices them.
+**Why not honour it**: CLHS 11.1.2.1.2 leaves it undefined (SBCL refuses outright with a
+package lock), and the interpreter's honoured set is an accident of which names
+`LispEvaluator.evalCons` expands before consulting the environment -- it honours `car`
+but not `first`, `length` but not `nth` -- so "make the compilers agree" means freezing
+that accident into a hand-kept list on three dispatchers, while honouring EVERY `cl`
+function collides with this fold, with inlining and with the dispatch gate. The defect
+was the silence, and that is what the warning removes. Cross-backend pin:
+`compiler/ClRedefinitionWarningsTest` (interpreter answers the definition, both compile
+backends warn, a non-intercepted name and an uncalled definition stay quiet) plus
+`JvmLispCompilerTest.compileAndRunUsesTheStandardOperatorWhenAProgramRedefinesACommonLispFunction`
+(the compiled program computes the STANDARD answer while `#'length` still names the
+definition). If package locks ever land, this message is what the lock reports.
+
 `(setf (symbol-function <computed>) ...)` can install anything under any name, so it
 stands the WHOLE pass down; a literal `(setf (symbol-function 'max) ...)` blocks only
 that name.

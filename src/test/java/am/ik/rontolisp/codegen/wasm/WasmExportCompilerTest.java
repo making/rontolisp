@@ -398,6 +398,55 @@ class WasmExportCompilerTest {
 			.isFalse();
 	}
 
+	@Test
+	void hostRandomForwardsTheRandomGetSlotAndRetiresTheSeedHook() {
+		// --host-random is the ONE opt-in out of the zero-import contract, and it opts
+		// out of exactly one slot: random_get stops being the module's own SplitMix64
+		// and forwards its (buf, len) to the injected host import, whose call index the
+		// WasmImportInjector has rewritten to 0 (it is the only import). Everything the
+		// module-local generator implied goes with it -- there is no state left to
+		// seed, so no __ronto_seed_random -- and the entropy API is sound again,
+		// because the bytes really are the host's.
+		// %random-byte is the primitive rontolisp:random-bytes is built out of, and the
+		// one the compiler gates -- spelled directly here so the check does not depend
+		// on the CLI's library splice.
+		String source = """
+				(defun draw (n) (random n))
+				(rontolisp:wasm-export 'draw :params '(:int) :returns :int)
+				(defun secret () (rontolisp::%random-byte))
+				(rontolisp:wasm-export 'secret :params '() :returns :int)
+				""";
+		List<LispVal> program = LispReader.readAllFromString(source);
+		byte[] hostRandom = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, true)
+			.compile(program);
+		// 0 locals; local.get 0; local.get 1; call 0; end
+		assertThat(noWasiStubBodies(hostRandom)[WasmLispCompiler.FUNC_RANDOM_GET]).as("random_get forwards to the host")
+			.isEqualTo(new byte[] { 0x00, 0x20, 0x00, 0x20, 0x01, 0x10, 0x00, 0x0b });
+		assertThat(containsAscii(hostRandom, "__ronto_seed_random")).as("nothing left to seed").isFalse();
+
+		// The default is unchanged: the module-local generator and the seed hook beside
+		// it. That the ENTROPY API follows the slot is pinned in WasmImportCompilerTest,
+		// where a surviving import is the proof that %random-byte reaches the host.
+		byte[] selfContained = new WasmLispCompiler(false, false, true).compile(program);
+		assertThat(noWasiStubBodies(selfContained)[WasmLispCompiler.FUNC_RANDOM_GET])
+			.isNotEqualTo(noWasiStubBodies(hostRandom)[WasmLispCompiler.FUNC_RANDOM_GET]);
+		assertThat(containsAscii(selfContained, "__ronto_seed_random")).isTrue();
+	}
+
+	@Test
+	void hostRandomIsRejectedWhereThereIsNoSlotToRoute() {
+		// Every other WASM build already draws from the host (preview1's random_get,
+		// the component's wasi:random), and a --no-wasi reactor COMPONENT imports
+		// nothing at all by contract -- an entropy import there would be a WIT
+		// world-shape decision, not a core export one.
+		assertThatThrownBy(() -> new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, false, true))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--host-random requires --no-wasi");
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, false, false, true))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("--host-random cannot be combined with --component");
+	}
+
 	private static boolean containsBytes(byte[] haystack, byte[] needle) {
 		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
 			for (int j = 0; j < needle.length; j++) {

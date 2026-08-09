@@ -65,6 +65,8 @@ sections:
         title: Reader Case (Upcasing)
       - file: guides/math-backends.md
         title: Math Function Backends
+      - file: guides/random.md
+        title: Randomness (random)
       - file: guides/wasm-host-boundary.md
         title: WASM Host Boundary (wasm-export / wasm-import)
       - file: guides/wit-contracts.md

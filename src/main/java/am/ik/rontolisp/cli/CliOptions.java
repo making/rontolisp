@@ -13,8 +13,8 @@ import org.jspecify.annotations.Nullable;
 public class CliOptions {
 
 	private static final Set<String> noValueKeys = Set.of("-h", "--help", //
-			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--optimize", "--no-gc",
-			"--simd", "--no-prune", "--emit-wit");
+			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--host-random",
+			"--optimize", "--no-gc", "--simd", "--no-prune", "--emit-wit");
 
 	private final Map<String, String> options;
 

@@ -1565,6 +1565,44 @@ final class WasmIoRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the {@code --no-wasi --host-random} {@code random_get} slot: instead of the
+	 * module-local generator below, the slot FORWARDS its two parameters to a host import
+	 * and returns the host's errno, so every {@code random} draw -- including one in a
+	 * quickloaded library's top-level form, which never learns where the bytes came from
+	 * -- is the host's entropy.
+	 *
+	 * <p>
+	 * The signature is preview1's {@code random_get(buf, len) -> errno} exactly, so a
+	 * host that already has a WASI implementation can pass it straight through; the
+	 * import module is {@code env} rather than {@code wasi_snapshot_preview1} because the
+	 * module still imports no WASI function -- it imports ONE host function the flag
+	 * asked for.
+	 *
+	 * <p>
+	 * This is what makes {@code rontolisp:random-bytes} sound again
+	 * ({@code WasmExprCompiler} un-gates {@code rontolisp::%random-byte} when it is in
+	 * effect): the entropy is genuinely the host's, so nothing is being passed off as
+	 * something it is not. It is also why {@code __ronto_seed_random} is NOT emitted
+	 * alongside it -- there is no module-local state left to seed.
+	 * @param placeholderFuncIndex the placeholder call index of the host import
+	 * ({@code WasmImportCompiler.PLACEHOLDER_FUNC_BASE + ordinal}), which
+	 * {@link am.ik.wasm.WasmImportInjector} rewrites to the import's real function index
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiHostRandomGetBody(int placeholderFuncIndex) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: BUF=0, LEN=1 (both i32); no locals.
+		w.write(0);
+		getLocal(w, 0);
+		getLocal(w, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(placeholderFuncIndex);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
 	// SplitMix64 constants: the golden-ratio increment and the two mixing multipliers.
 	private static final long SM64_GAMMA = 0x9E3779B97F4A7C15L;
 

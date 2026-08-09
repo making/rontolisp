@@ -151,8 +151,8 @@ reading of the clock true, so those are not.
 | `(uiop:getenv "X")` | `nil` — the environment is empty |
 | `probe-file`, `directory`, `load` | nothing is found (`nil`, or a catchable error) |
 | `with-open-file`, `open` | **signals** a catchable error naming WASI |
-| `(random n)`, `(random 1.0)` | works — a built-in generator, see below |
-| `rontolisp:random-bytes` | **signals** — no real entropy exists here |
+| `(random n)`, `(random 1.0)` | works — a built-in generator, or the host's with `--host-random` |
+| `rontolisp:random-bytes` | **signals**, unless `--host-random` supplies real entropy |
 | `get-universal-time` and the other clocks | **signals** — no value would be the time |
 | `read`, `read-line`, `read-char` (standard input) | **traps** |
 
@@ -166,39 +166,11 @@ Output being a sink is what lets a library that logs while it loads be
 quickloaded into a reactor at all — the alternative was killing the instance for
 a log line. If you need the text, return it from the export instead.
 
-`random` works because Common Lisp's `random` is a pseudo-random draw from
-`*random-state*`, not an entropy source: a fresh image is allowed to start from
-a fixed state, and `make-random-state` here answers `nil`, so nothing about the
-contract promises unpredictability. The module carries its own generator and
-starts it from a constant, which has one consequence worth knowing: **unseeded,
-every instance of one module produces the same sequence.**
-
-### Seeding it from the host — `__ronto_seed_random`
-
-A `--no-wasi` module cannot *import* the host's random: an import is not
-optional in core WebAssembly, so asking for one would break the very thing the
-flag is for (instantiating with `{}`). It exports a hook instead. Call it once,
-**before `_initialize`**, and even a library's load-time `(random ...)` draws
-from your entropy:
-
-```js
-const instance = new WebAssembly.Instance(module, {});
-instance.exports.__ronto_seed_random(
-  new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0],
-);
-instance.exports._initialize();
-```
-
-Skip the call and you get the deterministic sequence, unchanged. The hook is on
-the core-module shape only — a reactor component (`--component --no-wasi`) runs
-its top level at instantiation, so there is no window before the first draw.
-
-Seeding does **not** re-enable `rontolisp:random-bytes`. The generator is fast
-and well-distributed but invertible from a single output, so a seeded stream is
-unpredictable without being cryptographically strong; the API that promises
-entropy keeps saying no rather than handing you something that only looks like a
-CSPRNG. For session identifiers and tokens, mint them in the host
-(`crypto.randomUUID()`) and pass them in.
+Randomness is the one service with a choice to make: the module carries its own
+generator (so unseeded, every instance produces the same sequence), a host can
+seed it through the exported `__ronto_seed_random`, and `--host-random` routes
+`random` at a host import instead — which is also what makes
+`rontolisp:random-bytes` work here. See the [randomness guide](random.md).
 
 Combined with `--component`, the same contract produces a **reactor
 component** — a component that imports nothing, whose top-level forms run at
