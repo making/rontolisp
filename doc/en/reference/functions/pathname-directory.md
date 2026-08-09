@@ -6,7 +6,8 @@ The directory component of a namestring, as Common Lisp's list: `:absolute` or
 `:relative` followed by one string per directory level. A namestring with no
 directory part answers `nil`.
 
-A rontolisp pathname IS its namestring, so this is pure string work -- nothing is
+Takes a pathname or a namestring; the split is pure string work on the
+namestring -- nothing is
 read from the filesystem and a nonexistent path answers just the same. It pairs
 with [`directory`](directory.md): a walk uses it to decide what to do with each
 entry it was handed.

@@ -6595,9 +6595,10 @@ class WasmLispCompilerIntegrationTest {
 				+ " (print (scale-float 1.5 3))" + " (print (scale-float 1.0 -100000))"
 				+ " (defun fd-doubler (x) (* x 2)) (print (funcall (fdefinition 'fd-doubler) 21))"
 				+ " (print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
-				+ " (print (pathnamep 1))" + " (print (stream-element-type t))" + " (print (input-stream-p t))"
-				+ " (print (output-stream-p (make-broadcast-stream)))" + " (print (input-stream-p \"s\"))"))
-			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nT\nNIL\nCHARACTER\nT\nT\nNIL");
+				+ " (print (pathnamep #P\"/tmp/x\"))" + " (print (stream-element-type t))"
+				+ " (print (input-stream-p t))" + " (print (output-stream-p (make-broadcast-stream)))"
+				+ " (print (input-stream-p \"s\"))"))
+			.isEqualTo("240\n44\n12.0\n0.0\n42\nNIL\nNIL\nNIL\nT\nCHARACTER\nT\nT\nNIL");
 	}
 
 	@Test
@@ -7459,7 +7460,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (probe-file "absent.txt"))
 				(print (if (probe-file "absent.txt") 'yes 'no))
 				""";
-		assertThat(compileAndRunWithDir(code)).isEqualTo("\"probe.txt\"\nNIL\nNO");
+		assertThat(compileAndRunWithDir(code)).isEqualTo("#P\"probe.txt\"\nNIL\nNO");
 	}
 
 	@Test
@@ -7499,7 +7500,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (uiop:file-exists-p "probe-fc.txt"))
 				(print (uiop:file-exists-p "probe-nope.txt"))
 				""";
-		assertThat(compileAndRunWithDir(code)).isEqualTo("(\"probe-fc.txt\" NIL)\n\"probe-fc.txt\"\nNIL");
+		assertThat(compileAndRunWithDir(code)).isEqualTo("(#P\"probe-fc.txt\" NIL)\n#P\"probe-fc.txt\"\nNIL");
 	}
 
 	@Test
@@ -7511,7 +7512,7 @@ class WasmLispCompilerIntegrationTest {
 				(print (probe-file "cprobe.txt"))
 				(print (probe-file "cabsent.txt"))
 				""";
-		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("\"cprobe.txt\"\nNIL");
+		assertThat(compileAndRunComponentWithDir(code)).isEqualTo("#P\"cprobe.txt\"\nNIL");
 	}
 
 	// One program for both WASM modes: the entries are created by the program itself so
@@ -7520,7 +7521,9 @@ class WasmLispCompilerIntegrationTest {
 			(with-open-file (out "dl-b.txt" :direction :output) (write-line "b" out))
 			(with-open-file (out "dl-a.txt" :direction :output) (write-line "a" out))
 			(print (directory "./dl-*.txt"))
-			(print (remove-if-not (lambda (x) (and (> (length x) 5) (string= (subseq x 0 5) "./dl-")))
+			(print (remove-if-not (lambda (x)
+			                        (let ((n (namestring x)))
+			                          (and (> (length n) 5) (string= (subseq n 0 5) "./dl-"))))
 			                      (directory "./*.*")))
 			(print (uiop:directory-exists-p "."))
 			(print (uiop:directory-exists-p "dl-a.txt"))
@@ -7529,9 +7532,9 @@ class WasmLispCompilerIntegrationTest {
 			""";
 
 	private static final String DIRECTORY_LISTING_EXPECTED = """
-			("./dl-a.txt" "./dl-b.txt")
-			("./dl-a.txt" "./dl-b.txt")
-			"./"
+			(#P"./dl-a.txt" #P"./dl-b.txt")
+			(#P"./dl-a.txt" #P"./dl-b.txt")
+			#P"./"
 			NIL
 			NIL
 			NIL""";
@@ -7559,7 +7562,7 @@ class WasmLispCompilerIntegrationTest {
 				  (print (first all))
 				  (print (car (last all))))
 				""";
-		assertThat(compileAndRunWithDir(code)).isEqualTo("400\n\"./many-1000.txt\"\n\"./many-1399.txt\"");
+		assertThat(compileAndRunWithDir(code)).isEqualTo("400\n#P\"./many-1000.txt\"\n#P\"./many-1399.txt\"");
 	}
 
 	@Test
@@ -8825,7 +8828,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("387");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("389");
 	}
 
 	@Test

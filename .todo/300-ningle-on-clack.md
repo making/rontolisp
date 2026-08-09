@@ -90,10 +90,17 @@ once ningle lands. Other targets, same source: a `--component` serve build
    `(NIL)` for both before — on all four backends. `:accept` negotiation and
    `ningle:requirement` therefore dispatch; what is still untested end-to-end is
    the HTTP path through them, which gaps 4 and 5 block.
-4. **`.todo/304`** — `pathnamep` claims every string, so lack's
-   `finalize-response` shapes a STRING controller result as a bare-string Clack
-   body, which the transport refuses. `(setf (ningle:route *app* "/") "Welcome
-   to ningle!")` — the first line of ningle's README — is a 500.
+4. ~~`.todo/304`~~ — **DONE 2026-08-09.** A pathname is a distinct VALUE now
+   (an instance carrying its namestring, `#P"..."` reads to one, the producers
+   answer one, every path-taking operator accepts both spellings —
+   `.kb/pathnames.md`), so `pathnamep` answers NIL for a string and lack's
+   `finalize-response` shapes a STRING controller result as SBCL does:
+   `(200 NIL ("Welcome to ningle!"))`, verified against the real ningle + lack
+   over `lack.component:to-app` AND over a live `clack:clackup` socket —
+   `(setf (ningle:route *app* "/") "Welcome to ningle!")`, the first line of
+   ningle's README, answers 200 on the interpreter. The `pathnameClauseYields`
+   heuristic is deleted; jzon/mito discriminate by the type itself. What still
+   500s is only the nil-body case, which is gap 5 below.
 5. **A response body list holding NIL** (this item). ningle's `not-found` sets
    the status and returns nil, and lack's `finalize-response` answers
    `(404 () (NIL))` — a body LIST whose one element is NIL. `%http-body-string`
@@ -214,8 +221,9 @@ where ningle and a route-list router genuinely differ, and it exercises
 
 ## Work
 
-- Both load blockers are in (`.todo/301`, `.todo/302`), so `(ql:quickload
-  "ningle")` already loads: land `.todo/303` and `.todo/304`, then gap 5 above.
+- Gaps 1-4 are in (`.todo/301`, `.todo/302`, `.todo/303`, `.todo/304`), so
+  `(ql:quickload "ningle")` loads and a string controller serves: gap 5 above
+  is what remains before the programs below run unpatched.
 - Verify `(ql:quickload "ningle")` UNPATCHED and the two programs above on all
   four backends. The compile paths must be driven through `ql:quickload` in the
   program, not through `load` of the dist files — that is the path `LoadInliner`

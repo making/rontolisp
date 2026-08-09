@@ -69,11 +69,10 @@ Clack アプリケーション（lack-request、http-body）が必要とする�
 - `body` — **文字列のリスト**（連結されます）、`nil` または省略（空の
   ボディ — 2 要素の `(status headers)` 形も有効です）、`(unsigned-byte 8)`
   ベクタ、または rontolisp のストリーム（例: プロキシした fetch のボディ）。
-  **裸の文字列はエラーを送出します** — これは意図的で、Clack に忠実な挙動
-  です: Clack では pathname のボディが「このファイルを serve せよ」を意味し、
-  rontolisp の pathname はその namestring *そのもの*なので、文字列を受け
-  付けると静的ファイルのミドルウェアがファイルの*パス*を内容として serve
-  してしまいます。関数のレスポンスは Clack の delayed 形のみ対応です —
+  **裸の文字列はエラーを送出します** — これは意図的で、文字列を拒否する
+  Clack に忠実な挙動です。pathname のボディは「このファイルを serve せよ」を
+  意味し (lack の静的ファイルミドルウェアが返します)、ここでは独立した値
+  なので、トランスポートが配信できるようになるまで未対応として拒否されます。関数のレスポンスは Clack の delayed 形のみ対応です —
   `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
   — streaming writer 形は拒否されます。
 

@@ -46,6 +46,16 @@ public sealed interface Token {
 	}
 
 	/**
+	 * Pathname literal open ({@code #P"} / {@code #p"}) token: the {@link StringToken}
+	 * that follows is the namestring, and the reader builds the pathname value (a
+	 * {@code LispInstance} over the fixed {@code LispLayout.PATHNAME}) from it. Only
+	 * {@code #P} directly followed by a string is the dispatch; {@code #PFOO} stays a
+	 * symbol.
+	 */
+	record PathnameOpen() implements Token {
+	}
+
+	/**
 	 * Rank-n array literal open ({@code #nA(}) token; closed by the {@link RightParen}
 	 * matching the opening parenthesis.
 	 *

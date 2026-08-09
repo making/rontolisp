@@ -2874,15 +2874,48 @@ public final class LispNames {
 	public static final String CLOSE = "CLOSE";
 
 	/**
-	 * The {@code probe-file} built-in function: the pathname when the file exists,
-	 * {@code nil} otherwise. The one file primitive that does NOT signal on a missing
-	 * path, so it is the only way to ask the question on WASM (where a failed
-	 * {@code open} traps rather than signalling, which no {@code handler-case} can
-	 * catch). rontolisp represents a pathname as its namestring, so the "truename" it
-	 * answers with is the argument string itself -- no backend resolves symlinks or makes
-	 * the path absolute.
+	 * The {@code probe-file} built-in function: a PATHNAME value when the file exists,
+	 * {@code nil} otherwise. Prelude Lisp over {@link #PROBE_FILE_INTERNAL} -- the
+	 * primitive answers the namestring, the prelude wraps it in the pathname value
+	 * ({@code LispLayout.PATHNAME}) -- and it takes both designator spellings. No backend
+	 * resolves symlinks or makes the path absolute, so the "truename" carries the
+	 * argument namestring itself.
 	 */
 	public static final String PROBE_FILE = "PROBE-FILE";
+
+	/**
+	 * The {@code %probe-file} internal primitive behind {@link #PROBE_FILE}: takes a
+	 * namestring, answers it back when the file exists and {@code nil} otherwise. The one
+	 * file primitive that does NOT signal on a missing path, so it is the only way to ask
+	 * the question on WASM (where a failed {@code open} traps rather than signalling,
+	 * which no {@code handler-case} can catch). Stays string-in/string-out on every
+	 * backend; the pathname wrapping lives in the prelude {@code probe-file}.
+	 */
+	public static final String PROBE_FILE_INTERNAL = "%PROBE-FILE";
+
+	/**
+	 * The {@code pathname} built-in function: the identity on a pathname value, a fresh
+	 * pathname over a namestring, an error for anything else. Prelude Lisp; the canonical
+	 * constructor every producer ({@code make-pathname}, {@code directory},
+	 * {@code probe-file}, ...) funnels through.
+	 */
+	public static final String PATHNAME = "PATHNAME";
+
+	/**
+	 * The {@code parse-namestring} built-in function -- lite: {@code (values (pathname
+	 * thing) (length namestring))}, host and defaults accepted and ignored (a rontolisp
+	 * namestring has no host to parse against).
+	 */
+	public static final String PARSE_NAMESTRING = "PARSE-NAMESTRING";
+
+	/**
+	 * The {@code %path-ns} internal helper: a pathname value's namestring, anything else
+	 * unchanged. The LENIENT unwrap the prelude path functions coerce their arguments
+	 * through before doing string work -- unlike {@link #NAMESTRING_CL} it never signals,
+	 * so the existing "a non-string coerces to the empty namestring" tolerance of the
+	 * directory family is preserved.
+	 */
+	public static final String PATH_NS = "%PATH-NS";
 
 	/**
 	 * The {@code %list-directory} internal primitive: the one directory-LISTING call each
@@ -4993,11 +5026,11 @@ public final class LispNames {
 
 	/**
 	 * {@code merge-pathnames} (CL) -- the ANSI spelling of the merge
-	 * {@link #MERGE_PATHNAMES_STAR} already performs (rontolisp's paths are namestrings,
-	 * so the two coincide: uiop's variant only differs in host/device/version components
-	 * that are not modelled). A library that locates a data file relative to its own
-	 * source spells it this way -- local-time's {@code zoneinfo/} lookup is the seed
-	 * case.
+	 * {@link #MERGE_PATHNAMES_STAR} already performs (the merge works on the namestring a
+	 * pathname value carries, so the two coincide: uiop's variant only differs in
+	 * host/device/version components that are not modelled). A library that locates a
+	 * data file relative to its own source spells it this way -- local-time's
+	 * {@code zoneinfo/} lookup is the seed case.
 	 */
 	public static final String MERGE_PATHNAMES = "MERGE-PATHNAMES";
 
@@ -5267,21 +5300,22 @@ public final class LispNames {
 	public static final String BROADCAST_STREAM_COMPONENTS = "%BROADCAST-STREAM-COMPONENTS";
 
 	/**
-	 * The {@code pathnamep} built-in function: a rontolisp pathname IS its namestring, so
-	 * this is {@code stringp}. It answers exactly what {@code (typep x 'pathname)} does
-	 * (CL requires the two to agree) -- see the {@code PATHNAME} case of
-	 * {@code LispMacroExpander.makeTypeTest} for why that is a string test and what it
-	 * costs. Deviates from CL, where a namestring is NOT a pathname; here there is no
-	 * other value that could be one.
+	 * The {@code pathnamep} built-in function: whether the value is a pathname -- an
+	 * instance of the fixed {@code LispLayout.PATHNAME} layout, the value {@code #P"..."}
+	 * denotes. A string is NOT one (restoring CL's rule); it answers exactly what
+	 * {@code (typep x 'pathname)} does, as CL requires the two to agree. Expands to
+	 * {@code (%obj-is x '%PATHNAME)} on the compile paths, so with the instance gate off
+	 * (no pathname can exist) it is a constant nil.
 	 */
 	public static final String PATHNAMEP = "PATHNAMEP";
 
 	/**
-	 * The {@code namestring} built-in function -- the identity on a namestring, since a
-	 * rontolisp pathname IS one. Prelude Lisp; {@code uiop:namestring} lowers onto this
-	 * same function ({@code LispMacroExpander.expandUiopStubCall}), as real UIOP
-	 * re-exports CL's. The constant is spelled {@code NAMESTRING_CL} because
-	 * {@link #NAMESTRING} is the {@code uiop} package MEMBER of the same name.
+	 * The {@code namestring} built-in function -- the namestring carried by a pathname
+	 * value, or a namestring given directly (a string designates the pathname it names).
+	 * Prelude Lisp; {@code uiop:namestring} and {@code uiop:native-namestring} lower onto
+	 * this same function ({@code LispMacroExpander.expandUiopStubCall}), as real UIOP
+	 * re-exports/derives them from CL's. The constant is spelled {@code NAMESTRING_CL}
+	 * because {@link #NAMESTRING} is the {@code uiop} package MEMBER of the same name.
 	 */
 	public static final String NAMESTRING_CL = "NAMESTRING";
 
@@ -6016,7 +6050,13 @@ public final class LispNames {
 	/** The {@code uiop} stub package (and built-in ASDF system) name. */
 	public static final String UIOP_PKG = "UIOP";
 
-	/** {@code uiop:native-namestring} (stub: resolves, undefined when called). */
+	/**
+	 * {@code uiop:native-namestring} -- real: a rontolisp namestring IS the host spelling
+	 * (no backend translates), so it is CL's {@code namestring}. Lowered onto it on the
+	 * compile paths ({@code LispMacroExpander.expandUiopStubCall}); a Java function on
+	 * the interpreter. jzon's pathname stringify method and trivial-mimes'
+	 * {@code mime-probe} are the callers that made it real.
+	 */
 	public static final String NATIVE_NAMESTRING = "NATIVE-NAMESTRING";
 
 	/** {@code uiop:namestring} (stub). */
@@ -6124,8 +6164,8 @@ public final class LispNames {
 
 	/**
 	 * {@code uiop:ensure-directory-pathname} -- the pathname in DIRECTORY form: a
-	 * namestring that already ends in {@code /} is itself, anything else gains one. A
-	 * rontolisp pathname IS its namestring, so this is the whole of real UIOP's
+	 * namestring that already ends in {@code /} is itself, anything else gains one. The
+	 * namestring is flat here, so this is the whole of real UIOP's
 	 * name/type-to-directory-component promotion. Prelude Lisp, every backend.
 	 */
 	public static final String ENSURE_DIRECTORY_PATHNAME = "ENSURE-DIRECTORY-PATHNAME";

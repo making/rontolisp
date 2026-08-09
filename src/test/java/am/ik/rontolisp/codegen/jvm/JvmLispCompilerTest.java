@@ -2269,7 +2269,7 @@ class JvmLispCompilerTest {
 				(print (probe-file "%s"))
 				(print (if (probe-file "%s") 'yes 'no))
 				""".formatted(file, file, missing, missing)))
-			.isEqualTo("\"" + tempDir.resolve("probe.txt") + "\"\nNIL\nNO");
+			.isEqualTo("#P\"" + tempDir.resolve("probe.txt") + "\"\nNIL\nNO");
 	}
 
 	@Test
@@ -2282,7 +2282,7 @@ class JvmLispCompilerTest {
 				(print (uiop:file-exists-p "%s"))
 				(print (uiop:file-exists-p "%s"))
 				""".formatted(file, file, missing, file, missing)))
-			.isEqualTo("(\"" + tempDir.resolve("fc.txt") + "\" NIL)\n\"" + tempDir.resolve("fc.txt") + "\"\nNIL");
+			.isEqualTo("(#P\"" + tempDir.resolve("fc.txt") + "\" NIL)\n#P\"" + tempDir.resolve("fc.txt") + "\"\nNIL");
 	}
 
 	@Test
@@ -2313,9 +2313,9 @@ class JvmLispCompilerTest {
 				                                (lambda (x) (setq acc (cons x acc))))
 				  (print (reverse acc)))
 				""".formatted(dir, dir, dir, dir, dir, dir, dir, dir, dir, dir)))
-			.isEqualTo(("(\"%sa.txt\" \"%sb.txt\" \"%ssub/\")\n" + "(\"%sa.txt\" \"%sb.txt\")\n" + "(\"%ssub/\")\n"
-					+ "(\"%s\")\n" + "NIL\n" + "\"%s\"\n" + "NIL\n" + "(\"%sa.txt\" \"%sb.txt\")\n" + "(\"%ssub/\")\n"
-					+ "(\"%s\" \"%ssub/\")")
+			.isEqualTo(("(#P\"%sa.txt\" #P\"%sb.txt\" #P\"%ssub/\")\n" + "(#P\"%sa.txt\" #P\"%sb.txt\")\n"
+					+ "(#P\"%ssub/\")\n" + "(#P\"%s\")\n" + "NIL\n" + "#P\"%s\"\n" + "NIL\n"
+					+ "(#P\"%sa.txt\" #P\"%sb.txt\")\n" + "(#P\"%ssub/\")\n" + "(#P\"%s\" #P\"%ssub/\")")
 				.formatted(d, d, d, d, d, d, d, d, d, d, d, d, d));
 	}
 
@@ -5807,11 +5807,11 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunLiteStreamBuiltins() throws Exception {
-		// pathnamep is stringp: a rontolisp pathname IS its namestring, and it agrees
-		// with (typep x 'pathname) as CL requires (todo-249).
+		// pathnamep answers T only for a pathname VALUE -- a string is NOT
+		// one -- and it agrees with (typep x 'pathname) as CL requires.
 		assertThat(compileAndRun("(print (file-position t)) (print (file-length t)) (print (pathnamep \"/tmp/x\"))"
-				+ " (print (pathnamep 1)) (print (stream-element-type t))"))
-			.isEqualTo("NIL\nNIL\nT\nNIL\nCHARACTER");
+				+ " (print (pathnamep #P\"/tmp/x\")) (print (stream-element-type t))"))
+			.isEqualTo("NIL\nNIL\nNIL\nT\nCHARACTER");
 		assertThat(compileAndRun("(print (input-stream-p t)) (print (output-stream-p (make-broadcast-stream)))"
 				+ " (print (input-stream-p \"s\"))"))
 			.isEqualTo("T\nT\nNIL");
@@ -6986,12 +6986,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("387");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("389");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("387");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("389");
 	}
 
 	@Test

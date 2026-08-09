@@ -64,9 +64,11 @@
 | `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — パス名のディレクトリ部分を CL のリスト形式 (`:absolute`/`:relative` と階層ごとの文字列) で返し、無ければ `nil`。純粋な文字列処理で、ファイルシステムは読みません |
 | `pathname-name` | `(pathname-name "d/a.b.c")` | `"a.b"` — 型を除いたファイル名部分。最後の `/` より後ろで、かつ**最後の**ドットより前です (位置 0 のドットは名前の一部)。ファイルを指さないパス名では `nil` |
 | `pathname-type` | `(pathname-type "d/a.b.c")` | `"c"` — ドットを除いた型 (拡張子)。無ければ `nil`。同じ分割のもう半分です |
-| `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `"d/b.sql"` — `:directory`/`:name`/`:type` から名前文字列を組み立て、**指定されなかった**構成要素は `:defaults` から取ります。構成要素ごとの補完でありマージではありません: 指定した構成要素は defaults のものを置き換え、明示的な `nil` は「その構成要素なし」を意味します。4 バックエンドすべてで実行時の関数として動作し、リテラルの呼び出しは加えてコンパイル時に畳み込まれます |
-| `namestring` | `(namestring "/tmp/x")` | パス名の名前文字列。ここではパス名は名前文字列そのものなので文字列に対しては恒等関数で、それ以外はシグナルを発生させます。`uiop:namestring` も同じ関数です |
-| `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | 第 1 の名前文字列の欠けている部分を第 2 のもので補います。絶対ディレクトリが優先され、相対ディレクトリは連結され、無い場合は defaults のものが使われます。`uiop:merge-pathnames*` は同じマージです |
+| `pathname` | `(pathname "d/x")` | `#P"d/x"` — 正規のコンストラクタ: パス名はそのまま、文字列はそれが指定するパス名に包まれ、それ以外はシグナルします |
+| `parse-namestring` | `(parse-namestring "d/a.txt")` | `#P"d/a.txt"` (第 2 値は停止位置) — ライト版: ホストのパースはなく、文字列全体が名前文字列です |
+| `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — `:directory`/`:name`/`:type` からパス名を組み立て、**指定されなかった**構成要素は `:defaults` から取ります。構成要素ごとの補完でありマージではありません: 指定した構成要素は defaults のものを置き換え、明示的な `nil` は「その構成要素なし」を意味します。4 バックエンドすべてで実行時の関数として動作し、リテラルの呼び出しは加えてコンパイル時に畳み込まれます |
+| `namestring` | `(namestring #P"/tmp/x")` | `"/tmp/x"` — パス名が保持する名前文字列。文字列 (指定子) はそのまま通り、それ以外はシグナルを発生させます。`uiop:namestring` と `uiop:native-namestring` も同じ関数です |
+| `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | 第 1 のパス名の欠けている部分を第 2 のもので補います (どちらの綴りも受け付けます)。絶対ディレクトリが優先され、相対ディレクトリは連結され、無い場合は defaults のものが使われます。`uiop:merge-pathnames*` は同じマージです |
 | `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
@@ -322,7 +324,7 @@
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数のストリームへ転送する指定子。`*standard-output*` と `*standard-input*` は操作ごとに転送します (`nil` 指定子)。それ以外のシンボルはライト実装で、ストリームを作った時点で一度だけ解決します |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので `format`/`princ`/`prin1`/`write-string`/`write-char` が使え、`terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` はシグナルを発生させます |
-| `pathnamep` | `(pathnamep "/tmp/x")` | `t` — ここではパス名は名前文字列そのものなので `stringp` と同じで、`(typep x 'pathname)` とも一致します |
+| `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |
 | `stream-element-type` | `(stream-element-type s)` | 常に `character` -- すべてのストリームは文字ストリーム |
@@ -565,7 +567,8 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 | `uiop:subdirectories` | `(uiop:subdirectories "src/")` | ディレクトリのサブディレクトリを、それぞれ末尾に `/` を付けて返します |
 | `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | ディレクトリツリーを走査します。`collectp` が `collector` へ渡すものを、`recursep` が降りていく先を決めます。渡されるディレクトリはルートも含めてすべてディレクトリ形式です |
 | `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | ファイルの内容全体を 1 つの文字列として返します。ファイルを入力用に開けるすべてのバックエンドで動きます。lite 版: 本家 UIOP の `&rest` キーワードは受け付けて無視します (`:external-format` は rontolisp には存在せず、どのバックエンドも UTF-8 で読みます) |
-| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ (ここではパス名は名前文字列そのものです)。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
+| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
+| `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — パス名のホスト OS の綴り。ここでは名前文字列そのものなので `namestring` と同じです |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
 | `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — 空でない文字列の最初の文字。空文字列や文字列以外では `nil` |
@@ -579,10 +582,12 @@ rontolisp が実装しているメンバは以下のとおりで、各名前は�
 ディレクトリを基準に解決され、`""` はまさにそれを指す名前文字列なので、
 `(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
 
-`uiop:namestring` も実装されており、[`namestring`](functions/namestring.md) そのものです。
-本家 UIOP が Common Lisp の `namestring` を再エクスポートしているのと同じです。
+`uiop:namestring` と `uiop:native-namestring` も実装されており、
+[`namestring`](functions/namestring.md) そのものです。本家 UIOP が Common Lisp の
+`namestring` を再エクスポートしているのと同じで、rontolisp の名前文字列はもともと
+ホストの綴りです。
 
-パッケージの残りは**名前解決のためのスタブ**です。`uiop:native-namestring`、
+パッケージの残りは**名前解決のためのスタブ**です。
 `uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は
 解決はされる (ので `(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、
 コンパイルできる) ものの、呼び出すと undefined-function エラーになります。未実装ではなく

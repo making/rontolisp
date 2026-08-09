@@ -1219,31 +1219,35 @@ public final class LispEvaluator {
 			}
 			return apply(baseFilePosition, args, this.globalEnv);
 		}));
-		// probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
+		// %probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
 		// host without a filesystem (the browser playground's in-memory loader) answers
 		// from whatever IT can load. Working-directory-relative like open, not resolved
-		// against the load stack.
-		this.globalEnv.defineFunction(LispNames.PROBE_FILE, new LispFunction(LispNames.PROBE_FILE, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(LispNames.PROBE_FILE + " expects 1 argument, got " + args.size());
-			}
-			if (!(args.get(0) instanceof LispString path)) {
-				throw new LispEvalException(LispNames.PROBE_FILE + " expects a string pathname");
-			}
-			// The truename is the namestring itself (see LispNames.PROBE_FILE).
-			return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
-		}));
-		// file-write-date: the same SourceLoader mediation as probe-file, for the same
+		// against the load stack. String-in/string-out; the public probe-file is prelude
+		// Lisp that coerces a pathname argument and wraps the answer in a pathname value.
+		this.globalEnv.defineFunction(LispNames.PROBE_FILE_INTERNAL,
+				new LispFunction(LispNames.PROBE_FILE_INTERNAL, args -> {
+					if (args.size() != 1) {
+						throw new LispEvalException(
+								LispNames.PROBE_FILE_INTERNAL + " expects 1 argument, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString path)) {
+						throw new LispEvalException(LispNames.PROBE_FILE_INTERNAL + " expects a string pathname");
+					}
+					// The truename is the namestring itself (see LispNames.PROBE_FILE).
+					return this.sourceLoader.exists(path.value()) ? path : LispNil.INSTANCE;
+				}));
+		// file-write-date: the same SourceLoader mediation as %probe-file, for the same
 		// reason -- a host without a filesystem has no modification times and answers the
 		// nil Common Lisp already prescribes for "cannot be determined".
 		this.globalEnv.defineFunction(LispNames.FILE_WRITE_DATE, new LispFunction(LispNames.FILE_WRITE_DATE, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.FILE_WRITE_DATE + " expects 1 argument, got " + args.size());
 			}
-			if (!(args.get(0) instanceof LispString path)) {
-				throw new LispEvalException(LispNames.FILE_WRITE_DATE + " expects a string pathname");
+			String path = PathnameOps.designatorNamestring(args.get(0));
+			if (path == null) {
+				throw new LispEvalException(LispNames.FILE_WRITE_DATE + " expects a pathname designator");
 			}
-			Long universal = this.sourceLoader.writeDate(path.value());
+			Long universal = this.sourceLoader.writeDate(path);
 			return universal == null ? LispNil.INSTANCE : new LispInteger(universal);
 		}));
 		// %list-directory: the one directory-LISTING primitive, mediated by the same
@@ -2102,10 +2106,11 @@ public final class LispEvaluator {
 			if (args.size() != 1) {
 				throw new LispEvalException(LispNames.LOAD + " expects 1 argument, got " + args.size());
 			}
-			if (!(args.get(0) instanceof LispString path)) {
-				throw new LispEvalException(LispNames.LOAD + " expects a string argument");
+			String path = PathnameOps.designatorNamestring(args.get(0));
+			if (path == null) {
+				throw new LispEvalException(LispNames.LOAD + " expects a pathname designator");
 			}
-			loadFile(LispNames.LOAD, path.value());
+			loadFile(LispNames.LOAD, path);
 			return LispTrue.INSTANCE;
 		}));
 		this.globalEnv.defineFunction(LispNames.PROVIDE, new LispFunction(LispNames.PROVIDE, args -> {
@@ -2232,18 +2237,21 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME + ": system not registered: " + name);
 			}
-			if (!(args.get(1) instanceof LispString relative)) {
+			String relative = PathnameOps.designatorNamestring(args.get(1));
+			if (relative == null) {
 				throw new LispEvalException(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME
-						+ " expects a namestring as its second argument, got " + args.get(1).print());
+						+ " expects a pathname designator as its second argument, got " + args.get(1).print());
 			}
 			String base = system.baseDir();
 			if (base == null || base.isEmpty()) {
 				base = "./";
 			}
-			return new LispString(PathnameOps.mergePathnames(relative.value(), base.endsWith("/") ? base : base + "/"));
+			return new LispString(PathnameOps.mergePathnames(relative, base.endsWith("/") ? base : base + "/"));
 		}));
 		// uiop:merge-pathnames* -- the safer defaults-aware merge, portable across
-		// ASDF-loaded libraries. See PathnameOps for the string-level semantics.
+		// ASDF-loaded libraries. See PathnameOps for the string-level semantics; the
+		// answer is a pathname VALUE, as real UIOP's is (and as the compile-time fold
+		// produces, so the two renderings agree).
 		String mergePathnamesStarName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.MERGE_PATHNAMES_STAR);
 		this.globalEnv.defineFunction(mergePathnamesStarName, new LispFunction(mergePathnamesStarName, args -> {
 			if (args.isEmpty() || args.size() > 2) {
@@ -2253,18 +2261,37 @@ public final class LispEvaluator {
 			String specified = PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(0));
 			String defaults = args.size() > 1 ? PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(1))
 					: "";
-			return new LispString(PathnameOps.mergePathnames(specified, defaults));
+			return PathnameOps.pathnameValue(PathnameOps.mergePathnames(specified, defaults));
 		}));
 		// uiop:file-exists-p == probe-file (same contract: the truename on success, nil
-		// otherwise). Kept identical to the compile paths' lowering in
-		// LispMacroExpander.expandUiopStubCall.
+		// otherwise). Implemented directly over the SourceLoader rather than through the
+		// prelude probe-file (which is lazy-loaded and not yet resolvable here); kept
+		// identical to the compile paths' lowering in
+		// LispMacroExpander.expandUiopStubCall, which spells it (probe-file x).
 		String fileExistsPName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.FILE_EXISTS_P);
-		LispVal probeFile = this.globalEnv.lookupFunction(LispNames.PROBE_FILE);
 		this.globalEnv.defineFunction(fileExistsPName, new LispFunction(fileExistsPName, args -> {
 			if (args.size() != 1) {
 				throw new LispEvalException(fileExistsPName + " expects 1 argument, got " + args.size());
 			}
-			return apply(probeFile, args, this.globalEnv);
+			String path = PathnameOps.designatorNamestring(args.get(0));
+			if (path == null) {
+				throw new LispEvalException(fileExistsPName + " expects a pathname designator");
+			}
+			return this.sourceLoader.exists(path) ? PathnameOps.pathnameValue(path) : LispNil.INSTANCE;
+		}));
+		// uiop:native-namestring -- a rontolisp namestring IS the host spelling, so this
+		// is CL's namestring. Java-side (not a prelude splice) for the same reason as
+		// file-exists-p above; jzon's pathname stringify method calls it.
+		String nativeNamestringName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NATIVE_NAMESTRING);
+		this.globalEnv.defineFunction(nativeNamestringName, new LispFunction(nativeNamestringName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(nativeNamestringName + " expects 1 argument, got " + args.size());
+			}
+			String path = PathnameOps.designatorNamestring(args.get(0));
+			if (path == null) {
+				throw new LispEvalException(nativeNamestringName + " expects a pathname designator");
+			}
+			return new LispString(path);
 		}));
 		// uiop::get-pathname-defaults (internal in real UIOP too) -- the pathname
 		// relative names resolve against. Every backend resolves a relative path
@@ -7403,9 +7430,11 @@ public final class LispEvaluator {
 				value instanceof LispString str ? str.value() : Environment.displayString(value)));
 	}
 
-	// The Clack response body. A BARE STRING is refused as Clack itself refuses it:
-	// lack/app/file answers a PATHNAME body and a rontolisp pathname IS its namestring,
-	// so accepting a string would make :static serve a file's path as its contents.
+	// The Clack response body. A BARE STRING is refused as Clack itself refuses it
+	// (lack's finalize-response wraps a string controller result in a list, so a bare
+	// string here is a malformed response); a PATHNAME body -- lack/app/file's
+	// file-serving form, a distinct value -- falls to the unsupported-type arm until
+	// the transport can serve a file.
 	private String responseBody(LispVal body) {
 		switch (body) {
 			case LispNil ignored -> {

@@ -46,9 +46,11 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispFunction;
 import am.ik.rontolisp.LispHashTable;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispLambda;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -4080,9 +4082,11 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.OPEN, new LispFunction(LispNames.OPEN, args -> {
 			requireMinArgCount(LispNames.OPEN, args, 1);
-			if (!(args.get(0) instanceof LispString path)) {
-				throw new LispEvalException(LispNames.OPEN + " expects a string filename");
+			String openPath = PathnameOps.designatorNamestring(args.get(0));
+			if (openPath == null) {
+				throw new LispEvalException(LispNames.OPEN + " expects a pathname designator");
 			}
+			LispString path = new LispString(openPath);
 			// The CL keyword-argument shape ((open path :direction :input :element-type
 			// 'character ...)) is normalized to the positional one; :external-format
 			// (UTF-8 is the native format), :if-exists and :if-does-not-exist (the
@@ -5148,9 +5152,11 @@ public final class Environment implements Scope {
 		}));
 		env.defineFunction(LispNames.PATHNAMEP, new LispFunction(LispNames.PATHNAMEP, args -> {
 			requireArgCount(LispNames.PATHNAMEP, args, 1);
-			// A pathname IS its namestring here, so a string is one (and nothing else
-			// is). Agrees with (typep x 'pathname), as CL requires.
-			return args.get(0) instanceof LispString ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			// A pathname is an instance of the fixed LispLayout.PATHNAME layout;
+			// a string is NOT one. Agrees with (typep x 'pathname), as CL
+			// requires.
+			return args.get(0) instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME
+					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// make-pathname is NOT defined here: it is prelude Lisp
 		// (LispPreludeLibrary.MAKE_PATHNAME), so the interpreter and the three compiled

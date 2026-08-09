@@ -14,9 +14,9 @@ $ cat walk.lisp
 (uiop:collect-sub*directories "src/" (constantly t) (constantly t)
                               (lambda (dir) (print dir)))
 $ rontolisp walk.lisp
-"src/"
-"src/main/"
-"src/test/"
+#P"src/"
+#P"src/main/"
+#P"src/test/"
 ```
 
 ## バックエンドサポート

@@ -53,6 +53,12 @@ public final class ClosRegistry {
 		// class-slot-defs
 		// answer and standard-object descendant set.
 		this.layoutsByTag.put(UNBOUND_TAG, LispLayout.ofClass(UNBOUND_CLASS_NAME, List.of(), List.of()));
+		// The pathname layout is a LAYOUT ONLY too: a pathname value is an instance
+		// carrying its namestring (LispLayout.PATHNAME), and registering it
+		// here -- never as a class or struct -- is what resolves the %PATHNAME tag for
+		// %obj-new/%obj-is on every backend while keeping it out of every typep tag
+		// table, structure-object enumeration and %class-slot-defs answer.
+		this.layoutsByTag.put(LispLayout.PATHNAME_TAG, LispLayout.PATHNAME);
 		seedClass("CONDITION", null);
 		seedClass("SERIOUS-CONDITION", "CONDITION");
 		seedClass("ERROR", "SERIOUS-CONDITION");

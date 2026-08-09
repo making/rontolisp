@@ -71,9 +71,9 @@ Hello, Clack! GET /hello
 レスポンスの `body` は文字列のリスト・
 `(vector (unsigned-byte 8))` (各オクテットがそのコードポイントの文字になる)・
 rontolisp のストリーム・`nil` のいずれかで、2 要素の `(status headers)` 形も
-有効です。裸の文字列 — したがって pathname のボディも (rontolisp の
-pathname はその namestring です) — は明確なエラーを送出します。Clack 自身も
-文字列を拒否します。関数のボディは Clack の delayed レスポンス形
+有効です。裸の文字列は明確なエラーを送出します。Clack 自身も
+文字列を拒否します。pathname のボディ (lack のファイル配信形) はここでは独立した
+値であり、トランスポートが配信できるようになるまでこちらも拒否されます。関数のボディは Clack の delayed レスポンス形
 (responder が最終的なレスポンスリストで呼ばれる形) に対応し、streaming
 writer 形はエラーを送出します。
 

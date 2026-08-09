@@ -8,9 +8,9 @@ same contract, same behavior -- and it lowers onto that primitive on every
 backend, so libraries spelling the question the UIOP way (postmodern's
 `execute-file`, for instance) need no shim.
 
-A pathname is its namestring in rontolisp, so the "truename" returned on success
-is the argument string itself: no backend resolves symbolic links or makes the
-path absolute. A directory counts as existing.
+The "truename" answered on success is a pathname carrying the argument
+namestring: no backend resolves symbolic links or makes the path absolute. A
+directory counts as existing.
 
 ```lisp
 (uiop:file-exists-p "definitely-missing.txt")   ; => NIL

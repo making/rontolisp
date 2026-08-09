@@ -230,11 +230,19 @@ final class JvmReadRuntimeBuilder {
 
 	private final @Nullable MethodrefConstant filesReadString;
 
+	/**
+	 * The interned {@code LispLayout.PATHNAME} layout field, present exactly when the
+	 * instance machinery is (the {@code #P} arm builds {@code Object[]{layout, ns}} from
+	 * it); null with the gate off, where the arm signals instead.
+	 */
+	private final @Nullable FieldrefConstant pathnameLayout;
+
 	private JvmReadRuntimeBuilder(ConstantPool cp, ClassConstant thisClass, ClassConstant objectClass,
 			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
 			MethodrefConstant doubleValueOf, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, MethodrefConstant readLineHelper,
-			boolean emitLoad, boolean instances) {
+			boolean emitLoad, boolean instances, @Nullable FieldrefConstant pathnameLayout) {
+		this.pathnameLayout = pathnameLayout;
 		this.cp = cp;
 		this.thisClass = thisClass;
 		this.objectClass = objectClass;
@@ -382,10 +390,10 @@ final class JvmReadRuntimeBuilder {
 			ClassConstant objectArrayClass, ClassConstant stringClass, MethodrefConstant longValueOf,
 			MethodrefConstant doubleValueOf, MethodrefConstant stringCharAt, MethodrefConstant stringLength,
 			MethodrefConstant stringSubstring, MethodrefConstant objectEquals, MethodrefConstant readLineHelper,
-			boolean emitLoad, boolean instances) {
+			boolean emitLoad, boolean instances, @Nullable FieldrefConstant pathnameLayout) {
 		return new JvmReadRuntimeBuilder(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf,
 				doubleValueOf, stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelper, emitLoad,
-				instances);
+				instances, pathnameLayout);
 	}
 
 	private MethodrefConstant methodref(String name, String desc) {
@@ -414,7 +422,16 @@ final class JvmReadRuntimeBuilder {
 			ClassConstant stringClass) {
 		FieldrefConstant field = cp.addFieldref(thisClass,
 				cp.addNameAndType(cp.addUtf8(STRUCT_TABLE_FIELD), cp.addUtf8(STRUCT_TABLE_DESC)));
-		List<LispLayout> layouts = new ArrayList<>(registry.layouts().values());
+		// The PATHNAME layout is not a #S-readable type (its literal syntax is #P,
+		// which resolves through the fixed layout, never through this directory) --
+		// and its %PATHNAME tag carries neither name prefix, so it must not be
+		// shoehorned into the pkg/member split below.
+		List<LispLayout> layouts = new ArrayList<>();
+		for (LispLayout layout : registry.layouts().values()) {
+			if (layout.kind() != LispLayout.Kind.PATHNAME) {
+				layouts.add(layout);
+			}
+		}
 		JvmAsm a = new JvmAsm();
 		a.iconst(layouts.size());
 		a.anewarray(objectArrayClass);
@@ -1486,6 +1503,8 @@ final class JvmReadRuntimeBuilder {
 		int notVec = a.label();
 		int notStructS = a.label();
 		int structOpen = a.label();
+		int pathnameOpen = a.label();
+		int notPathnameP = a.label();
 		int notBits = a.label();
 		int notSingle = a.label();
 		int singleOpen = a.label();
@@ -1559,6 +1578,43 @@ final class JvmReadRuntimeBuilder {
 		a.invokestatic(this.readStruct);
 		a.areturn();
 		a.bind(notStructS);
+		// "#P\"" / "#p\"" -> pathname literal ("#P" without a string is a symbol,
+		// like the frontend). The value is Object[]{PATHNAME layout, namestring};
+		// with the instance gate off no pathname value can exist, so the arm signals
+		// rather than answering a mistyped value.
+		a.iload(0);
+		a.iconst('P');
+		a.branch(Opcode.IF_ICMPEQ, pathnameOpen);
+		a.iload(0);
+		a.iconst('p');
+		a.branch(Opcode.IF_ICMPNE, notPathnameP);
+		a.bind(pathnameOpen);
+		branchIfPosPlusGeLen(a, 2, atom);
+		charAtPosPlus(a, 2);
+		a.iconst('"');
+		a.branch(Opcode.IF_ICMPNE, atom);
+		advance(a);
+		advance(a);
+		if (this.pathnameLayout != null) {
+			a.invokestatic(this.readStr);
+			a.astore(3);
+			a.iconst(2);
+			a.anewarray(this.objectClass);
+			a.dup();
+			a.iconst(0);
+			a.getstatic(this.pathnameLayout);
+			a.aastore();
+			a.dup();
+			a.iconst(1);
+			a.aload(3);
+			a.aastore();
+		}
+		else {
+			err(a, "#P pathname literals need the instance runtime, which this artifact was compiled without");
+			a.aconstNull();
+		}
+		a.areturn();
+		a.bind(notPathnameP);
 		// "#*" -> bit vector (a general vector of 0/1, like the frontend)
 		a.iload(0);
 		a.iconst('*');

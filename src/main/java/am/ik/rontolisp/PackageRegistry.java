@@ -153,12 +153,12 @@ public final class PackageRegistry {
 			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
 			LispNames.TYPE_ERROR_DATUM, LispNames.TYPE_ERROR_EXPECTED_TYPE, LispNames.CELL_ERROR_NAME,
 			LispNames.UNBOUND_SLOT_INSTANCE, LispNames.MAKE_PATHNAME, LispNames.MERGE_PATHNAMES, LispNames.TRUENAME,
-			LispNames.PATHNAME_NAME, LispNames.PATHNAME_TYPE, LispNames.DELETE_FILE, LispNames.Y_OR_N_P,
-			LispNames.NAMESTRING_CL, LispNames.COPY_READTABLE, LispNames.SET_DISPATCH_MACRO_CHARACTER,
-			LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE, LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME,
-			LispNames.TYPE_OF, LispNames.INVOKE_RESTART, LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS,
-			LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING, LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE,
-			LispNames.STORE_VALUE);
+			LispNames.PATHNAME, LispNames.PARSE_NAMESTRING, LispNames.PATHNAME_NAME, LispNames.PATHNAME_TYPE,
+			LispNames.DELETE_FILE, LispNames.Y_OR_N_P, LispNames.NAMESTRING_CL, LispNames.COPY_READTABLE,
+			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
+			LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
+			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
+			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -185,10 +185,6 @@ public final class PackageRegistry {
 			"BIGNUM", "SINGLE-FLOAT", "DOUBLE-FLOAT", "SHORT-FLOAT", "LONG-FLOAT", "UNSIGNED-BYTE", "SIGNED-BYTE",
 			"BOOLEAN", "SEQUENCE", "ARRAY", "SIMPLE-ARRAY", "SIMPLE-VECTOR", "SIMPLE-STRING", "BASE-STRING",
 			"CHARACTER", "BASE-CHAR", "STANDARD-CHAR", "SATISFIES", "OTHERWISE", "STREAM",
-			// The pathname TYPE name (nothing satisfies it -- rontolisp pathnames are
-			// namestrings): clack's (typecase app ((or pathname string) ...)) must not
-			// resolve it to clack::pathname, which the type tests cannot know.
-			"PATHNAME",
 			// More empty types (nothing satisfies them, by the same must-not-become-
 			// pkg::name rule): no bit-vector value exists (the bit type is dead,
 			// .todo/180), a defgeneric's dispatcher is a plain function, a defstruct's
@@ -240,7 +236,8 @@ public final class PackageRegistry {
 			LispNames.MAKE_BROADCAST_STREAM_INTERNAL, LispNames.BROADCAST_STREAM_CLASS,
 			LispNames.BROADCAST_STREAM_COMPONENTS, LispNames.PATHNAME_DIRECTORY_STRING,
 			LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL, LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
-			LispNames.FENV_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME);
+			LispNames.FENV_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME, LispNames.PROBE_FILE_INTERNAL,
+			LispNames.PATH_NS);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

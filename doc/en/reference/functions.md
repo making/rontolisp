@@ -67,9 +67,11 @@ page.
 | `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — the directory component of a namestring as CL's list (`:absolute`/`:relative` plus one string per level), `nil` when there is none. Pure string work; nothing is read |
 | `pathname-name` | `(pathname-name "d/a.b.c")` | `"a.b"` — the file-name component without its type: everything after the last `/` and before the LAST dot (a dot at position 0 belongs to the name). `nil` when the namestring names no file |
 | `pathname-type` | `(pathname-type "d/a.b.c")` | `"c"` — the type (extension) without its dot, `nil` when there is none. The other half of the same split |
-| `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `"d/b.sql"` — composes a namestring from `:directory`/`:name`/`:type`, taking every UNSUPPLIED component from `:defaults`. Component-wise, NOT a merge: a supplied component replaces the defaults' one and an explicit `nil` means "no component". A real function on all four backends; literal calls are additionally folded at compile time |
-| `namestring` | `(namestring "/tmp/x")` | the namestring of a pathname — the identity on a string, since a pathname IS its namestring here; anything else signals. `uiop:namestring` is the same function |
-| `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | Fills the gaps in the first namestring from the second: an absolute directory wins, a relative one is appended, an absent one is taken from the defaults. `uiop:merge-pathnames*` is the same merge |
+| `pathname` | `(pathname "d/x")` | `#P"d/x"` — the canonical constructor: a pathname unchanged, a string wrapped into the pathname it designates, anything else signals |
+| `parse-namestring` | `(parse-namestring "d/a.txt")` | `#P"d/a.txt"` (and the stop position as a second value) — lite: no host parsing, the whole string is the namestring |
+| `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — composes a pathname from `:directory`/`:name`/`:type`, taking every UNSUPPLIED component from `:defaults`. Component-wise, NOT a merge: a supplied component replaces the defaults' one and an explicit `nil` means "no component". A real function on all four backends; literal calls are additionally folded at compile time |
+| `namestring` | `(namestring #P"/tmp/x")` | `"/tmp/x"` — the namestring a pathname carries; a string (a designator) passes through, anything else signals. `uiop:namestring` and `uiop:native-namestring` are the same function |
+| `merge-pathnames` | `(merge-pathnames "zoneinfo/" "/opt/lt/")` | Fills the gaps in the first pathname from the second (both spellings accepted): an absolute directory wins, a relative one is appended, an absent one is taken from the defaults. `uiop:merge-pathnames*` is the same merge |
 | `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
@@ -325,7 +327,7 @@ page.
 | `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a designator forwarding to the named variable's stream. `*standard-output*` / `*standard-input*` forward per operation (the `nil` designator); any other symbol is lite -- resolved ONCE, where the stream is built |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | an output stream fanning every write out to each component, in order; with no components, a discarding sink. A stream WITH components is a Gray stream, so `format`/`princ`/`prin1`/`write-string`/`write-char` work and `terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` signal |
-| `pathnamep` | `(pathnamep "/tmp/x")` | `t` — a pathname IS its namestring here, so this is `stringp`, and it agrees with `(typep x 'pathname)` |
+| `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |
 | `stream-element-type` | `(stream-element-type s)` | always `character` -- every stream is a character stream |
@@ -611,7 +613,8 @@ implements the members below; each name links to its own page.
 | `uiop:subdirectories` | `(uiop:subdirectories "src/")` | the subdirectories of a directory, each with its trailing `/` |
 | `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
 | `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | the whole file as one string. Runs on every backend that can open a file for input. Lite: real UIOP's `&rest` keys are accepted and ignored (`:external-format` has no rontolisp surface — every backend reads UTF-8) |
-| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `"/tmp/b.txt"` — the defaults-aware pathname merge (a pathname is its namestring here). A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
+| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — the defaults-aware pathname merge. A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
+| `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — the host-OS spelling of a pathname, which here IS the namestring, so this is `namestring` |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
 | `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
 | `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — the first character of a non-empty string, `nil` for an empty string or a non-string |
@@ -626,12 +629,12 @@ relative path resolves against the host's working directory, and `""` is the
 namestring designating exactly that, so `(merge-pathnames x
 (uiop::get-pathname-defaults))` yields `x`.
 
-`uiop:namestring` is implemented too, as the very function
-[`namestring`](functions/namestring.md) is — real UIOP re-exports Common Lisp's,
-and so does this.
+`uiop:namestring` and `uiop:native-namestring` are implemented too, as the very
+function [`namestring`](functions/namestring.md) is — real UIOP re-exports Common
+Lisp's, and a rontolisp namestring already is the host spelling.
 
-The rest of the package is a **name-resolution stub**: `uiop:native-namestring`,
-`uiop:os-unix-p`, `uiop:os-macosx-p` and `uiop:run-program`
+The rest of the package is a **name-resolution stub**: `uiop:os-unix-p`,
+`uiop:os-macosx-p` and `uiop:run-program`
 resolve — so a library naming them in an `(:import-from #:uiop)` clause reads and
 compiles — but calling one signals an undefined-function error. That is
 deliberate rather than unfinished: spawning an external process (`run-program`)

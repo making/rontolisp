@@ -3,6 +3,8 @@ package am.ik.rontolisp.eval;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispInstance;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -12,9 +14,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Namestring-level pathname operations for the CL {@code make-pathname} and
- * {@code uiop:merge-pathnames*} runtime primitives. Rontolisp represents paths as strings
- * (no {@code pathname} type), so these helpers work on strings only: a "directory" is the
- * prefix through the last {@code /}, the "name.type" is what follows.
+ * {@code uiop:merge-pathnames*} runtime primitives. A rontolisp pathname VALUE is an
+ * instance carrying its namestring ({@code LispLayout.PATHNAME}); the computation here is
+ * all on the namestring, so these helpers unwrap a pathname argument up front and work on
+ * strings from there: a "directory" is the prefix through the last {@code /}, the
+ * "name.type" is what follows.
  *
  * <p>
  * Design constraint: match the specific patterns real Quicklisp libraries emit for
@@ -28,21 +32,48 @@ public final class PathnameOps {
 	}
 
 	/**
-	 * Coerces a Lisp value to a namestring. A {@code LispString} passes through; a
-	 * keyword or a symbol {@code nil} is the empty string ("no name / no type" in the
-	 * make-pathname API); anything else is a hard error.
+	 * The namestring a pathname DESIGNATOR carries: a string is its own namestring, a
+	 * pathname value unwraps to its slot, anything else is null (the caller's error).
+	 * @param value the Lisp value
+	 * @return the namestring, or null when the value designates no pathname
+	 */
+	@Nullable public static String designatorNamestring(LispVal value) {
+		if (value instanceof LispString str) {
+			return str.value();
+		}
+		if (value instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME
+				&& inst.slot(0) instanceof LispString ns) {
+			return ns.value();
+		}
+		return null;
+	}
+
+	/**
+	 * A fresh pathname VALUE over the given namestring.
+	 * @param namestring the namestring
+	 * @return the pathname instance
+	 */
+	public static LispInstance pathnameValue(String namestring) {
+		return new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString(namestring) });
+	}
+
+	/**
+	 * Coerces a Lisp value to a namestring. A {@code LispString} passes through, a
+	 * pathname value unwraps, a keyword or a symbol {@code nil} is the empty string ("no
+	 * name / no type" in the make-pathname API); anything else is a hard error.
 	 * @param context the operator name for the error message
 	 * @param value the Lisp value
 	 * @return the namestring
 	 */
 	public static String namestring(String context, LispVal value) {
-		if (value instanceof LispString str) {
-			return str.value();
+		String designated = designatorNamestring(value);
+		if (designated != null) {
+			return designated;
 		}
 		if (value instanceof LispNil || (value instanceof LispSymbol sym && "NIL".equals(sym.name()))) {
 			return "";
 		}
-		throw new LispEvalException(context + ": expected a pathname (string), got " + value.print());
+		throw new LispEvalException(context + ": expected a pathname designator, got " + value.print());
 	}
 
 	/**
@@ -132,8 +163,8 @@ public final class PathnameOps {
 	/**
 	 * The three namestring components CL's {@code make-pathname} defaults independently.
 	 * {@code directory} carries its trailing {@code /}; {@code name} and {@code type} are
-	 * the empty string when absent (rontolisp has no pathname type, so there is no
-	 * {@code nil} component to model).
+	 * the empty string when absent (the pathname value carries only its namestring, so
+	 * there is no {@code nil} component to model).
 	 *
 	 * @param directory the directory prefix through the last {@code /}
 	 * @param name the file name without its type

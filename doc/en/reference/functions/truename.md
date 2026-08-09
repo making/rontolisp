@@ -7,8 +7,8 @@ The signal is the point: `(ignore-errors (truename path))` is the Common Lisp
 idiom for "this path if it is there, `nil` otherwise", and libraries use it to
 probe for an optional file or directory.
 
-rontolisp resolves no symbolic links and makes nothing absolute -- a pathname is
-its namestring -- so the value on success is the argument string itself. When you
+rontolisp resolves no symbolic links and makes nothing absolute, so the value on
+success is a pathname carrying the argument namestring. When you
 want the answer without the condition, use [`probe-file`](probe-file.md), which
 asks the same question and returns `nil` instead of signalling.
 

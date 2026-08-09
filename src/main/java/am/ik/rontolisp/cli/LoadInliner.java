@@ -545,10 +545,8 @@ public final class LoadInliner {
 		if (!(items.get(0) instanceof LispSymbol op) || !LispNames.LOAD.equals(op.name())) {
 			return null;
 		}
-		if (!(items.get(1) instanceof LispString path)) {
-			return null;
-		}
-		return path.value();
+		// A literal path is a string or a #P"..." pathname value.
+		return am.ik.rontolisp.eval.PathnameOps.designatorNamestring(items.get(1));
 	}
 
 	/**

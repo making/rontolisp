@@ -101,8 +101,11 @@ http-body actually read a served body (sessions, CSRF, ningle). What used to
 be documented here as shim limits is now the shared model's contract:
 `:remote-addr`/`:remote-port` carry the real peer on the interpreter/JVM (nil
 on the component — wasi:http exposes none); duplicate request headers join
-with `", "`; a bare-string response body is REFUSED; of the function-response
-protocol the DELAYED form is supported and the streaming writer refused.
+with `", "`; a bare-string response body is REFUSED (and a PATHNAME body --
+lack-app-file's file-serving form, a distinct value since todo-304 -- is
+refused as unsupported until the transport can serve a file); of the
+function-response protocol the DELAYED form is supported and the streaming
+writer refused.
 Still out of scope per `.todo/223`: WebSocket (`clack.socket`) and
 `:swank-port`.
 
@@ -446,7 +449,9 @@ Landed with this milestone, each with its own pin:
   lambda used to be read as a variable named PATHNAME. Walked structurally,
   not expanded: the expansion needs the class registry for a class-name head.
   Pinned by `JvmLispCompilerTest.compileAndRunEtypecaseInsideACapturingLambda`.
-- **`PATHNAME` joined `PackageRegistry.CL_TYPES`** so `(typecase app ((or
+- **`PATHNAME` resolves as a CL name** so `(typecase app ((or
   pathname string) ...))` under `(in-package :clack)` resolves the type name
-  to CL's rather than `clack::pathname` (nothing satisfies the pathname type;
-  rontolisp pathnames are namestrings).
+  to CL's rather than `clack::pathname`. It sat in `PackageRegistry.CL_TYPES`
+  while nothing satisfied the type; todo-304 made `pathname` a FUNCTION too
+  (the constructor of the distinct pathname value, `.kb/pathnames.md`), so
+  the name moved to `CL_FUNCTIONS` and resolves in both positions.

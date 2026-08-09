@@ -5,7 +5,9 @@ import java.util.List;
 import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -32,18 +34,29 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readPathnameLiteralYieldsItsNamestring() {
-		// A pathname IS its namestring here (every pathname primitive takes and returns
-		// strings), so #P contributes no value of its own -- quri's etld.lisp names its
-		// bundled data file this way.
-		assertThat(LispReader.readFromString("#P\"data/x.dat\"")).isEqualTo(new LispString("data/x.dat"));
-		assertThat(LispReader.readFromString("#p\"/abs/path\"")).isEqualTo(new LispString("/abs/path"));
+	void readPathnameLiteralYieldsAPathnameValue() {
+		// #P"..." denotes a pathname VALUE -- an instance carrying its namestring.
+		// The reader builds it directly: the layout is fixed
+		// (LispLayout.PATHNAME), so no registry is needed, and like a folded #S(...)
+		// literal it rides quote and backquote as a self-evaluating value.
+		assertThat(LispReader.readFromString("#P\"data/x.dat\""))
+			.isEqualTo(new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString("data/x.dat") }));
+		assertThat(LispReader.readFromString("#p\"/abs/path\"").print()).isEqualTo("#P\"/abs/path\"");
+		assertThat(LispReader.readFromString("'#P\"q\"").print()).isEqualTo("(QUOTE #P\"q\")");
 	}
 
 	@Test
 	void readPathnameDispatchNotFollowedByAStringStaysASymbol() {
 		// The pre-#P tokenization: only #P" is the dispatch.
 		assertThat(LispReader.readFromString("#PFOO")).isEqualTo(new LispSymbol("#PFOO"));
+	}
+
+	@Test
+	void readPathnameLiteralUnderAFailingFeatureConditionalIsSkippedWhole() {
+		// The #+ skip must consume the dispatch AND its string, or the namestring
+		// would surface as a datum of its own.
+		assertThat(LispReader.readFromString("(list #+rontolisp-no-such-feature #P\"skipped\" 1)").print())
+			.isEqualTo("(LIST 1)");
 	}
 
 	@Test

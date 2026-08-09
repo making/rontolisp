@@ -6,7 +6,8 @@ The type (extension) component of a namestring, without its dot -- what follows
 the LAST dot of the file part -- or `nil` when there is none. A dot at position 0
 does not separate a type, so a dotfile has a name and no type.
 
-A rontolisp pathname IS its namestring, so this is pure string work -- nothing is
+Takes a pathname or a namestring; the split is pure string work on the
+namestring -- nothing is
 read from the filesystem and a nonexistent path answers just the same. It is the
 other half of the split [`pathname-name`](pathname-name.md) takes, by the same
 rule.

@@ -49,7 +49,14 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 		 * A {@code defclass} / {@code define-condition} type; instances print as
 		 * {@code #<NAME :SLOT value ...>}.
 		 */
-		CLASS
+		CLASS,
+		/**
+		 * The built-in pathname type ({@link #PATHNAME}, the one layout of this kind): an
+		 * instance carries its namestring in slot 0 and prints as {@code #P"namestring"}
+		 * under {@code prin1} and as the bare namestring under {@code princ} (CLHS
+		 * 22.1.3.11), never in the slot-name syntax of the other two kinds.
+		 */
+		PATHNAME
 
 	}
 
@@ -58,6 +65,26 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 
 	/** The instance-tag prefix of a CLOS class. */
 	public static final String CLASS_TAG_PREFIX = "%class-";
+
+	/**
+	 * The instance tag of the built-in pathname type. Spelled in upper case so prelude
+	 * Lisp can quote it literally ({@code (%obj-is x '%PATHNAME)}) -- the reader upcases
+	 * source symbols, so a mixed-case tag would be unspellable there.
+	 */
+	public static final String PATHNAME_TAG = "%PATHNAME";
+
+	/**
+	 * The layout of every pathname value: one slot holding the namestring. A FIXED layout
+	 * rather than a registered type -- like the slot-unbound marker it is seeded into
+	 * {@code ClosRegistry.layoutsByTag} as a LAYOUT ONLY (never a class, never a struct),
+	 * so it joins no {@code typep} tag table, no {@code structure-object} /
+	 * {@code standard-object} enumeration and no {@code %class-slot-defs} answer, while
+	 * {@code %obj-new}/{@code %obj-is} resolve the tag on every backend. Being a constant
+	 * is what lets {@code LispReader} build a {@code #P"..."} literal with no registry in
+	 * scope.
+	 */
+	public static final LispLayout PATHNAME = new LispLayout(PATHNAME_TAG, "PATHNAME", Kind.PATHNAME,
+			List.of("NAMESTRING"), List.of(LispNil.INSTANCE), 1);
 
 	/**
 	 * Canonicalizes the collections so a layout is deeply immutable.
@@ -132,19 +159,29 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	}
 
 	/**
-	 * The text opening an instance of this layout: {@code "#S("} or {@code "#<"}.
+	 * The text opening an instance of this layout: {@code "#S("}, {@code "#<"} or
+	 * {@code "#P"} (the pathname renderer never appends slot names after it).
 	 * @return the opening delimiter
 	 */
 	public String openDelimiter() {
-		return this.kind == Kind.STRUCT ? "#S(" : "#<";
+		return switch (this.kind) {
+			case STRUCT -> "#S(";
+			case CLASS -> "#<";
+			case PATHNAME -> "#P";
+		};
 	}
 
 	/**
-	 * The text closing an instance of this layout: {@code ")"} or {@code ">"}.
+	 * The text closing an instance of this layout: {@code ")"}, {@code ">"} or nothing (a
+	 * pathname's namestring closes itself).
 	 * @return the closing delimiter
 	 */
 	public String closeDelimiter() {
-		return this.kind == Kind.STRUCT ? ")" : ">";
+		return switch (this.kind) {
+			case STRUCT -> ")";
+			case CLASS -> ">";
+			case PATHNAME -> "";
+		};
 	}
 
 	/**

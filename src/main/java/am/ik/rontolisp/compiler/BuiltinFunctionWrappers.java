@@ -942,9 +942,12 @@ public final class BuiltinFunctionWrappers {
 			// with-input-from-file).
 			// The wrapper takes the positional shape the built-in compiles.
 			// Lite stream/type introspection stubs (macro-lowered; slot-boundp and
-			// slot-makunbound are omitted -- their expansions need a literal slot name)
-			unary(LispNames.PROBE_FILE), unary(LispNames.SLEEP), unary(LispNames.FILE_POSITION),
-			unary(LispNames.FILE_LENGTH), unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
+			// slot-makunbound are omitted -- their expansions need a literal slot name).
+			// probe-file is NOT here: it is a prelude defun now now, so
+			// #'probe-file
+			// resolves to the real definition.
+			unary(LispNames.SLEEP), unary(LispNames.FILE_POSITION), unary(LispNames.FILE_LENGTH),
+			unary(LispNames.FILE_WRITE_DATE), unary(LispNames.PATHNAMEP),
 			new WrapperDef(LispNames.MAKE_BROADCAST_STREAM, List.of(), List.of(call(LispNames.MAKE_BROADCAST_STREAM))),
 			unary(LispNames.INPUT_STREAM_P), unary(LispNames.OUTPUT_STREAM_P), unary(LispNames.STREAM_ELEMENT_TYPE),
 			unary(LispNames.CLASS_OF), unary(LispNames.SIMPLE_CONDITION_FORMAT_CONTROL),

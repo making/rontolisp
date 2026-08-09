@@ -66,10 +66,11 @@ final class WasmReadRuntimeBuilder {
 	 */
 	record ReadCtx(int nilOffset, int quoteOffset, int functionOffset, boolean ehMode, boolean simd,
 			int instanceTypeIndex, int structDirBase, int structDirCount, int charNamesBase, int charNamesCount,
-			Msg msgEof, Msg msgCharEof, Msg msgCharName, Msg msgRadix, Msg msgRank, Msg msgRagged, Msg msgNested,
-			Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature, Msg msgLabels, Msg msgBlockComment,
-			Msg msgStructType, Msg msgStructClassHint, Msg msgStructName, Msg msgStructEmpty, Msg msgStructOdd,
-			Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero) {
+			int pathnameLayoutAddr, Msg msgEof, Msg msgCharEof, Msg msgCharName, Msg msgRadix, Msg msgRank,
+			Msg msgRagged, Msg msgNested, Msg msgProper, Msg msgPackedNum, Msg msgReadEval, Msg msgFeature,
+			Msg msgLabels, Msg msgBlockComment, Msg msgStructType, Msg msgStructClassHint, Msg msgStructName,
+			Msg msgStructEmpty, Msg msgStructOdd, Msg msgStructNoSlot, Msg msgStructInit, Msg msgDivZero,
+			Msg msgPathname) {
 	}
 
 	/**
@@ -123,7 +124,15 @@ final class WasmReadRuntimeBuilder {
 		int structDirBase = 0;
 		int structDirCount = 0;
 		if (instanceTypeIndex >= 0) {
-			List<LispLayout> layouts = new ArrayList<>(registry.layouts().values());
+			// The PATHNAME layout is not a #S-readable type (its literal syntax is #P,
+			// which resolves through the fixed layout address, never through this
+			// directory), and its %PATHNAME tag carries neither name prefix.
+			List<LispLayout> layouts = new ArrayList<>();
+			for (LispLayout layout : registry.layouts().values()) {
+				if (layout.kind() != LispLayout.Kind.PATHNAME) {
+					layouts.add(layout);
+				}
+			}
 			structDirCount = layouts.size();
 			int headerSize = 4 + 28 * layouts.size();
 			List<int[]> entries = new ArrayList<>();
@@ -175,13 +184,15 @@ final class WasmReadRuntimeBuilder {
 			dir.writeBytes(inits.toByteArray());
 			structDirBase = st.appendBlob(dir.toByteArray());
 		}
+		Integer pathnameAddr = layoutAddresses.get(LispLayout.PATHNAME_TAG);
 		return new ReadCtx(nilOffset, quoteOffset, functionOffset, ehMode, simd, instanceTypeIndex, structDirBase,
-				structDirCount, charNamesBase, CHAR_NAMES.length, msg(st, "Unexpected end of input, expected ')'"),
-				msg(st, "Unexpected end of input after #\\"), msg(st, "Unknown character name after #\\"),
-				msg(st, "Invalid digits after #x/#o/#b"), msg(st, "Invalid array rank"),
-				msg(st, "ragged array contents"), msg(st, "expected a nested list in array contents"),
-				msg(st, "array contents must be proper lists"), msg(st, "packed float array: expected a number"),
-				msg(st, "#. read-time evaluation is not supported"),
+				structDirCount, charNamesBase, CHAR_NAMES.length,
+				instanceTypeIndex >= 0 && pathnameAddr != null ? pathnameAddr : -1,
+				msg(st, "Unexpected end of input, expected ')'"), msg(st, "Unexpected end of input after #\\"),
+				msg(st, "Unknown character name after #\\"), msg(st, "Invalid digits after #x/#o/#b"),
+				msg(st, "Invalid array rank"), msg(st, "ragged array contents"),
+				msg(st, "expected a nested list in array contents"), msg(st, "array contents must be proper lists"),
+				msg(st, "packed float array: expected a number"), msg(st, "#. read-time evaluation is not supported"),
 				msg(st, "#+/#- feature conditionals are not supported by the compiled runtime reader"),
 				msg(st, "reader labels (#N=/#N#) are not supported by the compiled runtime reader"),
 				msg(st, "Unterminated block comment"), msg(st, "#S: not a defined structure type"),
@@ -190,7 +201,8 @@ final class WasmReadRuntimeBuilder {
 				msg(st, "#S: odd number of slot name/value items in a structure literal"),
 				msg(st, "#S: no slot with that name"),
 				msg(st, "#S: an omitted slot's initform is not readable at run time"),
-				msg(st, "Division by zero in ratio literal"));
+				msg(st, "Division by zero in ratio literal"),
+				msg(st, "#P pathname literals need the instance runtime, which this artifact was compiled without"));
 	}
 
 	private static Msg msg(WasmLispCompiler.StringTable st, String text) {
@@ -997,6 +1009,45 @@ final class WasmReadRuntimeBuilder {
 		advanceCursor(w);
 		call(w, WasmLispCompiler.FUNC_RD_STRUCT);
 		w.write(Instruction.RETURN);
+		end(w);
+		end(w);
+
+		// "#P\"" / "#p\"" -> pathname literal ("#P" without a string is a symbol,
+		// like the frontend): the string that follows is the namestring, and the
+		// value is an instance over the fixed PATHNAME layout. Cursor left AT the
+		// quote, so the recursive read takes the ordinary string path.
+		getLocal(w, C2);
+		i32(w, 'P');
+		w.write(Instruction.I32_EQ);
+		getLocal(w, C2);
+		i32(w, 'p');
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_OR);
+		cursorPlusLtEnd(w, 2);
+		w.write(Instruction.I32_AND);
+		ifVoid(w);
+		byteAtCursorPlus(w, 2);
+		i32(w, '"');
+		w.write(Instruction.I32_EQ);
+		ifVoid(w);
+		if (ctx.pathnameLayoutAddr() >= 0) {
+			advanceCursor(w);
+			advanceCursor(w);
+			call(w, WasmLispCompiler.FUNC_READ_EXPR);
+			setLocal(w, CAR);
+			i32(w, ctx.pathnameLayoutAddr());
+			getLocal(w, CAR);
+			i32(w, 1);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+			structNew(w, ctx.instanceTypeIndex());
+			w.write(Instruction.RETURN);
+		}
+		else {
+			// With the instance gate off no pathname value can exist; signal rather
+			// than answer a mistyped value.
+			emitErr(w, ctx, ctx.msgPathname());
+		}
 		end(w);
 		end(w);
 

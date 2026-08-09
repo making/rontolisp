@@ -872,11 +872,13 @@ final class WasmRuntimeBuilder {
 
 	/**
 	 * Emits the {@code TYPE_INSTANCE} print branch: {@code #S(NAME :SLOT value ...)} for
-	 * a struct layout, {@code #<NAME :SLOT value ...>} for a class one. The
-	 * {@code #S}/{@code #<} frame and the colon on each slot key are literal syntax and
-	 * so are written in BOTH escape modes (CLHS 22.1.3.12); only the slot VALUES go
-	 * through {@code elementFunc}, which is {@code FUNC_PRINT_VAL} for {@code prin1} and
-	 * {@code FUNC_PRINC_VAL} for {@code princ}.
+	 * a struct layout, {@code #<NAME :SLOT value ...>} for a class one, and for the
+	 * PATHNAME layout {@code #P"namestring"} under {@code prin1} / the bare namestring
+	 * under {@code princ} (CLHS 22.1.3.11, no slot syntax). The {@code #S}/{@code #<}
+	 * frame and the colon on each slot key are literal syntax and so are written in BOTH
+	 * escape modes (CLHS 22.1.3.12); only the slot VALUES go through {@code elementFunc},
+	 * which is {@code FUNC_PRINT_VAL} for {@code prin1} and {@code FUNC_PRINC_VAL} for
+	 * {@code princ} (also how this branch tells the two escape modes apart).
 	 *
 	 * <p>
 	 * The branch is a FIXED-SIZE loop driven by the layout record in linear memory, not a
@@ -906,6 +908,8 @@ final class WasmRuntimeBuilder {
 		WasmLispCompiler.StringTable.StringEntry openClass = st.addString("#<");
 		WasmLispCompiler.StringTable.StringEntry closeClass = st.addString(">");
 		WasmLispCompiler.StringTable.StringEntry keySep = st.addString(" :");
+		boolean escape = elementFunc == WasmLispCompiler.FUNC_PRINT_VAL;
+		WasmLispCompiler.StringTable.StringEntry pathnamePrefix = escape ? st.addString("#P") : null;
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -921,6 +925,34 @@ final class WasmRuntimeBuilder {
 		w.writeUnsignedLeb128(0);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(addrSlot);
+		// kind == PATHNAME: #P + the escaped namestring under prin1, the bare
+		// namestring under princ (CLHS 22.1.3.11) -- slot 0 through the element
+		// renderer, no slot-name loop.
+		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_KIND);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmInstanceLayouts.KIND_PATHNAME);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		if (pathnamePrefix != null) {
+			emitWriteString(w, pathnamePrefix);
+		}
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(instanceTypeIndex);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(instanceTypeIndex);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(elementFunc);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 		// kind == CLASS ? "#<" : "#S("
 		emitLoadLayoutWord(w, addrSlot, WasmInstanceLayouts.OFF_KIND);
 		w.write(Instruction.IF, 0x40);

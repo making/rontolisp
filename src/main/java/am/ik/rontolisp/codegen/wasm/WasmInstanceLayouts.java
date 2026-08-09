@@ -22,7 +22,8 @@ import am.ik.rontolisp.LispLayout;
  * Record shape (little-endian {@code i32} words, 4-byte aligned):
  *
  * <pre>
- * +0  kind      0 = struct (prints "#S(" ... ")"), 1 = class (prints "#&lt;" ... "&gt;")
+ * +0  kind      0 = struct (prints "#S(" ... ")"), 1 = class (prints "#&lt;" ... "&gt;"),
+ *               2 = pathname (prints #P"ns" / the bare namestring from slot 0)
  * +4  tagOff    byte offset of the tag text, e.g. "%struct-POINT"  (%obj-tag reads this)
  * +8  tagLen
  * +12 nameOff   byte offset of the printed type name, e.g. "POINT" (the printer reads this)
@@ -87,6 +88,13 @@ final class WasmInstanceLayouts {
 	static final int KIND_CLASS = 1;
 
 	/**
+	 * The kind word of the fixed PATHNAME layout ({@code LispLayout.PATHNAME}): the
+	 * printer renders {@code #P"namestring"} / the bare namestring from slot 0 instead of
+	 * the slot-name syntax of the other two kinds.
+	 */
+	static final int KIND_PATHNAME = 2;
+
+	/**
 	 * Interns every layout's strings and appends its record to the static data segment.
 	 * @param registry the compilation's CLOS/struct registry
 	 * @param stringTable the module's string table, still open for appends
@@ -104,7 +112,11 @@ final class WasmInstanceLayouts {
 				.map(stringTable::addString)
 				.toList();
 			ByteArrayOutputStream record = new ByteArrayOutputStream();
-			write32(record, layout.kind() == LispLayout.Kind.STRUCT ? KIND_STRUCT : KIND_CLASS);
+			write32(record, switch (layout.kind()) {
+				case STRUCT -> KIND_STRUCT;
+				case CLASS -> KIND_CLASS;
+				case PATHNAME -> KIND_PATHNAME;
+			});
 			write32(record, tag.offset());
 			write32(record, tag.length());
 			write32(record, name.offset());

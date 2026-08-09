@@ -1339,6 +1339,9 @@ final class JvmRuntimeBuilder {
 	 * @param closeClassStr the {@code "&gt;"} closer
 	 * @param keySepStr the {@code " :"} separator preceding a slot name
 	 * @param spaceStr the {@code " "} separator between a slot name and its value
+	 * @param pathnameKindStr the {@code "P"} kind marker of the pathname layout
+	 * @param pathnamePrefixStr the {@code "#P"} prefix a pathname prints under prin1, or
+	 * null for the princ variant (CLHS 22.1.3.11: princ writes the bare namestring)
 	 * @return the method body
 	 */
 	static List<Integer> buildInstToStringBody(ClassConstant objectArrayClass, ClassConstant stringArrayClass,
@@ -1347,7 +1350,8 @@ final class JvmRuntimeBuilder {
 			ConstantPool.StringConstant structKindStr, ConstantPool.StringConstant openStructStr,
 			ConstantPool.StringConstant openClassStr, ConstantPool.StringConstant closeStructStr,
 			ConstantPool.StringConstant closeClassStr, ConstantPool.StringConstant keySepStr,
-			ConstantPool.StringConstant spaceStr) {
+			ConstantPool.StringConstant spaceStr, ConstantPool.StringConstant pathnameKindStr,
+			ConstantPool.@org.jspecify.annotations.Nullable StringConstant pathnamePrefixStr) {
 		List<Integer> code = new ArrayList<>();
 		// layout = (String[]) arr[0]
 		code.add(Opcode.ALOAD_0);
@@ -1356,6 +1360,47 @@ final class JvmRuntimeBuilder {
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, stringArrayClass.index());
 		code.add(Opcode.ASTORE_2);
+		// A PATHNAME layout short-circuits the slot-name loop entirely (CLHS
+		// 22.1.3.11): prin1 is "#P" + the escaped namestring, princ the bare
+		// namestring -- the element formatter already renders a string both ways.
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.ICONST_2);
+		code.add(Opcode.AALOAD);
+		emitLdc(code, pathnameKindStr.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, objectEquals.index());
+		int ifNotPathnamePos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
+		if (pathnamePrefixStr == null) {
+			// princ: return format(arr[1])
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ICONST_1);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, elementFormatter.index());
+			code.add(Opcode.ARETURN);
+		}
+		else {
+			// prin1: return new StringBuilder("#P").append(format(arr[1])).toString()
+			code.add(Opcode.NEW);
+			emitU2(code, stringBuilderClass.index());
+			code.add(Opcode.DUP);
+			emitLdc(code, pathnamePrefixStr.index());
+			code.add(Opcode.INVOKESPECIAL);
+			emitU2(code, sbInitStr.index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ICONST_1);
+			code.add(Opcode.AALOAD);
+			code.add(Opcode.INVOKESTATIC);
+			emitU2(code, elementFormatter.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, sbAppendStr.index());
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, sbToString.index());
+			code.add(Opcode.ARETURN);
+		}
+		patchBranch(code, ifNotPathnamePos, code.size());
 		// The opener is chosen into a local BEFORE the StringBuilder is allocated: a
 		// branch merge with an uninitialized NEW on the operand stack is exactly what
 		// the offline StackMapTable computation should never have to model.

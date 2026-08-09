@@ -733,9 +733,9 @@ final class WasmExprCompiler {
 				}
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx);
-				case LispNames.OPEN -> WasmOpenCompiler.compile(cons, ctx);
+				case LispNames.OPEN -> WasmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				case LispNames.CLOSE -> WasmCloseCompiler.compile(cons, ctx);
-				case LispNames.PROBE_FILE -> WasmProbeFileCompiler.compile(cons, ctx);
+				case LispNames.PROBE_FILE_INTERNAL -> WasmProbeFileCompiler.compile(cons, ctx);
 				case LispNames.LIST_DIRECTORY -> WasmListDirectoryCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
 				case LispNames.WRITE_STRING -> {
@@ -964,7 +964,7 @@ final class WasmExprCompiler {
 				case LispNames.STRING_RIGHT_TRIM ->
 					WasmStringTrimCompiler.compileRight(LispMacroExpander.normalizeCharBag(cons), ctx);
 				case LispNames.READ -> WasmReadCompiler.compile(cons, ctx);
-				case LispNames.LOAD -> WasmLoadCompiler.compile(cons, ctx);
+				case LispNames.LOAD -> WasmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
 				// or non-literal, which the compiled runtime reader cannot execute
@@ -1541,6 +1541,17 @@ final class WasmExprCompiler {
 	 */
 	private static boolean isBinaryCall(LispCons cons) {
 		return cons.toList().size() == 3;
+	}
+
+	/**
+	 * Wraps a path-taking builtin's path argument in the pathname-to-namestring unwrap
+	 * ({@link LispMacroExpander#coercePathArg}) -- but ONLY when this compilation's
+	 * instance gate is on. With the gate off no pathname value can exist, and skipping
+	 * the wrap keeps every instance-free program byte-identical to a build that never
+	 * knew about pathnames (the {@code .kb/instance-syntax.md} rule).
+	 */
+	private static LispCons coercePathArgWhenGated(LispCons cons, int argIndex, WasmLispCompiler.Ctx ctx) {
+		return ctx.instanceTypeIndex >= 0 ? LispMacroExpander.coercePathArg(cons, argIndex) : cons;
 	}
 
 }

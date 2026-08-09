@@ -7378,8 +7378,15 @@ public final class LispMacroExpander {
 		}
 		if (LispNames.NAMESTRING.equals(qn.member()) && parts.size() == 2) {
 			// Not a stub: real UIOP re-exports CL's namestring, and rontolisp's CL one is
-			// prelude Lisp (a pathname IS its namestring), so both spellings must name
-			// the one function rather than leaving uiop:namestring a call-time error.
+			// prelude Lisp, so both spellings must name the one function rather than
+			// leaving uiop:namestring a call-time error.
+			return listToCons(List.of(new LispSymbol(LispNames.NAMESTRING_CL), parts.get(1)));
+		}
+		if (LispNames.NATIVE_NAMESTRING.equals(qn.member()) && parts.size() == 2) {
+			// Not a stub either: a rontolisp namestring IS the host spelling (no
+			// backend translates), so uiop:native-namestring is CL's namestring. jzon's
+			// pathname stringify method and trivial-mimes' mime-probe call it on real
+			// pathname values now that #P"..." denotes one.
 			return listToCons(List.of(new LispSymbol(LispNames.NAMESTRING_CL), parts.get(1)));
 		}
 		if (LispNames.FILE_EXISTS_P.equals(qn.member()) && parts.size() == 2) {
@@ -11481,6 +11488,36 @@ public final class LispMacroExpander {
 		return listToCons(List.of(new LispSymbol(LispNames.OBJ_BECOME), obj, quoteOf(tag)));
 	}
 
+	/** The binding the path-argument coercion introduces; nesting shadows harmlessly. */
+	private static final String PATH_ARG_VAR = "__path-arg";
+
+	/**
+	 * Rewrites argument {@code argIndex} (0-based among the arguments, so 0 is the first
+	 * argument) of a path-taking builtin call into a form that unwraps a PATHNAME value
+	 * to its namestring and passes every other value through:
+	 * {@code (let ((__path-arg ARG)) (if (%obj-is __path-arg '%PATHNAME) (%obj-ref
+	 * __path-arg 0) __path-arg))}. Built from the {@code %obj-*} primitives alone, so it
+	 * needs no prelude splice; the compilers apply it ONLY when their instance gate is on
+	 * -- with the gate off no pathname can exist and the call sites keep their exact
+	 * bytes (the byte-identity rule of {@code .kb/instance-syntax.md}). The interpreter
+	 * needs no expansion: its Java built-ins unwrap the instance directly.
+	 * @param cons the call form
+	 * @param argIndex the 0-based argument position to coerce
+	 * @return the call with that argument wrapped (the same form when absent)
+	 */
+	public static LispCons coercePathArg(LispCons cons, int argIndex) {
+		List<LispVal> parts = cons.toList();
+		int partIndex = argIndex + 1;
+		if (parts.size() <= partIndex) {
+			return cons;
+		}
+		LispSymbol var = new LispSymbol(PATH_ARG_VAR);
+		LispVal unwrap = makeIf(objIs(var, List.of(LispLayout.PATHNAME_TAG)), objRef(var, 0), var);
+		List<LispVal> wrapped = new java.util.ArrayList<>(parts);
+		wrapped.set(partIndex, makeLet(PATH_ARG_VAR, parts.get(partIndex), unwrap));
+		return (LispCons) listToCons(wrapped);
+	}
+
 	/**
 	 * Expands {@code (change-class instance 'name initarg value ...)} into an IN-PLACE
 	 * class change: the instance keeps its identity and every slot the old and the new
@@ -11689,6 +11726,14 @@ public final class LispMacroExpander {
 			case LispNames.OBJ_NEW, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.SIGNAL,
 					LispNames.MAKE_CONDITION:
 				return true;
+			case LispNames.READ, LispNames.READ_FROM_STRING, LispNames.LOAD:
+				// The emitted runtime reader can construct a PATHNAME instance from a
+				// #P"..." literal (and a struct instance from #S(...)), so a program
+				// that reads at run time is instance-capable. The pathname producers
+				// (probe-file, directory, make-pathname, ...) need no case of their own:
+				// they are prelude Lisp whose spliced bodies carry the %obj-new this
+				// scan already answers for.
+				return true;
 			case LispNames.READ_CHAR, LispNames.READ_BYTE, LispNames.PEEK_CHAR_INTERNAL:
 				// A read whose end of file SIGNALS builds the end-of-file condition
 				// instance (expandReadEofSignal).
@@ -11712,10 +11757,12 @@ public final class LispMacroExpander {
 				// expansion, whose every signal arm builds a simple-condition.
 				// #'read-char / #'peek-char / #'read-byte: their wrappers signal
 				// end-of-file, and (being REFERENCE_GATED_FUNCTIONS) are injected only
-				// because of this very reference.
+				// because of this very reference. #'read / #'read-from-string: their
+				// wrappers can read a #P"..." pathname instance, like the head case.
 				return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
 						&& (LispNames.SIGNAL.equals(fn.name()) || LispNames.READ_CHAR.equals(fn.name())
-								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name()));
+								|| LispNames.PEEK_CHAR.equals(fn.name()) || LispNames.READ_BYTE.equals(fn.name())
+								|| LispNames.READ.equals(fn.name()) || LispNames.READ_FROM_STRING.equals(fn.name()));
 			case LispNames.ERROR, LispNames.WARN, LispNames.CERROR: {
 				List<LispVal> parts = form.toList();
 				// (cerror continue-control datum args...) drops its first argument.
@@ -13509,10 +13556,12 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (pathnamep x)} into {@code (stringp x)}: a rontolisp pathname IS its
-	 * namestring, so a string is one and nothing else is. Agrees with
-	 * {@code (typep x 'pathname)}, as CL requires -- see the {@code PATHNAME} case of
-	 * {@link #makeTypeTest}.
+	 * Expands {@code (pathnamep x)} into {@code (%obj-is x '%PATHNAME)}: a pathname is an
+	 * instance of the fixed {@code LispLayout.PATHNAME} layout, and nothing else -- a
+	 * string in particular -- is one. Agrees with {@code (typep x 'pathname)}, as CL
+	 * requires -- see the {@code PATHNAME} case of {@link #makeTypeTest}. With the
+	 * instance gate off no pathname can exist, and {@code %obj-is} compiles to a constant
+	 * nil, which is then also the right answer.
 	 * @param cons the pathnamep expression
 	 * @return the expanded expression
 	 */
@@ -13521,7 +13570,7 @@ public final class LispMacroExpander {
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(LispNames.PATHNAMEP + " expects exactly one argument: " + cons.print());
 		}
-		return callOf(LispNames.STRINGP, parts.get(1));
+		return objIs(parts.get(1), List.of(LispLayout.PATHNAME_TAG));
 	}
 
 	/** Whether a plain (package-stripped) type name is usable as a TYPE specializer. */
@@ -20587,8 +20636,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> clauseParts = clause.toList();
 			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
-			LispVal test = pathnameClauseYields(clauseParts.get(0), clauses) ? (LispVal) LispNil.INSTANCE
-					: makeTypeTest(var, clauseParts.get(0), closRegistry);
+			LispVal test = makeTypeTest(var, clauseParts.get(0), closRegistry);
 			List<LispVal> condClause = new java.util.ArrayList<>();
 			condClause.add(test);
 			if (body.isEmpty()) {
@@ -20600,6 +20648,12 @@ public final class LispMacroExpander {
 			condParts.add(listToCons(condClause));
 		}
 		return makeLet(TYPECASE_VAR, keyform, listToCons(condParts));
+	}
+
+	/** A type-specifier symbol's name with any package qualifier stripped. */
+	private static String plainTypeName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
 	}
 
 	private static final String ETYPECASE_VAR = "__etypecase";
@@ -20638,8 +20692,7 @@ public final class LispMacroExpander {
 			}
 			List<LispVal> clauseParts = clause.toList();
 			List<LispVal> body = clauseParts.subList(1, clauseParts.size());
-			LispVal test = pathnameClauseYields(clauseParts.get(0), clauses) ? (LispVal) LispNil.INSTANCE
-					: makeTypeTest(var, clauseParts.get(0), closRegistry);
+			LispVal test = makeTypeTest(var, clauseParts.get(0), closRegistry);
 			List<LispVal> condClause = new java.util.ArrayList<>();
 			condClause.add(test);
 			if (body.isEmpty()) {
@@ -20652,69 +20705,6 @@ public final class LispMacroExpander {
 		}
 		condParts.add(makeExhaustiveErrorClause(var, "ETYPECASE"));
 		return makeLet(ETYPECASE_VAR, keyform, listToCons(condParts));
-	}
-
-	/**
-	 * Whether a {@code pathname} clause of a {@code typecase}/{@code etypecase} must
-	 * YIELD the strings it would otherwise claim to a sibling clause.
-	 *
-	 * <p>
-	 * A rontolisp pathname IS its namestring (there is no pathname object,
-	 * {@code .kb/directory-listing.md}), so the {@code pathname} type has to accept a
-	 * string -- otherwise {@code (check-type directory pathname)} and
-	 * {@code (etypecase file (null ...) (pathname ...))} reject the very values rontolisp
-	 * hands out as pathnames (mito's {@code migrate} and {@code migration-status}). But a
-	 * form that ALSO lists a clause a string can land in is not asking "is this a path?",
-	 * it is DISCRIMINATING a path from string CONTENT -- jzon's
-	 * {@code (typecase in (pathname (open in ...)) (t ...))} reads JSON text from
-	 * anything that is not a file, and claiming its string turned
-	 * {@code (jzon:parse "\"text\"")} into an attempt to open a file named {@code text}.
-	 * So the pathname clause yields to any sibling that could take the string: the
-	 * catch-all, and the string/vector/array/sequence family.
-	 *
-	 * <p>
-	 * This is a heuristic standing in for a type rontolisp does not have.
-	 * <strong>Re-evaluation trigger</strong>: give rontolisp a distinct pathname VALUE
-	 * (an instance carrying its namestring, the way defstruct instances already work on
-	 * every backend) and this rule -- and the whole "is a namestring a pathname" question
-	 * -- disappears with it.
-	 * @param clauseHead the clause's type specifier
-	 * @param clauses every clause of the form, including this one
-	 * @return whether the clause's test must be constant nil
-	 */
-	private static boolean pathnameClauseYields(LispVal clauseHead, List<LispVal> clauses) {
-		if (!(clauseHead instanceof LispSymbol head) || !"PATHNAME".equals(plainTypeName(head.name()))) {
-			return false;
-		}
-		for (LispVal other : clauses) {
-			if (!(other instanceof LispCons otherClause)) {
-				continue;
-			}
-			// The catch-all reads as LispTrue, not a symbol named T -- missing that is
-			// what let jzon's (typecase in (pathname (open in)) (t ...)) still claim its
-			// string on the first cut.
-			if (otherClause.car() instanceof LispTrue || (otherClause.car() instanceof LispSymbol otherHead
-					&& matchesAString(plainTypeName(otherHead.name())))) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/** A type-specifier symbol's name with any package qualifier stripped. */
-	private static String plainTypeName(String name) {
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
-		return qn == null ? name : qn.member();
-	}
-
-	/** Whether a bare type-specifier name can be satisfied by a string. */
-	private static boolean matchesAString(String plainName) {
-		return switch (plainName) {
-			case "T", "OTHERWISE", "STRING", "SIMPLE-STRING", "BASE-STRING", "SIMPLE-BASE-STRING", "VECTOR",
-					"SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "ATOM" ->
-				true;
-			default -> false;
-		};
 	}
 
 	/**
@@ -20764,16 +20754,15 @@ public final class LispMacroExpander {
 			case "STRUCTURE-OBJECT":
 				return makeAnyStructInstanceTest(value, closRegistry);
 			case "PATHNAME":
-				// A rontolisp pathname IS its namestring (there is no pathname object,
-				// see LispNames.MAKE_PATHNAME), so a STRING is what a pathname is here.
-				// The empty test this used to be made the type reject the very values
-				// rontolisp uses as pathnames: mito's (check-type directory pathname) in
-				// migrate and its (etypecase file (null ...) (pathname ...)) in
-				// migration-status both failed on a namestring that came out of
-				// uiop:directory-files. Consequence to know: a typecase listing
-				// `pathname' BEFORE `string' now takes the pathname branch for a string
-				// -- which is the same statement as "a namestring is a pathname".
-				return callOf(LispNames.STRINGP, value);
+				// A pathname is an instance of the fixed LispLayout.PATHNAME layout,
+				// so the test is instance-tag membership like a struct's --
+				// and a STRING is not one, restoring CL's rule. mito's (check-type
+				// directory pathname) and (etypecase file (null ...) (pathname ...))
+				// still pass because uiop:directory-files and friends now ANSWER
+				// pathname values; jzon's (typecase in (pathname (open in ...)) (t ...))
+				// discriminates a file from text by the type itself, which is what
+				// retired the pathnameClauseYields heuristic.
+				return objIs(value, List.of(LispLayout.PATHNAME_TAG));
 			case "PACKAGE":
 				// A package value is find-package's answer -- the name KEYWORD
 				// (.kb/symbol-runtime-api.md) -- so the test is "a keyword naming a
@@ -24991,6 +24980,11 @@ public final class LispMacroExpander {
 		}
 		namesByTags.computeIfAbsent(allClassTags, k -> new java.util.LinkedHashSet<>()).add("STANDARD-OBJECT");
 		namesByTags.computeIfAbsent(allStructTags, k -> new java.util.LinkedHashSet<>()).add("STRUCTURE-OBJECT");
+		// A pathname value is an instance too (the layout-only %PATHNAME tag), so a
+		// runtime (typep p 'pathname) answers through the same table; the non-instance
+		// branch needs no PATHNAME case because no other value is one.
+		namesByTags.computeIfAbsent(List.of(LispLayout.PATHNAME_TAG), k -> new java.util.LinkedHashSet<>())
+			.add("PATHNAME");
 		List<LispVal> entries = new java.util.ArrayList<>();
 		for (java.util.Map.Entry<List<String>, java.util.LinkedHashSet<String>> entry : namesByTags.entrySet()) {
 			List<LispVal> entryParts = new java.util.ArrayList<>();

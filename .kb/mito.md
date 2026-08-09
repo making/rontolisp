@@ -46,10 +46,13 @@ are what stood between "mito-core loads" and "the migration workflow runs":
 
 - `make-pathname` at RUN time, plus `pathname-name` / `pathname-type` --
   `.todo/222`, closed. `.kb/directory-listing.md`.
-- `pathname` stopped being an EMPTY type: `(check-type directory pathname)` in
-  `migrate` and `(etypecase file (null ...) (pathname ...))` in
-  `migration-status` both rejected the namestrings mito itself produces.
-  `.kb/declarations-type-checks.md`.
+- `pathname` stopped being an EMPTY type, and is a DISTINCT value since
+  todo-304: `(check-type directory pathname)` in `migrate` passes because the
+  caller hands `#P"db/"` (the guides' spelling) and the producers mito reads
+  from (`uiop:directory-files`, `merge-pathnames`, `make-pathname :defaults`)
+  answer pathname values; `(etypecase file (null ...) (pathname ...))` in
+  `migration-status` takes the pathname branch by the type itself.
+  `.kb/pathnames.md`, `.kb/declarations-type-checks.md`.
 - `uiop:directory-files` gained UIOP's optional wildcard argument
   (`"*.up.sql"`). `.kb/directory-listing.md`.
 - `uiop:read-file-string`, `delete-file` (+ the `%delete-file` primitive) and

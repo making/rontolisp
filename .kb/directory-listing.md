@@ -126,8 +126,8 @@ only fall out of the type rule:
 - A non-wild pathspec designates ITSELF: `"d"` and `"d/"` both answer `("d/")`,
   a file answers itself, a missing name answers nil.
 
-Two limits remain, and both are consequences of "a rontolisp pathname IS its
-namestring", not of this operator:
+Two limits remain, and both are consequences of the pathname VALUE carrying a
+FLAT namestring (`.kb/pathnames.md`), not of this operator:
 
 **DIRECTORY components are never wild** (`"src/*/f.lisp"` matches nothing) --
 there is no structured directory list to walk.
@@ -176,11 +176,12 @@ Two rules are load-bearing and both are SBCL-checked:
   AND `make-pathname`'s defaulting, so the three cannot disagree;
   `PathnameOps.components` is its Java twin.
 
-`pathname` also stopped being an EMPTY type in the same pass -- see
-`.kb/declarations-type-checks.md`. A rontolisp pathname IS its namestring, so
-`(typep x 'pathname)` and `pathnamep` are `stringp`; while the type was empty,
-`(check-type directory pathname)` rejected the very values rontolisp uses as
-pathnames (mito's `migrate` and `migration-status` both hit it).
+`pathname` also stopped being an EMPTY type in the same pass -- and todo-304
+then made it a DISTINCT type: a pathname is an instance carrying its
+namestring, `pathnamep`/`(typep x 'pathname)` test exactly that value, the
+family here answers pathnames and accepts both spellings, and the whole "is a
+namestring a pathname" question is gone. Model, gate coupling and the prelude
+coerce/wrap pattern: `.kb/pathnames.md`.
 
 ## Coverage
 

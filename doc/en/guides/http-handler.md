@@ -68,10 +68,10 @@ The handler returns Clack's positional response list `(status headers body)`:
 - `body` — a **list of strings** (joined), `nil` or omitted (an empty body —
   the two-element `(status headers)` form is valid), an `(unsigned-byte 8)`
   vector, or a rontolisp stream (e.g. a proxied fetch body). A **bare string
-  signals an error** — deliberately, and faithfully to Clack: a pathname body
-  means "serve this file" there, and a rontolisp pathname *is* its
-  namestring, so accepting strings would make a static-file middleware serve
-  a file's *path* as its contents. A function response is supported in
+  signals an error** — deliberately, and faithfully to Clack, which refuses
+  strings too. A pathname body means "serve this file" (lack's static-file
+  middleware answers one); it is a distinct value here and is refused as
+  unsupported until the transport can serve it. A function response is supported in
   Clack's delayed form only —
   `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
   — and the streaming-writer form is refused.

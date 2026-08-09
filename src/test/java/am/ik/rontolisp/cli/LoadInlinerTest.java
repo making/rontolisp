@@ -500,12 +500,12 @@ class LoadInlinerTest {
 
 	@Test
 	void foldsMakePathnameLiteralArgs() {
-		// A literal (make-pathname ...) with only self-evaluating args collapses to its
-		// namestring so the compilers never see the primitive.
+		// A literal (make-pathname ...) with only self-evaluating args collapses to a
+		// pathname VALUE so the compilers never see the primitive.
 		List<LispVal> program = LispReader.readAllFromString(
 				"(defparameter *dir* (make-pathname :directory '(:absolute \"a\" \"b\") :name nil :type nil))");
 		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *DIR* \"/a/b/\")");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *DIR* #P\"/a/b/\")");
 	}
 
 	@Test
@@ -513,7 +513,7 @@ class LoadInlinerTest {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defparameter *p* (uiop:merge-pathnames* \"file.txt\" \"/abs/\"))");
 		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
-		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *P* \"/abs/file.txt\")");
+		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *P* #P\"/abs/file.txt\")");
 	}
 
 	@Test
@@ -523,7 +523,7 @@ class LoadInlinerTest {
 				(defparameter *file* (uiop:merge-pathnames* *dir* "child.txt"))""");
 		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of()));
 		assertThat(result.stream().map(LispVal::print)).containsExactly("(DEFPARAMETER *DIR* \"/base/\")",
-				"(DEFPARAMETER *FILE* \"/base/child.txt\")");
+				"(DEFPARAMETER *FILE* #P\"/base/child.txt\")");
 	}
 
 	@Test
@@ -553,7 +553,7 @@ class LoadInlinerTest {
 				    (asdf:system-source-directory (asdf:find-system 'demo nil))))""");
 		List<LispVal> result = LoadInliner.inline(program, loaderOf(Map.of("main.lisp", "(defun m () 1)")),
 				"projects/demo");
-		assertThat(result.stream().map(LispVal::print)).contains("(DEFPARAMETER *DATA-DIR* \"projects/demo/data/\")");
+		assertThat(result.stream().map(LispVal::print)).contains("(DEFPARAMETER *DATA-DIR* #P\"projects/demo/data/\")");
 	}
 
 	@Test

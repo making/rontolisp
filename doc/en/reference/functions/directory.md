@@ -20,19 +20,20 @@ Given a directory holding `a.txt`, `b.txt` and the subdirectories `sub/` and
 
 | pathspec | answer |
 |---|---|
-| `"d/*.*"` | `("d/a.txt" "d/b.txt" "d/empty/" "d/sub/")` — everything |
-| `"d/*.txt"` | `("d/a.txt" "d/b.txt")` |
-| `"d/?.txt"` | `("d/a.txt" "d/b.txt")` |
-| `"d/*"` | `("d/empty/" "d/sub/")` — a wild name with NO type, so only untyped entries |
+| `"d/*.*"` | `(#P"d/a.txt" #P"d/b.txt" #P"d/empty/" #P"d/sub/")` — everything |
+| `"d/*.txt"` | `(#P"d/a.txt" #P"d/b.txt")` |
+| `"d/?.txt"` | `(#P"d/a.txt" #P"d/b.txt")` |
+| `"d/*"` | `(#P"d/empty/" #P"d/sub/")` — a wild name with NO type, so only untyped entries |
 | `"d/a*"` | `NIL` — same rule: `a.txt` has a type |
 
 A **non-wild pathspec designates itself**, as in Common Lisp: `"d/a.txt"` answers
-`("d/a.txt")` when the file exists, and a directory answers itself in directory
-form -- both `"d"` and `"d/"` give `("d/")`. **Listing a directory is
+`(#P"d/a.txt")` when the file exists, and a directory answers itself in directory
+form -- both `"d"` and `"d/"` give `(#P"d/")`. **Listing a directory is
 `"d/*.*"`, not `"d/"`.**
 
-The DIRECTORY components are never wild: a rontolisp pathname is its namestring,
-with no structured directory list to walk, so `"src/*/f.lisp"` matches nothing.
+The DIRECTORY components are never wild: a rontolisp pathname carries a flat
+namestring, with no structured directory list to walk, so `"src/*/f.lisp"`
+matches nothing.
 
 Every expectation above is the same answer SBCL gives for the same tree.
 

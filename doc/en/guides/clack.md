@@ -70,9 +70,9 @@ standard `(status headers body)` list:
 The response `body` may be a list of strings, a
 `(vector (unsigned-byte 8))` (each octet becomes the character of its code
 point), a rontolisp stream, or `nil`; the two-element `(status headers)` form
-is valid too. A bare string — and therefore a pathname body (a rontolisp
-pathname is its namestring) — signals a clear error, as Clack itself refuses
-strings. A function body is supported in Clack's delayed-response form (the
+is valid too. A bare string signals a clear error, as Clack itself refuses
+strings; a pathname body (lack's file-serving form) is a distinct value here and
+is refused too, until the transport can serve it. A function body is supported in Clack's delayed-response form (the
 responder is called with the final response list); the streaming-writer form
 signals.
 

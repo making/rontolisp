@@ -131,12 +131,13 @@ class LispPreludeLibraryTest {
 		for (String[] c : cases) {
 			LispVal actual = evaluator
 				.eval(LispReader.readFromString("(merge-pathnames \"" + c[0] + "\" \"" + c[1] + "\")"));
+			// The value is a pathname: #P + the merged namestring.
 			assertThat(actual.print()).as("(merge-pathnames %s %s)", c[0], c[1])
-				.isEqualTo("\"" + PathnameOps.mergePathnames(c[0], c[1]) + "\"");
+				.isEqualTo("#P\"" + PathnameOps.mergePathnames(c[0], c[1]) + "\"");
 		}
 		// The one-argument shape merges against the empty (working-directory) defaults.
 		assertThat(evaluator.eval(LispReader.readFromString("(merge-pathnames \"a/b.txt\")")).print())
-			.isEqualTo("\"a/b.txt\"");
+			.isEqualTo("#P\"a/b.txt\"");
 	}
 
 	@Test
@@ -168,8 +169,9 @@ class LispPreludeLibraryTest {
 			// directory, which evaluates to the same list the folder reads.
 			args.replaceAll(arg -> arg instanceof LispCons listCall && listCall.car() instanceof LispSymbol head
 					&& "LIST".equals(head.name()) ? listToQuotedList(listCall) : arg);
+			// The value is a pathname: #P + the composed namestring.
 			assertThat(evaluator.eval(LispReader.readFromString(form)).print()).as(form)
-				.isEqualTo("\"" + PathnameOps.makePathname(args) + "\"");
+				.isEqualTo("#P\"" + PathnameOps.makePathname(args) + "\"");
 		}
 	}
 

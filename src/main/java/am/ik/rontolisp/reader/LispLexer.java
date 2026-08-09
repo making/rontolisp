@@ -251,11 +251,11 @@ public final class LispLexer {
 			else if (c == '#' && this.pos + 2 < this.input.length()
 					&& (this.input.charAt(this.pos + 1) == 'P' || this.input.charAt(this.pos + 1) == 'p')
 					&& this.input.charAt(this.pos + 2) == '"') {
-				// #P"foo/bar" is a pathname literal. A pathname IS its namestring here
-				// (every pathname primitive -- make-pathname, merge-pathnames*,
-				// native-namestring -- takes and returns strings), so the dispatch
-				// contributes no token of its own and the string that follows becomes the
-				// datum. #P not followed by a string falls through to symbol reading.
+				// #P"foo/bar" is a pathname literal: the string that follows is the
+				// namestring and the reader builds the pathname VALUE (an instance over
+				// the fixed LispLayout.PATHNAME) from the pair. #P not followed by a
+				// string falls through to symbol reading.
+				add(tokens, new Token.PathnameOpen(), tokenStart);
 				this.pos += 2;
 			}
 			else if (c == '#' && this.pos + 1 < this.input.length() && this.input.charAt(this.pos + 1) == '*') {
@@ -882,13 +882,18 @@ public final class LispLexer {
 				return true;
 			}
 			// #2A(...) and friends: skip the symbol-shaped prefix, then a directly
-			// following list (a glued '(' only occurs in array literals here).
+			// following list (a glued '(' only occurs in array literals here) or a
+			// directly following string (#P"..." -- without this the namestring would
+			// surface as a datum of its own).
 			this.pos++;
 			while (this.pos < this.input.length() && isSymbolChar(this.input.charAt(this.pos))) {
 				this.pos++;
 			}
 			if (this.pos < this.input.length() && this.input.charAt(this.pos) == '(') {
 				skipDelimitedList();
+			}
+			else if (this.pos < this.input.length() && this.input.charAt(this.pos) == '"') {
+				skipStringRaw();
 			}
 			return true;
 		}

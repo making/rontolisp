@@ -11,7 +11,9 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -114,14 +116,15 @@ final class CompileTimePathnameFolder {
 			if (LispNames.WITH_OPEN_FILE.equals(op.name()) && items.size() >= 2 && items.get(1) instanceof LispCons spec
 					&& spec.isProperList()) {
 				List<LispVal> specParts = spec.toList();
-				if (specParts.size() >= 2 && specParts.get(1) instanceof LispString path
-						&& namesAnOutputDirection(specParts.subList(2, specParts.size()))) {
-					writtenPaths.add(path.value());
+				String specPath = specParts.size() >= 2 ? PathnameOps.designatorNamestring(specParts.get(1)) : null;
+				if (specPath != null && namesAnOutputDirection(specParts.subList(2, specParts.size()))) {
+					writtenPaths.add(specPath);
 				}
 			}
-			if (LispNames.OPEN.equals(op.name()) && items.size() >= 3 && items.get(1) instanceof LispString path
+			if (LispNames.OPEN.equals(op.name()) && items.size() >= 3
+					&& PathnameOps.designatorNamestring(items.get(1)) instanceof String openPath
 					&& namesAnOutputDirection(items.subList(2, items.size()))) {
-				writtenPaths.add(path.value());
+				writtenPaths.add(openPath);
 			}
 		}
 		for (LispVal item : items) {
@@ -198,10 +201,11 @@ final class CompileTimePathnameFolder {
 		if (items.size() >= 3) {
 			LispVal valueExpr = items.get(2);
 			LispVal reduced = reduce(valueExpr, systems, parameters, writtenPaths);
-			if (reduced instanceof LispString folded) {
-				parameters.put(nameSym.name(), folded);
-				out.add(folded);
-				changed |= folded != valueExpr;
+			if (reduced instanceof LispString
+					|| (reduced instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME)) {
+				parameters.put(nameSym.name(), reduced);
+				out.add(reduced);
+				changed |= reduced != valueExpr;
 			}
 			else {
 				LispVal foldedValue = foldForm(valueExpr, systems, parameters, writtenPaths);
@@ -248,9 +252,9 @@ final class CompileTimePathnameFolder {
 			changed |= foldedBody != items.get(i);
 			body.add(foldedBody);
 		}
-		if (reducedPath instanceof LispString pathStr && supportsInputBundling(options)
-				&& !writtenPaths.contains(pathStr.value())) {
-			String contents = tryReadFile(pathStr.value());
+		String reducedPathNs = reducedPath == null ? null : PathnameOps.designatorNamestring(reducedPath);
+		if (reducedPathNs != null && supportsInputBundling(options) && !writtenPaths.contains(reducedPathNs)) {
+			String contents = tryReadFile(reducedPathNs);
 			if (contents != null) {
 				return buildWithInputFromString(var, contents, body);
 			}
@@ -453,6 +457,10 @@ final class CompileTimePathnameFolder {
 				|| expr instanceof LispNil || expr instanceof LispTrue) {
 			return expr;
 		}
+		if (expr instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME) {
+			// A #P"..." literal (or an already-folded pathname) is its own reduction.
+			return expr;
+		}
 		if (expr instanceof LispSymbol sym) {
 			return reduceSymbol(sym, parameters);
 		}
@@ -540,7 +548,10 @@ final class CompileTimePathnameFolder {
 			reduced.add(r);
 		}
 		try {
-			return new LispString(PathnameOps.makePathname(reduced));
+			// The value make-pathname answers at run time is a pathname VALUE, so the
+			// fold produces the same -- PathnameOps.makePathname
+			// itself unwraps a pathname :defaults argument.
+			return PathnameOps.pathnameValue(PathnameOps.makePathname(reduced));
 		}
 		catch (RuntimeException ex) {
 			return null;
@@ -554,14 +565,16 @@ final class CompileTimePathnameFolder {
 			return null;
 		}
 		LispVal specified = reduce(args.get(0), systems, parameters, writtenPaths);
-		if (!(specified instanceof LispString specifiedStr)) {
+		String specifiedNs = specified == null ? null : PathnameOps.designatorNamestring(specified);
+		if (specifiedNs == null) {
 			return null;
 		}
 		String defaults = "";
 		if (args.size() == 2) {
 			LispVal defaultsVal = reduce(args.get(1), systems, parameters, writtenPaths);
-			if (defaultsVal instanceof LispString defaultsStr) {
-				defaults = defaultsStr.value();
+			String defaultsNs = defaultsVal == null ? null : PathnameOps.designatorNamestring(defaultsVal);
+			if (defaultsNs != null) {
+				defaults = defaultsNs;
 			}
 			else if (defaultsVal instanceof LispNil) {
 				defaults = "";
@@ -570,7 +583,9 @@ final class CompileTimePathnameFolder {
 				return null;
 			}
 		}
-		return new LispString(PathnameOps.mergePathnames(specifiedStr.value(), defaults));
+		// Real uiop:merge-pathnames* answers a pathname; the interpreter's Java twin
+		// wraps too, so the fold and the runtime agree.
+		return PathnameOps.pathnameValue(PathnameOps.mergePathnames(specifiedNs, defaults));
 	}
 
 	private static @Nullable LispVal reduceFindSystem(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
@@ -619,14 +634,15 @@ final class CompileTimePathnameFolder {
 			return null;
 		}
 		LispVal relative = reduce(args.get(1), systems, parameters, writtenPaths);
-		if (!(relative instanceof LispString relativeStr)) {
+		String relativeNs = relative == null ? null : PathnameOps.designatorNamestring(relative);
+		if (relativeNs == null) {
 			return null;
 		}
 		String base = system.baseDir();
 		if (base == null || base.isEmpty()) {
 			base = "./";
 		}
-		return new LispString(PathnameOps.mergePathnames(relativeStr.value(), base.endsWith("/") ? base : base + "/"));
+		return new LispString(PathnameOps.mergePathnames(relativeNs, base.endsWith("/") ? base : base + "/"));
 	}
 
 	private static @Nullable LispVal reduceSystemSourceDirectory(List<LispVal> args,

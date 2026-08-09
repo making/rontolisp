@@ -50,10 +50,13 @@ import org.jspecify.annotations.Nullable;
  * time codec (seconds since 1900-01-01 00:00:00 GMT) as pure era-based Gregorian
  * arithmetic; lite: a nil time-zone means GMT, not the local zone (no backend-portable
  * local-zone source exists), and {@code daylight-p} decodes as nil.</li>
- * <li>{@code merge-pathnames} / {@code truename} -- the two ANSI pathname functions that
- * are pure namestring work: the merge rule {@code PathnameOps.mergePathnames} implements
- * (a rontolisp pathname IS its namestring), and {@code probe-file} plus a signal on a
- * missing file, which is what makes the {@code (ignore-errors (truename x))}
+ * <li>The pathname family -- {@code pathname} / {@code parse-namestring} /
+ * {@code namestring} / {@code merge-pathnames} / {@code make-pathname} /
+ * {@code probe-file} / {@code truename} plus the {@code %path-ns} unwrap helper: a
+ * pathname VALUE is an instance carrying its namestring ({@code LispLayout.PATHNAME}), so
+ * every public entry coerces its argument to the namestring, computes on strings, and
+ * wraps the answer back into a pathname; {@code truename} is {@code probe-file} plus a
+ * signal on a missing file, which is what makes the {@code (ignore-errors (truename x))}
  * existence-probe idiom work.</li>
  * <li>{@code uiop/image:print-condition-backtrace} -- lite: prints the CONDITION and no
  * backtrace (no backend carries a Lisp-level call stack).</li>
@@ -289,6 +292,7 @@ public final class LispPreludeLibrary {
 				         (n (length s)))
 				    (cond ((and (> n 8) (string= (subseq s 0 8) "%struct-")) (intern (subseq s 8)))
 				          ((and (> n 7) (string= (subseq s 0 7) "%class-")) (intern (subseq s 7)))
+				          ((string= s "%PATHNAME") 'pathname)
 				          (t c))))
 				""");
 		// class-name reads the metaobject's name slot -- index 0 of the seeded
@@ -321,16 +325,20 @@ public final class LispPreludeLibrary {
 				        (rplaca (cdr tail) new-value)
 				        (return new-value)))))
 				""");
-		// merge-pathnames / truename: pure namestring work over primitives every
-		// backend has, so ONE Lisp definition serves all four -- unlike make-pathname
-		// and uiop:merge-pathnames*, which stay Java + compile-time folding because
-		// their keyword shapes are resolved at compile time (PathnameOps). The merge
-		// rule is the same one PathnameOps.mergePathnames implements; the two are
-		// pinned against each other by LispPreludeLibraryTest.
+		// merge-pathnames / truename: namestring work over primitives every backend
+		// has, so ONE Lisp definition serves all four. The pattern of the whole path
+		// family: coerce a pathname-or-namestring argument through %path-ns
+		// (or the strict namestring) at the entry, compute on the namestring, and wrap
+		// the answer in a pathname VALUE with (pathname ...) at the exit -- internals
+		// like %pathname-split stay string-typed. The merge rule is the same one
+		// PathnameOps.mergePathnames implements; the two are pinned against each other
+		// by LispPreludeLibraryTest.
 		SOURCES.put(LispNames.MERGE_PATHNAMES, """
 				(defun merge-pathnames (%mp-path &optional %mp-defaults)
-				  (let* ((p (if (stringp %mp-path) %mp-path ""))
-				         (d (if (stringp %mp-defaults) %mp-defaults ""))
+				  (let* ((%mp-pp (%path-ns %mp-path))
+				         (%mp-dd (%path-ns %mp-defaults))
+				         (p (if (stringp %mp-pp) %mp-pp ""))
+				         (d (if (stringp %mp-dd) %mp-dd ""))
 				         (ps (position #\\/ p :from-end t))
 				         (ds (position #\\/ d :from-end t))
 				         (pdir (if ps (subseq p 0 (+ ps 1)) ""))
@@ -341,7 +349,32 @@ public final class LispPreludeLibrary {
 				                    ((char= (char pdir 0) #\\/) pdir)
 				                    ((string= ddir "") pdir)
 				                    (t (concatenate 'string ddir pdir)))))
-				    (concatenate 'string dir (if (string= pfile "") dfile pfile))))
+				    (pathname (concatenate 'string dir (if (string= pfile "") dfile pfile)))))
+				""");
+		// %path-ns: the LENIENT designator unwrap -- a pathname value's namestring,
+		// anything else unchanged -- so the family below keeps its "a non-string
+		// coerces to the empty namestring" tolerance while accepting pathname values.
+		// namestring is the STRICT sibling (it signals on a non-designator).
+		SOURCES.put(LispNames.PATH_NS, """
+				(defun %path-ns (%pns-x)
+				  (if (%obj-is %pns-x '%PATHNAME) (%obj-ref %pns-x 0) %pns-x))
+				""");
+		// pathname: the canonical constructor every producer funnels through. The
+		// value is an instance of the fixed %PATHNAME layout carrying its namestring,
+		// which is what pathnamep / (typep x 'pathname) test.
+		SOURCES.put(LispNames.PATHNAME, """
+				(defun pathname (%pth-x)
+				  (cond ((%obj-is %pth-x '%PATHNAME) %pth-x)
+				        ((stringp %pth-x) (%obj-new '%PATHNAME %pth-x))
+				        (t (error "PATHNAME: not a pathname designator: ~S" %pth-x))))
+				""");
+		// parse-namestring -- lite: no host parsing (a rontolisp namestring has no
+		// host), so the value is the pathname over the whole namestring and the
+		// second value is its length, like CL's success case.
+		SOURCES.put(LispNames.PARSE_NAMESTRING, """
+				(defun parse-namestring (%psn-thing &optional %psn-host %psn-defaults)
+				  (let ((%psn-s (namestring %psn-thing)))
+				    (values (pathname %psn-s) (length %psn-s))))
 				""");
 		// %pathname-split: the ONE rendering of CL's "the LAST dot separates the type,
 		// and a dot at position 0 does not" rule -- (directory name type), with name and
@@ -351,7 +384,8 @@ public final class LispPreludeLibrary {
 		// other.
 		SOURCES.put(LispNames.PATHNAME_SPLIT, """
 				(defun %pathname-split (%ps-path)
-				  (let* ((%ps-p (if (stringp %ps-path) %ps-path ""))
+				  (let* ((%ps-x (%path-ns %ps-path))
+				         (%ps-p (if (stringp %ps-x) %ps-x ""))
 				         (%ps-s (position #\\/ %ps-p :from-end t))
 				         (%ps-d (if %ps-s (subseq %ps-p 0 (+ %ps-s 1)) ""))
 				         (%ps-f (if %ps-s (subseq %ps-p (+ %ps-s 1)) %ps-p))
@@ -412,14 +446,16 @@ public final class LispPreludeLibrary {
 				(defun make-pathname (&key (directory nil %mkp-dp) (name nil %mkp-np) (type nil %mkp-tp)
 				                           defaults host device version case
 				                      &allow-other-keys)
-				  (let* ((%mkp-d (%pathname-split (if (stringp defaults) defaults "")))
+				  (let* ((%mkp-ds (%path-ns defaults))
+				         (%mkp-d (%pathname-split (if (stringp %mkp-ds) %mkp-ds "")))
 				         (%mkp-dir (if %mkp-dp (%pathname-directory-string directory) (first %mkp-d)))
 				         (%mkp-n (if %mkp-np (%pathname-component-string name) (or (second %mkp-d) "")))
 				         (%mkp-t (if %mkp-tp (%pathname-component-string type) (or (third %mkp-d) ""))))
-				    (concatenate 'string %mkp-dir
-				                 (if (string= %mkp-t "")
-				                     %mkp-n
-				                     (concatenate 'string %mkp-n "." %mkp-t)))))
+				    (pathname
+				      (concatenate 'string %mkp-dir
+				                   (if (string= %mkp-t "")
+				                       %mkp-n
+				                       (concatenate 'string %mkp-n "." %mkp-t))))))
 				""");
 		SOURCES.put(LispNames.PATHNAME_COMPONENT_STRING, """
 				(defun %pathname-component-string (%pcs-v)
@@ -434,7 +470,7 @@ public final class LispPreludeLibrary {
 		// with it.
 		SOURCES.put(LispNames.DELETE_FILE, """
 				(defun delete-file (%dfl-path)
-				  (if (%delete-file %dfl-path)
+				  (if (%delete-file (namestring %dfl-path))
 				      t
 				      (error "DELETE-FILE: cannot delete ~A" %dfl-path)))
 				""");
@@ -499,14 +535,23 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.NAMESTRING_CL, """
 				(defun namestring (%ns-path)
-				  (if (stringp %ns-path)
-				      %ns-path
-				      (error "NAMESTRING: not a pathname designator: ~S" %ns-path)))
+				  (cond ((stringp %ns-path) %ns-path)
+				        ((%obj-is %ns-path '%PATHNAME) (%obj-ref %ns-path 0))
+				        (t (error "NAMESTRING: not a pathname designator: ~S" %ns-path))))
 				""");
 		SOURCES.put(LispNames.TRUENAME, """
 				(defun truename (%tn-path)
 				  (or (probe-file %tn-path)
 				      (error "TRUENAME: no such file")))
+				""");
+		// probe-file: the pathname VALUE over the namestring the %probe-file primitive
+		// answers (the primitive stays string-in/string-out per backend), nil when the
+		// file is not there. Takes both designator spellings, like every path-taking
+		// operator.
+		SOURCES.put(LispNames.PROBE_FILE, """
+				(defun probe-file (%pf-path)
+				  (let ((%pf-r (%probe-file (namestring %pf-path))))
+				    (if %pf-r (pathname %pf-r) nil)))
 				""");
 		// The directory-LISTING family: one Lisp rendering of the pattern, prefix,
 		// kind and ordering rules over the single per-backend primitive
@@ -517,7 +562,8 @@ public final class LispPreludeLibrary {
 		// sorted here, so the same program prints the same listing everywhere.
 		SOURCES.put(LispNames.PATHNAME_DIRECTORY, """
 				(defun pathname-directory (%pd-path)
-				  (let* ((%pd-p (if (stringp %pd-path) %pd-path ""))
+				  (let* ((%pd-x (%path-ns %pd-path))
+				         (%pd-p (if (stringp %pd-x) %pd-x ""))
 				         (%pd-s (position #\\/ %pd-p :from-end t)))
 				    (if (null %pd-s)
 				        nil
@@ -552,7 +598,8 @@ public final class LispPreludeLibrary {
 				""");
 		SOURCES.put(LispNames.DIR_NAMESTRING, """
 				(defun %dir-namestring (%dn-path)
-				  (let ((%dn-p (if (stringp %dn-path) %dn-path "")))
+				  (let* ((%dn-x (%path-ns %dn-path))
+				         (%dn-p (if (stringp %dn-x) %dn-x "")))
 				    (if (or (string= %dn-p "")
 				            (char= (char %dn-p (- (length %dn-p) 1)) #\\/))
 				        %dn-p
@@ -566,14 +613,16 @@ public final class LispPreludeLibrary {
 		// pathspec (see LispNames.ENSURE_DIRECTORIES_EXIST for the missing second value).
 		SOURCES.put(LispNames.ENSURE_DIRECTORIES_EXIST, """
 				(defun ensure-directories-exist (%ede-path)
-				  (let* ((%ede-p (if (stringp %ede-path) %ede-path ""))
+				  (let* ((%ede-x (%path-ns %ede-path))
+				         (%ede-p (if (stringp %ede-x) %ede-x ""))
 				         (%ede-s (position #\\/ %ede-p :from-end t))
 				         (%ede-d (if %ede-s (subseq %ede-p 0 (+ %ede-s 1)) "")))
 				    (if (string= %ede-d "") %ede-path (progn (%make-directories %ede-d) %ede-path))))
 				""");
 		SOURCES.put(LispNames.DIRECTORY, """
 				(defun directory (%dir-spec)
-				  (let* ((%dir-p (if (stringp %dir-spec) %dir-spec ""))
+				  (let* ((%dir-x (%path-ns %dir-spec))
+				         (%dir-p (if (stringp %dir-x) %dir-x ""))
 				         (%dir-s (position #\\/ %dir-p :from-end t))
 				         (%dir-d (if %dir-s (subseq %dir-p 0 (+ %dir-s 1)) ""))
 				         (%dir-n (if %dir-s (subseq %dir-p (+ %dir-s 1)) %dir-p)))
@@ -589,16 +638,16 @@ public final class LispPreludeLibrary {
 				                             (or (%pathname-typed-p %dir-n)
 				                                 (not (%pathname-typed-p %dir-b)))))
 				                (setq %dir-acc (cons (concatenate 'string %dir-d %dir-x) %dir-acc)))))
-				          (sort %dir-acc #'string<))
+				          (mapcar #'pathname (sort %dir-acc #'string<)))
 				        (let ((%dir-f (%dir-namestring %dir-p)))
-				          (cond ((%list-directory (if (string= %dir-f "") "." %dir-f)) (list %dir-f))
-				                ((and (string/= %dir-n "") (probe-file %dir-p)) (list %dir-p))
+				          (cond ((%list-directory (if (string= %dir-f "") "." %dir-f)) (list (pathname %dir-f)))
+				                ((and (string/= %dir-n "") (probe-file %dir-p)) (list (pathname %dir-p)))
 				                (t nil))))))
 				""");
 		SOURCES.put(LispNames.DIRECTORY_EXISTS_P, """
 				(defun uiop:directory-exists-p (%de-path)
 				  (let ((%de-d (%dir-namestring %de-path)))
-				    (if (%list-directory (if (string= %de-d "") "." %de-d)) %de-d nil)))
+				    (if (%list-directory (if (string= %de-d "") "." %de-d)) (pathname %de-d) nil)))
 				""");
 		// The optional PATTERN is UIOP's own second argument: a name-and-type wildcard
 		// (never a directory one -- real UIOP signals "Invalid file pattern" for that and
@@ -606,12 +655,13 @@ public final class LispPreludeLibrary {
 		// rules. mito's migration reader spells it (uiop:directory-files dir "*.up.sql").
 		SOURCES.put(LispNames.DIRECTORY_FILES, """
 				(defun uiop:directory-files (%df-dir &optional (%df-pat "*.*"))
-				  (when (position #\\/ %df-pat)
+				  (when (position #\\/ (%path-ns %df-pat))
 				    (error "Invalid file pattern ~S" %df-pat))
 				  (let ((%df-acc nil))
-				    (dolist (%df-e (directory (concatenate 'string (%dir-namestring %df-dir) %df-pat)))
-				      (unless (char= (char %df-e (- (length %df-e) 1)) #\\/)
-				        (setq %df-acc (cons %df-e %df-acc))))
+				    (dolist (%df-e (directory (concatenate 'string (%dir-namestring %df-dir) (%path-ns %df-pat))))
+				      (let ((%df-s (namestring %df-e)))
+				        (unless (char= (char %df-s (- (length %df-s) 1)) #\\/)
+				          (setq %df-acc (cons %df-e %df-acc)))))
 				    (nreverse %df-acc)))
 				""");
 		// Chunked, NOT (make-string (file-length s)): file-length answers nil on both
@@ -634,13 +684,14 @@ public final class LispPreludeLibrary {
 				(defun uiop:subdirectories (%sd-dir)
 				  (let ((%sd-acc nil))
 				    (dolist (%sd-e (directory (concatenate 'string (%dir-namestring %sd-dir) "*.*")))
-				      (when (char= (char %sd-e (- (length %sd-e) 1)) #\\/)
-				        (setq %sd-acc (cons %sd-e %sd-acc))))
+				      (let ((%sd-s (namestring %sd-e)))
+				        (when (char= (char %sd-s (- (length %sd-s) 1)) #\\/)
+				          (setq %sd-acc (cons %sd-e %sd-acc)))))
 				    (nreverse %sd-acc)))
 				""");
 		SOURCES.put(LispNames.COLLECT_SUB_DIRECTORIES, """
 				(defun uiop:collect-sub*directories (%cd-dir %cd-collectp %cd-recursep %cd-collector)
-				  (let ((%cd-d (%dir-namestring %cd-dir)))
+				  (let ((%cd-d (pathname (%dir-namestring %cd-dir))))
 				    (when (funcall %cd-collectp %cd-d)
 				      (funcall %cd-collector %cd-d))
 				    (dolist (%cd-sub (uiop:subdirectories %cd-d))
@@ -648,17 +699,18 @@ public final class LispPreludeLibrary {
 				        (uiop:collect-sub*directories %cd-sub %cd-collectp %cd-recursep %cd-collector))))
 				  nil)
 				""");
-		// The temporary-file trio. A rontolisp pathname IS its namestring, so
-		// "the pathname in directory form" is "the namestring with a trailing slash":
+		// The temporary-file trio. A pathname's namestring is flat, so "the pathname
+		// in directory form" is "the namestring with a trailing slash":
 		// merge-pathnames against one of these appends, which is exactly what
 		// smart-buffer's *temporary-directory* is built by.
 		SOURCES.put(LispNames.ENSURE_DIRECTORY_PATHNAME, """
 				(defun uiop:ensure-directory-pathname (%edp-path)
-				  (let ((%edp-s (if (stringp %edp-path) %edp-path (namestring %edp-path))))
-				    (if (or (string= %edp-s "")
-				            (char= (char %edp-s (- (length %edp-s) 1)) #\\/))
-				        %edp-s
-				        (concatenate 'string %edp-s "/"))))
+				  (let ((%edp-s (namestring %edp-path)))
+				    (pathname
+				      (if (or (string= %edp-s "")
+				              (char= (char %edp-s (- (length %edp-s) 1)) #\\/))
+				          %edp-s
+				          (concatenate 'string %edp-s "/")))))
 				""");
 		// $TMPDIR or /tmp/: getenv is the one environment reader every backend has, and
 		// a backend whose environment is empty (both WASM ones without --env) takes the
@@ -674,15 +726,15 @@ public final class LispPreludeLibrary {
 		// delete-file, so the "missing file" answer is nil in one step.
 		SOURCES.put(LispNames.DELETE_FILE_IF_EXISTS, """
 				(defun uiop:delete-file-if-exists (%dfe-path)
-				  (if (and %dfe-path (%delete-file %dfe-path)) t nil))
+				  (if (and %dfe-path (%delete-file (%path-ns %dfe-path))) t nil))
 				""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
 		// the clock -- (random n) is the one entropy source every backend shares.
 		SOURCES.put(LispNames.TEMP_FILE_NAME, """
 				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-type)
-				  (let ((%tfn-d (uiop:ensure-directory-pathname
-				                  (or %tfn-dir (uiop:default-temporary-directory))))
+				  (let ((%tfn-d (namestring (uiop:ensure-directory-pathname
+				                              (or %tfn-dir (uiop:default-temporary-directory)))))
 				        (%tfn-p (or %tfn-prefix "tmp"))
 				        (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
 				        (%tfn-n nil))
@@ -1355,6 +1407,19 @@ public final class LispPreludeLibrary {
 		// because reading that option here would duplicate the expansion's rule.
 		if (LispNames.TEMP_FILE_NAME.equals(entry) || LispNames.DELETE_FILE_IF_EXISTS.equals(entry)) {
 			return referencesName(program, LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED, canonical);
+		}
+		// The uiop lowerings expandUiopStubCall performs inside the expression
+		// compilers, after this pass: uiop:file-exists-p becomes (probe-file x) and
+		// uiop:namestring / uiop:native-namestring become (namestring x), so a program
+		// spelling only the uiop name must still splice the CL definition.
+		if (LispNames.PROBE_FILE.equals(entry)) {
+			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.FILE_EXISTS_P),
+					canonical);
+		}
+		if (LispNames.NAMESTRING_CL.equals(entry)) {
+			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NAMESTRING), canonical)
+					|| referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NATIVE_NAMESTRING),
+							canonical);
 		}
 		return false;
 	}

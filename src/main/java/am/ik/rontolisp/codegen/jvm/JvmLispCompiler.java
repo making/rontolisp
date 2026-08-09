@@ -1470,24 +1470,27 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
 		List<Integer> structTableClinit = List.of();
 		if (usesRead) {
-			// The reader reads #S(...) only when an instance can exist at all (the same
-			// gate the instance machinery uses); with it on, every struct layout is
-			// interned so the runtime directory can resolve any registered tag, and the
+			// The reader reads #S(...) and #P"..." only when an instance can exist at
+			// all (the same gate the instance machinery uses); with it on, every struct
+			// layout is interned so the runtime directory can resolve any registered
+			// tag, the fixed PATHNAME layout is interned for the #P arm, and the
 			// directory itself is baked into <clinit>.
 			boolean readerInstances = mayUseInstances;
+			am.ik.jvm.ConstantPool.FieldrefConstant pathnameLayoutField = null;
 			if (readerInstances) {
 				for (am.ik.rontolisp.LispLayout layout : closRegistry.layouts().values()) {
 					if (layout.kind() == am.ik.rontolisp.LispLayout.Kind.STRUCT) {
 						mainCtx.layoutPool.intern(cp, className, layout);
 					}
 				}
+				pathnameLayoutField = mainCtx.layoutPool.intern(cp, className, am.ik.rontolisp.LispLayout.PATHNAME);
 				structTableClinit = JvmReadRuntimeBuilder.structTableClinit(cp, thisClass, mainCtx.layoutPool,
 						closRegistry, objectClass, objectArrayClass, stringClass);
 			}
 			readMethods = JvmReadRuntimeBuilder
 				.create(cp, thisClass, objectClass, objectArrayClass, stringClass, longValueOf, doubleValueOf,
 						stringCharAt, stringLength, stringSubstring, objectEquals, readLineHelperMethod, usesLoad,
-						readerInstances)
+						readerInstances, pathnameLayoutField)
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
@@ -1636,11 +1639,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		List<Integer> instCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
-				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr) : List.of();
+				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), cp.addString("#P"))
+				: List.of();
 		List<Integer> instDisplayCode = usesInstances ? JvmRuntimeBuilder.buildInstToStringBody(objectArrayClass,
 				mainCtx.layoutPool.stringArrayClass(cp), stringBuilderClass, sbInitStr, sbAppendStr, sbToString,
 				objectEquals, lispToDisplayStringMethod, cp.addString("S"), cp.addString("#S("), cp.addString("#<"),
-				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr) : List.of();
+				closeParenStr, cp.addString(">"), cp.addString(" :"), spaceStr, cp.addString("P"), null) : List.of();
 		List<Integer> charPrin1Code = JvmRuntimeBuilder.buildCharPrin1Body(cp, stringConcat, characterToString);
 		List<Integer> ctdsCode = JvmRuntimeBuilder.buildConsToDisplayStringBody(objectArrayClass, stringBuilderClass,
 				sbInitStr, sbAppendStr, sbToString, lispToDisplayStringMethod, openParenStr, closeParenStr, spaceStr,
@@ -3483,7 +3487,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				List<String> parts = new ArrayList<>();
 				parts.add(lf.layout().tag());
 				parts.add(lf.layout().printName());
-				parts.add(lf.layout().kind() == am.ik.rontolisp.LispLayout.Kind.STRUCT ? "S" : "C");
+				parts.add(switch (lf.layout().kind()) {
+					case STRUCT -> "S";
+					case CLASS -> "C";
+					case PATHNAME -> "P";
+				});
 				parts.addAll(lf.layout().slotNames());
 				JvmRuntimeBuilder.emitIntConstStatic(code, parts.size());
 				code.add(Opcode.ANEWARRAY);

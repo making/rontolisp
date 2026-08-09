@@ -481,11 +481,11 @@
   ;; and a virtual thread, so "one async frame per request" is a measured
   ;; throughput property, not a style choice.
   ;;
-  ;; A BARE STRING is deliberately rejected, as Clack itself rejects it. The
-  ;; reason bites rontolisp harder than it bites upstream: lack/app/file
-  ;; answers a PATHNAME body, and a rontolisp pathname IS its namestring, so
-  ;; accepting a string would make the :static middleware serve a file's PATH
-  ;; as its contents, silently and with a 200.
+  ;; A BARE STRING is deliberately rejected, as Clack itself rejects it (lack's
+  ;; finalize-response wraps a string controller result in a list, so a bare
+  ;; string reaching the transport is a malformed response). A PATHNAME body
+  ;; -- lack/app/file's file-serving form, a distinct value here -- falls to
+  ;; the unsupported-type arm below until the transport can serve a file.
   (cond ((null body) "")
         ((consp body) (rontolisp::%http-join-strings body))
         ((stringp body)

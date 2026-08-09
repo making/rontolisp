@@ -135,8 +135,11 @@ keeps it regardless.
 (`%http-normalize-response` — the interpreter mirrors it in Java, arm for arm):
 
 - `status` must be an integer — a non-integer car SIGNALS (no more implicit
-  200). The two-element bodyless form is legal (lack's `finalize-response`
-  answers it for every ningle 404).
+  200). The two-element bodyless form is legal — lack's `finalize-response`
+  answers it when `make-response` was given NO body argument. A ningle 404 is
+  NOT that shape: its `make-context` passes the body argument, so `has-body`
+  is true and the 404 is the three-element `(404 () (NIL))` (measured on SBCL
+  and here; the attribution correction of todo-304).
 - `headers`: keyword plist, or (widening) a dotted alist so a fetch result's
   `:headers` passes straight through. Every pair becomes its own header line
   (repeated `:set-cookie` correct by construction); `content-length` /
@@ -144,9 +147,12 @@ keeps it regardless.
 - `body`: a LIST of strings (joined), nil, an `(unsigned-byte 8)` vector (one
   char per octet; see the known non-byte-exact bug below), or a rontolisp
   stream (drained — the one extra await). **A BARE STRING SIGNALS**,
-  upstream-faithful and load-bearing here: `lack/app/file` answers a PATHNAME
-  body and a rontolisp pathname IS its namestring, so accepting a string would
-  make `:static` serve a file's PATH as its contents with a 200.
+  upstream-faithful: lack's `finalize-response` wraps a string controller
+  result in a list (its `(pathnamep body)` branch stopped claiming strings
+  when the pathname became a distinct value, todo-304 / `.kb/pathnames.md`),
+  so a bare string reaching the transport is a malformed response. A PATHNAME
+  body — `lack/app/file`'s file-serving form — is refused by the
+  unsupported-type arm until the transport can serve a file.
 - A FUNCTION response is Clack's DELAYED form only — called with a responder
   that captures the real response; the streaming WRITER protocol is refused by
   the closure the responder returns.

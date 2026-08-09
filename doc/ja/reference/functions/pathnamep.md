@@ -2,23 +2,21 @@
 
 `(pathnamep object)`
 
-`object` がパス名かどうか、つまりここでは文字列かどうかを返します。rontolisp のパス名は
-パス名文字列そのものなので、文字列はパス名であり、それ以外の値はパス名ではありません。
-Common Lisp が要求するとおり、`(typep object 'pathname)` と同じ答えになります。
+`object` がパス名かどうかを返します。パス名は `#P"..."` が表す独立した値で、
+パス名文字列を保持するオブジェクトです。文字列はパス名では**ありません**
+(標準の Common Lisp と同じく、パス名を**指定**するだけです)。それ以外の値も
+パス名ではありません。Common Lisp が要求するとおり、`(typep object 'pathname)`
+と同じ答えになります。
 
-これは Common Lisp から逸脱しています。本来は名前文字列はパス名**指定子**であって
-パス名ではありません。ここでは他にパス名になりうる値がないため、実用的な答えと標準の
-答えが分かれます。
-
-`typecase` / `etypecase` では、`pathname` 節は文字列を受け取れる兄弟節 (catch-all、
-または `string` / `vector` / `array` / `sequence` 節) があるとき、その文字列を譲ります。
-これが 2 つのイディオムを区別します。「これはパスか」を問う
-`(etypecase file (null ...) (pathname ...))` は `pathname` の分岐を取り、ファイルと
-文字列**内容**を判別する `(typecase in (pathname (open in)) (t ...))` では文字列は
-catch-all に届きます。
+生成側 -- `pathname`、`make-pathname`、`merge-pathnames`、`probe-file`、
+`truename`、`directory` と `uiop:` のディレクトリ走査群 -- はすべてパス名を
+返し、パスを取る演算子はパス名と名前文字列の両方を受け付けます。そのため
+この述語がライブラリにファイルとテキストの判別を可能にします:
+`(typecase in (pathname (open in)) (t ...))` は `#P"..."` 引数を開き、文字列
+引数は内容としてパースします。
 
 ```lisp
-(pathnamep "/tmp/data.json") ; => T
+(pathnamep #P"/tmp/data.json") ; => T
 ```
 
-`(pathnamep 42)` は `NIL` です。
+`(pathnamep "/tmp/data.json")` と `(pathnamep 42)` は `NIL` です。

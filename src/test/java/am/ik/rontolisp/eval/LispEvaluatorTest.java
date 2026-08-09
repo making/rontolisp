@@ -5303,7 +5303,7 @@ class LispEvaluatorTest {
 		Files.writeString(present, "x\n");
 		String there = present.toString().replace("\\", "\\\\");
 		String missing = tempDir.resolve("nope.txt").toString().replace("\\", "\\\\");
-		assertThat(eval("(probe-file \"" + there + "\")")).isEqualTo(new LispString(present.toString()));
+		assertThat(eval("(probe-file \"" + there + "\")").print()).isEqualTo("#P\"" + present + "\"");
 		assertThat(eval("(probe-file \"" + missing + "\")")).isEqualTo(LispNil.INSTANCE);
 		// The whole point of the primitive: a missing path answers, it does not signal.
 		assertThat(eval("(if (probe-file \"" + missing + "\") 1 2)")).isEqualTo(new LispInteger(2));
@@ -5315,10 +5315,10 @@ class LispEvaluatorTest {
 		// probe must not degrade to "can I read this as a string?".
 		Path binary = tempDir.resolve("blob.bin");
 		Files.write(binary, new byte[] { (byte) 0xFF, (byte) 0xFE, 0x00, (byte) 0x80 });
-		assertThat(eval("(probe-file \"" + binary.toString().replace("\\", "\\\\") + "\")"))
-			.isEqualTo(new LispString(binary.toString()));
-		assertThat(eval("(probe-file \"" + tempDir.toString().replace("\\", "\\\\") + "\")"))
-			.isEqualTo(new LispString(tempDir.toString()));
+		assertThat(eval("(probe-file \"" + binary.toString().replace("\\", "\\\\") + "\")").print())
+			.isEqualTo("#P\"" + binary + "\"");
+		assertThat(eval("(probe-file \"" + tempDir.toString().replace("\\", "\\\\") + "\")").print())
+			.isEqualTo("#P\"" + tempDir + "\"");
 	}
 
 	@Test
@@ -5328,8 +5328,8 @@ class LispEvaluatorTest {
 		String there = present.toString().replace("\\", "\\\\");
 		String missing = tempDir.resolve("g.txt").toString().replace("\\", "\\\\");
 		assertThat(eval("(mapcar #'probe-file (list \"" + there + "\" \"" + missing + "\"))").print())
-			.isEqualTo("(\"" + present + "\" NIL)");
-		assertThat(eval("(uiop:file-exists-p \"" + there + "\")")).isEqualTo(new LispString(present.toString()));
+			.isEqualTo("(#P\"" + present + "\" NIL)");
+		assertThat(eval("(uiop:file-exists-p \"" + there + "\")").print()).isEqualTo("#P\"" + present + "\"");
 		assertThat(eval("(uiop:file-exists-p \"" + missing + "\")")).isEqualTo(LispNil.INSTANCE);
 	}
 
@@ -5344,8 +5344,8 @@ class LispEvaluatorTest {
 			}
 			throw new java.io.FileNotFoundException(path);
 		});
-		assertThat(evaluator.eval(LispReader.readFromString("(probe-file \"mem.lisp\")")))
-			.isEqualTo(new LispString("mem.lisp"));
+		assertThat(evaluator.eval(LispReader.readFromString("(probe-file \"mem.lisp\")")).print())
+			.isEqualTo("#P\"mem.lisp\"");
 		assertThat(evaluator.eval(LispReader.readFromString("(probe-file \"/etc/hosts\")")))
 			.isEqualTo(LispNil.INSTANCE);
 	}
@@ -5361,20 +5361,20 @@ class LispEvaluatorTest {
 		Files.createDirectory(tempDir.resolve("sub"));
 		Files.createDirectory(tempDir.resolve("empty"));
 		String dir = tempDir.toString().replace("\\", "\\\\");
-		assertThat(eval("(directory \"" + dir + "/*.*\")").print()).isEqualTo("(\"" + tempDir + "/a.txt\" \"" + tempDir
-				+ "/b.txt\" \"" + tempDir + "/empty/\" \"" + tempDir + "/sub/\")");
+		assertThat(eval("(directory \"" + dir + "/*.*\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\""
+				+ tempDir + "/b.txt\" #P\"" + tempDir + "/empty/\" #P\"" + tempDir + "/sub/\")");
 		assertThat(eval("(directory \"" + dir + "/*\")").print())
-			.isEqualTo("(\"" + tempDir + "/empty/\" \"" + tempDir + "/sub/\")");
+			.isEqualTo("(#P\"" + tempDir + "/empty/\" #P\"" + tempDir + "/sub/\")");
 		assertThat(eval("(directory \"" + dir + "/*.txt\")").print())
-			.isEqualTo("(\"" + tempDir + "/a.txt\" \"" + tempDir + "/b.txt\")");
+			.isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\"" + tempDir + "/b.txt\")");
 		assertThat(eval("(directory \"" + dir + "/?.txt\")").print())
-			.isEqualTo("(\"" + tempDir + "/a.txt\" \"" + tempDir + "/b.txt\")");
+			.isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\"" + tempDir + "/b.txt\")");
 		assertThat(eval("(directory \"" + dir + "/a*\")")).isEqualTo(LispNil.INSTANCE);
 		// A non-wild pathspec designates ITSELF: a directory in directory form, a file
 		// as given, and nothing at all when it does not exist.
-		assertThat(eval("(directory \"" + dir + "/\")").print()).isEqualTo("(\"" + tempDir + "/\")");
-		assertThat(eval("(directory \"" + dir + "\")").print()).isEqualTo("(\"" + tempDir + "/\")");
-		assertThat(eval("(directory \"" + dir + "/a.txt\")").print()).isEqualTo("(\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(directory \"" + dir + "/\")").print()).isEqualTo("(#P\"" + tempDir + "/\")");
+		assertThat(eval("(directory \"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/\")");
+		assertThat(eval("(directory \"" + dir + "/a.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
 		assertThat(eval("(directory \"" + dir + "/nope.txt\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(directory \"" + dir + "/empty/*.*\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(directory \"" + dir + "/nope/*.*\")")).isEqualTo(LispNil.INSTANCE);
@@ -5387,18 +5387,121 @@ class LispEvaluatorTest {
 		Files.writeString(tempDir.resolve("sub/c.txt"), "c\n");
 		Files.createDirectory(tempDir.resolve("sub/deep"));
 		String dir = tempDir.toString().replace("\\", "\\\\");
-		assertThat(eval("(uiop:directory-exists-p \"" + dir + "\")")).isEqualTo(new LispString(tempDir + "/"));
+		assertThat(eval("(uiop:directory-exists-p \"" + dir + "\")").print()).isEqualTo("#P\"" + tempDir + "/\"");
 		assertThat(eval("(uiop:directory-exists-p \"" + dir + "/a.txt\")")).isEqualTo(LispNil.INSTANCE);
 		assertThat(eval("(uiop:directory-exists-p \"" + dir + "/nope\")")).isEqualTo(LispNil.INSTANCE);
-		assertThat(eval("(uiop:directory-files \"" + dir + "\")").print()).isEqualTo("(\"" + tempDir + "/a.txt\")");
-		assertThat(eval("(uiop:subdirectories \"" + dir + "\")").print()).isEqualTo("(\"" + tempDir + "/sub/\")");
+		assertThat(eval("(uiop:directory-files \"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(uiop:subdirectories \"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/sub/\")");
 		assertThat(evalMulti("""
 				(let ((acc nil))
 				  (uiop:collect-sub*directories "%s" (constantly t) (constantly t)
 				                                (lambda (d) (setq acc (cons d acc))))
 				  (reverse acc))
 				""".formatted(dir)).print())
-			.isEqualTo("(\"" + tempDir + "/\" \"" + tempDir + "/sub/\" \"" + tempDir + "/sub/deep/\")");
+			.isEqualTo("(#P\"" + tempDir + "/\" #P\"" + tempDir + "/sub/\" #P\"" + tempDir + "/sub/deep/\")");
+	}
+
+	@Test
+	void pathnameIsADistinctValue() {
+		// A pathname is an instance carrying its namestring, not the namestring itself:
+		// the predicates, the reader literal and equality all checked
+		// against SBCL 2.6.5.
+		assertThat(eval("(list (pathnamep \"x\") (pathnamep #P\"x\") (pathnamep 42) (pathnamep nil))").print())
+			.isEqualTo("(NIL T NIL NIL)");
+		assertThat(eval("(list (typep #P\"x\" 'pathname) (typep \"x\" 'pathname) (typep #P\"x\" 'structure-object)"
+				+ " (typep #P\"x\" 'standard-object) (typep #P\"x\" 'atom))")
+			.print()).isEqualTo("(T NIL NIL NIL T)");
+		// prin1 prints #P with the namestring escaped; princ prints the bare
+		// namestring, nested elements included (CLHS 22.1.3.11).
+		assertThat(eval("(prin1-to-string #P\"d/a.txt\")")).isEqualTo(new LispString("#P\"d/a.txt\""));
+		assertThat(eval("(princ-to-string #P\"d/a.txt\")")).isEqualTo(new LispString("d/a.txt"));
+		assertThat(eval("(prin1-to-string (list #P\"a b\"))")).isEqualTo(new LispString("(#P\"a b\")"));
+		assertThat(eval("(princ-to-string (list #P\"a b\"))")).isEqualTo(new LispString("(a b)"));
+		assertThat(eval("(format nil \"~A |~S\" #P\"f o\" #P\"f o\")")).isEqualTo(new LispString("f o |#P\"f o\""));
+		// equal compares the namestring; a pathname never equals its namestring.
+		assertThat(eval("(list (equal #P\"a\" #P\"a\") (equal #P\"a\" \"a\") (equal #P\"a\" #P\"b\")"
+				+ " (equalp #P\"a\" #P\"a\"))")
+			.print()).isEqualTo("(T NIL NIL T)");
+		assertThat(eval("(type-of #P\"x\")").print()).isEqualTo("PATHNAME");
+	}
+
+	@Test
+	void pathnameProducersAnswerPathnamesAndConsumersTakeBoth() {
+		// The producers answer pathname values, namestring unwraps, and every
+		// path-taking operator accepts both spellings; expectations
+		// SBCL-checked except where a rontolisp namestring stays relative.
+		assertThat(eval("(namestring #P\"d/a.txt\")")).isEqualTo(new LispString("d/a.txt"));
+		assertThat(eval("(namestring \"d/a.txt\")")).isEqualTo(new LispString("d/a.txt"));
+		assertThat(eval("(pathname \"d/x\")").print()).isEqualTo("#P\"d/x\"");
+		assertThat(eval("(pathname #P\"d/x\")").print()).isEqualTo("#P\"d/x\"");
+		assertThat(eval("(multiple-value-list (parse-namestring \"d/a.txt\"))").print()).isEqualTo("(#P\"d/a.txt\" 7)");
+		assertThat(eval("(merge-pathnames \"b.txt\" \"d/a.sql\")").print()).isEqualTo("#P\"d/b.txt\"");
+		assertThat(eval("(merge-pathnames #P\"b.txt\" #P\"d/a.sql\")").print()).isEqualTo("#P\"d/b.txt\"");
+		assertThat(eval("(make-pathname :name \"x\" :defaults #P\"d/a.txt\")").print()).isEqualTo("#P\"d/x.txt\"");
+		// The component readers take both designator spellings.
+		assertThat(eval("(list (pathname-name #P\"d/a.b.c\") (pathname-type #P\"d/a.b.c\")"
+				+ " (pathname-directory #P\"a/b/c.txt\"))")
+			.print()).isEqualTo("(\"a.b\" \"c\" (:RELATIVE \"a\" \"b\"))");
+		assertThat(eval("(uiop:native-namestring #P\"d/a.txt\")")).isEqualTo(new LispString("d/a.txt"));
+	}
+
+	@Test
+	void pathnameFileOperatorsRoundTripOnTheFilesystem(@TempDir Path tempDir) throws Exception {
+		Files.writeString(tempDir.resolve("a.txt"), "hi\n");
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		// probe-file answers a PATHNAME (the truename is the argument namestring);
+		// truename unwraps through it; a missing file stays nil.
+		assertThat(eval("(probe-file \"" + dir + "/a.txt\")").print()).isEqualTo("#P\"" + tempDir + "/a.txt\"");
+		assertThat(eval("(probe-file #P\"" + dir + "/a.txt\")").print()).isEqualTo("#P\"" + tempDir + "/a.txt\"");
+		assertThat(eval("(probe-file \"" + dir + "/nope\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(truename #P\"" + dir + "/a.txt\")").print()).isEqualTo("#P\"" + tempDir + "/a.txt\"");
+		// open / with-open-file / load / delete-file / ensure-directories-exist /
+		// file-write-date take a pathname argument.
+		assertThat(eval("(with-open-file (in #P\"" + dir + "/a.txt\") (read-line in))"))
+			.isEqualTo(new LispString("hi"));
+		assertThat(eval("(integerp (file-write-date #P\"" + dir + "/a.txt\"))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(ensure-directories-exist #P\"" + dir + "/made/f.txt\")").print())
+			.isEqualTo("#P\"" + tempDir + "/made/f.txt\"");
+		assertThat(Files.isDirectory(tempDir.resolve("made"))).isTrue();
+		assertThat(eval("(delete-file #P\"" + dir + "/a.txt\")")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(Files.exists(tempDir.resolve("a.txt"))).isFalse();
+	}
+
+	@Test
+	void directoryFamilyAnswersPathnames(@TempDir Path tempDir) throws Exception {
+		Files.writeString(tempDir.resolve("a.txt"), "a\n");
+		Files.createDirectory(tempDir.resolve("sub"));
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		assertThat(eval("(directory \"" + dir + "/*.*\")").print())
+			.isEqualTo("(#P\"" + tempDir + "/a.txt\" #P\"" + tempDir + "/sub/\")");
+		assertThat(eval("(directory #P\"" + dir + "/*.txt\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(uiop:directory-files #P\"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/a.txt\")");
+		assertThat(eval("(uiop:subdirectories #P\"" + dir + "\")").print()).isEqualTo("(#P\"" + tempDir + "/sub/\")");
+		assertThat(eval("(uiop:directory-exists-p #P\"" + dir + "\")").print()).isEqualTo("#P\"" + tempDir + "/\"");
+		assertThat(eval("(mapcar #'pathnamep (directory \"" + dir + "/*.*\"))").print()).isEqualTo("(T T)");
+	}
+
+	@Test
+	void pathnameDiscriminatesFromStringContentInLackAndJzonShapes() {
+		// The two library shapes the old pathnameClauseYields heuristic served, now
+		// answered by the type itself: lack's finalize-response cond and jzon's
+		// typecase both discriminate a FILE from TEXT.
+		assertThat(evalMulti("""
+				(defun body-shape (body)
+				  (cond ((or (consp body) (pathnamep body) (and (not (stringp body)) (vectorp body)))
+				         (list body))
+				        (t (list (list body)))))
+				(list (body-shape "hello") (body-shape #P"f.txt") (body-shape '("x")))
+				""").print()).isEqualTo("(((\"hello\")) (#P\"f.txt\") ((\"x\")))");
+		assertThat(eval("(typecase \"text\" (pathname :path) (t :content))").print()).isEqualTo(":CONTENT");
+		assertThat(eval("(typecase #P\"f.json\" (pathname :path) (t :content))").print()).isEqualTo(":PATH");
+		assertThat(eval("(etypecase #P\"a.sql\" (null :none) (pathname :path))").print()).isEqualTo(":PATH");
+		// mito's migrate guard: a pathname passes check-type, a string no longer does.
+		assertThat(evalMulti("(defun m (directory) (check-type directory pathname) :ok) (m #P\"db/\")").print())
+			.isEqualTo(":OK");
+		assertThatThrownBy(() -> evalMulti("(defun m2 (directory) (check-type directory pathname) :ok) (m2 \"db/\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("not of type");
 	}
 
 	@Test
@@ -5744,8 +5847,10 @@ class LispEvaluatorTest {
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
 					"%make-string-input-stream", "%string-stream-contents", "%peek-char", "%set-fill-pointer",
 					"%string-compare", "%run-handlers")
-			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE", "DIRECTORY", "PATHNAME-DIRECTORY")
-			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p")
+			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE", "DIRECTORY", "PATHNAME-DIRECTORY",
+					"PATHNAME", "PARSE-NAMESTRING")
+			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p", "%path-ns",
+					"%probe-file")
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.contains("CHAR-LESSP", "CHAR-GREATERP", "CHAR-NOT-LESSP", "CHAR-NOT-GREATERP", "CHAR-NOT-EQUAL",
@@ -5754,7 +5859,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
 			.isSorted()
-			.hasSize(387);
+			.hasSize(389);
 	}
 
 	@Test
@@ -12036,7 +12141,7 @@ class LispEvaluatorTest {
 				(list (uiop:ensure-directory-pathname "/tmp/x")
 				      (uiop:ensure-directory-pathname "/tmp/x/")
 				      (uiop:delete-file-if-exists "/tmp/rontolisp-no-such-file-9f3a"))
-				""").print()).isEqualTo("(\"/tmp/x/\" \"/tmp/x/\" NIL)");
+				""").print()).isEqualTo("(#P\"/tmp/x/\" #P\"/tmp/x/\" NIL)");
 	}
 
 	@Test

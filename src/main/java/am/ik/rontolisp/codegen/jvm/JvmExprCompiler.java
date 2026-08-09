@@ -498,9 +498,9 @@ final class JvmExprCompiler {
 				}
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
-				case LispNames.OPEN -> JvmOpenCompiler.compile(cons, ctx, className);
+				case LispNames.OPEN -> JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
 				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
-				case LispNames.PROBE_FILE -> JvmProbeFileCompiler.compile(cons, ctx, className);
+				case LispNames.PROBE_FILE_INTERNAL -> JvmProbeFileCompiler.compile(cons, ctx, className);
 				case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
 				case LispNames.SLEEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons, false), ctx, className);
@@ -600,8 +600,9 @@ final class JvmExprCompiler {
 					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
 				case LispNames.PATHNAMEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx, className);
-				case LispNames.FILE_WRITE_DATE, LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL,
-						LispNames.FILE_LENGTH ->
+				case LispNames.FILE_WRITE_DATE ->
+					JvmFileMetaCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className, sym.name());
+				case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.FILE_LENGTH ->
 					JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
 				case LispNames.STREAM_ELEMENT_TYPE -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx,
@@ -959,7 +960,7 @@ final class JvmExprCompiler {
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
 				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);
-				case LispNames.LOAD -> JvmLoadCompiler.compile(cons, ctx, className);
+				case LispNames.LOAD -> JvmLoadCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
 				// A literal top-level require/provide (and the asdf directives) was
 				// consumed by the compile-time LoadInliner pass; anything left is nested
 				// or non-literal, which the compiled runtime reader cannot execute
@@ -1439,6 +1440,17 @@ final class JvmExprCompiler {
 			.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
 					ctx.cp.addNameAndType(ctx.cp.addUtf8(method), ctx.cp.addUtf8(desc)))
 			.index());
+	}
+
+	/**
+	 * Wraps a path-taking builtin's path argument in the pathname-to-namestring unwrap
+	 * ({@link LispMacroExpander#coercePathArg}) -- but ONLY when this compilation's
+	 * instance gate is on. With the gate off no pathname value can exist, and skipping
+	 * the wrap keeps every instance-free program byte-identical to a build that never
+	 * knew about pathnames (the {@code .kb/instance-syntax.md} rule).
+	 */
+	private static LispCons coercePathArgWhenGated(LispCons cons, int argIndex, JvmLispCompiler.Ctx ctx) {
+		return ctx.mayUseInstances ? LispMacroExpander.coercePathArg(cons, argIndex) : cons;
 	}
 
 }

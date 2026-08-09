@@ -17,6 +17,12 @@ no registry lookup and all three backends can render it with one fixed loop.
 
 - A `defstruct` instance prints `#S(NAME :SLOT value ...)`.
 - A `defclass`/`define-condition` instance prints `#<NAME :SLOT value ...>`.
+- The third layout kind, `PATHNAME`, is the ONE fixed layout of the pathname
+  value (`.kb/pathnames.md`): it prints `#P"namestring"` under `prin1` and the
+  bare namestring under `princ` -- a per-kind arm in all three printer loops,
+  never the slot-name syntax -- is seeded layout-only (never in `classes()`,
+  never a struct tag, excluded from the `#S` reader directories), and reads
+  back through the `#P` dispatch rather than `#S`.
 - The `#S`/`#<` frame and the `:` on each slot key are LITERAL syntax, so they
   are emitted under `princ` too (CLHS 22.1.3.12, matching SBCL); only the slot
   VALUES follow the ambient escape mode. `prin1`, `princ`, `format ~s`/`~a`,
@@ -201,7 +207,11 @@ runtime datum carrying initargs. **That case split must stay in step with
 `expandSignalDesignator`**; they are the same analysis written twice.
 
 Do NOT gate on `closRegistry.classes().isEmpty()` / `layouts().isEmpty()`: the
-registry seeds 21 built-in condition classes, so it is never empty.
+registry seeds 21 built-in condition classes, so it is never empty. Since
+todo-304 the scan also answers true for `read` / `read-from-string` / `load`
+heads (and `#'read`/`#'read-from-string`): the emitted runtime reader can
+construct a PATHNAME instance from `#P"..."`, so a read-using program is
+instance-capable.
 
 ## Where the expansions live
 

@@ -4,11 +4,11 @@
 
 Merges the `specified` path onto `defaults` and returns the result -- UIOP's
 defaults-aware variant of `merge-pathnames`, and the one portable libraries call
-to build a path relative to a data directory. A pathname is its namestring in
-rontolisp, so both arguments and the result are strings.
+to build a path relative to a data directory. Both arguments take either
+spelling (a pathname or a namestring); the result is a pathname.
 
 ```lisp
-(uiop:merge-pathnames* "b.txt" "/tmp/")   ; => "/tmp/b.txt"
+(uiop:merge-pathnames* "b.txt" "/tmp/")   ; => #P"/tmp/b.txt"
 ```
 
 Omitting `defaults` merges against `""` (the namestring designating the working

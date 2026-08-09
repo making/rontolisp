@@ -134,11 +134,17 @@ public final class LispInstance implements LispVal {
 	 * Renders the instance in {@code #S(NAME :SLOT value ...)} or
 	 * {@code #<NAME :SLOT value ...>} syntax. The {@code #S}/{@code #<} frame and the
 	 * colon on each slot key are literal syntax and so are emitted under {@code princ}
-	 * too (CLHS 22.1.3.12); only the slot VALUES follow the ambient escape mode.
+	 * too (CLHS 22.1.3.12); only the slot VALUES follow the ambient escape mode. The
+	 * exception is a PATHNAME (CLHS 22.1.3.11): {@code prin1} writes
+	 * {@code #P"namestring"} and {@code princ} writes the bare namestring, with no slot
+	 * syntax at all.
 	 * @param escape true for the readable form ({@code prin1}), false for {@code princ}
 	 * @return the printed text
 	 */
 	private String render(boolean escape) {
+		if (this.layout.kind() == LispLayout.Kind.PATHNAME) {
+			return escape ? "#P" + this.slots[0].print() : this.slots[0].display();
+		}
 		StringBuilder sb = new StringBuilder(this.layout.openDelimiter()).append(this.layout.printName());
 		for (int i = 0; i < this.layout.slotCount(); i++) {
 			sb.append(" :")

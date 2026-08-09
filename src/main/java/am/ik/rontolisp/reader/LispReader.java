@@ -334,6 +334,7 @@ public final class LispReader {
 			case Token.BitVectorToken bits -> readBitVector(bits.bits());
 			case Token.ArrayOpen array -> readArray(array.rank());
 			case Token.StructOpen ignored -> readStruct();
+			case Token.PathnameOpen ignored -> readPathname();
 			case Token.FloatArrayOpen open -> readFloatArray(open.single());
 			case Token.IntVectorOpen open -> readIntVector(open.width());
 			case Token.Quote ignored -> readQuote();
@@ -636,6 +637,18 @@ public final class LispReader {
 			slotValues.add(items.get(i + 1));
 		}
 		return new am.ik.rontolisp.LispStructLiteral(typeName, slotNames, slotValues);
+	}
+
+	// #P"namestring": the lexer guarantees a string token follows the dispatch, so the
+	// pathname VALUE is built right here -- the layout is the fixed LispLayout.PATHNAME,
+	// no registry is involved, and the instance is self-evaluating like a folded #S.
+	private LispVal readPathname() {
+		if (this.pos >= this.tokens.size() || !(this.tokens.get(this.pos) instanceof Token.StringToken str)) {
+			throw err("#P must be followed by a string namestring");
+		}
+		this.pos++;
+		return new am.ik.rontolisp.LispInstance(am.ik.rontolisp.LispLayout.PATHNAME,
+				new LispVal[] { new LispString(str.value()) });
 	}
 
 	// Reads the elements of a #(...)/#nA(...)/#f(...) literal up to the closing ')'.

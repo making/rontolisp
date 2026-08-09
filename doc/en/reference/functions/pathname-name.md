@@ -7,7 +7,8 @@ last `/` and before the LAST dot. A dot at position 0 is part of the name rather
 than a type separator, and a namestring that names no file -- one ending in `/`
 -- answers `nil`.
 
-A rontolisp pathname IS its namestring, so this is pure string work -- nothing is
+Takes a pathname or a namestring; the split is pure string work on the
+namestring -- nothing is
 read from the filesystem and a nonexistent path answers just the same. It splits
 by exactly the rule [`pathname-type`](pathname-type.md) uses for the other half,
 and the one [`make-pathname`](make-pathname.md) defaults `:defaults` with, so the
