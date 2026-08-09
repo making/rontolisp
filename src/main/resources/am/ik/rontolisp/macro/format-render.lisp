@@ -533,9 +533,8 @@
 (defun %fmt-value (ctrl end all out pos i params colon at d)
   (cond ((char= d #\?) (%fmt-recursive ctrl end all out pos i at))
         ((char= d #\p) (%fmt-plural out pos all i colon at))
-        (t
-         (list (%fmt-cat out (%fmt-field (nth i all) params colon at d)) pos
-               (+ i 1) nil))))
+        (t (list (%fmt-cat out (%fmt-field (nth i all) params colon at d)) pos
+                 (+ i 1) nil))))
 
 ;;; ~? / ~@?: the next argument is a control string. Plain ~? takes its arguments
 ;;; from the following argument (a list); ~@? takes them from the remaining

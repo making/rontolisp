@@ -111,13 +111,12 @@
     (swing:status *win*
                   (cond ((= s 1) "  You win!  Click any cell for a new game.")
                         ((= s 2) "  Boom!  Click any cell for a new game.")
-                        (t
-                         (concatenate 'string "  Mines remaining: "
-                                      (princ-to-string
-                                       (if *started*
-                                           (mines-remaining *state*)
-                                           *mines-count*))
-                                      "     (left: open   right: flag)"))))))
+                        (t (concatenate 'string "  Mines remaining: "
+                                        (princ-to-string
+                                         (if *started*
+                                             (mines-remaining *state*)
+                                             *mines-count*))
+                                        "     (left: open   right: flag)"))))))
 
 (defun draw ()
   (dotimes (i (* *w* *h*)) (paint-cell i (floor (/ i *w*)) (mod i *w*)))

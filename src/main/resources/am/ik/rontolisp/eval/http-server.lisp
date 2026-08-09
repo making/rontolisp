@@ -429,17 +429,16 @@
                                  out))))))
              (setq rest (cdr rest)))
            (nreverse out)))
-        (t
-         (let ((out nil) (rest headers))
-           (while (and rest (cdr rest))
-             (let ((name (rontolisp::%http-header-name (car rest))))
-               (unless (rontolisp::%http-drop-header-p name)
-                 (setq out
-                       (cons (cons name
-                              (rontolisp::%http-header-value (car (cdr rest))))
-                             out))))
-             (setq rest (cdr (cdr rest))))
-           (nreverse out)))))
+        (t (let ((out nil) (rest headers))
+             (while (and rest (cdr rest))
+               (let ((name (rontolisp::%http-header-name (car rest))))
+                 (unless (rontolisp::%http-drop-header-p name)
+                   (setq out
+                         (cons (cons name
+                                     (rontolisp::%http-header-value
+                                      (car (cdr rest)))) out))))
+               (setq rest (cdr (cdr rest))))
+             (nreverse out)))))
 
 (rontolisp:async-defun rontolisp::%http-drain (s)
   ;; Drain a rontolisp asynchronous stream into one string. The accumulator is

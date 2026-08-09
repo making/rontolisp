@@ -295,10 +295,9 @@
         ((= c 9) "\\t")
         ((= c 8) "\\b")
         ((= c 12) "\\f")
-        (t
-         (concatenate 'string "\\u00"
-          (subseq "0123456789abcdef" (ash c -4) (+ (ash c -4) 1))
-          (subseq "0123456789abcdef" (logand c 15) (+ (logand c 15) 1))))))
+        (t (concatenate 'string "\\u00"
+            (subseq "0123456789abcdef" (ash c -4) (+ (ash c -4) 1))
+            (subseq "0123456789abcdef" (logand c 15) (+ (logand c 15) 1))))))
 
 (defun rontolisp::%json-out-string (s acc)
   ;; Conses the JSON representation of string s onto acc (fragments in

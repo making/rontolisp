@@ -29,11 +29,10 @@
                ((<= e 22) (* v (com.inuoe.jzon/eisel-lemire::%pow10-exact e)))
              (setq v (* v 1.0d22))
              (setq e (- e 22))))
-          (t
-           (do ((v m) (e (- exp10)))
-               ((<= e 22) (/ v (com.inuoe.jzon/eisel-lemire::%pow10-exact e)))
-             (setq v (/ v 1.0d22))
-             (setq e (- e 22)))))))
+          (t (do ((v m) (e (- exp10)))
+                 ((<= e 22) (/ v (com.inuoe.jzon/eisel-lemire::%pow10-exact e)))
+               (setq v (/ v 1.0d22))
+               (setq e (- e 22)))))))
 
 (defun com.inuoe.jzon/eisel-lemire:make-double (mantissa exp10 neg)
   (let ((d

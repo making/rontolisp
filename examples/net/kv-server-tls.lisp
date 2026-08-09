@@ -35,11 +35,10 @@
 ;; "SET key value" -> ("SET" "key" "value")
 (defun split-words (s)
   (cond ((string= s "") nil)
-        (t
-         (let ((p (position #\space s)))
-           (if p
-               (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
-               (list s))))))
+        (t (let ((p (position #\space s)))
+             (if p
+                 (cons (subseq s 0 p) (split-words (subseq s (+ p 1))))
+                 (list s))))))
 
 ;; ("hello" "world") -> "hello world"
 (defun join-words (ws)

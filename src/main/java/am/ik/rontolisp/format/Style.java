@@ -12,9 +12,12 @@ import org.jspecify.annotations.Nullable;
  *
  * @param kind the layout family
  * @param inlineArgs how many arguments (not counting the operator) stay on the first
- * line; meaningful for {@link Kind#BODY} and {@link Kind#CLAUSES}
+ * line; meaningful for {@link Kind#BODY} and {@link Kind#CLAUSES}. {@link Kind#CLAUSE}
+ * and {@link Kind#DEFMETHOD} read the layout's own number off the form instead, and what
+ * is stored here is only what {@code statements} is judged against
  * @param bodyIndent how far the lines after the first are indented from the opening
- * paren's column; meaningful for {@link Kind#BODY} and {@link Kind#CLAUSES}
+ * paren's column; meaningful for {@link Kind#BODY}, {@link Kind#CLAUSE} and
+ * {@link Kind#CLAUSES}
  * @param childStyle the style forced onto certain children, or {@code null}. This is what
  * lets an operator describe the shape of the lists INSIDE it, which is the only way a
  * binding, clause or local-function definition can be recognized -- structurally
@@ -59,6 +62,14 @@ public record Style(Kind kind, int inlineArgs, int bodyIndent, @Nullable Style c
 		 * is laid out with {@code childStyle} rather than by its own head symbol.
 		 */
 		CLAUSES,
+		/**
+		 * One {@code cond}/{@code case} clause: a predicate, then a body at 1. Like
+		 * {@link #BODY}, except that whether the body starts on the predicate's line is
+		 * decided per clause rather than fixed here -- a bare {@code (t ...)} keeps a
+		 * single body form beside it where a real test does not
+		 * ({@code LispFormatter.clauseInlineArgs}).
+		 */
+		CLAUSE,
 		/**
 		 * {@code do}/{@code do*}: the variable list stays on the first line, the end-test
 		 * clause gets a line of its own indented PAST the body, and the body follows at
@@ -160,6 +171,15 @@ public record Style(Kind kind, int inlineArgs, int bodyIndent, @Nullable Style c
 	 */
 	public static Style clauses(int inlineArgs, Style clauseStyle) {
 		return new Style(Kind.CLAUSES, inlineArgs, 2, clauseStyle, false);
+	}
+
+	/**
+	 * The style of one clause: a predicate, then a body at 1. How much of it stays on the
+	 * predicate's line is read off the clause rather than fixed here.
+	 * @return the style
+	 */
+	public static Style clause() {
+		return new Style(Kind.CLAUSE, 0, 1, null, true);
 	}
 
 	/**

@@ -708,11 +708,10 @@ void main() {
            (setq *tx* *sx*)
            (setq *ty* *sy*)
            (setq *tz* *sz*))
-          (t
-           (let ((s (min-jerk u)))
-             (setq *tx* (+ *sx* (* s (- *gx* *sx*))))
-             (setq *ty* (+ *sy* (* s (- *gy* *sy*))))
-             (setq *tz* (+ *sz* (* s (- *gz* *sz*)))))))))
+          (t (let ((s (min-jerk u)))
+               (setq *tx* (+ *sx* (* s (- *gx* *sx*))))
+               (setq *ty* (+ *sy* (* s (- *gy* *sy*))))
+               (setq *tz* (+ *sz* (* s (- *gz* *sz*)))))))))
 
 ;; --- inverse kinematics (in 3-D): Jacobian DLS, FABRIK, or analytic ------------
 ;;

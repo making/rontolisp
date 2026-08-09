@@ -185,6 +185,8 @@ public final class LispFormatter {
 			case DO -> renderIteration(listing, indent, inner);
 			case LOOP -> renderLoop(listing, indent, inner);
 			case BODY, CLAUSES -> renderBody(listing, indent, style, style.inlineArgs(), style.bodyIndent(), inner);
+			case CLAUSE ->
+				renderBody(listing, indent, style, clauseInlineArgs(listing, indent, inner), style.bodyIndent(), inner);
 			case DEFMETHOD ->
 				renderBody(listing, indent, style, lambdaListIndex(listing.items()), style.bodyIndent(), inner);
 		};
@@ -331,7 +333,7 @@ public final class LispFormatter {
 		}
 		if (index == 2 && index < items.size() && !(items.get(index) instanceof CstNode.LineComment)) {
 			breakLine(indent + 4, items.get(index).trivia().blankLineBefore());
-			render(items.get(index), indent + 4, Style.body(0, 1), closersAfter(items, index, inner));
+			render(items.get(index), indent + 4, Style.clause(), closersAfter(items, index, inner));
 			index++;
 		}
 		layoutRun(items, index, items.size(), breakColumn, false, false, null, inner);
@@ -737,6 +739,9 @@ public final class LispFormatter {
 			// however short it is; one without has nothing to separate.
 			return listing.items().size() > 3;
 		}
+		// A CLAUSE needs no case of its own. It lifts at most ONE body form onto the
+		// predicate's line, so a clause with a body of two never lifts, and the stored 0
+		// gives the same answer here as asking would.
 		int inlineArgs = style.kind() == Style.Kind.DEFMETHOD ? lambdaListIndex(listing.items()) : style.inlineArgs();
 		return listing.items().size() - 1 - inlineArgs >= 2;
 	}
@@ -823,6 +828,124 @@ public final class LispFormatter {
 
 	private static boolean isKeyword(CstNode node) {
 		return node instanceof CstNode.Atom atom && atom.text().length() > 1 && atom.text().charAt(0) == ':';
+	}
+
+	/**
+	 * How much of a clause stays on its predicate's line: its one body form when the body
+	 * is no worse off there, nothing otherwise.
+	 * <p>
+	 * Nothing at all is what a clause used to get, and for a LIST predicate that is
+	 * right: {@code ((funcall less (car a) (car b)) (cons (car a) (merge2 ...)))} reads
+	 * far better with its body below the test than with the body broken open to keep it
+	 * beside a thirty-column predicate. It is wrong only when the predicate has room to
+	 * spare on its line, which is the case of the clause every {@code cond} and
+	 * {@code case} ends with: {@code (t ...)} and {@code (otherwise ...)} were losing a
+	 * whole line to one token.
+	 * <p>
+	 * Two structural conditions come first. A predicate that is not an ATOM is a test the
+	 * reader reads, and its line is not a wasted one. A body of two or more forms may not
+	 * be split at all -- its first form would sit in one column and the rest in another,
+	 * which is the one thing a body may never do.
+	 * <p>
+	 * The third condition is the whole of the width question, and it is asked the way
+	 * every "move it elsewhere" rule here asks: would moving it HELP. The lift buys back
+	 * the predicate's line and pays for it in the columns the body is pushed right, so
+	 * both renderings are measured and the lift is taken only when the body needs no more
+	 * lines beside the predicate than below it, and runs past the margin no more often.
+	 * That is what keeps two failures apart that no width bound on the predicate could:
+	 * sxql's {@code (select-query-state (push where-clause (...-where-clauses query)))},
+	 * whose body fits below on one line and has to be broken open to reach the predicate,
+	 * and cl-ppcre's {@code (function (write-string (cond ...) s))}, where the lift is
+	 * paid for by everything nested inside it -- the compounding that every
+	 * align-under-the-first-element rule here risks.
+	 * @param listing the clause
+	 * @param indent the column its opening paren is at
+	 * @param closers how many closing parens follow its last item
+	 * @return the number of items that stay on the predicate's line
+	 */
+	private int clauseInlineArgs(CstNode.Listing listing, int indent, int closers) {
+		List<CstNode> items = listing.items();
+		if (items.size() != 2 || !(items.get(0) instanceof CstNode.Atom predicate)) {
+			return 0;
+		}
+		CstNode body = items.get(1);
+		// The predicate sits at indent + 1, so the body goes either one space past it or
+		// on the next line at indent + 1.
+		Shape beside = shapeAt(body, indent + 1 + predicate.text().length() + 1, closers);
+		Shape below = shapeAt(body, indent + 1, closers);
+		return beside.lines() <= below.lines() && beside.overruns() <= below.overruns() ? 1 : 0;
+	}
+
+	/**
+	 * What a node costs when written at a given column: the lines it takes and how many
+	 * of them run past the margin.
+	 *
+	 * @param lines how many lines it occupies
+	 * @param overruns how many of those lines are over the margin
+	 */
+	private record Shape(int lines, int overruns) {
+	}
+
+	/**
+	 * Measures a node at a column by WRITING it there, looking at what came out, and
+	 * unwriting it again.
+	 * <p>
+	 * Nothing cheaper is honest, and both cheaper measures were tried first.
+	 * {@link #flat} answers a different question: a form with a one-line rendering that
+	 * fits never had a placement to decide. {@link #narrowest} is a LOWER bound that a
+	 * deep nest beats by a dozen columns -- it charges every element the shallowest
+	 * offset any style could give it, where the real styles align arguments under their
+	 * first sibling -- and that gap is exactly where an align-under-the-first-element
+	 * rule does its damage. A rule that turns on how much room a form really needs has to
+	 * ask the renderer for it.
+	 * <p>
+	 * The trial is a plain {@link #render} into {@link #out} followed by a rollback of
+	 * the three things a render can touch, so what it measures is by construction what
+	 * would be written. It costs what it measures, so it is asked only where the answer
+	 * decides something: a clause's single body form, at its two candidate columns.
+	 * @param node the node
+	 * @param column the column it would start at
+	 * @param closers how many closing parens follow it, which land on its last line
+	 * @return the shape it would have there
+	 */
+	private Shape shapeAt(CstNode node, int column, int closers) {
+		int mark = this.out.length();
+		boolean afterComment = this.afterLineComment;
+		int comments = this.trailingCommentStarts.size();
+		// A line of its own, so the measurement sees the node and nothing else.
+		this.out.append('\n').append(" ".repeat(column));
+		this.afterLineComment = false;
+		render(node, column, null, closers);
+		Shape shape = shapeSince(mark + 1, closers);
+		this.out.setLength(mark);
+		this.afterLineComment = afterComment;
+		this.trailingCommentStarts.subList(comments, this.trailingCommentStarts.size()).clear();
+		return shape;
+	}
+
+	/**
+	 * The shape of everything written since the given offset, counting the closing parens
+	 * that will follow the last line.
+	 * @param from the offset the trial started at
+	 * @param closers how many closing parens follow the last line
+	 * @return the shape
+	 */
+	private Shape shapeSince(int from, int closers) {
+		int lines = 0;
+		int overruns = 0;
+		int lineStart = from;
+		for (int index = from; index <= this.out.length(); index++) {
+			if (index < this.out.length() && this.out.charAt(index) != '\n') {
+				continue;
+			}
+			lines++;
+			int last = index == this.out.length() ? closers : 0;
+			if (index - lineStart + last > this.width) {
+				overruns++;
+			}
+			lineStart = index + 1;
+		}
+		return new Shape(lines, overruns);
 	}
 
 	/**

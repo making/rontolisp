@@ -64,8 +64,13 @@ body by two:
 ; => FIZZBUZZ
 ```
 
-`cond` clauses line up under the first clause. `if` puts its two branches under
-the test, so they read as a pair rather than as a body:
+`cond` clauses line up under the first clause. A clause too wide for one line puts
+its body below its test -- unless the test is a single token like `t` and the body
+is one form, in which case the body stays beside it rather than leaving a line to
+that token, so long as it needs no extra line and no extra width there.
+
+`if` puts its two branches under the test, so they read as a pair rather than as a
+body:
 
 ```lisp
 (let ((threshold (* 10 10)) (small-label "small") (measured (list 1 2 3 4 5 6)))

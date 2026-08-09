@@ -101,11 +101,10 @@
          ;; open sees it all. A provider with nothing to release just answers nil.
          (remhash (nth 0 args) *kv-handles*)
          nil)
-        (t
-         (error 'rontolisp:wit-error
-                :payload :other
-                :message (concatenate 'string "memory store: no such member "
-                                      member)))))
+        (t (error 'rontolisp:wit-error
+                  :payload :other
+                  :message (concatenate 'string "memory store: no such member "
+                                        member)))))
 
 ;;; This is the whole binding: the interface id from the .wit, and a function.
 (rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft" #'memory-store)

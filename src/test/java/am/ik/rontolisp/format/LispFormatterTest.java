@@ -101,6 +101,106 @@ class LispFormatterTest {
 	}
 
 	@Test
+	void keepsAClauseBodyBesideAOneTokenPredicate() {
+		// (t ...) is the clause nearly every cond ends with, and a line holding nothing
+		// but it is a line spent on one token. This body has to break wherever it starts,
+		// so keeping it beside the t costs it no line and saves the clause one.
+		assertThat(LispFormatter.format("""
+				(defun app (env)
+				  (let ((path (getf env :path-info)))
+				    (cond ((string= path "/get") (echo-when env :GET nil))
+				          (t (json-response 404 (rontolisp:plist-hash-table \
+				(list :error "not found" :path path)))))))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defun app (env)
+				  (let ((path (getf env :path-info)))
+				    (cond ((string= path "/get") (echo-when env :GET nil))
+				          (t (json-response 404
+				                            (rontolisp:plist-hash-table
+				                             (list :error "not found" :path path)))))))
+				""");
+	}
+
+	@Test
+	void keepsABodyOfTwoAndAListPredicateOffTheClauseLine() {
+		// The two structural halves of the rule. A body of TWO forms may not be lifted at
+		// all -- its first form would sit in one column and the rest in another, which is
+		// the one thing a body may never do. A LIST predicate is a test the reader reads,
+		// so its line is not a wasted one and its body is better off below it than broken
+		// open to reach it.
+		assertThat(LispFormatter.format("""
+				(defun app (env)
+				  (let ((path (getf env :path-info)))
+				    (cond ((string= path "/get") (echo-when env :GET nil))
+				          (t (json-response 404 (rontolisp:plist-hash-table \
+				(list :error "not found"))) (log-it path))
+				          ((and (stringp path) (search "/x" path)) (json-response 404 \
+				(rontolisp:plist-hash-table (list :error "not found" :path path)))))))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defun app (env)
+				  (let ((path (getf env :path-info)))
+				    (cond ((string= path "/get") (echo-when env :GET nil))
+				          (t
+				           (json-response 404
+				            (rontolisp:plist-hash-table (list :error "not found")))
+				           (log-it path))
+				          ((and (stringp path) (search "/x" path))
+				           (json-response 404
+				                          (rontolisp:plist-hash-table
+				                           (list :error "not found" :path path)))))))
+				""");
+	}
+
+	@Test
+	void keepsABodyThatFitsBelowItsPredicateBelowIt() {
+		// sxql's. The body fits on one line below the predicate, so the clause is two
+		// lines either way -- and lifting it would buy that second line back by breaking
+		// the body open to reach a nineteen-column name. A lift is taken only when it
+		// SAVES a line.
+		assertThat(LispFormatter.format("""
+				(defun add-where-clause (query where-clause)
+				  (etypecase query
+				    (select-query-state (push where-clause \
+				(select-query-state-where-clauses query)))
+				    (update-query-state (push where-clause \
+				(update-query-state-where-clauses query)))))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defun add-where-clause (query where-clause)
+				  (etypecase query
+				    (select-query-state
+				     (push where-clause (select-query-state-where-clauses query)))
+				    (update-query-state
+				     (push where-clause (update-query-state-where-clauses query)))))
+				""");
+	}
+
+	@Test
+	void keepsABodyBelowItsPredicateWhenTheLiftWouldCostItRoom() {
+		// cl-ppcre's, and the reason the rule is decided by rendering both ways rather
+		// than by any bound on the predicate's width: what the lift costs is paid again
+		// by
+		// everything nested inside the body. Lifting :string here pushes its whole
+		// twelve-line body eight columns right and past the margin, so it is refused --
+		// while the (t ...) nested three levels deeper inside it still pays for itself.
+		assertThat(LispFormatter.format("""
+				(defun f (input)
+				  (case input-type
+				    (:string (write-string (cond (simple-calls (apply token (nsubseq target-string \
+				match-start match-end) (map 'list #'reg reg-starts reg-ends))) (t (funcall token \
+				target-string start end))) s))))
+				""".replace("\\\n", ""))).isEqualTo("""
+				(defun f (input)
+				  (case input-type
+				    (:string
+				     (write-string (cond (simple-calls
+				                          (apply token
+				                                 (nsubseq target-string match-start match-end)
+				                                 (map 'list #'reg reg-starts reg-ends)))
+				                         (t (funcall token target-string start end))) s))))
+				""");
+	}
+
+	@Test
 	void alignsLetBindingsAndIndentsTheBodyByTwo() {
 		assertThat(LispFormatter.format("""
 				(let ((alpha (compute-something 1)) (beta (compute-something 2)) (gamma (compute 3)))
@@ -259,7 +359,10 @@ class LispFormatterTest {
 		// columns from column 8 -- but every line of it fits once it breaks, so the
 		// shallow
 		// column would buy it nothing and cost the clause above it its alignment. Only an
-		// argument the alignment itself puts past the margin may ask for the move.
+		// argument the alignment itself puts past the margin may ask for the move. What
+		// is
+		// pinned here is where the CLAUSES sit (column 8, under the first one); the prog1
+		// keeping the t company is the clause rule.
 		assertThat(LispFormatter.format("""
 				(defun next-char-non-extended (lexer)
 				  (cond ((end-of-string-p lexer) nil)
@@ -268,9 +371,8 @@ class LispFormatterTest {
 				""".replace("\\\n", ""))).isEqualTo("""
 				(defun next-char-non-extended (lexer)
 				  (cond ((end-of-string-p lexer) nil)
-				        (t
-				         (prog1 (schar (lexer-str lexer) (lexer-pos lexer))
-				           (incf (lexer-pos lexer))))))
+				        (t (prog1 (schar (lexer-str lexer) (lexer-pos lexer))
+				             (incf (lexer-pos lexer))))))
 				""");
 	}
 

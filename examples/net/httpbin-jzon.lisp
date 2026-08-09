@@ -82,10 +82,9 @@
           ((string= path "/put") (echo-when env :PUT t))
           ((string= path "/patch") (echo-when env :PATCH t))
           ((string= path "/delete") (echo-when env :DELETE t))
-          (t
-           (json-response 404
-                          (rontolisp:plist-hash-table
-                           (list :error "not found" :path path)))))))
+          (t (json-response 404
+                            (rontolisp:plist-hash-table
+                             (list :error "not found" :path path)))))))
 
 ;; The env :raw-body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers an env whose :body is the whole string.

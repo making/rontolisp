@@ -37,9 +37,11 @@ public final class IndentRules {
 
 	/**
 	 * A {@code cond}/{@code case} clause: same shape as a {@link #BINDING} but its tail
-	 * IS a body, so two forms in it never share a line.
+	 * IS a body, so two forms in it never share a line -- and a body of exactly one may
+	 * still keep the predicate company when the predicate is a bare token with room to
+	 * spare, which is what {@link Style.Kind#CLAUSE} decides per clause.
 	 */
-	private static final Style CLAUSE = Style.body(0, 1);
+	private static final Style CLAUSE = Style.clause();
 
 	/**
 	 * A list shaped like a definition -- name, lambda list, then a body at 2: a

@@ -180,11 +180,10 @@
          (concatenate 'string (rontolisp::%url-hex-byte (+ 224 (ash cp -12)))
                       (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -6) 63)))
                       (rontolisp::%url-hex-byte (+ 128 (logand cp 63)))))
-        (t
-         (concatenate 'string (rontolisp::%url-hex-byte (+ 240 (ash cp -18)))
-          (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -12) 63)))
-          (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -6) 63)))
-          (rontolisp::%url-hex-byte (+ 128 (logand cp 63)))))))
+        (t (concatenate 'string (rontolisp::%url-hex-byte (+ 240 (ash cp -18)))
+            (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -12) 63)))
+            (rontolisp::%url-hex-byte (+ 128 (logand (ash cp -6) 63)))
+            (rontolisp::%url-hex-byte (+ 128 (logand cp 63)))))))
 
 (defun rontolisp::%url-unreserved-p (c)
   ;; RFC 3986 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
@@ -259,11 +258,10 @@
   (when (not (stringp name)) (error "query-param expects a string name"))
   (cond ((null q) nil)
         ((not (stringp q)) (error "query-param expects a string or nil query"))
-        (t
-         (let ((params (rontolisp::%url-parse-query q)))
-           (do ((x params (cdr x)))
-               ((null x) nil)
-             (when (string= (car (car x)) name) (return (cdr (car x)))))))))
+        (t (let ((params (rontolisp::%url-parse-query q)))
+             (do ((x params (cdr x)))
+                 ((null x) nil)
+               (when (string= (car (car x)) name) (return (cdr (car x)))))))))
 
 ;; --- splitting ---------------------------------------------------------------
 

@@ -111,10 +111,9 @@
           ((string= path "/put") (echo-when env :PUT t))
           ((string= path "/patch") (echo-when env :PATCH t))
           ((string= path "/delete") (echo-when env :DELETE t))
-          (t
-           (json-response 404
-                          (rontolisp:plist-hash-table
-                           (list :error "not found" :path path)))))))
+          (t (json-response 404
+                            (rontolisp:plist-hash-table
+                             (list :error "not found" :path path)))))))
 
 ;; --- the reactor adapter --------------------------------------------------
 ;; What `clack:clackup :server :reactor` would install, written out.

@@ -94,15 +94,14 @@
      ((not (= (length a) (length (first a)))) (bad-request "a must be square"))
      ((not (number-row-p b (length a)))
       (bad-request "b must be a number array as long as a"))
-     (t
-      (let* ((m (linalg:from-list a)) (det (linalg:det m)))
-        (if (= det 0)
-            (bad-request "a is singular")
-            (json-response 200
-                           (rontolisp:plist-hash-table
-                            (list :x (linalg:to-list
-                                      (linalg:solve m (linalg:from-list b)))
-                                  :det det)))))))))
+     (t (let* ((m (linalg:from-list a)) (det (linalg:det m)))
+          (if (= det 0)
+              (bad-request "a is singular")
+              (json-response 200
+                             (rontolisp:plist-hash-table
+                              (list :x (linalg:to-list
+                                        (linalg:solve m (linalg:from-list b)))
+                                    :det det)))))))))
 
 ;; --- POST /fit : least-squares polynomial fitting ---------------------------
 
@@ -128,28 +127,27 @@
            (bad-request "points must be a non-empty array of [x, y] pairs"))
           ((< (length points) (+ degree 1))
            (bad-request "need at least degree + 1 points"))
-          (t
-           (let* ((xs (mapcar (lambda (p) (first p)) points))
-                  (ys (mapcar (lambda (p) (nth 1 p)) points))
-                  (a (vandermonde xs degree))
-                  (at (linalg:transpose a))
-                  (ata (linalg:matmul at a)))
-             (if (= (linalg:det ata) 0)
-                 (bad-request
-                  "points do not determine the polynomial (duplicate xs?)")
-                 (let* ((coeffs
-                         (linalg:solve ata
-                                       (linalg:dot at (linalg:from-list ys))))
-                        (fitted (linalg:dot a coeffs))
-                        (residuals (linalg:sub (linalg:from-list ys) fitted)))
-                   (json-response 200
-                                  (rontolisp:plist-hash-table
-                                   (list :coefficients (linalg:to-list coeffs)
-                                         :fitted (linalg:to-list fitted)
-                                         :residuals (linalg:to-list residuals)
-                                         :squared-error
-                                         (linalg:dot residuals
-                                                     residuals)))))))))))
+          (t (let* ((xs (mapcar (lambda (p) (first p)) points))
+                    (ys (mapcar (lambda (p) (nth 1 p)) points))
+                    (a (vandermonde xs degree))
+                    (at (linalg:transpose a))
+                    (ata (linalg:matmul at a)))
+               (if (= (linalg:det ata) 0)
+                   (bad-request
+                    "points do not determine the polynomial (duplicate xs?)")
+                   (let* ((coeffs
+                           (linalg:solve ata
+                                         (linalg:dot at (linalg:from-list ys))))
+                          (fitted (linalg:dot a coeffs))
+                          (residuals (linalg:sub (linalg:from-list ys) fitted)))
+                     (json-response 200
+                                    (rontolisp:plist-hash-table
+                                     (list :coefficients (linalg:to-list coeffs)
+                                           :fitted (linalg:to-list fitted)
+                                           :residuals (linalg:to-list residuals)
+                                           :squared-error
+                                           (linalg:dot residuals
+                                                       residuals)))))))))))
 
 ;; --- routing ----------------------------------------------------------------
 
@@ -177,10 +175,9 @@
           ((string= path "/fit")
            (if (eq method :POST) (handle-fit env) (method-not-allowed)))
           ((string= path "/") (usage))
-          (t
-           (json-response 404
-                          (rontolisp:plist-hash-table
-                           (list :error "not found" :path path)))))))
+          (t (json-response 404
+                            (rontolisp:plist-hash-table
+                             (list :error "not found" :path path)))))))
 
 ;; The env :raw-body is an asynchronous stream on every backend; drain it once
 ;; here and hand the helpers an env whose :body is the whole string (getf

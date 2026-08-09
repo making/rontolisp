@@ -82,11 +82,10 @@
          (format t ";; [java store] drop handle ~a~%" (nth 0 args))
          (java:call *java-handles* "remove" (nth 0 args))
          nil)
-        (t
-         (error 'rontolisp:wit-error
-                :payload :other
-                :message (concatenate 'string "java store: no such member "
-                                      member)))))
+        (t (error 'rontolisp:wit-error
+                  :payload :other
+                  :message (concatenate 'string "java store: no such member "
+                                        member)))))
 
 ;;; Bound AFTER the memory store, so this one wins: rontolisp:wit-provide replaces
 ;;; whatever was bound for the interface before it.

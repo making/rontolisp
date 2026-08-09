@@ -146,10 +146,9 @@
           ((>= k n) out)
         (setf (row-major-aref out k)
          (funcall %la-op (row-major-aref %la-x k) (row-major-aref %la-y k))))))
-   (t
-    (linalg::%la-bcast-loop %la-op %la-x %la-y
-                            (linalg::%la-bcast-shape (array-dimensions %la-x)
-                             (array-dimensions %la-y))))))
+   (t (linalg::%la-bcast-loop %la-op %la-x %la-y
+                              (linalg::%la-bcast-shape (array-dimensions %la-x)
+                               (array-dimensions %la-y))))))
 
 (defun linalg::%la-reduce (f a init)
   ;; Folds f over every element of a (row-major), starting from init.
@@ -510,12 +509,11 @@
               ((> minus 1) (error "linalg: reshape allows at most one -1"))
               ((or (= known 0) (/= (mod total known) 0))
                (error "linalg: reshape size mismatch"))
-              (t
-               (let ((inferred (/ total known)) (out nil))
-                 (do ((p (reverse shape) (cdr p)))
-                     ((null p) out)
-                   (setq out
-                         (cons (if (= (car p) -1) inferred (car p)) out)))))))))
+              (t (let ((inferred (/ total known)) (out nil))
+                   (do ((p (reverse shape) (cdr p)))
+                       ((null p) out)
+                     (setq out
+                      (cons (if (= (car p) -1) inferred (car p)) out)))))))))
 
 (defun linalg:reshape (a shape)
   ;; A fresh array with the given shape and the same row-major elements (same

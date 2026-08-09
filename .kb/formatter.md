@@ -65,8 +65,9 @@ A `Style` is `(kind, inlineArgs, bodyIndent, childStyle, statements)`:
 - `CALL` -- arguments align under the first one; trailing `:key value` pairs are
   grouped. `DATA` -- no operator, elements align just inside the delimiter.
   `BODY`/`CLAUSES` -- `inlineArgs` arguments on the operator's line, the rest at
-  `bodyIndent`. `DO`, `LOOP`, `DEFMETHOD` are three shapes that need their own
-  code.
+  `bodyIndent`. `DO`, `LOOP`, `DEFMETHOD`, `CLAUSE` are four shapes that need their
+  own code; the last two read their `inlineArgs` off the form instead of taking it
+  from the `Style`.
 - `childStyle` is the load-bearing one. Structurally `(rec (list acc) body)` is
   indistinguishable from a function call, and `(t (foo) (bar))` from a call to
   `t`; only the ENCLOSING operator knows they are a local-function definition and
@@ -126,6 +127,40 @@ which of them is which.
    parens that follow a form land on its last line only; charging them to its widest
    line makes it look two columns wider than it is and costs a `cond` its alignment.
    This took the corpus measurement below from 481 to 414.
+
+### A clause keeps a single body form beside a bare predicate
+
+A `cond`/`case`/`typecase` clause is `Style.Kind.CLAUSE`, and how much of it stays on
+the predicate's line is read off the FORM (`LispFormatter.clauseInlineArgs`), the way
+`defmethod`'s is. Zero -- the body strictly below the predicate -- is right for a list
+predicate and wrong for `(t ...)`, which loses a whole line to one token.
+
+Two structural conditions come first: the predicate must be an ATOM (a list is a test
+the reader reads, and its line is not a wasted one), and the body must be a SINGLE
+form (splitting a body of two across two columns is the one thing a body may never do).
+
+The third is width, and it is the reason this is not the two-line rule it looks like.
+No bound on the predicate's own width works, because the two ways the lift goes wrong
+are not about the predicate:
+
+- sxql's `(select-query-state (push where-clause (...-where-clauses query)))` -- the
+  body FITS on one line below, so the clause is two lines either way and the lift
+  merely breaks the body open to reach a nineteen-column name.
+- cl-ppcre's `(function (write-string (cond (simple-calls (apply ...)) ...) s))` --
+  the lift COMPOUNDS. What it costs is paid again by every form nested in the body,
+  and three of these stacked walk the line off the page.
+
+So both renderings are measured and the lift is taken only when the body needs no more
+lines beside the predicate than below it and runs past the margin no more often
+(`shapeAt`, which writes the body at a column, looks at what came out, and unwrites
+it). `narrowest` was tried here first and is not honest enough: it is a LOWER bound
+that charges every element the shallowest offset any style could give it, and a deep
+nest beats it by a dozen columns -- exactly the gap this decision turns on. The trial
+costs what it measures, so it is asked only for a clause's single body form at its two
+candidate columns; over the whole corpus that is ~330 decisions and no measurable time.
+
+The `do` end-test clause takes the same style: it is the same shape (a test, then
+result forms at 1), and sharing it means one rule rather than two that drift.
 
 ### Unknown operators are guessed from their name
 
@@ -204,10 +239,13 @@ neither a comment nor a trailing comment", taken over the files
 in the input:
 
 ```
-files=377  code lines over 80: source=1365 formatted=414  files-made-worse=5
+files=417  code lines over 80: source=1429 formatted=417  files-made-worse=5
 ```
 
-Only the `formatted` column is comparable across sessions. The `source` column
-measures the input, and the input moves whenever `examples/` or
-`src/main/resources/` is reformatted -- which every rule change has to do anyway, or
-`rontolisp format --check` over them goes red.
+Only the `formatted` column is comparable across sessions, and only against a run
+over the same tree -- the corpus itself grows (377 files when the number above was
+414, 417 when it was 417). The `source` column measures the input, and the input
+moves whenever `examples/` or `src/main/resources/` is reformatted -- which every
+rule change has to do anyway, or `rontolisp format --check` over them goes red. That
+check is NOT wired into CI, so the tree drifts as files are added: nine were already
+failing it when the clause rule landed.

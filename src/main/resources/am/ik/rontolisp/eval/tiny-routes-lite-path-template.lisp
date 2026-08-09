@@ -102,18 +102,17 @@
                (tiny-routes.middleware.path-template::%lite-match-parts
                 (cdr parts) path end)
                :fail)))
-        (t
-         (let ((limit pos) (len (length path)))
-           (do ()
-               ((or (>= limit len) (char= (char path limit) #\/)))
-             (setq limit (+ limit 1)))
-           (do ((end limit (- end 1)) (found :fail))
-               ((or (<= end pos) (not (eq found :fail))) found)
-             (let ((rest
-                    (tiny-routes.middleware.path-template::%lite-match-parts
-                     (cdr parts) path end)))
-               (unless (eq rest :fail)
-                 (setq found (cons (subseq path pos end) rest)))))))))
+        (t (let ((limit pos) (len (length path)))
+             (do ()
+                 ((or (>= limit len) (char= (char path limit) #\/)))
+               (setq limit (+ limit 1)))
+             (do ((end limit (- end 1)) (found :fail))
+                 ((or (<= end pos) (not (eq found :fail))) found)
+               (let ((rest
+                      (tiny-routes.middleware.path-template::%lite-match-parts
+                       (cdr parts) path end)))
+                 (unless (eq rest :fail)
+                   (setq found (cons (subseq path pos end) rest)))))))))
 
 (defun tiny-routes.middleware.path-template::make-path-template-exact-matcher
     (path-template)

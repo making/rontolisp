@@ -50,9 +50,8 @@
                       (push (logior #x80 (logand (ash c -6) #x3F)) bytes)
                       (push (logior #x80 (logand c #x3F)) bytes))))
               ((< c (if (eq enc :us-ascii) 128 256)) (push c bytes))
-              (t
-               (error "babel: character ~S is not encodable in ~S"
-                      (char string i) enc)))))
+              (t (error "babel: character ~S is not encodable in ~S"
+                        (char string i) enc)))))
     (setq bytes (nreverse bytes))
     ;; A PACKED (unsigned-byte 8) array, like real babel's simple-array result:
     ;; an adjustable array does not carry its declared element type here, and a

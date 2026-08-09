@@ -96,11 +96,10 @@
                    (list (+ sign 127) 128 0 0))
                   ((< e -126) ; underflow -> signed zero (no subnormals)
                    (list sign 0 0 0))
-                  (t
-                   (let ((be (+ e 127)))
-                     (list (+ sign (floor be 2))
-                           (+ (* (mod be 2) 128) (floor m 65536))
-                           (mod (floor m 256) 256) (mod m 256))))))))))
+                  (t (let ((be (+ e 127)))
+                       (list (+ sign (floor be 2))
+                             (+ (* (mod be 2) 128) (floor m 65536))
+                             (mod (floor m 256) 256) (mod m 256))))))))))
 
 (defun %write-f32 (x s) (dolist (b (%f32-bits x)) (write-byte b s)))
 
