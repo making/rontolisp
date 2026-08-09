@@ -964,6 +964,16 @@ before and every existing artifact stays byte-identical.
   when a body follows. `:identity` is accepted and prints NO address: there
   is no object-identity token in the value model, and a per-backend one would break the
   byte-identical cross-backend output the suite rests on.
+- **That type designator follows `*print-escape*`**, because CL writes it with `write`
+  and CLHS 22.1.3.3 drops a symbol's package qualifier when escape is off: `prin1` of a
+  `quri:uri` gives `#<QURI:URI ...>`, `princ` gives `#<URI ...>` (SBCL-checked). Only a
+  package-qualified type can tell the two apart, which is why it went unnoticed until
+  map-set's `#<MAP-SET of 1 element>` (`.kb/defstruct.md`). The escape-off spelling needs
+  no qualifier strip of its own -- the tag prefix attaches to the PACKAGE half
+  (`%struct-MAP-SET:MAP-SET`), so a qualified name's member part is already the bare type
+  name and only the unqualified spelling reaches the prefix-stripping cond. The reference
+  is late (Pass 2), so `injectMvSpillGlobal` counts an un-expanded
+  `print-unreadable-object` operator as the mention that declares `*print-escape*`.
 
 ## Out of scope / known gaps
 

@@ -6,6 +6,8 @@
 
 システム提供のメソッドはありません: どのメソッドも特定化していない型は組み込みの表示のままで、`print-object` メソッドを定義していないプログラムの出力は従来どおりです。
 
+[`defstruct`](../special-forms/defstruct.md) の `(:print-object fn)` / `(:print-function fn)` オプションはこのジェネリック関数に対するメソッドそのものです。したがって両者は交換可能で、同じ型に後から `defmethod` を書けばオプションが定義したメソッドを置き換えます。
+
 組み込み表示のうち `#S(...)`/`#<...>` でない唯一の例外がコンディションです: `princ`/`princ-to-string`/`~A` はその [`:report`](../macros/define-condition.md) を出力します。コンディションクラスに `print-object` メソッドがあれば、どちらのエスケープモードでもそのレポートより優先されます。
 
 `*print-escape*` は呼び出しの周りで束縛されます — `prin1`/`print`/`~S` では `t`、`princ`/`~A` では `nil` — ので、これを見て分岐する移植性のあるメソッド (可読形式か素の形式かを切り替える Common Lisp のイディオム) はここでも同じように動作します。`*print-readably*` は常に `nil` です。

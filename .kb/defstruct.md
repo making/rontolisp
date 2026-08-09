@@ -122,6 +122,65 @@ rejected. This is what makes ironclad's `define-digest-registers` — a
 `(:type (vector (unsigned-byte 32)))` struct over the digest registers — load
 verbatim.
 
+## `(:print-object fn)` / `(:print-function fn)` -- the printer options
+
+Both name the struct's printer as a function DESIGNATOR (a symbol or a lambda
+expression), and both are lowered to ONE thing: a synthesized
+
+```lisp
+(defmethod print-object ((obj <struct>) stream) (funcall fn obj stream [0]))
+```
+
+appended LAST to `expandDefstruct`'s generated forms, so the method body's accessor
+calls read defuns already generated above it and the struct is registered (the
+`registerStruct` in the slot loop) by the time the specializer is parsed. A symbol
+designator is taken with `#'` -- this is a Lisp-2 -- and anything else (a `(lambda
+...)`, an explicit `#'name`) is already the function-valued form.
+`(:print-function fn)` is the CLtL1 spelling and differs ONLY in passing a third
+`depth` argument; nothing tracks a print level, so it is the literal `0`, which is
+what an implementation without a depth counter passes (SBCL passes 0 at top level
+too). An option with NO argument, or with `nil`, leaves the default `#S(...)`
+printing in place.
+
+**There is no printer machinery of its own**: the option rides the `print-object`
+seam (`.kb/clos.md`), which already reaches struct instances on all four backends --
+a struct name parses as a TYPE specializer, so `printObjectTags` collects its
+descendant tags and every printing operator routes through `%print-object-str`.
+Consequences worth knowing:
+
+- On the compile path the generated forms go through `addExpandedDefinition` (like
+  `expandDefclass`'s, which also mixes plain defuns with synthesized defmethods), so
+  the method registers and its dispatcher slot is placed. Route them past it and the
+  raw `defmethod` reaches Pass 1 as an unknown top-level form.
+- A later user `defmethod print-object` on the same struct simply replaces this
+  method -- same generic, same specializer.
+- The seam's LITE limitation applies: the printer fires for the value an operator is
+  HANDED, not for one nested inside a printed list.
+
+**Rejected, not ignored**: the pair is mutually exclusive with `:type` (a typed
+struct IS a plain vector -- no instance tag to specialize on, and silently printing
+the vector is a divergence a program can see), and giving both spellings at once is
+an error, as in CL.
+
+This is what makes map-set (`map-set-20230618-git`, BSD 3-Clause, Robert Smith) load
+verbatim -- its one struct carries a `:print-function` whose output nothing in myway
+or ningle ever reads -- and its `~:P` plural directive needs nothing new: the static
+format expansion declines the directive and falls back to the runtime renderer, which
+has had `%fmt-plural` all along (`.kb/format.md`). Pinned by
+`LispEvaluatorTest#evalDefstructPrint*` / `#evalDefstructRejectsBothPrinterOptions`,
+`Jvm/WasmLispCompilerTest#compileAndRunDefstructPrintObjectAndPrintFunctionOptions`
+(the compile-path half, which ci-spec cannot check without the native binary) and
+the ci-spec case `defstruct-print-object-and-print-function` (all four backends).
+
+`print-unreadable-object`'s `:type t` spells the type designator the way CL writes
+the type SYMBOL at that moment, i.e. as `*print-escape*` decides: `prin1` keeps the
+package qualifier (`#<MAP-SET:MAP-SET of 1 element>`), `princ` writes only the
+symbol's name (`#<MAP-SET of 1 element>`) -- SBCL-checked, and invisible to any
+struct whose name is unqualified. `LispMacroExpander.typeNameOf` therefore reads
+`*print-escape*`, and because that expansion runs in Pass 2 -- long after
+`injectMvSpillGlobal`'s reference scan -- the scan counts an UN-EXPANDED
+`print-unreadable-object` operator as the reference that declares the variable.
+
 ## setf on accessors: the registry
 
 There is no `defsetf`; `LispMacroExpander.expandSetf`'s place list is a
@@ -176,8 +235,10 @@ in `defpackage` makes call sites resolve to the single-colon spelling and fail
 
 ## Out of scope / known gaps
 
-- defstruct options (`(defstruct (name ...) ...)`) throw
-  `UnsupportedOperationException("defstruct options are not supported")`.
+- An UNSUPPORTED defstruct option throws
+  `UnsupportedOperationException("DEFSTRUCT option is not supported: ...")`, naming
+  the clause. The supported set is `:constructor` / `:conc-name` / `:predicate` /
+  `:copier` / `:include` / `:type` / `:print-object` / `:print-function`.
 - No `structurep` (not standard CL); per-struct predicates only.
 - Compiled runtime `eval`: generated functions are callable (normal registry
   defuns), but eval'd forms cannot define structs or setf accessor places

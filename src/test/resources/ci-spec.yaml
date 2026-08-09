@@ -4348,6 +4348,32 @@ cases:
         (print (ci-kw-thing-state it)))
     expected: |
       5
+  - name: defstruct-print-object-and-print-function
+    # The two printer options ride the print-object seam: (:print-object fn) takes
+    # (object stream), the CLtL1 (:print-function fn) an extra depth (0 -- nothing
+    # tracks a print level). map-set's one struct is the :print-function shape, and
+    # its printer is the whole reason the library loads.
+    source: |
+      (defstruct (ci-po-pt (:print-object ci-po-pt-printer)) (x 1) (y 2))
+      (defun ci-po-pt-printer (obj stream)
+        (format stream "<~D,~D>" (ci-po-pt-x obj) (ci-po-pt-y obj)))
+      (defstruct (ci-pf-set (:print-function (lambda (obj stream depth)
+                                               (print-unreadable-object (obj stream :type t)
+                                                 (format stream "of ~D element~:P at ~D"
+                                                         (ci-pf-set-size obj) depth)))))
+        (size 1))
+      (print (make-ci-po-pt))
+      (print (princ-to-string (make-ci-po-pt :x 3)))
+      (format t "~A|~S~%" (make-ci-po-pt) (make-ci-po-pt :y 9))
+      (print (make-ci-pf-set))
+      (princ (make-ci-pf-set :size 3))
+      (terpri)
+    expected: |
+      <1,2>
+      "<3,2>"
+      <1,2>|<1,9>
+      #<CI-PF-SET of 1 element at 0>
+      #<CI-PF-SET of 3 elements at 0>
   - name: read-line-strips-one-trailing-carriage-return
     source: |
       (with-open-file (out "crlf.dat" :direction :output :element-type '(unsigned-byte 8))

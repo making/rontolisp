@@ -12006,6 +12006,67 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalDefstructPrintObjectTakesASymbolDesignator() {
+		// (:print-object fn) rides the print-object seam, so every printing operator
+		// renders the struct through it -- princ/prin1 and format's ~A/~S alike.
+		assertThat(evalMulti("""
+				(defstruct (po-pt (:print-object po-pt-printer)) (x 1) (y 2))
+				(defun po-pt-printer (obj stream)
+				  (format stream "<~D,~D>" (po-pt-x obj) (po-pt-y obj)))
+				(format nil "~A ~S ~A" (make-po-pt) (make-po-pt :x 3) (princ-to-string (make-po-pt :y 9)))
+				""").print()).isEqualTo("\"<1,2> <3,2> <1,9>\"");
+	}
+
+	@Test
+	void evalDefstructPrintFunctionTakesALambdaAndADepthArgument() {
+		// The CLtL1 spelling: the function takes a third `depth` argument, and 0 is
+		// what an implementation that tracks no depth passes. map-set's one struct is
+		// exactly this shape.
+		assertThat(evalMulti("""
+				(defstruct (pf-set (:print-function (lambda (obj stream depth)
+				                                      (print-unreadable-object (obj stream :type t)
+				                                        (format stream "of ~D element~:P at depth ~D"
+				                                                (pf-set-size obj) depth)))))
+				  (size 1))
+				(list (princ-to-string (make-pf-set)) (princ-to-string (make-pf-set :size 3)))
+				""").print())
+			.isEqualTo("(\"#<PF-SET of 1 element at depth 0>\" \"#<PF-SET of 3 elements at depth 0>\")");
+	}
+
+	@Test
+	void evalDefstructPrinterOnATypeStructIsRejected() {
+		// A :type struct IS a plain vector: no instance tag to specialize a
+		// print-object method on, so the combination is refused rather than ignored.
+		assertThatThrownBy(() -> evalMulti("""
+				(defstruct (tv-pt (:type (vector t)) (:print-object tv-printer)) x)
+				""")).hasMessageContaining(":print-object / :print-function on a :type struct");
+	}
+
+	@Test
+	void evalDefstructRejectsBothPrinterOptions() {
+		assertThatThrownBy(() -> evalMulti("""
+				(defstruct (two-pt (:print-object a) (:print-function b)) x)
+				""")).hasMessageContaining("only one of :print-object / :print-function");
+	}
+
+	@Test
+	void evalPrintUnreadableObjectTypeFollowsPrintEscape() {
+		// print-unreadable-object's :type t writes the type SYMBOL the way the current
+		// *print-escape* would: prin1 keeps the package qualifier, princ writes only
+		// the symbol's name (SBCL-checked).
+		assertThat(evalMulti("""
+				(defpackage :puo-lib (:use :cl) (:export :thing :make-thing))
+				(in-package :puo-lib)
+				(defstruct (thing (:print-object (lambda (obj stream)
+				                                   (print-unreadable-object (obj stream :type t)
+				                                     (princ (thing-v obj) stream)))))
+				  (v 7))
+				(in-package :cl-user)
+				(list (princ-to-string (puo-lib:make-thing)) (prin1-to-string (puo-lib:make-thing)))
+				""").print()).isEqualTo("(\"#<THING 7>\" \"#<PUO-LIB:THING 7>\")");
+	}
+
+	@Test
 	void evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage() {
 		// fast-http's callback-data shape: a macro that COMPUTES a symbol name, used
 		// inside a function body of its OWN file and called from another package. The

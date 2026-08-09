@@ -69,9 +69,16 @@ once ningle lands. Other targets, same source: a `--component` serve build
    consumers now do it (`.kb/asdf.md`), so `(ql:quickload "ningle")` resolves
    and splices the whole graph — ningle, myway, map-set, the lack trio — on all
    four backends, and now stops at gap 2 below instead.
-2. **`.todo/302`** — `defstruct (:print-function ...)`. map-set's one struct
-   carries a pretty printer; the option is a hard error, so a transitive
-   dependency of a transitive dependency stops the whole load.
+2. ~~`.todo/302`~~ — **DONE 2026-08-09.** `defstruct (:print-function ...)` and
+   its `:print-object` sibling. Both lower to a synthesized `defmethod
+   print-object` on the struct type, so they cost no printer machinery of their
+   own (`.kb/defstruct.md`); `~:P` needed nothing (the runtime renderer has had
+   `%fmt-plural` all along). `(ql:quickload "map-set")` now loads the verbatim
+   upstream file and a map-set prints `#<MAP-SET of N element(s)>` — SBCL-identical
+   — on all four backends, and `(ql:quickload "ningle")` LOADS. Same pass, because
+   the map-set printer is what exposed it: `print-unreadable-object`'s `:type t`
+   now follows `*print-escape*` (qualified under `prin1`, bare under `princ`), which
+   is how CL writes the type symbol.
 3. **`.todo/303`** — a closure over a LOOP `for (name val) on ... by #'cddr`
    variable sees NIL. ningle compiles a route's requirements into closures over
    exactly those variables, so **every requirement silently never matches** —
@@ -201,8 +208,8 @@ where ningle and a route-list router genuinely differ, and it exercises
 
 ## Work
 
-- Land `.todo/302` (the remaining load blocker; `.todo/301` is in), then
-  `.todo/303` and `.todo/304`, then gap 5 above.
+- Both load blockers are in (`.todo/301`, `.todo/302`), so `(ql:quickload
+  "ningle")` already loads: land `.todo/303` and `.todo/304`, then gap 5 above.
 - Verify `(ql:quickload "ningle")` UNPATCHED and the two programs above on all
   four backends. The compile paths must be driven through `ql:quickload` in the
   program, not through `load` of the dist files — that is the path `LoadInliner`

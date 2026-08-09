@@ -8587,8 +8587,9 @@ public final class LispMacroExpander {
 		}
 		// (defstruct (name option...) slot...): the supported options are
 		// (:constructor name [boa-lambda-list]), (:conc-name prefix-or-nil),
-		// (:copier name-or-nil), (:predicate name-or-nil), (:include parent) and
-		// (:type (vector ...)); anything else is a hard error naming the clause.
+		// (:copier name-or-nil), (:predicate name-or-nil), (:include parent),
+		// (:type (vector ...)) and the printer pair (:print-object fn) /
+		// (:print-function fn); anything else is a hard error naming the clause.
 		LispSymbol nameSym;
 		// Every (:constructor ...) option defines its OWN function, so this is a list:
 		// esrap's failed-parse declares both a full make-failed-parse and a
@@ -8608,6 +8609,13 @@ public final class LispMacroExpander {
 		// inherited slots, keyed by the slot's unqualified name.
 		java.util.Map<String, LispVal> includeOverrides = new java.util.LinkedHashMap<>();
 		boolean typedVector = false;
+		// (:print-object fn) / (:print-function fn): the struct's printer, as a function
+		// DESIGNATOR. Both ride the print-object seam (.kb/clos.md) as a generated
+		// defmethod rather than a printer mechanism of their own; the CLtL1
+		// :print-function spelling only differs in taking a third `depth` argument.
+		LispVal printer = null;
+		boolean printerTakesDepth = false;
+		boolean printerGiven = false;
 		if (parts.get(1) instanceof LispSymbol plain) {
 			nameSym = plain;
 		}
@@ -8699,6 +8707,19 @@ public final class LispMacroExpander {
 									ovParts.size() >= 2 ? ovParts.get(1) : LispNil.INSTANCE);
 						}
 					}
+					case ":PRINT-OBJECT", ":PRINT-FUNCTION" -> {
+						// The two spellings of one thing, and CL forbids giving both.
+						// The argument is a function designator; supplying none (or nil)
+						// leaves the default #S(...) printing in place, which is what
+						// "the structure printer is not overridden" means.
+						if (printerGiven) {
+							throw new UnsupportedOperationException(LispNames.DEFSTRUCT
+									+ " takes only one of :print-object / :print-function: " + parts.get(1).print());
+						}
+						printerGiven = true;
+						printer = optParts.size() > 1 && !(optValue instanceof LispNil) ? optValue : null;
+						printerTakesDepth = ":PRINT-FUNCTION".equals(optName);
+					}
 					case ":TYPE" -> {
 						// Only the vector shape: the struct is a plain vector (no
 						// instance
@@ -8721,6 +8742,13 @@ public final class LispMacroExpander {
 		else {
 			throw new UnsupportedOperationException(
 					LispNames.DEFSTRUCT + " options are not supported: " + parts.get(1).print());
+		}
+		if (printer != null && typedVector) {
+			// A :type struct IS a plain vector: no instance tag, so nothing to
+			// specialize a print-object method on. Rejected rather than ignored --
+			// silently printing the vector is a divergence a program can see.
+			throw new UnsupportedOperationException(LispNames.DEFSTRUCT
+					+ " :print-object / :print-function on a :type struct is not supported: " + parts.get(1).print());
 		}
 		String structName = nameSym.name();
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
@@ -8926,7 +8954,61 @@ public final class LispMacroExpander {
 				structAccessors.put(accessor, i + 1);
 			}
 		}
+		if (printer != null) {
+			if (closRegistry == null) {
+				throw new UnsupportedOperationException(LispNames.DEFSTRUCT
+						+ " :print-object / :print-function is not supported here (no type registry): " + cons.print());
+			}
+			// LAST, so the method body's accessor calls read defuns already generated
+			// above -- and so the struct is registered (registerStruct ran with the slot
+			// loop), which is what lets the method specialize on its name.
+			forms.add(structPrintObjectMethod(structName, printer, printerTakesDepth));
+		}
 		return forms;
+	}
+
+	/**
+	 * The parameter names of the {@code print-object} method a struct printer generates.
+	 */
+	private static final String STRUCT_PRINT_OBJ_VAR = "__struct_pobj";
+
+	private static final String STRUCT_PRINT_STREAM_VAR = "__struct_pstream";
+
+	/**
+	 * The {@code print-object} method a {@code defstruct}'s {@code (:print-object fn)} /
+	 * {@code (:print-function fn)} option generates:
+	 *
+	 * <pre>
+	 * (defmethod print-object ((obj &lt;struct&gt;) stream) (funcall fn obj stream [0]))
+	 * </pre>
+	 *
+	 * Routing through the ordinary {@code print-object} seam (.kb/clos.md) rather than a
+	 * printer mechanism of its own is what makes the option cost nothing new: the seam
+	 * already reaches struct instances on all four backends, and a later user
+	 * {@code defmethod print-object} on the same struct simply replaces this method.
+	 * @param structName the canonical struct name (the method's specializer)
+	 * @param printer the function designator the option carried
+	 * @param takesDepth whether it is the CLtL1 {@code :print-function} spelling, whose
+	 * function takes a third {@code depth} argument
+	 * @return the {@code defmethod} form
+	 */
+	private static LispVal structPrintObjectMethod(String structName, LispVal printer, boolean takesDepth) {
+		LispSymbol obj = new LispSymbol(STRUCT_PRINT_OBJ_VAR);
+		LispSymbol stream = new LispSymbol(STRUCT_PRINT_STREAM_VAR);
+		// A function DESIGNATOR: a symbol names a function, and this is a Lisp-2, so it
+		// has to be taken with #'; anything else -- a (lambda ...) expression, an
+		// explicit #'name -- is already the function-valued form.
+		LispVal fn = printer instanceof LispSymbol ? listToCons(List.of(new LispSymbol(LispNames.FUNCTION), printer))
+				: printer;
+		List<LispVal> call = new java.util.ArrayList<>(List.of(new LispSymbol(LispNames.FUNCALL), fn, obj, stream));
+		if (takesDepth) {
+			// CLtL1's third argument is the current *print-level* depth. Nothing here
+			// tracks one, and 0 is what an implementation without a depth counter passes.
+			call.add(new LispInteger(0));
+		}
+		LispVal specialized = listToCons(List.of(obj, new LispSymbol(structName)));
+		return listToCons(List.of(new LispSymbol(LispNames.DEFMETHOD), new LispSymbol(LispNames.PRINT_OBJECT),
+				listToCons(List.of(specialized, stream)), listToCons(call)));
 	}
 
 	/** A {@code (vector v...)} construction form (the :type vector struct instance). */
@@ -14737,7 +14819,12 @@ public final class LispMacroExpander {
 				out.add(rewriteSetfFunctionDefun((LispCons) form, structAccessors));
 			}
 			else if (isDefstructForm(form)) {
-				out.addAll(expandDefstruct((LispCons) form, structAccessors, closRegistry, exported));
+				// Plain defuns, plus -- for a (:print-object ...) / (:print-function ...)
+				// struct -- a synthesized print-object defmethod, which needs the same
+				// registration + dispatcher placement a top-level defmethod gets.
+				for (LispVal generated : expandDefstruct((LispCons) form, structAccessors, closRegistry, exported)) {
+					addExpandedDefinition(generated, out, closRegistry, dispatcherSlots, placedDispatchers);
+				}
 			}
 			else if (isNamedForm(form, LispNames.DEFCLASS)) {
 				// The expansion mixes plain defuns (constructor) with synthesized
@@ -20291,12 +20378,22 @@ public final class LispMacroExpander {
 	/**
 	 * The type NAME of a value as a string: the {@code %class-designator} answer with the
 	 * {@code %struct-}/{@code %class-} instance-tag prefix stripped (the prelude
-	 * {@code type-of}'s rule, minus the {@code intern} a printed name does not need). The
-	 * tag spelling is read with {@code prin1-to-string}, since {@code symbol-name} would
-	 * drop the package qualifier a canonical type name carries.
+	 * {@code type-of}'s rule, minus the {@code intern} a printed name does not need).
+	 *
+	 * <p>
+	 * The designator is spelled the way CL writes the type SYMBOL at that moment, which
+	 * is what {@code *print-escape*} decides: {@code prin1} keeps the package qualifier
+	 * ({@code #<MAP-SET:MAP-SET of 1 element>}), {@code princ} writes only the symbol's
+	 * name ({@code #<MAP-SET of 1 element>}) -- SBCL-checked, and the difference is
+	 * visible to any program whose struct/class lives in a package of its own. The
+	 * escape-off spelling needs no qualifier strip of its own: the tag prefix attaches to
+	 * the PACKAGE half ({@code %struct-MAP-SET:MAP-SET}), so a qualified name's member
+	 * part is already the bare type name and only the unqualified spelling reaches the
+	 * cond below.
 	 */
 	private static LispVal typeNameOf(LispVal obj) {
 		String prefix = "__ptn" + MV_COUNTER.getAndIncrement();
+		LispSymbol designator = new LispSymbol(prefix + "_d");
 		LispSymbol text = new LispSymbol(prefix + "_s");
 		LispSymbol size = new LispSymbol(prefix + "_n");
 		List<LispVal> clauses = new java.util.ArrayList<>();
@@ -20311,10 +20408,11 @@ public final class LispMacroExpander {
 			clauses.add(listToCons(List.of(test, fmtCall(LispNames.SUBSEQ, text, new LispInteger(length)))));
 		}
 		clauses.add(listToCons(List.of(LispTrue.INSTANCE, text)));
+		LispVal spelled = makeIf(new LispSymbol(LispNames.PRINT_ESCAPE_VAR),
+				fmtCall(LispNames.PRIN1_TO_STRING, designator), fmtCall(LispNames.PRINC_TO_STRING, designator));
 		LispVal bindings = listToCons(List.of(
-				listToCons(List.of(text,
-						fmtCall(LispNames.PRIN1_TO_STRING, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj)))),
-				listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
+				listToCons(List.of(designator, fmtCall(LispNames.CLASS_DESIGNATOR_INTERNAL, obj))),
+				listToCons(List.of(text, spelled)), listToCons(List.of(size, fmtCall(LispNames.LENGTH, text)))));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, listToCons(clauses)));
 	}
 
@@ -26534,8 +26632,13 @@ public final class LispMacroExpander {
 			usesFloatFormat = usesFloatFormat || usesSymbol(form, LispNames.READ_DEFAULT_FLOAT_FORMAT);
 		}
 		for (String name : PRINTER_MODE_VARS.keySet()) {
+			// print-unreadable-object READS *print-escape* to decide how it spells the
+			// :type designator, and its expansion happens in Pass 2 -- long after this
+			// scan -- so the un-expanded operator has to count as the reference. Nothing
+			// else in a program that only prints its own #<...> forms mentions the name.
+			boolean escapeReader = LispNames.PRINT_ESCAPE_VAR.equals(name);
 			for (LispVal form : program) {
-				if (usesSymbol(form, name)) {
+				if (usesSymbol(form, name) || (escapeReader && usesSymbol(form, LispNames.PRINT_UNREADABLE_OBJECT))) {
 					printerVars.add(name);
 					break;
 				}

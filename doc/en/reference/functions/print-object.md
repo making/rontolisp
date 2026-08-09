@@ -6,6 +6,8 @@ The generic function the printer consults. Defining a [`defmethod`](../special-f
 
 There is no system method: a type no method specializes on keeps the built-in rendering, and a program that defines no `print-object` method prints exactly as it did before.
 
+A [`defstruct`](../special-forms/defstruct.md) `(:print-object fn)` / `(:print-function fn)` option is exactly a method on this generic, so the two are interchangeable and a later `defmethod` on the same type replaces the option's method.
+
 The one built-in rendering that is not `#S(...)`/`#<...>` is a CONDITION's: `princ`/`princ-to-string`/`~A` write its [`:report`](../macros/define-condition.md) instead. A `print-object` method on a condition class wins over that report, in both escape modes.
 
 `*print-escape*` is bound around the call — `t` for `prin1`/`print`/`~S`, `nil` for `princ`/`~A` — so a portable method that branches on it (the Common Lisp idiom for rendering readably or bare) behaves the same way here. `*print-readably*` is always `nil`.

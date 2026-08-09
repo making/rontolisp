@@ -9394,6 +9394,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunDefstructPrintObjectAndPrintFunctionOptions() throws Exception {
+		// Both printer options lower to a synthesized print-object defmethod, which has
+		// to go through the same registration + dispatcher placement a top-level
+		// defmethod gets -- the compile path is the half ci-spec cannot check without
+		// the native binary. The CLtL1 :print-function spelling takes the extra depth.
+		assertThat(compileAndRun("""
+				(defstruct (dpo-pt (:print-object dpo-pt-printer)) (x 1) (y 2))
+				(defun dpo-pt-printer (obj stream)
+				  (format stream "<~D,~D>" (dpo-pt-x obj) (dpo-pt-y obj)))
+				(defstruct (dpf-set (:print-function (lambda (obj stream depth)
+				                                       (print-unreadable-object (obj stream :type t)
+				                                         (format stream "of ~D element~:P at ~D"
+				                                                 (dpf-set-size obj) depth)))))
+				  (size 1))
+				(print (list (princ-to-string (make-dpo-pt)) (prin1-to-string (make-dpo-pt :y 9))
+				             (princ-to-string (make-dpf-set)) (princ-to-string (make-dpf-set :size 3))))
+				"""))
+			.isEqualTo("(\"<1,2>\" \"<1,9>\" \"#<DPF-SET of 1 element at 0>\" \"#<DPF-SET of 3 elements at 0>\")");
+	}
+
+	@Test
 	void compileAndRunListSpecializedMethodExcludesClassInstances() throws Exception {
 		// An instance is a tagged cons internally, but must dispatch to the
 		// standard-object/default method, not a list/cons/sequence-specialized one.

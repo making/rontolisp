@@ -11,9 +11,19 @@
 
 生成される名前は通常の関数なので、第一級の値として使えます（`#'point-x`、`mapcar`、`funcall`）。コンパイル経路では `defstruct` はトップレベルフォームとしてのみサポートされます。インタープリタでは REPL や `load` 経由でも利用できます。[ユーザー定義パッケージ](../packages.md#ユーザー定義パッケージdefpackage)の下では、生成される名前はそのパッケージの内部シンボル（`geo::make-pt`）としてインターンされます。生成される名前を `defpackage` の `:export` clause に列挙することはサポートされません。
 
-インスタンスはリストではなく第一級の構造体オブジェクトです。`print` は標準の `#S(NAME :SLOT value ...)` 構文で表示します。インスタンスに対する `consp`/`listp` は `nil` で、`equal` はスロット単位で比較します（Common Lisp では異なる構造体は `equal` になりません）。オプション構文 `(defstruct (name option...) slot...)` は `(:constructor name)`、`(:conc-name prefix)`、`(:predicate name)`、`(:copier name)`、`(:include parent (slot new-default) ...)`、`(:type (vector ...))` をすべてのバックエンドでサポートし、スロットの前のドキュメント文字列は受理されて破棄されます。BOA コンストラクタ — `(:constructor name (lambda-list))` — はライト形式でサポートされます: ラムダリストに名前があるスロットはそのパラメータを読み、それ以外のスロットはコンストラクタ本体で initform を評価します。スロットオプション `:type` と `:read-only` はパースされて無視されます。構造体名は [`defmethod`](defmethod.md) のパラメータ specializer として使用できます。また、コンパイル済みプログラムのランタイム `eval` は `defstruct` もアクセサの `setf` place も認識しません（生成された関数を `eval` から呼び出すことは可能です）。
+インスタンスはリストではなく第一級の構造体オブジェクトです。`print` は標準の `#S(NAME :SLOT value ...)` 構文で表示します。インスタンスに対する `consp`/`listp` は `nil` で、`equal` はスロット単位で比較します（Common Lisp では異なる構造体は `equal` になりません）。オプション構文 `(defstruct (name option...) slot...)` は `(:constructor name)`、`(:conc-name prefix)`、`(:predicate name)`、`(:copier name)`、`(:include parent (slot new-default) ...)`、`(:type (vector ...))`、`(:print-object fn)`、`(:print-function fn)` をすべてのバックエンドでサポートし、スロットの前のドキュメント文字列は受理されて破棄されます。BOA コンストラクタ — `(:constructor name (lambda-list))` — はライト形式でサポートされます: ラムダリストに名前があるスロットはそのパラメータを読み、それ以外のスロットはコンストラクタ本体で initform を評価します。スロットオプション `:type` と `:read-only` はパースされて無視されます。構造体名は [`defmethod`](defmethod.md) のパラメータ specializer として使用できます。また、コンパイル済みプログラムのランタイム `eval` は `defstruct` もアクセサの `setf` place も認識しません（生成された関数を `eval` から呼び出すことは可能です）。
 
 `(:include parent)` は構造体の単一継承です。親のスロットが先に並ぶため、親のアクセサ・親の述語・`(typep x 'parent)` はいずれも子のインスタンスに対して機能し、子は自分のスロットをその後ろに追加します。末尾のスロット上書き — `(:include parent (slot new-default) ...)` — は継承したスロットのデフォルトを**この子のレイアウトでのみ**差し替えます（親自身のデフォルトは変わりません）。スロットのインデックスは継承したままなので、親のアクセサからそのまま読めます。親が定義していないスロットを上書きしようとするとエラーです。`(:type (vector ...))` は「インスタンス」を構造体オブジェクトではなく素のベクタにします。要素型は無視され（rontolisp のベクタは要素型を持ちません）、アクセサは `aref` 読み出しと `setf` 可能な place になり、コピーアは `copy-seq` です。構造体タグを持たないため、この型には述語も `#S(...)` 構文もなく、`defmethod` の specializer にもできません（Common Lisp も同様です — 型指定された構造体は `structure-object` ではありません）。`:type` 構造体への `:include` はエラーです。
+
+`(:print-object fn)` と `(:print-function fn)` は、`#S(...)` 構文の代わりに構造体専用のプリンタを与えます。`fn` は関数指定子（シンボルまたは `lambda` 式）で、`:print-object` は `(object stream)`、古い綴りの `:print-function` は `(object stream depth)` で呼び出します。`depth` は常に `0` です（プリントレベルは追跡していません）。どちらも構造体型に対する [`print-object`](defmethod.md) メソッドそのものなので、すべての出力操作 — `print`、`princ`、`prin1`、`format` の `~A`/`~S` — がこれを使い、後から同じ型に `defmethod print-object` を書けば置き換わります。本体には [`print-unreadable-object`](../macros/print-unreadable-object.md) を使うのが通例です。両方のオプションを与えるのはエラーで、どちらかを `:type` と併用するのもエラーです（型指定された構造体は素のベクタであり、ディスパッチする型を持ちません）。
+
+```lisp
+(defstruct (celsius (:print-object (lambda (obj stream)
+                                     (format stream "~D deg" (celsius-c obj)))))
+  (c 0))
+(list (princ-to-string (make-celsius :c 21)) (format nil "~A" (make-celsius)))
+; => ("21 deg" "0 deg")
+```
 
 ```lisp
 (defstruct shape (kind :none))
