@@ -78,7 +78,7 @@ and lack being in the module so that `app` can be an ordinary Clack application.
 | | [`../hello`](../hello) | this | [`../httpbin-clack`](../httpbin-clack) |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | the same, with five echo endpoints |
-| module | 563 B | 370,765 B raw / **102,172 B gzip** | 383,668 B / 105,361 B gzip |
+| module | 563 B | 248,356 B raw / **75,334 B gzip** | 264,277 B / 79,438 B gzip |
 | imports | zero | **zero** — instantiated with `{}`, no WASI shim | zero |
 | `_initialize` | none (no top-level forms) | ~5 ms — clack's load time, `clackup` included | ~5 ms |
 | warm request | | **0.013 ms** | 0.038 ms |
@@ -88,7 +88,7 @@ Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
 `src/worker.wasm`.
 On the real edge, `wrangler deploy` reported **1608.77 KiB upload / 358.27 KiB
 gzip** and a **Worker Startup Time of 30 ms** — measured before the module
-shrank to today's 362 KB; the next deploy will report the smaller bundle — and
+shrank to today's 248 KB; the next deploy will report the smaller bundle — and
 both routes answer there — verified after deploying, not inferred.
 
 So the cost of "it is a real Clack application" is startup and bundle size, paid

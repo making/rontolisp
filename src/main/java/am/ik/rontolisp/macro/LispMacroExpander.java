@@ -8969,6 +8969,318 @@ public final class LispMacroExpander {
 		return bound;
 	}
 
+	// ------------------------------------------------------------------
+	// CLOS-definition name summaries for the AST tree-shaker
+	// (eval.LibraryDefunPruner). Each mirrors the NAME half of the expansion
+	// beside it -- defstructDefinedNames follows expandDefstruct's generated
+	// spellings, classDefinedNames follows parseDefclassSlot's option grammar --
+	// and must move with it: a name the summary misses makes the pruner drop a
+	// definition a kept call site still needs, which fails the compile loudly.
+	// All summaries parse TOLERANTLY (an unsupported option contributes no
+	// names): the pruner runs before expansion, and a kept malformed form still
+	// reports through the expansion's own error.
+
+	/**
+	 * The names a top-level {@code defstruct} defines, as the tree-shaker's keep-keys:
+	 * the struct name, every constructor, the predicate, the copier and the accessors
+	 * over the OWN slots -- each in both the exported and the internal qualified
+	 * spelling, since the pruner has no export oracle. Accessors over {@code :include}d
+	 * slots need the parent chain's slot names, which only the caller can resolve --
+	 * {@link StructDefinedNames#accessorSpellings} is the per-slot generator it uses.
+	 * @param form the top-level form
+	 * @return the summary, or null when the form is not a {@code defstruct}
+	 */
+	public static @Nullable StructDefinedNames defstructDefinedNames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.DEFSTRUCT.equals(op.name()) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		LispSymbol nameSym;
+		List<String> constructorNames = new java.util.ArrayList<>();
+		boolean defaultConstructor = true;
+		String customPredicate = null;
+		boolean suppressPredicate = false;
+		String customCopier = null;
+		boolean suppressCopier = false;
+		String concNameOverride = null;
+		boolean concNameGiven = false;
+		String includeParent = null;
+		if (parts.get(1) instanceof LispSymbol plain) {
+			nameSym = plain;
+		}
+		else if (parts.get(1) instanceof LispCons header && header.car() instanceof LispSymbol headerName) {
+			nameSym = headerName;
+			for (LispVal option : header.toList().subList(1, header.toList().size())) {
+				if (!(option instanceof LispCons optCons) || !(optCons.car() instanceof LispSymbol optSym)
+						|| !optCons.isProperList()) {
+					continue;
+				}
+				List<LispVal> optParts = optCons.toList();
+				LispVal optValue = optParts.size() > 1 ? optParts.get(1) : LispNil.INSTANCE;
+				switch (optSym.name()) {
+					case ":CONSTRUCTOR" -> {
+						defaultConstructor = false;
+						if (optValue instanceof LispSymbol s) {
+							constructorNames.add(s.name());
+						}
+					}
+					case ":CONC-NAME" -> {
+						concNameGiven = true;
+						if (optValue instanceof LispSymbol s) {
+							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
+							String raw = cqn == null ? s.name() : cqn.member();
+							concNameOverride = raw.startsWith(":") ? raw.substring(1) : raw;
+						}
+						else if (optValue instanceof LispString s) {
+							concNameOverride = s.value();
+						}
+						else {
+							concNameOverride = "";
+						}
+					}
+					case ":PREDICATE" -> {
+						if (optValue instanceof LispSymbol s) {
+							customPredicate = s.name();
+						}
+						else {
+							suppressPredicate = true;
+						}
+					}
+					case ":COPIER" -> {
+						if (optValue instanceof LispSymbol s) {
+							customCopier = s.name();
+						}
+						else {
+							suppressCopier = true;
+						}
+					}
+					case ":INCLUDE" -> {
+						if (optValue instanceof LispSymbol inc) {
+							includeParent = inc.name();
+						}
+					}
+					default -> {
+					}
+				}
+			}
+		}
+		else {
+			return null;
+		}
+		String structName = nameSym.name();
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
+		String base = qn == null ? structName : qn.member();
+		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
+		List<String> defined = new java.util.ArrayList<>(prunerSpellings(structName));
+		if (defaultConstructor) {
+			defined.addAll(spellingsInPackageOf(structName, affixFor("make-", base) + base));
+		}
+		for (String ctor : constructorNames) {
+			defined.addAll(prunerSpellings(ctor));
+		}
+		if (!suppressPredicate) {
+			defined.addAll(customPredicate != null ? prunerSpellings(customPredicate)
+					: spellingsInPackageOf(structName, base + affixFor("-p", base)));
+		}
+		if (!suppressCopier) {
+			defined.addAll(customCopier != null ? prunerSpellings(customCopier)
+					: spellingsInPackageOf(structName, affixFor("copy-", base) + base));
+		}
+		List<String> ownSlotBases = new java.util.ArrayList<>();
+		List<LispVal> slotSpecs = parts.subList(2, parts.size());
+		if (!slotSpecs.isEmpty() && slotSpecs.get(0) instanceof LispString) {
+			slotSpecs = slotSpecs.subList(1, slotSpecs.size());
+		}
+		for (LispVal spec : slotSpecs) {
+			LispSymbol slot = spec instanceof LispSymbol s ? s
+					: spec instanceof LispCons specCons && specCons.car() instanceof LispSymbol s ? s : null;
+			if (slot != null) {
+				PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(slot.name());
+				ownSlotBases.add(slotQn == null ? slot.name() : slotQn.member());
+			}
+		}
+		List<String> instantiators = new java.util.ArrayList<>(prunerSpellings(structName));
+		if (defaultConstructor) {
+			instantiators.addAll(spellingsInPackageOf(structName, affixFor("make-", base) + base));
+		}
+		for (String ctor : constructorNames) {
+			instantiators.addAll(prunerSpellings(ctor));
+		}
+		return new StructDefinedNames(structName, includeParent, List.copyOf(ownSlotBases), List.copyOf(defined),
+				List.copyOf(instantiators), concName, base);
+	}
+
+	/**
+	 * The name summary of one {@code defstruct}, for the tree-shaker.
+	 *
+	 * @param structName the struct name as written (resolved spelling)
+	 * @param includeParent the {@code :include} parent name, or null
+	 * @param ownSlotBases the struct's OWN slot base names, in order
+	 * @param definedNames the non-accessor keep-keys: struct name, constructors,
+	 * predicate, copier (all spellings)
+	 * @param instantiatorNames the names whose reference proves an instance can exist:
+	 * the struct name (a {@code #S} literal, {@code make-instance}) and the constructors
+	 * @param concName the accessor prefix (member spelling)
+	 * @param caseBase the base name whose case the generated affixes follow
+	 */
+	public record StructDefinedNames(String structName, @Nullable String includeParent, List<String> ownSlotBases,
+			List<String> definedNames, List<String> instantiatorNames, String concName, String caseBase) {
+
+		/**
+		 * The accessor spellings for one slot base name -- own or inherited; the caller
+		 * resolves the {@code :include} chain.
+		 * @param slotBase the slot base name
+		 * @return the accessor name in every spelling a reference can take
+		 */
+		public List<String> accessorSpellings(String slotBase) {
+			return spellingsInPackageOf(this.structName, this.concName + affixFor(slotBase, this.caseBase));
+		}
+	}
+
+	/**
+	 * The names a top-level {@code defclass}/{@code define-condition} defines, as the
+	 * tree-shaker's keep-keys: the class name plus every {@code :reader}/{@code
+	 * :accessor} name (which the expansion turns into methods on generics of those names,
+	 * so a reference to one needs the class kept to compile).
+	 * @param form the top-level form
+	 * @return the keep-keys, or null when the form is not a class definition
+	 */
+	public static @Nullable List<String> classDefinedNames(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| (!LispNames.DEFCLASS.equals(op.name()) && !LispNames.DEFINE_CONDITION.equals(op.name()))
+				|| !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispSymbol nameSym)) {
+			return null;
+		}
+		List<String> defined = new java.util.ArrayList<>(prunerSpellings(nameSym.name()));
+		if (parts.size() >= 4 && parts.get(3) instanceof LispCons slots && slots.isProperList()) {
+			for (LispVal spec : slots.toList()) {
+				if (!(spec instanceof LispCons specCons) || !specCons.isProperList()) {
+					continue;
+				}
+				List<LispVal> specParts = specCons.toList();
+				for (int i = 1; i + 1 < specParts.size(); i += 2) {
+					if (specParts.get(i) instanceof LispSymbol key
+							&& (":READER".equals(key.name()) || ":ACCESSOR".equals(key.name()))
+							&& specParts.get(i + 1) instanceof LispSymbol fn && !fn.isKeyword()) {
+						defined.addAll(prunerSpellings(fn.name()));
+					}
+				}
+			}
+		}
+		return defined;
+	}
+
+	/**
+	 * Whether a {@code defclass} carries a class option ({@code (:metaclass ...)},
+	 * {@code (:default-initargs ...)}, ...) of the given keyword. A metaclass definition
+	 * runs the ensure-class driver at load time -- user {@code :around} code with
+	 * arbitrary side effects -- so the tree-shaker roots it.
+	 * @param form the defclass form
+	 * @param optionKeyword the option keyword spelling (e.g. {@code ":METACLASS"})
+	 * @return whether the option is present
+	 */
+	public static boolean defclassHasOption(LispVal form, String optionKeyword) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 4; i < parts.size(); i++) {
+			if (parts.get(i) instanceof LispCons option && option.car() instanceof LispSymbol key
+					&& optionKeyword.equals(key.name())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The generic a {@code defmethod}/{@code defgeneric} defines on, as the tree-shaker's
+	 * key: the plain function name, or the place name of a {@code (setf
+	 * name)} definition -- the spelling every {@code (setf (name ...))} site and
+	 * {@code #'(setf name)} reference contains textually.
+	 * @param form the defmethod/defgeneric form
+	 * @return the generic name, or null when the form is malformed
+	 */
+	public static @Nullable String prunableGenericName(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.cdr() instanceof LispCons rest)) {
+			return null;
+		}
+		if (rest.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		LispSymbol place = LambdaLists.setfFunctionPlaceName(rest.car());
+		return place == null ? null : place.name();
+	}
+
+	/**
+	 * The class-name specializers of a {@code defmethod}'s required parameters: every
+	 * {@code (var name)} entry's name symbol, skipping {@code (var (eql form))}. The
+	 * caller decides which of them name prunable class definitions; built-in type
+	 * specializers simply match none.
+	 * @param form the defmethod form
+	 * @return the specializer names, in parameter order
+	 */
+	public static List<String> defmethodSpecializerNames(LispVal form) {
+		List<String> specializers = new java.util.ArrayList<>();
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return specializers;
+		}
+		List<LispVal> parts = cons.toList();
+		// (defmethod name [qualifier...] lambda-list body...): the lambda list is the
+		// first list-shaped element after the name (an empty one reads as nil, which
+		// declares no specializers either way).
+		for (int i = 2; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons lambdaList)) {
+				if (parts.get(i) instanceof LispNil) {
+					break;
+				}
+				continue;
+			}
+			for (LispVal param : lambdaList.toList()) {
+				if (param instanceof LispSymbol marker && marker.name().startsWith("&")) {
+					break;
+				}
+				if (param instanceof LispCons paramCons && paramCons.cdr() instanceof LispCons specCell
+						&& specCell.car() instanceof LispSymbol spec) {
+					specializers.add(spec.name());
+				}
+			}
+			break;
+		}
+		return specializers;
+	}
+
+	/**
+	 * Every spelling a resolved reference to the name can take: the name itself, plus the
+	 * twin colon form of a qualified one -- the pruner has no export oracle, so it
+	 * matches either.
+	 */
+	private static List<String> prunerSpellings(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		if (qn == null) {
+			return List.of(name);
+		}
+		return List.of(PackageRegistry.qualify(qn.pkg(), qn.member()),
+				PackageRegistry.qualifyInternal(qn.pkg(), qn.member()));
+	}
+
+	/** A generated member name spelled in the owning name's package, both colon forms. */
+	private static List<String> spellingsInPackageOf(String owner, String member) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(owner);
+		if (qn == null) {
+			return List.of(member);
+		}
+		return List.of(PackageRegistry.qualify(qn.pkg(), member), PackageRegistry.qualifyInternal(qn.pkg(), member));
+	}
+
 	private static boolean isDefstructForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym
 				&& LispNames.DEFSTRUCT.equals(sym.name());

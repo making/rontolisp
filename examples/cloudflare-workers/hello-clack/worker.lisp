@@ -23,7 +23,7 @@
 ;;; not a trap -- and on every other backend is real standard error.
 ;;;
 ;;; ../hello is the other end of the same spectrum: three exported functions,
-;;; no clack, 563 bytes. This one is ~362 KB because what the tree-shaker keeps
+;;; no clack, 563 bytes. This one is ~248 KB because what the tree-shaker keeps
 ;;; of clack and lack is in it -- see the README.
 
 (ql:quickload '("clack" "clack-handler-cloudflare-workers"))

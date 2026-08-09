@@ -302,13 +302,42 @@ class LibraryDefunPrunerTest {
 		assertThat(names).contains("USED").doesNotContain("DEAD-BUT-DECLAIMED");
 	}
 
+	// The surviving top-level operator+name pairs, so CLOS definitions are visible to
+	// the assertions (definedNames sees only the defun family).
+	private static List<String> survivingHeads(List<LispVal> program) {
+		List<String> heads = new ArrayList<>();
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& cons.cdr() instanceof LispCons rest) {
+				String name = switch (rest.car()) {
+					case LispSymbol sym -> sym.name();
+					// (defmethod (setf place) ...) renders as "(SETF PLACE)"; an
+					// option-headed (defstruct (name (:opt ...)) ...) as its name.
+					case LispCons designator when designator.car() instanceof LispSymbol head ->
+						"SETF".equals(LispSymbol.memberName(head.name()))
+								&& designator.cdr() instanceof LispCons placeCell
+								&& placeCell.car() instanceof LispSymbol place
+										? "(SETF " + LispSymbol.memberName(place.name()) + ")" : head.name();
+					default -> null;
+				};
+				if (name != null) {
+					heads.add(LispSymbol.memberName(op.name()) + " " + LispSymbol.memberName(name));
+				}
+			}
+		}
+		return heads;
+	}
+
+	private static List<String> systemSurvivingHeads(String source, Map<String, String> files) {
+		return survivingHeads(LibraryDefunPruner.prune(UserMacroExpander.expand(spliceSystem(source, files))));
+	}
+
 	@Test
-	void closAndStructureDefinitionsStayRootsAndKeepWhatTheyName() {
-		// defclass/defmethod/defstruct/define-condition expand into defuns and
-		// dispatchers
-		// INSIDE the backends, after this pass, so they stay roots -- and a defun only
-		// they mention stays alive with them.
-		List<String> names = systemDefinedNames("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+	void unreferencedClosDefinitionsArePrunedAndTheirDefunClosureWithThem() {
+		// The CLOS definition kinds are candidates like defuns now: a class, condition,
+		// struct, generic and method nothing references leave, and a defun only their
+		// bodies mentioned leaves with them.
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
 				(defstruct point x y)
 				(defclass shape () ((size :initarg :size)))
 				(define-condition demo-error (error) ())
@@ -317,7 +346,268 @@ class LibraryDefunPrunerTest {
 				(defun scale (n) n)
 				(defun used () 1)
 				"""));
-		assertThat(names).contains("SCALE", "USED");
+		assertThat(heads).contains("DEFUN USED")
+			.doesNotContain("DEFSTRUCT POINT", "DEFCLASS SHAPE", "DEFINE-CONDITION DEMO-ERROR", "DEFGENERIC AREA",
+					"DEFMETHOD AREA", "DEFUN SCALE");
+	}
+
+	@Test
+	void aReferencedGenericKeepsItsMethodsAndTheirSpecializerClasses() {
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo::area (demo:used)))",
+				demoSystem("""
+						(defclass shape () ((size :initarg :size)))
+						(defgeneric area (s))
+						(defmethod area ((s shape)) (scale 2))
+						(defun scale (n) n)
+						(defun used () (make-instance 'shape :size 1))
+						"""));
+		assertThat(heads).contains("DEFGENERIC AREA", "DEFMETHOD AREA", "DEFCLASS SHAPE", "DEFUN SCALE", "DEFUN USED");
+	}
+
+	@Test
+	void aMethodOnALiveGenericSpecializingADeadClassIsPruned() {
+		// Per-method reachability: AREA is called, but no instance of GHOST can exist
+		// (nothing references the class), so its method leaves while SHAPE's stays. A
+		// method on a built-in type specializer has no class to gate on and stays with
+		// the generic.
+		List<String> heads = systemSurvivingHeads(
+				"(asdf:load-system :demo) (print (demo::area (make-instance 'demo::shape)))", demoSystem("""
+						(defclass shape () ())
+						(defclass ghost () ())
+						(defgeneric area (s))
+						(defmethod area ((s shape)) 1)
+						(defmethod area ((s ghost)) (ghost-helper))
+						(defmethod area ((s string)) 3)
+						(defun ghost-helper () 2)
+						"""));
+		assertThat(heads).contains("DEFCLASS SHAPE", "DEFMETHOD AREA", "DEFMETHOD AREA")
+			.doesNotContain("DEFCLASS GHOST", "DEFUN GHOST-HELPER");
+		assertThat(heads.stream().filter("DEFMETHOD AREA"::equals)).hasSize(2);
+	}
+
+	@Test
+	void aLiveSubclassKeepsTheMethodsOnItsSuperclass() {
+		// Applicability flows through inheritance textually: instantiating the subclass
+		// references the superclass in its defclass form, so a method specializing on
+		// the superclass stays reachable.
+		List<String> heads = systemSurvivingHeads(
+				"(asdf:load-system :demo) (print (demo::area (make-instance 'demo::square)))", demoSystem("""
+						(defclass shape () ())
+						(defclass square (shape) ())
+						(defgeneric area (s))
+						(defmethod area ((s shape)) 1)
+						"""));
+		assertThat(heads).contains("DEFCLASS SHAPE", "DEFCLASS SQUARE", "DEFMETHOD AREA");
+	}
+
+	@Test
+	void aProtocolMethodIsGatedByItsSpecializerAlone() {
+		// initialize-instance/print-object calls are synthesized by the expansions with
+		// no textual reference, so methods on CL protocol names have no generic gate:
+		// the live class keeps its :after method, the dead class loses it -- and the
+		// defun only the dead one called leaves with it.
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (make-instance 'demo::live-class))",
+				demoSystem("""
+						(defclass live-class () ())
+						(defclass dead-class () ())
+						(defmethod initialize-instance :after ((obj live-class) &key) (live-hook obj))
+						(defmethod initialize-instance :after ((obj dead-class) &key) (dead-hook obj))
+						(defmethod print-object ((obj dead-class) stream) stream)
+						(defun live-hook (o) o)
+						(defun dead-hook (o) o)
+						"""));
+		assertThat(heads).contains("DEFCLASS LIVE-CLASS", "DEFMETHOD INITIALIZE-INSTANCE", "DEFUN LIVE-HOOK")
+			.doesNotContain("DEFCLASS DEAD-CLASS", "DEFMETHOD PRINT-OBJECT", "DEFUN DEAD-HOOK");
+		assertThat(heads.stream().filter("DEFMETHOD INITIALIZE-INSTANCE"::equals)).hasSize(1);
+	}
+
+	@Test
+	void anAccessorReferenceKeepsTheDefiningClassButProvesNoInstance() {
+		// (size x) needs the class kept so the reader generic exists -- but an accessor
+		// reference alone is not an instantiation, so a protocol method on the class
+		// still leaves when nothing can create one.
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo::size demo::*thing*))",
+				demoSystem("""
+						(defclass shape () ((size :initarg :size :accessor size)))
+						(defmethod initialize-instance :after ((obj shape) &key) obj)
+						(defparameter *thing* nil)
+						"""));
+		assertThat(heads).contains("DEFCLASS SHAPE").doesNotContain("DEFMETHOD INITIALIZE-INSTANCE");
+	}
+
+	@Test
+	void structGeneratedNamesEachKeepTheDefstruct() {
+		Map<String, String> files = demoSystem("""
+				(defstruct point x y)
+				(defstruct (rect (:constructor build-rect) (:conc-name rc-) (:predicate rectp)) w h)
+				(defstruct orphan z)
+				(defun used () 1)
+				""");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (print (demo::make-point :x 1))", files))
+			.contains("DEFSTRUCT POINT")
+			.doesNotContain("DEFSTRUCT ORPHAN", "DEFSTRUCT RECT");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (print (demo::point-x demo::pt))", files))
+			.contains("DEFSTRUCT POINT");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (print (demo::copy-point demo::pt))", files))
+			.contains("DEFSTRUCT POINT");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (print (demo::rc-w demo::r))", files))
+			.contains("DEFSTRUCT RECT")
+			.doesNotContain("DEFSTRUCT POINT");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (print (demo::rectp demo::r))", files))
+			.contains("DEFSTRUCT RECT");
+	}
+
+	@Test
+	void anIncludingStructsInheritedAccessorKeepsIt() {
+		// child-x reads an inherited slot: the accessor name is generated over the
+		// :include parent's slot list, so the child must be keyed under it -- and the
+		// kept child's form references the parent, which :include needs registered.
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo::child-x demo::c))",
+				demoSystem("""
+						(defstruct parent x)
+						(defstruct (child (:include parent)) y)
+						(defun used () 1)
+						"""));
+		assertThat(heads).contains("DEFSTRUCT CHILD", "DEFSTRUCT PARENT");
+	}
+
+	@Test
+	void aConditionIsKeptByItsSignallingReferenceOrItsReader() {
+		Map<String, String> files = demoSystem("""
+				(define-condition demo-error (error) ((code :initarg :code :reader demo-error-code)))
+				(define-condition dead-error (error) ())
+				(defun used () 1)
+				""");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (error 'demo::demo-error :code 1)", files))
+			.contains("DEFINE-CONDITION DEMO-ERROR")
+			.doesNotContain("DEFINE-CONDITION DEAD-ERROR");
+		assertThat(systemSurvivingHeads(
+				"(asdf:load-system :demo) (handler-case (demo:used) (error (e) (demo::demo-error-code e)))", files))
+			.contains("DEFINE-CONDITION DEMO-ERROR");
+	}
+
+	@Test
+	void aMetaclassDefclassStaysARoot() {
+		// A (:metaclass ...) definition runs the ensure-class driver at load time --
+		// user :around code with arbitrary side effects -- so it is never a candidate.
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defclass meta-thing () ((x :initarg :x)) (:metaclass standard-class))
+				(defun used () 1)
+				"""));
+		assertThat(heads).contains("DEFCLASS META-THING");
+	}
+
+	@Test
+	void aSetfMethodIsKeyedUnderItsPlaceName() {
+		// The place reference (setf (width ...)) is what keeps the writer generic: the
+		// defgeneric survives (so the place stays registrable and dispatchable), and
+		// with the class instantiated the methods survive too.
+		List<String> heads = systemSurvivingHeads("""
+				(asdf:load-system :demo)
+				(defun poke (r) (setf (demo::width r) 3))
+				(print (poke (make-instance 'demo::rect)))
+				""", demoSystem("""
+				(defclass rect () ())
+				(defgeneric width (r))
+				(defgeneric (setf width) (v r))
+				(defmethod width ((r rect)) 1)
+				(defmethod (setf width) (v (r rect)) v)
+				(defclass dead () ())
+				"""));
+		assertThat(heads)
+			.contains("DEFMETHOD (SETF WIDTH)", "DEFGENERIC (SETF WIDTH)", "DEFMETHOD WIDTH", "DEFCLASS RECT")
+			.doesNotContain("DEFCLASS DEAD");
+	}
+
+	@Test
+	void aMethodOnlySetfGenericKeepsItsMethodOnThePlaceReferenceAlone() {
+		// No (defgeneric (setf title)) anywhere: pruning the only setf method would
+		// leave a kept (setf (title ...)) place with no writer registration to expand
+		// through, so a method-only setf generic has no specializer gate.
+		List<String> heads = systemSurvivingHeads("""
+				(asdf:load-system :demo)
+				(defun poke (r) (setf (demo::title r) 3))
+				(print (poke nil))
+				""", demoSystem("""
+				(defclass rect () ())
+				(defmethod (setf title) (v (r rect)) v)
+				"""));
+		assertThat(heads).contains("DEFMETHOD (SETF TITLE)");
+	}
+
+	@Test
+	void aMethodOnlyLocalGenericKeepsItsMethodsOnceTheNameIsLive() {
+		// No defgeneric anywhere: pruning the last method of a live name would leave a
+		// kept call site compiling against no definition at all, so a method-only
+		// generic has no specializer gate -- and the kept method's own specializer
+		// keeps its class registered.
+		List<String> heads = systemSurvivingHeads("""
+				(asdf:load-system :demo)
+				(defun poke (x) (demo::render x))
+				(print (poke nil))
+				""", demoSystem("""
+				(defclass never-made () ())
+				(defmethod render ((x never-made)) x)
+				"""));
+		assertThat(heads).contains("DEFMETHOD RENDER", "DEFCLASS NEVER-MADE");
+	}
+
+	@Test
+	void aForgedNameTemplateKeepsEveryDefinitionItCanProduce() {
+		// sxql's find-constructor: (symbol-function (intern (concatenate 'string
+		// "MAKE-" (symbol-name x) suffix))) resolves struct constructors the program
+		// never spells. The literal pieces form a template; every member it can
+		// produce counts as referenced -- while a definition outside the template
+		// still prunes.
+		List<String> heads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo:used :=))", demoSystem("""
+				(defstruct (=-op (:constructor make-=-op)) left right)
+				(defstruct unrelated-thing a)
+				(defun used (name)
+				  (funcall (symbol-function
+				            (intern (concatenate 'string "MAKE-" (symbol-name name) "-OP")))))
+				"""));
+		assertThat(heads).contains("DEFSTRUCT =-OP").doesNotContain("DEFSTRUCT UNRELATED-THING");
+		// The format spelling of the same forge, with the pieces in a control string.
+		List<String> formatHeads = systemSurvivingHeads("(asdf:load-system :demo) (print (demo:used :=))",
+				demoSystem("""
+						(defstruct (=-op (:constructor make-=-op)) left right)
+						(defstruct unrelated-thing a)
+						(defun used (name)
+						  (funcall (symbol-function (intern (format nil "MAKE-~a-OP" name)))))
+						"""));
+		assertThat(formatHeads).contains("DEFSTRUCT =-OP").doesNotContain("DEFSTRUCT UNRELATED-THING");
+	}
+
+	@Test
+	void subclassEnumerationRootsEveryClass() {
+		// cl-dbi's find-driver reaches a driver class through
+		// (c2mop:class-direct-subclasses (find-class 'dbi-driver)) and a forged
+		// string -- no name reference at all -- so a program that enumerates
+		// subclasses keeps every third-party class; defuns still prune.
+		List<String> heads = systemSurvivingHeads("""
+				(asdf:load-system :demo)
+				(print (demo:used "x"))
+				""", demoSystem("""
+				(defclass driver-base () ())
+				(defclass secret-driver (driver-base) ())
+				(defun used (name)
+				  (find name (%class-direct-subclasses (find-class 'driver-base))
+				        :key (lambda (c) c) :test (lambda (a b) t)))
+				(defun unused () 1)
+				"""));
+		assertThat(heads).contains("DEFCLASS SECRET-DRIVER", "DEFCLASS DRIVER-BASE").doesNotContain("DEFUN UNUSED");
+	}
+
+	@Test
+	void defgenericInlineMethodsFallAndStayWithTheGeneric() {
+		Map<String, String> files = demoSystem("""
+				(defgeneric describe-it (x) (:method ((x string)) x))
+				(defgeneric dead-generic (x) (:method ((x string)) x))
+				(defun used () 1)
+				""");
+		assertThat(systemSurvivingHeads("(asdf:load-system :demo) (print (demo::describe-it \"a\"))", files))
+			.contains("DEFGENERIC DESCRIBE-IT")
+			.doesNotContain("DEFGENERIC DEAD-GENERIC");
 	}
 
 	@Test

@@ -158,8 +158,9 @@ below.
 - **Compiling tree-shakes the system.** A function, variable or constant a
   loaded system defines but your program never reaches — following names
   through the source, including quoted symbols and whole string literals — is
-  left out of the `.class`/`.wasm`. Classes, generic functions, methods,
-  conditions and structures always stay. Compile with `--no-prune` (or
+  left out of the `.class`/`.wasm` — classes, generic functions, methods,
+  conditions and structures included (a method also leaves when no reachable
+  code can create an instance it applies to). Compile with `--no-prune` (or
   `--dynamic`) to keep every definition; see
   [Compiling to the JVM](../compiling/jvm.md) for the one consequence.
 

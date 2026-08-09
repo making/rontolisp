@@ -723,15 +723,23 @@ the reason so they are not re-derived:
 4. **Where the bytes really are: loaded-but-unreferenced cl-ppcre is anchored by
    its CLOS surface — 823,589 B on this module.** With the ppcre-free shim in
    place and the dependency still loaded, ZERO references remain, yet only 0.9%
-   leaves: `LibraryDefunPruner` keeps every `defgeneric`/`defmethod`/`defclass`/
+   leaves: `LibraryDefunPruner` KEPT every `defgeneric`/`defmethod`/`defclass`/
    `define-condition`/`defstruct` as a root (`.kb/library-defun-pruning.md`) and
    cl-ppcre's API and node tree are exactly that; at the module level every
    method body is materialized as a closure at load time, so it is in
    `valueFuncIds`, dispatchable, and live through the ladders. The shim-vs-nodep
-   delta — 648 functions, 800,319 B code, 22,392 B data — is therefore the
-   measured ceiling of the CLOS-aware-shaking lever on this module (now tracked
-   as `.todo/299`; it was collected in todo-290, whose other levers all landed
-   2026-08-09). The string-blob lever's cap was the 58,756 B `data[3]` segment
+   delta — 648 functions, 800,319 B code, 22,392 B data — was therefore the
+   measured ceiling of the CLOS-aware-shaking lever on this module (collected in
+   todo-290, whose other levers all landed 2026-08-09). **The lever itself
+   LANDED 2026-08-09**: the pruner's CLOS candidates + per-method gates
+   (`.kb/library-defun-pruning.md`, "The CLOS definition kinds are candidates
+   too") collect dead CLOS at the AST level, before either module half sees it
+   — which took ~30% out of every clack Worker (lack-util's ironclad/core rides
+   in unreferenced) and mooted a separate `valueFuncIds` half: a pruned method
+   is never emitted, and a kept one is genuinely dispatchable. What the AST
+   argument still cannot touch on THIS probe is the `let`-over-`defmethod` root
+   (build-replacement-template's binding initform calls `create-scanner`).
+   The string-blob lever's cap was the 58,756 B `data[3]` segment
    of an 81,003 B data section — an order of magnitude smaller, and the landed
    per-entry form (see "String blob" above) took 4,823 B of it on this probe:
    most of the segment is LIVE rows and literals, so the ceiling was never
@@ -808,8 +816,10 @@ engine; the spread between the cheapest and the richest API usage is 22 KB on a
   (`build-replacement-template`, a few KB) — against a ~748 KB live core. The
   823,589 B zero-reference ceiling collapses to noise the moment one entry
   point is real. (For a program that loads the engine but never calls it, the
-  answer is not a shaker — it is not loading the engine; that is the solved
-  todo-296 routing case.)
+  answer is not a shaker — it is not loading the engine (the todo-296 routing
+  case), and since 2026-08-09 the AST pruner's CLOS candidates collect the
+  loaded-but-unreferenced side anyway — see lever 4 in the routing section
+  above.)
 - **What CAN move a module that keeps the REAL engine is code DENSITY, not
   shaking** (user-redirected goal, 2026-08-08): the probe's wasm composition
   is 93% code section (696,108 B in 863 functions, five of them 93 KB

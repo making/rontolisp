@@ -66,9 +66,9 @@ between the two directories.
 | How it reaches the Worker | thirty hand-written lines and an explicit `wasm-export` | `clackup`, with the export synthesized |
 | Reads as | a Worker program that happens to speak Clack | **every other Clack program** |
 | clack in the module | none | what the tree-shaker keeps of clack and lack |
-| Module | 179 KB raw / **55 KB gzip** | 375 KB raw / **103 KB gzip** |
+| Module | 179 KB raw / **55 KB gzip** | 264 KB raw / **79 KB gzip** |
 
-103 KB gzip is about **3.4%** of the free plan's 3 MB bundle limit, so it fits
+79 KB gzip is about **2.6%** of the free plan's 3 MB bundle limit, so it fits
 with plenty of room — but it is **1.9×** the hand-written adapter compressed
 (2.1× raw), and that is the honest trade: you are paying for clack and lack to
 be in the module so that the file reads like an ordinary Clack program rather
@@ -99,7 +99,7 @@ curl         http://localhost:8787/nope                   # 404
 | [`../../net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) | **The whole program** — not in this directory, deliberately. `build.sh` compiles it. |
 | [`build.sh`](build.sh) | `--no-wasi --optimize=size` over that file. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` — same envelope, same boundary code, same file. |
-| `src/worker.wasm` | The compiled module (~375 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~264 KB). A build product — run `./build.sh` first. |
 
 The directory used to carry the program as a `worker.lisp` of its own — first
 split into an `app.lisp` and a transport, then as the upstream example verbatim
@@ -213,7 +213,7 @@ directory's `src/worker.wasm`, over the same requests:
 | --- | --- | --- |
 | imports | zero | **zero** — the Worker instantiates with `{}`, no WASI shim |
 | exports | `memory`, `_initialize`, `__ronto_alloc`, `__ronto_alloc_mark`, `__ronto_alloc_reset`, `handle-request` | **identical**, which is why one `src/index.js` serves both |
-| module | 182,767 B raw / 55,895 B gzip | 383,668 B raw / **105,361 B gzip** |
+| module | 178,971 B raw / 54,648 B gzip | 264,277 B raw / **79,438 B gzip** |
 | `WebAssembly.Module` compile | 0.3 ms | 0.8 ms — and on Cloudflare *no request pays it*, the module is compiled at deploy time |
 | `_initialize`, cold | 4.5 ms | **5.0 ms** — clack's entire load time, `clackup` included |
 | warm `GET /get` | 0.039 ms | **0.038 ms** |
@@ -237,7 +237,7 @@ warm; the first call of a fresh isolate is ~40 ms while V8 tiers the module up.
 
 On the real edge, `wrangler deploy` reported **1654.60 KiB upload / 371.94 KiB
 gzip** and a **Worker Startup Time of 26 ms** (14 ms before `clackup`) — measured
-before the module shrank to today's 375 KB; the next deploy will report the
+before the module shrank to today's 264 KB; the next deploy will report the
 smaller bundle — and all five endpoints (plus the 405, the 404, the unparseable
 body and a percent-encoded path) answer correctly there — verified after
 deploying, not inferred. End-to-end

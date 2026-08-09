@@ -184,20 +184,126 @@ and a cl-postgres program dies with `Cannot compile: USOCKET::%USOCK-RESIGNAL`
 at the `with-*` guard expansion. Unbalanced brackets disable third-party
 pruning rather than guess.
 
-**What stays a root, and why it is not just caution**:
-`defclass`/`defgeneric`/`defmethod`/`define-condition`/`defstruct`/`deftype` are
-expanded into defuns, dispatchers and type tables by
-`LispMacroExpander.expandTopLevelDefinitions` INSIDE the backends, after this
-pass -- and `expandMakeInstance` synthesizes a call to whatever generic is
-registered as `initialize-instance`/`shared-initialize` with NO textual
-occurrence at the `(make-instance 'c)` site. `(satisfies F)` in a `deftype`
-likewise expands to a literal `(F value)` call. Making the four CLOS forms
-non-roots individually buys 0-13 extra dead definitions across the whole
-vendored corpus; only `defmethod` is a big anchor (it would roughly double the
-yield) and it is exactly the one that cannot move. A CLOS-aware shaker is a
-separate item, not a tweak here — tracked as `.todo/299`, with the measured
-823,589 B zero-reference ceiling and the reason both this pass's roots AND the
-backends' `valueFuncIds` must learn CLOS together.
+**The CLOS definition kinds are candidates too (2026-08-09; third-party
+provenance only).** `defclass`/`defgeneric`/`defmethod`/`define-condition`/
+`defstruct` used to be unconditional roots, and the cost was measured at
+823,589 B for one loaded-but-unreferenced CLOS-heavy library (cl-ppcre on the
+routed-Worker probe) -- every method body survived into codegen, was
+materialized dispatchable, and the module shakers were RIGHT to keep it, so
+only this pass could collect it. Now (`Candidates` in the pruner; the name
+summaries live BESIDE the expansions they mirror --
+`LispMacroExpander.defstructDefinedNames`/`classDefinedNames`/
+`prunableGenericName`/`defmethodSpecializerNames`, and must move with them):
+
+- **keyed kinds** -- kept iff ANY defined name is referenced from a kept form:
+  `defclass`/`define-condition` under the class name + every `:reader`/
+  `:accessor` name (a reference to an accessor needs the class kept for the
+  reader generic to exist); `defstruct` under the struct name, every
+  constructor (BOA ones by their own names), the predicate, the copier and the
+  accessors -- including accessors over `:include`d slots, resolved through the
+  candidate chain (`.include` parents outside the candidate set root the
+  child); `defgeneric` under its (setf-normalized) generic name. Generated
+  names carry BOTH colon spellings (the pruner has no export oracle).
+- **`defmethod` is gated, per method**: the GENERIC gate (some spelling of the
+  generic name is live) plus one SPECIALIZER gate per required parameter that
+  names a candidate class/condition/struct -- satisfied when an INSTANTIATOR
+  name of that definition is live (the class name; a struct's name or
+  constructors). The soundness argument: an instance the method could apply to
+  can only be made through a reference the scan sees -- `make-instance 'c`,
+  `error 'c`, a constructor call -- and a live SUBCLASS keeps its ancestors
+  live textually (its defclass form names them), so applicability propagates
+  up the inheritance chain for free. When a kept form is scanned, its OWN keys
+  are excluded from the references it contributes -- a defclass header spells
+  its own name and accessors, and counting those would make an accessor-kept
+  class read as instantiable.
+- **the generic gate is absent for a CL protocol name** (member in
+  `PackageRegistry.CL_SYMBOLS`): `initialize-instance`/`shared-initialize`/
+  `print-object`/`close`/... are called by SYNTHESIZED expansion code with no
+  textual reference (`expandMakeInstance`, the printer hook, `with-open-*`'s
+  close), so such methods are kept on the specializer gate alone -- ironclad's
+  `initialize-instance :after` methods leave exactly when their classes do.
+- **the specializer gate applies only when the generic's method set stays
+  closed**: for an OWNED generic (its defgeneric is a candidate, so a live
+  name keeps a dispatcher even when every method is gated away) and for a CL
+  protocol name (the built-in is the last resort). A METHOD-ONLY local generic
+  -- `(defmethod (setf title) ...)` with no defgeneric anywhere -- keeps its
+  methods once the name is live, or a kept call site/setf place would compile
+  against no definition at all.
+
+**What stays a root, each for a stated reason**: a `defclass` carrying
+`(:metaclass ...)` (the ensure-class driver runs user `:around` code at load
+time -- arbitrary side effects); EVERY class when the program mentions
+`class-direct-subclasses`/`%class-direct-subclasses` (cl-dbi's `find-driver`
+reaches the dbd-postgres driver class through subclass ENUMERATION plus a
+forged string -- no name reference at all -- and `make-instance`s the
+metaobject; name-level reachability is unsound for classes then, while defuns,
+structs and the method gates keep working); the top-level
+`let`-over-`defmethod` idiom (not a definition form -- cl-ppcre's
+`build-replacement-template`, whose binding initform calls `create-scanner` at
+load time); `deftype` (worth 0-13 definitions corpus-wide, and `(satisfies F)`
+expands to a literal `(F value)` call). CLOS candidates need no
+initform-purity judgment: a slot `:initform`/`:default-initargs` runs at
+INSTANCE creation, not at definition time.
+
+**The name-template rule** (same commit): sxql resolves its struct
+constructors as `(symbol-function (intern (concatenate 'string "MAKE-"
+(symbol-name name) suffix) package))` -- a name assembled from literal pieces
+and computed holes, textually spelled nowhere. A `(concatenate 'string ...)`
+or `(format nil "..." ...)` argument of `intern`/`find-symbol` therefore
+becomes a TEMPLATE (literal pieces literal, everything else `.*`; every format
+directive is a hole), and every third-party member name it can produce counts
+as referenced -- `^MAKE-.*$` keeps all of sxql's op/clause/statement
+constructors and their defstructs. A piece-less assembly stays the documented
+computed-name carve-out, and the template only fires from KEPT forms, so a
+pruned `find-constructor` anchors nothing. The rule applies to every
+third-party candidate kind, defuns included (the same forge can target a
+defun; before this pass widened, defstruct roots merely hid the constructor
+case).
+
+**What it is worth** (2026-08-09, `--no-wasi --optimize=size`, node-verified
+request-for-request against same-day baselines): every clack Worker shed ~30%
+-- `hello-clack` 365,865 -> 248,356 B raw (75,334 gzip), `httpbin-clack`
+378,768 -> 264,277, `hello-tiny-routes` 388,925 -> 271,963,
+`httpbin-tiny-routes` 403,456 -> 289,068 -- because `lack-util` depends on
+`ironclad/core` for its session-id generator, and a Worker that never calls it
+still carried ironclad's 29 condition classes, 42 defgenerics and the digest
+method surface as roots (29 of the baseline module's 73 class layouts were
+ironclad's). `httpbin` (no third-party CLOS) stays BYTE-identical. The full
+`ci-spec.yaml` native run (1,300 cases, 4 backends), the 12
+`AsdfLibraryE2eSupport` subclasses, `MitoE2eTest` (9/9, live PostgreSQL) and
+`ClPostgresE2eTest` are the behavioral pins; `postgres-hello --component
+--optimize` moved 2,484,611 -> 2,288,983 (-7.9%). The routed-Worker
+zero-reference ceiling this section used to cite is MOSTLY collected: the same
+probe's engine now leaves except what the `let`-over-`defmethod` root anchors
+(the full-tiny-routes `httpbin` variant is 799,880 B where the /lite build is
+289,068).
+
+Pruner-side pinning tests (`LibraryDefunPrunerTest`):
+`unreferencedClosDefinitionsArePrunedAndTheirDefunClosureWithThem`,
+`aMethodOnALiveGenericSpecializingADeadClassIsPruned`,
+`aLiveSubclassKeepsTheMethodsOnItsSuperclass`,
+`aProtocolMethodIsGatedByItsSpecializerAlone`,
+`anAccessorReferenceKeepsTheDefiningClassButProvesNoInstance`,
+`structGeneratedNamesEachKeepTheDefstruct`,
+`anIncludingStructsInheritedAccessorKeepsIt`,
+`aConditionIsKeptByItsSignallingReferenceOrItsReader`,
+`aMetaclassDefclassStaysARoot`, `aSetfMethodIsKeyedUnderItsPlaceName`,
+`aMethodOnlySetfGenericKeepsItsMethodOnThePlaceReferenceAlone`,
+`aMethodOnlyLocalGenericKeepsItsMethodsOnceTheNameIsLive`,
+`aForgedNameTemplateKeepsEveryDefinitionItCanProduce`,
+`subclassEnumerationRootsEveryClass`,
+`defgenericInlineMethodsFallAndStayWithTheGeneric`; `SxqlE2eTest` is the
+end-to-end pin of the template rule (its whole API resolves through
+`find-constructor`).
+
+**Re-evaluation triggers**: a library that stages its forged name through a
+variable (`(let ((n (format ...))) (intern n))`) escapes the one-hop template
+scan -- widen the scan to the binding if one ever does; a string-assembly
+spelling other than `concatenate`/`format nil` (`uiop:strcat`, ...) needs its
+own template arm; and the `let`-over-`defmethod` root is the residual anchor
+on the cl-ppcre zero-reference probe -- gate it like a method group (every
+body member a defmethod, binding initforms judged) if a real program class
+ever needs those bytes.
 
 `defmacro`, `define-compiler-macro`, `define-modify-macro`, `defsetf`,
 `define-setf-expander` and `macrolet` need no rule at all: `UserMacroExpander`

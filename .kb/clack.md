@@ -267,9 +267,11 @@ moved to 200,155 / 58,793 and 474,150 / 124,756 gzip that day, for a
 warm-request price of 3-11 µs — `.kb/optimize-dead-code-elimination.md`, "What
 ROUTING costs a clack module". The `--optimize` columns above stay as the
 controlled clack-vs-no-clack measurement. Both tables are RECORDS of their own
-experiment, not the current build: after the CLOS-lowering pass and the
-one-source cutover (middlewares default-ON, the thin shim) the pair stands at
-**182,767 / 55,895** and **383,668 / 105,361** (gzip -9 -n, 2026-08-09) —
+experiment, not the current build: after the CLOS-lowering pass, the
+one-source cutover (middlewares default-ON, the thin shim) and the CLOS-aware
+library pruning (`.kb/library-defun-pruning.md`, 2026-08-09 — lack-util's
+unreferenced ironclad/core leaves) the pair stands at
+**178,971 / 54,648** and **264,277 / 79,438** (gzip -9 -n, 2026-08-09) —
 what the example READMEs now carry, and what `build.sh` reproduces.)
 
 The hand-written half still pays for being a PORTABLE Clack application: naming

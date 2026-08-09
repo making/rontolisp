@@ -78,8 +78,12 @@ source, including quoted symbols and string literals -- is not compiled in. Your
 own code is never pruned, and neither is anything a `load`/`require` splices in:
 only a library that came from a system is subject to it.
 
-Classes, generic functions, methods, conditions and structures always stay,
-because a `make-instance` can reach a method no source line names.
+Classes, generic functions, methods, conditions and structures are pruned by
+the same rule: a class nothing references leaves together with its methods,
+and a method on a generic your program does call is still dropped when no
+reachable code can create an instance of the class it specializes on. Methods
+on the standard protocol names (`initialize-instance`, `print-object`,
+`close`, ...) follow their class alone, since those calls are implicit.
 
 The one consequence: a library function whose name is only assembled at runtime
 from computed strings and called through `eval`/`apply` signals the usual

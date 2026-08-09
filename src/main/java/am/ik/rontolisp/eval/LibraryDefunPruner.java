@@ -131,38 +131,64 @@ public final class LibraryDefunPruner {
 		// (defun scan ...) under (in-package :cl-ppcre) is only CL-PPCRE:SCAN there --
 		// which is also the spelling every reference to it resolves to.
 		Map<String, List<Integer>> defsByName = new HashMap<>();
-		Map<Integer, String> nameByIndex = new HashMap<>();
+		Map<Integer, List<String>> keysByIndex = new HashMap<>();
 		Set<String> thirdParty = new HashSet<>();
+		Candidates closCandidates = Candidates.collect(resolved, provenance);
 		for (int i = 0; i < resolved.size(); i++) {
+			List<String> keys;
 			String name = definitionName(resolved.get(i));
-			if (name == null) {
-				continue;
-			}
-			boolean fromSystem = provenance.isPrunableSystem(i);
-			if (!fromSystem && !bundled.contains(name)) {
-				continue;
-			}
-			if (fromSystem) {
-				if (!hasPrunableInitform(resolved.get(i))) {
+			if (name != null) {
+				boolean fromSystem = provenance.isPrunableSystem(i);
+				if (!fromSystem && !bundled.contains(name)) {
 					continue;
 				}
-				thirdParty.add(name);
+				if (fromSystem) {
+					if (!hasPrunableInitform(resolved.get(i))) {
+						continue;
+					}
+					thirdParty.add(name);
+				}
+				keys = List.of(name);
 			}
-			defsByName.computeIfAbsent(name, k -> new ArrayList<>()).add(i);
-			nameByIndex.put(i, name);
+			else {
+				keys = closCandidates.keysAt(i);
+				if (keys == null) {
+					continue;
+				}
+				thirdParty.addAll(keys);
+			}
+			for (String key : keys) {
+				defsByName.computeIfAbsent(key, k -> new ArrayList<>()).add(i);
+			}
+			keysByIndex.put(i, keys);
 		}
-		if (defsByName.isEmpty()) {
+		if (defsByName.isEmpty() && closCandidates.methodGates().isEmpty()) {
 			return provenance.withoutMarkers(forms);
 		}
-		Prunable prunable = Prunable.of(defsByName.keySet(), bundled, thirdParty);
+		Set<String> exact = new HashSet<>(defsByName.keySet());
+		for (MethodGates gates : closCandidates.methodGates().values()) {
+			exact.addAll(gates.allGateNames());
+			thirdParty.addAll(gates.genericNames());
+		}
+		Prunable prunable = Prunable.of(exact, bundled, thirdParty);
 		// Fixpoint from the roots (every top-level form that is not a prunable
 		// definition): a definition is kept iff its name is referenced from a kept form,
-		// transitively.
+		// transitively; a defmethod is kept iff its gates are satisfied (see
+		// MethodGates).
+		Map<String, List<Integer>> methodsByGateName = new HashMap<>();
+		for (Map.Entry<Integer, MethodGates> method : closCandidates.methodGates().entrySet()) {
+			for (String gateName : method.getValue().allGateNames()) {
+				methodsByGateName.computeIfAbsent(gateName, k -> new ArrayList<>()).add(method.getKey());
+			}
+		}
 		Set<String> live = new HashSet<>();
 		Deque<String> queue = new ArrayDeque<>();
 		Set<String> roots = new LinkedHashSet<>();
+		Set<Integer> scanned = new HashSet<>();
+		Set<Integer> keptMethods = new HashSet<>();
 		for (int i = 0; i < resolved.size(); i++) {
-			if (!nameByIndex.containsKey(i) && !provenance.isMarker(i) && !isDeclamation(resolved.get(i))) {
+			if (!keysByIndex.containsKey(i) && !closCandidates.methodGates().containsKey(i) && !provenance.isMarker(i)
+					&& !isDeclamation(resolved.get(i))) {
 				collectReferences(resolved.get(i), prunable, roots);
 			}
 		}
@@ -185,31 +211,70 @@ public final class LibraryDefunPruner {
 				queue.add(name);
 			}
 		}
+		// A defmethod with no gate at all (an ungated method on a protocol name with no
+		// prunable specializer) is a root: kept and scanned like any other root form.
+		for (Map.Entry<Integer, MethodGates> method : closCandidates.methodGates().entrySet()) {
+			if (method.getValue().satisfiedBy(live) && keptMethods.add(method.getKey())) {
+				enqueueReferences(resolved.get(method.getKey()), prunable, live, queue, Set.of());
+			}
+		}
 		while (!queue.isEmpty()) {
 			String name = queue.remove();
 			List<Integer> indexes = defsByName.get(name);
-			if (indexes == null) {
-				continue;
+			if (indexes != null) {
+				for (int index : indexes) {
+					if (scanned.add(index)) {
+						// A kept form's references go live -- except a CLOS
+						// definition's OWN keys: its header spells its class name and
+						// accessors, and counting those as references would satisfy its
+						// own instantiator gate (an accessor-kept class would read as
+						// instantiable). References BETWEEN forms (a superclass list, an
+						// :include parent, a specializer) are not the form's own keys
+						// and still count.
+						List<String> ownKeys = closCandidates.keysAt(index);
+						enqueueReferences(resolved.get(index), prunable, live, queue,
+								ownKeys == null ? Set.of() : Set.copyOf(ownKeys));
+					}
+				}
 			}
-			for (int index : indexes) {
-				Set<String> refs = new LinkedHashSet<>();
-				collectReferences(resolved.get(index), prunable, refs);
-				for (String ref : refs) {
-					if (live.add(ref)) {
-						queue.add(ref);
+			List<Integer> gated = methodsByGateName.get(name);
+			if (gated != null) {
+				for (int index : gated) {
+					MethodGates gates = closCandidates.methodGates().get(index);
+					if (gates != null && !keptMethods.contains(index) && gates.satisfiedBy(live)) {
+						keptMethods.add(index);
+						enqueueReferences(resolved.get(index), prunable, live, queue, Set.of());
 					}
 				}
 			}
 		}
 		List<LispVal> out = new ArrayList<>(forms.size());
 		for (int i = 0; i < forms.size(); i++) {
-			String name = nameByIndex.get(i);
-			if (provenance.isMarker(i) || (name != null && !live.contains(name))) {
+			if (provenance.isMarker(i)) {
+				continue;
+			}
+			List<String> keys = keysByIndex.get(i);
+			if (keys != null && keys.stream().noneMatch(live::contains)) {
+				continue;
+			}
+			if (closCandidates.methodGates().containsKey(i) && !keptMethods.contains(i)) {
 				continue;
 			}
 			out.add(forms.get(i));
 		}
 		return out.size() == forms.size() ? forms : out;
+	}
+
+	private static void enqueueReferences(LispVal form, Prunable prunable, Set<String> live, Deque<String> queue,
+			Set<String> excludedOwnKeys) {
+		Set<String> refs = new LinkedHashSet<>();
+		collectReferences(form, prunable, refs);
+		refs.removeAll(excludedOwnKeys);
+		for (String ref : refs) {
+			if (live.add(ref)) {
+				queue.add(ref);
+			}
+		}
 	}
 
 	/**
@@ -417,6 +482,227 @@ public final class LibraryDefunPruner {
 	}
 
 	/**
+	 * The CLOS-definition candidates of the third-party trees: which
+	 * {@code defclass}/{@code define-condition}/{@code defstruct}/{@code defgeneric}
+	 * forms are keyed (kept iff any defined name is referenced), and which
+	 * {@code defmethod} forms are gated (see {@link MethodGates}). Everything the
+	 * summaries cannot read stays a root: a malformed form, a {@code defclass} carrying
+	 * {@code (:metaclass ...)} (its ensure-class driver runs user {@code :around} code at
+	 * load time), a {@code defstruct} whose {@code :include} chain leaves the candidate
+	 * set (its inherited accessor names cannot be computed here), and the top-level
+	 * {@code let}-over-{@code defmethod} idiom (not a definition form at all --
+	 * cl-ppcre's {@code build-replacement-template}; its binding initforms run at load
+	 * time).
+	 *
+	 * @param keyedNames keyed candidate index -> the names any reference to which keeps
+	 * the form
+	 * @param methodGates defmethod candidate index -> its keep-gates
+	 */
+	private record Candidates(Map<Integer, List<String>> keyedNames, Map<Integer, MethodGates> methodGates) {
+
+		@Nullable List<String> keysAt(int index) {
+			return this.keyedNames.get(index);
+		}
+
+		static Candidates collect(List<LispVal> resolved, Provenance provenance) {
+			Map<Integer, List<String>> keyedNames = new HashMap<>();
+			Map<Integer, MethodGates> methodGates = new HashMap<>();
+			// A program that ENUMERATES subclasses can reach a class no name ever
+			// spells: cl-dbi's find-driver matches (c2mop:class-direct-subclasses
+			// (find-class 'dbi-driver)) against a forged string and make-instances the
+			// metaobject it finds. Name-level reachability is unsound for classes then,
+			// so they all stay roots; defstructs (not enumerable) and the method/generic
+			// gates keep working.
+			boolean subclassEnumeration = usesAnySymbol(resolved,
+					Set.of(LispNames.CLASS_DIRECT_SUBCLASSES, LispNames.CLASS_DIRECT_SUBCLASSES_INTERNAL));
+			// Sweep 1: the class-shaped definitions, their instantiator gates, and the
+			// generics the trees own (a defgeneric present in prunable provenance).
+			Map<String, LispMacroExpander.StructDefinedNames> structBySpelling = new HashMap<>();
+			Map<Integer, LispMacroExpander.StructDefinedNames> structAt = new HashMap<>();
+			Map<String, List<String>> gateBySpelling = new HashMap<>();
+			Set<String> ownedGenerics = new HashSet<>();
+			for (int i = 0; i < resolved.size(); i++) {
+				if (!provenance.isPrunableSystem(i)) {
+					continue;
+				}
+				LispVal form = resolved.get(i);
+				if (isOperatorForm(form, LispNames.DEFSTRUCT)) {
+					LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
+					if (summary != null) {
+						structAt.put(i, summary);
+						for (String spelling : spellingsOf(summary.structName())) {
+							structBySpelling.put(spelling, summary);
+							gateBySpelling.put(spelling, summary.instantiatorNames());
+						}
+					}
+				}
+				else if (isOperatorForm(form, LispNames.DEFCLASS) || isOperatorForm(form, LispNames.DEFINE_CONDITION)) {
+					if (subclassEnumeration || (isOperatorForm(form, LispNames.DEFCLASS)
+							&& LispMacroExpander.defclassHasOption(form, ":METACLASS"))) {
+						continue;
+					}
+					List<String> names = LispMacroExpander.classDefinedNames(form);
+					if (names != null) {
+						keyedNames.put(i, names);
+						// Instantiating a class spells its NAME (make-instance 'c, a
+						// subclass's superclass list, error 'c) -- an accessor reference
+						// keeps the form for compilability but proves no instance.
+						// classDefinedNames puts the name's spellings first.
+						List<String> nameSpellings = List.copyOf(spellingsOf(names.get(0)));
+						for (String spelling : nameSpellings) {
+							gateBySpelling.put(spelling, nameSpellings);
+						}
+					}
+				}
+				else if (isOperatorForm(form, LispNames.DEFGENERIC)) {
+					String generic = LispMacroExpander.prunableGenericName(form);
+					if (generic != null && !PackageRegistry.isClSymbol(LispSymbol.memberName(generic))) {
+						List<String> spellings = List.copyOf(spellingsOf(generic));
+						keyedNames.put(i, spellings);
+						ownedGenerics.addAll(spellings);
+					}
+				}
+			}
+			// A defstruct whose accessor keys need an :include parent OUTSIDE the
+			// candidate set (or a cycle) stays a root -- its inherited accessor names
+			// cannot be derived from the forms at hand.
+			for (Map.Entry<Integer, LispMacroExpander.StructDefinedNames> struct : structAt.entrySet()) {
+				List<String> slotBases = resolveStructSlotBases(struct.getValue(), structBySpelling);
+				if (slotBases == null) {
+					continue;
+				}
+				List<String> keys = new ArrayList<>(struct.getValue().definedNames());
+				for (String slotBase : slotBases) {
+					keys.addAll(struct.getValue().accessorSpellings(slotBase));
+				}
+				keyedNames.put(struct.getKey(), keys);
+			}
+			// Sweep 2: the defmethod gates, now that ownership and the class gates are
+			// known.
+			for (int i = 0; i < resolved.size(); i++) {
+				if (!provenance.isPrunableSystem(i) || !isOperatorForm(resolved.get(i), LispNames.DEFMETHOD)) {
+					continue;
+				}
+				String generic = LispMacroExpander.prunableGenericName(resolved.get(i));
+				if (generic == null) {
+					continue;
+				}
+				boolean clProtocolName = PackageRegistry.isClSymbol(LispSymbol.memberName(generic));
+				List<String> genericGate = clProtocolName ? List.of() : List.copyOf(spellingsOf(generic));
+				// The specializer gate needs the generic's method set to be closed: it
+				// holds for a generic the trees own (its defgeneric is a candidate, so a
+				// live name keeps a dispatcher even when every method is gated away) and
+				// for a CL protocol name (the built-in behavior is the dispatcher of
+				// last resort). A method-only local generic keeps its methods once the
+				// name is live, or a live call site would compile against no definition
+				// at all.
+				List<List<String>> specializerGates = new ArrayList<>();
+				if (clProtocolName || spellingsOf(generic).stream().anyMatch(ownedGenerics::contains)) {
+					for (String specializer : LispMacroExpander.defmethodSpecializerNames(resolved.get(i))) {
+						List<String> gate = gateBySpelling.get(specializer);
+						if (gate != null) {
+							specializerGates.add(gate);
+						}
+					}
+				}
+				methodGates.put(i, new MethodGates(genericGate, List.copyOf(specializerGates)));
+			}
+			return new Candidates(Map.copyOf(keyedNames), Map.copyOf(methodGates));
+		}
+
+		/**
+		 * The struct's full slot-base list -- its {@code :include} ancestors' slots
+		 * first, then its own, the same order {@code expandDefstruct} merges -- or null
+		 * when the chain leaves the candidate set or cycles.
+		 */
+		@Nullable private static List<String> resolveStructSlotBases(LispMacroExpander.StructDefinedNames struct,
+				Map<String, LispMacroExpander.StructDefinedNames> structBySpelling) {
+			List<String> slotBases = new ArrayList<>();
+			Set<String> visited = new HashSet<>();
+			LispMacroExpander.StructDefinedNames current = struct;
+			while (true) {
+				if (!visited.add(current.structName())) {
+					return null;
+				}
+				slotBases.addAll(0, current.ownSlotBases());
+				String parent = current.includeParent();
+				if (parent == null) {
+					return slotBases;
+				}
+				LispMacroExpander.StructDefinedNames parentStruct = spellingsOf(parent).stream()
+					.map(structBySpelling::get)
+					.filter(java.util.Objects::nonNull)
+					.findFirst()
+					.orElse(null);
+				if (parentStruct == null) {
+					return null;
+				}
+				current = parentStruct;
+			}
+		}
+
+		private static boolean isOperatorForm(LispVal form, String operator) {
+			return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& operator.equals(LispSymbol.memberName(op.name())) && cons.isProperList();
+		}
+
+		/** Both colon spellings of a qualified name; the name itself otherwise. */
+		private static Set<String> spellingsOf(String name) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+			if (qn == null) {
+				return Set.of(name);
+			}
+			return Set.of(PackageRegistry.qualify(qn.pkg(), qn.member()),
+					PackageRegistry.qualifyInternal(qn.pkg(), qn.member()));
+		}
+	}
+
+	/**
+	 * When a third-party {@code defmethod} is kept. The GENERIC gate: some spelling of
+	 * the generic's name is live -- absent for a CL protocol name
+	 * ({@code initialize-instance}, {@code print-object}, {@code close}, ...), whose
+	 * calls the expansions synthesize with no textual reference. The SPECIALIZER gates,
+	 * one per required parameter specializing on a prunable class/condition/defstruct:
+	 * some INSTANTIATOR name of that definition is live -- an instance the method could
+	 * apply to can only be made through a reference the scan sees (the class name for
+	 * {@code make-instance}/{@code error}/a subclass's superclass list, a struct's
+	 * constructors), so a definition none of whose instantiators is live has no
+	 * instances, and every method specializing on it is unreachable whatever its generic
+	 * does. All gates must hold; a method with no gates at all is a root.
+	 *
+	 * @param genericGate the generic-name spellings, any of which being live satisfies
+	 * the gate; empty = no generic gate
+	 * @param specializerGates per specialized parameter, the instantiator names any of
+	 * which being live satisfies that parameter's gate
+	 */
+	private record MethodGates(List<String> genericGate, List<List<String>> specializerGates) {
+
+		boolean satisfiedBy(Set<String> live) {
+			if (!this.genericGate.isEmpty() && this.genericGate.stream().noneMatch(live::contains)) {
+				return false;
+			}
+			for (List<String> gate : this.specializerGates) {
+				if (gate.stream().noneMatch(live::contains)) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		List<String> allGateNames() {
+			List<String> names = new ArrayList<>(this.genericGate);
+			for (List<String> gate : this.specializerGates) {
+				names.addAll(gate);
+			}
+			return names;
+		}
+
+		List<String> genericNames() {
+			return this.genericGate;
+		}
+	}
+
+	/**
 	 * The name sets the reachability scan matches against, split by how a reference to
 	 * them may be spelled.
 	 *
@@ -488,21 +774,17 @@ public final class LibraryDefunPruner {
 
 	/**
 	 * Returns the defined name of a top-level {@code defun}/{@code defparameter}/
-	 * {@code defvar}/{@code defconstant} form, or {@code null} for anything else (which
-	 * is then a root). A {@code (defun (setf N) ...)} writer is keyed under N, the same
-	 * name every {@code (setf (N ...))} place and {@code #'(setf N)} reference contains
-	 * textually.
+	 * {@code defvar}/{@code defconstant} form, or {@code null} for anything else. A
+	 * {@code (defun (setf N) ...)} writer is keyed under N, the same name every
+	 * {@code (setf (N ...))} place and {@code #'(setf N)} reference contains textually.
 	 *
 	 * <p>
-	 * The definition kinds a third-party tree also uses heavily but that are NOT listed
-	 * here stay roots deliberately:
-	 * {@code defclass}/{@code defgeneric}/{@code defmethod}/
-	 * {@code define-condition}/{@code defstruct}/{@code deftype} are expanded into
-	 * defuns, dispatchers and type tables by
-	 * {@code LispMacroExpander.expandTopLevelDefinitions} INSIDE the backends, after this
-	 * pass -- and {@code (make-instance 'c)} synthesizes a call to whatever generic is
-	 * registered as {@code initialize-instance} with no textual occurrence at the call
-	 * site, so pruning them would mean duplicating the CLOS method-selection rules here.
+	 * The CLOS definition kinds -- {@code defclass}/{@code defgeneric}/
+	 * {@code defmethod}/{@code define-condition}/{@code defstruct} -- are not keyed here:
+	 * for third-party trees they are {@link Candidates} with their own name sets and
+	 * gates (a defmethod is reachable through its generic and its specializers, not
+	 * through one name), and outside those trees they stay roots. {@code deftype} stays a
+	 * root everywhere (worth 0-13 definitions across the vendored corpus).
 	 * {@code defmacro}, {@code define-compiler-macro}, {@code define-modify-macro},
 	 * {@code defsetf} and {@code define-setf-expander} never reach this pass at all:
 	 * {@code UserMacroExpander} registers and drops them.
@@ -600,6 +882,25 @@ public final class LibraryDefunPruner {
 					addAll(prunable.thirdPartyByMember().get(member), out);
 				}
 			}
+			case LispCons cons when isNameForgingCall(cons) -> {
+				// (intern (concatenate 'string "MAKE-" (symbol-name x) suffix) pkg) --
+				// sxql's find-constructor -- assembles a NAME out of literal pieces and
+				// computed holes and resolves it at run time. The literal pieces form a
+				// template; every third-party member name the template can produce
+				// counts as referenced. A piece-less assembly (all holes) stays the
+				// documented computed-name carve-out.
+				java.util.regex.Pattern template = cons.cdr() instanceof LispCons argCell ? nameTemplate(argCell.car())
+						: null;
+				if (template != null) {
+					for (Map.Entry<String, List<String>> entry : prunable.thirdPartyByMember().entrySet()) {
+						if (template.matcher(entry.getKey()).matches()) {
+							out.addAll(entry.getValue());
+						}
+					}
+				}
+				collectReferences(cons.car(), prunable, out);
+				collectReferences(cons.cdr(), prunable, out);
+			}
 			case LispCons cons when LispMacroExpander.isReadtableHookRegistration(cons) && cons.isProperList() -> {
 				// A reader hook rontolisp's reader can never fire: the registration
 				// lowers to a no-op that does not even evaluate the hook, so the #'name
@@ -626,6 +927,90 @@ public final class LibraryDefunPruner {
 		if (names != null) {
 			out.addAll(names);
 		}
+	}
+
+	/** Whether the call resolves a string it is handed into a symbol at run time. */
+	private static boolean isNameForgingCall(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		String member = member(op.name());
+		return LispNames.INTERN.equals(member) || LispNames.FIND_SYMBOL.equals(member);
+	}
+
+	/**
+	 * The name pattern a string-assembling argument of {@code intern}/{@code
+	 * find-symbol} can produce: literal pieces stay literal, computed pieces become
+	 * holes. Handles {@code (concatenate 'string piece...)} and {@code (format nil
+	 * "control" args...)} (every directive is a hole). Null when the argument is not such
+	 * an assembly or carries no literal piece at all -- a fully computed name is the
+	 * documented carve-out.
+	 */
+	private static java.util.regex.@Nullable Pattern nameTemplate(LispVal arg) {
+		if (!(arg instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		String member = member(op.name());
+		StringBuilder regex = new StringBuilder();
+		boolean anyLiteral = false;
+		if ("CONCATENATE".equals(member) && parts.size() >= 3) {
+			for (LispVal piece : parts.subList(2, parts.size())) {
+				if (piece instanceof LispString s) {
+					regex.append(java.util.regex.Pattern.quote(s.value()));
+					anyLiteral = true;
+				}
+				else {
+					regex.append(".*");
+				}
+			}
+		}
+		else if (LispNames.FORMAT.equals(member) && parts.size() >= 3 && parts.get(2) instanceof LispString control) {
+			String text = control.value();
+			StringBuilder literal = new StringBuilder();
+			for (int i = 0; i < text.length(); i++) {
+				char c = text.charAt(i);
+				if (c != '~') {
+					literal.append(c);
+					continue;
+				}
+				// A directive: skip its prefix parameters and one directive character
+				// (a ~/name/ runs to the closing slash), then emit a hole. ~~ is the
+				// literal tilde.
+				int j = i + 1;
+				while (j < text.length()
+						&& (Character.isDigit(text.charAt(j)) || ",'+-:@vV#".indexOf(text.charAt(j)) >= 0)) {
+					j++;
+				}
+				if (j >= text.length()) {
+					break;
+				}
+				if (text.charAt(j) == '~') {
+					literal.append('~');
+					i = j;
+					continue;
+				}
+				if (text.charAt(j) == '/') {
+					int close = text.indexOf('/', j + 1);
+					j = close < 0 ? text.length() - 1 : close;
+				}
+				if (literal.length() > 0) {
+					regex.append(java.util.regex.Pattern.quote(literal.toString()));
+					anyLiteral = true;
+					literal.setLength(0);
+				}
+				regex.append(".*");
+				i = j;
+			}
+			if (literal.length() > 0) {
+				regex.append(java.util.regex.Pattern.quote(literal.toString()));
+				anyLiteral = true;
+			}
+		}
+		else {
+			return null;
+		}
+		return anyLiteral ? java.util.regex.Pattern.compile(regex.toString()) : null;
 	}
 
 	/**

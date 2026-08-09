@@ -96,7 +96,7 @@ guide](../../../doc/en/guides/asdf-systems.md) has the exact accepted subset.
 | | [`../hello`](../hello) | [`../hello-clack`](../hello-clack) | this |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | three routes + `clackup` |
-| module | 563 B | 370,765 B raw / **102,172 B gzip** | 393,828 B raw / **107,334 B gzip** |
+| module | 563 B | 248,356 B raw / **75,334 B gzip** | 271,963 B raw / **80,645 B gzip** |
 | imports | zero | zero | **zero** — instantiated with `{}`, no WASI shim |
 | `_initialize` | none (no top-level forms) | ~5 ms | ~5 ms |
 | warm request | | 0.013 ms | **0.013 ms** |
@@ -104,10 +104,10 @@ guide](../../../doc/en/guides/asdf-systems.md) has the exact accepted subset.
 Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
 [`src/index.js`](src/index.js)'s boundary code against these exact modules.
 
-So routing costs **+23,063 B raw / +5,162 B gzip** over the hand-written
+So routing costs **+23,607 B raw / +5,311 B gzip** over the hand-written
 `defun`, paid once in the bundle, and nothing per request — the route list is
 walked in Lisp, and at three routes that disappears into the string boundary.
-107 KB gzip is 3.4% of the free plan's 3 MB compressed bundle limit.
+81 KB gzip is 2.7% of the free plan's 3 MB compressed bundle limit.
 
 ## Developing without Cloudflare
 
@@ -134,7 +134,7 @@ is resolved at **compile** time and inlined into the module).
 | [`worker.lisp`](worker.lisp) | The whole program — quickload, the routes, `clackup`. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend — and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../hello-clack/src/index.js`. |
-| `src/worker.wasm` | The compiled module (~385 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | The compiled module (~272 KB). A build product — run `./build.sh` first. |
 
 [`../httpbin-tiny-routes`](../httpbin-tiny-routes) is this example grown up: five
 echo endpoints declared one method at a time, a request body, a `/status/:code`
