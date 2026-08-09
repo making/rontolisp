@@ -224,3 +224,18 @@ repository root:
 ```
 
 The `.wasm` files are build products and are not checked in.
+
+### The `--no-wasi` warnings a build prints
+
+A `--no-wasi` build names, per primitive, every refusal its **load path** can
+reach — the ones that would otherwise die inside `_initialize` as a bare
+`RuntimeError: unreachable`, before any export exists. The line carries the call
+chain that reached it and the way out (`__ronto_set_time` for the clock,
+`--host-random` for entropy); a primitive only the *export* can reach stays
+quiet, because that one signals at the call, where `src/index.js` sees it.
+
+The `clack`-based directories all print one standing line for
+`WITH-OPEN-FILE`, reached through `CLACK:CLACKUP -> CLACK:EVAL-FILE ->
+CLACK::%LOAD-FILE`. That is `clackup`'s "the app is a pathname" branch: statically
+reachable, and never taken here — the chain in the line is what says so. Details
+in [the reactor-mode guide](../../doc/en/guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it).

@@ -197,3 +197,35 @@ initializer is exported as **`_initialize`** rather than `_start`. A host
 should call `_initialize` once after instantiation to run top-level forms
 (`defvar`/`defparameter`/`setq` globals that an exported function reads);
 pure-compute reactors that hold no top-level state can skip it.
+
+### What the build tells you before you run it
+
+A refusal reached from a **top-level form** is the exception to everything
+above: there is no caller to catch the condition, and the message goes to the
+output sink — so the instance dies inside `_initialize` with a bare
+`RuntimeError: unreachable` naming nobody. Which primitives your load path can
+reach is something the build already knows, so it says so — one line per
+primitive, with the call chain that got there:
+
+```console
+$ rontolisp app.lisp --no-wasi -o app.wasm
+.../session/state/cookie.lisp:25:12: warning: GET-UNIVERSAL-TIME is reachable from a top-level
+form of this --no-wasi module (the top-level (DEFSTRUCT COOKIE-STATE)), so it can run while the
+module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The
+module imports no clock: its time is whatever the host writes through the exported
+__ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize --
+until something does, reading it signals
+```
+
+The clock is the line worth having: a program that reads it while loading *is*
+loadable — on a host that sets it first — so this is a **host obligation**, not
+a refusal, and nothing but the build can tell you about it in advance. Entropy
+reads the same way and names `--host-random`.
+
+A primitive only an **export** can reach stays quiet, because that one is an
+ordinary call-time condition your caller can catch. Reachability is static, so
+a branch no run ever takes still counts: every `clack` program reports
+`with-open-file` through `clackup`'s `(clackup "app.lisp")` file branch, which
+a reactor never takes — the chain in the line is what tells you which branch it
+is. A refusal wrapped in `handler-case` or `ignore-errors` is not reported at
+all; the program already handles it.

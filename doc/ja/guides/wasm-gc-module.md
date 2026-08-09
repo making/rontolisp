@@ -100,3 +100,29 @@ WASI インポートスロットは内部のスタブで埋められるため、
 `--no-wasi` コンパイルはソースを `:rontolisp-reactor` フィーチャー有効で読みます。`clack:clackup ... :server :rontolisp` のプログラムがここで **serve する**リアクターになるのはこの仕組みです: ハンドラバックエンドがアプリケーションを保存し、コンパイラがホストがリクエストごとに呼ぶ `handle-request` エクスポートを合成します — [Clack ガイド](clack.md)の「ホストから呼ばれる場合」を参照してください。
 
 モジュールはリアクター(WASI コマンドではない)なので、トップレベルの初期化子は `_start` ではなく **`_initialize`** としてエクスポートされます。ホストはインスタンス化後に一度 `_initialize` を呼んでトップレベルフォーム(エクスポートされた関数が読む `defvar`/`defparameter`/`setq` のグローバル)を実行すべきです。トップレベル状態を持たない純粋計算リアクターは省略できます。
+
+### 実行する前にビルドが教えてくれること
+
+**トップレベルフォーム**から到達する拒否だけは、ここまでのすべての例外です:
+コンディションを捕捉する呼び出し元がなく、メッセージは出力シンクに消えるため、インスタンスは `_initialize`
+の中で、誰も名指ししない素の `RuntimeError: unreachable`
+で死にます。ロード経路がどの原始関数に到達しうるかはビルドが既に知っている事実なので、ビルドがそれを述べます — 原始関数ごとに 1 行、そこへ至った呼び出し連鎖つきで:
+
+```console
+$ rontolisp app.lisp --no-wasi -o app.wasm
+.../session/state/cookie.lisp:25:12: warning: GET-UNIVERSAL-TIME is reachable from a top-level
+form of this --no-wasi module (the top-level (DEFSTRUCT COOKIE-STATE)), so it can run while the
+module LOADS -- where nothing catches it and the host sees only RuntimeError: unreachable. The
+module imports no clock: its time is whatever the host writes through the exported
+__ronto_set_time hook (nanoseconds since the Unix epoch), so call that BEFORE _initialize --
+until something does, reading it signals
+```
+
+持っておく価値が最も高いのは時計の行です: ロード中に時計を読むプログラムは — 先に時刻を設定するホストの上でなら —
+*ロードできる*ので、これは拒否ではなく**ホスト側の義務**であり、事前に教えられるのはビルドだけです。エントロピーも同じ読み方で、`--host-random`
+を名指しします。
+
+**エクスポート**からしか到達できない原始関数については何も言いません。それは呼び出し元が捕捉できる通常の呼び出し時コンディションだからです。到達可能性は静的なので、実行時には決して通らない分岐も数に入ります:
+`clack` プログラムはどれも `clackup` の `(clackup "app.lisp")` ファイル分岐経由で `with-open-file`
+を報告します(リアクターが通ることはない分岐です) — どの分岐かを教えてくれるのが行に含まれる連鎖です。`handler-case` や `ignore-errors`
+で囲まれた拒否はそもそも報告されません。プログラムが既に対処しているからです。

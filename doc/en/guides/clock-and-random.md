@@ -79,6 +79,10 @@ The clock lands on the refusing side by itself: a reading of 0 is not "no time",
 it is 1970, and nothing the module could invent would *be* the time. So until a
 host sets it, all three built-ins signal a catchable error naming the operator.
 
+A library that reads the clock while it *loads* has no caller to catch that, so
+the **build** names it for you instead of leaving it to the first run — see
+[what the build tells you](wasm-gc-module.md#what-the-build-tells-you-before-you-run-it).
+
 ### Seeding the generator — `__ronto_seed_random`
 
 The module cannot *import* the host's random by default: a core WebAssembly import

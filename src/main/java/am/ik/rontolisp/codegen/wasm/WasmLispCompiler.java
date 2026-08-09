@@ -28,12 +28,14 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
+import am.ik.rontolisp.compiler.NoWasiLoadPathRefusals;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
@@ -1630,6 +1632,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
 		if (this.noWasi) {
+			// Every --no-wasi refusal is a call-time condition, which is right for a call
+			// site that may be dead -- but reached from a TOP-LEVEL form there is nothing
+			// to catch it and no output to read it in, so the host sees a nameless
+			// RuntimeError. The build knows which ones the load path reaches, so it says
+			// so (the clock's line is a HOST OBLIGATION rather than a refusal: it names
+			// __ronto_set_time). Before the rewrite below, which is what takes the
+			// file-opening forms out of the program.
+			NoWasiLoadPathRefusals.report(program, this.hostRandom, this.component).forEach(CompileWarnings::warn);
 			// A --no-wasi module has no filesystem, so file-opening forms lower to
 			// call-time error stubs. First, so every scan below (usesRead/usesEval,
 			// EH mode, the funcall-dispatch gate) reads the program that is actually
