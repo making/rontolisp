@@ -1396,16 +1396,16 @@ final class WasmIoRuntimeBuilder {
 	 * trapping the instance at {@code _initialize}.
 	 *
 	 * <p>
-	 * <strong>Why output, and ONLY output, gets a sink</strong> (the re-evaluation
-	 * trigger, decided 2026-08-07): a reactor host hands the module no file descriptors
-	 * at all, so there IS no destination for stdout/stderr -- discarding loses only the
-	 * bytes, and the alternative was killing the whole instance for a log line, with a
-	 * bare {@code unreachable} naming nothing. Every other stub keeps trapping because
-	 * answering would have to FABRICATE INPUT: an {@code fd_read} that reported EOF, a
-	 * {@code random_get} that left the buffer zeroed or a {@code clock_time_get} that
-	 * answered 0 all return data the program cannot tell from real, which is strictly
-	 * worse than a trap. {@code .todo/284}'s {@code random} half is exactly that case and
-	 * is deliberately still open.
+	 * <strong>Why output gets a sink</strong> (the re-evaluation trigger, decided
+	 * 2026-08-07): a reactor host hands the module no file descriptors at all, so there
+	 * IS no destination for stdout/stderr -- discarding loses only the bytes, and the
+	 * alternative was killing the whole instance for a log line, with a bare
+	 * {@code unreachable} naming nothing. This was the first stub to answer, and the
+	 * general rule grew out of it: a stub may answer when the answer is TRUE OF THIS
+	 * MODULE (no destination, no environment, no files), and may not when answering would
+	 * return data the program cannot tell from real -- which is why {@code fd_read} and
+	 * {@code clock_time_get} are still bare {@code unreachable} (see
+	 * {@code .kb/wasm-export-no-wasi.md} for the whole table).
 	 *
 	 * <p>
 	 * Every emitter here calls {@code fd_write} with ONE iovec and drops the errno, so
@@ -1430,6 +1430,285 @@ final class WasmIoRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds the {@code --no-wasi} {@code environ_sizes_get} stub: reports an EMPTY
+	 * environment (0 variables, 0 bytes) and returns errno 0, so
+	 * {@code (uiop:getenv "X")} answers {@code nil} instead of trapping.
+	 *
+	 * <p>
+	 * <strong>Why this is truth, not fabrication</strong> (the re-evaluation trigger,
+	 * decided 2026-08-09): "no environment variables are set" is a state every real WASI
+	 * host can produce -- {@code wasmtime run} without {@code --env} is exactly it -- and
+	 * a reactor host hands the module no environment at all, so reporting zero is a fact
+	 * about this module rather than data invented to look like a host's. It is the same
+	 * shape of answer as the {@code fd_write} sink and the opposite of a
+	 * {@code clock_time_get} answering 0, which would name a time that is not the time.
+	 * Every caller already handles the unset case: {@code getenv} is a lookup that may
+	 * miss.
+	 *
+	 * <p>
+	 * This is the second half of {@code smart-buffer}'s one load-time form
+	 * ({@code (merge-pathnames (format nil "smart-buffer-~36R" (random ...))
+	 * (uiop:default-temporary-directory))}) -- {@code default-temporary-directory} reads
+	 * {@code TMPDIR} -- and so of the {@code lack-request} chain that could not be
+	 * instantiated on a Worker.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiEnvironSizesGetBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: COUNT_OUT=0, BUFSIZE_OUT=1 (both i32); no locals.
+		w.write(0);
+		final int COUNT_OUT = 0, BUFSIZE_OUT = 1;
+		getLocal(w, COUNT_OUT);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		getLocal(w, BUFSIZE_OUT);
+		i32(w, 0);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/** preview1 {@code errno::noent} -- "no such file or directory". */
+	static final int ERRNO_NOENT = 44;
+
+	/** preview1 {@code errno::badf} -- "bad file descriptor". */
+	static final int ERRNO_BADF = 8;
+
+	/**
+	 * Builds a {@code --no-wasi} stub that simply REPORTS the given preview1 errno: the
+	 * whole body is {@code i32.const errno}, valid for every i32-returning WASI signature
+	 * whatever its parameters, because the parameters are just ignored.
+	 *
+	 * <p>
+	 * This is how the FILESYSTEM family answers instead of trapping, and it needed no new
+	 * logic anywhere else: {@code _open}, {@code _probe_file}, {@code _list_directory}
+	 * and {@code _load} all already turn a non-zero {@code path_open} errno into
+	 * {@code nil} -- deliberately, because a wasm trap is not catchable and a library
+	 * probing for an OPTIONAL file must degrade rather than abort. Handing them
+	 * {@code ENOENT} therefore makes {@code probe-file} / {@code directory} answer
+	 * {@code nil} and the {@code open} call sites signal a real, catchable Lisp error,
+	 * which is the truth about a module that has no filesystem at all -- no file exists,
+	 * so no file is found. {@code fd_close} / {@code fd_readdir} get {@code EBADF} for
+	 * the same reason: with every open failing there is no descriptor they could be
+	 * handed, and "that is not a descriptor" is again a true answer rather than an
+	 * invented one.
+	 *
+	 * <p>
+	 * {@code environ_get} uses it with errno 0: an EMPTY environment has no pointers and
+	 * no bytes to write, so success with nothing written is the complete answer (the
+	 * caller's loop is bounded by the count {@link #buildNoWasiEnvironSizesGetBody()}
+	 * just reported, which is zero).
+	 *
+	 * <p>
+	 * The syntactic {@code (with-open-file ...)} / {@code (open ...)} rewrite in
+	 * {@code compiler/NoWasiFilesystemStubs} stays, and is not made redundant by this: it
+	 * is what gives those two forms a message naming WASI instead of a generic "cannot
+	 * open", and -- the reason it runs first -- what drops the dead
+	 * {@code read}/{@code eval} bodies inside them out of the module entirely
+	 * ({@code .kb/optimize-dead-code-elimination.md}). This stub is the backstop for
+	 * every path that rewrite cannot see: {@code probe-file}, {@code directory},
+	 * {@code load}, and an {@code open} reached through {@code funcall}.
+	 * @param errno the preview1 errno to report
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiErrnoBody(int errno) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// no locals; the parameters (whatever the signature has) are ignored.
+		w.write(0);
+		i32(w, errno);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds the body of {@code __ronto_seed_random (i64) -> ()}, the host's way to
+	 * replace the {@code --no-wasi} generator's constant start state with real entropy:
+	 * it stores the argument into {@link WasmLispCompiler#RANDOM_STATE_ADDR}, and the
+	 * next SplitMix64 step continues from there.
+	 *
+	 * <p>
+	 * This is what a JavaScript host calls -- once, right after instantiation and BEFORE
+	 * {@code _initialize}, so even a library's load-time {@code (random ...)} draws from
+	 * the host's entropy:
+	 * {@code seed(new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0])}.
+	 * It is an EXPORT rather than an import on purpose: an import would make the module
+	 * un-instantiable with an empty import object, which is the entire contract of
+	 * {@code --no-wasi}. A host that does not call it gets the deterministic sequence,
+	 * unchanged.
+	 *
+	 * <p>
+	 * Seeding does NOT turn {@code rontolisp:random-bytes} back on. SplitMix64 is
+	 * invertible from a single output, so a host-seeded stream is unpredictable but not
+	 * cryptographically strong, and the entropy API keeps signalling rather than shipping
+	 * something that only looks like a CSPRNG.
+	 *
+	 * <p>
+	 * Core-module shape only ({@code --no-wasi} without {@code --component}). A reactor
+	 * COMPONENT would have to lift this into its WIT world to expose it, which is a
+	 * world-shape decision rather than a core export -- and its top level runs at
+	 * instantiation anyway, so there is no window before the load-time draws.
+	 * @return the function body bytes
+	 */
+	static byte[] buildSeedRandomBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// param: SEED=0 (i64); no locals.
+		w.write(0);
+		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
+		getLocal(w, 0);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// SplitMix64 constants: the golden-ratio increment and the two mixing multipliers.
+	private static final long SM64_GAMMA = 0x9E3779B97F4A7C15L;
+
+	private static final long SM64_MIX1 = 0xBF58476D1CE4E5B9L;
+
+	private static final long SM64_MIX2 = 0x94D049BB133111EBL;
+
+	/**
+	 * Builds the {@code --no-wasi} {@code random_get} stub: a SplitMix64 generator over
+	 * {@link WasmLispCompiler#RANDOM_STATE_ADDR} that fills the caller's buffer with
+	 * {@code buf_len} pseudo-random bytes and returns errno 0. Nothing is imported, so a
+	 * reactor's {@code (random n)} -- including one in a TOP-LEVEL form of a quickloaded
+	 * library -- answers instead of killing the instance.
+	 *
+	 * <p>
+	 * <strong>Why this is not the fabricated input the sink rule forbids</strong> (the
+	 * re-evaluation trigger, decided 2026-08-09): {@code random} is not an entropy API.
+	 * CL specifies it as a pseudo-random draw from {@code *random-state*}, and a
+	 * conforming image may start from a fixed state -- here {@code make-random-state}
+	 * already answers {@code nil}, so no state object is observable and "the sequence
+	 * repeats" is inside the contract, not a lie about the host. The primitive that DOES
+	 * promise entropy, {@code rontolisp::%random-byte} behind
+	 * {@code rontolisp:random-bytes}, is therefore NOT served from here on
+	 * {@code --no-wasi}: {@code WasmExprCompiler} lowers it to a call-time error instead,
+	 * because answering it from a fixed-seed PRNG would be exactly the "data the program
+	 * cannot tell from real" the {@code fd_read} / {@code clock_time_get} stubs still
+	 * trap over.
+	 *
+	 * <p>
+	 * The state cell starts at the zero of untouched linear memory, so every instance of
+	 * one module walks the same sequence. That is accepted, not overlooked: a core module
+	 * with no imports has no entropy available at all, and the alternatives (an import,
+	 * or a host poke into a frozen linear-memory address) both cost the zero-import
+	 * property that is the whole point of the flag. If a consumer ever needs per-instance
+	 * sequences, the cell above is the single place to write and the answer is an
+	 * exported {@code __ronto_seed_random} next to {@code __ronto_alloc}.
+	 * @return the function body bytes
+	 */
+	static byte[] buildNoWasiRandomGetBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: BUF=0, LEN=1 (both i32); i64 locals: S=2 (the generator's scratch),
+		// T=3 (the tail's byte shifter).
+		w.write(1);
+		w.write(2);
+		w.write(Type.I64);
+		final int BUF = 0, LEN = 1, S = 2, T = 3;
+		// while (len >= 8) { mem64[buf] = next(); buf += 8; len -= 8; }
+		w.write(Instruction.BLOCK, 0x40); // $done
+		w.write(Instruction.LOOP, 0x40); // $chunk
+		getLocal(w, LEN);
+		i32(w, 8);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		getLocal(w, BUF);
+		emitSplitMix64Next(w, S);
+		// align=0: a caller's buffer need not be 8-aligned (the two rontolisp call sites
+		// pass RANDOM_SCRATCH_ADDR, which is, but random_get's contract does not say so).
+		w.write(Instruction.I64_STORE, 0x00, 0x00);
+		getLocal(w, BUF);
+		i32(w, 8);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, BUF);
+		getLocal(w, LEN);
+		i32(w, 8);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // $chunk
+		w.write(Instruction.END); // $done
+		// Tail (len is now 0..7): one more draw, spent one byte at a time.
+		w.write(Instruction.BLOCK, 0x40); // $tailDone
+		getLocal(w, LEN);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		emitSplitMix64Next(w, S);
+		setLocal(w, T);
+		w.write(Instruction.LOOP, 0x40); // $tail
+		getLocal(w, BUF);
+		getLocal(w, T);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		getLocal(w, BUF);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, BUF);
+		getLocal(w, T);
+		i64(w, 8);
+		w.write(Instruction.I64_SHR_U);
+		setLocal(w, T);
+		getLocal(w, LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(LEN);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // $tail
+		w.write(Instruction.END); // $tailDone
+		// errno 0
+		i32(w, 0);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// One SplitMix64 step, leaving the u64 draw on the stack: the state cell advances by
+	// the golden-ratio gamma, and the new state is mixed through two xor-shift-multiply
+	// rounds and a final xor-shift. `scratch` is an i64 local the caller does not need
+	// across this sequence.
+	private static void emitSplitMix64Next(WasmWriter w, int scratch) {
+		// mem64[RANDOM_STATE_ADDR] += GAMMA ; scratch = the new state
+		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
+		i32(w, WasmLispCompiler.RANDOM_STATE_ADDR);
+		w.write(Instruction.I64_LOAD, 0x03, 0x00);
+		i64(w, SM64_GAMMA);
+		w.write(Instruction.I64_ADD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(scratch);
+		w.write(Instruction.I64_STORE, 0x03, 0x00);
+		emitSplitMix64Mix(w, scratch, 30, SM64_MIX1);
+		emitSplitMix64Mix(w, scratch, 27, SM64_MIX2);
+		// push scratch ^ (scratch >>> 31)
+		getLocal(w, scratch);
+		getLocal(w, scratch);
+		i64(w, 31);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I64_XOR);
+	}
+
+	// scratch = (scratch ^ (scratch >>> shift)) * multiplier
+	private static void emitSplitMix64Mix(WasmWriter w, int scratch, int shift, long multiplier) {
+		getLocal(w, scratch);
+		getLocal(w, scratch);
+		i64(w, shift);
+		w.write(Instruction.I64_SHR_U);
+		w.write(Instruction.I64_XOR);
+		i64(w, multiplier);
+		w.write(Instruction.I64_MUL);
+		setLocal(w, scratch);
+	}
+
 	// === low-level emit helpers ===
 
 	private static void getLocal(WasmWriter w, int slot) {
@@ -1444,6 +1723,11 @@ final class WasmIoRuntimeBuilder {
 
 	private static void i32(WasmWriter w, int value) {
 		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(value);
+	}
+
+	private static void i64(WasmWriter w, long value) {
+		w.write(Instruction.I64_CONST);
 		w.writeSignedLeb128(value);
 	}
 

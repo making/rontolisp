@@ -289,6 +289,115 @@ class WasmExportCompilerTest {
 		assertThat(containsBytes(bytes, sink)).as("the no-wasi fd_write sink body").isTrue();
 	}
 
+	// The nine --no-wasi stub bodies, in import-slot order: they are the first nine
+	// entries of the code section (WasmLispCompiler emits them before the start
+	// function).
+	// Each element is the raw body -- the locals declaration included -- exactly as the
+	// builders produce it, so a stub's whole policy can be pinned byte for byte.
+	private static byte[][] noWasiStubBodies(byte[] module) {
+		int[] p = { 8 }; // past the magic + version header
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xff;
+			int size = readUnsignedLeb128(module, p);
+			int end = p[0] + size;
+			if (id != 10) { // not the code section
+				p[0] = end;
+				continue;
+			}
+			int count = readUnsignedLeb128(module, p);
+			byte[][] bodies = new byte[Math.min(count, WasmLispCompiler.IMPORT_FUNC_COUNT)][];
+			for (int i = 0; i < bodies.length; i++) {
+				int bodySize = readUnsignedLeb128(module, p);
+				bodies[i] = java.util.Arrays.copyOfRange(module, p[0], p[0] + bodySize);
+				p[0] += bodySize;
+			}
+			return bodies;
+		}
+		throw new IllegalStateException("no code section");
+	}
+
+	private static int readUnsignedLeb128(byte[] buf, int[] p) {
+		int result = 0, shift = 0, b;
+		do {
+			b = buf[p[0]++] & 0xff;
+			result |= (b & 0x7f) << shift;
+			shift += 7;
+		}
+		while ((b & 0x80) != 0);
+		return result;
+	}
+
+	@Test
+	void noWasiStubsAnswerWhereverThereIsATrueAnswerAndTrapWhereThereIsNot() {
+		// The whole --no-wasi stub policy in one pin. A stub may answer when the answer
+		// is TRUE OF THIS MODULE -- no destination for output, no environment
+		// variables, no files -- and `random` may generate, because CL's random is a
+		// pseudo-random draw from *random-state*, not an entropy API. It may NOT invent
+		// input, and it may not name a time that is not the time: those two keep the
+		// bare `unreachable`.
+		List<LispVal> program = LispReader
+			.readAllFromString("(defun f (n) n)(rontolisp:wasm-export 'f :params '(:int) :returns :int)");
+		byte[][] bodies = noWasiStubBodies(new WasmLispCompiler(false, false, true).compile(program));
+
+		byte[] trap = { 0x00, 0x00, 0x0b };
+		assertThat(bodies[WasmLispCompiler.FUNC_FD_READ]).as("fd_read: answering EOF would invent input")
+			.isEqualTo(trap);
+		assertThat(bodies[WasmLispCompiler.FUNC_CLOCK_TIME_GET]).as("clock_time_get: no reading means 'no time'")
+			.isEqualTo(trap);
+
+		// 0 locals; local.get 3; local.get 1; i32.load off=4; i32.store; i32.const 0
+		assertThat(bodies[WasmLispCompiler.FUNC_FD_WRITE]).as("fd_write is a sink")
+			.isEqualTo(
+					new byte[] { 0x00, 0x20, 0x03, 0x20, 0x01, 0x28, 0x02, 0x04, 0x36, 0x02, 0x00, 0x41, 0x00, 0x0b });
+		// 0 locals; *count = 0; *bufsize = 0; return errno 0 -- an EMPTY environment.
+		assertThat(bodies[WasmLispCompiler.FUNC_ENVIRON_SIZES_GET]).as("environ_sizes_get reports an empty environment")
+			.isEqualTo(new byte[] { 0x00, 0x20, 0x00, 0x41, 0x00, 0x36, 0x02, 0x00, 0x20, 0x01, 0x41, 0x00, 0x36, 0x02,
+					0x00, 0x41, 0x00, 0x0b });
+		assertThat(bodies[WasmLispCompiler.FUNC_ENVIRON_GET]).as("environ_get: nothing to write, errno 0")
+			.isEqualTo(new byte[] { 0x00, 0x41, 0x00, 0x0b });
+		// The filesystem family reports an errno the _open / _probe_file /
+		// _list_directory / _load runtimes already turn into nil.
+		assertThat(bodies[WasmLispCompiler.FUNC_PATH_OPEN]).as("path_open answers ENOENT")
+			.isEqualTo(new byte[] { 0x00, 0x41, (byte) WasmIoRuntimeBuilder.ERRNO_NOENT, 0x0b });
+		assertThat(bodies[WasmLispCompiler.FUNC_FD_CLOSE]).as("fd_close answers EBADF")
+			.isEqualTo(new byte[] { 0x00, 0x41, (byte) WasmIoRuntimeBuilder.ERRNO_BADF, 0x0b });
+		assertThat(bodies[WasmLispCompiler.FUNC_FD_READDIR]).as("fd_readdir answers EBADF")
+			.isEqualTo(new byte[] { 0x00, 0x41, (byte) WasmIoRuntimeBuilder.ERRNO_BADF, 0x0b });
+
+		// random_get is a SplitMix64 generator over RANDOM_STATE_ADDR: two i64 locals,
+		// and the golden-ratio gamma as a signed LEB128 i64 constant.
+		byte[] randomGet = bodies[WasmLispCompiler.FUNC_RANDOM_GET];
+		assertThat(randomGet).as("random_get is not a trap").isNotEqualTo(trap);
+		assertThat(java.util.Arrays.copyOf(randomGet, 3)).as("two i64 locals")
+			.isEqualTo(new byte[] { 0x01, 0x02, 0x7e });
+		assertThat(containsBytes(randomGet, new byte[] { (byte) 0x95, (byte) 0xf8, (byte) 0xa9, (byte) 0xfa,
+				(byte) 0x97, (byte) 0xb7, (byte) 0xde, (byte) 0x9b, (byte) 0x9e, 0x7f }))
+			.as("the SplitMix64 gamma")
+			.isTrue();
+	}
+
+	@Test
+	void noWasiCoreModuleExportsTheHostSeedHook() {
+		// A --no-wasi module's `random` runs on its own generator from a CONSTANT start
+		// state, so every instance would repeat one sequence. __ronto_seed_random lets a
+		// host replace that state with real entropy before _initialize -- an export, not
+		// an import, because an import would cost the module the one property the flag
+		// exists for (instantiate with {}).
+		String source = "(defun draw (n) (random n))(rontolisp:wasm-export 'draw :params '(:int) :returns :int)";
+		List<LispVal> program = LispReader.readAllFromString(source);
+		assertThat(containsAscii(new WasmLispCompiler(false, false, true).compile(program), "__ronto_seed_random"))
+			.as("--no-wasi core module")
+			.isTrue();
+		// Not on a WASI-carrying build (random_get is the host's there) ...
+		assertThat(containsAscii(compile(source), "__ronto_seed_random")).as("Preview 1").isFalse();
+		// ... and not on the reactor COMPONENT, whose top level runs at instantiation --
+		// there is no window before the load-time draws, and exposing it at all would
+		// mean lifting it into the WIT world.
+		assertThat(containsAscii(new WasmLispCompiler(false, true, true).compile(program), "__ronto_seed_random"))
+			.as("--component --no-wasi reactor")
+			.isFalse();
+	}
+
 	private static boolean containsBytes(byte[] haystack, byte[] needle) {
 		outer: for (int i = 0; i + needle.length <= haystack.length; i++) {
 			for (int j = 0; j < needle.length; j++) {

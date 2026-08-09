@@ -31,6 +31,13 @@ let lisp = instantiate();
 // which is why it needs none of this.
 function instantiate() {
   const instance = new WebAssembly.Instance(module, {});
+  // Hand the module real entropy before its top level runs: a --no-wasi build
+  // imports nothing, so its `random` starts from a constant and every isolate
+  // would otherwise draw the same sequence. Seeding here -- BEFORE _initialize
+  // -- also covers the load-time draws inside quickloaded libraries.
+  instance.exports.__ronto_seed_random(
+    new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0],
+  );
   instance.exports._initialize();
   return instance.exports;
 }

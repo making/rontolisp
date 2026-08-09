@@ -138,21 +138,67 @@ A complete, copy-paste runnable Node + browser example is in the
 [browser guide's reactor section](wasm-browser.md#reactor-modules-by-hand).
 
 The WASI import slots are filled with internal stubs so every function index
-stays fixed (no other codegen changes). This mode is for **pure-compute**
-exports: any INPUT, time or `random` call (`read`/`uiop:getenv`/
-`get-universal-time`/`random`, including from a top-level form) hits a stub and
-**traps**, because a stub could only answer by inventing data. The file-opening
-forms are the diagnosable half of that rule: `with-open-file` and `open` compile
-to stubs that **signal a catchable error** ("requires WASI; a `--no-wasi` module
-has no filesystem") instead of trapping, so a library whose file-loading branch
-is dead code still compiles and runs.
+stays fixed (no other codegen changes). What those stubs do follows one rule:
+**a stub answers when the answer is true of the module, and refuses when
+answering would mean inventing a value you could not tell from a real one.** A
+reactor really has no output destination, no environment variables and no
+files, so those are answered; nothing about it makes a byte of input or a
+reading of the clock true, so those are not.
 
-Output is the exception. `print`, `format t` and everything else that writes to
-standard output or standard error go to a **sink**: a reactor host hands the
-module no file descriptors, so the bytes are discarded and the call returns
-normally. That is what lets a library that logs while it loads be quickloaded
-into a reactor at all — the alternative was killing the instance for a log line.
-If you need the text, return it from the export instead.
+| what your program does | on `--no-wasi` |
+| --- | --- |
+| `print`, `format t`, writes to `*error-output*` | **discarded** (a sink); the call returns normally |
+| `(uiop:getenv "X")` | `nil` — the environment is empty |
+| `probe-file`, `directory`, `load` | nothing is found (`nil`, or a catchable error) |
+| `with-open-file`, `open` | **signals** a catchable error naming WASI |
+| `(random n)`, `(random 1.0)` | works — a built-in generator, see below |
+| `rontolisp:random-bytes` | **signals** — no real entropy exists here |
+| `get-universal-time` and the other clocks | **signals** — no value would be the time |
+| `read`, `read-line`, `read-char` (standard input) | **traps** |
+
+Everything that signals does so at CALL time, so an `ignore-errors` or
+`handler-case` around it keeps working and a library whose file-loading or
+clock-probing branch is dead code still compiles and runs. Only standard input
+traps, and a trap is not catchable — that is the one place where a `--no-wasi`
+module still dies rather than reports.
+
+Output being a sink is what lets a library that logs while it loads be
+quickloaded into a reactor at all — the alternative was killing the instance for
+a log line. If you need the text, return it from the export instead.
+
+`random` works because Common Lisp's `random` is a pseudo-random draw from
+`*random-state*`, not an entropy source: a fresh image is allowed to start from
+a fixed state, and `make-random-state` here answers `nil`, so nothing about the
+contract promises unpredictability. The module carries its own generator and
+starts it from a constant, which has one consequence worth knowing: **unseeded,
+every instance of one module produces the same sequence.**
+
+### Seeding it from the host — `__ronto_seed_random`
+
+A `--no-wasi` module cannot *import* the host's random: an import is not
+optional in core WebAssembly, so asking for one would break the very thing the
+flag is for (instantiating with `{}`). It exports a hook instead. Call it once,
+**before `_initialize`**, and even a library's load-time `(random ...)` draws
+from your entropy:
+
+```js
+const instance = new WebAssembly.Instance(module, {});
+instance.exports.__ronto_seed_random(
+  new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0],
+);
+instance.exports._initialize();
+```
+
+Skip the call and you get the deterministic sequence, unchanged. The hook is on
+the core-module shape only — a reactor component (`--component --no-wasi`) runs
+its top level at instantiation, so there is no window before the first draw.
+
+Seeding does **not** re-enable `rontolisp:random-bytes`. The generator is fast
+and well-distributed but invertible from a single output, so a seeded stream is
+unpredictable without being cryptographically strong; the API that promises
+entropy keeps saying no rather than handing you something that only looks like a
+CSPRNG. For session identifiers and tokens, mint them in the host
+(`crypto.randomUUID()`) and pass them in.
 
 Combined with `--component`, the same contract produces a **reactor
 component** — a component that imports nothing, whose top-level forms run at

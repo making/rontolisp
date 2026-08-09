@@ -35,9 +35,10 @@ while it was being made to work:
 - **ningle reads every request through `lack-request`**, which tiny-routes
   never touches: the http-body / fast-http / smart-buffer / circular-streams /
   quri / yason / trivial-mimes chain is compiled and run by these legs. That
-  chain is also ~2 MB of a ~2.7 MB module, and the reason a ningle Worker
-  cannot be built today — its load-time `random` is `.todo/284`, not ningle's
-  doing. There is no size opt-in to offer either (myway compiles every rule to
+  chain is also ~2 MB of a ~2.7 MB module, and it is what made a ningle Worker
+  impossible until the `--no-wasi` stubs learned to answer `random` and
+  `getenv` (`.kb/wasm-export-no-wasi.md`) — the load-time trap was
+  smart-buffer's, not ningle's doing. There is no size opt-in to offer either (myway compiles every rule to
   a cl-ppcre scanner), which is the deliberate difference from
   `tiny-routes/lite`.
 - **`ningle:not-found` sets the status and returns nil**, so lack's

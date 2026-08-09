@@ -140,9 +140,10 @@ unchanged, on `:server :rontolisp`.
 ## Limitations
 
 The Worker sandbox and the `--no-wasi` build, exactly as in
-[`../httpbin`](../httpbin/README.md#limitations): no input, time or `random` in
-the Lisp (they trap), no filesystem, no `rontolisp:fetch` (use JavaScript's
-`fetch()` in `src/index.js`). Printing does not trap — it is discarded. And a
+[`../httpbin`](../httpbin/README.md#limitations): no standard input and no
+clock in the Lisp, no filesystem, no `rontolisp:fetch` (use JavaScript's
+`fetch()` in `src/index.js`). Printing does not trap — it is discarded — and
+`random` works, on a generator `src/index.js` seeds from `crypto`. And a
 runtime `(ql:quickload ...)` cannot work: the one at the top of `worker.lisp` is
 resolved at **compile** time and inlined into the module, which is why the first
 `./build.sh` needs network and later ones do not.

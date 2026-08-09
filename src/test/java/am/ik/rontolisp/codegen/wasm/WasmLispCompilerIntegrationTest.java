@@ -2647,6 +2647,90 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void noWasiModuleDrawsRandomNumbersFromItsOwnGenerator() throws Exception {
+		// The shape that made lack-request (and every Clack application that reads a
+		// request through it) unloadable on a Worker: a library names a temporary
+		// directory with a TOP-LEVEL (random ...), so the draw happens inside
+		// _initialize and a trapping stub killed the instance before any export could
+		// run. random_get is a self-contained SplitMix64 here, so the draw answers.
+		String program = """
+				(defvar *seed* (random 1000000))
+				(defun stamp () *seed*)
+				(rontolisp:wasm-export 'stamp :returns :int)
+				(defun draw (n) (random n))
+				(rontolisp:wasm-export 'draw :params '(:int) :returns :int)
+				(defun spread (n)
+				  ;; distinct draws, not one value repeated: count the distinct results
+				  ;; of n draws over a range wide enough that collisions are unlikely.
+				  (let ((seen '()))
+				    (dotimes (i n) (pushnew (random 1000000) seen))
+				    (length seen)))
+				(rontolisp:wasm-export 'spread :params '(:int) :returns :int)
+				""";
+		assertThat(Integer.parseInt(compileNoWasiAndInvoke(program, "stamp"))).isBetween(0, 999999);
+		assertThat(Integer.parseInt(compileNoWasiAndInvoke(program, "draw", "10"))).isBetween(0, 9);
+		assertThat(compileNoWasiAndInvoke(program, "spread", "50")).isEqualTo("50");
+	}
+
+	@Test
+	void noWasiHostSeedReplacesTheGeneratorsStartState() throws Exception {
+		// Two runs of the same module: unseeded they walk one fixed sequence (that is
+		// the documented price of a module that imports nothing), and a host that calls
+		// __ronto_seed_random first gets a different one. wasmtime's --invoke calls a
+		// single export, so the seed and the draw are one Lisp function apart: `seeded`
+		// pokes the state through the hook and then draws.
+		String program = """
+				(defun draw () (random 1000000))
+				(rontolisp:wasm-export 'draw :returns :int)
+				""";
+		String first = compileNoWasiAndInvoke(program, "draw");
+		assertThat(compileNoWasiAndInvoke(program, "draw")).as("unseeded: the same sequence every instance")
+			.isEqualTo(first);
+		// The hook is a plain export the host calls before anything else; driving it
+		// from wasmtime needs a second --invoke, so this leg only pins that it exists
+		// and is callable. The behavioural check (seeded runs differ) is the Node one in
+		// examples/cloudflare-workers/.
+		assertThat(compileNoWasiAndInvoke(program, "__ronto_seed_random", "42")).isEmpty();
+	}
+
+	@Test
+	void noWasiModuleAnswersAnEmptyEnvironmentAndAnEmptyFilesystem() throws Exception {
+		// A stub may answer when the answer is TRUE OF THIS MODULE. A reactor has no
+		// environment and no files, so getenv misses and probe-file finds nothing --
+		// which is what every caller of a lookup already handles, and what
+		// uiop:default-temporary-directory (the other half of smart-buffer's one
+		// load-time form) needs in order to fall back.
+		// %probe-file, not probe-file: the public spelling is a prelude defun the CLI
+		// splices, and this compiler is driven directly. The primitive is what reaches
+		// path_open, which is the stub under test.
+		String program = """
+				(defun envp () (if (uiop:getenv "HOME") 1 0))
+				(rontolisp:wasm-export 'envp :returns :int)
+				(defun probep () (if (%probe-file "/etc/hosts") 1 0))
+				(rontolisp:wasm-export 'probep :returns :int)
+				""";
+		assertThat(compileNoWasiAndInvoke(program, "envp")).isEqualTo("0");
+		assertThat(compileNoWasiAndInvoke(program, "probep")).isEqualTo("0");
+	}
+
+	@Test
+	void noWasiModuleSignalsForTheClockAndForRealEntropy() throws Exception {
+		// The other side of the same rule, for the two services that have no true
+		// answer: no value would BE the time, and a fixed-seed generator is not
+		// cryptographic entropy. Both signal a catchable Lisp condition naming what is
+		// missing rather than trapping, so a library that probes either one inside
+		// ignore-errors still loads.
+		String program = """
+				(defun clockp () (if (ignore-errors (get-universal-time)) 1 0))
+				(rontolisp:wasm-export 'clockp :returns :int)
+				(defun entropyp () (if (ignore-errors (rontolisp:random-bytes 4)) 1 0))
+				(rontolisp:wasm-export 'entropyp :returns :int)
+				""";
+		assertThat(compileNoWasiAndInvoke(program, "clockp")).isEqualTo("0");
+		assertThat(compileNoWasiAndInvoke(program, "entropyp")).isEqualTo("0");
+	}
+
+	@Test
 	void noWasiModuleStillTrapsOnInput() throws Exception {
 		// The other side of the rule: a stub may discard output, but answering a READ
 		// would fabricate input the program cannot tell from real, so it still traps.

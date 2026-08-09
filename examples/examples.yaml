@@ -603,10 +603,9 @@ examples:
       body), the "/hello/:name" template binding a parameter through myway's
       ppcre scanner, and the 404 coming from an overridden ningle:not-found
       METHOD, which is a defmethod on a library generic from the application's
-      package. The --no-wasi Worker build itself is NOT covered here and does
-      not instantiate today (ningle reads requests through lack-request, whose
-      chain draws random at load time); the reactor path this drives is the
-      same one, minus that. Checked with contains, not equals:
+      package. The --no-wasi Worker build itself is NOT covered here -- it needs
+      node, not a rontolisp backend -- but the reactor path this drives is the
+      same one. Checked with contains, not equals:
       the demo prints clackup's own start-up banner, and JSON key order differs
       per backend.
     expect:

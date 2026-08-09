@@ -1462,6 +1462,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// interned string bytes are clobbered.
 	static final int READDIR_USED_ADDR = 208;
 
+	// The --no-wasi PRNG's 64-bit state cell (8-aligned at 216..223, still below the
+	// DATA_BASE_OFFSET=256 headroom). Only a --no-wasi module reads or writes it: there
+	// random_get is not a host call but a SplitMix64 step over this cell
+	// (WasmIoRuntimeBuilder.buildNoWasiRandomGetBody). Zero-initialized memory is a valid
+	// SplitMix64 seed -- the step adds the golden-ratio gamma before mixing, so state 0
+	// is no weaker than any other -- which is why no data segment seeds it, and why every
+	// instance of one module walks the SAME sequence (deliberate; see
+	// .kb/wasm-export-no-wasi.md).
+	static final int RANDOM_STATE_ADDR = 216;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
@@ -2537,9 +2547,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the same intern-guarded pop for itself). So every component module stays
 		// byte-identical.
 		boolean hostArena = memoryHelpers && !this.component;
-		int helperFuncCount = memoryHelpers ? (hostArena ? 4 : 2) : 0;
+		int memoryHelperCount = memoryHelpers ? (hostArena ? 4 : 2) : 0;
 		int allocMarkFuncIndex = hostArena ? exportHelperBase + 2 : -1;
 		int allocResetFuncIndex = hostArena ? exportHelperBase + 3 : -1;
+		// __ronto_seed_random (i64) -> (): the host's escape hatch out of the --no-wasi
+		// generator's constant start state (WasmIoRuntimeBuilder.buildSeedRandomBody).
+		// Appended after the memory helpers, so it shifts only the COMPUTED wrapper/ABI
+		// bases below -- every fixed FUNC_* constant is under userFuncBase(). Core-module
+		// shape only: a reactor component would have to LIFT it to expose it at all.
+		boolean seedRandom = this.noWasi && !this.component;
+		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount : -1;
+		int helperFuncCount = memoryHelperCount + (seedRandom ? 1 : 0);
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
 		// a serve+fetch program's two spliced halves may each call
 		// wasi:http/types.fields-append, body-stream-read, ... in their own
@@ -3774,6 +3792,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addFunc(new Type[0], new Type[] { Type.I32 });
 					types.addFunc(new Type[] { Type.I32 }, new Type[0]);
 				}
+				// __ronto_seed_random (i64) -> (), last of the appended block (a
+				// --no-wasi
+				// core module never takes the component string-ABI branch above).
+				if (seedRandom) {
+					types.addFunc(new Type[] { Type.I64 }, new Type[0]);
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -4082,6 +4106,10 @@ public final class WasmLispCompiler implements LispCompiler {
 						fnDef.addFunction(abiTypeBase + 1);
 					}
 				}
+				// __ronto_seed_random, whose (i64)->() signature follows them.
+				if (seedRandom) {
+					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
+				}
 				// Export wrapper functions (host-callable), one per
 				// (rontolisp:wasm-export ...).
 				for (ExportPlan p : exportPlans) {
@@ -4349,6 +4377,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, allocMarkFuncIndex);
 						exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, allocResetFuncIndex);
 					}
+					// The host's seed hook: a --no-wasi module's `random` runs on its
+					// own generator, whose start state is a constant unless a host
+					// replaces it here. An EXPORT, not an import: an import would cost
+					// the module its instantiate-with-nothing contract.
+					if (seedRandom) {
+						exports.addExport("__ronto_seed_random", ExternalKind.FUNCTION, seedRandomFuncIndex);
+					}
 					// Host-callable Lisp functions requested via (rontolisp:wasm-export
 					// ...), each under its :as alias (default: the Lisp name).
 					for (ExportPlan p : exportPlans) {
@@ -4367,19 +4402,34 @@ public final class WasmLispCompiler implements LispCompiler {
 		mainWriter
 			// Code section
 			.writeCode(code -> {
-				// No-wasi mode: bodies for the nine stubs at indices 0-8. All but
-				// fd_write are `unreachable; end` (no locals); unreachable is
-				// stack-polymorphic so one shape satisfies every WASI signature, and
-				// calling one (i.e. any input, file or clock I/O) traps.
-				// fd_write is the ONE exception: it is a SINK (report every byte
-				// written, return errno 0), so writing to stdout/stderr on a reactor
-				// discards the bytes instead of killing the instance. See
-				// buildNoWasiSinkBody for why output is the only primitive that gets
-				// this.
+				// No-wasi mode: bodies for the nine stubs at indices 0-8. TWO are
+				// `unreachable; end` (no locals) -- fd_read and clock_time_get;
+				// unreachable is stack-polymorphic so one shape satisfies every WASI
+				// signature, and calling one traps.
+				// The other seven ANSWER, each for its own reason (see the builders):
+				// fd_write is a SINK, so writing to stdout/stderr on a reactor discards
+				// the bytes instead of killing the instance; random_get is a
+				// self-contained SplitMix64 generator over a linear-memory state cell;
+				// the two environ functions report an EMPTY environment; and the three
+				// filesystem slots report an errno, which the _open / _probe_file /
+				// _list_directory / _load runtimes already turn into nil.
+				// The line the last two keep trapping over: a stub may discard output,
+				// draw a pseudo-random number, or report a state the module really is
+				// in (no environment, no files) -- but it may not invent INPUT, and it
+				// may not name a time that is not the time.
 				if (this.noWasi) {
 					for (int i = 0; i < IMPORT_FUNC_COUNT; i++) {
-						code.addFunction(i == FUNC_FD_WRITE ? WasmIoRuntimeBuilder.buildNoWasiFdWriteSinkBody()
-								: new byte[] { 0x00, 0x00, 0x0b });
+						code.addFunction(switch (i) {
+							case FUNC_FD_WRITE -> WasmIoRuntimeBuilder.buildNoWasiFdWriteSinkBody();
+							case FUNC_RANDOM_GET -> WasmIoRuntimeBuilder.buildNoWasiRandomGetBody();
+							case FUNC_ENVIRON_SIZES_GET -> WasmIoRuntimeBuilder.buildNoWasiEnvironSizesGetBody();
+							case FUNC_ENVIRON_GET -> WasmIoRuntimeBuilder.buildNoWasiErrnoBody(0);
+							case FUNC_PATH_OPEN ->
+								WasmIoRuntimeBuilder.buildNoWasiErrnoBody(WasmIoRuntimeBuilder.ERRNO_NOENT);
+							case FUNC_FD_CLOSE, FUNC_FD_READDIR ->
+								WasmIoRuntimeBuilder.buildNoWasiErrnoBody(WasmIoRuntimeBuilder.ERRNO_BADF);
+							default -> new byte[] { 0x00, 0x00, 0x0b };
+						});
 					}
 				}
 				code.addFunction(finalStartBytes)
@@ -4619,6 +4669,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmExportRuntimeBuilder.buildAllocMarkBody());
 						code.addFunction(WasmExportRuntimeBuilder.buildAllocResetBody());
 					}
+				}
+				// __ronto_seed_random: the host's replacement for the generator's
+				// constant start state, matching the function-section order.
+				if (seedRandom) {
+					code.addFunction(WasmIoRuntimeBuilder.buildSeedRandomBody());
 				}
 				// Export wrapper bodies (host-callable), one per (rontolisp:wasm-export
 				// ...).

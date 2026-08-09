@@ -309,34 +309,38 @@ WASM.
 As in `../httpbin`, the **order of the keys inside a JSON object differs between
 backends** — it follows hash-table iteration order. The values are identical.
 
-## Middleware, `lack:builder`, sessions
+## Middleware, `lack:builder`, request bodies
 
 `clackup`'s default `backtrace` middleware is in this module and active — its
 report goes to `*error-output*`, a sink under `--no-wasi` — so "middleware
-works" is not hypothetical. What is still out of reach is the *session/body*
-stack: **`(ql:quickload "lack-request")` in a `--no-wasi` program traps at
-`_initialize` today**. Measured, and narrowed to one line upstream:
+works" is not hypothetical. Neither is the *body/params* stack:
+`(ql:quickload "lack-request")` loads on a `--no-wasi` build, and a
+`lack:builder` around this application reads a query string and a urlencoded
+POST body the way it does anywhere else.
+
+That took a fix rather than a discovery, and the measurement is worth keeping
+because it is the shape every heavy library has. The chain
 
 ```
 lack-request -> http-body -> fast-http -> smart-buffer
 ```
 
-and `smart-buffer/src/smart-buffer.lisp` names its temporary directory with a
-**top-level `(random ...)`**. `--no-wasi` has no WASI, so `random` compiles to an
-`unreachable` stub — which is the documented `--no-wasi` limitation
-([below](#limitations)) firing at *load* time instead of at call time, where a
-`handler-case` could at least see it. This is the same shape as clackup's own
-`format t` calls, and it is deliberately **not** fixed the same way: output has
-a meaningful null destination, so it goes to a sink, while a `random` that
-answered zeros would hand the program data it cannot tell from real. The same program is fine on the
-interpreter, on the JVM and as a Preview 1 `_start` module: only the reactor
-build, whose top-level forms run inside `_initialize`, hits it.
+ends at one upstream form — `smart-buffer/src/smart-buffer.lisp` names its
+temporary directory with a **top-level `(random ...)`** over
+`uiop:default-temporary-directory` — and on a `--no-wasi` module BOTH halves
+used to be `unreachable` stubs. That is the documented limitation firing at
+*load* time rather than at call time, inside `_initialize`, before any export
+exists and with nothing in `RuntimeError: unreachable` naming the culprit. It is
+now answered on both counts: the module carries its own `random` generator
+(seeded from `crypto` by [`src/index.js`](src/index.js)), and `getenv` reports
+the empty environment a reactor really has. The rule that keeps `read-line`
+trapping is unchanged — see [Limitations](#limitations) for where the line is.
 
-The Lisp side is otherwise ready for it: the reactor hands over a genuine Clack
-environment, `content-length` included, which is exactly what
-`lack/request:request-parameters` needs, and the application neither knows nor
-cares what is wrapped around it. When the load-time trap is gone, adding the
-middleware stack is an edit to the one source and nothing else.
+One thing in that stack is still out of reach, and it is now a *visible* one
+rather than a bare trap: `lack-middleware-session` reads the clock while it
+loads, and a clock is the one service a module with no imports cannot answer
+truthfully. It signals `GET-UNIVERSAL-TIME requires a host clock ...` instead of
+trapping namelessly.
 
 ## Why `clackup` prints, and why that is fine here
 
@@ -350,9 +354,9 @@ error are a **sink** under `--no-wasi`, so the bytes are simply discarded.
 That is a deliberate policy rather than a patch for clack: a reactor host hands
 the module no file descriptors, so discarding loses only the bytes, while the
 alternative was killing the instance for a log line — and it applies to every
-library that logs while it loads, not just this one. Input, time and `random`
-still trap under `--no-wasi`, because a stub can only answer those by inventing
-data.
+library that logs while it loads, not just this one. It generalized into the
+rule the whole `--no-wasi` surface follows: a stub answers when the answer is
+true of the module, and refuses when answering would only invent data.
 
 Locally (`rontolisp ../../net/httpbin-clack.lisp`, `wasmtime`) the two lines
 are visible on real stdout. Pass `:silent t :debug nil` if you would rather not
@@ -362,10 +366,12 @@ see them.
 
 Everything below is the Worker sandbox or the `--no-wasi` build, and every one
 of them applies to [`../httpbin`](../httpbin/README.md#limitations) identically:
-no input, time or `random` in the Lisp (they trap; `print` and `format t` do
-not, but their output is discarded), no filesystem (`with-open-file` and `open`
-signal a catchable error), no `rontolisp:fetch` (use JavaScript's `fetch()` in
-`src/index.js`).
+no standard input (it traps) and no clock (it signals), no filesystem
+(`with-open-file` and `open` signal a catchable error; `probe-file` and
+`directory` answer nothing), no `rontolisp:fetch` (use JavaScript's `fetch()` in
+`src/index.js`). `print` and `format t` do not trap, but their output is
+discarded, and `random` works on a module-local generator that `src/index.js`
+seeds from `crypto`.
 One more is specific to this directory: a runtime `(ql:quickload ...)` cannot
 work either — the `ql:quickload` form in the source is resolved at
 **compile** time and inlined into the module, which is why the first

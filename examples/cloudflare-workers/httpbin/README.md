@@ -351,9 +351,18 @@ application being portable.
 Everything below is the Worker sandbox or the `--no-wasi` build, not rontolisp
 itself:
 
-- **No input, time or randomness in the Lisp.** `--no-wasi` means `random`,
-  `get-universal-time` and `uiop:getenv` have nothing behind them and trap when
-  called — a stub could only answer by inventing data. Return values instead.
+- **No standard input and no clock in the Lisp.** A `--no-wasi` stub answers
+  only when the answer is true of the module. It is true that a reactor has no
+  environment and no files, so `uiop:getenv` and `probe-file` answer nothing;
+  it is not true that input ended or that the time is anything in particular, so
+  `read-line` traps and `get-universal-time` signals a catchable error. Return
+  values instead.
+- **`random` works; `rontolisp:random-bytes` does not.** The module carries its
+  own generator, which [`src/index.js`](src/index.js) seeds from
+  `crypto.getRandomValues` through the exported `__ronto_seed_random` before
+  `_initialize`. That makes the sequence unpredictable per isolate but not
+  cryptographically strong, so the API that promises entropy keeps signalling —
+  mint tokens with `crypto.randomUUID()` in JavaScript and pass them in.
 - **Printing is discarded, not trapped.** `print` and `format t` reach a sink
   under `--no-wasi` (a reactor host hands the module no file descriptors), so
   they cost nothing and lose everything. Do the logging in `src/index.js` with

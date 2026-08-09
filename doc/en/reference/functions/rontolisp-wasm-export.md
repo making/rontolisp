@@ -90,11 +90,14 @@ way.
 - Only a top-level `defun` can be exported; the declared parameter count must
   match its arity, and functions that take or return function values are out of
   scope.
-- Outside `--component`, the exported function is pure-compute: reading, time,
-  `random` and file access (from the function or from a top-level form) trap
-  under `--no-wasi` and are otherwise unsupported. Printing is the exception —
-  under `--no-wasi` standard output and standard error are a sink, so a print
-  discards its bytes instead of trapping. One more exception: under `--no-gc`,
+- Outside `--component`, the exported function is pure-compute: reading, time
+  and file access (from the function or from a top-level form) are unsupported.
+  Under `--no-wasi` each of those has its own defined answer rather than a bare
+  trap — output is discarded, `getenv` and file lookups answer nothing, the
+  clock and `rontolisp:random-bytes` signal a catchable error, `random` runs on
+  a built-in generator, and only standard input traps; see
+  [No-WASI (reactor) mode](../../guides/wasm-gc-module.md#no-wasi-reactor-mode).
+  One more exception: under `--no-gc`,
   `print`/`princ`/`terpri` work through a single `fd_write` import that is
   added only when the program prints (see
   [Printing](../../guides/wasm-nogc.md#printing-print--princ--terpri)).

@@ -8,21 +8,10 @@ application composed out of routes. This is the third shape:
 function at all but a CLOS **object** you hang routes on — and where the 404 is a
 method you override rather than a route you add.
 
-> **This one does not run on Cloudflare yet, and it is not ningle's fault.**
-> `build.sh` produces a module, but instantiating it traps in `_initialize`:
-> ningle reads the request through `lack-request`, and that chain
-> (`lack-request -> http-body -> fast-http -> smart-buffer`) names a temporary
-> directory with a **top-level `(random ...)`**, which a `--no-wasi` module has
-> no source of. It is the same load-time trap
-> [`../httpbin-clack`](../httpbin-clack/README.md#middleware-lackbuilder-sessions)
-> measures and explains; the day that is answered, this directory deploys with
-> no change. Everything below `build.sh` — the program, the routes, the local
-> loop — works today on the interpreter, the JVM and the WASM backends, which is
-> what [`check.lisp`](check.lisp) and `examples/examples.yaml` pin.
-
 ```bash
-./build.sh          # worker.lisp -> src/worker.wasm
-rontolisp check.lisp   # drive the whole Worker locally -- this is the loop today
+./build.sh              # worker.lisp -> src/worker.wasm
+npx wrangler dev        # or deploy it
+rontolisp check.lisp    # drive the whole Worker locally, on any backend
 ```
 
 ## The whole program
@@ -79,10 +68,10 @@ genuinely different model and not a spelling difference:
 | | [`../hello`](../hello) | [`../hello-clack`](../hello-clack) | [`../hello-tiny-routes`](../hello-tiny-routes) | this |
 | --- | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | three routes + `clackup` | two routes, a `not-found` method + `clackup` |
-| module | 563 B | 249,754 B raw / **76,023 B gzip** | 273,376 B raw / **81,400 B gzip** | 2,662,502 B raw / **608,100 B gzip** |
+| module | 563 B | 249,795 B raw / **76,049 B gzip** | 273,417 B raw / **81,427 B gzip** | 2,662,798 B raw / **608,220 B gzip** |
 | imports | zero | zero | zero | **zero** |
-| `_initialize` | none (no top-level forms) | 4.7 ms | 4.7 ms | **traps** (see above) |
-| warm request | | 0.014 ms | 0.013 ms | — |
+| `_initialize` | none (no top-level forms) | 4.9 ms | 4.7 ms | **7.2 ms** |
+| warm request | | 0.013 ms | 0.011 ms | **0.059 ms** |
 
 All four modules built and measured together (`--no-wasi --optimize=size`,
 `gzip -9 -n`, node 24 driving [`src/index.js`](src/index.js)'s boundary code,
@@ -98,8 +87,8 @@ ningle replaced by one `lack.request:make-request` call is 2,226,054 B raw /
 it, because its request IS the Clack environment plist; ningle's `call` reads
 `request-headers` / `-method` / `-path-info` / `-parameters` on every request, so
 there is no route around it. 608 KB gzip is still 20% of the free plan's 3 MB
-compressed limit — the size is not what blocks this Worker, the load-time
-`random` above is.
+compressed limit, so the size is a cost rather than a wall — but it is the
+reason to reach for `tiny-routes` when the routing is all you need.
 
 There is also no size opt-in to offer the way tiny-routes has one: myway
 compiles every rule to a **cl-ppcre scanner**, so the regex engine is genuinely
@@ -107,8 +96,7 @@ reachable and no amount of tree-shaking can remove it.
 
 ## Developing without Cloudflare
 
-This is the working loop today, and it is the same one the other directories
-have: the synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
+The same loop the other directories have: the synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
 function, so the whole Worker — routes, the `not-found` method and all — runs on
 the interpreter, the JVM and the WASM backends, which
 [`examples/examples.yaml`](../../examples.yaml) pins:
@@ -151,12 +139,18 @@ six routes instead of two.
 
 ## Limitations
 
-The load-time `random` at the top of this file is the one that matters here.
-Beyond it, the Worker sandbox and the `--no-wasi` build limit the same things as
-in [`../hello-clack`](../hello-clack/README.md#limitations): no input, time or
-`random` in the Lisp (they trap), no filesystem, no `rontolisp:fetch` (use
-JavaScript's `fetch()` in `src/index.js`). Printing does not trap — it is
-discarded.
+The same ones as [`../hello-clack`](../hello-clack/README.md#limitations): no
+standard input and no clock in the Lisp, no filesystem, no `rontolisp:fetch`
+(use JavaScript's `fetch()` in `src/index.js`). Printing does not trap — it is
+discarded — and `random` works, on a generator `src/index.js` seeds from
+`crypto`.
+
+This directory used to open with a blockquote saying it did not run on
+Cloudflare at all: `lack-request -> http-body -> fast-http -> smart-buffer`
+names a temporary directory with a top-level `(random ...)` over
+`uiop:default-temporary-directory`, and on a `--no-wasi` module both halves used
+to trap, inside `_initialize`, before any export existed. Nothing about ningle
+changed; the reactor learned to answer them.
 
 ## Rebuilding
 

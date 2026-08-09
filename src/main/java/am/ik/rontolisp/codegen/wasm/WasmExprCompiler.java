@@ -408,6 +408,23 @@ final class WasmExprCompiler {
 					return;
 				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
+					if (ctx.noWasi) {
+						// The one place where --no-wasi's PRNG must NOT stand in for the
+						// host. `random` there is a self-contained SplitMix64 (CL's
+						// random is a pseudo-random draw from *random-state*, so a fixed
+						// start is inside its contract), but random-bytes promises
+						// CRYPTOGRAPHIC entropy -- answering that from a fixed-seed
+						// generator is precisely the "data the program cannot tell from
+						// real" the trapping stubs exist to avoid. A call-time error, not
+						// a compile error: the site may be dead code in a spliced
+						// library.
+						WasmExprCompiler
+							.compileExpr(LispMacroExpander.callTimeUnsupportedStub("rontolisp:" + LispNames.RANDOM_BYTES
+									+ " requires a host entropy source, which --no-wasi excludes (a --no-wasi module"
+									+ " imports nothing; its `random` is a deterministic generator and must not be"
+									+ " passed off as cryptographic entropy)"), ctx);
+						return;
+					}
 					// One cryptographically strong byte: the low byte of a WASI
 					// random_get draw (real host entropy in Preview 1, wasi:random
 					// under --component), boxed as an i31 fixnum.
@@ -1353,8 +1370,26 @@ final class WasmExprCompiler {
 				}
 				case LispNames.MAKE_RANDOM_STATE ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx);
-				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
-					WasmTimeCompiler.compile(cons, ctx, sym.name());
+				case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME,
+						LispNames.GET_INTERNAL_RUN_TIME -> {
+					if (ctx.noWasi) {
+						// The clock is the one WASI service with no true answer for a
+						// module that has none: an empty environment IS the environment
+						// and a missing file IS missing, but there is no reading that
+						// means "there is no time" -- answering 0 would name 1970 and a
+						// program cannot tell that from the real clock. So this signals,
+						// where the filesystem answers nil and `random` generates. A
+						// call-time error, not a compile error, and (unlike the bare
+						// `unreachable` the clock_time_get stub still is) catchable, so
+						// a library that reads the clock inside ignore-errors loads.
+						WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(sym.name()
+								+ " requires a host clock, which --no-wasi excludes (a --no-wasi module imports"
+								+ " nothing, and no value it could invent would be the time)"), ctx);
+					}
+					else {
+						WasmTimeCompiler.compile(cons, ctx, sym.name());
+					}
+				}
 				case LispNames.SQRT -> WasmSqrtCompiler.compile(cons, ctx);
 				case LispNames.EXP -> WasmExpCompiler.compile(cons, ctx);
 				case LispNames.LOG -> WasmLogCompiler.compile(cons, ctx);
