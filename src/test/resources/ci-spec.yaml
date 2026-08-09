@@ -2171,6 +2171,49 @@ cases:
     expected: |
       NIL
       0
+  # A loop variable is ONE binding stepped in place, so after the loop it still
+  # holds the value from the final iteration -- the assignment that reads the
+  # exhausted cursor must never happen. Every expectation below was measured on
+  # SBCL 2.6.5 first. `on` (the variable IS the cursor) and `being the hash-key`
+  # legitimately end at nil; `repeat` terminates at its own place in the clause
+  # order, so the two repeat/`= then` orders give the mirrored answers.
+  - name: loop-variable-after-termination
+    source: |
+      (print (mapcar #'funcall (loop for x in '(1 2 3) collect (lambda () x))))
+      (print (mapcar #'funcall (loop for (a b) in '((1 2) (3 4)) collect (lambda () (list a b)))))
+      (print (mapcar #'funcall (loop for (a b) on '(1 2 3 4) by #'cddr collect (lambda () (list a b)))))
+      (print (mapcar #'funcall (loop for x across #(1 2 3) collect (lambda () x))))
+      (print (mapcar #'funcall (loop for c on '(1 2 3) collect (lambda () (car c)))))
+      (print (loop for x in '(1 2 3) finally (return x)))
+      (print (loop for x across #(1 2 3) finally (return x)))
+      (print (loop for x in '(1 2 3) for y in '(10 20) finally (return (list x y))))
+      (print (loop for x in '(1 2 3) and y in '(10 20) finally (return (list x y))))
+      (print (loop for i from 1 to 3 finally (return i)))
+      (print (loop for x in '() finally (return x)))
+      (print (let ((h (make-hash-table))) (setf (gethash 'a h) 1) (loop for k being the hash-key of h finally (return k))))
+      (print (let ((s (list 1 2 3 4 5))) (loop repeat 3 for x = (pop s) collect x) s))
+      (print (loop repeat 3 for x = 1 then (* x 2) finally (return x)))
+      (print (loop for x = 1 then (* x 2) repeat 3 finally (return x)))
+      (print (loop repeat 2 for x in '(1 2 3) finally (return x)))
+      (print (loop for x in '(1 2 3) repeat 2 finally (return x)))
+    expected: |
+      (3 3 3)
+      ((3 4) (3 4))
+      ((3 4) (3 4))
+      (3 3 3)
+      (NIL NIL NIL)
+      3
+      3
+      (3 20)
+      (2 20)
+      4
+      NIL
+      NIL
+      (4 5)
+      4
+      8
+      2
+      3
   - name: delete-delete-if-delete-if-not
     source: |
       (print (delete 2 '(1 2 3 2 1)))

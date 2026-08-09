@@ -2689,6 +2689,70 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalLoopVariableKeepsLastValueAfterTermination() {
+		// A loop variable is ONE binding stepped in place, so after the loop it holds
+		// the value from the final iteration -- what a closure built in the body sees
+		// when called afterwards. Every expectation here was measured on SBCL 2.6.5.
+		assertThat(eval("(mapcar #'funcall (loop for x in '(1 2 3) collect (lambda () x)))").print())
+			.isEqualTo("(3 3 3)");
+		assertThat(eval("(mapcar #'funcall (loop for (a b) in '((1 2) (3 4)) collect (lambda () (list a b))))").print())
+			.isEqualTo("((3 4) (3 4))");
+		assertThat(eval("(mapcar #'funcall (loop for (a b) on '(1 2 3 4) by #'cddr collect (lambda () (list a b))))")
+			.print()).isEqualTo("((3 4) (3 4))");
+		assertThat(eval("(mapcar #'funcall (loop for x across #(1 2 3) collect (lambda () x)))").print())
+			.isEqualTo("(3 3 3)");
+		assertThat(eval("(mapcar #'funcall (loop for c across \"abc\" collect (lambda () c)))").print())
+			.isEqualTo("(#\\c #\\c #\\c)");
+		// dolist binds freshly per iteration; loop steps one binding. They are
+		// supposed to disagree -- both match SBCL.
+		assertThat(eval("(let (fs) (dolist (x '(1 2 3) (mapcar #'funcall (reverse fs))) (push (lambda () x) fs)))")
+			.print()).isEqualTo("(1 2 3)");
+		// `finally` sees the same last value.
+		assertThat(eval("(loop for x in '(1 2 3) finally (return x))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(loop for x in '(1 2 3 4) by #'cddr finally (return x))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(loop for x across #(1 2 3) finally (return x))")).isEqualTo(new LispInteger(3));
+		// The clauses that legitimately end at nil keep doing so: `on`'s variable IS
+		// the cursor, and CL leaves a hash-key variable nil after the loop.
+		assertThat(eval("(mapcar #'funcall (loop for c on '(1 2 3) collect (lambda () c)))").print())
+			.isEqualTo("(NIL NIL NIL)");
+		assertThat(eval(
+				"(let ((h (make-hash-table))) (setf (gethash :a h) 1) (loop for k being the hash-key of h finally (return k)))"))
+			.isSameAs(LispNil.INSTANCE);
+		// A numeric variable steps PAST its limit, as in CL.
+		assertThat(eval("(loop for i from 1 to 3 finally (return i))")).isEqualTo(new LispInteger(4));
+		// Per-clause heads: the driver that ended keeps its previous value while an
+		// earlier driver whose own test passed does advance.
+		assertThat(eval("(loop for x in '(1 2 3) for y in '(10 20) finally (return (list x y)))").print())
+			.isEqualTo("(3 20)");
+		assertThat(eval("(loop for x in '(1 2 3) and y in '(10 20) finally (return (list x y)))").print())
+			.isEqualTo("(2 20)");
+		// A zero-iteration loop leaves the variable nil (nothing was ever assigned).
+		assertThat(eval("(loop for x in '() finally (return x))")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(loop for x across #() finally (return x))")).isSameAs(LispNil.INSTANCE);
+	}
+
+	@Test
+	void evalLoopRepeatIsAClauseOrderedDriver() {
+		// `repeat` terminates at its own position in the clause order, so a clause
+		// written AFTER it does not run one extra time on the terminating pass...
+		assertThat(eval("(let ((s (list 1 2 3 4 5))) (loop repeat 3 for x = (pop s) collect x) s)").print())
+			.isEqualTo("(4 5)");
+		assertThat(eval("(let ((n 0)) (loop repeat 3 for x = 0 then (progn (incf n) (1+ x))) n)"))
+			.isEqualTo(new LispInteger(2));
+		assertThat(eval("(loop repeat 3 for x = 1 then (* x 2) finally (return x))")).isEqualTo(new LispInteger(4));
+		assertThat(eval("(loop repeat 2 for x in '(1 2 3) finally (return x))")).isEqualTo(new LispInteger(2));
+		// ...while a clause written BEFORE it does, which is the mirrored answer and
+		// equally what CL specifies (both measured on SBCL 2.6.5).
+		assertThat(eval("(let ((n 0)) (loop for x = 0 then (progn (incf n) (1+ x)) repeat 3) n)"))
+			.isEqualTo(new LispInteger(3));
+		assertThat(eval("(loop for x in '(1 2 3) repeat 2 finally (return x))")).isEqualTo(new LispInteger(3));
+		// The count itself is unaffected.
+		assertThat(eval("(loop repeat 3 collect 'x)").print()).isEqualTo("(X X X)");
+		assertThat(eval("(loop repeat 0 collect 'x)")).isSameAs(LispNil.INSTANCE);
+		assertThat(eval("(loop for x in '(1 2) repeat 5 collect x)").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
 	void evalReturnExitsInnermostLoopOnly() {
 		// The inner return exits only the inner dolist; the outer loop keeps iterating.
 		assertThat(eval("""

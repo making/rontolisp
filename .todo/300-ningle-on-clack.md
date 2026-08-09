@@ -79,11 +79,17 @@ once ningle lands. Other targets, same source: a `--component` serve build
    the map-set printer is what exposed it: `print-unreadable-object`'s `:type t`
    now follows `*print-escape*` (qualified under `prin1`, bare under `princ`), which
    is how CL writes the type symbol.
-3. **`.todo/303`** — a closure over a LOOP `for (name val) on ... by #'cddr`
-   variable sees NIL. ningle compiles a route's requirements into closures over
-   exactly those variables, so **every requirement silently never matches** —
-   `:accept` content negotiation and every `ningle:requirement` answer 404 with
-   no error anywhere.
+3. ~~`.todo/303`~~ — **DONE 2026-08-09.** A closure over a LOOP `for (name val)
+   on ... by #'cddr` variable saw NIL. An element variable is now assigned in the
+   iteration head, after its own termination test passed, so at exhaustion it
+   keeps the last element as in CL (`.kb/loop-iteration-heads.md`); `repeat`
+   became a clause-ordered driver in the same pass, which removes an extra
+   evaluation of the following clause's form. `ningle/route::compile-requirements`
+   over the verbatim upstream source now answers `(T (:MY-FLAG (:FLAG :ON)))` for
+   a satisfied user requirement and `(NIL)` for an unsatisfied one — it answered
+   `(NIL)` for both before — on all four backends. `:accept` negotiation and
+   `ningle:requirement` therefore dispatch; what is still untested end-to-end is
+   the HTTP path through them, which gaps 4 and 5 block.
 4. **`.todo/304`** — `pathnamep` claims every string, so lack's
    `finalize-response` shapes a STRING controller result as a bare-string Clack
    body, which the transport refuses. `(setf (ningle:route *app* "/") "Welcome

@@ -36,6 +36,24 @@ Multiple `for` clauses step together, and the loop ends as soon as the shortest 
 (loop for a = 0 then b and b = 1 then (+ a b) repeat 8 collect b) ; => (1 1 2 3 5 8 13 21)
 ```
 
+A `for` variable is **one binding stepped in place**, not a fresh binding per iteration, so once the loop has ended it still holds the value from the final iteration — which is what `finally` sees, and what a closure built in the body answers when it is called afterwards. (`dolist` binds freshly, so its closures each keep their own element; the two are supposed to differ.)
+
+```lisp
+(mapcar #'funcall (loop for x in '(1 2 3) collect (lambda () x))) ; => (3 3 3)
+```
+
+The variable is assigned only once its own termination test has passed, so the clause whose driver ran out keeps its last value while an earlier clause that still had an element does advance:
+
+```lisp
+(loop for x in '(1 2 3) for y in '(10 20) finally (return (list x y))) ; => (3 20)
+```
+
+`for VAR on` is the apparent exception and is not one: there the variable *is* the cursor, so it legitimately ends at `nil`, as does a `being the hash-key`/`hash-value` variable. A numeric variable ends one step past its limit:
+
+```lisp
+(loop for i from 1 to 3 finally (return i)) ; => 4
+```
+
 Accumulation and numeric ranges cover the common cases directly:
 
 ```lisp

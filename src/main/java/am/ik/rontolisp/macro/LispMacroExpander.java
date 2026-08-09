@@ -1313,10 +1313,24 @@ public final class LispMacroExpander {
 			// {stepped variable, step expression} pairs (see makeStepForms).
 			final List<LispVal[]> steps = new java.util.ArrayList<>();
 
-			// Assignments syncing an iteration variable with its stepped cursor (e.g.
-			// the `in` variable from its list cursor). Run after the clause's steps —
-			// and, in an `and` group, after the whole group's parallel steps, so the
-			// other clauses' step forms still see the previous element.
+			// Assignments syncing an ELEMENT variable with its stepped cursor (e.g. the
+			// `in` variable from its list cursor, the `across` variable from its index).
+			// Run in the ITERATION HEAD, after this group's termination tests pass, so
+			// the assignment nobody is supposed to observe -- the one reading the
+			// exhausted cursor -- never happens: at loop exit the variable still holds
+			// the last element, which is what CL's single stepped binding means for a
+			// closure built in the body, for `finally`, and for a later clause's head
+			// (`for x in xs for y in ys`: when ys runs out first, y keeps its value).
+			// The cursor itself has already advanced by then, so the value assigned is
+			// the same one the end-of-body placement produced -- only the timing moves.
+			final List<LispVal> headSyncs = new java.util.ArrayList<>();
+
+			// Assignments syncing an iteration variable with its stepped cursor that
+			// must run after the clause's steps -- and, in an `and` group, after the
+			// whole group's parallel steps, so the other clauses' step forms still see
+			// the previous element. Unlike headSyncs these DO fire against the
+			// exhausted cursor: `being the hash-key/hash-value` leaves its variable nil
+			// after the loop in CL, so that final assignment is observable behavior.
 			final List<LispVal> postSteps = new java.util.ArrayList<>();
 
 			// Per-iteration re-assignment records {var, init, then} for
@@ -1465,22 +1479,29 @@ public final class LispMacroExpander {
 				seqEqualsGroups.add(new SeqEqualsGroup(iterationHeads.size(), steps.size(),
 						List.copyOf(groupBodyPrefix), List.copyOf(driverEndTests), groupDriverVars.size() - 1));
 			}
-			// Emit one iterationHead for this group: check its drivers, then run
-			// its (sequential) bodyPrefix. A later group's iterationHead runs
-			// only after this one signals continue, so a driver terminating
-			// here prevents the later group's bodyPrefix from evaluating.
-			List<LispVal> groupBodyPrefixForms = sequentialBodyPrefix(groupBodyPrefix);
+			// Emit one iterationHead for this group: check its drivers, then sync
+			// its element variables from the (already stepped) cursors and run its
+			// (sequential) bodyPrefix. A later group's iterationHead runs only
+			// after this one signals continue, so a driver terminating here
+			// prevents the later group's syncs and bodyPrefix from evaluating --
+			// and the terminating group's own element variables keep the last
+			// value they held (see ForPiece.headSyncs).
+			List<LispVal> groupHeadForms = new java.util.ArrayList<>();
+			for (ForPiece piece : group) {
+				groupHeadForms.addAll(piece.headSyncs);
+			}
+			groupHeadForms.addAll(sequentialBodyPrefix(groupBodyPrefix));
 			LispVal iterHead;
 			if (groupDriverEndTests.isEmpty()) {
-				iterHead = groupBodyPrefixForms.isEmpty() ? LispTrue.INSTANCE : prognT(groupBodyPrefixForms);
+				iterHead = groupHeadForms.isEmpty() ? LispTrue.INSTANCE : prognT(groupHeadForms);
 			}
-			else if (groupBodyPrefixForms.isEmpty()) {
+			else if (groupHeadForms.isEmpty()) {
 				iterHead = makeNot(orOf(groupDriverEndTests));
 			}
 			else {
-				// (if (not (or drivers...)) (progn bodyPrefix t) nil)
+				// (if (not (or drivers...)) (progn syncs+bodyPrefix t) nil)
 				iterHead = listToCons(List.of(new LispSymbol(LispNames.IF), makeNot(orOf(groupDriverEndTests)),
-						prognT(groupBodyPrefixForms), LispNil.INSTANCE));
+						prognT(groupHeadForms), LispNil.INSTANCE));
 			}
 			iterationHeads.add(iterHead);
 			if (parallel) {
@@ -1579,7 +1600,8 @@ public final class LispMacroExpander {
 			else {
 				// The variable holds the first element already at binding time (so a
 				// later sequential clause's init can reference it, as in CL) and is
-				// re-synced from the cursor after each step.
+				// re-synced from the cursor in the iteration head, once the cursor has
+				// stepped AND the end test has passed.
 				LispSymbol cursor = gensym("LIST");
 				piece.binds.add(new ForBinding(cursor, listForm, false));
 				piece.endTests.add(makeNot(call(LispNames.CONSP, cursor)));
@@ -1594,9 +1616,9 @@ public final class LispMacroExpander {
 			// `across` walks a random-access sequence (a string's characters or a
 			// vector's elements) via an index cursor; the element accessor is chosen at
 			// runtime because the sequence type is unknown at expansion time. The
-			// element read is bounds-guarded because the variable syncs at binding time
-			// and after each step, where the index may sit at the (empty or exhausted)
-			// sequence's length.
+			// element read is bounds-guarded because the variable syncs at binding time,
+			// where an EMPTY sequence puts the index at the length already (the
+			// per-iteration sync runs only once the end test has passed).
 			LispSymbol seq = gensym("seq");
 			LispSymbol idx = gensym("idx");
 			piece.binds.add(new ForBinding(seq, seqForm, false));
@@ -1604,7 +1626,7 @@ public final class LispMacroExpander {
 			piece.binds.add(new ForBinding(var, guardedElt(seq, idx), true));
 			piece.endTests.add(call(LispNames.GE, idx, call(LispNames.LENGTH, seq)));
 			piece.steps.add(new LispVal[] { idx, call(LispNames.ADD, idx, new LispInteger(1)) });
-			piece.postSteps.add(setq(var, guardedElt(seq, idx)));
+			piece.headSyncs.add(setq(var, guardedElt(seq, idx)));
 		}
 
 		/**
@@ -1627,7 +1649,11 @@ public final class LispMacroExpander {
 		 * list. {@code VAR} takes the key (for {@code hash-keys}) or value (for
 		 * {@code hash-values}); an optional {@code using (hash-value V)} /
 		 * {@code (hash-key K)} binds the companion variable. Iteration order is
-		 * unspecified (it follows the backend's hash-table order).</li>
+		 * unspecified (it follows the backend's hash-table order). Unlike the
+		 * element-holding clauses ({@code in}/{@code across}), the variable is synced at
+		 * the END of every iteration and so is left nil once the table is exhausted --
+		 * which is what CL leaves there too (a closure over a {@code hash-key} variable
+		 * answers nil after the loop on SBCL).</li>
 		 * <li>{@code symbols}/{@code present-symbols}/{@code external-symbols} of a
 		 * package are a lite no-op: rontolisp has no runtime intern table (see
 		 * {@code .kb/symbol-runtime-api.md}), so {@code SOURCE} is evaluated once for
@@ -1796,14 +1822,15 @@ public final class LispMacroExpander {
 
 		/**
 		 * Binds every symbol of a destructuring pattern (or a single variable) to its
-		 * accessor over the source expression, and re-destructures after each step.
+		 * accessor over the source expression, and re-destructures at the top of every
+		 * iteration whose termination test has passed (see {@link ForPiece#headSyncs}).
 		 */
 		private void destructureInto(ForPiece piece, LispVal pattern, LispVal source) {
 			List<LispVal[]> parts = new java.util.ArrayList<>();
 			destructurePairs(pattern, source, parts);
 			for (LispVal[] p : parts) {
 				piece.binds.add(new ForBinding((LispSymbol) p[0], p[1], true));
-				piece.postSteps.add(setq((LispSymbol) p[0], p[1]));
+				piece.headSyncs.add(setq((LispSymbol) p[0], p[1]));
 			}
 		}
 
@@ -1923,15 +1950,20 @@ public final class LispMacroExpander {
 			terminationT = t;
 		}
 
+		/**
+		 * {@code repeat N} is a DRIVER clause, not a global end test: its termination
+		 * contributes an iteration head at its own position in the clause order, so a
+		 * later clause's per-iteration form never runs an extra time on the pass that
+		 * exhausts the count ({@code (loop repeat 3 for x = (pop s) ...)} pops exactly
+		 * three times; {@code (loop repeat 3 for x = 1 then (* x 2) ...)} leaves x at 4,
+		 * not 8).
+		 */
 		private void parseRepeat() {
 			LispVal n = nextForm();
 			LispSymbol counter = gensym("repeat");
 			bindings.add(pair(counter, n));
 			LispVal test = call(LispNames.LE, counter, new LispInteger(0));
-			endTests.add(test);
-			if (!steps.isEmpty() && !driverEndTests.isEmpty()) {
-				steps.add(makeIf(orOf(driverEndTests), EPILOGUE_MARKER, LispNil.INSTANCE));
-			}
+			iterationHeads.add(makeNot(test));
 			steps.add(setq(counter, call(LispNames.SUB, counter, new LispInteger(1))));
 			driverEndTests.add(test);
 		}
