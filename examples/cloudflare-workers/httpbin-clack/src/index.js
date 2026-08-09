@@ -7,7 +7,7 @@
 // differs is only what builds the Clack environment from the envelope --
 // thirty hand-written lines in ../worker.lisp in httpbin, the built-in Clack
 // handler backend that `clackup` installs in the other two (:rontolisp
-// compiled --no-wasi, or :cloudflare-workers -- the same shared machinery).
+// compiled --no-wasi, or :reactor -- the same shared machinery).
 // None of it is visible from JavaScript.
 //
 //   diff ../../httpbin/src/index.js ../../httpbin-clack/src/index.js   # no output

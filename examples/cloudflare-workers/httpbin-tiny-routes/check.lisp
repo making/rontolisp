@@ -17,7 +17,7 @@
   (let ((request
          (rontolisp:json-stringify (rontolisp:plist-hash-table request-plist))))
     (format t "~&--> ~a~%" request)
-    (format t "<-- ~a~%" (clack.handler.cloudflare-workers:dispatch request))))
+    (format t "<-- ~a~%" (clack.handler.reactor:dispatch request))))
 
 (defun headers (&rest plist) (rontolisp:plist-hash-table plist))
 

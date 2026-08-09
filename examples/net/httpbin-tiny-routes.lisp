@@ -7,8 +7,8 @@
 ;; "tiny-routes/lite" is the ppcre-free opt-in system; the full "tiny-routes"
 ;; runs this file unchanged and costs a regex engine. Everything below the
 ;; quickload is examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp
-;; verbatim down to *app*, where the clackup line carries :server
-;; :cloudflare-workers instead.
+;; verbatim down to *app*, where the clackup line carries :server :reactor
+;; instead.
 ;;
 ;; Run (the first run downloads clack/lack/tiny-routes into ~/.rontolisp/quicklisp):
 ;;   rontolisp examples/net/httpbin-tiny-routes.lisp

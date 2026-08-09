@@ -13,7 +13,7 @@
 ;;; and :name tokens and refuses a regex-shaped template when the route is
 ;;; built. The README has the numbers and the subset.
 
-(ql:quickload '("clack" "clack-handler-cloudflare-workers" "tiny-routes/lite"))
+(ql:quickload '("clack" "clack-handler-reactor" "tiny-routes/lite"))
 
 ;; Its own package, like any consumer of a routing library: the route macros
 ;; and path-parameter come from tiny-routes' exports.
@@ -110,5 +110,5 @@
   (define-any "*" (req) (no-route req)))
 
 (clack:clackup *app*
-               :server :cloudflare-workers
+               :server :reactor
                :use-thread nil)

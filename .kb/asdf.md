@@ -287,8 +287,8 @@ against the lite contract in one order, silently re-shipping cl-ppcre in the
 other. Consequence: `tiny-routes-middleware-cookie` (depends on full
 tiny-routes) cannot be combined with lite, correctly -- its cookie middleware
 would drag the engine back anyway. The same session fixed the worker handler
-shim's empty-header envelope (`clack-handler-cloudflare-workers.lisp`
-`%header-pairs` now answers a VECTOR): tiny-routes' `(ok "x")` carries no
+shim's empty-header envelope (`clack-handler-reactor.lisp` `%header-pairs` now
+answers a VECTOR): tiny-routes' `(ok "x")` carries no
 headers, an empty LIST stringifies as JSON `false`, and the Headers
 constructor on the JS side throws on it -- the first headerless Clack response
 any Worker example ever produced. Docs: the `tiny-routes/lite` subsection of

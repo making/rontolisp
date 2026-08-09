@@ -32,8 +32,8 @@
 ;;   stores the app in the shared reactor store (http-reactor.lisp) and leaves
 ;;   the (rontolisp::%http-reactor ...) marker that eval/HttpReactorInliner
 ;;   answers with the synthesized handle-request wasm-export -- the same
-;;   store, dispatcher and JSON envelope the explicit
-;;   clack-handler-cloudflare-workers backend uses, so the two cannot drift.
+;;   store, dispatcher and JSON envelope the explicit clack-handler-reactor
+;;   backend uses, so the two cannot drift.
 ;;
 ;; There is NO bridge here for the socket legs, and that is the point: since
 ;; the rontolisp:http-handler cutover, rontolisp's own server protocol IS

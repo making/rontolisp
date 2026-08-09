@@ -93,14 +93,14 @@ public final class ShimLibraries {
 			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, "clack-handler-rontolisp.lisp"),
 			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, "clack-handler-rontolisp.lisp"),
 			// The Clack handler backend that is a HOST-DRIVEN REACTOR on every
-			// backend (a Cloudflare Worker and friends): a JSON request string in,
-			// a JSON response string out. Thin public names over the shared
-			// rontolisp::%http-reactor-* transport (http-reactor.lisp,
-			// HttpReactorLibrary), which :server :rontolisp's #+rontolisp-reactor
-			// leg rides too. Both spellings again.
-			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM, "clack-handler-cloudflare-workers.lisp"),
-			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM,
-					"clack-handler-cloudflare-workers.lisp"));
+			// backend (a Cloudflare Worker, a browser page, a node or JVM
+			// embedding): a JSON request string in, a JSON response string out.
+			// Thin public names over the shared rontolisp::%http-reactor-*
+			// transport (http-reactor.lisp, HttpReactorLibrary), which
+			// :server :rontolisp's #+rontolisp-reactor leg rides too. Both
+			// spellings again.
+			Map.entry(LispNames.CLACK_HANDLER_REACTOR_SYSTEM, "clack-handler-reactor.lisp"),
+			Map.entry(LispNames.CLACK_HANDLER_REACTOR_DOTTED_SYSTEM, "clack-handler-reactor.lisp"));
 
 	/**
 	 * Leaf-module substitutions: system name to (component file relative to the system's

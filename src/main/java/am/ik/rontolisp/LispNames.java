@@ -4487,8 +4487,8 @@ public final class LispNames {
 	/**
 	 * The internal {@code rontolisp::%http-reactor} marker:
 	 * {@code (rontolisp::%http-reactor 'dispatch-fn "export-name")}, left inside a Clack
-	 * handler backend's {@code run} by the {@code clack-handler-cloudflare-workers} shim.
-	 * It is NOT a function -- nothing defines it. On the WASM backends
+	 * handler backend's {@code run} by the {@code clack-handler-reactor} shim. It is NOT
+	 * a function -- nothing defines it. On the WASM backends
 	 * {@code eval/HttpReactorInliner} lowers the call site to {@code nil} and answers it
 	 * with the synthesized {@link #WASM_EXPORT} of a bridge to the named dispatcher (a
 	 * host-driven reactor's entry point is an export, and {@code wasm-export} needs a
@@ -6349,34 +6349,38 @@ public final class LispNames {
 	public static final String CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM = "clack.handler.rontolisp";
 
 	/**
-	 * The {@code clack.handler.cloudflare-workers} package: the Clack handler backend for
-	 * a HOST-DRIVEN REACTOR -- a Cloudflare Worker, and any embedding where the host has
-	 * already parsed the request and calls an exported function instead of handing the
-	 * program a socket. Satisfied by the built-in ASDF system
-	 * {@code clack-handler-cloudflare-workers}
-	 * ({@code clack-handler-cloudflare-workers.lisp}, {@code eval.ShimLibraries}), and
-	 * NOT seeded in {@code PackageRegistry} for the same reason as
-	 * {@link #CLACK_HANDLER_RONTOLISP_PKG}.
+	 * The {@code clack.handler.reactor} package: the Clack handler backend for a
+	 * HOST-DRIVEN REACTOR -- a Cloudflare Worker, a browser page, a node or JVM
+	 * embedding, any host that has already parsed the request and calls an exported
+	 * function instead of handing the program a socket. Satisfied by the built-in ASDF
+	 * system {@code clack-handler-reactor} ({@code clack-handler-reactor.lisp},
+	 * {@code eval.ShimLibraries}), and NOT seeded in {@code PackageRegistry} for the same
+	 * reason as {@link #CLACK_HANDLER_RONTOLISP_PKG}.
 	 *
 	 * <p>
-	 * Its entry point is {@code handle} (a JSON request string in, a JSON response string
-	 * out) rather than {@code run}: a reactor owns no socket, so {@code clackup} has
-	 * nothing to start. {@code run} is present only to fail with a sentence.
+	 * It is driven by {@code clackup} like every other handler backend, and what its
+	 * {@code run} owns instead of a socket is the shared application store plus -- on the
+	 * WASM backends -- the {@link #HTTP_REACTOR} marker the export is synthesized from.
+	 * Below {@code run} sit two public functions over the same shared transport:
+	 * {@code handle} (application + JSON request string in, JSON response string out) and
+	 * {@code dispatch}, which runs the stored application and is what a host calls.
 	 */
-	public static final String CLACK_HANDLER_CLOUDFLARE_WORKERS_PKG = "CLACK.HANDLER.CLOUDFLARE-WORKERS";
+	public static final String CLACK_HANDLER_REACTOR_PKG = "CLACK.HANDLER.REACTOR";
 
 	/**
-	 * The {@code clack-handler-cloudflare-workers} built-in ASDF system name -- the
-	 * ecosystem-conventional hyphenated spelling a user names directly.
+	 * The {@code clack-handler-reactor} built-in ASDF system name -- the
+	 * ecosystem-conventional hyphenated spelling a user names directly. It names the
+	 * TRANSPORT rather than a deployment vendor, like every other name in this lineage
+	 * ({@code %http-reactor-*}, {@code #+rontolisp-reactor}).
 	 */
-	public static final String CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM = "clack-handler-cloudflare-workers";
+	public static final String CLACK_HANDLER_REACTOR_SYSTEM = "clack-handler-reactor";
 
 	/**
-	 * The dotted alias of {@link #CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM}, registered
-	 * for the same reason as {@link #CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM}: it is the
-	 * system name lack's {@code find-package-or-load} derives from the package name.
+	 * The dotted alias of {@link #CLACK_HANDLER_REACTOR_SYSTEM}, registered for the same
+	 * reason as {@link #CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM}: it is the system name
+	 * lack's {@code find-package-or-load} derives from the package name.
 	 */
-	public static final String CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM = "clack.handler.cloudflare-workers";
+	public static final String CLACK_HANDLER_REACTOR_DOTTED_SYSTEM = "clack.handler.reactor";
 
 	/**
 	 * The {@code defpackage} {@code :local-nicknames} clause keyword -- lite: each

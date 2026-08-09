@@ -20,8 +20,8 @@ import org.jspecify.annotations.Nullable;
  * The compile-path answer to a HOST-DRIVEN REACTOR served by {@code clack:clackup}: turns
  * the {@code rontolisp::%http-reactor} marker a Clack handler backend's {@code run}
  * carries into the {@code rontolisp:wasm-export} the host actually calls. Two backends
- * carry it: {@code clack-handler-cloudflare-workers} on every WASM compile (that backend
- * IS the reactor shape, on every target), and {@code clack-handler-rontolisp} under
+ * carry it: {@code clack-handler-reactor} on every WASM compile (that backend IS the
+ * reactor shape, on every target), and {@code clack-handler-rontolisp} under
  * {@code #+rontolisp-reactor} ({@code --no-wasi} / {@code --no-gc}) -- both naming the
  * ONE shared dispatcher, {@code rontolisp::%http-reactor-dispatch}
  * ({@code http-reactor.lisp}), so a program that splices both shims yields two IDENTICAL

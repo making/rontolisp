@@ -136,7 +136,7 @@ Java pass has to coordinate "directive present AND marker present" or dodge a
 duplicate-export synthesis. WHY not `:server :auto`: it would leave
 `:rontolisp` meaning "owns a socket" and cost every ported program a source
 edit, which is the asymmetry the rule exists to remove. The reactor leg rides
-the same shared machinery as the explicit `:cloudflare-workers` backend (see
+the same shared machinery as the explicit `:reactor` backend (see
 below), so the two designators cannot drift. If a future host type cannot be
 told apart by compile flags, this scheme is the thing to re-evaluate — the
 feature reflects the TARGET, not the deployment vendor.
@@ -211,26 +211,26 @@ TWO designators reach it, and that is deliberate:
 
 - **`:server :rontolisp` under `#+rontolisp-reactor`** — the one-source rule
   above: reactor when the TARGET is a reactor.
-- **`:server :cloudflare-workers`** (`clack-handler-cloudflare-workers.lisp`,
-  package `clack.handler.cloudflare-workers`, both system spellings in
+- **`:server :reactor`** (`clack-handler-reactor.lisp`, package
+  `clack.handler.reactor`, both system spellings in
   `ShimLibraries.RESOURCES` / `BuiltinSystems` / `resource-config.json`, again
   NOT seeded in `PackageRegistry`) — host-driven on EVERY backend: its `run`
   stores the app where `:rontolisp` would bind a socket, which is what lets a
-  Worker be developed and driven through `dispatch` on the interpreter
-  (`hello-clack/check.lisp`), and it keeps the ecosystem-conventional per-host
-  name a Clack user looks for. Since the `:rontolisp` reactor leg landed it is
-  no longer NEEDED for a Worker — one `:rontolisp` source covers every host —
-  and both designators store into the ONE shared `%http-reactor-app`, so a
-  program that mixes them (clack always splices `clack-handler-rontolisp`;
-  the user quickloads the cloudflare one on top) stays coherent.
+  Worker (or a browser, node or JVM embedding) be developed and driven through
+  `dispatch` on the interpreter (`hello-clack/check.lisp`). Since the
+  `:rontolisp` reactor leg landed it is no longer NEEDED for a Worker — one
+  `:rontolisp` source covers every host — and both designators store into the
+  ONE shared `%http-reactor-app`, so a program that mixes them (clack always
+  splices `clack-handler-rontolisp`; the user quickloads the reactor one on
+  top) stays coherent.
 
 The explicit designator is driven by **`clackup`**, like every other handler
 backend:
 
 ```lisp
-(ql:quickload "clack-handler-cloudflare-workers")
+(ql:quickload "clack-handler-reactor")
 (load "app.lisp")
-(clack:clackup #'app :server :cloudflare-workers :use-thread nil)
+(clack:clackup #'app :server :reactor :use-thread nil)
 ```
 
 Below `clackup` sit two functions, and BOTH are public: `handle`
@@ -369,15 +369,27 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   workerd with an unparseable-JSON body: the report is discarded, the 200
   `"json":null` answer comes back).
 
-Why the VENDOR name stays a shim system while the machinery is
-`rontolisp::`-internal: the user-facing surface is the `:server` designator,
-and a handler backend is where the ecosystem already puts per-host names
-(`clack-handler-hunchentoot`, `clack-handler-woo`) — findable, and it keeps the
-core package vendor-free. The internals (`%http-reactor-*`) are named for the
+**Why the designator names the TRANSPORT and not a deployment vendor.** It was
+`:server :cloudflare-workers` / `clack-handler-cloudflare-workers` until
+2026-08-09; renamed, with no compatibility alias kept. Nothing in the shim is
+Cloudflare-specific (it is four delegations to `%http-reactor-*`), and once the
+`:rontolisp` reactor leg landed the vendor name no longer even carried "this is
+how you deploy to Workers" — that is `:rontolisp` plus `--no-wasi`. What was
+left is "host-driven on EVERY backend", which is the MECHANISM, and the
+mechanism is what every other name in this lineage already says
+(`http-reactor.lisp`, `%http-reactor-*`, `#+rontolisp-reactor`,
+`Features.WASM_REACTOR` — and "reactor" is the WASI term of art for exactly
+this shape). The ecosystem convention the vendor name was justified by does not
+point at vendors either: `clack-handler-hunchentoot` / `-woo` / `-fcgi` name
+server implementations and protocols, so a transport name IS the conventional
+shape here. The re-evaluation trigger, and the reason not to bring the old name
+back as an alias: it is now free for what would really deserve it — a backend
+surfacing something only one host has (a Worker's `env`/`ctx` bindings, say),
+layered on top of this one. The internals (`%http-reactor-*`) are named for the
 mechanism because no user names them, exactly like `%http-server-*`. Pinned by
-`LispEvaluatorAsdfTest`
-(`theCloudflareHandlerShim*` — now exercising the delegation and the
-interpreter's lazy reactor-library hook), by `HttpReactorInlinerTest` (the
+`LispEvaluatorAsdfTest` (`theReactorHandlerShim*` — now exercising the
+delegation and the interpreter's lazy reactor-library hook), by
+`HttpReactorInlinerTest` (the
 marker lowering and the synthesized export), by `RontoLispCliTest` (the
 `:rontolisp` reactor leg end to end through the CLI compile), and by
 `examples/cloudflare-workers/hello-clack/` +

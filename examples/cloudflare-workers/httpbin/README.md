@@ -60,8 +60,8 @@ $                                          # no output: identical
 ```
 
 Below the dashes is the **reactor adapter**: what
-`clack:clackup :server :cloudflare-workers` would have installed, written out in
-about thirty lines. It converts nothing itself either. rontolisp's own server
+`clack:clackup :server :reactor` would have installed, written out in about
+thirty lines. It converts nothing itself either. rontolisp's own server
 protocol *is* Clack's, so there is exactly one implementation of it —
 [`http-server.lisp`](../../../src/main/resources/am/ik/rontolisp/eval/http-server.lisp)
 — and the adapter calls the same two entry points the JDK server, the WASI
@@ -82,7 +82,7 @@ served request sees**. All that is left to write is the JSON envelope.
 | | this | [`../httpbin-clack`](../httpbin-clack) | [`../../net/httpbin.lisp`](../../net/httpbin.lisp) |
 | --- | --- | --- | --- |
 | The application | a Clack application | **the same file**, verbatim | a `rontolisp:http-handler` handler (also the Clack shapes) |
-| How it is installed | thirty hand-written lines | `clack:clackup :server :cloudflare-workers` | `(rontolisp:http-handler 'handle 8080)`, blocking on a socket |
+| How it is installed | thirty hand-written lines | `clack:clackup :server :reactor` | `(rontolisp:http-handler 'handle 8080)`, blocking on a socket |
 | clack in the module | **none** | what the tree-shaker keeps of clack and lack | none |
 | Module | **179 KB** (55 KB gzip) | 375 KB (103 KB gzip) | n/a, it is a server |
 
@@ -150,8 +150,8 @@ and what it gets back:
 { "status": 200, "headers": [["content-type", "application/json"]], "body": "..." }
 ```
 
-This is the same envelope the built-in `clack-handler-cloudflare-workers` backend
-speaks, which is why `src/index.js` is byte-identical in both directories. Two of
+This is the same envelope the built-in `clack-handler-reactor` backend speaks,
+which is why `src/index.js` is byte-identical in both directories. Two of
 its fields are load-bearing, and both fail quietly rather than loudly:
 
 - **Pass the raw target** (`url.pathname + url.search`) as one string, *not* a
@@ -267,8 +267,8 @@ compatibility flag and no `wrangler.jsonc` setting, and rontolisp compiles
 - `handle-request` wraps the whole adapter, so any other Lisp error answers 500
   and the instance keeps serving. That is not optional on a reactor: an uncaught
   Lisp error is a **trap**, which takes the instance down and forces the host to
-  throw it away. The `clack-handler-cloudflare-workers` backend catches in exactly
-  the same place, for exactly the same reason.
+  throw it away. The `clack-handler-reactor` backend catches in exactly the
+  same place, for exactly the same reason.
 
 Exception handling is nearly free here (re-measured 2026-08-09): stripping both
 `handler-case` forms shrinks this build by ~1.6 KB — 0.9% at `--optimize=size` —

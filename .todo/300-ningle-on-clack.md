@@ -161,7 +161,7 @@ two requests, over a real socket).
 
 ```lisp
 ;;; worker.lisp
-(ql:quickload '("clack" "clack-handler-cloudflare-workers" "ningle"))
+(ql:quickload '("clack" "clack-handler-reactor" "ningle"))
 
 (defpackage :hello-ningle (:use :cl))
 (in-package :hello-ningle)
@@ -182,7 +182,7 @@ two requests, over a real socket).
   (format nil "no route for ~a~%"
           (lack.request:request-path-info ningle:*request*)))
 
-(clack:clackup *app* :server :cloudflare-workers :use-thread nil)
+(clack:clackup *app* :server :reactor :use-thread nil)
 ```
 
 ```console

@@ -175,23 +175,22 @@ $ rontolisp app.lisp -o worker.wasm --no-wasi --optimize=size
 ミドルウェアはレポートを `*error-output*` に書きますが、これは `--no-wasi` では
 破棄されるシンクで、それ以外のバックエンドでは本物の標準エラー出力です。
 
-### リアクタを手で駆動する: `clack-handler-cloudflare-workers`
+### リアクタを手で駆動する: `clack-handler-reactor`
 
 2 つ目の組み込みハンドラバックエンドは、リアクタの形を**明示的に、すべての
 バックエンドでホスト駆動に**します:
 
 ```console
 $ cat worker.lisp
-(ql:quickload "clack-handler-cloudflare-workers")
+(ql:quickload "clack-handler-reactor")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
-(clack:clackup #'app :server :cloudflare-workers :use-thread nil)
+(clack:clackup #'app :server :reactor :use-thread nil)
 ```
 
 `:rontolisp` がインタプリタと JVM でソケットを bind するのに対し、この
 designator はそこでもアプリケーションを保存し、ホストは合成されたエクスポートが
-呼ぶのと同じ関数を
-`(clack.handler.cloudflare-workers:dispatch request-json)` と直接呼びます。
+呼ぶのと同じ関数 `(clack.handler.reactor:dispatch request-json)` を直接呼びます。
 Worker なしで Worker を開発・テストできるのはこれによります: 編集・実行ループ
 全体がインタプリタ上で回ります。Worker 自体にこの designator はもう必須では
 ありません。両者は同じ機構と同じアプリケーション格納を使うので、乖離しようが
@@ -201,14 +200,14 @@ Worker なしで Worker を開発・テストできるのはこれによりま�
 2 引数の普通の関数です:
 
 ```lisp
-(ql:quickload "clack-handler-cloudflare-workers")
+(ql:quickload "clack-handler-reactor")
 
 (defun app (env)
   (list 200 '(:content-type "text/plain")
         (list (format nil "~a ~a ~a" (getf env :request-method)
                       (getf env :path-info) (getf env :query-string)))))
 
-(princ (clack.handler.cloudflare-workers:handle
+(princ (clack.handler.reactor:handle
         #'app "{\"method\":\"GET\",\"target\":\"/hi?a=1\"}"))
 ```
 

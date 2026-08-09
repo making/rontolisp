@@ -41,8 +41,8 @@ where the program owns the socket and is ignored where the host does, and
 foreground. Deploying to Cloudflare is not a port of the program; it is a
 compile flag.
 
-The explicit `:server :cloudflare-workers` designator still exists and still
-works — it means "host-driven on *every* backend", stores the application even
+The explicit `:server :reactor` designator still exists and still works — it
+means "host-driven on *every* backend", stores the application even
 where `:rontolisp` would bind a socket, and is what lets a Worker be driven
 through `dispatch` on the interpreter with no Cloudflare in sight.
 [`../hello-clack`](../hello-clack) demonstrates that shape (and its
@@ -103,8 +103,8 @@ curl         http://localhost:8787/nope                   # 404
 
 The directory used to carry the program as a `worker.lisp` of its own — first
 split into an `app.lisp` and a transport, then as the upstream example verbatim
-with a different `clackup` **tail** (`:server :cloudflare-workers`). Each step
-deleted a difference, and this is the last one: since `:server :rontolisp`
+with a different `clackup` **tail** (`:server :reactor`). Each step deleted a
+difference, and this is the last one: since `:server :rontolisp`
 serves reactors too, the tail is the same, so the copy bought nothing but the
 chance to drift. There is nothing left to `diff` — the deployed program and the
 upstream example are one file.
@@ -134,8 +134,8 @@ equivalent of
 after the program. `%http-reactor-dispatch` runs the stored application over
 the JSON envelope; it is the **shared** reactor machinery
 ([`http-reactor.lisp`](../../../src/main/resources/am/ik/rontolisp/eval/http-reactor.lisp)),
-and the `:cloudflare-workers` backend's `dispatch` is a thin public name over
-the very same functions — the two designators cannot drift, and both store the
+and the `:reactor` backend's `dispatch` is a thin public name over the very
+same functions — the two designators cannot drift, and both store the
 application in one place.
 
 One keyword in the upstream file matters beyond sockets: **`:use-thread nil`**.
@@ -299,10 +299,9 @@ changes the application's behavior, and the four-host section explains why.
 
 When you want to drive the reactor *shape* itself as an ordinary function — a
 JSON request string in, a JSON response string out, on any backend — that is
-what the explicit `:server :cloudflare-workers` designator is for: its `run`
-stores the application everywhere, and
-`clack.handler.cloudflare-workers:dispatch` is exactly what the synthesized
-export calls. [`../hello-clack/check.lisp`](../hello-clack/check.lisp) and
+what the explicit `:server :reactor` designator is for: its `run` stores the
+application everywhere, and `clack.handler.reactor:dispatch` is exactly what
+the synthesized export calls. [`../hello-clack/check.lisp`](../hello-clack/check.lisp) and
 [`../httpbin-tiny-routes/check.lisp`](../httpbin-tiny-routes/check.lisp) are
 that loop, pinned by the examples manifest on the interpreter, the JVM and
 WASM.

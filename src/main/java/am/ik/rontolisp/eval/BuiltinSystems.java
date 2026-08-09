@@ -48,11 +48,10 @@ public final class BuiltinSystems {
 					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_RONTOLISP_SYSTEM, features)),
 			Map.entry(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM,
 					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_RONTOLISP_DOTTED_SYSTEM, features)),
-			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM,
-					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_SYSTEM, features)),
-			Map.entry(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM,
-					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_CLOUDFLARE_WORKERS_DOTTED_SYSTEM,
-							features)),
+			Map.entry(LispNames.CLACK_HANDLER_REACTOR_SYSTEM,
+					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_REACTOR_SYSTEM, features)),
+			Map.entry(LispNames.CLACK_HANDLER_REACTOR_DOTTED_SYSTEM,
+					features -> ShimLibraries.forms(LispNames.CLACK_HANDLER_REACTOR_DOTTED_SYSTEM, features)),
 			// The uiop package stub is seeded in PackageRegistry; the system contributes
 			// no forms (real libraries only name it so its symbols resolve).
 			Map.entry("uiop", features -> List.of()));

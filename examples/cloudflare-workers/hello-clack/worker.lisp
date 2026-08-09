@@ -6,7 +6,7 @@
 ;;; body) list out), so the same function runs on hunchentoot, on woo, under
 ;;; `wasmtime serve` and on the JVM, unchanged.
 ;;;
-;;; What makes it a Worker is the :server designator. :cloudflare-workers is a
+;;; What puts it on a Worker is the :server designator. :reactor is the
 ;;; built-in handler backend for a host that CALLS you instead of handing you a
 ;;; socket, so its `run` binds nothing -- it stores the application, and the
 ;;; compiler synthesizes the exported entry point src/index.js calls
@@ -26,7 +26,7 @@
 ;;; no clack, 563 bytes. This one is ~248 KB because what the tree-shaker keeps
 ;;; of clack and lack is in it -- see the README.
 
-(ql:quickload '("clack" "clack-handler-cloudflare-workers"))
+(ql:quickload '("clack" "clack-handler-reactor"))
 
 (defun app (env)
   (list 200 '(:content-type "text/plain; charset=utf-8")
@@ -35,5 +35,5 @@
                  (getf env :request-method) (getf env :path-info)))))
 
 (clack:clackup #'app
-               :server :cloudflare-workers
+               :server :reactor
                :use-thread nil)

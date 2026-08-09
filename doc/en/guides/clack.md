@@ -174,23 +174,23 @@ foreground. `clackup`'s default middlewares stay on everywhere: lack's
 `--no-wasi` is a discarding sink and on every other backend is real standard
 error.
 
-### Driving the reactor by hand: `clack-handler-cloudflare-workers`
+### Driving the reactor by hand: `clack-handler-reactor`
 
 A second built-in handler backend makes the reactor shape **explicit and
 host-driven on every backend**:
 
 ```console
 $ cat worker.lisp
-(ql:quickload "clack-handler-cloudflare-workers")
+(ql:quickload "clack-handler-reactor")
 (load "app.lisp")                       ; defines app, an ordinary Clack application
 
-(clack:clackup #'app :server :cloudflare-workers :use-thread nil)
+(clack:clackup #'app :server :reactor :use-thread nil)
 ```
 
 Where `:rontolisp` binds a socket on the interpreter and the JVM, this
 designator stores the application there too, and the host calls
-`(clack.handler.cloudflare-workers:dispatch request-json)` — the same function
-the synthesized export calls — directly. That is how a Worker can be developed
+`(clack.handler.reactor:dispatch request-json)` — the same function the
+synthesized export calls — directly. That is how a Worker can be developed
 and tested without the Worker: the whole edit/run loop happens on the
 interpreter. A Worker itself no longer needs this designator; both ride the
 same machinery and the same application store, so the two cannot drift.
@@ -199,14 +199,14 @@ Underneath both is `handle`, and it needs no `clackup` and no Worker to try —
 it is an ordinary function of two arguments:
 
 ```lisp
-(ql:quickload "clack-handler-cloudflare-workers")
+(ql:quickload "clack-handler-reactor")
 
 (defun app (env)
   (list 200 '(:content-type "text/plain")
         (list (format nil "~a ~a ~a" (getf env :request-method)
                       (getf env :path-info) (getf env :query-string)))))
 
-(princ (clack.handler.cloudflare-workers:handle
+(princ (clack.handler.reactor:handle
         #'app "{\"method\":\"GET\",\"target\":\"/hi?a=1\"}"))
 ```
 

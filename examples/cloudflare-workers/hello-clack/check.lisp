@@ -25,7 +25,7 @@
                  :headers (rontolisp:plist-hash-table
                            (list :host "example.com")))))))
     (format t "~&--> ~a~%" target)
-    (format t "<-- ~a~%" (clack.handler.cloudflare-workers:dispatch request))))
+    (format t "<-- ~a~%" (clack.handler.reactor:dispatch request))))
 
 (try "/")
 (try "/anything")

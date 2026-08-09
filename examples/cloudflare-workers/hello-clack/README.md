@@ -23,7 +23,7 @@ GET /anything
 ## The whole program
 
 ```lisp
-(ql:quickload '("clack" "clack-handler-cloudflare-workers"))
+(ql:quickload '("clack" "clack-handler-reactor"))
 
 (defun app (env)
   (list 200 '(:content-type "text/plain; charset=utf-8")
@@ -32,7 +32,7 @@ GET /anything
                  (getf env :request-method) (getf env :path-info)))))
 
 (clack:clackup #'app
-               :server :cloudflare-workers
+               :server :reactor
                :use-thread nil)
 ```
 
@@ -40,8 +40,8 @@ There is **no Worker-specific code in it**. `app` takes the Clack environment
 plist and returns the Clack `(status headers body)` list, so the same function
 runs on hunchentoot, on woo, under `wasmtime serve` and on the JVM, unchanged.
 
-`:cloudflare-workers` is a built-in handler backend that is **host-driven on
-every backend**: its `run` binds nothing — it stores the application and
+`:reactor` is a built-in handler backend that is **host-driven on every
+backend**: its `run` binds nothing — it stores the application and
 returns — and what replaces the socket is one WASM export, `handle-request` (a
 JSON request string in, a JSON response string out), which
 [`src/index.js`](src/index.js) calls. You do not declare that export:
@@ -54,8 +54,8 @@ A Worker does not strictly need this designator any more: `:server :rontolisp`
 serves on every target's own transport — a socket on the interpreter and the
 JVM, `wasmtime serve` under `--component`, and this same synthesized export
 under `--no-wasi` — which is how [`../httpbin-clack`](../httpbin-clack) deploys
-`examples/net/httpbin-clack.lisp` unchanged. What `:cloudflare-workers` still
-says is "host-driven *everywhere*": on the interpreter it stores the
+`examples/net/httpbin-clack.lisp` unchanged. What `:reactor` still says is
+"host-driven *everywhere*": on the interpreter it stores the
 application instead of binding a socket, which is what lets
 [`check.lisp`](check.lisp) drive the whole Worker through `dispatch` with no
 Cloudflare in sight.
@@ -100,8 +100,8 @@ this is what that costs.
 ## Developing without Cloudflare
 
 The exported entry point only exists on the WASM backends, but what sits under
-it does not: `clack.handler.cloudflare-workers:dispatch` is an ordinary function
-of a JSON string, and it is exactly what the synthesized export calls. So the
+it does not: `clack.handler.reactor:dispatch` is an ordinary function of a JSON
+string, and it is exactly what the synthesized export calls. So the
 whole Worker runs on the interpreter:
 
 ```bash

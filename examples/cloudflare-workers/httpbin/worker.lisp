@@ -117,7 +117,7 @@
                            (list :error "not found" :path path)))))))
 
 ;; --- the reactor adapter --------------------------------------------------
-;; What `clack:clackup :server :cloudflare-workers` would install, written out.
+;; What `clack:clackup :server :reactor` would install, written out.
 ;; Nothing above this line knows it exists.
 
 ;; The headers JSON object -> the ((name . value) ...) alist the raw tuple

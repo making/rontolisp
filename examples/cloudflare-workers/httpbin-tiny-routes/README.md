@@ -125,8 +125,8 @@ exported, so that one route is spelled the way the macros expand:
 ## Developing without Cloudflare
 
 Exactly as in [`../httpbin-clack`](../httpbin-clack/README.md#developing-without-cloudflare):
-the synthesized export calls `clack.handler.cloudflare-workers:dispatch`, an
-ordinary function, so the whole Worker — routes included — runs on the
+the synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
+function, so the whole Worker — routes included — runs on the
 interpreter, the JVM and the WASM backends:
 
 ```bash

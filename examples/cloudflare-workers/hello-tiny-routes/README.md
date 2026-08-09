@@ -29,7 +29,7 @@ no route for /anything
 ## The whole program
 
 ```lisp
-(ql:quickload '("clack" "clack-handler-cloudflare-workers" "tiny-routes/lite"))
+(ql:quickload '("clack" "clack-handler-reactor" "tiny-routes/lite"))
 
 (defpackage :hello-tiny-routes (:use :cl :tiny-routes))
 (in-package :hello-tiny-routes)
@@ -46,7 +46,7 @@ no route for /anything
     (not-found (format nil "no route for ~a~%" (path-info req)))))
 
 (clack:clackup *app*
-               :server :cloudflare-workers
+               :server :reactor
                :use-thread nil)
 ```
 
@@ -112,8 +112,8 @@ walked in Lisp, and at three routes that disappears into the string boundary.
 ## Developing without Cloudflare
 
 Exactly as in [`../hello-clack`](../hello-clack/README.md#developing-without-cloudflare):
-the synthesized export calls `clack.handler.cloudflare-workers:dispatch`, an
-ordinary function, so the whole Worker — routes included — runs on the
+the synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
+function, so the whole Worker — routes included — runs on the
 interpreter, the JVM and the WASM backends, which
 [`examples/examples.yaml`](../../examples.yaml) pins:
 

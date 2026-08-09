@@ -7,7 +7,7 @@ Cloudflare Workers. Each directory is a complete, independent Worker project:
 | Directory | What it is | Module | Host glue |
 | --- | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript functions: `add`, `fib`, and a string-returning `greet`. | **563 B**, `--no-gc`, plain MVP module, zero imports | 32 lines, no dependencies |
-| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :cloudflare-workers`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 248 KB (**75 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
+| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, and `clack:clackup :server :reactor`. No Worker-specific code in the Lisp at all — the compiler synthesizes the exported entry point. | 248 KB (**75 KB gzip**), `--no-wasi` wasm-GC, zero imports | 45 lines, one file, no dependencies |
 | [`hello-tiny-routes/`](hello-tiny-routes) | **`hello-clack` with the application composed instead of written.** Three routes through [tiny-routes](https://github.com/jeko2000/tiny-routes) — a `/hello/:name` path template, route declining into a catch-all 404 — and the same `clackup` line. Loaded as **`tiny-routes/lite`**, so no regex engine ships. | 272 KB (**81 KB gzip**), `--no-wasi` wasm-GC, zero imports | `hello-clack/src/index.js`, byte-identical |
 | [`httpbin/`](httpbin) | A **mini httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echoing the request as JSON, 405 and 404, and `handler-case` — as a [Clack](https://github.com/fukamachi/clack) application, with the adapter that puts it on a Worker written out by hand so that **clack itself never ships**. The application half is [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim, the same file `httpbin-clack/` deploys whole. | **179 KB** (55 KB gzip), `--no-wasi` wasm-GC, zero imports | 54 lines, one file, no dependencies |
 | [`httpbin-clack/`](httpbin-clack) | **The same application again, installed by `clack:clackup` — and there is no `worker.lisp` at all.** `build.sh` compiles [`examples/net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) — the file that serves on the interpreter, the JVM and under `wasmtime serve` — unchanged: under `--no-wasi` the `:server :rontolisp` handler backend takes its reactor shape and the compiler synthesizes the export. One source, four hosts, no adapter written anywhere — for 1.5× the module, because clack and lack (tree-shaken) ship inside it. | 264 KB (**79 KB gzip**), `--no-wasi` wasm-GC, zero imports | `httpbin/src/index.js`, byte-identical |
@@ -24,10 +24,10 @@ Workers, its handler is a portable Clack application, and the thirty lines that
 put it on Cloudflare are right there in the file rather than in a library.
 
 `hello-clack/` to see what a Clack application on a Worker looks like with
-nothing else in the way — three forms, and the `:server :cloudflare-workers`
-designator is the only thing that mentions Cloudflare. That designator means
-"host-driven on every backend", which is also what lets its `check.lisp` drive
-the Worker through `dispatch` on the interpreter.
+nothing else in the way — three forms, and nothing in the Lisp mentions
+Cloudflare at all. The `:server :reactor` designator means "host-driven on
+every backend", which is also what lets its `check.lisp` drive the Worker
+through `dispatch` on the interpreter.
 
 `hello-tiny-routes/` if you are starting a routed application rather than
 studying one. It is `hello-clack/` with the `defun` replaced by `define-routes`

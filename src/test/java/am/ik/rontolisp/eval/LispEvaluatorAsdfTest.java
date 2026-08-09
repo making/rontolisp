@@ -138,9 +138,8 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
-	void theCloudflareHandlerShimRunsAClackApplicationOverTheJsonEnvelope() {
-		// clack-handler-cloudflare-workers is the handler backend for a HOST-DRIVEN
-		// REACTOR:
+	void theReactorHandlerShimRunsAClackApplicationOverTheJsonEnvelope() {
+		// clack-handler-reactor is the handler backend for a HOST-DRIVEN REACTOR:
 		// no socket, so its entry point is `handle` (a JSON request string in, a JSON
 		// response string out) rather than clackup's `run`. It converts nothing
 		// itself -- it rides %http-make-env / %http-normalize-response -- so what this
@@ -148,14 +147,14 @@ class LispEvaluatorAsdfTest {
 		// RAW target split into a percent-decoded :path-info and a :query-string, and
 		// the response lowered back into the envelope.
 		String output = run("""
-				(ql:quickload "clack-handler-cloudflare-workers")
+				(ql:quickload "clack-handler-reactor")
 				(defun app (env)
 				  (list 200 '(:content-type "text/plain")
 				        (list (format nil "~a ~a ~a"
 				                      (getf env :request-method)
 				                      (getf env :path-info)
 				                      (getf env :query-string)))))
-				(print (clack.handler.cloudflare-workers:handle
+				(print (clack.handler.reactor:handle
 				        #'app "{\\"method\\":\\"GET\\",\\"target\\":\\"/%67et?a=1\\"}"))
 				""", Map.of(), List.of());
 		assertThat(output).contains("\\\"status\\\":200")
@@ -164,49 +163,49 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
-	void theCloudflareHandlerShimAnswersAHeaderlessResponseAsAnEmptyJsonArray() {
+	void theReactorHandlerShimAnswersAHeaderlessResponseAsAnEmptyJsonArray() {
 		// A Clack response may carry no headers at all (tiny-routes' (ok "x") builds
 		// one), and the envelope's headers must still cross as [] -- an empty LIST
 		// would stringify as JSON false, which the Headers constructor on the
 		// JavaScript side rejects. %header-pairs answers a vector for exactly this.
 		String output = run("""
-				(ql:quickload "clack-handler-cloudflare-workers")
+				(ql:quickload "clack-handler-reactor")
 				(defun app (env) (declare (ignore env)) (list 200 nil (list "bare")))
-				(print (clack.handler.cloudflare-workers:handle
+				(print (clack.handler.reactor:handle
 				        #'app "{\\"method\\":\\"GET\\",\\"target\\":\\"/\\"}"))
 				""", Map.of(), List.of());
 		assertThat(output).contains("\\\"headers\\\":[]").doesNotContain("\\\"headers\\\":false");
 	}
 
 	@Test
-	void theCloudflareHandlerShimAnswers500RatherThanLettingAnErrorEscape() {
+	void theReactorHandlerShimAnswers500RatherThanLettingAnErrorEscape() {
 		// On a reactor an uncaught error is a trap that takes the whole instance
 		// down, so the transport catches -- as every other rontolisp transport does
 		// with a handler error.
 		String output = run("""
-				(ql:quickload "clack-handler-cloudflare-workers")
+				(ql:quickload "clack-handler-reactor")
 				(defun app (env) (declare (ignore env)) (error "boom"))
-				(print (clack.handler.cloudflare-workers:handle #'app "{\\"target\\":\\"/\\"}"))
+				(print (clack.handler.reactor:handle #'app "{\\"target\\":\\"/\\"}"))
 				""", Map.of(), List.of());
 		assertThat(output).contains("\\\"status\\\":500").contains("boom");
 	}
 
 	@Test
-	void theCloudflareHandlerShimServesClackupThroughDispatch() {
-		// (clackup app :server :cloudflare-workers) resolves this backend and applies
+	void theReactorHandlerShimServesClackupThroughDispatch() {
+		// (clackup app :server :reactor) resolves this backend and applies
 		// RUN -- which is what the two calls below stand in for, so the test needs no
 		// download of clack itself. A reactor owns no socket, so run stores the
 		// application and returns nil; DISPATCH is what the host calls instead of
 		// connecting, and on the interpreter it is called directly (the WASM backends
 		// reach the same function through the compiler-synthesized export).
 		String output = run("""
-				(ql:quickload "clack-handler-cloudflare-workers")
+				(ql:quickload "clack-handler-reactor")
 				(defun app (env)
 				  (list 200 '(:content-type "text/plain")
 				        (list (format nil "~a ~a" (getf env :request-method)
 				                      (getf env :path-info)))))
-				(print (clack.handler.cloudflare-workers:run #'app :port 8080))
-				(print (clack.handler.cloudflare-workers:dispatch
+				(print (clack.handler.reactor:run #'app :port 8080))
+				(print (clack.handler.reactor:dispatch
 				        "{\\"method\\":\\"GET\\",\\"target\\":\\"/hi\\"}"))
 				""", Map.of(), List.of());
 		assertThat(output).contains("\\\"status\\\":200").contains("GET /hi");

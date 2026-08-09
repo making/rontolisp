@@ -21,8 +21,8 @@ import org.jspecify.annotations.Nullable;
  * store and the JSON request/response envelope over {@code http-server.lisp}'s
  * {@code %http-make-env} / {@code %http-normalize-response}, shared by BOTH Clack handler
  * backends -- the {@code #+rontolisp-reactor} leg of {@code clack-handler-rontolisp} and
- * the explicit {@code clack-handler-cloudflare-workers} backend delegate here, which is
- * what keeps a program that mixes the two designators on one store and one dispatcher
+ * the explicit {@code clack-handler-reactor} backend delegate here, which is what keeps a
+ * program that mixes the two designators on one store and one dispatcher
  * ({@code .kb/clack.md}).
  *
  * <p>

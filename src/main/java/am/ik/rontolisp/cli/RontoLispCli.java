@@ -429,8 +429,8 @@ public final class RontoLispCli {
 		loaded = HttpLibrary.process(loaded, spliceBackend, serveGlue);
 		// The host-driven reactor's counterpart of that splice: a Clack handler
 		// backend whose run stores the app and leaves a rontolisp::%http-reactor
-		// marker (the clack-handler-cloudflare-workers shim always; the
-		// clack-handler-rontolisp shim under #+rontolisp-reactor) gets the marker
+		// marker (the clack-handler-reactor shim always; the clack-handler-rontolisp
+		// shim under #+rontolisp-reactor) gets the marker
 		// lowered to nil and the wasm-export of a bridge to its dispatcher
 		// synthesized -- so a Worker source is (clack:clackup #'app :server
 		// :rontolisp) and nothing else. A no-op on the interpreter and the JVM (the

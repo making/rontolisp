@@ -8,7 +8,7 @@
 ;;; characters and :name tokens, and refuses a regex-shaped template when the
 ;;; route is built. Sizes: ../httpbin-tiny-routes.
 
-(ql:quickload '("clack" "clack-handler-cloudflare-workers" "tiny-routes/lite"))
+(ql:quickload '("clack" "clack-handler-reactor" "tiny-routes/lite"))
 
 ;; The route macros, path-parameter, ok and not-found are tiny-routes' exports.
 (defpackage :hello-tiny-routes (:use :cl :tiny-routes))
@@ -26,5 +26,5 @@
     (not-found (format nil "no route for ~a~%" (path-info req)))))
 
 (clack:clackup *app*
-               :server :cloudflare-workers
+               :server :reactor
                :use-thread nil)

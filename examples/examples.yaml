@@ -550,8 +550,8 @@ examples:
     note: >-
       the smallest Clack application on a Worker, and the counterpart of
       hello/: worker.lisp is THREE forms -- quickload, the application defun,
-      clackup with :server :cloudflare-workers -- and contains no
-      Worker-specific code at all, because the handler backend stores the app
+      clackup with :server :reactor -- and contains no Worker-specific
+      code at all, because the handler backend stores the app
       and the compiler synthesizes the exported entry point. The demo drives it
       through that backend's `dispatch`, the same function the synthesized
       wasm-export calls, so what this pins is the clackup route itself on every
@@ -569,8 +569,8 @@ examples:
       the same Worker with the application COMPOSED instead of written: three
       routes through tiny-routes/lite (loaded by ql:quickload, so the lite
       system resolves on the compile paths too) handed to clackup with
-      :server :cloudflare-workers. What it pins beyond hello-clack's case is
-      the routing itself on every backend the compiler has -- the
+      :server :reactor. What it pins beyond hello-clack's case is the
+      routing itself on every backend the compiler has -- the
       "/hello/:name" path template binding a parameter through the ppcre-free
       matcher, and a path no route claims declining into the catch-all 404.
       Checked with contains, not equals: the demo prints clackup's own

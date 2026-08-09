@@ -1,8 +1,8 @@
 ;;;; http-reactor.lisp -- the ONE host-driven-reactor transport, shared by both
 ;;;; Clack handler backends: the reactor leg of clack-handler-rontolisp
 ;;;; (#+rontolisp-reactor, i.e. --no-wasi / --no-gc) and the explicit
-;;;; clack-handler-cloudflare-workers backend delegate here, so the two cannot
-;;;; drift and a program that mixes them still stores ONE application.
+;;;; clack-handler-reactor backend delegate here, so the two cannot drift and a
+;;;; program that mixes them still stores ONE application.
 ;;;;
 ;;;; A reactor owns no socket: the host has already parsed the request and
 ;;;; calls a function -- the synthesized handle-request wasm-export on the WASM

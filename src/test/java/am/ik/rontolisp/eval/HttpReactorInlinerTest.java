@@ -12,12 +12,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class HttpReactorInlinerTest {
 
-	// The shape BOTH Clack handler backends' run has (clack-handler-cloudflare-workers
-	// on every WASM compile, clack-handler-rontolisp under #+rontolisp-reactor): the
-	// marker is NESTED in a defun, not a top-level directive, and it names the ONE
-	// shared dispatcher of http-reactor.lisp.
+	// The shape BOTH Clack handler backends' run has (clack-handler-reactor on every
+	// WASM compile, clack-handler-rontolisp under #+rontolisp-reactor): the marker is
+	// NESTED in a defun, not a top-level directive, and it names the ONE shared
+	// dispatcher of http-reactor.lisp.
 	private static final String SHIM = """
-			(defun clack.handler.cloudflare-workers:run (app &rest ignored)
+			(defun clack.handler.reactor:run (app &rest ignored)
 			  (declare (ignore ignored))
 			  (rontolisp::%http-reactor-register app)
 			  (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
@@ -52,7 +52,7 @@ class HttpReactorInlinerTest {
 	@Test
 	void twoIdenticalMarkersSynthesizeOneBridge() {
 		// A program can splice BOTH handler backends (clack always brings
-		// clack-handler-rontolisp; the user quickloads the cloudflare one on top).
+		// clack-handler-rontolisp; the user quickloads the reactor one on top).
 		// Under a reactor compile each run carries the marker, both naming the shared
 		// dispatcher -- one bridge, one export, whichever is read first.
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM + """
@@ -76,7 +76,7 @@ class HttpReactorInlinerTest {
 		// emits a module with a DUPLICATE export name, which no engine will compile.
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM + """
 				(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
-				(defun handle-request (json) (clack.handler.cloudflare-workers:handle #'app json))
+				(defun handle-request (json) (clack.handler.reactor:handle #'app json))
 				"""), WitExportDirective.Backend.WASM_GC);
 		String printed = print(out);
 		assertThat(printed).doesNotContain("%REACTOR-DISPATCH");
