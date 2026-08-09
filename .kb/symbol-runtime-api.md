@@ -308,11 +308,17 @@ served handler writing a report to `*error-output*`) the table was still null.
 reserved (`usesErrorOutput`), which is what `_addStream`'s `_streamCount = 3` reservation
 always assumed. Do not make it lazy again.
 
+On a served `--component` build the unbound signal escaped as an uncatchable wasm
+`unreachable` trap that 500'd the whole request even when the application caught its own
+condition (the todo-295 field symptom); the served leg is pinned by
+`ServeConditionCatchComponentE2eTest` over a real `wasmtime serve` (`.kb/lack.md`).
+
 Tests: `LispEvaluatorTest#standardStreamVariablesAreBoundToTheirDefaultsThroughTheSymbolApi`,
 the `standardStreamVariables*` pair in `JvmLispCompilerTest` and
 `WasmLispCompilerIntegrationTest`, the `symbol-runtime-api` ci-spec case (all four
-backends), and `LackEcosystemE2eTest#backtraceMiddlewareReportsTheApplicationsRealError*`
-(interpreter + JVM, opt-in).
+backends), `LackEcosystemE2eTest#backtraceMiddlewareReportsTheApplicationsRealError*`
+(interpreter + JVM, opt-in), and `ServeConditionCatchComponentE2eTest` (the served
+component leg, opt-in).
 
 ## Runtime-interned symbols as function designators (todo-229, 2026-08-02)
 

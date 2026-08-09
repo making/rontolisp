@@ -135,6 +135,19 @@ stream table exists from the start when the standard handles are reserved
 and JVM -- it needs a real socket, like the clackup legs), which asserts the 500 AND that
 stderr names the handler's own condition.
 
+On a SERVED `--component` build the same seam was worse than a wrong report: the
+middleware's handler runs at the signal point, and the synthesized unbound-variable
+signal it raised there escaped as a wasm `unreachable` trap that killed the whole
+request -- the host answered a bare 500 even when the application CAUGHT its own
+condition and would have answered 200 (found by hand with `curl` against
+`wasmtime serve`, filed as its own symptom before the diagnosis converged on todo-283's
+root cause; the "signal-and-catch inside a served request" framing was the field
+observation, not a second bug). That leg is pinned by
+`ServeConditionCatchComponentE2eTest`, which compiles the clackup probe to a component,
+serves it with a real `wasmtime serve`, and asserts the handler's 200 `caught` --
+the shared start-serve/probe/stop harness is `ServeComponentE2eSupport`
+(opt-in like `ExamplesE2eTest`: a driver plus `wasmtime` on `PATH`).
+
 ## Tests
 
 `LackEcosystemE2eTest` -- the interpreter and JVM legs, NO container -- and
