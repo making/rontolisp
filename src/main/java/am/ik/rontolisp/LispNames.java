@@ -4918,6 +4918,19 @@ public final class LispNames {
 	public static final String READ_EVAL_TEMPLATE = "%READ-EVAL-TEMPLATE";
 
 	/**
+	 * The {@code #.} marker variant the TOLERANT reader emits when the datum cannot even
+	 * be re-lexed: {@code (%read-eval-unreadable "RAW SOURCE TEXT")}. It carries the raw
+	 * text rather than a datum precisely because there is no datum, and it exists so the
+	 * decision "does this value matter" stays with the CONSUMER -- the lexer is the one
+	 * layer that cannot know whether the position is load-bearing. {@code AsdfSystems}
+	 * ignores it in an option nothing reads and fails the parse quoting the raw text
+	 * where it would decide a dependency or a source file. Only
+	 * {@code LispLexer.ReadEvalMode.SKIP_UNREADABLE} produces it, so it never reaches an
+	 * evaluator or a backend.
+	 */
+	public static final String READ_EVAL_UNREADABLE = "%READ-EVAL-UNREADABLE";
+
+	/**
 	 * {@code *read-eval*} -- whether {@code #.} read-time evaluation is enabled (CLHS:
 	 * binding it to {@code nil} makes the reader signal on {@code #.}). Seeded {@code t}
 	 * and proclaimed special on the interpreter, checked by

@@ -19,8 +19,8 @@ import org.jspecify.annotations.Nullable;
  * character level, so a skipped form may use syntax the reader does not support.
  * {@code #.} read-time evaluation is not supported and is a clear error; in the tolerant
  * mode used for {@code .asd} files the datum is wrapped in a {@code (%read-eval datum)}
- * marker for the consumer to resolve (or, when it uses unsupported syntax, skipped with a
- * warning -- the version-guard idiom).
+ * marker for the consumer to resolve (or, when it uses syntax the lexer cannot re-lex, in
+ * a {@code (%read-eval-unreadable "RAW TEXT")} marker the consumer decides about).
  */
 public final class LispLexer {
 
@@ -30,8 +30,9 @@ public final class LispLexer {
 		/** {@code #.} is a read error (the default). */
 		ERROR,
 		/**
-		 * The datum is wrapped in a {@code (%read-eval datum)} marker; an unreadable
-		 * datum is skipped with a warning ({@code .asd} files).
+		 * The datum is wrapped in a {@code (%read-eval datum)} marker; a datum that
+		 * cannot be re-lexed is wrapped in a {@code (%read-eval-unreadable "RAW TEXT")}
+		 * marker instead, for the consumer to accept or reject ({@code .asd} files).
 		 */
 		SKIP_UNREADABLE,
 		/**
@@ -208,16 +209,20 @@ public final class LispLexer {
 				// the consumer to resolve: AsdfSystems against a .asd file's defparameter
 				// bindings, the evaluator's load against the global environment. In
 				// SKIP_UNREADABLE mode a datum using syntax the lexer does not support
-				// falls back to a nil placeholder, preserving the surrounding structure
-				// (a skipped #. inside a plist/alist must not shift the remaining
-				// key/value pairing).
+				// becomes a (%read-eval-unreadable "RAW TEXT") marker instead: it keeps
+				// the surrounding structure (a #. inside a plist/alist must not shift the
+				// remaining key/value pairing) AND leaves the decision "does this value
+				// matter" to the consumer, which is the only layer that knows. Warning
+				// here cannot be right -- most such data sits in metadata nothing reads.
 				List<LocatedToken> datumTokens = tryTokenizeReadEvalDatum(this.input.substring(datumStart, this.pos));
 				if (datumTokens == null) {
 					if (this.readEvalMode == ReadEvalMode.MARKER) {
 						throw err("#. datum could not be read: " + this.input.substring(datumStart, this.pos));
 					}
-					System.err.println("warning: skipping unsupported #. read-time-eval form");
-					add(tokens, new Token.SymbolToken("NIL"), tokenStart);
+					add(tokens, new Token.LeftParen(), tokenStart);
+					add(tokens, new Token.SymbolToken(LispNames.READ_EVAL_UNREADABLE), tokenStart);
+					add(tokens, new Token.StringToken(this.input.substring(datumStart, this.pos).trim()), datumStart);
+					add(tokens, new Token.RightParen(), this.pos);
 				}
 				else {
 					// The marker's tokens all sit at (or just after) the #.; the datum's

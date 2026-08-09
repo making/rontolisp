@@ -1,5 +1,7 @@
 package am.ik.rontolisp.eval;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +33,27 @@ class AsdfSystemsTest {
 
 	private static AsdfSystems.LispSystem parse(String source) {
 		return AsdfSystems.parseDefsystem(form(source), null, Features.INTERPRETER);
+	}
+
+	/** What {@link #parseCapturingStderr} saw on {@code System.err}. */
+	private String stderr = "";
+
+	/**
+	 * Parses a {@code .asd} with {@code System.err} redirected: the consumer-decides rule
+	 * for {@code #.} markers is as much about what is NOT printed as about what parses,
+	 * and only a capture can pin "says nothing".
+	 */
+	private List<AsdfSystems.LispSystem> parseCapturingStderr(String source, String asdPath) {
+		ByteArrayOutputStream captured = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(captured));
+		try {
+			return AsdfSystems.parseAsdSource(source, asdPath, Features.INTERPRETER);
+		}
+		finally {
+			System.setErr(oldErr);
+			this.stderr = captured.toString();
+		}
 	}
 
 	private static SourceLoader loaderOf(Map<String, String> files) {
@@ -434,8 +457,9 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void parseAsdSourceSkipsAReadEvalGuardWithAWarning() {
-		// The ASDF-version-guard idiom: a leading top-level #. form is skipped.
+	void parseAsdSourceSkipsATopLevelReadEvalGuard() {
+		// The ASDF-version-guard idiom: a leading top-level #. form is skipped, silently
+		// -- nothing consumes its value, so nothing may complain about it.
 		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
 				#.(unless (uiop-version<= "3.1" (asdf-version)) (error "too old"))
 				(defsystem :lib :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
@@ -746,14 +770,115 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void unresolvableReadEvalInIgnoredMetadataDegradesToNil() {
+	void unresolvableReadEvalInIgnoredMetadataIsSilent() {
 		// A #. in ignored metadata (the :version read-file indirection) must not fail
-		// the parse: it degrades to the old warn-and-nil placeholder.
-		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource("""
+		// the parse -- and must not SAY anything either: the option loop throws the value
+		// away one line later, so a warning about it is noise with nothing to act on.
+		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
 				(defsystem :lib
 				  :version #.(uiop:read-file-form "version.sexp")
-				  :components ((:file "main")))""", "lib.asd", Features.INTERPRETER);
+				  :components ((:file "main")))""", "lib.asd");
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+		assertThat(stderr).isEmpty();
+	}
+
+	@Test
+	void theClProjectLongDescriptionSkeletonIsSilent() {
+		// Verbatim myway.asd (the cl-project skeleton every fukamachi library carries):
+		// a :long-description that opens the project's README at load time. Seven of
+		// these are on the ningle/clack dependency graph, and each one used to print a
+		// 370-character warning about a value :long-description discards.
+		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+				(defsystem myway
+				  :version "0.1.0"
+				  :author "Eitaro Fukamachi"
+				  :license "LLGPL"
+				  :depends-on (:cl-ppcre :quri)
+				  :components ((:module "src"
+				                :components ((:file "myway"))))
+				  :description "Sinatra-compatible routing library."
+				  :long-description
+				  #.(with-open-file (stream (merge-pathnames
+				                             #p"README.markdown"
+				                             (or *load-pathname* *compile-file-pathname*))
+				                            :if-does-not-exist nil
+				                            :direction :input)
+				      (when stream
+				        (let ((seq (make-array (file-length stream)
+				                               :element-type 'character
+				                               :fill-pointer t)))
+				          (setf (fill-pointer seq) (read-sequence seq stream))
+				          seq)))
+				  :in-order-to ((test-op (test-op myway-test))))""", "myway/myway.asd");
+		assertThat(systems.get(0).name()).isEqualTo("myway");
+		assertThat(systems.get(0).dependsOn()).containsExactly("cl-ppcre", "quri");
+		assertThat(systems.get(0).files()).containsExactly("src/myway.lisp");
+		assertThat(stderr).isEmpty();
+	}
+
+	@Test
+	void aPerformBodyReadEvalIsSilent() {
+		// The other ignored-option shape, from the seven *-test.asd files on the same
+		// graph: a #. inside the :perform test-op wiring, which has no operate machinery
+		// to run and is dropped whole.
+		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+				(defsystem "lib-test"
+				  :depends-on ("lib")
+				  :components ((:file "main"))
+				  :perform (test-op :after (op c)
+				                    (funcall (intern #.(string :run-test-system) :prove-asdf) c)))""", "lib-test.asd");
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+		assertThat(stderr).isEmpty();
+	}
+
+	@Test
+	void anUnresolvableReadEvalInDependsOnIsAHardError() {
+		// The other half of the same rule: where the value DECIDES something, a silent
+		// nil drops a dependency and surfaces much later as an undefined symbol far from
+		// the cause, so the parse fails naming the .asd and the clause instead.
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+				(defsystem :lib
+				  :depends-on ("base" #.(uiop:read-file-form "extra.sexp"))
+				  :components ((:file "main")))""", "proj/lib.asd", Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("proj/lib.asd")
+			.hasMessageContaining(":depends-on")
+			.hasMessageContaining("READ-FILE-FORM");
+	}
+
+	@Test
+	void anUnresolvableReadEvalInComponentsIsAHardError() {
+		// Same rule one level down: an unresolvable #. inside :components would silently
+		// REMOVE a source file from the system (the cffi-toolchain :if-feature shape).
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+				(defsystem :lib
+				  :components ((:file "main")
+				               (:file "bundle" :if-feature (#.(if (version< "3.1.8" (asdf-version)) :or :and)))))""",
+				"proj/lib.asd", Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("proj/lib.asd")
+			.hasMessageContaining(":components")
+			.hasMessageContaining("VERSION<");
+	}
+
+	@Test
+	void anUnreadableReadEvalIsSilentInMetadataAndNamedWhereItDecides() {
+		// A #. whose datum the lexer cannot even re-lex reaches the parse as raw source
+		// text rather than as a warning: same consumer-decides rule, so it is dropped
+		// with the metadata and quoted verbatim where it would pick a dependency.
+		List<AsdfSystems.LispSystem> systems = parseCapturingStderr("""
+				(defsystem :lib
+				  :long-description #.,readme
+				  :components ((:file "main")))""", "lib.asd");
+		assertThat(systems.get(0).files()).containsExactly("main.lisp");
+		assertThat(stderr).isEmpty();
+		assertThatThrownBy(() -> AsdfSystems.parseAsdSource("""
+				(defsystem :lib :depends-on (#.,extra) :components ((:file "main")))""", "proj/lib.asd",
+				Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("proj/lib.asd")
+			.hasMessageContaining(":depends-on")
+			.hasMessageContaining(",extra");
 	}
 
 	@Test

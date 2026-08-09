@@ -113,9 +113,13 @@ below.
   parse-time environment) may appear. `#+`/`#-` feature conditionals work
   (evaluated against the target backend's features, see
   [Data Types](../reference/data-types.md#comments-feature-conditionals-and-features)),
-  a `#.` read-time-eval form is resolved against those `defparameter`s (the
-  `(:file #.*string-file*)` idiom) — an unresolvable one, like an ASDF
-  version guard, is skipped with a warning — and a `:depends-on` entry may be
+  a `#.` read-time-eval form is resolved where its value is **used**: in a
+  clause that decides what gets loaded it is resolved against those
+  `defparameter`s (the `(:file #.*string-file*)` idiom), and an unresolvable
+  one is an error naming the file and the clause; in ignored metadata
+  (`:long-description`, `:version`, `:perform`, …) and at top level (an ASDF
+  version guard) it is dropped unevaluated and unremarked. A `:depends-on`
+  entry may be
   `(:feature EXPR DEP)`, contributing its dependency only when the feature
   expression holds, or `(:version NAME "1.2.3")`, resolving to the plain
   dependency (the version constraint is not checked — the `:version` option is

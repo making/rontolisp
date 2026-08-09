@@ -743,13 +743,15 @@ class LispReaderTest {
 	}
 
 	@Test
-	void readReadEvalUnparsableDatumSkippedInTolerantMode() {
-		// A #. datum that does not parse (here an unquote outside a backquote) falls
-		// back to a nil placeholder so it cannot shift the surrounding structure (e.g.
-		// plist/alist pairing inside an .asd option); consumers that treat top-level
-		// forms (AsdfSystems) ignore a bare nil.
+	void readReadEvalUnparsableDatumCarriesItsRawTextInTolerantMode() {
+		// A #. datum that does not parse (here an unquote outside a backquote) becomes a
+		// (%read-eval-unreadable "RAW TEXT") marker: it occupies exactly one datum, so it
+		// cannot shift the surrounding structure (e.g. plist/alist pairing inside an .asd
+		// option), and it carries the source text the CONSUMER needs to decide -- silent
+		// in metadata, a hard error where the value would decide what gets loaded.
 		List<LispVal> result = LispReader.readAllSkippingReadEval("#.,foo 42", Features.INTERPRETER);
-		assertThat(result).containsExactly(LispNil.INSTANCE, new LispInteger(42));
+		assertThat(result).containsExactly(LispReader.readFromString("(%read-eval-unreadable \",foo\")"),
+				new LispInteger(42));
 	}
 
 	@Test

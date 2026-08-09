@@ -167,9 +167,9 @@ public final class AsdfSystems {
 	 * declares an ordering-only component type ({@link #collectDocFileClass}), and any
 	 * other form is a hard error naming the file. A {@code #.} read-time-eval datum
 	 * (wrapped in a {@code %read-eval} marker by the tolerant reader) is resolved against
-	 * that environment; an unresolvable one is skipped with a warning (the
-	 * ASDF-version-guard idiom). {@code #+}/{@code #-} conditionals are evaluated against
-	 * {@code features}.
+	 * that environment WHERE ITS VALUE IS CONSUMED ({@link #resolveReadEval}); a
+	 * top-level one is ignored (the ASDF-version-guard idiom). {@code #+}/{@code #-}
+	 * conditionals are evaluated against {@code features}.
 	 * @param source the {@code .asd} source text
 	 * @param asdPath the resolved path of the {@code .asd} file (for the base directory
 	 * and error messages)
@@ -208,15 +208,9 @@ public final class AsdfSystems {
 		// like the feature pushes: they reach only the systems defined after them.
 		Set<String> docComponentTypes = new HashSet<>();
 		for (LispVal form : LispReader.readAllSkippingReadEval(source, features, asdPath)) {
-			// A #. datum the lexer could not re-lex leaves a nil placeholder (so it does
-			// not shift plist/alist pairing inside a defsystem option); a top-level one
-			// is an ASDF version guard and is simply ignored.
-			if (form instanceof LispNil) {
-				continue;
-			}
-			if (isReadEvalMarker(form)) {
+			if (isReadEvalMarker(form) || isUnreadableReadEvalMarker(form)) {
 				// A top-level #. form (an ASDF version guard) has side effects the data
-				// parse cannot perform; ignore it.
+				// parse cannot perform; ignore it, re-lexable or not.
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.IN_PACKAGE) || operatorMemberIs(form, LispNames.DEFPACKAGE)) {
@@ -244,8 +238,8 @@ public final class AsdfSystems {
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.DEFSYSTEM)) {
-				systems.add(parseDefsystem(substituteReadEval(form, parameters), baseDir, features, pushedFeatures,
-						docComponentTypes));
+				systems.add(parseDefsystem(form, baseDir, features, pushedFeatures, docComponentTypes,
+						new AsdContext(asdPath, parameters)));
 				continue;
 			}
 			throw new IllegalStateException(asdPath + ": unsupported form in .asd file (only " + LispNames.DEFSYSTEM
@@ -594,36 +588,97 @@ public final class AsdfSystems {
 	}
 
 	/**
-	 * Replaces every {@code (%read-eval datum)} marker in a defsystem form with the
-	 * datum's parse-time value: a reference to an earlier {@code defparameter} or any
-	 * value the mini evaluator supports. An unresolvable datum degrades to the old
-	 * behavior -- a warning and a nil placeholder -- so a {@code #.} version guard buried
-	 * in ignored metadata does not fail the whole {@code .asd}.
+	 * The enclosing {@code .asd} file's parse-time context: its path (for error messages)
+	 * and the data environment its top-level {@code defparameter}s built, which a
+	 * {@code #.} marker in a load-bearing option resolves against. A {@code defsystem}
+	 * written directly in a {@code .lisp} file has neither ({@link #NONE}).
+	 *
+	 * @param path the {@code .asd} path, or {@code null} when the form is not from one
+	 * @param parameters the parse-time {@code defparameter} bindings
 	 */
-	private static LispVal substituteReadEval(LispVal form, Map<String, LispVal> parameters) {
+	private record AsdContext(@Nullable String path, Map<String, LispVal> parameters) {
+
+		private static final AsdContext NONE = new AsdContext(null, Map.of());
+
+		/** The {@code "<path>: "} prefix every error from this file carries. */
+		private String prefix() {
+			return this.path == null ? "" : this.path + ": ";
+		}
+	}
+
+	/**
+	 * Resolves every {@code #.} marker inside a LOAD-BEARING {@code defsystem} value to
+	 * its parse-time value: a reference to an earlier {@code defparameter} or anything
+	 * else the mini evaluator supports ({@link #evalDataForm}) -- the cl-postgres
+	 * {@code (:file #.*string-file*)} idiom. An unresolvable one is a hard error naming
+	 * the {@code .asd} and the clause, like every other unsupported {@code .asd} shape.
+	 * <p>
+	 * Only the CONSUMER may call this, and only where the value decides something: what
+	 * gets loaded ({@code :depends-on}, {@code :components}, {@code :serial},
+	 * {@code :pathname}, {@code :class}, {@code :rontolisp-features}). The parsed-and-
+	 * ignored metadata keeps its markers untouched and says nothing about them -- most of
+	 * the {@code #.} in a real dist is a {@code :long-description} reading the project's
+	 * README at load time, and complaining about a value the very next line throws away
+	 * is noise, not diagnostics. In a load-bearing position the opposite holds:
+	 * substituting nil there drops a dependency or a source file and surfaces much later
+	 * as an undefined symbol far from the cause.
+	 * <p>
+	 * Conses are rebuilt only where something actually changed, so an untouched form
+	 * keeps its identity and with it its recorded source position
+	 * ({@code .kb/source-positions.md}).
+	 */
+	private static LispVal resolveReadEval(AsdContext asd, String context, LispVal form) {
 		if (!(form instanceof LispCons cons)) {
 			return form;
 		}
 		if (isReadEvalMarker(cons)) {
 			List<LispVal> items = cons.toList();
-			if (items.size() == 2) {
-				try {
-					return evalDataForm(items.get(1), parameters);
-				}
-				catch (IllegalStateException ex) {
-					// fall through to the placeholder
-				}
+			if (items.size() != 2) {
+				throw unresolvableReadEval(asd, context, cons.print(), "malformed read-time-eval marker");
 			}
-			System.err.println("warning: skipping unsupported #. read-time-eval form: "
-					+ (items.size() == 2 ? items.get(1).print() : cons.print()));
-			return LispNil.INSTANCE;
+			try {
+				return evalDataForm(items.get(1), asd.parameters());
+			}
+			catch (IllegalStateException ex) {
+				throw unresolvableReadEval(asd, context, items.get(1).print(),
+						ex.getMessage() == null ? "unsupported form" : ex.getMessage());
+			}
 		}
-		return new LispCons(substituteReadEval(cons.car(), parameters), substituteReadEval(cons.cdr(), parameters));
+		if (isUnreadableReadEvalMarker(cons)) {
+			// The lexer could not even re-lex the datum, so there is nothing to evaluate
+			// -- only the raw source text it carried here for this message.
+			throw unresolvableReadEval(asd, context, unreadableReadEvalText(cons), "the datum could not be read");
+		}
+		LispVal car = resolveReadEval(asd, context, cons.car());
+		LispVal cdr = resolveReadEval(asd, context, cons.cdr());
+		return car == cons.car() && cdr == cons.cdr() ? cons : new LispCons(car, cdr);
+	}
+
+	private static IllegalStateException unresolvableReadEval(AsdContext asd, String context, String datum,
+			String reason) {
+		return new IllegalStateException(asd.prefix() + context + ": cannot resolve the #. read-time-eval form " + datum
+				+ " (" + reason + "), and this clause decides what gets loaded -- a .asd is parsed as data, so only"
+				+ " literals, quote and if/or/and/not over earlier defparameters resolve");
 	}
 
 	private static boolean isReadEvalMarker(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
 				&& LispNames.READ_EVAL.equals(op.name());
+	}
+
+	/**
+	 * Whether {@code form} is the tolerant reader's {@code (%read-eval-unreadable "RAW
+	 * TEXT")} marker: a {@code #.} whose datum could not be re-lexed at all.
+	 */
+	private static boolean isUnreadableReadEvalMarker(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.READ_EVAL_UNREADABLE.equals(op.name());
+	}
+
+	/** The raw source text an unreadable {@code #.} marker carries. */
+	private static String unreadableReadEvalText(LispCons marker) {
+		List<LispVal> items = marker.toList();
+		return items.size() == 2 && items.get(1) instanceof LispString text ? text.value() : marker.print();
 	}
 
 	/**
@@ -658,8 +713,22 @@ public final class AsdfSystems {
 	 */
 	public static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
 			List<String> pushedFeatures) {
-		return parseDefsystem(form, baseDir, givenFeatures, pushedFeatures, Set.of());
+		return parseDefsystem(form, baseDir, givenFeatures, pushedFeatures, Set.of(), AsdContext.NONE);
 	}
+
+	/**
+	 * The {@code defsystem} options whose value is parsed and then thrown away: the
+	 * metadata, plus the test-op wiring there is no {@code operate} machinery to drive. A
+	 * {@code #.} read-time-eval marker inside one of these is never resolved and never
+	 * complained about -- nothing reads the value, so nothing may object to it. Every
+	 * OTHER option decides what gets loaded, so it resolves its markers and an
+	 * unresolvable one fails the parse ({@link #resolveReadEval}); the default direction
+	 * is deliberate, so a load-bearing option added later is covered without being
+	 * remembered here.
+	 */
+	private static final Set<String> IGNORED_OPTIONS = Set.of(":NAME", ":DESCRIPTION", ":LONG-DESCRIPTION", ":VERSION",
+			":AUTHOR", ":MAINTAINER", ":LICENSE", ":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO",
+			":IN-ORDER-TO", ":PERFORM");
 
 	/**
 	 * Parses a {@code defsystem} form with the doc-file component-class names the
@@ -674,10 +743,13 @@ public final class AsdfSystems {
 	 * {@code *features*} before this form
 	 * @param docComponentTypes the doc-file component-class names declared before this
 	 * form
+	 * @param asd the enclosing {@code .asd} file's path and parse-time
+	 * {@code defparameter} bindings, which a load-bearing option's {@code #.} marker
+	 * resolves against
 	 * @return the parsed system
 	 */
 	private static LispSystem parseDefsystem(LispVal form, @Nullable String baseDir, Features givenFeatures,
-			List<String> pushedFeatures, Set<String> docComponentTypes) {
+			List<String> pushedFeatures, Set<String> docComponentTypes, AsdContext asd) {
 		if (!(form instanceof LispCons cons)) {
 			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " expects a system definition form");
 		}
@@ -685,7 +757,8 @@ public final class AsdfSystems {
 		if (items.size() < 2) {
 			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " expects a system name: " + form.print());
 		}
-		String name = designator(LispNames.ASDF_DEFSYSTEM, items.get(1));
+		String name = designator(LispNames.ASDF_DEFSYSTEM,
+				resolveReadEval(asd, LispNames.ASDF_DEFSYSTEM + " system name", items.get(1)));
 		if ((items.size() - 2) % 2 != 0) {
 			throw new IllegalStateException(
 					LispNames.ASDF_DEFSYSTEM + " " + name + " expects :option value pairs: " + form.print());
@@ -695,7 +768,7 @@ public final class AsdfSystems {
 		// this system's own :if-feature / (:feature ...) clauses, whatever order the
 		// options happen to appear in. A push the .asd really made (pushedFeatures) is
 		// the same declaration, arriving from the file rather than from the option.
-		List<String> declaredFeatures = mergeFeatureNames(pushedFeatures, declaredFeatures(name, items));
+		List<String> declaredFeatures = mergeFeatureNames(pushedFeatures, declaredFeatures(name, items, asd));
 		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> dependsOn = new ArrayList<>();
 		boolean serial = false;
@@ -707,7 +780,12 @@ public final class AsdfSystems {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
 						+ " expects a keyword option, got " + items.get(i).print());
 			}
-			LispVal value = items.get(i + 1);
+			// A #. marker resolves where its value is CONSUMED. An option in
+			// IGNORED_OPTIONS keeps its markers untouched and stays silent about them;
+			// every other option resolves them, and an unresolvable one fails the parse
+			// naming the file and the clause (resolveReadEval).
+			LispVal value = IGNORED_OPTIONS.contains(key.name()) ? items.get(i + 1) : resolveReadEval(asd,
+					LispNames.ASDF_DEFSYSTEM + " " + name + " " + lower(key.name()), items.get(i + 1));
 			switch (key.name()) {
 				// Metadata: accepted for .asd compatibility, not recorded anywhere. The
 				// :version value may be any literal form, including ASDF's
@@ -799,12 +877,12 @@ public final class AsdfSystems {
 	 * when the file was read. The declaration is additive only -- there is no way to turn
 	 * a feature OFF, since that would let a system claim to be a backend it is not.
 	 */
-	private static List<String> declaredFeatures(String systemName, List<LispVal> items) {
+	private static List<String> declaredFeatures(String systemName, List<LispVal> items, AsdContext asd) {
+		String context = LispNames.ASDF_DEFSYSTEM + " " + systemName + " :rontolisp-features";
 		List<String> declared = new ArrayList<>();
 		for (int i = 2; i + 1 < items.size(); i += 2) {
 			if (items.get(i) instanceof LispSymbol key && key.isKeyword() && ":RONTOLISP-FEATURES".equals(key.name())) {
-				for (LispVal feature : properList(LispNames.ASDF_DEFSYSTEM + " " + systemName + " :rontolisp-features",
-						items.get(i + 1))) {
+				for (LispVal feature : properList(context, resolveReadEval(asd, context, items.get(i + 1)))) {
 					if (!(feature instanceof LispSymbol sym)) {
 						throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
 								+ " :rontolisp-features expects feature names, got " + feature.print());
