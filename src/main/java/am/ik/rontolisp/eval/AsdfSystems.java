@@ -1,7 +1,9 @@
 package am.ik.rontolisp.eval;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -67,9 +69,16 @@ public final class AsdfSystems {
 	 * component files are read, and each loader widens its own base set with them
 	 * ({@code Features.with}) -- so the backend feature stays the loader's, and a
 	 * dependency (parsed from its own {@code .asd}) never inherits them
+	 * @param packageInferredDir the directory a SUB-SYSTEM name resolves against when
+	 * this system is a {@code :class :package-inferred-system} ({@code ""} when the
+	 * system declares no {@code :pathname}, so sub-systems sit beside the {@code .asd}),
+	 * or {@code null} when it is an ordinary system. Non-null is the whole marker for the
+	 * class: such a system lists no {@code :components} and its graph is derived from the
+	 * component files' own {@code defpackage} forms
+	 * ({@link #inferPackageInferredSystems})
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
-			List<String> features) {
+			List<String> features, @Nullable String packageInferredDir) {
 	}
 
 	/**
@@ -168,6 +177,26 @@ public final class AsdfSystems {
 	 * @return the systems defined by the file
 	 */
 	public static List<LispSystem> parseAsdSource(String source, String asdPath, Features features) {
+		return parseAsdSource(source, asdPath, features, new HashMap<>());
+	}
+
+	/**
+	 * Parses a {@code .asd} file ({@link #parseAsdSource(String, String, Features)}),
+	 * merging the file's {@code register-system-packages} declarations into
+	 * {@code systemPackages}: the loader-wide "package P lives in system S" map a
+	 * package-inferred system consults when it turns a component file's
+	 * {@code defpackage} dependency into a system name
+	 * ({@link #inferPackageInferredSystems}). ningle.asd's three lines are load-bearing
+	 * -- without them {@code app.lisp}'s {@code (:import-from #:lack.request ...)} asks
+	 * for a system called {@code lack.request}, and no such {@code .asd} exists.
+	 * @param source the {@code .asd} source text
+	 * @param asdPath the resolved path of the {@code .asd} file
+	 * @param features the active reader features
+	 * @param systemPackages the loader's package-to-system map, extended in place
+	 * @return the systems defined by the file
+	 */
+	public static List<LispSystem> parseAsdSource(String source, String asdPath, Features features,
+			Map<String, String> systemPackages) {
 		String baseDir = SourceLoader.parentDir(asdPath);
 		List<LispSystem> systems = new ArrayList<>();
 		Map<String, LispVal> parameters = new HashMap<>();
@@ -194,11 +223,7 @@ public final class AsdfSystems {
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.REGISTER_SYSTEM_PACKAGES)) {
-				// Real ASDF records "package P lives in system S" so a later
-				// find-package can autoload S. Nothing here consults such a map: a
-				// package is located by its own defpackage (lack gives every one of
-				// its packages the dotted nickname this form would register), so the
-				// form is parsed and dropped like in-package/defpackage.
+				collectSystemPackages(form, systemPackages, asdPath);
 				continue;
 			}
 			if (operatorMemberIs(form, LispNames.DEFPARAMETER)) {
@@ -251,6 +276,40 @@ public final class AsdfSystems {
 			throw new IllegalStateException(asdPath + ": " + LispNames.DEFPARAMETER + " " + nameSym.name() + ": "
 					+ ex.getMessage() + " (a .asd defparameter value must be pure data: literals, quote, if/or/and/not"
 					+ " over earlier defparameters)");
+		}
+	}
+
+	/**
+	 * Records a top-level {@code (register-system-packages SYSTEM PACKAGES)} into the
+	 * loader's package-to-system map. Real ASDF keeps one global map and consults it from
+	 * two places: a {@code find-package} miss autoloads the system that owns the package,
+	 * and a package-inferred system translates a component file's {@code defpackage}
+	 * dependency into a system name. Only the second reaches here (a package is otherwise
+	 * located by its own {@code defpackage} and nicknames), and it is the reason the form
+	 * stopped being skipped.
+	 * <p>
+	 * Both arguments are read as DATA, so the {@code '(#:a #:b)} the form is always
+	 * written with is unwrapped as a quoted list; a bare designator counts as a
+	 * one-element list, matching ASDF's own {@code ensure-list}. The map is keyed by the
+	 * DOWNCASED package name, the spelling {@link #packageDesignatorName} produces on the
+	 * lookup side, so a keyword, a {@code #:} designator and a string all meet.
+	 */
+	private static void collectSystemPackages(LispVal form, Map<String, String> systemPackages, String asdPath) {
+		List<LispVal> items = ((LispCons) form).toList();
+		if (items.size() != 3) {
+			throw new IllegalStateException(asdPath + ": " + LispNames.REGISTER_SYSTEM_PACKAGES
+					+ " expects (register-system-packages SYSTEM PACKAGES): " + form.print());
+		}
+		String system = designator(LispNames.REGISTER_SYSTEM_PACKAGES, items.get(1));
+		LispVal packages = items.get(2);
+		if (packages instanceof LispCons quoted && quoted.car() instanceof LispSymbol quoteOp
+				&& LispNames.QUOTE.equals(quoteOp.name()) && quoted.cdr() instanceof LispCons datumCell) {
+			packages = datumCell.car();
+		}
+		List<LispVal> names = packages instanceof LispCons list && list.isProperList() ? list.toList()
+				: List.of(packages);
+		for (LispVal packageName : names) {
+			systemPackages.put(packageDesignatorName(LispNames.REGISTER_SYSTEM_PACKAGES, packageName), system);
 		}
 	}
 
@@ -640,6 +699,7 @@ public final class AsdfSystems {
 		Features features = declaredFeatures.isEmpty() ? givenFeatures : givenFeatures.with(declaredFeatures);
 		List<String> dependsOn = new ArrayList<>();
 		boolean serial = false;
+		boolean packageInferred = false;
 		LispVal components = null;
 		String pathname = null;
 		for (int i = 2; i < items.size(); i += 2) {
@@ -676,19 +736,56 @@ public final class AsdfSystems {
 				// :pathname and a :module prefix nest inside it), and an empty string
 				// adds no directory level, the same rule a module follows.
 				case ":PATHNAME" -> pathname = pathnamePrefix(LispNames.ASDF_DEFSYSTEM + " " + name, value);
+				// The only implemented component class: no :components at all, the graph
+				// derived from each file's own defpackage (inferPackageInferredSystems).
+				// Every other class picks a component TYPE that changes how sources load,
+				// which a data-only defsystem front end cannot honor, so it stays an
+				// error.
+				case ":CLASS" -> {
+					if (!LispNames.PACKAGE_INFERRED_SYSTEM.equals(memberName(classDesignator(name, value)))) {
+						throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name + ": unsupported :class "
+								+ value.print() + " (the only supported class is :package-inferred-system)");
+					}
+					packageInferred = true;
+				}
 				// Already consumed by declaredFeatures above.
 				case ":RONTOLISP-FEATURES" -> {
 				}
 				default -> throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
 						+ ": unsupported option " + key.name() + " (supported: :name :description :long-description"
-						+ " :version :author :maintainer :license :depends-on :serial :components :pathname"
+						+ " :version :author :maintainer :license :depends-on :serial :components :pathname :class"
 						+ " :rontolisp-features)");
 			}
 		}
 		String prefix = pathname == null || pathname.isEmpty() ? "" : pathname + "/";
+		if (packageInferred && components != null) {
+			throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
+					+ ": a :package-inferred-system has no :components (its graph is derived from each file's"
+					+ " defpackage)");
+		}
 		List<String> files = components == null ? List.of()
 				: orderComponents(name, components, serial, prefix, features, docComponentTypes);
-		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures);
+		// A package-inferred system's own :pathname is where its SUB-SYSTEM names
+		// resolve:
+		// array-operations says :pathname "src/" and then names array-operations/all.
+		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
+				packageInferred ? (pathname == null ? "" : pathname) : null);
+	}
+
+	/**
+	 * Reads a {@code :class} value: a keyword, a symbol (possibly
+	 * {@code asdf:}-qualified) or a string. The value is a CLASS name, so unlike a system
+	 * designator it keeps its spelling for {@link #memberName} to strip and upcase.
+	 */
+	private static LispSymbol classDesignator(String systemName, LispVal value) {
+		if (value instanceof LispSymbol sym) {
+			return sym;
+		}
+		if (value instanceof LispString str) {
+			return new LispSymbol(str.value());
+		}
+		throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + systemName
+				+ " :class expects a class name (keyword, symbol or string), got " + value.print());
 	}
 
 	/**
@@ -754,6 +851,152 @@ public final class AsdfSystems {
 		throw new IllegalStateException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name + "' not found (tried: "
 				+ String.join(", ", tried) + "); add its directory to --system-path or RONTOLISP_SOURCE_REGISTRY");
 	}
+
+	/**
+	 * Derives the sub-systems of a {@code :class :package-inferred-system} on demand and
+	 * registers them: such a system declares no {@code :components} at all, so
+	 * {@code registry} holds only the primary after its {@code .asd} was parsed and every
+	 * {@code NAME/SUB} name has to be answered from the FILES.
+	 * <p>
+	 * A sub-system name is a path under the primary's directory ({@code x/a/b} ->
+	 * {@code a/b.lisp}, below the primary's {@code :pathname} when it has one), and the
+	 * dependencies are the packages that file's leading {@code defpackage} names -- so
+	 * reading the files is not an optimization, it is the whole dependency graph
+	 * ({@code ningle.asd} lists only {@code "ningle/main"} and never mentions myway or
+	 * alexandria). The closure reachable from {@code name} is derived in one pass, so the
+	 * {@code .asd} is not re-read once per sub-system.
+	 * <p>
+	 * Cycles are left to the CALLER's existing {@code :depends-on} cycle check: an edge
+	 * back to an already-registered sibling is simply not followed here, so this walk
+	 * terminates and a real circular dependency is reported at load time with the stack
+	 * that reached it, exactly like a hand-listed one.
+	 * @param name the sub-system name to derive
+	 * @param registry the loader's system registry, extended in place with every system
+	 * derived
+	 * @param systemPackages the loader's package-to-system map
+	 * ({@code register-system-packages})
+	 * @param loader the loader used to read the component files
+	 * @param features the loader's reader features (widened by the primary's own
+	 * {@code :rontolisp-features}, like any of its component files)
+	 */
+	public static void inferPackageInferredSystems(String name, Map<String, LispSystem> registry,
+			Map<String, String> systemPackages, SourceLoader loader, Features features) {
+		int slash = name.indexOf('/');
+		if (slash < 0) {
+			return;
+		}
+		LispSystem primary = registry.get(name.substring(0, slash));
+		if (primary == null || primary.packageInferredDir() == null) {
+			return;
+		}
+		Features readFeatures = primary.features().isEmpty() ? features : features.with(primary.features());
+		Deque<String> pending = new ArrayDeque<>();
+		pending.addLast(name);
+		while (!pending.isEmpty()) {
+			String subName = pending.removeFirst();
+			if (registry.containsKey(subName)) {
+				continue;
+			}
+			LispSystem derived = deriveSubSystem(subName, primary, systemPackages, loader, readFeatures);
+			registry.put(subName, derived);
+			for (String dependency : derived.dependsOn()) {
+				if (dependency.startsWith(primary.name() + "/")) {
+					pending.addLast(dependency);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Derives one sub-system of a package-inferred system: its file is the name below the
+	 * primary's, its dependencies are that file's {@code defpackage} dependencies. It
+	 * inherits the primary's base directory and declared features (it IS one of the
+	 * primary's component files), and is never itself package-inferred -- only the
+	 * primary roots sub-system names.
+	 */
+	private static LispSystem deriveSubSystem(String name, LispSystem primary, Map<String, String> systemPackages,
+			SourceLoader loader, Features features) {
+		String dir = primary.packageInferredDir();
+		String file = (dir == null || dir.isEmpty() ? "" : dir + "/") + name.substring(primary.name().length() + 1)
+				+ ".lisp";
+		String path = SourceLoader.resolve(primary.baseDir(), file);
+		String source;
+		try {
+			source = loader.load(path);
+		}
+		catch (IOException ex) {
+			throw new IllegalStateException(LispNames.ASDF_LOAD_SYSTEM + ": system '" + name
+					+ "' is a sub-system of the package-inferred system '" + primary.name() + "', so it names the file "
+					+ path + ", which cannot be read: " + ex.getMessage(), ex);
+		}
+		// Only the first form: every source in the system is opened here, and the rest of
+		// each file is the load's business, not the dependency graph's.
+		LispVal first = LispReader.readFirstForm(source, features, path);
+		return new LispSystem(name, packageDependencies(first, path, systemPackages), List.of(file), primary.baseDir(),
+				primary.features(), null);
+	}
+
+	/**
+	 * The system names a component file's leading {@code defpackage} /
+	 * {@code uiop:define-package} declares as dependencies: every package named in
+	 * {@code :use}, {@code :mix}, {@code :reexport}, {@code :use-reexport} and
+	 * {@code :mix-reexport}, plus the FIRST argument of each {@code :import-from} /
+	 * {@code :shadowing-import-from}. {@code :nicknames}/{@code :shadow}/{@code :export}/
+	 * {@code :intern}/{@code :documentation} contribute nothing, which is why the clauses
+	 * are matched by name rather than rejected wholesale.
+	 */
+	private static List<String> packageDependencies(LispVal form, String path, Map<String, String> systemPackages) {
+		boolean isDefpackage = form instanceof LispCons cons && cons.isProperList()
+				&& (operatorMemberIs(form, LispNames.DEFPACKAGE) || operatorMemberIs(form, LispNames.DEFINE_PACKAGE));
+		List<LispVal> items = isDefpackage ? ((LispCons) form).toList() : List.of();
+		if (items.size() < 2) {
+			throw new IllegalStateException(path + ": the first form of a package-inferred system's file must be a "
+					+ LispNames.DEFPACKAGE + " (its dependencies are read from there), got " + form.print());
+		}
+		List<String> dependencies = new ArrayList<>();
+		for (LispVal clause : items.subList(2, items.size())) {
+			if (!(clause instanceof LispCons clauseCons) || !clauseCons.isProperList()
+					|| !(clauseCons.car() instanceof LispSymbol option)) {
+				continue;
+			}
+			List<LispVal> args = clauseCons.toList();
+			List<LispVal> packages = switch (memberName(option)) {
+				case "USE", "MIX", "REEXPORT", "USE-REEXPORT", "MIX-REEXPORT" -> args.subList(1, args.size());
+				case "IMPORT-FROM", "SHADOWING-IMPORT-FROM" ->
+					args.size() < 2 ? List.<LispVal>of() : args.subList(1, 2);
+				default -> List.<LispVal>of();
+			};
+			for (LispVal designator : packages) {
+				String system = packageSystemName(packageDesignatorName(path, designator), systemPackages);
+				if (system != null && !dependencies.contains(system)) {
+					dependencies.add(system);
+				}
+			}
+		}
+		return List.copyOf(dependencies);
+	}
+
+	/**
+	 * The system a package lives in: what {@code register-system-packages} recorded, or
+	 * -- ASDF's default -- the downcased package name itself. {@code null} for a package
+	 * no system provides: the ANSI packages and {@code asdf}, which are simply THERE.
+	 * That exclusion is what keeps a {@code (:use #:cl)} from asking the loader for a
+	 * system called {@code cl}.
+	 */
+	@Nullable private static String packageSystemName(String packageName, Map<String, String> systemPackages) {
+		String registered = systemPackages.get(packageName);
+		if (registered != null) {
+			return registered;
+		}
+		return IMPLEMENTATION_PACKAGES.contains(packageName) ? null : packageName;
+	}
+
+	/**
+	 * The packages that are present without loading anything (see
+	 * {@link #packageSystemName}).
+	 */
+	private static final Set<String> IMPLEMENTATION_PACKAGES = Set.of("cl", "common-lisp", "cl-user",
+			"common-lisp-user", "keyword", "asdf");
 
 	/**
 	 * Resolves one {@code :depends-on} entry to a system name, or {@code null} when the
@@ -855,6 +1098,27 @@ public final class AsdfSystems {
 		}
 		throw new IllegalStateException(
 				context + " expects a literal system name (string, keyword or symbol), got " + val.print());
+	}
+
+	/**
+	 * Parses a PACKAGE-name designator -- a string, a keyword, a {@code #:} designator or
+	 * a bare symbol -- to the downcased package name. Unlike a system designator
+	 * ({@link #designator}, where a string stays verbatim like ASDF's
+	 * {@code coerce-name}), a string spelling is downcased too: this name is only ever a
+	 * map key or a name to compare, and the three spellings of one package have to meet.
+	 * @param context the operator name for error messages
+	 * @param val the designator form
+	 * @return the downcased package name
+	 */
+	private static String packageDesignatorName(String context, LispVal val) {
+		if (val instanceof LispString str) {
+			return lower(str.value());
+		}
+		if (val instanceof LispSymbol sym) {
+			return symbolName(sym);
+		}
+		throw new IllegalStateException(
+				context + " expects a package name (string, keyword or symbol), got " + val.print());
 	}
 
 	private static String symbolName(LispSymbol sym) {

@@ -162,8 +162,8 @@ public final class LoadInliner {
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features, QuicklispClient quicklisp) {
 		List<LispVal> result = new ArrayList<>();
-		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(), new HashSet<>(),
-				new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp, baseDir);
+		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(), new HashMap<>(),
+				new HashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp, baseDir);
 		expandInto(program, result, ctx, baseDir);
 		// Fold the four ASDF/UIOP pathname primitives + bundle with-open-file bodies of
 		// literal-path files: a real library evaluates them at load time to build a path
@@ -177,15 +177,18 @@ public final class LoadInliner {
 	/**
 	 * The state threaded through the inline recursion: the loader, the in-progress file
 	 * stack (cycle guard), the provided modules, the ASDF side -- the registered systems,
-	 * the already-loaded systems, the in-progress system stack (cycle guard) and the
-	 * (mutable) {@code .asd} search path, which {@code ql:quickload} extends with the
-	 * downloaded cache directories -- the reader features for loaded files, the Quicklisp
-	 * downloader, and the entry source's directory (the base every path in the spliced
-	 * program is resolved against once this pass has flattened it).
+	 * the {@code register-system-packages} package-to-system map (what a package-inferred
+	 * system reads when it derives a dependency), the already-loaded systems, the
+	 * in-progress system stack (cycle guard) and the (mutable) {@code .asd} search path,
+	 * which {@code ql:quickload} extends with the downloaded cache directories -- the
+	 * reader features for loaded files, the Quicklisp downloader, and the entry source's
+	 * directory (the base every path in the spliced program is resolved against once this
+	 * pass has flattened it).
 	 */
 	private record Ctx(SourceLoader loader, Deque<String> loading, Set<String> provided,
-			Map<String, AsdfSystems.LispSystem> systems, Set<String> loadedSystems, Deque<String> loadingSystems,
-			List<String> systemPath, Features features, QuicklispClient quicklisp, @Nullable String entryBaseDir) {
+			Map<String, AsdfSystems.LispSystem> systems, Map<String, String> systemPackages, Set<String> loadedSystems,
+			Deque<String> loadingSystems, List<String> systemPath, Features features, QuicklispClient quicklisp,
+			@Nullable String entryBaseDir) {
 	}
 
 	private static void expandInto(List<LispVal> forms, List<LispVal> out, Ctx ctx, @Nullable String baseDir) {
@@ -404,11 +407,18 @@ public final class LoadInliner {
 			AsdfSystems.LocatedAsd asd = AsdfSystems.locate(name, searchDirs, ctx.loader());
 			// .asd forms read upcased like all source; AsdfSystems matches clause
 			// keywords case-insensitively and coerce-names system designators.
-			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					ctx.features())) {
+			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(), ctx.features(),
+					ctx.systemPackages())) {
 				ctx.systems().putIfAbsent(defined.name(), defined);
 			}
 			system = ctx.systems().get(name);
+			if (system == null) {
+				// A NAME/SUB of a :package-inferred-system: the .asd declares no
+				// components, so the name is answered from the file it points at.
+				AsdfSystems.inferPackageInferredSystems(name, ctx.systems(), ctx.systemPackages(), ctx.loader(),
+						ctx.features());
+				system = ctx.systems().get(name);
+			}
 			if (system == null) {
 				throw new IllegalStateException(asd.path() + " does not define system '" + name + "'");
 			}
@@ -420,9 +430,9 @@ public final class LoadInliner {
 		// copy shares every mutable field, so the registries stay one set of state; a
 		// dependency keeps the outer ctx, since it declares its own.
 		Ctx systemCtx = system.features().isEmpty() ? ctx
-				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.loadedSystems(),
-						ctx.loadingSystems(), ctx.systemPath(), ctx.features().with(system.features()), ctx.quicklisp(),
-						ctx.entryBaseDir());
+				: new Ctx(ctx.loader(), ctx.loading(), ctx.provided(), ctx.systems(), ctx.systemPackages(),
+						ctx.loadedSystems(), ctx.loadingSystems(), ctx.systemPath(),
+						ctx.features().with(system.features()), ctx.quicklisp(), ctx.entryBaseDir());
 		// Everything spliced from here on belongs to this system. A dependency opens its
 		// own bracket inside this one, so the pruner's innermost-wins rule attributes
 		// each

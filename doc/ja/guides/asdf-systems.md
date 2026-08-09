@@ -102,8 +102,10 @@ $ rontolisp
 
 - `.asd` ファイルは**データ**として解析されます: `defsystem` (裸または `asdf:` 修飾)、
   `in-package`/`defpackage` フォーム (スキップ)、`register-system-packages` フォーム
-  (スキップ — パッケージはそれを含むシステムではなく、常に自身の `defpackage` を
-  通じて見つかります)、そして純粋なリテラル/条件値を持つトップレベル `defparameter`
+  (「このパッケージはあのシステムにある」という対応を記録します —
+  package-inferred-system が `defpackage` の依存をシステム名に変換するときに
+  参照されます。それ以外では作用しません。パッケージは自身の `defpackage` を
+  通じて見つかるからです)、そして純粋なリテラル/条件値を持つトップレベル `defparameter`
   (解析時環境に評価されます) を書けます。`#+`/`#-`
   フィーチャ条件は動作し (ターゲットバックエンドのフィーチャーに対して評価されます。
   [データ型](../reference/data-types.md#コメントフィーチャー条件features)を参照)、
@@ -143,7 +145,20 @@ $ rontolisp
   `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
   (検査されません)。それ以外 (`:defsystem-depends-on` など) は句を名指しする
   エラーです。
-- 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます。
+- `:class :package-inferred-system` をサポートします — ningle、rove、
+  array-operations が採用しているスタイルです。このクラスのシステムは
+  **`:components` を一切持ちません**: サブシステム名がシステムのディレクトリ配下の
+  ファイルパスになり (`my-lib/main` は `main.lisp`、`my-lib/util/text` は
+  `util/text.lisp`。システムが `:pathname` を持つ場合はいずれもその配下)、
+  そのファイル**先頭の `defpackage`** が依存関係を表します — `:use`、`:mix`、
+  `:reexport`、`:use-reexport`、`:mix-reexport` が挙げる全パッケージと、
+  `:import-from` / `:shadowing-import-from` の第 1 引数です。パッケージ名は
+  システム名になります: `register-system-packages` フォームが宣言していれば
+  その名前、なければパッケージ名を小文字化したものです (`cl` などは除外されます)。
+  各ファイルは先頭のフォームだけが読まれます。これ以外の `:class` はサポートせず、
+  `:components` も併記した package-inferred-system はエラーです。
+- 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます
+  — 2 つのサブシステムの `defpackage` が互いを指す形で書かれた循環も含みます。
 - コンパイルパスはリテラルなトップレベルの `(asdf:load-system NAME)` を要求します。
   インタプリタは実行時に計算された名前も受け付けます。どちらも末尾のキーワード
   オプション (`:verbose nil`、`:force t`、`:silent t`) を受理して無視します。

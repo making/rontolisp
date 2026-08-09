@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 class AsdfSystemsTest {
 
@@ -883,6 +884,276 @@ class AsdfSystemsTest {
 		assertThatThrownBy(() -> AsdfSystems.loadSystemName(form("(asdf:load-system \"a\" :verbose)")))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessageContaining("expects :option value pairs");
+	}
+
+	// --- :class :package-inferred-system -------------------------------------------
+
+	/** The verbatim ningle.asd (ningle 0.3.0, LLGPL): the whole file, nothing elided. */
+	private static final String NINGLE_ASD = """
+			(defsystem "ningle"
+			  :class :package-inferred-system
+			  :version "0.3.0"
+			  :author "Eitaro Fukamachi"
+			  :license "LLGPL"
+			  :depends-on ("ningle/main")
+			  :description "Super micro framework for Common Lisp."
+			  :in-order-to ((test-op (test-op "ningle-test"))))
+
+			(register-system-packages "lack-component" '(#:lack.component))
+			(register-system-packages "lack-request" '(#:lack.request))
+			(register-system-packages "lack-response" '(#:lack.response))
+			""";
+
+	/** The leading defpackage of each of ningle's four sources, verbatim. */
+	private static final Map<String, String> NINGLE_FILES = Map.of("sw/ningle/main.lisp", """
+			(uiop:define-package #:ningle
+			  (:nicknames #:ningle/main)
+			  (:use #:cl)
+			  (:use-reexport #:ningle/app
+			                 #:ningle/context)
+			  (:import-from #:myway
+			                #:next-route)
+			  (:export #:next-route))
+			(in-package #:ningle)
+			""", "sw/ningle/app.lisp", """
+			(defpackage #:ningle/app
+			  (:nicknames #:ningle.app)
+			  (:use #:cl)
+			  (:shadowing-import-from #:ningle/context
+			                          #:*context*)
+			  (:import-from #:ningle/route
+			                #:ningle-route)
+			  (:import-from #:lack.request
+			                #:request-headers)
+			  (:import-from #:lack.response
+			                #:response-body)
+			  (:import-from #:lack.component
+			                #:lack-component)
+			  (:import-from #:myway
+			                #:make-mapper)
+			  (:import-from #:alexandria
+			                #:delete-from-plist)
+			  (:export #:app))
+			(in-package #:ningle/app)
+			""", "sw/ningle/context.lisp", """
+			(defpackage #:ningle/context
+			  (:nicknames #:ningle.context)
+			  (:use #:cl)
+			  (:export #:*context*))
+			(in-package #:ningle/context)
+			""", "sw/ningle/route.lisp", """
+			(defpackage #:ningle/route
+			  (:nicknames #:ningle.route)
+			  (:use #:cl)
+			  (:import-from #:myway
+			                #:route)
+			  (:export #:ningle-route))
+			(in-package #:ningle/route)
+			""");
+
+	private static Map<String, AsdfSystems.LispSystem> registryOf(List<AsdfSystems.LispSystem> systems) {
+		Map<String, AsdfSystems.LispSystem> registry = new java.util.HashMap<>();
+		for (AsdfSystems.LispSystem system : systems) {
+			registry.put(system.name(), system);
+		}
+		return registry;
+	}
+
+	private static AsdfSystems.LispSystem registered(Map<String, AsdfSystems.LispSystem> registry, String name) {
+		AsdfSystems.LispSystem system = registry.get(name);
+		assertThat(system).as(name).isNotNull();
+		return java.util.Objects.requireNonNull(system);
+	}
+
+	@Test
+	void parsesTheVerbatimNingleAsd() {
+		// The .asd names ONE sub-system and no components at all: everything the load
+		// needs beyond "ningle/main" is reachable only through the component files.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		List<AsdfSystems.LispSystem> systems = AsdfSystems.parseAsdSource(NINGLE_ASD, "sw/ningle/ningle.asd",
+				Features.INTERPRETER, systemPackages);
+		assertThat(systems).hasSize(1);
+		AsdfSystems.LispSystem ningle = systems.get(0);
+		assertThat(ningle.name()).isEqualTo("ningle");
+		assertThat(ningle.dependsOn()).containsExactly("ningle/main");
+		assertThat(ningle.files()).isEmpty();
+		// No :pathname, so sub-system names resolve beside the .asd.
+		assertThat(ningle.packageInferredDir()).isEmpty();
+		assertThat(systemPackages).containsOnly(entry("lack.component", "lack-component"),
+				entry("lack.request", "lack-request"), entry("lack.response", "lack-response"));
+	}
+
+	@Test
+	void anOrdinarySystemIsNotPackageInferred() {
+		assertThat(parse("(asdf:defsystem :lib :components ((:file \"main\")))").packageInferredDir()).isNull();
+	}
+
+	@Test
+	void packageInferredSubSystemsAreDerivedFromTheirFilesDefpackage() {
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				AsdfSystems.parseAsdSource(NINGLE_ASD, "sw/ningle/ningle.asd", Features.INTERPRETER, systemPackages));
+		AsdfSystems.inferPackageInferredSystems("ningle/main", registry, systemPackages, loaderOf(NINGLE_FILES),
+				Features.INTERPRETER);
+		// One pass derives the whole closure reachable from ningle/main, so the .asd is
+		// not re-read once per sub-system.
+		assertThat(registry).containsOnlyKeys("ningle", "ningle/main", "ningle/app", "ningle/context", "ningle/route");
+		AsdfSystems.LispSystem main = registered(registry, "ningle/main");
+		assertThat(main.files()).containsExactly("main.lisp");
+		assertThat(main.baseDir()).isEqualTo("sw/ningle");
+		// :use-reexport contributes every package it names; :import-from only its first.
+		assertThat(main.dependsOn()).containsExactly("ningle/app", "ningle/context", "myway");
+		// :use #:cl drops out, :nicknames/:export contribute nothing, and the three
+		// lack.* packages resolve through register-system-packages -- without that map
+		// this would ask for a system called lack.request.
+		assertThat(registered(registry, "ningle/app").dependsOn()).containsExactly("ningle/context", "ningle/route",
+				"lack-request", "lack-response", "lack-component", "myway", "alexandria");
+		assertThat(registered(registry, "ningle/context").dependsOn()).isEmpty();
+		assertThat(registered(registry, "ningle/route").dependsOn()).containsExactly("myway");
+		// A derived sub-system is a component file, never itself a root for more names.
+		assertThat(registered(registry, "ningle/route").packageInferredDir()).isNull();
+	}
+
+	@Test
+	void aNestedSubSystemNameResolvesToANestedPath() {
+		// rove's shape: rove/tests/main is tests/main.lisp, and rove/tests is defined by
+		// the .asd itself so the derivation must not overwrite it.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(AsdfSystems.parseAsdSource("""
+				(defsystem "rove"
+				  :class :package-inferred-system
+				  :depends-on ("rove/main"))
+				(defsystem "rove/tests"
+				  :class :package-inferred-system
+				  :depends-on ("rove" "rove/tests/main"))""", "sw/rove/rove.asd", Features.INTERPRETER,
+				systemPackages));
+		SourceLoader loader = loaderOf(Map.of("sw/rove/tests/main.lisp", """
+				(defpackage #:rove/tests/main
+				  (:use #:cl #:rove/core/suite/package))""", "sw/rove/core/suite/package.lisp", """
+				(defpackage #:rove/core/suite/package
+				  (:use #:cl))"""));
+		AsdfSystems.inferPackageInferredSystems("rove/tests/main", registry, systemPackages, loader,
+				Features.INTERPRETER);
+		assertThat(registered(registry, "rove/tests/main").files()).containsExactly("tests/main.lisp");
+		assertThat(registered(registry, "rove/tests/main").dependsOn()).containsExactly("rove/core/suite/package");
+		assertThat(registered(registry, "rove/core/suite/package").files()).containsExactly("core/suite/package.lisp");
+		// The explicitly defined secondary system keeps its own :depends-on.
+		assertThat(registered(registry, "rove/tests").dependsOn()).containsExactly("rove", "rove/tests/main");
+	}
+
+	@Test
+	void thePrimarysPathnameIsWhereItsSubSystemsResolve() {
+		// array-operations.asd's shape: :pathname "src/" plus a package-inferred class,
+		// so array-operations/all is src/all.lisp.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(AsdfSystems.parseAsdSource("""
+				(defsystem "array-operations"
+				  :class :package-inferred-system
+				  :pathname "src/"
+				  :depends-on ("let-plus" "array-operations/all"))""", "sw/aops/array-operations.asd",
+				Features.INTERPRETER, systemPackages));
+		assertThat(registered(registry, "array-operations").packageInferredDir()).isEqualTo("src");
+		AsdfSystems.inferPackageInferredSystems("array-operations/all", registry, systemPackages,
+				loaderOf(Map.of("sw/aops/src/all.lisp", """
+						(uiop:define-package :array-operations/all
+						  (:nicknames :array-operations :aops)
+						  (:use-reexport :array-operations/generic))""", "sw/aops/src/generic.lisp", """
+						(defpackage :array-operations/generic (:use :cl))""")), Features.INTERPRETER);
+		assertThat(registered(registry, "array-operations/all").files()).containsExactly("src/all.lisp");
+		assertThat(registered(registry, "array-operations/generic").files()).containsExactly("src/generic.lisp");
+	}
+
+	@Test
+	void aSubSystemCycleIsLeftToTheLoadersDependsOnCheck() {
+		// Two siblings that name each other: the derivation registers both and stops,
+		// rather than recursing until the stack ends. The cycle itself is reported by
+		// the loader's own :depends-on guard, with the stack that reached it.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(AsdfSystems.parseAsdSource(
+				"(defsystem \"lib\" :class :package-inferred-system :depends-on (\"lib/a\"))", "sw/lib/lib.asd",
+				Features.INTERPRETER, systemPackages));
+		AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages,
+				loaderOf(Map.of("sw/lib/a.lisp", "(defpackage #:lib/a (:use #:cl #:lib/b))", "sw/lib/b.lisp",
+						"(defpackage #:lib/b (:use #:cl #:lib/a))")),
+				Features.INTERPRETER);
+		assertThat(registry).containsOnlyKeys("lib", "lib/a", "lib/b");
+		assertThat(registered(registry, "lib/a").dependsOn()).containsExactly("lib/b");
+		assertThat(registered(registry, "lib/b").dependsOn()).containsExactly("lib/a");
+	}
+
+	@Test
+	void aSubSystemOfAnOrdinarySystemIsNotDerived() {
+		// Only a package-inferred PRIMARY roots sub-system names; a secondary name of an
+		// ordinary system stays "the .asd does not define it", as before.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				AsdfSystems.parseAsdSource("(defsystem \"lib\" :components ((:file \"main\")))", "sw/lib/lib.asd",
+						Features.INTERPRETER, systemPackages));
+		AsdfSystems.inferPackageInferredSystems("lib/tests", registry, systemPackages,
+				loaderOf(Map.of("sw/lib/tests.lisp", "(defpackage #:lib/tests (:use #:cl))")), Features.INTERPRETER);
+		assertThat(registry).containsOnlyKeys("lib");
+	}
+
+	@Test
+	void aMissingSubSystemFileNamesThePathItLooked() {
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
+						Features.INTERPRETER, systemPackages));
+		assertThatThrownBy(() -> AsdfSystems.inferPackageInferredSystems("lib/missing", registry, systemPackages,
+				loaderOf(Map.of()), Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("sw/lib/missing.lisp");
+	}
+
+	@Test
+	void aSubSystemFileWithoutALeadingDefpackageIsAHardError() {
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
+						Features.INTERPRETER, systemPackages));
+		assertThatThrownBy(() -> AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages,
+				loaderOf(Map.of("sw/lib/a.lisp", "(in-package #:lib)\n(defun f () 1)")), Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("must be a DEFPACKAGE");
+	}
+
+	@Test
+	void anUnsupportedClassNamesTheClause() {
+		assertThatThrownBy(() -> parse("(asdf:defsystem :lib :class :my-system)"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("unsupported :class")
+			.hasMessageContaining(":package-inferred-system");
+	}
+
+	@Test
+	void aPackageInferredSystemWithComponentsIsAHardError() {
+		// The class means "there is no component list"; one that also lists components
+		// is declaring two graphs, and the derived one would silently win.
+		assertThatThrownBy(
+				() -> parse("(asdf:defsystem :lib :class :package-inferred-system :components ((:file \"main\")))"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("has no :components");
+	}
+
+	@Test
+	void registerSystemPackagesAcceptsEverySpelling() {
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		AsdfSystems.parseAsdSource("""
+				(defsystem "lib")
+				(register-system-packages "a-sys" '(#:a.one #:a.two))
+				(register-system-packages :b-sys :b.one)
+				(register-system-packages "c-sys" '("C.ONE"))""", "lib.asd", Features.INTERPRETER, systemPackages);
+		assertThat(systemPackages).containsOnly(entry("a.one", "a-sys"), entry("a.two", "a-sys"),
+				entry("b.one", "b-sys"), entry("c.one", "c-sys"));
+	}
+
+	@Test
+	void registerSystemPackagesChecksItsShape() {
+		assertThatThrownBy(
+				() -> AsdfSystems.parseAsdSource("(register-system-packages \"a\")", "lib.asd", Features.INTERPRETER))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("REGISTER-SYSTEM-PACKAGES expects");
 	}
 
 }

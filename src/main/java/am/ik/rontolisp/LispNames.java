@@ -4846,11 +4846,23 @@ public final class LispNames {
 	/**
 	 * {@code register-system-packages} -- a top-level {@code .asd} form real ASDF uses to
 	 * map package names onto the system that defines them
-	 * ({@code (register-system-packages "lack-component" '(:lack.component))}). Parsed
-	 * and skipped: nothing here consults such a map, since a package is located by its
-	 * own {@code defpackage} (and its nicknames), never by the system that holds it.
+	 * ({@code (register-system-packages "lack-component" '(:lack.component))}). Recorded
+	 * into the loader's package-to-system map, which is what a
+	 * {@link #PACKAGE_INFERRED_SYSTEM} consults when it turns a component file's
+	 * {@code defpackage} dependency into a system name.
 	 */
 	public static final String REGISTER_SYSTEM_PACKAGES = "REGISTER-SYSTEM-PACKAGES";
+
+	/**
+	 * {@code package-inferred-system} -- the {@code asdf:defsystem} {@code :class} whose
+	 * component graph is DERIVED instead of listed: such a system has no
+	 * {@code :components} clause, a sub-system name is a file path under the primary
+	 * system's directory ({@code x/a/b} -> {@code a/b.lisp}), and that file's leading
+	 * {@code defpackage} names its dependencies. The system style the fukamachi ecosystem
+	 * (ningle, rove) has moved to; the only {@code :class} value the ASDF subset
+	 * implements.
+	 */
+	public static final String PACKAGE_INFERRED_SYSTEM = "PACKAGE-INFERRED-SYSTEM";
 
 	/**
 	 * {@code %read-eval} -- the internal marker the marker-mode reader wraps a {@code #.}

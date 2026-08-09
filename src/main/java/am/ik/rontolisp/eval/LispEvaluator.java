@@ -280,6 +280,13 @@ public final class LispEvaluator {
 	private final java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.HashMap<>();
 
 	/**
+	 * "Package P lives in system S", merged from the {@code register-system-packages}
+	 * forms of every {@code .asd} read so far. Read when a package-inferred system turns
+	 * a component file's {@code defpackage} dependency into a system name.
+	 */
+	private final java.util.Map<String, String> asdfSystemPackages = new java.util.HashMap<>();
+
+	/**
 	 * The systems already loaded by {@code asdf:load-system} (loading again is a no-op).
 	 */
 	private final java.util.Set<String> loadedSystems = new java.util.HashSet<>();
@@ -2913,10 +2920,17 @@ public final class LispEvaluator {
 			// keywords case-insensitively and coerce-names (downcases) system
 			// designators.
 			for (AsdfSystems.LispSystem defined : AsdfSystems.parseAsdSource(asd.source(), asd.path(),
-					Features.INTERPRETER)) {
+					Features.INTERPRETER, this.asdfSystemPackages)) {
 				this.asdfSystems.putIfAbsent(defined.name(), defined);
 			}
 			system = this.asdfSystems.get(name);
+			if (system == null) {
+				// A NAME/SUB of a :package-inferred-system: the .asd declares no
+				// components, so the name is answered from the file it points at.
+				AsdfSystems.inferPackageInferredSystems(name, this.asdfSystems, this.asdfSystemPackages,
+						this.sourceLoader, Features.INTERPRETER);
+				system = this.asdfSystems.get(name);
+			}
 			if (system == null) {
 				throw new LispEvalException(asd.path() + " does not define system '" + name + "'");
 			}

@@ -228,6 +228,31 @@ public final class LispReader {
 		return readAll(input, features, LispLexer.ReadEvalMode.MARKER, file);
 	}
 
+	/**
+	 * Reads ONLY the first expression of the input, without parsing the rest. The ASDF
+	 * subset's package-inferred systems use this to read a component file's leading
+	 * {@code defpackage} -- the whole dependency graph of such a system is derived from
+	 * those forms, so every source in the system is opened, and building the AST of each
+	 * one (plus its provenance entries) just to look at its first datum would cost a full
+	 * parse per file. Read-time-eval is tolerated the way a {@code .asd} tolerates it: a
+	 * {@code #.} further down the file must not make the file's package declaration
+	 * unreadable, since the real load resolves those markers later.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @return the first expression, or {@code nil} when the input holds none
+	 */
+	public static LispVal readFirstForm(String input, Features features, @Nullable String file) {
+		List<LocatedToken> tokens = new LispLexer(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file)
+			.tokenizeWithPositions();
+		// Provenance recording off: these conses are inspected and thrown away, and the
+		// table is first-write-wins -- the real load of the same file must be the one
+		// that
+		// claims its positions.
+		LispReader reader = new LispReader(tokens, features, input, file, false);
+		return reader.pos < reader.tokens.size() ? reader.readExpr() : LispNil.INSTANCE;
+	}
+
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,
 			@Nullable String file) {
 		List<LocatedToken> tokens = new LispLexer(input, features, readEvalMode, file).tokenizeWithPositions();

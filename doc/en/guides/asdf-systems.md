@@ -105,8 +105,10 @@ below.
 
 - `.asd` files are parsed as **data**: `defsystem` (bare or
   `asdf:`-qualified), `in-package`/`defpackage` forms (skipped),
-  `register-system-packages` forms (skipped — a package is found through its
-  own `defpackage`, never through the system that holds it), and top-level
+  `register-system-packages` forms (which record "this package lives in that
+  system" — read when a package-inferred system turns a `defpackage`
+  dependency into a system name, and otherwise inert, since a package is
+  found through its own `defpackage`), and top-level
   `defparameter`s of pure literal/conditional values (evaluated into a
   parse-time environment) may appear. `#+`/`#-` feature conditionals work
   (evaluated against the target backend's features, see
@@ -149,8 +151,21 @@ below.
   `:version` value may be any literal form including ASDF's
   `(:read-file-form ...)` indirection (never inspected). Anything else
   (`:defsystem-depends-on`, ...) is an error naming the clause.
+- `:class :package-inferred-system` is supported — the style ningle, rove and
+  array-operations use. Such a system has **no `:components` at all**: a
+  sub-system name is a file path under the system's directory (`my-lib/main`
+  is `main.lisp`, `my-lib/util/text` is `util/text.lisp`, both below
+  `:pathname` when the system has one), and that file's **leading
+  `defpackage`** names its dependencies — every package in `:use`, `:mix`,
+  `:reexport`, `:use-reexport` and `:mix-reexport`, plus the first argument of
+  each `:import-from` / `:shadowing-import-from`. A package name becomes a
+  system name: what a `register-system-packages` form declared, otherwise the
+  downcased package name itself (`cl` and friends drop out). Only the first
+  form of each file is read. No other `:class` is supported, and a
+  package-inferred system that also lists `:components` is an error.
 - Loading a system twice is a no-op; circular `:depends-on` chains are
-  detected and reported.
+  detected and reported — including one written as a cycle between two
+  sub-systems' `defpackage` forms.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;
   the interpreter also accepts a computed name at runtime. Both accept and
   ignore trailing keyword options (`:verbose nil`, `:force t`, `:silent t`),

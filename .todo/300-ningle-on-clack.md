@@ -62,11 +62,13 @@ once ningle lands. Other targets, same source: a `--component` serve build
 
 ## The five gaps
 
-1. **`.todo/301`** — `:class :package-inferred-system`. `ningle.asd` has no
-   `:components` at all; the component graph is derived from each file's
-   `defpackage`, and its three `register-system-packages` lines (which the ASDF
-   subset currently SKIPS) are what map the package `lack.request` to the system
-   `lack-request`. Nothing loads without this.
+1. ~~`.todo/301`~~ — **DONE 2026-08-09.** `:class :package-inferred-system`.
+   `ningle.asd` has no `:components` at all; the component graph is derived from
+   each file's `defpackage`, and its three `register-system-packages` lines are
+   what map the package `lack.request` to the system `lack-request`. Both `.asd`
+   consumers now do it (`.kb/asdf.md`), so `(ql:quickload "ningle")` resolves
+   and splices the whole graph — ningle, myway, map-set, the lack trio — on all
+   four backends, and now stops at gap 2 below instead.
 2. **`.todo/302`** — `defstruct (:print-function ...)`. map-set's one struct
    carries a pretty printer; the option is a hard error, so a transitive
    dependency of a transitive dependency stops the whole load.
@@ -199,8 +201,8 @@ where ningle and a route-list router genuinely differ, and it exercises
 
 ## Work
 
-- Land `.todo/301` and `.todo/302` (the load blockers), then `.todo/303` and
-  `.todo/304`, then gap 5 above.
+- Land `.todo/302` (the remaining load blocker; `.todo/301` is in), then
+  `.todo/303` and `.todo/304`, then gap 5 above.
 - Verify `(ql:quickload "ningle")` UNPATCHED and the two programs above on all
   four backends. The compile paths must be driven through `ql:quickload` in the
   program, not through `load` of the dist files — that is the path `LoadInliner`
