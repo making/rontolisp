@@ -322,7 +322,7 @@ $ wasmtime serve -W gc=y -W exceptions=y -S keyvalue=y server.wasm
 空から始まるインメモリストアなので (実測: どのリクエストも 1 hit を返します)
 残りませんが、プロセス外のプロバイダをリンクするホスト (たとえば wasmCloud の
 `wash dev`) なら残ります。実例は
-[`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue)
+[`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue)
 にあります。
 
 ## スループットと、コンポーネントが払っているコスト

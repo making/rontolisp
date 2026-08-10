@@ -119,7 +119,7 @@ $ curl -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/zzz
 
 同じルートはサーバなしで全バックエンドで動きます — 自分で組み立てたリクエスト
 プリストで合成済みハンドラを呼ぶだけで、
-[`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/tiny-routes-demo.lisp)
+[`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/develop/examples/asdf/tiny-routes-demo.lisp)
 がそれをしています。serve する場合は下記のバックエンド制約が付きます。
 
 ### もう 1 つの答え: ningle
@@ -301,15 +301,15 @@ report を載せた 500 を返します。
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
 
 この方法で作った完全な Worker —
-[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/main/examples/net/httpbin-clack.lisp)
+[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
 そのものをデプロイし、JavaScript 側と実測値を添えたもの — は
-[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack)
+[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack)
 にあります: 1 つのソースで 4 つのホスト、そしてディレクトリには Lisp ファイルが
 1 つもありません。
 
 `clackup` の 1 行よりモジュールサイズが重要なら、このアダプタは手書きできる程度
 の量なので、clack のロード自体を省けます。
-[`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin)
+[`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin)
 がそれです。同じアプリケーション、同じエンベロープ、同じ JavaScript 側で、
 モジュールは約半分になります。2 つのディレクトリは実測用のペアであり、
 リクエストあたりのコストは同じで、このようなホストで clack が要求するのは
@@ -326,5 +326,5 @@ report を載せた 500 を返します。
 
 関連: 土台となるサーバは [HTTP を Serve する (http-handler)](http-handler.md)、
 バックエンドごとの実行コマンド付きデモは
-[`examples/asdf/clack-hello.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/clack-hello.lisp)
+[`examples/asdf/clack-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/asdf/clack-hello.lisp)
 を参照してください。

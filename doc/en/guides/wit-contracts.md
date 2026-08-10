@@ -477,7 +477,7 @@ the same component counts 1, 2, 3. The interfaces a served component may
 `wasi:http/client`, `wasi:cli/types`, `wasi:cli/stdout`, `wasi:cli/stderr`,
 `wasi:clocks/*` and `wasi:random/random`.
 
-The full example is [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
+The full example is [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue).
 
 ### Releasing a resource (`<resource>-drop`)
 

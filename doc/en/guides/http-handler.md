@@ -320,7 +320,7 @@ starts empty on every request (verified: each request reports 1 hit), while a ho
 that links an out-of-process provider — wasmCloud (`wash dev`), say — keeps them.
 The
 worked example is
-[`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue).
+[`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue).
 
 ## Throughput, and what the component pays for
 

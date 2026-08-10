@@ -119,7 +119,7 @@ is meant to be used from.
 
 The same routes run WITHOUT a server on every backend — call the composed
 handler with a request plist you build yourself, which is what
-[`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/tiny-routes-demo.lisp)
+[`examples/asdf/tiny-routes-demo.lisp`](https://github.com/making/rontolisp/blob/develop/examples/asdf/tiny-routes-demo.lisp)
 does. Serving them has the backend constraints below.
 
 ### The other answer: ningle
@@ -299,14 +299,14 @@ Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.
 
 A complete Worker built this way — deploying
-[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/main/examples/net/httpbin-clack.lisp)
+[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
 itself, with the JavaScript side and the measurements — is
-[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin-clack):
+[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack):
 one source, four hosts, and the directory contains no Lisp file at all.
 
 If the module size matters more than the `clackup` line, this adapter is small
 enough to write out by hand and skip loading clack entirely.
-[`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/httpbin)
+[`examples/cloudflare-workers/httpbin/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin)
 is that: the same application, the same envelope, the same JavaScript side, and
 about half the module. The two directories are a measured pair — the
 per-request cost turns out to be identical, and what clack costs on a host like
@@ -322,5 +322,5 @@ this is module size and isolate startup.
   above (delayed function responses work).
 
 See also: [Serving HTTP (http-handler)](http-handler.md) for the underlying
-server, and [`examples/asdf/clack-hello.lisp`](https://github.com/making/rontolisp/blob/main/examples/asdf/clack-hello.lisp)
+server, and [`examples/asdf/clack-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/asdf/clack-hello.lisp)
 for the runnable demo with all per-backend commands.

@@ -282,7 +282,7 @@ curl http://127.0.0.1:8080/index
 
 そのカウントが実際に*残る*かどうかはコンポーネントではなくホストの都合です: wasmtime 組み込みのキーバリュープロバイダはインスタンスごとに作り直されるインメモリストアなので (`wasmtime serve` の下ではリクエストごと)、カウントは残りません。プロセス外のプロバイダをリンクするホストなら残ります — wasmCloud (`wash dev`) では同じコンポーネントが 1、2、3 と数えます。serve されるコンポーネントが束縛**できない**インターフェースは、自身の表面がすでにインポートしているものです: `wasi:http/types`、`wasi:http/client`、`wasi:cli/types`、`wasi:cli/stdout`、`wasi:cli/stderr`、`wasi:clocks/*`、`wasi:random/random`。
 
-完全な例は [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/main/examples/wit/keyvalue) にあります。
+完全な例は [`examples/wit/keyvalue`](https://github.com/making/rontolisp/tree/develop/examples/wit/keyvalue) にあります。
 
 ### リソースを解放する(`<resource>-drop`)
 
