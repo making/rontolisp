@@ -1628,6 +1628,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// The portable define-constant idiom's (boundp 'x) probe is the one thing in a
+		// straight-line library splice that forces the eval runtime; fold the provable
+		// guards away BEFORE the flatten below so the produced progn is spliced and the
+		// definition surfaces as an ordinary top-level defconstant.
+		program = LispMacroExpander.foldBoundpDefineConstantIdiom(program);
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
@@ -1785,27 +1790,41 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean usesLoad = programUsesSymbol(program, LispNames.LOAD);
 		boolean usesRead = programUsesSymbol(program, LispNames.READ)
 				|| programUsesSymbol(program, LispNames.READ_FROM_STRING) || usesLoad;
-		// The apply built-in reuses the runtime _apply, so it forces the eval runtime.
 		// boundp/symbol-value/fboundp probe the eval global envs through
-		// _env_lookup/_lookup, so they force it too; intern needs the real _intern body
-		// (canonical offsets) which lives in the reader runtime.
-		// multiple-value-call forces apply too: its expansion spreads a spill
-		// producer's dynamic value count with (apply fn (append ...)).
+		// _env_lookup/_lookup, so they force the eval runtime; intern needs the real
+		// _intern body (canonical offsets) which lives in the reader runtime.
 		boolean usesEval = programUsesEval(program) || usesLoad || this.dynamic
-				|| programUsesSymbol(program, LispNames.APPLY) || programUsesSymbol(program, LispNames.BOUNDP)
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.FBOUNDP)
-				|| programUsesSymbol(program, LispNames.FMAKUNBOUND)
+				|| programUsesSymbol(program, LispNames.BOUNDP) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
+				|| programUsesSymbol(program, LispNames.FBOUNDP) || programUsesSymbol(program, LispNames.FMAKUNBOUND)
 				// (setf (symbol-function ...)) writes GLOBAL_FENV (the raw place shape
 				// is scanned: the %set-symbol-function lowering happens per expression,
 				// after this gate).
-				|| LispMacroExpander.usesSymbolFunctionWrite(program)
-				|| programUsesSymbol(program, LispNames.MULTIPLE_VALUE_CALL)
-				// An INJECTED wrapper whose body calls apply -- the map* family,
-				// every/some, funcall -- is reachable as soon as the program takes that
-				// operator as a first-class value. The wrappers are added after this
-				// scan, so without this clause _apply stayed a nil-answering stub and
-				// (funcall #'mapcar #'list '(1 2) '(3 4)) answered (NIL NIL) here while
-				// the interpreter and the JVM answered ((1 3) (2 4)).
+				|| LispMacroExpander.usesSymbolFunctionWrite(program);
+		// A runtime apply -- a computed designator, a multiple-value-call, or a
+		// flet-bound/unknown literal target -- needs _apply and the SPREAD dispatcher,
+		// but NOT the _eval interpreter: an apply whose literal #'f/'f target names a
+		// compiled function is a physical direct call and needs neither (todo-315; it
+		// used to put the whole eval runtime into the artifact). The wrapper-name set
+		// counts only wrappers whose injection the apply site itself guarantees:
+		// unconditional catalog entries plus the reference-gated group (the #'name
+		// spelling is the reference), minus every group behind a program-scan gate the
+		// #'name spelling does not fire.
+		java.util.Set<String> applyGateWrappers = BuiltinFunctionWrappers.wrapperNames();
+		applyGateWrappers.removeAll(BuiltinFunctionWrappers.WASM_UNSUPPORTED);
+		applyGateWrappers.removeAll(BuiltinFunctionWrappers.HASH_FUNCTIONS);
+		applyGateWrappers.removeAll(BuiltinFunctionWrappers.ARRAY_FILL_POINTER_FUNCTIONS);
+		applyGateWrappers.remove(LispNames.PARSE_INTEGER);
+		applyGateWrappers.remove(LispNames.READ_FROM_STRING);
+		applyGateWrappers.remove(LispNames.INTERN);
+		applyGateWrappers.remove(LispNames.SEQ_STRING);
+		applyGateWrappers.remove(LispNames.SEQ_INT_VECTOR);
+		boolean usesApplyRuntime = usesEval || LispMacroExpander.needsApplyRuntime(program, applyGateWrappers)
+		// An INJECTED wrapper whose body calls apply -- the map* family,
+		// every/some, funcall -- is reachable as soon as the program takes that
+		// operator as a first-class value. The wrappers are added after this
+		// scan, so without this clause _apply stayed a nil-answering stub and
+		// (funcall #'mapcar #'list '(1 2) '(3 4)) answered (NIL NIL) here while
+		// the interpreter and the JVM answered ((1 3) (2 4)).
 				|| program.stream().anyMatch(BuiltinFunctionWrappers::referencesApplyingWrapper);
 		// A funcall/apply through a RUNTIME designator resolves a symbol late through
 		// the name registry (see the _lookup emission gate below).
@@ -3010,7 +3029,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// callable. See buildNameRegistrySet -- and note it runs BEFORE the registry
 		// blob is built, since building it interns every surviving name.
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, stringTable,
-				usesEval || usesRuntimeDesignator, anyNameResolvable(program, usesRead, usesLoad),
+				usesEval || usesRuntimeDesignator || usesApplyRuntime, anyNameResolvable(program, usesRead, usesLoad),
 				RuntimeNameProducers.anySymbolBuilder(program));
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
@@ -3029,9 +3048,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 		// The spread dispatcher (FUNC_DISPATCH_SPREAD): only _apply calls it, so it is
-		// built only with the eval runtime; otherwise its body is unreachable like an
-		// unused arity's.
-		if (usesEval) {
+		// built exactly when _apply is (the apply runtime, with or without the _eval
+		// interpreter); otherwise its body is unreachable like an unused arity's.
+		if (usesApplyRuntime) {
 			dispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(0, defuns, lambdaDecls, numDefuns, stringTable,
 					usesEval, userFuncBase(), true, dispatchableFuncIds));
 		}
@@ -3073,7 +3092,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// actually having such a call -- the registry embeds every defun NAME, so
 		// emitting it unconditionally would make two programs with identical CODE
 		// differ in bytes (the wit-import byte-identity pins).
-		if (usesEval || usesRuntimeDesignator) {
+		if (usesEval || usesRuntimeDesignator || usesApplyRuntime) {
 			ByteArrayOutputStream registry = new ByteArrayOutputStream();
 			int registryCount = 0;
 			for (int i = 0; i < defuns.size(); i++) {
@@ -3168,15 +3187,18 @@ public final class WasmLispCompiler implements LispCompiler {
 				.build();
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupBody();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalBody(offsets);
-			applyBody = WasmEvalRuntimeBuilder.buildApplyBody();
 			storeBody = WasmEvalRuntimeBuilder.buildStoreBody(offsets);
 		}
 		else {
 			envLookupBody = WasmEvalRuntimeBuilder.buildEnvLookupStub();
 			evalBody = WasmEvalRuntimeBuilder.buildEvalStub();
-			applyBody = WasmEvalRuntimeBuilder.buildApplyStub();
 			storeBody = WasmEvalRuntimeBuilder.buildStoreStub();
 		}
+		// _apply exists whenever the apply runtime does; without the _eval interpreter
+		// its body skips the $fenv and interpreted-closure arms (nothing can create
+		// either without _eval/_store).
+		applyBody = usesApplyRuntime ? WasmEvalRuntimeBuilder.buildApplyBody(usesEval)
+				: WasmEvalRuntimeBuilder.buildApplyStub();
 
 		// The symbol-API helper bodies (always emitted) embed the offset of the symbol
 		// T; intern it before the runtime intern blob below is snapshotted so a runtime
@@ -4905,9 +4927,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		int stringDataSegIndex = upperFoldSegIndex - 1;
 		List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges = stringData.length == 0 ? List.of()
 				: stringTable.shakeableRanges(stringDataSegIndex, dataBase, internBase, internRows);
+		@Nullable Map<Integer, String> funcSizeNames = debugFuncSizes() ? funcSizeNames(functions, lambdaDecls) : null;
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
-				coreModule = am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges);
+				coreModule = shakeCore(coreModule, caseFoldSegments, stringRanges, funcSizeNames, hostImports.size());
+			}
+			else if (funcSizeNames != null) {
+				dumpFuncSizes(coreModule, funcSizeNames, hostImports.size(),
+						am.ik.wasm.WasmTreeShaker.importedFunctionCount(coreModule), null);
 			}
 			if (this.serve) {
 				// rontolisp:http-handler: wrap the core (which exports %http-dispatch)
@@ -4978,13 +5005,144 @@ public final class WasmLispCompiler implements LispCompiler {
 					WasmComponentBuilder.wasiInterfaces(coreModule, componentImports, narrowing));
 			return WasmComponentBuilder.build(coreModule, componentExportDecls, componentImports, narrowing);
 		}
-		return this.optimize.eliminatesDeadCode()
-				? am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges) : coreModule;
+		if (this.optimize.eliminatesDeadCode()) {
+			return shakeCore(coreModule, caseFoldSegments, stringRanges, funcSizeNames, hostImports.size());
+		}
+		if (funcSizeNames != null) {
+			dumpFuncSizes(coreModule, funcSizeNames, hostImports.size(),
+					am.ik.wasm.WasmTreeShaker.importedFunctionCount(coreModule), null);
+		}
+		return coreModule;
 	}
 
 	// The import-slot ordinal of a $sched builtin field.
 	private static int schedOrdinal(Map<String, Integer> importSlotIndex, String field) {
 		return Objects.requireNonNull(importSlotIndex.get(WasmComponentImportCompiler.SCHED_MODULE + "\0" + field));
+	}
+
+	// -Drontolisp.wasm.debug-func-sizes (the wasm twin of
+	// rontolisp.jvm.debug-method-sizes): dump every SHIPPED function's code-entry size
+	// with its final index and the Lisp definition (or runtime helper) it came from.
+	private static boolean debugFuncSizes() {
+		return System.getProperty("rontolisp.wasm.debug-func-sizes") != null;
+	}
+
+	/**
+	 * Pre-injection function index to human-readable label, for {@link #dumpFuncSizes}:
+	 * the {@code FUNC_*} runtime helper constants (via reflection over this class's own
+	 * fields -- a debug aid, so a native image that strips the metadata just degrades to
+	 * positional labels), the dispatch ladder, and every user defun / lambda / top-level
+	 * chunk by its Lisp-derived name.
+	 */
+	private static Map<Integer, String> funcSizeNames(Map<String, WasmFunctionInfo> functions,
+			List<LambdaInfo> lambdaDecls) {
+		Map<Integer, String> names = new HashMap<>();
+		for (java.lang.reflect.Field f : WasmLispCompiler.class.getDeclaredFields()) {
+			if (java.lang.reflect.Modifier.isStatic(f.getModifiers()) && f.getType() == int.class
+					&& f.getName().startsWith("FUNC_")) {
+				try {
+					names.put(f.getInt(null), f.getName());
+				}
+				catch (IllegalAccessException ex) {
+					// a missing label only degrades the dump
+				}
+			}
+		}
+		for (int a = 0; a <= MAX_CALLABLE_ARITY; a++) {
+			names.put(FUNC_DISPATCH_BASE + a, "_dispatch_" + a);
+		}
+		names.put(FUNC_DISPATCH_SPREAD, "_dispatch_spread");
+		for (WasmFunctionInfo fi : functions.values()) {
+			names.put(fi.funcIndex(), fi.name());
+		}
+		for (LambdaInfo li : lambdaDecls) {
+			names.put(li.funcIndex(), li.methodName());
+		}
+		return names;
+	}
+
+	/**
+	 * Tree-shake the core module, dumping per-function sizes when the debug flag asks.
+	 */
+	private static byte[] shakeCore(byte[] coreModule,
+			List<am.ik.wasm.WasmTreeShaker.OwnedDataSegment> caseFoldSegments,
+			List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges, @Nullable Map<Integer, String> funcNames,
+			int importShift) {
+		if (funcNames == null) {
+			return am.ik.wasm.WasmTreeShaker.shake(coreModule, caseFoldSegments, stringRanges);
+		}
+		am.ik.wasm.WasmTreeShaker.ShakeResult res = am.ik.wasm.WasmTreeShaker.shakeWithRemap(coreModule,
+				caseFoldSegments, stringRanges);
+		dumpFuncSizes(res.module(), funcNames, importShift, res.importedFunctionCount(), res.funcRemap());
+		return res.module();
+	}
+
+	/**
+	 * Walks the finished module's code section and prints one stderr line per function,
+	 * largest first: {@code [func-size] <bytes>\t<final index>\t<name>}. Sizes are the
+	 * post-shake code-entry sizes, so they are the artifact's actual bytes; names come
+	 * from {@link #funcSizeNames} joined through the shaker's index remap.
+	 */
+	private static void dumpFuncSizes(byte[] module, Map<Integer, String> funcNames, int importShift,
+			int importedBefore, int @Nullable [] funcRemap) {
+		int importedAfter = importedBefore;
+		int[] preOfFinal = null;
+		if (funcRemap != null) {
+			importedAfter = 0;
+			for (int i = 0; i < importedBefore; i++) {
+				if (funcRemap[i] >= 0) {
+					importedAfter++;
+				}
+			}
+			preOfFinal = new int[funcRemap.length];
+			for (int pre = 0; pre < funcRemap.length; pre++) {
+				if (funcRemap[pre] >= 0) {
+					preOfFinal[funcRemap[pre]] = pre;
+				}
+			}
+		}
+		record Row(int size, int finalIndex, String name) {
+		}
+		List<Row> rows = new ArrayList<>();
+		int[] p = { 8 };
+		while (p[0] < module.length) {
+			int id = module[p[0]++] & 0xFF;
+			int size = readLebU32(module, p);
+			int end = p[0] + size;
+			if (id == 10) {
+				int count = readLebU32(module, p);
+				for (int i = 0; i < count; i++) {
+					int bodySize = readLebU32(module, p);
+					int finalIndex = importedAfter + i;
+					int pre = preOfFinal == null ? finalIndex : preOfFinal[finalIndex];
+					String name = funcNames.getOrDefault(pre - importShift, "_func_" + (pre - importShift));
+					rows.add(new Row(bodySize, finalIndex, name));
+					p[0] += bodySize;
+				}
+				break;
+			}
+			p[0] = end;
+		}
+		rows.sort((a, b) -> Integer.compare(b.size(), a.size()));
+		long total = 0;
+		for (Row row : rows) {
+			total += row.size();
+			System.err.println("[func-size] " + row.size() + "\t" + row.finalIndex() + "\t" + row.name());
+		}
+		System.err.println("[func-size] total " + total + " bytes in " + rows.size() + " functions");
+	}
+
+	private static int readLebU32(byte[] bytes, int[] p) {
+		int result = 0;
+		int shift = 0;
+		while (true) {
+			int b = bytes[p[0]++] & 0xFF;
+			result |= (b & 0x7F) << shift;
+			if ((b & 0x80) == 0) {
+				return result;
+			}
+			shift += 7;
+		}
 	}
 
 	static boolean hasDoubleLiteral(List<LispVal> args) {

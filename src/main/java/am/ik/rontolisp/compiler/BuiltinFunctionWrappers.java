@@ -217,6 +217,21 @@ public final class BuiltinFunctionWrappers {
 	 * compile)
 	 * @return list of {@code (setq name (lambda ...))} expressions
 	 */
+	/**
+	 * Every wrapper catalog name, for the apply-runtime gate
+	 * ({@code LispMacroExpander.needsApplyRuntime}): an {@code apply} whose literal
+	 * target is one of these compiles to a direct call of the injected wrapper. The
+	 * caller subtracts its backend's exclusions.
+	 * @return the names of every {@code WRAPPER_DEFS} entry
+	 */
+	public static Set<String> wrapperNames() {
+		Set<String> names = new java.util.HashSet<>();
+		for (WrapperDef def : WRAPPER_DEFS) {
+			names.add(def.name);
+		}
+		return names;
+	}
+
 	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames) {
 		List<LispVal> wrappers = new ArrayList<>();
 		for (WrapperDef def : WRAPPER_DEFS) {

@@ -584,7 +584,18 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
   a `muffle-warning` `restart-case` so `(muffle-warning)` aborts the output.
 - **The gate is `LispMacroExpander.usesRestartSystem(program)`, computed on the
   SURFACE program** (the four macros plus a call to / `#'` reference of a
-  restart-runtime function). It must be computed before
+  restart-runtime function). The scan matches those names in OPERATOR POSITION of
+  evaluated forms only (todo-315): it recurses into sub-forms, never into the spine
+  cells, skips `quote`d data, and ignores keyword heads -- the old spine-walking scan
+  read ANY occurrence of a symbol as an operator, so chipz's bzip2 decoder, whose
+  `tagbody` has a tag named `CONTINUE`, put every program that loads chipz into restart
+  mode (~7 KB on the zlib size-report row: the runtime defuns plus the signal hook in
+  every `error`/`warn` expansion, plus forced `usesInstances`/`blockExitTag`). A
+  binding pair or clause head spelling a restart name still over-approximates to true
+  (the safe direction); a computed designator forged from quoted data now fails loudly
+  as an undefined function, the same carve-out the pruner documents. Pinned by
+  `LispMacroExpanderTest.aNonOperatorRestartNameDoesNotFlipRestartMode` /
+  `anOperatorPositionRestartFormStillFlipsRestartMode`. It must be computed before
   `expandTopLevelDefinitions` (which re-runs it to inject the runtime defuns and
   the two globals) and threaded into: the JVM `blockExitChannel` / WASM
   `blockExitTag` (the expansions ride `catch`/`throw`, and on WASM that also

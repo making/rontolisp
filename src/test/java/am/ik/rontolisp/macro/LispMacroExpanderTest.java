@@ -57,6 +57,102 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aNonOperatorRestartNameDoesNotFlipRestartMode() {
+		// A tagbody tag, a let binding, or quoted data spelling a restart-runtime name is
+		// not a call: chipz's bzip2 decoder has a tagbody tag named CONTINUE, and the old
+		// spine-walking scan put every program that loads chipz into restart mode.
+		assertThat(LispMacroExpander
+			.usesRestartSystem(LispReader.readAllFromString("(defun f (x) (tagbody continue (go continue)))")))
+			.isFalse();
+		// NOTE a binding pair or clause head spelling a restart name -- e.g.
+		// (let ((continue 1)) ...) -- still over-approximates to true; that is the safe
+		// direction and not asserted here.
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(print '(abort continue))")))
+			.isFalse();
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(case x (:abort 1) (t 2))")))
+			.isFalse();
+	}
+
+	@Test
+	void anOperatorPositionRestartFormStillFlipsRestartMode() {
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(continue)"))).isTrue();
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(when t (abort c))"))).isTrue();
+		assertThat(LispMacroExpander
+			.usesRestartSystem(LispReader.readAllFromString("(restart-case (error \"x\") (retry () 1))"))).isTrue();
+		assertThat(LispMacroExpander.usesRestartSystem(LispReader.readAllFromString("(mapcar #'continue restarts)")))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.usesRestartSystem(LispReader.readAllFromString("(handler-bind ((error #'ignore)) (f))"))).isTrue();
+	}
+
+	@Test
+	void applyRuntimeIsNotNeededForLiteralTargetsAndNeededForComputedOnes() {
+		java.util.Set<String> wrappers = java.util.Set.of("+", "LIST");
+		// Literal #'defun-name / 'defun-name targets compile to direct calls.
+		assertThat(LispMacroExpander.needsApplyRuntime(
+				LispReader.readAllFromString("(defun f (&rest xs) xs) (apply #'f (list 1 2))"), wrappers))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(defun f (&rest xs) xs) (apply 'f (list 1 2))"), wrappers))
+			.isFalse();
+		// #'wrapper is injectable via the reference itself; 'wrapper is not.
+		assertThat(
+				LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(apply #'+ (list 1 2))"), wrappers))
+			.isFalse();
+		assertThat(LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(apply '+ (list 1 2))"), wrappers))
+			.isTrue();
+		// Computed designators, lambda designators and unknown names need _apply.
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(let ((f #'+)) (apply f (list 1 2)))"), wrappers))
+			.isTrue();
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(apply (lambda (a b) (+ a b)) (list 1 2))"), wrappers))
+			.isTrue();
+		assertThat(LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(apply #'nosuch (list 1))"),
+				wrappers))
+			.isTrue();
+		// A flet/labels-bound name is a variable at the call site after the rewrite.
+		assertThat(LispMacroExpander.needsApplyRuntime(
+				LispReader.readAllFromString("(defun f (&rest xs) xs) (flet ((f (x) x)) (apply #'f (list 1)))"),
+				wrappers))
+			.isTrue();
+		// multiple-value-call spreads through apply: literal known target stays direct.
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(multiple-value-call #'list (values 1 2))"), wrappers))
+			.isFalse();
+		assertThat(LispMacroExpander
+			.needsApplyRuntime(LispReader.readAllFromString("(multiple-value-call f (values 1 2))"), wrappers))
+			.isTrue();
+		// Quoted data is not a call.
+		assertThat(LispMacroExpander.needsApplyRuntime(LispReader.readAllFromString("(print '(apply f x))"), wrappers))
+			.isFalse();
+	}
+
+	@Test
+	void theBoundpDefineConstantIdiomFoldsExactlyWhenUnboundnessIsProvable() {
+		// The provable guard folds to a spliced defconstant (no boundp left).
+		List<LispVal> folded = LispMacroExpander.foldBoundpDefineConstantIdiom(
+				LispReader.readAllFromString("(unless (boundp '+k+) (defconstant +k+ 1)) (print +k+)"));
+		assertThat(folded.toString()).doesNotContain("BOUNDP");
+		// An earlier occurrence of the symbol keeps the guard.
+		List<LispVal> kept = LispMacroExpander.foldBoundpDefineConstantIdiom(
+				LispReader.readAllFromString("(print '+k+) (unless (boundp '+k+) (defconstant +k+ 1))"));
+		assertThat(kept.toString()).contains("BOUNDP");
+		// ... but a declaim naming it does not (it can bind nothing).
+		List<LispVal> declaimed = LispMacroExpander.foldBoundpDefineConstantIdiom(LispReader
+			.readAllFromString("(declaim (type fixnum +k+)) (unless (boundp '+k+) (defconstant +k+ 1)) (print +k+)"));
+		assertThat(declaimed.toString()).doesNotContain("BOUNDP");
+		// A seeded CL name stays dynamic.
+		List<LispVal> cl = LispMacroExpander.foldBoundpDefineConstantIdiom(LispReader
+			.readAllFromString("(unless (boundp '*standard-output*) (defconstant *standard-output* nil))"));
+		assertThat(cl.toString()).contains("BOUNDP");
+		// An earlier string literal spelling the name is the forgery carve-out.
+		List<LispVal> forged = LispMacroExpander.foldBoundpDefineConstantIdiom(
+				LispReader.readAllFromString("(print \"sets +K+ maybe\") (unless (boundp '+k+) (defconstant +k+ 1))"));
+		assertThat(forged.toString()).contains("BOUNDP");
+	}
+
+	@Test
 	void theRuntimeSubtypepTableIsEmittedInLatticeDeclarationOrder() {
 		// A computed (subtypep a b) makes the compiler bake the whole type lattice as a
 		// data table. Its order must be a function of the PROGRAM, never of the JVM run:

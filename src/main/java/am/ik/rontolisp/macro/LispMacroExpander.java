@@ -22244,9 +22244,15 @@ public final class LispMacroExpander {
 		}
 		if (cons.car() instanceof LispSymbol head) {
 			String name = head.name();
+			if (LispNames.QUOTE.equals(name)) {
+				// Quoted data cannot invoke a restart; a computed designator forged from
+				// it fails loudly (undefined function), the documented carve-out.
+				return false;
+			}
 			int sep = name.lastIndexOf(':');
 			String plain = sep >= 0 ? name.substring(sep + 1) : name;
-			if (RESTART_SYSTEM_MACROS.contains(plain) || RESTART_RUNTIME_FUNCTION_NAMES.contains(plain)) {
+			if (!name.startsWith(":")
+					&& (RESTART_SYSTEM_MACROS.contains(plain) || RESTART_RUNTIME_FUNCTION_NAMES.contains(plain))) {
 				return true;
 			}
 			if (LispNames.FUNCTION.equals(name) && cons.cdr() instanceof LispCons fnCons
@@ -22255,7 +22261,20 @@ public final class LispMacroExpander {
 				return true;
 			}
 		}
-		return usesRestartSystemForm(cons.car()) || usesRestartSystemForm(cons.cdr());
+		// Recurse into the SUB-FORMS (the car of each spine cell, incl. a cons in
+		// operator position), never into the spine cells themselves: treating every tail
+		// cons as a form makes any symbol anywhere -- a tagbody tag, a let-bound
+		// variable, quoted data -- read as an operator. chipz's bzip2 decoder has a
+		// tagbody tag named CONTINUE, and that misread put every program loading chipz
+		// into restart mode (measured on the zlib size-report row). A binding-pair or
+		// clause head spelling a restart name still over-approximates to true, which is
+		// the safe direction.
+		for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
+			if (usesRestartSystemForm(cell.car())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -24882,6 +24901,176 @@ public final class LispMacroExpander {
 	 */
 	public static boolean usesRuntimeFunctionDesignator(List<LispVal> program) {
 		return program.stream().anyMatch(LispMacroExpander::containsRuntimeFunctionDesignator);
+	}
+
+	/**
+	 * Folds the portable define-constant idiom, {@code (unless (boundp 'x) (defconstant
+	 * x v))} at top level, into {@code (progn (defconstant x v))} when {@code x} is
+	 * PROVABLY unbound at that point: this form is the symbol's first occurrence in the
+	 * whole program (in evaluation order), no earlier string literal spells the name (the
+	 * {@code (set (intern ...))} forgery carve-out, same as the pruner's), and the name
+	 * is not a seeded CL symbol (the standard stream variables are born bound). The
+	 * {@code boundp} probe is what forces the WASM eval runtime -- its answer lives in
+	 * the eval global-env mirror -- so chipz's 18 guarded constants used to put the whole
+	 * interpreter into every artifact. A guard the proof cannot discharge is left
+	 * untouched and keeps its runtime probe.
+	 * @param program the top-level forms (packages resolved, before top-level flattening
+	 * so the produced {@code progn} is spliced and the definition surfaces)
+	 * @return the program with every provable guard folded
+	 */
+	public static List<LispVal> foldBoundpDefineConstantIdiom(List<LispVal> program) {
+		java.util.Set<String> seenSymbols = new java.util.HashSet<>();
+		List<String> seenStrings = new java.util.ArrayList<>();
+		List<LispVal> out = new java.util.ArrayList<>(program.size());
+		for (LispVal form : program) {
+			String guarded = boundpGuardedName(form);
+			String member = guarded == null ? null : plainMemberName(guarded);
+			if (guarded != null && !seenSymbols.contains(guarded) && !PackageRegistry.isClSymbol(guarded)
+					&& seenStrings.stream().noneMatch(s -> s.contains(guarded) || s.contains(member))) {
+				List<LispVal> progn = new java.util.ArrayList<>();
+				progn.add(new LispSymbol(LispNames.PROGN));
+				LispCons cons = (LispCons) form;
+				for (LispVal rest = ((LispCons) cons.cdr()).cdr(); rest instanceof LispCons cell; rest = cell.cdr()) {
+					progn.add(cell.car());
+				}
+				collectSymbolsAndStrings(form, seenSymbols, seenStrings);
+				out.add(listToCons(progn));
+				continue;
+			}
+			// A declaim/proclaim expands to nil on every backend and can bind nothing,
+			// so a type declaration naming the constant ahead of its guard (chipz's
+			// +crc32-table+) must not count as an occurrence -- the pruner's rule.
+			if (!(form instanceof LispCons dcons && dcons.car() instanceof LispSymbol dhead
+					&& (LispNames.DECLAIM.equals(plainMemberName(dhead.name()))
+							|| LispNames.PROCLAIM.equals(plainMemberName(dhead.name()))))) {
+				collectSymbolsAndStrings(form, seenSymbols, seenStrings);
+			}
+			out.add(form);
+		}
+		return out;
+	}
+
+	/** The guarded name of a top-level {@code (unless (boundp 'x) ...)} form, or null. */
+	private static @Nullable String boundpGuardedName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.UNLESS.equals(plainMemberName(head.name())) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispCons test && test.car() instanceof LispSymbol testOp
+				&& LispNames.BOUNDP.equals(plainMemberName(testOp.name())) && test.cdr() instanceof LispCons testArg
+				&& testArg.car() instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons quotedCell
+				&& quotedCell.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		return null;
+	}
+
+	private static String plainMemberName(String name) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn == null ? name : qn.member();
+	}
+
+	private static void collectSymbolsAndStrings(LispVal form, java.util.Set<String> symbols, List<String> strings) {
+		switch (form) {
+			case LispSymbol sym -> symbols.add(sym.name());
+			case LispString str -> strings.add(str.value());
+			case LispCons cons -> {
+				collectSymbolsAndStrings(cons.car(), symbols, strings);
+				collectSymbolsAndStrings(cons.cdr(), symbols, strings);
+			}
+			default -> {
+			}
+		}
+	}
+
+	/**
+	 * Whether the program needs the runtime {@code _apply} spread machinery. An
+	 * {@code apply} (or a {@code multiple-value-call}, whose expansion spreads through
+	 * {@code apply}) whose designator is a literal {@code #'name}/{@code 'name} naming a
+	 * compiled function -- a top-level {@code defun} of the program or an injectable
+	 * built-in wrapper -- compiles to a physical direct call and needs no runtime at all;
+	 * every other designator (a computed expression, a literal {@code lambda}, a
+	 * {@code flet}/{@code labels}-bound name, whose call-site rewrite turns the
+	 * designator into a variable, or an unknown name) reaches {@code _apply}. Before this
+	 * scan existed, ANY {@code apply} put the whole eval runtime (interpreter, registry,
+	 * every arity dispatcher) into the artifact; the compilers now emit only
+	 * {@code _apply} plus the spread dispatcher for a program this answers true for, and
+	 * nothing for one it answers false for.
+	 * @param program the top-level forms (post library splice, packages resolved)
+	 * @param injectableWrapperNames the backend's injectable built-in wrapper names
+	 * ({@code BuiltinFunctionWrappers} minus the backend's exclusions)
+	 * @return whether {@code _apply} and the spread dispatcher must be emitted
+	 */
+	public static boolean needsApplyRuntime(List<LispVal> program, java.util.Set<String> injectableWrapperNames) {
+		java.util.Set<String> defuns = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+					&& LispNames.DEFUN.equals(op.name()) && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name) {
+				defuns.add(name.name());
+			}
+		}
+		return program.stream()
+			.anyMatch(f -> containsApplyRuntimeUse(f, defuns, injectableWrapperNames, java.util.Set.of()));
+	}
+
+	private static boolean containsApplyRuntimeUse(LispVal form, java.util.Set<String> defuns,
+			java.util.Set<String> wrappers, java.util.Set<String> localFns) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol op) {
+			String opName = op.name();
+			if (LispNames.QUOTE.equals(opName)) {
+				return false;
+			}
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(opName);
+			String member = qn == null ? opName : qn.member();
+			if ((LispNames.FLET.equals(member) || LispNames.LABELS.equals(member))
+					&& cons.cdr() instanceof LispCons rest) {
+				// The call-site rewrite turns #'local into a let-bound variable, so an
+				// apply of a local name is a computed designator whatever the outer
+				// scope knows under that name. Scanning the binding bodies with the
+				// extended set too (flet bodies cannot see the names) only
+				// over-approximates, which is the safe direction.
+				java.util.Set<String> extended = new java.util.HashSet<>(localFns);
+				if (rest.car() instanceof LispCons bindings) {
+					for (LispVal b = bindings; b instanceof LispCons cell; b = cell.cdr()) {
+						if (cell.car() instanceof LispCons binding && binding.car() instanceof LispSymbol local) {
+							extended.add(local.name());
+						}
+					}
+				}
+				for (LispVal r = rest; r instanceof LispCons cell; r = cell.cdr()) {
+					if (containsApplyRuntimeUse(cell.car(), defuns, wrappers, extended)) {
+						return true;
+					}
+				}
+				return false;
+			}
+			if ((LispNames.APPLY.equals(member) || LispNames.MULTIPLE_VALUE_CALL.equals(member))
+					&& cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() < 3 && LispNames.APPLY.equals(member)) {
+					return true;
+				}
+				if (parts.size() >= 2) {
+					LispVal desig = parts.get(1);
+					String target = applyLiteralTargetName(desig);
+					// A wrapper is only guaranteed injected when the site spells the
+					// reference as #'name (the injection gate scans (function name));
+					// the 'name spelling counts only against the program's own defuns.
+					boolean viaFunction = desig instanceof LispCons dc && dc.car() instanceof LispSymbol dh
+							&& LispNames.FUNCTION.equals(dh.name());
+					boolean knownTarget = target != null && !localFns.contains(target)
+							&& (defuns.contains(target) || (viaFunction && wrappers.contains(target)));
+					if (!knownTarget) {
+						return true;
+					}
+				}
+			}
+		}
+		return containsApplyRuntimeUse(cons.car(), defuns, wrappers, localFns)
+				|| containsApplyRuntimeUse(cons.cdr(), defuns, wrappers, localFns);
 	}
 
 	private static boolean containsRuntimeFunctionDesignator(LispVal form) {

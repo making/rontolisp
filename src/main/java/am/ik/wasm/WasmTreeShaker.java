@@ -208,6 +208,35 @@ public final class WasmTreeShaker {
 	 */
 	public static byte[] shake(byte[] module, List<OwnedDataSegment> ownedDataSegments,
 			List<DroppableDataRange> droppableDataRanges) {
+		return shakeWithRemap(module, ownedDataSegments, droppableDataRanges).module();
+	}
+
+	/**
+	 * The result of a {@link #shakeWithRemap} run, carrying the renumbering alongside the
+	 * shaken bytes so a caller can correlate the output's function indices with the
+	 * input's (a debug dump naming each surviving function is the consumer).
+	 *
+	 * @param module the shaken module (the input unchanged when nothing was dropped)
+	 * @param importedFunctionCount the INPUT module's imported-function count (imports
+	 * precede defined functions in the index space)
+	 * @param funcRemap old global function index to new global function index, {@code -1}
+	 * for a dropped function; {@code null} when nothing was dropped (identity)
+	 */
+	public record ShakeResult(byte[] module, int importedFunctionCount, int @Nullable [] funcRemap) {
+	}
+
+	/**
+	 * {@link #shake(byte[], List, List)}, additionally reporting the function
+	 * renumbering.
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @param ownedDataSegments data segments to drop when their owning functions are all
+	 * unreachable
+	 * @param droppableDataRanges byte ranges within a data segment to cut out when no
+	 * surviving body holds an {@code i32.const} addressing into them
+	 * @return the shaken module plus the old-to-new function index mapping
+	 */
+	public static ShakeResult shakeWithRemap(byte[] module, List<OwnedDataSegment> ownedDataSegments,
+			List<DroppableDataRange> droppableDataRanges) {
 		List<Section> sections = parseSections(module);
 
 		@Nullable Section typeSec = find(sections, SEC_TYPE);
@@ -326,7 +355,7 @@ public final class WasmTreeShaker {
 				numImportedFuncs, bodyConstants, globalConstants(globalSec));
 
 		if (next == totalFuncs && nextType == totalTypes && deadSegments.isEmpty() && deadRanges.isEmpty()) {
-			return module; // nothing to drop
+			return new ShakeResult(module, numImportedFuncs, null); // nothing to drop
 		}
 
 		// Rebuild the affected sections in place, preserving section order. A rebuilt
@@ -373,7 +402,27 @@ public final class WasmTreeShaker {
 				default -> rebuilt.add(s);
 			}
 		}
-		return assemble(rebuilt);
+		return new ShakeResult(assemble(rebuilt), numImportedFuncs, funcRemap);
+	}
+
+	/**
+	 * Counts the module's imported functions (they precede the defined functions in the
+	 * function index space, so a code-section walk needs this to place its entries).
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @return the number of function imports
+	 */
+	public static int importedFunctionCount(byte[] module) {
+		@Nullable Section importSec = find(parseSections(module), SEC_IMPORT);
+		if (importSec == null) {
+			return 0;
+		}
+		int count = 0;
+		for (ImportEntry e : parseImports(importSec.payload())) {
+			if (e.kind == KIND_FUNC) {
+				count++;
+			}
+		}
+		return count;
 	}
 
 	// Keeps a rebuilt vector-shaped section unless it came out empty, in which case the

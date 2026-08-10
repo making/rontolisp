@@ -151,3 +151,18 @@ Chunking bounds the TOP LEVEL, which is the body that grows with program length.
 enormous user `defun` is still one function and still pays the superlinear cost --
 there is no way to outline it without changing what the user wrote. If that ever
 becomes a real limit, the measurements above are what to reason from.
+
+## Measuring per-function sizes: `-Drontolisp.wasm.debug-func-sizes`
+
+The wasm twin of `rontolisp.jvm.debug-method-sizes` (todo-315): set the property (any
+value) and every compile prints one stderr line per SHIPPED function, largest first --
+`[func-size] <bytes>\t<final index>\t<name>` -- plus a total. Sizes are the post-shake
+code-entry bytes (the artifact's actual numbers, LEB re-encoding included): the names
+come from `WasmFunctionInfo.funcIndex`/`LambdaInfo` (defuns by Lisp name, lambdas and
+top-level chunks by their `_lambda_<id>`/`_toplevel_chunk_<id>` synthetic names), the
+`FUNC_*` runtime helpers by reflection over the constants, joined through the shaker's
+index remap (`WasmTreeShaker.shakeWithRemap`, which is `shake` plus the old-to-new
+function mapping). On the component path the dump covers the CORE module, before
+wrapping. `--no-gc` is not covered. This is what answered todo-315's "which are the two
+44.9/29.4 KB bodies" question (chipz's `%MAKE-BZIP2-STATE` BOA constructor, and a
+`labels` state-machine lambda) -- reach for it before any size work on this backend.

@@ -1746,7 +1746,7 @@ final class WasmEvalRuntimeBuilder {
 	 * count.
 	 * @return the encoded function body
 	 */
-	static byte[] buildApplyBody() {
+	static byte[] buildApplyBody(boolean usesEval) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -1771,7 +1771,9 @@ final class WasmEvalRuntimeBuilder {
 		w.write(Instruction.END);
 
 		// symbol designator (CL-style): a symbol resolves in the function namespace
-		// ($fenv then the compiled registry) and the result replaces fn
+		// ($fenv then the compiled registry; without the _eval interpreter no $fenv
+		// binding can exist, so the registry is probed directly) and the result
+		// replaces fn
 		getLocal(w, FN);
 		refTest(w, WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.IF, 0x40);
@@ -1779,19 +1781,21 @@ final class WasmEvalRuntimeBuilder {
 		refCast(w, WasmLispCompiler.TYPE_STRING);
 		structGet(w, WasmLispCompiler.TYPE_STRING, 0);
 		setLocal(w, FUNCID); // scratch: name offset
-		// $fenv binding?
-		getLocal(w, FUNCID);
-		emitGetGlobalFenv(w);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
-		setLocal(w, TMP);
-		getLocal(w, TMP);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		emitCdrOf(w, TMP);
-		setLocal(w, FN);
-		w.write(Instruction.ELSE);
+		if (usesEval) {
+			// $fenv binding?
+			getLocal(w, FUNCID);
+			emitGetGlobalFenv(w);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_ENV_LOOKUP);
+			setLocal(w, TMP);
+			getLocal(w, TMP);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, 0x40);
+			emitCdrOf(w, TMP);
+			setLocal(w, FN);
+			w.write(Instruction.ELSE);
+		}
 		// compiled registry?
 		getLocal(w, FUNCID);
 		w.write(Instruction.CALL);
@@ -1812,7 +1816,9 @@ final class WasmEvalRuntimeBuilder {
 		// nil here silently swallowed (apply (intern "NOSUCH") ...) -- todo-229).
 		w.write(Instruction.UNREACHABLE);
 		w.write(Instruction.END);
-		w.write(Instruction.END);
+		if (usesEval) {
+			w.write(Instruction.END);
+		}
 		w.write(Instruction.END);
 
 		// if fn is a closure struct
@@ -1825,58 +1831,61 @@ final class WasmEvalRuntimeBuilder {
 		structGet(w, WasmLispCompiler.TYPE_CLOSURE, 0);
 		setLocal(w, FUNCID);
 
-		// interpreted closure?
-		getLocal(w, FUNCID);
-		i32(w, -1);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF, 0x40);
-		// envField = fn.env = cons(lambdaTail, capturedEnv)
-		getLocal(w, FN);
-		refCast(w, WasmLispCompiler.TYPE_CLOSURE);
-		structGet(w, WasmLispCompiler.TYPE_CLOSURE, 1);
-		setLocal(w, TMP);
-		emitCarOf(w, TMP);
-		setLocal(w, PAIR); // lambdaTail = ((params) body...)
-		emitCdrOf(w, TMP);
-		setLocal(w, NEWENV); // capturedEnv
-		emitCarOf(w, PAIR);
-		setLocal(w, PARAMS); // (params)
-		emitCdrOf(w, PAIR);
-		setLocal(w, BODY); // (body...)
-		// bind params to args
-		getLocal(w, ARGLIST);
-		setLocal(w, ARGCUR);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		getLocal(w, PARAMS);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.BR_IF, 1);
-		// pval = argcur null ? null : car(argcur)
-		emitArgcurHeadOrNull(w, ARGCUR, true);
-		setLocal(w, TMP);
-		// pair = cons(car(params), pval)
-		emitCarOf(w, PARAMS);
-		getLocal(w, TMP);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-		setLocal(w, PAIR);
-		// newEnv = cons(pair, newEnv)
-		getLocal(w, PAIR);
-		getLocal(w, NEWENV);
-		structNew(w, WasmLispCompiler.TYPE_CONS);
-		setLocal(w, NEWENV);
-		// params = cdr(params); argcur = argcur null ? null : cdr(argcur)
-		emitCdrOf(w, PARAMS);
-		setLocal(w, PARAMS);
-		emitArgcurHeadOrNull(w, ARGCUR, false);
-		setLocal(w, ARGCUR);
-		w.write(Instruction.BR, 0);
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		// evaluate body as progn in newEnv
-		emitPrognLoop(w, BODY, NEWENV, TMP);
-		getLocal(w, TMP);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END); // if interpreted
+		// interpreted closure? (only _eval creates the funcId == -1 sentinel, so the
+		// arm exists only with the interpreter)
+		if (usesEval) {
+			getLocal(w, FUNCID);
+			i32(w, -1);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, 0x40);
+			// envField = fn.env = cons(lambdaTail, capturedEnv)
+			getLocal(w, FN);
+			refCast(w, WasmLispCompiler.TYPE_CLOSURE);
+			structGet(w, WasmLispCompiler.TYPE_CLOSURE, 1);
+			setLocal(w, TMP);
+			emitCarOf(w, TMP);
+			setLocal(w, PAIR); // lambdaTail = ((params) body...)
+			emitCdrOf(w, TMP);
+			setLocal(w, NEWENV); // capturedEnv
+			emitCarOf(w, PAIR);
+			setLocal(w, PARAMS); // (params)
+			emitCdrOf(w, PAIR);
+			setLocal(w, BODY); // (body...)
+			// bind params to args
+			getLocal(w, ARGLIST);
+			setLocal(w, ARGCUR);
+			w.write(Instruction.BLOCK, 0x40);
+			w.write(Instruction.LOOP, 0x40);
+			getLocal(w, PARAMS);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.BR_IF, 1);
+			// pval = argcur null ? null : car(argcur)
+			emitArgcurHeadOrNull(w, ARGCUR, true);
+			setLocal(w, TMP);
+			// pair = cons(car(params), pval)
+			emitCarOf(w, PARAMS);
+			getLocal(w, TMP);
+			structNew(w, WasmLispCompiler.TYPE_CONS);
+			setLocal(w, PAIR);
+			// newEnv = cons(pair, newEnv)
+			getLocal(w, PAIR);
+			getLocal(w, NEWENV);
+			structNew(w, WasmLispCompiler.TYPE_CONS);
+			setLocal(w, NEWENV);
+			// params = cdr(params); argcur = argcur null ? null : cdr(argcur)
+			emitCdrOf(w, PARAMS);
+			setLocal(w, PARAMS);
+			emitArgcurHeadOrNull(w, ARGCUR, false);
+			setLocal(w, ARGCUR);
+			w.write(Instruction.BR, 0);
+			w.write(Instruction.END); // loop
+			w.write(Instruction.END); // block
+			// evaluate body as progn in newEnv
+			emitPrognLoop(w, BODY, NEWENV, TMP);
+			getLocal(w, TMP);
+			w.write(Instruction.RETURN);
+			w.write(Instruction.END); // if interpreted
+		}
 
 		// compiled closure: dispatch by argument count
 		i32(w, 0);

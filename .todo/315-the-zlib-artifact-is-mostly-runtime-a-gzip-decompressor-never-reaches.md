@@ -98,6 +98,38 @@ optimizes it:
 5. The two data-section items (double interning, per-accessor message strings)
    are small next to the above; measure before spending time on them.
 
+## Results (2026-08-10)
+
+Items 1-3 delivered; items 4-5 (and the rest of item 2's ~84 KB floor) split into
+`.todo/316` with the measurements below. `zlib --optimize=size`:
+**425,815 -> 411,948 bytes (-3.3%)**, check stream byte-identical.
+
+1. **Done.** `-Drontolisp.wasm.debug-func-sizes` (`.kb/wasm-function-body-size.md`)
+   dumps every shipped function's post-shake size with its Lisp name, joined through
+   the shaker's remap (`WasmTreeShaker.shakeWithRemap`). The two big bodies are
+   `CHIPZ::%MAKE-BZIP2-STATE` (44,878 -- the ~60-slot BOA constructor, so it dies with
+   the bzip2 tree, item 4) and a `labels` state-machine lambda (29,447).
+2. **Partial.** The `MUFFLE-WARNING/ABORT/...` strings were a FALSE POSITIVE, not part
+   of the floor: `usesRestartSystemForm`'s spine-walking scan read chipz's `tagbody`
+   tag `CONTINUE` (bzip2.lisp:290) as a restart call. Operator-position scan
+   (`.kb/error-handling.md`) -> -6,923 B on this row. The remaining ~84 KB floor
+   (format renderer via `%format-condition` is the largest piece) is decomposed with
+   gate sites in `.todo/316`.
+3. **Done.** `_apply` + the SPREAD dispatcher are now a tier below the interpreter
+   (`LispMacroExpander.needsApplyRuntime`, `.kb/eval-runtime.md`): a literal-target
+   apply forces nothing (`(print (apply #'+ (list 1 2)))` at `--optimize=size`:
+   27,589 -> 18,829, and the remainder is the `#'+` WRAPPER's own transitive closure,
+   not runtime -- chipz's `(apply #'decompress ...)` direct call has no such cost); a
+   computed-designator apply costs 22,461 (no `_eval`/`_store`). zlib's LAST eval
+   trigger was then `boundp` in chipz's define-constant idiom;
+   `foldBoundpDefineConstantIdiom` discharges the 18 guards by proof and the eval
+   runtime is out of the artifact (-6,774 B beyond item 2's win). The JVM deliberately
+   keeps its wider gate: a trivial class already carries the runtime through the
+   wrapper-body self-check, so narrowing there changes nothing (recorded with a
+   re-evaluation trigger in `.kb/eval-runtime.md`).
+4. -> `.todo/316` item 1 (the ranked prize: ~90-120 KB of provably-dead bzip2).
+5. -> `.todo/316` item 3.
+
 ## Deliverable
 
 A measured reduction in the `zlib` rows of `size-report/results/wasm-flags.md`,

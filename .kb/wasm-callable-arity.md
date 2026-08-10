@@ -49,11 +49,15 @@ which in a non-EH module is a bare `unreachable`. That was acceptable while the
 only known sighting was cl-postgres' 9-argument SSL funcall on a dead branch; on
 chipz's inflate path it was a trap on the hot path, with no compile-time warning.
 
-The pass runs BEFORE `usesEval`, and that ordering is load-bearing: `usesEval`
-is a scan for `apply` (among others), and the spread dispatcher's BODY is only
-built when it is set. Moving the rewrite into the codegen branch would inject an
-`apply` the gate has already run past, and the dispatcher would be an
-`unreachable` stub again.
+The pass runs BEFORE the apply-runtime scan
+(`LispMacroExpander.needsApplyRuntime`, `.kb/eval-runtime.md`; it was the
+`usesEval` scan until todo-315 split the apply tier out of the interpreter), and
+that ordering is load-bearing: the scan looks for `apply`, and the spread
+dispatcher's BODY is only built when it answers true. Moving the rewrite into
+the codegen branch would inject an `apply` the gate has already run past, and
+the dispatcher would be an `unreachable` stub again. The injected
+`(apply fun ...)` designator is a VARIABLE, so the scan's computed-designator
+arm catches it.
 
 Pinned by `WasmLispCompilerIntegrationTest.compileFuncallWiderThanTheCallableLimitGoesThroughApply`
 (the keyword shape and twelve positional arguments) and the
