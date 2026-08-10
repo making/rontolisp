@@ -126,17 +126,27 @@ public final class RontoLispCli {
 		// directory of the loading file is always searched first, before these.
 		List<String> systemPath = systemPath(options.get("--system-path"), System.getenv("RONTOLISP_SOURCE_REGISTRY"));
 
-		if (!options.containsNoKey()) {
+		// -e/--eval "FORMS": the program is the argument itself rather than a file, and
+		// nothing downstream can tell the difference -- it interprets, and with -o it
+		// compiles. Only what a file itself provides is missing: a directory for a
+		// relative (load "...") to resolve against (the working directory stands in) and
+		// a name for a position-carrying error to print (line:column alone).
+		String inline = options.get("-e");
+		if (inline != null && options.containsNoKey()) {
+			throw new IllegalArgumentException("-e/--eval cannot be combined with the input file '" + options.getNokey()
+					+ "': give the program either inline or in a file");
+		}
+		if (inline == null && !options.containsNoKey()) {
 			repl(systemPath, options.contains("--simd"));
 			return;
 		}
 
-		String inputFile = Objects.requireNonNull(options.getNokey());
-		String source = readFile(inputFile);
+		String inputFile = inline == null ? Objects.requireNonNull(options.getNokey()) : null;
+		String source = inputFile == null ? Objects.requireNonNull(inline) : readFile(inputFile);
 		// Relative (load "...") paths resolve against the entry file's directory, so a
 		// program can be run or compiled from any working directory and still find its
 		// companion files (like Common Lisp's *load-pathname*).
-		String baseDir = SourceLoader.parentDir(inputFile);
+		String baseDir = inputFile == null ? null : SourceLoader.parentDir(inputFile);
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
@@ -681,6 +691,7 @@ public final class RontoLispCli {
 		this.out.println("Usage: rontolisp [options] [file]");
 		this.out.println("  (no args)          REPL mode");
 		this.out.println("  file               Interpret the file");
+		this.out.println("  -e \"FORMS\"         Interpret the given program instead of a file (--eval)");
 		this.out.println("  file -o out.class   Compile to JVM bytecode");
 		this.out.println("  file -o out.wasm    Compile to WASM");
 		this.out.println();
@@ -692,6 +703,13 @@ public final class RontoLispCli {
 		this.out.println("Options:");
 		this.out.println("  -h, --help         Show this help message");
 		this.out.println("  -v, --version      Show version");
+		this.out.println("  -e, --eval FORMS   Take the program from this argument, not from a file");
+		this.out.println("                     Repeatable: every -e appends another top-level form, so");
+		this.out.println("                     -e '(defun f () 1)' -e '(print (f))' is one program.");
+		this.out.println("                     Combines with -o (compiles the inline program) and with");
+		this.out.println("                     every flag below; it cannot be given beside an input file.");
+		this.out.println("                     A relative (load \"...\") resolves against the working");
+		this.out.println("                     directory, there being no file to resolve against");
 		this.out.println("  --dynamic          Resolve unknown calls/vars at runtime (late binding)");
 		this.out.println("                     Lets sources that define functions via load compile as-is");
 		this.out.println("  --component        Emit a WASI 0.3 component (run with: wasmtime run)");

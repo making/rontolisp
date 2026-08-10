@@ -63,6 +63,7 @@ echo '(print (+ 1 2))' > hello.lisp
 
 rontolisp                                # REPL
 rontolisp hello.lisp                     # interpret           -> 3
+rontolisp -e '(print (+ 1 2))'           # interpret this argument (--eval) -> 3
 rontolisp hello.lisp -o Hello.class && java Hello              # JVM -> 3
 rontolisp hello.lisp -o hello.wasm && wasmtime run -W gc hello.wasm  # WASM -> 3
 

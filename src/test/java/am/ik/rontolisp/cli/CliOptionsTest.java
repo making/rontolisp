@@ -84,6 +84,48 @@ class CliOptionsTest {
 	}
 
 	@Test
+	void inlineProgramsAccumulateInOrder() {
+		// -e is repeatable: the occurrences form ONE program, joined the way the forms
+		// would be written on separate lines of a file.
+		CliOptions options = CliOptions.build(new String[] { "-e", "(defun f () 1)", "-e", "(print (f))" });
+		assertThat(options.get("-e")).isEqualTo("(defun f () 1)\n(print (f))");
+		assertThat(options.containsNoKey()).isFalse();
+	}
+
+	@Test
+	void theLongSpellingIsTheSameKey() {
+		// --eval is stored as -e, and the two spellings mixed in one command line keep
+		// the order they were written in.
+		assertThat(CliOptions.build(new String[] { "--eval", "(print 42)" }).get("-e")).isEqualTo("(print 42)");
+		assertThat(CliOptions.build(new String[] { "--eval=(print 42)" }).get("-e")).isEqualTo("(print 42)");
+		CliOptions options = CliOptions.build(new String[] { "-e", "(defun f () 1)", "--eval", "(print (f))" });
+		assertThat(options.get("-e")).isEqualTo("(defun f () 1)\n(print (f))");
+	}
+
+	@Test
+	void anInlineProgramIsNotParsedAsOptions() {
+		// The value of -e is taken verbatim, so a program that starts with '-' or
+		// contains '=' survives.
+		assertThat(CliOptions.build(new String[] { "-e", "(- 1 2)" }).get("-e")).isEqualTo("(- 1 2)");
+		assertThat(CliOptions.build(new String[] { "-e", "(print (= 1 1))" }).get("-e")).isEqualTo("(print (= 1 1))");
+	}
+
+	@Test
+	void aTrailingValuedOptionIsRejected() {
+		// It used to be dropped, silently changing the mode: a trailing -e opened the
+		// REPL and a trailing -o interpreted instead of compiling.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "-e" })).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("option '-e' requires a value");
+		// The message names the spelling that was typed, not the canonical key.
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "--eval" }))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("option '--eval' requires a value");
+		assertThatThrownBy(() -> CliOptions.build(new String[] { "prog.lisp", "-o" }))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("option '-o' requires a value");
+	}
+
+	@Test
 	void aValueGivenAsTheFollowingArgumentKeepsItsEqualsSigns() {
 		// The glued form must not reach into a value the space form supplies.
 		CliOptions options = CliOptions.build(new String[] { "prog.lisp", "--system-path", "/a=b:/c" });

@@ -72,6 +72,39 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void evaluateInlineProgram() {
+		// -e runs like a file, not like the REPL: nothing is echoed, so the only output
+		// is what the program prints.
+		assertThat(runCli("", "-e", "(print (+ 1 2))")).isEqualTo("3\n");
+		assertThat(runCli("", "--eval", "(print (+ 1 2))")).isEqualTo("3\n");
+		assertThat(runCli("", "-e", "(+ 1 2)")).isEmpty();
+	}
+
+	@Test
+	void inlineProgramsShareOneEnvironmentInOrder() {
+		// Every -e/--eval appends to the same program, so a definition in one is visible
+		// to the next.
+		assertThat(runCli("", "-e", "(defun f (x) (* x x))", "--eval", "(print (f 5))")).isEqualTo("25\n");
+	}
+
+	@Test
+	void inlineProgramBesideAnInputFileIsAClearError() throws Exception {
+		Path file = tempDir.resolve("test.lisp");
+		Files.writeString(file, "(print 1)");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-e", "(print 2)"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("-e/--eval cannot be combined with the input file");
+	}
+
+	@Test
+	void compileInlineProgramToClassFile() throws Exception {
+		// The inline program is the same program a file holds, so -o compiles it.
+		Path classFile = tempDir.resolve("Inline.class");
+		runCli("", "-e", "(print (+ 1 2))", "-o", classFile.toString());
+		assertThat(Files.readAllBytes(classFile)).startsWith((byte) 0xCA, (byte) 0xFE, (byte) 0xBA, (byte) 0xBE);
+	}
+
+	@Test
 	void compileToClassFile() throws Exception {
 		Path file = tempDir.resolve("test.lisp");
 		Files.writeString(file, "(print (+ 1 2))");

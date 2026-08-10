@@ -16,6 +16,16 @@ public class CliOptions {
 			"-v", "--version", "--dynamic", "--buffered-output", "--component", "--no-wasi", "--host-random",
 			"--optimize", "--no-gc", "--simd", "--no-prune", "--emit-wit");
 
+	// A key that may be REPEATED: every occurrence appends to the same value, joined with
+	// a newline, instead of the last one winning. -e is one program written in several
+	// arguments, so `-e "(defun f () 1)" -e "(print (f))"` reads exactly like the two
+	// forms written on two lines of a file.
+	private static final Set<String> repeatableKeys = Set.of("-e");
+
+	// Long spellings that mean an existing key; the value is stored under the short one,
+	// so every reader looks at one name.
+	private static final Map<String, String> aliases = Map.of("--eval", "-e");
+
 	private final Map<String, String> options;
 
 	private static final String NOKEY = "__";
@@ -104,7 +114,7 @@ public class CliOptions {
 					options.put(NOKEY, arg);
 				}
 				else if (eq > 0) {
-					options.put(arg.substring(0, eq), arg.substring(eq + 1));
+					put(options, arg.substring(0, eq), arg.substring(eq + 1));
 				}
 				else {
 					key = arg;
@@ -115,11 +125,25 @@ public class CliOptions {
 				}
 			}
 			else {
-				options.put(key, arg);
+				put(options, key, arg);
 				key = null;
 			}
 		}
+		// A valued option written last with nothing after it used to be dropped, silently
+		// changing the mode instead of reporting anything: a trailing -e opened the REPL,
+		// a trailing -o interpreted rather than compiled.
+		if (key != null) {
+			throw new IllegalArgumentException("option '" + key + "' requires a value");
+		}
 		return new CliOptions(options);
+	}
+
+	private static void put(Map<String, String> options, String rawKey, String value) {
+		// The long spelling is the SAME key, not a second one: -e and --eval may be mixed
+		// in one command line and still accumulate in the order they were written.
+		String key = aliases.getOrDefault(rawKey, rawKey);
+		String previous = options.get(key);
+		options.put(key, previous == null || !repeatableKeys.contains(key) ? value : previous + "\n" + value);
 	}
 
 	@Override
