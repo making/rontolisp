@@ -190,7 +190,9 @@ numbers went stale every time the compiler changed, in a dozen places at once.
 `size-report/measure.sh` measures every tracked artifact -- the two micro
 programs across the flag matrix, and the Cloudflare Worker modules raw and
 gzipped -- writes `size-report/results/`, and
-`.github/workflows/size-report.yaml` re-runs it weekly and commits the diff. An
+`.github/workflows/size-report.yaml` re-runs it daily and commits the diff only
+when a measured number actually moved (a rerun that changes nothing but the
+date/commit stamps is restored, not committed). An
 example README that wants to talk about size links to
 `size-report/results/*.md`. A new artifact worth tracking gets a row in
 `measure.sh`'s `wasm_builds` / `worker_builds` table, not a paragraph in a

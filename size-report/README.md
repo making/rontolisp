@@ -6,8 +6,9 @@ The numbers used to live in the example READMEs, where they went stale as soon
 as the compiler changed. They live here instead: one script measures everything,
 [`results/`](results) holds what it produced, and
 [`.github/workflows/size-report.yaml`](../.github/workflows/size-report.yaml)
-re-runs it weekly and commits the diff. Example READMEs link here; they quote no
-byte counts of their own.
+re-runs it daily and commits the diff -- only when a number actually moved, so
+the `measured:` line in a report is the last run that changed something, not the
+last run. Example READMEs link here; they quote no byte counts of their own.
 
 ## The reports
 

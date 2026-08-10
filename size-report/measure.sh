@@ -68,7 +68,7 @@ version="$("${ronto[@]}" -v 2>/dev/null | sed -n 's/.*"version": *"\([^"]*\)".*/
 version="${version:-unknown}"
 # --short=7, not --short: git scales the default abbreviation to the local object
 # count, so a laptop and the CI runner stamp the same commit at different lengths
-# and every hand run conflicts with the weekly one over a line neither changed.
+# and every hand run conflicts with the scheduled one over a line neither changed.
 commit="$(git -C "$repo_root" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
 today="$(date -u +%Y-%m-%d)"
 

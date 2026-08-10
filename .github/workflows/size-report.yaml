@@ -3,13 +3,14 @@ name: Size report
 # Re-measure every artifact size-report/ tracks and commit the result, so the
 # numbers age with the compiler instead of with whoever last edited a README.
 #
-# Weekly rather than per-push: the run compiles ~20 modules and ql:quickloads
-# clack / lack / tiny-routes / ningle, which is minutes, and a size that moved
-# is worth seeing as one weekly diff rather than as noise on every commit.
+# Daily rather than per-push: the run compiles ~20 modules and ql:quickloads
+# clack / lack / tiny-routes / ningle, which is minutes, so a size that moved is
+# worth seeing as one daily diff rather than as noise on every commit. A day
+# whose numbers did not move commits nothing (see the commit step below).
 # Trigger it by hand after a change that is expected to move the numbers.
 on:
   schedule:
-  - cron: '17 3 * * 1'
+  - cron: '17 3 * * *'
   workflow_dispatch: {}
   push:
     branches:
@@ -60,6 +61,33 @@ jobs:
         set -e
         if git diff --quiet -- size-report/results; then
           echo "sizes unchanged"
+          exit 0
+        fi
+        # Every report stamps the run date and the compiler commit, so a
+        # scheduled run rewrites those lines even when no artifact moved a byte.
+        # Compare with exactly those stamps masked out; if that is all that
+        # changed, restore the checked-in files and commit nothing. Anything
+        # else -- a size, a wasmtime version, the notes/ prose appended below
+        # the table -- still counts as a real change.
+        mask() {
+          sed -E -e 's/^- measured: .*/- measured: STAMP/' \
+                 -e 's/^(- rontolisp: .*) \(`[0-9a-f]+`\)$/\1 (`STAMP`)/' \
+                 -e 's/^(  "generated"|  "commit"): .*/\1: STAMP,/'
+        }
+        real_change=0
+        for f in $(git diff --name-only -- size-report/results); do
+          if [ ! -f "$f" ] || ! git cat-file -e "HEAD:$f" 2>/dev/null; then
+            real_change=1
+            break
+          fi
+          if ! diff -q <(git show "HEAD:$f" | mask) <(mask < "$f") > /dev/null; then
+            real_change=1
+            break
+          fi
+        done
+        if [ "$real_change" = 0 ]; then
+          echo "sizes unchanged -- only the date/commit stamps moved, not committing"
+          git checkout -- size-report/results
           exit 0
         fi
         git diff --stat -- size-report/results
