@@ -20,6 +20,16 @@ for a module that stopped working.
 
 ## Reading the numbers
 
+**`Module` and `WASI` are read back out of the artifact**, not restated from the
+flags, so a row cannot keep claiming a shape the backend has stopped emitting.
+`core` is a plain wasm module and `component` a WASI component (the header
+distinguishes them); `command` means the module starts itself -- `_start`, or an
+exported `wasi:cli/run` -- while `reactor` means the host calls a named export
+instead, which is what `--no-gc` emits (`say-hello`, `approx-pi`). A component
+still carries a Preview 1 adapter inside it; the `WASI` column reports what the
+artifact imports from the outside, which for a component is `0.3.0` -- the same
+thing the cross-language table below calls Preview 3.
+
 **`--optimize` is not optional.** Without it a module carries the whole prelude
 -- ~124 KB for `hello_world`, 99.6% of which nothing in the program reaches.
 `--optimize` is the dead-code tree-shaker; it is what turns 124 KB into a few

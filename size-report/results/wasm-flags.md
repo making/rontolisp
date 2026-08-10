@@ -8,18 +8,18 @@ How the report is built and run: [../README.md](../README.md).
 - rontolisp: 0.1.0-SNAPSHOT (`f4a5a90`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
-| Program | Flags | Size (bytes) |
-| --- | --- | ---: |
-| hello_world | (none) | 124,230 |
-| hello_world | `--optimize` | 518 |
-| hello_world | `--optimize=size` | 518 |
-| hello_world | `--component --optimize=size` | 1,672 |
-| hello_world (nogc source) | `--no-gc --optimize=size` | 406 |
-| pi_approx | (none) | 124,430 |
-| pi_approx | `--optimize` | 2,781 |
-| pi_approx | `--optimize=size` | 2,781 |
-| pi_approx | `--component --optimize=size` | 3,908 |
-| pi_approx (nogc source) | `--no-gc --optimize=size` | 1,042 |
+| Program | Flags | Module | WASI | Size (bytes) |
+| --- | --- | --- | --- | ---: |
+| hello_world | (none) | core (command) | Preview 1 | 124,230 |
+| hello_world | `--optimize` | core (command) | Preview 1 | 518 |
+| hello_world | `--optimize=size` | core (command) | Preview 1 | 518 |
+| hello_world | `--component --optimize=size` | component (command) | 0.3.0 | 1,672 |
+| hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
+| pi_approx | (none) | core (command) | Preview 1 | 124,430 |
+| pi_approx | `--optimize` | core (command) | Preview 1 | 2,781 |
+| pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
+| pi_approx | `--component --optimize=size` | component (command) | 0.3.0 | 3,908 |
+| pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
 
 ## What is measured
 
@@ -42,6 +42,16 @@ answer under `wasmtime`, or the run fails instead of reporting a smaller number
 for a module that stopped working.
 
 ## Reading the numbers
+
+**`Module` and `WASI` are read back out of the artifact**, not restated from the
+flags, so a row cannot keep claiming a shape the backend has stopped emitting.
+`core` is a plain wasm module and `component` a WASI component (the header
+distinguishes them); `command` means the module starts itself -- `_start`, or an
+exported `wasi:cli/run` -- while `reactor` means the host calls a named export
+instead, which is what `--no-gc` emits (`say-hello`, `approx-pi`). A component
+still carries a Preview 1 adapter inside it; the `WASI` column reports what the
+artifact imports from the outside, which for a component is `0.3.0` -- the same
+thing the cross-language table below calls Preview 3.
 
 **`--optimize` is not optional.** Without it a module carries the whole prelude
 -- ~124 KB for `hello_world`, 99.6% of which nothing in the program reaches.

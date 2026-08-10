@@ -79,6 +79,38 @@ flag_cell() {
   if [[ -n "$1" ]]; then printf '`%s`' "$1"; else printf '(none)'; fi
 }
 bytes_of() { wc -c <"$1" | tr -d ' '; }
+# What a built artifact IS, read back out of the bytes rather than restated from
+# the flags that produced it -- so the row cannot claim a shape the backend has
+# since stopped emitting. Bytes 4..8 are the wasm header: `01 00 00 00` is a core
+# module, `0d 00 01 00` a component. "command" = it starts itself (`_start`, or
+# an exported `wasi:cli/run`); "reactor" = the host calls a named export.
+module_kind() {
+  if [[ "$(od -An -tx1 -j4 -N4 "$1" | tr -d ' \n')" == "0d000100" ]]; then
+    if LC_ALL=C grep -aq 'wasi:cli/run' "$1"; then
+      printf 'component (command)'
+    else
+      printf 'component (reactor)'
+    fi
+  elif LC_ALL=C grep -aq '_start' "$1"; then
+    printf 'core (command)'
+  else
+    printf 'core (reactor)'
+  fi
+}
+# Which WASI the artifact imports. A component embeds a Preview 1 adapter, so the
+# versioned `wasi:...@x.y.z` names have to win over `wasi_snapshot_preview1`.
+module_wasi() {
+  local ver
+  ver="$(LC_ALL=C grep -aoE 'wasi:[a-z0-9-]+/[a-z0-9-]+@[0-9]+\.[0-9]+\.[0-9]+' "$1" |
+    sed 's/.*@//' | sort -u | paste -sd '/' -)"
+  if [[ -n "$ver" ]]; then
+    printf '%s' "$ver"
+  elif LC_ALL=C grep -aq 'wasi_snapshot_preview1' "$1"; then
+    printf 'Preview 1'
+  else
+    printf 'none'
+  fi
+}
 # -n so the timestamp never lands in the compressed size.
 gzip_of() { gzip -9 -n -c "$1" | wc -c | tr -d ' '; }
 
@@ -153,16 +185,19 @@ measure_wasm_family() {
     echo "- rontolisp: $version (\`$commit\`)"
     echo "- validated on: ${wasmtime_version:-not run}"
     echo ""
-    echo "| Program | Flags | Size (bytes) |"
-    echo "| --- | --- | ---: |"
+    echo "| Program | Flags | Module | WASI | Size (bytes) |"
+    echo "| --- | --- | --- | --- | ---: |"
     for row in "${wasm_builds[@]}"; do
       IFS='|' read -r name src flags _runargs _expected <<<"$row"
-      local size prog
+      local size prog kind wasi
       size="$(bytes_of "$out/$name.wasm")"
+      kind="$(module_kind "$out/$name.wasm")"
+      wasi="$(module_wasi "$out/$name.wasm")"
       prog="$(basename "$(dirname "$src")")"
       [[ "$src" == *-nogc.lisp ]] && prog="$prog (nogc source)"
-      printf '| %s | %s | %s |\n' "$prog" "$(flag_cell "$flags")" "$(commas "$size")"
-      json_rows+=("{\"family\":\"wasm\",\"name\":\"$name\",\"flags\":\"${flags:-}\",\"bytes\":$size}")
+      printf '| %s | %s | %s | %s | %s |\n' \
+        "$prog" "$(flag_cell "$flags")" "$kind" "$wasi" "$(commas "$size")"
+      json_rows+=("{\"family\":\"wasm\",\"name\":\"$name\",\"flags\":\"${flags:-}\",\"module\":\"$kind\",\"wasi\":\"$wasi\",\"bytes\":$size}")
     done
     echo ""
     cat "$notes/wasm-flags.md"
