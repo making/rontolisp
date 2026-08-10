@@ -66,7 +66,10 @@ command -v wasmtime >/dev/null 2>&1 && have_wasmtime=1
 # `rontolisp -v` answers a JSON object; the report only wants the version string.
 version="$("${ronto[@]}" -v 2>/dev/null | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
 version="${version:-unknown}"
-commit="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# --short=7, not --short: git scales the default abbreviation to the local object
+# count, so a laptop and the CI runner stamp the same commit at different lengths
+# and every hand run conflicts with the weekly one over a line neither changed.
+commit="$(git -C "$repo_root" rev-parse --short=7 HEAD 2>/dev/null || echo unknown)"
 today="$(date -u +%Y-%m-%d)"
 
 mkdir -p "$out" "$results"
