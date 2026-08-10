@@ -1,7 +1,7 @@
 {
   "generated": "2026-08-10",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "8243970",
+  "commit": "e47f72f",
   "wasmtime": "wasmtime 47.0.3 (5554cc1a6 2026-07-31)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"","module":"core (command)","wasi":"Preview 1","bytes":124230},
@@ -19,12 +19,13 @@
     {"family":"workers","name":"hello-tiny-routes","flags":"--no-wasi --optimize=size","bytes":272208,"gzip":80278},
     {"family":"workers","name":"hello-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":783140,"gzip":199452},
     {"family":"workers","name":"hello-ningle","flags":"--no-wasi --optimize=size","bytes":2662840,"gzip":603804},
-    {"family":"workers","name":"httpbin","flags":"--no-wasi --optimize=size","bytes":179709,"gzip":54432},
-    {"family":"workers","name":"httpbin-clack","flags":"--no-wasi --optimize=size","bytes":264565,"gzip":79167},
+    {"family":"workers","name":"httpbin","flags":"--no-wasi --optimize=size","bytes":179841,"gzip":54577},
+    {"family":"workers","name":"httpbin-clack","flags":"--no-wasi --optimize=size","bytes":265112,"gzip":79325},
+    {"family":"workers","name":"httpbin-clack-one-source","flags":"--no-wasi --optimize=size","bytes":264588,"gzip":79137},
     {"family":"workers","name":"httpbin-tiny-routes","flags":"--no-wasi --optimize=size","bytes":289312,"gzip":86035},
     {"family":"workers","name":"httpbin-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":800425,"gzip":204178},
     {"family":"workers","name":"httpbin-ningle","flags":"--no-wasi --optimize=size","bytes":2668933,"gzip":605849},
-    {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":179839,"gzip":54519},
+    {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":179971,"gzip":54435},
     {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":97703}
   ]
 }

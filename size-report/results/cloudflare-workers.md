@@ -6,7 +6,7 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`8243970`)
+- rontolisp: 0.1.0-SNAPSHOT (`e47f72f`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -16,12 +16,13 @@ How the report is built and run: [../README.md](../README.md).
 | hello-tiny-routes | `--no-wasi --optimize=size` | 272,208 | 80,278 | 2.6% |
 | hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 783,140 | 199,452 | 6.3% |
 | hello-ningle | `--no-wasi --optimize=size` | 2,662,840 | 603,804 | 19.2% |
-| httpbin | `--no-wasi --optimize=size` | 179,709 | 54,432 | 1.7% |
-| httpbin-clack | `--no-wasi --optimize=size` | 264,565 | 79,167 | 2.5% |
+| httpbin | `--no-wasi --optimize=size` | 179,841 | 54,577 | 1.7% |
+| httpbin-clack | `--no-wasi --optimize=size` | 265,112 | 79,325 | 2.5% |
+| httpbin-clack-one-source | `--no-wasi --optimize=size` | 264,588 | 79,137 | 2.5% |
 | httpbin-tiny-routes | `--no-wasi --optimize=size` | 289,312 | 86,035 | 2.7% |
 | httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 800,425 | 204,178 | 6.5% |
 | httpbin-ningle | `--no-wasi --optimize=size` | 2,668,933 | 605,849 | 19.3% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,839 | 54,519 | 1.7% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,971 | 54,435 | 1.7% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **97,703 B** of it.
@@ -40,6 +41,14 @@ tiny-routes Workers rebuilt against the full `tiny-routes` system instead of
 compressed on the free plan, so the table reports raw and gzipped sizes and the
 share of that limit. What a framework costs there is module size and isolate
 startup, not per-request time.
+
+**`httpbin-clack` and `httpbin-clack-one-source` are the same application.**
+They differ in the `:server` designator only -- `:reactor`, which is
+host-driven on every backend, against `:rontolisp`, which reads the compile
+target and takes its reactor shape under `--no-wasi`. The second row builds
+`examples/net/httpbin-clack.lisp` itself, the file that binds a socket when
+interpreted, so what the pair measures is that choosing the portable designator
+costs nothing in bytes.
 
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
