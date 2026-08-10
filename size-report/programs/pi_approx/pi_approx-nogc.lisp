@@ -1,18 +1,9 @@
-;;;; pi_approx -- non-GC (--no-gc) edition
-;;;; The companion to pi_approx.lisp: the same Leibniz loop as a --no-gc
-;;;; reactor -- a plain MVP core module, no wasm-GC, called by name instead of
-;;;; through `_start`.
-;;;;
-;;;; The loop itself is unchanged (--no-gc is a numeric subset, and f64
-;;;; arithmetic is exactly what it is good at). Only the printing differs:
-;;;; `format`'s directive interpreter is outside the subset, so this prints
-;;;; with `princ`, which uses rontolisp's default float shape (6 significant
-;;;; digits) rather than the reference programs' 15 decimal places. That is a
-;;;; real difference in output, and it is why this variant is reported apart
-;;;; from the main table rather than inside it.
+;;;; pi_approx -- --no-gc edition: the same Leibniz loop as a reactor.
+;;;; princ instead of format (outside the subset), so it prints 6 significant
+;;;; digits, not 15 decimals -- hence reported apart from the main table.
 ;;;;
 ;;;; Run:
-;;;;   rontolisp examples/wasm-size/pi_approx/pi_approx-nogc.lisp \
+;;;;   rontolisp size-report/programs/pi_approx/pi_approx-nogc.lisp \
 ;;;;     -o pi-nogc.wasm --no-gc --optimize=size
 ;;;;   wasmtime run --invoke approx-pi pi-nogc.wasm
 
