@@ -127,18 +127,16 @@ Lisp source here is pinned by `examples/examples.yaml`:
 
 ## Deploying
 
-`hello`, `hello-clack`, `httpbin`, `httpbin-clack-one-source` and
-`httpbin-component` have been deployed to the real edge, not only run under
-`wrangler dev`; the two tiny-routes and two ningle ones are pinned locally
-instead, by their `check.lisp` and by node driving the built module.
+**All ten are deployed to the real edge**, not only run under `wrangler dev`,
+and every endpoint in the tables above was checked there with `curl` — including
+the 405, the 404, the unparseable body and both `/status` answers.
 
-Worker Startup Time is what `wrangler deploy` measures and budget-checks: 5-13 ms
-for the `httpbin` builds, 26-30 ms for the clack ones — going through
-`clack:clackup` instead of calling the handler backend directly is what moved
-that number, while the per-request cost did not. It is also why
-`httpbin/src/index.js` instantiates at **module scope**: both work, but there the
-cost is paid once per isolate outside the request path and Cloudflare validates
-it at deploy time.
+Cloudflare budget-checks **Worker Startup Time** at deploy, and `wrangler
+deploy` prints it when it has one to report. Going through `clack:clackup`
+instead of calling the handler backend directly is what moves that number; the
+per-request cost does not follow it. It is also why `httpbin/src/index.js`
+instantiates at **module scope**: both work, but there the cost is paid once per
+isolate outside the request path, where the deploy-time check can see it.
 
 **One gotcha, and it is not your code**: for several minutes after a Worker's
 *first* deploy its fresh `*.workers.dev` hostname answers intermittently with
