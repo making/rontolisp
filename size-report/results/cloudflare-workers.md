@@ -5,7 +5,7 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 Method and how to read the numbers: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`a15a0ac`)
+- rontolisp: 0.1.0-SNAPSHOT (`6f5e535`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |

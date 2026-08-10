@@ -1,8 +1,8 @@
 {
   "generated": "2026-08-10",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "a15a0ac",
-  "wasmtime": "wasmtime 47.0.2 (90fed3c6a 2026-07-21)",
+  "commit": "6f5e535",
+  "wasmtime": "wasmtime 47.0.3 (5554cc1a6 2026-07-31)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"","bytes":124230},
     {"family":"wasm","name":"hello_world_optimize","flags":"--optimize","bytes":518},
