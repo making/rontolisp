@@ -100,14 +100,18 @@ module_kind() {
     printf 'core (reactor)'
   fi
 }
-# Which WASI the artifact imports. A component embeds a Preview 1 adapter, so the
-# versioned `wasi:...@x.y.z` names have to win over `wasi_snapshot_preview1`.
+# Which WASI the artifact imports, named the one way the whole report names it.
+# The two eras state their version differently -- Preview 1 only as the import
+# module `wasi_snapshot_preview1`, later ones as a `@0.N.x` on every interface --
+# so the minor version is folded back to `Preview N` rather than leaving the
+# column half in release numbers and half in preview names. A component embeds a
+# Preview 1 adapter, so its own versioned imports have to be looked for first.
 module_wasi() {
-  local ver
-  ver="$(LC_ALL=C grep -aoE 'wasi:[a-z0-9-]+/[a-z0-9-]+@[0-9]+\.[0-9]+\.[0-9]+' "$1" |
-    sed 's/.*@//' | sort -u | paste -sd '/' -)"
-  if [[ -n "$ver" ]]; then
-    printf '%s' "$ver"
+  local previews
+  previews="$(LC_ALL=C grep -aoE 'wasi:[a-z0-9-]+/[a-z0-9-]+@0\.[0-9]+\.[0-9]+' "$1" |
+    sed 's/.*@0\.\([0-9]*\)\..*/Preview \1/' | sort -u | paste -sd '/' -)"
+  if [[ -n "$previews" ]]; then
+    printf '%s' "$previews"
   elif LC_ALL=C grep -aq 'wasi_snapshot_preview1' "$1"; then
     printf 'Preview 1'
   else

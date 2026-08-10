@@ -20,15 +20,15 @@ for a module that stopped working.
 
 ## Reading the numbers
 
-**`Module` and `WASI` are read back out of the artifact**, not restated from the
-flags, so a row cannot keep claiming a shape the backend has stopped emitting.
-`core` is a plain wasm module and `component` a WASI component (the header
-distinguishes them); `command` means the module starts itself -- `_start`, or an
-exported `wasi:cli/run` -- while `reactor` means the host calls a named export
-instead, which is what `--no-gc` emits (`say-hello`, `approx-pi`). A component
-still carries a Preview 1 adapter inside it; the `WASI` column reports what the
-artifact imports from the outside, which for a component is `0.3.0` -- the same
-thing the cross-language table below calls Preview 3.
+**`Module` and `WASI` are read out of the artifact**, not restated from the
+flags. `core` vs `component` is the wasm header; `command` starts itself
+(`_start`, or an exported `wasi:cli/run`), `reactor` waits for the host to call a
+named export, which is what `--no-gc` emits. A component embeds a Preview 1
+adapter; the column reports what it imports from outside, not that.
+
+**One name per WASI generation.** Preview 1 carries no version -- it is the
+import module `wasi_snapshot_preview1`; later generations version each interface
+(`wasi:cli/stdout@0.3.0`). The tables fold those back: WASI 0.3 is Preview 3.
 
 **`--optimize` is not optional.** Without it a module carries the whole prelude
 -- ~124 KB for `hello_world`, 99.6% of which nothing in the program reaches.
@@ -41,7 +41,7 @@ module ships no allocator, no `malloc` and no linear-memory bookkeeping, while
 every Preview 1 row from a linear-memory language carries its own heap. The
 comparable rows are the `--no-gc` ones, which emit a plain MVP core module.
 
-**`--component` costs about 1.1 KB.** It re-frames the module as a WASI 0.3
+**`--component` costs about 1.1 KB.** It re-frames the module as a Preview 3
 component; the canonical-ABI adapters and the type section are the whole
 difference. Its imports are then stated as a WIT world rather than as
 `fd_write`.
@@ -80,6 +80,6 @@ above.
 | --- | --- |
 | `--optimize` | Dead-code-eliminate: keep only what `_start` and the exports reach |
 | `--optimize=size` | The above, plus trade speed for size -- drops fused integer trees and unboxed locals. Costs up to 6x the runtime on integer-heavy code |
-| `--component` | Emit a WASI 0.3 component instead of a Preview 1 module |
+| `--component` | Emit a Preview 3 component instead of a Preview 1 module |
 | `--no-gc` | Emit a plain MVP core module: no wasm-GC, numeric subset only, exports rather than `_start` |
 | `--no-wasi` | No WASI imports at all; a reactor with `_initialize` instead of `_start` |
