@@ -6,7 +6,7 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`25a3389`)
+- rontolisp: 0.1.0-SNAPSHOT (`926be0c`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -15,13 +15,13 @@ How the report is built and run: [../README.md](../README.md).
 | hello-clack | `--no-wasi --optimize=size` | 248,593 | 74,701 | 2.4% |
 | hello-tiny-routes | `--no-wasi --optimize=size` | 276,218 | 81,021 | 2.6% |
 | hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 787,225 | 199,984 | 6.4% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,664,604 | 604,356 | 19.2% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,664,655 | 604,436 | 19.2% |
 | httpbin | `--no-wasi --optimize=size` | 179,647 | 54,407 | 1.7% |
 | httpbin-clack | `--no-wasi --optimize=size` | 265,413 | 79,197 | 2.5% |
 | httpbin-clack-one-source | `--no-wasi --optimize=size` | 264,889 | 79,035 | 2.5% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 306,919 | 88,431 | 2.8% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 818,124 | 208,495 | 6.6% |
-| httpbin-ningle | `--no-wasi --optimize=size` | 2,670,441 | 606,191 | 19.3% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 306,970 | 88,459 | 2.8% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 818,175 | 208,519 | 6.6% |
+| httpbin-ningle | `--no-wasi --optimize=size` | 2,670,492 | 606,213 | 19.3% |
 | httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,777 | 54,499 | 1.7% |
 
 The component row is the core module alone. Reached through `jco transpile`
