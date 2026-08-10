@@ -57,7 +57,7 @@ hunchentoot, on woo, under `wasmtime serve` and on the JVM unchanged. The
 half: the handler backend stores the application on every backend, the compiler
 synthesizes the `handle-request` export `src/index.js` calls — and why a Worker
 could also just use `:server :rontolisp`, the way
-[`../httpbin-clack`](../httpbin-clack) now does.
+[`../httpbin-clack-one-source`](../httpbin-clack-one-source) does.
 
 What the routing library adds is three things worth naming:
 

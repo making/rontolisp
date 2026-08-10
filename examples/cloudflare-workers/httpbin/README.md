@@ -46,8 +46,9 @@ curl         http://localhost:8787/nope                   # 404
 
 ## Neither half of `worker.lisp` was invented here
 
-Everything from `read-body` down to `app` is
-[`net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) **verbatim**: an
+Everything from `read-body` down to `*app*` is
+[`../httpbin-clack/worker.lisp`](../httpbin-clack/worker.lisp) — and
+[`net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) — **verbatim**: an
 ordinary Clack application, environment plist in, `(status headers body)` out,
 no Cloudflare anywhere. The same function runs on hunchentoot, on woo, under
 `wasmtime serve` and on the JVM unchanged.
@@ -74,7 +75,7 @@ All that is left to write is the JSON envelope.
 
 | | this | [`../httpbin-clack`](../httpbin-clack) | [`net/httpbin.lisp`](../../net/httpbin.lisp) |
 | --- | --- | --- | --- |
-| The application | a Clack application | **the same file**, verbatim | a `rontolisp:http-handler` handler |
+| The application | a Clack application | **the same text**, verbatim | a `rontolisp:http-handler` handler |
 | How it is installed | thirty hand-written lines | `clack:clackup :server :reactor` | `(rontolisp:http-handler 'handle 8080)`, blocking on a socket |
 | clack in the module | **none** | what the tree-shaker keeps of clack and lack | none |
 

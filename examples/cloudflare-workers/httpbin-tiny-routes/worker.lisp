@@ -1,9 +1,8 @@
 ;;; worker.lisp -- ../httpbin-clack with a real routing library on top.
 ;;;
-;;; The helpers are ../../net/httpbin-clack.lisp's (the file ../httpbin-clack
-;;; deploys), and so are the clackup call and the synthesized `handle-request`
-;;; export; what replaces its hand-written `cond` over :path-info -- and its
-;;; method check with it -- is tiny-routes.
+;;; The helpers are ../httpbin-clack/worker.lisp's, and so are the clackup call
+;;; and the synthesized `handle-request` export; what replaces its hand-written
+;;; `cond` over :path-info -- and its method check with it -- is tiny-routes.
 ;;;
 ;;; The FIRST line decides the module size. "tiny-routes/lite" swaps one
 ;;; component of the library: the cl-ppcre-backed path-template matcher, and

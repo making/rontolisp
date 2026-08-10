@@ -53,7 +53,8 @@ the full story.
 A Worker does not strictly need this designator any more: `:server :rontolisp`
 serves on every target's own transport — a socket on the interpreter and the
 JVM, `wasmtime serve` under `--component`, and this same synthesized export
-under `--no-wasi` — which is how [`../httpbin-clack`](../httpbin-clack) deploys
+under `--no-wasi` — which is how
+[`../httpbin-clack-one-source`](../httpbin-clack-one-source) deploys
 `examples/net/httpbin-clack.lisp` unchanged. What `:reactor` still says is
 "host-driven *everywhere*": on the interpreter it stores the
 application instead of binding a socket, which is what lets
@@ -132,11 +133,14 @@ Pass `:silent t :debug nil` to quiet them.
 | [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`. |
 | `src/worker.wasm` | The compiled module. A build product — run `./build.sh` first. |
 
-[`../httpbin-clack`](../httpbin-clack) is this example grown up — and one step
-further: it has no `worker.lisp` at all. Its `build.sh` compiles
-[`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) — the file
-that serves the same five endpoints on a real HTTP server — as the Worker,
-unchanged, on `:server :rontolisp`.
+[`../httpbin-clack`](../httpbin-clack) is this example grown up: the same three
+forms with five echo endpoints in the middle, and a `check.lisp` that drives
+them the same way. One step further,
+[`../httpbin-clack-one-source`](../httpbin-clack-one-source) has no
+`worker.lisp` at all — its `build.sh` compiles
+[`examples/net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp), the file that
+serves those endpoints on a real HTTP server, as the Worker unchanged on
+`:server :rontolisp`.
 
 ## Limitations
 

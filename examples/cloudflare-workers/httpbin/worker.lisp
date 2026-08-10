@@ -1,20 +1,19 @@
 ;;; worker.lisp -- a miniature httpbin (https://httpbin.org) for Cloudflare
 ;;; Workers, as a Clack application with the reactor adapter written out by hand.
 ;;;
-;;; Everything from `read-body` down to `app` is ../../net/httpbin-clack.lisp
-;;; -- the file ../httpbin-clack deploys as its Worker -- VERBATIM: the same
-;;; five echo endpoints, the same helpers, no Cloudflare anywhere in them.
-;;; `app` takes the Clack environment plist and returns the Clack (status
-;;; headers body) list, so it is the same function that runs on hunchentoot,
-;;; on woo, under `wasmtime serve` and on the JVM, unchanged.
+;;; Everything from `read-body` down to `*app*` is ../httpbin-clack/worker.lisp
+;;; -- and ../../net/httpbin-clack.lisp -- VERBATIM: the same five echo
+;;; endpoints, the same helpers, no Cloudflare anywhere in them. `*app*` holds a
+;;; function of the Clack environment plist returning the Clack (status headers
+;;; body) list, so it is the same application that runs on hunchentoot, on woo,
+;;; under `wasmtime serve` and on the JVM, unchanged.
 ;;;
 ;;; What differs from ../httpbin-clack is the LAST section of this file rather
-;;; than the application. That directory ships the upstream file whole, whose
-;;; Worker half is its ordinary
+;;; than the application. That directory installs it with its ordinary
 ;;;
-;;;   (clack:clackup #'app :server :rontolisp ...)
+;;;   (clack:clackup *app* :server :reactor ...)
 ;;;
-;;; -- under --no-wasi the built-in handler backend takes its reactor shape and
+;;; -- the built-in handler backend for a host that calls an export, which
 ;;; bridges the host's JSON envelope to the Clack environment. Here that bridge
 ;;; is the thirty lines under "the reactor adapter" and clack is never loaded at
 ;;; all -- which is the whole point of this directory: the module is ~2x smaller
@@ -102,18 +101,21 @@
 
 ;; --- the Clack application ------------------------------------------------
 
-;; :path-info carries the (percent-decoded) path only -- the query string
-;; arrives separately -- so the comparisons are exact.
-(defun app (env)
-  (let ((path (getf env :path-info)))
-    (cond ((string= path "/get") (echo-when env :GET nil))
-          ((string= path "/post") (echo-when env :POST t))
-          ((string= path "/put") (echo-when env :PUT t))
-          ((string= path "/patch") (echo-when env :PATCH t))
-          ((string= path "/delete") (echo-when env :DELETE t))
-          (t (json-response 404
-                            (rontolisp:plist-hash-table
-                             (list :error "not found" :path path)))))))
+;; A Clack application is a function VALUE -- what clackup, lack:builder and
+;; every middleware take and return -- so it is a lambda in a variable rather
+;; than a defun. :path-info carries the (percent-decoded) path only; the query
+;; string arrives separately, so the comparisons are exact.
+(defparameter *app*
+  (lambda (env)
+    (let ((path (getf env :path-info)))
+      (cond ((string= path "/get") (echo-when env :GET nil))
+            ((string= path "/post") (echo-when env :POST t))
+            ((string= path "/put") (echo-when env :PUT t))
+            ((string= path "/patch") (echo-when env :PATCH t))
+            ((string= path "/delete") (echo-when env :DELETE t))
+            (t (json-response 404
+                              (rontolisp:plist-hash-table
+                               (list :error "not found" :path path))))))))
 
 ;; --- the reactor adapter --------------------------------------------------
 ;; What `clack:clackup :server :reactor` would install, written out.
@@ -162,7 +164,9 @@
 (defun handle-request (request-json)
   (handler-case (let* ((req (rontolisp:json-parse request-json))
                        (env (rontolisp::%http-make-env (%request-tuple req)))
-                       (triple (rontolisp::%http-normalize-response (app env))))
+                       (triple
+                        (rontolisp::%http-normalize-response
+                         (funcall *app* env))))
                   (%envelope (car triple) (cadr triple) (caddr triple)))
     (error (e)
       (%envelope 500 (list (cons "content-type" "application/json"))

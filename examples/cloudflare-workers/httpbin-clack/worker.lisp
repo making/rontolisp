@@ -1,31 +1,33 @@
-;; The Clack flavour of httpbin.lisp: the same five echo endpoints (/get, /post,
-;; /put, /patch, /delete -- see there for the JSON they answer), served through
-;; clack:clackup on the real clack (ql:quickload). rontolisp's server protocol IS
-;; Clack's, so this is an ordinary Clack program: the application is a function
-;; VALUE from the env plist to a (status headers body) list, and clackup wraps it
-;; in lack's backtrace middleware (its :use-default-middlewares default) and
-;; serves it. clack's :raw-body is a SYNCHRONOUS stream (nil when the request has
-;; no body), so it is drained with read-char rather than httpbin.lisp's
-;; async-defun + (await (read-all ...)).
-;;
-;; :server :rontolisp serves on the TARGET's native inbound transport, chosen at
-;; compile time, so this ONE file is every host's program: the interpreter and
-;; the JVM bind the socket, a --component build is served by `wasmtime serve`,
-;; and a --no-wasi build is a REACTOR the host calls -- which is how
-;; examples/cloudflare-workers/httpbin-clack-one-source deploys this file (not a
-;; copy) to Cloudflare Workers. :port applies where the program owns the socket
-;; and is ignored where the host does; :use-thread nil serves in the foreground
-;; (Ctrl-C to stop). Preview 1 has no incoming TCP: the program compiles and
-;; clackup fails at run time.
-;;
-;;   rontolisp examples/net/httpbin-clack.lisp   # first run downloads clack/lack
-;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
-;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
-;;
-;; The build line for each of the other three hosts:
-;; examples/cloudflare-workers/httpbin-clack-one-source/README.md
+;;; worker.lisp -- a mini httpbin as a Clack application, installed on the
+;;; Worker by clack:clackup.
+;;;
+;;; Everything from `read-body` down to `*app*` is ../httpbin/worker.lisp's
+;;; application VERBATIM -- and ../../net/httpbin-clack.lisp's -- so the three
+;;; differ in one thing only: what puts the application on the host. There it is
+;;; thirty hand-written lines under the application and clack never loads; here
+;;; it is the last form of this file.
+;;;
+;;; :server :reactor is the built-in handler backend for a host that CALLS you
+;;; instead of handing you a socket. Its `run` binds nothing -- it stores the
+;;; application -- and the compiler synthesizes the export src/index.js calls
+;;; (handle-request: a JSON request string in, a JSON response string out).
+;;; Nothing here declares that export, because rontolisp:wasm-export needs a
+;;; literal name at compile time and a clackup call has none to give.
+;;;
+;;; :reactor means host-driven on EVERY backend, which is what lets check.lisp
+;;; drive this Worker on the interpreter and the JVM as well. The other
+;;; designator is ../httpbin-clack-one-source: `:server :rontolisp` serves on
+;;; whatever the compile target's native transport is, so the file it deploys
+;;; is unchanged from the one that binds a socket locally.
+;;;
+;;; :use-thread nil is what this host is, not boilerplate: it is already the
+;;; default on WASM, and on the interpreter and the JVM it stops clackup from
+;;; storing the application on a thread the next form would race. clackup's
+;;; default middlewares stay on -- lack's backtrace middleware writes its report
+;;; to *error-output*, a discarding sink under --no-wasi and real standard error
+;;; everywhere else.
 
-(ql:quickload "clack")
+(ql:quickload '("clack" "clack-handler-reactor"))
 
 ;; --- request helpers ------------------------------------------------------
 
@@ -100,4 +102,4 @@
                               (rontolisp:plist-hash-table
                                (list :error "not found" :path path))))))))
 
-(clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)
+(clack:clackup *app* :server :reactor :use-thread nil)

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Compile worker.lisp -- clack, the five echo endpoints and the clackup call --
-# to the .wasm module the Worker imports.
+# Compile the Worker's module. There is no worker.lisp in this directory and
+# that is the point: the program is examples/net/httpbin-clack.lisp ITSELF --
+# the same file that serves on the interpreter, on the JVM and under
+# `wasmtime serve` -- compiled for a host that calls an export instead of
+# handing over a socket. :server :rontolisp picks this transport at compile
+# time (--no-wasi reads the handler backend in reactor shape), and the
+# compiler synthesizes the `handle-request` export src/index.js calls.
 #
 # --no-wasi: the Worker calls the exported `handle-request` directly, it never
 #   runs the module as a program, and the handler does no I/O -- so the module
@@ -27,8 +32,9 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling worker.lisp -> src/worker.wasm"
-java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --optimize=size
+echo "compiling ../../net/httpbin-clack.lisp -> src/worker.wasm"
+java -jar "$jar" "$repo_root/examples/net/httpbin-clack.lisp" \
+  -o "$here/src/worker.wasm" --no-wasi --optimize=size
 
 ls -l "$here/src/worker.wasm"
 echo "done. Run it with:  npx wrangler dev"

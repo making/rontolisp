@@ -1,16 +1,16 @@
-# httpbin-clack — a Clack application on Cloudflare Workers, one source for every host
+# httpbin-clack — a Clack application on Cloudflare Workers
 
-The same five echo endpoints as [`../httpbin`](../httpbin) — in fact the same
-[Clack](https://github.com/fukamachi/clack) application, byte for byte — put on
-the Worker by `clack:clackup`. There is **no `worker.lisp` in this directory**,
-and that is the point: the program is
-[`net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) *itself*, the file that
-serves these endpoints on the interpreter, on the JVM and under `wasmtime
-serve`, compiled here unchanged for a host that calls an export instead of
-handing over a socket.
+The same five echo endpoints as [`../httpbin`](../httpbin), and the same
+[Clack](https://github.com/fukamachi/clack) application: `read-body` down to
+`*app*` is that directory's text verbatim. What differs is the last form.
+`clack:clackup` installs the application on the Worker here; there, thirty
+hand-written lines do it and clack never loads at all.
+
+Nothing in `worker.lisp` mentions Cloudflare, or a Worker, or an export: it is
+`ql:quickload`, an ordinary Clack application and a `clackup` line.
 
 ```bash
-./build.sh          # ../../net/httpbin-clack.lisp -> src/worker.wasm
+./build.sh          # worker.lisp -> src/worker.wasm
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -26,63 +26,46 @@ $ curl -X POST -d '{"name":"rontolisp"}' http://localhost:8787/post
 A wrong method answers 405 with the one it wanted, an unknown path 404, and a
 body that does not parse leaves `"json": null`.
 
-## One source, four hosts
+## What's in here
 
-`:server :rontolisp` means "serve on **this target's** native inbound
-transport", and the transport is chosen at *compile* time:
+| File | Purpose |
+| --- | --- |
+| [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the five endpoints, `clackup` |
+| [`check.lisp`](check.lisp) | The same handler driven without Cloudflare — on the interpreter, the JVM and the WASM backends |
+| [`build.sh`](build.sh) | `--no-wasi --optimize=size` over `worker.lisp` |
+| [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` |
+| `src/worker.wasm` | A build product — run `./build.sh` first |
 
-| Build | Transport | How it runs |
-| --- | --- | --- |
-| interpret / `-o App.class` | the program binds a socket | `rontolisp ../../net/httpbin-clack.lisp`, then `curl :8080` |
-| `-o app.wasm --component` | the host owns the socket (wasi:http) | `wasmtime serve ... app.wasm` |
-| `-o worker.wasm --no-wasi` | the host **calls** the module — a reactor | this directory: `src/index.js` calls `handle-request` |
-
-The `clackup` line does not change between the rows: `:port 8080` applies where
-the program owns the socket and is ignored where the host does, and
-`:use-thread nil` keeps the interpreter and the JVM serving in the foreground.
-Deploying to Cloudflare is not a port of the program; it is a compile flag.
-
-WASM Preview 1 is the one host where `clackup` cannot serve — it has no incoming
-TCP, so the program compiles and `clackup` fails at run time.
-
-The explicit `:server :reactor` designator still exists: it means "host-driven
-on *every* backend", which is what lets a Worker be driven through `dispatch` on
-the interpreter. [`../hello-clack`](../hello-clack) demonstrates that shape.
+Module sizes are measured rather than quoted here:
+[size report](../../../size-report/results/cloudflare-workers.md).
 
 ## What this answers that `../httpbin` does not
 
 | | `../httpbin` | this |
 | --- | --- | --- |
-| The application | a Clack application | **the same file**, verbatim |
+| The application | a Clack application | **the same text**, verbatim |
 | How it reaches the Worker | thirty hand-written lines and an explicit `wasm-export` | `clackup`, with the export synthesized |
 | Reads as | a Worker program that happens to speak Clack | **every other Clack program** |
 | clack in the module | none | what the tree-shaker keeps of clack and lack |
 
 The trade is honest: you pay for clack and lack to be in the module so that the
 file reads like an ordinary Clack program rather than like a Worker. What that
-is worth in bytes is in the
-[size report](../../../size-report/results/cloudflare-workers.md); what it is
-worth per request is [nothing](#what-it-costs).
-
-## What's in here
-
-| File | Purpose |
-| --- | --- |
-| [`../../net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) | **The whole program** — not in this directory, deliberately |
-| [`build.sh`](build.sh) | `--no-wasi --optimize=size` over that file |
-| [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` |
-| `src/worker.wasm` | A build product — run `./build.sh` first |
-
-The directory used to carry a `worker.lisp` of its own, then the upstream
-example with a different `clackup` tail. Each step deleted a difference; since
-`:server :rontolisp` serves reactors too, the tail is now the same, so the copy
-bought nothing but the chance to drift.
+is worth in bytes is in the size report; what it is worth per request is
+[nothing](#what-it-costs).
 
 ## The backend is a handler backend, not example code
 
-Nothing here writes an adapter. `clack-handler-rontolisp` is the built-in Clack
-handler backend `clackup` resolves for `:server :rontolisp`, and under
-`--no-wasi` it takes its reactor shape.
+Nothing here writes an adapter. `clack-handler-reactor` is a built-in Clack
+handler backend, and `:server :reactor` means **host-driven on every backend**:
+its `run` stores the application where a socket backend would bind a listener.
+That is what lets [`check.lisp`](check.lisp) drive this Worker — the same
+`dispatch` the Worker's export calls — on the interpreter and the JVM as well.
+
+[`../httpbin-clack-one-source`](../httpbin-clack-one-source) is the other
+designator: `:server :rontolisp` serves on whatever the compile *target*'s
+native transport is, which is what lets one file be a socket server locally and
+a Worker here without an edit. Both store into the same reactor machinery, so
+the two cannot drift.
 
 ### Where the export comes from
 
@@ -101,8 +84,8 @@ carries a marker and the compiler answers it, appending the equivalent of
 after the program. `%http-reactor-dispatch` runs the stored application over the
 JSON envelope; it is the **shared** reactor machinery
 ([`http-reactor.lisp`](../../../src/main/resources/am/ik/rontolisp/eval/http-reactor.lisp)),
-and the `:reactor` backend's `dispatch` is a thin public name over the same
-functions — so the two designators cannot drift.
+and `clack.handler.reactor:dispatch` is a thin public name over the same
+functions — which is why `check.lisp` exercises what the Worker exercises.
 
 One upstream keyword matters beyond sockets: **`:use-thread nil`**. The WASM
 backends are single-threaded, so `clackup` already defaults to `nil` there, but
@@ -132,7 +115,27 @@ request sees.
 The JSON envelope `src/index.js` speaks — and the two fields it has to get
 right, both of which fail quietly — is
 [documented in `../httpbin`](../httpbin/README.md#the-envelope-and-two-fields-the-javascript-side-must-get-right).
-It is the same envelope here, from the same file.
+It is the same envelope here.
+
+## Developing it without Cloudflare
+
+`dispatch` is an ordinary function, so the whole Worker runs locally on every
+backend the compiler has:
+
+```bash
+rontolisp check.lisp                                  # interpreter
+rontolisp check.lisp -o Check.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Check
+rontolisp check.lisp -o check.wasm && wasmtime run -W gc -W exceptions=y check.wasm
+```
+
+[`examples.yaml`](../../examples.yaml) pins all three, so a divergence between
+this directory and `../httpbin` — the same application, a different installer —
+shows up as two manifest cases disagreeing.
+
+The report that appears on standard error for the unparseable-body probe is
+lack's `backtrace` middleware, which prints even for an error the application
+catches. On the Worker that report goes to a discarding sink and the `200` with
+`"json": null` still comes back.
 
 ## What it costs
 
@@ -168,33 +171,6 @@ The linear-memory row is flat because of the
 [`../httpbin`](../httpbin/README.md#two-heaps-wasm-gc-collects-one-of-them-you-collect-the-other)
 explains why it is needed.
 
-## Verify it against a real Clack server
-
-The most direct check that this is a Clack application is to serve it as one,
-with the same file and no Cloudflare in sight:
-
-```bash
-rontolisp ../../net/httpbin-clack.lisp     # http://127.0.0.1:8080, Ctrl-C to stop
-curl 'http://127.0.0.1:8080/get?a=1&b=two'
-```
-
-Point the same curls at `npx wrangler dev` and the answers are the same
-document. Nothing was recompiled and nothing edited between the two.
-
-It compiles the same way for the other two hosts, which is what
-[`examples.yaml`](../../examples.yaml) pins (a blocking server, so the manifest
-builds it rather than running it):
-
-```bash
-rontolisp ../../net/httpbin-clack.lisp -o Serve.class && \
-  java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Serve
-rontolisp ../../net/httpbin-clack.lisp -o serve.wasm --component && \
-  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y serve.wasm
-```
-
-As in `../httpbin`, the **order of keys inside a JSON object differs between
-backends** — it follows hash-table iteration order. The values are identical.
-
 ## Middleware, `lack:builder`, request bodies
 
 `clackup`'s default `backtrace` middleware is in this module and active, so
@@ -217,6 +193,13 @@ loads, so `src/index.js` hands the time over through `__ronto_set_time`. Add
 `--host-random` — the session id is `rontolisp:random-bytes`, which a fixed-seed
 generator must not stand in for — and a `(:session)` builder serves a real
 session cookie and recognises it on the next request.
+
+**One caveat if you write your own `lack:builder` stack here**: a `--no-wasi`
+build then prints a standing `WITH-OPEN-FILE is reachable` warning. It is a
+false alarm — `builder` returns its composed application through `reduce`, so
+the compiler can no longer see that what reaches `clackup` is a function rather
+than a pathname, and `clackup`'s "the app is a file to load" branch stops being
+provably dead. The module is correct and the branch is never taken.
 
 ## Why `clackup` prints, and why that is fine here
 
@@ -246,10 +229,10 @@ module-local generator seeded from `crypto`; and the clock is whatever
 `src/index.js` writes through `__ronto_set_time` — it advances between requests,
 holds still inside one, and `(sleep n)` signals.
 
-One more is specific to this directory: a runtime `(ql:quickload ...)` cannot
-work either. The `ql:quickload` form in the source is resolved at **compile**
-time and inlined into the module, which is why the first `./build.sh` needs
-network and later ones do not.
+One more is specific to the clack directories: a runtime `(ql:quickload ...)`
+cannot work either. The `ql:quickload` form in the source is resolved at
+**compile** time and inlined into the module, which is why the first
+`./build.sh` needs network and later ones do not.
 
 ## Rebuilding
 

@@ -1,0 +1,107 @@
+# httpbin-clack-one-source — one Clack file, every host, this one included
+
+The same five echo endpoints as [`../httpbin-clack`](../httpbin-clack), and the
+same Clack application — but there is **no `worker.lisp` in this directory**,
+and that is the point. The program is
+[`net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) *itself*, the file that
+serves these endpoints on the interpreter, on the JVM and under `wasmtime
+serve`, compiled here unchanged for a host that calls an export instead of
+handing over a socket.
+
+```bash
+./build.sh          # ../../net/httpbin-clack.lisp -> src/worker.wasm
+npx wrangler dev    # http://localhost:8787
+npx wrangler deploy
+```
+
+```console
+$ curl 'http://localhost:8787/get?a=1&b=two'
+{"method":"GET","headers":{"host":"localhost:8787",...},"path":"/get","args":{"b":"two","a":"1"}}
+
+$ curl -X POST -d '{"name":"rontolisp"}' http://localhost:8787/post
+{"data":"{\"name\":\"rontolisp\"}","args":{},"json":{"name":"rontolisp"},"method":"POST",...}
+```
+
+## One source, four hosts
+
+`:server :rontolisp` means "serve on **this target's** native inbound
+transport", and the transport is chosen at *compile* time:
+
+| Build | Transport | How it runs |
+| --- | --- | --- |
+| interpret / `-o App.class` | the program binds a socket | `rontolisp ../../net/httpbin-clack.lisp`, then `curl :8080` |
+| `-o app.wasm --component` | the host owns the socket (wasi:http) | `wasmtime serve ... app.wasm` |
+| `-o worker.wasm --no-wasi` | the host **calls** the module — a reactor | this directory: `src/index.js` calls `handle-request` |
+
+The `clackup` line does not change between the rows: `:port 8080` applies where
+the program owns the socket and is ignored where the host does, and
+`:use-thread nil` keeps the interpreter and the JVM serving in the foreground.
+Deploying to Cloudflare is not a port of the program; it is a compile flag.
+
+WASM Preview 1 is the one host where `clackup` cannot serve — it has no incoming
+TCP, so the program compiles and `clackup` fails at run time.
+
+```bash
+rontolisp ../../net/httpbin-clack.lisp                                  # :8080
+rontolisp ../../net/httpbin-clack.lisp -o Serve.class && \
+  java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Serve
+rontolisp ../../net/httpbin-clack.lisp -o serve.wasm --component && \
+  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y serve.wasm
+rontolisp ../../net/httpbin-clack.lisp -o src/worker.wasm --no-wasi --optimize=size
+```
+
+[`examples.yaml`](../../examples.yaml) pins the first three (a blocking server,
+so the manifest builds it rather than running it); the fourth is this
+directory's `build.sh`.
+
+## How it differs from `../httpbin-clack`
+
+Only in the `:server` designator, and each answers a different question.
+
+| | [`../httpbin-clack`](../httpbin-clack) | this |
+| --- | --- | --- |
+| The program | its own `worker.lisp` | `net/httpbin-clack.lisp`, not a copy |
+| `:server` | `:reactor` — host-driven on *every* backend | `:rontolisp` — this *target*'s native transport |
+| Developed locally by | [`check.lisp`](../httpbin-clack/check.lisp) calling `dispatch` on every backend | serving it for real: `rontolisp ../../net/httpbin-clack.lisp` and `curl` |
+| Answers | "what does a Clack Worker look like?" | "how much does deploying one cost me in edits?" — none |
+
+Everything else is shared and documented once, in `../httpbin-clack`: where the
+[`handle-request` export comes from](../httpbin-clack/README.md#where-the-export-comes-from),
+why the backend [converts nothing](../httpbin-clack/README.md#it-converts-nothing),
+what clack [costs on a reactor](../httpbin-clack/README.md#what-it-costs),
+[middleware and request bodies](../httpbin-clack/README.md#middleware-lackbuilder-request-bodies),
+[why `clackup` prints](../httpbin-clack/README.md#why-clackup-prints-and-why-that-is-fine-here),
+and the [limitations](../httpbin-clack/README.md#limitations). Module sizes are
+in the [size report](../../../size-report/results/cloudflare-workers.md).
+
+## What's in here
+
+| File | Purpose |
+| --- | --- |
+| [`../../net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) | **The whole program** — not in this directory, deliberately |
+| [`build.sh`](build.sh) | `--no-wasi --optimize=size` over that file |
+| [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` |
+| `src/worker.wasm` | A build product — run `./build.sh` first |
+
+## Verify it against a real Clack server
+
+The most direct check that this is a Clack application is to serve it as one,
+with the same file and no Cloudflare in sight:
+
+```bash
+rontolisp ../../net/httpbin-clack.lisp     # http://127.0.0.1:8080, Ctrl-C to stop
+curl 'http://127.0.0.1:8080/get?a=1&b=two'
+```
+
+Point the same curls at `npx wrangler dev` and the answers are the same
+document. Nothing was recompiled and nothing edited between the two.
+
+As in `../httpbin`, the **order of keys inside a JSON object differs between
+backends** — it follows hash-table iteration order. The values are identical.
+
+## Rebuilding
+
+```bash
+./mvnw clean package -DskipTests   # from the repository root
+examples/cloudflare-workers/httpbin-clack-one-source/build.sh
+```

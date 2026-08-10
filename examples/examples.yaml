@@ -497,10 +497,11 @@ examples:
   - path: net/httpbin-clack.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
-      the ONE Clack source for every host: cloudflare-workers/httpbin-clack
+      the ONE Clack source for every host:
+      cloudflare-workers/httpbin-clack-one-source
       compiles THIS file (not a copy) as its deployed Worker -- :server
       :rontolisp takes the reactor shape under --no-wasi -- and
-      cloudflare-workers/httpbin/worker.lisp carries everything down to `app`
+      cloudflare-workers/httpbin/worker.lisp carries everything down to `*app*`
       verbatim under a hand-written adapter. What this pins is that the file
       the Worker ships is still a portable Clack application, on the two
       backends where clackup can actually bind (a blocking server, hence
@@ -618,8 +619,8 @@ examples:
     backends: [interpreter, jvm, wasm]
     note: >-
       loads worker.lisp -- the CLACK-FREE flavour of the Worker: the application
-      down to `app` is net/httpbin-clack.lisp VERBATIM (the same file
-      cloudflare-workers/httpbin-clack deploys whole), and what puts it on
+      down to `*app*` is cloudflare-workers/httpbin-clack/worker.lisp VERBATIM
+      (and net/httpbin-clack.lisp's), and what puts it on
       a reactor is thirty lines written out under it rather than
       clack:clackup -- and drives it over the requests the README curls. So the
       two directories differ in exactly one thing, and this case is the
@@ -644,6 +645,30 @@ examples:
         - '\"json\":null'
         - '\"allowed\":\"POST\"'
         - '"status":404'
+  - path: cloudflare-workers/httpbin-clack/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- the CLACKUP half of the same pair, over the same
+      probes as the httpbin case above: the application is identical, and what
+      differs is that clack:clackup :server :reactor installs it instead of the
+      thirty hand-written lines. So the two cases run the same requests through
+      the built-in handler backend and through a copy of what it does, and a
+      divergence shows up as this pair disagreeing -- which is what makes the
+      backend's `dispatch` (the very function the synthesized handle-request
+      export calls) pinned on every backend the compiler has, rather than only
+      on the WASM one that has an export. The unparseable-body probe also pins
+      that lack's default backtrace middleware only PRINTS -- to *error-output*,
+      a sink on the Worker -- while the 200 with "json":null still comes back.
+      Checked with contains, not equals: the key ORDER inside a JSON object
+      follows hash-table iteration order, which differs per backend.
+    expect:
+      contains:
+        - '\"path\":\"/get\"'
+        - '\"json\":{\"name\":\"rontolisp\"}'
+        - '\"json\":null'
+        - '\"allowed\":\"POST\"'
+        - '"status":404'
+        - '[["content-type","application/json"]]'
   - path: cloudflare-workers/httpbin-tiny-routes/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-

@@ -298,11 +298,15 @@ Two details the host side must get right:
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.
 
-A complete Worker built this way — deploying
+A complete Worker built this way — the JavaScript side and the measurements
+included — is
+[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack).
+Beside it,
+[`examples/cloudflare-workers/httpbin-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack-one-source)
+deploys
 [`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
-itself, with the JavaScript side and the measurements — is
-[`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack):
-one source, four hosts, and the directory contains no Lisp file at all.
+*itself* — the file that binds a socket when you interpret it — and so contains
+no Lisp file at all: one source, four hosts.
 
 If the module size matters more than the `clackup` line, this adapter is small
 enough to write out by hand and skip loading clack entirely.

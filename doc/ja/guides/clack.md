@@ -300,12 +300,15 @@ report を載せた 500 を返します。
 レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
 
-この方法で作った完全な Worker —
-[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
-そのものをデプロイし、JavaScript 側と実測値を添えたもの — は
+この方法で作った完全な Worker — JavaScript 側と実測値を添えたもの — は
 [`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack)
-にあります: 1 つのソースで 4 つのホスト、そしてディレクトリには Lisp ファイルが
-1 つもありません。
+にあります。その隣の
+[`examples/cloudflare-workers/httpbin-clack-one-source/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack-one-source)
+は
+[`examples/net/httpbin-clack.lisp`](https://github.com/making/rontolisp/blob/develop/examples/net/httpbin-clack.lisp)
+*そのもの* — インタプリタで実行すればソケットを bind するあのファイル — を
+デプロイするので、ディレクトリには Lisp ファイルが 1 つもありません:
+1 つのソースで 4 つのホストです。
 
 `clackup` の 1 行よりモジュールサイズが重要なら、このアダプタは手書きできる程度
 の量なので、clack のロード自体を省けます。

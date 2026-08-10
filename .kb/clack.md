@@ -301,9 +301,8 @@ reactor that wants NO clack package in the module at all can write those lines
 itself and export its own `handle-request`.
 `examples/cloudflare-workers/httpbin` is exactly that, and it is deliberately
 the SAME application as `examples/cloudflare-workers/httpbin-clack`
-(`net/httpbin-clack.lisp` verbatim down to `app` — the clack directory now
-deploys that FILE, so there is no copy left to diff) with the SAME envelope
-(one `src/index.js`, byte-identical between the two directories). The pair is therefore a controlled measurement of what clack
+(both carry `net/httpbin-clack.lisp` verbatim down to `*app*`) with the SAME
+envelope (one `src/index.js`, byte-identical between them). The pair is therefore a controlled measurement of what clack
 costs on a reactor, and the answer is size and a little startup — node 24, same
 machine, `--no-wasi --optimize`, re-measured 2026-08-08 after the dispatch-gate
 refinement halved the clack build (`.kb/optimize-dead-code-elimination.md`,
@@ -446,7 +445,8 @@ delegation and the interpreter's lazy reactor-library hook), by
 `HttpReactorInlinerTest` (the
 marker lowering and the synthesized export), by `RontoLispCliTest` (the
 `:rontolisp` reactor leg end to end through the CLI compile), and by
-`examples/cloudflare-workers/hello-clack/` +
+`examples/cloudflare-workers/hello-clack/`,
+`examples/cloudflare-workers/httpbin-clack/` +
 `examples/cloudflare-workers/httpbin-tiny-routes/`, whose `check.lisp`s drive
 `dispatch` on the interpreter, the JVM and wasm-GC (`examples/examples.yaml`).
 The clack-free half of the measured pair,
@@ -455,17 +455,21 @@ The clack-free half of the measured pair,
 shared `handle` and a hand-written one shows up as two manifest cases
 disagreeing.
 
-**The example directory collapsed to ONE Lisp file when the backend landed, and
-to ZERO when the `:rontolisp` reactor leg did**: first `worker.lisp` became
-`examples/net/httpbin-clack.lisp` verbatim with only the `clackup` arguments
-changed; now `httpbin-clack/build.sh` compiles `net/httpbin-clack.lisp` ITSELF
-and the directory holds no Lisp at all (its `check.lisp` went with the copy —
-the reactor-machinery-over-a-real-app pin lives in `httpbin-tiny-routes/`,
-and the one source's serve legs in its own manifest entry). The old
-`app.lisp` / `worker.lisp` / `serve.lisp` split existed because the transport
-was a hand-written adapter that had to be kept out of the application; a
-`:server` designator needs no such quarantine, and one designator for every
-host needs no second file.
+**The two designators get one example directory each, and the pair is the
+point.** `examples/cloudflare-workers/httpbin-clack` holds its own
+`worker.lisp` (`:server :reactor`) plus a `check.lisp` that drives `dispatch`
+on the interpreter, the JVM and Preview 1 — the clackup half of the measured
+pair with `httpbin/`, whose `check.lisp` runs the same probes through the
+hand-written adapter, so a divergence between the shared `handle` and a copy of
+it shows up as two manifest cases disagreeing.
+`examples/cloudflare-workers/httpbin-clack-one-source` holds NO Lisp at all:
+its `build.sh` compiles `net/httpbin-clack.lisp` ITSELF (`:server :rontolisp`),
+which is the one-source rule as a deployable artifact — and it needs no
+`check.lisp`, because on the interpreter that file binds a real socket, which
+is its own verification. The old `app.lisp` / `worker.lisp` / `serve.lisp`
+split existed because the transport was a hand-written adapter that had to be
+kept out of the application; a `:server` designator needs no such quarantine,
+which is why each directory is one file plus its check.
 
 Measured on the deployed Worker when `clackup` replaced the hand-written
 `wasm-export` + `defun` (node 24, same machine, `--no-wasi --optimize`;

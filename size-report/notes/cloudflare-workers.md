@@ -13,6 +13,14 @@ compressed on the free plan, so the table reports raw and gzipped sizes and the
 share of that limit. What a framework costs there is module size and isolate
 startup, not per-request time.
 
+**`httpbin-clack` and `httpbin-clack-one-source` are the same application.**
+They differ in the `:server` designator only -- `:reactor`, which is
+host-driven on every backend, against `:rontolisp`, which reads the compile
+target and takes its reactor shape under `--no-wasi`. The second row builds
+`examples/net/httpbin-clack.lisp` itself, the file that binds a socket when
+interpreted, so what the pair measures is that choosing the portable designator
+costs nothing in bytes.
+
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
 is ningle or its router myway: ningle reads every request through the
