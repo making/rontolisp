@@ -7,24 +7,17 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$here/../../.." && pwd)"
 
-# Prefer a rontolisp binary on PATH (a native image or the launcher); fall back
-# to the built exec JAR at the repo root.
-if command -v rontolisp >/dev/null 2>&1; then
-  compile() { rontolisp "$@"; }
-else
-  repo_root="$(cd "$here/../../.." && pwd)"
-  jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
-  if [[ ! -f "$jar" ]]; then
-    echo "No 'rontolisp' on PATH and JAR not found: $jar" >&2
-    echo "Install the binary, or build the JAR from the repo root: ./mvnw clean package" >&2
-    exit 1
-  fi
-  compile() { java -jar "$jar" "$@"; }
+jar="$repo_root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar"
+if [[ ! -f "$jar" ]]; then
+  echo "JAR not found: $jar" >&2
+  echo "Build it first from the repo root: ./mvnw clean package" >&2
+  exit 1
 fi
 
 echo "compiling battlefront.lisp -> battlefront.wasm"
-compile "$here/battlefront.lisp" -o "$here/battlefront.wasm" --no-wasi --optimize
+java -jar "$jar" "$here/battlefront.lisp" -o "$here/battlefront.wasm" --no-wasi --optimize
 
 # The page imports the generated ../webgl-common/gl-imports.js, so the served
 # root is examples/browser rather than this directory.
