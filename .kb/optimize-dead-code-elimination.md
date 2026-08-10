@@ -274,7 +274,7 @@ what it records). Preview 1 bytes:
 The fold above needs a literal. The same reachability argument covers an argument
 that is not a literal but whose TYPE the compiler knows, and there the numbers are
 bigger, because what the generic dispatch drags in is not the renderer for the type
-at hand -- it is every other renderer. Measured on the `wasm-size/pi_approx` loop at
+at hand -- it is every other renderer. Measured on the `size-report pi_approx` loop at
 `--optimize`: the loop ending in `(princ "done")` is 1,770 bytes and the same loop
 ending in `(princ <the f64 result>)` was **6,307** -- +3,777 bytes to print one
 float, of which `_print_f64_no_nl` is **379**. The rest is `_princ_val` itself

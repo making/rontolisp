@@ -670,18 +670,21 @@ examples:
         - '"status":404'
         - '[["content-type","text/plain; charset=utf-8"]]'
 
-  # --- wasm-size: the same two programs the cross-language size table measures ---
-  - path: wasm-size/hello_world/hello_world.lisp
+  # --- size-report/: the two programs the cross-language size table measures.
+  # They live outside examples/ because they exist to be measured rather than
+  # read; size-report/measure.sh reports them and this manifest pins that they
+  # still compute the right thing on every backend.
+  - path: ../size-report/programs/hello_world/hello_world.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     note: >-
-      the size-comparison floor. What matters in its directory is the size of the
-      compiled module (518 bytes with --optimize), but the number only means
-      something if the module still prints, so the run legs pin the output and the
-      wasm-component leg pins that the WASI 0.3 build of it compiles too.
+      the size-comparison floor. What matters about it is the size of the compiled
+      module, but the number only means something if the module still prints, so
+      the run legs pin the output and the wasm-component leg pins that the WASI 0.3
+      build of it compiles too.
     expect:
       equals: |
         Hello, World!
-  - path: wasm-size/pi_approx/pi_approx.lisp
+  - path: ../size-report/programs/pi_approx/pi_approx.lisp
     backends: [interpreter, jvm, wasm, wasm-component]
     note: >-
       a million Leibniz terms in f64 and one ~,15F. The equals check is the point:
@@ -690,17 +693,17 @@ examples:
     expect:
       equals: |
         pi = 3.141591653589774
-  - path: wasm-size/hello_world/hello_world-nogc.lisp
+  - path: ../size-report/programs/hello_world/hello_world-nogc.lisp
     backends: [no-gc]
     note: >-
-      the --no-gc floor, 406 bytes: a plain MVP core module that prints through
-      fd_write with no wasm-GC at all. Host-invoked (wasmtime run --invoke
-      say-hello), so the harness only compiles it.
-  - path: wasm-size/pi_approx/pi_approx-nogc.lisp
+      the --no-gc floor: a plain MVP core module that prints through fd_write with
+      no wasm-GC at all. Host-invoked (wasmtime run --invoke say-hello), so the
+      harness only compiles it.
+  - path: ../size-report/programs/pi_approx/pi_approx-nogc.lisp
     backends: [no-gc]
     note: >-
-      the same Leibniz loop as a 1,042-byte MVP core module -- the smallest
-      artifact in the directory. It prints with princ rather than ~,15F, so the
-      gap to the wasm-GC build is what the GC value model and the fixed-decimal
-      rendering cost, not the loop. Host-invoked (wasmtime run --invoke
+      the same Leibniz loop as an MVP core module -- the smallest artifact
+      measured. It prints with princ rather than ~,15F, so the gap to the wasm-GC
+      build is what the GC value model and the fixed-decimal rendering cost, not
+      the loop. Host-invoked (wasmtime run --invoke
       approx-pi), so the harness only compiles it.

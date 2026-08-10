@@ -1,0 +1,76 @@
+name: Size report
+
+# Re-measure every artifact size-report/ tracks and commit the result, so the
+# numbers age with the compiler instead of with whoever last edited a README.
+#
+# Weekly rather than per-push: the run compiles ~20 modules and ql:quickloads
+# clack / lack / tiny-routes / ningle, which is minutes, and a size that moved
+# is worth seeing as one weekly diff rather than as noise on every commit.
+# Trigger it by hand after a change that is expected to move the numbers.
+on:
+  schedule:
+  - cron: '17 3 * * 1'
+  workflow_dispatch: {}
+  push:
+    branches:
+    - develop
+    paths:
+    - size-report/**
+    - .github/workflows/size-report.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # Measuring a module that no longer runs would report a smaller number for a
+    # regression, so measure.sh runs the micro programs before reporting them.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v47.0.2"
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    # The Worker builds pull clack / lack / tiny-routes / ningle through
+    # ql:quickload. Carrying that cache keeps the job off the network and makes
+    # the run reproducible against a dist that moved under it.
+    - name: Cache the Quicklisp dist
+      uses: actions/cache@v4
+      with:
+        path: ~/.rontolisp/quicklisp
+        key: quicklisp-${{ runner.os }}-${{ hashFiles('size-report/measure.sh') }}
+        restore-keys: |
+          quicklisp-${{ runner.os }}-
+    - name: Build the compiler
+      run: ./mvnw -V --no-transfer-progress -DskipTests clean package
+    - name: Measure
+      run: ./size-report/measure.sh
+    - name: Commit the refreshed results
+      run: |
+        set -e
+        if git diff --quiet -- size-report/results; then
+          echo "sizes unchanged"
+          exit 0
+        fi
+        git diff --stat -- size-report/results
+        git config user.name  'github-actions[bot]'
+        git config user.email 'github-actions[bot]@users.noreply.github.com'
+        git add size-report/results
+        # [skip ci]: the commit touches only generated numbers, so nothing it can
+        # push is worth a CI run. GITHUB_TOKEN pushes already do not re-trigger
+        # workflows, but this also keeps the self-triggering `push` path above
+        # (size-report/**) from re-entering this job.
+        git commit -m 'Refresh the size report [skip ci]'
+        # A concurrent push during the run should retry, not clobber.
+        git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+        git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -67,7 +67,7 @@ site added to a `(make-array 16)` program: **8,615 -> 588 bytes**. On the JVM, o
 inline code for a ~665-byte function and comes out about even (`rainbow` +60 bytes, its
 one site living in spliced library code). A program with no live site is unchanged, the
 helper having been injected and then shaken out (`heat3d` +2 bytes of index-width
-residue; `minesweeper`, `hello`, `greet`, `dice`, `triangle`, both `wasm-size` programs
+residue; `minesweeper`, `hello`, `greet`, `dice`, `triangle`, both `size-report` programs
 byte-identical). Everything above two sites is pure win.
 
 ## The re-evaluation trigger

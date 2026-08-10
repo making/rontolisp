@@ -284,8 +284,8 @@ final class WasmEmitHelper {
 	 * <p>
 	 * The dispatch itself is {@link #buildAsF64Body} -- ONE shared function rather than
 	 * the ~80-byte ladder every site used to inline. The float arithmetic of
-	 * {@code examples/wasm-size/pi_approx} reached it ten times in one five-line program,
-	 * and the whole module carried 26 copies, 43% of its code section
+	 * {@code size-report/programs/pi_approx} reached it ten times in one five-line
+	 * program, and the whole module carried 26 copies, 43% of its code section
 	 * ({@code .kb/wasm-shared-coercion.md}). Out of line it also stops allocating a
 	 * scratch temp per site, which the caller never released.
 	 * @param w the body writer

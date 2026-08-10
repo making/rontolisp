@@ -18,7 +18,7 @@ there -- it was a three-way chain before the boxed-i64 and limb tiers landed
 that expensive out of proportion to the code that asked for it:
 
 - **it is per OPERAND, not per operation.** `(+ sum (/ sign (+ (* 2.0 i) 1.0)))` --
-  five-line `examples/wasm-size/pi_approx` -- coerces ten times, so its top-level body
+  five-line `size-report/programs/pi_approx` -- coerces ten times, so its top-level body
   was 1,027 bytes of which ~800 were ladders;
 - **the ratio runtime carried its own copy** (`WasmRatioRuntimeBuilder.emitLocalToF64`,
   sixteen call sites across `_rat_add`/`_rat_div`/`_rat_rem`/`_rat_cmp`/`_rat_cmp_bits`),
@@ -29,9 +29,9 @@ code section (**43%**). Sharing them:
 
 | program | flags | before | after | |
 | --- | --- | ---: | ---: | ---: |
-| `wasm-size/pi_approx` | `--optimize` | 5,356 | 3,540 | **-33.9%** |
-| `wasm-size/pi_approx` | `--optimize=size` | 5,236 | 3,420 | -34.7% |
-| `wasm-size/pi_approx` | `--component --optimize=size` | 6,365 | 4,549 | -28.5% |
+| `size-report pi_approx` | `--optimize` | 5,356 | 3,540 | **-33.9%** |
+| `size-report pi_approx` | `--optimize=size` | 5,236 | 3,420 | -34.7% |
+| `size-report pi_approx` | `--component --optimize=size` | 6,365 | 4,549 | -28.5% |
 | `ml/mlp` (float, no `vec:`) | `--optimize` | 152,408 | 136,970 | -10.1% |
 | `ml/nn` | `--optimize` | 116,013 | 102,798 | -11.4% |
 | `ml/numerical-calculus` | `--optimize` | 271,936 | 254,970 | -6.2% |

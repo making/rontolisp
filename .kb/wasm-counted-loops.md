@@ -133,9 +133,9 @@ wasmtime 47.0.2, `--optimize` unless stated, 2026-08-08.
 | probe | before | after |
 | --- | ---: | ---: |
 | `(dotimes (i 1000000))` alone | 1,987 | **203** |
-| `wasm-size/pi_approx`'s loop + `(princ "done")` | 2,530 | **1,770** |
-| `wasm-size/pi_approx` (`--optimize`) | 3,540 | **2,781** |
-| `wasm-size/pi_approx` (`--optimize=size`) | 3,420 | **2,781** |
+| `size-report pi_approx`'s loop + `(princ "done")` | 2,530 | **1,770** |
+| `size-report pi_approx` (`--optimize`) | 3,540 | **2,781** |
+| `size-report pi_approx` (`--optimize=size`) | 3,420 | **2,781** |
 
 Speed, a 100,000,000-iteration `(dotimes (i n) (setq s (+ s i)))` (best of three):
 

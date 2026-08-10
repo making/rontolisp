@@ -103,7 +103,7 @@ Whole modules, `--no-wasi --optimize` unless noted:
 | `browser/webgl-cube` | 37,202 | 33,669 | -9.5% |
 | `browser/webgl-galaxy` | 25,620 | 24,476 | -4.5% |
 
-`wasm-size/pi_approx` and `hello_world` are byte-identical at every `--optimize`
+`size-report pi_approx` and `hello_world` are byte-identical at every `--optimize`
 level (neither reaches an array), and their un-shaken `(none)` builds fell 307 KB
 -> 257 KB because the wrapper catalog itself shrank.
 

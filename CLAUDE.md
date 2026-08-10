@@ -183,6 +183,19 @@ After editing examples, normalize results and catch non-runnable examples:
 ./mvnw -Dtest=DocExamplesTest test                                            # verify every example runs + matches
 ```
 
+### Artifact Sizes Belong in `size-report/`, Not in a README
+
+No `examples/**/README.md` may quote a byte count of a compiled artifact. Those
+numbers went stale every time the compiler changed, in a dozen places at once.
+`size-report/measure.sh` measures every tracked artifact -- the two micro
+programs across the flag matrix, and the Cloudflare Worker modules raw and
+gzipped -- writes `size-report/results/`, and
+`.github/workflows/size-report.yaml` re-runs it weekly and commits the diff. An
+example README that wants to talk about size links to
+`size-report/results/*.md`. A new artifact worth tracking gets a row in
+`measure.sh`'s `wasm_builds` / `worker_builds` table, not a paragraph in a
+README.
+
 ### Verifying Output Manually (all four backends)
 
 A program is "verified" only when it has been run on **all four** backends. Don't
@@ -264,7 +277,7 @@ does not need rebuilding unless Java sources changed).
 - Format (Lisp): with a built exec jar, format the checked-in sources in place before the
   test run:
   ```bash
-  java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/
+  java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/ size-report/programs/
   ```
 - Test: `./mvnw test`
 - Web profile compile: `./mvnw -Pweb compile`. Required whenever `src/web/java` changed (the `Target_*` substitutions, `web/` `@JS` classes) or a signature it overrides changed. `src/web/java` compiles only under the `web` profile, so `./mvnw test` does NOT catch a break there -- only the web-playground CI job does. It leaves `target/classes` holding the WEB source set, so run it AFTER the test suite, or `clean` in between: a later `./mvnw test` without `clean` reuses that tree and fails with `NoClassDefFoundError` on classes the web profile excludes (e.g. `codegen.wasm`), which reads like a real regression and is not one.
