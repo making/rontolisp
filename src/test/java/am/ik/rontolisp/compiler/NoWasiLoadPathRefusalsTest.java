@@ -125,6 +125,68 @@ class NoWasiLoadPathRefusalsTest {
 			.contains("Compile without --component");
 	}
 
+	/** clack's shape: the dispatch is inside a local function of the callee. */
+	private static final String CLACKUP = """
+			(defun eval-file (path) (with-open-file (in path) path))
+			(defun clackup (app)
+			  (flet ((build (app)
+			           (let ((app (typecase app
+			                        ((or pathname string) (eval-file app))
+			                        (otherwise app))))
+			             app)))
+			    (build app)))
+			(defun handler () nil)
+			""";
+
+	@Test
+	void aBranchTheArgumentRulesOutIsNotOnTheLoadPath() {
+		// The standing line this pass used to print for EVERY clack/ningle/tiny-routes
+		// program: clackup keeps a (clackup "app.lisp") branch, and a reactor only ever
+		// hands it a function, so the file loader behind that branch is reachable
+		// statically and dead dynamically. A warning class whose only routine instance is
+		// a false positive teaches the reader to skip the class.
+		assertThat(warnings(CLACKUP + "(clackup #'handler)\n")).doesNotContain(LINE);
+		// The other direction is the whole reason the narrowing may only ever refute: a
+		// call that CAN take the branch still gets the line, chain and all.
+		assertThat(warnings(CLACKUP + "(clackup \"app.lisp\")\n")).contains("WITH-OPEN-FILE " + LINE)
+			.contains("a top-level form -> CLACKUP -> EVAL-FILE");
+		// A shape nothing states is UNKNOWN, which satisfies every type and so prunes
+		// nothing -- the direction a wrong answer must never fall in.
+		assertThat(warnings(CLACKUP + "(clackup (compute-app))\n")).contains("WITH-OPEN-FILE " + LINE);
+	}
+
+	@Test
+	void aTopLevelVariableStatesItsShapeTooAndARebindingRetractsIt() {
+		// (clackup *app*) over a (defvar *app* #'handler) says exactly what (clackup
+		// #'handler) says, one indirection out -- which is how every ningle and
+		// tiny-routes Worker spells it.
+		assertThat(warnings(CLACKUP + "(defvar *app* #'handler)\n(clackup *app*)\n")).doesNotContain(LINE);
+		// Unless something in the program can put another value in it: a special variable
+		// any caller may rebind states nothing about what a callee reads.
+		assertThat(warnings(CLACKUP + """
+				(defvar *app* #'handler)
+				(defun with-file (path) (let ((*app* path)) (clackup *app*)))
+				(clackup *app*)
+				""")).contains("WITH-OPEN-FILE " + LINE);
+	}
+
+	@Test
+	void aNameTheBodyRebindsCannotCarryTheCallersShape() {
+		// The callee's own dolist variable has nothing to do with the caller's #'handler,
+		// and a binding form this pass does not model scope for must therefore drop the
+		// name to UNKNOWN for the whole body.
+		assertThat(warnings("""
+				(defun eval-file (path) (with-open-file (in path) path))
+				(defun clackup (app)
+				  (dolist (app (list "app.lisp"))
+				    (typecase app
+				      ((or pathname string) (eval-file app))
+				      (otherwise app))))
+				(defun handler () nil)
+				(clackup #'handler)
+				""")).contains("WITH-OPEN-FILE " + LINE);
+	}
+
 	@Test
 	void aWasiCarryingBuildSaysNothing() {
 		// Every one of these works on a build that imports WASI, so the lines belong to

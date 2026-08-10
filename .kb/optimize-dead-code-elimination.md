@@ -60,6 +60,81 @@ The separate savings sum to 24.9 points against 20.2 combined, so they overlap â
 
 `-Drontolisp.debug.norawlocals=true` still switches the unboxed locals alone; it exists for A/B profiling and is what produced the "on/off" row above (the "off/on" row needed a throwaway local patch, since no shipped switch produces it).
 
+## Before the shakers: a `typecase` clause no call can select (todo-311, 2026-08-10)
+
+Both shakers are name reachability -- the wasm one over `call` immediates, the JVM one over
+method references -- so neither can see that a `typecase` clause is dead because of what the
+CALLER passed. clack's `clackup` is the standing example:
+
+```lisp
+(flet ((buildapp (app)
+         (let* ((app (typecase app
+                       ((or pathname string) (eval-file app))   ; (clackup "app.lisp")
+                       (otherwise app))))                       ; (clackup #'app)
+           ...)))
+  (let ((app (buildapp app))) ...))
+```
+
+Every Worker calls `(clack:clackup #'app ...)`, so the first clause cannot match -- and
+`CLACK::%LOAD-FILE`, `CLACK:EVAL-FILE`, `PROBE-FILE` and the `NoWasiFilesystemStubs` error
+string behind it rode into every clack Worker module anyway.
+
+`compiler/DeadTypeBranchPruner` DELETES such a clause from the AST before Pass 1, so the
+shakers then drop what it held by the reachability they already have. Gated on
+`eliminatesDeadCode()`, called from `JvmLispCompiler.compile` (right after
+`flattenTopLevel`) and `WasmLispCompiler.compile` (**after** `NoWasiFilesystemStubs`, which
+is what closes the funcall-dispatch gate on a clack Worker -- the pruner declines while the
+gate is open). It shares its whole decision, `ArgumentShapes.maySatisfy`, with the
+`--no-wasi` build warning that had the same blind spot
+(`.kb/wasm-export-no-wasi.md`); the two walks differ only in what they do with the answer.
+
+Deletion is the ONLY rewrite, which is why it needs no evaluation-order reasoning: the
+surviving form is the same form with fewer clauses. An `(if (typep x 'pathname) ...)` is
+left alone here even though the warning pass skips it -- rewriting a test means deciding
+what happens to the operand's own evaluation, and the branch holds no bytes of its own.
+
+**What makes it sound.** A rewrite needs the whole program to agree, not one call chain:
+
+- a parameter's shape is the JOIN over EVERY call site -- one `(clackup "app.lisp")`
+  anywhere keeps the clause;
+- a name taken as a VALUE (`#'clackup`, or any occurrence inside quoted data, which is how
+  a designator reaches `funcall`) has no known call sites, so its parameters state nothing;
+- a name with two definitions, or one that is also a `defmacro`/`defmethod`/`defgeneric`,
+  is left alone, and a user macro's ARGUMENTS are rewritten from the top-level scope (the
+  expansion may drop them inside a binding of its own);
+- the pass declines entirely under `RuntimeNameProducers.anyNameResolvable` -- `(eval
+  (read))` can call anything with anything.
+
+Over-COUNTING a call site is harmless (a shape that is not really passed only widens the
+join toward UNKNOWN, which prunes less), so the call scan is deliberately dumb: any cons
+whose head names a known function counts. Missing one is the unsafe direction, and the
+escape rule above is what covers it.
+
+Shapes flow through `let`/`let*`/`do`/`do*`, a `lambda`'s parameters (unknown -- whoever
+calls it decides) and `flet` locals, whose parameters are joined over the call sites in the
+`flet` body. That last one is not a refinement but the case itself, since clack's `typecase`
+is inside a local. A `labels` local stays unknown: its siblings can call it, so the body is
+not the whole call set.
+
+Measured, `--no-wasi --optimize=size`, 2026-08-10 (five functions and ~1.2 KB out of every
+clack Worker; the numbers in `size-report/results/cloudflare-workers.md` are the tracked
+ones):
+
+| worker | before | after |
+| --- | --- | --- |
+| `hello-clack` | 249,828 | 248,587 |
+| `hello-tiny-routes` | 273,450 | 272,208 |
+| `httpbin-clack` | 265,812 | 264,565 |
+| `httpbin-tiny-routes` | 290,560 | 289,312 |
+| `hello-ningle` | 2,662,831 | 2,662,835 |
+
+`hello-ningle` is the one that does not move, and it is the useful row: yason puts a `read`
+in the program, so `anyNameResolvable` holds and the pruner declines -- while the build
+WARNING still goes quiet there, because that walk is per-call-chain and needs no
+whole-program agreement. Two analyses, one predicate, and each is precise where the other
+cannot be. Pinned by `DeadTypeBranchPrunerTest`; every worker verified answering under node
+after the prune.
+
 ## WASM
 
 A **post-pass relocating tree-shaker** (`am.ik.wasm.WasmTreeShaker`, language-independent) runs on the finished **core module** bytes in `WasmLispCompiler.compile` just before returning â€” **including under `--component`**, where it runs right after `WasmImportInjector.inject` and before the component wrapper is built (see "Why the component path is safe" below; it was skipped there until todo-259, on a constraint that turned out not to exist). It parses the module sections, builds a call graph from the actual `call` (and `ref.func`) immediates in every body, computes the functions reachable from the roots (exported functions + `_start`/start section), drops the rest **including unused WASI function imports**, and renumbers every surviving function reference. Reachability is exact, not a manual table: when `eval`/`load`/`apply` is used, the dispatch bodies contain real `call`s to every registered function, so nothing dynamically-reached is pruned. It renumbers **function** AND **type** indices (see the next section; the memory and global sections keep their own index spaces untouched). This is the one place the fixed-index invariant is deliberately broken, and only because every reference site is rewritten in lockstep.

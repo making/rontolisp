@@ -223,9 +223,12 @@ a refusal, and nothing but the build can tell you about it in advance. Entropy
 reads the same way and names `--host-random`.
 
 A primitive only an **export** can reach stays quiet, because that one is an
-ordinary call-time condition your caller can catch. Reachability is static, so
-a branch no run ever takes still counts: every `clack` program reports
-`with-open-file` through `clackup`'s `(clackup "app.lisp")` file branch, which
-a reactor never takes — the chain in the line is what tells you which branch it
-is. A refusal wrapped in `handler-case` or `ignore-errors` is not reported at
-all; the program already handles it.
+ordinary call-time condition your caller can catch. Reachability is static, but
+it is not blind to the **arguments**: a call carries what the site says about
+each one — `#'app`, a literal, a `(defvar *app* (make-instance 'ningle:app))` —
+so a `typecase` branch whose type that value cannot have is not on the load
+path. That is what keeps every `clack` program quiet about `clackup`'s
+`(clackup "app.lisp")` file branch, which a reactor never takes. Where the call
+site says nothing, nothing is ruled out and the line stands. A refusal wrapped
+in `handler-case` or `ignore-errors` is not reported at all; the program
+already handles it.

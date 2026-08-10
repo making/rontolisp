@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +16,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.SourceProvenance;
+import am.ik.rontolisp.compiler.ArgumentShapes.Shape;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -40,7 +42,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <h2>What "the load path" means here</h2>
  *
- * The top-level forms, plus the bodies of the functions they call, transitively. Four
+ * The top-level forms, plus the bodies of the functions they call, transitively. Five
  * rules decide it, each chosen so the line is worth reading rather than merely true:
  * <ul>
  * <li><strong>A function VALUE is not a call.</strong> {@code #'app} handed to
@@ -66,13 +68,38 @@ import org.jspecify.annotations.Nullable;
  * right after this runs, so the body is not in the module either -- walking it would
  * report clack's {@code (read in nil eof)} as a standard-input trap the module does not
  * contain.</li>
+ * <li><strong>A branch the ARGUMENTS rule out is not reachable.</strong> A call edge
+ * carries the {@link ArgumentShapes.Shape}s of the actual arguments and binds them to the
+ * callee's parameters, so a {@code typecase}/{@code typep} branch whose type a known
+ * shape cannot have is skipped. This is what retired the standing clack line: every
+ * Worker calls {@code (clack:clackup #'app ...)}, {@code clackup} dispatches on
+ * {@code (typecase app ((or pathname string) (eval-file app)) (otherwise app))}, and a
+ * function is neither -- the file loader behind that clause was true statically and dead
+ * dynamically, in EVERY clack program. The same lattice takes the branch out of the
+ * module in {@link DeadTypeBranchPruner}.</li>
  * </ul>
  *
- * <p>
- * Reachability is static, so a branch that no run takes still counts: every {@code clack}
- * program prints the {@code %load-file} line, because {@code clackup} keeps a
- * {@code (clackup "app.lisp")} branch a reactor never takes. The reported CHAIN is what
- * makes that readable -- it names the path, so the reader can see which branch it is.
+ * <h2>Why a shape can only ever silence a FALSE line</h2>
+ *
+ * A wrong narrowing is a missed refusal -- the failure mode the whole pass exists to end
+ * -- so a shape is read only where the call site states it syntactically ({@code #'f}, a
+ * literal {@code (lambda ...)}, a literal, a quoted datum) and everything else is
+ * {@code UNKNOWN}, which satisfies every type and therefore prunes nothing. Three
+ * consequences are load-bearing:
+ * <ul>
+ * <li>the memoization keys on the SHAPES as well as the name and the guard, or the first
+ * call edge's arguments would silently answer for the second;</li>
+ * <li>a {@code flet}/{@code labels} body is walked at its CALL SITES, with the shapes
+ * bound -- clack's {@code typecase} is inside a local {@code buildapp}, so a local
+ * function walked once with unknown parameters would keep the line. A local whose name is
+ * taken as a value ({@code #'buildapp}) is additionally walked with everything unknown,
+ * and one that is never called at all is not walked, which is the same "a value is not a
+ * call" rule one level down;</li>
+ * <li>a name the region REBINDS in a form this pass does not model scope for (a
+ * {@code dolist} variable, a {@code loop} {@code with}, a {@code setq} target, ...) is
+ * dropped to {@code UNKNOWN} for that whole region, so a shadow can never carry a
+ * caller's shape into a binding that has nothing to do with it.</li>
+ * </ul>
  *
  * <p>
  * WASM {@code --no-wasi} on the GC backend only, which is where the refusal set of
@@ -106,23 +133,45 @@ public final class NoWasiLoadPathRefusals {
 	private record Found(String operator, Kind kind, LispVal site, String origin) {
 	}
 
-	/** One function body, with the definition form that carries its source position. */
-	private record Body(LispVal anchor, List<LispVal> forms) {
+	/**
+	 * One function body: the definition form that carries its source position, the lambda
+	 * list a call edge binds its argument shapes to, and the forms themselves.
+	 */
+	private record Body(LispVal anchor, @Nullable LispVal lambdaList, List<LispVal> forms) {
 	}
 
 	/**
-	 * Forms that run at load time: what reached them, and whether a handler covers them.
+	 * Forms that run at load time: what reached them, whether a handler covers them, and
+	 * what the call edge said about the parameters.
 	 */
-	private record Region(Body body, String origin, boolean guarded) {
+	private record Region(Body body, String origin, boolean guarded, Map<String, Shape> shapes) {
+	}
+
+	/** One call edge: the callee and what the site states about its arguments. */
+	private record Call(String name, List<Shape> argShapes) {
+	}
+
+	/** The memoization key: the same body under different shapes is a different walk. */
+	private record Visit(String name, List<Shape> argShapes) {
 	}
 
 	/**
-	 * The walk state at one point in a region: whether a handler covers it, and the
-	 * innermost enclosing form whose source position is known -- the position a refusal
-	 * reports when its own cons has lost one (a pass that rebuilt a cons drops it, and
-	 * that drops the whole subtree's, see {@code .kb/source-positions.md}).
+	 * A {@code flet}/{@code labels} function: its lambda list, its body, and the lexical
+	 * environment it closes over. {@code scope} is the local-function map visible inside
+	 * it -- for {@code labels} that map contains the function itself, which is why it is
+	 * held by reference and filled in after.
 	 */
-	private record At(boolean guarded, LispVal located) {
+	private record Local(LispVal lambdaList, LispVal bodyTail, Map<String, Shape> env, Map<String, Local> scope) {
+	}
+
+	/**
+	 * The walk state at one point in a region: whether a handler covers it, the innermost
+	 * enclosing form whose source position is known -- the position a refusal reports
+	 * when its own cons has lost one (a pass that rebuilt a cons drops it, and that drops
+	 * the whole subtree's, see {@code .kb/source-positions.md}) -- and the lexical
+	 * environment: variable shapes plus the local functions in scope.
+	 */
+	private record At(boolean guarded, LispVal located, Map<String, Shape> env, Map<String, Local> locals) {
 	}
 
 	/** The definition heads whose body only runs when something CALLS them. */
@@ -157,29 +206,39 @@ public final class NoWasiLoadPathRefusals {
 	 */
 	public static List<String> report(List<LispVal> program, boolean hostRandom, boolean reactorComponent) {
 		Map<String, List<Body>> definitions = collectDefinitions(program);
+		// (clackup *app* ...) over a (defvar *app* (make-instance 'ningle:app)) states
+		// its argument as plainly as (clackup #'app) does, one indirection further out.
+		Map<String, Shape> returns = ArgumentShapes.returnShapes(program);
+		Map<String, Shape> globals = ArgumentShapes.globals(program, returns);
 		Map<String, Found> found = new LinkedHashMap<>();
-		// name -> whether the visit that claimed it was guarded. A later UNGUARDED
-		// path to the same function is a different answer, so it is walked again.
-		Map<String, Boolean> visited = new HashMap<>();
+		// (name, argument shapes) -> whether the visit that claimed it was guarded. A
+		// later UNGUARDED path to the same function is a different answer, and so is the
+		// same function under different arguments, so either is walked again.
+		Map<Visit, Boolean> visited = new HashMap<>();
 		Deque<Region> queue = new ArrayDeque<>();
 		for (LispVal form : program) {
 			if (!isDeferredDefinition(form)) {
-				queue.addLast(new Region(new Body(form, List.of(form)), originLabel(form), false));
+				queue.addLast(new Region(new Body(form, null, List.of(form)), originLabel(form), false, Map.of()));
 			}
 		}
 		// Breadth first, so the path a line reports is the shortest one that reaches it.
 		while (!queue.isEmpty()) {
 			Region region = queue.removeFirst();
-			Map<String, Boolean> called = new LinkedHashMap<>();
-			Scan scan = new Scan(hostRandom, region.origin(), found, called);
-			At at = new At(region.guarded(), region.body().anchor());
+			Map<Call, Boolean> called = new LinkedHashMap<>();
+			Set<String> shadowed = ArgumentShapes.shadowedNames(region.body().forms());
+			Scan scan = new Scan(hostRandom, region.origin(), found, called, shadowed, returns);
+			Map<String, Shape> env = new HashMap<>(globals);
+			env.putAll(region.shapes());
+			At at = new At(region.guarded(), region.body().anchor(), scan.narrow(env), Map.of());
 			region.body().forms().forEach(form -> scan.form(form, at));
-			called.forEach((name, guarded) -> {
-				Boolean claimed = visited.get(name);
+			called.forEach((call, guarded) -> {
+				Visit visit = new Visit(call.name(), call.argShapes());
+				Boolean claimed = visited.get(visit);
 				if (claimed == null || (claimed && !guarded)) {
-					visited.put(name, guarded);
-					for (Body body : definitions.getOrDefault(name, List.of())) {
-						queue.addLast(new Region(body, region.origin() + " -> " + name, guarded));
+					visited.put(visit, guarded);
+					for (Body body : definitions.getOrDefault(call.name(), List.of())) {
+						queue.addLast(new Region(body, region.origin() + " -> " + call.name(), guarded,
+								ArgumentShapes.bind(body.lambdaList(), call.argShapes())));
 					}
 				}
 			});
@@ -213,7 +272,8 @@ public final class NoWasiLoadPathRefusals {
 				default -> parts.size();
 			};
 			if (body <= parts.size()) {
-				define(definitions, name, cons, parts.subList(body, parts.size()));
+				define(definitions, name, cons, body >= 1 ? parts.get(body - 1) : null,
+						parts.subList(body, parts.size()));
 			}
 			if (LispNames.DEFGENERIC.equals(head.name())) {
 				// (defgeneric name (ll) (:method qualifier* (ll) body...) ...): a :method
@@ -225,7 +285,8 @@ public final class NoWasiLoadPathRefusals {
 						List<LispVal> optParts = optCons.toList();
 						int start = bodyStart(optParts, 1);
 						if (start <= optParts.size()) {
-							define(definitions, name, optCons, optParts.subList(start, optParts.size()));
+							define(definitions, name, optCons, optParts.get(start - 1),
+									optParts.subList(start, optParts.size()));
 						}
 					}
 				}
@@ -234,9 +295,10 @@ public final class NoWasiLoadPathRefusals {
 		return definitions;
 	}
 
-	private static void define(Map<String, List<Body>> definitions, String name, LispVal anchor, List<LispVal> forms) {
+	private static void define(Map<String, List<Body>> definitions, String name, LispVal anchor,
+			@Nullable LispVal lambdaList, List<LispVal> forms) {
 		if (!forms.isEmpty()) {
-			definitions.computeIfAbsent(name, k -> new ArrayList<>()).add(new Body(anchor, forms));
+			definitions.computeIfAbsent(name, k -> new ArrayList<>()).add(new Body(anchor, lambdaList, forms));
 		}
 	}
 
@@ -289,7 +351,7 @@ public final class NoWasiLoadPathRefusals {
 
 	/**
 	 * The walk of one load-time region: it records the refusals it meets and collects the
-	 * names it calls, which the caller turns into the next regions.
+	 * calls it makes, which the caller turns into the next regions.
 	 */
 	private static final class Scan {
 
@@ -299,21 +361,52 @@ public final class NoWasiLoadPathRefusals {
 
 		private final Map<String, Found> found;
 
-		/** Called name -> whether every path to it from this region was guarded. */
-		private final Map<String, Boolean> called;
+		/** Call edge -> whether every path to it from this region was guarded. */
+		private final Map<Call, Boolean> called;
 
-		private Scan(boolean hostRandom, String origin, Map<String, Found> found, Map<String, Boolean> called) {
+		/** Names this region rebinds outside the modelled scoping. */
+		private final Set<String> shadowed;
+
+		/** Local functions already walked in this region, by name + guard + shapes. */
+		private final Set<String> walkedLocals = new HashSet<>();
+
+		/**
+		 * The program's function return shapes; see {@code ArgumentShapes.returnShapes}.
+		 */
+		private final Map<String, Shape> returns;
+
+		private Scan(boolean hostRandom, String origin, Map<String, Found> found, Map<Call, Boolean> called,
+				Set<String> shadowed, Map<String, Shape> returns) {
 			this.hostRandom = hostRandom;
 			this.origin = origin;
 			this.found = found;
 			this.called = called;
+			this.shadowed = shadowed;
+			this.returns = returns;
+		}
+
+		/** What one form states about its value, here. */
+		private Shape shapeOf(LispVal form, Map<String, Shape> env) {
+			return ArgumentShapes.of(form, env, this.returns);
+		}
+
+		/**
+		 * Drops the names this region rebinds; what is left is what a shape may narrow.
+		 */
+		private Map<String, Shape> narrow(Map<String, Shape> env) {
+			if (this.shadowed.isEmpty()) {
+				return env;
+			}
+			Map<String, Shape> out = new HashMap<>(env);
+			this.shadowed.forEach(name -> out.computeIfPresent(name, (k, v) -> Shape.UNKNOWN));
+			return out;
 		}
 
 		private void form(LispVal val, At at) {
 			if (!(val instanceof LispCons cons)) {
 				return;
 			}
-			At here = SourceProvenance.locate(cons) == null ? at : new At(at.guarded(), cons);
+			At here = SourceProvenance.locate(cons) == null ? at : new At(at.guarded(), cons, at.env(), at.locals());
 			if (cons.car() instanceof LispSymbol head) {
 				this.operatorForm(cons, head.name(), here);
 				return;
@@ -321,8 +414,8 @@ public final class NoWasiLoadPathRefusals {
 			if (cons.car() instanceof LispCons inner && inner.car() instanceof LispSymbol innerHead
 					&& LispNames.LAMBDA.equals(innerHead.name()) && inner.cdr() instanceof LispCons innerRest) {
 				// ((lambda (x) body...) arg...): applied right here, so its body runs
-				// here.
-				this.args(innerRest.cdr(), here);
+				// here, with the arguments' shapes bound to its parameters.
+				this.args(innerRest.cdr(), this.bound(here, innerRest.car(), this.argShapes(cons.cdr(), here)));
 			}
 			else {
 				this.form(cons.car(), here);
@@ -339,6 +432,14 @@ public final class NoWasiLoadPathRefusals {
 					|| LispNames.FUNCTION.equals(name) || DEFERRED_HEADS.contains(name)) {
 				return;
 			}
+			Local local = at.locals().get(name);
+			if (local != null) {
+				// A local name shadows the global one, and its body runs HERE -- with
+				// what this site says about its arguments.
+				this.args(cons.cdr(), at);
+				this.walkLocal(name, local, this.argShapes(cons.cdr(), at), at);
+				return;
+			}
 			Kind kind = kindOf(cons, name, this.hostRandom);
 			// A guarded site is a program that already handles the refusal -- except for
 			// standard input, which traps rather than signalling, so no handler covers
@@ -349,14 +450,13 @@ public final class NoWasiLoadPathRefusals {
 			}
 			if (LispNames.HANDLER_CASE.equals(name) && cons.cdr() instanceof LispCons protectedForm) {
 				// (handler-case FORM clause...): only FORM is covered -- a clause body
-				// runs
-				// with whatever protection surrounds the handler-case itself.
-				this.form(protectedForm.car(), new At(true, at.located()));
+				// runs with whatever protection surrounds the handler-case itself.
+				this.form(protectedForm.car(), new At(true, at.located(), at.env(), at.locals()));
 				this.args(protectedForm.cdr(), at);
 				return;
 			}
 			if (LispNames.IGNORE_ERRORS.equals(name)) {
-				this.args(cons.cdr(), new At(true, at.located()));
+				this.args(cons.cdr(), new At(true, at.located(), at.env(), at.locals()));
 				return;
 			}
 			if (LispNames.WITH_OPEN_FILE.equals(name) && cons.cdr() instanceof LispCons rest
@@ -367,14 +467,44 @@ public final class NoWasiLoadPathRefusals {
 				this.form(pathCell.car(), at);
 				return;
 			}
+			if ((LispNames.TYPECASE.equals(name) || LispNames.ETYPECASE.equals(name))
+					&& cons.cdr() instanceof LispCons rest) {
+				this.typecase(rest, at);
+				return;
+			}
+			if (LispNames.IF.equals(name) && cons.cdr() instanceof LispCons rest) {
+				// (if (typep app 'pathname) A B) with a function in app: only B runs.
+				boolean refuted = this.test(rest.car(), at);
+				if (rest.cdr() instanceof LispCons thenCell) {
+					if (!refuted) {
+						this.form(thenCell.car(), at);
+					}
+					this.args(thenCell.cdr(), at);
+				}
+				return;
+			}
+			if (LispNames.WHEN.equals(name) && cons.cdr() instanceof LispCons rest) {
+				if (!this.test(rest.car(), at)) {
+					this.args(rest.cdr(), at);
+				}
+				return;
+			}
+			if (LispNames.COND.equals(name)) {
+				LispVal clauses = cons.cdr();
+				while (clauses instanceof LispCons cell) {
+					if (cell.car() instanceof LispCons clause && !this.test(clause.car(), at)) {
+						this.args(clause.cdr(), at);
+					}
+					clauses = cell.cdr();
+				}
+				return;
+			}
 			if (BINDING_HEADS.contains(name) && cons.cdr() instanceof LispCons rest) {
-				this.bindings(rest.car(), at);
-				this.args(rest.cdr(), at);
+				this.args(rest.cdr(), this.bindings(name, rest.car(), at));
 				return;
 			}
 			if (LOCAL_FUNCTION_HEADS.contains(name) && cons.cdr() instanceof LispCons rest) {
-				this.localFunctions(rest.car(), at);
-				this.args(rest.cdr(), at);
+				this.localFunctions(cons, name, rest, at);
 				return;
 			}
 			if (LispNames.DEFSTRUCT.equals(name) && cons.cdr() instanceof LispCons rest) {
@@ -392,7 +522,7 @@ public final class NoWasiLoadPathRefusals {
 				this.args(slotCell.cdr(), at);
 				return;
 			}
-			this.called.merge(name, at.guarded(), (a, b) -> a && b);
+			this.called.merge(new Call(name, this.argShapes(cons.cdr(), at)), at.guarded(), (a, b) -> a && b);
 			this.args(cons.cdr(), at);
 		}
 
@@ -406,28 +536,152 @@ public final class NoWasiLoadPathRefusals {
 			this.form(rest, at);
 		}
 
-		/**
-		 * {@code ((var init) ...)} / {@code ((var init step) ...)}: the head only binds.
-		 */
-		private void bindings(LispVal list, At at) {
-			LispVal rest = list;
+		/** What this call site states, syntactically, about each of its arguments. */
+		private List<Shape> argShapes(LispVal tail, At at) {
+			List<Shape> shapes = new ArrayList<>();
+			LispVal rest = tail;
 			while (rest instanceof LispCons cons) {
-				if (cons.car() instanceof LispCons binding) {
-					this.args(binding.cdr(), at);
-				}
+				shapes.add(this.shapeOf(cons.car(), at.env()));
 				rest = cons.cdr();
+			}
+			return List.copyOf(shapes);
+		}
+
+		/** The state inside a lambda list's scope, with the argument shapes bound. */
+		private At bound(At at, LispVal lambdaList, List<Shape> argShapes) {
+			Map<String, Shape> env = new HashMap<>(at.env());
+			env.putAll(this.narrow(ArgumentShapes.bind(lambdaList, argShapes)));
+			return new At(at.guarded(), at.located(), env, at.locals());
+		}
+
+		/**
+		 * {@code (typecase key (type body...) ...)}: a clause whose type the key's shape
+		 * cannot have is not reachable, so its body is not on the load path.
+		 */
+		private void typecase(LispCons rest, At at) {
+			this.form(rest.car(), at);
+			Shape shape = this.shapeOf(rest.car(), at.env());
+			LispVal clauses = rest.cdr();
+			while (clauses instanceof LispCons cell) {
+				if (cell.car() instanceof LispCons clause && ArgumentShapes.maySatisfy(shape, clause.car())) {
+					this.args(clause.cdr(), at);
+				}
+				clauses = cell.cdr();
 			}
 		}
 
-		/** {@code ((name (args) body...) ...)}: the body runs here, the name is local. */
-		private void localFunctions(LispVal list, At at) {
+		/**
+		 * Walks a branch's test and answers whether the shapes REFUTE it -- the only
+		 * direction that prunes. Proving a test instead would need the shape to establish
+		 * the type, and a wrong prune here is a missed refusal.
+		 */
+		private boolean test(LispVal test, At at) {
+			this.form(test, at);
+			return this.refuted(test, at);
+		}
+
+		/** Whether a {@code (typep x 'type)} test is false for every value x can hold. */
+		private boolean refuted(LispVal test, At at) {
+			if (!(test instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)
+					|| !LispNames.TYPEP.equals(head.name()) || !(cons.cdr() instanceof LispCons valueCell)
+					|| !(valueCell.cdr() instanceof LispCons typeCell)) {
+				return false;
+			}
+			LispVal typeSpec = typeCell.car();
+			if (typeSpec instanceof LispCons quoted && quoted.car() instanceof LispSymbol quote
+					&& LispNames.QUOTE.equals(quote.name()) && quoted.cdr() instanceof LispCons datum) {
+				typeSpec = datum.car();
+			}
+			return !ArgumentShapes.maySatisfy(this.shapeOf(valueCell.car(), at.env()), typeSpec);
+		}
+
+		/**
+		 * {@code ((var init) ...)} / {@code ((var init step) ...)}: the head only binds.
+		 * Returns the state inside the body -- a {@code let}/{@code let*} variable
+		 * carries its initializer's shape, a stepped {@code do} variable carries none.
+		 */
+		private At bindings(String head, LispVal list, At at) {
+			boolean sequential = LispNames.LET_STAR.equals(head) || LispNames.DO_STAR.equals(head);
+			boolean stepped = LispNames.DO.equals(head) || LispNames.DO_STAR.equals(head);
+			Map<String, Shape> env = new HashMap<>(at.env());
+			At evalAt = at;
 			LispVal rest = list;
 			while (rest instanceof LispCons cons) {
-				if (cons.car() instanceof LispCons local && local.cdr() instanceof LispCons afterName) {
-					this.args(afterName.cdr(), at);
+				LispVal binding = cons.car();
+				LispVal var = binding instanceof LispCons pair ? pair.car() : binding;
+				LispVal init = binding instanceof LispCons pair && pair.cdr() instanceof LispCons initCell
+						? initCell.car() : null;
+				if (binding instanceof LispCons pair) {
+					this.args(pair.cdr(), evalAt);
+				}
+				if (var instanceof LispSymbol sym) {
+					Shape shape = stepped || init == null ? Shape.UNKNOWN : this.shapeOf(init, evalAt.env());
+					env.put(sym.name(), this.shadowed.contains(sym.name()) ? Shape.UNKNOWN : shape);
+					if (sequential) {
+						evalAt = new At(at.guarded(), at.located(), Map.copyOf(env), at.locals());
+					}
 				}
 				rest = cons.cdr();
 			}
+			return new At(at.guarded(), at.located(), env, at.locals());
+		}
+
+		/**
+		 * {@code ((name (args) body...) ...)}: the name is local, and the body runs where
+		 * something CALLS it -- with that site's argument shapes, which is what makes
+		 * clack's {@code buildapp} readable. A local taken as a value is walked once with
+		 * nothing known; a local nobody reaches is not walked, the same rule the global
+		 * graph applies to a {@code defun}.
+		 */
+		private void localFunctions(LispCons whole, String head, LispCons rest, At at) {
+			if (!LispNames.FLET.equals(head) && !LispNames.LABELS.equals(head)) {
+				// macrolet/symbol-macrolet: nothing here is a function body to defer.
+				LispVal list = rest.car();
+				while (list instanceof LispCons cons) {
+					if (cons.car() instanceof LispCons localDef && localDef.cdr() instanceof LispCons afterName) {
+						this.args(afterName.cdr(), at);
+					}
+					list = cons.cdr();
+				}
+				this.args(rest.cdr(), at);
+				return;
+			}
+			Map<String, Local> scope = new HashMap<>(at.locals());
+			// A labels function sees itself and its siblings; an flet function does not.
+			Map<String, Local> innerScope = LispNames.LABELS.equals(head) ? scope : at.locals();
+			List<String> names = new ArrayList<>();
+			LispVal list = rest.car();
+			while (list instanceof LispCons cons) {
+				if (cons.car() instanceof LispCons localDef && localDef.car() instanceof LispSymbol localName
+						&& localDef.cdr() instanceof LispCons afterName) {
+					scope.put(localName.name(), new Local(afterName.car(), afterName.cdr(), at.env(), innerScope));
+					names.add(localName.name());
+				}
+				list = cons.cdr();
+			}
+			At inner = new At(at.guarded(), at.located(), at.env(), scope);
+			for (String name : names) {
+				Local local = scope.get(name);
+				if (local != null && takenAsValue(whole, name)) {
+					// #'name: whoever received it decides the arguments, so nothing is
+					// known about them.
+					this.walkLocal(name, local, List.of(), inner);
+				}
+			}
+			this.args(rest.cdr(), inner);
+		}
+
+		/**
+		 * Walks a local function's body once per (guard, argument shapes) combination.
+		 */
+		private void walkLocal(String name, Local local, List<Shape> argShapes, At at) {
+			String key = name + "|" + at.guarded() + "|" + argShapes;
+			if (!this.walkedLocals.add(key)) {
+				return;
+			}
+			Map<String, Shape> env = new HashMap<>(local.env());
+			env.putAll(this.narrow(ArgumentShapes.bind(local.lambdaList(), argShapes)));
+			this.args(local.bodyTail(), new At(at.guarded(), at.located(), env, local.scope()));
 		}
 
 		/**
@@ -444,6 +698,21 @@ public final class NoWasiLoadPathRefusals {
 			}
 		}
 
+	}
+
+	/**
+	 * Whether {@code #'name} appears anywhere in a form -- a local escaping as a value.
+	 */
+	private static boolean takenAsValue(LispVal form, String name) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.FUNCTION.equals(head.name())
+				&& cons.cdr() instanceof LispCons target && target.car() instanceof LispSymbol referenced
+				&& name.equals(referenced.name())) {
+			return true;
+		}
+		return takenAsValue(cons.car(), name) || takenAsValue(cons.cdr(), name);
 	}
 
 	/** Which refusal this operator is, or {@code null} when it is not one. */

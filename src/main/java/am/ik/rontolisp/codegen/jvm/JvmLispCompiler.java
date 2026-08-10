@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
+import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.LambdaLists;
@@ -243,6 +244,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
+		if (this.optimize.eliminatesDeadCode()) {
+			// A typecase clause whose type no call site's argument can have is dead code
+			// the class shaker cannot see, because its reachability is by NAME
+			// (compiler/DeadTypeBranchPruner, .kb/optimize-dead-code-elimination.md).
+			program = DeadTypeBranchPruner.prune(program);
+		}
 		// The (rontolisp:async (defun ...)) wrapper expands first (the CLI already did;
 		// this keeps direct compiler invocations and the playground equivalent), so the
 		// placement check, Pass 1 and the async lowering below only ever see the

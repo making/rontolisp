@@ -159,8 +159,11 @@ chain and the way out (`__ronto_set_time` for the clock, `--host-random` for
 entropy); a primitive only the *export* can reach stays quiet, because that one
 signals at the call, where `src/index.js` sees it.
 
-The clack-based directories all print one standing line for `WITH-OPEN-FILE`,
-reached through `CLACK:CLACKUP -> CLACK:EVAL-FILE -> CLACK::%LOAD-FILE`. That is
-`clackup`'s "the app is a pathname" branch: statically reachable, never taken
-here — the chain in the line is what says so.
+None of these directories prints one today. The clack-based ones used to print a
+standing line for `WITH-OPEN-FILE`, reached through
+`CLACK:CLACKUP -> CLACK:EVAL-FILE -> CLACK::%LOAD-FILE` — `clackup`'s "the app is
+a pathname" branch, statically reachable and never taken here. A call now carries
+what the site says about its arguments (`#'app`, `*app*`), so a `typecase` branch
+that value cannot select is off the load path; under `--optimize` the branch is
+off the *module* too.
 [Details](../../doc/en/guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it).

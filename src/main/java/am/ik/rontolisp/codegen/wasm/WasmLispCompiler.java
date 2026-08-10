@@ -27,6 +27,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -1646,6 +1647,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			// compiled: clack's dead (read)/(eval) file loader otherwise holds the
 			// gate open and pulls the reader+eval runtimes into every Worker module.
 			program = NoWasiFilesystemStubs.rewrite(program);
+		}
+		if (this.optimize.eliminatesDeadCode()) {
+			// A typecase clause whose type no call site's argument can have is dead code
+			// the tree-shaker cannot see, because its reachability is by NAME
+			// (compiler/DeadTypeBranchPruner, .kb/optimize-dead-code-elimination.md).
+			// After the rewrite above: it is what closes the funcall-dispatch gate on a
+			// clack Worker, and the pruner declines while the gate is open.
+			program = DeadTypeBranchPruner.prune(program);
 		}
 		// rontolisp:await placement is checked on the raw forms; then every
 		// async-defun/async-lambda lowers to an ordinary defun/lambda over the
