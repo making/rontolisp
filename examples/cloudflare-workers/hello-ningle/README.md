@@ -16,9 +16,6 @@ rontolisp check.lisp    # drive the whole Worker locally, on any backend
 ```lisp
 (ql:quickload '("clack" "clack-handler-reactor" "ningle"))
 
-(defpackage :hello-ningle (:use :cl))
-(in-package :hello-ningle)
-
 (defvar *app* (make-instance 'ningle:app))
 
 (setf (ningle:route *app* "/")
@@ -47,8 +44,14 @@ Four things make it ningle:
   `ningle:*request*`, with `*response*` (mutable — that is how the 404 sets its
   status) and `*session*` beside it.
 - **The 404 is an extension point.** `ningle:not-found` is a generic function on
-  the application class, so this file specializes a *library* generic from the
-  application's own package.
+  the application class, so answering "no rule matched" is a `defmethod` on a
+  *library* generic.
+
+There is no `defpackage` here, and that is ningle's own idiom: a thin framework
+used through qualified names, exactly as its README shows. The tiny-routes
+Worker needs one because `(:use :tiny-routes)` is what makes `define-get` and
+`ok` unqualified; nothing here is used unqualified, so a package would earn
+nothing.
 
 `*app*` is still an ordinary Clack application, so it runs on hunchentoot, on
 woo, under `wasmtime serve` and on the JVM; the

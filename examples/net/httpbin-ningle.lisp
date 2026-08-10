@@ -27,9 +27,6 @@
 
 (ql:quickload '("clack" "ningle"))
 
-(defpackage :httpbin-ningle (:use :cl))
-(in-package :httpbin-ningle)
-
 (defvar *app* (make-instance 'ningle:app))
 
 ;;; --- answering ---------------------------------------------------------------

@@ -29,19 +29,23 @@ No echo handler reads a stream, parses a query string or sets a header. `pipe`
 threads the route table through the library's own middleware:
 
 ```lisp
-(defparameter *app* (pipe *routes* (wrap-request-body) (wrap-query-parameters)))
+(defparameter *app*
+  (tiny:pipe *routes* (tiny:wrap-request-body) (tiny:wrap-query-parameters)))
 ```
 
-so `(request-body req)` is the raw body as a string and
-`(request-get req :query-parameters)` is the parsed query — and the JSON routes
-are grouped under one more:
+so `(tiny:request-body req)` is the raw body as a string and
+`(tiny:request-get req :query-parameters)` is the parsed query — and each route
+group gets its content type the same way:
 
 ```lisp
-(pipe *json-routes* (wrap-response-content-type "application/json"))
+(tiny:pipe *json-routes* (tiny:wrap-response-content-type "application/json"))
 ```
 
-`/status/:code` is the one endpoint that answers `text/plain`, so it stays
-outside that group and builds its own response with `make-response`.
+`/status/:code` answers `text/plain`, so it is a group of its own; it is also
+the one route that names a status, which `tiny:make-response` takes.
+
+`tiny` is the library's own nickname, so there is no `defpackage` in the file:
+every name tiny-routes contributes is reachable qualified.
 
 ## Declining is the whole error story
 
@@ -60,7 +64,8 @@ those add over `define-any`, and the matcher is exported, so that one route is
 spelled the way the macros expand:
 
 ```lisp
-(wrap-request-matches-method (define-any "/patch" (req) (echo req t)) :patch)
+(tiny:wrap-request-matches-method
+ (tiny:define-any "/patch" (req) (echo req t)) :patch)
 ```
 
 | | |

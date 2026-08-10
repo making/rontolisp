@@ -6,7 +6,7 @@ How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-10
 - rontolisp: 0.1.0-SNAPSHOT (`3cff079`)
-- validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
+- validated on: wasmtime 47.0.2 (90fed3c6a 2026-07-21)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |

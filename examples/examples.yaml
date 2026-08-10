@@ -526,7 +526,7 @@ examples:
       `:regexp t` /status rule whose :captures bind, and an overridden
       ningle:not-found METHOD for the 404. What it pins beyond the tiny-routes
       case is the other routing model on the two backends where clackup can bind
-      -- a CLOS library generic specialized from the application's own package,
+      -- a `defmethod` on a CLOS library generic,
       requirement closures compiled when the route is defined, and the whole
       lack-request chain (http-body / fast-http / smart-buffer) compiling, which
       ningle reads every request through.

@@ -6,9 +6,6 @@
 
 (ql:quickload '("clack" "clack-handler-reactor" "ningle"))
 
-(defpackage :hello-ningle (:use :cl))
-(in-package :hello-ningle)
-
 (defvar *app* (make-instance 'ningle:app))
 
 ;; A controller does not have to be a function: a bare value IS one.

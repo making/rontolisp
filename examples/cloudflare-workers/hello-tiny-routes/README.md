@@ -27,19 +27,17 @@ no route for /anything
 ```lisp
 (ql:quickload '("clack" "clack-handler-reactor" "tiny-routes/lite"))
 
-(defpackage :hello-tiny-routes (:use :cl :tiny-routes))
-(in-package :hello-tiny-routes)
-
-(define-routes *routes*
-  (define-get "/" ()
-    (ok (format nil "Hello from tiny-routes on Cloudflare Workers!~%")))
-  (define-get "/hello/:name" (req)
-    (ok (format nil "Hello, ~a!~%" (path-parameter req :name))))
-  (define-any "*" (req)
-    (not-found (format nil "no route for ~a~%" (path-info req)))))
+(tiny:define-routes *routes*
+  (tiny:define-get "/" ()
+    (tiny:ok (format nil "Hello from tiny-routes on Cloudflare Workers!~%")))
+  (tiny:define-get "/hello/:name" (req)
+    (tiny:ok (format nil "Hello, ~a!~%" (tiny:path-parameter req :name))))
+  (tiny:define-any "*" (req)
+    (tiny:not-found (format nil "no route for ~a~%" (tiny:path-info req)))))
 
 (defparameter *app*
-  (pipe *routes* (wrap-response-content-type "text/plain; charset=utf-8")))
+  (tiny:pipe *routes*
+             (tiny:wrap-response-content-type "text/plain; charset=utf-8")))
 
 (clack:clackup *app* :server :reactor :use-thread nil)
 ```
@@ -58,6 +56,10 @@ Four things make it tiny-routes rather than a `cond` in disguise:
   sets the header for every route at once, so no route sets one — and
   [`../httpbin-tiny-routes`](../httpbin-tiny-routes) uses the same seam to read
   the request body and parse the query string.
+
+`tiny` is the library's own nickname, so there is no `defpackage` here either:
+every name it contributes is reachable qualified, which keeps the library's
+surface visible at each call site.
 
 `*app*` is still an ordinary Clack application, so it runs on hunchentoot, on
 woo, under `wasmtime serve` and on the JVM; the
