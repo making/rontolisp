@@ -662,4 +662,149 @@ class LibraryDefunPrunerTest {
 			.doesNotContain("RONTOLISP::%JSON-OUT", "RONTOLISP::%JSON-STRINGIFY");
 	}
 
+	// The printed body of the surviving definition whose name has the given member.
+	private static String survivingPrintOf(List<LispVal> program, String member) {
+		for (LispVal form : program) {
+			if (form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
+					&& rest.car() instanceof LispSymbol name && member.equals(LispSymbol.memberName(name.name()))) {
+				return form.print();
+			}
+		}
+		return "";
+	}
+
+	private static List<LispVal> systemPruned(String source, Map<String, String> files) {
+		return LibraryDefunPruner.prune(UserMacroExpander.expand(spliceSystem(source, files)));
+	}
+
+	@Test
+	void aCaseArmNoCallerConstantCanReachIsFoldedAndItsTreeWithIt() {
+		// Stage A (ConstantCaseArmPruner): every call site passes 'fast, so the
+		// (:slow slow) arm can never run -- it is deleted from make-thing and the slow
+		// constructor tree leaves with it. The default (t ...) arm always stays.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used 'demo::fast))", demoSystem("""
+				(defun make-thing (format)
+				  (case format
+				    ((:fast fast) (make-fast))
+				    ((:slow slow) (make-slow))
+				    (t (error "bad format"))))
+				(defun make-fast () 1)
+				(defun make-slow () 2)
+				(defun used (format) (make-thing format))
+				"""));
+		assertThat(memberNames(program)).contains("MAKE-FAST").doesNotContain("MAKE-SLOW");
+		assertThat(survivingPrintOf(program, "MAKE-THING")).contains(":FAST").contains("ERROR").doesNotContain(":SLOW");
+	}
+
+	@Test
+	void aCaseArmSurvivesWhenTheDispatchArgumentEscapes() {
+		// #'make-thing outside funcall/apply head position: calls through the escaped
+		// value are invisible, so every arm stays reachable.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used 'demo::fast))"
+				+ " (print (mapcar #'demo::make-thing (list :fast)))", demoSystem("""
+						(defun make-thing (format)
+						  (case format
+						    ((:fast fast) (make-fast))
+						    ((:slow slow) (make-slow))
+						    (t (error "bad format"))))
+						(defun make-fast () 1)
+						(defun make-slow () 2)
+						(defun used (format) (make-thing format))
+						"""));
+		assertThat(memberNames(program)).contains("MAKE-FAST", "MAKE-SLOW");
+		assertThat(survivingPrintOf(program, "MAKE-THING")).contains(":SLOW");
+	}
+
+	@Test
+	void theCallerConstantFlowsThroughAGenericAndApplyIntoTheCaseFold() {
+		// The chipz shape end to end: user constant -> the defgeneric's default method
+		// -> %decomp -> make-thing, with the recursive (apply #'decomp output state ...)
+		// contributing only a NON-KEY struct instance -- so the :slow arm folds, its
+		// constructor dies, and the slow struct definition leaves with it.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct fast-state)
+				(defstruct slow-state)
+				(defgeneric decomp (output state input &key &allow-other-keys)
+				  (:method (output format input &rest keys)
+				    (%decomp output format input keys)))
+				(defmethod decomp ((output null) (state fast-state) (input vector) &key)
+				  :inflated)
+				(defun %decomp (output format input keys)
+				  (let ((state (make-thing format)))
+				    (apply #'decomp output state input keys)))
+				(defun make-thing (format)
+				  (case format
+				    ((:fast fast) (make-fast-state))
+				    ((:slow slow) (make-slow-state))
+				    (t (error "bad format"))))
+				(defun used () (decomp nil 'fast (vector 1)))
+				"""));
+		assertThat(survivingHeads(program)).contains("DEFSTRUCT FAST-STATE").doesNotContain("DEFSTRUCT SLOW-STATE");
+		assertThat(survivingPrintOf(program, "MAKE-THING")).doesNotContain(":SLOW");
+	}
+
+	@Test
+	void aTypecaseArmOnAnUninstantiatedStructIsDeletedAndItsBodyPrunedWithIt() {
+		// Stage B: no instantiator of SLOW-STATE is live, so the (slow-state #'do-slow)
+		// arm contributes no references -- do-slow and the struct leave, and the arm is
+		// deleted from the surviving defun (its #'do-slow would no longer compile).
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct fast-state)
+				(defstruct slow-state)
+				(defun pick (state)
+				  (typecase state
+				    (fast-state #'do-fast)
+				    (slow-state #'do-slow)))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (funcall (pick (make-fast-state))))
+				"""));
+		assertThat(memberNames(program)).contains("DO-FAST").doesNotContain("DO-SLOW");
+		assertThat(survivingHeads(program)).doesNotContain("DEFSTRUCT SLOW-STATE");
+		assertThat(survivingPrintOf(program, "PICK")).contains("FAST-STATE").doesNotContain("SLOW-STATE");
+	}
+
+	@Test
+	void aReadModifyWritePlaceKeepsTheCaseSubjectUnknown() {
+		// (setf (ldb ...) result) assigns RESULT even though the place is a cons --
+		// cl-postgres's generated read-uint4 builds its network integer exactly this
+		// way, and folding its callers' ecase arms broke AUTHENTICATE. Every symbol
+		// inside a non-symbol place is poisoned, so both arms stay.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defun read-code ()
+				  (let ((result 0))
+				    (setf (ldb (byte 8 0) result) 3)
+				    result))
+				(defun dispatch (code)
+				  (ecase code
+				    (3 (do-three))
+				    (10 (do-ten))))
+				(defun do-three () 3)
+				(defun do-ten () 10)
+				(defun used () (dispatch (read-code)))
+				"""));
+		assertThat(memberNames(program)).contains("DO-THREE", "DO-TEN");
+		assertThat(survivingPrintOf(program, "DISPATCH")).contains("DO-TEN");
+	}
+
+	@Test
+	void aTypecaseArmOpensWhenAnInstantiatorOfItsHeadGoesLive() {
+		// The gate is monotone: the moment a live form references a constructor, the
+		// arm's references join the fixpoint and everything stays.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct fast-state)
+				(defstruct slow-state)
+				(defun pick (state)
+				  (typecase state
+				    (fast-state #'do-fast)
+				    (slow-state #'do-slow)))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (list (funcall (pick (make-fast-state))) (make-slow-state)))
+				"""));
+		assertThat(memberNames(program)).contains("DO-FAST", "DO-SLOW");
+		assertThat(survivingHeads(program)).contains("DEFSTRUCT SLOW-STATE");
+		assertThat(survivingPrintOf(program, "PICK")).contains("SLOW-STATE");
+	}
+
 }

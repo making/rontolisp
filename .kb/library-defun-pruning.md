@@ -310,6 +310,88 @@ ever needs those bytes.
 registers and drops them before this pass, measured to 0 occurrences
 post-expansion in every corpus.
 
+## The dead-branch stages (todo-316): constant case arms, instantiator-gated typecase arms
+
+Two mechanisms inside `prune()` that remove BRANCHES of kept third-party
+definitions, so the references inside them stop anchoring whole subtrees. Shipped
+together because chipz needs both to lose its bzip2 decoder: `make-dstate`'s
+`case` arm names `make-bzip2-state` (Stage A's target) and
+`decompress-fun-for-state`'s `typecase` arm names `%bzip2-decompress` (Stage B's).
+Worth **-38%** on the `zlib --optimize=size` row (411,948 -> 256,464 B) with the
+check stream still gunzipping byte-identically; a program using neither shape is
+byte-identical.
+
+**Stage A — `ConstantCaseArmPruner`** (`eval`, called from `prune()` right after
+package resolution): deletes a `case`/`ecase` arm inside a third-party form when
+NO value its subject can take may `eql` any of the arm's keys. The analysis is a
+monotone least fixpoint over per-REQUIRED-parameter VALUE sets (constants:
+symbols/integers/characters; NON-KEY: struct instances / function objects, which
+can never `eql` a literal key; TOP otherwise), flowing through direct calls,
+`funcall`/`apply` of a literal `#'f`/`'f` (spread positions go TOP), `let`/`let*`
+bindings and expression tails (`case`/`cond`/`if` join their REACHABLE arm tails;
+a tail `(error ...)` contributes nothing -- that is what turns
+`make-inflate-state`'s `(case f ...)` value into `{GZIP}` and lets the second-hop
+zlib/deflate arms fold too, taking adler32 with them). Calls to a `defgeneric`
+family join into EVERY method's parameters -- dispatch is not modeled, only
+widening. A name escapes (parameters AND return go TOP) on quoted data, a string
+spelling it, `#'f` outside `funcall`/`apply` head position, a `case` key, or a
+shadowing `flet`/`labels` local. Deleting a never-matching arm preserves EVERY
+execution (an `ecase`'s deleted keys still fall to its error), which is stronger
+than the carve-out; the one defeat is the documented computed-name forgery, and
+it lands on the `(t (error ...))` arm -- loud, typed, never silent.
+
+**Stage B — instantiator-gated `typecase`/`etypecase` arms** (`GatedArm` /
+`GateContext` in the pruner): an arm whose clause head names a candidate
+struct/class contributes its references only once an INSTANTIATOR of that
+definition is live -- the same soundness argument, monotone re-join and
+`gateBySpelling` table as the defmethod specializer gate. An arm still closed at
+the end is DELETED from the surviving form (it must be: its body may name pruned
+definitions -- `#'chipz::%bzip2-decompress` -- that would not compile).
+Deliberately NOT extended to `case`: a case key is a symbol and a symbol needs no
+instantiator -- Stage A is the sound mechanism there. Gating applies only to
+forms in prunable-system provenance, so user code is never rewritten.
+
+Both stages rewrite through `ConstantCaseArmPruner.FormRewriter`, which deletes
+clause conses by identity with a lockstep walk over the pre-resolution/resolved
+twins, `LispCons.rebuilt` + `SourceProvenance.inherit` per spine cell
+(`.kb/source-positions.md`), and keeps the original subtree on any structural
+mismatch. This relaxes "surviving forms are byte-identical" once more, to
+"byte-identical minus proven-dead arms".
+
+Pinned by `LibraryDefunPrunerTest`:
+`aCaseArmNoCallerConstantCanReachIsFoldedAndItsTreeWithIt`,
+`aCaseArmSurvivesWhenTheDispatchArgumentEscapes`,
+`theCallerConstantFlowsThroughAGenericAndApplyIntoTheCaseFold` (the chipz shape
+end to end, `apply #'f` + struct-constructor NON-KEY included),
+`aTypecaseArmOnAnUninstantiatedStructIsDeletedAndItsBodyPrunedWithIt`,
+`aTypecaseArmOpensWhenAnInstantiatorOfItsHeadGoesLive`; `ChipzE2eTest` is the
+end-to-end pin.
+
+**Place semantics are load-bearing in Stage A's assignment poisoning
+(`poisonPlace`), in BOTH directions.** A cons place mutates an object and leaves
+every binding's value classification intact (`(setf (dstate-checksum state) ...)`
+must NOT poison STATE -- poisoning every cons place was measured to cost the
+whole chipz fold, because `make-inflate-state`'s returned STATE went TOP and the
+recursive `apply` fed TOP into `decompress`'s format parameter). But the
+read-modify-write places `expandSetf` lowers onto an INNER place --
+`ldb`/`mask-field` (arg 2), `getf` (arg 1), `the` (arg 2), `values` (each
+subplace) -- DO assign the variable inside: cl-postgres's generated `read-uint4`
+builds its network integer with `(setf (ldb (byte 8 24) result) ...)`, and
+treating that as object mutation folded `authenticate`'s ecase arms 3/10 away
+(`ECASE: no clause matches 10`, caught by `ClPostgresE2eTest`). `poisonPlace`
+mirrors `expandSetf`'s case list; if a new RMW place family joins `expandSetf`,
+it must join `poisonPlace` in the same commit. Pinned by
+`aReadModifyWritePlaceKeepsTheCaseSubjectUnknown`.
+
+**Re-evaluation triggers**: Stage A's binder model walks `loop`/`macrolet`/
+`symbol-macrolet` bodies under an opaque env (every name TOP) -- model them if a
+real library ever dispatches a caller-constant through one; `handler-case` tails
+are TOP for the same reason. A `defgeneric` whose method set the analysis could
+narrow by dispatch (argument shapes exist in `compiler.ArgumentShapes`) would
+sharpen the join, but nothing measured needs it. Stage B's gate list is
+`Candidates`' `gateBySpelling` -- if classes ever join it under new instantiator
+spellings, the arms inherit them automatically.
+
 **A third-party variable definition is pruned only when its initform is provably
 a pure value computation** (`hasPrunableInitform`/`isPureValue`: a literal, a
 variable read, a `quote`/`function`, or a call to a small allocation/arithmetic

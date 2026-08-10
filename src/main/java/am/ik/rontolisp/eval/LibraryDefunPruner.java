@@ -126,6 +126,17 @@ public final class LibraryDefunPruner {
 		catch (LispPackageException ex) {
 			return provenance.withoutMarkers(forms);
 		}
+		// Stage A of the bzip2-tree elimination: fold case/ecase arms no possible
+		// subject value can reach OUT of third-party definitions, BEFORE reference
+		// collection -- a folded arm's references never anchor a definition. Runs only
+		// under this pass's own guards (not --dynamic/--no-prune, no surviving runtime
+		// load), which are exactly the carve-outs its own soundness needs.
+		if (provenance.hasSystems()) {
+			ConstantCaseArmPruner.Result folded = ConstantCaseArmPruner.fold(forms, resolved,
+					provenance::isPrunableSystem);
+			forms = folded.forms();
+			resolved = folded.resolved();
+		}
 		// Definition names come from the RESOLVED copy: a bundled library form is a
 		// resolver fixed point and reads the same either way, but a third-party
 		// (defun scan ...) under (in-package :cl-ppcre) is only CL-PPCRE:SCAN there --
@@ -186,10 +197,19 @@ public final class LibraryDefunPruner {
 		Set<String> roots = new LinkedHashSet<>();
 		Set<Integer> scanned = new HashSet<>();
 		Set<Integer> keptMethods = new HashSet<>();
+		// Stage B state: typecase arms gated on an instantiator (see GatedArm).
+		Map<String, List<GatedArm>> armsByGate = new HashMap<>();
+		List<GatedArm> allArms = new ArrayList<>();
+		Map<String, List<String>> instantiatorGates = closCandidates.instantiatorGates();
+		List<GatedArm> rootArms = new ArrayList<>();
 		for (int i = 0; i < resolved.size(); i++) {
 			if (!keysByIndex.containsKey(i) && !closCandidates.methodGates().containsKey(i) && !provenance.isMarker(i)
 					&& !isDeclamation(resolved.get(i))) {
-				collectReferences(resolved.get(i), prunable, roots);
+				GateContext ctx = gateContext(i, provenance, instantiatorGates);
+				collectReferences(resolved.get(i), prunable, roots, ctx);
+				if (ctx != null) {
+					rootArms.addAll(ctx.collected);
+				}
 			}
 		}
 		// %make-broadcast-stream is reached from a call the expression compilers
@@ -211,11 +231,13 @@ public final class LibraryDefunPruner {
 				queue.add(name);
 			}
 		}
+		registerArms(rootArms, Set.of(), armsByGate, allArms, live, queue);
 		// A defmethod with no gate at all (an ungated method on a protocol name with no
 		// prunable specializer) is a root: kept and scanned like any other root form.
 		for (Map.Entry<Integer, MethodGates> method : closCandidates.methodGates().entrySet()) {
 			if (method.getValue().satisfiedBy(live) && keptMethods.add(method.getKey())) {
-				enqueueReferences(resolved.get(method.getKey()), prunable, live, queue, Set.of());
+				enqueueReferences(resolved.get(method.getKey()), prunable, live, queue, Set.of(),
+						gateContext(method.getKey(), provenance, instantiatorGates), armsByGate, allArms);
 			}
 		}
 		while (!queue.isEmpty()) {
@@ -233,7 +255,8 @@ public final class LibraryDefunPruner {
 						// and still count.
 						List<String> ownKeys = closCandidates.keysAt(index);
 						enqueueReferences(resolved.get(index), prunable, live, queue,
-								ownKeys == null ? Set.of() : Set.copyOf(ownKeys));
+								ownKeys == null ? Set.of() : Set.copyOf(ownKeys),
+								gateContext(index, provenance, instantiatorGates), armsByGate, allArms);
 					}
 				}
 			}
@@ -243,11 +266,28 @@ public final class LibraryDefunPruner {
 					MethodGates gates = closCandidates.methodGates().get(index);
 					if (gates != null && !keptMethods.contains(index) && gates.satisfiedBy(live)) {
 						keptMethods.add(index);
-						enqueueReferences(resolved.get(index), prunable, live, queue, Set.of());
+						enqueueReferences(resolved.get(index), prunable, live, queue, Set.of(),
+								gateContext(index, provenance, instantiatorGates), armsByGate, allArms);
 					}
 				}
 			}
+			List<GatedArm> armsOpened = armsByGate.get(name);
+			if (armsOpened != null) {
+				for (GatedArm arm : armsOpened) {
+					openArm(arm, live, queue);
+				}
+			}
 		}
+		// An arm still closed at the end never runs (no instantiator of its head is
+		// live): delete it from its surviving form, because its body may name pruned
+		// definitions that would no longer compile.
+		Map<Integer, List<LispCons>> closedArmsByForm = new HashMap<>();
+		for (GatedArm arm : allArms) {
+			if (!arm.open) {
+				closedArmsByForm.computeIfAbsent(arm.formIndex, k -> new ArrayList<>()).add(arm.clause);
+			}
+		}
+		boolean rewritten = false;
 		List<LispVal> out = new ArrayList<>(forms.size());
 		for (int i = 0; i < forms.size(); i++) {
 			if (provenance.isMarker(i)) {
@@ -260,20 +300,75 @@ public final class LibraryDefunPruner {
 			if (closCandidates.methodGates().containsKey(i) && !keptMethods.contains(i)) {
 				continue;
 			}
-			out.add(forms.get(i));
+			List<LispCons> closedArms = closedArmsByForm.get(i);
+			if (closedArms == null) {
+				out.add(forms.get(i));
+			}
+			else {
+				Set<LispCons> dead = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+				dead.addAll(closedArms);
+				out.add(ConstantCaseArmPruner.FormRewriter.withoutArmsParallel(forms.get(i), resolved.get(i), dead));
+				rewritten = true;
+			}
 		}
-		return out.size() == forms.size() ? forms : out;
+		return out.size() == forms.size() && !rewritten ? forms : out;
+	}
+
+	/** The gate-scan context for a form, or null when arm gating cannot apply to it. */
+	private static @Nullable GateContext gateContext(int index, Provenance provenance,
+			Map<String, List<String>> instantiatorGates) {
+		if (instantiatorGates.isEmpty() || !provenance.isPrunableSystem(index)) {
+			return null;
+		}
+		return new GateContext(index, instantiatorGates);
+	}
+
+	private static void registerArms(List<GatedArm> arms, Set<String> excludedOwnKeys,
+			Map<String, List<GatedArm>> armsByGate, List<GatedArm> allArms, Set<String> live, Deque<String> queue) {
+		for (GatedArm arm : arms) {
+			arm.refs.removeAll(excludedOwnKeys);
+			allArms.add(arm);
+			if (arm.gateNames.stream().anyMatch(live::contains)) {
+				openArm(arm, live, queue);
+			}
+			else {
+				for (String gate : arm.gateNames) {
+					armsByGate.computeIfAbsent(gate, k -> new ArrayList<>()).add(arm);
+				}
+			}
+		}
+	}
+
+	private static void openArm(GatedArm arm, Set<String> live, Deque<String> queue) {
+		if (arm.open) {
+			return;
+		}
+		arm.open = true;
+		for (String ref : arm.refs) {
+			if (live.add(ref)) {
+				queue.add(ref);
+			}
+		}
 	}
 
 	private static void enqueueReferences(LispVal form, Prunable prunable, Set<String> live, Deque<String> queue,
 			Set<String> excludedOwnKeys) {
+		enqueueReferences(form, prunable, live, queue, excludedOwnKeys, null, new HashMap<>(), new ArrayList<>());
+	}
+
+	private static void enqueueReferences(LispVal form, Prunable prunable, Set<String> live, Deque<String> queue,
+			Set<String> excludedOwnKeys, @Nullable GateContext ctx, Map<String, List<GatedArm>> armsByGate,
+			List<GatedArm> allArms) {
 		Set<String> refs = new LinkedHashSet<>();
-		collectReferences(form, prunable, refs);
+		collectReferences(form, prunable, refs, ctx);
 		refs.removeAll(excludedOwnKeys);
 		for (String ref : refs) {
 			if (live.add(ref)) {
 				queue.add(ref);
 			}
+		}
+		if (ctx != null) {
+			registerArms(ctx.collected, excludedOwnKeys, armsByGate, allArms, live, queue);
 		}
 	}
 
@@ -498,7 +593,8 @@ public final class LibraryDefunPruner {
 	 * the form
 	 * @param methodGates defmethod candidate index -> its keep-gates
 	 */
-	private record Candidates(Map<Integer, List<String>> keyedNames, Map<Integer, MethodGates> methodGates) {
+	private record Candidates(Map<Integer, List<String>> keyedNames, Map<Integer, MethodGates> methodGates,
+			Map<String, List<String>> instantiatorGates) {
 
 		@Nullable List<String> keysAt(int index) {
 			return this.keyedNames.get(index);
@@ -607,7 +703,7 @@ public final class LibraryDefunPruner {
 				}
 				methodGates.put(i, new MethodGates(genericGate, List.copyOf(specializerGates)));
 			}
-			return new Candidates(Map.copyOf(keyedNames), Map.copyOf(methodGates));
+			return new Candidates(Map.copyOf(keyedNames), Map.copyOf(methodGates), Map.copyOf(gateBySpelling));
 		}
 
 		/**
@@ -700,6 +796,62 @@ public final class LibraryDefunPruner {
 		List<String> genericNames() {
 			return this.genericGate;
 		}
+	}
+
+	/**
+	 * Stage B of the bzip2-tree elimination: a {@code typecase}/{@code etypecase} arm
+	 * (inside a third-party form) whose clause head names a candidate
+	 * struct/class/condition contributes its references only once an INSTANTIATOR of that
+	 * definition is live -- the same soundness argument as the defmethod specializer
+	 * gate: the arm can only run on an instance, an instance can only be made through a
+	 * reference the scan sees, and when an instantiator goes live the arm's references
+	 * join the fixpoint (monotone). An arm still closed at the end is DELETED from the
+	 * surviving form -- it must be, because its body may name pruned definitions
+	 * ({@code #'chipz::%bzip2-decompress}) that would no longer compile. Deliberately NOT
+	 * extended to {@code case}: a case key is a symbol, and a symbol needs no
+	 * instantiator ({@code ConstantCaseArmPruner} is the sound mechanism there).
+	 *
+	 * @param formIndex the top-level form the arm sits in
+	 * @param clause the arm's clause cons, identified by IDENTITY in the resolved tree
+	 * @param gateNames the instantiator names of the head's definition, any of which
+	 * being live opens the arm
+	 * @param refs the references the arm contributes once open
+	 */
+	private static final class GatedArm {
+
+		final int formIndex;
+
+		final LispCons clause;
+
+		final List<String> gateNames;
+
+		final Set<String> refs;
+
+		boolean open;
+
+		GatedArm(int formIndex, LispCons clause, List<String> gateNames, Set<String> refs) {
+			this.formIndex = formIndex;
+			this.clause = clause;
+			this.gateNames = gateNames;
+			this.refs = refs;
+		}
+
+	}
+
+	/** The scan context that turns typecase-arm gating on for a third-party form. */
+	private static final class GateContext {
+
+		final int formIndex;
+
+		final Map<String, List<String>> gates;
+
+		final List<GatedArm> collected = new ArrayList<>();
+
+		GateContext(int formIndex, Map<String, List<String>> gates) {
+			this.formIndex = formIndex;
+			this.gates = gates;
+		}
+
 	}
 
 	/**
@@ -821,6 +973,10 @@ public final class LibraryDefunPruner {
 	 * alongside {@code vec:aref}.
 	 */
 	private static void collectReferences(LispVal form, Prunable prunable, Set<String> out) {
+		collectReferences(form, prunable, out, null);
+	}
+
+	private static void collectReferences(LispVal form, Prunable prunable, Set<String> out, @Nullable GateContext ctx) {
 		switch (form) {
 			case LispSymbol sym -> {
 				String name = sym.name();
@@ -882,6 +1038,30 @@ public final class LibraryDefunPruner {
 					addAll(prunable.thirdPartyByMember().get(member), out);
 				}
 			}
+			case LispCons cons when ctx != null && isTypecaseForm(cons) -> {
+				List<LispVal> parts = cons.toList();
+				// Head and subject scan normally; each clause whose head names a
+				// candidate becomes a GatedArm (see the class comment), the rest scan
+				// normally. Nested gatable arms inside an arm's body register
+				// independently -- an inner arm's own gate still applies even when the
+				// outer one opens.
+				collectReferences(parts.get(0), prunable, out, ctx);
+				if (parts.size() > 1) {
+					collectReferences(parts.get(1), prunable, out, ctx);
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					LispVal clause = parts.get(i);
+					if (clause instanceof LispCons clauseCons && clauseCons.car() instanceof LispSymbol head
+							&& !isTypecaseDefaultHead(head) && ctx.gates.containsKey(head.name())) {
+						Set<String> armRefs = new LinkedHashSet<>();
+						collectReferences(clause, prunable, armRefs, ctx);
+						ctx.collected.add(new GatedArm(ctx.formIndex, clauseCons, ctx.gates.get(head.name()), armRefs));
+					}
+					else {
+						collectReferences(clause, prunable, out, ctx);
+					}
+				}
+			}
 			case LispCons cons when isNameForgingCall(cons) -> {
 				// (intern (concatenate 'string "MAKE-" (symbol-name x) suffix) pkg) --
 				// sxql's find-constructor -- assembles a NAME out of literal pieces and
@@ -898,8 +1078,8 @@ public final class LibraryDefunPruner {
 						}
 					}
 				}
-				collectReferences(cons.car(), prunable, out);
-				collectReferences(cons.cdr(), prunable, out);
+				collectReferences(cons.car(), prunable, out, ctx);
+				collectReferences(cons.cdr(), prunable, out, ctx);
 			}
 			case LispCons cons when LispMacroExpander.isReadtableHookRegistration(cons) && cons.isProperList() -> {
 				// A reader hook rontolisp's reader can never fire: the registration
@@ -910,13 +1090,13 @@ public final class LibraryDefunPruner {
 				List<LispVal> parts = cons.toList();
 				for (LispVal arg : parts.subList(1, parts.size())) {
 					if (!LispMacroExpander.isDeadReadtableHook(arg)) {
-						collectReferences(arg, prunable, out);
+						collectReferences(arg, prunable, out, ctx);
 					}
 				}
 			}
 			case LispCons cons -> {
-				collectReferences(cons.car(), prunable, out);
-				collectReferences(cons.cdr(), prunable, out);
+				collectReferences(cons.car(), prunable, out, ctx);
+				collectReferences(cons.cdr(), prunable, out, ctx);
 			}
 			default -> {
 			}
@@ -927,6 +1107,20 @@ public final class LibraryDefunPruner {
 		if (names != null) {
 			out.addAll(names);
 		}
+	}
+
+	/** Whether the form is a {@code typecase}/{@code etypecase} whose arms may gate. */
+	private static boolean isTypecaseForm(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return false;
+		}
+		String member = member(op.name());
+		return LispNames.TYPECASE.equals(member) || LispNames.ETYPECASE.equals(member);
+	}
+
+	private static boolean isTypecaseDefaultHead(LispSymbol head) {
+		String member = member(head.name());
+		return "T".equals(member) || LispNames.OTHERWISE.equals(member);
 	}
 
 	/** Whether the call resolves a string it is handed into a symbol at run time. */
