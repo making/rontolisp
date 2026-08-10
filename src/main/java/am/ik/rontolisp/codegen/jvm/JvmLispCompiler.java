@@ -1401,8 +1401,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expansions that ran during Pass 2 included. Everything else is only ever
 		// called directly, and dropping its dispatcher case is what lets
 		// JvmClassShaker reach the library code an ASDF system splices.
-		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, cp, needsLookup,
-				anyNameResolvable(program, usesRead, usesLoad), RuntimeNameProducers.anySymbolBuilder(program));
+		boolean nameResolvable = anyNameResolvable(program, usesRead, usesLoad);
+		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
+		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, cp, needsLookup, nameResolvable,
+				symbolBuilders);
 		if (needsLookup) {
 			MethodrefConstant evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc));
 			MethodrefConstant applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc));
@@ -1455,7 +1457,8 @@ public final class JvmLispCompiler implements LispCompiler {
 				storeCode = JvmEvalRuntimeBuilder.buildStore(ec);
 				envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
 			}
-			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds);
+			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds,
+					this.dynamic || nameResolvable || symbolBuilders);
 			for (int g = 1; g < lookupSegments.size(); g++) {
 				lookupSegmentNames.add(cp.addUtf8("_lookup$" + g));
 			}

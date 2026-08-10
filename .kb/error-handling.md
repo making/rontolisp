@@ -515,6 +515,59 @@ Pinned by `LispMacroExpanderTest.conditionNarrowing*` /
 the whole condition block of the three per-backend suites plus the ci-spec
 condition cases, which now run against narrowed artifacts.
 
+## The routing gate asks whether a condition can be NAMED (todo-317)
+
+`mayCreateConditions` decides whether the report renderer is emitted at all, and the
+two CATCHING forms are where it parts company with `mayCreateInstances`. It cannot
+part company by proving the protected body will not signal: the handler prologue on
+every compiled backend synthesizes a `simple-error` for a caught RAW trap (the
+handlers-fall-back contract above), so an instance is built however the body fails and
+a division, an array index or a bad `car` all qualify. What decides the gate is
+whether program code can ever hold that instance.
+
+- **`handler-case` counts only when some clause binds a variable its own body
+  mentions** (`handlerCaseBindsCondition`). Otherwise the instance never leaves the
+  landing pad: the clause TYPE tests read its tag, an unmatched clause rethrows the
+  ORIGINAL payload, and an uncaught condition's text comes from that payload's message
+  string. The occurrence test is deliberately blunt (a mention in quoted data or under
+  a shadowing rebinding counts) -- over-approximating costs one unused renderer.
+  `:no-error` binds the protected form's VALUES, never a condition.
+- **`ignore-errors` counts only where a SECOND value can be read**
+  (`receivesMultipleValues`, a whole-program answer). Its expansion is
+  `(error (c) (values nil c))`, and an extra value travels either inside a consumer's
+  own expansion or through the `%mv-spill` global, which nothing but a consumer reads;
+  any occurrence of `multiple-value-bind`/`-list`/`-call`/`-setq`/`-prog1`/`nth-value`/
+  `%mv-spill` turns it back on.
+- **A clause HEAD is not a call, and that skip is now shared.**
+  `(handler-case b (error (e) ...))` read as `(error <computed> ...)` -- a runtime
+  datum with initargs -- which is why every handler-case routed. `evaluatedClauseForms`
+  is the one helper that answers "which sub-forms of this clause-bearing operator are
+  EVALUATED", used by this scan and by `needsRuntimeErrorDispatch` (which carried its
+  own copy from todo 316). **A new scan that walks a program as code goes through it**
+  -- the same misread has now cost three times (todo 315's tagbody-tag `CONTINUE`,
+  todo 316's dispatch runtime, this).
+
+Measured at `--optimize=size`: `(print (handler-case (+ 1 2) (error () 0)))` drops
+23,216 -> 5,713 B and `(print (ignore-errors (+ 1 2)))` 22,782 -> 5,638 B (-75%), the
+declined renderer taking `%format-condition`, `string=`, `%seq-to-list`,
+`%subseq-runtime`, the string streams and the funcall dispatchers with it. zlib is
+byte-identical: chipz constructs its own conditions, so it routes either way.
+
+This also closes the `%print-object-str`-on-`routesConditionReports`-alone question
+todo 316 left open. The renderer is emitted with an empty `printObjectTags` only when
+the routing is ON, and the case that made that wasteful -- routing on for a condition
+nothing can print -- is exactly what the two narrowings above now turn off. What
+remains is 58 bytes of defun in a program that genuinely routes, dead-code-eliminated
+by `--optimize` when no print site reaches it; gating it on a pre-Pass-2 scan for
+printing operators is NOT sound, because `format`'s `~A` lowers to `princ-to-string`
+after that scan would have run.
+
+The interpreter still never narrows (`ensureConditionReportRuntimeLoaded` fires from
+the catching forms themselves). Both narrowings are impossibility-based, so the value
+whose report would differ cannot exist. Pinned by
+`LispMacroExpanderTest.aHandlerCaseThatNeverNamesItsConditionDoesNotRouteReports` /
+`ignoreErrorsRoutesReportsOnlyWhereASecondValueCanBeRead`.
+
 ## cerror + signal-operator function values (todo-085, cl-base64)
 
 `cerror` has TWO lowerings, selected by the restart-mode gate (Phase 4 above).

@@ -13,6 +13,14 @@ compressed on the free plan, so the table reports raw and gzipped sizes and the
 share of that limit. What a framework costs there is module size and isolate
 startup, not per-request time.
 
+**Raw and gzip do not always move together.** Removing DUPLICATE bytes -- a name
+interned twice, one sentence repeated per generic -- is worth its full weight
+raw and close to nothing compressed, because a compressor had already collapsed
+it; the offsets that shift as a result can even cost gzip a few hundred bytes
+back. So a row whose raw size drops while its gzip size ticks up is the expected
+shape of a data-section dedup, not a regression: what shrank is the module the
+engine loads and keeps in memory.
+
 **`httpbin-clack` and `httpbin-clack-one-source` are the same application.**
 They differ in the `:server` designator only -- `:reactor`, which is
 host-driven on every backend, against `:rontolisp`, which reads the compile

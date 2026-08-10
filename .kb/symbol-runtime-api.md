@@ -352,7 +352,16 @@ resolves designators against the live environment and needs none of it):
   collision-free because one package cannot house two distinct symbols with one member
   name. Emitted only when the registry itself is (the
   `usesRuntimeFunctionDesignator` / `usesEval` gate), so ordinary programs stay
-  byte-identical. **VARIABLES do not get the alias**: `boundp`/`symbol-value` of an
+  byte-identical. **And only when the alias SPELLING can reach the run time** (todo-317):
+  `_lookup` matches interned offsets / pool strings, so the row is matchable only if a
+  symbol BUILDER can assemble that spelling, the reader can read it (`--dynamic`,
+  `anyNameResolvable`), or this compile already spells it — and in the last case the row's
+  string costs nothing. Without the gate a library's every internal accessor shipped a
+  second copy of its name that nothing could address: −849 B on the zlib size-report row.
+  The two backends gate identically (`WasmLispCompiler`'s registry-blob loop,
+  `JvmEvalRuntimeBuilder.lookupSegments`), pinned by
+  `WasmLispCompilerTest.theRegistrysSingleColonAliasShipsOnlyWhereItCanBeSpelled`.
+  **VARIABLES do not get the alias**: `boundp`/`symbol-value` of an
   interned symbol probe the `_genv` mirror by the single-colon spelling, so only
   EXPORTED specials resolve (lack's `*lack-middleware-backtrace*` is exported).
   Re-evaluate if a library reads an unexported special through runtime intern.

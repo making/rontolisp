@@ -376,14 +376,18 @@ class LispMacroExpanderTest {
 		// The last-resort error tail (condition construction plus the class-naming
 		// render) re-inlined per dispatcher costs over a kilobyte EACH across a
 		// library's synthesized slot accessors; a dispatcher instead calls the shared
-		// signal defun, carrying its half of the message as the literal prefix, and
-		// expandTopLevelDefinitions appends that defun exactly once.
+		// signal defun, carrying only the message's per-generic TAIL (its 22-byte head
+		// is one string per program, not one per generic), and expandTopLevelDefinitions
+		// appends that defun exactly once. The tail keeps the " on " separator so the
+		// literal cannot be read as a function-name designator by the dispatch gate.
 		String source = "(defclass box () ((v :accessor box-v))) (defgeneric poke (x))"
 				+ " (defmethod poke ((x box)) x)";
 		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
 				new HashMap<>(), new ClosRegistry());
 		String printed = expanded.stream().map(LispVal::print).reduce("", (a, b) -> a + "\n" + b);
-		assertThat(printed).contains("(%NO-APPLICABLE-METHOD \"No applicable method: POKE on \" X)");
+		assertThat(printed).contains("(%NO-APPLICABLE-METHOD \"POKE on \" X)")
+			.doesNotContain("\"No applicable method: POKE on \"")
+			.doesNotContain("\"POKE\"");
 		assertThat(expanded.stream().filter(LispMacroExpanderTest::isNoApplicableMethodDefun)).hasSize(1);
 		// A program without a generic in reach carries nothing.
 		List<LispVal> plain = LispMacroExpander.expandTopLevelDefinitions(
@@ -450,6 +454,46 @@ class LispMacroExpanderTest {
 				  (error (e) (princ e)))
 				""");
 		assertThat(narrowing.declineRenderer()).isTrue();
+	}
+
+	/** Whether the compile path routes condition reports for this program. */
+	private static boolean routesReports(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), registry);
+		return registry.routesConditionReports();
+	}
+
+	@Test
+	void aHandlerCaseThatNeverNamesItsConditionDoesNotRouteReports() {
+		// The handler prologue synthesizes a simple-error for ANY caught trap, so an
+		// instance really is built -- but with no clause naming it, nothing in the
+		// program can hand one to a printing operator, and the report renderer plus the
+		// string machinery it anchors are three quarters of a bare handler-case
+		// artifact.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error () 0)))")).isFalse();
+		// Bound but never mentioned is the same thing.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error (e) 0)))")).isFalse();
+		// :no-error binds the protected form's VALUES, never a condition.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error () 0) (:no-error (v) v)))")).isFalse();
+		// Mentioned: it can reach a print, so the routing stays.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error (e) (princ e))))")).isTrue();
+		// A clause head is a TYPE SPECIFIER, not a call -- reading (error (e) ...) as a
+		// signal site with initargs is what made every handler-case route.
+		assertThat(routesReports("(print (handler-case (+ 1 2) (error (e) (list e))))")).isTrue();
+		// A real condition source in the same program still routes.
+		assertThat(routesReports("""
+				(define-condition my-error (error) ())
+				(print (handler-case (error 'my-error) (error () 0)))
+				""")).isTrue();
+	}
+
+	@Test
+	void ignoreErrorsRoutesReportsOnlyWhereASecondValueCanBeRead() {
+		// (ignore-errors f) hands the condition back as its SECONDARY value, which
+		// travels through the %mv-spill global that only a consumer ever reads.
+		assertThat(routesReports("(print (ignore-errors (+ 1 2)))")).isFalse();
+		assertThat(routesReports("(multiple-value-bind (v c) (ignore-errors (+ 1 2)) (princ c))")).isTrue();
+		assertThat(routesReports("(print (nth-value 1 (ignore-errors (+ 1 2))))")).isTrue();
 	}
 
 }

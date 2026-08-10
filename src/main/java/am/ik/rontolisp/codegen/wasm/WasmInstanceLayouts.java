@@ -116,9 +116,15 @@ final class WasmInstanceLayouts {
 				continue;
 			}
 			// Every string is interned BEFORE the record is serialized: the record holds
-			// their offsets.
+			// their offsets. The print name is the tag minus its %class-/%struct- prefix
+			// (LispLayout.printNameOfTag), so it is interned as a VIEW into the tag's own
+			// bytes instead of a second copy -- checked against the layout rather than
+			// assumed, since the record carries the two strings independently.
 			WasmLispCompiler.StringTable.StringEntry tag = stringTable.addString(layout.tag());
-			WasmLispCompiler.StringTable.StringEntry name = stringTable.addString(layout.printName());
+			WasmLispCompiler.StringTable.StringEntry name = layout.printName()
+				.equals(LispLayout.printNameOfTag(layout.tag()))
+						? stringTable.addTailOf(layout.tag(), layout.tag().length() - layout.printName().length())
+						: stringTable.addString(layout.printName());
 			List<WasmLispCompiler.StringTable.StringEntry> slots = layout.slotNames()
 				.stream()
 				.map(stringTable::addString)

@@ -233,6 +233,24 @@ that is exactly what every blob-citing caller does: the instance-layout blob (bu
 Pass 2a), the `_lookup` registry rows (`stringTable.addString(defun.name)` after it), the
 `eval` special-form offsets, the reader's char-name and struct-directory tables.
 
+**An OVERLAPPING entry is never a candidate** (`StringTable.addTailOf`, todo-317): a
+layout's print name is interned as a view into its own `%class-` tag's bytes, and a range
+the shaker cuts has to own its bytes outright, so the reuse is declined when the container
+is already a candidate and the shared entry never becomes one. Any future byte sharing
+owes the same rule, or a cut takes a live string's bytes with it.
+
+**A GENERATED string literal that spells a function's name arms the dispatch gate**
+(todo-317, measured the hard way). `dispatchableFuncIds` reads a framed literal equal to a
+defun's name — or to its bare member name — as something `intern` could hand to `funcall`,
+which is right for a literal the USER wrote and wrong for one the compiler synthesized: it
+gives that defun a ladder case, and the ladder's call edge then keeps it and everything it
+reaches. Shortening a dispatcher's `"No applicable method: X on "` literal to just `"X"`
+did exactly that to every generic in the program — **+11.5 KB on the hello-clack Worker**,
+where the whole Gray-stream protocol came back — so the literal keeps its `" on "`
+separator (`LispMacroExpander.noApplicableMethod`). Re-evaluation trigger: if the gate ever
+learns to tell a generated literal from a user-written one, the bare name is 94 bytes
+better on the zlib row; until then, no generated literal may spell a name exactly.
+
 **The runtime intern table is handled structurally, not by standing down (2026-08-09).**
 The one blob that cites EVERY entry is the intern table (`buildInternBlob`, scanned by
 `_intern` on offset equality), and until 2026-08-09 that citation disqualified every

@@ -3030,9 +3030,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// through _lookup, so any defun whose name the program interned must stay
 		// callable. See buildNameRegistrySet -- and note it runs BEFORE the registry
 		// blob is built, since building it interns every surviving name.
+		boolean nameResolvable = anyNameResolvable(program, usesRead, usesLoad);
+		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
 		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, stringTable,
-				usesEval || usesRuntimeDesignator || usesApplyRuntime, anyNameResolvable(program, usesRead, usesLoad),
-				RuntimeNameProducers.anySymbolBuilder(program));
+				usesEval || usesRuntimeDesignator || usesApplyRuntime, nameResolvable, symbolBuilders);
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 			if (indirectCallArities.contains(arity)) {
@@ -3121,6 +3122,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			// PKG:NAME. Collision-free (one package cannot house two distinct symbols
 			// with one member name); appended after the base rows so a genuine key
 			// always wins in the linear scan.
+			//
+			// The alias SPELLING has to be reachable for the row to be, and _lookup
+			// matches interned OFFSETS: a name this compile already spells is interned
+			// (then the row's addString is free), and one it does not can only be
+			// assembled by a symbol BUILDER or read out of the input. With neither, the
+			// row and its string are bytes nothing can ever address -- one per chipz
+			// accessor, -849 B on the zlib size-report row.
+			boolean aliasReachable = this.dynamic || nameResolvable || symbolBuilders;
 			Set<String> defunNames = new HashSet<>();
 			for (DefunDecl defun : defuns) {
 				defunNames.add(defun.name);
@@ -3133,7 +3142,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				int q = defun.name.indexOf("::");
 				if (q > 0) {
 					String alias = defun.name.substring(0, q) + defun.name.substring(q + 1);
-					if (!defunNames.contains(alias)) {
+					if (!defunNames.contains(alias) && (aliasReachable || stringTable.isInterned(alias))) {
 						writeLittleEndian32(registry, stringTable.addString(alias).offset());
 						writeLittleEndian32(registry, i);
 						writeLittleEndian32(registry,
@@ -6784,6 +6793,42 @@ public final class WasmLispCompiler implements LispCompiler {
 			finally {
 				this.attributing = saved;
 			}
+		}
+
+		/**
+		 * Interns a string that is the TAIL of another as a VIEW into that string's
+		 * bytes, rather than a second copy of them. The one structural pair worth it is
+		 * an instance layout's, whose record holds both the {@code %class-FOO} tag and
+		 * the {@code FOO} print name it is a prefix of -- around 600 bytes on a library
+		 * with two dozen classes and structs.
+		 *
+		 * <p>
+		 * A shared entry can never be a tree-shake candidate: {@link #shakeableRanges}
+		 * hands the shaker byte ranges to CUT, and a cut range has to own its bytes
+		 * outright. So the reuse is declined when the container is already a candidate,
+		 * and the tail joins its container in never being one -- which costs nothing
+		 * here, since a layout record cites both offsets from data the shaker cannot see
+		 * through anyway.
+		 * @param whole the containing string, interned by this call when it is not
+		 * already
+		 * @param from the char index the tail starts at
+		 * @return the tail's entry, overlapping {@code whole}'s bytes when it may
+		 */
+		StringEntry addTailOf(String whole, int from) {
+			String tail = whole.substring(from);
+			StringEntry existing = this.cache.get(tail);
+			if (existing != null) {
+				// Already interned on its own; sharing now would strand those bytes.
+				return addString(tail);
+			}
+			StringEntry container = addString(whole);
+			if (this.shakeable.contains(whole)) {
+				return addString(tail);
+			}
+			int prefixBytes = whole.substring(0, from).getBytes(StandardCharsets.UTF_8).length;
+			StringEntry entry = new StringEntry(container.offset() + prefixBytes, container.length() - prefixBytes);
+			this.cache.put(tail, entry);
+			return entry;
 		}
 
 		StringEntry addString(String s) {

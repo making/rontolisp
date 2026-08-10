@@ -11913,23 +11913,32 @@ public final class LispMacroExpander {
 	 * same object-designator expansion. Over-approximating costs an unused renderer;
 	 * under-approximating cannot break a build, because every site that calls the
 	 * renderer falls back to its pre-report message when it is absent.
+	 *
+	 * <p>
+	 * The two CATCHING forms are the exception to "share the case split": they build a
+	 * condition the program cannot necessarily NAME, and this gate is about a value
+	 * reaching a printing operator, not about an instance existing. See
+	 * {@link #handlerCaseBindsCondition} and {@link #receivesMultipleValues}.
 	 * @param program the top-level forms, AFTER the library splices
 	 * @param closRegistry the class registry
 	 * @return whether a condition instance can exist
 	 */
 	public static boolean mayCreateConditions(List<LispVal> program, ClosRegistry closRegistry) {
+		// One whole-program answer, because ignore-errors hands its condition back as a
+		// SECONDARY value and nothing but a consumer can read one.
+		boolean multipleValues = receivesMultipleValues(program);
 		for (LispVal form : program) {
-			if (mayCreateCondition(form, closRegistry)) {
+			if (mayCreateCondition(form, closRegistry, multipleValues)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean mayCreateCondition(LispVal form, ClosRegistry closRegistry) {
+	private static boolean mayCreateCondition(LispVal form, ClosRegistry closRegistry, boolean multipleValues) {
 		if (form instanceof LispArray array) {
 			for (LispVal element : array.data()) {
-				if (mayCreateCondition(element, closRegistry)) {
+				if (mayCreateCondition(element, closRegistry, multipleValues)) {
 					return true;
 				}
 			}
@@ -11940,14 +11949,31 @@ public final class LispMacroExpander {
 			// only -- so it can never be a condition.
 			return false;
 		}
-		if (cons.car() instanceof LispSymbol head && constructsCondition(head.name(), cons, closRegistry)) {
-			return true;
+		if (cons.car() instanceof LispSymbol head) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+			String member = qn == null ? head.name() : qn.member();
+			if (constructsCondition(head.name(), member, cons, closRegistry, multipleValues)) {
+				return true;
+			}
+			List<LispVal> evaluated = evaluatedClauseForms(member, cons);
+			if (evaluated != null) {
+				// Without the skip, a (error (e) ...) CLAUSE reads as a signal call with
+				// initargs and every handler-case routes reports.
+				return evaluated.stream().anyMatch(f -> mayCreateCondition(f, closRegistry, multipleValues));
+			}
 		}
-		return mayCreateCondition(cons.car(), closRegistry) || mayCreateCondition(cons.cdr(), closRegistry);
+		return mayCreateCondition(cons.car(), closRegistry, multipleValues)
+				|| mayCreateCondition(cons.cdr(), closRegistry, multipleValues);
 	}
 
-	/** The per-operator half of {@link #mayCreateConditions}. */
-	private static boolean constructsCondition(String head, LispCons form, ClosRegistry closRegistry) {
+	/**
+	 * The per-operator half of {@link #mayCreateConditions}. Takes the operator's plain
+	 * (package-stripped) name beside the raw one: the catching forms match on the member
+	 * spelling, while {@code constructsInstance}'s own cases are raw names with their own
+	 * qualified spellings listed.
+	 */
+	private static boolean constructsCondition(String head, String member, LispCons form, ClosRegistry closRegistry,
+			boolean multipleValues) {
 		if (LispNames.OBJ_NEW.equals(head)) {
 			// The spliced constructor of a class: a condition only when the tag names a
 			// class descending from condition (a defstruct/defclass one does not).
@@ -11963,7 +11989,90 @@ public final class LispMacroExpander {
 					&& (LispNames.ERROR.equals(fn.name()) || LispNames.WARN.equals(fn.name())
 							|| LispNames.CERROR.equals(fn.name()) || constructsInstance(head, form));
 		}
+		if (LispNames.HANDLER_CASE.equals(member)) {
+			return handlerCaseBindsCondition(form);
+		}
+		if (LispNames.IGNORE_ERRORS.equals(member)) {
+			// (ignore-errors f) -> (handler-case f (error (c) (values nil c))): the
+			// condition leaves ONLY as the secondary value, which nothing but a
+			// multiple-value consumer can read.
+			return multipleValues;
+		}
 		return constructsInstance(head, form);
+	}
+
+	/**
+	 * Whether a {@code handler-case} can hand a condition VALUE to program code: some
+	 * clause binds a variable that its own body mentions.
+	 *
+	 * <p>
+	 * This is where the gate parts company with {@link #mayCreateInstances}, which keeps
+	 * listing the catching forms unconditionally. The handler prologue on every compiled
+	 * backend synthesizes a {@code simple-error} for a caught raw trap -- the
+	 * handlers-fall-back contract of {@code .kb/error-handling.md} -- so an instance
+	 * really is constructed however the protected body fails, and no "the body cannot
+	 * signal" analysis could ever say otherwise (a division, an array index or a bad
+	 * {@code car} traps). But that instance lives entirely inside the landing pad: the
+	 * clause TYPE tests read its tag, an unmatched clause rethrows the ORIGINAL payload,
+	 * and the message an uncaught condition prints comes from that payload's string. With
+	 * no clause naming it, no printing operator in the program can ever be handed it, so
+	 * the report renderer it would anchor is dead.
+	 *
+	 * <p>
+	 * The occurrence test is deliberately blunt -- any mention of the variable's name
+	 * anywhere in the clause body, quoted data and shadowing rebindings included -- since
+	 * over-approximating costs one unused renderer.
+	 * @param form the handler-case form
+	 * @return whether some clause exposes the condition
+	 */
+	private static boolean handlerCaseBindsCondition(LispCons form) {
+		if (!form.isProperList()) {
+			return true;
+		}
+		List<LispVal> parts = form.toList();
+		for (int i = 2; i < parts.size(); i++) {
+			if (!(parts.get(i) instanceof LispCons clause) || !clause.isProperList()) {
+				// A malformed clause is the backends' error to raise, not this scan's.
+				return true;
+			}
+			if (clause.car() instanceof LispSymbol head && ":NO-ERROR".equals(head.name())) {
+				// :no-error binds the protected form's VALUES, never a condition.
+				continue;
+			}
+			List<LispVal> clauseParts = clause.toList();
+			if (clauseParts.size() < 2 || !(clauseParts.get(1) instanceof LispCons vars)
+					|| !(vars.car() instanceof LispSymbol var)) {
+				continue;
+			}
+			for (LispVal bodyForm : clauseParts.subList(2, clauseParts.size())) {
+				if (usesSymbol(bodyForm, var.name())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether the program can read a SECONDARY value anywhere -- the observability gate
+	 * for {@code ignore-errors}, whose condition is its second value. Every extra value
+	 * travels either through a consumer's own expansion or through the {@code %mv-spill}
+	 * global, which only a consumer reads, so a program with no consumer cannot see one.
+	 * Conservative: an occurrence anywhere counts, operator position or not.
+	 * @param program the top-level forms
+	 * @return whether some multiple-value consumer is present
+	 */
+	private static boolean receivesMultipleValues(List<LispVal> program) {
+		for (String name : List.of(LispNames.MULTIPLE_VALUE_BIND, LispNames.MULTIPLE_VALUE_LIST,
+				LispNames.MULTIPLE_VALUE_CALL, LispNames.MULTIPLE_VALUE_SETQ, LispNames.MULTIPLE_VALUE_PROG1,
+				LispNames.NTH_VALUE, LispNames.MV_SPILL)) {
+			for (LispVal form : program) {
+				if (usesSymbol(form, name)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/** Whether the named class is registered and descends from {@code condition}. */
@@ -14511,22 +14620,34 @@ public final class LispMacroExpander {
 			return listToCons(
 					List.of(new LispSymbol(LispNames.ERROR), new LispString("No applicable method: " + genericName)));
 		}
-		// One call of the shared signal helper (see noApplicableMethodDefun); the
-		// per-generic half of the message travels as the literal prefix argument, so the
-		// rendered message is byte-identical to the inline tail this replaces.
+		// One call of the shared signal helper (see noApplicableMethodDefun); the literal
+		// carries the message's per-generic TAIL only, so its 22-byte head is one string
+		// per program instead of one per generic -- a library whose every slot accessor
+		// is a dispatcher had 30 copies of it on the zlib size-report row. The rendered
+		// message is byte-identical.
+		//
+		// The tail keeps the " on " separator rather than being the bare name, and that
+		// is load-bearing: a string literal that spells a function's name EXACTLY arms
+		// the dispatch gate's designator probe (JvmLispCompiler /
+		// WasmLispCompiler.dispatchableFuncIds, which reads a framed literal as something
+		// intern could hand to funcall), so every generic would get a ladder case and,
+		// through its call edge, keep its whole method tree alive -- measured at +11.5 KB
+		// on the hello-clack Worker. See .kb/optimize-dead-code-elimination.md.
 		return listToCons(List.of(new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME),
-				new LispString("No applicable method: " + genericName + " on "), params.get(0)));
+				new LispString(genericName + " on "), params.get(0)));
 	}
 
 	/**
 	 * The shared last-resort signal every dispatcher's {@code noApplicableMethod} call
-	 * targets: {@code (defun %no-applicable-method (prefix arg) (error (%string-concat
-	 * prefix (princ-to-string (%class-designator arg)))))}. The error tail is anything
-	 * but small once expanded -- condition construction plus the class-naming render --
-	 * and a library's synthesized slot readers/writers give it to EVERY accessor
-	 * dispatcher, so it is emitted once per program instead
-	 * ({@code expandTopLevelDefinitions} appends it when any dispatcher references it;
-	 * {@code LispEvaluator.defineDispatcher} defines it before its first dispatcher).
+	 * targets: {@code (defun %no-applicable-method (tail arg) (error (%string-concat
+	 * "No applicable method: " (%string-concat tail (princ-to-string (%class-designator
+	 * arg))))))}. The error tail is anything but small once expanded -- condition
+	 * construction plus the class-naming render -- and a library's synthesized slot
+	 * readers/writers give it to EVERY accessor dispatcher, so it is emitted once per
+	 * program instead ({@code expandTopLevelDefinitions} appends it when any dispatcher
+	 * references it; {@code LispEvaluator.defineDispatcher} defines it before its first
+	 * dispatcher). The message's fixed HEAD lives here for the same reason the defun
+	 * does: one copy per program beats one per generic.
 	 *
 	 * <p>
 	 * Naming the first argument's class in the message is deliberate: "No applicable
@@ -14537,13 +14658,15 @@ public final class LispMacroExpander {
 	 * @return the defun form
 	 */
 	public static LispVal noApplicableMethodDefun() {
-		LispSymbol prefix = new LispSymbol("%nam_prefix");
+		LispSymbol tail = new LispSymbol("%nam_tail");
 		LispSymbol arg = new LispSymbol("%nam_arg");
 		LispVal classOf = listToCons(List.of(new LispSymbol(LispNames.CLASS_DESIGNATOR_INTERNAL), arg));
+		LispVal named = listToCons(
+				List.of(new LispSymbol(LispNames.STRING_CONCAT), tail, callOf(LispNames.PRINC_TO_STRING, classOf)));
 		LispVal message = listToCons(
-				List.of(new LispSymbol(LispNames.STRING_CONCAT), prefix, callOf(LispNames.PRINC_TO_STRING, classOf)));
+				List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("No applicable method: "), named));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN),
-				new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME), listToCons(List.of((LispVal) prefix, arg)),
+				new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME), listToCons(List.of((LispVal) tail, arg)),
 				listToCons(List.of(new LispSymbol(LispNames.ERROR), message))));
 	}
 
@@ -25531,55 +25654,71 @@ public final class LispMacroExpander {
 					return true;
 				}
 			}
-			// A clause whose HEAD is a type specifier (or a key list) is not a call:
-			// (handler-case b (error (e) use...)) used to read as (error <computed>
-			// ...) and put the whole 23-class construction runtime into every
-			// handler-case artifact -- the same misread class as usesRestartSystem's
-			// tagbody-tag CONTINUE (fixed for todo 315). Only the clause BODIES are
-			// evaluated forms.
-			if ((LispNames.HANDLER_CASE.equals(member) || LispNames.CASE.equals(member)
-					|| LispNames.ECASE.equals(member) || LispNames.TYPECASE.equals(member)
-					|| LispNames.ETYPECASE.equals(member)) && cons.isProperList()) {
-				List<LispVal> parts = cons.toList();
-				if (parts.size() > 1 && containsRuntimeErrorDispatch(parts.get(1))) {
-					return true;
-				}
-				for (int i = 2; i < parts.size(); i++) {
-					if (!(parts.get(i) instanceof LispCons clause)) {
-						continue;
-					}
-					// handler-case: (type (var) body...); case family: (keys body...).
-					int bodyFrom = LispNames.HANDLER_CASE.equals(member) ? 2 : 1;
-					List<LispVal> clauseParts = clause.isProperList() ? clause.toList() : List.of();
-					for (int j = bodyFrom; j < clauseParts.size(); j++) {
-						if (containsRuntimeErrorDispatch(clauseParts.get(j))) {
-							return true;
-						}
-					}
-				}
-				return false;
-			}
-			if (LispNames.HANDLER_BIND.equals(member) && cons.isProperList()) {
-				// (handler-bind ((type handler)...) body...): the handler expressions
-				// and the body are code, the type heads are not.
-				List<LispVal> parts = cons.toList();
-				if (parts.size() > 1 && parts.get(1) instanceof LispCons bindings) {
-					for (LispVal rest = bindings; rest instanceof LispCons cell; rest = cell.cdr()) {
-						if (cell.car() instanceof LispCons binding && binding.cdr() instanceof LispCons handlerCell
-								&& containsRuntimeErrorDispatch(handlerCell.car())) {
-							return true;
-						}
-					}
-				}
-				for (int i = 2; i < parts.size(); i++) {
-					if (containsRuntimeErrorDispatch(parts.get(i))) {
-						return true;
-					}
-				}
-				return false;
+			List<LispVal> evaluated = evaluatedClauseForms(member, cons);
+			if (evaluated != null) {
+				return evaluated.stream().anyMatch(LispMacroExpander::containsRuntimeErrorDispatch);
 			}
 		}
 		return containsRuntimeErrorDispatch(cons.car()) || containsRuntimeErrorDispatch(cons.cdr());
+	}
+
+	/**
+	 * The sub-forms of a clause-bearing form that are actually EVALUATED -- the protected
+	 * / dispatched expression plus every clause BODY (and, for {@code handler-bind}, the
+	 * handler expressions) -- or null when the operator carries no clauses.
+	 *
+	 * <p>
+	 * A clause HEAD is a type specifier or a key list, never a call, and reading one as a
+	 * call has now cost twice: {@code (handler-case b (error (e) use...))} parsed as
+	 * {@code (error <computed> ...)} and baked the whole per-class construction runtime
+	 * into every handler-case artifact (todo 316), the same misread class as the
+	 * tagbody-tag {@code CONTINUE} that put every chipz program into restart mode (todo
+	 * 315). Every scan that walks a program AS CODE shares this one skip so a third
+	 * cannot repeat it.
+	 * @param member the operator's plain (package-stripped) name
+	 * @param cons the form
+	 * @return its evaluated sub-forms, or null when it is not a clause-bearing form
+	 */
+	@Nullable private static List<LispVal> evaluatedClauseForms(String member, LispCons cons) {
+		boolean handlerCase = LispNames.HANDLER_CASE.equals(member);
+		boolean caseFamily = handlerCase || LispNames.CASE.equals(member) || LispNames.ECASE.equals(member)
+				|| LispNames.TYPECASE.equals(member) || LispNames.ETYPECASE.equals(member);
+		boolean handlerBind = LispNames.HANDLER_BIND.equals(member);
+		if (!(caseFamily || handlerBind) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> evaluated = new java.util.ArrayList<>();
+		if (caseFamily) {
+			if (parts.size() > 1) {
+				evaluated.add(parts.get(1));
+			}
+			for (int i = 2; i < parts.size(); i++) {
+				if (!(parts.get(i) instanceof LispCons clause)) {
+					continue;
+				}
+				// handler-case: (type (var) body...); case family: (keys body...).
+				int bodyFrom = handlerCase ? 2 : 1;
+				List<LispVal> clauseParts = clause.isProperList() ? clause.toList() : List.of();
+				for (int j = bodyFrom; j < clauseParts.size(); j++) {
+					evaluated.add(clauseParts.get(j));
+				}
+			}
+			return evaluated;
+		}
+		// (handler-bind ((type handler)...) body...): the handler expressions and the
+		// body are code, the type heads are not.
+		if (parts.size() > 1 && parts.get(1) instanceof LispCons bindings) {
+			for (LispVal rest = bindings; rest instanceof LispCons cell; rest = cell.cdr()) {
+				if (cell.car() instanceof LispCons binding && binding.cdr() instanceof LispCons handlerCell) {
+					evaluated.add(handlerCell.car());
+				}
+			}
+		}
+		for (int i = 2; i < parts.size(); i++) {
+			evaluated.add(parts.get(i));
+		}
+		return evaluated;
 	}
 
 	/** Whether an error datum takes the runtime condition-type dispatch path. */

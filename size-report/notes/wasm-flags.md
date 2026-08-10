@@ -77,6 +77,19 @@ the format renderer and the unreachable seeded-condition arms and layouts. That
 is why the `zlib` rows sit far below chipz's full source size while the row's
 check still gunzips the stream byte-identically on every backend.
 
+**And the last -1.2% is the data section, not code.** A library whose every slot
+accessor is a generic used to ship its name three times over: once for the
+`_lookup` registry, once again in the single-colon alias spelling nothing could
+address (`.kb/symbol-runtime-api.md`), and once more inside a whole
+`"No applicable method: X on "` sentence per generic. Those, plus interning a
+layout's print name as a view into its own `%class-` tag rather than a second
+copy (`.kb/instance-syntax.md`), are worth 2,235 bytes here -- small next to the
+code-side stages above, and the reason the remaining gap to the C and Zig rows
+is runtime rather than redundancy. Note what that trade looks like COMPRESSED:
+duplicate text is what a compressor collapses for free, so removing it moves the
+raw number and barely the gzipped one (the Worker table, which counts gzip,
+shows raw down on every row and gzip within a percent either way).
+
 **The unoptimized micro rows are the prelude, so they move when the prelude
 does.** They grew by ~2.3 KB when `fill` joined it; `--optimize` takes both back
 to the same bytes as before, which is the point of only comparing tree-shaken

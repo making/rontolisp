@@ -156,7 +156,15 @@ why `slot-value`, `with-slots` and a struct accessor all compose with
 - **WASM-GC**: `TYPE_INSTANCE` = `struct {const i32 layoutAddr, mut eqref
   slots}` in its own rec group, appended after the fixed types, the `--simd`
   block and the async block so no existing type or `FUNC_*` index moves. The
-  layout records live in a linear-memory blob (`WasmInstanceLayouts`). Do NOT
+  layout records live in a linear-memory blob (`WasmInstanceLayouts`). A record cites
+  its tag (`%class-FOO`) and its print name (`FOO`) as two `(offset, length)` pairs,
+  and the second is the first minus a fixed prefix, so the print name is interned as a
+  VIEW into the tag's own bytes (`StringTable.addTailOf`) rather than a second copy —
+  ~600 B on a library with two dozen classes and structs. A shared entry can never be a
+  tree-shake candidate (a cut `DroppableDataRange` has to own its bytes outright), so
+  the reuse declines when the container is already one; the call site checks
+  `LispLayout.printNameOfTag` rather than assuming the relationship, because the record
+  carries the two strings independently. Do NOT
   "simplify" the struct to three fields: `{i32, i32, eqref}` with an immutable
   tail canonicalizes equal to `TYPE_VBLOCK` under `--simd` and `ref.test` could
   no longer tell an instance from a packed-array block. `--no-gc` has no

@@ -1067,4 +1067,50 @@ class WasmLispCompilerTest {
 		}
 	}
 
+	/** How many times the module's bytes spell {@code text}. */
+	private static int occurrences(byte[] module, String text) {
+		byte[] needle = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		int count = 0;
+		outer: for (int i = 0; i + needle.length <= module.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (module[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			count++;
+		}
+		return count;
+	}
+
+	@Test
+	void theRegistrysSingleColonAliasShipsOnlyWhereItCanBeSpelled() {
+		// _lookup matches interned OFFSETS, so an internal defun's PKG:NAME alias row is
+		// reachable only when the run time can produce that spelling: a symbol BUILDER
+		// assembles it (intern/find-symbol), a compile-time spelling is already interned
+		// (and then the row costs nothing). With neither, the alias string was bytes
+		// nothing could address -- one per accessor across a whole library.
+		String pkg = """
+				(defpackage :geo (:use :cl))
+				(in-package :geo)
+				(defun helper (x) (* x 2))
+				(in-package :cl-user)
+				""";
+		byte[] designatorOnly = compile(pkg + "(defvar *f* 'geo::helper) (print (funcall *f* 4))");
+		assertThat(occurrences(designatorOnly, "GEO::HELPER")).isEqualTo(1);
+		assertThat(occurrences(designatorOnly, "GEO:HELPER")).isZero();
+		byte[] withBuilder = compile(pkg + "(print (funcall (intern \"HELPER\" (find-package :geo)) 4))");
+		assertThat(occurrences(withBuilder, "GEO:HELPER")).isEqualTo(1);
+	}
+
+	@Test
+	void aLayoutPrintNameIsAViewIntoItsOwnTag() {
+		// A layout record holds both %struct-ZZTOP and the ZZTOP it prints; the second
+		// is the first minus a fixed prefix, so it is interned as an offset into those
+		// same bytes rather than a second copy (~600 bytes on a library with two dozen
+		// classes and structs).
+		byte[] module = compile("(defstruct (zztop (:conc-name q-)) a) (print (make-zztop :a 1))");
+		assertThat(occurrences(module, "%struct-ZZTOP")).isEqualTo(1);
+		assertThat(occurrences(module, "ZZTOP")).isEqualTo(1);
+	}
+
 }

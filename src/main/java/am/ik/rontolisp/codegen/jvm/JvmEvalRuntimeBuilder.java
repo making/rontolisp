@@ -943,10 +943,16 @@ final class JvmEvalRuntimeBuilder {
 	 * number of named functions -- never grows one method past the JVM's 64 KB
 	 * method-code limit (60 KB at cl-postgres scale). Each segment falls through to the
 	 * next; the last answers null.
+	 * @param k the shared constants
+	 * @param thisClass the class being emitted
+	 * @param dispatchable the funcIds the dispatchers kept a case for, or null for all
+	 * @param aliasReachable whether the single-colon alias SPELLING can reach the run
+	 * time at all (see the alias loop below)
+	 * @return the segment bodies
 	 */
 	static List<List<Integer>> buildLookupSegments(EvalConstants k, ConstantPool.ClassConstant thisClass,
-			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable) {
-		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable);
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable) {
+		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
@@ -975,7 +981,7 @@ final class JvmEvalRuntimeBuilder {
 	private static final int LOOKUP_SEGMENT_BUDGET = 24_000;
 
 	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass,
-			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable) {
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable) {
 		// Only the rows the dispatchers kept a case for: a name whose funcId has no case
 		// would resolve here and then fall through the dispatcher's search tree
 		// (JvmLispCompiler.dispatchableFuncIds decides both together).
@@ -991,11 +997,17 @@ final class JvmEvalRuntimeBuilder {
 		// so an unexported PKG::NAME defun also answers to PKG:NAME. Collision-free:
 		// one package cannot house two distinct symbols with one member name.
 		// Appended after the base rows so a genuine key always wins.
+		//
+		// The alias SPELLING has to reach the run time for the row to be worth a name
+		// compare and a pool string: a symbol BUILDER assembles it, the reader can read
+		// it, or this compile already spells it. With none of those it is a row nothing
+		// can match -- the WASM twin's gate, same reasoning.
 		for (Map.Entry<String, JvmLispCompiler.FunctionInfo> e : List.copyOf(entries)) {
 			int q = e.getKey().indexOf("::");
 			if (q > 0) {
 				String alias = e.getKey().substring(0, q) + e.getKey().substring(q + 1);
-				if (!this.k.functions().containsKey(alias)) {
+				if (!this.k.functions().containsKey(alias)
+						&& (aliasReachable || this.k.cp().hasStringConstant(alias))) {
 					entries.add(Map.entry(alias, e.getValue()));
 				}
 			}
