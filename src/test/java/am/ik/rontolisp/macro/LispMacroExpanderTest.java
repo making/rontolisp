@@ -397,4 +397,59 @@ class LispMacroExpanderTest {
 				&& LispNames.NO_APPLICABLE_METHOD_RUNTIME.equals(name.name());
 	}
 
+	private static LispMacroExpander.ConditionNarrowing narrowingOf(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		List<LispVal> expanded = LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source),
+				new HashMap<>(), registry);
+		return LispMacroExpander.conditionNarrowing(expanded, registry, false, false);
+	}
+
+	@Test
+	void conditionNarrowingCollectsLiteralTagsAndDeclinesTheRenderer() {
+		// Literal datums only: the constructible set is exactly what is named (plus the
+		// synthesized simple-* family), and with no unrendered control in sight the
+		// runtime renderer is declined.
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(define-condition my-error (error) ())
+				(handler-case (error 'my-error) (error (e) (princ e)))
+				(handler-case (error "plain ~a message" 1) (error (e) (princ e)))
+				""");
+		assertThat(narrowing.constructibleTags()).isNotNull()
+			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR")
+			.doesNotContain("%class-END-OF-FILE", "%class-DIVISION-BY-ZERO");
+		assertThat(narrowing.declineRenderer()).isTrue();
+	}
+
+	@Test
+	void anExplicitFormatControlInitargForcesTheRenderer() {
+		// An explicit :format-control initarg can carry directives into the slot, so
+		// the identity fast path is not enough and the renderer stays.
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(handler-case (error 'simple-error :format-control "x ~a" :format-arguments (list 1))
+				  (error (e) (princ e)))
+				""");
+		assertThat(narrowing.constructibleTags()).isNotNull();
+		assertThat(narrowing.declineRenderer()).isFalse();
+	}
+
+	@Test
+	void aComputedDatumMakesTheConditionSetUnknowable() {
+		// (error datum) with a computed datum can name any condition class.
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(defun boom (which) (error which))
+				(handler-case (boom 'end-of-file) (error (e) (princ e)))
+				""");
+		assertThat(narrowing.constructibleTags()).isNull();
+		assertThat(narrowing.declineRenderer()).isFalse();
+	}
+
+	@Test
+	void aDirectiveFreeLiteralFormatControlStillDeclinesTheRenderer() {
+		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
+				(handler-case (error 'simple-error :format-control "no directives here")
+				  (error (e) (princ e)))
+				""");
+		assertThat(narrowing.declineRenderer()).isTrue();
+	}
+
 }

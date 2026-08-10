@@ -232,6 +232,15 @@ public final class BuiltinFunctionWrappers {
 		return names;
 	}
 
+	/**
+	 * The {@code (setq name (lambda ...))} wrapper forms to splice, one per
+	 * {@code WRAPPER_DEFS} entry the program does not define itself and the caller has
+	 * not excluded.
+	 * @param userDefinedNames names the program defines (its own definition wins)
+	 * @param excludedNames names the caller's gates keep out (e.g. wrappers whose bodies
+	 * would force a runtime tier the program otherwise avoids)
+	 * @return the wrapper forms
+	 */
 	public static List<LispVal> generate(Set<String> userDefinedNames, Set<String> excludedNames) {
 		List<LispVal> wrappers = new ArrayList<>();
 		for (WrapperDef def : WRAPPER_DEFS) {

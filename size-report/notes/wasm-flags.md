@@ -64,9 +64,18 @@ hundred bytes. Only tree-shaken numbers are worth comparing.
 
 **`--optimize=size` only shows up on a big program.** On both micro programs it
 measures the same as plain `--optimize` -- there is nothing left to trade once
-the tree-shaker has run. On `zlib` it is another 23% (551,644 -> 425,815),
-because there the fused integer trees and unboxed locals it drops are spread
-over a whole library rather than a dozen forms.
+the tree-shaker has run. On `zlib` it was another 23% when measured (551,644 ->
+425,815, before the dead-branch pruning stages landed), because there the fused
+integer trees and unboxed locals it drops are spread over a whole library rather
+than a dozen forms.
+
+**The `zlib` rows also carry the dead-branch pruning story.** chipz ships a
+whole bzip2 decoder a gzip program never reaches; the AST pruner's dead-branch
+stages (`.kb/library-defun-pruning.md`) fold the `case`/`typecase` arms that
+anchor it, and the condition-runtime narrowing (`.kb/error-handling.md`) drops
+the format renderer and the unreachable seeded-condition arms and layouts. That
+is why the `zlib` rows sit far below chipz's full source size while the row's
+check still gunzips the stream byte-identically on every backend.
 
 **The unoptimized micro rows are the prelude, so they move when the prelude
 does.** They grew by ~2.3 KB when `fill` joined it; `--optimize` takes both back

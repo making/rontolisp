@@ -22,6 +22,8 @@ import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispArray;
+import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
@@ -2234,8 +2236,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// which are consumed by runtime helper bodies built after their append -- these
 		// addresses must exist before any body is compiled. (Like them, the append must
 		// also land before the data segment is snapshotted.)
-		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable)
-				: Map.of();
+		Map<String, Integer> layoutAddresses = this.usesInstances ? WasmInstanceLayouts.emit(closRegistry, stringTable,
+				usedLayoutTags(program, closRegistry, usesEval || restartMode || usesRead)) : Map.of();
 
 		// Assign funcIds and build function info map
 		int[] nextFuncId = { 0 };
@@ -6513,6 +6515,101 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.writer.write(0x80, 0x80, 0x00);
 		}
 
+	}
+
+	/**
+	 * The {@code %class-}/{@code %struct-} layout tags the program can reach, or null
+	 * when the set is unknowable and every layout must ship. A layout is reachable only
+	 * through a name: an {@code %obj-new}/{@code %obj-is} tag (spelled with its prefix),
+	 * or a class/struct designator a later expression expansion turns into one
+	 * ({@code (make-instance 'c)}, {@code (error 'c ...)} -- spelled bare). Both
+	 * spellings are symbols in the post-definitions program, so keeping every layout
+	 * whose tag or bare name occurs as ANY symbol (plus the simple-* tags the
+	 * handler-case/signal lowering synthesizes AFTER this scan, inside Pass 2) is a sound
+	 * over-approximation. Unknowable when the program embeds the eval runtime or restart
+	 * mode (evaluated/signal-hook code can reach any registered class), under
+	 * {@code --dynamic}, or when it enumerates subclasses / resolves classes by computed
+	 * name -- the same openings the pruner's class gates bail on.
+	 */
+	private java.util.@Nullable Set<String> usedLayoutTags(List<LispVal> program, ClosRegistry closRegistry,
+			boolean open) {
+		if (open || this.dynamic) {
+			return null;
+		}
+		java.util.Set<String> symbols = new java.util.HashSet<>();
+		for (LispVal form : program) {
+			collectSymbolNames(form, symbols);
+		}
+		for (String bail : LAYOUT_TAG_BAILS) {
+			if (symbols.contains(bail)) {
+				return null;
+			}
+		}
+		java.util.Set<String> used = new java.util.HashSet<>();
+		used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR");
+		used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-CONDITION");
+		used.add(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-WARNING");
+		// The unbound-slot marker's tag is %class-prefixed but is runtime plumbing.
+		used.add(ClosRegistry.UNBOUND_TAG);
+		// A read whose end of file SIGNALS constructs the end-of-file condition during
+		// the EXPRESSION expansion (expandReadEofSignal) -- after this scan -- so the
+		// operators' presence stands in for the tag.
+		for (String reader : List.of(LispNames.READ_CHAR, LispNames.READ_BYTE, LispNames.READ_LINE,
+				LispNames.PEEK_CHAR_INTERNAL, LispNames.READ_CHAR_RAW_INTERNAL, LispNames.READ_BYTE_RAW_INTERNAL,
+				LispNames.READ_LINE_RAW_INTERNAL)) {
+			if (symbols.contains(reader)) {
+				used.add(LispLayout.CLASS_TAG_PREFIX + "END-OF-FILE");
+				break;
+			}
+		}
+		for (String tag : closRegistry.layouts().keySet()) {
+			String bare = tag.startsWith(LispLayout.CLASS_TAG_PREFIX)
+					? tag.substring(LispLayout.CLASS_TAG_PREFIX.length()) : tag.startsWith(LispLayout.STRUCT_TAG_PREFIX)
+							? tag.substring(LispLayout.STRUCT_TAG_PREFIX.length()) : null;
+			if (bare == null || symbols.contains(tag) || symbols.contains(bare)
+					|| symbols.contains(LispSymbol.memberName(bare))) {
+				used.add(tag);
+			}
+		}
+		return used;
+	}
+
+	/**
+	 * Member names whose presence makes the reachable-layout set unknowable: subclass
+	 * enumeration reaches classes no name spells, and a class resolved from a computed
+	 * name can be any registered one.
+	 */
+	private static final java.util.Set<String> LAYOUT_TAG_BAILS = java.util.Set.of("CLASS-DIRECT-SUBCLASSES",
+			"%CLASS-DIRECT-SUBCLASSES", "FIND-CLASS", "CHANGE-CLASS", "ALLOCATE-INSTANCE", "SYMBOL-FUNCTION",
+			"FDEFINITION");
+
+	private static void collectSymbolNames(LispVal form, java.util.Set<String> out) {
+		switch (form) {
+			case LispSymbol sym -> {
+				out.add(sym.name());
+				String member = LispSymbol.memberName(sym.name());
+				if (!member.equals(sym.name())) {
+					out.add(member);
+				}
+			}
+			case LispCons cons -> {
+				collectSymbolNames(cons.car(), out);
+				collectSymbolNames(cons.cdr(), out);
+			}
+			case LispArray array -> {
+				for (LispVal element : array.data()) {
+					collectSymbolNames(element, out);
+				}
+			}
+			case am.ik.rontolisp.LispStructLiteral literal -> {
+				out.add(literal.typeName());
+				for (LispVal value : literal.slotValues()) {
+					collectSymbolNames(value, out);
+				}
+			}
+			default -> {
+			}
+		}
 	}
 
 	static final class StringTable {

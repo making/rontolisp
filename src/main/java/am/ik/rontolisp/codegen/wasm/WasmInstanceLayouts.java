@@ -98,11 +98,23 @@ final class WasmInstanceLayouts {
 	 * Interns every layout's strings and appends its record to the static data segment.
 	 * @param registry the compilation's CLOS/struct registry
 	 * @param stringTable the module's string table, still open for appends
+	 * @param usedTags the {@code %class-}/{@code %struct-} tags the program can reach
+	 * (see {@code WasmLispCompiler.usedLayoutTags}), or null to bake every layout -- the
+	 * pre-narrowing behavior, kept whenever the tag set is unknowable ({@code --dynamic},
+	 * an embedded eval runtime, subclass enumeration)
 	 * @return instance tag to the absolute linear address of its layout record
 	 */
-	static Map<String, Integer> emit(ClosRegistry registry, WasmLispCompiler.StringTable stringTable) {
+	static Map<String, Integer> emit(ClosRegistry registry, WasmLispCompiler.StringTable stringTable,
+			java.util.@org.jspecify.annotations.Nullable Set<String> usedTags) {
 		Map<String, Integer> addresses = new LinkedHashMap<>();
 		for (LispLayout layout : registry.layouts().values()) {
+			// A layout outside the two prefixed families (the unbound marker, PATHNAME)
+			// is runtime plumbing and always ships.
+			if (usedTags != null && !usedTags.contains(layout.tag())
+					&& (layout.tag().startsWith(LispLayout.CLASS_TAG_PREFIX)
+							|| layout.tag().startsWith(LispLayout.STRUCT_TAG_PREFIX))) {
+				continue;
+			}
 			// Every string is interned BEFORE the record is serialized: the record holds
 			// their offsets.
 			WasmLispCompiler.StringTable.StringEntry tag = stringTable.addString(layout.tag());

@@ -15230,9 +15230,12 @@ public final class LispMacroExpander {
 			out.addAll(slotUnboundDefuns());
 		}
 		// The condition-report renderer, once per program that can build a condition.
-		// Emitted here so its class partition is the COMPLETE registry.
+		// Emitted here so its class partition is the COMPLETE registry -- narrowed to
+		// the tags the program can actually construct, with the runtime format
+		// renderer declined when no site can hand it an unrendered control.
 		if (closRegistry.routesConditionReports()) {
-			out.addAll(conditionReportDefuns(closRegistry));
+			out.addAll(
+					conditionReportDefuns(closRegistry, conditionNarrowing(out, closRegistry, dynamic, restartMode)));
 		}
 		// The print-object renderer, once per program that defines a print-object method
 		// or routes condition reports. Emitted here so the tag list is the COMPLETE
@@ -20297,6 +20300,365 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * What the condition-report runtime may be narrowed to, computed by
+	 * {@link #conditionNarrowing} on the compile path and answered as {@link #none()}
+	 * everywhere the world stays open (the interpreter, {@code --dynamic}, restart mode).
+	 *
+	 * @param constructibleTags the {@code %class-} tags any reachable site can construct,
+	 * or null when unknowable (no narrowing)
+	 * @param declineRenderer whether every possible {@code format-control} is a
+	 * directive-free literal (or nil) with nil {@code format-arguments}, so
+	 * {@code %format-condition} needs no runtime renderer
+	 */
+	public record ConditionNarrowing(java.util.@Nullable Set<String> constructibleTags, boolean declineRenderer) {
+
+		/**
+		 * No narrowing at all: every registered condition class stays in the report
+		 * partition and the renderer arm stays in {@code %format-condition}.
+		 * @return the identity narrowing
+		 */
+		public static ConditionNarrowing none() {
+			return new ConditionNarrowing(null, false);
+		}
+
+	}
+
+	/**
+	 * Scans the EXPANDED program for what the condition runtime must serve. A condition
+	 * instance can only come from: an {@code error}/{@code warn}/{@code signal}/
+	 * {@code cerror}/{@code make-condition}/{@code make-instance} whose datum names a
+	 * class literally (collected), one whose datum is a literal string (the expansion
+	 * pre-renders the message and synthesizes a simple-* instance -- always in the set),
+	 * an {@code %obj-new} with a literal {@code %class-} tag (collected), or the
+	 * handler-case/restart fallback synthesis (the simple-* tags, always in the set). The
+	 * scan BAILS to {@link ConditionNarrowing#none()} on anything that makes the set
+	 * unknowable: a computed datum, an {@code eval}/{@code symbol-function}/
+	 * {@code fdefinition} occurrence, or an error-family function escaping as a value
+	 * ({@code #'error} outside {@code funcall}/{@code apply} head position, the quoted
+	 * designator in data). A name forged from computed strings alone can still reach a
+	 * pruned arm at run time -- the same documented carve-out as the pruner's, and the
+	 * failure is a fallback report text, never a lost signal (the report renderer's
+	 * callers all fall back when it answers nil).
+	 *
+	 * <p>
+	 * The decline half additionally requires every collected constructor site to hand
+	 * {@code format-control}/{@code format-arguments} nothing but a directive-free
+	 * literal string (or nil) and literal nil -- which the pre-rendering expansions
+	 * guarantee for every string-datum site, so only an explicit {@code :format-control}
+	 * initarg can force the renderer.
+	 * @param program the expanded program (post definition walk, pre report splice)
+	 * @param closRegistry the completed registry
+	 * @param dynamic whether the compile is {@code --dynamic} (never narrows)
+	 * @param restartMode whether the restart runtime is on (never narrows)
+	 * @return the narrowing, or {@link ConditionNarrowing#none()} when unknowable
+	 */
+	public static ConditionNarrowing conditionNarrowing(List<LispVal> program, ClosRegistry closRegistry,
+			boolean dynamic, boolean restartMode) {
+		if (dynamic || restartMode) {
+			return ConditionNarrowing.none();
+		}
+		ConditionTagScan scan = new ConditionTagScan(closRegistry);
+		for (LispVal form : program) {
+			scan.inGeneratedErrorRuntime = isGeneratedErrorRuntimeDefun(form);
+			scan.walk(form, false);
+		}
+		if (scan.bail) {
+			return ConditionNarrowing.none();
+		}
+		scan.tags.add("%class-SIMPLE-ERROR");
+		scan.tags.add(SIMPLE_CONDITION_TAG);
+		scan.tags.add("%class-SIMPLE-WARNING");
+		return new ConditionNarrowing(java.util.Set.copyOf(scan.tags), !scan.rendererForced);
+	}
+
+	private static final java.util.Set<String> CONDITION_SIGNAL_FAMILY = java.util.Set.of(LispNames.ERROR,
+			LispNames.WARN, LispNames.CERROR, LispNames.SIGNAL, LispNames.MAKE_CONDITION);
+
+	/** Whether the form is one of {@code runtimeErrorDefuns}' own generated defuns. */
+	private static boolean isGeneratedErrorRuntimeDefun(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.DEFUN.equals(op.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+			return LispNames.ERROR_RUNTIME.equals(name.name()) || name.name().startsWith("%ERROR-RT-");
+		}
+		return false;
+	}
+
+	private static final class ConditionTagScan {
+
+		private final ClosRegistry closRegistry;
+
+		final java.util.Set<String> tags = new java.util.HashSet<>();
+
+		boolean bail;
+
+		boolean rendererForced;
+
+		boolean inGeneratedErrorRuntime;
+
+		ConditionTagScan(ClosRegistry closRegistry) {
+			this.closRegistry = closRegistry;
+		}
+
+		void walk(LispVal form, boolean asData) {
+			if (this.bail) {
+				return;
+			}
+			switch (form) {
+				case LispSymbol sym -> {
+					String member = LispSymbol.memberName(sym.name());
+					if (asData && CONDITION_SIGNAL_FAMILY.contains(member) && !this.inGeneratedErrorRuntime) {
+						// 'error in data can be handed to funcall/mapcar/... with a
+						// computed datum later. The generated %error-runtime defuns are
+						// exempt: their (list 'error) / (member d '(error)) spellings
+						// are message data and dispatch keys by construction, and their
+						// %obj-new tags are still collected (each dispatched class IS
+						// constructible through them).
+						this.bail = true;
+					}
+					if ("SYMBOL-FUNCTION".equals(member) || "FDEFINITION".equals(member) || "EVAL".equals(member)) {
+						this.bail = true;
+					}
+				}
+				case LispCons cons -> walkCons(cons, asData);
+				default -> {
+				}
+			}
+		}
+
+		private void walkCons(LispCons cons, boolean asData) {
+			if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+				for (LispVal rest = cons; rest instanceof LispCons cell; rest = cell.cdr()) {
+					walk(cell.car(), asData);
+				}
+				return;
+			}
+			List<LispVal> parts = cons.toList();
+			String member = LispSymbol.memberName(op.name());
+			if (LispNames.QUOTE.equals(member)) {
+				walk(parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE, true);
+				return;
+			}
+			if (asData) {
+				for (LispVal part : parts) {
+					walk(part, true);
+				}
+				return;
+			}
+			if (LispNames.FUNCTION.equals(member)) {
+				if (parts.size() > 1 && parts.get(1) instanceof LispSymbol named
+						&& CONDITION_SIGNAL_FAMILY.contains(LispSymbol.memberName(named.name()))) {
+					this.bail = true;
+					return;
+				}
+				walk(parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE, false);
+				return;
+			}
+			if (LispNames.FUNCALL.equals(member) || LispNames.APPLY.equals(member)) {
+				String target = parts.size() > 1 && parts.get(1) instanceof LispCons head
+						&& head.car() instanceof LispSymbol headOp
+						&& (LispNames.FUNCTION.equals(headOp.name()) || LispNames.QUOTE.equals(headOp.name()))
+						&& head.cdr() instanceof LispCons headCell && headCell.car() instanceof LispSymbol named
+								? named.name() : null;
+				if (target != null && CONDITION_SIGNAL_FAMILY.contains(LispSymbol.memberName(target))) {
+					if (LispNames.APPLY.equals(member)) {
+						// The spread argument hides the datum.
+						this.bail = true;
+						return;
+					}
+					signalSite(LispSymbol.memberName(target),
+							parts.size() > 2 ? parts.subList(2, parts.size()) : List.of());
+					return;
+				}
+				for (int i = 1; i < parts.size(); i++) {
+					walk(parts.get(i), false);
+				}
+				return;
+			}
+			if (CONDITION_SIGNAL_FAMILY.contains(member)) {
+				signalSite(member, parts.subList(1, parts.size()));
+				return;
+			}
+			if (LispNames.CASE.equals(member) || LispNames.ECASE.equals(member) || LispNames.TYPECASE.equals(member)
+					|| LispNames.ETYPECASE.equals(member)) {
+				// A clause's keys / type-specifier head are compared, never called or
+				// funcalled -- only the subject and the clause bodies are code.
+				if (parts.size() > 1) {
+					walk(parts.get(1), false);
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					if (parts.get(i) instanceof LispCons clause) {
+						for (LispVal body = clause.cdr(); body instanceof LispCons cell; body = cell.cdr()) {
+							walk(cell.car(), false);
+						}
+					}
+				}
+				return;
+			}
+			if (LispNames.HANDLER_CASE.equals(member) || LispNames.HANDLER_BIND.equals(member)) {
+				// A handler clause's HEAD is a type specifier (tested, not
+				// constructed) and its var list binds -- neither is a signal site:
+				// (handler-case body (error (e) use...)) / (handler-bind ((error fn))
+				// body).
+				if (LispNames.HANDLER_CASE.equals(member)) {
+					if (parts.size() > 1) {
+						walk(parts.get(1), false);
+					}
+					for (int i = 2; i < parts.size(); i++) {
+						if (parts.get(i) instanceof LispCons clause && clause.cdr() instanceof LispCons rest
+								&& rest.cdr() instanceof LispVal) {
+							for (LispVal body = rest.cdr(); body instanceof LispCons cell; body = cell.cdr()) {
+								walk(cell.car(), false);
+							}
+						}
+					}
+				}
+				else {
+					if (parts.size() > 1 && parts.get(1) instanceof LispCons bindings) {
+						for (LispVal rest = bindings; rest instanceof LispCons cell; rest = cell.cdr()) {
+							if (cell.car() instanceof LispCons binding && binding.cdr() instanceof LispCons fnCell) {
+								walk(fnCell.car(), false);
+							}
+						}
+					}
+					for (int i = 2; i < parts.size(); i++) {
+						walk(parts.get(i), false);
+					}
+				}
+				return;
+			}
+			if (LispNames.MAKE_INSTANCE.equals(member) || "CHANGE-CLASS".equals(member)) {
+				List<LispVal> args = parts.subList(LispNames.MAKE_INSTANCE.equals(member) ? 1 : 2, parts.size());
+				if (args.isEmpty()) {
+					return;
+				}
+				String className = quotedSymbolName(args.get(0));
+				if (className == null) {
+					// A computed class could be a condition class.
+					this.bail = true;
+					return;
+				}
+				ClosRegistry.ClassInfo info = this.closRegistry.findClass(className);
+				if (info != null && info.ancestors().contains("CONDITION")) {
+					this.tags.add(LispLayout.CLASS_TAG_PREFIX + info.name());
+					checkInitargs(args.subList(1, args.size()));
+				}
+				for (LispVal arg : args.subList(1, args.size())) {
+					walk(arg, false);
+				}
+				return;
+			}
+			if (LispNames.OBJ_NEW.equals(member)) {
+				String tag = quotedSymbolName(parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE);
+				if (tag == null) {
+					this.bail = true;
+					return;
+				}
+				if (tag.startsWith(LispLayout.CLASS_TAG_PREFIX)) {
+					this.tags.add(tag);
+					String className = tag.substring(LispLayout.CLASS_TAG_PREFIX.length());
+					ClosRegistry.ClassInfo info = this.closRegistry.findClass(className);
+					if (info != null) {
+						int controlIndex = slotIndexOf(info, "FORMAT-CONTROL");
+						int argumentsIndex = slotIndexOf(info, "FORMAT-ARGUMENTS");
+						if (controlIndex >= 0 && argumentsIndex >= 0) {
+							LispVal control = 2 + controlIndex < parts.size() ? parts.get(2 + controlIndex)
+									: LispNil.INSTANCE;
+							LispVal arguments = 2 + argumentsIndex < parts.size() ? parts.get(2 + argumentsIndex)
+									: LispNil.INSTANCE;
+							// A BARE SYMBOL here is a generated constructor's
+							// parameter, whose values are the (already checked)
+							// surface initargs; a CONS is a baked :initform /
+							// :default-initargs expression the surface check cannot
+							// see, so it forces the renderer.
+							if (!isRenderedControl(control) && !(control instanceof LispSymbol)) {
+								this.rendererForced = true;
+							}
+							if (!isLiteralNil(arguments) && !(arguments instanceof LispSymbol)) {
+								this.rendererForced = true;
+							}
+						}
+					}
+				}
+				for (LispVal arg : parts.subList(2, parts.size())) {
+					walk(arg, false);
+				}
+				return;
+			}
+			for (LispVal part : parts) {
+				walk(part, false);
+			}
+		}
+
+		/**
+		 * One error/warn/signal/cerror/make-condition call; args exclude the operator.
+		 */
+		private void signalSite(String member, List<LispVal> args) {
+			int datumAt = LispNames.CERROR.equals(member) ? 1 : 0;
+			if (args.size() <= datumAt) {
+				return;
+			}
+			LispVal datum = args.get(datumAt);
+			String className = quotedSymbolName(datum);
+			if (className != null) {
+				ClosRegistry.ClassInfo info = this.closRegistry.findClass(className);
+				this.tags.add(LispLayout.CLASS_TAG_PREFIX + (info != null ? info.name() : className));
+				checkInitargs(args.subList(datumAt + 1, args.size()));
+			}
+			else if (!(datum instanceof LispString)) {
+				// A computed datum can name any condition class.
+				this.bail = true;
+				return;
+			}
+			// A literal-string datum is pre-rendered by expandObjectSignal whatever its
+			// arguments are; only walk the arguments for nested sites.
+			for (int i = datumAt + 1; i < args.size(); i++) {
+				walk(args.get(i), false);
+			}
+		}
+
+		/**
+		 * Flags an explicit :format-control/:format-arguments initarg the fast path
+		 * cannot serve.
+		 */
+		private void checkInitargs(List<LispVal> initargs) {
+			for (int i = 0; i + 1 < initargs.size(); i += 2) {
+				if (!(initargs.get(i) instanceof LispSymbol key)) {
+					return;
+				}
+				if (":FORMAT-CONTROL".equals(key.name()) && !isRenderedControl(initargs.get(i + 1))) {
+					this.rendererForced = true;
+				}
+				if (":FORMAT-ARGUMENTS".equals(key.name()) && !isLiteralNil(initargs.get(i + 1))) {
+					this.rendererForced = true;
+				}
+			}
+		}
+
+		/**
+		 * A control the identity fast path renders correctly: nil, or a tilde-free
+		 * literal.
+		 */
+		private static boolean isRenderedControl(LispVal control) {
+			return isLiteralNil(control) || control instanceof LispString text && text.value().indexOf('~') < 0;
+		}
+
+		private static boolean isLiteralNil(LispVal value) {
+			return value instanceof LispNil || value instanceof LispCons quoted && quoted.car() instanceof LispSymbol q
+					&& LispNames.QUOTE.equals(q.name()) && quoted.cdr() instanceof LispCons cell
+					&& cell.car() instanceof LispNil;
+		}
+
+		@Nullable private static String quotedSymbolName(LispVal form) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+					&& cons.cdr() instanceof LispCons cell && cell.car() instanceof LispSymbol name) {
+				return name.name();
+			}
+			return null;
+		}
+
+	}
+
+	/**
 	 * Partitions every registered CONDITION class by how its report renders. A class with
 	 * no {@code :report} of its own inherits the nearest ancestor's (walking the
 	 * slot-layout parent chain, which is the one {@code define-condition} inherits slots
@@ -20312,13 +20674,22 @@ public final class LispMacroExpander {
 	 * over a hundred -- and the groups partition the tags, so clause order carries no
 	 * meaning.
 	 */
-	private static List<ConditionReportGroup> conditionReportGroups(ClosRegistry closRegistry) {
+	private static List<ConditionReportGroup> conditionReportGroups(ClosRegistry closRegistry,
+			java.util.@Nullable Set<String> constructibleTags) {
 		java.util.Map<String, ConditionReportGroup> groups = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.ClassInfo cls : closRegistry.classes().values()) {
 			if (!cls.ancestors().contains("CONDITION")) {
 				continue;
 			}
 			String tag = LispLayout.CLASS_TAG_PREFIX + cls.name();
+			if (constructibleTags != null && !constructibleTags.contains(tag)) {
+				// No reachable site can construct an instance carrying this tag, so its
+				// report arm can never match a value -- the seeded end-of-file /
+				// unbound-slot / simple-type-error arms (and their report strings) leave
+				// every artifact that cannot build them. The interpreter never narrows
+				// (ConditionNarrowing.none()), so eval-world behavior is unchanged.
+				continue;
+			}
 			String key = null;
 			LispVal report = null;
 			// The nearest report along the class precedence list (the CPL is the
@@ -20388,10 +20759,24 @@ public final class LispMacroExpander {
 	 * @return the two defuns, in dependency order
 	 */
 	public static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry) {
+		return conditionReportDefuns(closRegistry, ConditionNarrowing.none());
+	}
+
+	/**
+	 * The narrowed variant the compile path uses: the report partition keeps only
+	 * constructible tags, and {@code %format-condition}'s renderer arm is declined when
+	 * no reachable site can hand it an unrendered control (see
+	 * {@link #conditionNarrowing}). The interpreter keeps the unnarrowed overload above
+	 * -- its world stays open at run time.
+	 * @param closRegistry the completed registry
+	 * @param narrowing what the program can construct
+	 * @return the {@code %format-condition} and {@code %condition-report-str} defuns
+	 */
+	public static List<LispVal> conditionReportDefuns(ClosRegistry closRegistry, ConditionNarrowing narrowing) {
 		LispSymbol value = new LispSymbol("__crv");
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(new LispSymbol(LispNames.COND));
-		for (ConditionReportGroup group : conditionReportGroups(closRegistry)) {
+		for (ConditionReportGroup group : conditionReportGroups(closRegistry, narrowing.constructibleTags())) {
 			LispVal rendered;
 			if (group.report() instanceof LispString text) {
 				rendered = text;
@@ -20410,7 +20795,7 @@ public final class LispMacroExpander {
 		LispVal reportDefun = listToCons(
 				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.CONDITION_REPORT_STR_INTERNAL),
 						listToCons(List.<LispVal>of(value)), listToCons(clauses)));
-		return List.of(formatConditionDefun(), reportDefun);
+		return List.of(formatConditionDefun(narrowing.declineRenderer()), reportDefun);
 	}
 
 	/**
@@ -20427,7 +20812,7 @@ public final class LispMacroExpander {
 	 * prints a condition. A nil control is no report at all, and answers nil so the
 	 * caller falls back.
 	 */
-	private static LispVal formatConditionDefun() {
+	private static LispVal formatConditionDefun(boolean declineRenderer) {
 		LispSymbol control = new LispSymbol("__fcc");
 		LispSymbol args = new LispSymbol("__fca");
 		LispSymbol stream = new LispSymbol("__fcs");
@@ -20446,7 +20831,13 @@ public final class LispMacroExpander {
 		arity.add(listToCons(List.of(LispTrue.INSTANCE,
 				listToCons(List.of(new LispSymbol(LispNames.FUNCALL), control, stream, first, second, third)))));
 		LispVal functionControl = renderedToString(stream, listToCons(arity));
-		LispVal body = makeIf(callOf(LispNames.STRINGP, control), FormatRenderer.call(control, args),
+		// The renderer arm is what pulls format-render.lisp (~33 KB of source) into
+		// every artifact that can build a condition. When conditionNarrowing PROVED
+		// every reachable control is a directive-free literal (or nil) with nil
+		// arguments -- the synthesized-simple-error common case -- the string arm
+		// answers the control itself and the renderer is never spliced.
+		LispVal stringArm = declineRenderer ? control : FormatRenderer.call(control, args);
+		LispVal body = makeIf(callOf(LispNames.STRINGP, control), stringArm,
 				makeIf(callOf(LispNames.NULL, control), LispNil.INSTANCE, functionControl));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.FORMAT_CONDITION_INTERNAL),
 				listToCons(List.of(control, args)), body));
@@ -25139,6 +25530,53 @@ public final class LispMacroExpander {
 				if (parts.size() > 2 && isRuntimeErrorDatum(parts.get(1))) {
 					return true;
 				}
+			}
+			// A clause whose HEAD is a type specifier (or a key list) is not a call:
+			// (handler-case b (error (e) use...)) used to read as (error <computed>
+			// ...) and put the whole 23-class construction runtime into every
+			// handler-case artifact -- the same misread class as usesRestartSystem's
+			// tagbody-tag CONTINUE (fixed for todo 315). Only the clause BODIES are
+			// evaluated forms.
+			if ((LispNames.HANDLER_CASE.equals(member) || LispNames.CASE.equals(member)
+					|| LispNames.ECASE.equals(member) || LispNames.TYPECASE.equals(member)
+					|| LispNames.ETYPECASE.equals(member)) && cons.isProperList()) {
+				List<LispVal> parts = cons.toList();
+				if (parts.size() > 1 && containsRuntimeErrorDispatch(parts.get(1))) {
+					return true;
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					if (!(parts.get(i) instanceof LispCons clause)) {
+						continue;
+					}
+					// handler-case: (type (var) body...); case family: (keys body...).
+					int bodyFrom = LispNames.HANDLER_CASE.equals(member) ? 2 : 1;
+					List<LispVal> clauseParts = clause.isProperList() ? clause.toList() : List.of();
+					for (int j = bodyFrom; j < clauseParts.size(); j++) {
+						if (containsRuntimeErrorDispatch(clauseParts.get(j))) {
+							return true;
+						}
+					}
+				}
+				return false;
+			}
+			if (LispNames.HANDLER_BIND.equals(member) && cons.isProperList()) {
+				// (handler-bind ((type handler)...) body...): the handler expressions
+				// and the body are code, the type heads are not.
+				List<LispVal> parts = cons.toList();
+				if (parts.size() > 1 && parts.get(1) instanceof LispCons bindings) {
+					for (LispVal rest = bindings; rest instanceof LispCons cell; rest = cell.cdr()) {
+						if (cell.car() instanceof LispCons binding && binding.cdr() instanceof LispCons handlerCell
+								&& containsRuntimeErrorDispatch(handlerCell.car())) {
+							return true;
+						}
+					}
+				}
+				for (int i = 2; i < parts.size(); i++) {
+					if (containsRuntimeErrorDispatch(parts.get(i))) {
+						return true;
+					}
+				}
+				return false;
 			}
 		}
 		return containsRuntimeErrorDispatch(cons.car()) || containsRuntimeErrorDispatch(cons.cdr());

@@ -451,6 +451,70 @@ belonged (cl-postgres surfaces every server NOTICE that way).
   block of `WasmLispCompilerIntegrationTest`, and the cross-backend ci-spec cases
   `condition-report-printing` + `signal-runtime-control-string`.
 
+## The condition floor is narrowed to what the program can construct (todo-316)
+
+The compile path shrinks the condition runtime along three axes; the interpreter
+never narrows (its world stays open at run time), and every narrowing is
+IMPOSSIBILITY-based -- a pruned arm/layout can only be reached by a value the
+program cannot make -- so behavior is identical wherever a value can exist.
+
+- **`conditionNarrowing`** (`LispMacroExpander`) scans the expanded program for
+  the constructible `%class-` tag set + whether any site can hand
+  `%format-condition` an UNRENDERED control. Tag sources: literal datums of the
+  signal family (`error`/`warn`/`signal`/`cerror`/`make-condition`,
+  `make-instance` of a condition class), literal-tag `%obj-new`, plus always the
+  synthesized simple-* three. It BAILS to `none()` (no narrowing) on a computed
+  datum, `eval`/`symbol-function`/`fdefinition`, an escaping `#'error`-family
+  value or quoted designator in data, `--dynamic`, restart mode. `handler-case`/
+  `handler-bind`/`case`-family clause HEADS are type specifiers / keys, not
+  calls, and the generated `%error-runtime`/`%error-rt-*` defuns are exempt from
+  the quoted-designator bail (their `(list 'error)` is message data; their
+  `%obj-new` tags are still collected -- through them every dispatched class IS
+  constructible). Name forgery from computed strings can still reach a pruned arm:
+  same carve-out family as the pruner's, and the failure is the caller's fallback
+  report text, never a lost signal.
+- **`conditionReportGroups` filters by the tag set**: the seeded `end-of-file`/
+  `unbound-slot`/`simple-type-error` arms (and their report strings) leave every
+  artifact that cannot construct them.
+- **`%format-condition` declines the renderer** when every possible control is a
+  directive-free literal (or nil) with nil arguments -- the common case, because
+  every string-datum signal site pre-renders its message (`formatMessagePieces`)
+  and stores nil arguments. Only an explicit `:format-control` initarg (surface
+  keyword check + the baked `:initform`/`:default-initargs` cons check inside
+  generated constructors' `%obj-new`) forces it back. On zlib the declined
+  renderer plus its transitive string machinery was **-61 KB**. One corner moves
+  TOWARD CLHS: the double-render deviation above requires the renderer, so a
+  declined artifact prints a rendered-once message whose text contains a live
+  tilde verbatim where the interpreter still re-renders it -- reachable only when
+  a format ARGUMENT's own text carries `~`. Re-evaluation trigger: if that
+  divergence ever bites, render once EVERYWHERE (retire the deviation), not by
+  un-declining.
+- **`WasmInstanceLayouts.emit` takes a used-tag set** (`usedLayoutTags` in
+  `WasmLispCompiler`): a `%class-`/`%struct-` layout ships only when its tag or
+  bare name occurs as a symbol in the final program (plus the simple-* three the
+  handler lowering synthesizes during Pass 2), with null (= bake all) under
+  `--dynamic`, an embedded eval runtime, restart mode, subclass enumeration,
+  `find-class`/`change-class`/`allocate-instance`/`symbol-function`/
+  `fdefinition`. The JVM backend already interned per referenced tag
+  (`LayoutPool`); this is the WASM twin. Note a `handler-case (error (e) ...)`
+  clause keeps every error-descendant layout through its lowered ancestor tag
+  list -- correct, those are testable.
+- **`needsRuntimeErrorDispatch` no longer misreads handler clauses**:
+  `(handler-case b (error (e) use...))` used to parse as `(error <computed> ...)`
+  and bake the whole per-class construction runtime (`%error-runtime` +
+  `%error-rt-*` for all 23 seeded classes) into EVERY handler-case artifact --
+  the same misread class as `usesRestartSystem`'s tagbody-tag CONTINUE (todo
+  315). With clause heads skipped (handler-case/handler-bind/case family), the
+  89,138 B handler-case probe is **23,341 B**; a real computed datum
+  (`(error which :name 'x)`) still splices the dispatch, four-backend verified.
+
+Pinned by `LispMacroExpanderTest.conditionNarrowing*` /
+`anExplicitFormatControlInitargForcesTheRenderer` /
+`aComputedDatumMakesTheConditionSetUnknowable` /
+`aDirectiveFreeLiteralFormatControlStillDeclinesTheRenderer`, and behaviorally by
+the whole condition block of the three per-backend suites plus the ci-spec
+condition cases, which now run against narrowed artifacts.
+
 ## cerror + signal-operator function values (todo-085, cl-base64)
 
 `cerror` has TWO lowerings, selected by the restart-mode gate (Phase 4 above).
