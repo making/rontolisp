@@ -37,7 +37,7 @@ jobs:
     - name: Install wasmtime
       uses: bytecodealliance/actions/wasmtime/setup@v1
       with:
-        version: "v47.0.2"
+        version: "v47.0.3"
     - uses: actions/setup-node@v4
       with:
         node-version: '24'
