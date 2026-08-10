@@ -260,7 +260,12 @@ does not need rebuilding unless Java sources changed).
 
 ### After Task Completion
 
-- Format: `./mvnw spring-javaformat:apply`
+- Format (Java): `./mvnw spring-javaformat:apply`
+- Format (Lisp): with a built exec jar, format the checked-in sources in place before the
+  test run:
+  ```bash
+  java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar format examples/ src/main/resources/
+  ```
 - Test: `./mvnw test`
 - Web profile compile: `./mvnw -Pweb compile`. Required whenever `src/web/java` changed (the `Target_*` substitutions, `web/` `@JS` classes) or a signature it overrides changed. `src/web/java` compiles only under the `web` profile, so `./mvnw test` does NOT catch a break there -- only the web-playground CI job does. It leaves `target/classes` holding the WEB source set, so run it AFTER the test suite, or `clean` in between: a later `./mvnw test` without `clean` reuses that tree and fails with `NoClassDefFoundError` on classes the web profile excludes (e.g. `codegen.wasm`), which reads like a real regression and is not one.
 - Native E2E: build the native image and run `CiSpecE2eTest` against it (see above). Required whenever `ci-spec.yaml` or any cross-backend output changed.
