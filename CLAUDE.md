@@ -196,6 +196,13 @@ example README that wants to talk about size links to
 `measure.sh`'s `wasm_builds` / `worker_builds` table, not a paragraph in a
 README.
 
+Each `results/*.md` carries its own prose -- what that family measures, how to
+read the numbers -- below the generated table, so the explanation travels with
+the numbers instead of sitting one directory up. That prose is
+`size-report/notes/<report>.md`, appended verbatim by `measure.sh`. Edit
+`notes/`; anything written into `results/` by hand is gone at the next run.
+`size-report/README.md` stays the build-and-run page.
+
 ### Verifying Output Manually (all four backends)
 
 A program is "verified" only when it has been run on **all four** backends. Don't
