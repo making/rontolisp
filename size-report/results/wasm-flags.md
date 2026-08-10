@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`9791831`)
+- rontolisp: 0.1.0-SNAPSHOT (`1147b88`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -20,10 +20,10 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 425,341 |
-| zlib | `--optimize` | core (command) | Preview 1 | 246,075 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 194,107 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 198,801 |
+| zlib | (none) | core (command) | Preview 1 | 423,094 |
+| zlib | `--optimize` | core (command) | Preview 1 | 243,840 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 191,872 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 196,613 |
 
 ## What is measured
 
@@ -103,6 +103,19 @@ anchor it, and the condition-runtime narrowing (`.kb/error-handling.md`) drops
 the format renderer and the unreachable seeded-condition arms and layouts. That
 is why the `zlib` rows sit far below chipz's full source size while the row's
 check still gunzips the stream byte-identically on every backend.
+
+**And the last -1.2% is the data section, not code.** A library whose every slot
+accessor is a generic used to ship its name three times over: once for the
+`_lookup` registry, once again in the single-colon alias spelling nothing could
+address (`.kb/symbol-runtime-api.md`), and once more inside a whole
+`"No applicable method: X on "` sentence per generic. Those, plus interning a
+layout's print name as a view into its own `%class-` tag rather than a second
+copy (`.kb/instance-syntax.md`), are worth 2,235 bytes here -- small next to the
+code-side stages above, and the reason the remaining gap to the C and Zig rows
+is runtime rather than redundancy. Note what that trade looks like COMPRESSED:
+duplicate text is what a compressor collapses for free, so removing it moves the
+raw number and barely the gzipped one (the Worker table, which counts gzip,
+shows raw down on every row and gzip within a percent either way).
 
 **The unoptimized micro rows are the prelude, so they move when the prelude
 does.** They grew by ~2.3 KB when `fill` joined it; `--optimize` takes both back
