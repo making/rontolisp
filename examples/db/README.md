@@ -21,27 +21,24 @@ export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ```
 
 No program here holds a connection string. Each calls
-`(database-url-parts (uiop:getenv "DATABASE_URL"))` — `uiop:getenv` being
-rontolisp's one spelling of "read an environment variable", ANSI CL having none
-— where `database-url-parts` comes from [`database-url.lisp`](database-url.lisp),
-pulled in with a top-level `(load "database-url.lisp")` and so spliced in at
-compile time: the parser compiles natively on every backend rather than needing
-`--dynamic`. It takes a URL and knows nothing about the environment, so the same
-five values can come from a config file or a command-line argument instead.
+`(database-url-parts (uiop:getenv "DATABASE_URL"))`, where `database-url-parts`
+comes from [`database-url.lisp`](database-url.lisp), pulled in with a top-level
+`(load ...)` and so spliced in at compile time — the parser compiles natively on
+every backend rather than needing `--dynamic`. It takes a URL and knows nothing
+about the environment, so the same five values could come from a config file
+instead.
 
 ```
 postgresql://user:password@host:port/database
 ```
 
-`postgres://` works as an alias for `postgresql://`. The password is optional
-(what the trust-auth server above wants), so is the port (5432), and so is a
-trailing query string — an `?sslmode=…`, which these examples recognise and
-drop, `use-ssl` not being wired up here. `%XX` escapes in the user and the
-password are decoded, so a password holding an `@` travels as `%40`; a `+` stays
-a literal plus, this being URI userinfo rather than a query string. Anything
-else — an unset variable, a missing host, a port that is not a number — is an
-error naming what is wrong, never a silent default: a fallback address would be
-the hardcoded connection this file exists to remove.
+`postgres://` is an alias. The password, the port (5432) and a trailing
+`?sslmode=…` (recognised and dropped — `use-ssl` is not wired up here) are all
+optional. `%XX` escapes in the user and password are decoded, so a password
+holding an `@` travels as `%40`; a `+` stays a literal plus, this being URI
+userinfo rather than a query string. Anything else — an unset variable, a
+missing host, a non-numeric port — is an error naming what is wrong, never a
+silent default.
 
 ## Interpreter / JVM
 
@@ -95,20 +92,17 @@ workload:
       DATABASE_URL: postgresql://postgres@192.168.11.76:54329/postgres
 ```
 
-`workload.environment.config` is inline values; `workload.environment.configFrom`
-/ `secretFrom` instead name entries of a top-level `configs:` / `secrets:`
-block (a `file:` path or `fromEnv:` list of names to read from the
-developer's own shell) for values that should not sit in the YAML in the
-clear. Either way this reaches `uiop:getenv` unmodified — wash links the
-same `wasi:cli/environment@0.3.0` interface `wasmtime serve --env` satisfies,
-just supplied from this block rather than a CLI flag.
+`workload.environment.config` is inline values; `configFrom` / `secretFrom`
+instead name entries of a top-level `configs:` / `secrets:` block, for values
+that should not sit in the YAML in the clear. Either way this reaches
+`uiop:getenv` unmodified — wash links the same `wasi:cli/environment@0.3.0`
+interface `wasmtime serve --env` satisfies.
 
 **Spin**
 ([canary build](https://github.com/spinframework/spin/releases/tag/canary),
-4.1.0-pre0+ — its wasmtime 47 enables the GC and
-exception-handling proposals by default) runs the same component with no
-flags at all, and serves it on `:3000`. Its sandbox is deny-by-default, so
-the manifest carries both the environment and the database address:
+4.1.0-pre0+) runs the same component with no flags at all and serves it on
+`:3000`. Its sandbox is deny-by-default, so the manifest carries both the
+environment and the database address:
 
 ```toml
 spin_manifest_version = 2
@@ -133,13 +127,10 @@ spin up
 ```
 
 `allowed_outbound_hosts` takes `<scheme>://<host>:<port>`, and the driver's
-plain TCP connect is checked under the **`tcp`** scheme — not `postgres` or
-`tcp`-less. Omit the entry and every request 500s with the destination named
-in the log (`Outbound network destination not allowed: tcp://127.0.0.1:54329`,
-plus the exact line to paste into the manifest); omit `environment` and you
-get the same bare `unreachable` trap `--env`-less wasmtime gives. Unlike wash,
-Spin does not virtualize the loopback: `127.0.0.1` in `DATABASE_URL` reaches a
-server on the developer's own machine.
+plain TCP connect is checked under the **`tcp`** scheme. Omit the entry and
+every request 500s with the destination named in the log; omit `environment` and
+you get the same bare `unreachable` trap `--env`-less wasmtime gives. Unlike
+wash, Spin does not virtualize the loopback.
 
 **A served component imports the environment interface itself.** The WASI 0.3
 service world carries no `wasi:cli/environment`, so the preview1 bridge answers

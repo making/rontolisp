@@ -1,9 +1,10 @@
 # hello — the smallest rontolisp Worker
 
 Three Lisp functions ([`worker.lisp`](worker.lisp)) that the Worker calls the
-way it would call any JavaScript function. The compiled module is
-**563 bytes**, imports **nothing**, and needs no WASI shim, no allocator and no
-bindings library — [`src/index.js`](src/index.js) is the entire host side.
+way it would call any JavaScript function. The compiled module imports
+**nothing** and needs no WASI shim, no allocator and no bindings library —
+[`src/index.js`](src/index.js) is the entire host side, and the module is by far
+the smallest thing [measured](../../../size-report/results/cloudflare-workers.md).
 
 ```bash
 ./build.sh          # worker.lisp -> src/worker.wasm
@@ -83,8 +84,8 @@ never the collector's business.)
 
 ## The non-GC subset
 
-`--no-gc` is what makes this module half a kilobyte and dependency-free, and it
-is available because `worker.lisp` stays inside the
+`--no-gc` is what makes this module tiny and dependency-free, and it is
+available because `worker.lisp` stays inside the
 [numeric/string subset](../../../doc/en/guides/wasm-nogc.md): integers, a string
 literal, `dotimes`. Add a cons cell, a hash table or the JSON library and the
 build needs the full language — `--no-wasi` instead of `--no-gc`, which is

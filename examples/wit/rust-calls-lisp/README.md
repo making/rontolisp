@@ -152,16 +152,8 @@ wasmtime run -W gc=y --invoke 'describe("hello world")' vowels.wasm
 ```
 
 The result is a `string`, so `wasmtime` prints it quoted (the inner quotes are
-the ones `describe` put around the phrase). Other inputs:
-
-```console
-$ wasmtime run -W gc=y --invoke 'describe("sky")' vowels.wasm
-"\"sky\" has 0 vowels"
-$ wasmtime run -W gc=y --invoke 'describe("a")' vowels.wasm
-"\"a\" has 1 vowel"
-```
-
-`a` gets the singular `vowel` -- the count that decided it came from the Lisp
+the ones `describe` put around the phrase). `describe("a")` answers
+`"\"a\" has 1 vowel"` — the count that picked the singular came from the Lisp
 component.
 
 ## Notes

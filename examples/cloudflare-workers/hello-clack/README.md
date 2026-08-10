@@ -71,35 +71,32 @@ standard error.
 
 ## What it costs
 
-`../hello` is the floor: three exported functions, no clack, **563 bytes**. This
-directory is the other end, and the difference is not the adapter — it is clack
-and lack being in the module so that `app` can be an ordinary Clack application.
+`../hello` is the floor: three exported functions and no clack. This directory
+is the other end, and the difference is not the adapter — it is clack and lack
+being in the module so that `app` can be an ordinary Clack application.
 
 | | [`../hello`](../hello) | this | [`../httpbin-clack`](../httpbin-clack) |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | the same, with five echo endpoints |
-| module | 563 B | 248,356 B raw / **75,334 B gzip** | 264,277 B / 79,438 B gzip |
 | imports | zero | **zero** — instantiated with `{}`, no WASI shim | zero |
 | `_initialize` | none (no top-level forms) | ~5 ms — clack's load time, `clackup` included | ~5 ms |
 | warm request | | **0.013 ms** | 0.038 ms |
 
-Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
-[`src/index.js`](src/index.js)'s boundary code against this exact
-`src/worker.wasm`.
-On the real edge, `wrangler deploy` reported **1608.77 KiB upload / 358.27 KiB
-gzip** and a **Worker Startup Time of 30 ms** — measured before the module
-shrank to today's 248 KB; the next deploy will report the smaller bundle — and
-both routes answer there — verified after deploying, not inferred. That startup
-figure was taken while `src/index.js` instantiated at module scope; it now
-instantiates on the first request (a Worker forbids generating random values in
-the global scope, and the module has to be seeded before `_initialize`), so the
-same work is now paid by request one.
+Measured on node 24 (V8, workerd's engine family) driving
+[`src/index.js`](src/index.js)'s boundary code against this `src/worker.wasm`.
+Module sizes: the
+[size report](../../../size-report/results/cloudflare-workers.md). On the real
+edge both routes answer, verified after deploying, and `wrangler deploy`
+reported a Worker Startup Time of 30 ms — taken while `src/index.js`
+instantiated at module scope; it now instantiates on the first request (a Worker
+forbids generating random values in the global scope, and the module has to be
+seeded before `_initialize`), so that work is paid by request one.
 
 So the cost of "it is a real Clack application" is startup and bundle size, paid
 once per isolate; the per-request cost is the Lisp call plus the string
-boundary. If a program will only ever run on a Worker, `../hello` is the
-cheaper shape — and if it needs to run on a Worker *and* on a real server,
-this is what that costs.
+boundary. If a program will only ever run on a Worker, `../hello` is the cheaper
+shape — and if it needs to run on a Worker *and* on a real server, this is what
+that costs.
 
 ## Developing without Cloudflare
 

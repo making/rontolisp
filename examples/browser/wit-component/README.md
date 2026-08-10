@@ -45,10 +45,9 @@ rontolisp fractal.lisp -o fractal.wasm --no-gc --component --optimize --emit-wit
 npx -y @bytecodealliance/jco transpile fractal.wasm -o dist --base64-cutoff 1000000
 ```
 
-The component is ~2.5 KB. `--base64-cutoff` inlines the core module into the
-generated JavaScript, so `dist/fractal.js` is a single self-contained ES module
-(~98 KB) with **zero `import` statements** -- the page fetches nothing but that
-file.
+`--base64-cutoff` inlines the core module into the generated JavaScript, so
+`dist/fractal.js` is a single self-contained ES module with **zero `import`
+statements** -- the page fetches nothing but that file.
 
 ## Run
 

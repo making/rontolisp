@@ -81,7 +81,7 @@ What the routing library adds is three things worth naming:
 
 A tiny-routes path template compiles to a **cl-ppcre scanner at run time**, so
 in a compiled module the whole regex engine is genuinely reachable and the
-tree-shaker is right to keep it — half a megabyte of it. `"tiny-routes/lite"` is
+tree-shaker is right to keep it. `"tiny-routes/lite"` is
 the opt-in system: the same source tree with the path-template matcher swapped
 for a ppcre-free one and the `:cl-ppcre` dependency dropped with it. It accepts
 templates of literal characters and `:name` tokens — `"/hello/:name"` is one —
@@ -96,18 +96,17 @@ guide](../../../doc/en/guides/asdf-systems.md) has the exact accepted subset.
 | | [`../hello`](../hello) | [`../hello-clack`](../hello-clack) | this |
 | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | three routes + `clackup` |
-| module | 563 B | 248,356 B raw / **75,334 B gzip** | 271,963 B raw / **80,645 B gzip** |
 | imports | zero | zero | **zero** — instantiated with `{}`, no WASI shim |
 | `_initialize` | none (no top-level forms) | ~5 ms | ~5 ms |
 | warm request | | 0.013 ms | **0.013 ms** |
 
-Measured on node 24 (V8, the same engine family as workerd, 2026-08-09) driving
-[`src/index.js`](src/index.js)'s boundary code against these exact modules.
+Measured on node 24 (V8, workerd's engine family) driving
+[`src/index.js`](src/index.js)'s boundary code against these modules.
 
-So routing costs **+23,607 B raw / +5,311 B gzip** over the hand-written
-`defun`, paid once in the bundle, and nothing per request — the route list is
-walked in Lisp, and at three routes that disappears into the string boundary.
-81 KB gzip is 2.7% of the free plan's 3 MB compressed bundle limit.
+So routing costs a modest amount in the bundle — the
+[size report](../../../size-report/results/cloudflare-workers.md) has the exact
+bytes against `hello-clack` — and nothing per request: the route list is walked
+in Lisp, and at three routes that disappears into the string boundary.
 
 ## Developing without Cloudflare
 
@@ -134,7 +133,7 @@ is resolved at **compile** time and inlined into the module).
 | [`worker.lisp`](worker.lisp) | The whole program — quickload, the routes, `clackup`. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend — and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../hello-clack/src/index.js`. |
-| `src/worker.wasm` | The compiled module (~272 KB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | A build product — run `./build.sh` first. |
 
 [`../httpbin-tiny-routes`](../httpbin-tiny-routes) is this example grown up: five
 echo endpoints declared one method at a time, a request body, a `/status/:code`

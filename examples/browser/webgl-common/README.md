@@ -109,19 +109,14 @@ page's import object.
 ## Why importing the union is free
 
 The demos compile with `--optimize`, and the tree-shaker drops unused host
-imports from the finished module. So although `gl.wit` declares every entry any
-demo needs, each compiled `.wasm` only imports what that demo actually reaches:
-`cube.wasm` imports 26, `galaxy.wasm` 32, `platformer.wasm` 34, `heat3d.wasm`
-36 and `robot-arm.wasm` 44 (counted with `wasm-tools print ... | grep -c
-'(import '`; each total includes the demo's own staging, canvas and math
-imports).
+imports. So although `gl.wit` declares every entry any demo needs, each compiled
+`.wasm` imports only what that demo reaches — between 26 and 44 functions,
+staging and canvas entries included.
 
-One nuance, which is now the module's business alone: a program that takes
-functions as values — e.g. through the spliced `linalg` library — keeps the
-same-arity import wrappers reachable through the `funcall` dispatcher, so a
-couple of entries the demo never calls can survive the shake. `heat3d.wasm`
-imports `disable` and `depthMask` for this reason, though `heat3d.lisp` calls
-neither. No page has to know: every page provides the whole generated union by
+One nuance: a program that takes functions as values — e.g. through the spliced
+`linalg` library — keeps the same-arity import wrappers reachable through the
+`funcall` dispatcher, so a couple of entries the demo never calls can survive
+the shake. No page has to know: every page provides the whole generated union by
 spreading `glImports`, so a surviving entry is already there.
 
 `examples/browser/webgl-triangle` deliberately does not use this package: it is

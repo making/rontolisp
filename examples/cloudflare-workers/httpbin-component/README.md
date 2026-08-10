@@ -35,7 +35,7 @@ disappears here. It is the entire benefit, and it is a genuine one.
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` (179 KB) | 1 × `.wasm` (179 KB) + `worker.js` (95 KB) |
+| Files the Worker imports | 1 × `.wasm` | 1 × `.wasm` + a generated `worker.js` — its size is in the [size report](../../../size-report/results/cloudflare-workers.md) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | none |
 | Top-level `defparameter` | works, via `_initialize` | works, at instantiation |
@@ -91,7 +91,7 @@ Caused by: exceptions proposal not enabled (at offset 0xb4e)
 ## When this path is actually clean
 
 When the program fits the `--no-gc` subset. [`../hello`](../hello) has no
-component build of its own, but try it: `--no-gc --component` is an 834-byte
+component build of its own, but try it: `--no-gc --component` is a sub-kilobyte
 component that imports *nothing*, so there is no exnref flag, and the glue has
 no dependencies. The output name says which build it is, so it cannot be
 confused with the `worker.wasm` this directory's own `build.sh` produces:
@@ -112,8 +112,8 @@ $ node --input-type=module -e '
 (That plain transpile is enough for Node. For a Worker, add
 `--instantiation sync -b 0` and hand the core module over as above.)
 
-Even there it is 92 KB of generated JavaScript standing in for about ten lines of
-hand-written glue — which is the honest summary of this whole directory.
+Even there it is ~90 KB of generated JavaScript standing in for about ten lines
+of hand-written glue — which is the honest summary of this whole directory.
 
 ## Rebuilding
 

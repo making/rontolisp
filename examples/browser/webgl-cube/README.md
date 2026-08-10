@@ -92,8 +92,8 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 
 - The module is compiled with `--no-wasi`, so its *only* imports are the
   host functions the program reaches — the import object is the whole
-  embedding API. With `--optimize` the shipped `cube.wasm` is about 9 KB and
-  imports 26 functions: 20 of the shared `gl` package's 29 WebGL2 entries, its
+  embedding API. With `--optimize` the shipped `cube.wasm` imports 26
+  functions: 20 of the shared `gl` package's 29 WebGL2 entries, its
   `ui.fail`, the three staging entries above and two canvas metrics. The nine
   `gl` entries the cube never calls (`uniform3f`, the VAO pair, `viewport`, ...)
   are tree-shaken away.

@@ -1,17 +1,14 @@
 # galaxy.lisp — a spiral galaxy: the WebGL pipeline driven from Lisp
 
-This example is the `rontolisp:wasm-import` showcase: a Lisp program that
-*calls into the browser*. Not just the physics — the whole WebGL2 pipeline
-runs from Lisp compiled to WebAssembly. The GLSL shader sources live in the
-Lisp file as string constants; Lisp compiles and links them, sets up the
-vertex buffer, attributes and blending, and issues every clear and draw call.
-JavaScript supplies the WebGL2 API as a table of one-line bindings generated
-from the shared `gl.wit` (a handle table maps `s32` handles to GL objects) plus
-the page UI — it contains no rendering logic of its own.
+The `rontolisp:wasm-import` showcase: a Lisp program that *calls into the
+browser*. Not just the physics — the whole WebGL2 pipeline runs from Lisp
+compiled to WebAssembly. The GLSL shader sources live in the Lisp file as string
+constants; Lisp compiles and links them, sets up the vertex buffer, attributes
+and blending, and issues every clear and draw call. JavaScript supplies the
+WebGL2 API as one-line bindings generated from the shared `gl.wit`, plus the page
+UI — no rendering logic of its own.
 
-**Live demo:** <https://making.github.io/rontolisp/webgl-galaxy/> (this
-directory is published as a subpath of the GitHub Pages site by
-`.github/workflows/pages.yaml`).
+**Live demo:** <https://making.github.io/rontolisp/webgl-galaxy/>
 
 ## What's in here
 
@@ -19,7 +16,7 @@ directory is published as a subpath of the GitHub Pages site by
 | ------------- | ------------------------------------------------------------------ |
 | `galaxy.lisp` | Everything: GLSL shaders, pipeline setup, orbits, per-star drawing. |
 | `index.html`  | The host page: one-line WebGL2 bindings + the HUD.                 |
-| `galaxy.wasm` | The compiled `--no-wasi` reactor (checked in, ~10 KB).             |
+| `galaxy.wasm` | The compiled `--no-wasi` reactor (checked in).                      |
 | `build.sh`    | Recompiles `galaxy.lisp` to `galaxy.wasm`.                         |
 
 The WebGL2 API boundary itself (the WIT interface, the enum constants and the
@@ -76,15 +73,14 @@ as `s32`/`f32`/`bool`/`string` in `gl.wit` for the shared entries:
   `gl:make-shader` hands it to the imported `fail` to show the page's error
   box.
 
-Startup order matters and is pleasingly simple: the page creates the WebGL2
-context, instantiates the module, and calls `_initialize()` — which runs the
-top-level `(setup-gl)`, so the shaders compile and the pipeline is configured
-*from Lisp* before the first frame. Each `requestAnimationFrame` tick then
-calls `exports.frame(t)`: Lisp sets the viewport, clears, computes every
-star's position on its slowly precessing ellipse, stages it with `set-vertex`,
-uploads with `gl-buffer-sub-data` and draws with `gl:draw-arrays`. At 16,000
-stars and 60 fps that is several million Lisp-to-JavaScript calls per second —
-the counter in the corner keeps score.
+Startup order is simple: the page creates the WebGL2 context, instantiates the
+module, and calls `_initialize()`, which runs the top-level `(setup-gl)` — so the
+shaders compile and the pipeline is configured *from Lisp* before the first
+frame. Each `requestAnimationFrame` tick then calls `exports.frame(t)`: Lisp
+sets the viewport, clears, computes every star's position on its slowly
+precessing ellipse, stages it, uploads and draws. At 16,000 stars and 60 fps
+that is several million Lisp-to-JavaScript calls per second — the counter in the
+corner keeps score.
 
 The two staging imports (`setVertex`, `bufferSubData`) are the only ones that
 are not literal WebGL2 entries: per-star floats cannot cross into GPU memory
@@ -125,8 +121,8 @@ Firefox 120+, Safari 18.2+, Edge 119+).
   `math.cos` are not among them — the WASM backend compiles `sin`/`cos`
   natively, so those two declarations are unreferenced and `--optimize` drops
   them.)
-- `--optimize` tree-shakes the runtime: the shipped `galaxy.wasm` is about
-  10 KB (the GLSL sources account for a third of it).
+- `--optimize` tree-shakes the runtime down to a few KB, of which the GLSL
+  sources are about a third.
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
   define stubs that signal an error when called, and the shared `gl` package's
   WIT-imported entries dispatch through a provider nothing binds (signaling

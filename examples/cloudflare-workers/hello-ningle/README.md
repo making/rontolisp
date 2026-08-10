@@ -65,30 +65,29 @@ genuinely different model and not a spelling difference:
 
 ## What it costs
 
+Measured on node 24 driving [`src/index.js`](src/index.js)'s boundary code
+against the four modules built together, imports zero in every case:
+
 | | [`../hello`](../hello) | [`../hello-clack`](../hello-clack) | [`../hello-tiny-routes`](../hello-tiny-routes) | this |
 | --- | --- | --- | --- | --- |
 | the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | three routes + `clackup` | two routes, a `not-found` method + `clackup` |
-| module | 563 B | 249,795 B raw / **76,049 B gzip** | 273,417 B raw / **81,427 B gzip** | 2,662,798 B raw / **608,220 B gzip** |
-| imports | zero | zero | zero | **zero** |
 | `_initialize` | none (no top-level forms) | 4.9 ms | 4.7 ms | **7.2 ms** |
 | warm request | | 0.013 ms | 0.011 ms | **0.059 ms** |
 
-All four modules built and measured together (`--no-wasi --optimize=size`,
-`gzip -9 -n`, node 24 driving [`src/index.js`](src/index.js)'s boundary code,
-2026-08-09); the neighbours' own READMEs record their own earlier runs.
-
-**Ten times the module, and almost none of it is ningle.** The same build with
-ningle replaced by one `lack.request:make-request` call is 2,226,054 B raw /
-495,317 B gzip, so ningle, its router
-[myway](https://github.com/fukamachi/myway) and myway's `map-set` account for
-**436 KB** of the total; the other ~2 MB is the `lack-request` chain — `http-body`,
+Module sizes: the
+[size report](../../../size-report/results/cloudflare-workers.md). This is by an
+order of magnitude the largest of the four — **and almost none of it is
+ningle.** The same build with ningle replaced by one
+`lack.request:make-request` call is barely smaller, so ningle, its router
+[myway](https://github.com/fukamachi/myway) and myway's `map-set` are a fifth of
+the difference; the rest is the `lack-request` chain — `http-body`,
 `fast-http`'s generated header and multipart state machines, `smart-buffer`,
 `circular-streams`, `yason`, `trivial-mimes`, `quri`. tiny-routes never touches
 it, because its request IS the Clack environment plist; ningle's `call` reads
 `request-headers` / `-method` / `-path-info` / `-parameters` on every request, so
-there is no route around it. 608 KB gzip is still 20% of the free plan's 3 MB
-compressed limit, so the size is a cost rather than a wall — but it is the
-reason to reach for `tiny-routes` when the routing is all you need.
+there is no route around it. It still fits the free plan's bundle limit with
+room to spare — the size is a cost rather than a wall — but it is the reason to
+reach for `tiny-routes` when the routing is all you need.
 
 There is also no size opt-in to offer the way tiny-routes has one: myway
 compiles every rule to a **cl-ppcre scanner**, so the regex engine is genuinely
@@ -135,7 +134,7 @@ six routes instead of two.
 | [`worker.lisp`](worker.lisp) | The whole program — quickload, the routes, the `not-found` method, `clackup`. This is what `build.sh` compiles. |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend — and what the examples manifest runs. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../hello-clack/src/index.js`. |
-| `src/worker.wasm` | The compiled module (~2.7 MB). A build product — run `./build.sh` first. |
+| `src/worker.wasm` | A build product — run `./build.sh` first. |
 
 ## Limitations
 

@@ -15,13 +15,11 @@ runnable component. The `.wit` is the only thing the two languages share.
    "HELLO WORLD!" ◀────────────────
 ```
 
-This is the "Lisp calls Rust" direction on its own. For the reverse -- a Rust
-program calling a Lisp component -- see [`wit/rust-calls-lisp/`](../rust-calls-lisp).
-
-The app also runs **standalone** on the interpreter and JVM, where a small Lisp
-`rontolisp:wit-provide` answers the same interface (§2) -- so you can develop
-against a Lisp fallback and deploy against the Rust component with no change to
-the program, exactly as [`wit/keyvalue/`](../keyvalue) does with a host.
+For the reverse direction see
+[`wit/rust-calls-lisp/`](../rust-calls-lisp). The app also runs **standalone** on
+the interpreter and JVM, where a small Lisp `rontolisp:wit-provide` answers the
+same interface (§2) — develop against the Lisp fallback, deploy against Rust,
+and never touch the program in between.
 
 ## Prerequisites
 
@@ -81,21 +79,17 @@ arguments. A two-line lambda makes the file run **standalone**:
                                  (t (error "casing: unknown member ~a" member)))))
 ```
 
-So the same file runs three ways, and prints the same thing each time:
+So the same file runs three ways and prints the same thing each time:
 
 ```bash
-rontolisp app.lisp                   # interpreter: the Lisp provider answers
-rontolisp app.lisp -o App.class      # JVM: the same provider
-  && java -cp . App
-rontolisp app.lisp -o app.wasm --component --optimize   # a component that imports
-                                     # example:textkit/casing -- and on WASM a
-                                     # wit-provide is INERT, so the Rust component
-                                     # answers instead once composed (below)
+rontolisp app.lisp                                       # interpreter: the Lisp provider answers
+rontolisp app.lisp -o App.class && java -cp . App        # JVM: the same provider
+rontolisp app.lisp -o app.wasm --component --optimize    # imports the interface instead
 ```
 
-That is the whole point: on the interpreter and JVM this is Lisp calling Lisp;
-composed with the Rust component it is Lisp calling Rust -- develop against the
-Lisp fallback, deploy against Rust, and never touch the program in between.
+On WASM a `wit-provide` is **inert**, so the composed Rust component answers
+there: on the interpreter and JVM this is Lisp calling Lisp, composed it is Lisp
+calling Rust.
 
 ## 3. The Rust component -- exports it
 
@@ -160,14 +154,7 @@ rust and lisp  ->  RUST AND LISP!
 
 ## Notes
 
-Only `string` crosses here, in both directions -- the flat, no-`result` subset of
-rontolisp's WIT mapping, which is why no `-W exceptions=y` is needed. The full
-mapping is documented in
+Only `string` crosses here, in both directions — the flat, no-`result` subset of
+rontolisp's WIT mapping, which is why no `-W exceptions=y` is needed. Full
+mapping:
 [`rontolisp:wit-import`](../../../doc/en/reference/functions/rontolisp-wit-import.md).
-
-The Lisp provider (§2) and the Rust component are two implementations of the one
-interface: the provider makes the file run standalone on the interpreter and JVM,
-and once composed the Rust component answers instead (a `wit-provide` is inert on
-every WASM backend). The composed run is the point -- a Lisp guest calling a Rust
-guest, with no host in between -- and the provider is what lets you get there from
-a program that already runs on its own.

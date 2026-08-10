@@ -18,7 +18,7 @@ directory is published as a subpath of the GitHub Pages site by
 | --------------- | ------------------------------------------------------------ |
 | `triangle.lisp` | The whole program: GLSL shaders, pipeline setup, one draw.    |
 | `index.html`    | The host page: ten one-line WebGL2 bindings.                  |
-| `triangle.wasm` | The compiled `--no-wasi` reactor (checked in, ~2 KB).         |
+| `triangle.wasm` | The compiled `--no-wasi` reactor (checked in).                |
 | `build.sh`      | Recompiles `triangle.lisp` to `triangle.wasm`.                |
 
 ## How it works

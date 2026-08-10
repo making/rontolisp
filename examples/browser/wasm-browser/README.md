@@ -1,17 +1,15 @@
 # Running rontolisp WASM in the browser (plain HTML + JavaScript)
 
-This example shows how to take a Lisp program, compile it to WebAssembly with
-rontolisp, and run it in a browser from ordinary HTML and JavaScript — no
-framework, no bundler, no server-side component.
+Take a Lisp program, compile it to WebAssembly with rontolisp, and run it in a
+browser from ordinary HTML and JavaScript — no framework, no bundler, no
+server-side component.
 
-It is different from [`web/`](../../web) at the repository root: that playground
+Different from [`web/`](../../../web) at the repository root: that playground
 compiles **rontolisp itself** to WASM (via GraalVM Web Image). Here we compile a
-**user Lisp program** with rontolisp's own WASM backend
-(`rontolisp prog.lisp -o prog.wasm`) and call the result from JavaScript.
+**user Lisp program** with rontolisp's own WASM backend and call the result from
+JavaScript.
 
-**Live demo:** <https://making.github.io/rontolisp/wasm-browser/> (this directory
-is published as a subpath of the GitHub Pages site by `.github/workflows/pages.yaml`;
-the `web/` playground is at the site root).
+**Live demo:** <https://making.github.io/rontolisp/wasm-browser/>
 
 ## What's in here
 
@@ -68,13 +66,10 @@ const res3 = await runWasmModule(wasmBytes, { stdin: "Ada\n" });
 ```
 
 `runWasm(url)` is just `fetch` + `runWasmModule(bytes)`. The root
-[`web/` playground](../../web)'s `compile-run.html` page uses `runWasmModule`
-to run a module it compiled in the browser a moment earlier (its
-`rontoCompileWasm` returns the bytes directly), so compile-to-WASM and
-run-the-WASM both happen client-side. It compiles the definitions once with a
-`(print (eval (read)))` driver, then for each call passes the call expression
-(e.g. `(fib 20)`) as **stdin** — reusing this same `runWasmModule(bytes, { stdin })`
-entry point — without recompiling.
+[`web/` playground](../../../web) uses `runWasmModule` on bytes it compiled in the
+browser a moment earlier, so compile-to-WASM and run-the-WASM both happen
+client-side: it compiles the definitions once with a `(print (eval (read)))`
+driver, then passes each call expression as **stdin** without recompiling.
 
 Because the module's only outward interface is stdout (and optionally stdin /
 env / exit code), "calling it from JavaScript" means *running it and reading

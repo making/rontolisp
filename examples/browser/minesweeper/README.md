@@ -33,8 +33,8 @@ compile it to a `.class` (`-o Minesweeper.class`; WASM cannot lower a Java
 object) -- and needs a display. Unlike the
 entropy-free browser reactor, this build has `random`, so it lays
 its own mines -- keeping them off the first click. The rendering layer reuses the
-[`../swing.lisp`](../swing.lisp) `swing` package (spliced in with
-`(require :swing "../swing.lisp")`), whose clickable, text-capable label grid
+[`../../jvm/swing.lisp`](../../jvm/swing.lisp) `swing` package (spliced in with
+`(require :swing "../../jvm/swing.lisp")`), whose clickable, text-capable label grid
 (`swing:label-grid-window`) was built for this game.
 
 ## Play it in the browser (WebAssembly)
@@ -83,6 +83,6 @@ Lisp. Each interaction is one export call:
 The `:string` / `:s-expr` boundary is a `(ptr, len)` into the module's linear
 memory. The page writes UTF-8 via the exported `__ronto_alloc` bump allocator,
 passes the pointer and length, and reads the returned `(ptr, len)` back out --
-the same pattern as [`../rainbow.html`](../rainbow.html). See the top of
+the same pattern as [`../rainbow/rainbow.html`](../rainbow/rainbow.html). See the top of
 `minesweeper-core.lisp` for the state layout and the `CLAUDE.md` notes on
 `rontolisp:wasm-export` and `--no-wasi` for the ABI details.

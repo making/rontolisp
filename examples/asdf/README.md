@@ -1,22 +1,9 @@
 # Loading real ASDF libraries
 
-These demos load REAL third-party Common Lisp libraries -- unmodified
-upstream sources -- through `asdf:load-system` and exercise their public API.
-All of them run identically on all four backends (interpreter, JVM,
-WASM Preview 1 and `--component`); they are the programs the cross-backend E2E
-tests pin (`AlexandriaE2eTest` / `SplitSequenceE2eTest` / `ParseNumberE2eTest`
-/ `ClUtilitiesE2eTest` / `ClWhoE2eTest` / `AssocUtilsE2eTest` / `ClBase64E2eTest`
-/ `JzonE2eTest` / `Md5E2eTest` / `ClPpcreE2eTest` / `IroncladE2eTest`
-/ `Uax15E2eTest` / `TinyRoutesE2eTest`).
-jzon's three numeric leaf components (the eisel-lemire float reader and
-Schubfach float printer) are replaced at load time by built-in shims over
-rontolisp's native float arithmetic, so float text takes rontolisp's
-cross-backend-identical shape rather than Schubfach's shortest-round-trip
-string:
-
-```console
-rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
-```
+These demos load REAL third-party Common Lisp libraries — unmodified upstream
+sources — through `asdf:load-system` and exercise their public API. All run
+identically on all four backends (interpreter, JVM, WASM Preview 1,
+`--component`), and each is pinned by its own cross-backend E2E test.
 
 | Demo | Library | Upstream |
 | --- | --- | --- |
@@ -32,30 +19,22 @@ rontolisp examples/asdf/jzon-demo.lisp --system-path src/test/resources/jzon/src
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
 | [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
 | [`uax-15-demo.lisp`](uax-15-demo.lisp) | uax-15 v0.1.3 (MIT) | <https://github.com/sabracrolleton/uax-15> |
-| [`tiny-routes-demo.lisp`](tiny-routes-demo.lisp) | tiny-routes v0.1.1 (BSD 3-Clause). Size note: its cl-ppcre dependency is most of a compiled module (~850 KB shaken) — a route template compiles to a scanner at RUN time, so the whole regex engine is genuinely reachable, exact-path routes included. The lever for a size-constrained module is the opt-in `(ql:quickload "tiny-routes/lite")`: the same tree with a ppcre-free path-template matcher and no `:cl-ppcre` dependency, which matches the `:name`-token subset identically and refuses regex-shaped templates at route-build time — see the [asdf-systems guide](../../doc/en/guides/asdf-systems.md) and [`../cloudflare-workers/httpbin-tiny-routes/`](../cloudflare-workers/httpbin-tiny-routes) (1,236,811 → 501,689 B raw) | <https://github.com/jeko2000/tiny-routes> |
-| [`clack-hello.lisp`](clack-hello.lisp) | clack v2.1.0 + lack (MIT), served by the built-in `clack-handler-rontolisp` backend; loads via `ql:quickload` (network on the first run), serves HTTP on the interpreter / JVM / WASM component | <https://github.com/fukamachi/clack> |
+| [`tiny-routes-demo.lisp`](tiny-routes-demo.lisp) | tiny-routes v0.1.1 (BSD 3-Clause). For a size-constrained module load the opt-in `"tiny-routes/lite"`, which drops the cl-ppcre dependency — see the [asdf-systems guide](../../doc/en/guides/asdf-systems.md) | <https://github.com/jeko2000/tiny-routes> |
+| [`clack-hello.lisp`](clack-hello.lisp) | clack v2.1.0 + lack (MIT), served by the built-in `clack-handler-rontolisp` backend; loads via `ql:quickload` (network on the first run) | <https://github.com/fukamachi/clack> |
+
+jzon's three numeric leaf components (the eisel-lemire float reader and
+Schubfach float printer) are replaced at load time by built-in shims over
+rontolisp's native float arithmetic, so float text takes rontolisp's
+cross-backend-identical shape rather than Schubfach's shortest-round-trip
+string.
 
 ## Where the libraries come from
 
-The library sources are vendored in this repository for the test suite, so
-the demos run out of the box from the repository root:
-
-- `src/test/resources/alexandria/`
-- `src/test/resources/split-sequence/`
-- `src/test/resources/parse-number/`
-- `src/test/resources/cl-utilities/`
-- `src/test/resources/cl-who/`
-- `src/test/resources/assoc-utils/`
-- `src/test/resources/cl-base64/`
-- `src/test/resources/jzon/` (the `.asd` lives in its `src/` subdirectory)
-- `src/test/resources/md5/`
-- `src/test/resources/cl-ppcre/`
-- `src/test/resources/ironclad/` (the SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice only; its executable
-  `ironclad.asd` is kept for provenance but a bundled replacement is what loads)
-- `src/test/resources/uax-15/` (its `--system-path` also needs
-  `src/test/resources/split-sequence` and `src/test/resources/cl-ppcre`)
-- `src/test/resources/tiny-routes/` (its `--system-path` also needs
-  `src/test/resources/cl-ppcre`)
+The sources are vendored under `src/test/resources/<library>/` for the test
+suite, so the demos run out of the box from the repository root. Two of them
+have a wrinkle: jzon's `.asd` lives in its `src/` subdirectory, and only the
+SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice of ironclad is vendored (its executable
+`ironclad.asd` is kept for provenance, but a bundled replacement is what loads).
 
 Alternatively, download the same versions from upstream and point
 `--system-path` (or the `RONTOLISP_SOURCE_REGISTRY` environment variable) at
@@ -63,18 +42,12 @@ the directory containing the `.asd` file:
 
 ```bash
 curl -sL https://github.com/sharplispers/split-sequence/archive/refs/tags/v2.0.1.tar.gz | tar xz
-curl -sL https://github.com/sharplispers/parse-number/archive/refs/tags/v1.8.tar.gz | tar xz
-curl -sL https://common-lisp.net/project/cl-utilities/cl-utilities-latest.tar.gz | tar xz
-curl -sL https://github.com/fukamachi/assoc-utils/archive/refs/heads/master.tar.gz | tar xz
 ```
 
 ## Running (all four backends)
 
-From the repository root, using the split-sequence demo (substitute
-`parse-number-demo.lisp` and `src/test/resources/parse-number` for the
-other). `rontolisp` is the native binary (`./mvnw -Pnative clean package
--DskipTests`); `java -jar target/rontolisp-0.1.0-SNAPSHOT-exec.jar` works
-identically everywhere `rontolisp` appears:
+From the repository root. `rontolisp` is the native binary; `java -jar
+target/rontolisp-0.1.0-SNAPSHOT-exec.jar` works identically:
 
 ```bash
 SYS=src/test/resources/split-sequence
@@ -95,8 +68,7 @@ rontolisp examples/asdf/split-sequence-demo.lisp -o demo-comp.wasm --component -
 ```
 
 `--system-path` takes ONE value, a `:`-joined list of directories, so a library
-with dependencies of its own names them all in the same argument. uax-15 and
-tiny-routes are the demos here that need it:
+with dependencies of its own names them all in the same argument:
 
 ```bash
 SYS=src/test/resources/uax-15:src/test/resources/split-sequence:src/test/resources/cl-ppcre
@@ -106,171 +78,37 @@ SYS=src/test/resources/tiny-routes:src/test/resources/cl-ppcre
 rontolisp examples/asdf/tiny-routes-demo.lisp --system-path $SYS
 ```
 
-The compile path splices the system's component files in at compile time
-(the `.asd` must be on disk when compiling), so the produced `.class`/`.wasm`
-is self-contained -- running it needs no library files.
+The compile path splices the system's component files in at compile time (the
+`.asd` must be on disk when compiling), so the produced `.class`/`.wasm` is
+self-contained.
 
-A demo that uses `handler-case`/`unwind-protect` compiles in EH mode, so BOTH
-wasm run commands need `-W exceptions=y` (wasmtime 37+) -- `alexandria-demo.lisp`
-is one, and so is `tiny-routes-demo.lisp` (`with-input-from-string` expands to an
-`unwind-protect`):
-
-```bash
-SYS=src/test/resources/alexandria
-rontolisp examples/asdf/alexandria-demo.lisp -o demo.wasm --system-path $SYS && \
-  wasmtime run -W gc -W exceptions=y demo.wasm
-```
+A demo using `handler-case`/`unwind-protect` compiles in EH mode, so both wasm
+run commands need `-W exceptions=y` (wasmtime 37+). `alexandria-demo.lisp` is
+one, and so is `tiny-routes-demo.lisp` (`with-input-from-string` expands to an
+`unwind-protect`).
 
 ## Expected output
 
-`split-sequence-demo.lisp`:
+Each demo prints one line per API call it exercises; `split-sequence-demo.lisp`
+starts:
 
 ```console
 ("a" "b" "" "c")
 ("a" "b" "c")
 ((1 2) (4 5) (6))
-((1) (3) (5))
-((1) (3) (5))
-("hello" "world" "lisp")
-16
-("a" "b")
-("c" "d")
-("b" "c" "d")
-("a" "b")
-((1) (3) (4))
-("" "" "b" "c")
 ```
 
-`parse-number-demo.lisp`:
-
-```console
-42
--13
-3.14
-1/3
--1/2
-1000.0
-250.0
-5.0
-255
-5
-511
-5
--42.5
-17
-```
-
-`cl-utilities-demo.lisp`:
-
-```console
-("a" "b" "" "c")
-("a" "b" "c")
-((1) (3) (5))
-((1) (3) (5))
-1
-9
-(3 . "three")
-1
-1
-(1 1 1)
-(1 1 2)
-(5 t (#\h #\e #\l #\l #\o))
-24
-49
-(0 1 4 9 16)
-((2 4 6) (1 3 5))
-1
-1
-(2 1)
-42
-8
-255
-8
-(1 99)
-42
-(2 5)
-```
-
-`cl-who-demo.lisp`:
-
-```console
-<html><head><title>Hi</title></head><body><p>Hello<a href='/x'>link</a></p></body></html>
-<div><span>3</span><span>&lt;a&amp;b&gt;</span><span>3-4</span></div>
-<br />
-<br>
-<p>&#xe9;</p>
-```
-
-`assoc-utils-demo.lisp`:
-
-```console
-"eitaro"
-"none"
-("name" "loc")
-("eitaro" "vienna")
-(:NAME "eitaro" :LOC "vienna")
-(("name" . "eitaro") ("loc" . "vienna"))
-(("name" . "eitaro"))
-(("y" . 2))
-(("k" . "v"))
-"eitaro in vienna"
-42
-"equal"
-```
-
-`jzon-demo.lisp`:
-
-```console
-42
--1.5
-"hello"
-t
-null
-#(1 2 3)
-"rontolisp"
-#("lisp" "wasm")
-[1,2,3]
-{"a":1}
-{"k":[true,null,7]}
-```
-
-`uax-15-demo.lisp`:
-
-```console
-(197)
-(65 778)
-(49 49 8260 50)
-(102 102)
-(197)
-230
-(1231 (832 NIL) (71984 T))
-(T T NIL T)
-```
-
-`tiny-routes-demo.lisp`:
-
-```console
-200 hello world NIL
-200 user 42 NIL
-200 q=lisp NIL
-200 pong NIL
-201 made (LOCATION /put)
-404 nope NIL
-404 nope NIL
-200 echo:abc NIL
-200 y (CONTENT-TYPE text/plain)
-202 x NIL
-```
+The output is identical on every backend, which is what the E2E tests assert —
+so the demo itself is the specification, and any divergence is a real failure.
 
 ## What can be loaded today
 
-A library qualifies when it stays inside plain
-`defun`/`defmacro`/`defpackage` code, `loop`, multiple values,
-`check-type`/`etypecase` with the supported type specifiers, declarations
-(parsed no-ops) and the lite `define-condition`/`make-condition`/`warn`/
-`restart-case`/`return-from` idioms. Libraries built on the CLOS static subset, the lite condition system,
-dynamic (special) variable binding, Gray output streams and adjustable
-fill-pointered string buffers load too (jzon exercises all of these on
-every backend); restarts remain out of reach -- see the
-[ASDF systems guide](../../doc/en/guides/asdf-systems.md) for the supported
-subset.
+A library qualifies when it stays inside plain `defun`/`defmacro`/`defpackage`
+code, `loop`, multiple values, `check-type`/`etypecase` with the supported type
+specifiers, declarations (parsed no-ops) and the lite
+`define-condition`/`make-condition`/`warn`/`restart-case`/`return-from` idioms.
+Libraries built on the CLOS static subset, the lite condition system, dynamic
+(special) variables, Gray output streams and adjustable fill-pointered string
+buffers load too — jzon exercises all of these on every backend. Restarts remain
+out of reach; the [ASDF systems guide](../../doc/en/guides/asdf-systems.md) has
+the supported subset.

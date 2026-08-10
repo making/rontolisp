@@ -95,8 +95,8 @@ Firefox 120+, Safari 18.2+, Edge 119+).
   `funcall` dispatcher keeps the same-arity import wrappers reachable, so
   `disable` and `depthMask` survive the shake. The page provides them either
   way — it spreads the whole generated `glImports` union.
-- The `.wasm` is larger than the galaxy's (~60 KB vs ~10 KB) because the
-  array runtime and the reachable `linalg` definitions ship with it.
+- The `.wasm` is several times the galaxy's, because the array runtime and the
+  reachable `linalg` definitions ship with it.
 - On the interpreter and JVM backends the `rontolisp:wasm-import` directives
   define stubs that signal an error when called, and the shared `gl` package's
   WIT-imported entries dispatch through a provider nothing binds (signaling
