@@ -4,57 +4,48 @@ Common Lisp compiled to WebAssembly, running on Cloudflare Workers. Each
 directory is a complete, independent Worker project: `./build.sh && npx wrangler
 dev`, then `npx wrangler deploy`.
 
+Two subjects — a greeting and a mini [httpbin](https://httpbin.org) — written
+once with **no library** and then once in the idiom of each web library. The
+point of the set is how differently the same endpoints come out, so the versions
+share no code and are not meant to diff cleanly against each other.
+
 Module sizes are measured rather than quoted here:
 [`size-report/results/cloudflare-workers.md`](../../size-report/results/cloudflare-workers.md).
 
-| Directory | What it is | Host glue |
+| Directory | Written as | Host glue |
 | --- | --- | --- |
-| [`hello/`](hello) | **Start here.** Three Lisp functions the Worker calls like JavaScript ones: `add`, `fib`, a string-returning `greet`. `--no-gc`, a plain MVP module with zero imports | 32 lines, no dependencies |
-| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** The smallest real [Clack](https://github.com/fukamachi/clack) application: `ql:quickload`, one `defun`, `clack:clackup :server :reactor`. Nothing in the Lisp mentions Cloudflare — the compiler synthesizes the exported entry point | 45 lines, one file |
-| [`hello-tiny-routes/`](hello-tiny-routes) | `hello-clack` with the application *composed* instead of written: three routes through [tiny-routes](https://github.com/jeko2000/tiny-routes), a `/hello/:name` template, a decline into a catch-all 404. Loaded as `tiny-routes/lite`, so no regex engine ships | `hello-clack/src/index.js`, byte-identical |
-| [`hello-ningle/`](hello-ningle) | `hello-clack` with [ningle](https://github.com/fukamachi/ningle) — the third shape: routes hang on a CLOS *object*, a bare string is a controller, and the 404 is an overridden `ningle:not-found` **method**. The heaviest of the three: ningle reads every request through the `lack-request` chain | `hello-clack/src/index.js`, byte-identical |
-| [`httpbin/`](httpbin) | A **mini httpbin** — five echo endpoints, 405, 404, `handler-case` — as a Clack application whose Worker adapter is written out by hand, so that clack itself never ships. The application half is [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim | 54 lines, boundary included |
-| [`httpbin-clack/`](httpbin-clack) | **The same application, installed by `clack:clackup`** instead of by a hand-written adapter: `ql:quickload`, the endpoints, `clackup :server :reactor`. The compiler synthesizes the export, and nothing in the Lisp mentions Cloudflare | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-clack-one-source/`](httpbin-clack-one-source) | `httpbin-clack` **with no `worker.lisp` at all**: `build.sh` compiles [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) unchanged, the same file that binds a socket locally. Under `--no-wasi` the `:server :rontolisp` backend takes its reactor shape — one source, four hosts | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | `httpbin-clack` with a real routing library: `define-routes`, a `/status/:code` template, route declining. Loaded as `tiny-routes/lite`, whose ppcre-free matcher keeps cl-ppcre out of the module | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-ningle/`](httpbin-ningle) | The same endpoints in [ningle](https://github.com/fukamachi/ningle)'s own model, and **deliberately not the same code**: routes assigned to a CLOS object in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, an `:ANY` fallback rule per path and a regex rule that declines | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-component/`](httpbin-component) | The same `httpbin` source reached through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
+| [`hello/`](hello) | **Start here.** Three `wasm-export`ed functions JavaScript calls directly. `--no-gc`, a plain MVP module with zero imports | 32 lines, no dependencies |
+| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** One application function and `clack:clackup` — the whole of [Clack](https://github.com/fukamachi/clack)'s API | 45 lines, one file |
+| [`hello-tiny-routes/`](hello-tiny-routes) | [tiny-routes](https://github.com/jeko2000/tiny-routes): a route table composed with `define-routes`, threaded through middleware with `pipe`. Loaded as `tiny-routes/lite`, so no regex engine ships | `hello-clack/src/index.js`, byte-identical |
+| [`hello-ningle/`](hello-ningle) | [ningle](https://github.com/fukamachi/ningle): routes assigned to a CLOS *object*, a bare string as a controller, an overridden `not-found` **method** | `hello-clack/src/index.js`, byte-identical |
+| [`httpbin/`](httpbin) | **No library.** Five echo endpoints, 405, 404, `handler-case` — plus the reactor adapter written out by hand, so clack never ships | 54 lines, boundary included |
+| [`httpbin-clack/`](httpbin-clack) | Plain Clack: an application *function*, a `cond` over `:path-info`, and one middleware — a function from application to application | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-clack-one-source/`](httpbin-clack-one-source) | **No `worker.lisp` at all**: `build.sh` compiles [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) unchanged, the file that binds a socket locally. One source, four hosts | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
 
 ## Which one should I copy?
 
-- **`hello/`** if your Lisp is numbers and strings. By far the smallest thing
+- **`hello/`** if your Lisp is numbers and strings — by far the smallest thing
   that works, and it needs no runtime support at all.
-- **`httpbin/`** for anything else — the shortest path to the full language on
-  Workers, with the thirty lines that put it on Cloudflare in the file rather
-  than in a library.
-- **`hello-clack/`** to see a Clack application with nothing else in the way.
-  `:server :reactor` means "host-driven on every backend", which is what lets
-  its `check.lisp` drive the Worker on the interpreter.
-- **`hello-tiny-routes/`** if you are starting a routed application rather than
-  studying one: `hello-clack/` with the `defun` replaced by `define-routes` and
-  nothing else changed.
-- **`hello-ningle/`** to compare the two routing models on the smallest possible
-  application, before reading `httpbin-ningle/`, which is where ningle's own way
-  of writing one is actually spelled out.
+- **`httpbin/`** for anything else without a library: the shortest path to the
+  full language on Workers, with the thirty lines that put it on Cloudflare in
+  the file rather than in a library.
 - **`httpbin-clack/`** when the file should read like every other Clack program.
-  It ships the *same* application text as `httpbin/` with `clack:clackup`
-  installing the adapter instead of the program carrying it. Measured there: the
-  per-request cost is identical; what clack costs is module size and a little
-  isolate startup.
-- **`httpbin-clack-one-source/`** when the program already exists and serves
-  somewhere else. It has no Lisp of its own: `:server :rontolisp` picks the
-  transport from the compile target, so `net/httpbin-clack.lisp` is a socket
-  server locally and this Worker here, with no edit between them.
-- **`httpbin-tiny-routes/`** when the routes deserve a library — path templates,
-  declining, the middleware combinators — *provided* it is loaded as
-  `tiny-routes/lite`. Full `"tiny-routes"` spells the same routes but ships
+  The per-request cost is the same as `httpbin/`'s; what clack costs is module
+  size and a little isolate startup, paid once.
+- **`httpbin-clack-one-source/`** when the program already serves somewhere
+  else. `:server :rontolisp` picks the transport from the compile target, so
+  there is no edit between a local server and this Worker.
+- **`httpbin-tiny-routes/`** when the routes deserve a library — templates,
+  declining, middleware combinators — *provided* it is loaded as
+  `tiny-routes/lite`. Full `"tiny-routes"` spells the same routes and ships
   cl-ppcre.
-- **`httpbin-ningle/`** if you already write ningle, or to see the two routing
-  models answer the same endpoints without being written the same way. It is by
-  an order of magnitude the largest and slowest to start of the four httpbin
-  Workers, and the reason is not ningle: it reads every request through the
-  `lack-request` chain, which is also what lets its controllers ignore streams
-  and JSON parsing entirely.
+- **`httpbin-ningle/`** if you already write ningle. It is by an order of
+  magnitude the largest and slowest to start of the four, and the reason is not
+  ningle: it reads every request through the `lack-request` chain, which is also
+  what lets its controllers ignore streams and JSON parsing entirely.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string
   marshalling, yes. Everywhere else, no.
@@ -75,13 +66,12 @@ All verified end to end under `npx wrangler dev` (workerd), not inferred:
 - **An instance is per isolate, not per request.** Instantiate once and cache
   it, and remember Lisp globals then persist between that isolate's requests.
   Anything that must really persist belongs in KV, D1 or a Durable Object.
-- **wasm-GC does not cover the boundary.** Inside the module cons cells and Lisp
-  strings are engine-managed. But WebAssembly has no string type, so a string
-  crossing the boundary is UTF-8 bytes in **linear memory**, which the engine
-  never traces — those bytes are the host's to reclaim. That is what the
-  `__ronto_alloc_mark`/`_reset` bracket in `httpbin/src/index.js` is, and why
-  `hello/` needs no such code.
-  [Details](httpbin/README.md#two-heaps-wasm-gc-collects-one-of-them-you-collect-the-other).
+- **wasm-GC does not cover the boundary.** Inside the module everything is
+  engine-managed, but WebAssembly has no string type, so a string crossing the
+  boundary is UTF-8 bytes in **linear memory**, which the engine never traces.
+  That is what the `__ronto_alloc_mark`/`_reset` bracket in
+  `httpbin/src/index.js` is, and why `hello/` needs no such code.
+  [Details](httpbin/README.md#two-heaps).
 
 ## Would the component model be simpler?
 
@@ -115,23 +105,20 @@ findings behind it:
    component outright.
 
 `--no-wasi` is doing quiet work there. Without it a wasm-GC component is a
-`wasi:cli/run` command by construction: it imports `wasi:cli/stdout`,
-`wasi:cli/types` and `wasi:filesystem/types` whether or not the program does any
-I/O, ships two extra core modules, and its top-level forms live in a `run`
-export jco cannot drive — so a `defparameter` was a hard constraint on this
-path. With it the compiler emits a **reactor component** that imports nothing,
-and the top level runs from the core module's start section inside
-`instantiate`.
+`wasi:cli/run` command by construction: it imports three WASI interfaces whether
+or not the program does any I/O, ships two extra core modules, and its top-level
+forms live in a `run` export jco cannot drive. With it the compiler emits a
+**reactor component** that imports nothing, and the top level runs from the core
+module's start section inside `instantiate`.
 
 ## Developing without Cloudflare
 
 The Lisp in every one of these is an ordinary function, so the whole edit/run
-loop happens locally: every directory with a handler in it has a `check.lisp`
-that drives it on the interpreter, the JVM and wasmtime.
-`httpbin-clack-one-source/` has no
-`check.lisp` because it needs none — its program IS `../net/httpbin-clack.lisp`,
-so its loop is `rontolisp ../net/httpbin-clack.lisp` and `curl` against a real
-server. Every Lisp source here is pinned by `examples/examples.yaml`:
+loop happens locally: every directory with a handler has a `check.lisp` that
+drives it on the interpreter, the JVM and wasmtime.
+`httpbin-clack-one-source/` needs none — its program IS
+`../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`. Every
+Lisp source here is pinned by `examples/examples.yaml`:
 
 ```bash
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
@@ -140,26 +127,24 @@ server. Every Lisp source here is pinned by `examples/examples.yaml`:
 
 ## Deploying
 
-The `hello`, `hello-clack`, `httpbin`, `httpbin-clack-one-source` and
-`httpbin-component` directories have been deployed to the real edge, not only
-run under `wrangler dev`; the two tiny-routes and two ningle ones have not (they
-are pinned locally instead, by their `check.lisp` and by node driving the built
-module). `httpbin-clack` builds the same application as
-`httpbin-clack-one-source` from its own file, and answers identically under
-node.
-Worker Startup Time is what `wrangler deploy`
-measures and budget-checks: 5-13 ms for the `httpbin` builds, 26-30 ms for the
-clack ones — going through `clack:clackup` instead of calling the handler
-backend directly is what moved that number, while the per-request cost did not.
-It is also why `httpbin/src/index.js` instantiates at **module scope** rather
-than on the first request: both work, but at module scope the cost is paid once
-per isolate outside the request path and Cloudflare validates it at deploy time.
+`hello`, `hello-clack`, `httpbin`, `httpbin-clack-one-source` and
+`httpbin-component` have been deployed to the real edge, not only run under
+`wrangler dev`; the two tiny-routes and two ningle ones are pinned locally
+instead, by their `check.lisp` and by node driving the built module.
+
+Worker Startup Time is what `wrangler deploy` measures and budget-checks: 5-13 ms
+for the `httpbin` builds, 26-30 ms for the clack ones — going through
+`clack:clackup` instead of calling the handler backend directly is what moved
+that number, while the per-request cost did not. It is also why
+`httpbin/src/index.js` instantiates at **module scope**: both work, but there the
+cost is paid once per isolate outside the request path and Cloudflare validates
+it at deploy time.
 
 **One gotcha, and it is not your code**: for several minutes after a Worker's
 *first* deploy its fresh `*.workers.dev` hostname answers intermittently with
 Cloudflare edge errors (`1042`, `1104`, a bare 404) while the route propagates.
-The giveaway is that `wrangler tail` shows nothing for those requests — they
-never reach the Worker. It settles on its own; re-deploys do not show it.
+The giveaway is that `wrangler tail` shows nothing for those requests. It settles
+on its own; re-deploys do not show it.
 
 ## Building
 
@@ -167,20 +152,11 @@ Every `build.sh` needs the compiler jar, built once from the repository root
 with `./mvnw clean package -DskipTests`. The `.wasm` files are build products
 and are not checked in.
 
-### The `--no-wasi` warnings a build prints
-
 A `--no-wasi` build names, per primitive, every refusal its **load path** can
 reach — the ones that would otherwise die inside `_initialize` as a bare
 `RuntimeError: unreachable`, before any export exists. The line carries the call
 chain and the way out (`__ronto_set_time` for the clock, `--host-random` for
 entropy); a primitive only the *export* can reach stays quiet, because that one
-signals at the call, where `src/index.js` sees it.
-
-None of these directories prints one today. The clack-based ones used to print a
-standing line for `WITH-OPEN-FILE`, reached through
-`CLACK:CLACKUP -> CLACK:EVAL-FILE -> CLACK::%LOAD-FILE` — `clackup`'s "the app is
-a pathname" branch, statically reachable and never taken here. A call now carries
-what the site says about its arguments (`#'app`, `*app*`), so a `typecase` branch
-that value cannot select is off the load path; under `--optimize` the branch is
-off the *module* too.
+signals at the call, where `src/index.js` sees it. None of these directories
+prints one today.
 [Details](../../doc/en/guides/wasm-gc-module.md#what-the-build-tells-you-before-you-run-it).

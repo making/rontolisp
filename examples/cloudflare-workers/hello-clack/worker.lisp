@@ -1,30 +1,11 @@
-;;; worker.lisp -- a Clack application on Cloudflare Workers, whole.
+;;; Clack, plain: an application is a FUNCTION of the environment plist that
+;;; returns the (status headers body) list. That is the whole API -- clack has
+;;; no router and no request object -- so the same `app` runs on hunchentoot,
+;;; on woo, under `wasmtime serve` and on the JVM, unchanged.
 ;;;
-;;; Three forms: load clack and the handler backend, define the application,
-;;; clackup. There is no Worker-specific code in it at all -- `app` is an
-;;; ordinary Clack application (the environment plist in, the (status headers
-;;; body) list out), so the same function runs on hunchentoot, on woo, under
-;;; `wasmtime serve` and on the JVM, unchanged.
-;;;
-;;; What puts it on a Worker is the :server designator. :reactor is the
-;;; built-in handler backend for a host that CALLS you instead of handing you a
-;;; socket, so its `run` binds nothing -- it stores the application, and the
-;;; compiler synthesizes the exported entry point src/index.js calls
-;;; (handle-request: a JSON request string in, a JSON response string out).
-;;; Nothing here declares that export, because rontolisp:wasm-export needs a
-;;; literal name at compile time and a clackup call has none to give.
-;;;
-;;; The one keyword is what this host is, not boilerplate:
-;;;   :use-thread nil -- already the default on WASM; on the interpreter and
-;;;                      the JVM it stops clackup from storing the application
-;;;                      on a thread the next form would race.
-;;; clackup's default middlewares stay on: lack's backtrace middleware prints
-;;; its report to *error-output*, which under --no-wasi is a sink -- discarded,
-;;; not a trap -- and on every other backend is real standard error.
-;;;
-;;; ../hello is the other end of the same spectrum: three exported functions,
-;;; no clack, 563 bytes. This one is ~248 KB because what the tree-shaker keeps
-;;; of clack and lack is in it -- see the README.
+;;; :server :reactor is the handler backend for a host that CALLS you instead
+;;; of handing you a socket; the compiler synthesizes the export src/index.js
+;;; calls. :use-thread nil keeps clackup in the foreground off WASM.
 
 (ql:quickload '("clack" "clack-handler-reactor"))
 

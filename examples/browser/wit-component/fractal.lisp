@@ -49,7 +49,7 @@
 ;;;; Everything stays inside the --no-gc subset -- floats, integers, string
 ;;;; literals, (concatenate 'string ...) and (subseq ...); no cons, list, hash or
 ;;;; I/O -- so the component needs no garbage collector, no WASI and no runtime
-;;;; flags, and is ~2 KB of WebAssembly.
+;;;; flags.
 
 ;;; The characters the renderers may return, darkest first. Index 0 means "inside
 ;;; the set"; indices 1..63 are the escape-time ramp. The page colors a pixel by

@@ -4,7 +4,7 @@
 #
 #   1. rontolisp: --no-gc --component --optimize --emit-wit
 #        --no-gc      a plain MVP core module (no wasm-GC, no WASI, no flags),
-#                     wrapped in a component: ~2 KB in total
+#                     wrapped in a component
 #        --component  the canonical ABI carries the strings across the boundary,
 #                     so no page code ever touches memory or a pointer
 #        --emit-wit   write the component's OWN world next to the .wasm; it is a

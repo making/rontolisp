@@ -1,12 +1,6 @@
-;;; check.lisp -- drive worker.lisp without Cloudflare, on any backend.
-;;;
-;;; Same shape as ../hello-clack/check.lisp (the notes are there): the WASM
-;;; export calls `clack.handler.reactor:dispatch`, an ordinary function, so
-;;; the whole Worker -- routes included -- runs here too.
-;;;
-;;;   rontolisp examples/cloudflare-workers/hello-tiny-routes/check.lisp
-;;;
-;;; The middle probes bind ":name"; the last declines into the catch-all 404.
+;;; Drive worker.lisp without Cloudflare, on any backend (../hello-clack/check.lisp
+;;; has the notes). The middle probes bind ":name"; the last declines into the
+;;; catch-all 404.
 
 (load "worker.lisp")
 

@@ -5,13 +5,11 @@
 #   runs the module as a program, and the handler does no I/O -- so the module
 #   needs no WASI imports at all. It becomes a reactor: nothing to shim on the
 #   JavaScript side, and `_initialize` instead of `_start`.
-# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
-#   what keeps the module small -- only the functions the program actually
-#   reaches end up in the output. =size additionally declines the two
-#   speed-over-size emissions: -20% raw / -21% gzip on this module (the two
-#   emissions weigh more here than in the clack builds, where the same level
-#   is worth about -11% / -13%) for a per-request cost of a few microseconds,
-#   the right trade on a Worker.
+# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is what
+#   keeps the module small -- only what the program reaches ships. =size
+#   additionally declines the two speed-over-size wasm-GC emissions, which weigh
+#   more on this library-free module than on the clack builds, for a
+#   per-request cost of a few microseconds.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"

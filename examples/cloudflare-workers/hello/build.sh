@@ -3,7 +3,7 @@
 #
 # --no-gc: this program is inside the non-GC subset (integers and a string
 #   literal, no cons cells or hash tables), so it compiles to a plain MVP module
-#   -- no wasm-GC, no WASI, no imports at all, and about half a kilobyte.
+#   -- no wasm-GC, no WASI, no imports at all.
 # --optimize: the dead-code tree-shaker; only what the exports reach ships.
 set -euo pipefail
 

@@ -1,15 +1,7 @@
-;;; check.lisp -- drive worker.lisp's handler without Cloudflare.
-;;;
-;;; Same shape as ../httpbin-clack/check.lisp (read the notes there): the
-;;; Worker's exported entry point calls the handler backend's `dispatch`, an
-;;; ordinary function, so the whole Worker -- routes included -- runs on the
-;;; interpreter, the JVM and the WASM backends:
-;;;
-;;;   rontolisp examples/cloudflare-workers/httpbin-tiny-routes/check.lisp
-;;;
-;;; The last two probes are the routed additions: the /status/:code path
-;;; template binding a parameter, and a non-numeric :code making that route
-;;; DECLINE into the catch-all 404.
+;;; Drive worker.lisp's handler without Cloudflare, on any backend
+;;; (../httpbin-clack/check.lisp has the notes). The last two probes are the
+;;; routed additions: the /status/:code template binding a parameter, and a
+;;; non-numeric :code making that route DECLINE into the catch-all 404.
 
 (load "worker.lisp")
 

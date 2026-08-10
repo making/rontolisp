@@ -1,15 +1,10 @@
-# httpbin-tiny-routes — the same Worker, routed by a real routing library
+# httpbin-tiny-routes — the same endpoints, composed
 
-The five echo endpoints of [`../httpbin-clack`](../httpbin-clack) — same
-helpers, same JSON documents — with the hand-written `cond` over `:path-info`
-replaced by [tiny-routes](https://github.com/jeko2000/tiny-routes):
-`define-routes`, one route macro per HTTP method, a `/status/:code` **path
-template** and the route-decline protocol. And one line that decides the module
-size:
-
-```lisp
-(ql:quickload "tiny-routes/lite")
-```
+The five echo endpoints of [`../httpbin-clack`](../httpbin-clack) written the
+way [tiny-routes](https://github.com/jeko2000/tiny-routes) wants them: route
+macros instead of a `cond`, a `/status/:code` **path template**, the
+route-decline protocol, and **middleware** for everything a handler would
+otherwise do itself.
 
 ```bash
 ./build.sh          # worker.lisp -> src/worker.wasm
@@ -19,7 +14,7 @@ npx wrangler deploy
 
 ```console
 $ curl 'http://localhost:8787/get?a=1&b=two'
-{"method":"GET","headers":{...},"path":"/get","args":{"b":"two","a":"1"}}
+{"args":{"b":"two","a":"1"},"headers":{...},"method":"GET","path":"/get"}
 
 $ curl http://localhost:8787/status/418
 418
@@ -28,88 +23,92 @@ $ curl http://localhost:8787/status/teapot     # :code must parse -> the route
 {"error":"not found","path":"/status/teapot"}  # declines into the 404
 ```
 
-## What `tiny-routes/lite` is
+## Middleware does the work
 
-The same tiny-routes source tree (the verbatim library from Quicklisp) with
-**one component substituted**: the path-template matcher. It is an *opt-in* —
-plain `(ql:quickload "tiny-routes")` still loads the untouched library,
-cl-ppcre included, and the two systems refuse to load into one program.
+No echo handler reads a stream, parses a query string or sets a header. `pipe`
+threads the route table through the library's own middleware:
 
-That one dependency is the whole size story. Upstream compiles a route template
-to a regex scanner at *run* time, so the whole cl-ppcre engine is genuinely
-reachable and the tree-shaker is right to keep it — measured, the full library
-takes this same module to roughly 2.8× its size (the
-[size report](../../../size-report/results/cloudflare-workers.md) carries both
-rows, built from this `worker.lisp` with only the `ql:quickload` line changed;
-they answer the same probes byte for byte).
+```lisp
+(defparameter *app* (pipe *routes* (wrap-request-body) (wrap-query-parameters)))
+```
 
-The lite matcher accepts templates made of **literal characters and `:name`
-tokens** (`/users/:id`, `/status/:code`, `/pair/:a/:b`) — almost every routed
-application — and matches them exactly as the full system does, greedy
-backtracking included; the two are pinned template-for-template against the real
-cl-ppcre engine by the test suite. Outside that subset the trade is loud, never
-silent: a template containing a regex metacharacter, or `:regex t`, signals a
-clear error when the route is *built*. A program that needs those loads the full
-`"tiny-routes"` and pays for the engine. Exact subset: the
-[ASDF systems guide](../../../doc/en/guides/asdf-systems.md).
+so `(request-body req)` is the raw body as a string and
+`(request-get req :query-parameters)` is the parsed query — and the JSON routes
+are grouped under one more:
 
-## The endpoints
+```lisp
+(pipe *json-routes* (wrap-response-content-type "application/json"))
+```
 
-| | |
-| --- | --- |
-| `GET /get` | echo the request: `args`, `headers`, `method`, `path` |
-| `POST /post` | the same, plus `data` (the raw body) and `json` (its parsed value) |
-| `PUT /put`, `PATCH /patch`, `DELETE /delete` | ditto |
-| `GET /status/:code` | answer with status `:code` — the **path template**; a non-numeric `:code` declines into the 404 |
+`/status/:code` is the one endpoint that answers `text/plain`, so it stays
+outside that group and builds its own response with `make-response`.
 
-The five echo endpoints answer the same documents as `../httpbin-clack`, but
-nothing in them checks a method any more: each is declared with the macro for
-the one method it answers, so the check is the *router's*.
+## Declining is the whole error story
 
-A wrong method then **declines** — no route claims the request — and lands in
-the single catch-all at the bottom, which is where both of httpbin's error
-answers are decided: a path that is one of the five endpoints declined on its
-method gives the 405 (naming the method that would have worked); any other path
-gives the 404. One route, not one per endpoint.
+Each echo endpoint is declared with the macro for the **one** method it answers,
+so a wrong method claims nothing and falls through — and the single catch-all at
+the bottom decides both of httpbin's error answers: a path that is one of the
+five gives the 405 (naming the method that would have worked), any other path
+the 404. One route, not one per endpoint.
 
-`/status/:code` is deliberately not in that list, because its decline means
-something else: the route answers `nil` when `:code` is not a number, and
-falling through to a catch-all with no entry there is exactly the 404 httpbin
-answers for `/status/teapot`.
+`/status/:code` declines too, on a `:code` that is not a number, and the
+catch-all has no entry for it — which is exactly the 404 httpbin answers for
+`/status/teapot`.
 
 `PATCH` has no macro in tiny-routes. Matching the method is the whole of what
 those add over `define-any`, and the matcher is exported, so that one route is
 spelled the way the macros expand:
 
 ```lisp
-(wrap-request-matches-method (define-any "/patch" (req) (echo-with-body req))
-                             :patch)
+(wrap-request-matches-method (define-any "/patch" (req) (echo req t)) :patch)
 ```
 
-## What's in here
-
-| File | Purpose |
+| | |
 | --- | --- |
-| [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the [`net/httpbin-clack.lisp`](../../net/httpbin-clack.lisp) helpers verbatim, the routes, `clackup` |
-| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs |
-| [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` and `../httpbin-clack/src/index.js` |
-| `src/worker.wasm` | A build product — run `./build.sh` first |
+| `GET /get` | echo the request: `args`, `headers`, `method`, `path` |
+| `POST /post`, `PUT /put`, `PATCH /patch`, `DELETE /delete` | the same, plus `data` (the raw body) and `json` (its parsed value) |
+| any of those, wrong method | 405 from the catch-all, naming the method that works |
+| `GET /status/NNN` | answer with that status; a non-numeric `:code` declines |
+| anything else | 404 from the catch-all |
+
+`args` comes from tiny-routes' `parse-query-parameters`, which splits on `&`
+and `=` and does not percent-decode — the library's own behaviour, and the one
+visible difference from the neighbouring documents.
+
+## `tiny-routes/lite`
+
+The opt-in system: the same library with the path-template matcher swapped for a
+ppcre-free one, described in
+[`../hello-tiny-routes`](../hello-tiny-routes/README.md#tiny-routeslite-and-why-it-is-on-the-quickload-line).
+This is where the choice is measured — the
+[size report](../../../size-report/results/cloudflare-workers.md) carries both
+rows, built from this `worker.lisp` with only the `ql:quickload` line changed
+(they answer the same probes byte for byte).
 
 ## Developing without Cloudflare
 
-As in [`../httpbin-clack`](../httpbin-clack/README.md):
-the synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
-function, so the whole Worker — routes included — runs on every backend:
+As in [`../httpbin-clack`](../httpbin-clack/README.md): the synthesized export
+calls `clack.handler.reactor:dispatch`, an ordinary function, so the whole
+Worker — routes included — runs on every backend:
 
 ```bash
 rontolisp check.lisp
-rontolisp check.lisp -o Prog.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Prog
+rontolisp check.lisp -o Check.class && java -cp rontolisp-0.1.0-SNAPSHOT-exec.jar:. Check
 rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exceptions=y check.wasm
 ```
 
 The first build downloads clack, lack and tiny-routes into
 `~/.rontolisp/quicklisp`; after that everything is offline, because the
 `ql:quickload` is resolved at **compile** time and inlined into the module.
+
+## What's in here
+
+| File | Purpose |
+| --- | --- |
+| [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the handlers, the routes, the middleware, `clackup` |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop |
+| [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` |
+| `src/worker.wasm` | A build product — run `./build.sh` first |
 
 ## Limitations
 

@@ -98,7 +98,7 @@ node -e '(async () => {
 # resident 100000 calls: memory 65536 -> 65536
 ```
 
-Drop the two arena lines and the same loop grows past 2 MB. Two caveats — the
+Drop the two arena lines and the same loop grows linear memory without bound. Two caveats — the
 arena is a manual stack, not a collector:
 
 - Only reset to a mark taken **before** everything still live.

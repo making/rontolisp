@@ -1,36 +1,20 @@
-;;; worker.lisp -- a mini httpbin as a Clack application, installed on the
-;;; Worker by clack:clackup.
+;;; Clack, plain: a mini httpbin as an application FUNCTION -- the environment
+;;; plist in, the (status headers body) list out -- and one MIDDLEWARE, which in
+;;; Clack is just a function from application to application. Clack has no
+;;; router, so dispatch is a `cond` over :path-info. Nothing here mentions
+;;; Cloudflare: the same `app` runs on hunchentoot, on woo, under
+;;; `wasmtime serve` and on the JVM.
 ;;;
-;;; Everything from `read-body` down to `*app*` is ../httpbin/worker.lisp's
-;;; application VERBATIM -- and ../../net/httpbin-clack.lisp's -- so the three
-;;; differ in one thing only: what puts the application on the host. There it is
-;;; thirty hand-written lines under the application and clack never loads; here
-;;; it is the last form of this file.
-;;;
-;;; :server :reactor is the built-in handler backend for a host that CALLS you
-;;; instead of handing you a socket. Its `run` binds nothing -- it stores the
-;;; application -- and the compiler synthesizes the export src/index.js calls
-;;; (handle-request: a JSON request string in, a JSON response string out).
-;;; Nothing here declares that export, because rontolisp:wasm-export needs a
-;;; literal name at compile time and a clackup call has none to give.
-;;;
-;;; :reactor means host-driven on EVERY backend, which is what lets check.lisp
-;;; drive this Worker on the interpreter and the JVM as well. The other
-;;; designator is ../httpbin-clack-one-source: `:server :rontolisp` serves on
-;;; whatever the compile target's native transport is, so the file it deploys
-;;; is unchanged from the one that binds a socket locally.
-;;;
-;;; :use-thread nil is what this host is, not boilerplate: it is already the
-;;; default on WASM, and on the interpreter and the JVM it stops clackup from
-;;; storing the application on a thread the next form would race. clackup's
-;;; default middlewares stay on -- lack's backtrace middleware writes its report
-;;; to *error-output*, a discarding sink under --no-wasi and real standard error
-;;; everywhere else.
+;;; :server :reactor is the handler backend for a host that CALLS you instead of
+;;; handing you a socket; the compiler synthesizes the handle-request export
+;;; src/index.js calls, because rontolisp:wasm-export needs a literal name at
+;;; compile time and a clackup call has none to give.
 
 (ql:quickload '("clack" "clack-handler-reactor"))
 
-;; --- request helpers ------------------------------------------------------
+;;; --- the endpoints -----------------------------------------------------------
 
+;; clack's :raw-body is a synchronous stream, and nil when there is no body.
 (defun read-body (stream)
   (if (null stream)
       ""
@@ -39,67 +23,67 @@
             ((null ch))
           (write-char ch out)))))
 
-;; Parse the body as JSON when it looks like a JSON object or array, and fall
-;; back to null when it does not parse -- which is what the real httpbin does.
+;; Parse the body as JSON when it looks like one, and fall back to null when it
+;; does not parse -- which is what the real httpbin does.
 (defun body-json (body)
   (if (and (stringp body) (> (length body) 0)
            (or (eql (char body 0) #\{) (eql (char body 0) #\[)))
       (handler-case (rontolisp:json-parse body) (error () 'null))
       'null))
 
-;; --- responses ------------------------------------------------------------
+(defun json-body (object)
+  (list (format nil "~a~%" (rontolisp:json-stringify object))))
 
-(defun json-response (status obj)
-  (list status '(:content-type "application/json")
-        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
+;; plist-hash-table and alist-hash-table give json-stringify the string-keyed
+;; hash tables it serializes as objects (:method becomes "method"; an empty
+;; query still renders {}), and the env :headers already is one.
+(defun echo (env with-body)
+  (let ((info
+         (rontolisp:plist-hash-table
+          (list :args (rontolisp:alist-hash-table
+                       (rontolisp:query-params (getf env :query-string)))
+                :headers (getf env :headers)
+                :method (symbol-name (getf env :request-method))
+                :path (getf env :path-info)))))
+    (when with-body
+      (let ((body (read-body (getf env :raw-body))))
+        (setf (gethash "data" info) body)
+        (setf (gethash "json" info) (body-json body))))
+    (list 200 nil (json-body info))))
 
-;; The common echo fields, as a JSON object: plist-hash-table and
-;; alist-hash-table give json-stringify the string-keyed hash tables it
-;; serializes as objects (:method becomes "method"; an empty query still
-;; renders {}), and the env :headers already is one.
-(defun request-info (env)
-  (rontolisp:plist-hash-table
-   (list :args (rontolisp:alist-hash-table
-                (rontolisp:query-params (getf env :query-string)))
-         :headers (getf env :headers)
-         :method (symbol-name (getf env :request-method))
-         :path (getf env :path-info))))
+;; :request-method is an interned keyword, so the check is eq.
+(defun endpoint (env method with-body)
+  (if (eq (getf env :request-method) method)
+      (echo env with-body)
+      (list 405 nil
+            (json-body
+             (rontolisp:plist-hash-table
+              (list :error "method not allowed"
+                    :allowed (symbol-name method)))))))
 
-(defun echo (env) (json-response 200 (request-info env)))
+;;; --- the application ---------------------------------------------------------
 
-(defun echo-with-body (env)
-  (let ((info (request-info env)) (body (read-body (getf env :raw-body))))
-    (setf (gethash "data" info) body)
-    (setf (gethash "json" info) (body-json body))
-    (json-response 200 info)))
+;; :path-info carries the decoded path only -- the query string arrives
+;; separately -- so the comparisons are exact.
+(defun app (env)
+  (let ((path (getf env :path-info)))
+    (cond ((string= path "/get") (endpoint env :GET nil))
+          ((string= path "/post") (endpoint env :POST t))
+          ((string= path "/put") (endpoint env :PUT t))
+          ((string= path "/patch") (endpoint env :PATCH t))
+          ((string= path "/delete") (endpoint env :DELETE t))
+          (t (list 404 nil
+                   (json-body
+                    (rontolisp:plist-hash-table
+                     (list :error "not found" :path path))))))))
 
-;; Echo the request only when it used the expected method; otherwise 405.
-;; :request-method is an interned keyword, so the comparison is eq.
-(defun echo-when (env expected with-body)
-  (cond ((not (eq (getf env :request-method) expected))
-         (json-response 405
-                        (rontolisp:plist-hash-table
-                         (list :error "method not allowed"
-                               :allowed (symbol-name expected)))))
-        (with-body (echo-with-body env))
-        (t (echo env))))
-
-;; --- the Clack application ------------------------------------------------
-
-;; A Clack application is a function VALUE -- what clackup, lack:builder and
-;; every middleware take and return -- so it is a lambda in a variable rather
-;; than a defun. :path-info carries the (percent-decoded) path only; the query
-;; string arrives separately, so the comparisons are exact.
-(defparameter *app*
+;; A middleware takes an application and returns one, which is why no endpoint
+;; above sets a header. Several of them compose with lack:builder.
+(defun wrap-json (app)
   (lambda (env)
-    (let ((path (getf env :path-info)))
-      (cond ((string= path "/get") (echo-when env :GET nil))
-            ((string= path "/post") (echo-when env :POST t))
-            ((string= path "/put") (echo-when env :PUT t))
-            ((string= path "/patch") (echo-when env :PATCH t))
-            ((string= path "/delete") (echo-when env :DELETE t))
-            (t (json-response 404
-                              (rontolisp:plist-hash-table
-                               (list :error "not found" :path path))))))))
+    (let ((response (funcall app env)))
+      (list* (first response)
+             (list* :content-type "application/json" (second response))
+             (cddr response)))))
 
-(clack:clackup *app* :server :reactor :use-thread nil)
+(clack:clackup (wrap-json #'app) :server :reactor :use-thread nil)

@@ -5,10 +5,9 @@
 # --no-wasi: the Worker calls the exported entry point directly and never runs
 #   the module as a program, so it needs no WASI imports at all. It becomes a
 #   reactor: nothing to shim on the JavaScript side, and `_initialize` instead
-#   of `_start`. clackup's own start-up banner is not a problem there -- under
-#   --no-wasi standard output is a sink, so the bytes are discarded.
-# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
-#   what keeps the module down. ningle has no size opt-in to offer the way
+#   of `_start`.
+# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is what
+#   keeps the module down. ningle has no size opt-in to offer the way
 #   tiny-routes does: myway compiles every rule to a cl-ppcre scanner, so the
 #   regex engine is genuinely reachable and the shaker is right to keep it.
 #

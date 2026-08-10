@@ -1,18 +1,12 @@
-;;; check.lisp -- drive worker.lisp without Cloudflare.
+;;; Drive worker.lisp without Cloudflare, on any backend.
 ;;;
-;;; The Worker's entry point is a WASM export, which only the WASM backends
-;;; have; what sits under it does not. `dispatch` -- a JSON request string in, a
-;;; JSON response string out, over the application clackup stored -- is an
-;;; ordinary function of the handler backend, and it is exactly what the
-;;; synthesized export calls. So the whole Worker runs on the interpreter:
+;;; The Worker's entry point is a WASM export, but what sits under it is not:
+;;; `dispatch` -- a JSON request string in, a JSON response string out, over the
+;;; application clackup stored -- is an ordinary function of the handler
+;;; backend, and exactly what the synthesized export calls.
 ;;;
-;;;   rontolisp examples/cloudflare-workers/hello-clack/check.lisp
-;;;
-;;; and identically on the JVM and the WASM backends.
-;;;
-;;; The two lines before the first --> are upstream clack's: clackup announces
-;;; the server it is about to start, and clack.handler:run announces debug mode.
-;;; On a Worker (--no-wasi) they go to a discarding stdout; here they do not.
+;;; The two lines before the first --> are upstream clack's. On a Worker
+;;; (--no-wasi) they go to a discarding stdout; here they do not.
 
 (load "worker.lisp")
 

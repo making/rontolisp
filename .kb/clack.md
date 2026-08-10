@@ -299,10 +299,14 @@ shipped with, and it still works.
 `%http-make-env` / `%http-normalize-response` plus the JSON envelope, so a
 reactor that wants NO clack package in the module at all can write those lines
 itself and export its own `handle-request`.
-`examples/cloudflare-workers/httpbin` is exactly that, and it is deliberately
-the SAME application as `examples/cloudflare-workers/httpbin-clack`
-(both carry `net/httpbin-clack.lisp` verbatim down to `*app*`) with the SAME
-envelope (one `src/index.js`, byte-identical between them). The pair is therefore a controlled measurement of what clack
+`examples/cloudflare-workers/httpbin` is exactly that: the same five endpoints
+answering the same documents as `examples/cloudflare-workers/httpbin-clack`,
+over the SAME envelope (one `src/index.js`, byte-identical between them). The
+two are written in their own idiom rather than kept diff-clean against each
+other (2026-08-10) — the library-free one is plain defuns and a `dispatch`
+`cond`, the clack one an application FUNCTION plus a middleware — but the
+endpoints and the envelope are fixed, so the pair is still a controlled
+measurement of what clack
 costs on a reactor, and the answer is size and a little startup — node 24, same
 machine, `--no-wasi --optimize`, re-measured 2026-08-08 after the dispatch-gate
 refinement halved the clack build (`.kb/optimize-dead-code-elimination.md`,

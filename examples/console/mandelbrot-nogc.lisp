@@ -30,7 +30,7 @@
 ;;;;      })()'
 ;;;;
 ;;;; 2. A component. The canonical ABI carries the string across and frees it, so
-;;;;    the host writes no memory code at all -- ~1.3 KB, and no runtime flags:
+;;;;    the host writes no memory code at all, and no runtime flags:
 ;;;;
 ;;;;      rontolisp examples/console/mandelbrot-nogc.lisp --no-gc --component --optimize \
 ;;;;        --emit-wit -o mandelbrot_component.wasm

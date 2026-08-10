@@ -1,20 +1,10 @@
-;;; check.lisp -- drive worker.lisp's handler without Cloudflare.
-;;;
-;;; `handle-request` is an ordinary function of a string, so the whole Worker --
-;;; the Clack application and the reactor adapter under it together -- can be
-;;; developed and debugged on the interpreter, where the edit/run loop costs
-;;; nothing:
-;;;
-;;;   rontolisp examples/cloudflare-workers/httpbin/check.lisp
-;;;
-;;; It runs identically on the JVM and WASM backends, which is what pins the
-;;; handler against every backend the compiler has.
+;;; Drive worker.lisp's handler without Cloudflare, on any backend:
+;;; `handle-request` is an ordinary function of a string, adapter included.
 ;;;
 ;;; The requests below are the envelope src/index.js builds out of a real
 ;;; `Request`: the RAW target rather than a pre-split path and query object, and
-;;; a content-length for anything with a body. Both are the adapter's contract,
-;;; and both fail quietly rather than loudly if you get them wrong -- see the
-;;; README.
+;;; a content-length for anything with a body. Both fail quietly if you get them
+;;; wrong -- see the README.
 
 (load "worker.lisp")
 

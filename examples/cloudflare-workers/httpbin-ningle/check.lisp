@@ -1,16 +1,8 @@
-;;; check.lisp -- drive worker.lisp's handler without Cloudflare.
-;;;
-;;; Same shape as ../httpbin-tiny-routes/check.lisp (read the notes there): the
-;;; Worker's exported entry point calls the handler backend's `dispatch`, an
-;;; ordinary function, so the whole Worker -- routes included -- runs on the
-;;; interpreter, the JVM and the WASM backends:
-;;;
-;;;   rontolisp examples/cloudflare-workers/httpbin-ningle/check.lisp
-;;;
-;;; The probes are chosen for the four ningle mechanisms worker.lisp is built
-;;; on: the parsed body arriving as `form`, the :ANY fallback route answering
-;;; 405, the regex rule declining a non-numeric status, and ningle:not-found
-;;; answering the 404.
+;;; Drive worker.lisp's handler without Cloudflare, on any backend
+;;; (../httpbin-clack/check.lisp has the notes). The probes are chosen for the
+;;; four ningle mechanisms worker.lisp is built on: the parsed body arriving as
+;;; `form`, the :ANY fallback route answering 405, the regex rule declining a
+;;; non-numeric status, and ningle:not-found answering the 404.
 
 (load "worker.lisp")
 

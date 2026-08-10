@@ -1,14 +1,8 @@
-# httpbin-ningle — the same endpoints, written the way ningle wants them written
+# httpbin-ningle — the same endpoints on an application object
 
-[`../httpbin-clack`](../httpbin-clack) answers a mini httpbin with a hand-written
-`cond` over `:path-info`. [`../httpbin-tiny-routes`](../httpbin-tiny-routes)
-answers the same thing with a *list of routes*. This is the third model:
-[ningle](https://github.com/fukamachi/ningle), where the application is a CLOS
-**object** you assign routes to.
-
-The endpoints match its two neighbours. **The code deliberately does not** — the
-helpers are not shared, because ningle is not a spelling variant of the other
-two and writing it in their shape would hide everything about it worth reading.
+The endpoints of [`../httpbin-clack`](../httpbin-clack) written the way
+[ningle](https://github.com/fukamachi/ningle) wants them: the application is a
+CLOS **object** you assign routes to, and the request arrives already decoded.
 
 ```bash
 ./build.sh          # worker.lisp -> src/worker.wasm
@@ -56,10 +50,9 @@ is really for.
 
 ### A controller returns the body; `*response*` carries the rest
 
-The `(status headers body)` triple a Clack application returns never appears in
-this file. A controller returns a **string** — ningle makes that the body — and
-says everything else by mutating `ningle:*response*`, the response object bound
-for the current request:
+The `(status headers body)` triple never appears in this file. A controller
+returns a **string** — ningle makes that the body — and says everything else by
+mutating `ningle:*response*`, the response object bound for the current request:
 
 ```lisp
 (defun respond-json (object)
@@ -79,27 +72,11 @@ body*. `args` is the query string, `form` is the parsed body (for the JSON post
 above, the JSON object itself), and the alist ningle hands the controller is
 those two appended.
 
-So nothing in this file reads a stream or parses JSON, and the five echo
-endpoints share one controller, because per method there is nothing left to do:
-
-```lisp
-(defun echo (params)
-  (declare (ignore params))
-  (let ((request ningle:*request*))
-    (respond-json
-     (rontolisp:plist-hash-table
-      (list :method (symbol-name (lack.request:request-method request))
-            :path (lack.request:request-path-info request)
-            :args (rontolisp:alist-hash-table
-                   (lack.request:request-query-parameters request))
-            :form (rontolisp:alist-hash-table
-                   (lack.request:request-body-parameters request))
-            :headers (lack.request:request-headers request))))))
-```
-
-That is the visible difference from the two neighbours' documents, and it is not
-a cosmetic one: they answer `data` (the raw body) and `json` (their own parse of
-it) because they read `:raw-body` themselves. Here the parse already happened.
+So nothing here reads a stream or parses JSON, and the five echo endpoints share
+one controller. That is also the visible difference from the neighbouring
+documents, and not a cosmetic one: they answer `data` (the raw body) and `json`
+(their own parse of it) because they read `:raw-body` themselves. Here the parse
+already happened.
 
 ### Declining means not matching — so `/status` is a regex rule
 
@@ -117,17 +94,11 @@ spelling, a regex instead of a template, whose capture groups arrive as
           (respond-text code))))
 ```
 
-A `"/status/:code"` template would match `/status/teapot` as happily, and leave
+A `"/status/:code"` template would match `/status/teapot` as happily and leave
 the controller holding a request it has no good answer for. This way
-`/status/teapot` matches no rule at all and reaches:
-
-```lisp
-(defmethod ningle:not-found ((app ningle:app)) ...)
-```
-
-`ningle:not-found` is a generic function on the application class — ningle's own
-extension point, and the 404 is an *override* of it rather than a route at the
-bottom of a list, which is where the tiny-routes Worker puts it.
+`/status/teapot` matches no rule at all and reaches `ningle:not-found`, a generic
+function on the application class — ningle's own extension point, and the 404 is
+an *override* of it rather than a route at the bottom of a list.
 
 ## The endpoints
 
@@ -142,38 +113,25 @@ bottom of a list, which is where the tiny-routes Worker puts it.
 
 ## What it costs
 
-Measured on node 24 driving [`src/index.js`](src/index.js)'s boundary code
-against the four httpbin modules built together, imports zero in every case
-(median of three runs; `warm GET` is the mean of 2,000 calls after 200 warm-up
-calls):
-
-| | [`../httpbin`](../httpbin) | [`../httpbin-clack`](../httpbin-clack) | [`../httpbin-tiny-routes`](../httpbin-tiny-routes) | this |
-| --- | --- | --- | --- | --- |
-| the routing | a `cond` over `:path-info` | the same `cond` | `define-routes` + declining | `setf` on an app object |
-| `_initialize` | 7.9 ms | 11.1 ms | 12.2 ms | **72.0 ms** |
-| warm `GET` | 0.035 ms | 0.035 ms | 0.034 ms | **0.128 ms** |
-
-Module sizes: the
-[size report](../../../size-report/results/cloudflare-workers.md). This is by an
-order of magnitude the largest and slowest to start of the four — **and almost
-none of that is ningle.** It is the `lack-request` chain the section above is
-about: getting the request decoded before the controller runs means
-`http-body`, `fast-http`'s generated header and multipart state machines,
-`smart-buffer`, `circular-streams`, `yason`, `trivial-mimes` and `quri` all ship
-and all run. tiny-routes never touches any of it. It still fits the free plan's
-bundle limit with room to spare — this is a cost, not a wall — but it is the
-reason to reach for `tiny-routes` when routing is all you need.
-
-There is also no size opt-in to offer the way tiny-routes has one: myway
-compiles every rule to a **cl-ppcre scanner**, so the regex engine is genuinely
-reachable and no amount of tree-shaking can remove it.
+This is by an order of magnitude the largest and slowest to start of the four
+httpbin Workers ([size
+report](../../../size-report/results/cloudflare-workers.md)) — **and almost none
+of that is ningle.** It is the `lack-request` chain the section above is about:
+getting the request decoded before the controller runs means `http-body`,
+`fast-http`'s generated header and multipart state machines, `smart-buffer`,
+`circular-streams`, `yason`, `trivial-mimes` and `quri` all ship and all run.
+tiny-routes never touches any of it. There is no size opt-in to offer either:
+myway compiles every rule to a **cl-ppcre scanner**, so the regex engine is
+genuinely reachable. It still fits the free plan's bundle limit with room to
+spare — a cost, not a wall — but it is the reason to reach for `tiny-routes`
+when routing is all you need.
 
 ## Developing without Cloudflare
 
-As in [`../httpbin-tiny-routes`](../httpbin-tiny-routes/README.md): the
-synthesized export calls `clack.handler.reactor:dispatch`, an ordinary function,
-so the whole Worker — routes, the `not-found` method and all — runs on every
-backend, which [`examples/examples.yaml`](../../examples.yaml) pins:
+As in [`../httpbin-clack`](../httpbin-clack/README.md): the synthesized export
+calls `clack.handler.reactor:dispatch`, an ordinary function, so the whole
+Worker — routes, the `not-found` method and all — runs on every backend, which
+[`examples/examples.yaml`](../../examples.yaml) pins:
 
 ```bash
 rontolisp check.lisp
@@ -184,12 +142,8 @@ rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exception
 (Key order inside a JSON object differs per backend — it follows hash-table
 iteration order — which is why the manifest checks with `contains`.)
 
-The first build downloads clack, lack and ningle into `~/.rontolisp/quicklisp`;
-after that everything is offline, because the `ql:quickload` is resolved at
-**compile** time and inlined into the module.
-
-To serve the same model over a real socket instead, drop the
-`clack-handler-reactor` line and use `:server :rontolisp` — that is what
+To serve the same model over a real socket, drop `clack-handler-reactor` and use
+`:server :rontolisp` — that is what
 [`examples/net/httpbin-ningle.lisp`](../../net/httpbin-ningle.lisp) does.
 
 ## What's in here
@@ -197,7 +151,7 @@ To serve the same model over a real socket instead, drop the
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | **The whole program**: quickload, the routes, the `not-found` method, `clackup` |
-| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop, and what the examples manifest runs |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../httpbin/src/index.js` |
 | `src/worker.wasm` | A build product — run `./build.sh` first |
 

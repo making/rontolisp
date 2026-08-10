@@ -16,7 +16,7 @@ directory is published as a subpath of the GitHub Pages site by
 | ------------ | ---------------------------------------------------------------- |
 | `cube.lisp`  | Everything: GLSL shaders, cube geometry, mat4 math, the frame.    |
 | `index.html` | The host page: one-line WebGL2 bindings + the animation loop.     |
-| `cube.wasm`  | The compiled `--no-wasi` reactor (checked in, ~9 KB).             |
+| `cube.wasm`  | The compiled `--no-wasi` reactor (checked in).                    |
 | `build.sh`   | Recompiles `cube.lisp` to `cube.wasm`.                            |
 
 The WebGL2 API boundary itself (the WIT interface, the enum constants and the

@@ -87,9 +87,9 @@ Servers on WASM need `--component` plus
 | [`httpbin.lisp`](net/httpbin.lisp) | A mini **httpbin**: `/get`, `/post`, `/put`, `/patch`, `/delete` echo the request as JSON, plus 405 and 404 |
 | [`httpbin-clos.lisp`](net/httpbin-clos.lisp) | The **CLOS** flavour: the envelope is a `defclass`, so `json-stringify` serializes slots in definition order — byte-identical output, and the same shape jzon produces |
 | [`httpbin-jzon.lisp`](net/httpbin-jzon.lisp) | The **jzon** flavour: only the two JSON call sites change, since `rontolisp:json-*` is a subset of jzon |
-| [`httpbin-clack.lisp`](net/httpbin-clack.lisp) | The **Clack** flavour, through `clack:clackup` on the real clack. rontolisp's server protocol *is* Clack's, so only the edges change. This one file is also, unchanged, the Worker of [`cloudflare-workers/httpbin-clack-one-source/`](cloudflare-workers/httpbin-clack-one-source). See the [Clack guide](../doc/en/guides/clack.md) |
-| [`httpbin-tiny-routes.lisp`](net/httpbin-tiny-routes.lisp) | The **routed** flavour: [tiny-routes](https://github.com/jeko2000/tiny-routes) replaces the `cond` over `:path-info`. A wrong method *declines* into the catch-all, which is where 405 and 404 are told apart |
-| [`httpbin-ningle.lisp`](net/httpbin-ningle.lisp) | The **ningle** flavour, the other routing model: routes hang on an application object, controllers receive matched parameters, and 404/405 is an overridden `ningle:not-found` method |
+| [`httpbin-clack.lisp`](net/httpbin-clack.lisp) | The **Clack** flavour: an application *function*, a `cond` over `:path-info` (clack has no router) and one middleware — a function from application to application. rontolisp's server protocol *is* Clack's, so this one file is also, unchanged, the Worker of [`cloudflare-workers/httpbin-clack-one-source/`](cloudflare-workers/httpbin-clack-one-source). See the [Clack guide](../doc/en/guides/clack.md) |
+| [`httpbin-tiny-routes.lisp`](net/httpbin-tiny-routes.lisp) | The **tiny-routes** flavour: routes composed with `define-routes`, threaded through the library's own middleware by `pipe`, and a wrong method *declining* into the catch-all that tells 405 from 404 |
+| [`httpbin-ningle.lisp`](net/httpbin-ningle.lisp) | The **ningle** flavour, the other routing model: routes are assigned to an application *object*, a controller returns the body and mutates `*response*`, the request arrives already parsed, and the 404 is an overridden `ningle:not-found` method |
 | [`magic-8-ball.lisp`](net/magic-8-ball.lisp) | The Spin tutorial's Magic 8 Ball JSON API. Inside a serve component `random` works via `wasi:random` |
 | [`dog-fetcher.lisp`](net/dog-fetcher.lisp) | `rontolisp:fetch` *inside* a handler — the proxy/aggregator shape |
 | [`linalg-api.lisp`](net/linalg-api.lisp) | A linear-algebra JSON service: `POST /solve` and `POST /fit`, with 400s for bad input. Integer inputs are solved exactly |
@@ -154,7 +154,7 @@ needs no glue at all. Each directory has its own README.
 | --- | --- |
 | [`asdf/`](asdf) | Loading unmodified upstream libraries — split-sequence, parse-number, cl-utilities, cl-who, assoc-utils, cl-base64, md5, cl-ppcre, jzon, ironclad, uax-15 — on all four backends |
 | [`wasmcloud/`](wasmcloud) | The wasmCloud Rust templates ported to `rontolisp:http-handler`, each with a `.wash/config.yaml` so `wash dev` builds and serves it |
-| [`cloudflare-workers/`](cloudflare-workers) | Six independent Workers, from a `--no-gc` module with zero imports to a full Clack application deployed by `npx wrangler deploy` |
+| [`cloudflare-workers/`](cloudflare-workers) | Ten independent Workers: two subjects written once with no library and then in the idiom of each web library, from a `--no-gc` module with zero imports to a routed application deployed by `npx wrangler deploy` |
 
 ## Running
 

@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Compile worker.lisp -- clack, the five echo endpoints and the clackup call --
-# to the .wasm module the Worker imports.
+# Compile worker.lisp -- clack, the five echo endpoints, the middleware and the
+# clackup call -- to the .wasm module the Worker imports.
 #
 # --no-wasi: the Worker calls the exported `handle-request` directly, it never
 #   runs the module as a program, and the handler does no I/O -- so the module
 #   needs no WASI imports at all. It becomes a reactor: nothing to shim on the
 #   JavaScript side, and `_initialize` instead of `_start`.
-# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
-#   what keeps the module small -- only the functions the program actually
-#   reaches end up in the output. It matters more here than in ../httpbin,
-#   because the program quickloads the whole of clack. =size additionally
-#   declines the two speed-over-size emissions: -11% raw / -14% gzip for a
-#   per-request cost of a few microseconds, the right trade on a Worker.
+# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is what
+#   keeps the module small. It matters more here than in ../httpbin, because the
+#   program quickloads the whole of clack.
 #
 # The first run downloads clack/lack into ~/.rontolisp/quicklisp; after that the
 # build is offline.

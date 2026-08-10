@@ -92,8 +92,7 @@ Firefox 120+, Safari 18.2+, Edge 119+).
 ## Notes
 
 - The module is compiled with `--no-wasi`, so its *only* imports are the ten
-  functions above — the import object is the whole embedding API. With
-  `--optimize` the shipped `triangle.wasm` is about 2 KB.
+  functions above — the import object is the whole embedding API.
 - For brevity there is no shader-compile error check; see
   [`webgl-galaxy/`](../webgl-galaxy) for the error-reporting pattern
   (`getShaderParameter` / `getShaderInfoLog` as a `:string` result).

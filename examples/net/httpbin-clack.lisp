@@ -1,34 +1,25 @@
-;; The Clack flavour of httpbin.lisp: the same five echo endpoints (/get, /post,
-;; /put, /patch, /delete -- see there for the JSON they answer), served through
-;; clack:clackup on the real clack (ql:quickload). rontolisp's server protocol IS
-;; Clack's, so this is an ordinary Clack program: the application is a function
-;; VALUE from the env plist to a (status headers body) list, and clackup wraps it
-;; in lack's backtrace middleware (its :use-default-middlewares default) and
-;; serves it. clack's :raw-body is a SYNCHRONOUS stream (nil when the request has
-;; no body), so it is drained with read-char rather than httpbin.lisp's
-;; async-defun + (await (read-all ...)).
+;; The Clack flavour of httpbin.lisp, plain: an application is a FUNCTION of the
+;; environment plist that returns the (status headers body) list, and a
+;; middleware is a function from application to application. Clack has no
+;; router, so dispatch is a `cond` over :path-info. rontolisp's server protocol
+;; IS Clack's, so this is an ordinary Clack program on the real clack.
 ;;
 ;; :server :rontolisp serves on the TARGET's native inbound transport, chosen at
-;; compile time, so this ONE file is every host's program: the interpreter and
-;; the JVM bind the socket, a --component build is served by `wasmtime serve`,
-;; and a --no-wasi build is a REACTOR the host calls -- which is how
-;; examples/cloudflare-workers/httpbin-clack-one-source deploys this file (not a
-;; copy) to Cloudflare Workers. :port applies where the program owns the socket
-;; and is ignored where the host does; :use-thread nil serves in the foreground
-;; (Ctrl-C to stop). Preview 1 has no incoming TCP: the program compiles and
-;; clackup fails at run time.
+;; compile time, so this ONE file is every host's program -- including, unedited,
+;; the Worker examples/cloudflare-workers/httpbin-clack-one-source deploys.
+;; :port applies where the program owns the socket and is ignored where the host
+;; does. Preview 1 has no incoming TCP: the program compiles and clackup fails at
+;; run time.
 ;;
 ;;   rontolisp examples/net/httpbin-clack.lisp   # first run downloads clack/lack
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
 ;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
-;;
-;; The build line for each of the other three hosts:
-;; examples/cloudflare-workers/httpbin-clack-one-source/README.md
 
 (ql:quickload "clack")
 
-;; --- request helpers ------------------------------------------------------
+;;; --- the endpoints -----------------------------------------------------------
 
+;; clack's :raw-body is a synchronous stream, and nil when there is no body.
 (defun read-body (stream)
   (if (null stream)
       ""
@@ -37,67 +28,67 @@
             ((null ch))
           (write-char ch out)))))
 
-;; Parse the body as JSON when it looks like a JSON object or array, and fall
-;; back to null when it does not parse -- which is what the real httpbin does.
+;; Parse the body as JSON when it looks like one, and fall back to null when it
+;; does not parse -- which is what the real httpbin does.
 (defun body-json (body)
   (if (and (stringp body) (> (length body) 0)
            (or (eql (char body 0) #\{) (eql (char body 0) #\[)))
       (handler-case (rontolisp:json-parse body) (error () 'null))
       'null))
 
-;; --- responses ------------------------------------------------------------
+(defun json-body (object)
+  (list (format nil "~a~%" (rontolisp:json-stringify object))))
 
-(defun json-response (status obj)
-  (list status '(:content-type "application/json")
-        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
+;; plist-hash-table and alist-hash-table give json-stringify the string-keyed
+;; hash tables it serializes as objects (:method becomes "method"; an empty
+;; query still renders {}), and the env :headers already is one.
+(defun echo (env with-body)
+  (let ((info
+         (rontolisp:plist-hash-table
+          (list :args (rontolisp:alist-hash-table
+                       (rontolisp:query-params (getf env :query-string)))
+                :headers (getf env :headers)
+                :method (symbol-name (getf env :request-method))
+                :path (getf env :path-info)))))
+    (when with-body
+      (let ((body (read-body (getf env :raw-body))))
+        (setf (gethash "data" info) body)
+        (setf (gethash "json" info) (body-json body))))
+    (list 200 nil (json-body info))))
 
-;; The common echo fields, as a JSON object: plist-hash-table and
-;; alist-hash-table give json-stringify the string-keyed hash tables it
-;; serializes as objects (:method becomes "method"; an empty query still
-;; renders {}), and the env :headers already is one.
-(defun request-info (env)
-  (rontolisp:plist-hash-table
-   (list :args (rontolisp:alist-hash-table
-                (rontolisp:query-params (getf env :query-string)))
-         :headers (getf env :headers)
-         :method (symbol-name (getf env :request-method))
-         :path (getf env :path-info))))
+;; :request-method is an interned keyword, so the check is eq.
+(defun endpoint (env method with-body)
+  (if (eq (getf env :request-method) method)
+      (echo env with-body)
+      (list 405 nil
+            (json-body
+             (rontolisp:plist-hash-table
+              (list :error "method not allowed"
+                    :allowed (symbol-name method)))))))
 
-(defun echo (env) (json-response 200 (request-info env)))
+;;; --- the application ---------------------------------------------------------
 
-(defun echo-with-body (env)
-  (let ((info (request-info env)) (body (read-body (getf env :raw-body))))
-    (setf (gethash "data" info) body)
-    (setf (gethash "json" info) (body-json body))
-    (json-response 200 info)))
+;; :path-info carries the decoded path only -- the query string arrives
+;; separately -- so the comparisons are exact.
+(defun app (env)
+  (let ((path (getf env :path-info)))
+    (cond ((string= path "/get") (endpoint env :GET nil))
+          ((string= path "/post") (endpoint env :POST t))
+          ((string= path "/put") (endpoint env :PUT t))
+          ((string= path "/patch") (endpoint env :PATCH t))
+          ((string= path "/delete") (endpoint env :DELETE t))
+          (t (list 404 nil
+                   (json-body
+                    (rontolisp:plist-hash-table
+                     (list :error "not found" :path path))))))))
 
-;; Echo the request only when it used the expected method; otherwise 405.
-;; :request-method is an interned keyword, so the comparison is eq.
-(defun echo-when (env expected with-body)
-  (cond ((not (eq (getf env :request-method) expected))
-         (json-response 405
-                        (rontolisp:plist-hash-table
-                         (list :error "method not allowed"
-                               :allowed (symbol-name expected)))))
-        (with-body (echo-with-body env))
-        (t (echo env))))
-
-;; --- the Clack application ------------------------------------------------
-
-;; A Clack application is a function VALUE -- what clackup, lack:builder and
-;; every middleware take and return -- so it is a lambda in a variable rather
-;; than a defun. :path-info carries the (percent-decoded) path only; the query
-;; string arrives separately, so the comparisons are exact.
-(defparameter *app*
+;; A middleware takes an application and returns one, which is why no endpoint
+;; above sets a header. Several of them compose with lack:builder.
+(defun wrap-json (app)
   (lambda (env)
-    (let ((path (getf env :path-info)))
-      (cond ((string= path "/get") (echo-when env :GET nil))
-            ((string= path "/post") (echo-when env :POST t))
-            ((string= path "/put") (echo-when env :PUT t))
-            ((string= path "/patch") (echo-when env :PATCH t))
-            ((string= path "/delete") (echo-when env :DELETE t))
-            (t (json-response 404
-                              (rontolisp:plist-hash-table
-                               (list :error "not found" :path path))))))))
+    (let ((response (funcall app env)))
+      (list* (first response)
+             (list* :content-type "application/json" (second response))
+             (cddr response)))))
 
-(clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)
+(clack:clackup (wrap-json #'app) :server :rontolisp :port 8080 :use-thread nil)

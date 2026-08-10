@@ -1,11 +1,8 @@
-# hello-ningle — a **ningle** application on Cloudflare Workers
+# hello-ningle — a Worker whose application is an object
 
-[`../hello-clack`](../hello-clack) is the smallest real Clack application on a
-Worker: `ql:quickload`, one `defun`, `clack:clackup`.
-[`../hello-tiny-routes`](../hello-tiny-routes) is the same Worker with the
-application composed out of routes. This is the third shape:
-[ningle](https://github.com/fukamachi/ningle), where the application is not a
-function at all but a CLOS **object** you hang routes on — and where the 404 is a
+The same greeting as [`../hello-clack`](../hello-clack), written the way
+[ningle](https://github.com/fukamachi/ningle) wants it: the application is not a
+function at all but a CLOS **object** you hang routes on, and the 404 is a
 method you override rather than a route you add.
 
 ```bash
@@ -38,67 +35,51 @@ rontolisp check.lisp    # drive the whole Worker locally, on any backend
 (clack:clackup *app* :server :reactor :use-thread nil)
 ```
 
-Still **no Worker-specific code**. `*app*` is an ordinary Clack application — the
-environment plist in, the `(status headers body)` list out — so it runs on
-hunchentoot, on woo, under `wasmtime serve` and on the JVM unchanged; the
-[`../hello-clack` README](../hello-clack/README.md) explains the designator half.
-
-What ningle adds over the two neighbours is worth naming, because it is a
-genuinely different model and not a spelling difference:
+Four things make it ningle:
 
 - **The application is an object, and a route is a `setf`.** There is no
-  route-list form: `(setf (ningle:route *app* "/x") controller)` mutates the
-  application's mapper, so routes can be added from anywhere, including at run
-  time.
-- **A controller does not have to be a function.** The `/` route above is a
-  *string*. ningle answers a non-function controller as the response body, which
-  is why the first line of its README is exactly that.
+  route-list form, so routes can be added from anywhere — another file, a
+  function, run time.
+- **A controller does not have to be a function.** The `/` route is a *string*;
+  ningle answers a non-function controller as the response body.
 - **A controller receives the parameters, not the environment.** The `:name`
-  token binds into an alist keyed by the keyword. The request itself is in the
-  `ningle:*request*` special, along with `*response*` (mutable — that is how the
-  404 below sets its status) and `*session*`.
-- **The 404 is an extension point, not a route.** `ningle:not-found` is a
-  generic function on the application class; overriding it is how "no rule
-  matched" is answered. That is the deliberate difference from the tiny-routes
-  Worker, where the 404 is the last route in the list — and it means this file
-  exercises `defmethod` on a library generic from the application's own package.
+  token binds into an alist keyed by the keyword; the request itself is in
+  `ningle:*request*`, with `*response*` (mutable — that is how the 404 sets its
+  status) and `*session*` beside it.
+- **The 404 is an extension point.** `ningle:not-found` is a generic function on
+  the application class, so this file specializes a *library* generic from the
+  application's own package.
+
+`*app*` is still an ordinary Clack application, so it runs on hunchentoot, on
+woo, under `wasmtime serve` and on the JVM; the
+[`../hello-clack` README](../hello-clack/README.md) explains the `:server`
+designator half. To serve it over a real socket, drop `clack-handler-reactor`
+and use `:server :rontolisp` — that is what
+[`examples/net/httpbin-ningle.lisp`](../../net/httpbin-ningle.lisp) does.
 
 ## What it costs
 
-Measured on node 24 driving [`src/index.js`](src/index.js)'s boundary code
-against the four modules built together, imports zero in every case:
-
-| | [`../hello`](../hello) | [`../hello-clack`](../hello-clack) | [`../hello-tiny-routes`](../hello-tiny-routes) | this |
-| --- | --- | --- | --- | --- |
-| the Lisp | 3 `wasm-export`ed functions | a Clack application + `clackup` | three routes + `clackup` | two routes, a `not-found` method + `clackup` |
-| `_initialize` | none (no top-level forms) | 4.9 ms | 4.7 ms | **7.2 ms** |
-| warm request | | 0.013 ms | 0.011 ms | **0.059 ms** |
-
-Module sizes: the
-[size report](../../../size-report/results/cloudflare-workers.md). This is by an
-order of magnitude the largest of the four — **and almost none of it is
-ningle.** The same build with ningle replaced by one
+This is by an order of magnitude the largest of the four hello Workers
+([size report](../../../size-report/results/cloudflare-workers.md)) — **and
+almost none of it is ningle.** The same build with ningle replaced by one
 `lack.request:make-request` call is barely smaller, so ningle, its router
 [myway](https://github.com/fukamachi/myway) and myway's `map-set` are a fifth of
 the difference; the rest is the `lack-request` chain — `http-body`,
 `fast-http`'s generated header and multipart state machines, `smart-buffer`,
 `circular-streams`, `yason`, `trivial-mimes`, `quri`. tiny-routes never touches
 it, because its request IS the Clack environment plist; ningle's `call` reads
-`request-headers` / `-method` / `-path-info` / `-parameters` on every request, so
-there is no route around it. It still fits the free plan's bundle limit with
-room to spare — the size is a cost rather than a wall — but it is the reason to
-reach for `tiny-routes` when the routing is all you need.
-
-There is also no size opt-in to offer the way tiny-routes has one: myway
+`request-headers` / `-method` / `-path-info` / `-parameters` on every request.
+There is no size opt-in to offer either, the way tiny-routes has one: myway
 compiles every rule to a **cl-ppcre scanner**, so the regex engine is genuinely
-reachable and no amount of tree-shaking can remove it.
+reachable. It still fits the free plan's bundle limit with room to spare — a
+cost, not a wall — but it is the reason to reach for `tiny-routes` when routing
+is all you need.
 
 ## Developing without Cloudflare
 
-The same loop the other directories have: the synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
+The synthesized export calls `clack.handler.reactor:dispatch`, an ordinary
 function, so the whole Worker — routes, the `not-found` method and all — runs on
-the interpreter, the JVM and the WASM backends, which
-[`examples/examples.yaml`](../../examples.yaml) pins:
+every backend, which [`examples/examples.yaml`](../../examples.yaml) pins:
 
 ```bash
 rontolisp check.lisp
@@ -118,37 +99,25 @@ rontolisp check.lisp -o check.wasm --optimize && wasmtime run -W gc -W exception
 (Key order differs per backend — it follows hash-table iteration order — which is
 why the manifest checks with `contains`.)
 
-The first build downloads clack, lack and ningle into `~/.rontolisp/quicklisp`;
-after that everything is offline (the `ql:quickload` is resolved at **compile**
-time and inlined into the module).
-
-To serve the same application over a real socket instead, drop the
-`clack-handler-reactor` line and use `:server :rontolisp` — that is what
-[`examples/net/httpbin-ningle.lisp`](../../net/httpbin-ningle.lisp) does, with
-six routes instead of two.
-
 ## What's in here
 
 | File | Purpose |
 | --- | --- |
-| [`worker.lisp`](worker.lisp) | The whole program — quickload, the routes, the `not-found` method, `clackup`. This is what `build.sh` compiles. |
-| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend — and what the examples manifest runs. |
+| [`worker.lisp`](worker.lisp) | The whole program. This is what `build.sh` compiles. |
+| [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight, on any backend. |
 | [`src/index.js`](src/index.js) | The whole Worker. **Byte-identical** to `../hello-clack/src/index.js`. |
 | `src/worker.wasm` | A build product — run `./build.sh` first. |
 
 ## Limitations
 
-The same ones as [`../hello-clack`](../hello-clack/README.md#limitations): no
-standard input, no filesystem, no `rontolisp:fetch` (use JavaScript's `fetch()`
-in `src/index.js`). Printing does not trap — it is discarded — `random` works on
-a generator `src/index.js` seeds from `crypto`, and the clock reads whatever
-`src/index.js` hands to `__ronto_set_time`.
+The Worker sandbox and `--no-wasi` limitations of
+[`../hello-clack`](../hello-clack/README.md#limitations) apply unchanged.
 
 This directory used to open with a blockquote saying it did not run on
-Cloudflare at all: `lack-request -> http-body -> fast-http -> smart-buffer`
-names a temporary directory with a top-level `(random ...)` over
+Cloudflare at all: `lack-request -> http-body -> fast-http -> smart-buffer` names
+a temporary directory with a top-level `(random ...)` over
 `uiop:default-temporary-directory`, and on a `--no-wasi` module both halves used
-to trap, inside `_initialize`, before any export existed. Nothing about ningle
+to trap inside `_initialize`, before any export existed. Nothing about ningle
 changed; the reactor learned to answer them.
 
 ## Rebuilding

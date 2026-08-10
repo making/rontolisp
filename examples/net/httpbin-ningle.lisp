@@ -1,25 +1,14 @@
-;; The ningle flavour of httpbin-clack.lisp: the same five echo endpoints, with
-;; the hand-written `cond` over :path-info -- and its method check with it --
-;; replaced by ningle. Where net/httpbin-tiny-routes.lisp composes a list of
-;; route handlers, ningle hangs routes on an application OBJECT: the app is
-;; `(make-instance 'ningle:app)` and every route is a `setf`, one per method,
-;; so a wrong method matches no rule at all.
+;; The ningle flavour of httpbin-clack.lisp: the application is a CLOS OBJECT.
+;; Four things make it ningle rather than a second route table:
 ;;
-;; The two ningle-specific moves are worth naming:
-;;
-;;   * a controller receives the PARAMETER alist, not the Clack environment.
-;;     The environment is still one accessor away -- lack.request:request-env
-;;     on ningle:*request*, the request object bound for the current request --
-;;     so httpbin-clack's helpers below are its own, unchanged.
-;;   * the 404 is a METHOD, not a catch-all route. Overriding ningle:not-found
-;;     is where "no rule matched" is answered, and it is what tells httpbin's
-;;     405 (a known path, wrong method) from its 404.
-;;
-;; Everything below the quickload is a portable Clack application, exactly as
-;; in httpbin-clack.lisp: :server :rontolisp means "serve on this target's
-;; native inbound transport", so this one file is also a Cloudflare Worker
-;; under --no-wasi -- the shape examples/cloudflare-workers/hello-ningle
-;; deploys with two routes instead of six.
+;;   * a route is an ASSIGNMENT, so the five echo endpoints are a loop;
+;;   * a controller returns the BODY and says the rest by mutating
+;;     ningle:*response* -- the (status headers body) triple never appears;
+;;   * a controller receives the PARAMETERS, and by then lack/request has decoded
+;;     the query string and PARSED the body, so nothing here reads a stream or
+;;     parses JSON;
+;;   * declining means NOT MATCHING (returning nil answers an empty body), so
+;;     every miss lands on ningle:not-found, a METHOD on the application class.
 ;;
 ;; Run (the first run downloads clack/lack/ningle into ~/.rontolisp/quicklisp):
 ;;   rontolisp examples/net/httpbin-ningle.lisp
@@ -32,7 +21,8 @@
 ;; time. Under --component the host owns the socket, so :port is ignored.
 ;;
 ;;   curl 'http://127.0.0.1:8080/get?a=1&b=two'
-;;   curl -X POST -d '{"name":"rontolisp"}' http://127.0.0.1:8080/post
+;;   curl -H 'content-type: application/json' -d '{"name":"rontolisp"}' \
+;;     http://127.0.0.1:8080/post          # the parsed body comes back as "form"
 ;;   curl http://127.0.0.1:8080/status/418
 
 (ql:quickload '("clack" "ningle"))
@@ -40,120 +30,79 @@
 (defpackage :httpbin-ningle (:use :cl))
 (in-package :httpbin-ningle)
 
-;; --- request helpers (httpbin-clack's, verbatim) ---------------------------
-
-(defun read-body (stream)
-  (if (null stream)
-      ""
-      (with-output-to-string (out)
-        (do ((ch (read-char stream nil nil) (read-char stream nil nil)))
-            ((null ch))
-          (write-char ch out)))))
-
-(defun body-json (body)
-  (if (and (stringp body) (> (length body) 0)
-           (or (eql (char body 0) #\{) (eql (char body 0) #\[)))
-      (handler-case (rontolisp:json-parse body) (error () 'null))
-      'null))
-
-;; --- responses (httpbin-clack's, verbatim) ---------------------------------
-
-(defun json-response (status obj)
-  (list status '(:content-type "application/json")
-        (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
-
-(defun request-info (env)
-  (rontolisp:plist-hash-table
-   (list :args (rontolisp:alist-hash-table
-                (rontolisp:query-params (getf env :query-string)))
-         :headers (getf env :headers)
-         :method (symbol-name (getf env :request-method))
-         :path (getf env :path-info))))
-
-;; --- the handlers ----------------------------------------------------------
-
-;; The Clack environment for the request being served. ningle hands a
-;; controller the parameter alist and keeps the request object in a special, so
-;; this is where the two conventions meet -- and below it httpbin-clack's
-;; handlers are unchanged. Gone is its `echo-when`: no handler checks a method
-;; any more, because the ROUTE does.
-(defun request-env () (lack.request:request-env ningle:*request*))
-
-(defun echo (env) (json-response 200 (request-info env)))
-
-(defun echo-with-body (env)
-  (let ((info (request-info env)) (body (read-body (getf env :raw-body))))
-    (setf (gethash "data" info) body)
-    (setf (gethash "json" info) (body-json body))
-    (json-response 200 info)))
-
-;; The echo endpoints and the ONE method each answers -- not a second dispatch,
-;; but what not-found reads to tell a request that matched no rule ON A KNOWN
-;; PATH (405, naming the method that works) from an unknown path (404).
-(defparameter *endpoints*
-  '(("/get" . :GET) ("/post" . :POST) ("/put" . :PUT) ("/patch" . :PATCH)
-    ("/delete" . :DELETE)))
-
-;; --- the routes ------------------------------------------------------------
-
 (defvar *app* (make-instance 'ningle:app))
 
-;; One route per endpoint, for the ONE method it answers: :method defaults to
-;; :GET, so only the four others name it. A request with the wrong method
-;; matches no rule and reaches not-found below -- so the 405 needs no route of
-;; its own per path.
-(setf (ningle:route *app* "/get")
-      (lambda (params)
-        (declare (ignore params))
-        (echo (request-env))))
+;;; --- answering ---------------------------------------------------------------
 
-(setf (ningle:route *app* "/post" :method :POST)
-      (lambda (params)
-        (declare (ignore params))
-        (echo-with-body (request-env))))
+(defun respond-json (object)
+  (setf (lack.response:response-headers ningle:*response*)
+        (list :content-type "application/json"))
+  (format nil "~a~%" (rontolisp:json-stringify object)))
 
-(setf (ningle:route *app* "/put" :method :PUT)
-      (lambda (params)
-        (declare (ignore params))
-        (echo-with-body (request-env))))
+(defun respond-text (text)
+  (setf (lack.response:response-headers ningle:*response*)
+        (list :content-type "text/plain; charset=utf-8"))
+  (format nil "~a~%" text))
 
-(setf (ningle:route *app* "/patch" :method :PATCH)
-      (lambda (params)
-        (declare (ignore params))
-        (echo-with-body (request-env))))
+(defun set-status (code)
+  (setf (lack.response:response-status ningle:*response*) code))
 
-(setf (ningle:route *app* "/delete" :method :DELETE)
-      (lambda (params)
-        (declare (ignore params))
-        (echo-with-body (request-env))))
+;;; --- the echo endpoint -------------------------------------------------------
 
-;; /status/:code is the route the hand-written cond could not spell. Returning
-;; nil is NOT a decline in ningle -- it answers an empty body -- so a :code that
-;; is not a number hands the request to not-found itself, which is the same
-;; method an unmatched path reaches. The table above has no /status entry, so
-;; that one gets the 404.
-(setf (ningle:route *app* "/status/:code")
-      (lambda (params)
-        (let ((code
-               (handler-case (parse-integer (cdr (assoc :code params)))
-                 (error () nil))))
-          (if code
-              (list code '(:content-type "text/plain; charset=utf-8")
-                    (list (format nil "~a~%" code)))
-              (ningle:not-found *app*)))))
+;; ONE controller for every echo endpoint: per method there is nothing left to
+;; do. `args` is the query string and `form` the parsed body -- for a JSON post
+;; that is the JSON object itself -- and the alist ningle hands the controller
+;; is those two appended, which is why this one ignores it.
+(defun echo (params)
+  (declare (ignore params))
+  (let ((request ningle:*request*))
+    (respond-json
+     (rontolisp:plist-hash-table
+      (list :method (symbol-name (lack.request:request-method request))
+            :path (lack.request:request-path-info request)
+            :args (rontolisp:alist-hash-table
+                   (lack.request:request-query-parameters request))
+            :form (rontolisp:alist-hash-table
+                   (lack.request:request-body-parameters request))
+            :headers (lack.request:request-headers request))))))
 
-;; The 404 is ningle's own extension point: a method on the application class,
-;; called when no rule matched. It answers the Clack triple directly, which
-;; ningle passes through untouched.
+;;; --- the routes --------------------------------------------------------------
+
+;; Rules are tried in the order they were assigned, so each path gets two: the
+;; ONE method it answers, then :ANY for the 405. That leaves not-found with only
+;; the answer it is really for.
+(dolist (endpoint
+         '(("/get" . :GET) ("/post" . :POST) ("/put" . :PUT) ("/patch" . :PATCH)
+           ("/delete" . :DELETE)))
+  (let ((path (car endpoint)) (allowed (cdr endpoint)))
+    (setf (ningle:route *app* path :method allowed) #'echo)
+    (setf (ningle:route *app* path :method :ANY)
+          (lambda (params)
+            (declare (ignore params))
+            (set-status 405)
+            (respond-json
+             (rontolisp:plist-hash-table
+              (list :error "method not allowed"
+                    :allowed (symbol-name allowed))))))))
+
+;; :ANY used as itself rather than as a fallback.
+(setf (ningle:route *app* "/anything" :method :ANY) #'echo)
+
+;; myway's other rule spelling: a REGEX, whose capture groups arrive as
+;; :captures. It fits because a code that is not three digits then matches no
+;; rule at all -- where a "/status/:code" template would match "/status/teapot"
+;; and leave the controller with nothing good to answer.
+(setf (ningle:route *app* "/status/([0-9]{3})" :regexp t)
+      (lambda (params)
+        (let ((code (parse-integer (first (cdr (assoc :captures params))))))
+          (set-status code)
+          (respond-text code))))
+
 (defmethod ningle:not-found ((app ningle:app))
-  (let* ((path (lack.request:request-path-info ningle:*request*))
-         (allowed (cdr (assoc path *endpoints* :test #'string=))))
-    (if allowed
-        (json-response 405
-                       (rontolisp:plist-hash-table
-                        (list :error "method not allowed"
-                              :allowed (symbol-name allowed))))
-        (json-response 404
-         (rontolisp:plist-hash-table (list :error "not found" :path path))))))
+  (set-status 404)
+  (respond-json
+   (rontolisp:plist-hash-table
+    (list :error "not found"
+          :path (lack.request:request-path-info ningle:*request*)))))
 
 (clack:clackup *app* :server :rontolisp :port 8080 :use-thread nil)

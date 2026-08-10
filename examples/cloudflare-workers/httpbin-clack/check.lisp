@@ -1,24 +1,12 @@
-;;; check.lisp -- drive worker.lisp's handler without Cloudflare.
+;;; Drive worker.lisp's handler without Cloudflare, on any backend: the
+;;; synthesized export calls `dispatch`, an ordinary function of the handler
+;;; backend, over the application clackup stored.
 ;;;
-;;; The Worker's entry point is a WASM export, which only the WASM backends
-;;; have; what sits under it does not. `dispatch` -- a JSON request string in, a
-;;; JSON response string out, over the application clackup stored -- is an
-;;; ordinary function of the :reactor handler backend, and it is exactly what
-;;; the synthesized export calls. So the whole Worker runs on the interpreter,
-;;; the JVM and the WASM backends:
-;;;
-;;;   rontolisp examples/cloudflare-workers/httpbin-clack/check.lisp
-;;;
-;;; The probes are ../httpbin/check.lisp's, over the same application: what
-;;; differs between the two directories is only what installs it, so a
-;;; divergence shows up as the two cases disagreeing.
-;;;
-;;; The two lines before the first --> are upstream clack's -- the clackup
-;;; banner and clack.handler:run's debug notice. On a Worker (--no-wasi) they go
-;;; to a discarding stdout; here they do not. The request dump in the middle is
-;;; lack's backtrace middleware, which clackup installs by default and which
-;;; prints even for an error the application CATCHES: the unparseable body is
-;;; still answered 200 with "json":null, on the Worker as here.
+;;; Two kinds of noise are upstream clack's, and both are gone on a Worker,
+;;; where stdout and *error-output* are a sink: the clackup banner before the
+;;; first -->, and the request dump from lack's default backtrace middleware,
+;;; which prints even for an error the application CATCHES -- the unparseable
+;;; body is still answered 200 with "json":null.
 
 (load "worker.lisp")
 

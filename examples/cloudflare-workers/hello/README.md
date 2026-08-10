@@ -1,10 +1,9 @@
 # hello — the smallest rontolisp Worker
 
 Three Lisp functions ([`worker.lisp`](worker.lisp)) that the Worker calls the
-way it would call any JavaScript function. The compiled module imports
-**nothing** and needs no WASI shim, no allocator and no bindings library —
-[`src/index.js`](src/index.js) is the entire host side, and the module is by far
-the smallest thing [measured](../../../size-report/results/cloudflare-workers.md).
+way it would call any JavaScript function. No library, no allocator, no WASI
+shim: the compiled module imports **nothing**, and
+[`src/index.js`](src/index.js) is the entire host side.
 
 ```bash
 ./build.sh          # worker.lisp -> src/worker.wasm
@@ -38,49 +37,33 @@ $ node -e 'const m = new WebAssembly.Module(require("fs").readFileSync("src/work
 [] [ 'add', 'fib', 'greet', 'memory', '__ronto_alloc', '__ronto_alloc_mark', '__ronto_alloc_reset' ]
 ```
 
-so instantiating it is one line, and it happens once per isolate:
+so instantiating it is one line, once per isolate, and `lisp.add(2, 3)` returns
+`5` — a `:s32` is an i32 on both sides:
 
 ```js
 const lisp = new WebAssembly.Instance(module, {}).exports;
 ```
 
-`add` and `fib` are then just functions: `lisp.add(2, 3)` returns `5`. A `:s32`
-is an i32 on both sides, and JavaScript sees a number.
-
 ## Strings, and why there is no bookkeeping here
 
 WebAssembly has no string type, so `greet` returns **two i32 values** — a
-pointer into the module's linear memory and a length — and the host decodes the
-bytes:
+pointer into linear memory and a length — and the host decodes the bytes:
 
 ```js
 const [ptr, len] = lisp.greet();
 new TextDecoder().decode(new Uint8Array(lisp.memory.buffer, ptr, len));
 ```
 
-That is the whole boundary, and the bytes live in **linear memory** — not on a
-garbage-collected heap. WebAssembly has no string type, so this is the only way a
-string can cross; the engine never traces linear memory, so in general those
-bytes are the host's to reclaim.
+Linear memory is not garbage collected, so in general those bytes are the
+host's to reclaim. Note what is *absent* here: the module exports
+`__ronto_alloc` and the arena pair `__ronto_alloc_mark`/`__ronto_alloc_reset`,
+and this Worker never touches them. Nothing crosses the boundary *into* the
+module, so the host never allocates and the returned string lands in a fixed
+scratch area the next call reuses — measured, 150 000 calls to `add` + `fib` +
+`greet` leave linear memory exactly where it started.
 
-Note what is *absent* here, though: the module also exports `__ronto_alloc` and
-the arena pair `__ronto_alloc_mark` / `__ronto_alloc_reset`, and this Worker
-never touches them. Nothing crosses the boundary *into* the module, so the host
-never allocates, and the returned string lands in a fixed scratch area that the
-next call reuses. Memory therefore stays flat on its own — measured, 150 000
-calls to `add` + `fib` + `greet` on one instance:
-
-```console
-memory after 150000 calls: 65536 -> 65536
-```
-
-Pass a string *in* and that changes: the host has to allocate, and then it has
-to reclaim. That is [`../httpbin`](../httpbin), and the arena bracket there is
-the reason it looks more complicated than this — see
-[Two heaps](../httpbin/README.md#two-heaps-wasm-gc-collects-one-of-them-you-collect-the-other)
-for which memory wasm-GC does and does not cover. (`--no-gc`, used here, has no
-garbage collector at all; the point holds either way, because the boundary was
-never the collector's business.)
+Pass a string *in* and that changes: see [`../httpbin`](../httpbin) and its
+[Two heaps](../httpbin/README.md#two-heaps) section.
 
 ## The non-GC subset
 
@@ -88,8 +71,8 @@ never the collector's business.)
 available because `worker.lisp` stays inside the
 [numeric/string subset](../../../doc/en/guides/wasm-nogc.md): integers, a string
 literal, `dotimes`. Add a cons cell, a hash table or the JSON library and the
-build needs the full language — `--no-wasi` instead of `--no-gc`, which is
-exactly what `../httpbin` does.
+build needs the full language — `--no-wasi` instead, which is what `../httpbin`
+does.
 
 ## Rebuilding
 

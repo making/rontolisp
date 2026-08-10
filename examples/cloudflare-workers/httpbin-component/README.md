@@ -11,13 +11,6 @@ boundary.
 npx wrangler dev    # http://localhost:8787
 ```
 
-```console
-$ curl 'http://localhost:8787/get?a=1&b=two'
-{"method":"GET","headers":{...},"path":"/get","args":{"b":"two","a":"1"}}
-$ curl -X POST -d '{not json' http://localhost:8787/post
-{"data":"{not json","args":{},"json":null,"method":"POST",...}
-```
-
 ## What it buys
 
 The canonical ABI marshals the strings, so the call is a call:
@@ -26,16 +19,16 @@ The canonical ABI marshals the strings, so the call is a call:
 const result = lisp.handleRequest(input);   // string in, string out
 ```
 
-Compare [`../httpbin/src/index.js`](../httpbin/src/index.js), whose `handleRequest`
-allocates, writes bytes into linear memory, reads a `[ptr, len]` pair back out
-and pops a bump-allocator arena to do the same thing. That whole function
-disappears here. It is the entire benefit, and it is a genuine one.
+Compare [`../httpbin/src/index.js`](../httpbin/src/index.js), whose
+`handleRequest` allocates, writes bytes into linear memory, reads a `[ptr, len]`
+pair back out and pops a bump-allocator arena to do the same thing. That whole
+function disappears here. It is the entire benefit, and it is a genuine one.
 
 ## What it costs
 
 | | [`../httpbin`](../httpbin) | this directory |
 | --- | --- | --- |
-| Files the Worker imports | 1 × `.wasm` | 1 × `.wasm` + a generated `worker.js` — its size is in the [size report](../../../size-report/results/cloudflare-workers.md) |
+| Files the Worker imports | 1 × `.wasm` | 1 × `.wasm` + a generated `worker.js` ([size report](../../../size-report/results/cloudflare-workers.md)) |
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | none |
 | Top-level `defparameter` | works, via `_initialize` | works, at instantiation |
@@ -44,32 +37,21 @@ disappears here. It is the entire benefit, and it is a genuine one.
 component that **imports nothing** (`wasm-tools component wit` shows not a
 single `import` line), so the generated glue's `ImportObject` type is literally
 empty and `src/index.js` instantiates with `{}`. The Lisp top level runs from
-the core module's *start section* inside `instantiate` — the reactor
-counterpart of `../httpbin` calling `_initialize` — so a `defparameter` is
-assigned before the first request. Without the flag, the same build imports
-three WASI interfaces that must be stubbed by hand, ships two extra (empty)
-core modules, and cannot run its top-level forms at all, because they live in a
-`wasi:cli/run` export jco cannot drive.
+the core module's *start section* inside `instantiate`. Without the flag, the
+same build imports three WASI interfaces that must be stubbed by hand, ships two
+extra (empty) core modules, and cannot run its top-level forms at all, because
+they live in a `wasi:cli/run` export jco cannot drive.
 
 ## The two things that are not obvious
 
-Each of these was found the hard way; `build.sh` and `src/index.js` carry the
-answers.
-
 **1. jco's default output does not run on Workers.** It calls
 `WebAssembly.compile()` on an inlined base64 blob at module scope, and a Worker
-may not compile WebAssembly at run time. workerd rejects the module:
-
-```
-Uncaught Error: Top-level await in module is unsettled.
-```
-
-`--tla-compat` moves that into an awaited `$init` promise, which is worse — the
-Worker starts and then every request hangs until the runtime cancels it. The mode
-that works is **`--instantiation sync`**: the generated glue does not compile
-anything, it asks the host for each already-compiled core module through a
-`getCoreModule(path)` callback. A `.wasm` import is exactly that, so
-`src/index.js` hands it over:
+may not compile WebAssembly at run time — workerd rejects the module with
+`Uncaught Error: Top-level await in module is unsettled.` `--tla-compat` moves
+that into an awaited `$init` promise, which is worse: the Worker starts and then
+every request hangs. The mode that works is **`--instantiation sync`**, where
+the glue asks the host for each already-compiled core module through a
+`getCoreModule(path)` callback. A `.wasm` import is exactly that:
 
 ```js
 import core0 from "./dist/worker.core.wasm";
@@ -80,21 +62,16 @@ instantiate(() => core0, {});
 `-b 0` goes with it, to stop jco inlining a small core module as base64 rather
 than emitting the file we need to import.
 
-**2. `handler-case` needs `--bindgen-enable-wasm-exnref`.** Without that flag jco
-refuses the component before generating anything:
-
-```
-ComponentError: failed to translate component
-Caused by: exceptions proposal not enabled (at offset 0xb4e)
-```
+**2. `handler-case` needs `--bindgen-enable-wasm-exnref`.** Without it jco
+refuses the component before generating anything (`exceptions proposal not
+enabled`).
 
 ## When this path is actually clean
 
 When the program fits the `--no-gc` subset. [`../hello`](../hello) has no
-component build of its own, but try it: `--no-gc --component` is a sub-kilobyte
-component that imports *nothing*, so there is no exnref flag, and the glue has
-no dependencies. The output name says which build it is, so it cannot be
-confused with the `worker.wasm` this directory's own `build.sh` produces:
+component build of its own, but try it: `--no-gc --component` is a tiny
+component that imports *nothing*, so there is no exnref flag and the glue has no
+dependencies:
 
 ```bash
 JAR=../../../target/rontolisp-0.1.0-SNAPSHOT-exec.jar
@@ -112,8 +89,8 @@ $ node --input-type=module -e '
 (That plain transpile is enough for Node. For a Worker, add
 `--instantiation sync -b 0` and hand the core module over as above.)
 
-Even there it is ~90 KB of generated JavaScript standing in for about ten lines
-of hand-written glue — which is the honest summary of this whole directory.
+Even there it is generated JavaScript standing in for about ten lines of
+hand-written glue — which is the honest summary of this whole directory.
 
 ## Rebuilding
 
@@ -124,5 +101,4 @@ examples/cloudflare-workers/httpbin-component/build.sh
 
 `build.sh` prints the core-module file names it produced. A reactor component
 has exactly one; if a rebuild ever prints more, the program stopped being
-import-free (or the flag went missing) and `src/index.js` needs to hear about
-it.
+import-free (or the flag went missing) and `src/index.js` needs to hear about it.

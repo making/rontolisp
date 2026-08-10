@@ -497,39 +497,39 @@ examples:
   - path: net/httpbin-clack.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
-      the ONE Clack source for every host:
-      cloudflare-workers/httpbin-clack-one-source
-      compiles THIS file (not a copy) as its deployed Worker -- :server
-      :rontolisp takes the reactor shape under --no-wasi -- and
-      cloudflare-workers/httpbin/worker.lisp carries everything down to `*app*`
-      verbatim under a hand-written adapter. What this pins is that the file
-      the Worker ships is still a portable Clack application, on the two
-      backends where clackup can actually bind (a blocking server, hence
-      compile-only; Preview 1 has no incoming TCP). The --no-wasi leg has no
-      backend token here; RontoLispCliTest pins the synthesized handle-request
-      export.
+      plain Clack, and the ONE source for every host:
+      cloudflare-workers/httpbin-clack-one-source compiles THIS file (not a
+      copy) as its deployed Worker, because :server :rontolisp takes the reactor
+      shape under --no-wasi. What this pins is that the file the Worker ships is
+      still a portable Clack application -- an application FUNCTION plus a
+      middleware applied directly, which is also the spelling that keeps
+      clackup's pathname branch provably dead -- on the two backends where
+      clackup can actually bind (a blocking server, hence compile-only; Preview
+      1 has no incoming TCP). The --no-wasi leg has no backend token here;
+      RontoLispCliTest pins the synthesized handle-request export.
   - path: net/httpbin-tiny-routes.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
-      httpbin-clack.lisp routed by tiny-routes instead of a `cond` over
-      :path-info: everything below the quickload is
-      cloudflare-workers/httpbin-tiny-routes/worker.lisp verbatim down to
-      *app*, so what this pins is that the routed Worker's application is a
-      portable Clack application too -- on the two backends where clackup can
-      bind (a blocking server, hence compile-only). It also pins that the lite
-      system's ql:quickload spelling resolves on both compile paths.
+      the same endpoints composed with tiny-routes instead: route macros, a
+      /status/:code template, the decline protocol, and `pipe` threading the
+      table through wrap-request-body / wrap-query-parameters /
+      wrap-response-content-type -- so what this pins beyond the clack case is
+      that the library's own middleware stack compiles and that the lite
+      system's ql:quickload spelling resolves on both compile paths. Blocking
+      server, hence compile-only.
   - path: net/httpbin-ningle.lisp
     backends: [jvm-compile, wasm-component]
     note: >-
-      the same endpoints again, routed by ningle: an application OBJECT with a
-      route per method, a /status/:code path template, and the 405/404 split
-      answered by an overridden ningle:not-found METHOD rather than a catch-all
-      route. What it pins beyond the tiny-routes case is the other routing
-      model on the two backends where clackup can bind (a blocking server,
-      hence compile-only) -- a CLOS library generic specialized from the
-      application's own package, requirement closures compiled when the route
-      is defined, and the whole lack-request chain (http-body / fast-http /
-      smart-buffer) compiling, which ningle reads every request through.
+      the same endpoints a third way, on a ningle application OBJECT: routes
+      assigned in a loop with an :ANY fallback per path for the 405, a
+      controller that returns a STRING and mutates ningle:*response*, a
+      `:regexp t` /status rule whose :captures bind, and an overridden
+      ningle:not-found METHOD for the 404. What it pins beyond the tiny-routes
+      case is the other routing model on the two backends where clackup can bind
+      -- a CLOS library generic specialized from the application's own package,
+      requirement closures compiled when the route is defined, and the whole
+      lack-request chain (http-body / fast-http / smart-buffer) compiling, which
+      ningle reads every request through.
   - path: net/httpbin-clos.lisp
     backends: [jvm-compile, wasm-component]
   - path: net/httpbin-jzon.lisp
@@ -553,24 +553,25 @@ examples:
   - path: cloudflare-workers/hello/worker.lisp
     backends: [no-gc, wasm-component]
     note: >-
-      the simplest Worker: three wasm-export'ed functions a JavaScript host calls
-      directly. Host-invoked, so the harness only compiles it. no-gc pins the
-      563-byte MVP module the Worker imports; wasm-component pins that the same
-      three exports lower through the canonical ABI, which is what
+      the simplest Worker, and the one with no library in it: three
+      wasm-export'ed functions a JavaScript host calls directly. Host-invoked,
+      so the harness only compiles it. no-gc pins the plain MVP module the
+      Worker imports; wasm-component pins that the same three exports lower
+      through the canonical ABI, which is what
       cloudflare-workers/httpbin-component transpiles with jco.
   - path: cloudflare-workers/hello-clack/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      the smallest Clack application on a Worker, and the counterpart of
-      hello/: worker.lisp is THREE forms -- quickload, the application defun,
-      clackup with :server :reactor -- and contains no Worker-specific
-      code at all, because the handler backend stores the app
-      and the compiler synthesizes the exported entry point. The demo drives it
-      through that backend's `dispatch`, the same function the synthesized
-      wasm-export calls, so what this pins is the clackup route itself on every
-      backend the compiler has. Checked with contains, not equals: the demo
-      prints clackup's own start-up banner, and the JSON key ORDER follows
-      hash-table iteration order, which differs per backend.
+      the smallest Clack application on a Worker, and the counterpart of hello/:
+      worker.lisp is THREE forms -- quickload, the application defun, clackup
+      with :server :reactor -- and contains no Worker-specific code at all,
+      because the handler backend stores the app and the compiler synthesizes
+      the exported entry point. The demo drives it through that backend's
+      `dispatch`, the same function the synthesized wasm-export calls, so what
+      this pins is the clackup route itself on every backend the compiler has.
+      Checked with contains, not equals: the demo prints clackup's own start-up
+      banner, and the JSON key ORDER follows hash-table iteration order, which
+      differs per backend.
     expect:
       contains:
         - 'Hello from Clack on Cloudflare Workers'
@@ -579,15 +580,15 @@ examples:
   - path: cloudflare-workers/hello-tiny-routes/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      the same Worker with the application COMPOSED instead of written: three
-      routes through tiny-routes/lite (loaded by ql:quickload, so the lite
-      system resolves on the compile paths too) handed to clackup with
-      :server :reactor. What it pins beyond hello-clack's case is the
-      routing itself on every backend the compiler has -- the
-      "/hello/:name" path template binding a parameter through the ppcre-free
-      matcher, and a path no route claims declining into the catch-all 404.
-      Checked with contains, not equals: the demo prints clackup's own
-      start-up banner, and JSON key order differs per backend.
+      the same greeting COMPOSED instead of written: three routes through
+      tiny-routes/lite (loaded by ql:quickload, so the lite system resolves on
+      the compile paths too), threaded through wrap-response-content-type by
+      `pipe` and handed to clackup with :server :reactor. What it pins beyond
+      hello-clack's case is the routing and the middleware seam on every backend
+      the compiler has -- the "/hello/:name" path template binding a parameter
+      through the ppcre-free matcher, and a path no route claims declining into
+      the catch-all 404. Checked with contains, not equals: the demo prints
+      clackup's own start-up banner, and JSON key order differs per backend.
     expect:
       contains:
         - 'Hello from tiny-routes on Cloudflare Workers'
@@ -597,7 +598,7 @@ examples:
   - path: cloudflare-workers/hello-ningle/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      the same Worker a third way: ningle, where the application is a CLOS
+      the same greeting a third way: ningle, where the application is a CLOS
       OBJECT and each route is a `setf` on it. What it pins beyond
       hello-tiny-routes' case is ningle's own model on every backend the
       compiler has -- a bare STRING as a controller (ningle answers it as the
@@ -606,9 +607,8 @@ examples:
       METHOD, which is a defmethod on a library generic from the application's
       package. The --no-wasi Worker build itself is NOT covered here -- it needs
       node, not a rontolisp backend -- but the reactor path this drives is the
-      same one. Checked with contains, not equals:
-      the demo prints clackup's own start-up banner, and JSON key order differs
-      per backend.
+      same one. Checked with contains, not equals: the demo prints clackup's own
+      start-up banner, and JSON key order differs per backend.
     expect:
       contains:
         - 'Hello from ningle on Cloudflare Workers'
@@ -618,23 +618,20 @@ examples:
   - path: cloudflare-workers/httpbin/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      loads worker.lisp -- the CLACK-FREE flavour of the Worker: the application
-      down to `*app*` is cloudflare-workers/httpbin-clack/worker.lisp VERBATIM
-      (and net/httpbin-clack.lisp's), and what puts it on
-      a reactor is thirty lines written out under it rather than
-      clack:clackup -- and drives it over the requests the README curls. So the
-      two directories differ in exactly one thing, and this case is the
-      clackup-free half of the pair: the adapter calls the same
-      rontolisp::%http-make-env / %http-normalize-response entry points the
-      handler backends do, so what it pins is that a hand-written adapter
-      builds the same environment on every backend -- the "?" split and the
-      percent-decoding of the raw target (/%67et answers "path":"/get"), the
-      content-length the buffered :raw-body needs, and the response header ALIST
-      crossing as a JSON array of pairs rather than an object. The Worker itself
-      calls the wasm-export'ed handle-request from JavaScript and is built by the
-      directory's build.sh (--no-wasi --optimize, a shape no backend token here
-      covers). Checked with contains, not equals: the key ORDER inside a JSON
-      object follows hash-table iteration order, which differs per backend.
+      loads worker.lisp -- the LIBRARY-FREE flavour: plain defuns, and thirty
+      lines of reactor adapter written out under them where the other three call
+      clack:clackup -- and drives it over the requests the README curls. The
+      adapter calls the same rontolisp::%http-make-env /
+      %http-normalize-response entry points the handler backends do, so what it
+      pins is that a hand-written adapter builds the same environment on every
+      backend: the "?" split and the percent-decoding of the raw target (/%67et
+      answers "path":"/get"), the content-length the buffered :raw-body needs,
+      and the response header ALIST crossing as a JSON array of pairs rather
+      than an object. The Worker itself calls the wasm-export'ed handle-request
+      from JavaScript and is built by the directory's build.sh (--no-wasi
+      --optimize, a shape no backend token here covers). Checked with contains,
+      not equals: the key ORDER inside a JSON object follows hash-table
+      iteration order, which differs per backend.
     expect:
       contains:
         # The response body is a JSON string nested in the outer JSON, so its
@@ -648,19 +645,20 @@ examples:
   - path: cloudflare-workers/httpbin-clack/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      loads worker.lisp -- the CLACKUP half of the same pair, over the same
-      probes as the httpbin case above: the application is identical, and what
-      differs is that clack:clackup :server :reactor installs it instead of the
-      thirty hand-written lines. So the two cases run the same requests through
-      the built-in handler backend and through a copy of what it does, and a
-      divergence shows up as this pair disagreeing -- which is what makes the
-      backend's `dispatch` (the very function the synthesized handle-request
-      export calls) pinned on every backend the compiler has, rather than only
-      on the WASM one that has an export. The unparseable-body probe also pins
-      that lack's default backtrace middleware only PRINTS -- to *error-output*,
-      a sink on the Worker -- while the 200 with "json":null still comes back.
-      Checked with contains, not equals: the key ORDER inside a JSON object
-      follows hash-table iteration order, which differs per backend.
+      loads worker.lisp -- the same endpoints as plain Clack, over the same
+      probes as the httpbin case above, so the pair runs one set of requests
+      through the built-in handler backend and through a hand-written copy of
+      what it does. A divergence shows up as the two cases disagreeing, which is
+      what pins the backend's `dispatch` (the very function the synthesized
+      handle-request export calls) on every backend the compiler has, rather
+      than only on the WASM one that has an export. It also pins Clack's other
+      composition unit -- a MIDDLEWARE, a function from application to
+      application, is what sets the content-type header here -- and, on the
+      unparseable-body probe, that lack's default backtrace middleware only
+      PRINTS (to *error-output*, a sink on the Worker) while the 200 with
+      "json":null still comes back. Checked with contains, not equals: the key
+      ORDER inside a JSON object follows hash-table iteration order, which
+      differs per backend.
     expect:
       contains:
         - '\"path\":\"/get\"'
@@ -672,19 +670,21 @@ examples:
   - path: cloudflare-workers/httpbin-tiny-routes/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      loads worker.lisp -- httpbin-clack's endpoints routed through the REAL
-      tiny-routes API, loaded as "tiny-routes/lite": the opt-in system whose
-      ppcre-free path-template matcher keeps cl-ppcre out of the module
-      (.kb/asdf.md; the corpus pinning lite == full is TinyRoutesLiteE2eTest).
-      What this pins beyond httpbin-clack's case is the routed Worker end to
-      end on every backend the compiler has: a method-specific route
-      (define-get, define-post, ... and wrap-request-matches-method for the
-      PATCH one) DECLINING on the wrong method so the single catch-all answers
-      httpbin's own 405, the /status/:code path template binding a parameter
-      through the lite matcher, a non-numeric :code declining into the
-      catch-all's 404 instead, and the ql:quickload spelling of the lite system
-      resolving on the compile paths. Checked with contains, not equals: JSON
-      key order follows hash-table iteration order, which differs per backend.
+      loads worker.lisp -- the same endpoints written on the REAL tiny-routes
+      API, loaded as "tiny-routes/lite": the opt-in system whose ppcre-free
+      path-template matcher keeps cl-ppcre out of the module (.kb/asdf.md; the
+      corpus pinning lite == full is TinyRoutesLiteE2eTest). What this pins
+      beyond httpbin-clack's case is the routed Worker end to end on every
+      backend the compiler has: a method-specific route (define-get,
+      define-post, ... and wrap-request-matches-method for the PATCH one)
+      DECLINING on the wrong method so the single catch-all answers httpbin's
+      own 405, the /status/:code path template binding a parameter through the
+      lite matcher, a non-numeric :code declining into the catch-all's 404
+      instead, the library's own middleware stack under `pipe` supplying the
+      request body / query parameters / content-type header the handlers never
+      touch, and the ql:quickload spelling of the lite system resolving on the
+      compile paths. Checked with contains, not equals: JSON key order follows
+      hash-table iteration order, which differs per backend.
     expect:
       contains:
         - '\"path\":\"/get\"'
@@ -697,9 +697,9 @@ examples:
   - path: cloudflare-workers/httpbin-ningle/check.lisp
     backends: [interpreter, jvm, wasm]
     note: >-
-      loads worker.lisp -- httpbin-clack's endpoints in ningle's model, and
-      deliberately NOT its code: what this pins is the four ningle mechanisms
-      the file is written on, each of which the tiny-routes case cannot reach.
+      loads worker.lisp -- the same endpoints in ningle's model: what this pins
+      is the four ningle mechanisms the file is written on, each of which the
+      tiny-routes case cannot reach.
       Routes assigned in a LOOP (`setf` on the application object, so the five
       echo endpoints and their five :ANY fallbacks are one dolist), a controller
       that returns a STRING and says the rest by mutating ningle:*response*

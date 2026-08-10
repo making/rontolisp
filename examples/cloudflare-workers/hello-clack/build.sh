@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
-# Compile worker.lisp -- the whole program: clack, the handler backend, the
-# application and the clackup call -- to the .wasm module the Worker imports.
+# Compile worker.lisp -- clack, the handler backend, the application and the
+# clackup call -- to the .wasm module the Worker imports.
 #
 # --no-wasi: the Worker calls the exported entry point directly and never runs
 #   the module as a program, so it needs no WASI imports at all. It becomes a
 #   reactor: nothing to shim on the JavaScript side, and `_initialize` instead
-#   of `_start`. clackup's own start-up banner is not a problem there -- under
-#   --no-wasi standard output is a sink, so the bytes are discarded.
-# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is
-#   what keeps the module down -- only the functions the program actually
-#   reaches end up in the output. It matters here because quickloading clack
-#   pulls in the whole of clack and lack. The =size level additionally declines
-#   the two speed-over-size emissions, which is the right trade on a Worker:
-#   -11% raw / -14% gzip and a slightly FASTER isolate startup, for a
-#   per-request cost measured in single-digit microseconds (0.011 -> 0.015 ms
-#   on this module, node 24).
+#   of `_start`. clackup's start-up banner is not a problem there -- standard
+#   output is a sink, so the bytes are discarded.
+# --optimize=size: a Worker bundle has a size limit, and the tree-shaker is what
+#   keeps the module down -- only what the program reaches ships. The =size
+#   level additionally declines the two speed-over-size wasm-GC emissions, the
+#   right trade on a Worker: smaller and a slightly faster isolate startup, for
+#   a per-request cost of single-digit microseconds.
 #
 # The first run downloads clack/lack into ~/.rontolisp/quicklisp; after that the
 # build is offline.
