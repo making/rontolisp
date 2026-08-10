@@ -85,6 +85,69 @@ final class WasmArityBundler {
 		return param instanceof LispSymbol sym && !sym.name().startsWith("&");
 	}
 
+	/**
+	 * Lowers a {@code funcall} with more arguments than
+	 * {@link WasmLispCompiler#MAX_CALLABLE_ARITY} into the equivalent {@code apply}:
+	 *
+	 * <pre>
+	 * (funcall f a1 .. a11) -> (apply f (list a1 .. a11))
+	 * </pre>
+	 *
+	 * The per-arity dispatchers take one WASM parameter per Lisp argument and so stop at
+	 * the limit, but {@code _apply} does not: it hands the whole argument list to the
+	 * SPREAD dispatcher ({@link WasmLispCompiler#FUNC_DISPATCH_SPREAD}), which reads each
+	 * target's parameters back out of the list. That mechanism already exists for
+	 * {@code apply} through a computed designator; this pass is what lets {@code funcall}
+	 * reach it too, instead of compiling to a call-time "not supported" signal.
+	 *
+	 * <p>
+	 * It has to be an AST pass rather than a codegen branch because the injected
+	 * {@code apply} is what turns the eval runtime on -- {@code usesEval} is a scan of
+	 * the program, and it runs after this one.
+	 *
+	 * <p>
+	 * A keyword lambda list is the shape that reaches the limit in practice: the
+	 * arguments are passed through verbatim for the callee's own dispatcher to parse, so
+	 * chipz's {@code (funcall fun state input output :input-start s :input-end e
+	 * :output-start s :output-end e)} is eleven of them for a function whose lambda list
+	 * has seven parameters.
+	 * @param program the top-level forms
+	 * @return the transformed program (the same list when no funcall is too wide)
+	 */
+	static List<LispVal> spreadOverArityFuncalls(List<LispVal> program) {
+		List<LispVal> out = new ArrayList<>(program.size());
+		boolean changed = false;
+		for (LispVal form : program) {
+			LispVal rewritten = spread(form);
+			changed |= rewritten != form;
+			out.add(rewritten);
+		}
+		return changed ? out : program;
+	}
+
+	private static LispVal spread(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return form;
+		}
+		boolean quoted = cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name());
+		if (quoted) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		List<LispVal> out = new ArrayList<>(parts.size());
+		for (LispVal part : parts) {
+			out.add(spread(part));
+		}
+		if (cons.car() instanceof LispSymbol op && LispNames.FUNCALL.equals(op.name())
+				&& out.size() - 2 > WasmLispCompiler.MAX_CALLABLE_ARITY) {
+			List<LispVal> listParts = new ArrayList<>();
+			listParts.add(new LispSymbol(LispNames.LIST));
+			listParts.addAll(out.subList(2, out.size()));
+			return listToCons(List.of(new LispSymbol(LispNames.APPLY), out.get(1), listToCons(listParts)));
+		}
+		return LispCons.rebuiltList(cons, out);
+	}
+
 	private static LispVal rewrite(LispVal form, Map<String, Integer> wide) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;

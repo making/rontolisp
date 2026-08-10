@@ -555,6 +555,40 @@ public final class GrayStreamsLibrary {
 			}
 			return am.ik.rontolisp.LispCons.rebuiltList(cons, out);
 		}
+		// (defclass name (supers) (slot...) option...) and define-condition's identical
+		// shape: a SLOT SPEC is data whose head is the slot NAME, not a call. chipz's
+		// (format :initarg :format :reader invalid-format) slot was read as a
+		// (format stream ctrl args...) call and handed back as the format rewrite's
+		// let, which defclass then rejected ("expects a keyword slot option, got
+		// ((__gray_fmt_stream :INITARG))"). Only the option VALUES are rewritten
+		// (:initform holds a real expression); the class options AFTER the slot list
+		// are ordinary code -- :report's lambda prints through this very protocol --
+		// and are rewritten whole.
+		int slotListAt = (LispNames.DEFCLASS.equals(opName) || LispNames.DEFINE_CONDITION.equals(opName)) ? 3 : -1;
+		if (slotListAt > 0 && slotListAt < parts.size()
+				&& parts.get(slotListAt) instanceof am.ik.rontolisp.LispCons slots && slots.isProperList()) {
+			List<LispVal> rewrittenSlots = new java.util.ArrayList<>();
+			for (LispVal slot : slots.toList()) {
+				rewrittenSlots.add(rewriteSlotSpec(slot, 1, used));
+			}
+			List<LispVal> out = new java.util.ArrayList<>(parts.subList(0, slotListAt));
+			out.add(am.ik.rontolisp.LispCons.rebuiltList(slots, rewrittenSlots));
+			for (int i = slotListAt + 1; i < parts.size(); i++) {
+				out.add(rewrite(parts.get(i), used));
+			}
+			return am.ik.rontolisp.LispCons.rebuiltList(cons, out);
+		}
+		// (defstruct name-or-options [doc] slot...): the same hazard one level flatter --
+		// the slots are the trailing elements rather than a nested list, and a slot spec
+		// is (name [initform] option...), so everything after the name is an expression.
+		if (LispNames.DEFSTRUCT.equals(opName) && parts.size() > 1) {
+			int slotsFrom = (parts.size() > 2 && parts.get(2) instanceof am.ik.rontolisp.LispString) ? 3 : 2;
+			List<LispVal> out = new java.util.ArrayList<>(parts.subList(0, Math.min(slotsFrom, parts.size())));
+			for (int i = slotsFrom; i < parts.size(); i++) {
+				out.add(rewriteSlotSpec(parts.get(i), 2, used));
+			}
+			return am.ik.rontolisp.LispCons.rebuiltList(cons, out);
+		}
 		boolean valueBindings = LispNames.LET.equals(opName) || LispNames.LET_STAR.equals(opName);
 		boolean functionBindings = LispNames.FLET.equals(opName) || LispNames.LABELS.equals(opName)
 				|| LispNames.MACROLET.equals(opName);
@@ -585,6 +619,30 @@ public final class GrayStreamsLibrary {
 			out.add(rewrite(parts.get(i), used));
 		}
 		return am.ik.rontolisp.LispCons.rebuiltList(cons, out);
+	}
+
+	/**
+	 * Rewrites one {@code defclass}/{@code define-condition}/{@code defstruct} slot
+	 * specification. The slot NAME (element 0) is data and never a call operator;
+	 * elements {@code [1, firstOptionIndex)} are positional expressions (defstruct's
+	 * initform); from {@code firstOptionIndex} on the elements alternate keyword, value,
+	 * and only the values are rewritten. A bare-symbol slot comes back untouched.
+	 * @param slot the slot specification
+	 * @param firstOptionIndex the index at which the keyword/value tail begins
+	 * @param used the dispatch helpers this rewrite has reached
+	 * @return the rewritten slot specification
+	 */
+	private static LispVal rewriteSlotSpec(LispVal slot, int firstOptionIndex, java.util.Set<String> used) {
+		if (!(slot instanceof am.ik.rontolisp.LispCons slotCons) || !slotCons.isProperList()) {
+			return slot;
+		}
+		List<LispVal> slotParts = slotCons.toList();
+		List<LispVal> out = new java.util.ArrayList<>(slotParts.size());
+		for (int i = 0; i < slotParts.size(); i++) {
+			boolean keyword = i == 0 || (i >= firstOptionIndex && (i - firstOptionIndex) % 2 == 0);
+			out.add(keyword ? slotParts.get(i) : rewrite(slotParts.get(i), used));
+		}
+		return am.ik.rontolisp.LispCons.rebuiltList(slotCons, out);
 	}
 
 	private static LispVal rewriteTail(LispVal tail, java.util.Set<String> used) {

@@ -249,3 +249,30 @@ otherwise fail with "unknown superclass
 RONTOLISP:FUNDAMENTAL-BINARY-INPUT-STREAM". Pinned by
 `LispEvaluatorTest#evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream` and
 the two `LackEcosystem*E2eTest` classes (all four backends).
+
+## A slot NAME is not a call operator
+
+The compile-path pre-pass (`GrayStreamsLibrary.process`) rewrites every
+stream-taking built-in call with a non-literal stream onto the
+`%gray-*-dispatch` helpers, and it walks the WHOLE program to find them. A
+`defclass` / `define-condition` SLOT SPEC is a list whose head is the slot name,
+so a slot named after one of those built-ins used to be rewritten as if it were a
+call: chipz's
+
+```lisp
+(define-condition invalid-format-error (chipz-error)
+  ((format :initarg :format :reader invalid-format))
+  (:report (lambda (condition stream) (format stream "Invalid format ~S" ...))))
+```
+
+came back as the format rewrite's `let`, and `defclass` rejected it with
+`expects a keyword slot option, got ((__gray_fmt_stream :INITARG))`.
+
+`rewriteBindingForm` now handles the three definers whose bodies carry slot
+specs. The slot NAME and the class name / superclass list are left verbatim;
+only the option VALUES are rewritten (`:initform` holds a real expression), and
+`defstruct`'s positional initform is rewritten too (`rewriteSlotSpec`'s
+`firstOptionIndex` is what distinguishes the two shapes). The class options AFTER
+the slot list stay ordinary code -- `:report`'s lambda prints through this very
+protocol and must keep rewriting. Pinned by
+`JvmLispCompilerTest.grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone`.

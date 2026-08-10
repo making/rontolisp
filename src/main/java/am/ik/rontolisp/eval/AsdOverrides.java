@@ -53,11 +53,6 @@ public final class AsdOverrides {
 			// single-threaded cache on backends that really run concurrent handlers.
 			// The replacement takes the decision per backend; reasons in the file.
 			Map.entry("dbi.asd", "dbi-deps.asd"),
-			// Not unparseable but OVER-SCOPED: the only consumer in any supported
-			// closure is mito-migration's advisory-lock id, which needs the three
-			// crc32 entry points and nothing else. The replacement declares just
-			// package.lisp + crc32.lisp; the inflate/bzip2 decompressor stays out.
-			Map.entry("chipz.asd", "chipz-crc32-slice.asd"),
 			// Not unparseable at all -- replaced only to ADD the opt-in
 			// "tiny-routes/lite" secondary system (same components, no :cl-ppcre,
 			// path-template.lisp substituted with the ppcre-free matcher via

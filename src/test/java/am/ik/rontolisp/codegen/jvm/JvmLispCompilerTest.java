@@ -6007,6 +6007,32 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone() throws Exception {
+		// A defclass/define-condition SLOT SPEC is data whose head is the slot name.
+		// chipz's (format :initarg :format :reader invalid-format) slot was read as a
+		// (format stream ctrl args...) call and handed back as the format rewrite's
+		// let, which defclass then rejected with "expects a keyword slot option, got
+		// ((__gray_fmt_stream :INITARG))". The :report body after the slot list is
+		// ordinary code and still rewrites -- it prints through this very protocol.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
+				(defclass gs-sink (rontolisp:fundamental-character-output-stream)
+				  ((format :initarg :format :reader sink-format)
+				   (acc :initform "")))
+				(defmethod rontolisp:stream-write-string ((s gs-sink) str)
+				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) str))
+				  str)
+				(define-condition bad-format (error)
+				  ((format :initarg :format :reader bad-format-name))
+				  (:report (lambda (condition stream)
+				             (format stream "Invalid format ~a" (bad-format-name condition)))))
+				(let ((s (make-instance 'gs-sink :format :gzip)))
+				  (format s "to ~a" (sink-format s))
+				  (print (list (sink-format s) (slot-value s 'acc))))
+				(print (handler-case (error 'bad-format :format :bzip2) (error (e) (princ-to-string e))))
+				""")))).isEqualTo("(:GZIP \"to GZIP\")\n\"Invalid format BZIP2\"");
+	}
+
+	@Test
 	void compileAndRunGrayBinaryStreamDispatchAndFilePosition() throws Exception {
 		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
 		// file-position call sites with a non-literal stream rewrite onto the
@@ -7020,12 +7046,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("390");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("391");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("390");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("391");
 	}
 
 	@Test
@@ -10069,6 +10095,43 @@ class JvmLispCompilerTest {
 				  (setf (aref a 1 1) 9)
 				  (print (list (aref a 0 0) (aref a 1 1))))
 				""")).isEqualTo("(3 9)");
+	}
+
+	@Test
+	void compileFillWritesEveryElementInRange() throws Exception {
+		// Same contract as the interpreter's fillWritesEveryElementInRange.
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 5 :element-type '(unsigned-byte 8) :initial-element 9))
+				       (same (eq a (fill a 300 :start 1 :end 4))))
+				  (print (list a same (array-element-type a))))
+				""")).isEqualTo("(#(9 44 44 44 9) T (UNSIGNED-BYTE 8))");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4 5))) (fill l 0 :start 1 :end 3) (print l))"))
+			.isEqualTo("(1 0 0 4 5)");
+		assertThat(compileAndRun(
+				"(print (fill (make-array 5 :element-type 'character :initial-element #\\a) #\\z :start 2))"))
+			.isEqualTo("\"aazzz\"");
+		assertThat(compileAndRun("(print (funcall #'fill (make-array 2 :initial-element 1) 8))")).isEqualTo("#(8 8)");
+	}
+
+	@Test
+	void compileMakeArrayElementTypeResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's makeArrayElementTypeResolvesADeftypeAlias:
+		// an alias picks the representation its expansion designates. On this backend
+		// the program-level usesIntArray gate has to resolve it too, or the _iv*
+		// helpers would not be emitted and the call would fall to the general path.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype real-double () 'double-float)
+				(deftype char-buf () 'character)
+				(let ((a (make-array 3 :element-type 'octet))
+				      (b (make-array 2 :element-type 'byte-buffer :initial-contents '(1 300)))
+				      (c (make-array 2 :element-type 'real-double))
+				      (s (make-array 3 :element-type 'char-buf :initial-element #\\x)))
+				  (print (list (array-element-type a) (aref a 0) b (array-element-type c) (aref c 0) (stringp s) s)))
+				""")).isEqualTo("((UNSIGNED-BYTE 8) 0 #(1 44) DOUBLE-FLOAT 0.0 T \"xxx\")");
+		assertThat(compileAndRun("(print (array-element-type (make-array 2 :element-type 'not-a-type)))"))
+			.isEqualTo("T");
 	}
 
 	@Test

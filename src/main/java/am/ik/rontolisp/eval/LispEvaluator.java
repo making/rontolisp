@@ -744,6 +744,10 @@ public final class LispEvaluator {
 		// registered expansion to the family -- the same resolution the compile paths
 		// get from ConcatenateForms.resultSpec(designator, closRegistry).
 		this.globalEnv.defineFunction(LispNames.CONCATENATE, Environment.concatenateBuiltin(this.closRegistry));
+		// make-array for the same reason: an :element-type naming a user deftype
+		// (salza2's octet) must select the representation its expansion designates --
+		// a packed (unsigned-byte 8) vector, not a general array of nil.
+		this.globalEnv.defineFunction(LispNames.MAKE_ARRAY, Environment.makeArrayBuiltin(this.closRegistry));
 		// subtypep over the built-in type lattice + the CLOS class registry. A single
 		// primary value: t when sub is known to be a subtype of super, nil otherwise.
 		this.globalEnv.defineFunction(LispNames.SUBTYPEP, new LispFunction(LispNames.SUBTYPEP, args -> {

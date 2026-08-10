@@ -8955,7 +8955,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("390");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("391");
 	}
 
 	@Test
@@ -14407,6 +14407,66 @@ class WasmLispCompilerIntegrationTest {
 				  (setf (aref a 1 1) 9)
 				  (print (list (aref a 0 0) (aref a 1 1))))
 				""")).isEqualTo("(3 9)");
+	}
+
+	@Test
+	void compileFillWritesEveryElementInRange() throws Exception {
+		// Same contract as the interpreter's fillWritesEveryElementInRange.
+		assertThat(compileAndRun("""
+				(let* ((a (make-array 5 :element-type '(unsigned-byte 8) :initial-element 9))
+				       (same (eq a (fill a 300 :start 1 :end 4))))
+				  (print (list a same (array-element-type a))))
+				""")).isEqualTo("(#(9 44 44 44 9) T (UNSIGNED-BYTE 8))");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4 5))) (fill l 0 :start 1 :end 3) (print l))"))
+			.isEqualTo("(1 0 0 4 5)");
+		assertThat(compileAndRun(
+				"(print (fill (make-array 5 :element-type 'character :initial-element #\\a) #\\z :start 2))"))
+			.isEqualTo("\"aazzz\"");
+		assertThat(compileAndRun("(print (funcall #'fill (make-array 2 :initial-element 1) 8))")).isEqualTo("#(8 8)");
+	}
+
+	@Test
+	void compileFuncallWiderThanTheCallableLimitGoesThroughApply() throws Exception {
+		// The per-arity dispatchers stop at MAX_CALLABLE_ARITY, so an 11-argument
+		// funcall used to compile to a call-time "not supported" signal -- a trap on a
+		// LIVE path. WasmArityBundler.spreadOverArityFuncalls rewrites it to
+		// (apply f (list ...)), which the SPREAD dispatcher already serves. A keyword
+		// lambda list is how a program reaches the limit: the arguments go through
+		// verbatim for the callee to parse, so four keywords is eleven arguments.
+		// chipz's %inflate is exactly this shape.
+		assertThat(compileAndRun("""
+				(defun k4 (a b c &key (input-start 0) input-end (output-start 0) output-end)
+				  (list a b c input-start input-end output-start output-end))
+				(defun pick () #'k4)
+				(print (funcall (pick) 1 2 3 :input-start 4 :input-end 5 :output-start 6 :output-end 7))
+				(print (funcall #'k4 1 2 3 :input-start 4 :input-end 5 :output-start 6 :output-end 7))
+				""")).isEqualTo("(1 2 3 4 5 6 7)\n(1 2 3 4 5 6 7)");
+		// Twelve plain positional arguments through a function value, the same route.
+		assertThat(compileAndRun("""
+				(defun v (&rest xs) (length xs))
+				(defun pickv () #'v)
+				(print (funcall (pickv) 1 2 3 4 5 6 7 8 9 10 11 12))
+				""")).isEqualTo("12");
+	}
+
+	@Test
+	void compileMakeArrayElementTypeResolvesADeftypeAlias() throws Exception {
+		// Same contract as the interpreter's makeArrayElementTypeResolvesADeftypeAlias:
+		// an alias picks the representation its expansion designates. salza2 allocates
+		// every buffer as :element-type 'octet.
+		assertThat(compileAndRun("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype real-double () 'double-float)
+				(deftype char-buf () 'character)
+				(let ((a (make-array 3 :element-type 'octet))
+				      (b (make-array 2 :element-type 'byte-buffer :initial-contents '(1 300)))
+				      (c (make-array 2 :element-type 'real-double))
+				      (s (make-array 3 :element-type 'char-buf :initial-element #\\x)))
+				  (print (list (array-element-type a) (aref a 0) b (array-element-type c) (aref c 0) (stringp s) s)))
+				""")).isEqualTo("((UNSIGNED-BYTE 8) 0 #(1 44) DOUBLE-FLOAT 0.0 T \"xxx\")");
+		assertThat(compileAndRun("(print (array-element-type (make-array 2 :element-type 'not-a-type)))"))
+			.isEqualTo("T");
 	}
 
 	@Test

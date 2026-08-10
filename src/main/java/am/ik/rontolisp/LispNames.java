@@ -2276,6 +2276,14 @@ public final class LispNames {
 	 */
 	public static final String REPLACE = "REPLACE";
 
+	/**
+	 * The {@code fill} built-in function ({@code (fill sequence item &key start end)}).
+	 * Destructive over an array (a packed vector included) and over a list; an immutable
+	 * string is rebuilt through {@code concatenate} like {@link #REPLACE}, so it answers
+	 * a fresh string rather than mutating in place.
+	 */
+	public static final String FILL = "FILL";
+
 	/** The {@code string=} built-in function (case-sensitive string equality). */
 	public static final String STRING_EQ = "STRING=";
 

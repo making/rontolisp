@@ -82,11 +82,17 @@ helper is always emitted (all module bytes shifted once, flag-dimension
 byte-identity contracts unaffected).
 
 Mutation flows through SHARED expansions (`LispMacroExpander`):
-`expandReplace` and `expandScharSetFunctional` branch at runtime on
+`expandReplace`, `expandFill` and `expandScharSetFunctional` branch at runtime on
 `(%arrayp seq)` — a vector (char vector included) is written in place via
 `%row-major-aset` + `elt` and returned; an immutable string keeps the
 functional rebuild (fresh string; the setf form still requires a variable
-place). `lowerCharacterInitialContentsMakeArray` lowers rank-1 character
+place). `fill` is `replace` with a constant source and one extra arm: a LIST
+target has its `car`s rewritten with `rplaca` (chipz and salza2 only ever fill
+vectors, but a half-contract builtin is worse than none), and the string rebuild
+splices a `(make-array n :element-type 'character :initial-element item)` filler
+between the untouched head and tail. The interpreter writes a string in place
+through `LispString.setCharAt`, so that one deviation is compile-path-only,
+exactly as it is for `replace`. `lowerCharacterInitialContentsMakeArray` lowers rank-1 character
 `:initial-contents` to a fresh string copy (`subseq` of a stringp contents,
 else `coerce 'string`) — both compilers try it BEFORE the general
 `:initial-contents` lowering. Default `:initial-element` for a char vector

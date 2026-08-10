@@ -5881,7 +5881,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
 			.isSorted()
-			.hasSize(390);
+			.hasSize(391);
 	}
 
 	@Test
@@ -11938,6 +11938,52 @@ class LispEvaluatorTest {
 			.isEqualTo("T");
 		assertThat(eval("(array-element-type (make-array 4 :element-type '(unsigned-byte 8) :fill-pointer 2))").print())
 			.isEqualTo("T");
+	}
+
+	@Test
+	void fillWritesEveryElementInRange() {
+		// Destructive over every mutable sequence, like replace: the SAME object comes
+		// back. chipz's code-length tables and salza2's bitstream reset both clear a
+		// buffer this way, and (fill v 0) with :start/:end is the only shape they use.
+		assertThat(evalMulti("""
+				(let* ((a (make-array 5 :element-type '(unsigned-byte 8) :initial-element 9))
+				       (same (eq a (fill a 300 :start 1 :end 4))))
+				  (list a same (array-element-type a)))
+				""").print()).isEqualTo("(#(9 44 44 44 9) T (UNSIGNED-BYTE 8))");
+		assertThat(eval("(let ((g (make-array 4 :initial-element 'x))) (list (eq g (fill g 7)) g))").print())
+			.isEqualTo("(T #(7 7 7 7))");
+		assertThat(eval("(let ((l (list 1 2 3 4 5))) (fill l 0 :start 1 :end 3) l)").print()).isEqualTo("(1 0 0 4 5)");
+		assertThat(eval("(fill (make-array 5 :element-type 'character :initial-element #\\a) #\\z :start 2)").print())
+			.isEqualTo("\"aazzz\"");
+		// As a first-class value, like #'replace.
+		assertThat(eval("(funcall #'fill (make-array 2 :initial-element 1) 8)").print()).isEqualTo("#(8 8)");
+	}
+
+	@Test
+	void makeArrayElementTypeResolvesADeftypeAlias() {
+		// A zero-parameter deftype alias in :element-type selects the representation its
+		// expansion designates -- the same one the literal spelling would, on all four
+		// backends. salza2 allocates every buffer as :element-type 'octet, and getting a
+		// general array of nil instead of a packed vector of 0 broke its match scanner
+		// on a comparison against an element past the copied input.
+		assertThat(evalMulti("""
+				(deftype octet () '(unsigned-byte 8))
+				(deftype byte-buffer () 'octet)
+				(deftype real-double () 'double-float)
+				(deftype char-buf () 'character)
+				(let ((a (make-array 3 :element-type 'octet))
+				      (b (make-array 2 :element-type 'byte-buffer :initial-contents '(1 300)))
+				      (c (make-array 2 :element-type 'real-double))
+				      (s (make-array 3 :element-type 'char-buf :initial-element #\\x)))
+				  (list (array-element-type a) (aref a 0) b (array-element-type c) (aref c 0) (stringp s) s))
+				""").print()).isEqualTo("((UNSIGNED-BYTE 8) 0 #(1 44) DOUBLE-FLOAT 0.0 T \"xxx\")");
+		// A name with no deftype behind it is left alone, and a self-referential one
+		// terminates on the hop bound instead of spinning: both keep the general array.
+		assertThat(eval("(array-element-type (make-array 2 :element-type 'not-a-type))").print()).isEqualTo("T");
+		assertThat(evalMulti("""
+				(deftype loopy () 'loopy)
+				(array-element-type (make-array 2 :element-type 'loopy))
+				""").print()).isEqualTo("T");
 	}
 
 	@Test

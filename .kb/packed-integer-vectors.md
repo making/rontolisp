@@ -12,6 +12,52 @@ element type -- keeps the general boxed representation, mirroring the packed
 float arrays' fallback rule. Introduced by todo 194 stage 2 so ironclad's
 SHA-256 working buffers stay unboxed on the wasm-GC backend.
 
+## "Literal" includes a `deftype` alias of one
+
+**A zero-parameter `deftype` name in `:element-type` behaves exactly as if its
+expansion had been written at the call site** -- on all four backends, for the
+packed integer widths, the packed floats and the character vector alike.
+`LispMacroExpander.resolveElementTypeAlias(spec, closRegistry)` is the one
+resolver: it strips the quote the compile paths still carry, follows alias
+chains (bounded at 16 hops, which is also what terminates a self-referential
+`(deftype a () 'a)`), and returns the argument UNCHANGED when it names no
+registered alias -- so a program with no alias compiles to the same bytes as
+before. Three call sites, one per representation-choosing place:
+
+- **Interpreter**: `Environment.makeArrayBuiltin(closRegistry)`, registered
+  registry-less by `createGlobal` and re-registered by `LispEvaluator` with its
+  own registry. Exactly the `concatenateBuiltin` arrangement, and for the same
+  reason -- the registry is mutated as the program loads, so the builtin has to
+  hold the live object rather than a snapshot.
+- **JVM**: `JvmArrayCompiler.compileMake` resolves once, up front, and every
+  recognizer below reads the resolved value. The program-level gates
+  (`JvmLispCompiler.makeArrayIsPackedInt` / `makeArrayIsPackedFloat`, which
+  decide whether the `_iv*` / `_fv*` helpers are emitted at all) resolve too:
+  a gate that missed the alias would leave the helpers out and silently send the
+  call to the general path.
+- **wasm-GC**: `WasmArrayCompiler.compileMake`, same shape. This backend's
+  `packedIntElementWidth` used to demand the quote wrapper, so it declined every
+  alias the resolver had just expanded; it now accepts the bare list too, which
+  is what the JVM's and the interpreter's have always done.
+
+Found through salza2, which allocates every buffer as `:element-type 'octet`
+(`(deftype octet () '(unsigned-byte 8))`). It got a general array of `nil`
+instead of a packed vector of `0`, and its match scanner -- which compares an
+element one past the copied input, relying on the buffer being zero-filled --
+died on `Expected integer, got: NIL`. md5's `ub32` buffers and flexi-streams'
+`octet` buffers are the same shape and pack now too (md5's digests are
+unchanged; the mask-on-store is what its `(logand ... #xffffffff)` already did
+by hand). `fixnum` (cl-ppcre, chipz) names no user deftype, so it is untouched.
+
+**Still not resolved, deliberately**: a designator computed at RUN time
+(`LispMacroExpander.lowerRuntimeElementTypeMakeArray`'s dispatch tests the value
+against the character names only), and `with-open-file`/`open`'s
+`:element-type`, whose `isBinaryElementTypeLiteral` check is a separate literal
+matcher. Both are alias-blind; widen them when a library needs it. Pinned by
+`LispEvaluatorTest.makeArrayElementTypeResolvesADeftypeAlias`, its
+`Jvm`/`Wasm...IntegrationTest` twins, and the `make-array-element-type-deftype-alias`
+ci-spec case.
+
 ## Representation per backend
 
 - **Interpreter**: `LispIntVector` (`am.ik.rontolisp`) -- `int width` (8/16/32)

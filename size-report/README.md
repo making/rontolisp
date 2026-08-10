@@ -14,7 +14,7 @@ last run. Example READMEs link here; they quote no byte counts of their own.
 
 | File | What it measures |
 | --- | --- |
-| [`results/wasm-flags.md`](results/wasm-flags.md) | Two micro programs across every size-relevant compiler flag -- what `--optimize`, `--component` and `--no-gc` are each worth |
+| [`results/wasm-flags.md`](results/wasm-flags.md) | Two micro programs and one real library (chipz gunzip) across every size-relevant compiler flag -- what `--optimize`, `--component` and `--no-gc` are each worth |
 | [`results/cloudflare-workers.md`](results/cloudflare-workers.md) | The [Cloudflare Worker](../examples/cloudflare-workers) modules, raw and gzipped -- what a web framework costs in a bundle |
 | [`results/sizes.json`](results/sizes.json) | The same numbers, machine-readable |
 
@@ -35,7 +35,7 @@ every time it regenerates `results/`. Edit `notes/`, never `results/`.
 
 It uses `target/rontolisp` when the GraalVM native binary is built and the
 executable jar otherwise (override with `RONTOLISP=/path/to/rontolisp`).
-`wasmtime` is optional -- without it the micro programs are built and measured
+`wasmtime` is optional -- without it the `programs/` modules are built and measured
 but not run. `npx` is optional -- without it the jco-transpiled glue row is
 skipped. The Worker builds `ql:quickload` clack / lack / tiny-routes / ningle,
 so the first run needs network.

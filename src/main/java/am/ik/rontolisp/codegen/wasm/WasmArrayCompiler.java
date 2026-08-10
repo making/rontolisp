@@ -98,8 +98,13 @@ final class WasmArrayCompiler {
 			WasmExprCompiler.compileExpr(contentsLowering, ctx);
 			return;
 		}
-		boolean singleFloat = isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
-		boolean doubleFloat = isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		// Resolved ONCE, through the deftype registry: every recognizer below sees the
+		// expansion a user alias stands for, so (make-array n :element-type 'octet)
+		// picks the same representation as the literal '(unsigned-byte 8) spelling.
+		LispVal elementType = am.ik.rontolisp.macro.LispMacroExpander
+			.resolveElementTypeAlias(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD), ctx.closRegistry);
+		boolean singleFloat = isSingleFloatElementType(elementType);
+		boolean doubleFloat = isDoubleFloatElementType(elementType);
 		LispVal fpArg = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjArg = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		// A rank-1 :element-type 'character array is the general array shape holding
@@ -111,8 +116,7 @@ final class WasmArrayCompiler {
 		// now takes this route (matching the JVM), so setf-aref writes always land in
 		// place -- the previous immutable TYPE_STRING branch dropped high bytes on
 		// downstream read even for programs that never called mutation.
-		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander
-			.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		boolean charVector = am.ik.rontolisp.macro.LispMacroExpander.isCharacterElementType(elementType);
 		if ((doubleFloat || singleFloat) && fpArg == null && adjArg == null) {
 			// A plain :element-type 'double-float / 'single-float array (no fill pointer
 			// /
@@ -122,7 +126,7 @@ final class WasmArrayCompiler {
 			compilePackedMake(args, ctx, singleFloat);
 			return;
 		}
-		int packedIntWidth = packedIntElementWidth(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		int packedIntWidth = packedIntElementWidth(elementType);
 		if (packedIntWidth > 0 && fpArg == null && adjArg == null) {
 			// A plain :element-type '(unsigned-byte 8|16|32) array packs when the
 			// runtime rank is 1 (a rank-n shape keeps the general boxed representation,
@@ -1672,16 +1676,23 @@ final class WasmArrayCompiler {
 	}
 
 	// The packed integer-vector width (8/16/32) a make-array :element-type value
-	// designates: the literal quoted list '(unsigned-byte 8|16|32). Anything else --
-	// including a runtime-computed element type -- answers 0 and keeps the general boxed
-	// representation, like the float widths. Mirrors the interpreter's
-	// packedIntElementWidth.
+	// designates: the list (unsigned-byte 8|16|32), quoted as written at a call site or
+	// bare as a resolved deftype alias hands it over. Anything else -- including a
+	// runtime-computed element type -- answers 0 and keeps the general boxed
+	// representation, like the float widths. The optional quote makes this accept the
+	// same two shapes as JvmArrayCompiler.packedIntElementWidth and the interpreter's
+	// (which only ever sees the evaluated, unquoted designator); accepting only the
+	// quoted one silently declined every alias the resolver had just expanded.
 	static int packedIntElementWidth(@Nullable LispVal elementType) {
-		if (elementType instanceof LispCons quote && quote.car() instanceof LispSymbol q
-				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons rest
-				&& rest.cdr() instanceof LispNil && rest.car() instanceof LispCons spec
-				&& spec.car() instanceof LispSymbol head && spec.cdr() instanceof LispCons widthCell
-				&& widthCell.car() instanceof LispInteger width && widthCell.cdr() instanceof LispNil) {
+		LispVal unquoted = elementType;
+		if (unquoted instanceof LispCons quote && quote.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons quoteRest
+				&& quoteRest.cdr() instanceof LispNil) {
+			unquoted = quoteRest.car();
+		}
+		if (unquoted instanceof LispCons spec && spec.car() instanceof LispSymbol head
+				&& spec.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
+				&& widthCell.cdr() instanceof LispNil) {
 			String name = head.name();
 			int colon = name.lastIndexOf(':');
 			String local = colon >= 0 ? name.substring(colon + 1) : name;

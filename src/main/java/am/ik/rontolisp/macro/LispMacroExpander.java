@@ -7134,6 +7134,88 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (fill sequence item &key start end)}: {@code replace} with a
+	 * constant source, and the same three-way runtime dispatch. An array (a packed
+	 * integer/float vector and a mutable character vector included) is written IN PLACE
+	 * through {@code %row-major-aset} and returned; a list has its {@code car}s rewritten
+	 * with {@code rplaca}; an immutable string is rebuilt as
+	 * {@code (concatenate 'string head filler tail)} -- the {@link #expandReplace}
+	 * deviation, for the same reason (a string literal has no writable storage on the
+	 * compile backends). The keywords must be literal.
+	 *
+	 * <pre>
+	 * (fill s v :start a) ->
+	 * (let* ((__fll_s s) (__fll_v v) (__fll_a a) (__fll_b (length __fll_s)))
+	 *   (if (%arrayp __fll_s)
+	 *       (do ((__fll_k __fll_a (+ __fll_k 1)))
+	 *           ((&gt;= __fll_k __fll_b) __fll_s)
+	 *         (%row-major-aset __fll_s __fll_k __fll_v))
+	 *       (if (listp __fll_s)
+	 *           (do ((__fll_c (nthcdr __fll_a __fll_s) (cdr __fll_c))
+	 *                (__fll_k __fll_a (+ __fll_k 1)))
+	 *               ((or (&gt;= __fll_k __fll_b) (null __fll_c)) __fll_s)
+	 *             (rplaca __fll_c __fll_v))
+	 *           (concatenate 'string
+	 *             (subseq __fll_s 0 __fll_a)
+	 *             (make-array (max 0 (- __fll_b __fll_a)) :element-type 'character
+	 *                         :initial-element __fll_v)
+	 *             (subseq __fll_s __fll_b (length __fll_s))))))
+	 * </pre>
+	 * @param cons the fill expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFill(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 3 || parts.size() % 2 == 0) {
+			throw new IllegalArgumentException("fill expects (fill sequence item [:start s] [:end e])");
+		}
+		LispSymbol seq = new LispSymbol("__fll_s");
+		LispSymbol item = new LispSymbol("__fll_v");
+		LispVal start = new LispInteger(0);
+		LispVal end = fmtCall(LispNames.LENGTH, seq);
+		for (int k = 3; k < parts.size(); k += 2) {
+			if (!(parts.get(k) instanceof LispSymbol key)) {
+				throw new UnsupportedOperationException("fill supports only literal keyword arguments");
+			}
+			switch (key.name()) {
+				case LispNames.START_KEYWORD -> start = boundOrDefault(parts.get(k + 1), start);
+				case LispNames.END_KEYWORD -> end = boundOrDefault(parts.get(k + 1), end);
+				default ->
+					throw new UnsupportedOperationException("fill supports only the literal :start/:end keywords");
+			}
+		}
+		LispSymbol from = new LispSymbol("__fll_a");
+		LispSymbol to = new LispSymbol("__fll_b");
+		LispSymbol index = new LispSymbol("__fll_k");
+		LispSymbol cell = new LispSymbol("__fll_c");
+		LispVal bindings = listToCons(
+				List.of(listToCons(List.of(seq, parts.get(1))), listToCons(List.of(item, parts.get(2))),
+						listToCons(List.of(from, start)), listToCons(List.of(to, end))));
+		LispVal step = listToCons(List.of(index, from, fmtCall(LispNames.ADD, index, new LispInteger(1))));
+		LispVal arrayLoop = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(step)),
+				listToCons(List.of(fmtCall(LispNames.GE, index, to), seq)),
+				fmtCall(LispNames.ROW_MAJOR_ASET, seq, index, item)));
+		LispVal listStep = listToCons(List.of(cell, fmtCall(LispNames.NTHCDR, from, seq), callOf(LispNames.CDR, cell)));
+		LispVal listLoop = listToCons(List.of(new LispSymbol(LispNames.DO), listToCons(List.of(listStep, step)),
+				listToCons(List
+					.of(fmtCall(LispNames.OR, fmtCall(LispNames.GE, index, to), callOf(LispNames.NULL, cell)), seq)),
+				fmtCall(LispNames.RPLACA, cell, item)));
+		// A character vector of the requested width IS a string on every backend, which
+		// is what make-string builds; spelling it as make-array keeps the filler on the
+		// one allocation shape whose :initial-element the compile paths already lower.
+		LispVal filler = listToCons(List.of(new LispSymbol(LispNames.MAKE_ARRAY),
+				fmtCall(LispNames.MAX, new LispInteger(0), fmtCall(LispNames.SUB, to, from)),
+				new LispSymbol(LispNames.ELEMENT_TYPE_KEYWORD), quoteOf("CHARACTER"),
+				new LispSymbol(LispNames.INITIAL_ELEMENT_KEYWORD), item));
+		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("STRING"),
+				fmtCall(LispNames.SUBSEQ, seq, new LispInteger(0), from), filler,
+				fmtCall(LispNames.SUBSEQ, seq, to, fmtCall(LispNames.LENGTH, seq)));
+		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seq), arrayLoop,
+				makeIf(callOf(LispNames.LISTP, seq), listLoop, functional));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
+	}
+
+	/**
 	 * A replace/sequence bound expression: a literal nil keeps the default, a literal
 	 * integer passes through, and anything else is wrapped in {@code (or expr default)}
 	 * so a runtime nil falls back to the default.
@@ -22581,6 +22663,55 @@ public final class LispMacroExpander {
 					.of(new LispSymbol(LispNames.ASET), arrVar, idxVar, fmtCall(LispNames.ELT, contentsVar, idxVar)))));
 		return makeLet(arrVar.name(), listToCons(inner), makeLet(contentsVar.name(), contents,
 				makeLet(lenVar.name(), callOf(LispNames.LENGTH, contentsVar), fill)));
+	}
+
+	/**
+	 * The number of {@code deftype} hops {@link #resolveElementTypeAlias} follows before
+	 * giving up. An alias chain is a handful of links at most in real sources; the bound
+	 * is what makes a self-referential {@code (deftype a () 'a)} terminate.
+	 */
+	private static final int ELEMENT_TYPE_ALIAS_HOPS = 16;
+
+	/**
+	 * Resolves a {@code make-array :element-type} designator through the zero-parameter
+	 * {@code deftype} registry, so an alias behaves exactly as if its expansion had been
+	 * written at the call site. {@code (deftype octet () '(unsigned-byte 8))} followed by
+	 * {@code (make-array n :element-type 'octet)} must build the same packed vector as
+	 * the literal spelling -- salza2 allocates every buffer that way, and without the
+	 * resolution it got a general array whose elements read back as {@code nil} instead
+	 * of {@code 0}.
+	 *
+	 * <p>
+	 * The quote wrapper the compile paths still carry is stripped, alias chains are
+	 * followed (bounded by {@link #ELEMENT_TYPE_ALIAS_HOPS}, which also terminates a
+	 * self-referential deftype), and a designator that names no registered alias is
+	 * returned UNCHANGED -- an unrelated program compiles to the same bytes as before.
+	 * @param elementType the {@code :element-type} value, quoted or already evaluated, or
+	 * null
+	 * @param registry the registry holding the {@code deftype} expansions, or null to
+	 * resolve nothing
+	 * @return the resolved type specifier, or the argument itself when it names no alias
+	 */
+	@Nullable public static LispVal resolveElementTypeAlias(@Nullable LispVal elementType, @Nullable ClosRegistry registry) {
+		if (elementType == null || registry == null) {
+			return elementType;
+		}
+		LispVal spec = elementType;
+		if (spec instanceof LispCons quoteCons && quoteCons.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quoteCons.cdr() instanceof LispCons rest
+				&& rest.cdr() instanceof LispNil) {
+			spec = rest.car();
+		}
+		boolean resolved = false;
+		for (int hop = 0; hop < ELEMENT_TYPE_ALIAS_HOPS && spec instanceof LispSymbol sym; hop++) {
+			LispVal expansion = registry.findDeftype(sym.name());
+			if (expansion == null) {
+				break;
+			}
+			spec = expansion;
+			resolved = true;
+		}
+		return resolved ? spec : elementType;
 	}
 
 	/**

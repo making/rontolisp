@@ -978,7 +978,7 @@ public final class BuiltinFunctionWrappers {
 			// String operations
 			unary(LispNames.STRING), unary(LispNames.STRING_UPCASE), unary(LispNames.STRING_DOWNCASE),
 			unary(LispNames.STRING_CAPITALIZE), unary(LispNames.MAKE_STRING), binary(LispNames.REPLACE),
-			binaryOptionalThird(LispNames.SUBSEQ), stringEquality(LispNames.STRING_EQ),
+			binary(LispNames.FILL), binaryOptionalThird(LispNames.SUBSEQ), stringEquality(LispNames.STRING_EQ),
 			stringEquality(LispNames.STRING_EQUAL), binary(LispNames.STRING_TRIM), binary(LispNames.STRING_LEFT_TRIM),
 			binary(LispNames.STRING_RIGHT_TRIM),
 			// Character operations

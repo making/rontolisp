@@ -771,8 +771,20 @@ public final class Environment implements Scope {
 		}));
 	}
 
-	private static void registerArrays(Environment env) {
-		env.defineFunction(LispNames.MAKE_ARRAY, new LispFunction(LispNames.MAKE_ARRAY, args -> {
+	/**
+	 * The {@code make-array} builtin, with its {@code :element-type} designator resolved
+	 * through {@link LispMacroExpander#resolveElementTypeAlias(LispVal, ClosRegistry)}.
+	 * Registered registry-less by {@link #createGlobal}; the evaluator re-registers it
+	 * with its class registry so a user {@code deftype} alias (salza2's {@code octet})
+	 * selects the same representation the literal spelling would -- exactly as the
+	 * compile paths resolve it, and the same arrangement {@link #concatenateBuiltin}
+	 * uses.
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the literal designators only
+	 * @return the builtin function
+	 */
+	public static LispFunction makeArrayBuiltin(@Nullable ClosRegistry closRegistry) {
+		return new LispFunction(LispNames.MAKE_ARRAY, args -> {
 			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.MAKE_ARRAY + " expects at least 1 argument");
 			}
@@ -796,7 +808,8 @@ public final class Environment implements Scope {
 						case LispNames.ADJUSTABLE_KEYWORD -> adjustable = !(args.get(i + 1) instanceof LispNil);
 						case LispNames.DISPLACED_TO_KEYWORD -> displacedToArg = args.get(i + 1);
 						case LispNames.DISPLACED_INDEX_OFFSET_KEYWORD -> displacedOffsetArg = args.get(i + 1);
-						case LispNames.ELEMENT_TYPE_KEYWORD -> elementTypeArg = args.get(i + 1);
+						case LispNames.ELEMENT_TYPE_KEYWORD ->
+							elementTypeArg = LispMacroExpander.resolveElementTypeAlias(args.get(i + 1), closRegistry);
 						default -> {
 						}
 					}
@@ -923,7 +936,11 @@ public final class Environment implements Scope {
 				}
 			}
 			return new LispArray(dims, data, fillPointer, adjustable);
-		}));
+		});
+	}
+
+	private static void registerArrays(Environment env) {
+		env.defineFunction(LispNames.MAKE_ARRAY, makeArrayBuiltin(null));
 		env.defineFunction(LispNames.AREF, new LispFunction(LispNames.AREF, args -> {
 			if (args.isEmpty()) {
 				throw new LispEvalException(LispNames.AREF + " expects an array and subscripts");
@@ -5299,6 +5316,69 @@ public final class Environment implements Scope {
 			}
 			throw new LispEvalException(
 					LispNames.REPLACE + ": target must be a string, vector, or list, got: " + target.print());
+		}));
+		env.defineFunction(LispNames.FILL, new LispFunction(LispNames.FILL, args -> {
+			requireMinArgCount(LispNames.FILL, args, 2);
+			LispVal target = args.get(0);
+			LispVal item = args.get(1);
+			int start = 0;
+			int end = sequenceLength(LispNames.FILL, target);
+			// A nil bound keeps its default, as in replace.
+			for (int i = 2; i + 1 < args.size(); i += 2) {
+				if (args.get(i) instanceof LispSymbol key && !(args.get(i + 1) instanceof LispNil)) {
+					switch (key.name()) {
+						case LispNames.START_KEYWORD -> start = requireIndex(LispNames.FILL, args.get(i + 1));
+						case LispNames.END_KEYWORD -> end = requireIndex(LispNames.FILL, args.get(i + 1));
+						default -> throw new LispEvalException("fill: unsupported keyword " + key.name());
+					}
+				}
+			}
+			// Destructive, like replace: the sequence itself comes back, so a buffer
+			// cleared between uses stays the same object (chipz's code-length tables,
+			// salza2's bitstream reset).
+			if (target instanceof LispString targetStr) {
+				int codePoint = requireChar(LispNames.FILL, item).codePoint();
+				for (int k = start; k < end; k++) {
+					targetStr.setCharAt(k, codePoint);
+				}
+				return targetStr;
+			}
+			if (target instanceof LispIntVector targetIv) {
+				long masked = exactIntElement(LispNames.FILL, item);
+				for (int k = start; k < end; k++) {
+					targetIv.setElement(k, masked);
+				}
+				return targetIv;
+			}
+			if (target instanceof LispFloatArray targetFa) {
+				double value = asDouble(item);
+				for (int k = start; k < end; k++) {
+					targetFa.setElement(k, value);
+				}
+				return targetFa;
+			}
+			if (target instanceof LispArray targetArr) {
+				for (int k = start; k < end; k++) {
+					targetArr.writeFlat(k, item);
+				}
+				return targetArr;
+			}
+			if (target instanceof LispCons || target instanceof LispNil) {
+				int idx = 0;
+				LispVal cur = target;
+				while (cur instanceof LispCons cellToSkip && idx < start) {
+					cur = cellToSkip.cdr();
+					idx++;
+				}
+				while (cur instanceof LispCons cellToFill && idx < end) {
+					cellToFill.setCar(item);
+					cur = cellToFill.cdr();
+					idx++;
+				}
+				return target;
+			}
+			throw new LispEvalException(
+					LispNames.FILL + ": target must be a string, vector, or list, got: " + target.print());
 		}));
 	}
 

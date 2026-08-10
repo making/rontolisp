@@ -41,9 +41,19 @@ Gotchas: `.asd` reader limits are the *rontolisp reader's* limits — since Phas
 
 **Nested/computed asdf forms on the compile paths (todo-228)**: a NESTED `(asdf:load-system ...)` / `(ql:quickload ...)` compiles to a CALL-time error stub ("cannot load a system at run time on the compiled backends"; was a compile error) and a nested/computed `(asdf:find-system X [ep])` lowers to its arguments evaluated for effect followed by `nil` (`LispMacroExpander.expandRuntimeFindSystem`; a LITERAL name still folds via `CompileTimePathnameFolder`). lack's `find-package-or-load` is the driving consumer: all three sit inside a defun behind a `find-package` probe that the baked package table answers for every spliced system, so they are dead at run time but must compile. The divergence vs the interpreter (whose runtime `find-system` answers its live registry plus built-ins) is deliberate -- a compiled program has no system registry and nothing it could load. Nested `require`/`provide`/`asdf:defsystem` remain compile errors.
 
+**One override RETIRED (2026-08-10)**: `chipz.asd` used to map to a hand-authored
+`chipz-crc32-slice.asd` declaring `package.lisp` + `crc32.lisp` only -- a SCOPE decision
+taken when mito's advisory lock was the closure's single consumer and nothing called
+`chipz:decompress`. `size-report/programs/zlib` calls it, which is exactly the trigger the
+slice wrote down for itself. The real `chipz.asd` now loads verbatim on all four backends
+(`ChipzE2eTest`), so the override and the replacement file are both deleted; the one gate
+it predicted was real and is closed -- `types-and-tables.lisp:107` needed `fill`, which
+rontolisp now has. mito is unaffected: chipz's crc32 of `"mydb"` is `285543882` through
+the full system, the value the slice and SBCL 2.2.9 both answered.
+
 **Replacement `.asd` files (`eval/AsdOverrides`)**: some libraries' `.asd` is an executable PROGRAM, not data — ironclad's defines component classes (`defclass ironclad-source-file (cl-source-file)`), generates its subsystem defsystems with a `defmacro` over `uiop:ensure-list`, and attaches `perform :around` methods. `AsdfSystems` deliberately never evaluates a system definition, so such a file cannot be parsed at all. `AsdOverrides` maps the `.asd` FILE NAME to a bundled replacement source (`src/main/resources/am/ik/rontolisp/eval/*.asd`, written in the supported defsystem subset) and `AsdfSystems.locate` substitutes it after locating the real file — keeping the located PATH, so component files still resolve against the real library tree and the loaded sources are the library's own. One entry serves every backend (both loaders go through `locate`). Registered today: `ironclad.asd` -> `ironclad-slice.asd`, `cl-postgres.asd` ->
 `cl-postgres-deps.asd`, `postmodern.asd` -> `postmodern-deps.asd`, `trivia.asd` ->
-`trivia-trivial.asd`, `dbi.asd` -> `dbi-deps.asd`, `chipz.asd` -> `chipz-crc32-slice.asd`,
+`trivia-trivial.asd`, `dbi.asd` -> `dbi-deps.asd`,
 `tiny-routes.asd` -> `tiny-routes-lite.asd` (not unparseable at all -- replaced only to
 ADD the opt-in `tiny-routes/lite` secondary system beside the verbatim primary; see the
 tiny-routes/lite section below). **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs an entry in `src/main/resources/META-INF/native-image/.../resource-config.json`** (`AsdOverrides` resp. `ShimLibraries` as the `typeReachable` condition) — the native binary loads them off the classpath, and a missing entry fails only there, as `<name> is missing from the classpath` at `asdf:load-system` time. `./mvnw test` cannot catch it: the JVM run reads the resource straight from `target/classes`. This is how `ironclad-slice.asd` shipped unusable on the native binary and stayed that way until the SCRAM work re-ran the native E2E. This is the third tier of the substitution ladder: whole shim system (`ShimLibraries`) > replacement `.asd` (system metadata only, real sources) > leaf-module shim (one component file, real everything else) > derived forms (individual forms of the components that hold them, real everything else -- see the uax-15 section at the end).

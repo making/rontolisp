@@ -68,6 +68,31 @@ verification against the actual Quicklisp dist at probe time)
     (`subtypep`'s secondary value, `.todo/214`).
 - **`cl-ppcre`, `ironclad` — DONE** (see `.kb/asdf.md`); both are on the guide's
   loadable list.
+- **`chipz` — DONE (2026-08-10).** The real 0.8 sources load and inflate gzip /
+  zlib / deflate on all four backends; the CRC32-only `AsdOverrides` slice is
+  retired (`.kb/asdf.md`, `.kb/mito.md`), `ChipzE2eTest` pins it,
+  `examples/asdf/chipz-demo.lisp` + the guide row are in, and
+  `size-report/programs/zlib` is built on it. Three infrastructure gaps fell out,
+  each fixed for everyone rather than for chipz:
+  - **`fill` did not exist.** A standard CL function; now a shared macro
+    expansion over `%row-major-aset`/`rplaca` with the `replace` string
+    deviation. salza2 wanted it too.
+  - **`make-array :element-type` ignored a `deftype` alias**, so
+    `:element-type 'octet` built a general array of `nil` instead of a packed
+    vector of `0` (`.kb/packed-integer-vectors.md`). md5's `ub32` buffers and
+    flexi-streams' `octet` buffers pack now as a side effect.
+  - **The wasm Gray-streams pre-pass rewrote a defclass SLOT named after a
+    stream built-in as if it were a call** (`.kb/gray-streams.md`), and **a
+    `funcall` past `MAX_CALLABLE_ARITY` compiled to a call-time signal** instead
+    of routing through `apply`'s spread dispatcher.
+- **`salza2` (deflate) — verified loadable, deliberately not kept.** 2.1 gzips
+  correctly on all four backends once the `deftype`-alias fix above is in (it was
+  the library that surfaced it). It is not vendored: nothing in the repo consumes
+  compression, and the size-report row wanted the DECOMPRESSOR to be comparable
+  with the cross-language table. `(ql:quickload "salza2")` is all it takes to
+  bring back; known limits at the time: `salza2:reset` needs `fill` (now present,
+  unretested), and `stream.lisp`'s `compressing-stream` compiles with an
+  undefined `stream-error-stream` (`.todo/252`).
 
 ## Deliverable
 

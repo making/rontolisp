@@ -205,6 +205,43 @@ cases:
       (231 #(1 231 3))
       T
       #(1732584193 4023233417 2225363975 255870178 1578413049 1761846468 178639645 2993401642)
+  - name: make-array-element-type-deftype-alias
+    source: |
+      (deftype mae-octet () '(unsigned-byte 8))
+      (deftype mae-buffer () 'mae-octet)
+      (deftype mae-double () 'double-float)
+      (deftype mae-char () 'character)
+      (let ((mae-a (make-array 3 :element-type 'mae-octet))
+            (mae-b (make-array 2 :element-type 'mae-buffer :initial-contents '(1 300)))
+            (mae-c (make-array 2 :element-type 'mae-double))
+            (mae-s (make-array 3 :element-type 'mae-char :initial-element #\x)))
+        (print (list (array-element-type mae-a) (aref mae-a 0) mae-b))
+        (print (list (array-element-type mae-c) (aref mae-c 0) (stringp mae-s) mae-s)))
+      (print (array-element-type (make-array 2 :element-type 'mae-unregistered)))
+    expected: |
+      ((UNSIGNED-BYTE 8) 0 #(1 44))
+      (DOUBLE-FLOAT 0.0 T "xxx")
+      T
+  - name: fill-and-over-arity-funcall
+    source: |
+      (let* ((fl-a (make-array 5 :element-type '(unsigned-byte 8) :initial-element 9))
+             (fl-same (eq fl-a (fill fl-a 300 :start 1 :end 4))))
+        (print (list fl-a fl-same (array-element-type fl-a))))
+      (let ((fl-l (list 1 2 3 4 5)))
+        (fill fl-l 0 :start 1 :end 3)
+        (print fl-l))
+      (print (fill (make-array 5 :element-type 'character :initial-element #\a) #\z :start 2))
+      (print (funcall #'fill (make-array 2 :initial-element 1) 8))
+      (defun fl-k4 (a b c &key (input-start 0) input-end (output-start 0) output-end)
+        (list a b c input-start input-end output-start output-end))
+      (defun fl-pick () #'fl-k4)
+      (print (funcall (fl-pick) 1 2 3 :input-start 4 :input-end 5 :output-start 6 :output-end 7))
+    expected: |
+      (#(9 44 44 44 9) T (UNSIGNED-BYTE 8))
+      (1 0 0 4 5)
+      "aazzz"
+      #(8 8)
+      (1 2 3 4 5 6 7)
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
@@ -1429,7 +1466,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      390
+      391
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN

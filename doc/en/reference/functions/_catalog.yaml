@@ -121,6 +121,7 @@ categories:
       - { slug: make-string, name: "make-string" }
       - { slug: make-sequence, name: "make-sequence" }
       - { slug: replace, name: "replace" }
+      - { slug: fill, name: "fill" }
       - { slug: string-upcase, name: "string-upcase" }
       - { slug: string-downcase, name: "string-downcase" }
       - { slug: string-capitalize, name: "string-capitalize" }

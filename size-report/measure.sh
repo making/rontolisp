@@ -127,9 +127,14 @@ json_rows=()
 # Family 1: the flag matrix over programs/
 # ============================================================================
 # NAME|SOURCE|COMPILE FLAGS|RUN ARGS|EXPECTED FIRST LINE
+#
+# zlib's -W exceptions=y is in RUN ARGS, not in the compile flags: chipz uses
+# catch/throw, so the module is built in EH mode and wasmtime needs the feature
+# to run it. Nothing about the build asks for it.
 hello_expected='Hello, World!'
 pi_expected='pi = 3.141591653589774'
 pi_nogc_expected='3.141591'
+zlib_expected='gunzip 507 -> 65536 bytes, fnv1a 4E08BBC5'
 
 wasm_builds=(
   "hello_world_plain|programs/hello_world/hello_world.lisp||-W gc|$hello_expected"
@@ -142,6 +147,10 @@ wasm_builds=(
   "pi_approx_size|programs/pi_approx/pi_approx.lisp|--optimize=size|-W gc|$pi_expected"
   "pi_approx_component|programs/pi_approx/pi_approx.lisp|--component --optimize=size|-W gc=y|$pi_expected"
   "pi_approx_nogc|programs/pi_approx/pi_approx-nogc.lisp|--no-gc --optimize=size|--invoke approx-pi|$pi_nogc_expected"
+  "zlib_plain|programs/zlib/zlib.lisp||-W gc -W exceptions=y|$zlib_expected"
+  "zlib_optimize|programs/zlib/zlib.lisp|--optimize|-W gc -W exceptions=y|$zlib_expected"
+  "zlib_size|programs/zlib/zlib.lisp|--optimize=size|-W gc -W exceptions=y|$zlib_expected"
+  "zlib_component|programs/zlib/zlib.lisp|--component --optimize=size|-W gc=y -W exceptions=y|$zlib_expected"
 )
 
 measure_wasm_family() {

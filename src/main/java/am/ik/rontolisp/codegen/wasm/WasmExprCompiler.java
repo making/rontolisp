@@ -892,6 +892,7 @@ final class WasmExprCompiler {
 				case LispNames.MAKE_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx);
 				case LispNames.REPLACE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons), ctx);
+				case LispNames.FILL -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFill(cons), ctx);
 				case LispNames.SCHAR_SET ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
 				case LispNames.LOWER_CASE_P ->

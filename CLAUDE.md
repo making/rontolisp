@@ -187,8 +187,8 @@ After editing examples, normalize results and catch non-runnable examples:
 
 No `examples/**/README.md` may quote a byte count of a compiled artifact. Those
 numbers went stale every time the compiler changed, in a dozen places at once.
-`size-report/measure.sh` measures every tracked artifact -- the two micro
-programs across the flag matrix, and the Cloudflare Worker modules raw and
+`size-report/measure.sh` measures every tracked artifact -- `size-report/programs/`
+across the flag matrix, and the Cloudflare Worker modules raw and
 gzipped -- writes `size-report/results/`, and
 `.github/workflows/size-report.yaml` re-runs it daily and commits the diff only
 when a measured number actually moved (a rerun that changes nothing but the

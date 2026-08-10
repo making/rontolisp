@@ -16,6 +16,7 @@ identically on all four backends (interpreter, JVM, WASM Preview 1,
 | [`cl-base64-demo.lisp`](cl-base64-demo.lisp) | cl-base64 v3.4 (BSD-style) | <https://github.com/darabi/cl-base64> |
 | [`jzon-demo.lisp`](jzon-demo.lisp) | com.inuoe.jzon v1.1.4 (MIT) | <https://github.com/Zulu-Inuoe/jzon> |
 | [`md5-demo.lisp`](md5-demo.lisp) | md5 v2.0.4 (public domain) | <https://github.com/pmai/md5> |
+| [`chipz-demo.lisp`](chipz-demo.lisp) | chipz 0.8 (BSD) — gzip/zlib/deflate decompression. Uses `catch`/`throw`, so both WASM runs need `-W exceptions=y` | <https://github.com/froydnj/chipz> |
 | [`cl-ppcre-demo.lisp`](cl-ppcre-demo.lisp) | cl-ppcre v2.1.2 (BSD 2-Clause) | <https://github.com/edicl/cl-ppcre> |
 | [`ironclad-demo.lisp`](ironclad-demo.lisp) | ironclad v0.61, SHA-256/HMAC/PBKDF2/HKDF/SCRAM slice (BSD 3-Clause) | <https://github.com/sharplispers/ironclad> |
 | [`uax-15-demo.lisp`](uax-15-demo.lisp) | uax-15 v0.1.3 (MIT) | <https://github.com/sabracrolleton/uax-15> |

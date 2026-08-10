@@ -1772,6 +1772,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (and rewrite their direct call sites) so real-library signatures compile
 		// despite the MAX_CALLABLE_ARITY type limit.
 		program = WasmArityBundler.bundle(program);
+		// And route a funcall wider than the same limit through apply, whose SPREAD
+		// dispatcher has no per-argument parameter. BEFORE the usesEval scan below:
+		// the injected apply is what turns the eval runtime (and with it the spread
+		// dispatcher's body) on.
+		program = WasmArityBundler.spreadOverArityFuncalls(program);
 		// Detect whether the program uses (eval ...). When it does, a runtime
 		// interpreter (_eval) and a function-name registry are emitted, and dispatch
 		// functions are generated for every registered arity so _eval can apply them.

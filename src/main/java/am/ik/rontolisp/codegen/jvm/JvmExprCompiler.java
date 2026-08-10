@@ -594,6 +594,7 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx, className);
 				case LispNames.REPLACE ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons, ctx.usesArrays), ctx, className);
+				case LispNames.FILL -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFill(cons), ctx, className);
 				case LispNames.SCHAR_SET ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
 				case LispNames.LOWER_CASE_P ->

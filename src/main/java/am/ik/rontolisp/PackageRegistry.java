@@ -143,7 +143,7 @@ public final class PackageRegistry {
 			LispNames.ARRAY_DISPLACEMENT, LispNames.STABLE_SORT, LispNames.COPY_SEQ, LispNames.READ_CHAR,
 			LispNames.PEEK_CHAR, LispNames.MAKE_STRING_OUTPUT_STREAM, LispNames.MAKE_STRING_INPUT_STREAM,
 			LispNames.GET_OUTPUT_STREAM_STRING, LispNames.MAKE_SYNONYM_STREAM, LispNames.VECTORP, LispNames.ARRAYP,
-			LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P,
+			LispNames.MAKE_STRING, LispNames.REPLACE, LispNames.FILL, LispNames.LOWER_CASE_P, LispNames.UPPER_CASE_P,
 			LispNames.CONSTANTP, LispNames.GET_SETF_EXPANSION, LispNames.STREAMP, LispNames.SIMPLE_STRING_P,
 			LispNames.MASK_FIELD, LispNames.SCALE_FLOAT, LispNames.DECODE_FLOAT, LispNames.SUBTYPEP,
 			LispNames.CHAR_NAME, LispNames.FDEFINITION, LispNames.FILE_POSITION, LispNames.FILE_LENGTH,

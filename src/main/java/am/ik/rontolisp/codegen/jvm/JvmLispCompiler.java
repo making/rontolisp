@@ -994,7 +994,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A runtime read can produce ANY datum -- #(...), #f(...), #d(...) -- so the
 		// reader forces the array machinery on; without it a read vector would not
 		// print or index correctly.
-		boolean usesFloatArray = programUsesFloatArray(program) || usesRead;
+		boolean usesFloatArray = programUsesFloatArray(program, closRegistry) || usesRead;
 
 		// Whether the program can produce a packed integer vector (a #N@(...) literal
 		// or make-array :element-type '(unsigned-byte 8|16|32)). When true, the rank-1
@@ -1004,7 +1004,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// #N@(...), so usesRead does not force this gate. The injected %seq-int-vector
 		// wrapper allocates one, and it is not part of the scanned program, so its own
 		// gate forces this one on.
-		boolean usesIntArray = programUsesIntArray(program) || usesSeqIntVector;
+		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector;
 
 		// Whether the array runtime helper group is emitted (the same test that gates
 		// its emission below). The mutable-character-vector consumers -- the _eqv
@@ -2957,25 +2957,25 @@ public final class JvmLispCompiler implements LispCompiler {
 	// (LispFloatArray) or a (make-array ... :element-type 'double-float ...) form. Gates
 	// the _fv* dispatch helpers and their routing; when false the array op compilers call
 	// the general _array* helpers directly, keeping the default build byte-identical.
-	private static boolean programUsesFloatArray(List<LispVal> program) {
+	private static boolean programUsesFloatArray(List<LispVal> program, ClosRegistry closRegistry) {
 		for (LispVal expr : program) {
-			if (usesFloatArray(expr)) {
+			if (usesFloatArray(expr, closRegistry)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean usesFloatArray(LispVal val) {
+	private static boolean usesFloatArray(LispVal val, ClosRegistry closRegistry) {
 		if (val instanceof am.ik.rontolisp.LispFloatArray) {
 			return true;
 		}
 		if (val instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
-					&& makeArrayIsPackedFloat(cons)) {
+					&& makeArrayIsPackedFloat(cons, closRegistry)) {
 				return true;
 			}
-			return usesFloatArray(cons.car()) || usesFloatArray(cons.cdr());
+			return usesFloatArray(cons.car(), closRegistry) || usesFloatArray(cons.cdr(), closRegistry);
 		}
 		return false;
 	}
@@ -2985,36 +2985,41 @@ public final class JvmLispCompiler implements LispCompiler {
 	// (make-array ... :element-type '(unsigned-byte 8|16|32) ...) form. Gates the _iv*
 	// dispatch helpers and their routing; when false the array op compilers keep the
 	// fv/general dispatch, so the default build is byte-identical.
-	private static boolean programUsesIntArray(List<LispVal> program) {
+	private static boolean programUsesIntArray(List<LispVal> program, ClosRegistry closRegistry) {
 		for (LispVal expr : program) {
-			if (usesIntArray(expr)) {
+			if (usesIntArray(expr, closRegistry)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean usesIntArray(LispVal val) {
+	private static boolean usesIntArray(LispVal val, ClosRegistry closRegistry) {
 		if (val instanceof am.ik.rontolisp.LispIntVector) {
 			return true;
 		}
 		if (val instanceof LispCons cons) {
 			if (cons.car() instanceof LispSymbol head && LispNames.MAKE_ARRAY.equals(head.name())
-					&& makeArrayIsPackedInt(cons)) {
+					&& makeArrayIsPackedInt(cons, closRegistry)) {
 				return true;
 			}
-			return usesIntArray(cons.car()) || usesIntArray(cons.cdr());
+			return usesIntArray(cons.car(), closRegistry) || usesIntArray(cons.cdr(), closRegistry);
 		}
 		return false;
 	}
 
-	// Whether a (make-array ...) call carries :element-type '(unsigned-byte 8|16|32)
-	// (a literal quoted list at the call site) -- the packed integer-vector shape.
-	private static boolean makeArrayIsPackedInt(LispCons makeArray) {
+	// Whether a (make-array ...) call carries :element-type '(unsigned-byte 8|16|32) --
+	// a literal quoted list at the call site, or a deftype alias of one -- the packed
+	// integer-vector shape. The gate resolves the alias for the same reason
+	// JvmArrayCompiler.compileMake does: a gate that missed it would leave the _iv*
+	// helpers unemitted and send salza2's (make-array n :element-type 'octet) to the
+	// general boxed path, whose elements read back as nil rather than 0.
+	private static boolean makeArrayIsPackedInt(LispCons makeArray, ClosRegistry closRegistry) {
 		List<LispVal> args = makeArray.toList();
 		for (int i = 2; i + 1 < args.size(); i++) {
 			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
-				return JvmArrayCompiler.packedIntElementWidth(args.get(i + 1)) > 0;
+				return JvmArrayCompiler.packedIntElementWidth(
+						LispMacroExpander.resolveElementTypeAlias(args.get(i + 1), closRegistry)) > 0;
 			}
 		}
 		return false;
@@ -3024,11 +3029,16 @@ public final class JvmLispCompiler implements LispCompiler {
 	// 'single-float (a literal quoted symbol at the call site, package qualifier ignored)
 	// --
 	// either produces a packed float array.
-	private static boolean makeArrayIsPackedFloat(LispCons makeArray) {
+	private static boolean makeArrayIsPackedFloat(LispCons makeArray, ClosRegistry closRegistry) {
 		List<LispVal> args = makeArray.toList();
 		for (int i = 2; i + 1 < args.size(); i++) {
 			if (args.get(i) instanceof LispSymbol kw && LispNames.ELEMENT_TYPE_KEYWORD.equals(kw.name())) {
-				LispVal type = args.get(i + 1);
+				LispVal type = LispMacroExpander.resolveElementTypeAlias(args.get(i + 1), closRegistry);
+				if (type instanceof LispSymbol resolved) {
+					// An alias resolves to the BARE symbol, without the quote wrapper the
+					// literal spelling still carries.
+					type = new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(resolved, LispNil.INSTANCE));
+				}
 				if (type instanceof LispCons q && q.car() instanceof LispSymbol qs && LispNames.QUOTE.equals(qs.name())
 						&& q.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol ts) {
 					String name = ts.name();

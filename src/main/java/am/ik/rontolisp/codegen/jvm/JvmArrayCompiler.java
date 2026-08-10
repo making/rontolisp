@@ -86,6 +86,11 @@ final class JvmArrayCompiler {
 		LispVal fillPointer = findKeywordValue(args, LispNames.FILL_POINTER_KEYWORD);
 		LispVal adjustable = findKeywordValue(args, LispNames.ADJUSTABLE_KEYWORD);
 		LispVal initValue = findKeywordValue(args, LispNames.INITIAL_ELEMENT_KEYWORD);
+		// Resolved ONCE, through the deftype registry: every recognizer below sees the
+		// expansion a user alias stands for, so (make-array n :element-type 'octet)
+		// picks the same representation as the literal '(unsigned-byte 8) spelling.
+		LispVal elementType = LispMacroExpander
+			.resolveElementTypeAlias(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD), ctx.closRegistry);
 		LispVal runtimeElementTypeLowering = LispMacroExpander.lowerRuntimeElementTypeMakeArray(cons);
 		if (runtimeElementTypeLowering != null) {
 			// A :element-type held in a VARIABLE picks the representation at run time
@@ -108,7 +113,7 @@ final class JvmArrayCompiler {
 			JvmExprCompiler.compileExpr(contentsLowering, ctx, className);
 			return;
 		}
-		if (LispMacroExpander.isCharacterElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))) {
+		if (LispMacroExpander.isCharacterElementType(elementType)) {
 			// A rank-1 :element-type 'character array is a mutable character vector,
 			// marked by _charVecMake's length-4 header and normalized on demand into the
 			// quote-framed runtime string (_strv). A missing fill-pointer defaults to the
@@ -123,7 +128,7 @@ final class JvmArrayCompiler {
 			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.CHAR_VEC_MAKE, JvmArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
-		int packedIntWidth = packedIntElementWidth(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD));
+		int packedIntWidth = packedIntElementWidth(elementType);
 		if (ctx.usesIntArray && packedIntWidth > 0 && fillPointer == null && adjustable == null) {
 			// A plain :element-type '(unsigned-byte 8|16|32) array (no fill pointer /
 			// adjustable / displacement) is a packed long[] with a width header:
@@ -136,8 +141,7 @@ final class JvmArrayCompiler {
 			invokeHelper(ctx, className, JvmIntArrayRuntimeBuilder.MAKE, JvmIntArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
-		if (ctx.usesFloatArray && isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
-				&& fillPointer == null && adjustable == null) {
+		if (ctx.usesFloatArray && isSingleFloatElementType(elementType) && fillPointer == null && adjustable == null) {
 			// A plain :element-type 'single-float array (no fill pointer / adjustable /
 			// displacement) is a packed float[]: _sfvMake(dims, init) allocates it and
 			// fills with the coerced (narrowed to f32) init (default 0.0 inside the
@@ -148,8 +152,7 @@ final class JvmArrayCompiler {
 					JvmFloatArrayRuntimeBuilder.MAKE_DESC);
 			return;
 		}
-		if (ctx.usesFloatArray && isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
-				&& fillPointer == null && adjustable == null) {
+		if (ctx.usesFloatArray && isDoubleFloatElementType(elementType) && fillPointer == null && adjustable == null) {
 			// A plain :element-type 'double-float array (no fill pointer / adjustable /
 			// displacement) is a packed double[]: _fvMake(dims, init) allocates it and
 			// fills with the coerced init (default 0.0 inside the helper).
@@ -159,8 +162,7 @@ final class JvmArrayCompiler {
 			return;
 		}
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
-		if (initValue == null && (isDoubleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD))
-				|| isSingleFloatElementType(findKeywordValue(args, LispNames.ELEMENT_TYPE_KEYWORD)))) {
+		if (initValue == null && (isDoubleFloatElementType(elementType) || isSingleFloatElementType(elementType))) {
 			// An :element-type 'double-float / 'single-float array with a fill pointer /
 			// adjustable falls back to a general array; default its elements to 0.0, not
 			// nil.

@@ -15,29 +15,25 @@ widening for mito's metaclasses) and `.kb/packages.md`
 (`uiop:define-package` + `:use-reexport`, which is what makes the `mito`
 umbrella package work).
 
-## The one hand-authored override: a chipz CRC32 SLICE
+## chipz: the CRC32 slice is gone, the real library loads
 
-`AsdOverrides` maps `chipz.asd` -> `chipz-crc32-slice.asd`. This is a SCOPE
-decision, not a parse workaround: the real `chipz.asd` has parsed as data since
-`.todo/241`. The only consumer in the whole closure is
-`mito-migration/src/migration/util.lisp`, which imports exactly
-`make-crc32` / `update-crc32` / `produce-crc32` to derive a PostgreSQL
-advisory-lock id from the database name; nothing anywhere calls
-`chipz:decompress`. The replacement declares `package.lisp` + `crc32.lisp` and
-nothing else, so the ~2,600 lines of inflate/bzip2/gzip/zlib stay out.
+`AsdOverrides` used to map `chipz.asd` to a hand-authored `chipz-crc32-slice.asd`
+declaring `package.lisp` + `crc32.lisp` and nothing else, because
+`mito-migration/src/migration/util.lisp` -- which imports exactly `make-crc32` /
+`update-crc32` / `produce-crc32` to derive a PostgreSQL advisory-lock id from the
+database name -- was the whole closure's only consumer and nothing called
+`chipz:decompress`.
 
-`crc32.lisp` is self-contained in the branch rontolisp takes (`#-sbcl`): it
-names chipz's own `index` / `simple-octet-vector` deftypes, but only inside
-`declare` forms, which are no-ops here
-(`.kb/declarations-type-checks.md`) -- so `types-and-tables.lisp` and the
-`constants.lisp` it reads `+max-code-length+` from are both out of the slice.
-Verified: chipz's crc32 of `"mydb"` is `285543882` on this slice and on SBCL
-2.2.9 loading the real full chipz.
+That slice wrote its own re-evaluation trigger ("the moment any supported system
+calls `chipz:decompress`..."), and `size-report/programs/zlib` pulled it: the
+override and the replacement file were deleted on 2026-08-10 and the REAL
+`chipz.asd` now loads verbatim -- inflate, bzip2, gzip and zlib containers
+included -- on all four backends (`ChipzE2eTest`, `.kb/asdf.md`). The single gate
+the slice predicted was real and is closed: `types-and-tables.lisp:107` needed
+`fill`, which rontolisp did not have and now does.
 
-**Re-evaluation trigger**: the moment any supported system calls
-`chipz:decompress` / `make-dstate` / `make-decompressing-stream`, widen the
-slice to the real component list and expect work -- `types-and-tables.lisp:107`
-alone needs `fill`, which rontolisp does not have (`.todo/043`).
+Nothing changed for mito: chipz's crc32 of `"mydb"` is `285543882` through the
+full system, the same value the slice and SBCL 2.2.9 answer.
 
 ## What the migration workflow needed from the core language
 
