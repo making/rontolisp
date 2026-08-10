@@ -1248,6 +1248,24 @@ public final class JvmLispCompiler implements LispCompiler {
 			mainCtx.emit(Opcode.INVOKESTATIC);
 			mainCtx.emitU2(ref.index());
 		}
+		// A program that writes RAW OCTETS to standard output has to drain the
+		// PrintStream itself. It auto-flushes on a newline and on every byte[] write --
+		// which is why the print family never needed this, its characters go out through
+		// the writer's byte[] path -- but a single-byte write only flushes on '\n', and a
+		// byte-oriented filter's output need not end in one. The three other backends
+		// have nothing to drain (both wasm ones call fd_write per byte, the interpreter
+		// flushes at the end of the run), so without this a compiled JVM filter would
+		// silently truncate where they do not. Gated on the source naming one of the two
+		// operators that reach the helper, so every other artifact keeps its exact bytes:
+		// ANY new path to _writeByte's standard-output branch must join this gate.
+		if (programUsesSymbol(program, LispNames.WRITE_BYTE) || programUsesSymbol(program, LispNames.WRITE_SEQUENCE)) {
+			mainCtx.emit(Opcode.GETSTATIC);
+			mainCtx.emitU2(systemOut.index());
+			mainCtx.emit(Opcode.INVOKEVIRTUAL);
+			mainCtx.emitU2(cp.addMethodref(cp.addClass(cp.addUtf8("java/io/PrintStream")),
+					cp.addNameAndType(cp.addUtf8("flush"), cp.addUtf8("()V")))
+				.index());
+		}
 		mainCtx.emit(Opcode.RETURN);
 
 		// Pass 2c: Compile lambda bodies (iteratively, new lambdas may be discovered

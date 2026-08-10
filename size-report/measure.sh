@@ -126,7 +126,13 @@ json_rows=()
 # ============================================================================
 # Family 1: the flag matrix over programs/
 # ============================================================================
-# NAME|SOURCE|COMPILE FLAGS|RUN ARGS|EXPECTED FIRST LINE
+# NAME|SOURCE|COMPILE FLAGS|RUN ARGS|CHECK
+#
+# CHECK is either the module's expected FIRST LINE of output, or the literal
+# token `filter`, which means: feed $zlib_gz on stdin and require the whole
+# output to be $zlib_plain byte for byte. zlib is a filter -- it prints nothing
+# -- so a first line is not what it has, and comparing every octet is the
+# stronger check anyway.
 #
 # zlib's -W exceptions=y is in RUN ARGS, not in the compile flags: chipz uses
 # catch/throw, so the module is built in EH mode and wasmtime needs the feature
@@ -134,7 +140,6 @@ json_rows=()
 hello_expected='Hello, World!'
 pi_expected='pi = 3.141591653589774'
 pi_nogc_expected='3.141591'
-zlib_expected='gunzip 507 -> 65536 bytes, fnv1a 4E08BBC5'
 
 wasm_builds=(
   "hello_world_plain|programs/hello_world/hello_world.lisp||-W gc|$hello_expected"
@@ -147,17 +152,36 @@ wasm_builds=(
   "pi_approx_size|programs/pi_approx/pi_approx.lisp|--optimize=size|-W gc|$pi_expected"
   "pi_approx_component|programs/pi_approx/pi_approx.lisp|--component --optimize=size|-W gc=y|$pi_expected"
   "pi_approx_nogc|programs/pi_approx/pi_approx-nogc.lisp|--no-gc --optimize=size|--invoke approx-pi|$pi_nogc_expected"
-  "zlib_plain|programs/zlib/zlib.lisp||-W gc -W exceptions=y|$zlib_expected"
-  "zlib_optimize|programs/zlib/zlib.lisp|--optimize|-W gc -W exceptions=y|$zlib_expected"
-  "zlib_size|programs/zlib/zlib.lisp|--optimize=size|-W gc -W exceptions=y|$zlib_expected"
-  "zlib_component|programs/zlib/zlib.lisp|--component --optimize=size|-W gc=y -W exceptions=y|$zlib_expected"
+  "zlib_plain|programs/zlib/zlib.lisp||-W gc -W exceptions=y|filter"
+  "zlib_optimize|programs/zlib/zlib.lisp|--optimize|-W gc -W exceptions=y|filter"
+  "zlib_size|programs/zlib/zlib.lisp|--optimize=size|-W gc -W exceptions=y|filter"
+  "zlib_component|programs/zlib/zlib.lisp|--component --optimize=size|-W gc=y -W exceptions=y|filter"
 )
+
+# The gzip stream the zlib rows read from stdin, and the plaintext their output
+# has to equal. Generated rather than checked in: the artifact never sees it (the
+# program reads stdin, so no byte of it is compiled in) and only the run check
+# does. 8 distinct 64-byte lines repeated 128 times = 65536 octets, so the first
+# block runs chipz's literal and short-match paths and the rest runs long
+# back-references through the 32 KB window; it gzips to a few hundred bytes,
+# well inside the program's 8192-byte input buffer.
+zlib_plain="$out/zlib-input.txt"
+zlib_gz="$out/zlib-input.gz"
+
+make_zlib_input() {
+  awk 'BEGIN {
+    for (b = 0; b < 128; b++)
+      for (l = 0; l < 8; l++)
+        printf "rontolisp size-report zlib fixture line %02d --------------------\n", l
+  }' >"$zlib_plain"
+  gzip -9 -n -c "$zlib_plain" >"$zlib_gz"
+}
 
 measure_wasm_family() {
   echo ""
   echo "=== Build: programs/ ==="
   for row in "${wasm_builds[@]}"; do
-    IFS='|' read -r name src flags _runargs _expected <<<"$row"
+    IFS='|' read -r name src flags _runargs _check <<<"$row"
     printf '%-24s %s\n' "$name" "${flags:-(no flags)}"
     # shellcheck disable=SC2086 -- flags is a deliberate word list
     "${ronto[@]}" "$here/$src" -o "$out/$name.wasm" $flags
@@ -165,21 +189,33 @@ measure_wasm_family() {
 
   echo ""
   echo "=== Validate: programs/ ==="
+  make_zlib_input
   local fail=0
   for row in "${wasm_builds[@]}"; do
-    IFS='|' read -r name _src _flags runargs expected <<<"$row"
+    IFS='|' read -r name _src _flags runargs check <<<"$row"
     printf '%-24s ' "$name:"
     if [[ "$have_wasmtime" != 1 ]]; then
       echo "SKIP (no wasmtime)"
       continue
     fi
+    if [[ "$check" == "filter" ]]; then
+      # shellcheck disable=SC2086 -- runargs is a deliberate word list
+      wasmtime run $runargs "$out/$name.wasm" <"$zlib_gz" >"$out/$name.out" 2>/dev/null || true
+      if cmp -s "$zlib_plain" "$out/$name.out"; then
+        echo "OK (gunzipped $(commas "$(bytes_of "$out/$name.out")") bytes, byte for byte)"
+      else
+        echo "FAIL (output differs from $zlib_plain)"
+        fail=1
+      fi
+      continue
+    fi
     # shellcheck disable=SC2086 -- runargs is a deliberate word list
     local actual
     actual="$(wasmtime run $runargs "$out/$name.wasm" 2>/dev/null | head -1 || true)"
-    if [[ "$actual" == "$expected" ]]; then
+    if [[ "$actual" == "$check" ]]; then
       echo "OK ($actual)"
     else
-      echo "FAIL (expected '$expected', got '$actual')"
+      echo "FAIL (expected '$check', got '$actual')"
       fail=1
     fi
   done
@@ -204,7 +240,7 @@ measure_wasm_family() {
     echo "| Program | Flags | Module | WASI | Size (bytes) |"
     echo "| --- | --- | --- | --- | ---: |"
     for row in "${wasm_builds[@]}"; do
-      IFS='|' read -r name src flags _runargs _expected <<<"$row"
+      IFS='|' read -r name src flags _runargs _check <<<"$row"
       local size prog kind wasi
       size="$(bytes_of "$out/$name.wasm")"
       kind="$(module_kind "$out/$name.wasm")"

@@ -8047,6 +8047,68 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWithDir(code)).isEqualTo("65");
 	}
 
+	/** The byte-transparency program every backend's standard-stream test runs. */
+	private static final String BINARY_CAT = """
+			(let ((b (read-byte *standard-input* nil nil)))
+			  (while b
+			    (write-byte b *standard-output*)
+			    (setq b (read-byte *standard-input* nil nil))))
+			""";
+
+	/** stdin for {@link #BINARY_CAT}: a NUL, a UTF-8 sequence, a high byte, a newline. */
+	private static final byte[] BINARY_CAT_STDIN = { 'h', 'i', 0, (byte) 0xE6, (byte) 0x97, (byte) 0xA5, (byte) 0xFF,
+			'\n', 'z' };
+
+	private static final String BINARY_CAT_HEX = "686900e697a5ff0a7a";
+
+	@Test
+	void binaryStandardStreamsAreByteTransparent() throws Exception {
+		assertThat(compileAndRunBinary(new WasmLispCompiler().compile(LispReader.readAllFromString(BINARY_CAT)),
+				BINARY_CAT_STDIN, "wasmtime run -W gc"))
+			.isEqualTo(BINARY_CAT_HEX);
+	}
+
+	@Test
+	void componentBinaryStandardStreamsAreByteTransparent() throws Exception {
+		// The component reads fd 0 and writes fd 1 through the preview1 adapter (this
+		// program is not async, so stdin.lisp is not spliced -- see
+		// .kb/read-load-streams.md).
+		assertThat(
+				compileAndRunBinary(new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(BINARY_CAT)),
+						BINARY_CAT_STDIN, "wasmtime run -W gc=y"))
+			.isEqualTo(BINARY_CAT_HEX);
+	}
+
+	@Test
+	void binaryStandardStreamDesignators() throws Exception {
+		String code = """
+				(setq buf (make-array 4 :initial-element 0))
+				(setq filled (read-sequence buf t))
+				(write-byte 62 nil)
+				(write-sequence buf t :end filled)
+				(write-byte 60 *standard-output*)
+				(print (read-byte *standard-input* nil :eof))
+				""";
+		assertThat(compileAndRunBinary(new WasmLispCompiler().compile(LispReader.readAllFromString(code)),
+				new byte[] { 65, 66, 67 }, "wasmtime run -W gc"))
+			// ">ABC<:EOF\n"
+			.isEqualTo("3e4142433c3a454f460a");
+	}
+
+	/**
+	 * Runs a module over RAW stdin bytes and answers its stdout as lowercase hex.
+	 * {@code ExecResult} decodes stdout as text, which a byte-transparency assertion
+	 * cannot use, so {@code od} renders the bytes inside the container instead.
+	 */
+	private static String compileAndRunBinary(byte[] moduleBytes, byte[] stdin, String runCommand) throws Exception {
+		wasmtime.copyFileToContainer(Transferable.of(moduleBytes), path("test.wasm"));
+		wasmtime.copyFileToContainer(Transferable.of(stdin), path("stdin.bin"));
+		ExecResult result = wasmtime.execInContainer("bash", "-c", "set -o pipefail; " + runCommand + " "
+				+ path("test.wasm") + " < " + path("stdin.bin") + " | od -An -tx1 -v | tr -d ' \\n'");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
 	@Test
 	void readWriteSequenceRoundTrip() throws Exception {
 		String code = """

@@ -12,7 +12,8 @@ import am.ik.wasm.Type;
  * Compiles the {@code read-byte} built-in: {@code (read-byte stream &optional
  * eof-error-p eof-value)}. The stream, eof-error-p (default {@code t}) and eof-value
  * (default {@code nil}) are passed to the {@code _read_byte} stream runtime, which reads
- * one raw byte via {@code fd_read} and returns it as an i31 integer.
+ * one raw byte via {@code fd_read} and returns it as an i31 integer -- from fd 0 for a
+ * non-handle designator.
  */
 final class WasmReadByteCompiler {
 
@@ -24,7 +25,10 @@ final class WasmReadByteCompiler {
 		if (parts.size() < 2 || parts.size() > 4) {
 			throw new UnsupportedOperationException("read-byte expects 1 to 3 arguments, got " + (parts.size() - 1));
 		}
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		// The source designator, like the character reads: an explicit nil means the
+		// current *standard-input*, whose default t the stream runtime reads fd 0 for.
+		LispVal stream = WasmEmitHelper.inputStreamArg(ctx, parts.get(1));
+		WasmExprCompiler.compileExpr(stream != null ? stream : parts.get(1), ctx);
 		WasmExprCompiler.compileExpr(parts.size() > 2 ? parts.get(2) : LispTrue.INSTANCE, ctx);
 		if (parts.size() > 3) {
 			WasmExprCompiler.compileExpr(parts.get(3), ctx);

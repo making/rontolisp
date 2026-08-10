@@ -5,25 +5,25 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`25a3389`)
+- rontolisp: 0.1.0-SNAPSHOT (`4aa08d4`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | (none) | core (command) | Preview 1 | 126,500 |
+| hello_world | (none) | core (command) | Preview 1 | 126,551 |
 | hello_world | `--optimize` | core (command) | Preview 1 | 518 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 518 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,672 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
-| pi_approx | (none) | core (command) | Preview 1 | 126,700 |
+| pi_approx | (none) | core (command) | Preview 1 | 126,751 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 676,213 |
-| zlib | `--optimize` | core (command) | Preview 1 | 558,907 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 432,134 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 436,804 |
+| zlib | (none) | core (command) | Preview 1 | 668,924 |
+| zlib | `--optimize` | core (command) | Preview 1 | 551,644 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 425,815 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 430,485 |
 
 ## What is measured
 
@@ -33,7 +33,7 @@ How the report is built and run: [../README.md](../README.md).
 | --- | --- |
 | [`programs/hello_world/`](../programs/hello_world) | Write `Hello, World!` to stdout, and nothing else |
 | [`programs/pi_approx/`](../programs/pi_approx) | Approximate pi with the Leibniz series, 1,000,000 terms, to 15 decimal places |
-| [`programs/zlib/`](../programs/zlib) | gunzip a 64 KB stream with [chipz](https://github.com/froydnj/chipz) 0.8, `ql:quickload`ed from the live Quicklisp dist like the Worker family (so the row tracks whatever version the dist serves; the pinned copy `ChipzE2eTest` runs against is `src/test/resources/chipz/`) |
+| [`programs/zlib/`](../programs/zlib) | Read gzip data from stdin, decompress it with [chipz](https://github.com/froydnj/chipz) 0.8, write the octets to stdout. chipz is `ql:quickload`ed from the live Quicklisp dist like the Worker family, so the row tracks whatever version the dist serves; the pinned copy `ChipzE2eTest` runs against is `src/test/resources/chipz/` |
 
 The two micro programs have a `-nogc` companion each, because `--no-gc` accepts
 only `(defun ...)` and `rontolisp:wasm-export` at top level and has no `format`.
@@ -43,28 +43,21 @@ be expressed there. They follow
 a cross-language Wasm size comparison, so the rows can be read next to C, Rust,
 Zig, Moonbit and Wado.
 
-`zlib` does the same WORK as its upstream namesake -- gzip in, decompressed
-bytes out -- but it is not yet the same program, and the difference is worth
-stating before the numbers are read:
+`zlib` is the SAME PROGRAM as its upstream namesake, down to the 8192-byte input
+buffer the C and Zig versions use: read all of stdin, inflate, write the
+decompressed octets to stdout. Nothing is embedded and nothing is reported, so
+the row measures the decompressor and the runtime under it rather than a
+literal and a summary line. (It was not always: until binary stdin/stdout
+landed, the input was a 507-byte literal compiled into the source and the output
+was a length plus an FNV-1a.)
 
-| | upstream (c / rust / zig / wado) | rontolisp |
-| --- | --- | --- |
-| input | read all of stdin | a 507-byte literal embedded in the source |
-| output | write the decompressed bytes to stdout | print the length and an FNV-1a |
-
-Both differences are the same missing feature: rontolisp has no binary
-stdin/stdout (`read-byte`/`write-byte` need a stream from `open`). What the
-summary line costs was measured rather than guessed -- replacing it with a bare
-`(princ (length raw))` saves 2,008 bytes of 432,134, because chipz's own
-condition reports already pull the format renderer in -- so it is the missing
-I/O, not the reporting, that keeps the row from being like-for-like.
-
-What the row does measure is the decompressor: an inflate state machine over
-typed bit buffers, the Huffman tables, a 32 KB window and CRC32, all compiled in
-from a third-party library's unmodified sources. The stream inflates to 65536
-octets (a 512-byte block repeated 128 times, so both the literal path and long
-back-references through the window run) and the FNV-1a is what pins every
-backend to the same bytes.
+What the row measures is that decompressor: an inflate state machine over typed
+bit buffers, the Huffman tables, a 32 KB window and CRC32, all compiled in from
+a third-party library's unmodified sources. The check feeds it 65536 octets'
+worth of gzip -- 8 distinct 64-byte lines repeated 128 times, so the first block
+runs the literal and short-match paths and the rest runs long back-references
+through the window -- and requires the output to equal the original byte for
+byte.
 
 **`zlib` is the row that carries the runtime, not just the library.** chipz
 calls `apply`, which turns the embedded `eval` runtime on, and it uses
@@ -73,9 +66,11 @@ the run, and why the four rows are ~430 KB rather than the ~100 KB the inflate
 code alone would be). Both are properties of the library's own source, not of
 how the program was written.
 
-Every module is checked before it is measured: it must still print the right
-answer under `wasmtime`, or the run fails instead of reporting a smaller number
-for a module that stopped working.
+Every module is checked before it is measured, or the run fails instead of
+reporting a smaller number for a module that stopped working: the two micro
+programs must still print the right answer under `wasmtime`, and `zlib` -- which
+prints nothing -- must gunzip the check stream to exactly the octets it was made
+from.
 
 ## Reading the numbers
 
@@ -96,7 +91,7 @@ hundred bytes. Only tree-shaken numbers are worth comparing.
 
 **`--optimize=size` only shows up on a big program.** On both micro programs it
 measures the same as plain `--optimize` -- there is nothing left to trade once
-the tree-shaker has run. On `zlib` it is another 23% (558,907 -> 432,134),
+the tree-shaker has run. On `zlib` it is another 23% (551,644 -> 425,815),
 because there the fused integer trees and unboxed locals it drops are spread
 over a whole library rather than a dozen forms.
 
@@ -146,10 +141,10 @@ above.
 
 ### zlib
 
-Same task in every row -- gzip decompress -- but not yet the same program: see
-the input/output table above, and note that the rontolisp row is a dynamic
-language's whole runtime plus a library that pulls in `eval` and exceptions,
-where the others are a decompressor and nothing else.
+Same program in every row -- gzip on stdin, decompressed octets on stdout --
+with one thing worth keeping in view: the rontolisp row is a dynamic language's
+whole runtime plus a library that pulls in `eval` and exceptions, where the
+others are a decompressor and nothing else.
 
 | Language | WASI | Size (bytes) | What it does |
 | --- | --- | ---: | --- |

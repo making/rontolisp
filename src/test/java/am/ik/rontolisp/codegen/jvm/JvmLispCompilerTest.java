@@ -2721,6 +2721,79 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void binaryStandardStreamsAreByteTransparent() throws Exception {
+		// The compiled twin of
+		// LispEvaluatorTest#evalBinaryStandardStreamsAreByteTransparent:
+		// a NUL, a high byte and a newline survive stdin -> stdout unchanged, and the
+		// trailing 'z' (no newline after it) is what pins the end-of-main flush -- an
+		// auto-flushing PrintStream drains a single-byte write only on '\n'.
+		byte[] octets = { 'h', 'i', 0, (byte) 0xE6, (byte) 0x97, (byte) 0xA5, (byte) 0xFF, '\n', 'z' };
+		assertThat(compileAndRunBinary("""
+				(let ((b (read-byte *standard-input* nil nil)))
+				  (while b
+				    (write-byte b *standard-output*)
+				    (setq b (read-byte *standard-input* nil nil))))
+				""", octets)).isEqualTo(octets);
+	}
+
+	@Test
+	void binaryStandardStreamDesignators() throws Exception {
+		assertThat(compileAndRunBinary("""
+				(setq buf (make-array 4 :initial-element 0))
+				(setq filled (read-sequence buf t))
+				(write-byte 62 nil)
+				(write-sequence buf t :end filled)
+				(write-byte 60 *standard-output*)
+				(print (read-byte *standard-input* nil :eof))
+				""", new byte[] { 65, 66, 67 })).isEqualTo(">ABC<:EOF\n".getBytes(StandardCharsets.UTF_8));
+	}
+
+	@Test
+	void aNumericStreamHandleIsNeverAStandardStream() throws Exception {
+		// The table reserves handles 0/1/2 only for a program that names
+		// *error-output*, so here the string stream IS handle 0 and the file handle 1.
+		// A byte helper that read 0 as standard input or wrote 1 to standard output
+		// would hijack both -- which is what it did to cl-postgres' handshake, whose
+		// socket is the first stream its program opens.
+		String file = tempDir.resolve("handles.dat").toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(print (with-output-to-string (s) (princ "captured" s)))
+				(with-open-file (out "%s" :direction :output :element-type '(unsigned-byte 8))
+				  (write-byte 65 out)
+				  (write-byte 66 out))
+				(with-open-file (in "%s" :element-type '(unsigned-byte 8))
+				  (print (read-byte in))
+				  (print (read-byte in))
+				  (print (read-byte in nil :eof)))
+				""".formatted(file, file))).isEqualTo("\"captured\"\n65\n66\n:EOF");
+	}
+
+	/** Runs a compiled program over RAW stdin bytes and answers its raw stdout bytes. */
+	private byte[] compileAndRunBinary(String lispCode, byte[] stdin) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		JvmLispCompiler compiler = new JvmLispCompiler("Test");
+		Path classFile = tempDir.resolve("Test.class");
+		Files.write(classFile, compiler.compile(program));
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { tempDir.toUri().toURL() },
+				ClassLoader.getSystemClassLoader())) {
+			Method main = loader.loadClass("Test").getMethod("main", String[].class);
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			PrintStream oldOut = System.out;
+			InputStream oldIn = System.in;
+			System.setOut(new PrintStream(baos));
+			System.setIn(new ByteArrayInputStream(stdin));
+			try {
+				main.invoke(null, (Object) new String[0]);
+			}
+			finally {
+				System.setOut(oldOut);
+				System.setIn(oldIn);
+			}
+			return baos.toByteArray();
+		}
+	}
+
+	@Test
 	void writeByteReturnsByte() throws Exception {
 		String file = tempDir.resolve("wb.dat").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun("""

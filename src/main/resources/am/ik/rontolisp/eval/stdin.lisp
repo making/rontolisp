@@ -122,11 +122,14 @@
           (if c c (error 'end-of-file))))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-byte-or-raw-f (s)
-  ;; read-byte has NO stdin designator (a stream argument is mandatory and must
-  ;; be a binary stream on the interpreter/JVM), so a nil stream is an error
-  ;; here too -- never a read of the stdin stream, which would silently overlap
-  ;; the adapter's cached stream in a program that also calls the eof-arg
-  ;; read forms the rewrite leaves native.
-  (if (null s)
-      (error "read-byte expects an input stream")
-      (rontolisp::%read-byte-raw s)))
+  ;; A raw PASSTHROUGH, unlike its two siblings above: the native read-byte now
+  ;; takes the standard-stream designator itself, so a nil / t stream reaches the
+  ;; preview1 adapter's own stdin -- byte-exact and identical to what the other
+  ;; three backends read -- instead of the error this used to signal. It is NOT
+  ;; routed through the stdin.lisp chunk buffer because that buffer is a STRING
+  ;; whose cursor walks decoded characters; binary octets must not be
+  ;; UTF-8-decoded on the way through. The consequence is the documented mixing
+  ;; limit, unchanged: an async program that reads stdin both as bytes and as
+  ;; lines/characters holds two host stdin streams and their interleaving is
+  ;; implementation-specific.
+  (rontolisp::%read-byte-raw s))

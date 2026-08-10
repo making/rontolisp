@@ -2036,10 +2036,33 @@ final class JvmIoRuntimeBuilder {
 	 * Reads one byte from the binary input stream in the table; on EOF returns
 	 * {@code eofValue} when {@code eofErrorP} is nil, otherwise throws. A byte is a boxed
 	 * {@code Long} 0-255.
+	 *
+	 * <p>
+	 * A non-handle designator -- nil, or the {@code t} an unbound
+	 * {@code *standard-input*} reads as -- reads the process standard input, so
+	 * {@code (read-byte *standard-input*)} moves raw octets through stdin. That is
+	 * {@code System.in} directly, NOT the {@code _stdinReader} the character reads share:
+	 * mixing text and byte reads on one stream is out of contract on every backend, and a
+	 * shared reader would buffer ahead and swallow bytes.
+	 *
+	 * <p>
+	 * A numeric handle is ALWAYS a table index here, never a WASI-style file descriptor:
+	 * the table reserves 0/1/2 only when the program names {@code *error-output*}
+	 * ({@code JvmLispCompiler}'s {@code <clinit>} seeds {@code _streamCount = 3} under
+	 * that same gate), so in every other program the first three streams a program opens
+	 * ARE handles 0, 1 and 2. Reading handle 0 as standard input therefore hijacked a
+	 * real file/socket -- which is what it did to the cl-postgres handshake.
 	 */
 	private List<Integer> buildReadByte() {
 		// Slots: 0=handle, 1=eofErrorP, 2=eofValue, 3=in (InputStream), 4=b (int)
 		List<Integer> code = new ArrayList<>();
+		// if (!(handle instanceof Long)) in = System.in;
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifHandlePos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
 		// in = (InputStream) _streams[(int) ((Long) handle).longValue()];
 		// (a Socket entry contributes its input stream instead)
 		code.add(Opcode.GETSTATIC);
@@ -2080,6 +2103,14 @@ final class JvmIoRuntimeBuilder {
 			emitU2(code, this.inputStreamClass.index());
 			code.add(Opcode.ASTORE_3);
 		}
+		int gotoStdReadPos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifHandlePos, code.size());
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemIn.index());
+		code.add(Opcode.ASTORE_3);
+		patchBranch(code, gotoStdReadPos, code.size());
 		// b = in.read();
 		code.add(Opcode.ALOAD_3);
 		code.add(Opcode.INVOKEVIRTUAL);
@@ -2456,10 +2487,37 @@ final class JvmIoRuntimeBuilder {
 	/**
 	 * {@code _writeByte(Object byteObj, Object handle) -> byteObj}. Writes one raw byte
 	 * to the binary output stream in the table.
+	 *
+	 * <p>
+	 * The designator mirror of {@link #buildReadByte}: a non-handle -- nil, or the
+	 * {@code t} an unbound {@code *standard-output*} reads as -- writes to
+	 * {@code System.out}, the very {@code PrintStream} the print family writes through,
+	 * so binary output and {@code princ} cannot reorder. A numeric handle stays a table
+	 * index, for the reason spelled out on {@link #buildReadByte}. The one handle that IS
+	 * a standard stream is 2 ({@code *error-output*}) and only under the
+	 * {@code emitStderrBranch} gate -- which is exactly the condition under which the
+	 * table reserves 0/1/2 in the first place.
 	 */
 	private List<Integer> buildWriteByte() {
 		// Slots: 0=byteObj, 1=handle, 2=out (OutputStream)
 		List<Integer> code = new ArrayList<>();
+		// The *error-output* designator: System.err.write(b); return byteObj;
+		emitStderrBranch(code, Opcode.ALOAD_1, () -> {
+			code.add(Opcode.GETSTATIC);
+			emitU2(code, java.util.Objects.requireNonNull(this.systemErr).index());
+			emitByteValue(code);
+			code.add(Opcode.INVOKEVIRTUAL);
+			emitU2(code, this.outputStreamWrite.index());
+			code.add(Opcode.ALOAD_0);
+			code.add(Opcode.ARETURN);
+		});
+		// if (!(handle instanceof Long)) out = System.out;
+		code.add(Opcode.ALOAD_1);
+		code.add(Opcode.INSTANCEOF);
+		emitU2(code, this.longClass.index());
+		int ifHandlePos = code.size();
+		code.add(Opcode.IFEQ);
+		emitU2(code, 0);
 		// out = (OutputStream) _streams[(int) ((Long) handle).longValue()];
 		// (a Socket entry contributes its output stream instead)
 		code.add(Opcode.GETSTATIC);
@@ -2500,19 +2558,50 @@ final class JvmIoRuntimeBuilder {
 			emitU2(code, this.outputStreamClass.index());
 			code.add(Opcode.ASTORE_2);
 		}
+		int gotoWriteBytePos = code.size();
+		code.add(Opcode.GOTO);
+		emitU2(code, 0);
+		patchBranch(code, ifHandlePos, code.size());
+		code.add(Opcode.GETSTATIC);
+		emitU2(code, this.systemOut.index());
+		// The cast is what makes the two paths MERGE as an OutputStream: without it the
+		// frame joins PrintStream with OutputStream as Object and the verifier rejects
+		// the write below.
+		code.add(Opcode.CHECKCAST);
+		emitU2(code, this.outputStreamClass.index());
+		code.add(Opcode.ASTORE_2);
+		// _col = b ^ '\n' -- zero exactly when the octet just written IS a newline,
+		// which is the only thing the field means (fresh-line tests it against zero).
+		// A raw byte moves the standard-output column like a character does, or a
+		// (write-byte 10 t) followed by fresh-line would emit a second newline here
+		// while the interpreter emits none. Branchless, so the frame stays flat.
+		emitByteValue(code);
+		code.add(Opcode.BIPUSH);
+		code.add(10);
+		code.add(Opcode.IXOR);
+		code.add(Opcode.PUTSTATIC);
+		emitU2(code, this.colField.index());
+		patchBranch(code, gotoWriteBytePos, code.size());
 		// out.write((int) ((Long) byteObj).longValue()); return byteObj;
 		code.add(Opcode.ALOAD_2);
+		emitByteValue(code);
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, this.outputStreamWrite.index());
+		code.add(Opcode.ALOAD_0);
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * Pushes {@code (int) ((Long) byteObj).longValue()} -- slot 0 of {@code _writeByte}.
+	 */
+	private void emitByteValue(List<Integer> code) {
 		code.add(Opcode.ALOAD_0);
 		code.add(Opcode.CHECKCAST);
 		emitU2(code, this.longClass.index());
 		code.add(Opcode.INVOKEVIRTUAL);
 		emitU2(code, this.longValue.index());
 		code.add(Opcode.L2I);
-		code.add(Opcode.INVOKEVIRTUAL);
-		emitU2(code, this.outputStreamWrite.index());
-		code.add(Opcode.ALOAD_0);
-		code.add(Opcode.ARETURN);
-		return code;
 	}
 
 	/**

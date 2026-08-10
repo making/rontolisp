@@ -124,13 +124,13 @@ the raw handle AHEAD of their `_writeStr` delegation (`_writeString`) dereferenc
 branch. A served handler reporting through `*error-output*` -- lack's `:backtrace`
 middleware -- is the shape that hits it. Do not make the allocation lazy again.
 
-What that does NOT fix, deliberately (no consumer, and each would need its own guard):
-the helpers with no stderr branch at all still take a reserved handle down their table
-path and dereference the empty slot -- `(write-byte b *error-output*)` and the read
-family (`read-char`/`read-byte`/`read-line`) on any of 0/1/2. Neither backend
-SUPPORTS those (the interpreter answers `WRITE-BYTE expects a binary output stream`);
-what differs is the shape of the failure, an NPE instead of that error. Give them the
-branch, or a `>= FIRST_USER_HANDLE` guard, when something needs one.
+The byte helpers were the exception this section used to list as unfixed -- "give them the
+branch when something needs one" -- and todo-314 needed one: `write-byte` now takes the
+`emitStderrBranch` prefix like the string writers, and both byte helpers treat a non-handle
+designator and the reserved handles as the process streams (`.kb/read-load-streams.md`). What
+is still unguarded, deliberately, is the READ family on handles 1/2 (`read-char`/`read-line`
+aimed at stdout or stderr): no backend supports it, and what differs is only the shape of the
+failure -- an NPE here, a zero-byte `fd_read` on wasm. Same remedy if something ever needs it.
 
 - **JVM**: there is no JDK `Writer` over `System.err` that writes THROUGH (a
   `PrintWriter` buffers, and a warning lost at exit is worse than the branch), so the

@@ -78,8 +78,8 @@ page.
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
 | `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
-| `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | Read one byte (0-255) from a binary input stream. At EOF, signal an `end-of-file` condition, or return `eof-value` when `eof-error-p` is `nil` |
-| `write-byte` | `(write-byte 255 stream)` | Write one raw byte (0-255) to a binary output stream. Returns the byte |
+| `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | Read one byte (0-255) from a binary input stream, or from standard input for the `t`/`nil` designator. At EOF, signal an `end-of-file` condition, or return `eof-value` when `eof-error-p` is `nil` |
+| `write-byte` | `(write-byte 255 stream)`, `(write-byte 255 *standard-output*)` | Write one raw byte (0-255) to a binary output stream, or to standard output for the `t`/`nil` designator. Returns the byte |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | Fill a vector from an input stream -- characters when the buffer is a character vector, else bytes. Returns the fill position. `:start`/`:end` must be literal keywords |
 | `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | Write a sequence to a stream and return it. A string is written as characters (like `write-string`); a vector of bytes (0-255) is written to a binary output stream. `:start`/`:end` must be literal keywords |
 | `read` | `(read)`, `(read stream)` | Read one S-expression from stdin (or from an input stream opened by `open`/`with-open-file`) (all three backends). `nil` on EOF |

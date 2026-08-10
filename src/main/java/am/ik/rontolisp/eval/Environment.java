@@ -4575,29 +4575,55 @@ public final class Environment implements Scope {
 						List.of(rest.isEmpty() ? LispNil.INSTANCE : rest.get(0), LispNil.INSTANCE, LispNil.INSTANCE));
 			}
 		}));
+		// The byte ops take the same stream DESIGNATOR every other stream operation
+		// takes: nil resolves through *standard-input* / *standard-output*, and t --
+		// which those variables hold by default -- is the process standard stream. So
+		// (read-byte *standard-input*), CL's own spelling for a bivalent standard
+		// stream, works without giving the standard-stream variables a handle value.
+		// The raw process streams are used directly, NOT the stdinReader/emit character
+		// path: mixing text and byte reads on one stream is out of contract (the reader
+		// buffers ahead), while the byte WRITE shares the PrintStream `out` so binary
+		// output and princ cannot reorder.
+		//
+		// Only the DESIGNATOR names a process stream; a numeric handle stays a table
+		// index (2, the *error-output* value, is the one exception, and it is a real
+		// table entry here). The JVM cannot promise more than that -- it reserves 0/1/2
+		// only for a program that names *error-output*, so elsewhere a user stream IS
+		// handle 0 -- and a rule that holds on one backend only is worse than none.
 		env.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
 			requireMinArgCount(LispNames.READ_BYTE, args, 1);
 			if (args.size() > 3) {
 				throw new LispEvalException(LispNames.READ_BYTE + " expects 1 to 3 arguments");
 			}
-			if (!(args.get(0) instanceof LispInteger handle)) {
-				throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
-			}
-			Closeable byteEntry = streams.get(handle.value());
+			LispVal src = resolveInputSrc.apply(args.get(0));
 			int b;
-			if (byteEntry instanceof Socket socket) {
-				b = SocketSupport.readByte(socket);
-			}
-			else if (byteEntry instanceof InputStream in2) {
+			if (src == null || src instanceof LispNil || src instanceof LispTrue) {
 				try {
-					b = in2.read();
+					b = in.read();
 				}
 				catch (IOException ex) {
 					throw new UncheckedIOException(ex);
 				}
 			}
-			else {
+			else if (!(src instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
+			}
+			else {
+				Closeable byteEntry = streams.get(handle.value());
+				if (byteEntry instanceof Socket socket) {
+					b = SocketSupport.readByte(socket);
+				}
+				else if (byteEntry instanceof InputStream in2) {
+					try {
+						b = in2.read();
+					}
+					catch (IOException ex) {
+						throw new UncheckedIOException(ex);
+					}
+				}
+				else {
+					throw new LispEvalException(LispNames.READ_BYTE + " expects a binary input stream");
+				}
 			}
 			if (b < 0) {
 				boolean eofError = args.size() < 2 || args.get(1) != LispNil.INSTANCE;
@@ -4613,7 +4639,20 @@ public final class Environment implements Scope {
 			if (!(args.get(0) instanceof LispInteger value) || value.value() < 0 || value.value() > 255) {
 				throw new LispEvalException(LispNames.WRITE_BYTE + " expects an integer between 0 and 255");
 			}
-			if (!(args.get(1) instanceof LispInteger handle)) {
+			LispVal dest = resolveOutputDest.apply(args.get(1));
+			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
+				// The same PrintStream princ writes through, so a program that mixes
+				// text and raw bytes on standard output keeps them in order.
+				out.write((int) value.value());
+				atLineStart[0] = value.value() == '\n';
+				return value;
+			}
+			if (dest instanceof LispInteger err && err.value() == StreamDesignators.STANDARD_ERROR_HANDLE) {
+				System.err.write((int) value.value());
+				System.err.flush();
+				return value;
+			}
+			if (!(dest instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.WRITE_BYTE + " expects a binary output stream");
 			}
 			Closeable byteEntry = streams.get(handle.value());

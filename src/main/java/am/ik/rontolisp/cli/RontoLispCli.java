@@ -294,12 +294,17 @@ public final class RontoLispCli {
 			for (LispVal expr : LispReader.readAllWithReadEvalMarkers(source, Features.INTERPRETER, entryFile)) {
 				evaluator.eval(evaluator.resolveReadTimeEvalInCode(expr));
 			}
+			this.out.flush();
 			return;
 		}
 		List<LispVal> exprs = LispReader.readAllFromString(source, Features.INTERPRETER, entryFile);
 		for (LispVal expr : exprs) {
 			evaluator.eval(expr);
 		}
+		// A program whose last write is a raw octet (write-byte to standard output) has
+		// nothing left to flush it: an auto-flushing PrintStream only drains on a
+		// newline, and a byte-oriented filter's output need not end in one.
+		this.out.flush();
 	}
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,

@@ -6676,6 +6676,32 @@ cases:
       T
       T
 
+  - name: binary-standard-output
+    source: |
+      ;; write-byte / write-sequence take the same stream DESIGNATOR every other
+      ;; stream operation takes, so raw octets reach the process standard output
+      ;; on all four backends: t, an explicit nil, and *standard-output* (which
+      ;; holds t) all name it. This is the output half of a byte-oriented filter;
+      ;; the input half cannot be a case here, because the driver hands the child
+      ;; a stdin pipe nobody writes to.
+      (write-byte 62 t)
+      (write-byte 62 nil)
+      (write-sequence #(98 105 110 97 114 121) *standard-output*)
+      (write-byte 60 *standard-output*)
+      ;; The byte and the character paths share one destination, in order: a
+      ;; princ after a write-byte may not overtake it on any backend.
+      (princ "|")
+      (write-byte 10 t)
+      ;; A raw octet moves the standard-output COLUMN exactly like a character
+      ;; does, so fresh-line after a written newline adds nothing -- the one
+      ;; place the byte path has to agree with the character path's bookkeeping.
+      (fresh-line)
+      ;; The value is the byte, as CL says (so "A" from the write, then 65).
+      (print (write-byte 65 t))
+    expected: |
+      >>binary<|
+      A65
+
   - name: postmodern-non-mop-milestone
     source: |
       ;; .todo/202 -- the four language mechanics the non-MOP postmodern build

@@ -75,8 +75,8 @@
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
 | `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
-| `read-byte` | `(read-byte stream)`, `(read-byte stream nil -1)` | バイナリ入力ストリームから 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
-| `write-byte` | `(write-byte 255 stream)` | バイナリ出力ストリームに生の 1 バイト(0-255)を書き込みます。バイトを返します |
+| `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | バイナリ入力ストリーム、または `t`/`nil` 指定子なら標準入力から 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
+| `write-byte` | `(write-byte 255 stream)`, `(write-byte 255 *standard-output*)` | バイナリ出力ストリーム、または `t`/`nil` 指定子なら標準出力に生の 1 バイト(0-255)を書き込みます。バイトを返します |
 | `read-sequence` | `(read-sequence buf stream)`, `(read-sequence buf stream :start 2 :end 4)` | 入力ストリームからベクタを埋めます。バッファが文字ベクタなら文字、それ以外はバイトです。充填位置を返します。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `write-sequence` | `(write-sequence "abcd" s :start 1 :end 3)`, `(write-sequence buf stream)` | シーケンスをストリームに書き込み、それを返します。文字列は（`write-string` と同様に）文字として書き込まれ、バイト(0-255)のベクタはバイナリ出力ストリームに書き込まれます。`:start`/`:end` はリテラルのキーワードでなければなりません |
 | `read` | `(read)`, `(read stream)` | 標準入力(または `open`/`with-open-file` で開いた入力ストリーム)からS式を1つ読み込みます(3つのバックエンドすべて)。EOFでは `nil` |

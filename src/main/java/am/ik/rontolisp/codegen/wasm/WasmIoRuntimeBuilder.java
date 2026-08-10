@@ -747,6 +747,12 @@ final class WasmIoRuntimeBuilder {
 	 * byte from the stream's file descriptor via fd_read into the BYTE_SCRATCH_ADDR
 	 * scratch cell -- no quote framing, no newline scan -- and returns it as an i31
 	 * integer. On EOF returns eof-value when eof-error-p is nil, otherwise traps.
+	 *
+	 * <p>
+	 * A non-handle designator -- nil, or the {@code t} an unbound
+	 * {@code *standard-input*} reads as -- is fd 0, the process standard input, exactly
+	 * like {@code _read_char}'s dispatch: the test is "is a handle", not "is nil",
+	 * because a {@code ref.cast} on the {@code t} struct would trap.
 	 * @return the function body bytes
 	 */
 	static byte[] buildReadByteBody() {
@@ -762,10 +768,18 @@ final class WasmIoRuntimeBuilder {
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
 
-		// fd = i31.get_s(stream)
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 0 (stdin)
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
 		getLocal(w, STREAM);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		w.write(Instruction.END);
 		setLocal(w, FD);
 		// iov.ptr = BYTE_SCRATCH_ADDR ; iov.len = 1
 		i32(w, IOV);
@@ -1347,14 +1361,22 @@ final class WasmIoRuntimeBuilder {
 	 * Builds the _write_byte(byte, stream) function body. Writes the byte's low 8 bits as
 	 * one raw byte to the stream's file descriptor via fd_write -- no quote framing, no
 	 * newline -- and returns the byte.
+	 *
+	 * <p>
+	 * The designator mirror of {@link #buildReadByteBody}: a non-handle -- nil, or the
+	 * {@code t} an unbound {@code *standard-output*} reads as -- is fd 1, the process
+	 * standard output. The reserved handle 2 needs no branch of its own here: fd 2 IS
+	 * stderr for {@code fd_write}, the same reason the string writers have none.
 	 * @return the function body bytes
 	 */
 	static byte[] buildWriteByteBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: BYTE=0 (ref), STREAM=1 (ref) ; no locals
-		w.write(0);
-		final int BYTE = 0, STREAM = 1;
+		// params: BYTE=0 (ref), STREAM=1 (ref) ; i32 local: FD=2
+		w.write(1);
+		w.write(1);
+		w.write(Type.I32);
+		final int BYTE = 0, STREAM = 1, FD = 2;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 		final int SCRATCH = WasmLispCompiler.BYTE_SCRATCH_ADDR;
@@ -1372,16 +1394,41 @@ final class WasmIoRuntimeBuilder {
 		i32(w, IOV + 4);
 		i32(w, 1);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// fd_write(i31.get_s(stream), IOV, 1, NWRITTEN) ; drop errno
+		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout)
+		getLocal(w, STREAM);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.write(Type.I32);
 		getLocal(w, STREAM);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		w.write(Instruction.END);
+		setLocal(w, FD);
+		// fd_write(fd, IOV, 1, NWRITTEN) ; drop errno
+		getLocal(w, FD);
 		i32(w, IOV);
 		i32(w, 1);
 		i32(w, NWRITTEN);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_FD_WRITE);
 		w.write(Instruction.DROP);
+		// A raw octet moves the standard-output column exactly like a character does:
+		// if (fd == 1) LINE_START = (byte != '\n'), the same flag _write_str keeps. Any
+		// other descriptor leaves it alone -- a file write must not disturb stdout's.
+		getLocal(w, FD);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, WasmLispCompiler.LINE_START_ADDR);
+		i32(w, SCRATCH);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		i32(w, 10);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
 		// return the byte
 		getLocal(w, BYTE);
 		w.write(Instruction.END);

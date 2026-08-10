@@ -5661,6 +5661,53 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalBinaryStandardStreamsAreByteTransparent() {
+		// stdin -> stdout as octets: the bytes below are a NUL, a high byte and a
+		// newline plus one UTF-8 lead byte, none of which may be decoded, re-encoded or
+		// line-buffered on the way through. The spelling is CL's own -- the standard
+		// stream variables hold the t designator, so no handle is involved.
+		byte[] octets = { 'h', 'i', 0, (byte) 0xE6, (byte) 0x97, (byte) 0xA5, (byte) 0xFF, '\n', 'z' };
+		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+		PrintStream out = new PrintStream(captured, true, StandardCharsets.UTF_8);
+		LispEvaluator evaluator = new LispEvaluator(out, new ByteArrayInputStream(octets));
+		for (LispVal expr : LispReader.readAllFromString("""
+				(let ((b (read-byte *standard-input* nil nil)))
+				  (while b
+				    (write-byte b *standard-output*)
+				    (setq b (read-byte *standard-input* nil nil))))
+				""")) {
+			evaluator.eval(expr);
+		}
+		out.flush();
+		assertThat(captured.toByteArray()).isEqualTo(octets);
+	}
+
+	@Test
+	void evalBinaryStandardStreamDesignators() {
+		// nil and t are the same two designators every other stream operation takes, and
+		// read-sequence / write-sequence inherit them through their read-byte /
+		// write-byte lowering.
+		java.io.ByteArrayOutputStream captured = new java.io.ByteArrayOutputStream();
+		PrintStream out = new PrintStream(captured, true, StandardCharsets.UTF_8);
+		LispEvaluator evaluator = new LispEvaluator(out, new ByteArrayInputStream(new byte[] { 65, 66, 67 }));
+		LispVal result = LispNil.INSTANCE;
+		for (LispVal expr : LispReader.readAllFromString("""
+				(setq buf (make-array 4 :initial-element 0))
+				(setq filled (read-sequence buf t))
+				(write-byte 62 nil)
+				(write-sequence buf t :end filled)
+				(write-byte 60 *standard-output*)
+				(read-byte *standard-input* nil :eof)
+				""")) {
+			result = evaluator.eval(expr);
+		}
+		out.flush();
+		assertThat(captured.toString(StandardCharsets.UTF_8)).isEqualTo(">ABC<");
+		// The stream is drained, so the eof-value comes back instead of a signal.
+		assertThat(result).isEqualTo(new LispSymbol(":EOF"));
+	}
+
+	@Test
 	void writeSequenceReturnsSequence(@TempDir Path tempDir) {
 		String file = tempDir.resolve("wsr.dat").toString().replace("\\", "\\\\");
 		LispVal result = evalMulti("""
