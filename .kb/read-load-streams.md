@@ -63,8 +63,24 @@ and `head = tail = 0` on the output record (`WasmStringStreamRuntimeBuilder.buil
 the chunk bytes stay where the bump allocator put them -- nothing references them once the
 chain head is gone). Pinned by `stringOutputStreamNamesClearOnRead` in the JVM/WASM suites,
 `evalStringOutputStreamNamesClearOnRead`, and the `postmodern-language-incidentals` ci-spec case.
-`make-string-input-stream` is deliberately NOT exposed: CL's takes `&optional start end`, which
-this machinery would silently ignore, and `with-input-from-string` covers every known consumer.
+`make-string-input-stream` is the CL spelling of `%make-string-input-stream`, wired the same way
+(`LispMacroExpander.expandMakeStringInputStream`, dispatched in `Jvm/WasmExprCompiler`; a real
+`LispFunction` in the interpreter). It USED to be withheld, on two grounds that both expired:
+"CL's takes `&optional start end`, which this machinery would silently ignore" -- the expansion
+now routes a bounded call through `(subseq string start end)`, so the code-point bounds rule is
+subseq's on every backend instead of a second implementation of it, and the interpreter's
+`LispFunction` applies the same rule directly -- and "`with-input-from-string` covers every known
+consumer", which stopped being true the moment a real library needed the stream to OUTLIVE the
+form that made it: yason's `parse` takes a string by making one, so `lack/request` answered
+`400 Bad Request` to every JSON request body, which is every `ningle` application (a route's
+controller reads `request-parameters`, and that parses the body). Pinned by
+`stringInputStreamReadsWithoutWithInputFromString` + `stringInputStreamHonoursStartAndEnd` in the
+JVM/WASM suites, `evalStringInputStream*` in the interpreter suite, and end to end by
+`examples/cloudflare-workers/httpbin-ningle` (a JSON `POST` echoed back as `form`).
+**The re-evaluation trigger for the next visitor**: nothing about the shape of this argues for a
+`%`-internal-only name -- if another CL stream constructor is being withheld for "the internal
+one covers every consumer", check whether a library now needs it as a VALUE rather than in a
+scoped macro, because that is the shape the argument does not survive.
 
 **`peek-char` (all four backends)**:
 `(peek-char [peek-type [stream [eof-error-p [eof-value]]]])`. Only "the next character, left in

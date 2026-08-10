@@ -520,6 +520,27 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalStringInputStreamReadsWithoutWithInputFromString() {
+		// The public spelling of the stream with-input-from-string binds: a library
+		// that hands the stream around instead of scoping it needs this one.
+		assertThat(evalMulti("""
+				(defvar *in* (make-string-input-stream "ab
+				cd"))
+				(list (read-line *in*) (read-line *in*) (read-line *in* nil :eof))""").print())
+			.isEqualTo("(\"ab\" \"cd\" :EOF)");
+	}
+
+	@Test
+	void evalStringInputStreamHonoursStartAndEnd() {
+		// CL's (make-string-input-stream string &optional start end) reads the
+		// bounded substring only.
+		assertThat(evalMulti("""
+				(defvar *bounded* (make-string-input-stream "xxhixx" 2 4))
+				(list (read-char *bounded*) (read-char *bounded*) (read-char *bounded* nil :eof))""").print())
+			.isEqualTo("(#\\h #\\i :EOF)");
+	}
+
+	@Test
 	void evalPeekCharLeavesTheCharacterInTheStream() {
 		assertThat(eval("""
 				(with-input-from-string (s "ab")
@@ -5841,7 +5862,8 @@ class LispEvaluatorTest {
 					"SYMBOL-VALUE")
 			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
 			.contains("STRING")
-			.contains("PEEK-CHAR", "MAKE-STRING-OUTPUT-STREAM", "GET-OUTPUT-STREAM-STRING", "MAKE-SYNONYM-STREAM")
+			.contains("PEEK-CHAR", "MAKE-STRING-OUTPUT-STREAM", "MAKE-STRING-INPUT-STREAM", "GET-OUTPUT-STREAM-STRING",
+					"MAKE-SYNONYM-STREAM")
 			.contains("INVOKE-RESTART", "FIND-RESTART", "COMPUTE-RESTARTS", "RESTART-NAME", "MUFFLE-WARNING", "ABORT",
 					"CONTINUE")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
@@ -5859,7 +5881,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
 			.isSorted()
-			.hasSize(389);
+			.hasSize(390);
 	}
 
 	@Test

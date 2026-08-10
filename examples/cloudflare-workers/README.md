@@ -2,8 +2,7 @@
 
 Common Lisp compiled to WebAssembly, running on Cloudflare Workers. Each
 directory is a complete, independent Worker project: `./build.sh && npx wrangler
-dev`, then `npx wrangler deploy` — except `hello-ningle/`, whose module builds
-but does not instantiate yet.
+dev`, then `npx wrangler deploy`.
 
 Module sizes are measured rather than quoted here:
 [`size-report/results/cloudflare-workers.md`](../../size-report/results/cloudflare-workers.md).
@@ -17,6 +16,7 @@ Module sizes are measured rather than quoted here:
 | [`httpbin/`](httpbin) | A **mini httpbin** — five echo endpoints, 405, 404, `handler-case` — as a Clack application whose Worker adapter is written out by hand, so that clack itself never ships. The application half is [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) verbatim | 54 lines, boundary included |
 | [`httpbin-clack/`](httpbin-clack) | **The same application, installed by `clack:clackup` — with no `worker.lisp` at all.** `build.sh` compiles [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) unchanged: under `--no-wasi` the `:server :rontolisp` backend takes its reactor shape and the compiler synthesizes the export. One source, four hosts | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | `httpbin-clack` with a real routing library: `define-routes`, a `/status/:code` template, route declining. Loaded as `tiny-routes/lite`, whose ppcre-free matcher keeps cl-ppcre out of the module | `httpbin/src/index.js`, byte-identical |
+| [`httpbin-ningle/`](httpbin-ningle) | The same endpoints in [ningle](https://github.com/fukamachi/ningle)'s own model, and **deliberately not the same code**: routes assigned to a CLOS object in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, an `:ANY` fallback rule per path and a regex rule that declines | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source reached through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
 
 ## Which one should I copy?
@@ -32,9 +32,9 @@ Module sizes are measured rather than quoted here:
 - **`hello-tiny-routes/`** if you are starting a routed application rather than
   studying one: `hello-clack/` with the `defun` replaced by `define-routes` and
   nothing else changed.
-- **`hello-ningle/`** to compare the two routing models rather than to deploy.
-  Everything except the last step works, and `check.lisp` drives the whole
-  application on the interpreter, the JVM and wasmtime.
+- **`hello-ningle/`** to compare the two routing models on the smallest possible
+  application, before reading `httpbin-ningle/`, which is where ningle's own way
+  of writing one is actually spelled out.
 - **`httpbin-clack/`** when the file should read like every other Clack program.
   It deploys the *same* application text as `httpbin/` with `clack:clackup`
   installing the adapter instead of the program carrying it. Measured there: the
@@ -44,6 +44,12 @@ Module sizes are measured rather than quoted here:
   declining, the middleware combinators — *provided* it is loaded as
   `tiny-routes/lite`. Full `"tiny-routes"` spells the same routes but ships
   cl-ppcre.
+- **`httpbin-ningle/`** if you already write ningle, or to see the two routing
+  models answer the same endpoints without being written the same way. It is by
+  an order of magnitude the largest and slowest to start of the four httpbin
+  Workers, and the reason is not ningle: it reads every request through the
+  `lack-request` chain, which is also what lets its controllers ignore streams
+  and JSON parsing entirely.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string
   marshalling, yes. Everywhere else, no.
@@ -129,8 +135,11 @@ program IS `../net/httpbin-clack.lisp`, so its loop is `rontolisp
 
 ## Deploying
 
-All but the two tiny-routes directories have been deployed to the real edge, not
-only run under `wrangler dev`. Worker Startup Time is what `wrangler deploy`
+The `hello`, `hello-clack`, `httpbin`, `httpbin-clack` and `httpbin-component`
+directories have been deployed to the real edge, not only run under `wrangler
+dev`; the two tiny-routes and two ningle ones have not (they are pinned locally
+instead, by their `check.lisp` and by node driving the built module).
+Worker Startup Time is what `wrangler deploy`
 measures and budget-checks: 5-13 ms for the `httpbin` builds, 26-30 ms for the
 clack ones — going through `clack:clackup` instead of calling the handler
 backend directly is what moved that number, while the per-request cost did not.

@@ -227,6 +227,7 @@ worker_builds=(
   "httpbin-clack|examples/net/httpbin-clack.lisp|--no-wasi --optimize=size|"
   "httpbin-tiny-routes|examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp|--no-wasi --optimize=size|"
   "httpbin-tiny-routes (full tiny-routes)|examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp|--no-wasi --optimize=size|s|tiny-routes/lite|tiny-routes|g"
+  "httpbin-ningle|examples/cloudflare-workers/httpbin-ningle/worker.lisp|--no-wasi --optimize=size|"
   "httpbin-component (core module)|examples/cloudflare-workers/httpbin/worker.lisp|--component --no-wasi --optimize=size|"
 )
 
@@ -266,9 +267,17 @@ measure_workers_family() {
   done
 
   # The jco-transpiled glue, when npx is available: the component row's real
-  # cost on a Worker is the core module PLUS the generated JavaScript.
-  local jco_js="" component_slug="${slugs[$((${#slugs[@]} - 1))]}"
-  if command -v npx >/dev/null 2>&1; then
+  # cost on a Worker is the core module PLUS the generated JavaScript. The row
+  # is found by its FLAGS, not by its position -- a new Worker appended to the
+  # table above must not silently transpile a core module instead.
+  local jco_js="" component_slug=""
+  local n=${#slugs[@]}
+  for ((i = 0; i < n; i++)); do
+    [[ "${flagsv[i]}" == *--component* ]] && component_slug="${slugs[i]}"
+  done
+  if [[ -z "$component_slug" ]]; then
+    echo "NOTE: no --component row -- skipping the generated-glue row."
+  elif command -v npx >/dev/null 2>&1; then
     echo "transpiling the component with jco"
     # The same flags examples/cloudflare-workers/httpbin-component/build.sh uses.
     if npx -y @bytecodealliance/jco transpile "$out/$component_slug.wasm" \

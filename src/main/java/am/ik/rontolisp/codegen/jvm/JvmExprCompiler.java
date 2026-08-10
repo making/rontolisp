@@ -534,6 +534,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx, className);
 				case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL ->
 					JvmStringStreamCompiler.compileMakeInputStream(cons, ctx, className);
+				case LispNames.MAKE_STRING_INPUT_STREAM ->
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx, className);
 				case LispNames.STRING_STREAM_CONTENTS_INTERNAL ->
 					JvmStringStreamCompiler.compileContents(cons, ctx, className);
 				case LispNames.WITH_OUTPUT_TO_STRING ->

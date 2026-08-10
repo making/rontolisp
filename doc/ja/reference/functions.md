@@ -321,6 +321,7 @@
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | pathspec のディレクトリ部分を作成して pathspec を返します(2つのWASMバックエンドではシグナルを発生させます) |
 | `delete-file` | `(delete-file "notes.txt")` | 指定したファイルを削除して `t` を返します。ファイルが残る場合は「そもそも無かった」場合も含めてシグナルを発生させます(2つのWASMバックエンドでは `ensure-directories-exist` と同じ理由でシグナルを発生させます) |
 | `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
+| `make-string-input-stream` | `(make-string-input-stream string &optional start end)` | 文字列から読み込む入力ストリーム。`with-input-from-string` が束縛するものを明示的に作ります |
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数のストリームへ転送する指定子。`*standard-output*` と `*standard-input*` は操作ごとに転送します (`nil` 指定子)。それ以外のシンボルはライト実装で、ストリームを作った時点で一度だけ解決します |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので `format`/`princ`/`prin1`/`write-string`/`write-char` が使え、`terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` はシグナルを発生させます |

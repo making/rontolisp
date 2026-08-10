@@ -6299,6 +6299,32 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (make-string-input-stream string &optional start end)} -- CL's
+	 * public spelling of the internal {@code (%make-string-input-stream string)} that
+	 * {@code with-input-from-string} is built on. A bounded call becomes the internal
+	 * call over {@code (subseq string start end)}, so the code-point bounds rule is
+	 * subseq's on every backend rather than a second implementation of it.
+	 * @param cons the make-string-input-stream expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandMakeStringInputStream(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 4) {
+			throw new UnsupportedOperationException(
+					LispNames.MAKE_STRING_INPUT_STREAM + " expects 1 to 3 arguments, got " + (parts.size() - 1));
+		}
+		LispVal string = parts.get(1);
+		if (parts.size() > 2) {
+			List<LispVal> subseq = new ArrayList<>(List.of(new LispSymbol(LispNames.SUBSEQ), string, parts.get(2)));
+			if (parts.size() == 4) {
+				subseq.add(parts.get(3));
+			}
+			string = listToCons(subseq);
+		}
+		return callOf(LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL, string);
+	}
+
+	/**
 	 * Expands {@code (get-output-stream-string stream)} into the internal
 	 * {@code (%string-stream-contents stream)}, which answers what the string output
 	 * stream has accumulated AND clears it -- CL's contract, so a second call sees only

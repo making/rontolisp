@@ -807,6 +807,8 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandGetOutputStreamString(cons), ctx);
 				case LispNames.MAKE_STRING_INPUT_STREAM_INTERNAL ->
 					WasmWriteStringCompiler.compileMakeInputStream(cons, ctx);
+				case LispNames.MAKE_STRING_INPUT_STREAM ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeStringInputStream(cons), ctx);
 				case LispNames.STRING_STREAM_CONTENTS_INTERNAL -> WasmWriteStringCompiler.compileContents(cons, ctx);
 				// unwindProtect = ctx.ehMode: a literal with-* flips the
 				// module into EH mode via the gate, so these expansions ride

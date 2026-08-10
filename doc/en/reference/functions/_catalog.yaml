@@ -365,6 +365,7 @@ categories:
       - { slug: ensure-directories-exist, name: "ensure-directories-exist" }
       - { slug: delete-file, name: "delete-file" }
       - { slug: make-string-output-stream, name: "make-string-output-stream" }
+      - { slug: make-string-input-stream, name: "make-string-input-stream" }
       - { slug: get-output-stream-string, name: "get-output-stream-string" }
       - { slug: make-synonym-stream, name: "make-synonym-stream" }
       - { slug: make-broadcast-stream, name: "make-broadcast-stream" }

@@ -7857,6 +7857,25 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void stringInputStreamReadsWithoutWithInputFromString() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((s (make-string-input-stream "ab
+				cd")))
+				  (princ (read-line s))
+				  (princ (read-line s))
+				  (princ (read-line s nil 'eof)))""")).isEqualTo("abcdEOF");
+	}
+
+	@Test
+	void stringInputStreamHonoursStartAndEnd() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((s (make-string-input-stream "xxhixx" 2 4)))
+				  (princ (read-char s))
+				  (princ (read-char s))
+				  (princ (read-char s nil 'eof)))""")).isEqualTo("hiEOF");
+	}
+
+	@Test
 	void peekCharLeavesTheCharacterInTheStream() throws Exception {
 		assertThat(compileAndRun("""
 				(with-input-from-string (s "ab")
@@ -8936,7 +8955,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("389");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("390");
 	}
 
 	@Test

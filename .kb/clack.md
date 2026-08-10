@@ -40,14 +40,29 @@ while it was being made to work:
   `getenv` (`.kb/wasm-export-no-wasi.md`) — the load-time trap was
   smart-buffer's, not ningle's doing. There is no size opt-in to offer either (myway compiles every rule to
   a cl-ppcre scanner), which is the deliberate difference from
-  `tiny-routes/lite`.
+  `tiny-routes/lite`. That chain is also why **a ningle application is the only
+  one of the two that parses a request BODY on the normal path**: a controller
+  reads `request-parameters`, which for `application/json` reaches yason
+  through http-body. yason makes its own stream out of the string, so until
+  `make-string-input-stream` existed as a public name every JSON request body
+  answered `400 Bad Request` — `lack/request` catches the undefined-function
+  error and ningle's `call :around` turns it into the 400. Retired in
+  `.kb/read-load-streams.md`; the reason it took so long to surface is that the
+  serve legs here post form-encoded bodies, which http-body parses without a
+  stream constructor.
 - **`ningle:not-found` sets the status and returns nil**, so lack's
   `finalize-response` answers a body LIST holding NIL and every ningle 404 has
   that shape — the response-contract arm in `.kb/http-server.md`.
 
 Preview 1 cannot serve either of them, but ningle's ROUTING runs there:
-`examples/cloudflare-workers/hello-ningle/check.lisp` drives it through the
+`examples/cloudflare-workers/hello-ningle/check.lisp` and
+`examples/cloudflare-workers/httpbin-ningle/check.lisp` drive it through the
 reactor path on the interpreter, the JVM and Preview 1 (`examples/examples.yaml`).
+The second is the wider pin, and deliberately does NOT share the other httpbin
+Workers' code: it covers routes assigned in a loop, an `:ANY` fallback rule per
+path (the 405), a `:regexp t` rule whose `:captures` bind (the decline), a
+controller that returns a string and mutates `ningle:*response*`, and the JSON
+and form-encoded bodies arriving already parsed as `request-body-parameters`.
 
 ## The handler backend is a built-in shim system, found LATE-BOUND by name
 

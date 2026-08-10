@@ -1,7 +1,8 @@
 // index.js -- the whole Worker: Request -> JSON -> Lisp -> JSON -> Response.
 //
-// This file is BYTE-IDENTICAL in ../../hello-clack and ../../hello-tiny-routes:
-// how the Lisp half routes is not visible from JavaScript.
+// BYTE-IDENTICAL in every hello-* directory here: how the Lisp half routes is
+// not visible from JavaScript. A new sibling copies this file, it does not edit
+// it.
 //
 // It is ../../httpbin-clack/src/index.js with everything these examples do not
 // need removed: no body (the application ignores it), and no arena bracket

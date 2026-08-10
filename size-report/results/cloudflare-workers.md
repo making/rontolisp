@@ -6,24 +6,25 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`8fc6147`)
+- rontolisp: 0.1.0-SNAPSHOT (`1f2cdf0`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 249,828 | 75,094 | 2.4% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 273,450 | 80,569 | 2.6% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 784,389 | 199,602 | 6.3% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,662,831 | 603,850 | 19.2% |
-| httpbin | `--no-wasi --optimize=size` | 179,709 | 54,432 | 1.7% |
-| httpbin-clack | `--no-wasi --optimize=size` | 265,812 | 79,532 | 2.5% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 290,560 | 86,320 | 2.7% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 801,667 | 204,585 | 6.5% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,839 | 54,519 | 1.7% |
+| hello-clack | `--no-wasi --optimize=size` | 248,587 | 75,733 | 2.4% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 272,208 | 81,138 | 2.6% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 783,140 | 200,451 | 6.4% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,662,844 | 608,198 | 19.3% |
+| httpbin | `--no-wasi --optimize=size` | 179,709 | 54,932 | 1.7% |
+| httpbin-clack | `--no-wasi --optimize=size` | 264,565 | 79,895 | 2.5% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 289,312 | 86,207 | 2.7% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 800,425 | 205,533 | 6.5% |
+| httpbin-ningle | `--no-wasi --optimize=size` | 2,668,937 | 610,036 | 19.4% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,839 | 55,031 | 1.7% |
 
 The component row is the core module alone. Reached through `jco transpile`
-a Worker also imports the generated JavaScript: **97,702 B** of it.
+a Worker also imports the generated JavaScript: **195,405 B** of it.
 
 ## What is measured
 
@@ -39,5 +40,15 @@ tiny-routes Workers rebuilt against the full `tiny-routes` system instead of
 compressed on the free plan, so the table reports raw and gzipped sizes and the
 share of that limit. What a framework costs there is module size and isolate
 startup, not per-request time.
+
+**The routing library is not what the ningle rows measure.** Both of them are an
+order of magnitude above their tiny-routes neighbours, and almost none of that
+is ningle or its router myway: ningle reads every request through the
+`lack-request` chain -- `http-body`, `fast-http`, `smart-buffer`,
+`circular-streams`, `yason`, `trivial-mimes`, `quri` -- which tiny-routes never
+touches because its request IS the Clack environment plist. There is also no
+lite row to pair them with, the way the tiny-routes rows have one: myway
+compiles every rule to a cl-ppcre scanner, so the regex engine is genuinely
+reachable and the tree-shaker is right to keep it.
 
 What each compiler flag does: [`wasm-flags.md`](wasm-flags.md#flags).

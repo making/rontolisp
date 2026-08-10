@@ -669,6 +669,40 @@ examples:
         - '\"path\":\"/status/teapot\"'
         - '"status":404'
         - '[["content-type","text/plain; charset=utf-8"]]'
+  - path: cloudflare-workers/httpbin-ningle/check.lisp
+    backends: [interpreter, jvm, wasm]
+    note: >-
+      loads worker.lisp -- httpbin-clack's endpoints in ningle's model, and
+      deliberately NOT its code: what this pins is the four ningle mechanisms
+      the file is written on, each of which the tiny-routes case cannot reach.
+      Routes assigned in a LOOP (`setf` on the application object, so the five
+      echo endpoints and their five :ANY fallbacks are one dolist), a controller
+      that returns a STRING and says the rest by mutating ningle:*response*
+      (status and headers, never the Clack triple), a request that arrives
+      DECODED so one controller serves every method -- the query string as
+      `args` and the parsed body as `form`, both the lack-request chain's work,
+      for a JSON body and a form-encoded one alike -- and DECLINING as the only
+      thing a ningle route can do, which is why the :ANY rule assigned after
+      each method rule answers the 405, why /status is a `:regexp t` rule whose
+      :captures bind (a non-numeric code matches nothing), and why the 404 comes
+      from an overridden ningle:not-found METHOD. Checked with contains, not
+      equals: JSON key order follows hash-table iteration order, which differs
+      per backend.
+    expect:
+      contains:
+        - '\"path\":\"/get\"'
+        # One key per needle: a needle spanning two keys of one object would
+        # depend on their order.
+        - '\"a\":\"1\"'
+        - '\"b\":\"two\"'
+        - '\"form\":{\"name\":\"rontolisp\"}'
+        - '\"form\":{\"name\":\"lisp\"}'
+        - '\"allowed\":\"POST\"'
+        - '\"path\":\"/anything\"'
+        - '"status":418'
+        - '\"path\":\"/status/teapot\"'
+        - '"status":404'
+        - '[["content-type","text/plain; charset=utf-8"]]'
 
   # --- size-report/: the two programs the cross-language size table measures.
   # They live outside examples/ because they exist to be measured rather than

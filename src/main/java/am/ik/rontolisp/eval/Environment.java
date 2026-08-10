@@ -3842,6 +3842,35 @@ public final class Environment implements Scope {
 					streams.put(handle, new BufferedReader(new StringReader(str.value())));
 					return new LispInteger(handle);
 				}));
+		// The public spelling. CL's lambda list is (string &optional start end); the
+		// bounded form is the stream over that subsequence, which is what the compile
+		// paths expand it to as well.
+		env.defineFunction(LispNames.MAKE_STRING_INPUT_STREAM,
+				new LispFunction(LispNames.MAKE_STRING_INPUT_STREAM, args -> {
+					if (args.isEmpty() || args.size() > 3) {
+						throw new LispEvalException(
+								LispNames.MAKE_STRING_INPUT_STREAM + " expects 1 to 3 arguments, got " + args.size());
+					}
+					if (!(args.get(0) instanceof LispString str)) {
+						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM + " expects a string");
+					}
+					String text = str.value();
+					// Bounds are CHARACTER positions (code points), not UTF-16 code units
+					// -- subseq's idiom, and the same one the compile paths get for free
+					// by expanding through subseq.
+					int cpLen = text.codePointCount(0, text.length());
+					int start = args.size() > 1 ? requireIndex(LispNames.MAKE_STRING_INPUT_STREAM, args.get(1)) : 0;
+					int end = (args.size() > 2 && !(args.get(2) instanceof LispNil))
+							? requireIndex(LispNames.MAKE_STRING_INPUT_STREAM, args.get(2)) : cpLen;
+					if (start < 0 || end > cpLen || start > end) {
+						throw new LispEvalException(LispNames.MAKE_STRING_INPUT_STREAM + ": invalid bounds " + start
+								+ ", " + end + " for string of length " + cpLen);
+					}
+					String bounded = text.substring(text.offsetByCodePoints(0, start), text.offsetByCodePoints(0, end));
+					long handle = nextStreamHandle.getAndIncrement();
+					streams.put(handle, new BufferedReader(new StringReader(bounded)));
+					return new LispInteger(handle);
+				}));
 		// Lite: with no component streams a broadcast stream is a discarding sink -- a
 		// fresh string output stream nobody ever reads. A CALL with components never
 		// reaches here (LispEvaluator expands it, like the compile paths, into the Gray

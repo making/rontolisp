@@ -3245,6 +3245,14 @@ public final class LispNames {
 	public static final String MAKE_STRING_OUTPUT_STREAM = "MAKE-STRING-OUTPUT-STREAM";
 
 	/**
+	 * The {@code make-string-input-stream} built-in function: a character input stream
+	 * over a string, the public spelling of {@link #MAKE_STRING_INPUT_STREAM_INTERNAL}.
+	 * CL's lambda list is {@code (string &optional start end)}, and the bounded form is
+	 * the stream over that subsequence.
+	 */
+	public static final String MAKE_STRING_INPUT_STREAM = "MAKE-STRING-INPUT-STREAM";
+
+	/**
 	 * The {@code get-output-stream-string} built-in function: the string a
 	 * {@code make-string-output-stream} stream has accumulated so far, CLEARING the
 	 * stream so the next call answers only what was written after this one.

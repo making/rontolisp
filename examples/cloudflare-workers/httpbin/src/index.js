@@ -1,16 +1,9 @@
 // index.js -- the whole Worker: Request -> JSON -> Lisp -> JSON -> Response.
 //
-// This file is BYTE-IDENTICAL in ../../httpbin, ../../httpbin-clack and
-// ../../httpbin-tiny-routes, and that is the readable proof that the
-// directories differ only in how the Lisp half is written. All speak the same
-// JSON envelope, and on the other side of it sits a Clack application; what
-// differs is only what builds the Clack environment from the envelope --
-// thirty hand-written lines in ../worker.lisp in httpbin, the built-in Clack
-// handler backend that `clackup` installs in the other two (:rontolisp
-// compiled --no-wasi, or :reactor -- the same shared machinery).
-// None of it is visible from JavaScript.
-//
-//   diff ../../httpbin/src/index.js ../../httpbin-clack/src/index.js   # no output
+// BYTE-IDENTICAL in every httpbin-* directory that drives the module directly
+// (httpbin-component has its own generated glue instead), and that is the
+// point: how the Lisp half is written is not visible from JavaScript. A new
+// sibling copies this file rather than editing it.
 //
 // The envelope is documented in ../../httpbin/README.md; two of its fields are
 // easy to get wrong, and requestToJson below says which.
