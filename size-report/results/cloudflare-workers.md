@@ -5,21 +5,21 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 Method and how to read the numbers: [../README.md](../README.md).
 
 - measured: 2026-08-10
-- rontolisp: 0.1.0-SNAPSHOT (`bc2fd794`)
+- rontolisp: 0.1.0-SNAPSHOT (`a15a0ac`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 249,828 | 76,068 | 2.4% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 273,450 | 81,442 | 2.6% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 784,389 | 200,807 | 6.4% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,662,831 | 608,230 | 19.3% |
-| httpbin | `--no-wasi --optimize=size` | 179,709 | 54,932 | 1.7% |
-| httpbin-clack | `--no-wasi --optimize=size` | 265,812 | 80,234 | 2.6% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 290,560 | 86,512 | 2.8% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 801,667 | 205,839 | 6.5% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,839 | 55,031 | 1.7% |
+| hello-clack | `--no-wasi --optimize=size` | 249,828 | 75,094 | 2.4% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 273,450 | 80,569 | 2.6% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 784,389 | 199,602 | 6.3% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,662,831 | 603,850 | 19.2% |
+| httpbin | `--no-wasi --optimize=size` | 179,709 | 54,432 | 1.7% |
+| httpbin-clack | `--no-wasi --optimize=size` | 265,812 | 79,532 | 2.5% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 290,560 | 86,320 | 2.7% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 801,667 | 204,585 | 6.5% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 179,839 | 54,519 | 1.7% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **97,702 B** of it.

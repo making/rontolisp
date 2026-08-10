@@ -1,8 +1,8 @@
 {
   "generated": "2026-08-10",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "bc2fd794",
-  "wasmtime": "wasmtime 47.0.3 (5554cc1a6 2026-07-31)",
+  "commit": "a15a0ac",
+  "wasmtime": "wasmtime 47.0.2 (90fed3c6a 2026-07-21)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"","bytes":124230},
     {"family":"wasm","name":"hello_world_optimize","flags":"--optimize","bytes":518},
@@ -15,15 +15,15 @@
     {"family":"wasm","name":"pi_approx_component","flags":"--component --optimize=size","bytes":3908},
     {"family":"wasm","name":"pi_approx_nogc","flags":"--no-gc --optimize=size","bytes":1042},
     {"family":"workers","name":"hello","flags":"--no-gc --optimize","bytes":563,"gzip":428},
-    {"family":"workers","name":"hello-clack","flags":"--no-wasi --optimize=size","bytes":249828,"gzip":76068},
-    {"family":"workers","name":"hello-tiny-routes","flags":"--no-wasi --optimize=size","bytes":273450,"gzip":81442},
-    {"family":"workers","name":"hello-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":784389,"gzip":200807},
-    {"family":"workers","name":"hello-ningle","flags":"--no-wasi --optimize=size","bytes":2662831,"gzip":608230},
-    {"family":"workers","name":"httpbin","flags":"--no-wasi --optimize=size","bytes":179709,"gzip":54932},
-    {"family":"workers","name":"httpbin-clack","flags":"--no-wasi --optimize=size","bytes":265812,"gzip":80234},
-    {"family":"workers","name":"httpbin-tiny-routes","flags":"--no-wasi --optimize=size","bytes":290560,"gzip":86512},
-    {"family":"workers","name":"httpbin-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":801667,"gzip":205839},
-    {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":179839,"gzip":55031},
+    {"family":"workers","name":"hello-clack","flags":"--no-wasi --optimize=size","bytes":249828,"gzip":75094},
+    {"family":"workers","name":"hello-tiny-routes","flags":"--no-wasi --optimize=size","bytes":273450,"gzip":80569},
+    {"family":"workers","name":"hello-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":784389,"gzip":199602},
+    {"family":"workers","name":"hello-ningle","flags":"--no-wasi --optimize=size","bytes":2662831,"gzip":603850},
+    {"family":"workers","name":"httpbin","flags":"--no-wasi --optimize=size","bytes":179709,"gzip":54432},
+    {"family":"workers","name":"httpbin-clack","flags":"--no-wasi --optimize=size","bytes":265812,"gzip":79532},
+    {"family":"workers","name":"httpbin-tiny-routes","flags":"--no-wasi --optimize=size","bytes":290560,"gzip":86320},
+    {"family":"workers","name":"httpbin-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":801667,"gzip":204585},
+    {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":179839,"gzip":54519},
     {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":97702}
   ]
 }
