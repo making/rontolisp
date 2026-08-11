@@ -5,7 +5,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
@@ -27,13 +26,9 @@ final class JvmMapcarCompiler {
 			throw new UnsupportedOperationException(LispNames.MAPCAR
 					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
 		}
-		ctx.indirectCallArities.add(nLists);
-
-		// Compile function expression
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
-		int funcSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(funcSlot);
+		// Compile the function designator: a literal one is called directly, anything
+		// else goes through the arity dispatcher.
+		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(1), nLists, ctx, className);
 
 		// Compile each list expression, guarding it is a list.
 		List<Integer> listSlots = new ArrayList<>();
@@ -74,20 +69,12 @@ final class JvmMapcarCompiler {
 			ctx.emitU2(0);
 		}
 
-		// Push func and car of each list for the dispatch call
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(funcSlot);
+		// Call the function with the car of each list
+		List<Runnable> cars = new ArrayList<>();
 		for (int listSlot : listSlots) {
-			// car(list) = ((Object[]) list)[0]
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			cars.add(() -> emitCar(ctx, listSlot));
 		}
-		// Call _invoke_<nLists>(func, car...)
-		JvmFunctionCallCompiler.emitDispatchCall(nLists, ctx, className);
+		call.emitCall(ctx, className, cars);
 
 		// Create new cons: new Object[2] {mapped, null}
 		int mappedSlot = ctx.allocTemp();
@@ -150,6 +137,16 @@ final class JvmMapcarCompiler {
 		ctx.emit(Opcode.CHECKCAST);
 		ctx.emitU2(ctx.objectArrayClass.index());
 		ctx.emit(Opcode.ICONST_1);
+		ctx.emit(Opcode.AALOAD);
+	}
+
+	// car(list) = ((Object[]) list)[0]
+	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(slot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
 		ctx.emit(Opcode.AALOAD);
 	}
 

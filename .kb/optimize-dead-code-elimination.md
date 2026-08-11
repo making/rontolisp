@@ -817,6 +817,92 @@ One refinement was tried and REJECTED on measurement, and its lesson is now bake
 
 Tests: `componentCoreIsTreeShakenUnderOptimize` (shrinkage + a scalar and a string-returning export invoked under wasmtime, i.e. the canonical-ABI helpers survived) and `optimizedServeComponentStillServesUnderWasmtimeServe` (a shaken serve component actually answers a request), both in `WasmLispCompilerIntegrationTest`; `FormatRendererTest.theFunctionDesignatorArmIsInjectedOnlyForAProgramThatSpellsTheDirective` for the renderer half.
 
+### A designator the compiler can READ never enters `valueFuncIds` (todo-323, 2026-08-11)
+
+The gate above decides which VALUES get a case. This is the other half: an operator that
+funcalls a function argument no longer MAKES a value out of a designator it can read.
+`Wasm/JvmDesignatorCall` is the one decision -- `compiler.FunctionDesignators.literalName`
+(a literal `#'name` / `'name`, `normalize`d) plus the backend's own registry at the arity
+in hand -- and the six sites that ask it are `funcall`, `mapcar`, `mapc`, `mapcan`,
+`reduce` and `sort` on BOTH compile backends. A resolved site emits the direct call its
+head-position spelling would have emitted; the funcId is never materialized as a closure,
+so it joins neither `valueFuncIds` nor the ladder.
+
+**Why the direct call is the same call.** A ladder case IS that instruction sequence:
+`WasmRuntimeBuilder.buildDispatchBody` pushes the closure's env (null, for a `#'name`
+value), the arguments, and -- for a variadic target -- the surplus arguments linked into
+the rest list, then `call`s; `JvmRuntimeBuilder.renderCase` is the same minus the env,
+which the JVM's defuns do not take. `WasmDesignatorCall.emitCall` reproduces exactly that,
+which is why the two variadic shapes are its only real code: reached at exactly the
+required count it appends the empty rest list, wider than it it evaluates every argument
+into a temp first (left to right, as the dispatching route does) and links the surplus.
+
+**What is deliberately NOT resolved**, all three keeping the dispatcher: a computed
+designator; a name no registry answers (a car/cdr composition that synthesizes a lambda,
+a `--dynamic` deferral); and **an arity the callee cannot take**. That last is the one to
+not "fix": the arity contract of these operators is a RUN-time one, so `(mapcar #'cons
+'(1 2))` must fail where it failed before -- a WASM trap, the ladder's default arm (nil)
+on the JVM -- rather than becoming the compile error the head position would give. On WASM the resolution is asked
+BEFORE the dispatch ceiling check (`WasmFunctionCallCompiler.compileFuncall`), because a
+ceiling on the dispatchers cannot bind a call that uses none.
+
+Lisp-2 shadowing needs no handling here: `flet`/`labels` rewrite both `(f x)` and `#'f`
+into their binding VARIABLE before any backend sees the form (`.kb/flet-labels.md`), so a
+surviving `(function name)` names the global by construction.
+
+Measured on the `zlib` rows, each module still gunzipping the fixture byte for byte:
+
+| zlib row | before | after |
+| --- | --- | ---: |
+| (no flag) | 342,942 | 341,789 (-0.3%) |
+| `--optimize` | 162,340 | 158,708 (**-2.2%**) |
+| `--optimize=size` | 130,658 | 127,026 (**-2.8%**) |
+| `--component --optimize=size` | 135,316 | 131,677 (-2.7%) |
+| the JVM class, `--optimize` | 202,708 | 196,914 (**-2.9%**) |
+| the JVM class, no flag | 370,492 | 372,223 (+0.5%) |
+
+The last row is the honest cost and it is only there: a variadic callee reached wider than
+its required count links the rest list AT the call site now, where the ladder case used to
+hold that code once for every caller. It is a trade the tracked configurations take
+happily, and `--optimize` is where it pays back.
+
+What moves the bytes is NOT the callee -- a mapped function is called from the site either
+way -- but what the ladder stops fanning out to. `STRING=` (2,449 B in the zlib probe) is
+the shape: `expandRuntimeFindPackage` emits `(assoc key '(...) :test #'string=)` on a path
+this program never runs, and the live arity-2 ladder kept it anyway. Reading the designator
+turns that into a direct call FROM DEAD CODE, and dead code shakes. 137 -> 136 of 498
+defuns dispatchable, 111 -> 105 funcIds materialized as values
+(`-Drontolisp.debug.dispatchgate=true`).
+
+**The lever this does NOT reach, measured and declined: a designator BOUND to a temp.**
+`LispMacroExpander.expandMap` binds `(let ((__map_fn #'identity)) ... (funcall __map_fn
+...))`, and the family lowered by `expandMapFamily` (`maplist`/`mapcon`/`mapl`) does the
+same, so a literal there is a value again. Leaving the literal AT the funcall site instead
+of binding it was tried: **75 bytes** on the zlib rows, against two real costs -- the
+interpreter would then evaluate the designator once per element instead of once, and a
+designator naming an UNDEFINED function would stop signalling when the sequence is empty
+(the loop never runs). Re-evaluation trigger: the win belongs to a general
+propagation-and-drop of a let binding whose init is a literal designator and whose every
+use is a funcall head, done in the backends where the use sites are already known -- not
+to a rewrite per expander. Recorded as `.todo/328`.
+
+Pins: `WasmTreeShakerTest.aLiteralDesignatorSiteBuysNoLadderCase` and
+`JvmClassShakerTest.aLiteralDesignatorSiteBuysNoDispatchCase` -- the same paired
+difference on each backend, a literal `mapcar` designator against the same designator
+behind a variable, where the ladder's absence is what drops a function the program only
+SPELLS. Behaviorally `WasmLispCompilerIntegrationTest.literalFunctionDesignatorsCompileAndRun`
+/ `JvmLispCompilerTest.compileAndRunLiteralFunctionDesignators` (both variadic shapes, both
+routes answering alike), `compileAndRunLiteralDesignatorOfTheWrongArityKeepsTheDispatcher`
+for the declined arity, and the four-backend ci-spec case
+`literal-function-designators-answer-like-computed-ones`.
+
+**A gate test's scaffolding is affected, and silently.** Five of the tests above used
+`(print (funcall 'f))` purely to keep a ladder emitted at all; that spelling is now a
+direct call, so the ladder disappeared and their probes had nothing left to keep -- one
+turned red (`aFramedSpellingWithoutABuilderDoesNotHoldARow`) and the paired-count ones
+would have gone vacuously green. They now funcall through a VARIABLE. Any future test
+about what the ladders keep alive owes the same care.
+
 ## What ROUTING costs a clack module: cl-ppcre, measured and decided (todo-295, 2026-08-08)
 
 Adding tiny-routes to a Clack reactor nearly triples the module, and the extra is

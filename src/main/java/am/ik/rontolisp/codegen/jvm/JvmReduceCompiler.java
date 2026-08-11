@@ -5,7 +5,6 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
@@ -22,15 +21,11 @@ final class JvmReduceCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(2);
-
 		boolean withInit = hasInitialValue(args);
 
-		// Compile function expression
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
-		int funcSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(funcSlot);
+		// Compile the function designator: a literal one is called directly, anything
+		// else goes through the arity-2 dispatcher.
+		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(1), 2, ctx, className);
 
 		int accSlot = ctx.allocTemp();
 		int listSlot = ctx.allocTemp();
@@ -82,19 +77,18 @@ final class JvmReduceCompiler {
 		ctx.emitU2(0);
 
 		// acc = func(acc, car(list))
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(funcSlot);
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(accSlot);
-		// car(list) = ((Object[]) list)[0]
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(listSlot);
-		ctx.emit(Opcode.CHECKCAST);
-		ctx.emitU2(ctx.objectArrayClass.index());
-		ctx.emit(Opcode.ICONST_0);
-		ctx.emit(Opcode.AALOAD);
-		// Call _invoke_2(func, acc, car)
-		JvmFunctionCallCompiler.emitDispatchCall(2, ctx, className);
+		call.emitCall(ctx, className, List.of(() -> {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(accSlot);
+		}, () -> {
+			// car(list) = ((Object[]) list)[0]
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(listSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_0);
+			ctx.emit(Opcode.AALOAD);
+		}));
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(accSlot);
 

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -7,7 +8,6 @@ import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
@@ -34,14 +34,17 @@ final class JvmFunctionCallCompiler {
 	 * Compiles the {@code funcall} built-in.
 	 */
 	static void compileFuncall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		List<LispVal> args = cons.toList();
-		int arity = args.size() - 2;
-		ctx.indirectCallArities.add(arity);
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
-		for (int i = 2; i < args.size(); i++) {
-			JvmExprCompiler.compileExpr(args.get(i), ctx, className);
+		List<LispVal> parts = cons.toList();
+		int arity = parts.size() - 2;
+		// A literal designator is called directly, anything else goes through the arity
+		// dispatcher.
+		JvmDesignatorCall call = JvmDesignatorCall.prepare(parts.get(1), arity, ctx, className);
+		List<Runnable> args = new ArrayList<>();
+		for (int i = 2; i < parts.size(); i++) {
+			LispVal arg = parts.get(i);
+			args.add(() -> JvmExprCompiler.compileExpr(arg, ctx, className));
 		}
-		emitDispatchCall(arity, ctx, className);
+		call.emitCall(ctx, className, args);
 	}
 
 	/**

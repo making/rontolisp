@@ -115,6 +115,17 @@ unchecked `FUNC_DISPATCH_BASE + nLists` they used to compute silently addressed
 the NEXT runtime helper and emitted a module that does not validate. They are in
 `widestDispatchArity` for that reason, so eleven lists now compiles and runs.
 
+**A site that uses no dispatcher is outside all of this.** A literal `#'name` /
+`'name` designator naming a function of a compatible arity is emitted as a
+direct call (`WasmDesignatorCall`,
+`.kb/optimize-dead-code-elimination.md`), so neither the ceiling nor the arity
+registration applies to it -- `WasmFunctionCallCompiler.compileFuncall` asks for
+the direct call BEFORE the ceiling check, and `mapDispatchFuncIndex` is not
+called at all. What still reaches the wide path is what always did: a COMPUTED
+designator, and any site the SPREAD pre-pass has already rewritten into `apply`
+(it runs on the AST, before either backend resolves a designator, so a literal
+one wide enough to be spread goes through `_apply` like any other).
+
 ## Ordering the passes depend on
 
 The spread pass runs BEFORE the apply-runtime scan

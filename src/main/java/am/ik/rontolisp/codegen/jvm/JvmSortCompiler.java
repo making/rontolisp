@@ -3,7 +3,6 @@ package am.ik.rontolisp.codegen.jvm;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
@@ -20,18 +19,16 @@ final class JvmSortCompiler {
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(2);
 
-		// Compile list, then predicate (left-to-right evaluation order).
+		// Compile list, then predicate (left-to-right evaluation order). A literal
+		// predicate is called directly, anything else goes through the arity-2
+		// dispatcher.
 		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 		int listSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(listSlot);
 
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(2)), ctx, className);
-		int predSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(predSlot);
+		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(2), 2, ctx, className);
 
 		int iSlot = ctx.allocTemp();
 		int jSlot = ctx.allocTemp();
@@ -64,12 +61,8 @@ final class JvmSortCompiler {
 		ctx.emit(Opcode.IFNULL);
 		ctx.emitU2(0);
 
-		// if (_invoke_2(pred, car(j), car(i)) != nil) swap car(i) and car(j)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(predSlot);
-		emitCar(ctx, jSlot);
-		emitCar(ctx, iSlot);
-		JvmFunctionCallCompiler.emitDispatchCall(2, ctx, className);
+		// if (pred(car(j), car(i)) != nil) swap car(i) and car(j)
+		call.emitCall(ctx, className, List.of(() -> emitCar(ctx, jSlot), () -> emitCar(ctx, iSlot)));
 		int noSwapBranch = ctx.code.size();
 		ctx.emit(Opcode.IFNULL);
 		ctx.emitU2(0);

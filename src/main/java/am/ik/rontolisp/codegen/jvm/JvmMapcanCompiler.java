@@ -5,7 +5,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
@@ -27,13 +26,9 @@ final class JvmMapcanCompiler {
 			throw new UnsupportedOperationException(LispNames.MAPCAN
 					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
 		}
-		ctx.indirectCallArities.add(nLists);
-
-		// Compile function expression
-		JvmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx, className);
-		int funcSlot = ctx.allocTemp();
-		ctx.emit(Opcode.ASTORE);
-		ctx.emit(funcSlot);
+		// Compile the function designator: a literal one is called directly, anything
+		// else goes through the arity dispatcher.
+		JvmDesignatorCall call = JvmDesignatorCall.prepare(args.get(1), nLists, ctx, className);
 
 		// Compile each list expression, guarding it is a list. mapcan operates on lists;
 		// a
@@ -68,19 +63,12 @@ final class JvmMapcanCompiler {
 			ctx.emitU2(0);
 		}
 
-		// mapped = _invoke_<nLists>(func, car(list)...)
-		ctx.emit(Opcode.ALOAD);
-		ctx.emit(funcSlot);
+		// mapped = func(car(list)...)
+		List<Runnable> cars = new ArrayList<>();
 		for (int listSlot : listSlots) {
-			// car(list) = ((Object[]) list)[0]
-			ctx.emit(Opcode.ALOAD);
-			ctx.emit(listSlot);
-			ctx.emit(Opcode.CHECKCAST);
-			ctx.emitU2(ctx.objectArrayClass.index());
-			ctx.emit(Opcode.ICONST_0);
-			ctx.emit(Opcode.AALOAD);
+			cars.add(() -> emitCar(ctx, listSlot));
 		}
-		JvmFunctionCallCompiler.emitDispatchCall(nLists, ctx, className);
+		call.emitCall(ctx, className, cars);
 		int mappedSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(mappedSlot);
@@ -120,6 +108,16 @@ final class JvmMapcanCompiler {
 		}
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(resultSlot);
+	}
+
+	// car(list) = ((Object[]) list)[0]
+	private static void emitCar(JvmLispCompiler.Ctx ctx, int slot) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(slot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ICONST_0);
+		ctx.emit(Opcode.AALOAD);
 	}
 
 }

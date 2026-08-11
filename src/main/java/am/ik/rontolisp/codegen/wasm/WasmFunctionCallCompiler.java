@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.wasm;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import am.ik.rontolisp.LispCons;
@@ -34,6 +35,18 @@ final class WasmFunctionCallCompiler {
 	static void compileFuncall(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2; // (funcall f arg0 ...) -> arity = num_args
+		List<Runnable> args = new ArrayList<>();
+		for (int i = 2; i < parts.size(); i++) {
+			LispVal arg = parts.get(i);
+			args.add(() -> WasmExprCompiler.compileExpr(arg, ctx));
+		}
+		// A literal designator is called directly, whatever the arity: the ceiling below
+		// is the DISPATCHERS' and no dispatcher is involved.
+		WasmDesignatorCall direct = WasmDesignatorCall.direct(parts.get(1), arity, ctx);
+		if (direct != null) {
+			direct.emitCall(ctx, args);
+			return;
+		}
 		if (arity > ctx.callArityCeiling) {
 			// The dispatch functions occupy a FIXED index range (FUNC_DISPATCH_BASE +
 			// 0..MAX_CALLABLE_ARITY) plus the extra tier this module sized from its own
@@ -53,9 +66,7 @@ final class WasmFunctionCallCompiler {
 		// Push funcval
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(parts.get(1)), ctx);
 		// Push args
-		for (int i = 2; i < parts.size(); i++) {
-			WasmExprCompiler.compileExpr(parts.get(i), ctx);
-		}
+		args.forEach(Runnable::run);
 		// Call dispatch
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);

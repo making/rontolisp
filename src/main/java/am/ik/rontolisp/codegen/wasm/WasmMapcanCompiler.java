@@ -6,7 +6,6 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -28,13 +27,10 @@ final class WasmMapcanCompiler {
 			throw new UnsupportedOperationException(LispNames.MAPCAN
 					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
 		}
-		int dispatchFuncIdx = WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPCAN, nLists, ctx);
-
-		// Compile function expression
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
-		int funcSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(funcSlot);
+		// Compile the function designator: a literal one is called directly, anything
+		// else goes through the arity dispatcher.
+		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(1), nLists,
+				() -> WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPCAN, nLists, ctx), ctx);
 
 		// Compile each list expression; mapcan operates on lists, so a non-list (e.g. a
 		// string) traps. The slots double as the cursors -- only the concatenation is
@@ -72,21 +68,12 @@ final class WasmMapcanCompiler {
 			ctx.writer.write(Instruction.BR_IF, 1); // break to $exit
 		}
 
-		// mapped = dispatch_<nLists>(func, car(list)...)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(funcSlot);
+		// mapped = func(car(list)...)
+		List<Runnable> cars = new ArrayList<>();
 		for (int listSlot : listSlots) {
-			// car(list)
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(listSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-			ctx.writer.writeUnsignedLeb128(0); // car
+			cars.add(() -> emitCar(ctx, listSlot));
 		}
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
+		call.emitCall(ctx, cars);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(mappedSlot);
 
@@ -121,6 +108,16 @@ final class WasmMapcanCompiler {
 		// Result
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(resultSlot);
+	}
+
+	private static void emitCar(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0); // car
 	}
 
 }

@@ -1936,6 +1936,45 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun("(print (funcall #'mapl #'car '(1 2)))")).isEqualTo("(1 2)");
 	}
 
+	// A designator the compiler can READ is called directly by funcall / the map family /
+	// reduce / sort instead of through the arity dispatcher (JvmDesignatorCall). Every
+	// answer here has to be the one the dispatching route gives, including the shapes the
+	// direct call has to build itself: a variadic callee reached at exactly its required
+	// count (the empty rest list) and wider than it (the surplus linked into one).
+	@Test
+	void compileAndRunLiteralFunctionDesignators() throws Exception {
+		String defs = "(defun dbl (x) (* x 2)) (defun addall (&rest xs) (reduce #'+ xs :initial-value 0)) ";
+		assertThat(compileAndRun(defs + "(print (mapcar #'dbl '(1 2 3)))")).isEqualTo("(2 4 6)");
+		assertThat(compileAndRun(defs + "(print (mapcar 'dbl '(1 2 3)))")).isEqualTo("(2 4 6)");
+		assertThat(compileAndRun(defs + "(print (mapcar #'addall '(1 2) '(10 20)))")).isEqualTo("(11 22)");
+		assertThat(compileAndRun(defs + "(print (mapcar #'addall '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(defs + "(print (mapc #'dbl '(1 2)))")).isEqualTo("(1 2)");
+		assertThat(compileAndRun(defs + "(print (mapcan #'list '(1 2 3)))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(defs + "(print (reduce #'+ '(1 2 3 4)))")).isEqualTo("10");
+		assertThat(compileAndRun(defs + "(print (reduce #'addall '(1 2 3) :initial-value 10))")).isEqualTo("16");
+		assertThat(compileAndRun(defs + "(print (sort (list 3 1 2) #'<))")).isEqualTo("(1 2 3)");
+		assertThat(compileAndRun(defs + "(print (funcall #'dbl 21))")).isEqualTo("42");
+		assertThat(compileAndRun(defs + "(print (funcall #'addall 1 2 3))")).isEqualTo("6");
+		assertThat(compileAndRun(defs + "(print (funcall #'addall))")).isEqualTo("0");
+		// The same designator through a variable keeps the dispatching route, and both
+		// routes answer alike.
+		assertThat(compileAndRun(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2 3))))")).isEqualTo("(2 4 6)");
+		assertThat(compileAndRun(defs + "(let ((f #'addall)) (print (funcall f 1 2 3)))")).isEqualTo("6");
+	}
+
+	// An arity the callee cannot take is NOT a compile error at these sites: the arity
+	// contract of funcall and the map family is a RUN-time one, so such a site keeps the
+	// dispatcher and behaves exactly as the computed-designator spelling of it does --
+	// which on this backend means the ladder's default arm, nil.
+	@Test
+	void compileAndRunLiteralDesignatorOfTheWrongArityKeepsTheDispatcher() throws Exception {
+		String defs = "(defun dbl (x) (* x 2)) ";
+		assertThat(compileAndRun(defs + "(print (funcall #'dbl 1 2))"))
+			.isEqualTo(compileAndRun(defs + "(let ((f #'dbl)) (print (funcall f 1 2)))"));
+		assertThat(compileAndRun("(print (mapcar #'cons '(1 2)))"))
+			.isEqualTo(compileAndRun("(let ((f #'cons)) (print (mapcar f '(1 2))))"));
+	}
+
 	@Test
 	void compileAndRunMapIntoList() throws Exception {
 		assertThat(compileAndRun("(print (map-into (list 0 0 0 0) #'+ '(1 2 3) '(10 20 30 40)))"))

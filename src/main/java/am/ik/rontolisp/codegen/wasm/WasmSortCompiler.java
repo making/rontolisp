@@ -4,7 +4,6 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 
 /**
@@ -20,19 +19,19 @@ final class WasmSortCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(2);
-		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + 2;
 
-		// Compile list, then predicate (left-to-right evaluation order).
+		// Compile list, then predicate (left-to-right evaluation order). A literal
+		// predicate is called directly, anything else goes through the arity-2
+		// dispatcher.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int listSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(listSlot);
 
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(2)), ctx);
-		int predSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(predSlot);
+		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(2), 2, () -> {
+			ctx.indirectCallArities.add(2);
+			return WasmLispCompiler.FUNC_DISPATCH_BASE + 2;
+		}, ctx);
 
 		int iSlot = ctx.allocTemp();
 		int jSlot = ctx.allocTemp();
@@ -73,13 +72,8 @@ final class WasmSortCompiler {
 		ctx.writer.write(Instruction.I32_EQZ);
 		ctx.writer.write(Instruction.BR_IF, 1); // exit to $inner
 
-		// if truthy(dispatch_2(pred, car(j), car(i))) swap car(i) and car(j)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(predSlot);
-		emitCar(ctx, jSlot);
-		emitCar(ctx, iSlot);
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
+		// if truthy(pred(car(j), car(i))) swap car(i) and car(j)
+		call.emitCall(ctx, List.of(() -> emitCar(ctx, jSlot), () -> emitCar(ctx, iSlot)));
 		ctx.writer.write(Instruction.REF_IS_NULL);
 		ctx.writer.write(Instruction.I32_EQZ); // 1 when the predicate result is truthy
 		ctx.writer.write(Instruction.IF, 0x40);

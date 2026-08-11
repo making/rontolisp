@@ -8277,3 +8277,33 @@ cases:
       34
       51
       NIL
+  - name: literal-function-designators-answer-like-computed-ones
+    source: |
+      ;; A designator the compiler can READ is called directly instead of through
+      ;; the arity dispatcher; the same designator behind a variable keeps the
+      ;; dispatcher. Both routes have to answer alike on every backend, including
+      ;; a variadic callee reached at exactly its required count and wider than it.
+      (defun desig-dbl (x) (* x 2))
+      (defun desig-all (&rest xs) (reduce (function +) xs :initial-value 0))
+      (print (mapcar (function desig-dbl) '(1 2 3)))
+      (print (mapcar 'desig-dbl '(1 2 3)))
+      (print (mapcar (function desig-all) '(1 2) '(10 20)))
+      (print (mapcar (function desig-all) '(1 2)))
+      (print (mapc (function desig-dbl) '(1 2)))
+      (print (mapcan (function list) '(1 2 3)))
+      (print (reduce (function +) '(1 2 3 4)))
+      (print (sort (list 3 1 2) (function <)))
+      (print (funcall (function desig-all) 1 2 3))
+      (let ((f (function desig-dbl)) (g (function desig-all)))
+        (print (list (mapcar f '(1 2 3)) (funcall g 1 2 3))))
+    expected: |
+      (2 4 6)
+      (2 4 6)
+      (11 22)
+      (1 2)
+      (1 2)
+      (1 2 3)
+      10
+      (1 2 3)
+      6
+      ((2 4 6) 6)

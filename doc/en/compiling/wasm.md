@@ -117,6 +117,15 @@ accessors a `defstruct` or `define-condition` generates — are emitted once, wi
 every call redirected to the shared body. Only the code is shared: each function
 keeps its own identity, so `(eq #'f #'g)` stays `NIL`.
 
+Naming the function outright helps here. `(mapcar #'double xs)`, `(reduce #'+ xs)`,
+`(sort xs #'<)` and `(funcall #'double x)` compile to the same direct call
+`(double x)` does, rather than making `double` a first-class value and calling it
+through the runtime's per-arity dispatcher. Two things follow: the call itself is
+cheaper, and a function nothing else reaches stops being reachable through that
+dispatcher — which is often what keeps whole swathes of a library in the artifact.
+Pass the same function as a computed value (a variable, a `lambda`, a designator
+built at run time) and the dispatcher comes back, as it must.
+
 That floor does not depend on how the program spells the write. A constant text
 is rendered at compile time and emitted as bytes, so `print`, `princ` + `terpri`,
 `write-string`, `write-line` and `(format t "Hello, ~a!~%" "World")` all leave the

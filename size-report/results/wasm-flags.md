@@ -10,20 +10,20 @@ How the report is built and run: [../README.md](../README.md).
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | (none) | core (command) | Preview 1 | 126,683 |
+| hello_world | (none) | core (command) | Preview 1 | 126,653 |
 | hello_world | `--optimize` | core (command) | Preview 1 | 518 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 518 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,672 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
-| pi_approx | (none) | core (command) | Preview 1 | 126,883 |
+| pi_approx | (none) | core (command) | Preview 1 | 126,853 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 342,942 |
-| zlib | `--optimize` | core (command) | Preview 1 | 162,340 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 130,658 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 135,316 |
+| zlib | (none) | core (command) | Preview 1 | 341,789 |
+| zlib | `--optimize` | core (command) | Preview 1 | 158,708 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 127,026 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 131,677 |
 
 ## What is measured
 
@@ -113,6 +113,17 @@ per group and redirects every reference, worth -4.9% on that row (137,430 ->
 130,658) and about the same on the other two optimized `zlib` rows. Only code is
 shared, not identity: `(eq #'f #'g)` stays `NIL` for two identically-bodied
 functions.
+
+**A function named at a call site is not a function value.** `(mapcar #'f xs)`,
+`(reduce #'+ xs)`, `(sort xs #'<)` and `(funcall #'f x)` compile to the direct
+call the head-position spelling gives, not to a value handed to the per-arity
+dispatcher (`.kb/optimize-dead-code-elimination.md`). What that buys the `zlib`
+rows is not the callee -- it is called either way -- but the dispatcher's fan-out:
+every case in a live dispatcher keeps its target reachable, so a function whose
+only real caller sits on a dead path used to ride along. `STRING=` (2,449 B),
+reached only by the runtime `find-package` lookup this program never runs, was
+one such. Worth -2.2% at `--optimize` (162,340 -> 158,708) and -2.8% at
+`--optimize=size` (130,658 -> 127,026), with every Worker row moving with it.
 
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the

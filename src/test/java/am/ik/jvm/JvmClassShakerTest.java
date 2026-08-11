@@ -142,8 +142,10 @@ class JvmClassShakerTest {
 		// shakeable. Only the data evaluators (eval/read/read-from-string/load) still
 		// keep every function dispatchable -- their names arrive from OUTSIDE.
 		// The funcall keeps the dispatch machinery emitted at all -- without one there
-		// are no dispatch methods and UNUSED is dropped whatever the gate decides.
-		String prefix = "(defun unused (x) (car x)) (defun f () 1) (print (funcall 'f)) ";
+		// are no dispatch methods and UNUSED is dropped whatever the gate decides. It
+		// goes through a VARIABLE on purpose: a designator the compiler can read is a
+		// direct call and emits no dispatcher either (JvmDesignatorCall).
+		String prefix = "(defun unused (x) (car x)) (defun f () 1) (let ((g #'f)) (print (funcall g))) ";
 		byte[] gated = compile(prefix + "(print (eq (intern (string-upcase \"post\") :keyword) :post))",
 				OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(gated)).contains("F").doesNotContain("UNUSED");
@@ -170,7 +172,10 @@ class JvmClassShakerTest {
 		// member name merely collides with an unrelated string literal stays call-only
 		// and shakes; the same program plus an intern of something unrelated widens the
 		// probes again, and the row keeps the defun alive.
-		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall 'f)) (print \"RUNTASK\") ";
+		// The funcall goes through a VARIABLE so a dispatcher exists to keep RUNTASK at
+		// all (a designator the compiler can read is a direct call, JvmDesignatorCall).
+		String collide = "(defun runtask () 2) (defun f () 1) (let ((g #'f)) (print (funcall g))) "
+				+ "(print \"RUNTASK\") ";
 		byte[] builderless = compile(collide, OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(builderless)).contains("F").doesNotContain("RUNTASK");
 		assertThat(run(builderless)).isEqualTo("1\n\"RUNTASK\"");
@@ -181,6 +186,23 @@ class JvmClassShakerTest {
 		byte[] keywordShape = compile(collide + "(print (eq (intern (string-upcase \"zz\") :keyword) :zz))",
 				OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(keywordShape)).doesNotContain("RUNTASK");
+	}
+
+	@Test
+	void aLiteralDesignatorSiteBuysNoDispatchCase() throws Exception {
+		// (mapcar #'dbl ...) is the direct invokestatic its head-position spelling would
+		// have been, so DBL never becomes a function VALUE and the arity-1 dispatcher is
+		// not emitted at all -- which is what stops the ladder from keeping HALVE, a
+		// function nothing calls that is dispatchable only because the program spells its
+		// name. Route the same designator through a variable and both come back.
+		String defs = "(defun dbl (x) (* x 2)) (defun halve (x) (/ x 2)) ";
+		String tail = " (print 'halve)";
+		byte[] literal = compile(defs + "(print (mapcar #'dbl '(1 2)))" + tail, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(literal)).contains("DBL").doesNotContain("HALVE", "_invoke_1");
+		byte[] computed = compile(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))))" + tail, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(computed)).contains("DBL", "HALVE", "_invoke_1");
+		// Same answer either way -- this only moves where the call is decided.
+		assertThat(run(literal)).isEqualTo(run(computed));
 	}
 
 	@Test

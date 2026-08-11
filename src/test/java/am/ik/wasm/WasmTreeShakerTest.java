@@ -150,8 +150,10 @@ class WasmTreeShakerTest {
 		// Only the data evaluators (eval/read/read-from-string/load) still keep every
 		// function dispatchable, because their names arrive from OUTSIDE the module.
 		// The funcall keeps the dispatch machinery emitted at all -- without one there
-		// are no ladders and every module would be tiny whatever the gate decides.
-		String funcall = "(defun f () 1) (print (funcall 'f)) ";
+		// are no ladders and every module would be tiny whatever the gate decides. It
+		// goes through a VARIABLE on purpose: a designator the compiler can read is a
+		// direct call and emits no ladder either (WasmDesignatorCall).
+		String funcall = "(defun f () 1) (let ((g #'f)) (print (funcall g))) ";
 		String keyword = funcall + "(print (eq (intern (string-upcase \"post\") :keyword) :post))";
 		String forging = funcall + "(print (intern (string-upcase \"post\")))";
 		String reading = funcall + "(print (eval (read)))";
@@ -175,8 +177,11 @@ class WasmTreeShakerTest {
 		// keeps no registry row and shakes out. Pinned as a paired difference: the
 		// colliding literal and a non-colliding one must yield the same function
 		// count (an unconditional framed probe would keep RUNTASK alive in the first).
-		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall 'f)) (print \"RUNTASK\")";
-		String noCollide = "(defun runtask () 2) (defun f () 1) (print (funcall 'f)) (print \"RUNTASX\")";
+		// The funcall goes through a VARIABLE so a ladder exists to keep RUNTASK at all
+		// (a designator the compiler can read is a direct call, WasmDesignatorCall).
+		String base = "(defun runtask () 2) (defun f () 1) (let ((g #'f)) (print (funcall g))) ";
+		String collide = base + "(print \"RUNTASK\")";
+		String noCollide = base + "(print \"RUNTASX\")";
 		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
 		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
 		Module.parse(colliding).assertWellFormed();
@@ -197,13 +202,31 @@ class WasmTreeShakerTest {
 		String keyword = " (print (eq (intern (string-upcase \"post\") :keyword) :post))";
 		String slots = " (defstruct pt (x 0)) (print (slot-value (make-pt :x 7) 'x))";
 		for (String shape : new String[] { keyword, slots }) {
-			String base = "(defun runtask () 2) (defun f () 1) (print (funcall 'f))" + shape;
+			String base = "(defun runtask () 2) (defun f () 1) (let ((g #'f)) (print (funcall g)))" + shape;
 			byte[] colliding = compile(base + " (print \"RUNTASK\")", false, OptimizeLevel.DEFAULT);
 			byte[] plain = compile(base + " (print \"RUNTASX\")", false, OptimizeLevel.DEFAULT);
 			Module.parse(colliding).assertWellFormed();
 			assertThat(Module.parse(colliding).definedFunctionCount()).describedAs(shape)
 				.isEqualTo(Module.parse(plain).definedFunctionCount());
 		}
+	}
+
+	@Test
+	void aLiteralDesignatorSiteBuysNoLadderCase() {
+		// (mapcar #'dbl ...) is the direct call its head-position spelling would have
+		// been, so DBL never becomes a function VALUE and the arity-1 ladder is left the
+		// unreachable stub -- which is what stops it keeping HALVE, a function nothing
+		// calls that is dispatchable only because the program spells its name. Route the
+		// same designator through a variable and the ladder comes back with both.
+		String defs = "(defun dbl (x) (* x 2)) (defun halve (x) (/ x 2)) ";
+		String tail = " (print 'halve)";
+		byte[] literal = compile(defs + "(print (mapcar #'dbl '(1 2)))" + tail, false, OptimizeLevel.DEFAULT);
+		byte[] computed = compile(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))))" + tail, false,
+				OptimizeLevel.DEFAULT);
+		Module.parse(literal).assertWellFormed();
+		Module.parse(computed).assertWellFormed();
+		assertThat(Module.parse(literal).definedFunctionCount())
+			.isLessThan(Module.parse(computed).definedFunctionCount());
 	}
 
 	@Test

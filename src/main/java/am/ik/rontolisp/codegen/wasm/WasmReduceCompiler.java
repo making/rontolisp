@@ -6,7 +6,6 @@ import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.compiler.FunctionDesignators;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -23,16 +22,14 @@ final class WasmReduceCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
-		ctx.indirectCallArities.add(2);
-		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + 2;
-
 		boolean withInit = hasInitialValue(args);
 
-		// Compile function expression
-		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);
-		int funcSlot = ctx.allocTemp();
-		ctx.writer.write(Instruction.SET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(funcSlot);
+		// Compile the function designator: a literal one is called directly, anything
+		// else goes through the arity-2 dispatcher.
+		WasmDesignatorCall call = WasmDesignatorCall.prepare(args.get(1), 2, () -> {
+			ctx.indirectCallArities.add(2);
+			return WasmLispCompiler.FUNC_DISPATCH_BASE + 2;
+		}, ctx);
 
 		int accSlot = ctx.allocTemp();
 		int listSlot = ctx.allocTemp();
@@ -89,21 +86,18 @@ final class WasmReduceCompiler {
 		ctx.writer.write(Instruction.BR_IF, 1); // break to $exit
 
 		// acc = func(acc, car(list))
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(funcSlot);
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(accSlot);
-		// car(list)
-		ctx.writer.write(Instruction.GET_LOCAL);
-		ctx.writer.writeUnsignedLeb128(listSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		ctx.writer.writeUnsignedLeb128(0); // car
-		// Call dispatch_2(func, acc, car)
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(dispatchFuncIdx);
+		call.emitCall(ctx, List.of(() -> {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(accSlot);
+		}, () -> {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(listSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			ctx.writer.writeUnsignedLeb128(0); // car
+		}));
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(accSlot);
 

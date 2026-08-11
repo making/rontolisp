@@ -44,7 +44,12 @@ exactly what shipped until `.todo/218` (see "History" below).
    branches to the exit as soon as ANY cursor is not a cons, pushes one `car` per list
    and calls `_invoke_<nLists>` / `dispatch_<nLists>` (so `ctx.indirectCallArities` must
    be told `nLists`, not 1 -- a stale `1` there is what made a two-list `mapc` trap on
-   WASM). `mapc` keeps its first list in a slot of its own because it is the return
+   WASM). **Unless the designator is one the compiler can READ**: a literal `#'name` /
+   `'name` naming a function that takes `nLists` arguments is called DIRECTLY instead,
+   through `Wasm/JvmDesignatorCall` -- the same decision `funcall`, `reduce` and `sort`
+   make, and the arity is then not registered at all. Why, and what it is deliberately
+   not applied to: `.kb/optimize-dead-code-elimination.md`, "A designator the compiler
+   can READ never enters `valueFuncIds`". `mapc` keeps its first list in a slot of its own because it is the return
    value; `mapcan` walks the list slots directly, since only the concatenation survives.
    The interpreter's counterparts are `LispEvaluator.mapFamilyValues` (the shared walk)
    plus `mapValues`/`mapForEffect`/`mapcanValues` (the three finishers) --
