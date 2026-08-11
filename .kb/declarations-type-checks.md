@@ -139,6 +139,16 @@ A site's kind comes from four sources (`WasmArrayCompiler.arrayKindOfExpr`):
   (`WasmArrayCompiler.nonStringArefStore`, intercepted at both
   `WasmExprCompiler` setf sites) -- that branch exists because a string is a
   rank-1 character array, and a pinned non-string kind proves it dead.
+- A `replace` / `fill` site whose DESTINATION is pinned non-string calls the
+  array-arm-only shared runtime instead of the wide one
+  (`WasmArrayCompiler.provesArrayValue`, `.kb/sequence-op-runtimes.md`). Same
+  trust, same failure mode: a false declaration traps in the arm's
+  `%row-major-aset` rather than silently taking the wrong branch. That predicate
+  also answers on a WEAKER fact this file's `Kind` cannot carry -- "an array of
+  some representation", from a `make-array` whose rank is a runtime fact --
+  tracked in `Ctx.arrayLocals` beside `Ctx.declaredArrays`; `initExprKind` must
+  keep refusing those, because it picks an accessor and a wrong rank is a wrong
+  accessor.
 - Independent of declarations: at `--optimize=size` the GENERIC rank-1
   `%aset` now hoists array/index/value into temps once and lets the three
   arms read the slots (`emitHoistedAset1`) -- the legacy shape re-emitted the

@@ -4911,6 +4911,36 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sequenceOpRuntimeArmRouting() throws Exception {
+		// The narrowing gate of .kb/sequence-op-runtimes.md, from both sides IN ONE
+		// PROGRAM: sites whose destination this compile proves to be an array call the
+		// array-arm-only shared runtime, and the list / immutable-string destinations
+		// that must NOT take that arm still answer what they always did. A gate that
+		// over-predicted would trap here rather than answer wrong data, which is why
+		// this runs the module rather than reading it.
+		String source = """
+				(defun sor-copy (n)
+				  (let ((a (make-array (* 2 n) :element-type '(unsigned-byte 8)))
+				        (b (make-array (* 2 n) :element-type '(unsigned-byte 8))))
+				    (fill b 7 :start 1)
+				    (replace a b :start1 1 :end1 3)
+				    (replace a '(1 2) :start1 5)
+				    a))
+				(print (sor-copy 3))
+				(print (replace (list 0 0 0 0) '(1 2) :start1 1))
+				(print (replace "abcdef" "XY" :start1 2))
+				(print (fill (list 1 2 3) 9 :start 1))
+				(print (fill "abcdef" #\\z :start 2 :end 4))
+				""";
+		assertThat(compileAndRun(source)).isEqualTo("""
+				#(0 0 7 0 0 1)
+				(0 1 2 0)
+				"abXYef"
+				(1 9 9)
+				"abzzef\"""");
+	}
+
+	@Test
 	void writeSequenceString() throws Exception {
 		assertThat(compileAndRun("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
 			.isEqualTo("bc");

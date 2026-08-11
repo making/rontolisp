@@ -6,24 +6,24 @@ How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-11
 - rontolisp: 0.1.0-SNAPSHOT (`50dc115`)
-- validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
+- validated on: wasmtime 47.0.2 (90fed3c6a 2026-07-21)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | (none) | core (command) | Preview 1 | 126,653 |
+| hello_world | (none) | core (command) | Preview 1 | 126,057 |
 | hello_world | `--optimize` | core (command) | Preview 1 | 518 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 518 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,672 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
-| pi_approx | (none) | core (command) | Preview 1 | 126,853 |
+| pi_approx | (none) | core (command) | Preview 1 | 126,257 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 322,775 |
-| zlib | `--optimize` | core (command) | Preview 1 | 147,734 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 117,118 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 121,723 |
+| zlib | (none) | core (command) | Preview 1 | 322,183 |
+| zlib | `--optimize` | core (command) | Preview 1 | 137,775 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 109,290 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 113,843 |
 
 ## What is measured
 

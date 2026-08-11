@@ -899,10 +899,16 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx);
 				case LispNames.MAKE_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx);
+				// A site whose DESTINATION is provably an array calls the shared
+				// runtime's array arm directly, skipping the %arrayp dispatch. A program
+				// with no unproven site then leaves the wide one -- the list rewrite and
+				// the string rebuild -- without a caller (.kb/sequence-op-runtimes.md).
 				case LispNames.REPLACE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons, true,
-						ctx.functions.containsKey(LispNames.REPLACE_RUNTIME)), ctx);
-				case LispNames.FILL -> WasmExprCompiler.compileExpr(
-						LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME)), ctx);
+						ctx.functions.containsKey(LispNames.REPLACE_RUNTIME),
+						routesToArrayArm(cons, LispNames.REPLACE_ARRAY_RUNTIME, ctx)), ctx);
+				case LispNames.FILL -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME),
+							routesToArrayArm(cons, LispNames.FILL_ARRAY_RUNTIME, ctx)), ctx);
 				case LispNames.SCHAR_SET ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
 				case LispNames.LOWER_CASE_P ->
@@ -1655,6 +1661,20 @@ final class WasmExprCompiler {
 	 */
 	private static LispCons coercePathArgWhenGated(LispCons cons, int argIndex, WasmLispCompiler.Ctx ctx) {
 		return ctx.instanceTypeIndex >= 0 ? LispMacroExpander.coercePathArg(cons, argIndex) : cons;
+	}
+
+	/**
+	 * Whether a {@code replace} / {@code fill} site may call the named array-arm-only
+	 * shared runtime instead of the wide dispatch: its first argument -- the DESTINATION
+	 * sequence -- must be provably an array, and the program must carry that helper.
+	 * Answering false only costs the site the narrower callee
+	 * ({@code .kb/sequence-op-runtimes.md}).
+	 */
+	private static boolean routesToArrayArm(LispCons cons, String helper, WasmLispCompiler.Ctx ctx) {
+		if (!ctx.functions.containsKey(helper) || !(cons.cdr() instanceof LispCons rest)) {
+			return false;
+		}
+		return WasmArrayCompiler.provesArrayValue(rest.car(), ctx);
 	}
 
 }

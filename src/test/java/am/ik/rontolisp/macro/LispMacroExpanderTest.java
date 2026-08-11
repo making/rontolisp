@@ -398,6 +398,14 @@ class LispMacroExpanderTest {
 			.doesNotContain("%FILL-RUNTIME");
 		assertThat(LispMacroExpander.expandMapInto(mapInto, false).print()).contains("FUNCALL")
 			.doesNotContain("%MAP-INTO-RUNTIME");
+		// A site whose DESTINATION the backend has proved to be an array calls the
+		// array-arm-only helper instead, on the same call-site shape: it skips a %arrayp
+		// test whose answer is already known, and leaves the wide dispatch (the list
+		// rewrite, the immutable-string rebuild) reachable only from a site that needs
+		// it.
+		assertThat(LispMacroExpander.expandReplace(replace, true, true, true).print())
+			.isEqualTo("(%REPLACE-RUNTIME-ARRAY A B I NIL NIL J)");
+		assertThat(LispMacroExpander.expandFill(fill, true, true).print()).isEqualTo("(%FILL-RUNTIME-ARRAY A V I NIL)");
 	}
 
 	@Test
@@ -412,19 +420,48 @@ class LispMacroExpanderTest {
 		// so a name in this shape cannot collide with anything the program can write.
 		assertThat(replace)
 			.startsWith("(SETQ %REPLACE-RUNTIME (LAMBDA (%rpr_1 %rpr_2 %rpr_s1 %rpr_e1 %rpr_s2 %rpr_e2)");
-		// All three destination arms live here: the destructive element store, the list
-		// cons-cell rewrite, and the immutable-string rebuild.
+		// All three destination arms live here: the list cons-cell rewrite, the
+		// immutable-string rebuild, and -- as a CALL, so the two helpers hold one copy
+		// of it between them -- the destructive element store.
 		assertThat(replace).contains("%ARRAYP")
-			.contains("%ROW-MAJOR-ASET")
 			.contains("LISTP")
 			.contains("RPLACA")
 			.contains("(OR %rpr_s1 0)")
-			.contains("CONCATENATE");
+			.contains("CONCATENATE")
+			.contains("(%REPLACE-RUNTIME-ARRAY __rpl_1 __rpl_2 __rpl_s1 __rpl_e1 __rpl_s2 __rpl_e2)")
+			.doesNotContain("%ROW-MAJOR-ASET");
 		assertThat(replace).doesNotContain("(REPLACE ");
+		// The array arm on its own: the same bounds, defaulted the same way (so the wide
+		// helper may hand it either raw or already-defaulted ones), and no dispatch left.
+		String replaceArray = LispMacroExpander.replaceArrayRuntimeWrapper().print();
+		assertThat(replaceArray)
+			.startsWith("(SETQ %REPLACE-RUNTIME-ARRAY (LAMBDA (%rpa_1 %rpa_2 %rpa_s1 %rpa_e1 %rpa_s2 %rpa_e2)");
+		assertThat(replaceArray).contains("%ROW-MAJOR-ASET")
+			.contains("(OR %rpa_s1 0)")
+			.doesNotContain("%ARRAYP")
+			.doesNotContain("RPLACA")
+			.doesNotContain("CONCATENATE")
+			.doesNotContain("(REPLACE ");
+		// A LIST source is walked with a cursor, as the list DESTINATION arm is: an elt
+		// per element re-walks the list head, and elt is a whole representation dispatch
+		// where car is one field read.
+		assertThat(replaceArray).contains("NTHCDR").contains("(CAR __rpl_sc)").doesNotContain("(ELT ");
 		String fill = LispMacroExpander.fillRuntimeWrapper().print();
 		assertThat(fill).startsWith("(SETQ %FILL-RUNTIME (LAMBDA (%flr_s %flr_v %flr_a %flr_b)");
-		assertThat(fill).contains("%ARRAYP").contains("%ROW-MAJOR-ASET").contains("RPLACA").contains("(OR %flr_a 0)");
+		assertThat(fill).contains("%ARRAYP")
+			.contains("RPLACA")
+			.contains("(OR %flr_a 0)")
+			.contains("(%FILL-RUNTIME-ARRAY __fll_s __fll_v __fll_a __fll_b)")
+			.doesNotContain("%ROW-MAJOR-ASET");
 		assertThat(fill).doesNotContain("(FILL ");
+		String fillArray = LispMacroExpander.fillArrayRuntimeWrapper().print();
+		assertThat(fillArray).startsWith("(SETQ %FILL-RUNTIME-ARRAY (LAMBDA (%fla_s %fla_v %fla_a %fla_b)");
+		assertThat(fillArray).contains("%ROW-MAJOR-ASET")
+			.contains("(OR %fla_a 0)")
+			.doesNotContain("%ARRAYP")
+			.doesNotContain("RPLACA")
+			.doesNotContain("CONCATENATE")
+			.doesNotContain("(FILL ");
 		String mapInto = LispMacroExpander.mapIntoRuntimeWrapper(2).print();
 		assertThat(mapInto).startsWith("(SETQ %MAP-INTO-RUNTIME-2 (LAMBDA (%mir_res %mir_fn %mir_s0 %mir_s1)");
 		assertThat(mapInto).contains("FUNCALL").contains("RPLACA");
@@ -437,8 +474,14 @@ class LispMacroExpanderTest {
 		// wrapper body) names, gated apart because the three are independent lowerings
 		// rather than three arms of one runtime dispatch. map-into answers one helper
 		// per source-sequence count in use.
-		assertThat(seqOpHelperNames("(defun f (a b) (replace a b))")).containsExactly("%REPLACE-RUNTIME");
-		assertThat(seqOpHelperNames("(defun f (a) (fill a 0))")).containsExactly("%FILL-RUNTIME");
+		// replace and fill each answer a PAIR: the wide dispatch and the array arm it
+		// calls. Which of them a site can reach is decided per site, long after this
+		// scan, so they travel together and the shaker drops whichever ends up without a
+		// caller.
+		assertThat(seqOpHelperNames("(defun f (a b) (replace a b))")).containsExactly("%REPLACE-RUNTIME",
+				"%REPLACE-RUNTIME-ARRAY");
+		assertThat(seqOpHelperNames("(defun f (a) (fill a 0))")).containsExactly("%FILL-RUNTIME",
+				"%FILL-RUNTIME-ARRAY");
 		assertThat(seqOpHelperNames("(defun f (r x y) (map-into r #'+ x y) (map-into r #'1+ x))"))
 			.containsExactly("%MAP-INTO-RUNTIME-1", "%MAP-INTO-RUNTIME-2");
 		assertThat(seqOpHelperNames("(defun f (l) (car l))")).isEmpty();

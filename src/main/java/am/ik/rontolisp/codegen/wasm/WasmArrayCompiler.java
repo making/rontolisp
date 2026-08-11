@@ -897,6 +897,101 @@ final class WasmArrayCompiler {
 		return null;
 	}
 
+	/**
+	 * Whether an expression PROVABLY evaluates to a value {@code %arrayp} answers true
+	 * for -- never a list, never an immutable string. This is a weaker question than
+	 * {@link #arrayKindOfExpr}: it asks which BRANCH of a representation dispatch a value
+	 * can take, not which accessor to emit, so it is answered for a {@code make-array}
+	 * whose rank (and therefore whose packed-or-general representation) is not known
+	 * until run time.
+	 *
+	 * <p>
+	 * Its consumers are the {@code replace} / {@code fill} sites, which route to the
+	 * array-arm-only shared runtime on it ({@code .kb/sequence-op-runtimes.md}). Three
+	 * sources, and each is one already in use for array emission:
+	 * <ol>
+	 * <li>a pinned non-string representation kind (a declaration, a {@code defstruct}
+	 * slot {@code :type}, a {@code (the ...)} wrap, an initializer this compile chose a
+	 * representation for) -- {@link #arrayKindOfExpr};</li>
+	 * <li>a {@code let} binding registered in {@code Ctx.arrayLocals} because its
+	 * initializer proved this weaker fact and the body never reassigns it;</li>
+	 * <li>a {@code make-array} call right at the site, through
+	 * {@link #makeArrayBuildsArrayValue}.</li>
+	 * </ol>
+	 * A false DECLARATION is undefined behavior in CL and becomes a deterministic trap
+	 * here, exactly as {@code .kb/declarations-type-checks.md} records for the single-arm
+	 * accessors: the array arm's {@code %row-major-aset} casts, and a list or string
+	 * fails that cast.
+	 * @param expr the expression at the sequence position
+	 * @param ctx the compile context
+	 * @return true only when the value cannot be a list or an immutable string
+	 */
+	static boolean provesArrayValue(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (expr instanceof LispSymbol sym && ctx.arrayLocals.contains(sym.name())) {
+			return true;
+		}
+		DeclaredArrayTypes.Kind kind = arrayKindOfExpr(expr, ctx);
+		if (kind != null) {
+			return kind != DeclaredArrayTypes.Kind.STRING;
+		}
+		return makeArrayBuildsArrayValue(expr, ctx);
+	}
+
+	/**
+	 * Whether an expression is a {@code make-array} call that cannot answer a STRING --
+	 * i.e. one whose value {@code %arrayp} is true whatever its rank turns out to be at
+	 * run time, which is what lets this answer where {@link #initExprKind} cannot (that
+	 * one must know the rank, because rank decides packed-or-general).
+	 *
+	 * <p>
+	 * Conservative in three places, each of them a shape {@link #compileMake} can route
+	 * to a string or to a value it is not worth reasoning about: a CHARACTER element type
+	 * (with {@code :initial-contents} it builds a fresh string), an element type that is
+	 * a bare symbol (a VARIABLE holding a designator computed at run time, which can name
+	 * {@code character}) and {@code :displaced-to} (whose target may itself be a string).
+	 * Every other shape -- packed, general, fill-pointered, adjustable, any rank -- is an
+	 * array.
+	 * @param expr the expression at the sequence position
+	 * @param ctx the compile context
+	 * @return true when the call cannot answer anything but an array
+	 */
+	static boolean makeArrayBuildsArrayValue(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)
+				|| !LispNames.MAKE_ARRAY.equals(localName(head.name()))
+				|| ctx.duplicatedDefunNames.contains(head.name())) {
+			return false;
+		}
+		List<LispVal> args = cons.toList();
+		if (args.size() < 2 || args.size() % 2 != 0) {
+			return false;
+		}
+		for (int i = 2; i + 1 < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol key)) {
+				return false;
+			}
+			switch (key.name()) {
+				case LispNames.ELEMENT_TYPE_KEYWORD -> {
+					LispVal raw = args.get(i + 1);
+					if (raw instanceof LispSymbol) {
+						return false;
+					}
+					if (LispMacroExpander
+						.isCharacterElementType(LispMacroExpander.resolveElementTypeAlias(raw, ctx.closRegistry))) {
+						return false;
+					}
+				}
+				case LispNames.INITIAL_ELEMENT_KEYWORD, LispNames.INITIAL_CONTENTS_KEYWORD,
+						LispNames.FILL_POINTER_KEYWORD, LispNames.ADJUSTABLE_KEYWORD -> {
+					// None of these can turn the result into anything but an array.
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 	private static String localName(String name) {
 		int colon = name.lastIndexOf(':');
 		return colon >= 0 ? name.substring(colon + 1) : name;

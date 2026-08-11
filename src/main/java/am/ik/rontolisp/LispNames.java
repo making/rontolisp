@@ -2261,8 +2261,25 @@ public final class LispNames {
 	 */
 	public static final String REPLACE_RUNTIME = "%REPLACE-RUNTIME";
 
+	/**
+	 * The {@code %replace-runtime-array} internal helper: the {@code %arrayp} ARM of
+	 * {@link #REPLACE_RUNTIME} on its own, over the same six parameters. Travels with the
+	 * wide helper, whose array arm is a call to it, so a program carries the copy loop
+	 * once however many of the two it reaches; a site whose destination is PROVABLY an
+	 * array calls it directly and the wide dispatch -- the list rewrite and the
+	 * immutable-string rebuild -- is then reachable only from a caller that needs it. See
+	 * {@code .kb/sequence-op-runtimes.md}.
+	 */
+	public static final String REPLACE_ARRAY_RUNTIME = "%REPLACE-RUNTIME-ARRAY";
+
 	/** The {@code %fill-runtime} internal helper; see {@link #REPLACE_RUNTIME}. */
 	public static final String FILL_RUNTIME = "%FILL-RUNTIME";
+
+	/**
+	 * The {@code %fill-runtime-array} internal helper: the {@code %arrayp} arm of
+	 * {@link #FILL_RUNTIME} on its own; see {@link #REPLACE_ARRAY_RUNTIME}.
+	 */
+	public static final String FILL_ARRAY_RUNTIME = "%FILL-RUNTIME-ARRAY";
 
 	/**
 	 * The {@code %map-into-runtime-<em>n</em>} internal helpers; see

@@ -283,6 +283,33 @@ cases:
       (1 9 9 4 5)
       (5 6)
       (4 5 0)
+  # Both sides of the replace/fill arm-narrowing gate in ONE program
+  # (.kb/sequence-op-runtimes.md). sor-copy's destination is one this compile PROVES
+  # is an array, so the wasm backend routes those sites past the shared runtime's
+  # %arrayp dispatch to its array arm; the list and immutable-string destinations
+  # below must still reach the arms that narrowing removes. A gate that
+  # over-predicted would trap on the wasm backends rather than answer wrong data,
+  # so running the program is the check.
+  - name: sequence-op-runtime-arm-routing
+    source: |
+      (defun sor-copy (n)
+        (let ((sor-a (make-array (* 2 n) :element-type '(unsigned-byte 8)))
+              (sor-b (make-array (* 2 n) :element-type '(unsigned-byte 8))))
+          (fill sor-b 7 :start 1)
+          (replace sor-a sor-b :start1 1 :end1 3)
+          (replace sor-a '(1 2) :start1 5)
+          sor-a))
+      (print (sor-copy 3))
+      (print (replace (list 0 0 0 0) '(1 2) :start1 1))
+      (print (replace "abcdef" "XY" :start1 2))
+      (print (fill (list 1 2 3) 9 :start 1))
+      (print (fill "abcdef" #\z :start 2 :end 4))
+    expected: |
+      #(0 0 7 0 0 1)
+      (0 1 2 0)
+      "abXYef"
+      (1 9 9)
+      "abzzef"
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

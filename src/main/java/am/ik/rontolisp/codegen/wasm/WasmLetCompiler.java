@@ -256,14 +256,28 @@ final class WasmLetCompiler {
 		// needs no such check, it covers assignments too. Shadowed outer entries are
 		// removed whatever the new binding proves. Skipped at top level (the eval mirror
 		// owns those slots) and in async bodies, like the raw locals.
+		// Beside them, the weaker "this name holds an array" fact (ctx.arrayLocals), for
+		// an init that proves the VALUE is an array without proving its representation --
+		// a make-array whose size is computed, whose rank and therefore whose packed-or-
+		// general representation is a runtime fact. It routes replace/fill sites to the
+		// array-arm-only shared runtime (.kb/sequence-op-runtimes.md) and is registered,
+		// shadowed and restored exactly like the kinds.
 		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> savedDeclaredArrays = ctx.declaredArrays;
 		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> newDeclaredArrays = null;
+		Set<String> savedArrayLocals = ctx.arrayLocals;
+		Set<String> newArrayLocals = null;
 		for (String name : letVarNames) {
 			if (savedDeclaredArrays.containsKey(name)) {
 				if (newDeclaredArrays == null) {
 					newDeclaredArrays = new HashMap<>(savedDeclaredArrays);
 				}
 				newDeclaredArrays.remove(name);
+			}
+			if (savedArrayLocals.contains(name)) {
+				if (newArrayLocals == null) {
+					newArrayLocals = new HashSet<>(savedArrayLocals);
+				}
+				newArrayLocals.remove(name);
 			}
 		}
 		if (!ctx.topLevel && !async && ctx.asyncResume == null) {
@@ -304,6 +318,22 @@ final class WasmLetCompiler {
 					}
 					else {
 						additions.remove(name);
+						// No representation, but the init may still prove the value is an
+						// ARRAY. Same never-reassigned condition as the kinds above.
+						if (WasmArrayCompiler.makeArrayBuildsArrayValue(pairList.get(1), ctx)) {
+							if (assignedInBody == null) {
+								assignedInBody = new HashSet<>();
+								for (LispVal bodyForm : bodyExprs) {
+									collectAssignedNames(bodyForm, assignedInBody);
+								}
+							}
+							if (!assignedInBody.contains(name)) {
+								if (newArrayLocals == null) {
+									newArrayLocals = new HashSet<>(savedArrayLocals);
+								}
+								newArrayLocals.add(name);
+							}
+						}
 					}
 				}
 			}
@@ -316,6 +346,9 @@ final class WasmLetCompiler {
 		}
 		if (newDeclaredArrays != null) {
 			ctx.declaredArrays = newDeclaredArrays;
+		}
+		if (newArrayLocals != null) {
+			ctx.arrayLocals = newArrayLocals;
 		}
 
 		// Save and adjust boxedVars for the let body. The set tracks names, so each
@@ -363,6 +396,7 @@ final class WasmLetCompiler {
 		ctx.localIntLambdas = savedLocalLambdas;
 		ctx.rawLocals = savedRawLocals;
 		ctx.declaredArrays = savedDeclaredArrays;
+		ctx.arrayLocals = savedArrayLocals;
 		ctx.nextI64Local = savedNextI64Local;
 	}
 

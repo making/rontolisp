@@ -5960,6 +5960,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declaredArrays = Map.of();
 
 		/**
+		 * Lexical variables in scope that provably hold an ARRAY -- the weaker fact
+		 * {@link #declaredArrays} does not carry, for an initializer that pins the value
+		 * down as an array without pinning its representation ({@code (make-array n
+		 * :element-type '(unsigned-byte 8))} with a COMPUTED {@code n}: an integer
+		 * {@code n} packs, a dimension LIST would not, so the kind is unknown but
+		 * {@code %arrayp} is true either way). Read by
+		 * {@code WasmArrayCompiler.provesArrayValue} to route a {@code replace} /
+		 * {@code fill} site to the array-arm-only shared runtime; scoped exactly like
+		 * {@link #declaredArrays}.
+		 */
+		Set<String> arrayLocals = Set.of();
+
+		/**
 		 * Defun names the program defines MORE than once. A {@code defstruct} accessor's
 		 * slot {@code :type} is only trusted at a call site when the accessor's generated
 		 * body is the one definition the call can reach; a user redefinition of the name

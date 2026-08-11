@@ -1026,6 +1026,47 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aProvenArrayDestinationLeavesTheSharedRuntimesNonArrayArmsWithoutACaller() {
+		// The narrowing gate (.kb/sequence-op-runtimes.md). A replace/fill destination
+		// the compile has PROVED to be an array routes past the wide dispatch to its
+		// array arm, so the list rewrite and the immutable-string rebuild have no caller
+		// left and the shaker drops them: measured 4,445 -> 2,328 bytes for
+		// %REPLACE-RUNTIME and 1,680 -> 727 for %FILL-RUNTIME on the zlib artifact's own
+		// helper bodies.
+		String proven = """
+				(defun sq-work (n)
+				  (let ((a (make-array (* 2 n) :element-type '(unsigned-byte 8)))
+				        (b (make-array (* 2 n) :element-type '(unsigned-byte 8))))
+				    (fill b 7 :start 1)
+				    (replace a b :start1 1)
+				    (aref a 1)))
+				(print (sq-work 4))
+				""";
+		// The same program with the ONE fact the gate rests on taken away: the
+		// destination is a parameter nothing pins down, so both sites keep the wide
+		// dispatch and the module carries its non-array arms.
+		String unproven = """
+				(defun sq-work2 (a b)
+				  (fill b 7 :start 1)
+				  (replace a b :start1 1)
+				  (aref a 1))
+				(print (sq-work2 (make-array 8 :element-type '(unsigned-byte 8))
+				                 (make-array 8 :element-type '(unsigned-byte 8))))
+				""";
+		assertThat(compileForSize(proven).length).isLessThan(compileForSize(unproven).length - 2000);
+		// Under-predicting costs the module bytes and never its correctness -- the wide
+		// helper's own array arm is a call to the same helper. That both arrangements
+		// ANSWER the same thing is pinned by
+		// WasmLispCompilerIntegrationTest.sequenceOpRuntimeArmRouting and the
+		// sequence-op-runtime-arm-routing ci-spec case (all four backends).
+	}
+
+	private static byte[] compileForSize(String source) {
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString(source));
+	}
+
+	@Test
 	void aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher() {
 		// The byte budget behind .kb/wasm-callable-arity.md's derived ceiling. A funcall
 		// past MAX_CALLABLE_ARITY used to be rewritten into apply, and _apply drags in

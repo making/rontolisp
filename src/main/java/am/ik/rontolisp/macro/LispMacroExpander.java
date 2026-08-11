@@ -7047,7 +7047,7 @@ public final class LispMacroExpander {
 	 *   (if (%arrayp __rpl_1)
 	 *       (progn (dotimes (__rpl_k __rpl_n)
 	 *                (%row-major-aset __rpl_1 (+ __rpl_s1 __rpl_k)
-	 *                                 (elt __rpl_2 (+ __rpl_s2 __rpl_k))))
+	 *                                 (aref __rpl_2 (+ __rpl_s2 __rpl_k))))
 	 *              __rpl_1)
 	 *       (if (listp __rpl_1)
 	 *           (do ((__rpl_c (nthcdr __rpl_s1 __rpl_1) (cdr __rpl_c))
@@ -7106,6 +7106,31 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandReplace(LispCons cons, boolean arraysExist, boolean helperPresent) {
+		return expandReplace(cons, arraysExist, helperPresent, false);
+	}
+
+	/**
+	 * Like {@link #expandReplace(LispCons, boolean, boolean)}, but answers a call to the
+	 * NARROW {@link #replaceArrayRuntimeWrapper()} -- the {@code %arrayp} arm alone --
+	 * when the caller has proved this site's DESTINATION is an array and the program
+	 * carries that helper ({@code arrayHelperTarget}).
+	 *
+	 * <p>
+	 * The two helpers answer the same thing for an array destination: the wide one tests
+	 * {@code %arrayp} and then calls the narrow one, so routing here only skips a test
+	 * whose answer the caller already knows. Proving it is the BACKEND's job, on the
+	 * evidence it has at the site ({@code WasmArrayCompiler.provesArrayValue}); a backend
+	 * that cannot prove anything passes false and keeps today's lowering, so the gate
+	 * under-predicting costs the module bytes and never its correctness.
+	 * @param cons the replace expression
+	 * @param arraysExist whether a general array can exist in this program
+	 * @param helperPresent whether the program defines {@code %replace-runtime}
+	 * @param arrayHelperTarget whether this site's destination is a PROVEN array and the
+	 * program defines {@code %replace-runtime-array}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandReplace(LispCons cons, boolean arraysExist, boolean helperPresent,
+			boolean arrayHelperTarget) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || parts.size() % 2 == 0) {
 			throw new IllegalArgumentException(
@@ -7127,11 +7152,12 @@ public final class LispMacroExpander {
 						"replace supports only the literal :start1/:end1/:start2/:end2 keywords");
 			}
 		}
-		if (helperPresent) {
-			return listToCons(List.of(new LispSymbol(LispNames.REPLACE_RUNTIME), parts.get(1), parts.get(2), bounds[0],
-					bounds[1], bounds[2], bounds[3]));
+		if (arrayHelperTarget || helperPresent) {
+			String helper = arrayHelperTarget ? LispNames.REPLACE_ARRAY_RUNTIME : LispNames.REPLACE_RUNTIME;
+			return listToCons(List.of(new LispSymbol(helper), parts.get(1), parts.get(2), bounds[0], bounds[1],
+					bounds[2], bounds[3]));
 		}
-		return replaceDispatch(parts.get(1), parts.get(2), bounds, arraysExist);
+		return replaceDispatch(parts.get(1), parts.get(2), bounds, arraysExist, SeqOpArms.ALL);
 	}
 
 	/**
@@ -7155,19 +7181,62 @@ public final class LispMacroExpander {
 	 * @return the helper's definition, wrapper-shaped
 	 */
 	public static LispVal replaceRuntimeWrapper() {
-		LispSymbol p1 = new LispSymbol("%rpr_1");
-		LispSymbol p2 = new LispSymbol("%rpr_2");
-		LispSymbol[] pb = { new LispSymbol("%rpr_s1"), new LispSymbol("%rpr_e1"), new LispSymbol("%rpr_s2"),
-				new LispSymbol("%rpr_e2") };
-		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
-				listToCons(List.of(p1, p2, pb[0], pb[1], pb[2], pb[3])), replaceDispatch(p1, p2, pb, true)));
-		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.REPLACE_RUNTIME), lambda));
+		return replaceWrapper(LispNames.REPLACE_RUNTIME, "%rpr", SeqOpArms.ALL_CALLING_ARRAY_ARM);
 	}
 
-	// The replace lowering shared by the inline site and the %replace-runtime defun. The
+	/**
+	 * Builds the narrow {@code %replace-runtime-array} defun: the {@code %arrayp} ARM of
+	 * {@link #replaceRuntimeWrapper()} alone, over the same six parameters.
+	 *
+	 * <p>
+	 * <strong>Why a second helper and not a narrowed one.</strong> Which arm a
+	 * {@code replace} site needs is a property of the SITE, not of the program: chipz
+	 * replaces into {@code (unsigned-byte 8)} vectors and nothing else, while the
+	 * {@code #'replace} wrapper body -- generated for every program -- takes whatever it
+	 * is handed. So the two live side by side and the wide one's array arm is a CALL to
+	 * this one: a program carries the copy loop once whichever of them it reaches, and a
+	 * program all of whose sites prove an array destination leaves the wide dispatch
+	 * without a caller, for the tree shaker to drop. See
+	 * {@code .kb/sequence-op-runtimes.md} for the soundness argument the routing rests
+	 * on.
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal replaceArrayRuntimeWrapper() {
+		return replaceWrapper(LispNames.REPLACE_ARRAY_RUNTIME, "%rpa", SeqOpArms.ARRAY_ONLY);
+	}
+
+	// One (setq name (lambda (seq1 seq2 s1 e1 s2 e2) <arms>)) replace helper.
+	private static LispVal replaceWrapper(String name, String paramPrefix, SeqOpArms arms) {
+		LispSymbol p1 = new LispSymbol(paramPrefix + "_1");
+		LispSymbol p2 = new LispSymbol(paramPrefix + "_2");
+		LispSymbol[] pb = { new LispSymbol(paramPrefix + "_s1"), new LispSymbol(paramPrefix + "_e1"),
+				new LispSymbol(paramPrefix + "_s2"), new LispSymbol(paramPrefix + "_e2") };
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(p1, p2, pb[0], pb[1], pb[2], pb[3])), replaceDispatch(p1, p2, pb, true, arms)));
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(name), lambda));
+	}
+
+	/**
+	 * Which representation arms one {@code replace} / {@code fill} lowering spells. The
+	 * arms themselves are the same forms in every case; this only decides which of them
+	 * this body holds, and whether the destructive one is spelled out or called.
+	 */
+	private enum SeqOpArms {
+
+		/** Every arm, spelled out: what a site emits with no shared helper to call. */
+		ALL,
+		/** Every arm, but the destructive one is a call to the array helper. */
+		ALL_CALLING_ARRAY_ARM,
+		/** The destructive arm alone: the array helper's own body. */
+		ARRAY_ONLY
+
+	}
+
+	// The replace lowering shared by the inline site and the %replace-runtime defuns. The
 	// four bounds are the caller's expressions, nil where absent; each is defaulted here
 	// against the let*-bound sequences, so a runtime nil falls back the same way.
-	private static LispVal replaceDispatch(LispVal seq1, LispVal seq2, LispVal[] bounds, boolean arraysExist) {
+	private static LispVal replaceDispatch(LispVal seq1, LispVal seq2, LispVal[] bounds, boolean arraysExist,
+			SeqOpArms arms) {
 		LispSymbol r1 = new LispSymbol("__rpl_1");
 		LispSymbol r2 = new LispSymbol("__rpl_2");
 		// A nil bound keeps its default (a runtime nil through the or-wrapper), as in
@@ -7200,25 +7269,43 @@ public final class LispMacroExpander {
 						List.of(fmtCall(LispNames.OR, fmtCall(LispNames.GE, k, n), callOf(LispNames.NULL, cell)), r1)),
 				fmtCall(LispNames.RPLACA, cell, fmtCall(LispNames.ELT, r2, fmtCall(LispNames.ADD, vs2, k)))));
 		LispVal nonArray = makeIf(callOf(LispNames.LISTP, r1), listLoop, functional);
-		if (!arraysExist) {
+		if (!arraysExist && arms != SeqOpArms.ARRAY_ONLY) {
 			// No array can exist, so seq1 is a string or a list and the destructive
 			// element loop is unreachable; emitting it would just drag the array
-			// runtime into every class through the injected #'replace wrapper.
+			// runtime into every class through the injected #'replace wrapper. (The
+			// array helper is not built at all on a backend that answers false here.)
 			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, nonArray));
 		}
 		// The source reads with aref when seq2 is an array (a string included: aref
-		// reads a string's character on every backend) and elt only for a list. The
-		// aref shape lets the wasm backend's fused store read a packed integer
-		// vector's element raw -- an elt call boxed every byte of a
+		// reads a string's character on every backend), and the listp branch walks the
+		// source's cons cells with a cursor -- the same shape the list DESTINATION arm
+		// uses, and for the same reason: an elt per element re-walks the list head
+		// (O(n^2)), and elt is a whole representation dispatch where car is one field
+		// read. The aref shape lets the wasm backend's fused store read a packed
+		// integer vector's element raw -- an elt call boxed every byte of a
 		// vector-to-vector copy (ironclad's copy-digest, ~7% of the PBKDF2 profile).
-		LispVal eltLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
-				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
-						fmtCall(LispNames.ELT, r2, fmtCall(LispNames.ADD, vs2, k)))));
+		LispSymbol srcCell = new LispSymbol("__rpl_sc");
+		LispVal srcStep = listToCons(
+				List.of(srcCell, fmtCall(LispNames.NTHCDR, vs2, r2), callOf(LispNames.CDR, srcCell)));
+		LispVal srcKStep = listToCons(List.of(k, new LispInteger(0), fmtCall(LispNames.ADD, k, new LispInteger(1))));
+		LispVal listSourceLoop = listToCons(List.of(new LispSymbol(LispNames.DO),
+				listToCons(List.of(srcStep, srcKStep)),
+				listToCons(List.of(fmtCall(LispNames.OR, fmtCall(LispNames.GE, k, n), callOf(LispNames.NULL, srcCell)),
+						r1)),
+				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k), callOf(LispNames.CAR, srcCell))));
 		LispVal arefLoop = listToCons(List.of(new LispSymbol(LispNames.DOTIMES), listToCons(List.of(k, n)),
 				fmtCall(LispNames.ROW_MAJOR_ASET, r1, fmtCall(LispNames.ADD, vs1, k),
 						fmtCall(LispNames.AREF, r2, fmtCall(LispNames.ADD, vs2, k)))));
-		LispVal copyLoop = makeIf(callOf(LispNames.LISTP, r2), eltLoop, arefLoop);
+		LispVal copyLoop = makeIf(callOf(LispNames.LISTP, r2), listSourceLoop, arefLoop);
 		LispVal mutating = makeProgn(List.of(copyLoop, r1));
+		if (arms == SeqOpArms.ARRAY_ONLY) {
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, mutating));
+		}
+		if (arms == SeqOpArms.ALL_CALLING_ARRAY_ARM) {
+			// The bounds are already defaulted here, so the callee's own or-wrappers see
+			// integers and default nothing again.
+			mutating = fmtCall(LispNames.REPLACE_ARRAY_RUNTIME, r1, r2, vs1, ve1, vs2, ve2);
+		}
 		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, r1), mutating, nonArray);
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
 	}
@@ -7269,6 +7356,22 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandFill(LispCons cons, boolean helperPresent) {
+		return expandFill(cons, helperPresent, false);
+	}
+
+	/**
+	 * Like {@link #expandFill(LispCons, boolean)}, but answers a call to the NARROW
+	 * {@link #fillArrayRuntimeWrapper()} -- the {@code %arrayp} arm alone -- when the
+	 * caller has proved this site's SEQUENCE is an array and the program carries that
+	 * helper; see {@link #expandReplace(LispCons, boolean, boolean, boolean)}, whose
+	 * routing rule this follows exactly.
+	 * @param cons the fill expression
+	 * @param helperPresent whether the program defines {@code %fill-runtime}
+	 * @param arrayHelperTarget whether this site's sequence is a PROVEN array and the
+	 * program defines {@code %fill-runtime-array}
+	 * @return the expanded expression
+	 */
+	public static LispVal expandFill(LispCons cons, boolean helperPresent, boolean arrayHelperTarget) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || parts.size() % 2 == 0) {
 			throw new IllegalArgumentException("fill expects (fill sequence item [:start s] [:end e])");
@@ -7286,11 +7389,11 @@ public final class LispMacroExpander {
 					throw new UnsupportedOperationException("fill supports only the literal :start/:end keywords");
 			}
 		}
-		if (helperPresent) {
-			return listToCons(
-					List.of(new LispSymbol(LispNames.FILL_RUNTIME), parts.get(1), parts.get(2), startArg, endArg));
+		if (arrayHelperTarget || helperPresent) {
+			String helper = arrayHelperTarget ? LispNames.FILL_ARRAY_RUNTIME : LispNames.FILL_RUNTIME;
+			return listToCons(List.of(new LispSymbol(helper), parts.get(1), parts.get(2), startArg, endArg));
 		}
-		return fillDispatch(parts.get(1), parts.get(2), startArg, endArg);
+		return fillDispatch(parts.get(1), parts.get(2), startArg, endArg, SeqOpArms.ALL);
 	}
 
 	/**
@@ -7302,18 +7405,34 @@ public final class LispMacroExpander {
 	 * @return the helper's definition, wrapper-shaped
 	 */
 	public static LispVal fillRuntimeWrapper() {
-		LispSymbol seq = new LispSymbol("%flr_s");
-		LispSymbol item = new LispSymbol("%flr_v");
-		LispSymbol start = new LispSymbol("%flr_a");
-		LispSymbol end = new LispSymbol("%flr_b");
-		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
-				listToCons(List.of(seq, item, start, end)), fillDispatch(seq, item, start, end)));
-		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.FILL_RUNTIME), lambda));
+		return fillWrapper(LispNames.FILL_RUNTIME, "%flr", SeqOpArms.ALL_CALLING_ARRAY_ARM);
 	}
 
-	// The fill lowering shared by the inline site and the %fill-runtime defun; the two
+	/**
+	 * Builds the narrow {@code %fill-runtime-array} defun: the {@code %arrayp} arm of
+	 * {@link #fillRuntimeWrapper()} alone, over the same four parameters. Same shape and
+	 * same reason as {@link #replaceArrayRuntimeWrapper()}.
+	 * @return the helper's definition, wrapper-shaped
+	 */
+	public static LispVal fillArrayRuntimeWrapper() {
+		return fillWrapper(LispNames.FILL_ARRAY_RUNTIME, "%fla", SeqOpArms.ARRAY_ONLY);
+	}
+
+	// One (setq name (lambda (seq item start end) <arms>)) fill helper.
+	private static LispVal fillWrapper(String name, String paramPrefix, SeqOpArms arms) {
+		LispSymbol seq = new LispSymbol(paramPrefix + "_s");
+		LispSymbol item = new LispSymbol(paramPrefix + "_v");
+		LispSymbol start = new LispSymbol(paramPrefix + "_a");
+		LispSymbol end = new LispSymbol(paramPrefix + "_b");
+		LispVal lambda = listToCons(List.of(new LispSymbol(LispNames.LAMBDA),
+				listToCons(List.of(seq, item, start, end)), fillDispatch(seq, item, start, end, arms)));
+		return listToCons(List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(name), lambda));
+	}
+
+	// The fill lowering shared by the inline site and the %fill-runtime defuns; the two
 	// bounds are the caller's expressions, nil where absent.
-	private static LispVal fillDispatch(LispVal sequence, LispVal value, LispVal startArg, LispVal endArg) {
+	private static LispVal fillDispatch(LispVal sequence, LispVal value, LispVal startArg, LispVal endArg,
+			SeqOpArms arms) {
 		LispSymbol seq = new LispSymbol("__fll_s");
 		LispSymbol item = new LispSymbol("__fll_v");
 		LispVal start = boundOrDefault(startArg, new LispInteger(0));
@@ -7343,6 +7462,14 @@ public final class LispMacroExpander {
 		LispVal functional = fmtCall(LispNames.CONCATENATE, quoteOf("STRING"),
 				fmtCall(LispNames.SUBSEQ, seq, new LispInteger(0), from), filler,
 				fmtCall(LispNames.SUBSEQ, seq, to, fmtCall(LispNames.LENGTH, seq)));
+		if (arms == SeqOpArms.ARRAY_ONLY) {
+			return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, arrayLoop));
+		}
+		if (arms == SeqOpArms.ALL_CALLING_ARRAY_ARM) {
+			// The bounds are already defaulted here, so the callee's own or-wrappers see
+			// integers and default nothing again.
+			arrayLoop = fmtCall(LispNames.FILL_ARRAY_RUNTIME, seq, item, from, to);
+		}
 		LispVal body = makeIf(callOf(LispNames.ARRAYP_INTERNAL, seq), arrayLoop,
 				makeIf(callOf(LispNames.LISTP, seq), listLoop, functional));
 		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR), bindings, body));
@@ -8470,6 +8597,14 @@ public final class LispMacroExpander {
 	 * {@link #mapIntoRuntimeWrapper(int)}).
 	 *
 	 * <p>
+	 * {@code replace} and {@code fill} each answer a PAIR -- the wide dispatch and the
+	 * {@code %arrayp}-arm-only helper it calls ({@link #replaceArrayRuntimeWrapper()},
+	 * {@link #fillArrayRuntimeWrapper()}). They travel together because which of them a
+	 * site can reach is decided per site, at compile time, long after this scan: the pair
+	 * costs one call more than the single wide helper did, and a program whose sites all
+	 * prove an array destination leaves the wide one without a caller for the shaker.
+	 *
+	 * <p>
 	 * A backend asks this of its program AND of the builtin wrappers it is about to
 	 * inject, and injects the answer in that same loop -- the same reason as
 	 * {@link #subseqRuntimeWrapper()}: a {@code #'replace} / {@code #'fill} wrapper body
@@ -8484,9 +8619,11 @@ public final class LispMacroExpander {
 		List<LispVal> helpers = new java.util.ArrayList<>();
 		if (namesSymbolIn(LispNames.REPLACE, forms)) {
 			helpers.add(replaceRuntimeWrapper());
+			helpers.add(replaceArrayRuntimeWrapper());
 		}
 		if (namesSymbolIn(LispNames.FILL, forms)) {
 			helpers.add(fillRuntimeWrapper());
+			helpers.add(fillArrayRuntimeWrapper());
 		}
 		java.util.Set<Integer> arities = new java.util.TreeSet<>();
 		for (List<LispVal> group : forms) {
@@ -8508,7 +8645,9 @@ public final class LispMacroExpander {
 	public static java.util.Set<String> sequenceOpRuntimeNames() {
 		java.util.Set<String> names = new java.util.HashSet<>();
 		names.add(LispNames.REPLACE_RUNTIME);
+		names.add(LispNames.REPLACE_ARRAY_RUNTIME);
 		names.add(LispNames.FILL_RUNTIME);
+		names.add(LispNames.FILL_ARRAY_RUNTIME);
 		for (int n = 0; n <= MAX_MAP_INTO_SOURCES; n++) {
 			names.add(LispNames.mapIntoRuntime(n));
 		}
