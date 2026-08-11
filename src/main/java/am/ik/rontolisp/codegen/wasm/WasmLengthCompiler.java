@@ -27,6 +27,18 @@ final class WasmLengthCompiler {
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		// A declared packed integer vector's length is its array.len, with the same
+		// trapping ref.cast as the declared accessors (.kb/declarations-type-checks.md)
+		// -- rank-1 by construction, no fill pointer possible, so no dispatch is needed.
+		am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = WasmArrayCompiler.arrayKindOfExpr(args.get(1), ctx);
+		if (kind != null && kind.packedIntWidth() != 0) {
+			WasmExprCompiler.compileExpr(args.get(1), ctx);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			ctx.writer.writeHeapType(WasmArrayCompiler.intArrType(kind.packedIntWidth()));
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			return;
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);

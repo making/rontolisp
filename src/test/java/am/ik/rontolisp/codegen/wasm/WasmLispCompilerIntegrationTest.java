@@ -1187,6 +1187,99 @@ class WasmLispCompilerIntegrationTest {
 				#(4000000000 4000000000 4000000007)""");
 	}
 
+	@Test
+	void declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults() throws Exception {
+		// Declaration-driven array emission (.kb/declarations-type-checks.md): a rank-1
+		// aref/%aset/length site whose array representation is pinned down -- by a
+		// (declare (type ...)) on a variable or parameter, a defstruct slot :type read
+		// through its accessor (inherited slots included), an all-&optional deftype
+		// alias, or a binding initializer this compile chose a representation for --
+		// emits that ONE representation's accessor behind a trapping ref.cast instead of
+		// the inline dispatch chain. The shapes below cover every source and every kind
+		// (packed u8/u16/u32 with mask/readback edges past the i31 range, packed float,
+		// general, string), plus shapes that must STAY generic and still answer right (a
+		// rank-unknown declaration at a rank-2 site). Both optimize levels must agree
+		// with each other and with the interpreter/JVM text.
+		String program = """
+				(deftype octet-vec (&optional length)
+				  (let ((length (or length '*)))
+				    `(simple-array (unsigned-byte 8) (,length))))
+				(defstruct chunk
+				  (data (make-array 4 :element-type '(unsigned-byte 8)) :type octet-vec)
+				  (bits 0 :type (unsigned-byte 32)))
+				(defstruct (wide-chunk (:include chunk))
+				  (tab (make-array 3 :element-type '(unsigned-byte 16))
+				       :type (simple-array (unsigned-byte 16) (3))))
+				(defun fill-declared (buf n)
+				  (declare (type (simple-array (unsigned-byte 8) (*)) buf)
+				           (type (unsigned-byte 16) n))
+				  (dotimes (i n buf)
+				    (setf (aref buf i) (+ i 254))))
+				(defun read-both (w i)
+				  (declare (type wide-chunk w))
+				  (+ (aref (chunk-data w) i) (aref (wide-chunk-tab w) i)))
+				(defun sum-simple (v)
+				  (declare (type simple-vector v))
+				  (+ (svref v 0) (aref v 1)))
+				(defun first-char (s)
+				  (declare (type simple-string s))
+				  (aref s 0))
+				(let ((u32 (make-array 3 :element-type '(unsigned-byte 32)))
+				      (f (make-array 2 :element-type 'double-float :initial-element 0.5d0))
+				      (gen (make-array 2)))
+				  (setf (aref u32 0) 4000000000)
+				  (setf (aref u32 1) (aref u32 0))
+				  (setf (aref u32 2) 4294967296)
+				  (print (aref u32 0))
+				  (print (aref u32 1))
+				  (print (aref u32 2))
+				  (print (length u32))
+				  (setf (aref f 1) 2.25)
+				  (print (aref f 1))
+				  (setf (aref gen 0) 'a)
+				  (print (aref gen 0))
+				  (print (fill-declared (make-array 4 :element-type '(unsigned-byte 8)) 4))
+				  (let ((w (make-wide-chunk)))
+				    (setf (aref (chunk-data w) 1) 7)
+				    (setf (aref (wide-chunk-tab w) 1) 65535)
+				    (print (read-both w 1))
+				    (print (aref (wide-chunk-data w) 1)))
+				  (print (sum-simple (vector 30 12)))
+				  (print (first-char "xyz"))
+				  (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'octet-vec))
+				  (let ((acc 0))
+				    (do ((c (make-array 3 :element-type '(unsigned-byte 16)))
+				         (i 0 (1+ i)))
+				        ((>= i 3) nil)
+				      (setf (aref c i) (* i 300))
+				      (setq acc (+ acc (aref c i))))
+				    (print acc))
+				  (let ((maybe (make-array '(2 2))))
+				    (declare (type (simple-array t *) maybe))
+				    (setf (aref maybe 0 0) 5)
+				    (print (aref maybe 0 0))))
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		byte[] fast = new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT).compile(parsed);
+		byte[] small = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE).compile(parsed);
+		assertThat(runModule(small, "decl-size.wasm")).isEqualTo(runModule(fast, "decl-fast.wasm"));
+		assertThat(runModule(fast, "decl-fast.wasm")).isEqualTo("""
+				4000000000
+				4000000000
+				0
+				3
+				2.25
+				A
+				#(254 255 0 1)
+				65542
+				7
+				42
+				#\\x
+				T
+				900
+				5""");
+	}
+
 	// Runs an already-compiled module. Used where the point of the test is to compare
 	// two compilations of the SAME program, so the module name has to differ per run.
 	private static String runModule(byte[] wasmBytes, String name) throws Exception {

@@ -771,6 +771,18 @@ public final class ClosRegistry {
 	private final Map<String, LispVal> deftypes = new LinkedHashMap<>();
 
 	/**
+	 * {@code defstruct} accessor name (normalized) to the declared {@code :type} of the
+	 * slot it reads, and struct name (normalized) to its per-slot {@code :type} table
+	 * (what an {@code :include} child inherits). Registered by
+	 * {@code LispMacroExpander.expandDefstruct}; consulted by declaration-driven array
+	 * emission ({@code am.ik.rontolisp.compiler.DeclaredArrayTypes}). Purely advisory
+	 * side tables -- the {@link LispLayout} itself stays type-free.
+	 */
+	private final Map<String, LispVal> structAccessorTypes = new LinkedHashMap<>();
+
+	private final Map<String, Map<String, LispVal>> structSlotTypes = new LinkedHashMap<>();
+
+	/**
 	 * Alias name (normalized) to the CANONICAL name of the class it names -- what
 	 * {@code (setf (find-class 'alias) (find-class 'target))} registers. The target is
 	 * resolved to its canonical spelling at registration time, so the map is one level
@@ -887,6 +899,57 @@ public final class ClosRegistry {
 	 */
 	public java.util.Set<String> deftypeNames() {
 		return java.util.Collections.unmodifiableSet(this.deftypes.keySet());
+	}
+
+	/**
+	 * Registers a {@code defstruct} slot's declared {@code :type} under its accessor
+	 * name, and the same specifier in the per-struct slot-type table (which is what an
+	 * {@code :include} child reads to inherit it). The specifier is stored as written --
+	 * whether it proves a representation is the consumer's judgment
+	 * ({@code am.ik.rontolisp.compiler.DeclaredArrayTypes}); a slot with no {@code :type}
+	 * registers nothing.
+	 * @param structName the struct name as spelled in the defstruct
+	 * @param slotBaseName the package-stripped slot name
+	 * @param accessorName the generated accessor's name, as the expansion spells it
+	 * @param typeSpec the slot's declared {@code :type} specifier
+	 */
+	public void registerStructSlotType(String structName, String slotBaseName, String accessorName, LispVal typeSpec) {
+		this.structSlotTypes.computeIfAbsent(normalize(structName), k -> new LinkedHashMap<>())
+			.put(slotBaseName, typeSpec);
+		this.structAccessorTypes.put(normalize(accessorName), typeSpec);
+	}
+
+	/**
+	 * The declared {@code :type} specifiers of a struct's slots, by package-stripped slot
+	 * name -- what an {@code :include} child inherits. Empty for a struct that declares
+	 * none.
+	 * @param structName the struct name as spelled
+	 * @return slot base name to type specifier, possibly empty
+	 */
+	public Map<String, LispVal> structSlotTypes(String structName) {
+		Map<String, LispVal> exact = this.structSlotTypes.get(normalize(structName));
+		if (exact == null && PackageRegistry.splitQualified(structName) instanceof PackageRegistry.QualifiedName qn) {
+			exact = this.structSlotTypes.get(qn.member());
+		}
+		return exact == null ? Map.of() : exact;
+	}
+
+	/**
+	 * The declared {@code :type} specifier of the slot a {@code defstruct} accessor
+	 * reads, or null. Single- and double-colon spellings match, like
+	 * {@link #findDeftype}.
+	 * @param accessorName the accessor name as spelled at the call site
+	 * @return the slot's type specifier, or null
+	 */
+	@Nullable public LispVal structAccessorType(String accessorName) {
+		LispVal exact = this.structAccessorTypes.get(normalize(accessorName));
+		if (exact != null) {
+			return exact;
+		}
+		if (PackageRegistry.splitQualified(accessorName) instanceof PackageRegistry.QualifiedName qn) {
+			return this.structAccessorTypes.get(qn.member());
+		}
+		return null;
 	}
 
 	/**

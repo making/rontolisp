@@ -19,7 +19,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
-| `declare` / `declaim` / `proclaim` / `the` | 解析されるだけの no-op（コンパイルには影響しない） |
+| `declare` / `declaim` / `proclaim` / `the` | 結果は変えない。WASM では配列の `type` 宣言が要素アクセサのエミットを誘導（モジュールが小さく速くなる）、それ以外では解析されるだけの no-op |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
 | `make-package` / `export` / `import` / `rename-package`（ランタイム） | 利用不可。`use-package` は `in-package` と同様の読み込み/コンパイル時ディレクティブ。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
 | `progv` | インタプリタのみ（JVM/WASM ではコンパイルエラー） |

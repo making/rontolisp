@@ -4810,6 +4810,71 @@ cases:
       :CHECKED2
       :DIGIT
       :ABC
+  - name: declared-array-types-single-arm-access
+    source: |
+      (deftype ci-octet-vec (&optional length)
+        (let ((length (or length '*)))
+          `(simple-array (unsigned-byte 8) (,length))))
+      (defstruct ci-chunk
+        (data (make-array 4 :element-type '(unsigned-byte 8)) :type ci-octet-vec)
+        (bits 0 :type (unsigned-byte 32)))
+      (defstruct (ci-wide-chunk (:include ci-chunk))
+        (tab (make-array 3 :element-type '(unsigned-byte 16))
+             :type (simple-array (unsigned-byte 16) (3))))
+      (defun ci-fill-declared (buf n)
+        (declare (type (simple-array (unsigned-byte 8) (*)) buf)
+                 (type (unsigned-byte 16) n))
+        (dotimes (i n buf)
+          (setf (aref buf i) (+ i 254))))
+      (defun ci-read-both (w i)
+        (declare (type ci-wide-chunk w))
+        (+ (aref (ci-chunk-data w) i) (aref (ci-wide-chunk-tab w) i)))
+      (defun ci-sum-simple (v)
+        (declare (type simple-vector v))
+        (+ (svref v 0) (aref v 1)))
+      (defun ci-first-char (s)
+        (declare (type simple-string s))
+        (aref s 0))
+      (let ((u32 (make-array 3 :element-type '(unsigned-byte 32)))
+            (f (make-array 2 :element-type 'double-float :initial-element 0.5d0)))
+        (setf (aref u32 0) 4000000000)
+        (setf (aref u32 1) (aref u32 0))
+        (setf (aref u32 2) 4294967296)
+        (print (aref u32 0))
+        (print (aref u32 1))
+        (print (aref u32 2))
+        (print (length u32))
+        (setf (aref f 1) 2.25)
+        (print (aref f 1))
+        (print (ci-fill-declared (make-array 4 :element-type '(unsigned-byte 8)) 4))
+        (let ((w (make-ci-wide-chunk)))
+          (setf (aref (ci-chunk-data w) 1) 7)
+          (setf (aref (ci-wide-chunk-tab w) 1) 65535)
+          (print (ci-read-both w 1))
+          (print (aref (ci-wide-chunk-data w) 1)))
+        (print (ci-sum-simple (vector 30 12)))
+        (print (ci-first-char "xyz"))
+        (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'ci-octet-vec))
+        (let ((acc 0))
+          (do ((c (make-array 3 :element-type '(unsigned-byte 16)))
+               (i 0 (1+ i)))
+              ((>= i 3) nil)
+            (setf (aref c i) (* i 300))
+            (setq acc (+ acc (aref c i))))
+          (print acc)))
+    expected: |
+      4000000000
+      4000000000
+      0
+      3
+      2.25
+      #(254 255 0 1)
+      65542
+      7
+      42
+      #\x
+      T
+      900
   - name: user-deftype-typep-satisfies
     source: |
       (deftype ci-even () '(satisfies evenp))

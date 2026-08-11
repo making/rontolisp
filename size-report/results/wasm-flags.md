@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-11
-- rontolisp: 0.1.0-SNAPSHOT (`1001563`)
+- rontolisp: 0.1.0-SNAPSHOT (`9fb538d`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -20,10 +20,10 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 365,142 |
-| zlib | `--optimize` | core (command) | Preview 1 | 193,382 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 161,976 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 166,656 |
+| zlib | (none) | core (command) | Preview 1 | 354,554 |
+| zlib | `--optimize` | core (command) | Preview 1 | 182,934 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 149,054 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 153,734 |
 
 ## What is measured
 
@@ -116,6 +116,22 @@ is 4 bytes an element. Worth **-15.6%** on the `--optimize=size` row (191,872 ->
 161,976), which is more than the tables' own bytes: a specialized vector also
 stops boxing every element, so the general-array and cons paths those tables
 pinned shake out with them.
+
+**Type declarations now drive the array accessors.** chipz declares
+`(simple-array (unsigned-byte 8) (*))`-style types on nearly every buffer --
+as `(declare (type ...))`, as `defstruct` slot `:type`s, and through its own
+`deftype` aliases -- and those used to be parsed no-ops: every rank-1
+`aref`/`(setf aref)`/`length` site carried the full inline representation
+dispatch (196 bytes per `aref`, 21% of the module's instruction bytes). A site
+whose array representation a declaration (or the binding's own `make-array`
+initializer) pins down now emits that ONE representation's accessor behind a
+trapping cast, and the generic size-level store also stopped re-emitting its
+index/value expressions once per dispatch arm
+(`.kb/declarations-type-checks.md`). Worth **-8.0%** on the `--optimize=size`
+row (161,976 -> 149,054) and -5.4% at plain `--optimize`, with the check
+stream still gunzipping byte-identically on all four backends. What remains
+against the C/Zig rows is the code the declarations do not reach -- the state
+machine's undeclared intermediates and the funcall dispatch ladders.
 
 **And a further -1.2% is the data section, not code.** A library whose every slot
 accessor is a generic used to ship its name three times over: once for the

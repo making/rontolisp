@@ -18,7 +18,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset + a definition-time MOP subset) |
 | `defstruct` `:include` | single inheritance only; slot-overrides `(:include parent (slot default) ...)` work |
-| `declare` / `declaim` / `proclaim` / `the` | parsed no-ops (no effect on compilation) |
+| `declare` / `declaim` / `proclaim` / `the` | never change a result; on WASM an array `type` declaration directs the element-accessor emission (smaller, faster modules), everywhere else parsed no-ops |
 | `typep` / `subtypep` / `coerce` / `concatenate` | literal (quoted) type specifiers only; `coerce` targets `'list` / `'vector` / `'string` (or a float type), `concatenate` builds those same three sequence families |
 | `make-package` / `export` / `import` / `rename-package` (runtime) | not available; `use-package` is a read/compile-time directive like `in-package`; `defpackage` `:shadow` / `:shadowing-import-from` are errors |
 | `progv` | interpreter only (compile error on the JVM/WASM backends) |

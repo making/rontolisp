@@ -2329,6 +2329,17 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 		}
 
+		// Defun names defined more than once: a defstruct accessor's slot :type is only
+		// trusted while the generated accessor is the ONE definition its name reaches
+		// (WasmArrayCompiler.arrayKindOfExpr).
+		Set<String> duplicatedDefunNames = new HashSet<>();
+		Set<String> seenDefunNames = new HashSet<>();
+		for (DefunDecl defun : defuns) {
+			if (!seenDefunNames.add(defun.name)) {
+				duplicatedDefunNames.add(defun.name);
+			}
+		}
+
 		// Reusable builder template with shared constants and state
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
@@ -2340,6 +2351,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
 			.inlinableDefuns(inlinableDefuns)
+			.duplicatedDefunNames(duplicatedDefunNames)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.valueFuncIds(valueFuncIds)
@@ -2423,6 +2435,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				funcCtx.locals.put(defun.paramNames.get(i), i + 1);
 			}
 			funcCtx.nextLocal = defun.paramNames.size() + 1;
+			// (declare (type ...)) at the body head: array kinds for the parameters, so
+			// a declared site emits the single-arm accessor
+			// (.kb/declarations-type-checks.md).
+			funcCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredKinds(defun.bodyExprs, funcCtx);
 
 			// Determine which params are captured by nested lambdas
 			Set<String> capturedVars = FreeVarAnalyzer.findCapturedVars(defun.bodyExprs,
@@ -2598,6 +2614,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				lambdaCtx.locals.put(lambda.paramNames.get(i), i + 1);
 			}
 			lambdaCtx.nextLocal = lambda.paramNames.size() + 1;
+			// (declare (type ...)) at the body head (a local function's sits inside its
+			// (block name ...) wrap): array kinds for the parameters.
+			lambdaCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredKinds(lambda.bodyExprs, lambdaCtx);
 
 			// Set up captures mapping (free vars accessed from env cons list)
 			Map<String, Integer> captures = new HashMap<>();
@@ -5758,6 +5777,25 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		int rawSentinelGlobalIndex = -1;
 
+		/**
+		 * Lexical variables in scope whose ARRAY representation a declaration (or an
+		 * initializer this compile itself chose a representation for) pins down --
+		 * consumed by the single-arm rank-1 {@code aref}/{@code %aset}/{@code length}
+		 * emission ({@code WasmArrayCompiler.arrayKindOfExpr},
+		 * {@code .kb/declarations-type-checks.md}). Scoped exactly like {@link #locals}:
+		 * registered by the defun/lambda body setup and {@link WasmLetCompiler}, shadowed
+		 * names removed, restored on scope exit.
+		 */
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declaredArrays = Map.of();
+
+		/**
+		 * Defun names the program defines MORE than once. A {@code defstruct} accessor's
+		 * slot {@code :type} is only trusted at a call site when the accessor's generated
+		 * body is the one definition the call can reach; a user redefinition of the name
+		 * lands here and turns that trust off.
+		 */
+		Set<String> duplicatedDefunNames = Set.of();
+
 		Map<String, Integer> captures = Map.of();
 
 		Set<String> boxedVars = Set.of();
@@ -6163,6 +6201,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
+			this.duplicatedDefunNames = builder.duplicatedDefunNames;
 		}
 
 		static Builder builder() {
@@ -6180,6 +6219,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Map<String, WasmFunctionInfo> functions = Map.of();
 
 			private Map<String, DefunDecl> inlinableDefuns = Map.of();
+
+			private Set<String> duplicatedDefunNames = Set.of();
 
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
@@ -6281,6 +6322,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder inlinableDefuns(Map<String, DefunDecl> inlinableDefuns) {
 				this.inlinableDefuns = inlinableDefuns;
+				return this;
+			}
+
+			Builder duplicatedDefunNames(Set<String> duplicatedDefunNames) {
+				this.duplicatedDefunNames = duplicatedDefunNames;
 				return this;
 			}
 

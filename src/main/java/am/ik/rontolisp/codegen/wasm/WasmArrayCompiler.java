@@ -1,6 +1,7 @@
 package am.ik.rontolisp.codegen.wasm;
 
 import java.util.List;
+import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
 
@@ -12,6 +13,8 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.DeclaredArrayTypes;
+import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -780,10 +783,20 @@ final class WasmArrayCompiler {
 		int arrSlot = setTemp(ctx);
 		if (rank == 1) {
 			// Rank 1: evaluate the index once, then dispatch from the slots (the shape
-			// WasmIntFusionCompiler reuses for its aref leaves).
+			// WasmIntFusionCompiler reuses for its aref leaves). A site whose array
+			// representation a declaration (or an initializer this compile itself chose a
+			// representation for) pins down emits that ONE representation's read with a
+			// trapping ref.cast instead of the full dispatch chain
+			// (.kb/declarations-type-checks.md).
 			WasmExprCompiler.compileExpr(args.get(2), ctx);
 			int idxSlot = setTemp(ctx);
-			emitAref1FromSlots(ctx, arrSlot, idxSlot);
+			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
+			if (kind != null) {
+				emitKindedAref1(ctx, kind, arrSlot, idxSlot);
+			}
+			else {
+				emitAref1FromSlots(ctx, arrSlot, idxSlot);
+			}
 			return;
 		}
 		testFarray(ctx, arrSlot);
@@ -850,6 +863,231 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * The array representation kind of an expression at an access site, or null when
+	 * nothing pins one down. Three sources, each a declaration or this compile's own
+	 * choice: a lexical variable with a declared/derived kind
+	 * ({@code Ctx.declaredArrays}, registered by the defun/lambda body setup and
+	 * {@link WasmLetCompiler}), a {@code (the spec expr)} wrap, and a {@code defstruct}
+	 * accessor call whose slot declares a {@code :type} (via the registry side table;
+	 * skipped under {@code --dynamic} and for a name the program defines more than once,
+	 * where the accessor's body is not the only definition the call could reach).
+	 */
+	static DeclaredArrayTypes.@Nullable Kind arrayKindOfExpr(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (expr instanceof LispSymbol sym) {
+			return ctx.declaredArrays.get(sym.name());
+		}
+		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (LispNames.THE.equals(localName(head.name())) && parts.size() == 3) {
+			DeclaredArrayTypes.Kind kind = DeclaredArrayTypes.kindOfSpec(parts.get(1), ctx.closRegistry);
+			return kind != null ? kind : arrayKindOfExpr(parts.get(2), ctx);
+		}
+		if (parts.size() == 2 && !ctx.dynamic && ctx.closRegistry != null
+				&& !ctx.duplicatedDefunNames.contains(head.name())) {
+			LispVal slotType = ctx.closRegistry.structAccessorType(head.name());
+			if (slotType != null) {
+				return DeclaredArrayTypes.kindOfSpec(slotType, ctx.closRegistry);
+			}
+		}
+		return null;
+	}
+
+	private static String localName(String name) {
+		int colon = name.lastIndexOf(':');
+		return colon >= 0 ? name.substring(colon + 1) : name;
+	}
+
+	/**
+	 * The declared array kinds a FUNCTION body's leading {@code (declare (type ...))}
+	 * forms establish for its parameters (and free names), specials filtered out. The
+	 * declarations may sit one wrapper deep: {@code LambdaLists} wraps a
+	 * return-from-using body in {@code (%fn-block name ...)} and the flet lowering wraps
+	 * a local function's body in {@code (block name ...)} -- both still declare the
+	 * function body, so the scan follows a sole trailing wrapper of either spelling.
+	 */
+	static Map<String, DeclaredArrayTypes.Kind> functionBodyDeclaredKinds(List<LispVal> bodyExprs,
+			WasmLispCompiler.Ctx ctx) {
+		Map<String, DeclaredArrayTypes.Kind> kinds = new java.util.HashMap<>(
+				DeclaredArrayTypes.declaredKinds(bodyExprs, ctx.closRegistry));
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			LispVal form = bodyExprs.get(i);
+			if (form instanceof am.ik.rontolisp.LispString || isDeclareForm(form)) {
+				continue;
+			}
+			if (i == bodyExprs.size() - 1 && form instanceof LispCons wrapper && wrapper.isProperList()
+					&& wrapper.car() instanceof LispSymbol head && (LispNames.FN_BLOCK_INTERNAL.equals(head.name())
+							|| LispNames.BLOCK.equals(localName(head.name())))
+					&& wrapper.toList().size() >= 3) {
+				List<LispVal> wrapped = wrapper.toList();
+				DeclaredArrayTypes.declaredKinds(wrapped.subList(2, wrapped.size()), ctx.closRegistry)
+					.forEach(kinds::putIfAbsent);
+			}
+			break;
+		}
+		kinds.keySet().removeAll(ctx.specialVars);
+		return kinds.isEmpty() ? Map.of() : kinds;
+	}
+
+	private static boolean isDeclareForm(LispVal form) {
+		return form instanceof LispCons cons && cons.isProperList() && cons.car() instanceof LispSymbol head
+				&& LispNames.DECLARE.equals(localName(head.name()));
+	}
+
+	/**
+	 * A single-pair {@code (setf (aref var idx) value)} whose VARIABLE place has a pinned
+	 * non-string array kind, rewritten to the {@code (%aset var idx value)} the setf
+	 * expansion would reach -- minus the {@code stringp}/{@code schar-set} branch the
+	 * expansion wraps around a variable place (a string is a rank-1 character array, but
+	 * a value of this kind cannot be one). Null for every other shape, which keeps the
+	 * ordinary expansion.
+	 */
+	static @Nullable LispCons nonStringArefStore(LispCons setfCons, WasmLispCompiler.Ctx ctx) {
+		if (!setfCons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = setfCons.toList();
+		if (parts.size() != 3 || !(parts.get(1) instanceof LispCons place) || !place.isProperList()
+				|| !(place.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		String op = localName(head.name());
+		if (!LispNames.AREF.equals(op) && !LispNames.SVREF.equals(op)) {
+			return null;
+		}
+		List<LispVal> placeParts = place.toList();
+		if (placeParts.size() != 3 || !(placeParts.get(1) instanceof LispSymbol arrayVar)) {
+			return null;
+		}
+		DeclaredArrayTypes.Kind kind = arrayKindOfExpr(arrayVar, ctx);
+		if (kind == null || kind == DeclaredArrayTypes.Kind.STRING) {
+			return null;
+		}
+		return new LispCons(new LispSymbol(LispNames.ASET),
+				new LispCons(arrayVar, new LispCons(placeParts.get(2), new LispCons(parts.get(2), LispNil.INSTANCE))));
+	}
+
+	/**
+	 * The array kind a {@code let} binding's INIT expression proves without any
+	 * declaration -- this compile's own representation choice, so the kind is exact, not
+	 * trusted: a literal packed {@code make-array} (the same recognizers
+	 * {@link #compileMake} uses), or a kinded source through {@link #arrayKindOfExpr} (a
+	 * declared outer variable, an accessor call). The caller must still verify the
+	 * binding is never reassigned; a declaration needs no such check (it covers
+	 * assignments too).
+	 */
+	static DeclaredArrayTypes.@Nullable Kind initExprKind(LispVal init, WasmLispCompiler.Ctx ctx) {
+		DeclaredArrayTypes.Kind direct = arrayKindOfExpr(init, ctx);
+		if (direct != null) {
+			return direct;
+		}
+		if (!(init instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)
+				|| !LispNames.MAKE_ARRAY.equals(localName(head.name()))) {
+			return null;
+		}
+		List<LispVal> args = cons.toList();
+		if (args.size() < 2 || !(args.get(1) instanceof LispInteger)) {
+			// Rank-1 with a literal size only; a dims list or computed size keeps the
+			// generic path.
+			return null;
+		}
+		LispVal elementType = null;
+		for (int i = 2; i + 1 < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol key)) {
+				return null;
+			}
+			switch (key.name()) {
+				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = args.get(i + 1);
+				case LispNames.INITIAL_ELEMENT_KEYWORD, LispNames.INITIAL_CONTENTS_KEYWORD -> {
+					// Neither changes the representation.
+				}
+				default -> {
+					// :fill-pointer / :adjustable / :displaced-to (or a computed keyword)
+					// build the general adjustable shapes -- prove nothing here.
+					return null;
+				}
+			}
+		}
+		LispVal resolved = LispMacroExpander.resolveElementTypeAlias(elementType, ctx.closRegistry);
+		if (resolved == null) {
+			return DeclaredArrayTypes.Kind.GENERAL;
+		}
+		int packedWidth = packedIntElementWidth(resolved);
+		if (packedWidth != 0) {
+			return switch (packedWidth) {
+				case 8 -> DeclaredArrayTypes.Kind.U8;
+				case 16 -> DeclaredArrayTypes.Kind.U16;
+				default -> DeclaredArrayTypes.Kind.U32;
+			};
+		}
+		if (isDoubleFloatElementType(resolved) || isSingleFloatElementType(resolved)) {
+			return DeclaredArrayTypes.Kind.FLOAT;
+		}
+		if (LispMacroExpander.isCharacterElementType(resolved)) {
+			// A character vector's representation is the marked general array OR a
+			// string after normalization -- two representations, so prove neither.
+			return null;
+		}
+		if (elementTypeLocalName(resolved) != null || resolved instanceof LispCons) {
+			// A literal non-packed element type ((unsigned-byte 64), fixnum, t, ...)
+			// keeps the general boxed representation.
+			return DeclaredArrayTypes.Kind.GENERAL;
+		}
+		return null;
+	}
+
+	// The declared-kind single-arm rank-1 read: the one representation's accessor with a
+	// trapping ref.cast where the generic chain runs the 4-way dispatch. arrSlot holds
+	// the array (as eq), idxSlot the boxed index; leaves the boxed element.
+	private static void emitKindedAref1(WasmLispCompiler.Ctx ctx, DeclaredArrayTypes.Kind kind, int arrSlot,
+			int idxSlot) {
+		switch (kind) {
+			case U8, U16, U32 -> {
+				int type = intArrType(kind.packedIntWidth());
+				getLocal(ctx, arrSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(type);
+				getLocal(ctx, idxSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				if (kind == DeclaredArrayTypes.Kind.U32) {
+					ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+					ctx.writer.writeUnsignedLeb128(type);
+					ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+				}
+				else {
+					// A u8/u16 element always fits an i31: box inline, no call.
+					ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+					ctx.writer.writeUnsignedLeb128(type);
+					boxI31(ctx);
+				}
+			}
+			case FLOAT -> {
+				emitPackedReadF64(ctx, arrSlot, idxSlot);
+				boxFloat(ctx);
+			}
+			case GENERAL -> {
+				getLocal(ctx, arrSlot);
+				castCellGet0(ctx);
+				getLocal(ctx, idxSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				callArrGet(ctx);
+			}
+			case STRING -> {
+				getLocal(ctx, arrSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(WasmLispCompiler.TYPE_STRING);
+				getLocal(ctx, idxSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				WasmEmitHelper.emitStrCharAtCall(ctx);
+				WasmCharCompiler.makeChar(ctx);
+			}
+		}
 	}
 
 	static void compileRowMajorAref(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -1016,6 +1254,28 @@ final class WasmArrayCompiler {
 		// (%aset array subscript... value)
 		List<LispVal> args = cons.toList();
 		int rank = args.size() - 3;
+		if (rank == 1) {
+			// A store whose array representation is pinned down (declaration / accessor
+			// slot :type / this compile's own initializer choice) emits that ONE arm; a
+			// string kind never stores (strings are immutable structs -- the generic
+			// general arm's cast traps there too, so the generic path answers it).
+			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
+			if (kind != null && kind != DeclaredArrayTypes.Kind.STRING) {
+				emitKindedAset1(args, kind, ctx, resultNeeded);
+				return;
+			}
+			if (!WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+				// Size level: evaluate array/index/value ONCE into temps and let every
+				// arm read the slots -- the legacy shape below re-emits the index and
+				// value expressions in each arm, which triples their bytes (only one arm
+				// ever runs, so evaluation order and once-only effects are identical).
+				// The speed levels keep the legacy shape: its packed-int arm compiles
+				// the value RAW through the fusion machinery, which a pre-boxed temp
+				// would defeat.
+				emitHoistedAset1(args, ctx, resultNeeded);
+				return;
+			}
+		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
 		testFarray(ctx, arrSlot);
@@ -1057,6 +1317,121 @@ final class WasmArrayCompiler {
 		if (rank == 1) {
 			ctx.writer.write(Instruction.END);
 		}
+		ctx.writer.write(Instruction.END);
+		if (!resultNeeded) {
+			ctx.writer.write(Instruction.DROP);
+		}
+	}
+
+	// The declared-kind single-arm rank-1 store: array, subscript and value evaluate in
+	// the generic order, then the one representation's store runs with a trapping
+	// ref.cast. A packed integer store keeps the raw-value fast path (tryCompileRaw)
+	// because the single arm needs the value only once; the result -- the value AS
+	// STORED -- materializes only when the caller consumes it.
+	private static void emitKindedAset1(List<LispVal> args, DeclaredArrayTypes.Kind kind, WasmLispCompiler.Ctx ctx,
+			boolean resultNeeded) {
+		LispVal idxExpr = args.get(2);
+		LispVal valueExpr = args.get(args.size() - 1);
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		switch (kind) {
+			case U8, U16, U32 -> {
+				int type = intArrType(kind.packedIntWidth());
+				WasmExprCompiler.compileExpr(idxExpr, ctx);
+				int idxSlot = setTemp(ctx);
+				getLocal(ctx, arrSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(type);
+				getLocal(ctx, idxSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				if (!WasmIntFusionCompiler.tryCompileRaw(valueExpr, ctx)) {
+					WasmExprCompiler.compileExpr(valueExpr, ctx);
+					int valSlot = setTemp(ctx);
+					emitUnboxIntForStore(ctx, valSlot);
+				}
+				ctx.writer.write(Instruction.I32_WRAP_I64);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+				ctx.writer.writeUnsignedLeb128(type);
+				if (resultNeeded) {
+					emitKindedAref1(ctx, kind, arrSlot, idxSlot);
+				}
+			}
+			case FLOAT -> {
+				WasmExprCompiler.compileExpr(idxExpr, ctx);
+				int idxSlot = setTemp(ctx);
+				WasmExprCompiler.compileExpr(valueExpr, ctx);
+				WasmEmitHelper.castFloatGetF64(ctx);
+				boxFloat(ctx);
+				int boxSlot = setTemp(ctx);
+				emitPackedWriteF64(ctx, arrSlot, idxSlot, boxSlot);
+				if (!resultNeeded) {
+					ctx.writer.write(Instruction.DROP);
+				}
+			}
+			case GENERAL -> {
+				getLocal(ctx, arrSlot);
+				castCellGet0(ctx);
+				WasmExprCompiler.compileExpr(idxExpr, ctx);
+				WasmEmitHelper.castI31GetS(ctx);
+				WasmExprCompiler.compileExpr(valueExpr, ctx);
+				callArrSet(ctx);
+				if (!resultNeeded) {
+					ctx.writer.write(Instruction.DROP);
+				}
+			}
+			case STRING -> throw new IllegalStateException("a string kind never reaches the kinded store");
+		}
+	}
+
+	// The size-level generic rank-1 store: array/index/value hoisted into temps ONCE,
+	// then the same three-arm dispatch as the legacy shape reading the slots -- one
+	// evaluation each instead of a per-arm re-emission of the index and value
+	// expressions. Leaves the value as stored (or nothing when unconsumed), exactly like
+	// the legacy emission.
+	private static void emitHoistedAset1(List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean resultNeeded) {
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		int arrSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int idxSlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+		int valSlot = setTemp(ctx);
+		testFarray(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed float: coerce the boxed value to its float box and store at the flat
+		// (= sole) subscript.
+		getLocal(ctx, valSlot);
+		WasmEmitHelper.castFloatGetF64(ctx);
+		boxFloat(ctx);
+		int boxSlot = setTemp(ctx);
+		emitPackedWriteF64(ctx, arrSlot, idxSlot, boxSlot);
+		ctx.writer.write(Instruction.ELSE);
+		testIntVector(ctx, arrSlot);
+		emitIfEq(ctx);
+		// packed integer vector: mask-store through _iv_set, answering the value as
+		// stored only when consumed.
+		getLocal(ctx, arrSlot);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		emitUnboxIntForStore(ctx, valSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IV_SET);
+		if (resultNeeded) {
+			emitPackedIntRead(ctx, arrSlot, idxSlot);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		}
+		else {
+			refNull(ctx);
+		}
+		ctx.writer.write(Instruction.ELSE);
+		// general: data[idx] = val through the shared _arr_set, which answers the value.
+		getLocal(ctx, arrSlot);
+		castCellGet0(ctx);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, valSlot);
+		callArrSet(ctx);
+		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		if (!resultNeeded) {
 			ctx.writer.write(Instruction.DROP);

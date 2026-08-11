@@ -1,9 +1,16 @@
-# Declarations as no-ops, eval-when, check-type/assert (Phase 3 unit 1)
+# Declarations: no-op semantics, declaration-driven array emission, eval-when, check-type/assert
 
 Origin: the first unit of the ASDF Phase 3 split in
 `.todo/054-asdf-support.md` (shipped 2026-07-05). Goal: real CL library sources
 parse and load -- nearly every library body contains `declare`/`declaim`, and
 macro-exporting libraries wrap `defmacro` in `eval-when`.
+
+**Since 2026-08-11 declarations are no longer PURE no-ops on the wasm-GC
+backend**: a `(declare (type ...))` (and a `defstruct` slot `:type`) can drive
+single-arm array-access EMISSION -- see "Declaration-driven array emission"
+below. The VALUE semantics are unchanged everywhere: no declaration ever
+changes a result, and the interpreter/JVM/`--no-gc` backends still ignore them
+entirely.
 
 ## What ships
 
@@ -27,6 +34,133 @@ codegen), classified in `PackageRegistry.CL_MACROS` (precedent: `error` is a
   become the error call and the places list is dropped (it establishes no
   `continue`/`store-value` restart, so there is nothing to re-store into --
   the restart system itself exists, see `.kb/error-handling.md`).
+
+## Declaration-driven array emission (wasm-GC, todo-320)
+
+**Invariant: a declaration may change EMISSION, never a RESULT. A rank-1
+`aref`/`(setf aref)`/`length` site whose array's representation is pinned down
+emits that ONE representation's accessor behind a trapping `ref.cast` instead
+of the inline 4-way dispatch chain -- and a FALSE declaration becomes a
+deterministic trap at the access, never silent wrong data.** wasm-GC backends
+only (Preview 1 AND `--component`); the interpreter, the JVM and `--no-gc`
+still treat every declaration as a no-op, so a program with a false
+declaration DIVERGES across backends (works there, traps here). That is the
+todo-320 design decision: CL calls a false declaration undefined behavior, and
+a trap is the cheapest diagnosable shape -- a checked signal would cost the
+very dispatch bytes the feature removes. Re-evaluation trigger: if a real
+library ever needs the failure catchable, route the cast failure through a
+shared trap-with-message helper instead of widening per-site code.
+
+### Why this exists (the todo-320 measurements)
+
+Measured on the chipz `zlib` artifact at `--optimize=size` (2026-08-11):
+**21.1% of the module's instruction bytes were `aref`/`%aset` inline dispatch
+chains** -- 196 bytes per rank-1 `aref` site (62 sites), 232-1540 per `%aset`
+site (60 sites, whose index/value expressions were re-emitted once per ARM).
+The ceiling measurement: chipz's fully-declared `crc32` compiled to 822 bytes
+generically; the hand-written ideal (raw i64 locals, direct `array.get_u`) is
+120 bytes. **Arithmetic, by contrast, is NOT where the size is**: with fusion
+off a generic `+`/`logand`/`ash` is one 2-byte helper call, so
+declaration-driven arithmetic emission was measured to be worth ~nothing at
+size level and deliberately NOT built (it remains a possible SPEED lever at
+the default level, where a declared tree could drop fusion's double emission
+-- re-measure before building that). Result on the `zlib` rows: 161,976 ->
+149,054 (`--optimize=size`, -8.0%), 193,382 -> 182,934 (`--optimize`),
+166,656 -> 153,734 (`--component --optimize=size`), check stream gunzipping
+byte-identically on all four backends.
+
+### The representation kinds and their sources
+
+`am.ik.rontolisp.compiler.DeclaredArrayTypes` (backend-free, so the JVM could
+adopt it later) maps a type specifier to a `Kind`: `U8`/`U16`/`U32` (packed
+integer vector -- requires an explicitly rank-1 dims spec, `(simple-array
+(unsigned-byte 8) (*))`; an unknown-rank spec could be a rank-n GENERAL array
+of the same element type), `FLOAT` (packed float array, either width),
+`GENERAL` (boxed general array: `simple-vector`, `fixnum`/`t`/other unpacked
+element types at any rank) and `STRING`. A character element type maps to
+NOTHING (a character vector is a marked general array OR a string after
+normalization -- two representations); a bare `vector`/`array` proves nothing
+(a string is a vector too). Specifier symbols resolve through the
+`ClosRegistry` deftype table, including the NEW defaulted registration: an
+all-`&optional` deftype (`simple-octet-vector`) now registers its bare-name
+DEFAULT expansion, folded by a closed pure evaluator over the
+`quote`/`list`/`cons`/`append`/`or`/`let`/`let*` shapes a backquoted body
+reads as (`LispMacroExpander.defaultedDeftypeExpansion`; the CLHS
+deftype-specific unsupplied-optional default is the symbol `*`). This aligns
+the direct-compiler path with the CLI path, whose `UserMacroExpander`
+pre-pass already folded such deftypes by evaluation (`LispEvaluator
+.foldDeftype`).
+
+A site's kind comes from four sources (`WasmArrayCompiler.arrayKindOfExpr`):
+
+1. **A declared lexical variable** -- `Ctx.declaredArrays`, scoped exactly
+   like `Ctx.locals`: registered from body-head `(declare (type ...))` forms
+   by the defun/lambda body setup (`WasmLispCompiler`, following the sole
+   trailing `%fn-block`/`(block name ...)` wrapper `LambdaLists` and the flet
+   lowering produce) and by `WasmLetCompiler` (bound AND free declarations --
+   a free declaration covers the body, which is also where a lambda list's
+   generated `let*` prologue leaves its parameter declarations); shadowed
+   names removed, restored on scope exit. Specials are never registered;
+   registration is skipped at top level (the eval mirror owns those slots)
+   and in async bodies, like the raw locals.
+2. **A binding INITIALIZER this compile chose a representation for**
+   (`WasmArrayCompiler.initExprKind`): a literal packed/general `make-array`
+   (rank-1 literal size, no fill-pointer/adjustable/displacement keywords), a
+   slot-typed accessor call, or a kinded outer variable -- but only while the
+   body never reassigns the name (a declaration needs no such check: it
+   covers assignments too). This is what types `do`-bound table variables
+   (`(do ((counts (hdt-counts table))) ...)`) and `loop with` bindings, which
+   chipz leaves undeclared.
+3. **A `defstruct` slot `:type` read through its accessor call** -- captured
+   by `expandDefstruct` into `ClosRegistry.registerStructSlotType` (a side
+   table; `LispLayout` stays type-free), `:include` children inheriting the
+   parent's slot types, accessors over inherited slots included. Trusted only
+   while the accessor's generated body is the ONE definition the call can
+   reach: off under `--dynamic`, and off for any name the program defines
+   more than once (`Ctx.duplicatedDefunNames`).
+4. **A `(the spec expr)` wrap** at the array position.
+
+### What the kinded sites emit
+
+- `aref` rank-1 (`emitKindedAref1`): `ref.cast` to the one representation +
+  its direct read -- u8/u16 box `ref.i31` inline (they always fit), u32 goes
+  through `_int_new`, FLOAT/GENERAL/STRING reuse the generic chain's own arm
+  bodies. ~19-30 bytes against the 196-byte chain.
+- `%aset` rank-1 (`emitKindedAset1`): same single arm; the packed-int arm
+  keeps the raw-value fast path (`tryCompileRaw`) because a single arm needs
+  the value only once. A STRING kind never stores (strings are immutable
+  structs; the generic path's general-arm cast traps there too, so kinded
+  emission declines and the generic path answers it).
+- `length` of a packed kind: `ref.cast` + `array.len` + `ref.i31` (rank-1 by
+  construction, no fill pointer possible). The other kinds keep the generic
+  chain (a GENERAL vector's length must honour a fill pointer).
+- `(setf (aref var i) v)` on a VARIABLE place whose kind is non-string skips
+  the expansion's `stringp`/`schar-set` branch entirely
+  (`WasmArrayCompiler.nonStringArefStore`, intercepted at both
+  `WasmExprCompiler` setf sites) -- that branch exists because a string is a
+  rank-1 character array, and a pinned non-string kind proves it dead.
+- Independent of declarations: at `--optimize=size` the GENERIC rank-1
+  `%aset` now hoists array/index/value into temps once and lets the three
+  arms read the slots (`emitHoistedAset1`) -- the legacy shape re-emitted the
+  index and value expressions per arm, tripling their bytes. The speed levels
+  keep the legacy shape on purpose: its packed-int arm compiles the value RAW
+  through the fusion machinery, which a pre-boxed temp would defeat.
+
+Emission is at EVERY optimize level (the `WasmDotimesCompiler` precedent:
+strictly smaller AND faster, so it is not a speed-for-size trade). Evaluation
+order (array, index, value) is the generic order; a false declaration may
+observe index/value side effects before the cast traps where the generic
+general arm would have trapped first -- acceptable inside UB, noted here so
+nobody chases it as a bug.
+
+### Pinning tests
+
+`WasmLispCompilerIntegrationTest.declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults`
+(every source and kind, mask/readback edges past the i31 range, inherited
+slot types, the defaulted deftype, shapes that must STAY generic; both
+optimize levels against the interpreter/JVM text) and the
+`declared-array-types-single-arm-access` ci-spec case (all four backends).
+`ChipzE2eTest` is the end-to-end pin on the real library.
 
 ## makeTypeTest (shared type-specifier tests)
 

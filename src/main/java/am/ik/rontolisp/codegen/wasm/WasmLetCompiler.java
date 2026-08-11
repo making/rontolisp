@@ -246,6 +246,78 @@ final class WasmLetCompiler {
 			ctx.rawLocals = newRawLocals;
 		}
 
+		// Declared/derived array kinds for the body: a (declare (type <array-spec> v))
+		// at the body head pins v's representation (bound OR free names -- a free
+		// declaration covers references in this body, which is also where the let*
+		// prologue a lambda list generates leaves its parameter declarations); a binding
+		// whose INIT already proves a representation (a literal packed make-array, a
+		// slot-typed accessor call, a kinded outer variable) derives it with no
+		// declaration, but only while the body never reassigns the name -- a declaration
+		// needs no such check, it covers assignments too. Shadowed outer entries are
+		// removed whatever the new binding proves. Skipped at top level (the eval mirror
+		// owns those slots) and in async bodies, like the raw locals.
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> savedDeclaredArrays = ctx.declaredArrays;
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> newDeclaredArrays = null;
+		for (String name : letVarNames) {
+			if (savedDeclaredArrays.containsKey(name)) {
+				if (newDeclaredArrays == null) {
+					newDeclaredArrays = new HashMap<>(savedDeclaredArrays);
+				}
+				newDeclaredArrays.remove(name);
+			}
+		}
+		if (!ctx.topLevel && !async && ctx.asyncResume == null) {
+			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declared = am.ik.rontolisp.compiler.DeclaredArrayTypes
+				.declaredKinds(bodyExprs, ctx.closRegistry);
+			Set<String> assignedInBody = null;
+			Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> additions = new HashMap<>();
+			for (Map.Entry<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> entry : declared.entrySet()) {
+				if (!letVarNames.contains(entry.getKey()) && !ctx.specialVars.contains(entry.getKey())) {
+					// A free declaration: applies to the outer binding within this body.
+					additions.put(entry.getKey(), entry.getValue());
+				}
+			}
+			if (bindings instanceof LispCons kindScan) {
+				for (LispVal binding : kindScan.toList()) {
+					List<LispVal> pairList = ((LispCons) binding).toList();
+					String name = ((LispSymbol) pairList.get(0)).name();
+					if (ctx.specialVars.contains(name)) {
+						continue;
+					}
+					am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = declared.get(name);
+					if (kind == null) {
+						kind = WasmArrayCompiler.initExprKind(pairList.get(1), ctx);
+						if (kind != null) {
+							if (assignedInBody == null) {
+								assignedInBody = new HashSet<>();
+								for (LispVal bodyForm : bodyExprs) {
+									collectAssignedNames(bodyForm, assignedInBody);
+								}
+							}
+							if (assignedInBody.contains(name)) {
+								kind = null;
+							}
+						}
+					}
+					if (kind != null) {
+						additions.put(name, kind);
+					}
+					else {
+						additions.remove(name);
+					}
+				}
+			}
+			if (!additions.isEmpty()) {
+				if (newDeclaredArrays == null) {
+					newDeclaredArrays = new HashMap<>(savedDeclaredArrays);
+				}
+				newDeclaredArrays.putAll(additions);
+			}
+		}
+		if (newDeclaredArrays != null) {
+			ctx.declaredArrays = newDeclaredArrays;
+		}
+
 		// Save and adjust boxedVars for the let body. The set tracks names, so each
 		// binding's boxedness must REPLACE a shadowed outer binding's: a raw value
 		// stored under a name whose outer binding was boxed would otherwise be
@@ -290,6 +362,7 @@ final class WasmLetCompiler {
 		ctx.locals = savedLocals;
 		ctx.localIntLambdas = savedLocalLambdas;
 		ctx.rawLocals = savedRawLocals;
+		ctx.declaredArrays = savedDeclaredArrays;
 		ctx.nextI64Local = savedNextI64Local;
 	}
 

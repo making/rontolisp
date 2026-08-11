@@ -121,6 +121,14 @@ final class WasmExprCompiler {
 		if (ctx.asyncResume == null && expr instanceof LispCons cons && cons.isProperList()
 				&& cons.car() instanceof LispSymbol sym) {
 			if (LispNames.SETF.equals(sym.name())) {
+				LispCons knownArrayStore = WasmArrayCompiler.nonStringArefStore(cons, ctx);
+				if (knownArrayStore != null) {
+					// A variable place whose array kind is pinned down cannot be a
+					// string, so the expansion's stringp/schar-set branch is dead --
+					// compile the %aset (itself single-arm) directly.
+					WasmArrayCompiler.compileAset(knownArrayStore, ctx, false);
+					return;
+				}
 				compileForEffect(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx);
 				return;
 			}
@@ -1109,8 +1117,19 @@ final class WasmExprCompiler {
 				case LispNames.NTHCDR -> WasmNthcdrCompiler.compile(cons, ctx);
 				case LispNames.RPLACA -> WasmRplacaCompiler.compile(cons, ctx);
 				case LispNames.RPLACD -> WasmRplacdCompiler.compile(cons, ctx);
-				case LispNames.SETF -> WasmExprCompiler
-					.compileExpr(LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx);
+				case LispNames.SETF -> {
+					LispCons knownArrayStore = WasmArrayCompiler.nonStringArefStore(cons, ctx);
+					if (knownArrayStore != null) {
+						// The variable place's pinned array kind makes the expansion's
+						// stringp/schar-set branch dead; the %aset answers the value as
+						// stored, which IS the setf value here.
+						WasmArrayCompiler.compileAset(knownArrayStore, ctx, true);
+					}
+					else {
+						WasmExprCompiler.compileExpr(
+								LispMacroExpander.expandSetf(cons, ctx.structAccessors, ctx.closRegistry), ctx);
+					}
+				}
 				case LispNames.PUSH -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPush(cons), ctx);
 				case LispNames.POP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandPop(cons), ctx);
 				case LispNames.REMF -> WasmExprCompiler.compileExpr(LispMacroExpander.expandRemf(cons), ctx);

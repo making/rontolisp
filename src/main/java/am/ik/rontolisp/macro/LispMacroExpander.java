@@ -9143,6 +9143,10 @@ public final class LispMacroExpander {
 		List<LispSymbol> slotSyms = new java.util.ArrayList<>();
 		List<String> slotBases = new java.util.ArrayList<>();
 		List<LispVal> slotDefaults = new java.util.ArrayList<>();
+		// The slot's declared :type, or null -- kept OUT of the layout (declarations stay
+		// no-ops for the value model) and registered as a ClosRegistry side table so
+		// declaration-driven array emission can read an accessor's element kind.
+		List<LispVal> slotTypes = new java.util.ArrayList<>();
 		List<LispVal> slotSpecs = parts.subList(2, parts.size());
 		if (!slotSpecs.isEmpty() && slotSpecs.get(0) instanceof LispString) {
 			// (defstruct name "docstring" slot...): the documentation string is dropped.
@@ -9151,6 +9155,7 @@ public final class LispMacroExpander {
 		for (LispVal spec : slotSpecs) {
 			LispSymbol slot;
 			LispVal dflt = LispNil.INSTANCE;
+			LispVal slotType = null;
 			if (spec instanceof LispSymbol s) {
 				slot = s;
 			}
@@ -9160,13 +9165,17 @@ public final class LispMacroExpander {
 				if (specParts.size() >= 2) {
 					dflt = specParts.get(1);
 				}
-				// Slot options after the initform: :type and :read-only are parsed and
-				// ignored (declarations are no-ops); anything else is a hard error.
+				// Slot options after the initform: :type is captured (as a declaration --
+				// it never changes the value model), :read-only is parsed and ignored;
+				// anything else is a hard error.
 				for (int i = 2; i + 1 < specParts.size(); i += 2) {
 					if (!(specParts.get(i) instanceof LispSymbol opt)
 							|| (!":TYPE".equals(opt.name()) && !":READ-ONLY".equals(opt.name()))) {
 						throw new IllegalArgumentException(
 								LispNames.DEFSTRUCT + " slot option is not supported: " + spec.print());
+					}
+					if (":TYPE".equals(opt.name())) {
+						slotType = specParts.get(i + 1);
 					}
 				}
 			}
@@ -9178,6 +9187,7 @@ public final class LispMacroExpander {
 			slotSyms.add(slot);
 			slotBases.add(slotQn == null ? slot.name() : slotQn.member());
 			slotDefaults.add(dflt);
+			slotTypes.add(slotType);
 		}
 		if (includeParent != null) {
 			// (:include parent): the parent's slots (its own layout order, so a chain
@@ -9199,12 +9209,15 @@ public final class LispMacroExpander {
 			List<LispSymbol> mergedSyms = new java.util.ArrayList<>();
 			List<String> mergedBases = new java.util.ArrayList<>();
 			List<LispVal> mergedDefaults = new java.util.ArrayList<>();
+			List<LispVal> mergedTypes = new java.util.ArrayList<>();
+			java.util.Map<String, LispVal> parentTypes = closRegistry.structSlotTypes(includeParent);
 			for (int i = 0; i < parentLayout.slotNames().size(); i++) {
 				String inherited = parentLayout.slotNames().get(i);
 				mergedSyms.add(new LispSymbol(inherited));
 				mergedBases.add(inherited);
 				LispVal override = includeOverrides.remove(inherited);
 				mergedDefaults.add(override != null ? override : parentLayout.initforms().get(i));
+				mergedTypes.add(parentTypes.get(inherited));
 			}
 			if (!includeOverrides.isEmpty()) {
 				throw new IllegalArgumentException(LispNames.DEFSTRUCT + " :include " + includeParent
@@ -9213,9 +9226,11 @@ public final class LispMacroExpander {
 			mergedSyms.addAll(slotSyms);
 			mergedBases.addAll(slotBases);
 			mergedDefaults.addAll(slotDefaults);
+			mergedTypes.addAll(slotTypes);
 			slotSyms = mergedSyms;
 			slotBases = mergedBases;
 			slotDefaults = mergedDefaults;
+			slotTypes = mergedTypes;
 		}
 		// Registered only after the slot loop: the layout carries the ordered slot names
 		// and initforms, which is what makes an instance self-describing to the printer
@@ -9322,6 +9337,9 @@ public final class LispMacroExpander {
 				forms.add(listToCons(
 						List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(accessor), params, objRef(obj, i))));
 				structAccessors.put(accessor, i + 1);
+				if (closRegistry != null && slotTypes.get(i) != null) {
+					closRegistry.registerStructSlotType(structName, slotBases.get(i), accessor, slotTypes.get(i));
+				}
 			}
 		}
 		if (printer != null) {
@@ -22163,18 +22181,23 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Like {@link #expandDeftype(LispCons)}, but additionally registers a zero-parameter
-	 * {@code (deftype name () 'spec)} in the class registry so its name resolves as a
-	 * type specifier in {@code typep}/{@code typecase}. Only the literal-expansion shape
-	 * is registered (an empty lambda list and a quoted-literal body, e.g.
-	 * {@code (satisfies alistp)}); a parameterized or computed deftype stays an
-	 * unresolved specifier, exactly as before.
+	 * Like {@link #expandDeftype(LispCons)}, but additionally registers the type name in
+	 * the class registry so it resolves as a type specifier in
+	 * {@code typep}/{@code typecase} and in declaration-driven array emission. Two shapes
+	 * register: a zero-parameter {@code (deftype name () 'spec)} (the literal expansion),
+	 * and an all-{@code &optional} deftype whose DEFAULT expansion the closed pure folder
+	 * below can compute ({@link #defaultedDeftypeExpansion} -- the
+	 * {@code simple-octet-vector} shape). Anything else stays an unresolved specifier,
+	 * exactly as before.
 	 * @param cons the deftype expression
 	 * @param closRegistry mutated: the deftype expansion is registered
 	 * @return nil
 	 */
 	public static LispVal expandDeftype(LispCons cons, ClosRegistry closRegistry) {
 		LispVal expansion = literalDeftypeExpansion(cons);
+		if (expansion == null) {
+			expansion = defaultedDeftypeExpansion(cons);
+		}
 		if (expansion != null && cons.toList().get(1) instanceof LispSymbol nameSym) {
 			closRegistry.registerDeftype(nameSym.name(), expansion);
 		}
@@ -22200,6 +22223,147 @@ public final class LispMacroExpander {
 			return rest.car();
 		}
 		return null;
+	}
+
+	/**
+	 * The DEFAULT expansion of an all-{@code &optional} {@code deftype} used as a bare
+	 * name -- the specifier {@code (deftype simple-octet-vector (&optional length) (let
+	 * ((length (or length '*))) `(simple-array (unsigned-byte 8) (,length))))} denotes
+	 * when spelled {@code simple-octet-vector} (CLHS: a bare deftype name means every
+	 * unsupplied optional takes its init-form, whose deftype-specific default is the
+	 * symbol {@code *}). The body -- backquote already read as {@code list}/{@code
+	 * cons}/{@code append} calls -- is folded by the closed pure evaluator below;
+	 * anything it cannot prove folds to null and the name stays an unresolved specifier,
+	 * exactly as before.
+	 */
+	@Nullable private static LispVal defaultedDeftypeExpansion(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 4 || !(parts.get(1) instanceof LispSymbol) || !(parts.get(2) instanceof LispCons lambdaList)
+				|| !lambdaList.isProperList()) {
+			return null;
+		}
+		List<LispVal> paramSpecs = lambdaList.toList();
+		if (!(paramSpecs.get(0) instanceof LispSymbol marker) || !LispNames.LAMBDA_OPTIONAL.equals(marker.name())) {
+			return null;
+		}
+		java.util.Map<String, LispVal> env = new java.util.HashMap<>();
+		for (LispVal spec : paramSpecs.subList(1, paramSpecs.size())) {
+			if (spec instanceof LispSymbol plain) {
+				// CLHS deftype: an optional with no init-form defaults to the symbol *.
+				env.put(plain.name(), new LispSymbol("*"));
+			}
+			else if (spec instanceof LispCons pair && pair.isProperList() && pair.car() instanceof LispSymbol name) {
+				List<LispVal> pairParts = pair.toList();
+				LispVal dflt = pairParts.size() >= 2 ? foldPureSpecExpr(pairParts.get(1), env) : new LispSymbol("*");
+				if (dflt == null) {
+					return null;
+				}
+				env.put(name.name(), dflt);
+			}
+			else {
+				return null;
+			}
+		}
+		LispVal body = parts.get(parts.size() - 1);
+		return foldPureSpecExpr(body, env);
+	}
+
+	/**
+	 * Folds a pure list-building expression over an environment of already-folded values:
+	 * literals, environment reads, {@code quote}, {@code list}, {@code cons},
+	 * {@code append}, {@code or} and {@code let}/{@code let*} -- the closed set a
+	 * backquoted deftype body reads as. Anything else answers null (no fold).
+	 */
+	@Nullable private static LispVal foldPureSpecExpr(LispVal expr, java.util.Map<String, LispVal> env) {
+		if (expr instanceof LispInteger || expr instanceof LispString || expr instanceof LispNil) {
+			return expr;
+		}
+		if (expr instanceof LispSymbol sym) {
+			return env.get(sym.name());
+		}
+		if (!(expr instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		switch (head.name()) {
+			case LispNames.QUOTE -> {
+				return parts.size() == 2 ? parts.get(1) : null;
+			}
+			case LispNames.LIST -> {
+				List<LispVal> folded = foldPureSpecArgs(parts, env);
+				return folded == null ? null : (folded.isEmpty() ? LispNil.INSTANCE : listToCons(folded));
+			}
+			case LispNames.CONS -> {
+				List<LispVal> folded = foldPureSpecArgs(parts, env);
+				return folded != null && folded.size() == 2 ? new LispCons(folded.get(0), folded.get(1)) : null;
+			}
+			case LispNames.APPEND -> {
+				List<LispVal> folded = foldPureSpecArgs(parts, env);
+				if (folded == null) {
+					return null;
+				}
+				List<LispVal> elements = new java.util.ArrayList<>();
+				for (LispVal piece : folded) {
+					if (piece instanceof LispNil) {
+						continue;
+					}
+					if (!(piece instanceof LispCons pieceCons) || !pieceCons.isProperList()) {
+						return null;
+					}
+					elements.addAll(pieceCons.toList());
+				}
+				return elements.isEmpty() ? LispNil.INSTANCE : listToCons(elements);
+			}
+			case LispNames.OR -> {
+				LispVal result = LispNil.INSTANCE;
+				for (int i = 1; i < parts.size(); i++) {
+					result = foldPureSpecExpr(parts.get(i), env);
+					if (result == null || !(result instanceof LispNil)) {
+						return result;
+					}
+				}
+				return result;
+			}
+			case LispNames.LET, LispNames.LET_STAR -> {
+				if (parts.size() < 3) {
+					return null;
+				}
+				java.util.Map<String, LispVal> inner = new java.util.HashMap<>(env);
+				java.util.Map<String, LispVal> initEnv = LispNames.LET.equals(head.name()) ? env : inner;
+				LispVal bindings = normalizeBindingList(parts.get(1));
+				if (bindings instanceof LispCons bindingCons) {
+					for (LispVal binding : bindingCons.toList()) {
+						if (!(binding instanceof LispCons pair) || !pair.isProperList()
+								|| !(pair.car() instanceof LispSymbol name)) {
+							return null;
+						}
+						List<LispVal> pairParts = pair.toList();
+						LispVal value = pairParts.size() >= 2 ? foldPureSpecExpr(pairParts.get(1), initEnv)
+								: LispNil.INSTANCE;
+						if (value == null) {
+							return null;
+						}
+						inner.put(name.name(), value);
+					}
+				}
+				return foldPureSpecExpr(parts.get(parts.size() - 1), inner);
+			}
+			default -> {
+				return null;
+			}
+		}
+	}
+
+	@Nullable private static List<LispVal> foldPureSpecArgs(List<LispVal> parts, java.util.Map<String, LispVal> env) {
+		List<LispVal> folded = new java.util.ArrayList<>(parts.size() - 1);
+		for (int i = 1; i < parts.size(); i++) {
+			LispVal value = foldPureSpecExpr(parts.get(i), env);
+			if (value == null) {
+				return null;
+			}
+			folded.add(value);
+		}
+		return folded;
 	}
 
 	/**
