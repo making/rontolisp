@@ -446,6 +446,63 @@ The rontolisp backend emits none, so this is invisible on a compiled core module
 on the hand-written WAT blobs the component wrapper embeds: the base adapter's name section
 alone is 1,438 B of its 3,953. Pinned by `WasmTreeShakerTest.dropsTheNameSectionRenumberingHasInvalidated`.
 
+### Identical bodies are emitted once (todo-322, 2026-08-11)
+
+`am.ik.wasm.WasmBodyFolder` runs as the tail of `WasmTreeShaker.shakeWithRemap`, so every
+shaken artifact gets it (GC Preview 1, the `--component` core, the shaken adapter,
+`--no-gc`) at every `eliminatesDeadCode()` level: when two or more defined functions
+declare canonically-equal types and carry byte-for-byte identical code entries, one body
+survives and every `call`/`ref.func`/export/start/global-initializer reference is
+redirected to it. The pass iterates to a fixpoint -- folding the twins can make their
+CALLERS byte-identical in turn (measured: the `--no-gc` export wrappers of two identical
+defuns differ only in their `call` target, so they fold on the second pass) -- and then
+one more `dropUnreachable` run collects any type entry the fold orphaned. "Canonically
+equal" is same index, or same position in byte-identical `rec`-group entries neither of
+which references its own members: byte-identical entries name identical EXTERNAL indices,
+so their closures are equal under wasm-GC canonicalization, while inside a
+self-referential group byte equality proves nothing (the same immediate resolves to a
+different group). The distinction only matters on `--no-gc`, which declares one type
+entry per function; the GC writer shares signature entries, so there the key degenerates
+to "same declared index".
+
+**The identity question, answered (the reason folding is sound):** nothing in the emitted
+module shapes can observe a function's identity through its code index. A first-class
+function value is a closure STRUCT whose dispatch id is plain `i32` data -- two
+definitions that fold keep distinct funcIds, distinct `_lookup` rows and distinct
+dispatch-ladder arms; the arms just `call` the same body. `eq` on WASM is `ref.eq` plus
+char/bignum/string value fallbacks and has NO closure arm (`WasmEmitHelper
+.emitEqComparison`), so `(eq #'f #'g)` is NIL for two identically-bodied defuns on every
+backend, fold or no fold -- pinned four-backend by the ci-spec case
+`identical-function-bodies-keep-distinct-identity` and under `--optimize` by the
+fold program in `optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo`. (`(eq #'f #'f)`
+already diverges interpreter-vs-compilers -- fresh struct per `#'` -- and stays out of
+the pin.) `ref.func` values have no comparator, and multiple exports may alias one
+function index; the component wrapper reaches core functions by export NAME only.
+
+Measured 2026-08-11 on the zlib rows (the todo's probe: 362 bodies, 28 duplicate groups,
+6,639 B redundant at `=size`), each module gunzipping the fixture byte-for-byte after:
+
+| zlib row | before | after |
+| --- | --- | ---: |
+| `--optimize` | 171,312 | 162,340 (**-5.2%**) |
+| `--optimize=size` | 137,430 | 130,658 (**-4.9%**, 362 -> 314 bodies) |
+| `--component --optimize=size` | 142,110 | 135,316 (-4.8%) |
+
+Structural pins: `WasmBodyFolderTest` -- a module with N identical bodies emits one and
+the emitted module holds NO duplicate (type, body) pair at all (the fixpoint), on the GC
+backend at both levels and on `--no-gc` (where both export names end up aliasing the one
+wrapper). The corpus stays covered by `WasmTreeShakerCorpusTest` (wasm-tools validation)
+and `JvmClassShakerCorpusTest`'s output equality. The `-Drontolisp.wasm.debug-func-sizes`
+dump labels a folded group by its survivor (first pre-image wins in `dumpFuncSizes`).
+
+**The JVM twin is measured, not implemented** (`.todo/327`): the zlib class at
+`--optimize` has the same shape -- 353 `Code` methods, 48 duplicates, 8,331 B redundant
+(5.2% of code bytes), the same accessor tail. Folding there means redirecting
+`invokestatic` constant-pool immediates and letting `JvmClassShaker` drop the orphaned
+method, but methods are reachable BY NAME (the dispatch/eval roots, the reflective
+`_apply` edge), so the survivor set needs its own soundness argument -- the todo carries
+the numbers and the design sketch.
+
 ### The component WRAPPER: adapter + WASI surface (todo-270, 2026-08-06)
 
 Until this pass the wrapper was fixed cost: whatever the core shrank to, a component carried

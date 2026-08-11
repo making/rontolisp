@@ -77,6 +77,16 @@ the format renderer and the unreachable seeded-condition arms and layouts. That
 is why the `zlib` rows sit far below chipz's full source size while the row's
 check still gunzips the stream byte-identically on every backend.
 
+**Identical function bodies are emitted once.** A `defstruct`/`define-condition`
+accessor compiles to the same bytes as its siblings two or three at a time, and
+chipz declares five conditions and several structs -- on the `--optimize=size`
+row that was 362 bodies of which 48 were byte-for-byte copies of an earlier one.
+The duplicate-body fold (`.kb/optimize-dead-code-elimination.md`) keeps one body
+per group and redirects every reference, worth -4.9% on that row (137,430 ->
+130,658) and about the same on the other two optimized `zlib` rows. Only code is
+shared, not identity: `(eq #'f #'g)` stays `NIL` for two identically-bodied
+functions.
+
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
 distance/length codes, ~700 elements in all -- as

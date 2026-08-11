@@ -5294,9 +5294,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					importedAfter++;
 				}
 			}
+			// Several pre indices can share one final index (identical bodies fold to a
+			// survivor); the first -- the survivor -- names the shared body.
 			preOfFinal = new int[funcRemap.length];
+			Arrays.fill(preOfFinal, -1);
 			for (int pre = 0; pre < funcRemap.length; pre++) {
-				if (funcRemap[pre] >= 0) {
+				if (funcRemap[pre] >= 0 && preOfFinal[funcRemap[pre]] < 0) {
 					preOfFinal[funcRemap[pre]] = pre;
 				}
 			}

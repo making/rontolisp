@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
 
@@ -18,7 +19,8 @@ import org.jspecify.annotations.Nullable;
  * {@code ref.func}) immediates in every function body, computes the set of functions
  * reachable from the module's roots (its exported functions and an optional start
  * function), drops the rest, and renumbers every surviving function reference so the
- * module stays valid.
+ * module stays valid. {@code WasmBodyFolder} then folds survivors whose declared type and
+ * code bytes are identical down to one body each.
  * <p>
  * The same walk collects every <strong>type</strong> index the survivors still mention
  * (function signatures, GC-op immediates, block types, locals, globals, tags, imports,
@@ -220,7 +222,9 @@ public final class WasmTreeShaker {
 	 * @param importedFunctionCount the INPUT module's imported-function count (imports
 	 * precede defined functions in the index space)
 	 * @param funcRemap old global function index to new global function index, {@code -1}
-	 * for a dropped function; {@code null} when nothing was dropped (identity)
+	 * for a dropped function; a function whose body {@code WasmBodyFolder} folded into an
+	 * identical survivor maps to the survivor's index (so several old indices may share
+	 * one new index); {@code null} when nothing was dropped (identity)
 	 */
 	public record ShakeResult(byte[] module, int importedFunctionCount, int @Nullable [] funcRemap) {
 	}
@@ -236,6 +240,32 @@ public final class WasmTreeShaker {
 	 * @return the shaken module plus the old-to-new function index mapping
 	 */
 	public static ShakeResult shakeWithRemap(byte[] module, List<OwnedDataSegment> ownedDataSegments,
+			List<DroppableDataRange> droppableDataRanges) {
+		ShakeResult shaken = dropUnreachable(module, ownedDataSegments, droppableDataRanges);
+		ShakeResult folded = WasmBodyFolder.fold(shaken);
+		if (folded == shaken) {
+			return shaken;
+		}
+		// A fold can orphan a type entry (a backend that declares one entry per
+		// function); re-running the reachability half collects it. Every function is
+		// still live -- the fold redirects references, it never removes an edge -- so
+		// this only drops types, and the segment/range claims (already applied, and
+		// speaking in the ORIGINAL module's indices) must not be re-applied.
+		ShakeResult cleaned = dropUnreachable(folded.module(), List.of(), List.of());
+		if (cleaned.funcRemap() == null) {
+			return new ShakeResult(cleaned.module(), folded.importedFunctionCount(), folded.funcRemap());
+		}
+		int[] foldRemap = Objects.requireNonNull(folded.funcRemap());
+		int[] remap = new int[foldRemap.length];
+		for (int i = 0; i < remap.length; i++) {
+			remap[i] = foldRemap[i] < 0 ? -1 : cleaned.funcRemap()[foldRemap[i]];
+		}
+		return new ShakeResult(cleaned.module(), folded.importedFunctionCount(), remap);
+	}
+
+	// The reachability half of the pass; WasmBodyFolder then folds duplicate bodies among
+	// the survivors and composes its renumbering into the returned remap.
+	private static ShakeResult dropUnreachable(byte[] module, List<OwnedDataSegment> ownedDataSegments,
 			List<DroppableDataRange> droppableDataRanges) {
 		List<Section> sections = parseSections(module);
 
@@ -436,7 +466,7 @@ public final class WasmTreeShaker {
 
 	// The name a custom section carries, or null when its payload is not even a valid
 	// name.
-	private static @Nullable String customSectionName(byte[] payload) {
+	static @Nullable String customSectionName(byte[] payload) {
 		if (payload.length == 0) {
 			return null;
 		}
@@ -531,10 +561,10 @@ public final class WasmTreeShaker {
 	 * {@code firstTypeIndex} -- more than one for a {@code rec} group), and every type
 	 * index its own definition mentions.
 	 */
-	private record TypeEntry(int start, int end, int firstTypeIndex, int typeCount, List<Ref> refs) {
+	record TypeEntry(int start, int end, int firstTypeIndex, int typeCount, List<Ref> refs) {
 	}
 
-	private static List<TypeEntry> parseTypeSection(byte[] payload) {
+	static List<TypeEntry> parseTypeSection(byte[] payload) {
 		int[] p = { 0 };
 		int count = readU(payload, p);
 		List<TypeEntry> entries = new ArrayList<>();
@@ -761,7 +791,7 @@ public final class WasmTreeShaker {
 
 	// --- Function section ---
 
-	private static int[] parseFunctionSection(byte[] payload) {
+	static int[] parseFunctionSection(byte[] payload) {
 		int[] p = { 0 };
 		int count = readU(payload, p);
 		int[] types = new int[count];
@@ -790,7 +820,7 @@ public final class WasmTreeShaker {
 	// --- Global / tag sections ---
 
 	// globalsec := vec(globaltype expr); globaltype := valtype mut
-	private static List<Ref> scanGlobalSection(byte[] payload) {
+	static List<Ref> scanGlobalSection(byte[] payload) {
 		return scanGlobalSection(payload, null);
 	}
 
@@ -1033,7 +1063,7 @@ public final class WasmTreeShaker {
 		return result;
 	}
 
-	private static byte[] rebuildExportSection(byte[] payload, int[] remap) {
+	static byte[] rebuildExportSection(byte[] payload, int[] remap) {
 		int[] p = { 0 };
 		int count = readU(payload, p);
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
@@ -1050,7 +1080,7 @@ public final class WasmTreeShaker {
 		return body.toByteArray();
 	}
 
-	private static byte[] rebuildStartSection(byte[] payload, int[] remap) {
+	static byte[] rebuildStartSection(byte[] payload, int[] remap) {
 		int[] p = { 0 };
 		int index = readU(payload, p);
 		ByteArrayOutputStream body = new ByteArrayOutputStream();

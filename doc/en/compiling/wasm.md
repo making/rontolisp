@@ -112,6 +112,11 @@ the type definitions nothing left names, and the static string data no surviving
 code still addresses — a printed literal's module is a few hundred bytes rather
 than the whole runtime's string table.
 
+Definitions that compile to byte-for-byte identical bodies — typically the
+accessors a `defstruct` or `define-condition` generates — are emitted once, with
+every call redirected to the shared body. Only the code is shared: each function
+keeps its own identity, so `(eq #'f #'g)` stays `NIL`.
+
 That floor does not depend on how the program spells the write. A constant text
 is rendered at compile time and emitted as bytes, so `print`, `princ` + `terpri`,
 `write-string`, `write-line` and `(format t "Hello, ~a!~%" "World")` all leave the

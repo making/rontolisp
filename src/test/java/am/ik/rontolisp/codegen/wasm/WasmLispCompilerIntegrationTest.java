@@ -2706,7 +2706,13 @@ class WasmLispCompilerIntegrationTest {
 				"(defun up (s) (intern (string-upcase s))) (print (eq (up \"alpha\") 'alpha)) (print (up \"alpha\"))",
 				"(defun mk (a b) (intern (concatenate 'string a b)))"
 						+ " (print (eq (mk \"ZE\" \"TA\") (mk \"ZE\" \"TA\"))) (print (mk \"ZE\" \"TA\"))",
-				"(defun cut-of (s) (subseq s 1 1)) (print (eq (intern (cut-of \"x\")) '||))");
+				"(defun cut-of (s) (subseq s 1 1)) (print (eq (intern (cut-of \"x\")) '||))",
+				// Byte-identical defun bodies fold to one shared body under --optimize;
+				// each name keeps its own dispatch id and closure struct, so the direct
+				// calls, the funcall path and eq-distinctness must all survive the fold.
+				"(defun fold-twin-a (n) (* n 17)) (defun fold-twin-b (n) (* n 17))"
+						+ " (print (fold-twin-a 2)) (print (funcall #'fold-twin-b 3))"
+						+ " (print (eq #'fold-twin-a #'fold-twin-b))");
 		for (String program : programs) {
 			List<LispVal> parsed = LispReader.readAllFromString(program);
 			String plain = runOptimizeLevel(parsed, OptimizeLevel.NONE);

@@ -8266,3 +8266,14 @@ cases:
       (#(99 20 30 40) #(10 20 30 40) NIL)
       ("zB" "zB")
       FOLD-DIFFERENTIAL-OK
+  - name: identical-function-bodies-keep-distinct-identity
+    source: |
+      (defun body-twin-a (n) (* n 17))
+      (defun body-twin-b (n) (* n 17))
+      (print (body-twin-a 2))
+      (print (funcall #'body-twin-b 3))
+      (print (eq #'body-twin-a #'body-twin-b))
+    expected: |
+      34
+      51
+      NIL
