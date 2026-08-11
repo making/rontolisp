@@ -8,10 +8,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispArray;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -176,6 +178,16 @@ public final class PureBuiltinFolder {
 				// reference, whose value the compile path does not know.
 				return sym.isKeyword() ? form : null;
 			}
+			case LispArray ignored -> {
+				// A #(...) literal is self-evaluating. Its identity is why no fold may
+				// RETURN one (isFoldableResult), but reading its elements as an ARGUMENT
+				// is what lets a literal table spelled as a vector fold like the list
+				// spelling beside it.
+				return form;
+			}
+			case LispIntVector ignored -> {
+				return form;
+			}
 			case LispCons cons -> {
 				if (cons.car() instanceof LispSymbol op && LispNames.QUOTE.equals(op.name())
 						&& cons.cdr() instanceof LispCons datum && datum.cdr() instanceof LispNil) {
@@ -232,7 +244,7 @@ public final class PureBuiltinFolder {
 	private static boolean isFoldableResult(LispVal value) {
 		return value instanceof LispInteger || value instanceof LispBigInteger || value instanceof LispChar
 				|| value instanceof LispString || value instanceof LispNil || value instanceof LispTrue
-				|| value instanceof LispSymbol;
+				|| value instanceof LispSymbol || value instanceof LispIntVector;
 	}
 
 	/**
@@ -684,6 +696,15 @@ public final class PureBuiltinFolder {
 	private static final int MAX_FOLDED_CHARS = 4096;
 
 	/**
+	 * The ceiling for a folded packed integer table, in elements. Unlike the two above it
+	 * is a bound on the COMPILER's work rather than on the output: the elements are
+	 * already spelled out in the source, and the folded table is SMALLER than the call it
+	 * replaces on every backend, so a big one is exactly what this fold is for. 65,536 is
+	 * past any hand-written table (chipz's largest is 288, ironclad's 256).
+	 */
+	private static final int MAX_FOLDED_ELEMENTS = 65_536;
+
+	/**
 	 * The curated table. Insertion-ordered because {@link #foldedOperators} is iterated
 	 * by the harness ({@code .kb/emitted-output-determinism.md}).
 	 *
@@ -903,6 +924,10 @@ public final class PureBuiltinFolder {
 			}
 			return sb.codePointCount(0, sb.length()) > MAX_FOLDED_CHARS ? null : new LispString(sb.toString());
 		});
+		// -- packed integer tables ----------------------------------------------
+		t.put(LispNames.COERCE,
+				args -> args.size() == 2 ? packedIntVector(args.get(0), packedWidth(args.get(1))) : null);
+		t.put(LispNames.MAKE_ARRAY, PureBuiltinFolder::foldMakeArray);
 		t.put(LispNames.SUBSEQ, args -> {
 			if (args.size() < 2 || args.size() > 3 || !(args.get(0) instanceof LispString s)) {
 				return null;
@@ -922,6 +947,141 @@ public final class PureBuiltinFolder {
 			return new LispString(value.substring(from, value.offsetByCodePoints(from, end - start)));
 		});
 		return java.util.Collections.unmodifiableMap(t);
+	}
+
+	// ------------------------------------------------------ the packed-table folds
+
+	/**
+	 * A literal lookup table costs THREE TIMES its own bytes when it is built at run
+	 * time: {@code (coerce '(...) '(vector (unsigned-byte 32)))} -- the way every CL
+	 * library spells one -- conses the element list first, at around 11.8 bytes of wasm
+	 * per element, where the packed vector it becomes is 4. Folding the call to the
+	 * {@link LispIntVector} literal it computes hands the backends the table as DATA,
+	 * which is what {@code WasmQuoteCompiler.compileIntVectorLiteral} bakes into the
+	 * module's data segment.
+	 *
+	 * <p>
+	 * <b>Why a packed vector may be a fold RESULT when an array may not.</b> The identity
+	 * rule excludes an array because two evaluations of one fold would hand out one
+	 * object where the program built two. A packed literal does not: both compile
+	 * backends materialize it FRESH at every evaluation (the wasm one allocates the array
+	 * and copies the segment into it, the JVM one builds a new {@code long[]}), exactly
+	 * as a string literal does and for the same measured reason -- so a folded table is
+	 * as mutable and as unshared as the call it replaces. The INTERPRETER, where a
+	 * literal is one shared object, does not fold.
+	 *
+	 * <p>
+	 * The fold is element-type EXACT: a value that does not fit the declared width
+	 * declines rather than being masked, and so does a non-integer element, an improper
+	 * list, and an element count past {@link #MAX_FOLDED_ELEMENTS}. A {@code deftype}
+	 * alias of a packed designator declines too -- the fold runs before the deftype
+	 * registry is populated, so it cannot resolve one, and the run-time
+	 * {@code %seq-int-vector} lowering still builds the same value.
+	 * @param sequence the already-reduced sequence argument
+	 * @param width the packed element width the result type asks for, 0 for none
+	 * @return the packed literal, or null to decline
+	 */
+	private static @Nullable LispVal packedIntVector(LispVal sequence, int width) {
+		if (width == 0) {
+			return null;
+		}
+		List<LispVal> elements = literalElements(sequence);
+		if (elements == null || elements.size() > MAX_FOLDED_ELEMENTS) {
+			return null;
+		}
+		long limit = width == 32 ? 0xFFFFFFFFL : (1L << width) - 1;
+		long[] data = new long[elements.size()];
+		for (int i = 0; i < data.length; i++) {
+			BigInteger n = switch (elements.get(i)) {
+				case LispInteger v -> BigInteger.valueOf(v.value());
+				case LispBigInteger v -> v.value();
+				default -> null;
+			};
+			if (n == null || n.signum() < 0 || n.bitLength() > 32 || n.longValue() > limit) {
+				return null;
+			}
+			data[i] = n.longValue();
+		}
+		return new LispIntVector(width, data);
+	}
+
+	/**
+	 * {@code (make-array N :element-type '(unsigned-byte 8|16|32) :initial-contents
+	 * '(...))} -- the other spelling of the same literal table -- as its packed literal.
+	 *
+	 * <p>
+	 * {@code :initial-contents} is REQUIRED: without it the call is an allocation whose
+	 * size is the only thing the compiler knows, and folding
+	 * {@code (make-array 8192 :element-type '(unsigned-byte 8))} would bake 8 KB of zeros
+	 * into the module in place of one {@code array.new_default}. Any other keyword
+	 * ({@code :fill-pointer}, {@code :adjustable}, {@code :displaced-to},
+	 * {@code :initial-element}) declines, as does a rank other than 1 and a dimension
+	 * that disagrees with the contents.
+	 */
+	private static @Nullable LispVal foldMakeArray(List<LispVal> args) {
+		if (args.isEmpty() || args.size() % 2 != 1) {
+			return null;
+		}
+		LispVal elementType = null;
+		LispVal contents = null;
+		for (int i = 1; i + 1 < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
+				return null;
+			}
+			switch (LispSymbol.memberName(key.name())) {
+				case "ELEMENT-TYPE" -> elementType = args.get(i + 1);
+				case "INITIAL-CONTENTS" -> contents = args.get(i + 1);
+				default -> {
+					return null;
+				}
+			}
+		}
+		if (contents == null) {
+			return null;
+		}
+		LispVal packed = packedIntVector(contents, LispNames.unsignedByteWidth(elementType));
+		return (packed instanceof LispIntVector iv && iv.length() == rankOneLength(args.get(0))) ? packed : null;
+	}
+
+	/** The length a rank-1 {@code make-array} dimension argument asks for, or -1. */
+	private static int rankOneLength(LispVal dimensions) {
+		LispVal size = (dimensions instanceof LispCons cons && cons.cdr() instanceof LispNil) ? cons.car() : dimensions;
+		return (size instanceof LispInteger n && n.value() >= 0 && n.value() <= MAX_FOLDED_ELEMENTS) ? (int) n.value()
+				: -1;
+	}
+
+	/** The elements of a literal sequence -- a proper list or a vector -- or null. */
+	private static @Nullable List<LispVal> literalElements(LispVal sequence) {
+		return switch (sequence) {
+			case LispNil ignored -> List.of();
+			case LispCons cons -> cons.isProperList() ? cons.toList() : null;
+			case LispArray array -> {
+				if (array.dimensions().length != 1) {
+					yield null;
+				}
+				// An unfilled slot is null in the backing store, which is not an integer:
+				// it goes in as nil so the element check declines it like any other
+				// non-integer, rather than tripping over the null.
+				List<LispVal> out = new ArrayList<>(array.data().length);
+				for (LispVal element : array.data()) {
+					out.add(element == null ? LispNil.INSTANCE : element);
+				}
+				yield out;
+			}
+			case LispIntVector iv -> {
+				List<LispVal> out = new ArrayList<>(iv.length());
+				for (int i = 0; i < iv.length(); i++) {
+					out.add(new LispInteger(iv.elementAt(i)));
+				}
+				yield out;
+			}
+			default -> null;
+		};
+	}
+
+	/** The packed element width a literal result-type designator asks for, or 0. */
+	private static int packedWidth(LispVal designator) {
+		return LispNames.packedVectorWidth(designator);
 	}
 
 	// --------------------------------------------------------------- table helpers

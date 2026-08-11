@@ -968,8 +968,14 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);
 				case LispNames.ARRAY_DISP_TARGET -> JvmArrayCompiler.compileDispTarget(cons, ctx, className);
 				case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
-				case LispNames.COERCE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons,
-						ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx, className);
+				case LispNames.COERCE -> {
+					// A packed (unsigned-byte 8|16|32) result type lowers through the
+					// shared %seq-int-vector helper, exactly as concatenate's does;
+					// everything else is expandCoerce as before.
+					LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
+					JvmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons,
+							ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx, className);
+				}
 				case LispNames.MAP_INTO -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandMapInto(cons,
 								ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))),

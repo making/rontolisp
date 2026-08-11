@@ -1026,6 +1026,33 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem() {
+		// A literal (unsigned-byte N) table is baked into the module's static data at the
+		// element width, so one more element costs w/8 bytes -- not the ~11.8 the cons
+		// list of the (coerce '(...) '(vector ...)) spelling used to cost, nor the ~12 an
+		// array.set run costs. Measured 4.0 / 2.0 / 1.0 (the exact element width).
+		assertThat(marginalBytesPerTableElement("(unsigned-byte 32)", 0xF0F0F0F0L)).isLessThanOrEqualTo(4);
+		assertThat(marginalBytesPerTableElement("(unsigned-byte 16)", 0xF0F0L)).isLessThanOrEqualTo(2);
+		assertThat(marginalBytesPerTableElement("(unsigned-byte 8)", 0xF0L)).isLessThanOrEqualTo(1);
+	}
+
+	// The bytes one more element adds to a literal table of 256, i.e. the per-element
+	// cost with the site's fixed copy loop paid for in both measurements.
+	private static int marginalBytesPerTableElement(String elementType, long fill) {
+		return compileWithTable(elementType, fill, 257).length - compileWithTable(elementType, fill, 256).length;
+	}
+
+	private static byte[] compileWithTable(String elementType, long fill, int count) {
+		StringBuilder source = new StringBuilder("(defvar *t* (coerce '(");
+		for (int k = 0; k < count; k++) {
+			source.append(fill).append(' ');
+		}
+		source.append(") '(vector ").append(elementType).append(")))\n(print (aref *t* 1))");
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.DEFAULT)
+			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
+	@Test
 	void aSlotAccessorDispatcherDoesNotCarryItsOwnCopyOfTheNoApplicableMethodTail() {
 		// Every synthesized accessor is a pair of dispatchers (reader + %setf- writer)
 		// whose last resort used to inline the whole error tail -- condition

@@ -6631,6 +6631,61 @@ public final class LispNames {
 		return true;
 	}
 
+	/**
+	 * The width of an {@code (unsigned-byte 8|16|32)} element-type specifier -- the three
+	 * widths the packed integer-vector representation supports
+	 * ({@code .kb/packed-integer-vectors.md}) -- or 0 for anything else, {@code *},
+	 * {@code t}, {@code character} and the unsupported widths included. A
+	 * package-qualified spelling is matched by its member name.
+	 *
+	 * <p>
+	 * It lives here, with the names, because every layer asks it: the interpreter's
+	 * {@code make-array}, {@code ConcatenateForms}' result-type normalizer in
+	 * {@code compiler}, and {@code PureBuiltinFolder} in {@code macro} -- which may not
+	 * import {@code compiler}, so the shared spelling has to sit below both.
+	 * @param elementType the element-type specifier
+	 * @return 8, 16, 32, or 0
+	 */
+	public static int unsignedByteWidth(@org.jspecify.annotations.Nullable LispVal elementType) {
+		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
+				&& widthCell.cdr() instanceof LispNil) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+			if (UNSIGNED_BYTE.equals(qn == null ? head.name() : qn.member())
+					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
+				return (int) width.value();
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * The packed element width a SEQUENCE RESULT-TYPE designator asks for --
+	 * {@code (vector (unsigned-byte 8))}, {@code (simple-array (unsigned-byte 32) (*))}
+	 * -- or 0 for a general (element-type-free) result.
+	 *
+	 * <p>
+	 * Which spellings carry an element type is a SHAPE rule, not a position rule: only
+	 * {@code (vector T ...)}, {@code (array T ...)} and {@code (simple-array T ...)} lead
+	 * with one, while {@code (simple-vector SIZE)} and the bit-vector spellings carry a
+	 * SIZE in that slot, so reading position 1 unconditionally would turn esrap's
+	 * {@code (simple-vector 41)} into a specialized request.
+	 * @param designator the result-type designator, already unquoted
+	 * @return 8, 16, 32, or 0
+	 */
+	public static int packedVectorWidth(@org.jspecify.annotations.Nullable LispVal designator) {
+		if (!(designator instanceof LispCons spec) || !(spec.car() instanceof LispSymbol head)
+				|| !(spec.cdr() instanceof LispCons rest)) {
+			return 0;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
+		boolean carriesElementType = switch (qn == null ? head.name() : qn.member()) {
+			case "VECTOR", "ARRAY", "SIMPLE-ARRAY" -> true;
+			default -> false;
+		};
+		return carriesElementType ? unsignedByteWidth(rest.car()) : 0;
+	}
+
 	private LispNames() {
 	}
 

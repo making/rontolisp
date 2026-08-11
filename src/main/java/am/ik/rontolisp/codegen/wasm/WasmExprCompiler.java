@@ -1240,9 +1240,14 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx);
 				case LispNames.ARRAY_DISP_TARGET -> WasmArrayCompiler.compileDispTarget(cons, ctx);
 				case LispNames.ARRAY_DISP_OFFSET -> WasmArrayCompiler.compileDispOffset(cons, ctx);
-				case LispNames.COERCE -> WasmExprCompiler.compileExpr(
-						LispMacroExpander.expandCoerce(cons, true, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)),
-						ctx);
+				case LispNames.COERCE -> {
+					// A packed (unsigned-byte 8|16|32) result type lowers through the
+					// shared %seq-int-vector helper, exactly as concatenate's does;
+					// everything else is expandCoerce as before.
+					LispVal packed = ConcatenateForms.packedVectorCoerce(cons, ctx.closRegistry);
+					WasmExprCompiler.compileExpr(packed != null ? packed : LispMacroExpander.expandCoerce(cons, true,
+							ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx);
+				}
 				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons,
 						ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);

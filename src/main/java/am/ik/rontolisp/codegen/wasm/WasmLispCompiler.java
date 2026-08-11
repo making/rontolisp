@@ -6652,6 +6652,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		private final Set<String> shakeable = new HashSet<>();
 
+		/**
+		 * {@code {absolute offset, length}} of every {@link #appendShakeableBlob} blob,
+		 * in append (i.e. address) order so the emitted range list is deterministic.
+		 */
+		private final List<int[]> shakeableBlobs = new ArrayList<>();
+
 		private boolean attributing;
 
 		private int nextOffset;
@@ -6904,6 +6910,10 @@ public final class WasmLispCompiler implements LispCompiler {
 							start, end));
 				}
 			}
+			for (int[] blob : this.shakeableBlobs) {
+				int start = blob[0] - dataBase;
+				ranges.add(new am.ik.wasm.WasmTreeShaker.DroppableDataRange(segmentIndex, start, start + blob[1]));
+			}
 			return ranges;
 		}
 
@@ -6922,6 +6932,23 @@ public final class WasmLispCompiler implements LispCompiler {
 			int offset = this.nextOffset;
 			this.data.write(blob, 0, blob.length);
 			this.nextOffset += blob.length;
+			return offset;
+		}
+
+		/**
+		 * {@link #appendBlob} for a blob whose ONLY reader is a function body's own
+		 * {@code i32.const} -- a baked packed integer-vector literal
+		 * ({@code WasmQuoteCompiler.compileIntVectorLiteral}). The bytes join the
+		 * {@link #shakeableRanges} candidates on exactly the terms an
+		 * {@link #addBodyString} entry does: the shaker keeps the range when a surviving
+		 * body still holds a constant inside it, and cuts it when the last reader died.
+		 * Unlike a string a blob is never deduplicated, so one append is one range.
+		 * @param blob the bytes to place
+		 * @return the absolute offset where the blob was placed
+		 */
+		int appendShakeableBlob(byte[] blob) {
+			int offset = appendBlob(blob);
+			this.shakeableBlobs.add(new int[] { offset, blob.length });
 			return offset;
 		}
 

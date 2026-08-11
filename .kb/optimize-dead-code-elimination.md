@@ -233,6 +233,16 @@ that is exactly what every blob-citing caller does: the instance-layout blob (bu
 Pass 2a), the `_lookup` registry rows (`stringTable.addString(defun.name)` after it), the
 `eval` special-form offsets, the reader's char-name and struct-directory tables.
 
+**A baked packed-vector literal is a candidate too** (`StringTable.appendShakeableBlob`,
+todo-319). A literal `(unsigned-byte 8|16|32)` table of 16+ elements goes into the same
+segment as raw little-endian bytes, and its only reader is the copy loop's own
+`i32.const base` — the same shape the window grants a body string, so the blob joins the
+candidate list directly instead of needing a window. A blob is never deduplicated, so one
+append is one range. That is also why the loop takes its base from an `i32.const` and not
+from the load's memarg offset: the probe reads `i32.const` values and skips memargs, so a
+base hidden there would let the shaker cut a table its own reader still addresses
+(`.kb/packed-integer-vectors.md`).
+
 **An OVERLAPPING entry is never a candidate** (`StringTable.addTailOf`, todo-317): a
 layout's print name is interned as a view into its own `%class-` tag's bytes, and a range
 the shaker cuts has to own its bytes outright, so the reuse is declined when the container

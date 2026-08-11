@@ -47,6 +47,7 @@ import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.compiler.ClackEnv;
+import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -4158,8 +4159,14 @@ public final class LispEvaluator {
 				return eval(LispMacroExpander.expandArrayTotalSize(cons), env);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX:
 				return eval(LispMacroExpander.expandArrayRowMajorIndex(cons), env);
-			case LispNames.COERCE:
-				return eval(LispMacroExpander.expandCoerce(cons), env);
+			case LispNames.COERCE: {
+				// A packed (unsigned-byte 8|16|32) result type is the one designator
+				// expandCoerce cannot express (it collapses a compound spec to its head);
+				// the shared lowering answers the same %seq-int-vector call every backend
+				// uses (.kb/concatenate-result-families.md).
+				LispVal packed = ConcatenateForms.packedVectorCoerce(cons, this.closRegistry);
+				return eval(packed != null ? packed : LispMacroExpander.expandCoerce(cons), env);
+			}
 			case LispNames.MAP_INTO:
 				return eval(LispMacroExpander.expandMapInto(cons), env);
 			case LispNames.RASSOC:

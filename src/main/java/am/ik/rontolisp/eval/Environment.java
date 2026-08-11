@@ -1396,18 +1396,7 @@ public final class Environment implements Scope {
 	}
 
 	private static int packedIntElementWidth(@Nullable LispVal elementType) {
-		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
-				&& widthCell.cdr() instanceof LispNil) {
-			String name = head.name();
-			int colon = name.lastIndexOf(':');
-			String local = colon >= 0 ? name.substring(colon + 1) : name;
-			if (local.equals(LispNames.UNSIGNED_BYTE)
-					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
-				return (int) width.value();
-			}
-		}
-		return 0;
+		return LispNames.unsignedByteWidth(elementType);
 	}
 
 	// A packed integer-vector element: an exact integer, masked by the caller. Anything

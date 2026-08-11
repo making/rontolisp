@@ -84,11 +84,43 @@ made 7 of 13 `ClPostgresE2eTest` legs fail with `ETYPECASE: no clause matches
   through `expand`), sharing `Environment.packedIntVector` with its own
   `%seq-int-vector`.
 
-Re-evaluation trigger: `coerce` and `map` still DROP the element type
-(`expandCoerce` collapses a compound spec to its head), so
-`(coerce list '(vector (unsigned-byte 8)))` is a general vector. That is a
-divergence from `concatenate` and it survives only because no library exercised
-it — the shared builder to reuse when one does is `%seq-int-vector`.
+## `coerce` shares that arm (todo-319) — `map` still does not
+
+That trigger fired: chipz spells every one of its constant tables
+`(coerce '(...) '(vector (unsigned-byte 16|32)))`, and the general vector it got
+lost both the element type ANSI promises and, on the compile paths, the unboxed
+representation. `ConcatenateForms.packedVectorCoerce(cons, closRegistry)` is the
+retirement — the same `literalResultSpec` normalizer, the same
+`%seq-int-vector` helper, the same `needsSeqIntVector` gate (widened to read a
+`coerce` designator at index 2 as well as a `concatenate` one at index 1, which
+is also what keeps the JVM's `usesIntArray` forced on). The three coerce call
+sites — `LispEvaluator`'s `COERCE` case, `Jvm`/`WasmExprCompiler`'s — consult it
+BEFORE `LispMacroExpander.expandCoerce`, which is unchanged and still collapses
+every other compound spec to its head. A designator with no packed width answers
+null there, so those programs compile to the same bytes as before.
+
+The width test itself moved DOWN to `LispNames.unsignedByteWidth` /
+`LispNames.packedVectorWidth` (the root package), because `PureBuiltinFolder`
+asks the same question from `macro`, which may not import `compiler`.
+`ConcatenateForms` and `Environment` delegate to it, so the three copies that
+had drifted apart are one.
+
+**Still dropped, deliberately: `map`.** `expandMap` collapses a compound vector
+designator to the bare symbol `'VECTOR` before it emits its `(coerce ... 'vector)`,
+so `(map '(vector (unsigned-byte 8)) #'f x)` is a general vector — and that
+collapse is also what makes the gate above sound, since no codegen-synthesized
+coerce can ever carry a packed designator that the source scan did not see.
+**Trigger:** a library that maps into a byte vector. The fix is to stop
+collapsing in `expandMap` and route through `packedVectorCoerce`, and it must
+widen `needsSeqIntVector` to see the `map` designator in the SAME pass, or the
+helper will be missing at run time.
+
+**Also still general: a COMPUTED coerce designator.** `expandComputedCoerce`
+dispatches on the designator's head at run time and its vector arm builds the
+general vector, so `(coerce seq type)` with `type` holding
+`'(vector (unsigned-byte 8))` diverges from the literal spelling. Same trigger,
+same gate constraint; `concatenateWrapper`'s runtime `equal` test against the
+three `(unsigned-byte N)` lists is the shape to copy.
 
 ## A user deftype alias resolves through the class registry (todo-256)
 
@@ -185,7 +217,7 @@ literally at the call site (http-body's own
 designator that means a packed vector in call position must not mean a general
 one through `apply`.
 
-## `coerce` re-uses the same runtime dispatch
+## `coerce` re-uses the same runtime dispatch for a COMPUTED type
 
 `coerce`'s own result type may be computed too (`(coerce seq type)` with `type`
 in a variable — `alexandria:copy-sequence`/`coercef`/`median`). It was FLOAT-ONLY
@@ -223,3 +255,9 @@ mixed-sequence string family) and `concatenate-packed-element-type`,
 `IroncladE2eTest` (the HKDF vector, end to end on four backends), and the
 `LackEcosystem*E2eTest` lack legs (fast-http's `'simple-byte-vector`, the
 parameterized shape end to end).
+
+The coerce arm: `ci-spec.yaml` `coerce-packed-element-type` (all four backends,
+literal and computed sequence side by side) plus
+`LispEvaluatorTest#evalCoerceKeepsThePackedElementType`,
+`JvmLispCompilerTest#compileAndRunCoerceKeepsThePackedElementType` and
+`WasmLispCompilerIntegrationTest#coerceKeepsThePackedElementTypeAndBakesALiteralTable`.

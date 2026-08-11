@@ -42,6 +42,17 @@ import am.ik.rontolisp.PackageRegistry;
  * The compilers additionally require the result type to be written as a literal quoted
  * designator: the interpreter evaluates it at runtime, a compiler has to resolve it
  * statically.
+ *
+ * <p>
+ * <b>{@code coerce} shares the packed arm.</b> A result-type designator means the same
+ * thing whichever operator reads it, so {@link #packedVectorCoerce} lowers
+ * {@code (coerce seq '(vector (unsigned-byte 8)))} through the very same
+ * {@code %seq-int-vector} helper and the very same {@link #needsSeqIntVector} gate. That
+ * retires the divergence this file used to record as a re-evaluation trigger ("coerce
+ * still DROPS the element type"): {@code expandCoerce} collapses a compound spec to its
+ * head, so the packed spelling built a GENERAL vector -- which is how every literal
+ * lookup table a library spells as {@code (coerce '(...) '(vector (unsigned-byte 32)))}
+ * lost its element type.
  */
 public final class ConcatenateForms {
 
@@ -140,7 +151,7 @@ public final class ConcatenateForms {
 					return new ResultSpec(ResultFamily.LIST, 0);
 				}
 				case "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "BIT-VECTOR", "SIMPLE-BIT-VECTOR" -> {
-					return new ResultSpec(ResultFamily.VECTOR, packedElementWidth(member, current));
+					return new ResultSpec(ResultFamily.VECTOR, LispNames.packedVectorWidth(current));
 				}
 				default -> {
 					LispVal expansion = (closRegistry == null) ? null : closRegistry.findDeftype(sym.name());
@@ -155,44 +166,16 @@ public final class ConcatenateForms {
 	}
 
 	/**
-	 * The packed unsigned-integer element width a vector-family designator asks for, or 0
-	 * for a general result. Only {@code (vector ELEMENT-TYPE ...)},
-	 * {@code (array ELEMENT-TYPE ...)} and {@code (simple-array ELEMENT-TYPE ...)} carry
-	 * an element type in the second position -- {@code (simple-vector SIZE)} carries a
-	 * SIZE there (its element type is always {@code t}) and the bit-vector spellings a
-	 * size too, so reading position 1 unconditionally would turn {@code (simple-vector
-	 * 41)} into a specialized request. Same shape rule as {@code typep}'s array arm.
-	 */
-	private static int packedElementWidth(String member, LispVal designator) {
-		boolean carriesElementType = switch (member) {
-			case "VECTOR", "ARRAY", "SIMPLE-ARRAY" -> true;
-			default -> false;
-		};
-		if (!carriesElementType || !(designator instanceof LispCons spec) || !(spec.cdr() instanceof LispCons rest)) {
-			return 0;
-		}
-		return unsignedByteWidth(rest.car());
-	}
-
-	/**
 	 * The width of an {@code (unsigned-byte 8|16|32)} element-type specifier -- the three
 	 * widths the packed representation supports -- or 0 for anything else (including
 	 * {@code *}, {@code t}, {@code character} and the unsupported widths, which all mean
-	 * a general vector here).
+	 * a general vector here). The spelling itself lives in {@link LispNames}, below both
+	 * this package and {@code macro}, so the fold can ask the same question.
 	 * @param elementType the element-type specifier
 	 * @return 8, 16, 32, or 0
 	 */
 	public static int unsignedByteWidth(LispVal elementType) {
-		if (elementType instanceof LispCons cons && cons.car() instanceof LispSymbol head
-				&& cons.cdr() instanceof LispCons widthCell && widthCell.car() instanceof LispInteger width
-				&& widthCell.cdr() instanceof LispNil) {
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
-			if (LispNames.UNSIGNED_BYTE.equals(qn == null ? head.name() : qn.member())
-					&& (width.value() == 8 || width.value() == 16 || width.value() == 32)) {
-				return (int) width.value();
-			}
-		}
-		return 0;
+		return LispNames.unsignedByteWidth(elementType);
 	}
 
 	/**
@@ -301,6 +284,39 @@ public final class ConcatenateForms {
 		};
 	}
 
+	/**
+	 * The packed-vector lowering of a {@code coerce} call, or {@code null} when the call
+	 * asks for anything else: {@code (coerce seq '(vector (unsigned-byte 8)))} is
+	 * {@code (%seq-int-vector seq 8)}, the same helper and the same value
+	 * {@code (concatenate '(vector (unsigned-byte 8)) seq)} produces.
+	 *
+	 * <p>
+	 * Every other designator -- including the general vector, and a width the packed
+	 * representation does not support -- answers {@code null}, so the caller falls back
+	 * to {@code LispMacroExpander.expandCoerce} and the program compiles exactly as
+	 * before. The interpreter and both compilers consult this before their own coerce
+	 * expansion, which is what keeps one answer on four backends.
+	 * @param cons the coerce expression
+	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
+	 * designators, or null for the built-in members only
+	 * @return the {@code %seq-int-vector} call, or null when the result is not a packed
+	 * vector
+	 */
+	public static @Nullable LispVal packedVectorCoerce(LispCons cons, @Nullable ClosRegistry closRegistry) {
+		if (!cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return null;
+		}
+		ResultSpec spec = literalResultSpec(parts.get(2), closRegistry);
+		if (spec == null || spec.family() != ResultFamily.VECTOR || spec.intWidth() == 0) {
+			return null;
+		}
+		return intVectorCall(parts.get(1), spec.intWidth());
+	}
+
 	// (quote X) -> X; anything else is not a literal designator.
 	private static @Nullable LispVal unquoted(LispVal form) {
 		if (!(form instanceof LispCons quoted)) {
@@ -359,17 +375,18 @@ public final class ConcatenateForms {
 	}
 
 	/**
-	 * Whether the program writes a {@code concatenate} whose result type asks for a
-	 * PACKED unsigned-integer vector, i.e. whose lowering will call
+	 * Whether the program writes a {@code concatenate} or a {@code coerce} whose result
+	 * type asks for a PACKED unsigned-integer vector, i.e. whose lowering will call
 	 * {@code %seq-int-vector}. The backends gate the helper's injection on this (plus a
 	 * {@code #'concatenate} reference, whose wrapper spells the same dispatch at run
 	 * time), so a program that never asks for one stays byte-identical.
 	 *
 	 * <p>
 	 * Unlike {@link #needsSeqString} this gate cannot be outrun by a codegen-time
-	 * expansion: nothing this compiler generates concatenates into a packed element type
-	 * -- {@code format}, {@code with-output-to-string} and the string-stream builders all
-	 * emit the {@code 'string} family.
+	 * expansion: nothing this compiler generates builds a packed element type --
+	 * {@code format}, {@code with-output-to-string} and the string-stream builders all
+	 * emit the {@code 'string} family, and every {@code coerce} an expansion synthesizes
+	 * asks for {@code 'list} / {@code 'string} / {@code 'vector}.
 	 * @param program the top-level forms
 	 * @param closRegistry the registry whose {@code deftype} expansions resolve alias
 	 * designators, or null for the built-in members only
@@ -389,10 +406,16 @@ public final class ConcatenateForms {
 			return false;
 		}
 		List<LispVal> parts = cons.toList();
-		if (parts.size() >= 2 && parts.get(0) instanceof LispSymbol op && LispNames.CONCATENATE.equals(op.name())) {
-			ResultSpec spec = literalResultSpec(parts.get(1), closRegistry);
-			if (spec != null && spec.intWidth() != 0) {
-				return true;
+		// (concatenate 'TYPE ...) reads its designator at index 1, (coerce value 'TYPE)
+		// at index 2; both lower through %seq-int-vector when it spells a packed width.
+		if (parts.size() >= 2 && parts.get(0) instanceof LispSymbol op) {
+			int designator = LispNames.CONCATENATE.equals(op.name()) ? 1
+					: (LispNames.COERCE.equals(op.name()) && parts.size() == 3) ? 2 : -1;
+			if (designator > 0) {
+				ResultSpec spec = literalResultSpec(parts.get(designator), closRegistry);
+				if (spec != null && spec.intWidth() != 0) {
+					return true;
+				}
 			}
 		}
 		return needsSeqIntVector(cons.car(), closRegistry) || needsSeqIntVector(cons.cdr(), closRegistry);

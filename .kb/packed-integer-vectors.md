@@ -106,6 +106,10 @@ ci-spec case.
   vectors this way; reading it back yields a general vector, which is
   conformant). WASM printer converts to a boxed general array in place and
   reuses the general renderer (the farray pattern).
+- `coerce` into an `(unsigned-byte 8|16|32)` vector designator builds the packed
+  representation, the same arm `concatenate` has
+  (`.kb/concatenate-result-families.md`); `map` and a COMPUTED coerce designator
+  still do not, and that file carries the trigger.
 - `subseq` / `copy-seq` are TYPE-PRESERVING (packed in, packed out at the same
   width): the shared `expandSubseqCompat` vector lowering now allocates through
   the new internal `%array-alike` (fresh zero-filled array with the SAME
@@ -135,8 +139,49 @@ ci-spec case.
 now reads into a packed vector for N in {8, 16, 32} (elements masked); any
 other width keeps reading as a plain `#(...)` vector. `Token.IntVectorOpen`,
 `LispReader.readIntVector`. Both compile backends bake the literal natively
-(`WasmQuoteCompiler.compileIntVectorLiteral`, zero elements skip their store;
-`JvmQuoteCompiler.compileLiteralIntVector`, a raw `long[]` build).
+(`WasmQuoteCompiler.compileIntVectorLiteral`;
+`JvmQuoteCompiler.compileLiteralIntVector`, a raw `long[]` build). Since
+todo-319 the reader is not the only producer: `PureBuiltinFolder` reduces a
+literal `(coerce '(...) '(vector (unsigned-byte N)))` / `(make-array ...
+:initial-contents '(...))` to the same value, which is how a library's own
+constant tables reach these emitters.
+
+### A long literal is DATA, not a run of `array.set`s
+
+**A packed literal of 16 elements or more goes into the module's static data at
+the element width, and the site becomes a copy loop over it: `w/8` bytes an
+element plus a fixed ~45.** Below that threshold the old emission stands
+(`array.new_default` + one `array.set` per non-zero element, ~12-17 bytes each),
+so every hand-written short literal compiles to the bytes it always did. The
+crossover is really around 7 elements; 16 buys margin for exactly that reason.
+Measured marginal cost at the three widths: 4.0 / 2.0 / 1.0 bytes an element,
+i.e. the element width and nothing else (`WasmLispCompilerTest.aLiteralLookupTable
+CostsItsOwnBytesAndNotThreeTimesThem`).
+
+Three things this emission is careful about, each of which is a trap if changed:
+
+- **The bytes go through `StringTable.appendShakeableBlob`**, i.e. into the ONE
+  active data segment the string data already occupies (4-byte aligned), and the
+  blob is registered as a `DroppableDataRange`. `--optimize` therefore cuts a
+  dead table's bytes exactly as it cuts a dead string's — a 100-element table in
+  an unreferenced defun leaves 8 bytes of alignment padding behind and nothing
+  else. This is also why it is NOT `array.new_data`: that instruction needs a
+  PASSIVE segment and a datacount section, and `WasmTreeShaker` neither parses
+  passive segments nor renumbers a `dataidx` when it drops one — it throws on
+  the opcode on purpose (`scanGc`). Widening the shaker is the prerequisite for
+  ever using it, and it would buy ~35 bytes a table.
+- **The segment base is an explicit `i32.const`, not the load's memarg offset.**
+  The shaker's droppable-range probe reads `i32.const` values out of surviving
+  bodies and skips memargs, so a base hidden in a memarg would let it cut a
+  table whose own reader is still alive.
+- **The loop counter is an i64 scratch local, so an ASYNC resume body falls back
+  to the `array.set` run.** That body assembles its own locals declaration and
+  never resolves an i64 placeholder, which is why fusion, the raw `let` locals
+  and the counted `dotimes` all stand down there too.
+
+The array is still allocated and filled at the SITE, so each evaluation yields a
+fresh, independently mutable vector — the property `PureBuiltinFolder` rests on
+when it bakes a table (`.kb/pure-builtin-fold.md`).
 
 ## The unboxed fast paths (wasm-GC; why this representation exists)
 

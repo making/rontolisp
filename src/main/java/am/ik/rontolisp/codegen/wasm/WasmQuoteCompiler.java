@@ -96,17 +96,42 @@ final class WasmQuoteCompiler {
 
 	/**
 	 * Compiles a packed integer-vector literal (ironclad's {@code #N@(...)} table syntax,
-	 * or a macro-time value) into its native representation: a bare
-	 * {@code TYPE_I8ARR/I16ARR/I32ARR} array of the pre-masked elements, allocated zeroed
-	 * with {@code array.new_default} and filled with {@code array.set} (zero elements
-	 * skip their store). Shared by the {@code quote} path and the bare-literal path in
-	 * {@link WasmExprCompiler}.
+	 * or a table the {@code PureBuiltinFolder} reduced a literal
+	 * {@code coerce}/{@code make-array} to) into its native representation: a bare
+	 * {@code TYPE_I8ARR/I16ARR/I32ARR} array of the pre-masked elements. Shared by the
+	 * {@code quote} path and the bare-literal path in {@link WasmExprCompiler}.
+	 *
+	 * <p>
+	 * <b>Two emissions, and the cheaper one wins.</b> A literal can be allocated zeroed
+	 * with {@code array.new_default} and filled with {@code array.set} -- around 12 bytes
+	 * an element, but no fixed cost and a ZERO element costs nothing at all -- or its
+	 * elements can go into the module's static data, little-endian at the element width,
+	 * with the site a copy loop over them: {@code w/8} bytes an element (4 for a CRC
+	 * table, 1 for a byte table) plus a fixed ~55. {@link #prefersDataSegment} counts
+	 * both and picks, so a real lookup table is baked (that is the whole point of the
+	 * fold that produces these -- chipz's ~700 constant-table elements were 11.8 bytes
+	 * each as the cons list the {@code coerce} spelling built) while a short one, and a
+	 * mostly-zero one of any length, keeps the emission it always had.
+	 *
+	 * <p>
+	 * The array is still allocated and filled AT THE SITE, so each evaluation of the
+	 * literal yields a fresh, independently mutable vector -- the property the fold rests
+	 * on. The blob is registered as a droppable data range, so {@code --optimize} cuts
+	 * the bytes when the last body holding their address dies.
 	 * @param iv the packed literal
 	 * @param ctx the compilation context
 	 */
 	static void compileIntVectorLiteral(am.ik.rontolisp.LispIntVector iv, WasmLispCompiler.Ctx ctx) {
 		long[] data = iv.data();
 		int type = WasmArrayCompiler.intArrType(iv.width());
+		// An async resume body declares its own locals and never resolves an i64 scratch
+		// placeholder, which is why every other i64-local user (fusion, the raw let
+		// locals, the counted dotimes) stands down there too; the array.set run needs no
+		// counter, so it is the fallback rather than a missing case.
+		if (ctx.asyncResume == null && prefersDataSegment(data, iv.width())) {
+			compileIntVectorFromData(iv, type, ctx);
+			return;
+		}
 		i32Const(ctx, data.length);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		ctx.writer.writeUnsignedLeb128(type);
@@ -125,6 +150,127 @@ final class WasmQuoteCompiler {
 			ctx.writer.writeUnsignedLeb128(type);
 		}
 		getLocal(ctx, dataSlot);
+	}
+
+	/**
+	 * The copy loop's fixed cost in bytes: the allocation, the two counter locals, the
+	 * cast, the two scaled reads of the counter, the load, the store, the increment, the
+	 * bound test and the branch. Counted from the emitter below (~55 with a four-byte
+	 * base address), and used only to CHOOSE between two correct emissions, so being a
+	 * few bytes off moves the crossover by one element and nothing else.
+	 */
+	private static final int DATA_SEGMENT_FIXED_BYTES = 55;
+
+	/**
+	 * Whether baking the elements as static data beats storing them one {@code array.set}
+	 * at a time. Counting rather than thresholding matters in one direction that a
+	 * threshold gets wrong: the {@code array.set} run SKIPS a zero element entirely, so a
+	 * long mostly-zero literal is nearly free that way and would pay its full width per
+	 * element as data.
+	 */
+	private static boolean prefersDataSegment(long[] data, int width) {
+		// array.new_default + the two slot accesses, then per stored element:
+		// local.get, ref.cast, the index, the value, array.set.
+		long inline = 9;
+		for (int i = 0; i < data.length; i++) {
+			if (data[i] != 0) {
+				inline += 10 + signedLebLength(i) + signedLebLength((int) data[i]);
+			}
+		}
+		return DATA_SEGMENT_FIXED_BYTES + (long) data.length * (width / 8) < inline;
+	}
+
+	/** The byte length of a signed LEB128 encoding, as {@code WasmWriter} emits it. */
+	private static int signedLebLength(int value) {
+		int length = 1;
+		for (int remaining = value >> 6; remaining != 0 && remaining != -1; remaining >>= 7) {
+			length++;
+		}
+		return length;
+	}
+
+	// arr = array.new_default T (count); for (n = 0; n < count; n++)
+	// arr[n] = load_u<width>(base + (n << log2 bytes)); arr
+	//
+	// The loop counter is an i64 scratch local -- the only raw local flavour a body has,
+	// and the watermark is restored afterwards so the slot is reused like a fused site's.
+	// The base is an explicit i32.const rather than the load's memarg offset ON PURPOSE:
+	// the tree shaker's droppable-range probe reads i32.const values out of the surviving
+	// bodies and skips memargs, so a base hidden in a memarg would let it cut a table its
+	// own reader still addresses.
+	//
+	// Elements are stored little-endian, which is what the load reads back on every host:
+	// wasm's linear memory is little-endian by definition.
+	private static void compileIntVectorFromData(am.ik.rontolisp.LispIntVector iv, int type, WasmLispCompiler.Ctx ctx) {
+		long[] data = iv.data();
+		int bytes = iv.width() / 8;
+		int shift = Integer.numberOfTrailingZeros(bytes);
+		byte[] blob = new byte[data.length * bytes];
+		for (int i = 0; i < data.length; i++) {
+			for (int b = 0; b < bytes; b++) {
+				blob[i * bytes + b] = (byte) (data[i] >>> (8 * b));
+			}
+		}
+		int base = ctx.stringTable.appendShakeableBlob(blob);
+		int arrSlot = ctx.allocTemp();
+		int savedI64Locals = ctx.nextI64Local;
+		int counter = ctx.allocI64Temp();
+		i32Const(ctx, data.length);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		ctx.writer.writeUnsignedLeb128(type);
+		setLocal(ctx, arrSlot);
+		i64Const(ctx, 0);
+		setI64Local(ctx, counter);
+		ctx.writer.write(Instruction.LOOP, 0x40);
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		getI64Local(ctx, counter);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		getI64Local(ctx, counter);
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		if (shift > 0) {
+			i32Const(ctx, shift);
+			ctx.writer.write(Instruction.I32_SHL);
+		}
+		i32Const(ctx, base);
+		ctx.writer.write(Instruction.I32_ADD);
+		ctx.writer.write(switch (bytes) {
+			case 1 -> Instruction.I32_LOAD8_U;
+			case 2 -> Instruction.I32_LOAD16_U;
+			default -> Instruction.I32_LOAD;
+		});
+		ctx.writer.writeUnsignedLeb128(shift); // alignment hint: the natural one
+		ctx.writer.writeUnsignedLeb128(0); // offset
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(type);
+		getI64Local(ctx, counter);
+		i64Const(ctx, 1);
+		ctx.writer.write(Instruction.I64_ADD);
+		setI64Local(ctx, counter);
+		getI64Local(ctx, counter);
+		i64Const(ctx, data.length);
+		ctx.writer.write(Instruction.I64_LT_U);
+		ctx.writer.write(Instruction.BR_IF);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.END);
+		getLocal(ctx, arrSlot);
+		ctx.nextI64Local = savedI64Locals;
+	}
+
+	private static void i64Const(WasmLispCompiler.Ctx ctx, long value) {
+		ctx.writer.write(Instruction.I64_CONST);
+		ctx.writer.writeSignedLeb128(value);
+	}
+
+	private static void getI64Local(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writeI64LocalIndex(slot);
+	}
+
+	private static void setI64Local(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(slot);
 	}
 
 	// --- --simd packed literals (v128 lane groups) --------------------------------

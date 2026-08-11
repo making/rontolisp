@@ -1288,6 +1288,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalCoerceKeepsThePackedElementType() {
+		// The same result-type designator means the same thing whichever operator reads
+		// it: (coerce seq '(vector (unsigned-byte 8))) is the packed vector concatenate
+		// already built, not a general one. Every CL library spells its lookup tables
+		// this way -- chipz's +crc32-table+ is (coerce '(...) '(vector (unsigned-byte
+		// 32))) -- and the general answer lost both the element type and, on the compile
+		// paths, the unboxed representation.
+		assertThat(eval("""
+				(let ((v (coerce '(1 2 3) '(vector (unsigned-byte 8)))))
+				  (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v))""").print())
+			.isEqualTo("((UNSIGNED-BYTE 8) T #(1 2 3))");
+		assertThat(eval("(array-element-type (coerce #(1 2) '(simple-array (unsigned-byte 16) (*))))").print())
+			.isEqualTo("(UNSIGNED-BYTE 16)");
+		assertThat(eval("(array-element-type (coerce '(1) '(array (unsigned-byte 32) (*))))").print())
+			.isEqualTo("(UNSIGNED-BYTE 32)");
+		// Stores mask to the element width, exactly like make-array's.
+		assertThat(eval("(princ-to-string (coerce '(260 -1) '(vector (unsigned-byte 8))))"))
+			.isEqualTo(new LispString("#(4 255)"));
+		// Every other designator is untouched: the general vector, the spellings that
+		// carry a SIZE, an unsupported width, and the non-vector families.
+		assertThat(eval("(array-element-type (coerce '(1 2) 'vector))").print()).isEqualTo("T");
+		assertThat(eval("(array-element-type (coerce '(1 2) '(vector character)))").print()).isEqualTo("T");
+		assertThat(eval("(array-element-type (coerce '(1 2) '(simple-vector 2)))").print()).isEqualTo("T");
+		assertThat(eval("(array-element-type (coerce '(1) '(vector (unsigned-byte 4))))").print()).isEqualTo("T");
+		assertThat(eval("(coerce #(1 2) 'list)").print()).isEqualTo("(1 2)");
+	}
+
+	@Test
 	void evalConcatenateAliasResultTypeKeepsThePackedElementType() {
 		// The deftype chain carries the element type too, so fast-http's
 		// 'simple-byte-vector is a packed result and not merely a vector one.

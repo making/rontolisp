@@ -35,9 +35,9 @@ byte.
 **`zlib` is the row that carries the runtime, not just the library.** chipz
 calls `apply`, which turns the embedded `eval` runtime on, and it uses
 `catch`/`throw`, which puts the module in EH mode (hence `-W exceptions=y` in
-the run, and why the four rows are ~430 KB rather than the ~100 KB the inflate
-code alone would be). Both are properties of the library's own source, not of
-how the program was written.
+the run, and why the unoptimized row is hundreds of KB rather than the ~100 KB
+the inflate code alone would be). Both are properties of the library's own
+source, not of how the program was written.
 
 Every module is checked before it is measured, or the run fails instead of
 reporting a smaller number for a module that stopped working: the two micro
@@ -77,7 +77,20 @@ the format renderer and the unreachable seeded-condition arms and layouts. That
 is why the `zlib` rows sit far below chipz's full source size while the row's
 check still gunzips the stream byte-identically on every backend.
 
-**And the last -1.2% is the data section, not code.** A library whose every slot
+**A constant table now costs its own bytes.** chipz spells every lookup table it
+has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
+distance/length codes, ~700 elements in all -- as
+`(coerce '(<literals>) '(vector (unsigned-byte 16|32)))`, and that used to be
+built cons cell by cons cell at startup, ~11.8 bytes of wasm an element. The
+compiler folds the literal call to the specialized vector it produces and the
+backend bakes that into the module's static data at the element width
+(`.kb/pure-builtin-fold.md`, `.kb/packed-integer-vectors.md`), so the same table
+is 4 bytes an element. Worth **-15.6%** on the `--optimize=size` row (191,872 ->
+161,976), which is more than the tables' own bytes: a specialized vector also
+stops boxing every element, so the general-array and cons paths those tables
+pinned shake out with them.
+
+**And a further -1.2% is the data section, not code.** A library whose every slot
 accessor is a generic used to ship its name three times over: once for the
 `_lookup` registry, once again in the single-colon alias spelling nothing could
 address (`.kb/symbol-runtime-api.md`), and once more inside a whole

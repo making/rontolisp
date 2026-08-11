@@ -4,6 +4,7 @@ import java.util.List;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
@@ -179,6 +180,55 @@ class PureBuiltinFolderTest {
 		assertThat(folded("(ash 1 1000000)").print()).startsWith("(");
 		// Just inside the ceiling still folds.
 		assertThat(folded("(expt 2 100)")).isEqualTo(LispReader.readFromString("1267650600228229401496703205376"));
+	}
+
+	@Test
+	void aLiteralLookupTableFoldsToItsPackedVector() {
+		// The shape every CL library spells a constant table as, in both its spellings
+		// and at every width. The result is a LispIntVector, i.e. data the backends bake
+		// rather than a cons list they build at run time.
+		for (String source : List.of("(coerce '(1 2 3) '(vector (unsigned-byte 8)))",
+				"(coerce #(1 2 3) '(simple-array (unsigned-byte 16) (*)))",
+				"(coerce '(1 2 3) '(array (unsigned-byte 32) (*)))",
+				"(make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))",
+				"(make-array '(3) :element-type '(unsigned-byte 8) :initial-contents #(1 2 3))")) {
+			assertThat(folded(source)).as("folds: %s", source).isInstanceOf(LispIntVector.class);
+			assertThat(folded(source).print()).as("value: %s", source).isEqualTo("#(1 2 3)");
+		}
+		assertThat(((LispIntVector) folded("(coerce '(1) '(vector (unsigned-byte 16)))")).width()).isEqualTo(16);
+	}
+
+	@Test
+	void aPackedTableFoldIsElementTypeExact() {
+		// A value that does not fit the declared width is the PROGRAM's bug, not the
+		// folder's to mask: it declines and the run-time builder gives its own (masked)
+		// answer, which is the one the interpreter gives too. The same for a
+		// non-integer element, an improper list, and a designator with no packed width.
+		for (String source : List.of("(coerce '(1 256) '(vector (unsigned-byte 8)))",
+				"(coerce '(-1) '(vector (unsigned-byte 8)))", "(coerce '(65536) '(vector (unsigned-byte 16)))",
+				"(coerce '(4294967296) '(vector (unsigned-byte 32)))", "(coerce '(1 #\\a) '(vector (unsigned-byte 8)))",
+				"(coerce '(1 . 2) '(vector (unsigned-byte 8)))", "(coerce '(1) '(vector (unsigned-byte 4)))",
+				"(coerce '(1) '(simple-vector 1))", "(coerce '(1) 'vector)",
+				"(coerce x '(vector (unsigned-byte 8)))")) {
+			assertThat(folded(source).print()).as("declines: %s", source).startsWith("(");
+		}
+	}
+
+	@Test
+	void aMakeArrayWithoutLiteralContentsIsNotFolded() {
+		// :initial-contents is what makes the call a TABLE. Without it the size is the
+		// only thing known, and folding (make-array 8192 :element-type '(unsigned-byte
+		// 8)) would bake 8 KB of zeros in place of one array.new_default. Every other
+		// keyword declines too -- a fill pointer or an :adjustable flag is not the
+		// packed representation at all.
+		for (String source : List.of("(make-array 8192 :element-type '(unsigned-byte 8))",
+				"(make-array 3 :element-type '(unsigned-byte 8) :initial-element 0)",
+				"(make-array 4 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3))",
+				"(make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3) :fill-pointer 0)",
+				"(make-array '(2 2) :element-type '(unsigned-byte 8) :initial-contents '((1 2) (3 4)))",
+				"(make-array 3 :initial-contents '(1 2 3))")) {
+			assertThat(folded(source).print()).as("declines: %s", source).startsWith("(");
+		}
 	}
 
 	@Test

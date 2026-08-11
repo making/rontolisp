@@ -133,6 +133,16 @@ of those names — a `defun`, a `defmethod`, an `flet` — and your definition w
 the compiler stops folding that name anywhere in the program. `--dynamic` turns
 the whole thing off, since every name there resolves at run time.
 
+A literal lookup table is folded the same way, and there the saving is the table
+itself: `(coerce '(0 #x77073096 …) '(vector (unsigned-byte 32)))` and
+`(make-array n :element-type '(unsigned-byte 8) :initial-contents '(…))` become
+the specialized vector they build, which the module carries as static data at the
+element width instead of building a list of boxed integers at startup — around 4
+bytes an element for a 32-bit table rather than 12. Each evaluation of the form
+still yields a fresh, independently mutable vector, exactly as the call did. An
+element that does not fit the declared width is not folded; the run-time builder
+masks it, as it always has.
+
 On the `--component` path the **wrapper shrinks with the core**, not just the core
 itself. Which WASI 0.3 interfaces a component imports follows from what the program
 can actually reach: `(print "Hello World!")` compiles to a component importing

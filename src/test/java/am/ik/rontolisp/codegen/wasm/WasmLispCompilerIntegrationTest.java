@@ -630,6 +630,41 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void coerceKeepsThePackedElementTypeAndBakesALiteralTable() throws Exception {
+		// coerce reads the SAME result-type designator concatenate does, so a packed
+		// element type means a packed vector there too. Both routes run: a LITERAL
+		// sequence, which PureBuiltinFolder reduces to the packed literal the backend
+		// bakes into its data segment, and one behind a function parameter, which builds
+		// through the injected %seq-int-vector at run time. A table past the
+		// data-segment threshold (16 elements) covers the baked emission, and the two
+		// (table) calls pin the freshness the fold rests on -- one literal, two arrays.
+		String program = """
+				(defun %id (x) x)
+				(defun table () (coerce '(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 65535)
+				                        '(vector (unsigned-byte 16))))
+				(let ((v (coerce '(1 2 260) '(vector (unsigned-byte 8)))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(let ((v (coerce (%id '(1 2 260)) '(vector (unsigned-byte 8)))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(print (array-element-type (coerce #(1) '(simple-array (unsigned-byte 32) (*)))))
+				(print (array-element-type (coerce '(1 2) '(simple-vector 2))))
+				(print (array-element-type (coerce '(1 2) 'vector)))
+				(print (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(7 8 9)))
+				(let ((a (table)) (b (table)))
+				  (setf (aref a 0) 99)
+				  (print (list (aref a 0) (aref b 0) (aref a 17) (eq a b) (length a))))
+				""";
+		assertThat(compileAndRun(program)).isEqualTo("""
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				(UNSIGNED-BYTE 32)
+				T
+				T
+				#(7 8 9)
+				(99 0 65535 NIL 18)""");
+	}
+
+	@Test
 	void concatenateStringTakesAnySequence() throws Exception {
 		// The string family walks any character sequence, nil (the empty list) included:
 		// s-sql builds "CREATE TABLE x" as

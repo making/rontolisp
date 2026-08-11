@@ -3519,6 +3519,49 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunCoerceKeepsThePackedElementType() throws Exception {
+		// coerce reads the SAME result-type designator concatenate does, so a packed
+		// element type means a packed vector there too. Both routes are exercised: a
+		// LITERAL sequence, which PureBuiltinFolder reduces to the packed literal at
+		// compile time, and one behind a function parameter, which goes through the
+		// injected %seq-int-vector at run time. They must agree.
+		assertThat(compileAndRun("""
+				(defun %id (x) x)
+				(let ((v (coerce '(1 2 260) '(vector (unsigned-byte 8)))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(let ((v (coerce (%id '(1 2 260)) '(vector (unsigned-byte 8)))))
+				  (print (list (array-element-type v) (typep v '(simple-array (unsigned-byte 8) (*))) v)))
+				(print (array-element-type (coerce #(1) '(simple-array (unsigned-byte 16) (*)))))
+				(print (array-element-type (coerce '(1) '(vector (unsigned-byte 32) *))))
+				(print (array-element-type (coerce '(1 2) '(simple-vector 2))))
+				(print (array-element-type (coerce '(1 2) 'vector)))
+				""")).isEqualTo("""
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				((UNSIGNED-BYTE 8) T #(1 2 4))
+				(UNSIGNED-BYTE 16)
+				(UNSIGNED-BYTE 32)
+				T
+				T""");
+	}
+
+	@Test
+	void compileAndRunFoldsALiteralLookupTableToItsPackedLiteral() throws Exception {
+		// The whole point of folding the table: it is DATA at compile time, so the
+		// backends bake it instead of consing the element list at run time. What the
+		// program may still do to it is unchanged -- each evaluation of the literal
+		// yields a FRESH, independently mutable vector, exactly as the coerce call did.
+		assertThat(compileAndRun("""
+				(defun table () (coerce '(10 20 30 40) '(vector (unsigned-byte 16))))
+				(let ((a (table)) (b (table)))
+				  (setf (aref a 0) 99)
+				  (print (list a b (eq a b))))
+				(print (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(7 8 9)))
+				""")).isEqualTo("""
+				(#(99 20 30 40) #(10 20 30 40) NIL)
+				#(7 8 9)""");
+	}
+
+	@Test
 	void compileAndRunConcatenateAsAFunctionValueKeepsThePackedElementType() throws Exception {
 		// The #'concatenate wrapper's designator is a RUNTIME value, so it re-does the
 		// width dispatch there -- http-body spells exactly this

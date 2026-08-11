@@ -109,6 +109,12 @@ whether or not a fold exists).
   third`. A string is indexed by code point everywhere.
 - **String production** — `symbol-name princ-to-string prin1-to-string string-upcase
   string-downcase concatenate subseq`.
+- **The packed literal table** — `coerce` and `make-array`, and ONLY into an
+  `(unsigned-byte 8|16|32)` vector. `(coerce '(<literals>) '(vector (unsigned-byte
+  32)))` is how every CL library spells a lookup table, and building it at run time
+  costs **~11.8 bytes of wasm per element** (the cons list, then the fill) where the
+  packed vector it becomes is 4. See the section below for why an array may be this
+  fold's result when the identity rule excludes every other one.
 
 The justification is written per GROUP rather than per entry on purpose: within a
 group every entry rests on the same property (exact integer arithmetic, code-point
@@ -151,17 +157,26 @@ The rule this pass commits to, in order:
   them would pick one of two answers a live divergence already disagrees on.
   **Trigger:** `.todo/269`. (Case CONVERSION is a different set of operators and is
   in the table — see above.)
-- **Any value with IDENTITY** — a cons, an array, a hash table, an instance. A fold at
-  two sites would hand out two objects where the program built one, and a fold of a
-  sublist would alias storage the program can `rplacd`. This is enforced as a property
-  of the RESULT (`isFoldableResult`), not as a per-entry rule, so `(cdr '(1 2 3))` and
-  `(nth 0 '((1) (2)))` decline by construction while `(nth 1 '(a b c))` folds.
+- **Any value with IDENTITY** — a cons, a general array, a hash table, an instance. A
+  fold at two sites would hand out two objects where the program built one, and a fold
+  of a sublist would alias storage the program can `rplacd`. This is enforced as a
+  property of the RESULT (`isFoldableResult`), not as a per-entry rule, so
+  `(cdr '(1 2 3))` and `(nth 0 '((1) (2)))` decline by construction while
+  `(nth 1 '(a b c))` folds.
   A STRING result is IN, and the reason is measured, not assumed: on both compile
   backends a string literal materializes FRESH on each evaluation (the JVM copies the
   constant-pool string into its mutable representation; the wasm backend allocates a
   `$str_bytes` array), so a folded `(string-upcase "ab")` is as mutable and as
   unshared as the call it replaced. On the INTERPRETER a literal is one shared object
   and mutating it persists — which is exactly why the interpreter does not fold.
+  A PACKED INTEGER VECTOR result is in for that same reason, and it is the reason
+  rather than the type that decides: both compile backends allocate the array and fill
+  it AT THE SITE (`JvmQuoteCompiler.compileLiteralIntVector` builds a new `long[]`;
+  `WasmQuoteCompiler.compileIntVectorLiteral` allocates and copies its data segment
+  in), so two evaluations of one folded table are two independently mutable vectors —
+  pinned as `(eq a b)` = `nil` after mutating one, in the ci-spec case and in each
+  backend's own test. A general `#(...)` array is NOT in: nothing bakes one freshly
+  per evaluation and no measurement asked for it.
 - **The `floor` family and every other multiple-value producer.** Folding
   `(floor 7 2)` to `3` would silently drop the secondary value a
   `multiple-value-bind` reads (`.kb/multiple-values.md`).
@@ -171,7 +186,68 @@ The rule this pass commits to, in order:
   them removes a class of accidents for free.
 - **An unbounded result.** `(expt 2 1000000)` and `(ash 1 1000000)` decline at 4096
   bits, and a folded string at 4096 code points: a fold must not make the COMPILER do
-  unbounded work, nor bake a megabyte of digits into the output.
+  unbounded work, nor bake a megabyte of digits into the output. A packed table's
+  ceiling is 65,536 ELEMENTS and is a different kind of bound — the elements are
+  already spelled out in the source and the folded table is smaller than the call it
+  replaces, so it bounds only the compiler's work.
+- **A `make-array` with no `:initial-contents`.** The size is then the only thing
+  known, and folding `(make-array 8192 :element-type '(unsigned-byte 8))` would bake
+  8 KB of zeros in place of one `array.new_default`. `:initial-element`,
+  `:fill-pointer`, `:adjustable`, `:displaced-to`, a rank other than 1 and a dimension
+  that disagrees with the contents all decline the same way.
+- **An out-of-range table element.** `(coerce '(256) '(vector (unsigned-byte 8)))`
+  declines rather than folding to the masked 0: the fold is element-type EXACT, so a
+  value that does not fit is the program's bug and the run-time builder's masking
+  answer — the one the interpreter gives — is the one that stands. A non-integer
+  element, an improper list and a `deftype` ALIAS designator decline too; the alias
+  because the fold runs before the deftype registry is populated, and the run-time
+  `%seq-int-vector` lowering resolves it anyway.
+
+## The packed literal table (todo-319)
+
+The one fold whose win is BYTES rather than reachability, and the one whose result is
+an object. It rests on two other pieces, both of which had to be true first:
+
+1. **`coerce` had to keep the element type.** `(coerce '(...) '(vector (unsigned-byte
+   32)))` used to build a GENERAL vector on all four backends, so folding it to a
+   packed literal would have invented a different value. That divergence was already
+   written down as a re-evaluation trigger and is retired in the same pass
+   (`.kb/concatenate-result-families.md`) — the fold is now a compile-time evaluation
+   of exactly what the run-time `%seq-int-vector` builder produces.
+2. **The wasm backend had to bake the literal as DATA.** A `LispIntVector` literal used
+   to compile to `array.new_default` plus one `array.set` per element, ~12-17 bytes
+   each — worse per element than the cons list it replaced. Past 16 elements the
+   elements now go into the module's static data at the element width and the site is a
+   copy loop over them (`.kb/packed-integer-vectors.md`).
+
+An argument may be a `#(...)` vector or a packed vector as well as a quoted list, so
+`literalValue` answers one for those two types too — chipz spells half its tables as
+vector literals. That widening is about ARGUMENTS only: what may be BAKED is still
+decided by `isFoldableResult`, and a general array is not in it.
+
+**Did the fold change the interpreter? No — the `coerce` widening did, and on all four
+backends at once.** The interpreter still folds nothing, so a folded table and the table
+the interpreter builds are the same value by construction: `equalp` (pinned by the
+ci-spec case's `fold-check-seq`, which uses `equalp` precisely because two arrays are
+`equal` only when they are one object) and identically mutable. What DID move for every
+backend, together, is that `(coerce seq '(vector (unsigned-byte N)))` now answers a
+specialized vector instead of a general one — a semantic change with its own tests, made
+first so that the fold has something exact to be a compile-time evaluation OF.
+
+Measured at `--optimize=size`, a program that binds one table and prints one element
+(the same probe the todo used), core Preview 1 bytes:
+
+| table | before | after |
+| --- | ---: | ---: |
+| 3 × `(unsigned-byte 32)` | 11,843 | **5,437** |
+| 256 × `(unsigned-byte 32)` | 14,809 | **6,482** |
+| marginal, per element | 11.7 | **4.1** |
+
+and on the `zlib` size-report rows (chipz, ~700 constant-table elements):
+423,094 → 365,142 plain, 243,840 → 193,382 at `--optimize`, 191,872 → **161,976** at
+`--optimize=size`, 196,613 → 166,656 as a component. More than the tables' own bytes,
+because a packed table also stops boxing every element and the whole cons-list build
+path shakes out with it.
 
 ## The three things that make it safe
 

@@ -209,6 +209,27 @@ public final class FoldDifferential {
 				"(concatenate 'string (%id \"ab\") (%id \"cd\"))"));
 		add(probes, "subseq", "\"hello\"", "1", "3");
 		add(probes, "subseq", "\"hello\"", "2");
+		// The packed literal table. Like concatenate's, the RESULT TYPE stays literal in
+		// the control -- the compile-path lowering resolves the designator statically, so
+		// hiding it would not be the same call. Every width, and one table long enough to
+		// cross the wasm backend's data-segment threshold (16 elements), so both
+		// emissions are compared against the runtime build.
+		probes.add(new Probe("coerce", "(coerce '(1 2 3) '(vector (unsigned-byte 8)))",
+				"(coerce (%id '(1 2 3)) '(vector (unsigned-byte 8)))"));
+		probes.add(new Probe("coerce", "(coerce #(0 65535 7) '(simple-array (unsigned-byte 16) (*)))",
+				"(coerce (%id #(0 65535 7)) '(simple-array (unsigned-byte 16) (*)))"));
+		probes.add(new Probe("coerce", "(coerce '(0 4294967295 2147483648) '(vector (unsigned-byte 32)))",
+				"(coerce (%id '(0 4294967295 2147483648)) '(vector (unsigned-byte 32)))"));
+		probes.add(new Probe("coerce",
+				"(coerce '(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17) '(vector (unsigned-byte 8)))",
+				"(coerce (%id '(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17)) '(vector (unsigned-byte 8)))"));
+		probes.add(new Probe("coerce",
+				"(coerce '(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 4294967295) '(vector (unsigned-byte 32)))",
+				"(coerce (%id '(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 4294967295)) "
+						+ "'(vector (unsigned-byte 32)))"));
+		probes.add(new Probe("make-array",
+				"(make-array 3 :element-type '(unsigned-byte 16) :initial-contents '(9 8 65535))",
+				"(make-array (%id 3) :element-type '(unsigned-byte 16) :initial-contents (%id '(9 8 65535)))"));
 		return List.copyOf(probes);
 	}
 
