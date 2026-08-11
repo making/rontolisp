@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-11
-- rontolisp: 0.1.0-SNAPSHOT (`cffd71d`)
+- rontolisp: 0.1.0-SNAPSHOT (`525700a`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -21,9 +21,9 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
 | zlib | (none) | core (command) | Preview 1 | 342,942 |
-| zlib | `--optimize` | core (command) | Preview 1 | 171,312 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 137,430 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 142,110 |
+| zlib | `--optimize` | core (command) | Preview 1 | 162,340 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 130,658 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 135,316 |
 
 ## What is measured
 
@@ -103,6 +103,16 @@ anchor it, and the condition-runtime narrowing (`.kb/error-handling.md`) drops
 the format renderer and the unreachable seeded-condition arms and layouts. That
 is why the `zlib` rows sit far below chipz's full source size while the row's
 check still gunzips the stream byte-identically on every backend.
+
+**Identical function bodies are emitted once.** A `defstruct`/`define-condition`
+accessor compiles to the same bytes as its siblings two or three at a time, and
+chipz declares five conditions and several structs -- on the `--optimize=size`
+row that was 362 bodies of which 48 were byte-for-byte copies of an earlier one.
+The duplicate-body fold (`.kb/optimize-dead-code-elimination.md`) keeps one body
+per group and redirects every reference, worth -4.9% on that row (137,430 ->
+130,658) and about the same on the other two optimized `zlib` rows. Only code is
+shared, not identity: `(eq #'f #'g)` stays `NIL` for two identically-bodied
+functions.
 
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the

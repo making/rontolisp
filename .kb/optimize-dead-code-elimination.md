@@ -488,6 +488,13 @@ Measured 2026-08-11 on the zlib rows (the todo's probe: 362 bodies, 28 duplicate
 | `--optimize=size` | 137,430 | 130,658 (**-4.9%**, 362 -> 314 bodies) |
 | `--component --optimize=size` | 142,110 | 135,316 (-4.8%) |
 
+Every Worker row moved with it (`hello-ningle` raw -176 KB / -6.9%, the full-tiny-routes
+rows ~-4.6%, the rest -0.4..-0.7%), with one honest nuance: identical bodies were bytes
+gzip already compressed almost to nothing, so on the small clack Workers the RAW win
+comes with a few hundred bytes MORE gzip (renumbered call immediates compress a little
+worse); the big modules win on both axes. Raw is what wasmtime/V8 compile and hold, gzip
+is the Cloudflare transfer budget -- the rows in `size-report/results/` carry both.
+
 Structural pins: `WasmBodyFolderTest` -- a module with N identical bodies emits one and
 the emitted module holds NO duplicate (type, body) pair at all (the fixpoint), on the GC
 backend at both levels and on `--no-gc` (where both export names end up aliasing the one
