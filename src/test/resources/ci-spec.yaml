@@ -242,6 +242,22 @@ cases:
       "aazzz"
       #(8 8)
       (1 2 3 4 5 6 7)
+  # The map family funcalls its function once per element of each list, so its LIST
+  # COUNT picks a per-arity dispatcher exactly as a funcall's argument count does.
+  # WASM computed that index without a ceiling check, so past the fixed dispatcher
+  # block it addressed the next runtime helper and emitted a module that does not
+  # validate; the other backends were always fine.
+  - name: map-family-over-eleven-lists
+    source: |
+      (defun ml-sum (&rest ml-xs) (reduce #'+ ml-xs))
+      (defun ml-sum-list (&rest ml-xs) (list (reduce #'+ ml-xs)))
+      (print (mapcar #'ml-sum '(1) '(2) '(3) '(4) '(5) '(6) '(7) '(8) '(9) '(10) '(11)))
+      (print (mapcan #'ml-sum-list '(1) '(2) '(3) '(4) '(5) '(6) '(7) '(8) '(9) '(10) '(11)))
+      (print (mapc #'ml-sum '(1) '(2) '(3) '(4) '(5) '(6) '(7) '(8) '(9) '(10) '(11)))
+    expected: |
+      (66)
+      (66)
+      (1)
   # A LIST destination for replace. The compile paths used to fall through to the
   # immutable-string rebuild here: the JVM threw a ClassCastException, WASM printed
   # the three subsequences concatenated as text, and (setf (subseq l ...)) on a list

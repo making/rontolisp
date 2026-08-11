@@ -769,6 +769,12 @@ final class WasmAsyncEmit {
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			.simd(proto.simd)
 			.userFuncBase(proto.userFuncBase)
+			// NOT optional either, for the same reason as the instance pair below: a
+			// funcall wider than the fixed dispatcher block would compile to a call-time
+			// signal at the top level while the same form inside a defun reached the
+			// module's own extra dispatcher.
+			.callArityCeiling(proto.callArityCeiling)
+			.extraDispatchFuncBase(proto.extraDispatchFuncBase)
 			.numDefuns(proto.numDefuns)
 			.userDefunNames(proto.userDefunNames)
 			.usesFmakunbound(proto.usesFmakunbound)

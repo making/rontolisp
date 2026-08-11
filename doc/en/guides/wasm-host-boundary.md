@@ -174,7 +174,7 @@ Limitations:
 - On the interpreter and JVM backends the directive defines a stub that
   signals an error when called, so a shared source still loads everywhere, but
   actually calling an import needs the WASM host.
-- Imported functions have the same 7-parameter arity limit as other functions
+- Imported functions have the same 10-parameter arity limit as other functions
   under the wasm-GC value model.
 - Instantiating the module requires every declared import to be provided:
   `wasmtime run` needs a `--preload <module>=<file>.wasm` per import module

@@ -20,10 +20,10 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 354,554 |
-| zlib | `--optimize` | core (command) | Preview 1 | 182,934 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 149,054 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 153,734 |
+| zlib | (none) | core (command) | Preview 1 | 342,942 |
+| zlib | `--optimize` | core (command) | Preview 1 | 171,312 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 137,430 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 142,110 |
 
 ## What is measured
 

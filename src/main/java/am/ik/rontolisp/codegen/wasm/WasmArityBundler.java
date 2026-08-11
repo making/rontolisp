@@ -22,8 +22,9 @@ import am.ik.rontolisp.LispVal;
  * arguments into a list" shape the limit's error message suggests -- automatically, so
  * real-library code with wide helper signatures (e.g. split-sequence's 10-parameter
  * {@code split-list}) compiles without source changes. Raising the limit itself would
- * shift the type/function indices the pinned {@code --component} adapter blobs depend on,
- * so the transform stays at the AST level:
+ * move indices in every module -- it is the origin {@code FUNC_DISPATCH_SPREAD} and every
+ * later {@code FUNC_*} and type index are defined off -- so the transform stays at the
+ * AST level:
  *
  * <pre>
  * (defun f (p1 .. p10) body)          -> (defun f (p1 .. p6 %bundle)
@@ -86,15 +87,58 @@ final class WasmArityBundler {
 	}
 
 	/**
-	 * Lowers a {@code funcall} with more arguments than
-	 * {@link WasmLispCompiler#MAX_CALLABLE_ARITY} into the equivalent {@code apply}:
+	 * The widest PER-ARITY dispatch the program asks for: the argument count of its
+	 * widest {@code funcall}, or the list count of its widest
+	 * {@code mapcar}/{@code mapc}/{@code mapcan} (each iteration funcalls the mapped
+	 * function with one element per list), whichever is larger -- {@code 0} when it has
+	 * neither. What the compiler sizes its EXTRA dispatcher tier from
+	 * ({@link WasmLispCompiler#callArityCeiling()}), so that an eleven-argument
+	 * {@code funcall} answers with one 975-byte ladder rather than by pulling in a 12 KB
+	 * spread dispatcher that serves every callable at every width.
+	 *
+	 * <p>
+	 * A pre-scan of the source program cannot see a {@code funcall} a macro synthesizes
+	 * later in Pass 2, which is exactly what the codegen ceiling checks are still for:
+	 * anything past the ceiling stays a call-time signal ({@code funcall}) or a compile
+	 * error (the map family, which has no per-site fallback).
+	 * @param program the top-level forms
+	 * @return the widest dispatch arity
+	 */
+	static int widestDispatchArity(List<LispVal> program) {
+		int widest = 0;
+		for (LispVal form : program) {
+			widest = Math.max(widest, widestDispatchArityIn(form));
+		}
+		return widest;
+	}
+
+	private static int widestDispatchArityIn(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()
+				|| cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())) {
+			return 0;
+		}
+		List<LispVal> parts = cons.toList();
+		// (funcall f a1 .. aN) and (mapcar f l1 .. lN) both dispatch at N.
+		int widest = cons.car() instanceof LispSymbol op
+				&& (LispNames.FUNCALL.equals(op.name()) || LispNames.MAPCAR.equals(op.name())
+						|| LispNames.MAPC.equals(op.name()) || LispNames.MAPCAN.equals(op.name())) ? parts.size() - 2
+								: 0;
+		for (LispVal part : parts) {
+			widest = Math.max(widest, widestDispatchArityIn(part));
+		}
+		return widest;
+	}
+
+	/**
+	 * Lowers a {@code funcall} with more arguments than the module's per-arity
+	 * dispatchers can take into the equivalent {@code apply}:
 	 *
 	 * <pre>
-	 * (funcall f a1 .. a11) -> (apply f (list a1 .. a11))
+	 * (funcall f a1 .. a15) -> (apply f (list a1 .. a15))
 	 * </pre>
 	 *
 	 * The per-arity dispatchers take one WASM parameter per Lisp argument and so stop at
-	 * the limit, but {@code _apply} does not: it hands the whole argument list to the
+	 * the ceiling, but {@code _apply} does not: it hands the whole argument list to the
 	 * SPREAD dispatcher ({@link WasmLispCompiler#FUNC_DISPATCH_SPREAD}), which reads each
 	 * target's parameters back out of the list. That mechanism already exists for
 	 * {@code apply} through a computed designator; this pass is what lets {@code funcall}
@@ -106,26 +150,30 @@ final class WasmArityBundler {
 	 * the program, and it runs after this one.
 	 *
 	 * <p>
-	 * A keyword lambda list is the shape that reaches the limit in practice: the
-	 * arguments are passed through verbatim for the callee's own dispatcher to parse, so
-	 * chipz's {@code (funcall fun state input output :input-start s :input-end e
-	 * :output-start s :output-end e)} is eleven of them for a function whose lambda list
-	 * has seven parameters.
+	 * A keyword lambda list is the shape that reaches the fixed block's limit in
+	 * practice: the arguments are passed through verbatim for the callee's own dispatcher
+	 * to parse, so chipz's {@code (funcall fun state input output :input-start s
+	 * :input-end e :output-start s :output-end e)} is eleven of them for a function whose
+	 * lambda list has seven parameters. That one is now inside the derived ceiling and
+	 * reaches its own dispatcher; what still comes here is a call wide enough that a
+	 * per-arity ladder is the more expensive answer.
 	 * @param program the top-level forms
+	 * @param ceiling the widest funcall this module dispatches per arity
+	 * ({@link WasmLispCompiler#callArityCeiling()})
 	 * @return the transformed program (the same list when no funcall is too wide)
 	 */
-	static List<LispVal> spreadOverArityFuncalls(List<LispVal> program) {
+	static List<LispVal> spreadOverArityFuncalls(List<LispVal> program, int ceiling) {
 		List<LispVal> out = new ArrayList<>(program.size());
 		boolean changed = false;
 		for (LispVal form : program) {
-			LispVal rewritten = spread(form);
+			LispVal rewritten = spread(form, ceiling);
 			changed |= rewritten != form;
 			out.add(rewritten);
 		}
 		return changed ? out : program;
 	}
 
-	private static LispVal spread(LispVal form) {
+	private static LispVal spread(LispVal form, int ceiling) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
 			return form;
 		}
@@ -136,10 +184,9 @@ final class WasmArityBundler {
 		List<LispVal> parts = cons.toList();
 		List<LispVal> out = new ArrayList<>(parts.size());
 		for (LispVal part : parts) {
-			out.add(spread(part));
+			out.add(spread(part, ceiling));
 		}
-		if (cons.car() instanceof LispSymbol op && LispNames.FUNCALL.equals(op.name())
-				&& out.size() - 2 > WasmLispCompiler.MAX_CALLABLE_ARITY) {
+		if (cons.car() instanceof LispSymbol op && LispNames.FUNCALL.equals(op.name()) && out.size() - 2 > ceiling) {
 			List<LispVal> listParts = new ArrayList<>();
 			listParts.add(new LispSymbol(LispNames.LIST));
 			listParts.addAll(out.subList(2, out.size()));

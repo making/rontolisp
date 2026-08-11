@@ -275,11 +275,22 @@ public final class WasmLispCompiler implements LispCompiler {
 	/**
 	 * The index of the first user defun: the fixed runtime helpers, plus -- under
 	 * {@code --simd} only -- the {@link WasmVecSimdRuntimeBuilder} block and the
-	 * {@link WasmLinalgSimdRuntimeBuilder} one after it. Every fixed {@code FUNC_*}
-	 * constant below {@link #FUNC_USER_BASE} keeps its value in both modes; only what
-	 * follows shifts, and only when {@code simd} is set.
+	 * {@link WasmLinalgSimdRuntimeBuilder} one after it, plus the extra per-arity
+	 * dispatchers {@link #extraCallArity} asked for. Every fixed {@code FUNC_*} constant
+	 * below {@link #FUNC_USER_BASE} keeps its value in every mode; only what follows
+	 * shifts, and only when one of those conditional blocks is present.
 	 */
 	int userFuncBase() {
+		return extraDispatchFuncBase() + this.extraCallArity;
+	}
+
+	/**
+	 * The index of {@code _dispatch_11}, the first EXTRA per-arity dispatcher: right
+	 * after the {@code --simd} and async blocks, so adding one moves no fixed index --
+	 * only {@link #userFuncBase()}, which every consumer already reads dynamically. Only
+	 * meaningful when {@link #extraCallArity} is non-zero.
+	 */
+	private int extraDispatchFuncBase() {
 		return asyncFuncBase() + (this.asyncMode ? WasmFutureRuntimeBuilder.FUNC_COUNT : 0);
 	}
 
@@ -319,6 +330,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the index of the first export wrapper type
 	 */
 	private int fixedTypeCount() {
+		return extraCallableTypeBase() + this.extraCallArity;
+	}
+
+	/**
+	 * The index of the {@code callable_arity_11} signature, the first EXTRA callable
+	 * type: right after the fixed, {@code --simd}, async and instance types, so adding
+	 * one moves no existing type index. Only meaningful when {@link #extraCallArity} is
+	 * non-zero.
+	 */
+	private int extraCallableTypeBase() {
 		return instanceTypeBase() + (this.usesInstances ? INSTANCE_TYPE_COUNT : 0);
 	}
 
@@ -348,6 +369,65 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * instances, the same conditional-index discipline {@code --simd} and async use.
 	 */
 	private boolean usesInstances;
+
+	/**
+	 * How many per-arity dispatchers past {@link #MAX_CALLABLE_ARITY} this program asks
+	 * for: {@code 0} unless a call site is wider than the fixed block, and never more
+	 * than {@link #MAX_EXTRA_CALL_ARITY}. Derived in {@link #compile} from
+	 * {@link WasmArityBundler#widestDispatchArity}, before the pass that would otherwise
+	 * spread that site through {@code apply}. Each one appends a dispatcher after the
+	 * async block and a callable type after the instance block -- the same
+	 * conditional-index discipline as {@code --simd}, async and instances, so a program
+	 * whose widest call fits the fixed block is byte-identical to a build that never knew
+	 * about the extra tier.
+	 */
+	private int extraCallArity;
+
+	/**
+	 * The widest call this module can make through a per-arity dispatcher -- a
+	 * {@code funcall}'s argument count or a {@code mapcar}/{@code mapc}/{@code mapcan}'s
+	 * list count. A wider {@code funcall} is rewritten into {@code apply}, whose SPREAD
+	 * dispatcher takes the arguments as one list
+	 * ({@link WasmArityBundler#spreadOverArityFuncalls}); a wider map site is a compile
+	 * error ({@link #mapDispatchFuncIndex}).
+	 */
+	int callArityCeiling() {
+		return MAX_CALLABLE_ARITY + this.extraCallArity;
+	}
+
+	/**
+	 * The dispatcher for a {@code funcall} of {@code arity} arguments: the fixed block's
+	 * entry up to {@link #MAX_CALLABLE_ARITY}, else the appended one.
+	 * @param arity the argument count, at most {@link #callArityCeiling()}
+	 * @param extraBase the value of {@code extraDispatchFuncBase()} for this module
+	 * @return the function index to call
+	 */
+	static int dispatchFuncIndex(int arity, int extraBase) {
+		return arity <= MAX_CALLABLE_ARITY ? FUNC_DISPATCH_BASE + arity : extraBase + (arity - MAX_CALLABLE_ARITY - 1);
+	}
+
+	/**
+	 * As {@link #dispatchFuncIndex}, for an operator that funcalls its argument once per
+	 * element of each of {@code arity} lists (the {@code mapcar}/{@code mapc}/
+	 * {@code mapcan} family). Past the ceiling there is no per-site fallback -- unlike
+	 * {@code funcall}, which has the call-time signal -- and an out-of-range index would
+	 * silently call the NEXT runtime helper and emit a module that does not validate, so
+	 * the site is a compile error instead.
+	 * @param operator the operator name, for the message
+	 * @param arity the number of mapped lists
+	 * @param ctx the compilation context, whose {@code indirectCallArities} the arity
+	 * joins
+	 * @return the function index to call
+	 */
+	static int mapDispatchFuncIndex(String operator, int arity, Ctx ctx) {
+		if (arity > ctx.callArityCeiling) {
+			throw new UnsupportedOperationException(
+					operator + " over " + arity + " lists exceeds the WASM backend's dispatch limit of "
+							+ ctx.callArityCeiling + " (bundle the extra lists, or map over a list of lists)");
+		}
+		ctx.indirectCallArities.add(arity);
+		return dispatchFuncIndex(arity, ctx.extraDispatchFuncBase);
+	}
 
 	/**
 	 * Test hook: export names (beyond serve's {@code handle}) given the CALLBACK-lift
@@ -519,7 +599,22 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_DISPATCH_BASE = FUNC_GETENV + 1;
 
+	// The per-arity dispatchers the FIXED block carries (FUNC_DISPATCH_BASE + 0..10), and
+	// with them the widest signature a defun/lambda may physically have. It is an index
+	// ORIGIN, not merely a limit -- FUNC_DISPATCH_SPREAD and every FUNC_* after it, plus
+	// every type index after TYPE_CALLABLE_BASE + 10, are defined off it -- so raising it
+	// would move indices in EVERY module. A call site wider than this gets its dispatcher
+	// APPENDED instead (extraCallArity), which moves nothing.
 	static final int MAX_CALLABLE_ARITY = 10;
+
+	// How far past MAX_CALLABLE_ARITY a call site may pull its own per-arity dispatcher
+	// in before the SPREAD dispatcher becomes the better answer. Evidence: across the 122
+	// systems of a populated Quicklisp cache (1,886 files) the widest funcall is uiop's
+	// 13-argument (funcall 'ensure-pathname p :namestring ... :on-error nil), and chipz's
+	// inflate call is 11; every program measured needs ONE extra arity, so four is
+	// headroom rather than a fit. Past it the ladders would outgrow the one function that
+	// serves every arity, so the program keeps the old ceiling and spreads instead.
+	static final int MAX_EXTRA_CALL_ARITY = 4;
 
 	// The SPREAD dispatcher: one function over every callable, taking the argument list
 	// as a single cons list (the arity-1 signature). _apply calls it, because the
@@ -1023,60 +1118,61 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int TYPE_PRINT_F64 = 10; // (f64) -> ()
 
-	// Callable types: arity N = (ref null eq)^(N+1) -> (ref null eq)
-	// Used by dispatch functions and user functions (defuns/lambdas) alike
+	// Callable types: arity N = (ref null eq)^(N+1) -> (ref null eq), at index
+	// TYPE_CALLABLE_BASE + N (11..21). Used by the dispatch functions, by user functions
+	// (defuns/lambdas) and, as the generic "N+1 eq params -> eq" signature, by most of
+	// the runtime helpers below. A dispatcher past MAX_CALLABLE_ARITY gets its signature
+	// APPENDED after the last conditional type block instead (extraCallableTypeBase), so
+	// no index here moves.
 	static final int TYPE_CALLABLE_BASE = 11;
 
-	// callable_arity_N type index = TYPE_CALLABLE_BASE + N (indices 11..18)
-
-	// Callable types: arity N = (ref null eq)^(N+1) -> (ref null eq)
 	// TYPE_READ_LINE: () -> (ref null eq)
-	static final int TYPE_READ_LINE = TYPE_CALLABLE_BASE + MAX_CALLABLE_ARITY + 1; // 19
+	static final int TYPE_READ_LINE = TYPE_CALLABLE_BASE + MAX_CALLABLE_ARITY + 1; // 22
 
 	// type index for _lookup: (i32) -> (i32); also used by the fd_close import
-	static final int TYPE_LOOKUP = TYPE_READ_LINE + 1; // 20
+	static final int TYPE_LOOKUP = TYPE_READ_LINE + 1; // 23
 
 	// type index for _env_lookup: (i32, (ref null eq)) -> (ref null eq)
-	static final int TYPE_ENV_LOOKUP = TYPE_LOOKUP + 1; // 21
+	static final int TYPE_ENV_LOOKUP = TYPE_LOOKUP + 1; // 24
 
 	// type index for _intern: (i32, i32) -> (i32)
-	static final int TYPE_INTERN = TYPE_ENV_LOOKUP + 1; // 22
+	static final int TYPE_INTERN = TYPE_ENV_LOOKUP + 1; // 25
 
 	// type index for path_open: (i32,i32,i32,i32,i32,i64,i64,i32,i32) -> (i32)
-	static final int TYPE_PATH_OPEN = TYPE_ENV_LOOKUP + 2; // 23
+	static final int TYPE_PATH_OPEN = TYPE_ENV_LOOKUP + 2; // 26
 
 	// Ratio struct {i32 numerator, i32 denominator}, always normalized (coprime,
 	// denominator > 1, sign on the numerator). A rational whose denominator reduces to
 	// one is represented as a plain i31 integer instead.
-	static final int TYPE_RATIO = TYPE_PATH_OPEN + 1; // 24
+	static final int TYPE_RATIO = TYPE_PATH_OPEN + 1; // 27
 
 	// type index for _rat_new: (i32, i32) -> (ref null eq)
-	static final int TYPE_RAT_NEW = TYPE_RATIO + 1; // 25
+	static final int TYPE_RAT_NEW = TYPE_RATIO + 1; // 28
 
 	// type index for _rat_num/_rat_den: ((ref null eq)) -> (i32)
-	static final int TYPE_RAT_GET = TYPE_RAT_NEW + 1; // 26
+	static final int TYPE_RAT_GET = TYPE_RAT_NEW + 1; // 29
 
 	// type index for _rat_cmp: ((ref null eq), (ref null eq)) -> (i32)
-	static final int TYPE_RAT_CMP = TYPE_RAT_GET + 1; // 27
+	static final int TYPE_RAT_CMP = TYPE_RAT_GET + 1; // 30
 
 	// type index for _read_line: (i32 fd) -> (ref null eq)
-	static final int TYPE_READ_LINE_FD = TYPE_RAT_CMP + 1; // 28
+	static final int TYPE_READ_LINE_FD = TYPE_RAT_CMP + 1; // 31
 
 	// type index for _open: ((ref null eq) path, i32 mode) -> (ref null eq)
-	static final int TYPE_OPEN = TYPE_READ_LINE_FD + 1; // 29
+	static final int TYPE_OPEN = TYPE_READ_LINE_FD + 1; // 32
 
 	// clock_time_get (i32 clock_id, i64 precision, i32 result_ptr) -> i32 errno
-	static final int TYPE_CLOCK_TIME_GET = TYPE_OPEN + 1; // 30
+	static final int TYPE_CLOCK_TIME_GET = TYPE_OPEN + 1; // 33
 
 	// Character struct {i32 code}: the runtime representation of a character, distinct
 	// from
 	// an i31 integer so characterp and the accessors can dispatch on it via ref.test.
-	static final int TYPE_CHAR = TYPE_CLOCK_TIME_GET + 1; // 31
+	static final int TYPE_CHAR = TYPE_CLOCK_TIME_GET + 1; // 34
 
 	// Hash-table bucket array: array (mut (ref null eq)). Each slot holds a bucket alist
 	// (a cons chain of (key . value) entries) or null. Implicitly a subtype of eq, so a
 	// bucket array can be stored in a cons/cell field and compared with ref.eq.
-	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 32
+	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 35
 
 	// Degenerate-future struct {mut i32 kind, mut (ref null eq) value}: the
 	// non-asyncMode runtime representation of a future, distinct from every other value
@@ -1084,7 +1180,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// %async-run, runs the body to completion and wraps the value as kind 2 (settled);
 	// the kind field stays so the struct's shape cannot structurally canonicalize into
 	// the one-field TYPE_CELL (ref.test could no longer tell them apart).
-	static final int TYPE_P1_FUTURE = TYPE_HASH_BUCKETS + 1; // 33
+	static final int TYPE_P1_FUTURE = TYPE_HASH_BUCKETS + 1; // 36
 
 	// String byte array: array (mut i8) -- the GC-managed byte storage for a
 	// TYPE_STRING's `data` field (field 2). A bare array comptype (implicitly sub
@@ -1092,14 +1188,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	// readers ref.cast it before array.get_u / array.len. Appended right after
 	// TYPE_P1_FUTURE so the export/import wrapper type indices shift by one (see
 	// wrapperTypeIndex / importTypeIndex, both TYPE_WRITE_STR_GC + 1 based).
-	static final int TYPE_STR_BYTES = TYPE_P1_FUTURE + 1; // 34
+	static final int TYPE_STR_BYTES = TYPE_P1_FUTURE + 1; // 37
 
 	// _str_to_mem ((ref null eq) str, i32 ptr) -> i32: copies a string's $str_bytes
 	// array (with its surrounding quotes) into linear[ptr..) and returns the byte
 	// count. The array->linear bridge for the paths that still need a linear pointer
 	// (WASI iovecs for write-line/open, the reader input scratch, the host :string
 	// boundary, runtime intern). Appended after TYPE_STR_BYTES.
-	static final int TYPE_STR_TO_MEM = TYPE_STR_BYTES + 1; // 35
+	static final int TYPE_STR_TO_MEM = TYPE_STR_BYTES + 1; // 38
 
 	// _write_str_gc ((ref null eq) str, i32 from, i32 to) -> (): writes bytes
 	// [from, to) of a string's $str_bytes array to the current print sink -- appended
@@ -1107,13 +1203,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// never aliases the capture buffer), else staged into heap scratch and handed to
 	// _write_str for stdout. The print path for string values now that their bytes live
 	// on the GC heap. Appended after TYPE_STR_TO_MEM.
-	static final int TYPE_WRITE_STR_GC = TYPE_STR_TO_MEM + 1; // 36
+	static final int TYPE_WRITE_STR_GC = TYPE_STR_TO_MEM + 1; // 39
 
 	// Packed float-array data storage: array (mut f64). A bare array comptype (implicitly
 	// sub final), so a subtype of eq -- it stores in TYPE_FARRAY's (ref null eq) data
 	// field and readers ref.cast it before array.get / array.len. The unboxed f64 storage
 	// of a packed float array. Appended after TYPE_WRITE_STR_GC.
-	static final int TYPE_F64ARR = TYPE_WRITE_STR_GC + 1; // 37
+	static final int TYPE_F64ARR = TYPE_WRITE_STR_GC + 1; // 40
 
 	// Packed float array: struct {(ref null eq) dims, (ref null eq) data} -- a rank-n
 	// packed float array as a distinct first-class type (disjoint from TYPE_CELL, so
@@ -1125,7 +1221,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fill pointer / adjustable / displacement (a packed array is a pure compute buffer).
 	// Appended after TYPE_F64ARR; the export/import wrapper type indices below shift past
 	// it and TYPE_F32ARR.
-	static final int TYPE_FARRAY = TYPE_F64ARR + 1; // 38
+	static final int TYPE_FARRAY = TYPE_F64ARR + 1; // 41
 
 	// Packed single-float array data storage: array (mut f32). A bare array comptype
 	// (implicitly sub final), a subtype of eq -- it stores in TYPE_FARRAY's (ref null eq)
@@ -1134,7 +1230,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (#f(...) / make-array :element-type 'single-float). Reads widen f32->f64,
 	// writes narrow f64->f32; scalars stay f64 (no single-float scalar type). Appended
 	// after TYPE_FARRAY (last type of the DEFAULT module).
-	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 39
+	static final int TYPE_F32ARR = TYPE_FARRAY + 1; // 42
 
 	// --- the reader # dispatch signatures (always present) ------------------------
 	//
@@ -1143,17 +1239,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shift past them, like everything after the fixed types).
 
 	// _rd_dims ((ref null eq) rows, i32 rank) -> (ref null eq) dims buckets
-	static final int TYPE_RD_DIMS = TYPE_F32ARR + 1; // 40
+	static final int TYPE_RD_DIMS = TYPE_F32ARR + 1; // 43
 
 	// _rd_flat ((ref null eq) items, i32 depth, (ref null eq) dims, (ref null eq) out,
 	// i32 idx) -> i32 next idx
-	static final int TYPE_RD_FLAT = TYPE_RD_DIMS + 1; // 41
+	static final int TYPE_RD_FLAT = TYPE_RD_DIMS + 1; // 44
 
 	// _rd_token () -> i32 start offset (the token's end is the read cursor)
-	static final int TYPE_RD_TOKEN = TYPE_RD_FLAT + 1; // 42
+	static final int TYPE_RD_TOKEN = TYPE_RD_FLAT + 1; // 45
 
 	// _rd_memeq (i32 a, i32 b, i32 len) -> i32 (byte-range equality)
-	static final int TYPE_RD_MEMEQ = TYPE_RD_TOKEN + 1; // 43
+	static final int TYPE_RD_MEMEQ = TYPE_RD_TOKEN + 1; // 46
 
 	// How many type entries the reader block appends.
 	static final int READER_TYPE_COUNT = 4;
@@ -1170,16 +1266,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// range. The only {i64} struct in the module, so ref.test can discriminate it.
 	// _int_new never boxes an in-range value, so two equal integers are only ever
 	// both-i31 (ref.eq works) or both-boxed (compared by field).
-	static final int TYPE_BIGNUM = TYPE_RD_MEMEQ + 1; // 44
+	static final int TYPE_BIGNUM = TYPE_RD_MEMEQ + 1; // 47
 
 	// _int_new (i64) -> (ref null eq)
-	static final int TYPE_INT_NEW = TYPE_BIGNUM + 1; // 45
+	static final int TYPE_INT_NEW = TYPE_BIGNUM + 1; // 48
 
 	// _int_val ((ref null eq)) -> i64
-	static final int TYPE_INT_VAL = TYPE_INT_NEW + 1; // 46
+	static final int TYPE_INT_VAL = TYPE_INT_NEW + 1; // 49
 
 	// _print_i64_no_nl (i64) -> ()
-	static final int TYPE_PRINT_I64 = TYPE_INT_VAL + 1; // 47
+	static final int TYPE_PRINT_I64 = TYPE_INT_VAL + 1; // 50
 
 	static final int BIGNUM_TYPE_LAST = TYPE_PRINT_I64;
 
@@ -1194,23 +1290,23 @@ public final class WasmLispCompiler implements LispCompiler {
 	// discriminates TYPE_BIGINT from every other value.
 
 	// TYPE_LIMBS: array (mut i32) -- limb storage.
-	static final int TYPE_LIMBS = BIGNUM_TYPE_LAST + 1; // 48
+	static final int TYPE_LIMBS = BIGNUM_TYPE_LAST + 1; // 51
 
 	// TYPE_BIGINT: struct {(ref null $limbs) limbs}.
-	static final int TYPE_BIGINT = TYPE_LIMBS + 1; // 49
+	static final int TYPE_BIGINT = TYPE_LIMBS + 1; // 52
 
 	// _limb_shl/_limb_shr ((ref null eq), i32) -> (ref null eq)
-	static final int TYPE_BIG_SHIFT = TYPE_BIGINT + 1; // 50
+	static final int TYPE_BIG_SHIFT = TYPE_BIGINT + 1; // 53
 
 	// _limb_addsub/_limb_divrem_mag/_big_divrem ((ref null eq), (ref null eq), i32) ->
 	// (ref null eq)
-	static final int TYPE_BIG_TRIPLE = TYPE_BIG_SHIFT + 1; // 51
+	static final int TYPE_BIG_TRIPLE = TYPE_BIG_SHIFT + 1; // 54
 
 	// _big_grow ((ref null eq), i32, i32) -> (ref null eq)
-	static final int TYPE_BIG_GROW = TYPE_BIG_TRIPLE + 1; // 52
+	static final int TYPE_BIG_GROW = TYPE_BIG_TRIPLE + 1; // 55
 
 	// _big_to_f64 ((ref null eq)) -> f64
-	static final int TYPE_BIG_TO_F64 = TYPE_BIG_GROW + 1; // 53
+	static final int TYPE_BIG_TO_F64 = TYPE_BIG_GROW + 1; // 56
 
 	static final int BIGINT_TYPE_LAST = TYPE_BIG_TO_F64;
 
@@ -1221,13 +1317,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// need their own entries.
 
 	// _fx_val ((ref null eq)) -> (i64, i32)
-	static final int TYPE_FX_VAL = BIGINT_TYPE_LAST + 1; // 54
+	static final int TYPE_FX_VAL = BIGINT_TYPE_LAST + 1; // 57
 
 	// _fx_add/_fx_sub/_fx_mul/_fx_ash (i64, i64) -> (i64, i32)
-	static final int TYPE_FX_BIN = TYPE_FX_VAL + 1; // 55
+	static final int TYPE_FX_BIN = TYPE_FX_VAL + 1; // 58
 
 	// _fx_mod/_fx_rem (i64, i64) -> i64
-	static final int TYPE_FX_DIV = TYPE_FX_BIN + 1; // 56
+	static final int TYPE_FX_DIV = TYPE_FX_BIN + 1; // 59
 
 	static final int FX_TYPE_LAST = TYPE_FX_DIV;
 
@@ -1243,36 +1339,36 @@ public final class WasmLispCompiler implements LispCompiler {
 	// ref.test discriminates the width directly.
 
 	// array (mut i8) -- an (unsigned-byte 8) vector.
-	static final int TYPE_I8ARR = FX_TYPE_LAST + 1; // 57
+	static final int TYPE_I8ARR = FX_TYPE_LAST + 1; // 60
 
 	// array (mut i16) -- an (unsigned-byte 16) vector.
-	static final int TYPE_I16ARR = TYPE_I8ARR + 1; // 58
+	static final int TYPE_I16ARR = TYPE_I8ARR + 1; // 61
 
 	// array (mut i32) -- an (unsigned-byte 32) vector.
-	static final int TYPE_I32ARR = TYPE_I16ARR + 1; // 59
+	static final int TYPE_I32ARR = TYPE_I16ARR + 1; // 62
 
 	// _iv_set ((ref null eq), i32, i64) -> (): the packed integer-vector raw store.
-	static final int TYPE_IV_SET = TYPE_I32ARR + 1; // 60
+	static final int TYPE_IV_SET = TYPE_I32ARR + 1; // 63
 
 	// _t_sym () -> eqref: the cached-t helper's signature.
-	static final int TYPE_T_SYM = TYPE_IV_SET + 1; // 61
+	static final int TYPE_T_SYM = TYPE_IV_SET + 1; // 64
 
 	// fd_readdir(fd, buf, buf_len, cookie, retptr) -> errno:
 	// (i32, i32, i32, i64, i32) -> i32. Appended after the last fixed type rather than
 	// slotted next to TYPE_PATH_OPEN so every type index above keeps its value; the
 	// conditional --simd / async / instance blocks follow it through IARR_TYPE_LAST.
-	static final int TYPE_FD_READDIR = TYPE_T_SYM + 1; // 62
+	static final int TYPE_FD_READDIR = TYPE_T_SYM + 1; // 65
 
 	// _ub_read ((ref null eq) shadow, i64 raw) -> (ref null eq): the unboxed-local
 	// boxed-read helper's signature. Appended after the last fixed type, like
 	// TYPE_FD_READDIR above, so every type index keeps its value.
-	static final int TYPE_UB_READ = TYPE_FD_READDIR + 1; // 63
+	static final int TYPE_UB_READ = TYPE_FD_READDIR + 1; // 66
 
 	// _arr_set ((ref null eq) header, i32 flat, (ref null eq) value) -> (ref null eq):
 	// the shared general-array store's signature. _arr_get reuses TYPE_BIG_SHIFT, which
 	// is already ((ref null eq), i32) -> (ref null eq). Appended after the last fixed
 	// type, like the two above, so every type index keeps its value.
-	static final int TYPE_ARR_SET = TYPE_UB_READ + 1; // 64
+	static final int TYPE_ARR_SET = TYPE_UB_READ + 1; // 67
 
 	static final int IARR_TYPE_LAST = TYPE_ARR_SET;
 
@@ -1287,7 +1383,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// array (mut v128) -- the lane-group storage of a packed float array under --simd.
 	// A bare array comptype (implicitly sub final), so a subtype of eq. array.new_default
 	// zeroes every lane, which is what lets the kernels drop their scalar tails.
-	static final int TYPE_V128ARR = IARR_TYPE_LAST + 1; // 60
+	static final int TYPE_V128ARR = IARR_TYPE_LAST + 1; // 68
 
 	// struct {i32 count, i32 kind, (ref null eq) groups} -- the --simd replacement for
 	// the
@@ -1299,13 +1395,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// TYPE_V128ARR, and `groups` holds ceil(count / lanes) + 1 groups -- the trailing one
 	// a
 	// zero sentinel so matvec's shuffle window can always read one group past its last.
-	static final int TYPE_VBLOCK = IARR_TYPE_LAST + 2; // 61
+	static final int TYPE_VBLOCK = IARR_TYPE_LAST + 2; // 69
 
 	// _v_get ((ref null eq) vblock, i32 index) -> f64
-	static final int TYPE_V_GET = IARR_TYPE_LAST + 3; // 62
+	static final int TYPE_V_GET = IARR_TYPE_LAST + 3; // 70
 
 	// _v_set ((ref null eq) vblock, i32 index, f64 value) -> f64 (the value AS STORED)
-	static final int TYPE_V_SET = IARR_TYPE_LAST + 4; // 63
+	static final int TYPE_V_SET = IARR_TYPE_LAST + 4; // 71
 
 	// How many type entries the --simd block appends.
 	static final int SIMD_TYPE_COUNT = 4;
@@ -1779,11 +1875,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (and rewrite their direct call sites) so real-library signatures compile
 		// despite the MAX_CALLABLE_ARITY type limit.
 		program = WasmArityBundler.bundle(program);
-		// And route a funcall wider than the same limit through apply, whose SPREAD
-		// dispatcher has no per-argument parameter. BEFORE the usesEval scan below:
-		// the injected apply is what turns the eval runtime (and with it the spread
+		// A CALL SITE wider than the fixed block is a different question from a too-wide
+		// DEFUN: the arguments of a keyword lambda list go through verbatim for the
+		// callee's own dispatcher to parse, so a seven-parameter function is funcalled
+		// with eleven. Give the program its own per-arity dispatchers up to the widest
+		// such site (appended, so no fixed index moves) and route only what is still too
+		// wide through apply, whose SPREAD dispatcher has no per-argument parameter --
+		// one
+		// function over EVERY callable, and 12 KB of the zlib artifact when the only
+		// thing
+		// that wanted it was an eleven-argument funcall. BEFORE the usesEval scan below:
+		// an injected apply is what turns the eval runtime (and with it the spread
 		// dispatcher's body) on.
-		program = WasmArityBundler.spreadOverArityFuncalls(program);
+		int widestDispatch = WasmArityBundler.widestDispatchArity(program);
+		this.extraCallArity = widestDispatch > MAX_CALLABLE_ARITY + MAX_EXTRA_CALL_ARITY ? 0
+				: Math.max(0, widestDispatch - MAX_CALLABLE_ARITY);
+		program = WasmArityBundler.spreadOverArityFuncalls(program, callArityCeiling());
 		// Detect whether the program uses (eval ...). When it does, a runtime
 		// interpreter (_eval) and a function-name registry are emitted, and dispatch
 		// functions are generated for every registered arity so _eval can apply them.
@@ -2371,6 +2478,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
+			.callArityCeiling(callArityCeiling())
+			.extraDispatchFuncBase(extraDispatchFuncBase())
 			.numDefuns(defuns.size())
 			.userDefunNames(Set.copyOf(userDefinedNames))
 			.warnedClRedefinitions(warnedClRedefinitions)
@@ -3096,6 +3205,27 @@ public final class WasmLispCompiler implements LispCompiler {
 			dw.write(Instruction.END);
 			dispatchBodies.add(db.toByteArray());
 		}
+		// The EXTRA per-arity dispatchers (extraDispatchFuncBase()..), emitted with the
+		// async block rather than here so the fixed indices above keep their values. The
+		// slot has to exist as soon as the pre-scan sizes the tier -- Pass 2 writes the
+		// index into every call -- but a site the scan saw and Pass 2 never emitted (one
+		// inside a defmacro body, say) leaves it an unused arity, stubbed like the fixed
+		// block's.
+		List<byte[]> extraDispatchBodies = new ArrayList<>();
+		for (int arity = MAX_CALLABLE_ARITY + 1; arity <= callArityCeiling(); arity++) {
+			if (indirectCallArities.contains(arity)) {
+				extraDispatchBodies.add(WasmRuntimeBuilder.buildDispatchBody(arity, defuns, lambdaDecls, numDefuns,
+						stringTable, usesEval, userFuncBase(), false, dispatchableFuncIds));
+			}
+			else {
+				ByteArrayOutputStream db = new ByteArrayOutputStream();
+				WasmWriter dw = new WasmWriter(db);
+				dw.write(0);
+				dw.write(Instruction.UNREACHABLE);
+				dw.write(Instruction.END);
+				extraDispatchBodies.add(db.toByteArray());
+			}
+		}
 
 		// Build helper function bodies
 		byte[] printI32Body = WasmRuntimeBuilder.buildPrintI32Core(true);
@@ -3465,7 +3595,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				});
 				// type 10: _print_f64 / _print_f64_no_nl
 				types.addFunc(new Type[] { Type.F64 }, new Type[] {});
-				// types 11-18: callable types for arities 0-7
+				// types 11-21: callable types for arities 0-10 (MAX_CALLABLE_ARITY).
 				// Each: (ref null eq)^(arity+1) -> (ref null eq)
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					int paramCount = arity + 1; // env + args
@@ -3936,6 +4066,24 @@ public final class WasmLispCompiler implements LispCompiler {
 						});
 					});
 				}
+				// The EXTRA callable signatures (extraCallableTypeBase()..), one per
+				// per-arity dispatcher past the fixed block: arity N is
+				// (ref null eq)^(N+1) -> (ref null eq), the same shape as
+				// TYPE_CALLABLE_BASE + N. Appended here rather than continuing that block
+				// so no existing type index moves; the dispatchers are their only users
+				// (a defun/lambda is still capped at MAX_CALLABLE_ARITY parameters).
+				for (int arity = MAX_CALLABLE_ARITY + 1; arity <= callArityCeiling(); arity++) {
+					int paramCount = arity + 1; // env + args
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(paramCount);
+						for (int i = 0; i < paramCount; i++) {
+							w.writeRefType(true, Type.EQ.code());
+						}
+						w.write(1);
+						w.writeRefType(true, Type.EQ.code());
+					});
+				}
 				// Export wrapper signatures (host-callable), appended after the last
 				// fixed type (TYPE_F32ARR, or the --simd block's TYPE_V_SET). One per
 				// (rontolisp:wasm-export ...) directive.
@@ -4120,7 +4268,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// getenv runtime
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _getenv ((ref null eq)) ->
 															// (ref null eq)
-				// Dispatch functions (arities 0-7) plus the spread one, which reuses the
+				// Dispatch functions (arities 0-10) plus the spread one, which reuses the
 				// arity-1 signature ((funcval, argList) -> value).
 				for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
 					fnDef.addFunction(TYPE_CALLABLE_BASE + arity);
@@ -4274,6 +4422,11 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						fnDef.addFunction(WasmFutureRuntimeBuilder.typeIndexOf(i, asyncTypeBase() + 3));
 					}
+				}
+				// The EXTRA per-arity dispatchers, right after the async block, over the
+				// callable signatures appended at extraCallableTypeBase().
+				for (int i = 0; i < this.extraCallArity; i++) {
+					fnDef.addFunction(extraCallableTypeBase() + i);
 				}
 				// User defun functions
 				for (DefunDecl defun : defuns) {
@@ -4861,6 +5014,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb));
 					}
+				}
+				// The EXTRA per-arity dispatcher bodies, in extraDispatchFuncBase()
+				// order.
+				for (byte[] body : extraDispatchBodies) {
+					code.addFunction(body);
 				}
 				// User defun function bodies
 				for (byte[] body : userFunctionBodies) {
@@ -5944,6 +6102,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		int userFuncBase = FUNC_USER_BASE;
 
 		/**
+		 * {@link WasmLispCompiler#callArityCeiling()} -- the widest {@code funcall} this
+		 * module dispatches per arity. A site past it compiles to a call-time signal.
+		 */
+		int callArityCeiling = MAX_CALLABLE_ARITY;
+
+		/**
+		 * The index of {@code _dispatch_11}, the first dispatcher past the fixed block.
+		 * Only read for an arity above {@link WasmLispCompiler#MAX_CALLABLE_ARITY}, which
+		 * {@link #callArityCeiling} already gates.
+		 */
+		int extraDispatchFuncBase = FUNC_USER_BASE;
+
+		/**
 		 * The number of emitted defun bodies -- the defuns LIST size, one module function
 		 * per definition. NOT {@link #functions}{@code .size()}: that map holds one entry
 		 * per NAME, so a redefined defun (fast-http redefines 11 struct readers) makes it
@@ -6181,6 +6352,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
 			this.simd = builder.simd;
 			this.userFuncBase = builder.userFuncBase;
+			this.callArityCeiling = builder.callArityCeiling;
+			this.extraDispatchFuncBase = builder.extraDispatchFuncBase;
 			this.numDefuns = builder.numDefuns;
 			this.userDefunNames = builder.userDefunNames;
 			this.usesFmakunbound = builder.usesFmakunbound;
@@ -6261,6 +6434,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean simd = false;
 
 			private int userFuncBase = FUNC_USER_BASE;
+
+			private int callArityCeiling = MAX_CALLABLE_ARITY;
+
+			private int extraDispatchFuncBase = FUNC_USER_BASE;
 
 			private int numDefuns = 0;
 
@@ -6427,6 +6604,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder userFuncBase(int userFuncBase) {
 				this.userFuncBase = userFuncBase;
+				return this;
+			}
+
+			Builder callArityCeiling(int callArityCeiling) {
+				this.callArityCeiling = callArityCeiling;
+				return this;
+			}
+
+			Builder extraDispatchFuncBase(int extraDispatchFuncBase) {
+				this.extraDispatchFuncBase = extraDispatchFuncBase;
 				return this;
 			}
 

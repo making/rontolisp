@@ -27,8 +27,7 @@ final class WasmMapcCompiler {
 			throw new UnsupportedOperationException(LispNames.MAPC
 					+ " expects at least 2 arguments (a function and one list), got " + (args.size() - 1));
 		}
-		ctx.indirectCallArities.add(nLists);
-		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + nLists;
+		int dispatchFuncIdx = WasmLispCompiler.mapDispatchFuncIndex(LispNames.MAPC, nLists, ctx);
 
 		// Compile function expression
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(args.get(1)), ctx);

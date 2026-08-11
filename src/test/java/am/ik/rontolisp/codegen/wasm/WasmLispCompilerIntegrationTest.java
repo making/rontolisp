@@ -14632,13 +14632,15 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void compileFuncallWiderThanTheCallableLimitGoesThroughApply() throws Exception {
-		// The per-arity dispatchers stop at MAX_CALLABLE_ARITY, so an 11-argument
-		// funcall used to compile to a call-time "not supported" signal -- a trap on a
-		// LIVE path. WasmArityBundler.spreadOverArityFuncalls rewrites it to
-		// (apply f (list ...)), which the SPREAD dispatcher already serves. A keyword
-		// lambda list is how a program reaches the limit: the arguments go through
-		// verbatim for the callee to parse, so four keywords is eleven arguments.
-		// chipz's %inflate is exactly this shape.
+		// The FIXED per-arity dispatcher block stops at MAX_CALLABLE_ARITY, so an
+		// 11-argument funcall used to compile to a call-time "not supported" signal --
+		// a trap on a LIVE path. It now gets a dispatcher of its own, appended after the
+		// fixed block; past MAX_EXTRA_CALL_ARITY more of them,
+		// WasmArityBundler.spreadOverArityFuncalls still rewrites the site to
+		// (apply f (list ...)) for the SPREAD dispatcher to serve. A keyword lambda list
+		// is how a program reaches the limit: the arguments go through verbatim for the
+		// callee to parse, so four keywords is eleven arguments. chipz's %inflate is
+		// exactly this shape.
 		assertThat(compileAndRun("""
 				(defun k4 (a b c &key (input-start 0) input-end (output-start 0) output-end)
 				  (list a b c input-start input-end output-start output-end))
@@ -14652,6 +14654,44 @@ class WasmLispCompilerIntegrationTest {
 				(defun pickv () #'v)
 				(print (funcall (pickv) 1 2 3 4 5 6 7 8 9 10 11 12))
 				""")).isEqualTo("12");
+	}
+
+	@Test
+	void compileFuncallEitherSideOfTheDerivedArityCeilingAnswersTheSame() throws Exception {
+		// The ceiling is derived from the program's own widest call, so both the
+		// per-arity route (11..14 arguments) and the apply/SPREAD route (15, past
+		// MAX_EXTRA_CALL_ARITY) have to answer identically -- and both at the TOP LEVEL,
+		// which compiles through WasmAsyncEmit.freshCtx: a context that did not carry
+		// the ceiling compiled the site to a call-time signal there while the same form
+		// inside a defun worked.
+		for (int width : new int[] { 10, 11, 14, 15 }) {
+			StringBuilder args = new StringBuilder();
+			for (int i = 1; i <= width; i++) {
+				args.append(' ').append(i);
+			}
+			assertThat(compileAndRun("""
+					(defun v (&rest xs) (length xs))
+					(defun pickv () #'v)
+					(print (funcall (pickv)%s))
+					""".formatted(args))).as("funcall of width %d", width).isEqualTo(String.valueOf(width));
+		}
+	}
+
+	@Test
+	void compileMapcarOverMoreListsThanTheFixedDispatcherBlockWorks() throws Exception {
+		// The map family funcalls its function once per element of each list, so its
+		// list count picks a per-arity dispatcher exactly as a funcall's argument count
+		// does -- and it used to compute that index without a ceiling check, which past
+		// the fixed block silently addressed the NEXT runtime helper and emitted a
+		// module that does not validate. Eleven lists is inside the derived ceiling now.
+		// The mapped function is variadic: a fixed ELEVEN-parameter defun is past the
+		// defun-side limit, which the bundler rewrites and then refuses to hand out as a
+		// function value -- a separate rule, and one this change deliberately leaves at
+		// MAX_CALLABLE_ARITY.
+		assertThat(compileAndRun("""
+				(defun s11 (&rest xs) (reduce #'+ xs))
+				(print (mapcar #'s11 '(1) '(2) '(3) '(4) '(5) '(6) '(7) '(8) '(9) '(10) '(11)))
+				""")).isEqualTo("(66)");
 	}
 
 	@Test

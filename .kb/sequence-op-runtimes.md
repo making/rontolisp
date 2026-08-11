@@ -158,30 +158,31 @@ the helper is injected and then fully shaken out, the same residue
   (`.kb/packed-integer-vectors.md`). If a site ever needs more, the answer is a fast
   path at the SITE before the call, never re-inlining the dispatch.
 
-## The spread dispatcher on this module is NOT an over-approximating scan
+## The spread dispatcher on this module was NOT an over-approximating scan
 
-`_dispatch_spread` is another 12,156 B of the zlib artifact, and chipz's only literal
+`_dispatch_spread` was another 12,156 B of the zlib artifact, and chipz's only literal
 `apply` does not force it (a literal `#'f` target compiles to a direct call). What
-turns `needsApplyRuntime` on is **`WasmArityBundler.spreadOverArityFuncalls`**: a
-`funcall` with more arguments than `MAX_CALLABLE_ARITY` (10) is rewritten into
-`(apply f (list ...))`, and chipz's
+turned `needsApplyRuntime` on was **`WasmArityBundler.spreadOverArityFuncalls`**: a
+`funcall` with more arguments than the per-arity dispatchers can take was rewritten
+into `(apply f (list ...))`, and chipz's
 
 ```lisp
 (funcall fun state input output :input-start s :input-end e
                                 :output-start s :output-end e)
 ```
 
-is eleven of them. The designator is a variable, so the rewritten `apply` needs
+is eleven of them. The designator is a variable, so the rewritten `apply` needed
 `_apply` and the spread dispatcher for real -- the per-arity dispatchers take one
-wasm parameter per Lisp argument and stop at the ceiling. Nothing here is
-over-approximating; the gate is right.
+wasm parameter per Lisp argument and stop at the ceiling. Nothing there was
+over-approximating; the gate was right, and the ceiling was the cause.
 
-**Measured lever, not taken here:** raising `MAX_CALLABLE_ARITY` to 12 removes
-`_dispatch_spread` from the module entirely and takes the `--optimize=size` build from
-165,645 to **154,022 (-7.0%)** -- `_dispatch_11` costs 975 B where the spread
-dispatcher cost 12,160. It is a separate change because the constant is an index
-origin: `FUNC_DISPATCH_SPREAD = FUNC_DISPATCH_BASE + MAX_CALLABLE_ARITY + 1`, so every
-later `FUNC_*` shifts, and so does every callable type index after 11. `.todo/321`.
+**Which is now derived, not fixed at 10.** A call site 11..14 arguments wide gets its
+own per-arity dispatcher, APPENDED after the fixed block so no existing index moves
+(`MAX_CALLABLE_ARITY` is an index origin -- see `.kb/wasm-callable-arity.md` for the
+mechanics and the audit). Nothing spreads chipz's call any more, `needsApplyRuntime`
+answers false, and the spread dispatcher goes back to being the stub it should have
+been: `_dispatch_11` costs 975 B where it cost 12,156. zlib `--optimize=size`
+149,054 -> **137,430 (-7.8%)**.
 
 ## Pinning tests
 

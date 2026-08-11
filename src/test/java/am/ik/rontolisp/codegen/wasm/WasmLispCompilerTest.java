@@ -1026,6 +1026,40 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher() {
+		// The byte budget behind .kb/wasm-callable-arity.md's derived ceiling. A funcall
+		// past MAX_CALLABLE_ARITY used to be rewritten into apply, and _apply drags in
+		// the SPREAD dispatcher -- ONE function over every callable at every width,
+		// 12,156 B and 7.3% of the zlib --optimize=size artifact for what was an
+		// eleven-argument call. Inside the derived ceiling the site gets its own
+		// per-arity dispatcher instead: measured 41 bytes here, 975 on zlib, against the
+		// 2,405 the spread dispatcher costs even in this two-callable program.
+		int fixed = compileFuncallOfWidth(10).length;
+		assertThat(compileFuncallOfWidth(11).length - fixed).isLessThan(500);
+		assertThat(compileFuncallOfWidth(
+				WasmLispCompiler.MAX_CALLABLE_ARITY + WasmLispCompiler.MAX_EXTRA_CALL_ARITY).length - fixed)
+			.isLessThan(500);
+		// One argument past the cap the ladders would outgrow the one function that
+		// serves every arity, so the program keeps the old ceiling and spreads.
+		assertThat(compileFuncallOfWidth(
+				WasmLispCompiler.MAX_CALLABLE_ARITY + WasmLispCompiler.MAX_EXTRA_CALL_ARITY + 1).length - fixed)
+			.isGreaterThan(1000);
+	}
+
+	// A program whose only wide call is one funcall of `width` arguments through a
+	// function VALUE (the shape the defun-side bundler never sees).
+	private static byte[] compileFuncallOfWidth(int width) {
+		StringBuilder source = new StringBuilder(
+				"(defun v (&rest xs) (length xs))\n(defun pickv () #'v)\n" + "(print (funcall (pickv)");
+		for (int i = 1; i <= width; i++) {
+			source.append(' ').append(i);
+		}
+		source.append("))");
+		return new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString(source.toString()));
+	}
+
+	@Test
 	void aLiteralLookupTableCostsItsOwnBytesAndNotThreeTimesThem() {
 		// A literal (unsigned-byte N) table is baked into the module's static data at the
 		// element width, so one more element costs w/8 bytes -- not the ~11.8 the cons

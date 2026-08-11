@@ -374,7 +374,7 @@ decides what to make of it.
   [`<resource>-drop`](#releasing-a-resource-resource-drop) and by nothing else:
   `cl:close` does not apply to a WIT resource, whose handles are the provider's
   (or the host's) private numbering, not a slot in a rontolisp stream table.
-- On the WASM backend the 7-parameter arity limit applies to a binding like any
+- On the WASM backend the 10-parameter arity limit applies to a binding like any
   other function, counting a method's leading `self`.
 - Instantiating the compiled Preview 1 module requires the host to provide every
   import that survives tree shaking: `wasmtime run` needs a

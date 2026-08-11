@@ -34,18 +34,21 @@ final class WasmFunctionCallCompiler {
 	static void compileFuncall(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 2; // (funcall f arg0 ...) -> arity = num_args
-		if (arity > WasmLispCompiler.MAX_CALLABLE_ARITY) {
+		if (arity > ctx.callArityCeiling) {
 			// The dispatch functions occupy a FIXED index range (FUNC_DISPATCH_BASE +
-			// 0..MAX_CALLABLE_ARITY); an over-arity index would silently call the
-			// NEXT runtime helper (cl-postgres' 9-argument make-ssl-stream funcall
-			// produced an invalid module this way). The site stays compilable as a
-			// call-time signal, so an over-arity funcall on a dead branch (SSL is
-			// interpreter/JVM-only anyway) never blocks a build.
+			// 0..MAX_CALLABLE_ARITY) plus the extra tier this module sized from its own
+			// widest funcall; an over-ceiling index would silently call the NEXT runtime
+			// helper (cl-postgres' 9-argument make-ssl-stream funcall produced an invalid
+			// module this way). A source-level site past the ceiling was already
+			// rewritten
+			// into apply by WasmArityBundler, so what reaches here is one a macro
+			// synthesized during Pass 2, after that scan. The site stays compilable as a
+			// call-time signal, so it never blocks a build.
 			WasmExprCompiler.compileExpr(LispMacroExpander.overArityFuncallStub(arity), ctx);
 			return;
 		}
 		ctx.indirectCallArities.add(arity);
-		int dispatchFuncIdx = WasmLispCompiler.FUNC_DISPATCH_BASE + arity;
+		int dispatchFuncIdx = WasmLispCompiler.dispatchFuncIndex(arity, ctx.extraDispatchFuncBase);
 
 		// Push funcval
 		WasmExprCompiler.compileExpr(FunctionDesignators.normalize(parts.get(1)), ctx);
