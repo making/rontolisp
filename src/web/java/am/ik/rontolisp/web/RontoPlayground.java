@@ -18,6 +18,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
+import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.WitExportInliner;
@@ -176,7 +177,12 @@ public final class RontoPlayground {
 		List<LispVal> program = WitLibrary
 			.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(VecLibrary.process(
 					LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))))))));
-		return LibraryDefunPruner.prune(WitExportInliner.inline(program, null, backend, uploads));
+		// The (boundp 'name) fold runs before the shake for the same reason it does in the
+		// CLI: a guarded library constant is not a top-level definer until its probe is
+		// decided, and the shaker cannot drop what it cannot see
+		// (compiler/CompileTimeBoundp).
+		return LibraryDefunPruner
+			.prune(CompileTimeBoundp.fold(WitExportInliner.inline(program, null, backend, uploads), false, false));
 	}
 
 	@JS(args = { "fn" }, value = "globalThis.rontoEval = fn;")

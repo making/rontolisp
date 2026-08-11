@@ -26,6 +26,7 @@ import am.ik.rontolisp.Version;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
+import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
@@ -543,6 +544,15 @@ public final class RontoLispCli {
 		// as pruning roots below.
 		boolean witWorld = WitExportInliner.usesWitExport(program);
 		program = WitExportInliner.inline(program, baseDir, witBackend, SourceLoader.fileSystem());
+		// Decide the (boundp 'name) probes whose answer the top-level order already fixes
+		// (compiler/CompileTimeBoundp), and collapse the guards they were testing. It has
+		// to happen BEFORE the tree-shaker below, not just inside the compilers: the
+		// portable (unless (boundp '+k+) (defconstant +k+ v)) is what keeps a library's
+		// constants from being top-level definers, and an unreachable one the shaker
+		// cannot see stays in the artifact. Packages are still unresolved here, so only
+		// the "unbound" direction is decided; the compilers run the pass again once the
+		// spellings are canonical.
+		program = CompileTimeBoundp.fold(program, dynamic, false);
 		// Drop spliced library definitions unreachable from the user program (the AST
 		// tree-shaker; see LibraryDefunPruner). Skipped under --dynamic (late binding
 		// can resolve any name at runtime) and --no-prune (the explicit escape hatch) --

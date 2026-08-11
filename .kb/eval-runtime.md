@@ -35,18 +35,17 @@ under `--optimize`. Narrowing the JVM gate would change nothing but add a guaran
 re-compile pass. Re-evaluation trigger: if the JVM wrapper set ever becomes
 reference-gated like the WASM spread tier, revisit.
 
-## The portable define-constant idiom no longer forces the runtime (WASM; todo-315)
+## A literal `boundp` never reaches this gate
 
-`(unless (boundp 'x) (defconstant x v))` at top level -- chipz spells 18 of them -- is
-folded to `(progn (defconstant x v))` by `LispMacroExpander.foldBoundpDefineConstantIdiom`
-(called before `flattenTopLevel`, so the definition surfaces) when `x` is PROVABLY unbound
-there: first occurrence of the symbol in program order, no earlier string literal spells
-the name (the `(set (intern ...))` forgery carve-out), not a seeded CL symbol. A
-`declaim`/`proclaim` naming the constant ahead of its guard does not count as an
-occurrence (it expands to nil on every backend -- the pruner's rule; chipz's
-`+crc32-table+` type declaim is the case that needed this). An undischargeable guard keeps
-its runtime `boundp` and the eval runtime with it. Interpreter/JVM behavior is identical
-by construction (the guard body runs exactly when the runtime probe would have run it).
+`boundp` is in the OR-chain above, but a `(boundp 'name)` over a LITERAL symbol is
+decided at compile time and is gone before the scan runs: the program is closed, so the
+answer is which top-level forms before it declare the name a global.
+`compiler/CompileTimeBoundp` folds it on both compile paths (and, in the CLI and the
+playground, before the tree-shaker, because the `(unless (boundp '+k+) (defconstant +k+
+v))` guard is also what keeps a library constant from being a top-level definer). Only a
+COMPUTED designator -- `(boundp (intern ...))` -- still opens the gate. Full mechanics,
+what is deliberately not decidable, and why `fboundp` is left out:
+`.kb/compile-time-boundp.md`.
 
 **Top-level global mirroring**: when `usesEval`, a top-level `setq`/`defvar`/`defparameter`/`defconstant` in compiled code (the `Ctx.topLevel` context) also calls `_store(name, value, genv)` to copy the binding into the eval global env, so an eval'd expression can resolve a global the compiled program defined (`Jvm/WasmSetqCompiler.mirrorTopLevelGlobal`; the compiled value still lives in a `main`/`_start` local, the mirror is write-through one-way).
 

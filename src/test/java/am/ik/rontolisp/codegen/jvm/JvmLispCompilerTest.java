@@ -1606,6 +1606,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void theDefineConstantGuardCompilesToTheBareDefinition() {
+		// The portable define-constant guard compiles to exactly the class the bare
+		// definition compiles to: the probe was decided at compile time
+		// (compiler/CompileTimeBoundp), so the boundp its usesEval OR-chain arm reads is
+		// not in the program any more, and neither is the guard that wrapped it.
+		byte[] guarded = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(unless (boundp '+bpk+) (defconstant +bpk+ 5)) (print +bpk+)"));
+		byte[] bare = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print +bpk+)"));
+		assertThat(guarded).isEqualTo(bare);
+		// A computed designator is not decidable and keeps its probe, so the two programs
+		// stay different classes. What that costs is NOT readable here: this backend's
+		// gate is deliberately wide (the injected wrapper bodies reference _apply) and
+		// the class shaker is what trims the runtime, so the size pin lives on the WASM
+		// side, whose gate is exact -- .kb/eval-runtime.md.
+		byte[] computed = new JvmLispCompiler("Test")
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print (boundp (intern \"+BPK+\")))"));
+		assertThat(computed).isNotEqualTo(bare);
+	}
+
+	@Test
 	void compileAndRunSymbolValue() throws Exception {
 		assertThat(compileAndRun("(defvar *sv-var* 42) (print (symbol-value '*sv-var*))"
 				+ "(setq *sv-var2* 7) (print (symbol-value (intern \"*SV-VAR2*\")))"

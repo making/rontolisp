@@ -96,6 +96,11 @@ the "grep before you change behavior" rule:
   quoted symbol) is deleted, and `defvar`/`defparameter`/`defconstant` are compiled for
   effect instead of building the name they return (always on, like the fold above) ->
   `.kb/toplevel-statement-values.md`
+- `(boundp 'name)` over a LITERAL symbol is decided at compile time (always on, both
+  compile paths, and in the CLI/playground BEFORE the tree-shaker, because the portable
+  `(unless (boundp '+k+) (defconstant +k+ v))` guard hides the definition it wraps): what
+  the top-level order makes decidable, every position it does not, and the free soundness
+  gate -> `.kb/compile-time-boundp.md`
 - Backends & flags -- `--dynamic`, `--optimize`, `--component` (WASI 0.3), `--no-gc`, `--simd`,
   `wit-import`/`wit-export`/`wasm-export`, WASM GC strings.
 - `rontolisp format`, the source formatter: the whitespace-ONLY invariant (identical token

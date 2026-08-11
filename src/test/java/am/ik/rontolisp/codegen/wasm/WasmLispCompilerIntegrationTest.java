@@ -9386,6 +9386,33 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aLiteralBoundpCostsNothingWhileAComputedOneStillCarriesTheEvalRuntime() {
+		// A probe the top-level order decides compiles to exactly the module its ANSWER
+		// compiles to (compiler/CompileTimeBoundp), so the eval runtime the boundp arm of
+		// the usesEval OR-chain would have pulled in is not there at all.
+		byte[] probed = new WasmLispCompiler().compile(
+				LispReader.readAllFromString("(defvar *bpv* 1) (print (boundp '*bpv*)) (print (boundp '*bp-nope*))"));
+		byte[] answered = new WasmLispCompiler()
+			.compile(LispReader.readAllFromString("(defvar *bpv* 1) (print t) (print nil)"));
+		assertThat(probed).isEqualTo(answered);
+		// Same for the portable define-constant guard, whose collapse also has to leave
+		// the definition behind as a plain top-level definer.
+		byte[] guarded = new WasmLispCompiler()
+			.compile(LispReader.readAllFromString("(unless (boundp '+bpk+) (defconstant +bpk+ 5)) (print +bpk+)"));
+		byte[] bare = new WasmLispCompiler()
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print +bpk+)"));
+		assertThat(guarded).isEqualTo(bare);
+		// A genuinely computed designator has to be resolved at run time, so the same
+		// program keeps the runtime. What that is worth is read off the SHAKEN modules,
+		// where nothing else is left to hide it: 21,800 bytes against 529.
+		byte[] computed = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print (boundp (intern \"+BPK+\")))"));
+		byte[] literal = new WasmLispCompiler(false, false, false, OptimizeLevel.SIZE)
+			.compile(LispReader.readAllFromString("(defconstant +bpk+ 5) (print t)"));
+		assertThat(computed.length).isGreaterThan(literal.length * 10);
+	}
+
+	@Test
 	void symbolValueReadsTheGlobalVariableNamespace() throws Exception {
 		assertThat(compileAndRun("(defvar *sv-var* 42) (print (symbol-value '*sv-var*))"
 				+ "(setq *sv-var2* 7) (print (symbol-value (intern \"*SV-VAR2*\")))"

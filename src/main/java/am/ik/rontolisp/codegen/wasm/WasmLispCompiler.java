@@ -32,6 +32,7 @@ import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
@@ -1727,11 +1728,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
-		// The portable define-constant idiom's (boundp 'x) probe is the one thing in a
-		// straight-line library splice that forces the eval runtime; fold the provable
-		// guards away BEFORE the flatten below so the produced progn is spliced and the
-		// definition surfaces as an ordinary top-level defconstant.
-		program = LispMacroExpander.foldBoundpDefineConstantIdiom(program);
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
@@ -1752,6 +1748,17 @@ public final class WasmLispCompiler implements LispCompiler {
 			// gate open and pulls the reader+eval runtimes into every Worker module.
 			program = NoWasiFilesystemStubs.rewrite(program);
 		}
+		// A (boundp 'name) over a literal symbol is decided here, against the globals the
+		// top-level forms before it declare (compiler/CompileTimeBoundp): the probe is
+		// what forces the eval runtime, and the guard it tests is what keeps the
+		// definition it wraps from surfacing as a top-level definer. AFTER the --no-wasi
+		// rewrite above for the same reason the scans below are: the fold refuses a
+		// program that can eval, and clack's DEAD file loader is exactly such a program
+		// until that rewrite takes it out. The CLI folds the same program before its
+		// tree-shaker runs (where the rewrite has not happened yet); this run decides
+		// what only the canonical spellings and the rewritten program can decide, and
+		// keeps a direct compiler invocation equivalent.
+		program = CompileTimeBoundp.fold(program, this.dynamic, true);
 		if (this.optimize.eliminatesDeadCode()) {
 			// A typecase clause whose type no call site's argument can have is dead code
 			// the tree-shaker cannot see, because its reachability is by NAME

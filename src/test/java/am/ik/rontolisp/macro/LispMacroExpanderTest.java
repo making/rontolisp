@@ -129,30 +129,6 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
-	void theBoundpDefineConstantIdiomFoldsExactlyWhenUnboundnessIsProvable() {
-		// The provable guard folds to a spliced defconstant (no boundp left).
-		List<LispVal> folded = LispMacroExpander.foldBoundpDefineConstantIdiom(
-				LispReader.readAllFromString("(unless (boundp '+k+) (defconstant +k+ 1)) (print +k+)"));
-		assertThat(folded.toString()).doesNotContain("BOUNDP");
-		// An earlier occurrence of the symbol keeps the guard.
-		List<LispVal> kept = LispMacroExpander.foldBoundpDefineConstantIdiom(
-				LispReader.readAllFromString("(print '+k+) (unless (boundp '+k+) (defconstant +k+ 1))"));
-		assertThat(kept.toString()).contains("BOUNDP");
-		// ... but a declaim naming it does not (it can bind nothing).
-		List<LispVal> declaimed = LispMacroExpander.foldBoundpDefineConstantIdiom(LispReader
-			.readAllFromString("(declaim (type fixnum +k+)) (unless (boundp '+k+) (defconstant +k+ 1)) (print +k+)"));
-		assertThat(declaimed.toString()).doesNotContain("BOUNDP");
-		// A seeded CL name stays dynamic.
-		List<LispVal> cl = LispMacroExpander.foldBoundpDefineConstantIdiom(LispReader
-			.readAllFromString("(unless (boundp '*standard-output*) (defconstant *standard-output* nil))"));
-		assertThat(cl.toString()).contains("BOUNDP");
-		// An earlier string literal spelling the name is the forgery carve-out.
-		List<LispVal> forged = LispMacroExpander.foldBoundpDefineConstantIdiom(
-				LispReader.readAllFromString("(print \"sets +K+ maybe\") (unless (boundp '+k+) (defconstant +k+ 1))"));
-		assertThat(forged.toString()).contains("BOUNDP");
-	}
-
-	@Test
 	void theRuntimeSubtypepTableIsEmittedInLatticeDeclarationOrder() {
 		// A computed (subtypep a b) makes the compiler bake the whole type lattice as a
 		// data table. Its order must be a function of the PROGRAM, never of the JVM run:

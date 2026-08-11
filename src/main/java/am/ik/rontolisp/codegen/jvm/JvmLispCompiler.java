@@ -34,6 +34,7 @@ import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
+import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -241,6 +242,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		// the rest of compilation sees canonical names.
 		PackageResolver packageResolver = new PackageResolver();
 		program = packageResolver.resolveProgram(program);
+		// A (boundp 'name) over a literal symbol is decided here, against the globals the
+		// top-level forms before it declare (compiler/CompileTimeBoundp): the probe is
+		// what forces the eval runtime, and the guard it tests is what keeps the
+		// definition it wraps from surfacing as a top-level definer. The CLI folds the
+		// same program before its tree-shaker runs; this run decides what only the
+		// canonical spellings can decide, and keeps a direct compiler invocation
+		// equivalent.
+		program = CompileTimeBoundp.fold(program, this.dynamic, true);
 		// Splice top-level (progn ...)/(eval-when ...) so Pass 1 collects the defuns
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
