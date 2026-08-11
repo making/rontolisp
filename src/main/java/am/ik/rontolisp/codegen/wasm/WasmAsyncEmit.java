@@ -763,6 +763,7 @@ final class WasmAsyncEmit {
 			.hostRandom(proto.hostRandom)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)
+			.condMessagesObservable(proto.condMessagesObservable)
 			.blockExitTag(proto.blockExitTag)
 			.restartMode(proto.restartMode)
 			.usesSeqString(proto.usesSeqString)

@@ -549,6 +549,49 @@ class LispMacroExpanderTest {
 		return registry.routesConditionReports();
 	}
 
+	/**
+	 * The same answer under {@code lazyConditionMessages} (the wasm-GC backends, whose
+	 * signal path renders no message): the gate narrows to "can program code HOLD a
+	 * condition".
+	 */
+	private static boolean routesReportsLazy(String source) {
+		ClosRegistry registry = new ClosRegistry();
+		LispMacroExpander.expandTopLevelDefinitions(LispReader.readAllFromString(source), new HashMap<>(), registry,
+				null, false, true);
+		return registry.routesConditionReports();
+	}
+
+	@Test
+	void aThrowOnlyConstructionDoesNotRouteReportsWhereMessagesAreLazy() {
+		// A typed signal builds an instance only to THROW it: on a backend that never
+		// renders the signal message (an uncaught condition is a bare trap), nothing
+		// about the site is observable through the report machinery -- while the
+		// message-rendering backends keep routing for the eager signal text.
+		String typedSignal = "(define-condition zc (error) ()) (defun f () (error 'zc)) (print (f))";
+		assertThat(routesReportsLazy(typedSignal)).isFalse();
+		assertThat(routesReports(typedSignal)).isTrue();
+		// The keyword constructor define-condition splices returns its instance, but
+		// with no reference to it the instance cannot reach program hands.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print 1)")).isFalse();
+		// signal unwinds or answers nil; the instance is never held.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print (signal 'zc))")).isFalse();
+	}
+
+	@Test
+	void aHeldConditionStillRoutesReportsWhereMessagesAreLazy() {
+		// A handler-case clause that names its condition hands it to program code.
+		assertThat(routesReportsLazy("""
+				(define-condition zc (error) ())
+				(print (handler-case (error 'zc) (error (e) (princ-to-string e))))
+				""")).isTrue();
+		// make-condition returns the instance.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print (make-condition 'zc))")).isTrue();
+		// make-instance of a condition class reaches the spliced constructor.
+		assertThat(routesReportsLazy("(define-condition zc (error) ()) (print (make-instance 'zc))")).isTrue();
+		// A typed warn PRINTS a message that renders through the report machinery.
+		assertThat(routesReportsLazy("(define-condition zw (warning) ()) (warn 'zw)")).isTrue();
+	}
+
 	@Test
 	void aHandlerCaseThatNeverNamesItsConditionDoesNotRouteReports() {
 		// The handler prologue synthesizes a simple-error for ANY caught trap, so an

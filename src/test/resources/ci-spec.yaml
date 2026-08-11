@@ -1493,6 +1493,14 @@ cases:
       "pg 1/2"
       "#<CI-REP-BARE :V 1>"
       "plain 7"
+  - name: no-applicable-method-report
+    source: |
+      (defclass ci-nam-box () ((v :initarg :v :reader ci-nam-box-v)))
+      (print (ci-nam-box-v (make-instance 'ci-nam-box :v 41)))
+      (print (handler-case (ci-nam-box-v 42) (error (e) (princ-to-string e))))
+    expected: |
+      41
+      "No applicable method: CI-NAM-BOX-V on INTEGER"
   - name: rontolisp-package-introspection
     source: |
       (print (rontolisp:list-macros))

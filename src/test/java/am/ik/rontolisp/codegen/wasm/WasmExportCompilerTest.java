@@ -417,12 +417,13 @@ class WasmExportCompilerTest {
 		// since the Unix epoch) and the clock built-ins report it. Calling it before
 		// _initialize is what makes a library that timestamps while it LOADS -- the
 		// lack-middleware-session case -- loadable on a reactor at all.
-		// ignore-errors puts the module in EH mode, which is what materializes the
-		// refusal MESSAGE in the data section (outside it, %error is a bare
-		// `unreachable` and the text is never emitted) -- the shape the assertions on
-		// the message below need.
+		// ignore-errors puts the module in EH mode, and READING its secondary value is
+		// what materializes the refusal MESSAGE in the data section (outside EH mode
+		// %error is a bare `unreachable`; and since signal messages are lazy on this
+		// backend, a program that never reads the condition does not carry the text
+		// either) -- the shape the assertions on the message below need.
 		String source = """
-				(defun t0 () (or (ignore-errors (get-universal-time)) 0))
+				(defun t0 () (multiple-value-bind (v c) (ignore-errors (get-universal-time)) (or v 0)))
 				(rontolisp:wasm-export 't0 :returns :s64)
 				""";
 		List<LispVal> program = LispReader.readAllFromString(source);

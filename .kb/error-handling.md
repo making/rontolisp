@@ -115,6 +115,9 @@ everywhere except `--no-gc`.
     condition shapes is the worse trade. **Re-evaluate if** the renderer ever
     becomes free (tree-shakeable per directive, or the literal path stops being
     a concatenation): then both paths should store the pair and render lazily.
+    (Since todo-324 the eager render is EMITTED only where it can be observed:
+    the wasm-GC compilers skip the message operand — the expansion still builds
+    it for the interpreter/JVM uncaught text. See the lazy-messages section.)
   - The argument forms are evaluated only on the string arm — a datum that turns
     out to be a condition instance or a type symbol has no format arguments — so
     every datum-only call and every non-string arm keeps its previous expansion
@@ -133,7 +136,9 @@ everywhere except `--no-gc`.
   field + `<clinit>` (and the `_hcDepthTl` depth counter) are emitted only
   when used (`JvmLispCompiler.ConditionChannel`, shared per compilation via
   the builder). WASM: `%error-cond` traps like `%error` (arguments in the
-  designator LET still compile; the message expression does not).
+  designator LET still compile; the message expression does not — and since
+  todo-324 the message operand is never compiled in EH mode either, see the
+  lazy-messages section below).
 - `typep`-style tests: `makeTypeTest` gained a `ClosRegistry` parameter and a
   class branch (descendant-tag membership, `equal` on the car — WASM
   content-safe); `typecase`/`etypecase` thread the registry from every
@@ -567,6 +572,89 @@ the catching forms themselves). Both narrowings are impossibility-based, so the 
 whose report would differ cannot exist. Pinned by
 `LispMacroExpanderTest.aHandlerCaseThatNeverNamesItsConditionDoesNotRouteReports` /
 `ignoreErrorsRoutesReportsOnlyWhereASecondValueCanBeRead`.
+
+## Signal messages are lazy on wasm-GC; the last resort signals values (todo-324)
+
+**The invariant: on the wasm-GC backends a signal's message string is rendered only
+where a condition value can reach program hands -- never at the signal point.** The
+observation that licenses it: on these backends an uncaught condition exits as a bare
+`unreachable` trap (no text), and the `$lisp-cond` payload cdr has exactly one reader,
+the handler-case landing's simple-error synthesis, which runs only when the payload car
+(the instance) is nil. So the eagerly rendered message every signal site used to build
+-- interpreter/JVM need it for the uncaught `LispEvalException`/`RuntimeException` text
+-- was written and never read on wasm. Three changes, one gate:
+
+- **`WasmErrorCompiler.compileCond` / `WasmSignalCondCompiler` never compile their
+  message operand** (payload cdr = nil). Unconditional: `%error-cond`/`%signal-cond`
+  always carry a real instance in the car, so the synthesize path cannot want the cdr.
+  The instance operand still compiles -- initarg expressions are evaluated at
+  construction per CL. This is what deletes the report-render code from every typed
+  signal site (chipz's `%INFLATE` & friends stopped calling `%PRINT-OBJECT-STR`).
+- **A plain `%error`'s message operand compiles only when `Ctx.condMessagesObservable`**
+  -- its message IS the payload a caught raw trap becomes a `simple-error` from, so it
+  must survive exactly where some clause can BIND that instance. The flag is the
+  narrowed routing answer below (forced on under restart mode / `--dynamic`), copied in
+  `WasmAsyncEmit.freshCtx` like every Ctx flag.
+- **The routing gate itself narrows on wasm**: `expandTopLevelDefinitions` takes
+  `lazyConditionMessages` (only `WasmLispCompiler` passes true; JVM/interpreter keep the
+  broad gate -- their uncaught path prints the eager message, which needs the report
+  machinery at the signal site). Under it the answer is
+  `LispMacroExpander.mayHoldConditions`: `mayCreateConditions` minus the throw-only
+  constructions (literal-typed `error`/`cerror`, `signal`, the read family's end-of-file
+  lowering), keeping handler-case-that-binds, ignore-errors-under-mv,
+  `make-condition`, `make-instance`/`allocate-instance`/`change-class` of a condition
+  class (or of an unknowable computed class), the `#'error`-family escapes, `load`, and
+  typed `warn` (its printed message renders through the report machinery). The keyword
+  constructor every `define-condition` splices is exempted by SHAPE
+  (`conditionConstructorName`: `(defun N (...) (%obj-new '%class-COND syms...))`) unless
+  some other form references N -- without the exemption every library that merely
+  DEFINES conditions (chipz) kept the whole renderer. Broad answer under restart mode /
+  `--dynamic` (`conditionRoutingGate`).
+- **`%no-applicable-method` signals VALUES, not prose**: the defun is now
+  `(error 'no-applicable-method-error :%nam-operation tail :%nam-datum-class
+  (%class-designator arg))` against a class seeded ON DEMAND
+  (`ClosRegistry.ensureNoApplicableErrorSeeded` -- constructor-seeding is deliberately
+  not unconditional, the `ensureMopClassesSeeded` lesson; slot names are %-fenced so
+  `registerSlotPosition` cannot make a user slot ambiguous). Its `:report` lambda
+  renders the byte-identical old text (`"No applicable method: ~a~a"` over the two
+  slots). Injection moved BEFORE the report-renderer injection (its constructible tag
+  must be in `conditionNarrowing`'s set or a caught-and-printed accessor error loses its
+  text) and AFTER the routing answer (a dispatcher alone must not flip routing on).
+  Deliberate narrowing: a `(simple-error ...)` handler-case clause no longer matches
+  this error (it used to arrive as a plain message and be synthesized into one); CLHS
+  specifies only `error`. `mayCreateInstances` sees the typed defun, so a
+  dispatcher-bearing program is instance-capable even with no class of its own.
+
+Measured on zlib `--optimize=size` (the todo-324 rows): Preview 1 127,026 -> 117,118
+(-7.8%), component 131,677 -> 121,723, gunzip output byte-identical, corrupt input
+still the same trap. What left: `%CONDITION-REPORT-STR`, `%FORMAT-CONDITION`, chipz's
+~14 `:report` lambdas, the `%NO-APPLICABLE-METHOD` render (788 B of construction
+remain), and the eager ecase/etypecase fall-through renders inside the inflate
+machinery.
+
+**Why the remaining floor is a floor.** zlib still carries `FUNC_PRINT_VAL` +
+`FUNC_PRINC_VAL` + `FUNC_PRIN1/PRINC_TO_STR` + `%PRINT-OBJECT-STR` + the `PRINT-OBJECT`
+dispatcher + chipz's `print-object` method (~4.6 KB): the entry edge is
+`%SEQ-TO-STRING` (the `coerce`-to-string runtime, really reachable through
+`%FILL-RUNTIME`/`%REPLACE-RUNTIME` from the inflate tables), whose element conversion
+IS princ semantics, and once one princ site exists the print-object seam (chipz defines
+two `print-object` methods) and both escape modes of `%PRINT-OBJECT-STR` keep the full
+value printers. Cutting further means splitting the printer (a narrow
+string/char/symbol/integer renderer for coercions and `%string-concat`, leaving
+`FUNC_PRINT_VAL`'s cons/array/instance arms to programs that print) -- the todo-324
+"split the printer" direction, deliberately not taken: the coercion helpers are shared
+by real printing programs, so a split must prove the narrow renderer identical over the
+whole designator domain on both wasm backends. Re-evaluation trigger: a program family
+whose artifacts carry the printers ONLY through `%seq-to-string`/`%schar-set-runtime`
+(no print site at all) and where those bytes matter.
+
+Behavior pinned by `noApplicableMethodIsCatchableAndReportsTheSameText` (evaluator) /
+`compileAndRunNoApplicableMethodIsCatchableAndReportsTheSameText` (JVM) /
+`ehNoApplicableMethodIsCatchableAndReportsTheSameText` (wasm) -- all three assert the
+exact old text -- the gate by
+`LispMacroExpanderTest.aThrowOnlyConstructionDoesNotRouteReportsWhereMessagesAreLazy` /
+`aHeldConditionStillRoutesReportsWhereMessagesAreLazy`, and cross-backend (component
+leg included) by the ci-spec `no-applicable-method-report` case.
 
 ## cerror + signal-operator function values (todo-085, cl-base64)
 

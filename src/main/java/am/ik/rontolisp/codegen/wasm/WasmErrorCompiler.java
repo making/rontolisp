@@ -32,7 +32,14 @@ final class WasmErrorCompiler {
 	private WasmErrorCompiler() {
 	}
 
-	/** Compiles {@code (%error message)}: the condition instance slot is nil. */
+	/**
+	 * Compiles {@code (%error message)}: the condition instance slot is nil. The message
+	 * operand IS the payload a handler-case landing synthesizes its {@code simple-error}
+	 * from, so it compiles -- unless {@code ctx.condMessagesObservable} says no program
+	 * code can ever hold a condition (then no clause binds the synthesized instance, the
+	 * tag tests never read the string, and an uncaught throw is a textless trap), in
+	 * which case the message render is skipped like {@code %error-cond}'s.
+	 */
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!ctx.ehMode) {
 			ctx.writer.write(Instruction.UNREACHABLE);
@@ -41,11 +48,26 @@ final class WasmErrorCompiler {
 		List<LispVal> parts = cons.toList();
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
-		WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		if (ctx.condMessagesObservable) {
+			WasmExprCompiler.compileExpr(parts.get(1), ctx);
+		}
+		else {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+		}
 		emitThrowPayload(ctx);
 	}
 
-	/** Compiles {@code (%error-cond condition message)}. */
+	/**
+	 * Compiles {@code (%error-cond condition message)}. The message operand is never
+	 * compiled: the payload cdr is read only by the handler-case landing's simple-error
+	 * synthesis, which runs only when the instance (car) is nil -- and every
+	 * {@code %error-cond} site passes a real instance -- while an uncaught throw exits as
+	 * a bare {@code unreachable} trap, which carries no text on this backend. The text a
+	 * caught condition reports comes from its {@code :report} at print time instead, so
+	 * skipping the signal-point render changes what the artifact carries, never what it
+	 * prints.
+	 */
 	static void compileCond(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (!ctx.ehMode) {
 			ctx.writer.write(Instruction.UNREACHABLE);
@@ -53,7 +75,8 @@ final class WasmErrorCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
-		WasmExprCompiler.compileExpr(parts.get(2), ctx);
+		ctx.writer.write(Instruction.REF_NULL);
+		ctx.writer.writeHeapType(Type.EQ.code());
 		emitThrowPayload(ctx);
 	}
 

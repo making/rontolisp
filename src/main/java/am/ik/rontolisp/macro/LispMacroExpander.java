@@ -12165,21 +12165,128 @@ public final class LispMacroExpander {
 	 * @return whether a condition instance can exist
 	 */
 	public static boolean mayCreateConditions(List<LispVal> program, ClosRegistry closRegistry) {
+		return conditionValueGate(program, closRegistry, false);
+	}
+
+	/**
+	 * Whether a condition instance can reach PROGRAM HANDS -- be bound, returned, or
+	 * otherwise held by program code, rather than merely constructed and thrown. This is
+	 * {@link #mayCreateConditions} with the throw-only construction sites excluded: a
+	 * literal-typed {@code error}/{@code cerror}, a {@code signal} (which either unwinds
+	 * or answers nil), and the read family's end-of-file signals all build an instance
+	 * that lives entirely inside the signal channel, so on a backend whose signal path
+	 * renders no message (wasm-GC: an uncaught condition is a bare trap, and since the
+	 * message-operand skip the payload carries no text a handler could fall back to)
+	 * nothing about those sites is observable through the report machinery. What still
+	 * counts: the catching forms that BIND ({@code handler-case} with a mentioned
+	 * variable, {@code ignore-errors} where a second value is read),
+	 * {@code make-condition} (returns the instance), a spliced condition-class
+	 * constructor (reachable from {@code make-instance}), the {@code #'}-value escapes,
+	 * {@code load} (runs code this scan never saw), and {@code warn} with a non-string
+	 * datum (its printed message renders through the report machinery). Restart mode and
+	 * {@code --dynamic} keep the broad answer -- the caller gates them, mirroring
+	 * {@code conditionNarrowing}'s bails.
+	 * @param program the top-level forms, AFTER the library splices
+	 * @param closRegistry the class registry
+	 * @return whether program code can hold a condition instance
+	 */
+	public static boolean mayHoldConditions(List<LispVal> program, ClosRegistry closRegistry) {
+		return conditionValueGate(program, closRegistry, true);
+	}
+
+	/**
+	 * The routing answer {@code expandTopLevelDefinitions} records: the broad "can one be
+	 * built" gate on the message-rendering backends (and always under restart mode or
+	 * {@code --dynamic}), the "can program code hold one" gate where signal messages are
+	 * never rendered (see the {@code lazyConditionMessages} overload's javadoc).
+	 */
+	private static boolean conditionRoutingGate(List<LispVal> program, ClosRegistry closRegistry,
+			boolean lazyConditionMessages, boolean dynamic, boolean restartMode) {
+		if (!lazyConditionMessages || dynamic || restartMode) {
+			return mayCreateConditions(program, closRegistry);
+		}
+		return mayHoldConditions(program, closRegistry);
+	}
+
+	private static boolean conditionValueGate(List<LispVal> program, ClosRegistry closRegistry, boolean holdOnly) {
 		// One whole-program answer, because ignore-errors hands its condition back as a
 		// SECONDARY value and nothing but a consumer can read one.
 		boolean multipleValues = receivesMultipleValues(program);
+		// The hold side must not trip over the keyword constructor every
+		// define-condition splices ((defun %make-X (...) (%obj-new '%class-X ...)) --
+		// its %obj-new RETURNS the instance, but the defun sits there whether or not
+		// anything can call it. A constructor whose name no other form references is
+		// skipped; a referenced one (a make-instance expansion, a #'%make-X) makes the
+		// whole answer true.
+		java.util.Set<LispVal> exemptForms = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		if (holdOnly) {
+			java.util.Map<LispVal, String> constructors = new java.util.IdentityHashMap<>();
+			for (LispVal form : program) {
+				String name = conditionConstructorName(form, closRegistry);
+				if (name != null) {
+					constructors.put(form, name);
+				}
+			}
+			for (java.util.Map.Entry<LispVal, String> ctor : constructors.entrySet()) {
+				String member = memberOf(ctor.getValue());
+				for (LispVal other : program) {
+					if (other != ctor.getKey() && referencesFunction(other, member)) {
+						return true;
+					}
+				}
+			}
+			exemptForms.addAll(constructors.keySet());
+		}
 		for (LispVal form : program) {
-			if (mayCreateCondition(form, closRegistry, multipleValues)) {
+			if (exemptForms.contains(form)) {
+				continue;
+			}
+			if (mayCreateCondition(form, closRegistry, multipleValues, holdOnly)) {
+				if (holdOnly && Boolean.getBoolean("rontolisp.debug.holdgate")) {
+					System.err.println("[holdgate] " + form.print());
+				}
 				return true;
 			}
 		}
 		return false;
 	}
 
-	private static boolean mayCreateCondition(LispVal form, ClosRegistry closRegistry, boolean multipleValues) {
+	/**
+	 * The defun name when the form is a spliced condition-class keyword constructor in
+	 * exactly the generated shape -- {@code (defun N (lambda-list) (%obj-new
+	 * '%class-CONDITION args...))} with every argument a plain symbol or literal -- else
+	 * null. Anything fancier falls back to counting as a hold (the safe direction).
+	 */
+	@Nullable private static String conditionConstructorName(LispVal form, ClosRegistry closRegistry) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 4 || !(parts.get(0) instanceof LispSymbol defun) || !LispNames.DEFUN.equals(defun.name())
+				|| !(parts.get(1) instanceof LispSymbol name) || !(parts.get(3) instanceof LispCons body)
+				|| !body.isProperList()) {
+			return null;
+		}
+		List<LispVal> bodyParts = body.toList();
+		if (bodyParts.size() < 2 || !(bodyParts.get(0) instanceof LispSymbol head)
+				|| !LispNames.OBJ_NEW.equals(head.name()) || !(quotedSymbol(bodyParts.get(1)) instanceof LispSymbol tag)
+				|| !tag.name().startsWith(LispLayout.CLASS_TAG_PREFIX)
+				|| !isConditionClass(closRegistry, tag.name().substring(LispLayout.CLASS_TAG_PREFIX.length()))) {
+			return null;
+		}
+		for (int i = 2; i < bodyParts.size(); i++) {
+			if (bodyParts.get(i) instanceof LispCons) {
+				return null;
+			}
+		}
+		return name.name();
+	}
+
+	private static boolean mayCreateCondition(LispVal form, ClosRegistry closRegistry, boolean multipleValues,
+			boolean holdOnly) {
 		if (form instanceof LispArray array) {
 			for (LispVal element : array.data()) {
-				if (mayCreateCondition(element, closRegistry, multipleValues)) {
+				if (mayCreateCondition(element, closRegistry, multipleValues, holdOnly)) {
 					return true;
 				}
 			}
@@ -12193,31 +12300,35 @@ public final class LispMacroExpander {
 		if (cons.car() instanceof LispSymbol head) {
 			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head.name());
 			String member = qn == null ? head.name() : qn.member();
-			if (constructsCondition(head.name(), member, cons, closRegistry, multipleValues)) {
+			if (constructsCondition(head.name(), member, cons, closRegistry, multipleValues, holdOnly)) {
 				return true;
 			}
 			List<LispVal> evaluated = evaluatedClauseForms(member, cons);
 			if (evaluated != null) {
 				// Without the skip, a (error (e) ...) CLAUSE reads as a signal call with
 				// initargs and every handler-case routes reports.
-				return evaluated.stream().anyMatch(f -> mayCreateCondition(f, closRegistry, multipleValues));
+				return evaluated.stream().anyMatch(f -> mayCreateCondition(f, closRegistry, multipleValues, holdOnly));
 			}
 		}
-		return mayCreateCondition(cons.car(), closRegistry, multipleValues)
-				|| mayCreateCondition(cons.cdr(), closRegistry, multipleValues);
+		return mayCreateCondition(cons.car(), closRegistry, multipleValues, holdOnly)
+				|| mayCreateCondition(cons.cdr(), closRegistry, multipleValues, holdOnly);
 	}
 
 	/**
-	 * The per-operator half of {@link #mayCreateConditions}. Takes the operator's plain
-	 * (package-stripped) name beside the raw one: the catching forms match on the member
-	 * spelling, while {@code constructsInstance}'s own cases are raw names with their own
-	 * qualified spellings listed.
+	 * The per-operator half of {@link #mayCreateConditions} and
+	 * {@link #mayHoldConditions}. Takes the operator's plain (package-stripped) name
+	 * beside the raw one: the catching forms match on the member spelling, while
+	 * {@code constructsInstance}'s own cases are raw names with their own qualified
+	 * spellings listed.
 	 */
 	private static boolean constructsCondition(String head, String member, LispCons form, ClosRegistry closRegistry,
-			boolean multipleValues) {
+			boolean multipleValues, boolean holdOnly) {
 		if (LispNames.OBJ_NEW.equals(head)) {
 			// The spliced constructor of a class: a condition only when the tag names a
-			// class descending from condition (a defstruct/defclass one does not).
+			// class descending from condition (a defstruct/defclass one does not). It
+			// counts on the hold side too: the constructor RETURNS the instance
+			// (make-instance reaches it), and whether any caller keeps it is not
+			// statically knowable here.
 			return form.cdr() instanceof LispCons rest && quotedSymbol(rest.car()) instanceof LispSymbol tag
 					&& tag.name().startsWith(LispLayout.CLASS_TAG_PREFIX)
 					&& isConditionClass(closRegistry, tag.name().substring(LispLayout.CLASS_TAG_PREFIX.length()));
@@ -12225,7 +12336,8 @@ public final class LispMacroExpander {
 		if (LispNames.FUNCTION.equals(head)) {
 			// #'error / #'warn / #'cerror join the #'signal of constructsInstance: their
 			// generated wrappers reach the object-designator expansion, which renders the
-			// datum's report.
+			// datum's report. A #'-value escape defeats the hold analysis too (the same
+			// caution as conditionNarrowing's bail), so the hold side keeps this case.
 			return form.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol fn
 					&& (LispNames.ERROR.equals(fn.name()) || LispNames.WARN.equals(fn.name())
 							|| LispNames.CERROR.equals(fn.name()) || constructsInstance(head, form));
@@ -12239,7 +12351,50 @@ public final class LispMacroExpander {
 			// multiple-value consumer can read.
 			return multipleValues;
 		}
+		if (holdOnly) {
+			return constructsHeldCondition(head, form, closRegistry);
+		}
 		return constructsInstance(head, form);
+	}
+
+	/**
+	 * The hold-side replacement for {@code constructsInstance}'s throw-only cases (see
+	 * {@link #mayHoldConditions}; the shared cases above have already matched).
+	 */
+	private static boolean constructsHeldCondition(String head, LispCons form, ClosRegistry closRegistry) {
+		switch (head) {
+			case LispNames.MAKE_CONDITION:
+				// Returns the instance to its caller.
+				return true;
+			case LispNames.LOAD:
+				// Runs code this scan never saw; anything can hold anything.
+				return true;
+			case LispNames.MAKE_INSTANCE, LispNames.ALLOCATE_INSTANCE, LispNames.CHANGE_CLASS: {
+				// make-instance of a condition class reaches the spliced constructor the
+				// walk exempted; an unquotable class argument makes the answer
+				// unknowable.
+				// change-class takes the object first, so its class argument is one
+				// later.
+				List<LispVal> parts = form.toList();
+				int classIndex = LispNames.CHANGE_CLASS.equals(head) ? 2 : 1;
+				if (parts.size() <= classIndex) {
+					return false;
+				}
+				LispSymbol className = quotedSymbol(parts.get(classIndex));
+				return className == null || isConditionClass(closRegistry, className.name());
+			}
+			case LispNames.WARN: {
+				// A typed (or object) warn PRINTS a message that renders through the
+				// report machinery -- observable output, unlike error's (a trap here).
+				List<LispVal> parts = form.toList();
+				return parts.size() > 1 && !(parts.get(1) instanceof LispString);
+			}
+			default:
+				// error/cerror (typed or computed), signal, and the read family's
+				// end-of-file signals construct only to THROW: the instance never
+				// reaches program hands, and the trap it exits through carries no text.
+				return false;
+		}
 	}
 
 	/**
@@ -14880,35 +15035,50 @@ public final class LispMacroExpander {
 
 	/**
 	 * The shared last-resort signal every dispatcher's {@code noApplicableMethod} call
-	 * targets: {@code (defun %no-applicable-method (tail arg) (error (%string-concat
-	 * "No applicable method: " (%string-concat tail (princ-to-string (%class-designator
-	 * arg))))))}. The error tail is anything but small once expanded -- condition
-	 * construction plus the class-naming render -- and a library's synthesized slot
-	 * readers/writers give it to EVERY accessor dispatcher, so it is emitted once per
-	 * program instead ({@code expandTopLevelDefinitions} appends it when any dispatcher
-	 * references it; {@code LispEvaluator.defineDispatcher} defines it before its first
-	 * dispatcher). The message's fixed HEAD lives here for the same reason the defun
-	 * does: one copy per program beats one per generic.
+	 * targets: {@code (defun %no-applicable-method (tail arg) (error
+	 * 'no-applicable-method-error :%nam-operation tail :%nam-datum-class
+	 * (%class-designator arg)))}. The error tail is anything but small once expanded --
+	 * condition construction plus (on the eager-message backends) the class-naming render
+	 * -- and a library's synthesized slot readers/writers give it to EVERY accessor
+	 * dispatcher, so it is emitted once per program instead
+	 * ({@code expandTopLevelDefinitions} appends it when any dispatcher references it,
+	 * seeding the condition class in the same breath;
+	 * {@code LispEvaluator.defineDispatcher} defines it before its first dispatcher).
+	 *
+	 * <p>
+	 * The signal is TYPED, not a rendered string: the seeded
+	 * {@code no-applicable-method-error} carries the message fragment and the class
+	 * designator as slot VALUES and its {@code :report} renders them
+	 * ({@code ClosRegistry.noApplicableErrorReport}), so a backend whose signal path does
+	 * not render messages (wasm-GC, where an uncaught condition is a bare trap) carries
+	 * no last-resort prose and no printer reachability from its accessor dispatchers. The
+	 * reported text is byte-identical to the old eager concatenation. One deliberate
+	 * narrowing rides along: a {@code handler-case} clause naming {@code simple-error} no
+	 * longer matches this error (it used to arrive as a plain message and be synthesized
+	 * into one); CLHS specifies only {@code error} here.
 	 *
 	 * <p>
 	 * Naming the first argument's class in the message is deliberate: "No applicable
 	 * method: X" alone made a cross-package generic-name collision (two
 	 * {@code :reader message} generics) undiagnosable at run time. The DESIGNATOR (tag
 	 * symbol), not class-of: the message needs a name, and class-of would drag the
-	 * metaobject runtime into every program with a generic function.
+	 * metaobject runtime into every program with a generic function. It is stored at
+	 * CONSTRUCTION time (not resolved by the report) so the report lambda stays a
+	 * two-slot render.
 	 * @return the defun form
 	 */
 	public static LispVal noApplicableMethodDefun() {
 		LispSymbol tail = new LispSymbol("%nam_tail");
 		LispSymbol arg = new LispSymbol("%nam_arg");
 		LispVal classOf = listToCons(List.of(new LispSymbol(LispNames.CLASS_DESIGNATOR_INTERNAL), arg));
-		LispVal named = listToCons(
-				List.of(new LispSymbol(LispNames.STRING_CONCAT), tail, callOf(LispNames.PRINC_TO_STRING, classOf)));
-		LispVal message = listToCons(
-				List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("No applicable method: "), named));
-		return listToCons(List.of(new LispSymbol(LispNames.DEFUN),
-				new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME), listToCons(List.of((LispVal) tail, arg)),
-				listToCons(List.of(new LispSymbol(LispNames.ERROR), message))));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				listToCons(List.of(new LispSymbol(LispNames.QUOTE),
+						new LispSymbol(ClosRegistry.NO_APPLICABLE_ERROR_CLASS_NAME))),
+				new LispSymbol(":" + ClosRegistry.NO_APPLICABLE_ERROR_OPERATION_SLOT), tail,
+				new LispSymbol(":" + ClosRegistry.NO_APPLICABLE_ERROR_DATUM_CLASS_SLOT), classOf));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.NO_APPLICABLE_METHOD_RUNTIME),
+						listToCons(List.of((LispVal) tail, arg)), signal));
 	}
 
 	/**
@@ -15251,6 +15421,31 @@ public final class LispMacroExpander {
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported,
 			boolean dynamic) {
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, dynamic, false);
+	}
+
+	/**
+	 * As the overload above, threading whether the backend's signal path renders no
+	 * message ({@code lazyConditionMessages} -- the wasm-GC backends, where an uncaught
+	 * condition exits as a bare trap and the compilers skip every signal's message
+	 * operand). On such a backend the report renderer has exactly one consumer left, a
+	 * printing operator handed a condition VALUE, so the routing gate narrows from
+	 * {@link #mayCreateConditions} (can one be built) to {@link #mayHoldConditions} (can
+	 * program code hold one). Restart mode and {@code --dynamic} keep the broad gate: the
+	 * signal hook hands every handler-bind handler the instance, and late binding defeats
+	 * the hold analysis.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated: classes, generics, and methods
+	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param dynamic whether the backend compiles in late-binding mode
+	 * @param lazyConditionMessages whether the backend never renders signal messages
+	 * @return the program with each definition replaced by its generated defuns
+	 */
+	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
+			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
+			boolean lazyConditionMessages) {
 		// The one whole-program pass both compilers already run, so the pure-builtin fold
 		// and the load-time-value hoist ride along instead of needing their own
 		// registration in every pipeline. The fold goes FIRST: a folded
@@ -15333,7 +15528,8 @@ public final class LispMacroExpander {
 		// has no definition to splice and would take the fast path below), and again on
 		// the expanded program, where a define-condition has become a %obj-new
 		// constructor.
-		closRegistry.setRoutesConditionReports(mayCreateConditions(program, closRegistry));
+		closRegistry.setRoutesConditionReports(
+				conditionRoutingGate(program, closRegistry, lazyConditionMessages, dynamic, restartMode));
 		boolean symbolFunctionWrite = usesSymbolFunctionWrite(program);
 		if (!runtimeSubtypep && !runtimeTypep && !runtimeError && !restartMode && !metaobjectRuntime
 				&& !allocateInstanceRuntime && !compileRuntime && !makeInstanceFunction && !classSlotDefsRuntime
@@ -15555,7 +15751,8 @@ public final class LispMacroExpander {
 		// The registry is complete and every class constructor is spliced, so this is the
 		// final answer: everything injected below (the runtime-error helpers, the print
 		// renderer) reads it, and so does every signal site compiled in Pass 2.
-		closRegistry.setRoutesConditionReports(mayCreateConditions(out, closRegistry));
+		closRegistry.setRoutesConditionReports(
+				conditionRoutingGate(out, closRegistry, lazyConditionMessages, dynamic, restartMode));
 		if (runtimeSubtypep) {
 			// Injected once the registry is complete; defuns are collected in a
 			// position-independent pass, so appending is safe. The data table is a
@@ -15593,6 +15790,19 @@ public final class LispMacroExpander {
 		if (needsSlotUnboundHelper(program, out)) {
 			out.addAll(slotUnboundDefuns());
 		}
+		// The shared no-applicable-method signal, once per program with a dispatcher that
+		// can reach it: without this defun every dispatcher (each synthesized slot
+		// reader/writer included) re-inlines the whole error tail. Its class is seeded
+		// here, not in the registry constructor (the ensureMopClassesSeeded lesson).
+		// Position matters twice over: AFTER the routing answer above, so a dispatcher
+		// alone does not flip report routing on (the defun's typed signal would read as
+		// a condition constructor), and BEFORE the report renderer below, whose
+		// narrowing must see the construction or a caught-and-printed accessor error
+		// would lose its report text.
+		if (out.stream().anyMatch(f -> referencesFunction(f, LispNames.NO_APPLICABLE_METHOD_RUNTIME))) {
+			closRegistry.ensureNoApplicableErrorSeeded();
+			out.add(noApplicableMethodDefun());
+		}
 		// The condition-report renderer, once per program that can build a condition.
 		// Emitted here so its class partition is the COMPLETE registry -- narrowed to
 		// the tags the program can actually construct, with the runtime format
@@ -15612,13 +15822,6 @@ public final class LispMacroExpander {
 		// simple-condition's format-control THROUGH the renderer), and gated so a program
 		// whose every format call has a literal control -- the overwhelming majority --
 		// carries none of it.
-		// The shared no-applicable-method signal, once per program with a dispatcher that
-		// can reach it: without this defun every dispatcher (each synthesized slot
-		// reader/writer included) re-inlines the whole error tail. Before the format
-		// renderer, whose scan must see this defun's error form.
-		if (out.stream().anyMatch(f -> referencesFunction(f, LispNames.NO_APPLICABLE_METHOD_RUNTIME))) {
-			out.add(noApplicableMethodDefun());
-		}
 		out = withFormatRenderer(out, dynamic);
 		// The shared (setf (aref var i) x) / (setf (char s i) c) string writer, once per
 		// program that can reach it. LAST, so its scan covers every definition injected

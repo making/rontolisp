@@ -13333,6 +13333,17 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehNoApplicableMethodIsCatchableAndReportsTheSameText() throws Exception {
+		// The last resort signals a typed condition whose :report renders lazily (the
+		// signal-point message operand is never compiled on this backend); a handler
+		// that PRINTS it must still see exactly the old eager message.
+		assertThat(compileAndRunEh("""
+				(defclass nam-box () ((v :initarg :v :reader nam-box-v)))
+				(print (handler-case (nam-box-v 42) (error (e) (princ-to-string e))))
+				""")).isEqualTo("\"No applicable method: NAM-BOX-V on INTEGER\"");
+	}
+
+	@Test
 	void ehSimpleConditionFamilyReportsThroughFormatControl() throws Exception {
 		assertThat(compileAndRunEh("""
 				(define-condition cr-pg (simple-warning) ())

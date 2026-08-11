@@ -9757,6 +9757,16 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void noApplicableMethodIsCatchableAndReportsTheSameText() {
+		// The last resort signals a typed condition whose :report renders lazily; the
+		// text a handler that PRINTS it sees must be exactly the old eager message.
+		assertThat(evalMulti("""
+				(defclass nam-box () ((v :initarg :v :reader nam-box-v)))
+				(handler-case (nam-box-v 42) (error (e) (princ-to-string e)))
+				""").print()).isEqualTo("\"No applicable method: NAM-BOX-V on INTEGER\"");
+	}
+
+	@Test
 	void defmethodOnABuiltinNameKeepsTheBuiltinAsTheDefaultMethod() {
 		// The dispatcher SHADOWS the built-in defun; without stashing it as the
 		// generic's default method every non-instance argument dies with "No

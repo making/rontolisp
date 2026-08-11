@@ -513,6 +513,16 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunNoApplicableMethodIsCatchableAndReportsTheSameText() throws Exception {
+		// The last resort signals a typed condition whose :report renders lazily; a
+		// handler that PRINTS it must see exactly the old eager message.
+		assertThat(compileAndRun("""
+				(defclass nam-box () ((v :initarg :v :reader nam-box-v)))
+				(print (handler-case (nam-box-v 42) (error (e) (princ-to-string e))))
+				""")).isEqualTo("\"No applicable method: NAM-BOX-V on INTEGER\"");
+	}
+
+	@Test
 	void compileAndRunHandlerCaseCatchesErrorFromCalledFunction() throws Exception {
 		assertThat(compileAndRun("""
 				(defun hc-thrower () (error "deep"))

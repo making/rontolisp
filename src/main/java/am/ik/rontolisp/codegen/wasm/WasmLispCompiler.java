@@ -1823,8 +1823,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Computed before expandTopLevelDefinitions, which runs the same scan to
 		// inject the restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// lazyConditionMessages: this backend never renders a signal's message (an
+		// uncaught condition is a bare trap and the %error/%error-cond compilers skip
+		// the message operand), so the report-routing gate narrows to "can program
+		// code HOLD a condition" -- see the expandTopLevelDefinitions overload.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic);
+				packageResolver::spellsAsExternal, this.dynamic, true);
+		// Whether any signal's message string is observable: exactly the narrowed
+		// routing answer (a message is read only through a HELD condition), forced on
+		// with it under restart mode / --dynamic. Read by WasmErrorCompiler to decide
+		// whether a plain %error compiles its message operand.
+		boolean condMessagesObservable = closRegistry.routesConditionReports() || restartMode || this.dynamic;
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
 		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
 		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --
@@ -2451,6 +2460,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		Ctx.Builder ctxBuilder = Ctx.builder()
 			.stringTable(stringTable)
 			.ehMode(ehMode)
+			.condMessagesObservable(condMessagesObservable)
 			.blockExitTag(blockExitTag)
 			.restartMode(restartMode)
 			.usesSeqString(usesSeqString)
@@ -6051,6 +6061,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean ehMode = false;
 
 		/**
+		 * True when program code can HOLD a condition value
+		 * ({@code LispMacroExpander.mayHoldConditions}; forced under restart mode and
+		 * {@code --dynamic}). Off, a plain {@code %error}'s message operand is not
+		 * compiled either -- the payload string's only reader is a handler clause that
+		 * binds the synthesized condition, and none exists -- so signal-site message
+		 * renders vanish from the artifact. {@code %error-cond}/{@code %signal-cond} skip
+		 * their message unconditionally (the payload cdr of a non-nil instance is never
+		 * read); this flag extends the skip to the instance-less throw.
+		 */
+		boolean condMessagesObservable = true;
+
+		/**
 		 * True when the program throws on the block-exit tag -- it lowers a cross-lambda
 		 * {@code return-from}, or it uses {@code catch}/{@code throw}, which share the
 		 * tag. The tag (index 1) is then emitted and {@code handler-case} is made
@@ -6348,6 +6370,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.hostRandom = builder.hostRandom;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
+			this.condMessagesObservable = builder.condMessagesObservable;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
 			this.usesSeqString = builder.usesSeqString;
@@ -6423,6 +6446,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean serve = false;
 
 			private boolean ehMode = false;
+
+			private boolean condMessagesObservable = true;
 
 			private boolean blockExitTag = false;
 
@@ -6572,6 +6597,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder ehMode(boolean ehMode) {
 				this.ehMode = ehMode;
+				return this;
+			}
+
+			Builder condMessagesObservable(boolean condMessagesObservable) {
+				this.condMessagesObservable = condMessagesObservable;
 				return this;
 			}
 

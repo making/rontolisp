@@ -170,6 +170,60 @@ public final class ClosRegistry {
 	}
 
 	/**
+	 * Seeds the condition class the shared {@code %no-applicable-method} defun signals:
+	 * {@code no-applicable-method-error} under {@code error}, carrying the message
+	 * fragment ({@code "GENERIC-NAME on "}) and the failing argument's class designator
+	 * as VALUES, with a {@code :report} that renders them only when something reports the
+	 * condition. Idempotent, and deliberately NOT run from the constructor (the
+	 * {@link #ensureMopClassesSeeded} lesson: a registered class joins every typep tag
+	 * table, runtime slot-name dispatch and {@code %class-slot-defs} answer) -- triggered
+	 * exactly where the defun is installed: the {@code expandTopLevelDefinitions}
+	 * injection and the interpreter's {@code defineDispatcher}.
+	 */
+	public void ensureNoApplicableErrorSeeded() {
+		if (this.classes.containsKey(NO_APPLICABLE_ERROR_CLASS_NAME)) {
+			return;
+		}
+		// The slot names are %-fenced: seedClass registers every slot name's position
+		// globally (the ambiguous-slot-name machinery), so a plain name here could turn
+		// a same-named user slot ambiguous and grow that program's runtime dispatch.
+		// Nothing but the generated defun ever spells these.
+		seedClass(NO_APPLICABLE_ERROR_CLASS_NAME, "ERROR", NO_APPLICABLE_ERROR_OPERATION_SLOT,
+				NO_APPLICABLE_ERROR_DATUM_CLASS_SLOT);
+		registerConditionReport(NO_APPLICABLE_ERROR_CLASS_NAME, noApplicableErrorReport());
+	}
+
+	/**
+	 * The condition class {@link #ensureNoApplicableErrorSeeded} registers. Not a CL
+	 * standard name (CLHS leaves the type of a no-applicable-method error
+	 * implementation-defined below {@code error}), so an {@code (error () ...)} clause is
+	 * the portable way to catch it.
+	 */
+	public static final String NO_APPLICABLE_ERROR_CLASS_NAME = "NO-APPLICABLE-METHOD-ERROR";
+
+	/** Slot 0 of the seeded class: the {@code "GENERIC-NAME on "} message fragment. */
+	public static final String NO_APPLICABLE_ERROR_OPERATION_SLOT = "%NAM-OPERATION";
+
+	/** Slot 1 of the seeded class: the failing argument's class designator symbol. */
+	public static final String NO_APPLICABLE_ERROR_DATUM_CLASS_SLOT = "%NAM-DATUM-CLASS";
+
+	/**
+	 * The {@code :report} of the seeded {@code no-applicable-method-error}:
+	 * {@code (lambda (c s) (format s "No applicable method: ~a~a" (%obj-ref c 0) (%obj-ref c 1)))}
+	 * -- the exact text the defun used to render eagerly into its signal message, now
+	 * produced only when the condition is reported. Baked {@code %obj-ref} indexes for
+	 * the same reason as {@link #unboundSlotReport}.
+	 */
+	private static LispVal noApplicableErrorReport() {
+		LispSymbol condition = new LispSymbol("__c");
+		LispSymbol stream = new LispSymbol("__s");
+		LispVal format = list(new LispSymbol("FORMAT"), stream, new LispString("No applicable method: ~a~a"),
+				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(0)),
+				list(new LispSymbol(LispNames.OBJ_REF), condition, new LispInteger(1)));
+		return list(new LispSymbol(LispNames.LAMBDA), list(condition, stream), format);
+	}
+
+	/**
 	 * The {@code :report} of the seeded {@code unbound-slot}, as the AST a
 	 * {@code define-condition} would have registered:
 	 * {@code (lambda (c s) (format s "The slot ~S is unbound in ~S" (%obj-ref c 0) (%obj-ref c 1)))}.
