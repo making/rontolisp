@@ -13,6 +13,7 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.LetBoundDesignators;
 import am.ik.jvm.ConstantPool.FieldrefConstant;
 import am.ik.jvm.Opcode;
 
@@ -38,7 +39,11 @@ final class JvmLetCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		List<LispVal> parts = cons.toList();
+		// A binding that only holds a literal designator for the body's funcall sites is
+		// propagated into them and dropped, so the designator never becomes a VALUE here
+		// (LetBoundDesignators; the WASM twin does the same).
+		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars, ctx.functions.keySet());
+		List<LispVal> parts = letForm.toList();
 		// A bare symbol entry is an init-less binding to nil.
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);

@@ -874,17 +874,8 @@ turns that into a direct call FROM DEAD CODE, and dead code shakes. 137 -> 136 o
 defuns dispatchable, 111 -> 105 funcIds materialized as values
 (`-Drontolisp.debug.dispatchgate=true`).
 
-**The lever this does NOT reach, measured and declined: a designator BOUND to a temp.**
-`LispMacroExpander.expandMap` binds `(let ((__map_fn #'identity)) ... (funcall __map_fn
-...))`, and the family lowered by `expandMapFamily` (`maplist`/`mapcon`/`mapl`) does the
-same, so a literal there is a value again. Leaving the literal AT the funcall site instead
-of binding it was tried: **75 bytes** on the zlib rows, against two real costs -- the
-interpreter would then evaluate the designator once per element instead of once, and a
-designator naming an UNDEFINED function would stop signalling when the sequence is empty
-(the loop never runs). Re-evaluation trigger: the win belongs to a general
-propagation-and-drop of a let binding whose init is a literal designator and whose every
-use is a funcall head, done in the backends where the use sites are already known -- not
-to a rewrite per expander. Recorded as `.todo/328`.
+The lever this half does not reach on its own is a designator BOUND to a temp, which the
+next section closes.
 
 Pins: `WasmTreeShakerTest.aLiteralDesignatorSiteBuysNoLadderCase` and
 `JvmClassShakerTest.aLiteralDesignatorSiteBuysNoDispatchCase` -- the same paired
@@ -900,8 +891,106 @@ for the declined arity, and the four-backend ci-spec case
 `(print (funcall 'f))` purely to keep a ladder emitted at all; that spelling is now a
 direct call, so the ladder disappeared and their probes had nothing left to keep -- one
 turned red (`aFramedSpellingWithoutABuilderDoesNotHoldARow`) and the paired-count ones
-would have gone vacuously green. They now funcall through a VARIABLE. Any future test
-about what the ladders keep alive owes the same care.
+would have gone vacuously green. They funcall a COMPUTED designator now (`(funcall (car
+(list #'f)))`; a variable was the first fix and stopped working when the section below
+landed). Any future test about what the ladders keep alive owes the same care.
+
+### A designator BOUND to a temp is not a value either (todo-328, 2026-08-11)
+
+The section above reads the designator AT the call site, and every expander that NAMES one
+to avoid re-evaluating it undoes that: `LispMacroExpander.expandMap` binds `(let
+((__map_fn #'identity)) ... (funcall __map_fn (elt ...)))` -- and the `coerce` lowering
+emits `(map 'list #'identity x)`, so every program that coerces a string carried one --
+as do `expandMapFamily` (`maplist`/`mapcon`/`mapl`) and `expandEverySomeFamily`. The
+binding materialized the closure, the ladder got its case back, and everything that case
+reaches was pinned again.
+
+`compiler.LetBoundDesignators.propagate` closes it in ONE place for every such expander,
+present and future: **a `let` binding whose init is a literal designator naming a
+registered function, and whose every use in the body is a function-designator position, is
+propagated into those uses and the binding dropped.** `Jvm/WasmLetCompiler` call it on the
+way in, so a hand-written `let`, the nested lets `let*` lowers to, and every
+macro-generated binding all go through the same rule; the resolved sites are then ordinary
+written-out literals to `Jvm/WasmDesignatorCall`.
+
+**Why the backends and not the expanders.** Leaving the literal AT the funcall site in
+`expandMap` was measured first -- 75 bytes on the zlib rows -- and declined for two
+reasons that still hold: the interpreter would then evaluate the designator once per
+element instead of once, and a designator naming an UNDEFINED function would stop
+signalling over an empty sequence (the loop body never runs). Rewriting in the backends
+keeps the interpreter out of it entirely -- it never sees the rewrite -- and one rule
+covers every binder instead of one edit per expander.
+
+**The safety argument is a COUNT, not a walker.** The pass certifies the occurrences it
+understands (the designator argument of the six operators the backends resolve) and
+separately counts EVERY occurrence of the name in the body with a deliberately shape-blind
+scan -- quoted data, binding lists, dotted tails and all. It rewrites only when the two
+agree, which is what lets the substitution then be shape-blind too. Everything the
+certifying walk does not understand therefore shows up as an occurrence with no
+certification and simply keeps the binding: a use as a plain VALUE (which must keep its
+ladder case, or the value stops resolving), a `setq`, an inner binding or lambda parameter
+of the same name, a `(funcall f ...)` shaped list that is a datum rather than a call. The
+walk stays opaque at the heads that carry data (`quote`, `declare`, the `def*` family, a
+`case` clause's keys, a lambda list) for exactly one reason: descending somewhere
+non-evaluated is free (the occurrence is uncertified and the count refuses the binding),
+but CERTIFYING something non-evaluated would corrupt it.
+
+**Three guards beyond the count.** A SPECIAL name is never dropped -- a dynamic binding is
+one a callee reads, so it is not the body's alone to see. A name bound twice in the same
+binding list is left alone. And the designator must name a function the backend's registry
+answers (`ctx.functions`): that is what makes the substitution value-identical -- both
+spellings compile to the same static funcId, `--dynamic` included, since
+`Jvm/WasmFunctionFormCompiler` defer to the runtime only for a name the registry does NOT
+hold -- and it is also what keeps `#'cadr` out, whose value is a car/cdr composition
+SYNTHESIZED per site (`.kb/core-representation.md`), where duplicating would cost more
+than the binding saves.
+
+The WASM fusion registry is untouched by construction: it registers a `__FLET*` binding
+whose init is an eligible integer-tree LAMBDA (`.kb/wasm-int-fusion.md`), and this pass
+only ever takes a binding whose init is a literal designator.
+
+**What the table deliberately does not list, and the trigger to revisit it.** The
+certified positions are the six operators the backends RESOLVE, not every operator that
+ends up funcalling its argument. `map`/`maplist`/`mapcon`/`mapl`/`every`/`some` bind the
+designator in their own expansion, so a LITERAL written at one of those sites is taken
+here anyway -- at the generated binding, which is the whole point. What stays outside is a
+literal that reached them through a HAND-WRITTEN variable (`(let ((f #'oddp)) (every f
+xs))`): the generated binding then holds the variable, not a literal, and both bindings
+stay. Adding those operators' designator slots to `designatorSlot` is the lever if that
+shape turns up in a real program; it was left out because every slot in that table is a
+claim about an expander that has to keep being true.
+
+Measured against the same commit, every zlib row still gunzipping its fixture byte for
+byte and every Worker still answering:
+
+| row | before | after |
+| --- | --- | ---: |
+| zlib, `--optimize` | 136,135 | 136,068 |
+| zlib, `--optimize=size` | 107,695 | 107,628 |
+| zlib, `--component --optimize=size` | 112,199 | 112,135 |
+| **the JVM class, `--optimize`** | **194,772** | **193,720 (-0.5%)** |
+| `hello-tiny-routes` Worker, `--optimize=size` | 269,259 | 268,832 |
+| `httpbin` Worker, `--optimize=size` | 162,658 (51,201 gz) | 162,640 (50,597 gz) |
+| `hello_world`, no flag | 126,057 | 126,033 |
+
+Small on wasm, ten times that on the JVM class, and nothing regressed anywhere. Two things
+the spread says. The JVM pays more for a ladder case (a variadic callee's rest-list
+linking lives in the case, not at the site), so dropping the value is worth more there.
+And `hello_world` -- which maps nothing -- moving at all is the shared runtime's own
+`let`-bound designators going direct; at `--optimize` those functions are shaken anyway,
+which is exactly why the flagged rows move less than the unflagged one. What a dropped
+binding BUYS is a ladder case, so the lever pays where the ladder is otherwise dead (the
+shape that made `STRING=` shakeable in the section above) -- and it now pays there
+whichever way the program spells the designator.
+
+Pins: `WasmTreeShakerTest.aDesignatorBoundToATempIsTheSameDirectCall` (the bound spelling
+is the written-out literal's own module, byte for byte) and
+`JvmClassShakerTest.aDesignatorBoundToATempIsTheSameDirectCall` (the same method set, the
+same output), each paired with the same binding plus a VALUE use, which still dispatches.
+`LetBoundDesignatorsTest` covers the rule itself. Behaviorally the four-backend
+`literal-function-designators-answer-like-computed-ones` case grew the three shapes that
+KEEP the binding -- value use, `setq`, shadowing -- because the interpreter answers them
+without ever seeing the rewrite.
 
 ## What ROUTING costs a clack module: cl-ppcre, measured and decided (todo-295, 2026-08-08)
 

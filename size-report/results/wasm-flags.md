@@ -10,20 +10,20 @@ How the report is built and run: [../README.md](../README.md).
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
-| hello_world | (none) | core (command) | Preview 1 | 126,057 |
+| hello_world | (none) | core (command) | Preview 1 | 126,033 |
 | hello_world | `--optimize` | core (command) | Preview 1 | 518 |
 | hello_world | `--optimize=size` | core (command) | Preview 1 | 518 |
 | hello_world | `--component --optimize=size` | component (command) | Preview 3 | 1,672 |
 | hello_world (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 406 |
-| pi_approx | (none) | core (command) | Preview 1 | 126,257 |
+| pi_approx | (none) | core (command) | Preview 1 | 126,233 |
 | pi_approx | `--optimize` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 320,538 |
-| zlib | `--optimize` | core (command) | Preview 1 | 136,135 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 107,695 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 112,199 |
+| zlib | (none) | core (command) | Preview 1 | 320,456 |
+| zlib | `--optimize` | core (command) | Preview 1 | 136,068 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 107,628 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 112,135 |
 
 ## What is measured
 

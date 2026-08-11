@@ -8329,8 +8329,20 @@ cases:
       (print (reduce (function +) '(1 2 3 4)))
       (print (sort (list 3 1 2) (function <)))
       (print (funcall (function desig-all) 1 2 3))
+      ;; A designator bound to a temp is read through the binding on the compile
+      ;; paths (the binding is propagated into the designator positions and
+      ;; dropped); the three shapes that keep it -- a use as a plain VALUE, an
+      ;; assignment, an inner binding of the same name -- must answer the same on
+      ;; every backend, the interpreter (which never sees the rewrite) included.
       (let ((f (function desig-dbl)) (g (function desig-all)))
         (print (list (mapcar f '(1 2 3)) (funcall g 1 2 3))))
+      (let ((f (function desig-dbl)))
+        (print (list (mapcar f '(1 2)) (funcall (car (list f)) 5))))
+      (let ((f (function desig-dbl)))
+        (setq f (function desig-all))
+        (print (funcall f 1 2)))
+      (let ((f (function desig-dbl)))
+        (print (let ((f (function desig-all))) (funcall f 1 2))))
     expected: |
       (2 4 6)
       (2 4 6)
@@ -8342,3 +8354,6 @@ cases:
       (1 2 3)
       6
       ((2 4 6) 6)
+      ((2 4) 10)
+      3
+      3

@@ -360,6 +360,29 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aMalformedFormKeepsItsLineUnderALetBoundDesignator() throws Exception {
+		// The same inheriting half for the designator propagation: the binding leaves and
+		// its funcall site is rewritten, which rebuilds every cons from the outer let
+		// down
+		// to the mapcar -- the malformed let among them. Without the inherit, that let is
+		// a cons the position table has never seen and the failure loses its own line.
+		Path file = this.tempDir.resolve("bad.lisp");
+		Files.writeString(file, """
+				(defun dbl (x) (* x 2))
+				(defun g (xs)
+				  (let ((f #'dbl))
+				    (let ((a 1) 2)
+				      (mapcar f xs))))
+				(print (g '(1 2)))
+				""");
+		for (String output : new String[] { "Bad.class", "bad.wasm" }) {
+			assertThatThrownBy(() -> runCli("", file.toString(), "-o", this.tempDir.resolve(output).toString()))
+				.isInstanceOf(LispCompileException.class)
+				.hasMessageContaining("bad.lisp:4:5:");
+		}
+	}
+
+	@Test
 	void aMalformedTopLevelCheckTypeNamesItsOwnLine() throws Exception {
 		// A top-level check-type/assert is expanded by the free-variable walk, before any
 		// pass with a position hook has looked at it, so its complaint used to arrive

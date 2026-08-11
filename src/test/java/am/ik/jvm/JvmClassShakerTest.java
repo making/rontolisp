@@ -142,10 +142,11 @@ class JvmClassShakerTest {
 		// shakeable. Only the data evaluators (eval/read/read-from-string/load) still
 		// keep every function dispatchable -- their names arrive from OUTSIDE.
 		// The funcall keeps the dispatch machinery emitted at all -- without one there
-		// are no dispatch methods and UNUSED is dropped whatever the gate decides. It
-		// goes through a VARIABLE on purpose: a designator the compiler can read is a
-		// direct call and emits no dispatcher either (JvmDesignatorCall).
-		String prefix = "(defun unused (x) (car x)) (defun f () 1) (let ((g #'f)) (print (funcall g))) ";
+		// are no dispatch methods and UNUSED is dropped whatever the gate decides. Its
+		// designator is COMPUTED on purpose: a designator the compiler can read is a
+		// direct call and emits no dispatcher either, and so is one it can read through
+		// a let temp (JvmDesignatorCall, LetBoundDesignators).
+		String prefix = "(defun unused (x) (car x)) (defun f () 1) (print (funcall (car (list #'f)))) ";
 		byte[] gated = compile(prefix + "(print (eq (intern (string-upcase \"post\") :keyword) :post))",
 				OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(gated)).contains("F").doesNotContain("UNUSED");
@@ -172,9 +173,10 @@ class JvmClassShakerTest {
 		// member name merely collides with an unrelated string literal stays call-only
 		// and shakes; the same program plus an intern of something unrelated widens the
 		// probes again, and the row keeps the defun alive.
-		// The funcall goes through a VARIABLE so a dispatcher exists to keep RUNTASK at
-		// all (a designator the compiler can read is a direct call, JvmDesignatorCall).
-		String collide = "(defun runtask () 2) (defun f () 1) (let ((g #'f)) (print (funcall g))) "
+		// The funcall's designator is COMPUTED so a dispatcher exists to keep RUNTASK at
+		// all (a designator the compiler can read -- written out or through a let temp --
+		// is a direct call, JvmDesignatorCall / LetBoundDesignators).
+		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) "
 				+ "(print \"RUNTASK\") ";
 		byte[] builderless = compile(collide, OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(builderless)).contains("F").doesNotContain("RUNTASK");
@@ -194,15 +196,37 @@ class JvmClassShakerTest {
 		// have been, so DBL never becomes a function VALUE and the arity-1 dispatcher is
 		// not emitted at all -- which is what stops the ladder from keeping HALVE, a
 		// function nothing calls that is dispatchable only because the program spells its
-		// name. Route the same designator through a variable and both come back.
+		// name. Compute the same designator and both come back.
 		String defs = "(defun dbl (x) (* x 2)) (defun halve (x) (/ x 2)) ";
 		String tail = " (print 'halve)";
 		byte[] literal = compile(defs + "(print (mapcar #'dbl '(1 2)))" + tail, OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(literal)).contains("DBL").doesNotContain("HALVE", "_invoke_1");
-		byte[] computed = compile(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))))" + tail, OptimizeLevel.DEFAULT);
+		byte[] computed = compile(defs + "(print (mapcar (car (list #'dbl)) '(1 2)))" + tail, OptimizeLevel.DEFAULT);
 		assertThat(declaredMethodNames(computed)).contains("DBL", "HALVE", "_invoke_1");
 		// Same answer either way -- this only moves where the call is decided.
 		assertThat(run(literal)).isEqualTo(run(computed));
+	}
+
+	@Test
+	void aDesignatorBoundToATempIsTheSameDirectCall() throws Exception {
+		// A designator the compiler can read through a let temp is the case above, not
+		// the computed one: the binding is propagated into the funcall sites and dropped
+		// (LetBoundDesignators), so the class holds exactly the written-out literal's
+		// methods -- no dispatcher, and HALVE shakes. Every expander that names a
+		// designator to avoid re-evaluating it (map/maplist/every/...) binds one, so this
+		// is what stops a coerced string from pinning the arity-1 dispatcher.
+		String defs = "(defun dbl (x) (* x 2)) (defun halve (x) (/ x 2)) ";
+		String tail = " (print 'halve)";
+		byte[] literal = compile(defs + "(print (mapcar #'dbl '(1 2)))" + tail, OptimizeLevel.DEFAULT);
+		byte[] bound = compile(defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))))" + tail, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(bound)).isEqualTo(declaredMethodNames(literal));
+		assertThat(run(bound)).isEqualTo(run(literal));
+		// One use as a plain VALUE and the binding stays: the value has to resolve, so
+		// the dispatcher is back and keeps HALVE with it.
+		byte[] valued = compile(
+				defs + "(let ((f #'dbl)) (print (mapcar f '(1 2))) (print (funcall (car (list f)) 3)))" + tail,
+				OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(valued)).contains("DBL", "HALVE", "_invoke_1");
 	}
 
 	@Test

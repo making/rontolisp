@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.LetBoundDesignators;
 import am.ik.wasm.Instruction;
 
 /**
@@ -35,7 +36,12 @@ final class WasmLetCompiler {
 	}
 
 	static void compile(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		List<LispVal> parts = cons.toList();
+		// A binding that only holds a literal designator for the body's funcall sites is
+		// propagated into them and dropped, so the designator never becomes a VALUE here
+		// (LetBoundDesignators; the JVM twin does the same). It cannot collide with the
+		// __FLET registration below: that one wants a LAMBDA init, this one a designator.
+		LispCons letForm = LetBoundDesignators.propagate(cons, ctx.specialVars, ctx.functions.keySet());
+		List<LispVal> parts = letForm.toList();
 		// A bare symbol entry is an init-less binding to nil.
 		LispVal bindings = LispMacroExpander.normalizeBindingList(parts.get(1));
 		Map<String, Integer> savedLocals = new HashMap<>(ctx.locals);
@@ -43,7 +49,7 @@ final class WasmLetCompiler {
 		// like a sequence statement (a resume restores the bound locals from the spill
 		// and skips the init), and the body routes through the shared guarded progn. A
 		// dynamic (special) binding cannot survive a suspension, so it is rejected.
-		boolean async = ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(cons) > 0;
+		boolean async = ctx.asyncResume != null && WasmAwaitAnalysis.countAwaits(letForm) > 0;
 
 		// Pre-scan body for captured vars. Specials are globals reachable from any
 		// function,
