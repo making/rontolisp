@@ -5,8 +5,8 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-11
-- rontolisp: 0.1.0-SNAPSHOT (`50dc115`)
-- validated on: wasmtime 47.0.2 (90fed3c6a 2026-07-21)
+- rontolisp: 0.1.0-SNAPSHOT (`381590e`)
+- validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
 | --- | --- | --- | --- | ---: |
