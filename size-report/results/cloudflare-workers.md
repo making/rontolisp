@@ -12,20 +12,20 @@ How the report is built and run: [../README.md](../README.md).
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 244,782 | 73,593 | 2.3% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 272,362 | 80,223 | 2.6% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 728,585 | 193,094 | 6.1% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,360,717 | 554,507 | 17.6% |
-| httpbin | `--no-wasi --optimize=size` | 162,673 | 51,387 | 1.6% |
-| httpbin-clack | `--no-wasi --optimize=size` | 261,177 | 78,511 | 2.5% |
-| httpbin-clack-one-source | `--no-wasi --optimize=size` | 260,734 | 78,453 | 2.5% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 302,831 | 87,948 | 2.8% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 760,422 | 200,967 | 6.4% |
-| httpbin-ningle | `--no-wasi --optimize=size` | 2,366,768 | 556,752 | 17.7% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 162,803 | 51,486 | 1.6% |
+| hello-clack | `--no-wasi --optimize=size` | 244,475 | 74,833 | 2.4% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 272,057 | 80,746 | 2.6% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 720,894 | 191,836 | 6.1% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,335,923 | 552,590 | 17.6% |
+| httpbin | `--no-wasi --optimize=size` | 162,735 | 51,743 | 1.6% |
+| httpbin-clack | `--no-wasi --optimize=size` | 260,868 | 79,059 | 2.5% |
+| httpbin-clack-one-source | `--no-wasi --optimize=size` | 260,345 | 78,944 | 2.5% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 301,972 | 88,177 | 2.8% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 751,552 | 200,153 | 6.4% |
+| httpbin-ningle | `--no-wasi --optimize=size` | 2,341,970 | 554,244 | 17.6% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 162,865 | 51,842 | 1.6% |
 
 The component row is the core module alone. Reached through `jco transpile`
-a Worker also imports the generated JavaScript: **116,315 B** of it.
+a Worker also imports the generated JavaScript: **311,720 B** of it.
 
 ## What is measured
 

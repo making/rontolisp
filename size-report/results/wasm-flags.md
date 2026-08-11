@@ -20,10 +20,10 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 341,789 |
-| zlib | `--optimize` | core (command) | Preview 1 | 158,708 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 127,026 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 131,677 |
+| zlib | (none) | core (command) | Preview 1 | 322,775 |
+| zlib | `--optimize` | core (command) | Preview 1 | 147,734 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 117,118 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 121,723 |
 
 ## What is measured
 
@@ -124,6 +124,18 @@ only real caller sits on a dead path used to ride along. `STRING=` (2,449 B),
 reached only by the runtime `find-package` lookup this program never runs, was
 one such. Worth -2.2% at `--optimize` (162,340 -> 158,708) and -2.8% at
 `--optimize=size` (130,658 -> 127,026), with every Worker row moving with it.
+
+**A signal's message is rendered only where it can be read.** On this backend an
+uncaught condition is a bare trap and a typed throw's payload text has no
+reader, so no signal site compiles its message render any more, and where no
+program code can ever HOLD a condition (`.kb/error-handling.md`, the lazy
+signal messages) the report renderer, the library's `:report` lambdas and the
+plain-message renders drop out with it; the generic-dispatch last resort signals
+its operation and class as slot values instead of rendered prose for the same
+reason. zlib reports nothing, so this took the value printer's whole condition
+tail: -7.8% at `--optimize=size` (127,026 -> 117,118), with the Worker rows --
+which DO catch conditions and keep the renderer -- still shedding their
+signal-point renders (hello-ningle -24.8 KB raw).
 
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
