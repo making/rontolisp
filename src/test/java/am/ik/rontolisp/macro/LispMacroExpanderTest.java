@@ -372,6 +372,92 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void aDestructiveSequenceOperatorSiteIsOneCallWhenTheProgramCarriesTheSharedDispatch() {
+		// replace / fill / map-into each inline a whole runtime dispatch -- a
+		// %row-major-aset copy loop, a list arm, an immutable-string rebuild made of
+		// three subseqs and a concatenate -- 3.8 KB / 1.7 KB / 1.9 KB of wasm PER SITE.
+		// chipz's update-window is four replaces and was 18 KB for thirty lines of Lisp.
+		// If those shapes come back into the site, the cost comes back with it.
+		LispCons replace = (LispCons) LispReader.readAllFromString("(replace a b :start1 i :end2 j)").get(0);
+		assertThat(LispMacroExpander.expandReplace(replace, true, true).print())
+			.isEqualTo("(%REPLACE-RUNTIME A B I NIL NIL J)");
+		LispCons fill = (LispCons) LispReader.readAllFromString("(fill a v :start i)").get(0);
+		assertThat(LispMacroExpander.expandFill(fill, true).print()).isEqualTo("(%FILL-RUNTIME A V I NIL)");
+		// map-into routes to the helper of its own SOURCE-SEQUENCE COUNT: the loop body
+		// is a funcall of exactly that many arguments, so one helper cannot serve two
+		// counts without an apply (and with it the spread dispatcher).
+		LispCons mapInto = (LispCons) LispReader.readAllFromString("(map-into r 'f x y)").get(0);
+		assertThat(LispMacroExpander.expandMapInto(mapInto, true).print())
+			.isEqualTo("(%MAP-INTO-RUNTIME-2 R (FUNCTION F) X Y)");
+		// Without the helper each site keeps the pre-existing inline lowering, so a gate
+		// that under-predicts costs sharing and never correctness.
+		assertThat(LispMacroExpander.expandReplace(replace, true, false).print()).contains("%ROW-MAJOR-ASET")
+			.contains("(SUBSEQ ")
+			.doesNotContain("%REPLACE-RUNTIME");
+		assertThat(LispMacroExpander.expandFill(fill, false).print()).contains("%ROW-MAJOR-ASET")
+			.doesNotContain("%FILL-RUNTIME");
+		assertThat(LispMacroExpander.expandMapInto(mapInto, false).print()).contains("FUNCALL")
+			.doesNotContain("%MAP-INTO-RUNTIME");
+	}
+
+	@Test
+	void theSharedSequenceOpDispatchesAnswerTheSameThingAsTheInlinedOnes() {
+		// One body, two homes each: the defun carries the same dispatch the inline
+		// lowering spells, so routing a site to it cannot change what it answers. The
+		// bounds are PARAMETERS, nil when the caller omitted the keyword, which is what
+		// lets one call-site shape serve every keyword combination. None may call its
+		// own operator, or compiling the helper would re-enter the routing forever.
+		String replace = LispMacroExpander.replaceRuntimeWrapper().print();
+		// The parameter names are spelled in lower case on purpose: the reader upcases,
+		// so a name in this shape cannot collide with anything the program can write.
+		assertThat(replace)
+			.startsWith("(SETQ %REPLACE-RUNTIME (LAMBDA (%rpr_1 %rpr_2 %rpr_s1 %rpr_e1 %rpr_s2 %rpr_e2)");
+		// All three destination arms live here: the destructive element store, the list
+		// cons-cell rewrite, and the immutable-string rebuild.
+		assertThat(replace).contains("%ARRAYP")
+			.contains("%ROW-MAJOR-ASET")
+			.contains("LISTP")
+			.contains("RPLACA")
+			.contains("(OR %rpr_s1 0)")
+			.contains("CONCATENATE");
+		assertThat(replace).doesNotContain("(REPLACE ");
+		String fill = LispMacroExpander.fillRuntimeWrapper().print();
+		assertThat(fill).startsWith("(SETQ %FILL-RUNTIME (LAMBDA (%flr_s %flr_v %flr_a %flr_b)");
+		assertThat(fill).contains("%ARRAYP").contains("%ROW-MAJOR-ASET").contains("RPLACA").contains("(OR %flr_a 0)");
+		assertThat(fill).doesNotContain("(FILL ");
+		String mapInto = LispMacroExpander.mapIntoRuntimeWrapper(2).print();
+		assertThat(mapInto).startsWith("(SETQ %MAP-INTO-RUNTIME-2 (LAMBDA (%mir_res %mir_fn %mir_s0 %mir_s1)");
+		assertThat(mapInto).contains("FUNCALL").contains("RPLACA");
+		assertThat(mapInto).doesNotContain("(MAP-INTO ");
+	}
+
+	@Test
+	void theSequenceOpRuntimeGateInjectsOnlyTheHelpersThatWouldHaveACaller() {
+		// The injection gate: one helper per operator the program (or a generated
+		// wrapper body) names, gated apart because the three are independent lowerings
+		// rather than three arms of one runtime dispatch. map-into answers one helper
+		// per source-sequence count in use.
+		assertThat(seqOpHelperNames("(defun f (a b) (replace a b))")).containsExactly("%REPLACE-RUNTIME");
+		assertThat(seqOpHelperNames("(defun f (a) (fill a 0))")).containsExactly("%FILL-RUNTIME");
+		assertThat(seqOpHelperNames("(defun f (r x y) (map-into r #'+ x y) (map-into r #'1+ x))"))
+			.containsExactly("%MAP-INTO-RUNTIME-1", "%MAP-INTO-RUNTIME-2");
+		assertThat(seqOpHelperNames("(defun f (l) (car l))")).isEmpty();
+		// The replace and fill bodies call subseq, so they must count toward the
+		// %subseq-runtime gate -- which is why a backend injects them BEFORE it and
+		// scans them (.kb/sequence-op-runtimes.md).
+		assertThat(LispMacroExpander.programUsesSubseq(
+				LispMacroExpander.sequenceOpRuntimeWrappers(LispReader.readAllFromString("(replace a b)"))))
+			.isTrue();
+	}
+
+	private static List<String> seqOpHelperNames(String source) {
+		return LispMacroExpander.sequenceOpRuntimeWrappers(LispReader.readAllFromString(source))
+			.stream()
+			.map(form -> ((LispSymbol) ((LispCons) ((LispCons) form).cdr()).car()).name())
+			.toList();
+	}
+
+	@Test
 	void theDispatcherLastResortIsOneCallOfTheSharedNoApplicableMethodSignal() {
 		// The last-resort error tail (condition construction plus the class-naming
 		// render) re-inlined per dispatcher costs over a kilobyte EACH across a

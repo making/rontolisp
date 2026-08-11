@@ -242,6 +242,31 @@ cases:
       "aazzz"
       #(8 8)
       (1 2 3 4 5 6 7)
+  # A LIST destination for replace. The compile paths used to fall through to the
+  # immutable-string rebuild here: the JVM threw a ClassCastException, WASM printed
+  # the three subsequences concatenated as text, and (setf (subseq l ...)) on a list
+  # was a silent no-op there because the rebuilt value is dropped in statement
+  # position. Only the interpreter's native replace was right.
+  - name: replace-into-a-list
+    source: |
+      (let ((rl-l (list 1 2 3 4 5)))
+        (print (replace rl-l '(9 9) :start1 1))
+        (print rl-l))
+      (let ((rl-m (list 0 0 0 0)))
+        (replace rl-m #(7 8 9) :start1 1 :end1 3 :start2 1)
+        (print rl-m))
+      (let ((rl-s (list 1 2 3 4 5)))
+        (setf (subseq rl-s 1) '(9 9))
+        (print rl-s))
+      (print (replace (list 1 2) '(5 6 7 8)))
+      (print (funcall #'replace (list 0 0 0) '(4 5)))
+    expected: |
+      (1 9 9 4 5)
+      (1 9 9 4 5)
+      (0 8 9 0)
+      (1 9 9 4 5)
+      (5 6)
+      (4 5 0)
   - name: flet-fusion-and-unboxed-locals
     source: |
       (defun s3-rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))

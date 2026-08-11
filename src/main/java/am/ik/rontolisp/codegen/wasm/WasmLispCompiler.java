@@ -2153,8 +2153,20 @@ public final class WasmLispCompiler implements LispCompiler {
 		// holds every representation unconditionally, so the helper is a strict
 		// improvement wherever there is a caller, and WasmSubseqCompiler routes a site to
 		// it exactly when it is present.
+		//
+		// The replace/fill/map-into runtimes sit beside it for the same reason (a
+		// #'replace / #'fill wrapper body is a site of its own), and BEFORE it: their
+		// bodies call subseq, so they count toward its gate
+		// (.kb/sequence-op-runtimes.md).
+		List<LispVal> seqOpHelpers = userDefinedNames.stream()
+			.anyMatch(LispMacroExpander.sequenceOpRuntimeNames()::contains) ? List.of()
+					: LispMacroExpander.sequenceOpRuntimeWrappers(program, wrappers);
+		for (LispVal helper : seqOpHelpers) {
+			defuns.add(extractSetqLambda(helper));
+		}
 		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME)
-				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers))) {
+				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers)
+						|| LispMacroExpander.programUsesSubseq(seqOpHelpers))) {
 			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
 		}
 		// The shared sequence-conversion trio, once per program whose lowerings can

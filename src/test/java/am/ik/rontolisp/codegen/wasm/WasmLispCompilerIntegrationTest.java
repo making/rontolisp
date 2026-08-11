@@ -4736,6 +4736,21 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void replaceIntoAList() throws Exception {
+		// A list destination is rewritten through its cons cells, like the interpreter's
+		// native replace. It used to fall through to the immutable-string rebuild here
+		// and print the three subsequences concatenated as text -- and (setf (subseq l
+		// ...)) on a list was a silent no-op, the rebuilt value dropped in statement
+		// position (.kb/sequence-op-runtimes.md).
+		assertThat(compileAndRun("(print (replace (list 1 2 3 4 5) '(9 9) :start1 1))")).isEqualTo("(1 9 9 4 5)");
+		assertThat(compileAndRun("(print (replace (list 0 0 0 0) #(7 8 9) :start1 1 :end1 3 :start2 1))"))
+			.isEqualTo("(0 8 9 0)");
+		assertThat(compileAndRun("(print (replace (list 1 2) '(5 6 7 8)))")).isEqualTo("(5 6)");
+		assertThat(compileAndRun("(let ((l (list 1 2 3 4 5))) (setf (subseq l 1) '(9 9)) (print l))"))
+			.isEqualTo("(1 9 9 4 5)");
+	}
+
+	@Test
 	void writeSequenceString() throws Exception {
 		assertThat(compileAndRun("(princ (with-output-to-string (s) (write-sequence \"abcd\" s :start 1 :end 3)))"))
 			.isEqualTo("bc");

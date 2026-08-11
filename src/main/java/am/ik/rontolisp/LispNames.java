@@ -2249,6 +2249,41 @@ public final class LispNames {
 	public static final String SEQ_TO_VECTOR = "%SEQ-TO-VECTOR";
 
 	/**
+	 * The {@code %replace-runtime} internal helper: the whole
+	 * {@link am.ik.rontolisp.macro.LispMacroExpander#expandReplace} dispatch -- the
+	 * destructive element-copy loop, the list source read and the immutable-string
+	 * rebuild -- as ONE defun,
+	 * {@code (%replace-runtime seq1 seq2 start1 end1 start2 end2)} with a nil bound
+	 * meaning its default. Injected once per program by each compiler backend, beside the
+	 * builtin wrappers, so that a site is a call rather than an inlined copy of the whole
+	 * dispatch; see {@code .kb/sequence-op-runtimes.md}. The interpreter never sees it
+	 * (its {@code replace} is a native built-in).
+	 */
+	public static final String REPLACE_RUNTIME = "%REPLACE-RUNTIME";
+
+	/** The {@code %fill-runtime} internal helper; see {@link #REPLACE_RUNTIME}. */
+	public static final String FILL_RUNTIME = "%FILL-RUNTIME";
+
+	/**
+	 * The {@code %map-into-runtime-<em>n</em>} internal helpers; see
+	 * {@link #REPLACE_RUNTIME}. One per SOURCE-SEQUENCE COUNT the program uses, because
+	 * the loop body is a {@code funcall} of exactly that many arguments -- passing the
+	 * sources as a list instead would need an {@code apply} and with it the spread
+	 * dispatcher. Build a name with {@link #mapIntoRuntime(int)}.
+	 */
+	public static final String MAP_INTO_RUNTIME_PREFIX = "%MAP-INTO-RUNTIME-";
+
+	/**
+	 * The {@code %map-into-runtime-<em>n</em>} helper name for {@code n} source
+	 * sequences.
+	 * @param sourceCount the number of source sequences the site passes
+	 * @return the helper's symbol name
+	 */
+	public static String mapIntoRuntime(int sourceCount) {
+		return MAP_INTO_RUNTIME_PREFIX + sourceCount;
+	}
+
+	/**
 	 * The {@code %no-applicable-method} internal helper: the generic-function
 	 * dispatchers' shared last-resort signal, {@code (error (%string-concat prefix
 	 * (princ-to-string (%class-designator arg))))} as ONE defun. Injected once per

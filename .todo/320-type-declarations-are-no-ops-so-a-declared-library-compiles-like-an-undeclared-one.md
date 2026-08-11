@@ -23,10 +23,13 @@ squeezing the runtime. **Measured breakdown of the 191,872-byte artifact** (2026
 | `FUNC_*` runtime | 14,154 | 8% |
 | top-level chunk (constant tables) | 13,760 | 8% |
 
-`.todo/318` and `.todo/319` take roughly 30 KB out of the bottom four rows. What is left
-is the top two: **~119 KB of chipz's own compiled code, against 34,484 bytes for the
-whole C artifact and 20,072 for Zig.** No amount of runtime narrowing reaches that; the
-gap is code density per Lisp form.
+`.todo/318` has since landed and took 25,586 B of it (the artifact is 166,286 B now):
+`update-window` fell out of the top of the list and most of what it removed came out of
+the "chipz's own defuns" row, not the runtime rows. `.todo/319` and `.todo/321` are
+another ~16 KB. What is left after all of them is still the top two rows: **87,285 B of
+chipz's own compiled code (60,276 defuns + 27,009 lambdas), against 34,484 bytes for the
+whole C artifact and 20,072 for Zig.** No amount of runtime narrowing reaches that; the gap is code density per Lisp
+form.
 
 ## What to investigate
 

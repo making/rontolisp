@@ -592,9 +592,11 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx, className);
 				case LispNames.MAKE_STRING ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx, className);
-				case LispNames.REPLACE ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons, ctx.usesArrays), ctx, className);
-				case LispNames.FILL -> JvmExprCompiler.compileExpr(LispMacroExpander.expandFill(cons), ctx, className);
+				case LispNames.REPLACE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons,
+						ctx.usesArrays, ctx.functions.containsKey(LispNames.REPLACE_RUNTIME)), ctx, className);
+				case LispNames.FILL -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME)), ctx,
+						className);
 				case LispNames.SCHAR_SET ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx, className);
 				case LispNames.LOWER_CASE_P ->
@@ -968,8 +970,10 @@ final class JvmExprCompiler {
 				case LispNames.ARRAY_DISP_OFFSET -> JvmArrayCompiler.compileDispOffset(cons, ctx, className);
 				case LispNames.COERCE -> JvmExprCompiler.compileExpr(LispMacroExpander.expandCoerce(cons,
 						ctx.usesArrays, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)), ctx, className);
-				case LispNames.MAP_INTO ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx, className);
+				case LispNames.MAP_INTO -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandMapInto(cons,
+								ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))),
+						ctx, className);
 				case LispNames.APPEND -> JvmAppendCompiler.compile(cons, ctx, className);
 				case LispNames.EVAL -> JvmEvalCompiler.compile(cons, ctx, className);
 				case LispNames.READ -> JvmReadCompiler.compile(cons, ctx, className);

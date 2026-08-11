@@ -826,9 +826,24 @@ public final class JvmLispCompiler implements LispCompiler {
 		// program
 		// would pull ~120 KB of array runtime into a class with no use for it. When the
 		// gate is off JvmSubseqCompiler declines the rewrite anyway, so nothing calls it.
-		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME)
-				&& (programUsesAnyArrayOp(program) || forcedGroups.contains(GROUP_ARRAYS))
-				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers))) {
+		//
+		// The replace/fill/map-into runtimes sit beside it for the same reason (a
+		// #'replace / #'fill wrapper body is a site of its own), and BEFORE it: their
+		// bodies call subseq, so they count toward its gate
+		// (.kb/sequence-op-runtimes.md).
+		// The array gate covers them too -- each body's destructive arm names
+		// aref/%row-major-aset -- and when it is off every one of their sites keeps the
+		// inline lowering, so nothing calls the missing helper.
+		boolean arrayGate = programUsesAnyArrayOp(program) || forcedGroups.contains(GROUP_ARRAYS);
+		List<LispVal> seqOpHelpers = !arrayGate
+				|| userDefinedNames.stream().anyMatch(LispMacroExpander.sequenceOpRuntimeNames()::contains) ? List.of()
+						: LispMacroExpander.sequenceOpRuntimeWrappers(program, wrappers);
+		for (LispVal helper : seqOpHelpers) {
+			defuns.add(extractSetqLambda(helper));
+		}
+		if (!userDefinedNames.contains(LispNames.SUBSEQ_RUNTIME) && arrayGate
+				&& (LispMacroExpander.programUsesSubseq(program) || LispMacroExpander.programUsesSubseq(wrappers)
+						|| LispMacroExpander.programUsesSubseq(seqOpHelpers))) {
 			defuns.add(extractSetqLambda(LispMacroExpander.subseqRuntimeWrapper()));
 		}
 		// The shared sequence-conversion trio, beside the subseq helper for the same

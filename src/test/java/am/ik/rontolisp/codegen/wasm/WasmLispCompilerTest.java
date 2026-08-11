@@ -1015,6 +1015,17 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aDestructiveSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedRuntime() {
+		// Same budget idea again, for the .kb/sequence-op-runtimes.md helpers. Each of
+		// these used to inline its whole runtime dispatch -- replace 3,806 bytes per
+		// site, map-into 1,949, fill 1,718; chipz's update-window is four replaces and
+		// was 18 KB, 9.5% of the whole zlib module. Measured 21 / 17 / 15.
+		assertThat(marginalBytesPerSite("(replace *v* *w* :start1 i :start2 1 :end2 4)")).isLessThan(120);
+		assertThat(marginalBytesPerSite("(fill *v* i :start 1)")).isLessThan(120);
+		assertThat(marginalBytesPerSite("(map-into *v* #'1+ *w*)")).isLessThan(120);
+	}
+
+	@Test
 	void aSlotAccessorDispatcherDoesNotCarryItsOwnCopyOfTheNoApplicableMethodTail() {
 		// Every synthesized accessor is a pair of dispatchers (reader + %setf- writer)
 		// whose last resort used to inline the whole error tail -- condition
@@ -1045,7 +1056,8 @@ class WasmLispCompilerTest {
 	}
 
 	private static byte[] compileWithSites(String site, int count) {
-		StringBuilder source = new StringBuilder("(defvar *v* (make-array 8 :initial-element 0))\n(defun f (i)");
+		StringBuilder source = new StringBuilder("(defvar *v* (make-array 8 :initial-element 0))\n"
+				+ "(defvar *w* (make-array 8 :initial-element 0))\n(defun f (i)");
 		for (int k = 0; k < count; k++) {
 			source.append(' ').append(site);
 		}

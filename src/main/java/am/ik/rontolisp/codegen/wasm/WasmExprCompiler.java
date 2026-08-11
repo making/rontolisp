@@ -891,8 +891,10 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx);
 				case LispNames.MAKE_STRING ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeString(cons), ctx);
-				case LispNames.REPLACE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons), ctx);
-				case LispNames.FILL -> WasmExprCompiler.compileExpr(LispMacroExpander.expandFill(cons), ctx);
+				case LispNames.REPLACE -> WasmExprCompiler.compileExpr(LispMacroExpander.expandReplace(cons, true,
+						ctx.functions.containsKey(LispNames.REPLACE_RUNTIME)), ctx);
+				case LispNames.FILL -> WasmExprCompiler.compileExpr(
+						LispMacroExpander.expandFill(cons, ctx.functions.containsKey(LispNames.FILL_RUNTIME)), ctx);
 				case LispNames.SCHAR_SET ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandScharSetFunctional(cons), ctx);
 				case LispNames.LOWER_CASE_P ->
@@ -1241,7 +1243,8 @@ final class WasmExprCompiler {
 				case LispNames.COERCE -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandCoerce(cons, true, ctx.functions.containsKey(LispNames.SEQ_TO_LIST)),
 						ctx);
-				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons), ctx);
+				case LispNames.MAP_INTO -> WasmExprCompiler.compileExpr(LispMacroExpander.expandMapInto(cons,
+						ctx.functions.containsKey(LispNames.mapIntoRuntime(cons.toList().size() - 3))), ctx);
 				case LispNames.APPEND -> WasmAppendCompiler.compile(cons, ctx);
 				case LispNames.FUNCALL -> {
 					// A direct (funcall __FLETn_f ...) of a registered local function in
