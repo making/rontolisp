@@ -6,26 +6,26 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-11
-- rontolisp: 0.1.0-SNAPSHOT (`82f97c5`)
+- rontolisp: 0.1.0-SNAPSHOT (`50dc115`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 244,475 | 74,833 | 2.4% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 272,057 | 80,746 | 2.6% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 720,894 | 191,836 | 6.1% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,335,923 | 552,590 | 17.6% |
-| httpbin | `--no-wasi --optimize=size` | 162,735 | 51,743 | 1.6% |
-| httpbin-clack | `--no-wasi --optimize=size` | 260,868 | 79,059 | 2.5% |
-| httpbin-clack-one-source | `--no-wasi --optimize=size` | 260,345 | 78,944 | 2.5% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 301,972 | 88,177 | 2.8% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 751,552 | 200,153 | 6.4% |
-| httpbin-ningle | `--no-wasi --optimize=size` | 2,341,970 | 554,244 | 17.6% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 162,865 | 51,842 | 1.6% |
+| hello-clack | `--no-wasi --optimize=size` | 244,475 | 73,474 | 2.3% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 272,057 | 80,129 | 2.5% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 720,894 | 191,272 | 6.1% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,335,919 | 549,277 | 17.5% |
+| httpbin | `--no-wasi --optimize=size` | 162,735 | 51,256 | 1.6% |
+| httpbin-clack | `--no-wasi --optimize=size` | 260,868 | 78,413 | 2.5% |
+| httpbin-clack-one-source | `--no-wasi --optimize=size` | 260,345 | 78,301 | 2.5% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 301,972 | 87,828 | 2.8% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 751,552 | 199,293 | 6.3% |
+| httpbin-ningle | `--no-wasi --optimize=size` | 2,341,970 | 551,393 | 17.5% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 162,865 | 51,357 | 1.6% |
 
 The component row is the core module alone. Reached through `jco transpile`
-a Worker also imports the generated JavaScript: **311,720 B** of it.
+a Worker also imports the generated JavaScript: **116,315 B** of it.
 
 ## What is measured
 

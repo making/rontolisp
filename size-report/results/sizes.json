@@ -1,7 +1,7 @@
 {
   "generated": "2026-08-11",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "82f97c5",
+  "commit": "50dc115",
   "wasmtime": "wasmtime 47.0.3 (5554cc1a6 2026-07-31)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"","module":"core (command)","wasi":"Preview 1","bytes":126653},
@@ -19,17 +19,17 @@
     {"family":"wasm","name":"zlib_size","flags":"--optimize=size","module":"core (command)","wasi":"Preview 1","bytes":117118},
     {"family":"wasm","name":"zlib_component","flags":"--component --optimize=size","module":"component (command)","wasi":"Preview 3","bytes":121723},
     {"family":"workers","name":"hello","flags":"--no-gc --optimize","bytes":563,"gzip":428},
-    {"family":"workers","name":"hello-clack","flags":"--no-wasi --optimize=size","bytes":244475,"gzip":74833},
-    {"family":"workers","name":"hello-tiny-routes","flags":"--no-wasi --optimize=size","bytes":272057,"gzip":80746},
-    {"family":"workers","name":"hello-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":720894,"gzip":191836},
-    {"family":"workers","name":"hello-ningle","flags":"--no-wasi --optimize=size","bytes":2335923,"gzip":552590},
-    {"family":"workers","name":"httpbin","flags":"--no-wasi --optimize=size","bytes":162735,"gzip":51743},
-    {"family":"workers","name":"httpbin-clack","flags":"--no-wasi --optimize=size","bytes":260868,"gzip":79059},
-    {"family":"workers","name":"httpbin-clack-one-source","flags":"--no-wasi --optimize=size","bytes":260345,"gzip":78944},
-    {"family":"workers","name":"httpbin-tiny-routes","flags":"--no-wasi --optimize=size","bytes":301972,"gzip":88177},
-    {"family":"workers","name":"httpbin-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":751552,"gzip":200153},
-    {"family":"workers","name":"httpbin-ningle","flags":"--no-wasi --optimize=size","bytes":2341970,"gzip":554244},
-    {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":162865,"gzip":51842},
-    {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":311720}
+    {"family":"workers","name":"hello-clack","flags":"--no-wasi --optimize=size","bytes":244475,"gzip":73474},
+    {"family":"workers","name":"hello-tiny-routes","flags":"--no-wasi --optimize=size","bytes":272057,"gzip":80129},
+    {"family":"workers","name":"hello-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":720894,"gzip":191272},
+    {"family":"workers","name":"hello-ningle","flags":"--no-wasi --optimize=size","bytes":2335919,"gzip":549277},
+    {"family":"workers","name":"httpbin","flags":"--no-wasi --optimize=size","bytes":162735,"gzip":51256},
+    {"family":"workers","name":"httpbin-clack","flags":"--no-wasi --optimize=size","bytes":260868,"gzip":78413},
+    {"family":"workers","name":"httpbin-clack-one-source","flags":"--no-wasi --optimize=size","bytes":260345,"gzip":78301},
+    {"family":"workers","name":"httpbin-tiny-routes","flags":"--no-wasi --optimize=size","bytes":301972,"gzip":87828},
+    {"family":"workers","name":"httpbin-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":751552,"gzip":199293},
+    {"family":"workers","name":"httpbin-ningle","flags":"--no-wasi --optimize=size","bytes":2341970,"gzip":551393},
+    {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":162865,"gzip":51357},
+    {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":116315}
   ]
 }
