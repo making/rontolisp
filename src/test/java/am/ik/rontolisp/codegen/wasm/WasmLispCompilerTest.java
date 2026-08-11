@@ -1067,6 +1067,36 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aTopLevelFormThatIsNothingButAConstantEmitsNothing() {
+		// _start drops what a top-level form returns, so a form that only produces a
+		// value has nothing to emit -- and the module has to be BYTE-identical to the one
+		// without it, not merely close (compiler/ToplevelStatements,
+		// .kb/toplevel-statement-values.md). Every (in-package ...) of every file of a
+		// quickloaded system resolves to exactly the quoted symbol below.
+		String bare = "(print 1)\n";
+		String padded = "'chipz\nnil\nt\n:key\n\"doc\"\n42\n" + bare + "'cl-user\n";
+		assertThat(compileForSize(padded)).isEqualTo(compileForSize(bare));
+	}
+
+	@Test
+	void aTopLevelDefinerDoesNotBuildTheNameSymbolItReturns() {
+		// defvar/defparameter/defconstant bind, then return the name -- which _start
+		// drops, so at top level the name is not built at all
+		// (compiler/ToplevelStatements,
+		// .kb/toplevel-statement-values.md). Lengthening the name is what shows it: a
+		// name that reached the module would cost its own bytes in the data section, so
+		// the two modules would differ in size. Compiled at SIZE, where the string shake
+		// is on and an unreferenced name would be dropped anyway -- the assertion below
+		// is the stronger one, that nothing referenced it in the first place.
+		String shortName = "(defparameter *a* 1)\n(print *a*)\n";
+		String longName = "(defparameter *a-parameter-name-long-enough-to-be-visible-in-the-bytes* 1)\n"
+				+ "(print *a-parameter-name-long-enough-to-be-visible-in-the-bytes*)\n";
+		assertThat(compileForSize(longName).length).isEqualTo(compileForSize(shortName).length);
+		assertThat(new String(compileForSize(longName), java.nio.charset.StandardCharsets.ISO_8859_1))
+			.doesNotContain("A-PARAMETER-NAME-LONG-ENOUGH");
+	}
+
+	@Test
 	void aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher() {
 		// The byte budget behind .kb/wasm-callable-arity.md's derived ceiling. A funcall
 		// past MAX_CALLABLE_ARITY used to be rewritten into apply, and _apply drags in

@@ -30,6 +30,7 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
+import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -2014,6 +2015,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				topLevelExprs.add(expr);
 			}
 		}
+		// _start drops every top-level form's value, so a form that is nothing BUT a
+		// value has nothing to emit. The resolvers leave these behind in bulk -- an
+		// in-package/defpackage directive resolves to a quoted symbol, an unselected
+		// eval-when to nil (compiler/ToplevelStatements,
+		// .kb/toplevel-statement-values.md).
+		topLevelExprs = ToplevelStatements.prune(topLevelExprs);
 		// Two independently spliced libraries can bind the SAME interface (each in its
 		// own %-package). Merge them into one import per
 		// interface so the component-level wiring sees a single instance -- the two
@@ -6172,6 +6179,20 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		/** True when the program uses the embedded {@code eval} runtime. */
 		boolean usesEval = false;
+
+		/**
+		 * The one top-level form whose returned NAME the emitter is dropping, or
+		 * {@code null}. Set by {@link WasmToplevelEmit} immediately before it compiles a
+		 * {@code defvar}/{@code defparameter}/{@code defconstant} in statement position;
+		 * {@link WasmDefvarCompiler} clears it when it takes the offer and emits no name
+		 * (see {@code compiler/ToplevelStatements},
+		 * {@code .kb/toplevel-statement-values.md}). Keyed by the cons IDENTITY, and
+		 * cleared on acceptance, so the emitter can tell whether the offer was taken --
+		 * an offer the dispatch did not route to the defvar compiler leaves a value on
+		 * the stack and still gets its drop -- and so a nested definer compiled while
+		 * this one's init expression is being emitted cannot take it.
+		 */
+		@Nullable LispVal definerNameDropped;
 
 		Set<String> userDefunNames = Set.of();
 

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 import am.ik.wasm.WasmWriter;
@@ -82,8 +83,23 @@ final class WasmToplevelEmit {
 				chunk = openChunk(start, boxedVars);
 			}
 			int localsBefore = chunk.ctx.locals.size();
+			// Statement position: the chunk drops whatever the form returns, so a definer
+			// that returns nothing but the name it just bound is offered the chance to
+			// emit no name at all rather than push the symbol only to pop it
+			// (compiler/ToplevelStatements; the constant-valued forms that pass leaves
+			// are gone from `exprs` before this loop sees them). The offer goes through
+			// the ordinary compileExpr so the form keeps its source-position attribution
+			// and its async-spine handling; whether it was TAKEN is read back from the
+			// context, so a spelling the dispatch does not route to the defvar compiler
+			// leaves its value on the stack and still gets its drop.
+			boolean offered = ToplevelStatements.isNameValuedDefiner(expr);
+			chunk.ctx.definerNameDropped = offered ? expr : null;
 			WasmExprCompiler.compileExpr(expr, chunk.ctx);
-			chunk.writer.write(Instruction.DROP);
+			boolean taken = offered && chunk.ctx.definerNameDropped == null;
+			chunk.ctx.definerNameDropped = null;
+			if (!taken) {
+				chunk.writer.write(Instruction.DROP);
+			}
 			if (chunk.ctx.locals.size() > localsBefore) {
 				pinnedByLocals = true;
 			}

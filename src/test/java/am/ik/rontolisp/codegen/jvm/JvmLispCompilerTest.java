@@ -1764,6 +1764,15 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void aDefinerWhoseValueIsReadStillYieldsTheNameSymbol() throws Exception {
+		// A TOP-LEVEL definer is compiled for effect -- main() pops what it returns, so
+		// the name symbol is never built (compiler/ToplevelStatements). That is a
+		// statement-position decision and nothing else: read the value and the form is
+		// still the CL form that answers its own name.
+		assertThat(compileAndRun("(print (defparameter *nested-name* 7))")).isEqualTo("*NESTED-NAME*");
+	}
+
+	@Test
 	void compileAndRunGlobalReadInsideFunction() throws Exception {
 		// A defparameter global referenced inside a defun body must resolve (previously
 		// failed to compile: "Cannot compile symbol reference: *k*").

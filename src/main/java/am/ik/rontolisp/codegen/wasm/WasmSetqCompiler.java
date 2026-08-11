@@ -220,7 +220,7 @@ final class WasmSetqCompiler {
 	 * stack (left there by the {@code local.tee}) is preserved as the form's result.
 	 */
 	static void mirrorTopLevelGlobal(String name, int slot, WasmLispCompiler.Ctx ctx) {
-		if (!ctx.topLevel || !ctx.usesEval) {
+		if (!mirrorsTopLevelGlobal(ctx)) {
 			return;
 		}
 		// _store(place, value, GLOBAL_ENV) -> value ; drop the returned value (the result
@@ -233,6 +233,18 @@ final class WasmSetqCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STORE);
 		ctx.writer.write(Instruction.DROP);
+	}
+
+	/**
+	 * Whether {@link #mirrorTopLevelGlobal} would emit anything here. A caller that has
+	 * to stage the assigned value in a local ONLY so the mirror can read it back asks
+	 * first, so a program that never evals does not pay a {@code local.tee} -- and a
+	 * local -- per top-level binding.
+	 * @param ctx the context the assignment is being emitted into
+	 * @return {@code true} when the mirror emits
+	 */
+	static boolean mirrorsTopLevelGlobal(WasmLispCompiler.Ctx ctx) {
+		return ctx.topLevel && ctx.usesEval;
 	}
 
 }

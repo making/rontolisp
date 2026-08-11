@@ -16,6 +16,7 @@ import java.util.Set;
 
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
+import am.ik.rontolisp.compiler.ToplevelStatements;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.LambdaLists;
@@ -704,6 +705,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				topLevelExprs.add(expr);
 			}
 		}
+		// main() drops every top-level form's value, so a form that is nothing BUT a
+		// value has nothing to emit. The resolvers leave these behind in bulk -- an
+		// in-package/defpackage directive resolves to a quoted symbol, an unselected
+		// eval-when to nil (compiler/ToplevelStatements,
+		// .kb/toplevel-statement-values.md).
+		topLevelExprs = ToplevelStatements.prune(topLevelExprs);
 
 		// A redefined defun keeps only its LAST definition: a class may not hold two
 		// methods of the same name and descriptor (fast-http redefines 11 struct
@@ -1239,6 +1246,17 @@ public final class JvmLispCompiler implements LispCompiler {
 				topChunkNames.add(nameUtf8);
 				topChunkRefs.add(cp.addMethodref(thisClass, cp.addNameAndType(nameUtf8, topChunkDesc)));
 			}
+			// Statement position: the chunk pops whatever the form returns, so a definer
+			// that returns nothing but the name it just bound is offered the chance to
+			// emit no name at all rather than push the symbol only to pop it
+			// (compiler/ToplevelStatements; the constant-valued forms that pass leaves
+			// are gone from topLevelExprs before this loop sees them). The offer goes
+			// through the ordinary compileExpr so the form keeps everything that path
+			// gives it; whether it was TAKEN is read back from the context, so a spelling
+			// the dispatch does not route to the defvar compiler leaves its value on the
+			// stack and still gets its pop.
+			boolean offered = ToplevelStatements.isNameValuedDefiner(expr);
+			chunkCtx.definerNameDropped = offered ? expr : null;
 			try {
 				JvmExprCompiler.compileExpr(expr, chunkCtx, this.className);
 			}
@@ -1251,7 +1269,11 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 				throw new IllegalStateException("while compiling top-level form " + shown + ": " + ex.getMessage(), ex);
 			}
-			chunkCtx.emit(Opcode.POP);
+			boolean taken = offered && chunkCtx.definerNameDropped == null;
+			chunkCtx.definerNameDropped = null;
+			if (!taken) {
+				chunkCtx.emit(Opcode.POP);
+			}
 		}
 		if (chunkCtx != null) {
 			chunkCtx.emit(Opcode.RETURN);
@@ -3875,6 +3897,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * runtime's global environment; null otherwise.
 		 */
 		@Nullable MethodrefConstant evalStoreRef;
+
+		/**
+		 * The one top-level form whose returned NAME the emitter is dropping, or
+		 * {@code null}. Set immediately before a {@code defvar}/{@code defparameter}/
+		 * {@code defconstant} in statement position is compiled;
+		 * {@link JvmDefvarCompiler} clears it when it takes the offer and emits no name
+		 * (see {@code compiler/ToplevelStatements},
+		 * {@code .kb/toplevel-statement-values.md}). Keyed by the cons IDENTITY, and
+		 * cleared on acceptance, so the emitter can tell whether the offer was taken --
+		 * an offer the dispatch did not route to the defvar compiler leaves a value on
+		 * the stack and still gets its pop -- and so a nested definer compiled while this
+		 * one's init expression is being emitted cannot take it.
+		 */
+		@Nullable LispVal definerNameDropped;
 
 		String className = "";
 

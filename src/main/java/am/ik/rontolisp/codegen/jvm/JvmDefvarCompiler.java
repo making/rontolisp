@@ -23,6 +23,16 @@ final class JvmDefvarCompiler {
 	}
 
 	static void compile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean force) {
+		// Take the top-level emitter's offer to drop the name this form returns, if the
+		// offer is for THIS form (compiler/ToplevelStatements,
+		// .kb/toplevel-statement-values.md). Cleared here, before the init expression is
+		// compiled, so a nested definer cannot take it and so the emitter can see that it
+		// was taken.
+		boolean emitName = true;
+		if (ctx.definerNameDropped == cons) {
+			ctx.definerNameDropped = null;
+			emitName = false;
+		}
 		List<LispVal> parts = cons.toList();
 		LispSymbol name = (LispSymbol) parts.get(1);
 		if (ctx.globals.contains(name.name())) {
@@ -58,9 +68,12 @@ final class JvmDefvarCompiler {
 			ctx.emit(Opcode.ASTORE);
 			ctx.emit(slot);
 		}
-		// defvar returns the variable name symbol.
-		JvmExprCompiler.compileExpr(new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(name, LispNil.INSTANCE)),
-				ctx, className);
+		// defvar returns the variable name symbol -- unless the caller is dropping it.
+		if (emitName) {
+			JvmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.QUOTE), new LispCons(name, LispNil.INSTANCE)), ctx,
+					className);
+		}
 	}
 
 }

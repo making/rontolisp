@@ -91,6 +91,11 @@ the "grep before you change behavior" rule:
   compile paths): the curated table, what is deliberately excluded and why, and the
   four-backend differential harness that decides what may be in it ->
   `.kb/pure-builtin-fold.md`
+- A top-level form is a STATEMENT: both compile paths drop its value, so nothing may be
+  emitted only to be dropped -- the constant a resolver leaves behind (`in-package` -> a
+  quoted symbol) is deleted, and `defvar`/`defparameter`/`defconstant` are compiled for
+  effect instead of building the name they return (always on, like the fold above) ->
+  `.kb/toplevel-statement-values.md`
 - Backends & flags -- `--dynamic`, `--optimize`, `--component` (WASI 0.3), `--no-gc`, `--simd`,
   `wit-import`/`wit-export`/`wasm-export`, WASM GC strings.
 - `rontolisp format`, the source formatter: the whitespace-ONLY invariant (identical token
