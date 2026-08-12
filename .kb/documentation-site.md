@@ -143,9 +143,16 @@ the template, that rule belongs on a doc page instead; inline it from there.
   catalog entry is missing from `operators.md`. A doc rename that breaks the site
   therefore breaks this build too.
 - The version is `<project major.minor>.<git rev-list --count HEAD -- doc
-  docs-tool>`, computed in `pages.yaml` (whose checkout needs `fetch-depth: 0`):
-  it bumps exactly when something that can change the skill changed. Local runs
-  default to `SkillGen.DEV_VERSION`. Both archives are written with fixed
-  timestamps so an unchanged bundle stays byte-identical.
+  docs-tool examples>` -- but that is only a CANDIDATE. `pages.yaml` curls the
+  published `version.json` and passes `--previous-version` / `--previous-hash`;
+  `SkillGen` digests the whole bundle minus the version itself
+  (`contentDigest`, published as `contentHash`) and keeps the previous version
+  when the digest matches. A commit count alone would bump on a `doc/ja`-only
+  edit, a docs-tool test change or a rebuilt `.wasm` the bundle excludes, and
+  every installed copy would re-download 2MB that is byte-identical. The
+  candidate still has to be monotonic, which is why it stays a commit count.
+  `pages.yaml`'s checkout needs `fetch-depth: 0` for it. Local runs default to
+  `SkillGen.DEV_VERSION`. Both archives are written with fixed timestamps so an
+  unchanged bundle stays byte-identical.
 - Nothing is committed back to the repo -- the bundle is an artifact of the Pages
   deploy, so there is no generated file in git to drift.

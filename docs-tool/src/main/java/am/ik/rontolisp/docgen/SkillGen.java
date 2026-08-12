@@ -128,12 +128,23 @@ public final class SkillGen {
 
 	private final String repoBase;
 
+	private final String previousVersion;
+
+	private final String previousHash;
+
 	public SkillGen(Path source, Path out, String lang, String version, String commit, String siteBase) {
-		this(source, out, lang, version, commit, siteBase, null, DEFAULT_REPO_BASE);
+		this(source, out, lang, version, commit, siteBase, null, DEFAULT_REPO_BASE, null, null);
 	}
 
 	public SkillGen(Path source, Path out, String lang, String version, String commit, String siteBase, Path examples,
 			String repoBase) {
+		this(source, out, lang, version, commit, siteBase, examples, repoBase, null, null);
+	}
+
+	public SkillGen(Path source, Path out, String lang, String version, String commit, String siteBase, Path examples,
+			String repoBase, String previousVersion, String previousHash) {
+		this.previousVersion = previousVersion;
+		this.previousHash = previousHash;
 		this.source = source;
 		this.out = out;
 		this.lang = lang;
@@ -153,6 +164,8 @@ public final class SkillGen {
 		String siteBase = "https://making.github.io/rontolisp";
 		Path examples = Path.of("examples");
 		String repoBase = DEFAULT_REPO_BASE;
+		String previousVersion = null;
+		String previousHash = null;
 		for (int i = 0; i < args.length - 1; i++) {
 			switch (args[i]) {
 				case "--source" -> source = Path.of(args[++i]);
@@ -163,11 +176,14 @@ public final class SkillGen {
 				case "--site-base" -> siteBase = args[++i];
 				case "--examples" -> examples = Path.of(args[++i]);
 				case "--repo-base" -> repoBase = args[++i];
+				case "--previous-version" -> previousVersion = args[++i];
+				case "--previous-hash" -> previousHash = args[++i];
 				default -> {
 				}
 			}
 		}
-		new SkillGen(source, out, lang, version, commit, siteBase, examples, repoBase).generate();
+		new SkillGen(source, out, lang, version, commit, siteBase, examples, repoBase, previousVersion, previousHash)
+			.generate();
 	}
 
 	/** Writes the whole bundle. */
@@ -207,14 +223,20 @@ public final class SkillGen {
 			Files.writeString(target, entry.getValue(), StandardCharsets.UTF_8);
 		}
 
-		String skill = renderSkill(langDir, nav, catalogs);
+		// What the skill IS decides the version, not how many commits went by: a
+		// change to doc/ja, to a test, or to a .wasm the bundle excludes produces
+		// the same bytes, and an install that re-downloads for that is noise.
+		String digest = contentDigest(references, renderSkill(langDir, nav, catalogs, ""));
+		String resolved = digest.equals(this.previousHash) ? this.previousVersion : this.version;
+
+		String skill = renderSkill(langDir, nav, catalogs, resolved);
 		Files.writeString(skillDir.resolve("SKILL.md"), skill, StandardCharsets.UTF_8);
 
-		Files.writeString(this.out.resolve("VERSION"), this.version + "\n", StandardCharsets.UTF_8);
-		Files.writeString(this.out.resolve("version.json"), versionJson(), StandardCharsets.UTF_8);
-		Files.writeString(this.out.resolve(SKILL_NAME + "-full.md"), buildSingleFile(skill, references),
+		Files.writeString(this.out.resolve("VERSION"), resolved + "\n", StandardCharsets.UTF_8);
+		Files.writeString(this.out.resolve("version.json"), versionJson(resolved, digest), StandardCharsets.UTF_8);
+		Files.writeString(this.out.resolve(SKILL_NAME + "-full.md"), buildSingleFile(skill, references, resolved),
 				StandardCharsets.UTF_8);
-		Files.writeString(this.out.resolve("index.html"), renderInstallPage(langDir), StandardCharsets.UTF_8);
+		Files.writeString(this.out.resolve("index.html"), renderInstallPage(langDir, resolved), StandardCharsets.UTF_8);
 
 		Map<String, byte[]> archive = new LinkedHashMap<>();
 		archive.put(SKILL_NAME + "/SKILL.md", skill.getBytes(StandardCharsets.UTF_8));
@@ -229,23 +251,24 @@ public final class SkillGen {
 		// path that keeps itself up to date.
 		String summary = frontmatterDescription(skill);
 		Map<String, byte[]> plugin = new LinkedHashMap<>();
-		plugin.put(".claude-plugin/plugin.json", pluginJson(summary).getBytes(StandardCharsets.UTF_8));
+		plugin.put(".claude-plugin/plugin.json", pluginJson(summary, resolved).getBytes(StandardCharsets.UTF_8));
 		for (Map.Entry<String, byte[]> entry : archive.entrySet()) {
 			plugin.put("skills/" + entry.getKey(), entry.getValue());
 		}
 		writeZip(this.out.resolve(PLUGIN_ZIP), plugin);
-		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(summary), StandardCharsets.UTF_8);
+		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(summary, resolved), StandardCharsets.UTF_8);
 
-		System.out.println("Generated skill " + SKILL_NAME + " " + this.version + " (" + references.size()
+		System.out.println("Generated skill " + SKILL_NAME + " " + resolved
+				+ (resolved.equals(this.version) ? "" : " (unchanged content; " + this.version + " not published)") + " (" + references.size()
 				+ " reference files) into " + this.out);
 	}
 
 	// --- SKILL.md ---------------------------------------------------------
 
-	private String renderSkill(Path langDir, Nav nav, List<Catalog> catalogs) throws IOException {
+	private String renderSkill(Path langDir, Nav nav, List<Catalog> catalogs, String version) throws IOException {
 		String template = readResource(TEMPLATE_RESOURCE);
 		String body = substituteIncludes(template, langDir);
-		body = body.replace("{{version}}", this.version)
+		body = body.replace("{{version}}", version)
 			.replace("{{site-base}}", this.siteBase)
 			.replace("{{operator-counts}}", operatorCounts(catalogs))
 			.replace("{{guides-table}}", buildGuidesTable(nav))
@@ -279,6 +302,34 @@ public final class SkillGen {
 		}
 		matcher.appendTail(out);
 		return out.toString();
+	}
+
+	/**
+	 * A digest of everything the bundle contains except the version itself, so that
+	 * two runs over the same documentation agree no matter how many commits went by
+	 * in between. Published in {@code version.json}, and fed back to the next run as
+	 * {@code --previous-hash}: that is what lets an unchanged skill keep its
+	 * version, which is what stops a client re-downloading it for nothing.
+	 */
+	static String contentDigest(Map<String, String> references, String skillWithoutVersion) throws IOException {
+		try {
+			java.security.MessageDigest sha = java.security.MessageDigest.getInstance("SHA-256");
+			for (Map.Entry<String, String> entry : new java.util.TreeMap<>(references).entrySet()) {
+				sha.update(entry.getKey().getBytes(StandardCharsets.UTF_8));
+				sha.update((byte) 0);
+				sha.update(entry.getValue().getBytes(StandardCharsets.UTF_8));
+				sha.update((byte) 0);
+			}
+			sha.update(skillWithoutVersion.getBytes(StandardCharsets.UTF_8));
+			StringBuilder hex = new StringBuilder();
+			for (byte b : sha.digest()) {
+				hex.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
+			}
+			return hex.toString();
+		}
+		catch (java.security.NoSuchAlgorithmException e) {
+			throw new IOException("SHA-256 is unavailable", e);
+		}
 	}
 
 	/** Adds one {@code #} to every ATX heading. */
@@ -649,9 +700,9 @@ public final class SkillGen {
 
 	// --- other outputs ----------------------------------------------------
 
-	private String buildSingleFile(String skill, Map<String, String> references) {
+	private String buildSingleFile(String skill, Map<String, String> references, String version) {
 		StringBuilder md = new StringBuilder();
-		md.append("<!-- rontolisp skill ").append(this.version).append(" -- ").append(this.siteBase).append(" -->\n\n");
+		md.append("<!-- rontolisp skill ").append(version).append(" -- ").append(this.siteBase).append(" -->\n\n");
 		md.append(skill);
 		for (Map.Entry<String, String> entry : references.entrySet()) {
 			md.append("\n\n---\n\n# FILE: references/").append(entry.getKey()).append("\n\n").append(entry.getValue());
@@ -675,7 +726,7 @@ public final class SkillGen {
 		return stop < 0 ? folded : folded.substring(0, stop + 1).trim();
 	}
 
-	private String pluginJson(String summary) {
+	private String pluginJson(String summary, String version) {
 		return """
 				{
 				  "name": "%s",
@@ -683,7 +734,7 @@ public final class SkillGen {
 				  "version": "%s",
 				  "homepage": "%s/docs/en/getting-started/agent-skill.html"
 				}
-				""".formatted(SKILL_NAME, jsonEscape(summary), this.version, this.siteBase);
+				""".formatted(SKILL_NAME, jsonEscape(summary), version, this.siteBase);
 	}
 
 	/**
@@ -694,7 +745,7 @@ public final class SkillGen {
 	 * this file still resolves, and the version it then installs is the one inside
 	 * the archive's {@code plugin.json}.
 	 */
-	private String marketplaceJson(String summary) {
+	private String marketplaceJson(String summary, String version) {
 		return """
 				{
 				  "name": "%s",
@@ -718,7 +769,7 @@ public final class SkillGen {
 				    }
 				  ]
 				}
-				""".formatted(SKILL_NAME, ownerName(), this.version, SKILL_NAME, jsonEscape(summary), this.version,
+				""".formatted(SKILL_NAME, ownerName(), version, SKILL_NAME, jsonEscape(summary), version,
 				this.siteBase, this.siteBase, PLUGIN_ZIP);
 	}
 
@@ -732,15 +783,16 @@ public final class SkillGen {
 		return text.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 
-	private String versionJson() {
+	private String versionJson(String version, String digest) {
 		return """
 				{
 				  "name": "%s",
 				  "version": "%s",
 				  "commit": "%s",
+				  "contentHash": "%s",
 				  "docs": "%s/docs/en/"
 				}
-				""".formatted(SKILL_NAME, this.version, this.commit, this.siteBase);
+				""".formatted(SKILL_NAME, version, this.commit, digest, this.siteBase);
 	}
 
 	/**
@@ -748,7 +800,7 @@ public final class SkillGen {
 	 * bundle's chrome: the instructions someone follows to install the skill exist
 	 * once, as a documentation page, not once here and once there.
 	 */
-	private String renderInstallPage(Path langDir) throws IOException {
+	private String renderInstallPage(Path langDir, String version) throws IOException {
 		Path guide = langDir.resolve(INSTALL_GUIDE);
 		if (!Files.exists(guide)) {
 			throw new IOException("The install page needs " + guide);
@@ -760,7 +812,7 @@ public final class SkillGen {
 						: siteUrl(resolved));
 		MutableDataSet options = DocGen.markdownOptions();
 		String body = HtmlRenderer.builder(options).build().render(Parser.builder(options).build().parse(markdown));
-		return readResource(INDEX_HTML_RESOURCE).replace("{{version}}", this.version)
+		return readResource(INDEX_HTML_RESOURCE).replace("{{version}}", version)
 			.replace("{{site-base}}", this.siteBase)
 			.replace("{{body}}", body);
 	}

@@ -79,8 +79,10 @@ jobs:
     - name: Generate documentation site (doc -> web/dist/docs)
       run: java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
     # The skill's version is <project major.minor>.<commits that can change it>,
-    # so it bumps by itself whenever the documentation or the generator moves and
-    # stays put when nothing did.
+    # but only if the bundle's CONTENT actually moved: the generator compares its
+    # digest against the published one and keeps the old version when they match,
+    # so a doc/ja-only commit, or a rebuilt .wasm the bundle excludes, does not
+    # tell every installed copy to re-download itself.
     - name: Compute skill version
       id: skill
       run: |
@@ -90,12 +92,18 @@ jobs:
         MAJOR_MINOR=${MAJOR_MINOR%.*}
         PATCH=$(git rev-list --count HEAD -- doc docs-tool examples)
         echo "version=${MAJOR_MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
-        echo "skill version ${MAJOR_MINOR}.${PATCH}"
+        # What is published now, if anything -- absent on the very first deploy.
+        PUBLISHED=$(curl -sSL --fail https://making.github.io/rontolisp/skill/version.json || echo '{}')
+        echo "previous-version=$(echo "$PUBLISHED" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')" >> "$GITHUB_OUTPUT"
+        echo "previous-hash=$(echo "$PUBLISHED" | sed -n 's/.*"contentHash": *"\([^"]*\)".*/\1/p')" >> "$GITHUB_OUTPUT"
+        echo "candidate ${MAJOR_MINOR}.${PATCH}; published $PUBLISHED"
     - name: Generate agent skill (doc -> web/dist/skill)
       run: |
         java -jar docs-tool/target/rontolisp-docgen.jar skill \
           --source doc --out web/dist/skill \
           --version '${{ steps.skill.outputs.version }}' \
+          --previous-version '${{ steps.skill.outputs.previous-version }}' \
+          --previous-hash '${{ steps.skill.outputs.previous-hash }}' \
           --commit '${{ github.sha }}' \
           --site-base 'https://making.github.io/rontolisp'
     - name: Upload Pages artifact

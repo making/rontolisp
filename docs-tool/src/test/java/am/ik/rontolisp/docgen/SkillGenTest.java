@@ -137,6 +137,28 @@ class SkillGenTest {
 	}
 
 	@Test
+	void anUnchangedBundleKeepsItsVersion(@TempDir Path second) throws IOException {
+		String published = Files.readString(out.resolve("version.json"), StandardCharsets.UTF_8);
+		String hash = published.replaceAll("(?s).*\"contentHash\": \"([^\"]+)\".*", "$1");
+		assertThat(hash).hasSize(64);
+		// A later commit offers a higher version; identical content declines it, so
+		// every installed copy is spared a re-download that changes nothing.
+		new SkillGen(DOC, second, "en", "9.9.9", "beef456", "https://example.test/rontolisp", EXAMPLES,
+				"https://repo.test/blob/develop", "1.2.3", hash)
+			.generate();
+		assertThat(Files.readString(second.resolve("VERSION"), StandardCharsets.UTF_8)).isEqualTo("1.2.3\n");
+		assertThat(Files.readString(second.resolve("version.json"), StandardCharsets.UTF_8)).contains(hash);
+	}
+
+	@Test
+	void aChangedBundleTakesTheNewVersion(@TempDir Path second) throws IOException {
+		new SkillGen(DOC, second, "en", "9.9.9", "beef456", "https://example.test/rontolisp", EXAMPLES,
+				"https://repo.test/blob/develop", "1.2.3", "0".repeat(64))
+			.generate();
+		assertThat(Files.readString(second.resolve("VERSION"), StandardCharsets.UTF_8)).isEqualTo("9.9.9\n");
+	}
+
+	@Test
 	void bothArchivesCarryTheWholeBundle() throws IOException {
 		try (ZipFile zip = new ZipFile(out.resolve(SkillGen.SKILL_NAME + ".skill").toFile())) {
 			assertThat(zip.getEntry(SkillGen.SKILL_NAME + "/SKILL.md")).isNotNull();
