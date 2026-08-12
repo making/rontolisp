@@ -77,6 +77,12 @@ public final class SkillGen {
 	/** The documentation page that IS the install page, relative to the language directory. */
 	static final String INSTALL_GUIDE = "getting-started/agent-skill.md";
 
+	/** The skill packaged as a Claude Code plugin, for an {@code archive} marketplace source. */
+	static final String PLUGIN_ZIP = SKILL_NAME + "-plugin.zip";
+
+	/** The one-file marketplace that `claude plugin marketplace add <url>` reads. */
+	static final String MARKETPLACE_JSON = "marketplace.json";
+
 	private static final Pattern MD_LINK = Pattern.compile("\\[([^\\]]*)]\\(([^)\\s]+)\\)");
 
 	private static final Pattern INCLUDE = Pattern.compile("\\{\\{include:([^}]+)}}");
@@ -168,6 +174,18 @@ public final class SkillGen {
 		}
 		writeTarGz(this.out.resolve(SKILL_NAME + "-skill.tar.gz"), archive);
 		writeZip(this.out.resolve(SKILL_NAME + ".skill"), archive);
+
+		// The plugin form of the same skill, plus the one-file marketplace that
+		// points at it -- `claude plugin marketplace add <that URL>` is the install
+		// path that keeps itself up to date.
+		String summary = frontmatterDescription(skill);
+		Map<String, byte[]> plugin = new LinkedHashMap<>();
+		plugin.put(".claude-plugin/plugin.json", pluginJson(summary).getBytes(StandardCharsets.UTF_8));
+		for (Map.Entry<String, byte[]> entry : archive.entrySet()) {
+			plugin.put("skills/" + entry.getKey(), entry.getValue());
+		}
+		writeZip(this.out.resolve(PLUGIN_ZIP), plugin);
+		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(summary), StandardCharsets.UTF_8);
 
 		System.out.println("Generated skill " + SKILL_NAME + " " + this.version + " (" + references.size()
 				+ " reference files) into " + this.out);
@@ -471,6 +489,79 @@ public final class SkillGen {
 			md.append("\n\n---\n\n# FILE: references/").append(entry.getKey()).append("\n\n").append(entry.getValue());
 		}
 		return md.toString();
+	}
+
+	/**
+	 * The skill's own frontmatter description, collapsed to one line. Reused as the
+	 * plugin's and the marketplace's description so that what the skill says it is
+	 * for is stated once.
+	 */
+	static String frontmatterDescription(String skill) throws IOException {
+		Matcher matcher = Pattern.compile("(?ms)^description:[ \t]*>?-?[ \t]*\r?\n(.*?)^\\w", Pattern.MULTILINE)
+			.matcher(skill);
+		if (!matcher.find()) {
+			throw new IOException("The skill template no longer has a folded `description:` in its frontmatter");
+		}
+		String folded = matcher.group(1).replaceAll("\\s+", " ").trim();
+		int stop = folded.indexOf(". ");
+		return stop < 0 ? folded : folded.substring(0, stop + 1).trim();
+	}
+
+	private String pluginJson(String summary) {
+		return """
+				{
+				  "name": "%s",
+				  "description": "%s",
+				  "version": "%s",
+				  "homepage": "%s/docs/en/getting-started/agent-skill.html"
+				}
+				""".formatted(SKILL_NAME, jsonEscape(summary), this.version, this.siteBase);
+	}
+
+	/**
+	 * A marketplace served as one static file. Because it is added by URL, Claude
+	 * Code downloads nothing but this JSON -- a relative plugin source would have no
+	 * checkout to be relative to -- so the plugin is an absolute {@code archive}
+	 * URL. That URL is deliberately unversioned: a client holding a stale copy of
+	 * this file still resolves, and the version it then installs is the one inside
+	 * the archive's {@code plugin.json}.
+	 */
+	private String marketplaceJson(String summary) {
+		return """
+				{
+				  "name": "%s",
+				  "owner": {
+				    "name": "%s"
+				  },
+				  "metadata": {
+				    "description": "The rontolisp documentation, packaged for coding agents",
+				    "version": "%s"
+				  },
+				  "plugins": [
+				    {
+				      "name": "%s",
+				      "description": "%s",
+				      "version": "%s",
+				      "homepage": "%s/docs/en/getting-started/agent-skill.html",
+				      "source": {
+				        "source": "archive",
+				        "url": "%s/skill/%s"
+				      }
+				    }
+				  ]
+				}
+				""".formatted(SKILL_NAME, ownerName(), this.version, SKILL_NAME, jsonEscape(summary), this.version,
+				this.siteBase, this.siteBase, PLUGIN_ZIP);
+	}
+
+	/** The site's GitHub user, read off the site URL rather than hard-coded twice. */
+	private String ownerName() {
+		Matcher matcher = Pattern.compile("https?://([^./]+)\\.github\\.io").matcher(this.siteBase);
+		return matcher.find() ? matcher.group(1) : SKILL_NAME;
+	}
+
+	private static String jsonEscape(String text) {
+		return text.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 
 	private String versionJson() {

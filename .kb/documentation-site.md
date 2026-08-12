@@ -86,6 +86,24 @@ plus a generated `contents.md` and `operators.md`), a `.tar.gz` and a `.skill` z
 of that tree, `rontolisp-full.md` (all of it as one file), `VERSION` /
 `version.json`, and an install page.
 
+**Two install paths, both served from `/skill/`.** The plugin one is primary:
+`marketplace.json` + `rontolisp-plugin.zip` (`.claude-plugin/plugin.json` +
+`skills/rontolisp/**`), added with
+`claude plugin marketplace add https://making.github.io/rontolisp/skill/marketplace.json`.
+A marketplace added by URL downloads NOTHING but that JSON, so its plugin entry
+cannot use a relative `./path` source -- it is an absolute `archive` URL, and the
+archive URL is deliberately unversioned so a client holding a stale
+`marketplace.json` still resolves (the version it installs is the one in the
+archive's `plugin.json`). No `sha256` for the same reason: pinning it would
+break every client whose copy of the marketplace predates the current archive.
+This is also why nothing has to be committed to the repo -- there is no
+`.claude-plugin/marketplace.json` in git, and no generated file in the tree. The
+second path is the bare `.tar.gz` into a `skills/` directory, which nothing
+updates for you. `claude plugin` rejects an archive URL that is not https or
+that points at a loopback host, so the plugin install can only be exercised
+against the deployed site, not a local server -- what a local run CAN check is
+that `claude plugin marketplace add` accepts the generated JSON.
+
 **The invariant: the skill is a VIEW of `doc/`, never a second copy of it.** The
 only hand-written text in it is
 `docs-tool/src/main/resources/skill/SKILL.template.md` -- frontmatter plus the

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -167,6 +168,56 @@ class SkillGenTest {
 		// ...but a code span inside a link LABEL must still be retargeted
 		assertThat(generator().retargetLinks("[`car`](../reference/functions/car.md)", "guides/x.md"))
 			.isEqualTo("[`car`](references/reference/functions/car.md)");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void thePluginArchiveHasTheLayoutClaudeCodeExpects() throws IOException {
+		try (ZipFile zip = new ZipFile(out.resolve(SkillGen.PLUGIN_ZIP).toFile())) {
+			assertThat(zip.getEntry("skills/" + SkillGen.SKILL_NAME + "/SKILL.md")).isNotNull();
+			assertThat(zip.getEntry("skills/" + SkillGen.SKILL_NAME + "/references/operators.md")).isNotNull();
+			var manifest = zip.getEntry(".claude-plugin/plugin.json");
+			assertThat(manifest).isNotNull();
+			try (InputStream in = zip.getInputStream(manifest)) {
+				Map<String, Object> plugin = new org.yaml.snakeyaml.Yaml().load(in);
+				assertThat(plugin).containsEntry("name", SkillGen.SKILL_NAME).containsEntry("version", "1.2.3");
+				assertThat((String) plugin.get("description")).isNotBlank();
+			}
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void theMarketplaceIsSelfContainedBecauseItIsAddedByUrl() throws IOException {
+		String json = Files.readString(out.resolve(SkillGen.MARKETPLACE_JSON), StandardCharsets.UTF_8);
+		Map<String, Object> marketplace = new org.yaml.snakeyaml.Yaml().load(json);
+		assertThat(marketplace).containsEntry("name", SkillGen.SKILL_NAME);
+		List<Map<String, Object>> plugins = (List<Map<String, Object>>) marketplace.get("plugins");
+		assertThat(plugins).hasSize(1);
+		Map<String, Object> entry = plugins.get(0);
+		assertThat(entry).containsEntry("name", SkillGen.SKILL_NAME).containsEntry("version", "1.2.3");
+		// Claude Code downloads nothing but this file when the marketplace is added
+		// by URL, so a relative source would have no checkout to resolve against.
+		Object source = entry.get("source");
+		assertThat(source).isInstanceOf(Map.class);
+		Map<String, Object> archive = (Map<String, Object>) source;
+		assertThat(archive).containsEntry("source", "archive");
+		assertThat((String) archive.get("url")).endsWith("/skill/" + SkillGen.PLUGIN_ZIP);
+	}
+
+	@Test
+	void thePluginDescriptionIsTheSkillsOwn() throws IOException {
+		String summary = SkillGen.frontmatterDescription("""
+				---
+				name: x
+				description: >-
+				  First sentence about it. Second sentence,
+				  wrapped over two lines.
+				---
+
+				body
+				""");
+		assertThat(summary).isEqualTo("First sentence about it.");
 	}
 
 	@Test
