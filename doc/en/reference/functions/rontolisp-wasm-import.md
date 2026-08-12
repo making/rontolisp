@@ -51,7 +51,7 @@ buffer with the exported `__ronto_alloc`) and returned as a `(ptr, len)` pair
 `:async t` declares that the host may implement the function
 **asynchronously** — on a JavaScript host, a `WebAssembly.Suspending`-wrapped
 function (JSPI). The call then returns a **future** that
-[`rontolisp:await`](rontolisp-await.md) resolves, so the source says at the
+[`rontolisp:await`](../special-forms/rontolisp-await.md) resolves, so the source says at the
 call site that the boundary is asynchronous — the same reading as an
 `async func` member of a [`rontolisp:wit-import`](rontolisp-wit-import.md),
 which lowers to exactly this option on this backend. (The word deliberately

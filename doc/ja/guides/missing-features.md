@@ -14,7 +14,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | 機能 | 状況 |
 | --- | --- |
 | リスタート | 利用可。デバッガ統合（`break`、`*debugger-hook*`）とコンディションとの関連付けはありません |
-| `symbol-macrolet` | 利用不可（`macrolet` は利用可能） |
+| `define-symbol-macro` | 利用不可（レキシカルな `symbol-macrolet` は利用可能） |
 | `&environment` | `defmacro` のラムダリストで受け付けますが、常に `nil` に束縛されます（マクロ展開環境オブジェクトは存在しません）。`&whole` は `defmacro`・`destructuring-bind` の双方で動作します |
 | `loop`（拡張版） | 一部対応（後述） |
 | CLOS | 一部対応（静的サブセット + 定義時 MOP サブセット） |
@@ -105,11 +105,13 @@ wasm-GC バックエンドで捕捉できるのは**シグナルされた**コ�
 ## `loop` マクロ
 
 拡張版 [`loop`](../reference/macros/loop.md) の限定的なサブセットが利用でき
-ます: 数値/リストのステップ（`for`）、文字列のステップ（`for ... across`）、
-よく使う集約（`collect`、`append`、`sum`、`count`、`maximize`、`minimize`
-など）、単純な制御節（`while`/`until`、`repeat`、`when`/`unless`、`finally`、
-`return`）。対象外は、分配束縛、`for` 節同士の並行 `and`、`being`、アナフォリック
-な `it`、`named`/`loop-finish`、`thereis`/`always`/`never` です。
+ます。対応している節はそのページに一覧があり、分配束縛、並行 `and`、アナフォリック
+な `it`、`loop-finish`、`thereis`/`always`/`never` も含まれます。対象外は
+`named`（およびそれが名付ける `return-from`）です。また、分配束縛のパターンは
+ラムダリストキーワードを解釈せず（`&optional` などはエラーにならず通常の変数と
+して束縛されます）、`being` はハッシュテーブルを駆動しますが、パッケージ形式
+（`being the external-symbols of ...`）はランタイムの intern テーブルが存在
+しないため、解析はされるものの空のシーケンスを反復します。
 
 ## 構造体とオブジェクト
 

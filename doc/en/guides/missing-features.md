@@ -13,7 +13,7 @@ with `rontolisp:list-special-forms`, `rontolisp:list-macros`, and
 | Feature | Status |
 | --- | --- |
 | restarts | available; no debugger integration (`break`, `*debugger-hook*`) and no condition-restart association |
-| `symbol-macrolet` | not available (`macrolet` is) |
+| `define-symbol-macro` | not available (the lexical `symbol-macrolet` is) |
 | `&environment` | accepted in a `defmacro` lambda list but always bound to `nil` (there is no macro-expansion environment object). `&whole` works, in `defmacro` and `destructuring-bind` alike |
 | `loop` (extended) | partial (see below) |
 | CLOS | partial (static subset + a definition-time MOP subset) |
@@ -102,12 +102,14 @@ only **signaled** conditions are catchable — a runtime trap still aborts.
 ## The `loop` macro
 
 A bounded subset of the extended [`loop`](../reference/macros/loop.md) is
-available: numeric/list stepping (`for`), string stepping (`for ... across`),
-the common accumulators (`collect`, `append`, `sum`, `count`, `maximize`,
-`minimize`, ...), and simple control clauses (`while`/`until`, `repeat`,
-`when`/`unless`, `finally`, `return`). Out of scope are destructuring, parallel
-`and` between `for` clauses, `being`, the anaphoric `it`, `named`/`loop-finish`,
-and `thereis`/`always`/`never`.
+available -- that page lists the supported clauses, which include destructuring
+patterns, parallel `and`, the anaphoric `it`, `loop-finish` and
+`thereis`/`always`/`never`. What is out of scope: `named` (and the
+`return-from` it would name); a destructuring pattern does not recognize
+lambda-list keywords (`&optional` and friends bind as ordinary variables instead
+of signalling); `being` drives hash tables, but its package form
+(`being the external-symbols of ...`) parses and iterates the EMPTY sequence,
+because there is no runtime intern table.
 
 ## Structures and objects
 

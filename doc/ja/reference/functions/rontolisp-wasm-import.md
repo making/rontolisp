@@ -50,7 +50,7 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 
 `:async t` は、ホストがこの関数を**非同期に**実装しうること — JavaScript
 ホストでは `WebAssembly.Suspending` でラップされた関数 (JSPI) — を宣言します。
-呼び出しは [`rontolisp:await`](rontolisp-await.md) で解決できる **future** を
+呼び出しは [`rontolisp:await`](../special-forms/rontolisp-await.md) で解決できる **future** を
 返すため、境界が非同期であることを呼び出し側のソースが語れます — このバックエンド
 ではまさにこのオプションに脱糖される [`rontolisp:wit-import`](rontolisp-wit-import.md)
 の `async func` メンバーと同じ読みです。(この語は意図的に
