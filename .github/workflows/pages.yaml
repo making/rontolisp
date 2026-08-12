@@ -27,6 +27,8 @@ on:
     - pom.xml
     - doc/**
     - docs-tool/**
+    # The agent skill mirrors the example programs, so they are an input to it.
+    - examples/**
     - .github/workflows/pages.yaml
   workflow_dispatch:
 
@@ -86,7 +88,7 @@ jobs:
         BASE=$(./mvnw -q --no-transfer-progress help:evaluate -Dexpression=project.version -DforceStdout | tail -1)
         MAJOR_MINOR=${BASE%-SNAPSHOT}
         MAJOR_MINOR=${MAJOR_MINOR%.*}
-        PATCH=$(git rev-list --count HEAD -- doc docs-tool)
+        PATCH=$(git rev-list --count HEAD -- doc docs-tool examples)
         echo "version=${MAJOR_MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
         echo "skill version ${MAJOR_MINOR}.${PATCH}"
     - name: Generate agent skill (doc -> web/dist/skill)

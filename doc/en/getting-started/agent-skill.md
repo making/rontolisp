@@ -95,3 +95,8 @@ is what those priors get wrong most often. Under `references/`:
 - `contents.md`, every page of this manual by title.
 - every page of this manual, verbatim, at the same relative paths -- so a
   detail the skill needs is a file read away, with no network.
+- `examples.md` and `examples/`, the repository's example programs as they are,
+  minus the build outputs: a compiled `.wasm` or a `.bin` of weights is a link
+  to the repository rather than a file. Documentation says what an operator
+  does; an example says what a whole program of some shape looks like, down to
+  the build command.

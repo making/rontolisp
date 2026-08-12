@@ -121,6 +121,15 @@ the template, that rule belongs on a doc page instead; inline it from there.
   URLs -- which is also why the page's links to the artifacts are written
   absolute in the Markdown: they have to work from both places.
 
+- The bundle also mirrors `examples/` (`--examples`, default `examples`) into
+  `references/examples/` with a generated `references/examples.md`. Inclusion is an
+  ALLOWLIST of text extensions (`SkillGen.EXAMPLE_TEXT_EXTENSIONS`) plus a skip
+  list of build directories, so a `.wasm` or a `.bin` of weights cannot get in --
+  the bundle is text an agent reads, and the generator writes strings, so binary
+  would be mangled rather than merely large. A README link to one of those
+  excluded files is rewritten to `--repo-base` (the GitHub blob URL) instead of
+  being left dangling. `examples/**` is therefore both a `pages.yaml` path trigger
+  and part of the version's commit count.
 - `SkillGen.CONTENTS_PAGE` is `contents.md`, not `index.md`: `doc/en/index.md`
   mirrors to `references/index.md`, and a case-insensitive filesystem would let a
   generated `INDEX.md` silently eat it.

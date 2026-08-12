@@ -83,6 +83,31 @@ public final class SkillGen {
 	/** The one-file marketplace that `claude plugin marketplace add <url>` reads. */
 	static final String MARKETPLACE_JSON = "marketplace.json";
 
+	/** Where the mirrored example programs land, under {@code references/}. */
+	static final String EXAMPLES_DIR = "examples";
+
+	/** The generated page listing every mirrored example. */
+	static final String EXAMPLES_PAGE = "examples.md";
+
+	/** Where a file that exists in the repository but not in the bundle can be read. */
+	static final String DEFAULT_REPO_BASE = "https://github.com/making/rontolisp/blob/develop";
+
+	/**
+	 * What an example is made of, as far as a reader is concerned. The bundle is
+	 * text an agent reads, so a compiled artifact (`.wasm`) or a weight file
+	 * (`.bin`) is not merely large, it is unreadable -- the allowlist keeps binary
+	 * out by construction rather than by naming every kind of it.
+	 */
+	static final List<String> EXAMPLE_TEXT_EXTENSIONS = List.of("lisp", "asd", "md", "txt", "sh", "js", "mjs", "css",
+			"html", "json", "jsonc", "wit", "wat", "wac", "yaml", "yml", "toml", "rs", "py", "java", "xml", "sql",
+			"csv");
+
+	/** Build output that happens to sit inside an example directory. */
+	static final List<String> EXAMPLE_SKIP_DIRS = List.of("target", "node_modules", "dist", "build", "out");
+
+	/** How many files of one example the index names before summarizing the rest. */
+	static final int LISTED_FILES_PER_EXAMPLE = 10;
+
 	private static final Pattern MD_LINK = Pattern.compile("\\[([^\\]]*)]\\(([^)\\s]+)\\)");
 
 	private static final Pattern INCLUDE = Pattern.compile("\\{\\{include:([^}]+)}}");
@@ -99,13 +124,24 @@ public final class SkillGen {
 
 	private final String siteBase;
 
+	private final Path examples;
+
+	private final String repoBase;
+
 	public SkillGen(Path source, Path out, String lang, String version, String commit, String siteBase) {
+		this(source, out, lang, version, commit, siteBase, null, DEFAULT_REPO_BASE);
+	}
+
+	public SkillGen(Path source, Path out, String lang, String version, String commit, String siteBase, Path examples,
+			String repoBase) {
 		this.source = source;
 		this.out = out;
 		this.lang = lang;
 		this.version = version;
 		this.commit = commit;
 		this.siteBase = siteBase;
+		this.examples = examples;
+		this.repoBase = repoBase;
 	}
 
 	public static void main(String[] args) throws IOException {
@@ -115,6 +151,8 @@ public final class SkillGen {
 		String version = DEV_VERSION;
 		String commit = "";
 		String siteBase = "https://making.github.io/rontolisp";
+		Path examples = Path.of("examples");
+		String repoBase = DEFAULT_REPO_BASE;
 		for (int i = 0; i < args.length - 1; i++) {
 			switch (args[i]) {
 				case "--source" -> source = Path.of(args[++i]);
@@ -123,11 +161,13 @@ public final class SkillGen {
 				case "--version" -> version = args[++i];
 				case "--commit" -> commit = args[++i];
 				case "--site-base" -> siteBase = args[++i];
+				case "--examples" -> examples = Path.of(args[++i]);
+				case "--repo-base" -> repoBase = args[++i];
 				default -> {
 				}
 			}
 		}
-		new SkillGen(source, out, lang, version, commit, siteBase).generate();
+		new SkillGen(source, out, lang, version, commit, siteBase, examples, repoBase).generate();
 	}
 
 	/** Writes the whole bundle. */
@@ -147,6 +187,15 @@ public final class SkillGen {
 		Map<String, String> references = new LinkedHashMap<>();
 		for (Map.Entry<String, String> page : readMarkdown(langDir).entrySet()) {
 			references.put(page.getKey(), siteLinksForMirroredPage(page.getValue(), page.getKey()));
+		}
+		Map<String, String> examplePages = readExamples();
+		if (!examplePages.isEmpty()) {
+			for (Map.Entry<String, String> page : examplePages.entrySet()) {
+				references.put(EXAMPLES_DIR + "/" + page.getKey(),
+						page.getKey().endsWith(".md") ? repoLinksForMissingFiles(page.getValue(), page.getKey(),
+								examplePages.keySet()) : page.getValue());
+			}
+			references.put(EXAMPLES_PAGE, buildExampleIndex(examplePages));
 		}
 		// Not "index.md": the documentation already has one, and a case-insensitive
 		// filesystem would silently let the generated file eat it.
@@ -402,6 +451,125 @@ public final class SkillGen {
 			}
 		}
 		return md.toString();
+	}
+
+	// --- examples ---------------------------------------------------------
+
+	/**
+	 * Reads the example programs, keyed by path relative to the examples directory.
+	 * Documentation says what the language does; an example says what a whole
+	 * working program of some shape looks like, which is the other half of writing
+	 * one.
+	 */
+	private Map<String, String> readExamples() throws IOException {
+		Map<String, String> files = new LinkedHashMap<>();
+		if (this.examples == null || !Files.isDirectory(this.examples)) {
+			return files;
+		}
+		try (Stream<Path> paths = Files.walk(this.examples)) {
+			for (Path path : paths.filter(Files::isRegularFile).sorted().toList()) {
+				String relative = this.examples.relativize(path).toString().replace('\\', '/');
+				if (isReadableExampleFile(relative)) {
+					files.put(relative, Files.readString(path, StandardCharsets.UTF_8));
+				}
+			}
+		}
+		return files;
+	}
+
+	/** True for a text file of an example that is not build output. */
+	static boolean isReadableExampleFile(String relative) {
+		for (String segment : relative.split("/")) {
+			if (segment.startsWith(".") || EXAMPLE_SKIP_DIRS.contains(segment)) {
+				return false;
+			}
+		}
+		return EXAMPLE_TEXT_EXTENSIONS.contains(extensionOf(relative));
+	}
+
+	/** The lower-case extension of a path, or the empty string. */
+	static String extensionOf(String path) {
+		int dot = path.lastIndexOf('.');
+		return dot < 0 ? "" : path.substring(dot + 1).toLowerCase();
+	}
+
+	/**
+	 * Points an example's prose at the repository for the files the bundle leaves
+	 * out -- the compiled `.wasm` its README tells you to run, say. The link stays a
+	 * link, and says where the thing really is.
+	 */
+	String repoLinksForMissingFiles(String markdown, String pageRelativePath, java.util.Set<String> bundled) {
+		return mapLinks(markdown, pageRelativePath, (inTree, resolved) -> {
+			if (!inTree) {
+				return this.repoBase + "/" + normalize(EXAMPLES_DIR + "/" + pageRelativePath + "/../" + resolved);
+			}
+			return bundled.contains(resolved) ? null : this.repoBase + "/" + EXAMPLES_DIR + "/" + resolved;
+		});
+	}
+
+	/**
+	 * One line per example directory, so that "is there a program that already does
+	 * this?" is a single lookup rather than a walk of the tree.
+	 */
+	static String buildExampleIndex(Map<String, String> examplePages) {
+		Map<String, List<String>> byDirectory = new java.util.TreeMap<>();
+		for (String relative : examplePages.keySet()) {
+			int slash = relative.lastIndexOf('/');
+			byDirectory.computeIfAbsent(slash < 0 ? "" : relative.substring(0, slash), key -> new ArrayList<>())
+				.add(relative.substring(slash + 1));
+		}
+		StringBuilder md = new StringBuilder("""
+				# Examples
+
+				Whole working programs from the repository, mirrored here as they are --
+				minus the build outputs, so a compiled `.wasm` or a `.bin` of weights is a
+				link to the repository rather than a file. Read the one closest in shape to
+				what you are about to write: it shows the imports, the entry point and the
+				build command that a reference page cannot.
+
+				Paths are relative to this file.
+				""");
+		String group = null;
+		for (Map.Entry<String, List<String>> entry : byDirectory.entrySet()) {
+			String directory = entry.getKey();
+			if (directory.isEmpty()) {
+				continue;
+			}
+			String top = directory.contains("/") ? directory.substring(0, directory.indexOf('/')) : directory;
+			if (!top.equals(group)) {
+				group = top;
+				md.append("\n## ").append(top).append("\n\n");
+			}
+			md.append("- `").append(EXAMPLES_DIR).append('/').append(directory).append("/` -- ");
+			String readme = directory + "/README.md";
+			String title = examplePages.containsKey(readme) ? firstHeading(examplePages.get(readme)) : null;
+			md.append(title == null ? "" : title + " ");
+			// Name the files worth opening; a directory of fixtures (46 sample
+			// glyphs, say) is a count, not 46 links nobody follows.
+			List<String> names = new ArrayList<>(entry.getValue());
+			names.sort(java.util.Comparator.comparing((String name) -> switch (extensionOf(name)) {
+				case "md" -> 0;
+				case "lisp", "asd" -> 1;
+				case "sh" -> 2;
+				default -> 3;
+			}).thenComparing(java.util.Comparator.naturalOrder()));
+			List<String> links = new ArrayList<>();
+			for (String name : names.subList(0, Math.min(names.size(), LISTED_FILES_PER_EXAMPLE))) {
+				links.add("[" + name + "](" + EXAMPLES_DIR + "/" + directory + "/" + name + ")");
+			}
+			md.append(String.join(", ", links));
+			if (names.size() > LISTED_FILES_PER_EXAMPLE) {
+				md.append(" (+").append(names.size() - LISTED_FILES_PER_EXAMPLE).append(" more in the directory)");
+			}
+			md.append("\n");
+		}
+		return md.toString();
+	}
+
+	/** The text of a Markdown file's first ATX heading, or null. */
+	static String firstHeading(String markdown) {
+		Matcher matcher = Pattern.compile("(?m)^#{1,3} (.+)$").matcher(markdown);
+		return matcher.find() ? matcher.group(1).trim() + " --" : null;
 	}
 
 	/** Every documentation page by title, in navigation order. */

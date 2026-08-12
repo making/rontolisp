@@ -90,6 +90,12 @@ Read the guide before using one of these.
 ## Where everything is
 
 - `references/operators.md` -- every operator by category. The existence check.
+- `references/examples.md` -- every worked example in the repository, by
+  directory, with the whole program mirrored under `references/examples/`. Before
+  writing a program of a shape you have not written here before -- a WASM
+  component, an HTTP handler, a Clack app, an `.asd` system, a browser demo --
+  open the closest one: it shows the imports, the entry point and the build
+  command that no reference page states.
 - `references/contents.md` -- every documentation page by title.
 - `references/reference/functions/<slug>.md`,
   `references/reference/macros/<slug>.md`,

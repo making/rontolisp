@@ -40,8 +40,11 @@ class SkillGenTest {
 
 	static String skill;
 
+	private static final Path EXAMPLES = Path.of("..", "examples");
+
 	private static SkillGen generator() {
-		return new SkillGen(DOC, out, "en", "1.2.3", "cafe123", "https://example.test/rontolisp");
+		return new SkillGen(DOC, out, "en", "1.2.3", "cafe123", "https://example.test/rontolisp", EXAMPLES,
+				"https://repo.test/blob/develop");
 	}
 
 	@BeforeAll
@@ -218,6 +221,42 @@ class SkillGenTest {
 				body
 				""");
 		assertThat(summary).isEqualTo("First sentence about it.");
+	}
+
+	@Test
+	void theExamplesAreMirroredWithoutTheirBuildOutput() throws IOException {
+		Path examples = skillDir.resolve("references/" + SkillGen.EXAMPLES_DIR);
+		try (Stream<Path> files = Files.walk(examples)) {
+			List<String> names = files.filter(Files::isRegularFile).map(p -> p.getFileName().toString()).toList();
+			assertThat(names).isNotEmpty()
+				.as("a compiled artifact is unreadable text, so it stays out")
+				.noneMatch(name -> name.endsWith(".wasm") || name.endsWith(".bin"));
+		}
+		// Spot-check that whole programs really are there to read.
+		assertThat(examples.resolve("asdf/README.md")).exists();
+		String index = Files.readString(skillDir.resolve("references/" + SkillGen.EXAMPLES_PAGE),
+				StandardCharsets.UTF_8);
+		assertThat(index).contains("`" + SkillGen.EXAMPLES_DIR + "/asdf/`");
+	}
+
+	@Test
+	void aFileTheBundleLeavesOutIsLinkedInTheRepository() {
+		SkillGen generator = generator();
+		// `.wasm` is not mirrored, so its link has to say where the file lives.
+		assertThat(generator.repoLinksForMissingFiles("run [it](hello.wasm) and [read](hello.lisp)",
+				"hello/README.md", java.util.Set.of("hello/README.md", "hello/hello.lisp")))
+			.isEqualTo("run [it](https://repo.test/blob/develop/examples/hello/hello.wasm) and [read](hello.lisp)");
+	}
+
+	@Test
+	void buildOutputAndBinariesAreNotReadableExampleFiles() {
+		assertThat(SkillGen.isReadableExampleFile("hello/hello.lisp")).isTrue();
+		assertThat(SkillGen.isReadableExampleFile("hello/README.md")).isTrue();
+		assertThat(SkillGen.isReadableExampleFile("hello/hello.wasm")).isFalse();
+		assertThat(SkillGen.isReadableExampleFile("ch07/params.bin")).isFalse();
+		assertThat(SkillGen.isReadableExampleFile("web/node_modules/x/index.js")).isFalse();
+		assertThat(SkillGen.isReadableExampleFile("app/target/classes/A.lisp")).isFalse();
+		assertThat(SkillGen.isReadableExampleFile("hello/.gitignore")).isFalse();
 	}
 
 	@Test
