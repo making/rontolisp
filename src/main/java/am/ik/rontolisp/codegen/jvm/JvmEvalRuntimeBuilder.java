@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import am.ik.rontolisp.LispNames;
 import am.ik.jvm.ConstantPool;
@@ -948,11 +949,14 @@ final class JvmEvalRuntimeBuilder {
 	 * @param dispatchable the funcIds the dispatchers kept a case for, or null for all
 	 * @param aliasReachable whether the single-colon alias SPELLING can reach the run
 	 * time at all (see the alias loop below)
+	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
+	 * (JvmLispCompiler.Ctx.spelledLiterals) -- the alias probe reads it
 	 * @return the segment bodies
 	 */
 	static List<List<Integer>> buildLookupSegments(EvalConstants k, ConstantPool.ClassConstant thisClass,
-			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable) {
-		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable);
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
+			Set<String> spelledLiterals) {
+		return new JvmEvalRuntimeBuilder(k).lookupSegments(thisClass, dispatchable, aliasReachable, spelledLiterals);
 	}
 
 	/** Builds the {@code _envLookup} method body. */
@@ -981,7 +985,8 @@ final class JvmEvalRuntimeBuilder {
 	private static final int LOOKUP_SEGMENT_BUDGET = 24_000;
 
 	private List<List<Integer>> lookupSegments(ConstantPool.ClassConstant thisClass,
-			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable) {
+			java.util.@org.jspecify.annotations.Nullable Set<Integer> dispatchable, boolean aliasReachable,
+			Set<String> spelledLiterals) {
 		// Only the rows the dispatchers kept a case for: a name whose funcId has no case
 		// would resolve here and then fall through the dispatcher's search tree
 		// (JvmLispCompiler.dispatchableFuncIds decides both together).
@@ -1006,8 +1011,7 @@ final class JvmEvalRuntimeBuilder {
 			int q = e.getKey().indexOf("::");
 			if (q > 0) {
 				String alias = e.getKey().substring(0, q) + e.getKey().substring(q + 1);
-				if (!this.k.functions().containsKey(alias)
-						&& (aliasReachable || this.k.cp().hasStringConstant(alias))) {
+				if (!this.k.functions().containsKey(alias) && (aliasReachable || spelledLiterals.contains(alias))) {
 					entries.add(Map.entry(alias, e.getValue()));
 				}
 			}

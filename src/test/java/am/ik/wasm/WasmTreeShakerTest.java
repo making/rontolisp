@@ -214,6 +214,46 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void aCompilerInternedTableNameDoesNotArmTheDispatchGate() {
+		// The gate's name probes read Ctx.spelledLiterals -- the spellings Pass 2
+		// emitted as VALUES -- not the whole string table. An instance layout's slot
+		// names are interned for the layout directory (a private compiler table), so a
+		// defun whose name merely matches a slot keeps no registry row and shakes.
+		// Paired difference as above: a slot named RUNTASK and one named RUNTASX must
+		// yield the same function count.
+		String base = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) ";
+		String collide = base + "(defclass box () ((runtask :initarg :size))) "
+				+ "(print (null (make-instance 'box :size 5)))";
+		String noCollide = base + "(defclass box () ((runtasx :initarg :size))) "
+				+ "(print (null (make-instance 'box :size 5)))";
+		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
+		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
+	void aGeneratedReaderBodySlotNameDoesNotArmTheDispatchGate() {
+		// In a program with conditions live, a generated :reader/:accessor body quotes
+		// its slot name for the unbound-slot signal. That quote is synthesized, not
+		// spelled by the user, so it rides in %unspelled-quote and must not arm the
+		// gate -- before it did, every slot name of every class held a same-named
+		// defun's row, ladder case and body alive (one per chipz header accessor on
+		// the zlib size-report row). The read still answers, and the handler still
+		// catches the unbound read, with the rows absent.
+		String base = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) ";
+		String tail = " (let ((b (make-instance 'box))) " + "(print (handler-case (box-task b) (error (e) -1))))";
+		String collide = base + "(defclass box () ((runtask :accessor box-task)))" + tail;
+		String noCollide = base + "(defclass box () ((runtasx :accessor box-task)))" + tail;
+		byte[] colliding = compile(collide, false, OptimizeLevel.DEFAULT);
+		byte[] plain = compile(noCollide, false, OptimizeLevel.DEFAULT);
+		Module.parse(colliding).assertWellFormed();
+		assertThat(Module.parse(colliding).definedFunctionCount())
+			.isEqualTo(Module.parse(plain).definedFunctionCount());
+	}
+
+	@Test
 	void aLiteralDesignatorSiteBuysNoLadderCase() {
 		// (mapcar #'dbl ...) is the direct call its head-position spelling would have
 		// been, so DBL never becomes a function VALUE and the arity-1 ladder is left the

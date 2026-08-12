@@ -1059,6 +1059,10 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx);
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);
 				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
+				// quote for a compiler-synthesized name: same value, but the spelling is
+				// not recorded as program-spelled (see LispNames.UNSPELLED_QUOTE).
+				case LispNames.UNSPELLED_QUOTE ->
+					WasmEmitHelper.compileUnspelledLiteral(((LispSymbol) ((LispCons) cons.cdr()).car()).name(), ctx);
 				case LispNames.IF -> WasmIfCompiler.compile(cons, ctx);
 				case LispNames.WHILE -> WasmWhileCompiler.compile(cons, ctx);
 				case LispNames.LET -> WasmLetCompiler.compile(cons, ctx);

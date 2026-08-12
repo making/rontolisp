@@ -129,6 +129,20 @@ final class JvmEmitHelper {
 	}
 
 	static void compileStringLiteral(String value, JvmLispCompiler.Ctx ctx) {
+		// The loaded value is a literal the program can hold at run time, so its
+		// spelling is a designator the dispatch gate's name probes must see.
+		ctx.spelledLiterals.add(value);
+		compileUnspelledLiteral(value, ctx);
+	}
+
+	/**
+	 * {@link #compileStringLiteral} minus the spelled-literal record: the emission for a
+	 * name the COMPILER synthesized ({@code %unspelled-quote}), which must not arm the
+	 * funcall-dispatch gate's name probes. See {@code LispNames.UNSPELLED_QUOTE}.
+	 * @param value the symbol name (or framed string) to load
+	 * @param ctx the compilation context
+	 */
+	static void compileUnspelledLiteral(String value, JvmLispCompiler.Ctx ctx) {
 		ConstantPool.StringConstant sc = ctx.cp.addString(value);
 		if (sc.index() <= 255) {
 			ctx.emit(Opcode.LDC);

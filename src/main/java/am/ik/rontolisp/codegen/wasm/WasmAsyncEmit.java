@@ -751,6 +751,10 @@ final class WasmAsyncEmit {
 			// every closure the top level materializes and the dispatch ladders lose
 			// their cases for them (a trap at the first (funcall f ...)).
 			.valueFuncIds(proto.valueFuncIds)
+			// Module-wide and MUTATED during emission for the same reason: a literal
+			// the synchronous top level spells must keep arming the dispatch gate's
+			// name probes.
+			.spelledLiterals(proto.spelledLiterals)
 			.nextFuncId(proto.nextFuncId)
 			.dynamic(proto.dynamic)
 			// The level decides emission shape (the fusion/unboxed-local trades), so a

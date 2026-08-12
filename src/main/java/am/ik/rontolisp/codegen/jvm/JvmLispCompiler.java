@@ -975,6 +975,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		// Ctx.valueFuncIds), filled while the bodies are emitted and read below to size
 		// the dispatchers and the name registry.
 		Set<Integer> valueFuncIds = new HashSet<>();
+		// Every literal spelling Pass 2 emits as a runtime value (see
+		// Ctx.spelledLiterals). Filled while the bodies are emitted, read below by the
+		// dispatch gate's name probes.
+		Set<String> spelledLiterals = new HashSet<>();
 
 		// The reader runtime is emitted for read/load; load also evaluates each form, so
 		// it pulls in the eval runtime as well.
@@ -1098,6 +1102,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.valueFuncIds(valueFuncIds)
+			.spelledLiterals(spelledLiterals)
 			.nextFuncId(nextFuncId)
 			.appendMethod(appendMethod)
 			.mathAbsLong(mathAbsLong)
@@ -1454,8 +1459,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// JvmClassShaker reach the library code an ASDF system splices.
 		boolean nameResolvable = anyNameResolvable(program, usesRead, usesLoad);
 		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
-		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, cp, needsLookup, nameResolvable,
-				symbolBuilders);
+		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(functions, valueFuncIds, spelledLiterals, needsLookup,
+				nameResolvable, symbolBuilders);
 		if (needsLookup) {
 			MethodrefConstant evalRef = cp.addMethodref(thisClass, cp.addNameAndType(evalName, evalDesc));
 			MethodrefConstant applyRef = cp.addMethodref(thisClass, cp.addNameAndType(applyName, evalDesc));
@@ -1509,7 +1514,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				envLookupCode = JvmEvalRuntimeBuilder.buildEnvLookup(ec);
 			}
 			lookupSegments = JvmEvalRuntimeBuilder.buildLookupSegments(ec, thisClass, dispatchableFuncIds,
-					this.dynamic || nameResolvable || symbolBuilders);
+					this.dynamic || nameResolvable || symbolBuilders, spelledLiterals);
 			for (int g = 1; g < lookupSegments.size(); g++) {
 				lookupSegmentNames.add(cp.addUtf8("_lookup$" + g));
 			}
@@ -2790,9 +2795,14 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * program would have missed exactly those);</li>
 	 * <li>the names a runtime SYMBOL designator can resolve. {@code _lookup} compares the
 	 * designator against string CONSTANTS, so a registry row is reachable only when the
-	 * program already put that name in the pool as a loadable string -- a quoted symbol,
-	 * a string literal, an {@code intern} of a literal. This is the constant-pool
-	 * counterpart of the WASM side's interned-offset test.</li>
+	 * program already loads that name as a string VALUE -- a quoted symbol, a string
+	 * literal, an {@code intern} of a literal. The probe reads
+	 * {@code Ctx.spelledLiterals} -- the spellings Pass 2 emitted as values -- not the
+	 * whole constant pool: the pool also holds strings the compiler added for its own
+	 * machinery (layout tables, runtime error messages), and no run-time path turns those
+	 * into a designator the program did not spell itself. This is the constant-pool
+	 * counterpart of the WASM side's spelled-literal test, and the two must classify
+	 * alike.</li>
 	 * </ul>
 	 *
 	 * <p>
@@ -2802,7 +2812,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * dispatchable).
 	 * @param functions the program's functions by name
 	 * @param valueFuncIds the funcIds Pass 2 materialized as function values
-	 * @param cp the constant pool, holding every string the emitted code can load
+	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
 	 * @param symbolBuilders whether the program contains a symbol BUILDER
 	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
@@ -2811,7 +2821,7 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return the funcIds that need a dispatcher case (and a registry row)
 	 */
 	private Set<Integer> dispatchableFuncIds(Map<String, FunctionInfo> functions, Set<Integer> valueFuncIds,
-			ConstantPool cp, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
+			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time.
@@ -2841,11 +2851,12 @@ public final class JvmLispCompiler implements LispCompiler {
 				// a defun whose member name collides with an unrelated literal stays
 				// call-only.
 				String member = name.substring(colon + 1);
-				if (cp.hasStringConstant(name)
-						|| (q > 0 && cp.hasStringConstant(name.substring(0, q) + name.substring(q + 1)))
-						|| (colon >= 0 && cp.hasStringConstant(member))
-						|| (symbolBuilders && (cp.hasStringConstant("\"" + name + "\"")
-								|| cp.hasStringConstant("\"" + member + "\"") || cp.hasStringConstant(":" + member)))) {
+				if (spelledLiterals.contains(name)
+						|| (q > 0 && spelledLiterals.contains(name.substring(0, q) + name.substring(q + 1)))
+						|| (colon >= 0 && spelledLiterals.contains(member))
+						|| (symbolBuilders && (spelledLiterals.contains("\"" + name + "\"")
+								|| spelledLiterals.contains("\"" + member + "\"")
+								|| spelledLiterals.contains(":" + member)))) {
 					dispatchable.add(entry.getValue().funcId());
 				}
 			}
@@ -2853,6 +2864,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
 			System.err.println("[dispatch-gate] " + dispatchable.size() + " of " + functions.size()
 					+ " functions dispatchable (" + valueFuncIds.size() + " funcIds materialized as values)");
+			for (Map.Entry<String, FunctionInfo> entry : functions.entrySet()) {
+				if (dispatchable.contains(entry.getValue().funcId())
+						&& !valueFuncIds.contains(entry.getValue().funcId())) {
+					System.err.println("[dispatch-gate] name-armed\t" + entry.getKey());
+				}
+			}
 		}
 		return dispatchable;
 	}
@@ -3815,6 +3832,20 @@ public final class JvmLispCompiler implements LispCompiler {
 		 */
 		Set<Integer> valueFuncIds;
 
+		/**
+		 * Every literal spelling Pass 2 emitted as a runtime VALUE the program can hold
+		 * -- a quoted/self-evaluating symbol's name, a string literal's framed form, a
+		 * keyword -- recorded where the value is loaded
+		 * ({@link JvmEmitHelper#compileStringLiteral}). One mutable set shared by every
+		 * {@code Ctx}, like {@link #valueFuncIds}, and read by
+		 * {@code dispatchableFuncIds}: a runtime symbol designator can only ever BE one
+		 * of these (or a builder's product from one), so the name-registry probes read
+		 * this set rather than the whole constant pool -- a string the compiler put in
+		 * the pool for its own machinery (a layout table, a runtime error message) is not
+		 * a name the program spells, and must not arm a dispatch case.
+		 */
+		Set<String> spelledLiterals;
+
 		int[] nextFuncId;
 
 		int nextLocal = 1;
@@ -4162,6 +4193,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.valueFuncIds = builder.valueFuncIds;
+			this.spelledLiterals = builder.spelledLiterals;
 			this.nextFuncId = builder.nextFuncId;
 			this.numOps = builder.numOps;
 			this.mathOps = builder.mathOps;
@@ -4307,6 +4339,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
 			private Set<Integer> valueFuncIds = new HashSet<>();
+
+			private Set<String> spelledLiterals = new HashSet<>();
 
 			private int[] nextFuncId = new int[1];
 
@@ -4653,6 +4687,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder indirectCallArities(Set<Integer> indirectCallArities) {
 				this.indirectCallArities = indirectCallArities;
+				return this;
+			}
+
+			Builder spelledLiterals(Set<String> spelledLiterals) {
+				this.spelledLiterals = spelledLiterals;
 				return this;
 			}
 

@@ -2441,6 +2441,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Ctx.valueFuncIds). Filled while the bodies are emitted, read below to size the
 		// dispatch ladders.
 		Set<Integer> valueFuncIds = new HashSet<>();
+		// Every literal spelling Pass 2 emits as a runtime value (see
+		// Ctx.spelledLiterals). Filled while the bodies are emitted, read below by the
+		// dispatch gate's name probes.
+		Set<String> spelledLiterals = new HashSet<>();
 		// The cl functions whose user defun an operator interception already warned
 		// about: the warning is per NAME, not per call site (see
 		// Ctx.warnedClRedefinitions).
@@ -2500,6 +2504,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.valueFuncIds(valueFuncIds)
+			.spelledLiterals(spelledLiterals)
 			.nextFuncId(nextFuncId)
 			.dynamic(this.dynamic)
 			.optimize(this.optimize)
@@ -3210,7 +3215,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// blob is built, since building it interns every surviving name.
 		boolean nameResolvable = anyNameResolvable(program, usesRead, usesLoad);
 		boolean symbolBuilders = RuntimeNameProducers.anySymbolBuilder(program);
-		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, stringTable,
+		Set<Integer> dispatchableFuncIds = dispatchableFuncIds(defuns, valueFuncIds, spelledLiterals,
 				usesEval || usesRuntimeDesignator || usesApplyRuntime, nameResolvable, symbolBuilders);
 		List<byte[]> dispatchBodies = new ArrayList<>();
 		for (int arity = 0; arity <= MAX_CALLABLE_ARITY; arity++) {
@@ -3300,7 +3305,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (int i = 0; i < defuns.size(); i++) {
 				DefunDecl defun = defuns.get(i);
 				// Only the rows dispatchableFuncIds kept: a row whose name the program
-				// never interned cannot be hit (see StringTable.isInterned), and a row
+				// never spells cannot be hit (see Ctx.spelledLiterals), and a row
 				// whose funcId has no ladder case would resolve to a br_table default.
 				// The two sets are computed together so they cannot drift apart.
 				if (!dispatchableFuncIds.contains(i)) {
@@ -3341,7 +3346,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				int q = defun.name.indexOf("::");
 				if (q > 0) {
 					String alias = defun.name.substring(0, q) + defun.name.substring(q + 1);
-					if (!defunNames.contains(alias) && (aliasReachable || stringTable.isInterned(alias))) {
+					if (!defunNames.contains(alias) && (aliasReachable || spelledLiterals.contains(alias))) {
 						writeLittleEndian32(registry, stringTable.addString(alias).offset());
 						writeLittleEndian32(registry, i);
 						writeLittleEndian32(registry,
@@ -5439,7 +5444,14 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * INTERNED OFFSETS, so a registry row is reachable only when the program interned
 	 * that name for some other reason -- a quoted symbol, a string literal, an
 	 * {@code intern} of a literal. A name nothing spells gets a runtime-interned offset
-	 * that matches no static row.</li>
+	 * that matches no static row. The probe reads {@code Ctx.spelledLiterals} -- the
+	 * spellings Pass 2 emitted as VALUES -- not the whole string table: the table also
+	 * holds entries the compiler interned for its private structures (an instance
+	 * layout's slot names, the printer's {@code "-"}/{@code "/"} pieces, registry row
+	 * names), and no run-time path turns those bytes into a designator the program did
+	 * not spell itself, so letting them arm a row gave every same-named defun a ladder
+	 * case -- measured as one row + arm per chipz accessor whose slot name the layout
+	 * directory happened to intern.</li>
 	 * </ul>
 	 *
 	 * <p>
@@ -5451,7 +5463,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * resolves any name at run time -- to keep every function dispatchable.
 	 * @param defuns the program's defuns, index = funcId
 	 * @param valueFuncIds the funcIds Pass 2 materialized as closures
-	 * @param stringTable the interned strings, BEFORE the registry adds its own names
+	 * @param spelledLiterals the literal spellings Pass 2 emitted as runtime values
 	 * @param registryLive whether a real {@code _lookup} registry is emitted at all
 	 * @param symbolBuilders whether the program contains a symbol BUILDER
 	 * ({@code RuntimeNameProducers.anySymbolBuilder}) -- only then can a framed string
@@ -5459,8 +5471,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * applied
 	 * @return the funcIds that need a ladder case (and a registry row)
 	 */
-	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds, StringTable stringTable,
-			boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
+	private Set<Integer> dispatchableFuncIds(List<DefunDecl> defuns, Set<Integer> valueFuncIds,
+			Set<String> spelledLiterals, boolean registryLive, boolean anyNameResolvable, boolean symbolBuilders) {
 		if (this.dynamic || anyNameResolvable) {
 			// Late binding, or an operator that can produce a name this compile never
 			// sees spelled: any name can be resolved at run time, so nothing is provably
@@ -5490,24 +5502,39 @@ public final class WasmLispCompiler implements LispCompiler {
 				// they are probed only when one is present -- without it a defun whose
 				// member name collides with an unrelated literal stays call-only.
 				String member = name.substring(colon + 1);
-				if (stringTable.isInterned(name)
-						|| (q > 0 && stringTable.isInterned(name.substring(0, q) + name.substring(q + 1)))
-						|| (colon >= 0 && stringTable.isInterned(member))
-						|| (symbolBuilders && (stringTable.isInterned("\"" + name + "\"")
-								|| stringTable.isInterned("\"" + member + "\"")
-								|| stringTable.isInterned(":" + member)))) {
+				if (spelledLiterals.contains(name)
+						|| (q > 0 && spelledLiterals.contains(name.substring(0, q) + name.substring(q + 1)))
+						|| (colon >= 0 && spelledLiterals.contains(member))
+						|| (symbolBuilders && (spelledLiterals.contains("\"" + name + "\"")
+								|| spelledLiterals.contains("\"" + member + "\"")
+								|| spelledLiterals.contains(":" + member)))) {
 					dispatchable.add(i);
 				}
 			}
 		}
 		if (Boolean.getBoolean("rontolisp.debug.dispatchgate")) {
 			// Sizing aid: how much of the program the ladders still name. A defun listed
-			// as neither VALUE nor INTERNED is one --optimize can now reach.
+			// as neither VALUE nor INTERNED is one --optimize can now reach; a
+			// name-armed row names the literal spelling that holds it open.
 			System.err.println("[dispatch-gate] " + dispatchable.size() + " of " + defuns.size()
 					+ " defuns dispatchable (" + valueFuncIds.size() + " funcIds materialized as values)");
 			for (int i = 0; i < defuns.size(); i++) {
 				if (!dispatchable.contains(i)) {
 					System.err.println("[dispatch-gate] call-only\t" + defuns.get(i).name);
+				}
+				else if (!valueFuncIds.contains(i)) {
+					String name = defuns.get(i).name;
+					int q = name.indexOf("::");
+					int colon = name.lastIndexOf(':');
+					String member = name.substring(colon + 1);
+					String spelling = spelledLiterals.contains(name) ? name
+							: q > 0 && spelledLiterals.contains(name.substring(0, q) + name.substring(q + 1))
+									? name.substring(0, q) + name.substring(q + 1)
+									: colon >= 0 && spelledLiterals.contains(member) ? member
+											: spelledLiterals.contains("\"" + name + "\"") ? "\"" + name + "\""
+													: spelledLiterals.contains("\"" + member + "\"")
+															? "\"" + member + "\"" : ":" + member;
+					System.err.println("[dispatch-gate] name-armed\t" + name + "\tby\t" + spelling);
 				}
 			}
 		}
@@ -6035,6 +6062,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<Integer> valueFuncIds;
 
 		/**
+		 * Every literal spelling Pass 2 emitted as a runtime VALUE the program can hold
+		 * -- a quoted/self-evaluating symbol's name, a string literal's framed form, a
+		 * keyword -- recorded where the value is built
+		 * ({@link WasmEmitHelper#compileStringLiteral} and the few emitters that build a
+		 * literal-derived value directly). Shared by every {@code Ctx} (one mutable set,
+		 * like {@link #valueFuncIds}) and read after the last body is emitted by
+		 * {@code dispatchableFuncIds}: a runtime symbol designator can only ever BE one
+		 * of these (or a builder's product from one), so the name-registry probes read
+		 * this set rather than the whole string table -- an entry the compiler interned
+		 * for a private table (an instance-layout slot name, a printer piece, a registry
+		 * row) is not a name the program spells, and must not arm a dispatch-ladder case.
+		 */
+		Set<String> spelledLiterals;
+
+		/**
 		 * The {@code cl} function names this compile has already warned about, so an
 		 * override that happens at fifty call sites reports once (one mutable set shared
 		 * by every {@code Ctx}, like {@link #valueFuncIds}). See
@@ -6418,6 +6460,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.lambdaDecls = builder.lambdaDecls;
 			this.indirectCallArities = builder.indirectCallArities;
 			this.valueFuncIds = builder.valueFuncIds;
+			this.spelledLiterals = builder.spelledLiterals;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
 			this.nextFuncId = builder.nextFuncId;
 			this.dynamic = builder.dynamic;
@@ -6484,6 +6527,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<Integer> indirectCallArities = new HashSet<>();
 
 			private Set<Integer> valueFuncIds = new HashSet<>();
+
+			private Set<String> spelledLiterals = new HashSet<>();
 
 			private Set<String> warnedClRedefinitions = new HashSet<>();
 
@@ -6605,6 +6650,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder valueFuncIds(Set<Integer> valueFuncIds) {
 				this.valueFuncIds = valueFuncIds;
+				return this;
+			}
+
+			Builder spelledLiterals(Set<String> spelledLiterals) {
+				this.spelledLiterals = spelledLiterals;
 				return this;
 			}
 
@@ -7089,21 +7139,6 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.charBackspace = addBodyString("Backspace");
 			this.charNul = addBodyString("Nul");
 			this.charRubout = addBodyString("Rubout");
-		}
-
-		/**
-		 * Whether this string has already been interned. The name-registry gate asks it:
-		 * a runtime symbol designator resolves through {@code _lookup}, which compares
-		 * INTERNED OFFSETS, so a defun's registry row can only ever be hit when the
-		 * program interned that exact name for some other reason (a quoted symbol, a
-		 * string literal, an {@code intern} of a literal). A name the program never
-		 * spells cannot reach the row -- {@code _intern} would hand a runtime-interned
-		 * offset, which no static row carries.
-		 * @param s the string to probe
-		 * @return true when it is already in the table
-		 */
-		boolean isInterned(String s) {
-			return this.cache.containsKey(s);
 		}
 
 		/**

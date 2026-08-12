@@ -3618,6 +3618,7 @@ public final class LispEvaluator {
 		if (head instanceof LispSymbol sym) {
 			switch (sym.name()) {
 				case LispNames.QUOTE:
+				case LispNames.UNSPELLED_QUOTE:
 					return evalQuote(cons);
 				case LispNames.IF:
 					return evalIf(cons, env);

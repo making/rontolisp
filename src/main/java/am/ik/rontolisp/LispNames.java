@@ -11,6 +11,20 @@ public final class LispNames {
 	/** The {@code quote} special form. */
 	public static final String QUOTE = "QUOTE";
 
+	/**
+	 * The internal {@code (%unspelled-quote name)} form: evaluates exactly like
+	 * {@code (quote name)} on every backend, but the compile backends do NOT record the
+	 * symbol's spelling as a program-spelled literal, so it never arms the
+	 * funcall-dispatch gate's name probes. It is the quote for a name the COMPILER
+	 * synthesizes into an expansion (a generated {@code :reader} body quoting its slot
+	 * name for the {@code unbound-slot} signal) -- real data at run time, but not a
+	 * designator the user wrote, so it must not keep a same-named defun's registry row
+	 * and ladder case alive. The symbol rule twin of "no generated string literal may
+	 * spell a defun name exactly" ({@code .kb/optimize-dead-code-elimination.md}). Never
+	 * produced by the reader; user code cannot reach it.
+	 */
+	public static final String UNSPELLED_QUOTE = "%UNSPELLED-QUOTE";
+
 	/** The {@code if} special form. */
 	public static final String IF = "IF";
 

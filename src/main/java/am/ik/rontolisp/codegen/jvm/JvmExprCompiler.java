@@ -726,6 +726,10 @@ final class JvmExprCompiler {
 				case LispNames.STRING_RIGHT_TRIM ->
 					JvmStringTrimCompiler.compileRight(LispMacroExpander.normalizeCharBag(cons), ctx, className);
 				case LispNames.QUOTE -> JvmQuoteCompiler.compile(cons, ctx, className);
+				// quote for a compiler-synthesized name: same value, but the spelling is
+				// not recorded as program-spelled (see LispNames.UNSPELLED_QUOTE).
+				case LispNames.UNSPELLED_QUOTE ->
+					JvmEmitHelper.compileUnspelledLiteral(((LispSymbol) ((LispCons) cons.cdr()).car()).name(), ctx);
 				case LispNames.IF -> JvmIfCompiler.compile(cons, ctx, className);
 				case LispNames.WHILE -> JvmWhileCompiler.compile(cons, ctx, className);
 				case LispNames.LET -> JvmLetCompiler.compile(cons, ctx, className);

@@ -7587,6 +7587,19 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Like {@link #quoteOf}, but through {@link LispNames#UNSPELLED_QUOTE}: the symbol a
+	 * lowering SYNTHESIZES as a result value (a {@code type-of}/{@code class-of} type
+	 * name) is real run-time data but not a spelling the program wrote, so it must not
+	 * arm the funcall-dispatch gate's name probes -- letting it would keep a registry
+	 * row, ladder case and builtin wrapper alive for every same-named function in every
+	 * program with a generic dispatcher ({@code %no-applicable-method} carries the
+	 * class-designator cond).
+	 */
+	private static LispVal unspelledQuoteOf(String name) {
+		return listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE), new LispSymbol(name)));
+	}
+
+	/**
 	 * The {@code (quote character)} constant of the lite {@code stream-element-type}
 	 * (every stream is a character stream).
 	 * @return the quoted type name
@@ -10864,9 +10877,22 @@ public final class LispMacroExpander {
 	 * unless it is the unbound marker, in which case {@code unbound-slot} is signalled.
 	 * {@code objVar} must be a variable (or another expression safe to evaluate twice) --
 	 * the helper is handed it again as the condition's {@code instance}.
+	 *
+	 * <p>
+	 * The slot name rides in an {@link LispNames#UNSPELLED_QUOTE}, not a plain quote:
+	 * this shape is what every generated {@code :reader}/{@code :accessor} body compiles
+	 * to, so a plain quote would put every slot name of every class into the compile
+	 * backends' spelled-literal set and arm the funcall-dispatch gate for every
+	 * same-named accessor -- measured as a ladder case + registry row per chipz header
+	 * accessor. The name is still a real symbol at run time (the condition's
+	 * {@code :name} slot); only the gate stops reading it as a designator the user
+	 * spelled. A user-written {@code slot-value} keeps the plain quote
+	 * ({@link #slotReadCall}) -- there the user DID spell the name.
 	 */
 	private static LispVal checkedSlotRead(LispVal objVar, int index, String baseName) {
-		return slotReadCall(objRef(objVar, index), objVar, baseName);
+		return listToCons(List.of(new LispSymbol(LispNames.SLOT_READ_INTERNAL), objRef(objVar, index), objVar,
+				listToCons(List.of(new LispSymbol(LispNames.UNSPELLED_QUOTE),
+						new LispSymbol(baseName.toUpperCase(java.util.Locale.ROOT))))));
 	}
 
 	/**
@@ -11613,21 +11639,22 @@ public final class LispMacroExpander {
 		LispSymbol v = new LispSymbol(prefix + "_v");
 		List<LispVal> clauses = new java.util.ArrayList<>();
 		clauses.add(listToCons(List.of(listToCons(List.of(new LispSymbol(LispNames.OBJ_P), v)), objTag(v))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, v), quoteOf("NULL"))));
-		clauses.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, v, LispTrue.INSTANCE), quoteOf("BOOLEAN"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.INTEGERP, v), quoteOf("INTEGER"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.RATIONALP, v), quoteOf("RATIO"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.FLOATP, v), quoteOf("FLOAT"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.STRINGP, v), quoteOf("STRING"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.CHARACTERP, v), quoteOf("CHARACTER"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.KEYWORDP, v), quoteOf("KEYWORD"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.SYMBOLP, v), quoteOf("SYMBOL"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.NULL, v), unspelledQuoteOf("NULL"))));
+		clauses
+			.add(listToCons(List.of(fmtCall(LispNames.EQ_GENERAL, v, LispTrue.INSTANCE), unspelledQuoteOf("BOOLEAN"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.INTEGERP, v), unspelledQuoteOf("INTEGER"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.RATIONALP, v), unspelledQuoteOf("RATIO"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.FLOATP, v), unspelledQuoteOf("FLOAT"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.STRINGP, v), unspelledQuoteOf("STRING"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.CHARACTERP, v), unspelledQuoteOf("CHARACTER"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.KEYWORDP, v), unspelledQuoteOf("KEYWORD"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.SYMBOLP, v), unspelledQuoteOf("SYMBOL"))));
 		if (hashTablesExist) {
-			clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), quoteOf("HASH-TABLE"))));
+			clauses.add(listToCons(List.of(mvCall(LispNames.HASH_TABLE_P, v), unspelledQuoteOf("HASH-TABLE"))));
 		}
-		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), quoteOf("FUNCTION"))));
-		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), quoteOf("CONS"))));
-		clauses.add(listToCons(List.of(LispTrue.INSTANCE, quoteOf("T"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.FUNCTIONP, v), unspelledQuoteOf("FUNCTION"))));
+		clauses.add(listToCons(List.of(mvCall(LispNames.CONSP, v), unspelledQuoteOf("CONS"))));
+		clauses.add(listToCons(List.of(LispTrue.INSTANCE, unspelledQuoteOf("T"))));
 		List<LispVal> condParts = new java.util.ArrayList<>();
 		condParts.add(new LispSymbol(LispNames.COND));
 		condParts.addAll(clauses);

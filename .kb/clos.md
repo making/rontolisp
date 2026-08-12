@@ -826,7 +826,12 @@ an unbound slot rather than writing `null`.
   name). **They are calls, not inlined `%obj-is` + `if`, for a size reason**: an inline
   instance-of test is ~60 bytes of JVM bytecode, and one per accessor and per
   `slot-value` ran the ci-spec corpus past the 64 KB method limit
-  ([jvm-method-size-limits.md](jvm-method-size-limits.md)).
+  ([jvm-method-size-limits.md](jvm-method-size-limits.md)). In a GENERATED
+  `:reader`/`:accessor` body the `'NAME` rides in `%unspelled-quote`
+  (`LispMacroExpander.checkedSlotRead`, todo-334): the compiler synthesized that
+  spelling, so it must not arm the funcall-dispatch gate's name probes for a same-named
+  defun ([optimize-dead-code-elimination.md](optimize-dead-code-elimination.md)); a
+  user-written `slot-value` keeps the plain quote.
 - `expandSlotValue` is the CHECKED read; `expandSlotValueRaw` is the unchecked one the
   `setf` place expansion needs (a write must reach the `%obj-ref` place, and storing
   into an unbound slot is how it becomes bound). A RUNTIME (non-literal) slot name

@@ -331,9 +331,12 @@ gives that defun a ladder case, and the ladder's call edge then keeps it and eve
 reaches. Shortening a dispatcher's `"No applicable method: X on "` literal to just `"X"`
 did exactly that to every generic in the program — **+11.5 KB on the hello-clack Worker**,
 where the whole Gray-stream protocol came back — so the literal keeps its `" on "`
-separator (`LispMacroExpander.noApplicableMethod`). Re-evaluation trigger: if the gate ever
-learns to tell a generated literal from a user-written one, the bare name is 94 bytes
-better on the zlib row; until then, no generated literal may spell a name exactly.
+separator (`LispMacroExpander.noApplicableMethod`). The trigger this paragraph used to
+carry half-fired 2026-08-12 (todo-334): the gate now tells a generated SYMBOL from a
+user-written one (`%unspelled-quote`, "the funcall-dispatch gate" below), and a framed
+STRING literal only probes while a symbol builder is present — but with one present, a
+generated string still arms exactly as measured here, so the rule stands: no generated
+string literal may spell a name exactly.
 
 **The runtime intern table is handled structurally, not by standing down (2026-08-09).**
 The one blob that cites EVERY entry is the intern table (`buildInternBlob`, scanned by
@@ -824,7 +827,45 @@ Two sources, both EXACT rather than heuristic:
 
 - **`Ctx.valueFuncIds`** — the funcIds Pass 2 actually materialized as a closure: `WasmFunctionFormCompiler.compileNamed` / `JvmFunctionFormCompiler` (`#'name`), `WasmLambdaCompiler.emitClosureValue` / `JvmLambdaCompiler` (every `(lambda ...)` value), and `WasmAsyncEmit`'s waiter closure over a resume function. Collected DURING emission, not from a pre-scan, which is the whole point: a `#'identity` or `%seq-string` reference a macro synthesizes during Pass 2 is invisible to any scan of the source program, and that is exactly what `.todo/260` recorded a naive attempt dying on. Every body is emitted before the ladders are built, so the set is complete when it is read.
   **Trap, and it bit once:** `WasmAsyncEmit.freshCtx` rebuilds a `Ctx` field by field and also builds the SYNCHRONOUS top level. Omitting `valueFuncIds` there silently lost every closure the top level makes, and `(funcall f 1)` trapped. Any module-wide MUTABLE `Ctx` field must be listed there.
-- **the names a runtime SYMBOL designator can resolve.** On WASM this source is live when the registry is (`usesEval || usesRuntimeDesignator || usesApplyRuntime` since todo-315 -- the apply tier keeps symbol designators resolving without the interpreter, `.kb/eval-runtime.md`). `_lookup` matches interned offsets (WASM) / string constants (JVM), so a registry row is reachable only when the program already put that exact name there for another reason — a quoted symbol, a string literal, an `intern` of a literal. `StringTable.isInterned` and `ConstantPool.hasStringConstant` are the two probes, and the name is tried six ways: canonical, the `::`->`:` alias row's spelling, the bare member name after the last colon — and (2026-08-08) the FRAMED string-literal spelling of the full name and of the member (`"NAME"`, quotes included: a string literal interns via `LispString.literal()`, so `(intern "RUN" pkg)` — clack's handler discovery — spells `"RUN"`, not `RUN`; before this the probe missed every literal-string designator on both backends), plus the keyword spelling `:member` (`uiop:symbol-call :pkg :member` spells both halves as keywords).
+- **the names a runtime SYMBOL designator can resolve.** On WASM this source is live when the registry is (`usesEval || usesRuntimeDesignator || usesApplyRuntime` since todo-315 -- the apply tier keeps symbol designators resolving without the interpreter, `.kb/eval-runtime.md`). `_lookup` matches interned offsets (WASM) / string constants (JVM), so a registry row is reachable only when the program already put that exact name there for another reason — a quoted symbol, a string literal, an `intern` of a literal. The probe set is **`Ctx.spelledLiterals`** on both backends (todo-334, 2026-08-12): every spelling Pass 2 emits as a runtime VALUE, recorded in `Wasm/JvmEmitHelper.compileStringLiteral` exactly as `valueFuncIds` records closures — during emission, so a literal a macro synthesizes into a compiled body still counts. It used to be the whole string table / constant pool (`StringTable.isInterned` / `ConstantPool.hasStringConstant`), and that over-approximation had a body count: the instance-layout directory interns every class's slot names (`WasmInstanceLayouts.emit`), the printer prologue interns `"-"`/`"/"`, the JVM layout tables mint theirs — none of them producible as a designator at run time, and every one armed any same-named defun's row. Each name is tried six ways: canonical, the `::`->`:` alias row's spelling, the bare member name after the last colon — and (2026-08-08) the FRAMED string-literal spelling of the full name and of the member (`"NAME"`, quotes included: a string literal interns via `LispString.literal()`, so `(intern "RUN" pkg)` — clack's handler discovery — spells `"RUN"`, not `RUN`; before this the probe missed every literal-string designator on both backends), plus the keyword spelling `:member` (`uiop:symbol-call :pkg :member` spells both halves as keywords).
+
+  **A literal the compiler SYNTHESIZES as pure result data is exempted through
+  `%unspelled-quote`** (`LispNames.UNSPELLED_QUOTE`, same commit): it compiles exactly
+  like `quote` on every backend (`Wasm/JvmEmitHelper.compileUnspelledLiteral`; the
+  interpreter evaluates it as `quote`) but records nothing. Two emitters use it, each a
+  symbol that is real run-time data without being a spelling the user wrote: the
+  generated `:reader`/`:accessor` body's slot name (`LispMacroExpander.checkedSlotRead`
+  quotes it for the `unbound-slot` signal's `:name` — in an EH-mode program this used to
+  arm a row + ladder case for EVERY slot name of EVERY class; a user-written
+  `slot-value`'s name keeps the plain quote, the user spelled it there), and
+  `expandClassDesignator`'s type-name results (`'STRING`/`'CONS`/... — every program
+  with a generic dispatcher carries them inside `%no-applicable-method`, and they kept
+  the same-named builtin wrappers, `STRING`'s princ-to-string chain included,
+  dispatchable). This is the symbol half of todo-317's rule ("no generated literal may
+  spell a defun name exactly"); the carve-out story is unchanged — `(funcall
+  (cell-error-name e) ...)` / `(funcall (type-of x) ...)` now stop resolving like any
+  forged name, loudly, and `--dynamic` restores them.
+
+  What the two changes are worth, measured 2026-08-12 on the zlib rows (same-machine
+  baselines, each artifact gunzipping the fixture byte-for-byte on all four backends
+  after): `--optimize=size` 77,444 -> **72,457 (-6.4%)**, `--component
+  --optimize=size` 79,143 -> 74,111 (-6.4%), `--optimize` 100,494 -> 95,414 (-5.1%),
+  no flag 294,968 -> 291,763; the JVM class at `--optimize` 147,721 -> **138,170
+  (-6.5%)**, no flag 344,446 -> 339,597. The dispatchable set drops 103 -> 72 —
+  exactly `valueFuncIds`, zero name-armed rows left. What left: all 27 header/condition accessor
+  rows + ladder arms (`CHIPZ::FLAGS`..`ADLER32`, `%setf-` writers — armed by layout slot
+  names + reader-body quotes), the dead zlib-side accessor bodies todo-333 exposed, the
+  `-`/`/`/`PATHNAME`/`LENGTH` wrapper rows (printer pieces / layout print names), and
+  the `STRING`/`CONS`/`NULL`/`FLOAT` wrappers (class-designator quotes).
+  `examples/cloudflare-workers/httpbin` moved -613 B at its own build line; the clack
+  Workers are byte-identical (their accessors are genuinely value-taken). Debug:
+  `-Drontolisp.debug.dispatchgate=true` now prints `name-armed <defun> by <spelling>`
+  for every row held by a literal rather than a value — the attribution question
+  todo-334 asked. Pinned by `WasmTreeShakerTest
+  .aCompilerInternedTableNameDoesNotArmTheDispatchGate` /
+  `aGeneratedReaderBodySlotNameDoesNotArmTheDispatchGate` and their `JvmClassShakerTest`
+  twins (the JVM pair also runs the module: the quoted-designator funcall still
+  resolves, the unbound read still signals into its handler).
 
   **The three widened spellings apply only while the program contains a symbol BUILDER
   at all (2026-08-09)** — `RuntimeNameProducers.anySymbolBuilder`: `intern`,

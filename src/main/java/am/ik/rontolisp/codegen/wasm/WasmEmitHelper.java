@@ -815,6 +815,20 @@ final class WasmEmitHelper {
 	}
 
 	static void compileStringLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
+		// The emitted value is a literal the program can hold at run time, so its
+		// spelling is a designator the dispatch gate's name probes must see.
+		ctx.spelledLiterals.add(displayForm);
+		compileUnspelledLiteral(displayForm, ctx);
+	}
+
+	/**
+	 * {@link #compileStringLiteral} minus the spelled-literal record: the emission for a
+	 * name the COMPILER synthesized ({@code %unspelled-quote}), which must not arm the
+	 * funcall-dispatch gate's name probes. See {@code LispNames.UNSPELLED_QUOTE}.
+	 * @param displayForm the symbol name (or framed string) to build
+	 * @param ctx the compilation context
+	 */
+	static void compileUnspelledLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
 		WasmLispCompiler.StringTable.StringEntry entry = ctx.stringTable.addString(displayForm);
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.offset());

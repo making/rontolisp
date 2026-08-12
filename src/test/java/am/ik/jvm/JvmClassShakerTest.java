@@ -191,6 +191,35 @@ class JvmClassShakerTest {
 	}
 
 	@Test
+	void aCompilerInternedTableNameDoesNotArmTheDispatchGate() throws Exception {
+		// The gate's name probes read Ctx.spelledLiterals -- the spellings Pass 2
+		// emitted as VALUES -- not the whole constant pool. An instance layout's slot
+		// names reach the pool for the layout tables (a private compiler structure), so
+		// a defun whose name merely matches a slot keeps no registry row and shakes.
+		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) "
+				+ "(defclass box () ((runtask :initarg :size))) (print (null (make-instance 'box :size 5)))";
+		byte[] shaken = compile(collide, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(shaken)).contains("F").doesNotContain("RUNTASK");
+		assertThat(run(shaken)).isEqualTo("1\nNIL");
+	}
+
+	@Test
+	void aGeneratedReaderBodySlotNameDoesNotArmTheDispatchGate() throws Exception {
+		// In a program with conditions live, a generated :reader/:accessor body quotes
+		// its slot name for the unbound-slot signal. That quote is synthesized, not
+		// spelled by the user, so it rides in %unspelled-quote and must not arm the
+		// gate -- before it did, every slot name of every class held a same-named
+		// defun's row and dispatch case alive. The unbound read still signals and the
+		// handler still catches it, with the row absent.
+		String collide = "(defun runtask () 2) (defun f () 1) (print (funcall (car (list #'f)))) "
+				+ "(defclass box () ((runtask :accessor box-task))) "
+				+ "(let ((b (make-instance 'box))) (print (handler-case (box-task b) (error (e) -1))))";
+		byte[] shaken = compile(collide, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(shaken)).doesNotContain("RUNTASK");
+		assertThat(run(shaken)).isEqualTo("1\n-1");
+	}
+
+	@Test
 	void anUnselectableGenericBranchAndItsMethodShakeOut() throws Exception {
 		// The dispatcher lists only the branches some call site's argument shapes may
 		// select (compiler/GenericDispatchNarrowing): with (sizeof 21) as the only
