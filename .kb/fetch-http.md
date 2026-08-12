@@ -18,6 +18,10 @@ the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
 `await`/`futurep` compile/run on every backend and WASM mode (Preview 1 included);
 **only `fetch` is component-only** (`WasmFetchCompiler` is a compile error outside
 `--component`; the JVM emits the fetch/await runtime when fetch or await is used).
+**On a `--no-wasi` reactor there is therefore no `fetch` at all** — it is wasi:http and a
+reactor imports no WASI — and the way out is the host's own client behind a
+`rontolisp:wasm-import`, asynchronous on the host side through JSPI:
+`.kb/wasm-import.md`, showcase `examples/cloudflare-workers/dog-fetcher`.
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with

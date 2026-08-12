@@ -29,6 +29,11 @@ target and takes its reactor shape under `--no-wasi`. The second row builds
 interpreted, so what the pair measures is that choosing the portable designator
 costs nothing in bytes.
 
+**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its module
+imports one host function instead of reaching for `rontolisp:fetch`, so what
+separates the two rows is the JSON parsing of the upstream answer, not a
+transport: a reactor's way out costs an import entry and a wrapper.
+
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
 is ningle or its router myway: ningle reads every request through the

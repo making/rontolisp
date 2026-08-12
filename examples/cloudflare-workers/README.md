@@ -24,6 +24,7 @@ Module sizes are measured rather than quoted here:
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
+| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | `hello-clack/src/index.js` plus the JSPI bridge |
 
 ## Which one should I copy?
 
@@ -46,6 +47,9 @@ Module sizes are measured rather than quoted here:
   magnitude the largest and slowest to start of the four, and the reason is not
   ningle: it reads every request through the `lack-request` chain, which is also
   what lets its controllers ignore streams and JSON parsing entirely.
+- **`dog-fetcher/`** when the Worker has to call something else. It is the one
+  directory whose module imports a host function, and the only place the
+  synchronous-Lisp/asynchronous-JavaScript seam is dealt with.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string
   marshalling, yes. Everywhere else, no.
@@ -59,6 +63,12 @@ All verified end to end under `npx wrangler dev` (workerd), not inferred:
 - **wasm exception handling runs**, also with no flag — so `handler-case` can
   answer 500 from inside the Lisp. Under wasmtime the same module needs
   `-W exceptions=y`.
+- **JSPI runs**, again with no flag and no compatibility-date opt-in, so a
+  synchronous wasm import can be answered by an `async` JavaScript function —
+  which is what lets a reactor, whose `rontolisp:fetch` is unavailable, make
+  outgoing HTTP requests at all. [`dog-fetcher/`](dog-fetcher) is that, and
+  spells out what suspending costs: while a handler is parked the isolate is
+  free, so concurrent requests have to be serialised by hand.
 - **A Worker may not compile WebAssembly at run time.** `import module from
   "./x.wasm"` gives an already-compiled `WebAssembly.Module`; anything calling
   `WebAssembly.compile()` on bytes hangs at startup. That one fact shapes the
@@ -117,8 +127,10 @@ The Lisp in every one of these is an ordinary function, so the whole edit/run
 loop happens locally: every directory with a handler has a `check.lisp` that
 drives it on the interpreter, the JVM and wasmtime.
 `httpbin-clack-one-source/` needs none — its program IS
-`../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`. Every
-Lisp source here is pinned by `examples/examples.yaml`:
+`../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`; and
+`dog-fetcher/` cannot have one, because its HTTP client is an import only a
+Worker provides. Every other Lisp source here is pinned by
+`examples/examples.yaml`:
 
 ```bash
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false \
@@ -127,9 +139,11 @@ Lisp source here is pinned by `examples/examples.yaml`:
 
 ## Deploying
 
-**All ten are deployed to the real edge**, not only run under `wrangler dev`,
+**All eleven are deployed to the real edge**, not only run under `wrangler dev`,
 and every endpoint in the tables above was checked there with `curl` — including
-the 405, the 404, the unparseable body and both `/status` answers.
+the 405, the 404, the unparseable body, both `/status` answers, and
+`dog-fetcher/`'s outgoing request, whose JSPI bridge needs nothing on the edge
+that it did not need locally.
 
 Cloudflare budget-checks **Worker Startup Time** at deploy, and `wrangler
 deploy` prints it when it has one to report. Going through `clack:clackup`

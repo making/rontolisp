@@ -93,6 +93,26 @@ import object is GENERATED from the same gl.wit (`gl-imports.js`, pinned by
 names cannot drift from the lowering); that, not the byte-identity, is what the migration
 bought.
 
+**An ASYNCHRONOUS host function fits behind this synchronous boundary — JSPI, and
+workerd has it unflagged (2026-08-12)**: `examples/cloudflare-workers/dog-fetcher` is a
+`--no-wasi` reactor whose outgoing HTTP is one `:string -> :string` import wrapped in
+`WebAssembly.Suspending`, with the module's `handle-request` entered through
+`WebAssembly.promising`; the wasm stack parks until the promise settles and resumes with
+the result, so the Lisp calls it like any other function and nothing in the compiler
+knows. That is what gives a reactor a way OUT at all — `rontolisp:fetch` is wasi:http and
+a reactor imports no WASI — and it needed no flag and no compatibility-date opt-in, under
+`wrangler dev` AND deployed (verified against the real dog.ceo, all five endpoints on
+both; node 24 has no JSPI, so a plain-node probe of such a module must stub the import
+synchronously). **Two
+consequences a host of a suspending import has to honour**, both learned here: (1) a
+suspending import may only be called on a stack entered through `promising`, so the
+`_initialize` load path must never reach one; (2) suspending RE-ENTERS the module —
+control returns to the event loop, so a second request can call in while the first is
+parked, sharing the globals and the `__ronto_alloc_mark`/`_reset` bracket (whose marks are
+LIFO and cannot nest across interleaved requests). The example serialises calls onto one
+promise queue for that reason, measured at ~250 ms apart for eight concurrent upstream
+round trips; overlapping them would need a per-call allocator scope, not a second mark.
+
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in
 `WasmLispCompilerIntegrationTest` (`wasmtime run --preload host=... main.wasm`, host
