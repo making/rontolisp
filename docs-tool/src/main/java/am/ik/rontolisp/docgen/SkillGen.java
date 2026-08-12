@@ -75,7 +75,7 @@ public final class SkillGen {
 	static final String OPERATORS_PAGE = "operators.md";
 
 	/** The documentation page that IS the install page, relative to the language directory. */
-	static final String INSTALL_GUIDE = "guides/agent-skill.md";
+	static final String INSTALL_GUIDE = "getting-started/agent-skill.md";
 
 	private static final Pattern MD_LINK = Pattern.compile("\\[([^\\]]*)]\\(([^)\\s]+)\\)");
 

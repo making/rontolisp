@@ -59,7 +59,7 @@ curl -sSL https://making.github.io/rontolisp/skill/VERSION
 ## 中身
 
 `SKILL.md` は「ここでは Common Lisp の知識は*事前分布*であって真実ではない」という
-作業原則を述べ、[未対応の Common Lisp 機能](missing-features.md)をインラインで
+作業原則を述べ、[未対応の Common Lisp 機能](../guides/missing-features.md)をインラインで
 取り込みます。その事前分布が最も間違えるのがそこだからです。`references/` の下には:
 
 - `operators.md` — 言語に存在する全演算子のカテゴリ別索引。「rontolisp にこれは

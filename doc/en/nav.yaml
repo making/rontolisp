@@ -13,6 +13,8 @@ sections:
         title: File Interpretation
       - file: getting-started/format.md
         title: Formatting Source Code
+      - file: getting-started/agent-skill.md
+        title: Agent Skill
   - title: Compiling
     pages:
       - file: compiling/jvm.md
@@ -79,8 +81,6 @@ sections:
         title: WASM Non-GC Output (--no-gc)
       - file: guides/wasm-browser.md
         title: Running WASM in a Browser
-      - file: guides/agent-skill.md
-        title: Agent Skill
       - file: guides/missing-features.md
         title: Unsupported CL Features
       - file: guides/eval-limitations.md

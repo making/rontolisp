@@ -62,7 +62,7 @@ from a script.
 
 `SKILL.md` states the working rule -- Common Lisp knowledge is a *prior* here,
 not the truth -- and inlines
-[Unsupported Common Lisp Features](missing-features.md), because that is what
+[Unsupported Common Lisp Features](../guides/missing-features.md), because that is what
 those priors get wrong most often. Under `references/`:
 
 - `operators.md`, an index of every operator in the language by category. One
