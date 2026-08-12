@@ -14366,6 +14366,24 @@ public final class LispMacroExpander {
 	 */
 	public static LispVal generateDispatcher(String genericName, ClosRegistry closRegistry,
 			@Nullable String builtinFallback) {
+		return generateDispatcher(genericName, closRegistry, builtinFallback, null);
+	}
+
+	/**
+	 * As {@link #generateDispatcher(String, ClosRegistry, String)}, additionally
+	 * consulting an optimizing backend's {@link DispatchNarrower}: a branch whose
+	 * specializer vector no call site in the program can select is omitted, so the
+	 * tree-shakers drop the method defuns only it referenced. The default methods (the
+	 * chain's base) are never filtered, and a {@code null} narrower emits the
+	 * byte-identical unfiltered dispatcher.
+	 * @param genericName the generic-function name (any spelling)
+	 * @param closRegistry the registry holding the generic and the class ancestor sets
+	 * @param builtinFallback the function name holding the shadowed built-in, or null
+	 * @param narrower the branch filter, or null to keep every branch
+	 * @return the dispatcher defun
+	 */
+	public static LispVal generateDispatcher(String genericName, ClosRegistry closRegistry,
+			@Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
 		ClosRegistry.GenericInfo generic = closRegistry.findGeneric(genericName);
 		if (generic == null) {
 			throw new IllegalArgumentException("Unknown generic function: " + genericName);
@@ -14376,8 +14394,8 @@ public final class LispMacroExpander {
 		// qualifier or call-next-method is present; otherwise the historical single-call
 		// dispatcher is emitted unchanged.
 		boolean combined = generic.methods().values().stream().anyMatch(m -> !m.isPrimary() || m.usesNext());
-		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback)
-				: simpleDispatchBody(generic, params, closRegistry, builtinFallback);
+		LispVal chain = combined ? combinedDispatchBody(generic, params, closRegistry, builtinFallback, narrower)
+				: simpleDispatchBody(generic, params, closRegistry, builtinFallback, narrower);
 		List<LispVal> defun = new java.util.ArrayList<>();
 		defun.add(new LispSymbol(LispNames.DEFUN));
 		defun.add(new LispSymbol(generic.name()));
@@ -14502,7 +14520,7 @@ public final class LispMacroExpander {
 	 * The single-method-per-branch dispatcher body (no qualifiers, no call-next-method).
 	 */
 	private static LispVal simpleDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
-			ClosRegistry closRegistry, @Nullable String builtinFallback) {
+			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
 		List<ClosRegistry.MethodInfo> methods = new java.util.ArrayList<>(generic.methods().values());
 		MiRefinement refinement = miRefinement(generic, closRegistry);
 		java.util.Set<ClosRegistry.MethodInfo> exactTagBranches = java.util.Collections
@@ -14531,6 +14549,11 @@ public final class LispMacroExpander {
 				: fallbackOrNoApplicableMethod(generic.name(), params, variadic, builtinFallback);
 		for (ClosRegistry.MethodInfo method : methods.reversed()) {
 			if (method.isDefault()) {
+				continue;
+			}
+			if (narrower != null && !narrower.branchSelectable(generic.name(), method.specializers())) {
+				// No call site in the program can select this branch; the shakers drop
+				// the method defun once nothing references it.
 				continue;
 			}
 			LispVal test = exactTagBranches.contains(method)
@@ -14680,7 +14703,7 @@ public final class LispMacroExpander {
 	 * branch.
 	 */
 	private static LispVal combinedDispatchBody(ClosRegistry.GenericInfo generic, List<LispVal> params,
-			ClosRegistry closRegistry, @Nullable String builtinFallback) {
+			ClosRegistry closRegistry, @Nullable String builtinFallback, @Nullable DispatchNarrower narrower) {
 		java.util.LinkedHashMap<String, ClosRegistry.MethodInfo> reps = new java.util.LinkedHashMap<>();
 		for (ClosRegistry.MethodInfo m : generic.methods().values()) {
 			if (!m.isDefault()) {
@@ -14706,6 +14729,11 @@ public final class LispMacroExpander {
 		branches.sort(specificityOrder(closRegistry));
 		LispVal chain = effectiveMethod(null, generic, params, closRegistry, builtinFallback);
 		for (ClosRegistry.MethodInfo rep : branches.reversed()) {
+			if (narrower != null && !narrower.branchSelectable(generic.name(), rep.specializers())) {
+				// No call site can select this branch (a meet branch's vector is more
+				// specific than either parent, so it is ruled out with them).
+				continue;
+			}
 			LispVal test = exactTagBranches.contains(rep)
 					? miExactTagTest(rep, java.util.Objects.requireNonNull(refinement), params)
 					: specializerTest(rep, params, closRegistry);
@@ -15585,6 +15613,34 @@ public final class LispMacroExpander {
 			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
 			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
 			boolean lazyConditionMessages) {
+		return expandTopLevelDefinitions(program, structAccessors, closRegistry, exported, dynamic,
+				lazyConditionMessages, null);
+	}
+
+	/**
+	 * As the overload above, threading an optimizing backend's {@link DispatchNarrower}.
+	 * When present, it is handed the expanded program just before the dispatcher slots
+	 * are filled, and each generated dispatcher omits the branches it rules out
+	 * ({@code compiler/GenericDispatchNarrowing}); the tree-shakers then drop the
+	 * unreferenced method defuns. It is consulted ONLY for the dispatchers generated
+	 * here: the interpreter, {@code ShadowedBuiltins}' regenerated comparison shape and
+	 * every non-optimizing compile pass {@code null} and stay byte-identical. Programs
+	 * that append registry-derived runtimes after the slot fill (the metaobject/MOP
+	 * family, symbol-function forwarders) drop the narrower: those runtimes contain call
+	 * sites this pre-slot analysis would never see.
+	 * @param program the top-level forms
+	 * @param structAccessors mutated: accessor name to 1-based slot position
+	 * @param closRegistry mutated: classes, generics, and methods
+	 * @param exported {@code (package, member) -> is it external}, or {@code null}
+	 * @param dynamic whether the backend compiles in late-binding mode
+	 * @param lazyConditionMessages whether the backend never renders signal messages
+	 * @param narrower the dispatch narrower, or {@code null} to keep every branch
+	 * @return the program with each definition replaced by its generated defuns
+	 */
+	public static List<LispVal> expandTopLevelDefinitions(List<LispVal> program,
+			java.util.Map<String, Integer> structAccessors, ClosRegistry closRegistry,
+			java.util.function.@org.jspecify.annotations.Nullable BiPredicate<String, String> exported, boolean dynamic,
+			boolean lazyConditionMessages, @org.jspecify.annotations.Nullable DispatchNarrower narrower) {
 		// The one whole-program pass both compilers already run, so the pure-builtin fold
 		// and the load-time-value hoist ride along instead of needing their own
 		// registration in every pipeline. The fold goes FIRST: a folded
@@ -15781,8 +15837,20 @@ public final class LispMacroExpander {
 				out.add(form);
 			}
 		}
+		// The narrowing analysis must see every call site the emitted program will
+		// contain; the runtimes appended below this loop are registry-derived and can
+		// call the initialization/print generics, so their presence stands the narrower
+		// down entirely rather than risking a missed site.
+		DispatchNarrower activeNarrower = narrower;
+		if (activeNarrower != null && (metaobjectRuntime || allocateInstanceRuntime || compileRuntime
+				|| metaclassProtocol || makeInstanceFunction || symbolFunctionWrite)) {
+			activeNarrower = null;
+		}
+		if (activeNarrower != null) {
+			activeNarrower.analyze(out, closRegistry, structAccessors);
+		}
 		for (java.util.Map.Entry<Integer, String> slot : dispatcherSlots.entrySet()) {
-			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry));
+			out.set(slot.getKey(), generateDispatcher(slot.getValue(), closRegistry, null, activeNarrower));
 		}
 		// Same phase, same reason as the dispatchers: a struct predicate emitted before
 		// its :include children were registered tests too few tags.

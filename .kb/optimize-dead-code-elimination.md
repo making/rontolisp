@@ -135,7 +135,81 @@ whole-program agreement. Two analyses, one predicate, and each is precise where 
 cannot be. Pinned by `DeadTypeBranchPrunerTest`; every worker verified answering under node
 after the prune.
 
-## WASM
+## A dispatcher branch no call site can select (todo-332, 2026-08-12)
+
+The defgeneric twin of the pruner above: a generic's dispatcher is not a `typecase`, it is
+the generated arm list (`.kb/clos.md`), so `DeadTypeBranchPruner` cannot see that a METHOD
+is dead because of what every caller passes. zlib was the standing case: the program's one
+entry is `(chipz:decompress nil 'chipz:gzip <ub8-vector>)` and the artifact carried all 18
+`%DECOMPRESS` variants (11,998 B) plus a 2,838-B dispatcher for a call that can select
+exactly one.
+
+`compiler/GenericDispatchNarrowing` (the `macro.DispatchNarrower` hook) runs inside
+`expandTopLevelDefinitions`, after the walk registered every method and just before the
+dispatcher slots are filled: it joins argument shapes over every call site of each generic
+(the `ArgumentShapes` lattice, which gained a VECTOR shape -- `make-array`/`vector`/
+`make-string`/`subseq`/`copy-seq` return rules -- for exactly this), and
+`generateDispatcher` then omits each branch (method, meet, exact-tag alike) whose
+specializer vector no site's shapes may satisfy. The method-body defuns are still emitted;
+the SHAKERS drop the unreferenced ones and everything only they reach -- which is the
+whole point, because the pathname/stream helpers behind chipz's dead methods are where the
+bytes were. Only an optimizing, early-bound compile narrows: the interpreter,
+`ShadowedBuiltins`' regenerated comparison shape, `--dynamic` and every `NONE`-level build
+pass a null narrower and stay byte-identical.
+
+**Satisfiability** leans permissive like `maySatisfy`: DEFAULT and EQL specializers always
+keep a branch; a CLASS specializer is satisfiable only by INSTANCE/UNKNOWN shapes (no
+literal can become an instance); a TYPE name defers to `maySatisfy`, except that INSTANCE
+satisfies ANY type name (a gray-stream instance IS a `stream`, and a struct-name
+specializer -- undecided in the lattice -- tests instances too; that undecidedness also
+means a struct-name specializer alone never narrows, only the positions beside it do).
+
+**The escape rules** mirror the funcall-dispatch gate's probes, because a name that gate
+could resolve into a registry row can reach the narrowed dispatcher with arbitrary
+arguments at run time: `#'g` outside the direct funcall/apply target position, `g` in
+quoted data or in a user macro call's arguments (an expansion may re-arrange them into a
+call), and -- only while the program holds a symbol BUILDER -- any string/keyword literal
+spelling `g`'s member name. `anyNameResolvable` or any async operator declines the whole
+analysis, and a program that appends registry-derived runtimes after the slot fill (the
+metaobject/MOP family, `#'make-instance` as a value, symbol-function forwarders) stands
+the narrower down: those runtimes contain call sites the pre-slot analysis never sees.
+Excluded wholesale, same reason (their call sites are synthesized during Pass 2):
+`cl`-symbol names (print-object, the initialization protocol, every shadowable built-in),
+accessor/writer generics (`structAccessors` entries and slot base names -- the ambiguous
+`slot-value` fallback calls a reader generic the AST never spells), `%`-internal names,
+gray-stream packages, short-form combinations, and any generic with a nested method defun.
+
+**The liveness fixpoint** is what makes the zlib join non-trivial: chipz's
+`%decompress-from-pathname` calls `decompress` with UNKNOWN shapes, but only the dead
+pathname methods call IT, and the recursion re-enters through `(apply #'decompress output
+state input keys)` in `%decompress` -- an apply with a literal target is read as a CALL
+SITE (leading arguments only), not an escape. Only two unit kinds may be dead -- the
+method-body defuns of narrowable generics, and plain defuns whose every head-position
+reference sits inside such bodies -- and only those two get parameter-shape joins (their
+callers are all visible by construction); every other defun is live from the start with
+UNKNOWN parameters, because Pass-2 machinery can call constructors and helpers by names
+the analyzed AST never spells.
+
+Measured 2026-08-12 on the zlib rows against the tracked `size-report` baselines, each
+module gunzipping a fixture byte-for-byte on all four backends after: Preview 1
+`--optimize` 125,213 -> 108,439 (**-13.4%**), `--optimize=size` 96,834 -> **83,269
+(-14.0%)**, `--component --optimize=size` 101,340 -> 84,989 (**-16.1%**), the JVM class at
+`--optimize` 181,772 -> 162,575 (-10.6%); the no-flag module is byte-identical at 298,934.
+What survives of the family is exactly the selectable slice: the dispatcher at 323 B, the
+default method, the (null, decompression-state, vector) method and its `%decompress/null-
+vector` helper -- `/NULL-STREAM`, `/STREAM-STREAM`, `/VECTOR-VECTOR`, `/STREAM-VECTOR`,
+`%DECOMPRESS-FROM-PATHNAME` and the twelve other method defuns are gone.
+
+Pinned by `JvmClassShakerTest.anUnselectableGenericBranchAndItsMethodShakeOut` (structural
++ behavioral: the narrowed class runs, the string-site / value-escape / no-flag variants
+all keep the branch) and its `WasmTreeShakerTest` twin, plus a generic-with-dead-branch
+program in `optimizedModulesPrintExactlyWhatTheUnoptimizedOnesDo` (differential, kept
+branch AND default fallback). Re-evaluation triggers: (1) async programs are declined
+wholesale -- serve/fetch components are the biggest CLOS-heavy artifacts left, and
+narrowing them needs the async lowering's synthesized closures attributed; (2) an EQL
+specializer is never ruled out -- a shape-vs-literal comparison would narrow eql-dispatch
+libraries; (3) a struct-name specializer is undecided in the lattice -- deciding it (the
+registry knows the name) would let a SYMBOL/NULL argument kill struct branches directly.
 
 A **post-pass relocating tree-shaker** (`am.ik.wasm.WasmTreeShaker`, language-independent) runs on the finished **core module** bytes in `WasmLispCompiler.compile` just before returning — **including under `--component`**, where it runs right after `WasmImportInjector.inject` and before the component wrapper is built (see "Why the component path is safe" below; it was skipped there until todo-259, on a constraint that turned out not to exist). It parses the module sections, builds a call graph from the actual `call` (and `ref.func`) immediates in every body, computes the functions reachable from the roots (exported functions + `_start`/start section), drops the rest **including unused WASI function imports**, and renumbers every surviving function reference. Reachability is exact, not a manual table: when `eval`/`load`/`apply` is used, the dispatch bodies contain real `call`s to every registered function, so nothing dynamically-reached is pruned. It renumbers **function** AND **type** indices (see the next section; the memory and global sections keep their own index spaces untouched). This is the one place the fixed-index invariant is deliberately broken, and only because every reference site is rewritten in lockstep.
 

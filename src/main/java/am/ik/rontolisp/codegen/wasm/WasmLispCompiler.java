@@ -1844,8 +1844,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// uncaught condition is a bare trap and the %error/%error-cond compilers skip
 		// the message operand), so the report-routing gate narrows to "can program
 		// code HOLD a condition" -- see the expandTopLevelDefinitions overload.
+		// The dispatch narrower drops generic-function branches no call site can select
+		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
+		// may narrow -- under --dynamic any name resolves at run time.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic, true);
+				packageResolver::spellsAsExternal, this.dynamic, true,
+				this.optimize.eliminatesDeadCode() && !this.dynamic
+						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
 		// Whether any signal's message string is observable: exactly the narrowed
 		// routing answer (a message is read only through a HELD condition), forced on
 		// with it under restart mode / --dynamic. Read by WasmErrorCompiler to decide

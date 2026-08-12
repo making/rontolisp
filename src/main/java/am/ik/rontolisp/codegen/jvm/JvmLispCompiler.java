@@ -290,8 +290,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// expandTopLevelDefinitions, which runs the same scan to inject the
 		// restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
+		// The dispatch narrower drops generic-function branches no call site can select
+		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
+		// may narrow -- under --dynamic any name resolves at run time.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic);
+				packageResolver::spellsAsExternal, this.dynamic, false,
+				this.optimize.eliminatesDeadCode() && !this.dynamic
+						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
 		if (System.getProperty("rontolisp.debug.dump-program") != null) {
 			for (LispVal form : program) {
 				System.err.println(form.print());

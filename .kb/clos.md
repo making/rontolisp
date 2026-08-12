@@ -53,7 +53,13 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   introspection churn) and are rewritten away before any backend sees them.
   `MethodInfo.usesNext` records whether a body mentions them.
 - `generateDispatcher(name, registry)` — ONE dispatcher defun per generic: a
-  nested-if chain over the methods, most specific first. Specializers may sit on
+  nested-if chain over the methods, most specific first. An OPTIMIZING compile
+  additionally passes a `DispatchNarrower` (`compiler/GenericDispatchNarrowing`),
+  which omits the branches no call site in the program can select so the shakers
+  drop their method defuns — soundness rules, exclusions and the zlib measurement
+  in `.kb/optimize-dead-code-elimination.md`; every other caller (the
+  interpreter, `ShadowedBuiltins`' structural comparison, non-optimizing builds)
+  passes null and the dispatcher is byte-identical. Specializers may sit on
   ANY required parameter; methods order by comparing parameters leftmost-first
   with `specializerRank` per parameter (eql 0, classes 10..99 by descending
   ancestor-set size = subclass first, built-in types 200s with subtypes like

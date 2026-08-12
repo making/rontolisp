@@ -232,6 +232,29 @@ class WasmTreeShakerTest {
 	}
 
 	@Test
+	void anUnselectableGenericBranchAndItsMethodShakeOut() {
+		// The dispatcher lists only the branches some call site's argument shapes may
+		// select (compiler/GenericDispatchNarrowing): with (sizeof 21) as the only
+		// call, the string method -- and the helper only it calls -- fall out of the
+		// dispatcher and shake. A string call site brings them back, and so does
+		// taking #'sizeof as a VALUE (the narrower's escape).
+		String defs = "(defgeneric sizeof (x)) (defmethod sizeof ((x integer)) (keepme x)) "
+				+ "(defmethod sizeof ((x string)) (dropme x)) (defun keepme (x) (* x 2)) "
+				+ "(defun dropme (x) 999) (print (sizeof 21))";
+		byte[] narrowed = compile(defs, false, OptimizeLevel.DEFAULT);
+		byte[] stringSite = compile(defs + " (print (sizeof \"abc\"))", false, OptimizeLevel.DEFAULT);
+		byte[] escaped = compile(defs + " (print (funcall (car (list #'sizeof)) \"abc\"))", false,
+				OptimizeLevel.DEFAULT);
+		Module.parse(narrowed).assertWellFormed();
+		Module.parse(stringSite).assertWellFormed();
+		Module.parse(escaped).assertWellFormed();
+		assertThat(Module.parse(narrowed).definedFunctionCount())
+			.isLessThan(Module.parse(stringSite).definedFunctionCount());
+		assertThat(Module.parse(narrowed).definedFunctionCount())
+			.isLessThan(Module.parse(escaped).definedFunctionCount());
+	}
+
+	@Test
 	void aDesignatorBoundToATempIsTheSameDirectCall() {
 		// A designator the compiler can read through a let temp is the case above, not
 		// the computed one: the binding is propagated into the funcall sites and dropped

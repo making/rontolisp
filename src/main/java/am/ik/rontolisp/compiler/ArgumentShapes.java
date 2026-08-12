@@ -78,6 +78,14 @@ public final class ArgumentShapes {
 		/** A quoted non-empty list. */
 		CONS,
 		/**
+		 * A rank-1 non-string, non-bit array: the result of a {@code (make-array n ...)}
+		 * whose element type is numeric or unstated, of {@code (vector ...)}, or of a
+		 * {@code subseq}/{@code copy-seq} over a value already of this shape. Strings and
+		 * bit vectors are deliberately NOT this shape -- each has type memberships this
+		 * one must not claim ({@code string}) or rule out ({@code bit-vector}).
+		 */
+		VECTOR,
+		/**
 		 * {@code (make-instance 'some-class)}: an instance of a class this lattice has no
 		 * point for. It is a shape rather than {@code UNKNOWN} because the instance TYPES
 		 * are mutually exclusive -- a ningle app is not a pathname, which is an instance
@@ -114,6 +122,10 @@ public final class ArgumentShapes {
 		table.put(Shape.NULL, Set.of("NULL", "SYMBOL", "BOOLEAN", "LIST", "SEQUENCE", "ATOM", "T"));
 		// A cons is the one shape that is not an atom.
 		table.put(Shape.CONS, Set.of("CONS", "LIST", "SEQUENCE", "T"));
+		// SIMPLE-VECTOR is CL-strictly (simple-array t (*)), but the runtime type
+		// tests here do not discriminate element types, so it stays satisfiable --
+		// the same lean the STRING row takes.
+		table.put(Shape.VECTOR, Set.of("VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY", "SEQUENCE", "ATOM", "T"));
 		// An instance answers to its own class name and to its superclasses' -- none of
 		// which this class decides, so all of them stay satisfiable through the default
 		// arm of maySatisfyNamed. What it must NOT answer to is another instance type,
@@ -253,6 +265,22 @@ public final class ArgumentShapes {
 			if (LispNames.MAKE_INSTANCE.equals(head.name()) && cons.cdr() instanceof LispCons classCell) {
 				return ofClassName(classCell.car());
 			}
+			if (LispNames.MAKE_ARRAY.equals(head.name())) {
+				return ofMakeArray(cons);
+			}
+			if (LispNames.VECTOR.equals(head.name())) {
+				return Shape.VECTOR;
+			}
+			if (LispNames.MAKE_STRING.equals(head.name())) {
+				return Shape.STRING;
+			}
+			if ((LispNames.SUBSEQ.equals(head.name()) || LispNames.COPY_SEQ.equals(head.name()))
+					&& cons.cdr() instanceof LispCons seqCell) {
+				// Both preserve a string/vector argument's type. A LIST argument is NOT
+				// propagated: an empty subseq of a cons is nil, a different shape.
+				Shape seq = of(seqCell.car(), env, returns);
+				return seq == Shape.STRING || seq == Shape.VECTOR ? seq : Shape.UNKNOWN;
+			}
 			return returns.getOrDefault(head.name(), Shape.UNKNOWN);
 		}
 		return ofDatum(form);
@@ -339,6 +367,57 @@ public final class ArgumentShapes {
 			return DECIDED_TYPES.contains(plainName(className)) ? Shape.UNKNOWN : Shape.INSTANCE;
 		}
 		return Shape.UNKNOWN;
+	}
+
+	/**
+	 * {@code (make-array dims ...)}: {@link Shape#VECTOR} only when the shape is certain
+	 * -- a literal integer dimension (rank 1) and an element type that cannot make the
+	 * result a string ({@code character}) or a bit vector ({@code bit}). A computed
+	 * dimension form, a dimension LIST, or an unrecognized element-type spelling stays
+	 * {@link Shape#UNKNOWN}.
+	 */
+	private static Shape ofMakeArray(LispCons cons) {
+		if (!(cons.cdr() instanceof LispCons dimsCell) || !(dimsCell.car() instanceof LispInteger)) {
+			return Shape.UNKNOWN;
+		}
+		LispVal rest = dimsCell.cdr();
+		while (rest instanceof LispCons keyCell) {
+			if (keyCell.car() instanceof LispSymbol key && ":ELEMENT-TYPE".equals(key.name())
+					&& keyCell.cdr() instanceof LispCons valueCell) {
+				return safeVectorElementType(valueCell.car()) ? Shape.VECTOR : Shape.UNKNOWN;
+			}
+			rest = keyCell.cdr();
+		}
+		return Shape.VECTOR;
+	}
+
+	/**
+	 * Whether a literal {@code :element-type} argument certainly yields a non-string,
+	 * non-bit vector: a quoted numeric type -- {@code (unsigned-byte 8)},
+	 * {@code single-float}, plain {@code integer} -- or {@code t}.
+	 */
+	private static boolean safeVectorElementType(LispVal spec) {
+		LispVal datum = spec;
+		if (spec instanceof LispCons quoted && quoted.car() instanceof LispSymbol head
+				&& LispNames.QUOTE.equals(head.name()) && quoted.cdr() instanceof LispCons cell) {
+			datum = cell.car();
+		}
+		else if (spec instanceof LispTrue) {
+			return true;
+		}
+		else if (!(spec instanceof LispCons)) {
+			return false;
+		}
+		String name = switch (datum) {
+			case LispSymbol sym -> plainName(sym);
+			case LispTrue ignored -> "T";
+			case LispCons compound when compound.car() instanceof LispSymbol head -> plainName(head);
+			default -> null;
+		};
+		return name != null && Set
+			.of("T", "UNSIGNED-BYTE", "SIGNED-BYTE", "INTEGER", "FIXNUM", "FLOAT", "SINGLE-FLOAT", "DOUBLE-FLOAT",
+					"SHORT-FLOAT", "LONG-FLOAT", "REAL", "NUMBER")
+			.contains(name);
 	}
 
 	/** The shape of a self-evaluating or quoted datum. */

@@ -2712,7 +2712,14 @@ class WasmLispCompilerIntegrationTest {
 				// calls, the funcall path and eq-distinctness must all survive the fold.
 				"(defun fold-twin-a (n) (* n 17)) (defun fold-twin-b (n) (* n 17))"
 						+ " (print (fold-twin-a 2)) (print (funcall #'fold-twin-b 3))"
-						+ " (print (eq #'fold-twin-a #'fold-twin-b))");
+						+ " (print (eq #'fold-twin-a #'fold-twin-b))",
+				// A generic with a branch no call site can select: the narrowed
+				// dispatcher (compiler/GenericDispatchNarrowing) must answer every
+				// live call -- the kept branch and the default fallback -- exactly
+				// like the full one.
+				"(defgeneric gsz (x)) (defmethod gsz ((x integer)) (* x 2))"
+						+ " (defmethod gsz ((x string)) 999) (defmethod gsz (x) 'other)"
+						+ " (print (gsz 21)) (print (gsz 'sym))");
 		for (String program : programs) {
 			List<LispVal> parsed = LispReader.readAllFromString(program);
 			String plain = runOptimizeLevel(parsed, OptimizeLevel.NONE);

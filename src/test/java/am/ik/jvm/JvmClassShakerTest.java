@@ -191,6 +191,29 @@ class JvmClassShakerTest {
 	}
 
 	@Test
+	void anUnselectableGenericBranchAndItsMethodShakeOut() throws Exception {
+		// The dispatcher lists only the branches some call site's argument shapes may
+		// select (compiler/GenericDispatchNarrowing): with (sizeof 21) as the only
+		// call, the string method -- and DROPME, which only it calls -- fall out of
+		// the dispatcher and shake. A string call site brings them back; so does
+		// taking #'sizeof as a VALUE (the narrower's escape, mirroring the
+		// funcall-dispatch gate); and without --optimize nothing narrows at all.
+		String defs = "(defgeneric sizeof (x)) (defmethod sizeof ((x integer)) (keepme x)) "
+				+ "(defmethod sizeof ((x string)) (dropme x)) (defun keepme (x) (* x 2)) "
+				+ "(defun dropme (x) 999) (print (sizeof 21))";
+		byte[] narrowed = compile(defs, OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(narrowed)).contains("KEEPME").doesNotContain("DROPME");
+		assertThat(run(narrowed)).isEqualTo("42");
+		byte[] stringSite = compile(defs + " (print (sizeof \"abc\"))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(stringSite)).contains("KEEPME", "DROPME");
+		assertThat(run(stringSite)).isEqualTo("42\n999");
+		byte[] escaped = compile(defs + " (print (funcall (car (list #'sizeof)) \"abc\"))", OptimizeLevel.DEFAULT);
+		assertThat(declaredMethodNames(escaped)).contains("KEEPME", "DROPME");
+		byte[] unoptimized = compile(defs, OptimizeLevel.NONE);
+		assertThat(declaredMethodNames(unoptimized)).contains("KEEPME", "DROPME");
+	}
+
+	@Test
 	void aLiteralDesignatorSiteBuysNoDispatchCase() throws Exception {
 		// (mapcar #'dbl ...) is the direct invokestatic its head-position spelling would
 		// have been, so DBL never becomes a function VALUE and the arity-1 dispatcher is
