@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-12
-- rontolisp: 0.1.0-SNAPSHOT (`bfb4f3e`)
+- rontolisp: 0.1.0-SNAPSHOT (`d608c84`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -20,10 +20,10 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 298,934 |
-| zlib | `--optimize` | core (command) | Preview 1 | 108,439 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 83,269 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 84,989 |
+| zlib | (none) | core (command) | Preview 1 | 294,968 |
+| zlib | `--optimize` | core (command) | Preview 1 | 100,494 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 77,444 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 79,143 |
 
 ## What is measured
 
@@ -158,6 +158,21 @@ method defuns and the pathname/stream helpers only they called shake out.
 Worth **-14.0%** on the `--optimize=size` row (96,834 -> 83,269), -16.1% on the
 component row, and -10.6% on the JVM class, every module still gunzipping the
 fixture byte-for-byte on all four backends.
+
+**The format symbol reaches the state machine's slot dispatch.** chipz stores
+the caller's `'chipz:gzip` into `inflate-state`'s `data-format` slot and picks
+the state-machine entry off the slot READ -- `(ecase (inflate-state-data-format
+state) (deflate ...) (zlib ...) (gzip ...))` -- so the caller-constant fold that
+had already removed the bzip2 arm stopped one hop short of the zlib half. The
+fold now tracks per-slot value sets (constructor arguments, initforms, `setf`
+writes; `.kb/library-defun-pruning.md`), which deletes the zlib/deflate arms,
+and the labels lowering stopped constructing closures for state functions
+nothing references any more (`.kb/flet-labels.md`), so the zlib state closures,
+`%make-zlib-header` and the adler32 runtime shake out. Worth **-7.0%** on the
+`--optimize=size` row (83,269 -> 77,444), -7.3% at `--optimize`, -6.9% on the
+component row and -9.1% on the JVM class; the no-flag module moves too
+(298,934 -> 294,968), because neither mechanism is gated on a flag. Every
+module still gunzips the fixture byte-for-byte on all four backends.
 
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
