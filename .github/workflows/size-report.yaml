@@ -46,7 +46,7 @@ jobs:
     # ql:quickload. Carrying that cache keeps the job off the network and makes
     # the run reproducible against a dist that moved under it.
     - name: Cache the Quicklisp dist
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.rontolisp/quicklisp
         key: quicklisp-${{ runner.os }}-${{ hashFiles('size-report/measure.sh') }}

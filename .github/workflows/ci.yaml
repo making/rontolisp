@@ -61,7 +61,7 @@ jobs:
     # re-run went from 10.5 s to 46.8 s). Watch the size step below instead; the
     # budget shared with the Maven caches is 10 GB.
     - name: Cache the wasmtime compiled modules
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/wasmtime
         key: wasmtime-modules-${{ runner.os }}-${{ hashFiles('src/main/**', 'src/test/java/am/ik/rontolisp/codegen/wasm/**') }}

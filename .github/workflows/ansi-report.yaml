@@ -39,7 +39,7 @@ jobs:
     # gitlab.common-lisp.net being reachable, and a bumped revision misses the
     # cache and re-clones, which is exactly what a bump should do.
     - name: Cache the ANSI suite
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ansi-test/suite
         key: ansi-suite-${{ hashFiles('ansi-test/fetch.sh') }}
