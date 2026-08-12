@@ -2981,28 +2981,32 @@ public final class Environment implements Scope {
 			for (int i = 0; i < args.size(); i++) {
 				LispVal cur = args.get(i);
 				boolean last = (i == args.size() - 1);
-				if (cur instanceof LispCons head) {
-					if (pendingTail != null) {
-						pendingTail.setCdr(head);
-					}
-					if (result == LispNil.INSTANCE) {
-						result = head;
-					}
-					LispCons tail = head;
-					while (tail.cdr() instanceof LispCons next) {
-						tail = next;
-					}
-					pendingTail = tail;
-				}
-				else if (last) {
-					// The final argument may be any object; splice it onto the running
-					// tail.
+				if (last) {
+					// The final argument is spliced in untouched -- it is never walked,
+					// so splicing a list onto itself ((nconc x x), the standard way to
+					// build a circular list) terminates instead of chasing the cycle it
+					// has just created.
 					if (pendingTail != null) {
 						pendingTail.setCdr(cur);
 					}
 					else {
 						result = cur;
 					}
+				}
+				else if (cur instanceof LispCons head) {
+					// Find the last cons BEFORE linking: linking first would make the
+					// walk chase the new tail (and loop forever when it is a cycle).
+					LispCons tail = head;
+					while (tail.cdr() instanceof LispCons next) {
+						tail = next;
+					}
+					if (pendingTail != null) {
+						pendingTail.setCdr(head);
+					}
+					if (result == LispNil.INSTANCE) {
+						result = head;
+					}
+					pendingTail = tail;
 				}
 				// non-last nil arguments are skipped
 			}

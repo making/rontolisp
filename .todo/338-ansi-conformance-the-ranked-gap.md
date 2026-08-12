@@ -23,7 +23,6 @@ alphabetically.
 | no runtime `make-package` and `defpackage` only as a LITERAL top-level form, so the chapter's own `set-up-packages` cannot be defined -- then the package-query API (`package-used-by-list`, `packagep`, `do-symbols`, `find-all-symbols`, ...) is missing on top | `packages` chapter (5.5%), 181 direct hits | .todo/038, .kb/packages.md |
 | `read-from-string` has no index second value | most of `reader`'s 288 wrong-value tests | .todo/214 |
 | the pathname accessors (`pathname-host`/`-device`/`-version`, `wild-pathname-p`, `pathname-match-p`, `enough-namestring`, `translate-logical-pathname`) and `*default-pathname-defaults*` | `pathnames` 9.8% + `files` 9.2% | .kb/pathnames.md |
-| `(nconc x x)` never returns | costs every chapter a re-run, and `*circular-conses*` everywhere | .todo/339 |
 
 ## Operator families the suite bills by the dozen
 
@@ -70,7 +69,7 @@ the new information:
 
 ## Reading caveat
 
-2,254 top-level forms were lost (unreadable, unevaluable, or non-terminating),
+2,229 top-level forms were lost (unreadable or unevaluable; none non-terminating),
 and every test they would have defined is missing from the counts -- `objects`
 (239) and `sequences` (903) are measured optimistically. Closing a gap can
 therefore LOWER a chapter's pass rate by admitting the tests behind it; that is

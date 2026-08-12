@@ -5040,7 +5040,11 @@ public final class LispMacroExpander {
 	/**
 	 * Expands (nconc a b) into a let/while walk that destructively links the last cons of
 	 * {@code a} to {@code b} and returns {@code a} (or {@code b} when {@code a} is
-	 * empty). Both operands are bound once to avoid re-evaluation.
+	 * empty). Both operands are bound once to avoid re-evaluation. The walk of {@code a}
+	 * happens BEFORE the {@code rplacd}, and {@code b} is never walked at all: that order
+	 * is what makes {@code (nconc x x)} -- the standard way to build a circular list --
+	 * terminate instead of chasing the cycle it has just created. The interpreter's
+	 * variadic {@code nconc} in {@code Environment.createGlobal} owes the same order.
 	 * @param aForm the first operand form
 	 * @param bForm the second operand form
 	 * @return the expanded expression

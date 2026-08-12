@@ -6187,6 +6187,14 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void nconcOfAListOntoItself() throws Exception {
+		// (nconc s s) builds a circular list: the last argument is left untouched, so the
+		// splice must not walk into the cycle it has just created.
+		assertThat(compileAndRun("(let ((s (list 1 2 3))) (nconc s s) (print (nth 4 s)) (print (nth 6 s)))"))
+			.isEqualTo("2\n1");
+	}
+
+	@Test
 	void identityFunction() throws Exception {
 		assertThat(compileAndRun("(print (identity 42)) (print (identity '(1 2 3))) (print (funcall #'identity 'x))"))
 			.isEqualTo("42\n(1 2 3)\nX");

@@ -7,6 +7,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispChar;
@@ -30,6 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class LispEvaluatorTest {
 
@@ -3243,6 +3245,20 @@ class LispEvaluatorTest {
 		assertThat(eval("(nconc nil (list 1 2))").print()).isEqualTo("(1 2)");
 		assertThat(eval("(nconc (list 1 2) nil)").print()).isEqualTo("(1 2)");
 		assertThat(eval("(funcall #'nconc (list 'a) (list 'b 'c))").print()).isEqualTo("(A B C)");
+	}
+
+	@Test
+	void evalNconcOfAListOntoItself() {
+		// Splicing a list onto ITSELF is the standard way to build a circular list: the
+		// last argument is left untouched, so the splice must not walk into the cycle it
+		// has just created. Preemptive so a regression fails instead of hanging the
+		// suite.
+		assertTimeoutPreemptively(Duration.ofSeconds(30), () -> {
+			assertThat(eval("(let ((s (list 1 2 3))) (nconc s s) (list (nth 3 s) (nth 4 s) (nth 6 s)))").print())
+				.isEqualTo("(1 2 1)");
+			assertThat(eval("(let ((s (list 1 2))) (eq (nconc s s) s))")).isSameAs(LispTrue.INSTANCE);
+			assertThat(eval("(let ((s (list 1 2))) (nconc nil s s) (nth 3 s))").print()).isEqualTo("2");
+		});
 	}
 
 	@Test
