@@ -2535,44 +2535,62 @@ final class WasmArrayCompiler {
 
 	// Pushes an i32: whether the value in slot is a packed integer vector (any width).
 	static void testIntVector(WasmLispCompiler.Ctx ctx, int slot) {
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
-		ctx.writer.write(Instruction.I32_OR);
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
-		ctx.writer.write(Instruction.I32_OR);
+		testIntVector(ctx.writer, slot);
+	}
+
+	// The raw-WasmWriter counterpart, for the runtime builders that emit into a
+	// WasmWriter directly.
+	static void testIntVector(am.ik.wasm.WasmWriter w, int slot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.I32_OR);
 	}
 
 	// Pushes the i32 length of the packed integer vector in slot (width dispatch via
 	// ref.test; array.len needs the concrete array type for the cast).
 	static void emitPackedIntLen(WasmLispCompiler.Ctx ctx, int slot) {
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
-		ctx.writer.write(Instruction.IF, Type.I32.code());
-		castIntArrLen(ctx, slot, WasmLispCompiler.TYPE_I8ARR);
-		ctx.writer.write(Instruction.ELSE);
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
-		ctx.writer.write(Instruction.IF, Type.I32.code());
-		castIntArrLen(ctx, slot, WasmLispCompiler.TYPE_I16ARR);
-		ctx.writer.write(Instruction.ELSE);
-		castIntArrLen(ctx, slot, WasmLispCompiler.TYPE_I32ARR);
-		ctx.writer.write(Instruction.END);
-		ctx.writer.write(Instruction.END);
+		emitPackedIntLen(ctx.writer, slot);
 	}
 
-	private static void castIntArrLen(WasmLispCompiler.Ctx ctx, int slot, int type) {
-		getLocal(ctx, slot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		ctx.writer.writeHeapType(type);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+	// The raw-WasmWriter counterpart, for the runtime builders that emit into a
+	// WasmWriter directly.
+	static void emitPackedIntLen(am.ik.wasm.WasmWriter w, int slot) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.IF, Type.I32.code());
+		castIntArrLen(w, slot, WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.IF, Type.I32.code());
+		castIntArrLen(w, slot, WasmLispCompiler.TYPE_I16ARR);
+		w.write(Instruction.ELSE);
+		castIntArrLen(w, slot, WasmLispCompiler.TYPE_I32ARR);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+	}
+
+	private static void castIntArrLen(am.ik.wasm.WasmWriter w, int slot, int type) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(slot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(type);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 	}
 
 	// Reads data[idx] of the packed integer vector in arrSlot as an UNSIGNED i64,

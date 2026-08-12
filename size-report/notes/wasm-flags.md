@@ -110,6 +110,15 @@ tail: -7.8% at `--optimize=size` (127,026 -> 117,118), with the Worker rows --
 which DO catch conditions and keep the renderer -- still shedding their
 signal-point renders (hello-ningle -24.8 KB raw).
 
+**The generic `length` dispatch is one function.** A `length` site whose
+argument's representation no declaration pins used to inline the whole
+sequence-type ladder -- packed vectors, string, general array, hash table, cons
+walk, ~300 bytes each -- and this module held 66 copies, 13.6% of its bytes,
+spread over chipz's defuns and the spliced runtime helpers alike. It is now one
+shared `_seq_len` callee, matching what the JVM backend always did
+(`.kb/length-runtime.md`), worth **-8.1%** on the `--optimize=size` row
+(105,393 -> 96,834) with the inflate loop's timing unchanged.
+
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
 distance/length codes, ~700 elements in all -- as

@@ -999,6 +999,15 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aLengthSiteDoesNotCarryItsOwnCopyOfTheSharedDispatch() {
+		// Same budget idea: a generic length site is one call to _seq_len rather than
+		// the whole sequence-type ladder -- ~300 bytes per site, 66 copies and 13.6% of
+		// the zlib module before the sharing (the JVM backend's _length was always out
+		// of line). Measured 4.
+		assertThat(marginalBytesPerSite("(length *v*)")).isLessThan(60);
+	}
+
+	@Test
 	void aSequenceOperatorSiteDoesNotCarryItsOwnCopyOfTheSharedConversions() {
 		// Same budget idea as the element-access test above, for the
 		// .kb/seq-conversion-runtime.md trio. A literal coerce site is one call; the

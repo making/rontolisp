@@ -913,8 +913,18 @@ final class WasmEmitHelper {
 	 * @param ctx the compilation context (its writer receives the instructions)
 	 */
 	static void emitStrCharCountCall(WasmLispCompiler.Ctx ctx) {
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
+		emitStrCharCountCall(ctx.writer);
+	}
+
+	/**
+	 * The raw-{@link WasmWriter} counterpart of
+	 * {@link #emitStrCharCountCall(WasmLispCompiler.Ctx)}, for the runtime builders that
+	 * emit into a {@code WasmWriter} directly.
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitStrCharCountCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
 	}
 
 	/**

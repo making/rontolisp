@@ -1074,7 +1074,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int FUNC_ARR_SET = FUNC_ARR_GET + 1;
 
-	static final int FX_FUNC_LAST = FUNC_ARR_SET;
+	// _seq_len ((ref null eq) value) -> (ref null eq): the generic length dispatch --
+	// packed float/int vector, string, general array (fill pointer), hash table, cons
+	// walk (WasmLengthCompiler.buildSeqLenBody). It used to be inlined at every length
+	// site whose argument's representation is not pinned -- ~300 bytes each, 66 copies
+	// and 13.6% of the zlib module. The JVM backend always had the shared form
+	// (_length, JvmLengthRuntimeBuilder). Appended after the last fixed helper so no
+	// index above shifts.
+	static final int FUNC_SEQ_LEN = FUNC_ARR_SET + 1;
+
+	static final int FX_FUNC_LAST = FUNC_SEQ_LEN;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -4430,6 +4439,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_BIG_SHIFT); // _arr_get (header, flat) -> value
 				fnDef.addFunction(TYPE_ARR_SET); // _arr_set (header, flat, value) ->
 													// value
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _seq_len (value) -> length
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -5022,6 +5032,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// shared general-array element access bodies (FUNC_ARR_GET/FUNC_ARR_SET)
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrGetBody());
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody());
+				// shared generic sequence-length dispatch body (FUNC_SEQ_LEN)
+				code.addFunction(WasmLengthCompiler.buildSeqLenBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
