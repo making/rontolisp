@@ -166,6 +166,14 @@ Boundary details beyond the scalar types:
   `(ptr, len)` pair (a two-element array in JavaScript).
 - An `:s-expr` **result** is parsed with the embedded reader, so the host can
   hand back a whole list structure as text.
+- An **asynchronous** host function — a `WebAssembly.Suspending`-wrapped
+  import under JSPI — is declared with `:async t`: the call then returns a
+  future that `rontolisp:await` resolves, the build prints the host's
+  obligations (`Suspending` on the import, `promising` on the exports that can
+  reach it, serialised calls), and a call reachable from a top-level form of a
+  `--no-wasi` module is a compile error (`_initialize` cannot suspend). The
+  [reference page](../reference/functions/rontolisp-wasm-import.md) has the
+  full contract.
 
 Limitations:
 

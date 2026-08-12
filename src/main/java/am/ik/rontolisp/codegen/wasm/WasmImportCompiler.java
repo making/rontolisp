@@ -73,8 +73,14 @@ final class WasmImportCompiler {
 	 * @param field the WASM import field name ({@code :as}, default the Lisp name)
 	 * @param paramTypes the declared parameter type designators, in order
 	 * @param returnType the declared return type designator ({@code :void} when omitted)
+	 * @param async whether the host function may suspend ({@code :async t}): the wrapper
+	 * then wraps the boxed result in a settled {@code TYPE_P1_FUTURE}, so the call
+	 * answers a future that {@code rontolisp:await} resolves. Preview 1 has nothing that
+	 * can observe a pending state -- the host call blocks the wasm stack (synchronously,
+	 * or suspended through JSPI), so started == settled is the option's contract here
 	 */
-	record Decl(String name, String module, String field, List<BoundaryType> paramTypes, BoundaryType returnType) {
+	record Decl(String name, String module, String field, List<BoundaryType> paramTypes, BoundaryType returnType,
+			boolean async) {
 	}
 
 	/**
@@ -101,7 +107,8 @@ final class WasmImportCompiler {
 		}
 		BoundaryType returns = directive.returnType() == null ? BoundaryType.VOID
 				: knownType(directive.returnType(), form, true);
-		return new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params), returns);
+		return new Decl(directive.name(), directive.module(), directive.field(), List.copyOf(params), returns,
+				directive.async());
 	}
 
 	// One designator from the directive, restricted to the import vocabulary. The
@@ -177,12 +184,26 @@ final class WasmImportCompiler {
 		WasmWriter writer = new WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		ctx.nextLocal = numParams + 1 + numI32Temps;
+		if (decl.async()) {
+			// The future's kind field goes under the boxed result: the wrapper builds the
+			// settled (kind 2) TYPE_P1_FUTURE the moment the host call returns -- on this
+			// backend the call blocks the wasm stack (synchronously, or suspended through
+			// JSPI), so the value is ready when the wrapper resumes and started ==
+			// settled
+			// is exactly what the struct says.
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(2);
+		}
 		for (int i = 0; i < numParams; i++) {
 			emitUnboxParam(ctx, decl.paramTypes().get(i), i + 1);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(PLACEHOLDER_FUNC_BASE + ordinal);
 		emitBoxResult(ctx, decl.returnType(), ptrSlot, strFromMemFuncIndex);
+		if (decl.async()) {
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
+		}
 		ctx.writer.write(Instruction.END);
 		// Local declarations: the i32 scratch pair (when present), then the
 		// (ref null eq) temps allocated by allocTemp during unboxing.

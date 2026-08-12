@@ -1,6 +1,6 @@
 # rontolisp:wasm-import
 
-`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) :returns type)`
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) :returns type [:async t])`
 
 Declares a function the WASM host provides (JavaScript in a browser, or another
 module preloaded into wasmtime) and makes it callable from Lisp under `name`
@@ -45,6 +45,38 @@ The type designators are shared with
 A `:string` result must be written into linear memory by the host (reserve the
 buffer with the exported `__ronto_alloc`) and returned as a `(ptr, len)` pair
 (a two-element array from JavaScript).
+
+## `:async t` — a host function that may suspend
+
+`:async t` declares that the host may implement the function
+**asynchronously** — on a JavaScript host, a `WebAssembly.Suspending`-wrapped
+function (JSPI). The call then returns a **future** that
+[`rontolisp:await`](rontolisp-await.md) resolves, so the source says at the
+call site that the boundary is asynchronous — the same reading as an
+`async func` member of a [`rontolisp:wit-import`](rontolisp-wit-import.md),
+which lowers to exactly this option on this backend. (The word deliberately
+matches [`rontolisp:wasm-export`](rontolisp-wasm-export.md)'s `:async`: WIT
+spells both directions `async func`, and the directive carries the direction.)
+
+```lisp
+(rontolisp:wasm-import 'host-fetch :from "env" :as "fetch"
+                       :params '(:string) :returns :string :async t)   ; => HOST-FETCH
+```
+
+- On this backend the future is **settled at creation**: the host call blocks
+  the wasm stack — synchronously, or suspended through JSPI — so the value is
+  ready when the call returns and `await` never actually suspends. The option
+  buys one source that reads the same everywhere, not concurrency.
+- The build prints what the host now owes: wrap the import in
+  `WebAssembly.Suspending`, enter every export that can reach it through
+  `WebAssembly.promising` (the build lists them), and serialise calls — a
+  suspended module can be re-entered, which nothing in it is prepared for. A
+  host that answers synchronously is equally valid; the call returns an
+  already-settled future either way.
+- Under `--no-wasi`, a call reachable from a top-level form is a **compile
+  error**: `_initialize` runs on a stack no `promising` entered, so a
+  suspension there traps naming nobody. Move the call behind an export, or
+  drop `:async t` if the host answers synchronously.
 
 ## Limitations
 

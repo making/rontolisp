@@ -43,8 +43,10 @@ import org.jspecify.annotations.Nullable;
  * with no component type to describe a richer shape with. A {@code result}-returning
  * function binds an internal raw import whose host answers the {@code (:ok . V)} /
  * {@code (:error . E)} envelope, unwrapped by a public wrapper defun through
- * {@code rontolisp::%wit-result} (whose error arm signals
- * {@code rontolisp:wit-error}).</li>
+ * {@code rontolisp::%wit-result} (whose error arm signals {@code rontolisp:wit-error}).
+ * An {@code async func} member lowers with {@code :async
+ * t}, so the binding answers a (settled) future there like on every other backend -- and
+ * inherits the option's build-time obligations ({@link SuspendingImports}).</li>
  * <li><strong>Interpreter and JVM</strong>: an ordinary {@code defun} per WIT function,
  * whose body calls {@code rontolisp::%wit-call} -- the runtime dispatch through the
  * provider bound for the interface ({@code rontolisp:wit-provide}). Because each binding
@@ -373,13 +375,15 @@ public final class WitImportDirective {
 				// FUTURE on every backend that has one -- settled with the provider's
 				// result (eager-start runs the body to completion), or rejected when the
 				// provider signals (the condition re-signals at await, matching the
-				// component's error-arm mapping). Preview 1 stays the degenerate
-				// synchronous binding below (its async contract).
+				// component's error-arm mapping). Preview 1 lowers the same member to a
+				// `wasm-import :async t` below, whose wrapper answers the settled
+				// degenerate future -- so `futurep` agrees on every backend and one
+				// declaration serves the reactor, the component and the provider targets.
 				bindings.add(asyncProviderDefun(name, ifaceId, member, params));
 				continue;
 			}
-			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns)
-					: providerDefun(name, ifaceId, member, params));
+			bindings.add(wasm ? wasmImportForm(name, module, directive.fieldStyle().apply(member), params, returns,
+					func.def().func().async()) : providerDefun(name, ifaceId, member, params));
 		}
 		// A resource is released by its own interface's `drop`, which WIT declares no
 		// function for -- see the lower() javadoc for the name and why it is bound only
@@ -1108,9 +1112,10 @@ public final class WitImportDirective {
 	}
 
 	// (rontolisp:wasm-import 'name :from "module" :as "field" :params '(...) :returns
-	// ...)
-	private static LispVal wasmImportForm(String name, String module, String field, List<Param> params,
-			String returns) {
+	// ... [:async t]) -- :async t when the WIT member is an `async func`, so the P1
+	// binding answers a (settled) future like every other backend's.
+	private static LispVal wasmImportForm(String name, String module, String field, List<Param> params, String returns,
+			boolean async) {
 		List<LispVal> designators = new ArrayList<>();
 		for (Param param : params) {
 			designators.add(new LispSymbol(param.designator()));
@@ -1126,6 +1131,10 @@ public final class WitImportDirective {
 		out.add(quote(list(designators)));
 		out.add(new LispSymbol(":RETURNS"));
 		out.add(new LispSymbol(returns));
+		if (async) {
+			out.add(new LispSymbol(":ASYNC"));
+			out.add(new LispSymbol("T"));
+		}
 		return list(out);
 	}
 

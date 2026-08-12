@@ -1,6 +1,6 @@
 # rontolisp:wasm-import
 
-`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) :returns type)`
+`(rontolisp:wasm-import 'name :from "module" :as "field" :params '(type...) :returns type [:async t])`
 
 WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロードされた別の
 モジュール) が提供する関数を宣言し、`name` という名前でトップレベルの `defun`
@@ -45,6 +45,40 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 `:string` の戻り値は、ホストがリニアメモリに書き込み (バッファはエクスポート
 された `__ronto_alloc` で確保)、`(ptr, len)` のペア (JavaScript からは要素数 2 の
 配列) として返す必要があります。
+
+## `:async t` — サスペンドしうるホスト関数
+
+`:async t` は、ホストがこの関数を**非同期に**実装しうること — JavaScript
+ホストでは `WebAssembly.Suspending` でラップされた関数 (JSPI) — を宣言します。
+呼び出しは [`rontolisp:await`](rontolisp-await.md) で解決できる **future** を
+返すため、境界が非同期であることを呼び出し側のソースが語れます — このバックエンド
+ではまさにこのオプションに脱糖される [`rontolisp:wit-import`](rontolisp-wit-import.md)
+の `async func` メンバーと同じ読みです。(この語は意図的に
+[`rontolisp:wasm-export`](rontolisp-wasm-export.md) の `:async` と揃えて
+あります。WIT は両方向とも `async func` と綴り、方向はディレクティブ自体が
+示します。)
+
+```lisp
+(rontolisp:wasm-import 'host-fetch :from "env" :as "fetch"
+                       :params '(:string) :returns :string :async t)   ; => HOST-FETCH
+```
+
+- このバックエンドでは future は**生成時点で settled** です。ホスト呼び出しは
+  wasm スタックをブロックする (同期的に、または JSPI でサスペンドして) ため、
+  呼び出しが返った時点で値は用意されており、`await` が実際にサスペンドすることは
+  ありません。このオプションが買うのはどのバックエンドでも同じに読めるひとつの
+  ソースであり、並行性ではありません。
+- ビルドはホストが負う義務を出力します: インポートを `WebAssembly.Suspending`
+  でラップし、そこへ到達しうるすべてのエクスポート (ビルドが列挙します) を
+  `WebAssembly.promising` 経由で呼び出し、呼び出しを直列化する —
+  サスペンドしたモジュールは再入されうるが、その用意は何もないためです。
+  同期的に応答するホストも同様に有効で、その場合も呼び出しは settled 済みの
+  future を返します。
+- `--no-wasi` では、トップレベルフォームから到達しうる呼び出しは
+  **コンパイルエラー**です。`_initialize` は `promising` が入っていない
+  スタックで実行されるため、そこでのサスペンドは誰の名前も出さずにトラップ
+  します。呼び出しをエクスポートの背後へ移すか、ホストが同期的に応答するなら
+  `:async t` を外してください。
 
 ## 制限事項
 

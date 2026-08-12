@@ -5898,6 +5898,10 @@ class LispEvaluatorTest {
 				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(add 1 2)"))
 			.isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("RONTOLISP:WASM-IMPORT");
+		// :async t (the host may suspend; WASM answers a future) loads unchanged here:
+		// the host does not exist off WASM, so the stub is the same either way.
+		assertThat(eval("(rontolisp:wasm-import 'pull :params '(:string) :returns :string :async t)"))
+			.isEqualTo(new LispSymbol("PULL"));
 	}
 
 	private static java.util.List<String> symbolNames(LispVal val) {

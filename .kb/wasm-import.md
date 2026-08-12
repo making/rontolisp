@@ -116,11 +116,44 @@ The first consequence is now discharged for fetch: `--host-fetch` (todo-335, clo
 2026-08-12) lowers `rontolisp:fetch` itself onto an injected `env.fetch` import with a
 DERIVED envelope, so a Worker no longer declares this import by hand for HTTP -- the
 dog-fetcher example above now writes `(await (fetch ...))` and its build prints the
-promising/serialise obligation (`.kb/fetch-http.md` has the whole lowering). What
-remains open: the language still cannot say that a USER import suspends (`.todo/336`
-proposes `:async t` -> a future resolved by `rontolisp:await`), and the re-entrancy the
-mechanism creates is still unguarded (`.todo/337`, which also records that this fired
-the documented re-evaluation trigger in `.kb/dynamic-special-variables.md`).
+promising/serialise obligation (`.kb/fetch-http.md` has the whole lowering). A USER
+import says it suspends with `:async t` (todo-336, the section below); the re-entrancy
+the mechanism creates is still unguarded (`.todo/337`, which also records that this
+fired the documented re-evaluation trigger in `.kb/dynamic-special-variables.md`).
+
+**`:async t` -- a suspending host import is a future, not a secret (todo-336,
+2026-08-12)**: `(rontolisp:wasm-import 'host-fetch ... :async t)` declares that the host
+function may SUSPEND, and the call then returns a FUTURE that `rontolisp:await`
+resolves. The word deliberately matches export-side `:async` (the stackful async lift):
+WIT spells both directions `async func`, and the directive carries the direction. On
+this backend the future is DELIBERATELY DEGENERATE -- JSPI blocks the wasm stack, so the
+wrapper wraps the boxed result in a settled kind-2 `TYPE_P1_FUTURE` (the `%async-run`
+struct; `WasmImportCompiler.buildWrapperBody` pushes the kind under the unboxed args) --
+started == settled is the option's documented CONTRACT here, exactly like
+`--host-fetch`'s eager `:body` string; the option buys one source that reads the same on
+every backend, not concurrency. Parsed by `WasmImportDirective` (`:async` takes literal
+`t`/`nil` only), so the interpreter/JVM stubs load it unchanged (the host does not exist
+there; the stub still signals at the call). A `wit-import`ed `async func` member lowers
+to exactly this option on Preview 1 (`WitImportDirective.wasmImportForm`), which is what
+makes `futurep` agree on all four backends -- the interpreter/JVM bind an async-defun
+over the provider call, `--component` a real subtask future, and P1 previously answered
+the RAW value. What the declaration buys the BUILD (`compiler/SuspendingImports`, riding
+`NoWasiLoadPathRefusals.walk` with a `rootFunction` seed): a standing obligation warning
+naming each `module.field` (Suspending wrap + promising entry + serialised calls, a
+synchronous host equally valid), a listing of WHICH exports can reach a suspending
+import (per-export walk; an import taken as `#'value` widens it to "ANY export" -- the
+walk follows calls, not values), and -- under `--no-wasi` only -- an ERROR when the LOAD
+PATH reaches one: `_initialize` runs on a stack no `promising` entered, a suspension
+there is a TRAP no handler covers (the SUSPEND kind reports through handler-case like
+STDIN), and unlike `--host-fetch` (a flag over portable programs, warning only) the
+program itself declared the suspension. A WASI command module keeps the warning and
+refuses nothing (`wasmtime --preload` hosts are synchronous; `_start` is the whole
+program). Pinned by `SuspendingImportsTest` (obligation lines, export listing,
+value-widening, load-path error, handler does not silence it), `WasmImportCompilerTest.parsesAsyncOption`,
+`WitImportDirectiveTest.lowersAnAsyncFuncMemberWithAsyncTOnPreview1` and the
+`asyncImportAnswersASettledFutureThatAwaitResolves` preload E2E (futurep -> T, await
+resolves, `#'`-funcall composes). Host-glue generation (the Suspending wrapper +
+promising entry JS) remains open: `.todo/340`.
 
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in

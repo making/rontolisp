@@ -112,7 +112,7 @@ public final class NoWasiLoadPathRefusals {
 	}
 
 	/** What a reached primitive costs, and the way out where there is one. */
-	private enum Kind {
+	enum Kind {
 
 		/** The clock: a host obligation, not a refusal, on a build that has the hook. */
 		CLOCK,
@@ -129,14 +129,21 @@ public final class NoWasiLoadPathRefusals {
 		 * SUSPENDING {@code env.fetch} may only run on a stack entered through
 		 * {@code WebAssembly.promising}, which {@code _initialize} is not.
 		 */
-		FETCH
+		FETCH,
+		/**
+		 * A host import declared {@code :async t} ({@link SuspendingImports}): like
+		 * {@link #STDIN} a suspension is a TRAP, not a condition, so no handler covers
+		 * it. Never produced by {@link #report}; only the {@code SuspendingImports} entry
+		 * points ask for it.
+		 */
+		SUSPEND
 
 	}
 
 	/**
 	 * One reached primitive: what it is, where it is, and how the load path got there.
 	 */
-	private record Found(String operator, Kind kind, LispVal site, String origin) {
+	record Found(String operator, Kind kind, LispVal site, String origin) {
 	}
 
 	/**
@@ -220,6 +227,29 @@ public final class NoWasiLoadPathRefusals {
 	 */
 	public static List<String> report(List<LispVal> program, boolean hostRandom, boolean hostFetch,
 			boolean reactorComponent) {
+		Map<String, Found> found = walk(program, hostRandom, hostFetch, Set.of(), null);
+		List<String> lines = new ArrayList<>(found.size());
+		found.values().forEach(f -> lines.add(line(f, reactorComponent)));
+		return lines;
+	}
+
+	/**
+	 * The walk itself, seeded either with the LOAD PATH (every non-deferred top-level
+	 * form; {@code rootFunction} null) or with one function's bodies under unknown
+	 * arguments ({@code rootFunction} set) -- the latter is how {@link SuspendingImports}
+	 * asks which exports can reach a suspending import.
+	 * @param program the resolved, flattened top-level forms
+	 * @param hostRandom whether {@code --host-random} routes {@code random_get}
+	 * @param hostFetch whether {@code --host-fetch} routes {@code rontolisp:fetch}
+	 * @param suspendingImports the {@code :async t} host-import names; a call of one is a
+	 * {@link Kind#SUSPEND} finding (reported through a handler, like {@link Kind#STDIN}
+	 * -- a suspension traps rather than signalling)
+	 * @param rootFunction the function whose bodies seed the walk, or {@code null} for
+	 * the load path
+	 * @return the findings, keyed by reported operator, in reach order
+	 */
+	static Map<String, Found> walk(List<LispVal> program, boolean hostRandom, boolean hostFetch,
+			Set<String> suspendingImports, @Nullable String rootFunction) {
 		Map<String, List<Body>> definitions = collectDefinitions(program);
 		// (clackup *app* ...) over a (defvar *app* (make-instance 'ningle:app)) states
 		// its argument as plainly as (clackup #'app) does, one indirection further out.
@@ -231,9 +261,17 @@ public final class NoWasiLoadPathRefusals {
 		// same function under different arguments, so either is walked again.
 		Map<Visit, Boolean> visited = new HashMap<>();
 		Deque<Region> queue = new ArrayDeque<>();
-		for (LispVal form : program) {
-			if (!isDeferredDefinition(form)) {
-				queue.addLast(new Region(new Body(form, null, List.of(form)), originLabel(form), false, Map.of()));
+		if (rootFunction == null) {
+			for (LispVal form : program) {
+				if (!isDeferredDefinition(form)) {
+					queue.addLast(new Region(new Body(form, null, List.of(form)), originLabel(form), false, Map.of()));
+				}
+			}
+		}
+		else {
+			// The caller decides the arguments, so nothing is known about them.
+			for (Body body : definitions.getOrDefault(rootFunction, List.of())) {
+				queue.addLast(new Region(body, rootFunction, false, Map.of()));
 			}
 		}
 		// Breadth first, so the path a line reports is the shortest one that reaches it.
@@ -241,7 +279,8 @@ public final class NoWasiLoadPathRefusals {
 			Region region = queue.removeFirst();
 			Map<Call, Boolean> called = new LinkedHashMap<>();
 			Set<String> shadowed = ArgumentShapes.shadowedNames(region.body().forms());
-			Scan scan = new Scan(hostRandom, hostFetch, region.origin(), found, called, shadowed, returns);
+			Scan scan = new Scan(hostRandom, hostFetch, suspendingImports, region.origin(), found, called, shadowed,
+					returns);
 			Map<String, Shape> env = new HashMap<>(globals);
 			env.putAll(region.shapes());
 			At at = new At(region.guarded(), region.body().anchor(), scan.narrow(env), Map.of());
@@ -258,9 +297,7 @@ public final class NoWasiLoadPathRefusals {
 				}
 			});
 		}
-		List<String> lines = new ArrayList<>(found.size());
-		found.values().forEach(f -> lines.add(line(f, reactorComponent)));
-		return lines;
+		return found;
 	}
 
 	/**
@@ -374,6 +411,9 @@ public final class NoWasiLoadPathRefusals {
 
 		private final boolean hostFetch;
 
+		/** The {@code :async t} host-import names; a call of one is a SUSPEND finding. */
+		private final Set<String> suspendingImports;
+
 		private final String origin;
 
 		private final Map<String, Found> found;
@@ -392,10 +432,11 @@ public final class NoWasiLoadPathRefusals {
 		 */
 		private final Map<String, Shape> returns;
 
-		private Scan(boolean hostRandom, boolean hostFetch, String origin, Map<String, Found> found,
-				Map<Call, Boolean> called, Set<String> shadowed, Map<String, Shape> returns) {
+		private Scan(boolean hostRandom, boolean hostFetch, Set<String> suspendingImports, String origin,
+				Map<String, Found> found, Map<Call, Boolean> called, Set<String> shadowed, Map<String, Shape> returns) {
 			this.hostRandom = hostRandom;
 			this.hostFetch = hostFetch;
+			this.suspendingImports = suspendingImports;
 			this.origin = origin;
 			this.found = found;
 			this.called = called;
@@ -460,12 +501,15 @@ public final class NoWasiLoadPathRefusals {
 				this.walkLocal(name, local, this.argShapes(cons.cdr(), at), at);
 				return;
 			}
-			Kind kind = kindOf(cons, name, this.hostRandom, this.hostFetch);
+			Kind kind = this.suspendingImports.contains(name) ? Kind.SUSPEND
+					: kindOf(cons, name, this.hostRandom, this.hostFetch);
 			// A guarded site is a program that already handles the refusal -- except for
-			// standard input, which traps rather than signalling, so no handler covers
-			// it.
-			if (kind != null && (!at.guarded() || kind == Kind.STDIN)) {
-				this.found.computeIfAbsent(reportedName(name),
+			// standard input and a suspending import, which trap rather than signalling,
+			// so no handler covers them.
+			if (kind != null && (!at.guarded() || kind == Kind.STDIN || kind == Kind.SUSPEND)) {
+				// A suspending import reports under its own (declared) name; the table
+				// kinds map to their public API.
+				this.found.computeIfAbsent(kind == Kind.SUSPEND ? name : reportedName(name),
 						operator -> new Found(operator, kind, at.located(), this.origin));
 			}
 			if (LispNames.HANDLER_CASE.equals(name) && cons.cdr() instanceof LispCons protectedForm) {
@@ -723,7 +767,7 @@ public final class NoWasiLoadPathRefusals {
 	/**
 	 * Whether {@code #'name} appears anywhere in a form -- a local escaping as a value.
 	 */
-	private static boolean takenAsValue(LispVal form, String name) {
+	static boolean takenAsValue(LispVal form, String name) {
 		if (!(form instanceof LispCons cons)) {
 			return false;
 		}
@@ -796,6 +840,9 @@ public final class NoWasiLoadPathRefusals {
 					+ " -- a stack no WebAssembly.promising entered, so a SUSPENDING host fetch"
 					+ " (WebAssembly.Suspending / JSPI) traps here; the host's env.fetch must answer"
 					+ " synchronously, or the fetch must move out of the load path";
+			// A load-path :async t call is an ERROR, not a line: SuspendingImports
+			// formats it, and report() never produces the kind.
+			case SUSPEND -> throw new IllegalStateException("SUSPEND is not a reportable line");
 		};
 		return SourceProvenance.prefix(found.site()) + "warning: " + found.operator()
 				+ " is reachable from a top-level form of this --no-wasi module (" + found.origin()

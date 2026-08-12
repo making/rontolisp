@@ -29,9 +29,14 @@ import org.jspecify.annotations.Nullable;
  * @param paramTypes the raw parameter type designator keywords, in order
  * @param returnType the raw return type designator keyword, or {@code null} when omitted
  * / declared void
+ * @param async whether the host function may SUSPEND ({@code :async t}): the call then
+ * returns a future that {@code rontolisp:await} resolves, and the build states the host
+ * obligations the suspension creates. The word deliberately matches the export side's
+ * {@code :async} (WIT spells both directions {@code async func}); the directive itself
+ * carries the direction
  */
 public record WasmImportDirective(String name, String module, String field, List<String> paramTypes,
-		@Nullable String returnType) {
+		@Nullable String returnType, boolean async) {
 
 	/** The default import module name when {@code :from} is omitted. */
 	public static final String DEFAULT_MODULE = "env";
@@ -67,6 +72,7 @@ public record WasmImportDirective(String name, String module, String field, List
 		@Nullable String field = null;
 		@Nullable List<String> params = null;
 		@Nullable String returns = null;
+		boolean async = false;
 		int i = 2;
 		while (i < items.size()) {
 			String keyword = keywordName(items.get(i), form);
@@ -79,13 +85,14 @@ public record WasmImportDirective(String name, String module, String field, List
 				case ":AS" -> field = stringValue(value, keyword, form);
 				case ":PARAMS" -> params = quotedKeywordList(value, form);
 				case ":RETURNS" -> returns = returnKeyword(value, form);
+				case ":ASYNC" -> async = booleanValue(value, keyword, form);
 				default -> throw new UnsupportedOperationException(
 						"Unknown rontolisp:wasm-import option " + keyword + " in " + form.print());
 			}
 			i += 2;
 		}
 		return new WasmImportDirective(name, module, field == null ? unqualifiedMember(name) : field,
-				params == null ? List.of() : params, returns);
+				params == null ? List.of() : params, returns, async);
 	}
 
 	// The host-facing default field is the symbol's bare member name, lowercased: the
@@ -128,6 +135,27 @@ public record WasmImportDirective(String name, String module, String field, List
 			return name.name();
 		}
 		throw new UnsupportedOperationException("rontolisp:wasm-import " + keyword + " expects a string in "
+				+ form.print() + ", got: " + value.print());
+	}
+
+	// An :async value is the literal t or nil -- the option is a compile-time fact
+	// about the host boundary, so a computed value has nothing it could mean here.
+	private static boolean booleanValue(LispVal value, String keyword, LispCons form) {
+		if (value instanceof LispNil) {
+			return false;
+		}
+		if (value instanceof am.ik.rontolisp.LispTrue) {
+			return true;
+		}
+		if (value instanceof LispSymbol sym) {
+			if ("T".equals(sym.name())) {
+				return true;
+			}
+			if ("NIL".equals(sym.name())) {
+				return false;
+			}
+		}
+		throw new UnsupportedOperationException("rontolisp:wasm-import " + keyword + " expects t or nil in "
 				+ form.print() + ", got: " + value.print());
 	}
 

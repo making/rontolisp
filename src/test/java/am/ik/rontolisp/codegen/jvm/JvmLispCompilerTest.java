@@ -1240,6 +1240,11 @@ class JvmLispCompilerTest {
 		assertThat(compileAndRun(
 				"(rontolisp:wasm-import 'add :from \"host\" :params '(:int :int) :returns :int)" + "(print (+ 1 2))"))
 			.isEqualTo("3");
+		// :async t (the host may suspend; WASM answers a future) compiles unchanged
+		// here: the host does not exist off WASM, so the stub is the same either way.
+		assertThat(compileAndRun(
+				"(rontolisp:wasm-import 'pull :params '(:string) :returns :string :async t)" + "(print (+ 1 2))"))
+			.isEqualTo("3");
 	}
 
 	@Test

@@ -45,6 +45,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.StreamDesignators;
+import am.ik.rontolisp.compiler.SuspendingImports;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Section;
@@ -1785,6 +1786,52 @@ public final class WasmLispCompiler implements LispCompiler {
 		// nested in them (the CLI already flattens via UserMacroExpander; this keeps
 		// direct compiler invocations equivalent).
 		program = LispMacroExpander.flattenTopLevel(program);
+		// rontolisp:wasm-import :async t declares that the host function may SUSPEND
+		// (WebAssembly.Suspending / JSPI). The wrapper only wraps the result in a
+		// settled future -- the suspension itself is the host's business -- so the
+		// BUILD states what the host now owes (compiler/SuspendingImports; the
+		// --host-fetch precedent). Skipped under --component, where the directive is
+		// rejected outright below.
+		Map<String, String> suspendingImports = this.component ? Map.of() : SuspendingImports.declared(program);
+		if (!suspendingImports.isEmpty()) {
+			CompileWarnings.warn(":async t: this module imports " + String.join(", ", suspendingImports.values())
+					+ ", declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the"
+					+ " exports that can reach one through WebAssembly.promising, and serialise calls (a suspended"
+					+ " module can be re-entered, which nothing in it is prepared for); a host that answers"
+					+ " synchronously is equally valid -- the call then returns an already-settled future either way");
+			if (SuspendingImports.anyTakenAsValue(program, suspendingImports.keySet())) {
+				// #'name escaped: whoever received it can call it, so the per-export
+				// answer below would under-report -- widen it to every export instead.
+				CompileWarnings.warn(":async t: a suspending import is taken as a value (#'name), so ANY export may"
+						+ " reach one -- enter every export through WebAssembly.promising");
+			}
+			else {
+				List<String> exportsReaching = new ArrayList<>();
+				for (LispVal expr : program) {
+					if (WasmExportCompiler.isExportForm(expr)) {
+						WasmExportCompiler.Decl decl = WasmExportCompiler.parse((LispCons) expr);
+						if (suspendingImports.containsKey(decl.name())
+								|| SuspendingImports.reaches(program, suspendingImports.keySet(), decl.name())) {
+							exportsReaching.add(decl.exportName());
+						}
+					}
+				}
+				if (!exportsReaching.isEmpty()) {
+					CompileWarnings.warn(":async t: the exports that can reach a suspending import -- enter each"
+							+ " through WebAssembly.promising: " + String.join(", ", exportsReaching));
+				}
+			}
+			if (this.noWasi) {
+				// _initialize runs the load path on a stack no promising entered, and
+				// the program DECLARED the host may suspend -- an error, not a line
+				// (unlike --host-fetch, where a synchronous host is an equally valid
+				// implementation of the flag).
+				List<String> onLoadPath = SuspendingImports.onLoadPath(program, suspendingImports.keySet());
+				if (!onLoadPath.isEmpty()) {
+					throw new UnsupportedOperationException(onLoadPath.get(0));
+				}
+			}
+		}
 		if (this.noWasi) {
 			// Every --no-wasi refusal is a call-time condition, which is right for a call
 			// site that may be dead -- but reached from a TOP-LEVEL form there is nothing

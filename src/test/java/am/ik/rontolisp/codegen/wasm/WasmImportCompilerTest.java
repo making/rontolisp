@@ -86,6 +86,20 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void parsesAsyncOption() {
+		// :async t declares that the host may suspend: the call answers a settled
+		// future. The default -- and an explicit nil -- is the plain synchronous
+		// wrapper, byte-identical to every pre-:async module.
+		assertThat(parse("(rontolisp:wasm-import 'pull :params '(:string) :returns :string :async t)").async())
+			.isTrue();
+		assertThat(parse("(rontolisp:wasm-import 'pull :params '(:string) :returns :string)").async()).isFalse();
+		assertThat(parse("(rontolisp:wasm-import 'pull :params '(:string) :returns :string :async nil)").async())
+			.isFalse();
+		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'pull :params '(:string) :async 1)"))
+			.hasMessageContaining(":ASYNC expects t or nil");
+	}
+
+	@Test
 	void rejectsUnknownTypeDesignator() {
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :params '(:widget))"))
 			.hasMessageContaining(":WIDGET");

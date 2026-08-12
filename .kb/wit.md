@@ -612,8 +612,8 @@ Like `WitExportDirective` it does no I/O and no codegen (the caller hands it the
 
 | backend | the directive becomes |
 |---|---|
-| Preview 1 WASM (`-o out.wasm`) | one `(rontolisp:wasm-import 'name :from M :as FIELD :params '(...) :returns T)` per WIT function — literally what a hand-written import block carries |
-| interpreter, JVM (`-o Prog.class`) | the `defpackage`, then one ordinary `(defun kv:bucket-get (self key) (rontolisp::%wit-call "wasi:keyvalue/store@0.2.0" "bucket-get" self key))` per WIT function |
+| Preview 1 WASM (`-o out.wasm`) | one `(rontolisp:wasm-import 'name :from M :as FIELD :params '(...) :returns T)` per WIT function — literally what a hand-written import block carries. An `async func` member carries `:async t` (todo 336), so the binding answers a settled future there like every other backend's async binding (`.kb/wasm-import.md`) |
+| interpreter, JVM (`-o Prog.class`) | the `defpackage`, then one ordinary `(defun kv:bucket-get (self key) (rontolisp::%wit-call "wasi:keyvalue/store@0.2.0" "bucket-get" self key))` per WIT function — an `async func` member binds as an `async-defun` over the provider call instead, so callers get a (settled) future |
 | `--component` | a component-model **instance import** of the interface, each bound function `canon lower`ed (`(rontolisp::%component-import ...)`, below) — on every variant, `rontolisp:http-handler` (serve) included |
 | `--no-gc` | clear error (`WitImportDirective.lower`) — its MVP module imports nothing |
 

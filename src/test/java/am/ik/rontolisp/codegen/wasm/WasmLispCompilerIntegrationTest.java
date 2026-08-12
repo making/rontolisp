@@ -1436,6 +1436,35 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void asyncImportAnswersASettledFutureThatAwaitResolves() throws Exception {
+		// :async t: the call answers a FUTURE -- rontolisp:await resolves it and
+		// futurep sees it, like an `async func` binding on every other backend. The
+		// preloaded host module answers synchronously, which the option's contract
+		// allows (started == settled on this backend either way). Scalar types only:
+		// a preloaded wasm host has its own linear memory, so the (ptr,len) string
+		// boundary is a JS-host affair.
+		String host = """
+				(defun host-add (a b) (+ a b))
+				(defun host-scale (x) (* x 2.5))
+				(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+				(rontolisp:wasm-export 'host-scale :as "scale" :params '(:float) :returns :float)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int :async t)
+				(rontolisp:wasm-import 'scale :from "host" :params '(:float) :returns :float :async t)
+				(print (rontolisp:futurep (add 1 2)))
+				(print (rontolisp:await (add 20 22)))
+				(print (rontolisp:await (scale 4.0)))
+				(print (rontolisp:await (funcall #'add 1 2)))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.NONE)).isEqualTo("""
+				T
+				42
+				10.0
+				3""");
+	}
+
+	@Test
 	void importedHostFunctionInsideUserPackageResolvesUnqualifiedName() throws Exception {
 		// A wasm-import declared inside a user package with a plain unqualified quoted
 		// name registers under the canonical qualified name (PackageResolver resolves

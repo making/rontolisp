@@ -81,7 +81,10 @@ every backend; see the "Future-as-value combinators" section below).
   struct is KEPT as P1's internal degenerate-future representation (its former
   producer, `rontolisp:then`, is gone; the then-chain kind-1 branch and third
   field were deleted with it -- the kind field survives only so the shape does
-  not structurally canonicalize into the one-field `TYPE_CELL`);
+  not structurally canonicalize into the one-field `TYPE_CELL`). A
+  `rontolisp:wasm-import ... :async t` wrapper is the struct's other producer
+  since todo-336: a suspending host import answers the same settled future
+  (`.kb/wasm-import.md`);
   `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) is P1's await resolver
   (pass-through for non-futures, recursive flatten of the memoized value), and
   `futurep` ref.tests it. Streams are a compile error. CAVEAT: an async body's

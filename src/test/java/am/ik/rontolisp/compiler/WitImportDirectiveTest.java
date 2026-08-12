@@ -431,6 +431,19 @@ class WitImportDirectiveTest {
 	}
 
 	@Test
+	void lowersAnAsyncFuncMemberWithAsyncTOnPreview1() {
+		// An `async func` member answers a future on every backend: the interpreter/JVM
+		// bind it as an async-defun, --component as a real subtask future, and Preview 1
+		// lowers it to `wasm-import :async t` -- the settled degenerate future, so
+		// `futurep` agrees everywhere and the declaration is not reactor-specific.
+		assertThat(printed(lowerApi("  pull: async func(url: string) -> string;", Backend.WASM_GC))).isEqualTo(
+				"(RONTOLISP:WASM-IMPORT (QUOTE pull) :FROM \"api\" :AS \"pull\" :PARAMS (QUOTE (:STRING)) :RETURNS :STRING :ASYNC T)");
+		// A plain member stays exactly as it was -- the option is absent, not nil, so
+		// every pre-:async artifact keeps its byte identity.
+		assertThat(printed(lowerApi("  pull: func(url: string) -> string;", Backend.WASM_GC))).doesNotContain(":ASYNC");
+	}
+
+	@Test
 	void carriesAByteStringAcrossThePreview1Boundary() {
 		// list<u8> is a byte-per-char rontolisp string (the settled mapping), so it
 		// crosses
