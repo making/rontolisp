@@ -71,6 +71,11 @@ class DocGenTest {
 			.isEqualTo("<a href=\"format.html\">format</a>");
 		assertThat(DocGen.rewriteMarkdownLinks("<a href=\"../guides/eval-limitations.md#x\">eval</a>"))
 			.isEqualTo("<a href=\"../guides/eval-limitations.html#x\">eval</a>");
+		// An absolute URL ending in .md is a file elsewhere, with no .html beside it
+		String published = "<a href=\"https://making.github.io/rontolisp/skill/rontolisp-full.md\">full</a>";
+		assertThat(DocGen.rewriteMarkdownLinks(published)).isEqualTo(published);
+		assertThat(DocGen.rewriteMarkdownLinks("<a href=\"//cdn.example/x.md\">x</a>"))
+			.isEqualTo("<a href=\"//cdn.example/x.md\">x</a>");
 	}
 
 	@Test

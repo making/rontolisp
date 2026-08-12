@@ -267,8 +267,13 @@ public final class DocGen {
 		Matcher matcher = MD_LINK.matcher(html);
 		StringBuilder out = new StringBuilder();
 		while (matcher.find()) {
-			String anchor = matcher.group(2) == null ? "" : matcher.group(2);
-			matcher.appendReplacement(out, Matcher.quoteReplacement("href=\"" + matcher.group(1) + ".html" + anchor + "\""));
+			String target = matcher.group(1);
+			// Only a link to a page of this site becomes .html. An absolute URL
+			// ending in .md names a file somewhere else -- the published SKILL.md,
+			// say -- and there is no .html beside it.
+			String replacement = target.contains("://") || target.startsWith("//") ? matcher.group(0)
+					: "href=\"" + target + ".html" + (matcher.group(2) == null ? "" : matcher.group(2)) + "\"";
+			matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
 		}
 		matcher.appendTail(out);
 		return out.toString();
