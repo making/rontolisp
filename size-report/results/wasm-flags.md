@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-12
-- rontolisp: 0.1.0-SNAPSHOT (`99a44e5`)
+- rontolisp: 0.1.0-SNAPSHOT (`c760802`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -20,10 +20,10 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--optimize=size` | core (command) | Preview 1 | 2,781 |
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
-| zlib | (none) | core (command) | Preview 1 | 294,968 |
-| zlib | `--optimize` | core (command) | Preview 1 | 100,494 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 77,444 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 79,143 |
+| zlib | (none) | core (command) | Preview 1 | 291,763 |
+| zlib | `--optimize` | core (command) | Preview 1 | 95,414 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 72,457 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 74,111 |
 
 ## What is measured
 

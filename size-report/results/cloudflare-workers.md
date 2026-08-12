@@ -6,24 +6,24 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-12
-- rontolisp: 0.1.0-SNAPSHOT (`99a44e5`)
+- rontolisp: 0.1.0-SNAPSHOT (`c760802`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 227,309 | 69,955 | 2.2% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 251,964 | 74,988 | 2.4% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 684,335 | 180,111 | 5.7% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,250,300 | 521,376 | 16.6% |
-| httpbin | `--no-wasi --optimize=size` | 147,916 | 47,721 | 1.5% |
-| httpbin-clack | `--no-wasi --optimize=size` | 242,793 | 73,674 | 2.3% |
-| httpbin-clack-one-source | `--no-wasi --optimize=size` | 242,344 | 73,566 | 2.3% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 279,404 | 82,291 | 2.6% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 712,519 | 187,080 | 5.9% |
-| httpbin-ningle | `--no-wasi --optimize=size` | 2,256,042 | 522,960 | 16.6% |
-| dog-fetcher | `--no-wasi --optimize=size` | 259,646 | 77,663 | 2.5% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 148,046 | 47,824 | 1.5% |
+| hello-clack | `--no-wasi --optimize=size` | 227,335 | 69,957 | 2.2% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 251,990 | 74,994 | 2.4% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 684,361 | 180,125 | 5.7% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,250,327 | 521,388 | 16.6% |
+| httpbin | `--no-wasi --optimize=size` | 147,053 | 47,481 | 1.5% |
+| httpbin-clack | `--no-wasi --optimize=size` | 242,819 | 73,681 | 2.3% |
+| httpbin-clack-one-source | `--no-wasi --optimize=size` | 242,370 | 73,572 | 2.3% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 279,430 | 82,265 | 2.6% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 712,545 | 187,157 | 5.9% |
+| httpbin-ningle | `--no-wasi --optimize=size` | 2,256,069 | 523,025 | 16.6% |
+| dog-fetcher | `--no-wasi --host-fetch --optimize=size` | 258,479 | 78,788 | 2.5% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 147,183 | 47,584 | 1.5% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **116,315 B** of it.
@@ -59,10 +59,11 @@ target and takes its reactor shape under `--no-wasi`. The second row builds
 interpreted, so what the pair measures is that choosing the portable designator
 costs nothing in bytes.
 
-**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its module
-imports one host function instead of reaching for `rontolisp:fetch`, so what
-separates the two rows is the JSON parsing of the upstream answer, not a
-transport: a reactor's way out costs an import entry and a wrapper.
+**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its source
+calls the same `rontolisp:fetch` every backend answers, and `--host-fetch`
+lowers it onto ONE host import, so what separates the two rows is that lowering
+plus the JSON parsing of the upstream answer: a reactor's way out costs an
+import entry and a wrapper, not a transport of its own.
 
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
