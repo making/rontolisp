@@ -38,28 +38,29 @@ plain synchronous function (no `Suspending`, no `promising`) and produced the
 same answer -- so "eagerly buffered, fast" and "truly streamed, serialised" are
 a HOST choice over one module, exactly as the `:async t` obligation line says.
 
-**2. Chunking alone does NOT bound memory -- the staging buffer must be
-reused.** 4 MiB pulled as 64 x 64 KiB, module counts the bytes and keeps
-nothing:
+**2. Chunking alone does NOT bound memory -- the buffer must be reused.** 4 MiB
+pulled as 64 x 64 KiB, module counts the bytes and keeps nothing:
 
 | host convention | arena growth | linear memory |
 | --- | --- | --- |
 | `__ronto_alloc` per chunk (today's `:string` result rule) | **+4.00 MiB** | 0.25 -> 4.13 MiB |
-| ONE buffer allocated up front, rewritten per chunk | **+0.00 MiB** | 0.25 -> 0.25 MiB |
+| ONE buffer, rewritten per chunk | **+0.00 MiB** | 0.25 -> 0.25 MiB |
 
 The whole memory argument for streaming dies unless the import result
-convention changes: the host must write into a buffer the MODULE owns and
-return a length, not call `__ronto_alloc` per chunk.
+convention changes for bytes. See the design below for the shape that follows:
+the CALLER passes the buffer.
 
-**3. A handle parameter is what gives a pull import call identity.** Two
-serialised `body(handle)` calls each drained their own chunk list; without a
-handle the import is a global cursor and the second call eats the first's
-chunks. (Overlap is still refused by the re-entry guard -- it fired exactly as
-designed when two suspending calls were started concurrently, the first
-completing and the second trapping. Real overlap still needs the per-call arena
-scope and the per-task dynamic store that `.kb/wasm-import.md` defers under
-"Deliberately NOT per-call state"; a handle buys host bookkeeping, not
-concurrency.)
+**3. A handle parameter would give a pull import call identity -- and is not
+needed.** Two serialised `body(handle)` calls each drained their own chunk
+list; without a handle the import is a global cursor and the second call eats
+the first's chunks. But the re-entry guard already guarantees there is only
+ever ONE call inside the module (it fired exactly as designed when two
+suspending calls were started concurrently: the first completed, the second
+trapped), so a serialising host needs nothing but a "current request" variable
+-- which is what its promise queue already establishes. Deliberately NO handle
+in the protocol: add one when the per-call arena scope and per-task dynamic
+store that `.kb/wasm-import.md` defers under "Deliberately NOT per-call state"
+make real overlap possible, and not before.
 
 **4. A `:string` result cannot carry bytes.** Handing back three bytes
 `ff fe 41` produced three characters, the first of them code point **2089058**
@@ -130,16 +131,44 @@ JVM the caller passes a closure or a string directly, and on the WASM backends
 the synthesized export builds the thunk over a `:async t` import. The wasm case
 becomes a special case of the shared shape instead of a fork.
 
+The whole WASM boundary is then three entries:
+
+```
+;; module -> host
+handle-request(headPtr, headLen) -> (ptr, len)   ; request head JSON -> response head JSON
+
+;; host -> module (:async t or synchronous -- the host's choice, finding 1)
+env.readRequestBody(ptr, cap) -> i32   ; write up to cap bytes at ptr, return n; 0 = EOF
+env.writeResponseBody(ptr, len)        ; take len bytes from ptr
+```
+
+**The CALLER passes the buffer** -- the `read(2)` shape, and the answer to
+finding 2. There is deliberately no `__ronto_*` export handing a buffer out:
+the `__ronto_*` namespace is for general runtime hooks (`alloc`, `set_time`,
+the seed), an HTTP-shaped entry there is a layering break, and a module-owned
+buffer would have to be named for a body it cannot see from the boundary
+layer. Passing (ptr, cap) at the call also means the host cannot hold a pointer
+across calls, and it survives the per-call arena scope unchanged -- where the
+buffer LIVES becomes a module-side decision the protocol never mentions. It
+generalises past HTTP the same way: `env.kvGet(keyPtr, keyLen, bufPtr, bufCap)
+-> i32`, with the return being the FULL length so an undersized buffer is a
+retry, not a truncation.
+
+`:string` results keep today's rule (the host `__ronto_alloc`s and returns
+(ptr, len)). That is not an inconsistency but the line worth drawing:
+**`:string` is a value, `:bytes` is a transfer.** A bounded control-plane value
+may be allocated per call; an unbounded byte stream may not.
+
 Phases, each independently landable and each with its own gate:
 
 **Phase 0 -- the boundary types.** A `:bytes` designator for
-`wasm-import`/`wasm-export` params and results: an `(unsigned-byte 8)` vector
-crossing as (ptr, len) with no UTF-8 decode in either direction (finding 4).
-And a module-owned staging convention for import results -- the module exports
-its buffer (ptr, cap), the host writes into it and returns the length (finding
-2). Both are general: they are what any future byte-shaped host import needs.
-Gate: a preload E2E round-tripping arbitrary bytes, and the finding-2 table
-re-measured flat.
+`wasm-import`/`wasm-export` params and results: an `(unsigned-byte 8)` vector,
+no UTF-8 decode in either direction (finding 4), and a RESULT declared `:bytes`
+takes the caller-passed (ptr, cap) pair and answers a length rather than
+allocating (finding 2, and the design note above). Both are general -- they are
+what any byte-shaped host import needs, HTTP or not. Gate: a preload E2E
+round-tripping arbitrary bytes (including the `ff fe 41` that finding 4
+corrupts today), and the finding-2 table re-measured flat.
 
 **Phase 1 -- Preview 1 gets a real stream value.** `TYPE_P1_STREAM
 {mut i32 eof, mut readFn, mut closeFn}` -- the same three fields as
@@ -173,9 +202,9 @@ cases unchanged.
 
 **Phase 3 -- the response body, symmetrically.** Today it is one string in
 linear memory, so a large or streamed response pays the same way. Same
-protocol in reverse (a push import over the staging buffer), and
-`%http-normalize-response`'s stream arm stops being drained before sending on
-this transport.
+convention in reverse (`env.writeResponseBody(ptr, len)`, the module choosing
+where those bytes sit), and `%http-normalize-response`'s stream arm stops being
+drained before sending on this transport.
 
 **Phase 4 -- the examples, and the glue that stops being hand-written.** Ten of
 the eleven `examples/cloudflare-workers/` directories speak this envelope
@@ -206,6 +235,15 @@ drifting.
 
 - The Clack environment contract and the response contract (`.kb/http-server.md`)
   -- this item moves how the body ARRIVES, never what a handler sees.
+- **The key is `:raw-body`, not `:body`.** It is upstream's, and the `raw` is
+  load-bearing: `lack/src/request.lisp` parses `:raw-body` through
+  `http-body:parse` and appends `:body-parameters` TO THE SAME PLIST, so the
+  two names are a pair distinguishing the unparsed stream from the parsed view.
+  `request-raw-body` is also exported, so renaming would break lack, ningle and
+  every application over them. Same file is the reason `:buffered` must stay
+  seekable: lack wraps it in a `circular-input-stream` and `file-position`s it
+  back to 0, which a pull stream cannot serve -- so the lack ecosystem keeps
+  `:buffered` and the streaming mode serves everything else.
 - The four-backend `:raw-body` spelling: after Phase 1 the portable
   `(await (read-all (getf env :raw-body)))` must work on all four, which is the
   whole point.
