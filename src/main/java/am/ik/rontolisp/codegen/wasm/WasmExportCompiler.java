@@ -442,8 +442,15 @@ final class WasmExportCompiler {
 		if (ctx.ehMode) {
 			WasmEmitHelper.emitCatchAllPrologue(ctx);
 		}
-		final boolean asyncTarget = ctx.asyncFuncBase >= 0 && ctx.asyncDefunNames.contains(decl.name());
-		final boolean callbackDriven = asyncTarget && isCallbackExport(ctx, decl);
+		// asyncMode: the boundary decision is DYNAMIC, like Preview 1's resolve below
+		// -- a plain defun handing back someone else's future has exactly the same
+		// boundary problem as an async-defun target, so the poll runs on every
+		// asyncMode export (it passes a non-future straight through) instead of being
+		// keyed on the target's name. Unlike P1, the component's guarantee costs the
+		// poll + ref.test + _sched_loop branch per export wrapper; a component with no
+		// async surface has no asyncFuncBase and stays byte-identical.
+		final boolean asyncBoundary = ctx.asyncFuncBase >= 0;
+		final boolean callbackDriven = asyncBoundary && isCallbackExport(ctx, decl);
 		// asyncMode: every host entry re-establishes the CURRENT task. A callback
 		// export begins a fresh task record (frames created while the target runs
 		// eagerly are owned by it, and its waitable-set starts empty); every other
@@ -477,7 +484,7 @@ final class WasmExportCompiler {
 		// is degenerate synchronous: calling one runs it to completion and hands back a
 		// SETTLED future, and so does a `wasm-import ... :async t`. The boundary declares
 		// a scalar/string, so the wrapper resolves the future here -- what the
-		// asyncTarget
+		// asyncBoundary
 		// branch below already does for --component, and what the reactor transport and
 		// every worked example had to spell as an explicit %future-force. The resolve is
 		// DYNAMIC rather than keyed on the target being an async-defun, because a plain
@@ -529,13 +536,15 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.END);
 			return;
 		}
-		// asyncMode: an async-defun target returns a TYPE_FUTURE; poll it so the host
-		// sees the settled value, and drive a still-pending one through the blocking
-		// event loop (_sched_loop) -- an async target that awaited a host-backed
-		// future suspended, and this export boundary is synchronous, so the loop runs
-		// it to completion here. A rejected future's re-signal reaches the catch-all
-		// above (the trap an error in an exported function produces today).
-		if (asyncTarget) {
+		// asyncMode: a target that answers a TYPE_FUTURE -- an async-defun's own, or
+		// one a plain defun passes through -- is polled so the host sees the settled
+		// value, and a still-pending one is driven through the blocking event loop
+		// (_sched_loop): an async body that awaited a host-backed future suspended,
+		// and this export boundary is synchronous, so the loop runs it to completion
+		// here. A non-future answer passes the poll untouched. A rejected future's
+		// re-signal reaches the catch-all above (the trap an error in an exported
+		// function produces today).
+		if (asyncBoundary) {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_POLL);
 			int polled = ctx.allocTemp();
@@ -557,14 +566,9 @@ final class WasmExportCompiler {
 			ctx.writer.writeUnsignedLeb128(polled);
 		}
 		// The scratch locals sit right after the parameter slots (see scratchTypes).
+		// (A callback-lifted export cannot reach here: it exists only under asyncMode,
+		// where the callbackDriven branch above returned.)
 		emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl));
-		if (isCallbackExport(ctx, decl)) {
-			// a callback-lifted export whose target is not an async-defun completed
-			// within the call: the packed EXIT code (the response went out through
-			// task.return inside the target)
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(0);
-		}
 		if (ctx.reentryGuardGlobalIndex >= 0) {
 			emitReentryGuardStore(ctx, 0);
 		}

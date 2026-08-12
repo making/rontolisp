@@ -2537,7 +2537,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// one inside a fused expression tree substitutes the body, so ironclad-style
 		// one-liner arithmetic wrappers (mod32+, rol32) stop chopping hot expression
 		// trees into boxed call boundaries. Never under --dynamic (late binding must
-		// keep observing redefinition).
+		// keep observing redefinition), and never an async-defun: under asyncMode its
+		// rewritten plain defun LOOKS inlinable (a one-form body is a closed int
+		// tree), but calling one must build the TYPE_FUTURE its entry+resume state
+		// machine answers -- splicing the raw body would hand a synchronous caller
+		// the value where every other backend hands a future.
 		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
 		if (!this.dynamic) {
 			Map<String, Integer> defunCounts = new HashMap<>();
@@ -2545,7 +2549,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				defunCounts.merge(defun.name(), 1, Integer::sum);
 			}
 			for (DefunDecl defun : defuns) {
-				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && WasmIntFusionCompiler.isInlinableDefun(defun)) {
+				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && !asyncDefunNames.contains(defun.name())
+						&& WasmIntFusionCompiler.isInlinableDefun(defun)) {
 					inlinableDefuns.put(defun.name(), defun);
 				}
 			}

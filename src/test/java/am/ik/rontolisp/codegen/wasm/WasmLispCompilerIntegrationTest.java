@@ -9749,6 +9749,65 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	// Compiles an asyncMode --component program (async surface forces EH mode, so the
+	// run needs -W exceptions=y) and invokes a component-model export by its WAVE
+	// signature.
+	private static String compileAsyncComponentAndInvoke(String lispCode, String invocation) throws Exception {
+		byte[] component = new WasmLispCompiler(false, true).compile(LispReader.readAllFromString(lispCode));
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
+				invocation, path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		return result.getStdout().trim();
+	}
+
+	@Test
+	void componentExportResolvesTheFutureItsTargetAnswers() throws Exception {
+		// asyncMode's counterpart of preview1ExportResolvesTheFutureItsTargetAnswers:
+		// the wrapper's poll / _sched_loop branch used to be keyed on the TARGET being
+		// an async-defun, so a plain defun handing back someone else's future was
+		// unboxed as the declared scalar and trapped with `cast failure` on the very
+		// first call. The poll block is fully dynamic (a non-future passes through),
+		// so it now runs on every asyncMode export. The extra leading body form keeps
+		// `inner` off the fusion-inline fast path independently of the async gate.
+		String direct = """
+				(rontolisp:async-defun probe (n) (+ n 100))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		String awaited = """
+				(rontolisp:async-defun inner (n) (+ n 100))
+				(rontolisp:async-defun probe (n) (rontolisp:await (inner n)))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		String passThrough = """
+				(rontolisp:async-defun inner (n) n (+ n 100))
+				(defun probe (n) (inner n))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		String passThroughOneForm = """
+				(rontolisp:async-defun inner (n) (+ n 100))
+				(defun probe (n) (inner n))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		for (String program : List.of(direct, awaited, passThrough, passThroughOneForm)) {
+			assertThat(compileAsyncComponentAndInvoke(program, "probe(7)")).isEqualTo("107");
+		}
+	}
+
+	@Test
+	void componentAsyncDefunKeepsItsFutureThroughASyncCaller() throws Exception {
+		// A one-form async-defun's rewritten plain defun used to be collected as
+		// fusion-inlinable (its body is a closed integer tree), so a synchronous
+		// caller spliced the raw body -- bypassing the entry+resume state machine --
+		// and futurep answered NIL where every other backend answers T.
+		String program = """
+				(rontolisp:async-defun inner (n) (+ n 100))
+				(defun probe (n) (if (rontolisp:futurep (inner n)) 1 0))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		assertThat(compileAsyncComponentAndInvoke(program, "probe(7)")).isEqualTo("1");
+	}
+
 	@Test
 	void componentAsyncDefunCompilesAsStateMachine() throws Exception {
 		// --component compiles async-defun/async-lambda/await as entry+resume state

@@ -167,6 +167,12 @@ both levels producing identical output).
   (same for literal ratios / big integers).
 - Async resume bodies (`ctx.asyncResume != null`): the await spine/hoist
   analysis owns argument shapes there.
+- A call to an asyncMode `rontolisp:async-defun` whose rewritten plain defun
+  would qualify textually (a one-form integer body): the name never enters
+  `Ctx.inlinableDefuns`, because a call must answer the `TYPE_FUTURE` its
+  entry+resume state machine builds -- splicing the raw body handed a
+  synchronous caller the value where every other backend hands a future
+  (`.kb/async-await.md`).
 - Division (`/`) is never fused (exact ratios). Binary comparisons fuse through
   their own entry point (`tryCompileCompare`, stage 4) -- but only when a side
   is fusable; `(< x y)` over two plain leaves stays generic.

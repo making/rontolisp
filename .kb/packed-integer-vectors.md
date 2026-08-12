@@ -211,6 +211,10 @@ See `.kb/wasm-int-fusion.md` for the fused-tree machinery. The packed arms:
   order, so argument evaluation order is preserved. This is what un-chops
   ironclad's `mod32+`/`rol32` one-liners out of the hot rounds. `(ldb (byte s
   p) x)` with a literal byte spec classifies through its `expandLdb` expansion.
+  An asyncMode `rontolisp:async-defun` is excluded from the collection even
+  when its rewritten plain defun qualifies textually: a call must build the
+  `TYPE_FUTURE` its entry+resume state machine answers, and splicing the raw
+  body handed a synchronous caller the value instead (`.kb/async-await.md`).
 
 ## The heap-type encoding landmine this uncovered
 

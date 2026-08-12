@@ -92,7 +92,11 @@ every backend; see the "Future-as-value combinators" section below).
   observably identical when the await is adjacent.
 - **--component (asyncMode)**: async-defun/async-lambda (and a top level with
   awaits) compile as ENTRY+RESUME state machines over first-class
-  `TYPE_FUTURE`s (`WasmAsyncEmit`). The import layer is a real scheduler: an
+  `TYPE_FUTURE`s (`WasmAsyncEmit`). An async-defun's rewritten plain defun is
+  excluded from the fusion-inlinable set even when a one-form body qualifies
+  textually -- splicing the raw body bypasses the state machine, so a
+  synchronous caller got the value where every backend must get the future
+  (todo-342; `.kb/wasm-int-fusion.md`). The import layer is a real scheduler: an
   `async func` wit-import member returns a pending `TYPE_FUTURE` through
   `rontolisp::%subtask-future` (registry + the CURRENT task's waitable-set),
   and the events are dispatched by the shared core `_sched_dispatch`
@@ -100,7 +104,9 @@ every backend; see the "Future-as-value combinators" section below).
   `_sched_loop` (a `waitable-set.wait` loop, base component-model-async and
   wasmCloud-legal) runs suspensions to completion at the synchronous
   boundaries: the top-level `_start` entry and a non-serve wasm-export
-  wrapper whose async target suspended. Serve's `handle` boundary instead
+  wrapper whose target answered a pending future (EVERY asyncMode export
+  polls dynamically -- a plain defun may pass an async function's future
+  through, todo-342; `.kb/wasm-export-no-wasi.md`). Serve's `handle` boundary instead
   runs the CALLBACK driver: the wrapper begins a task record
   (`_task_begin`; frames created while it runs carry it as their OWNER, the
   5th `TYPE_ASYNC_FRAME` field), and a pending handler does NOT block --

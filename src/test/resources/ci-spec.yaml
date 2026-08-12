@@ -1705,6 +1705,19 @@ cases:
       T
       42
       42
+  - name: async-future-survives-a-synchronous-caller
+    # A plain defun calling an async function must receive a future, exactly as
+    # an async caller would -- the component backend used to splice a one-form
+    # async-defun's raw body into the caller (fusion inlining of its rewritten
+    # plain defun), so futurep answered NIL there and T everywhere else.
+    source: |
+      (rontolisp:async-defun ci-sync-caller-inner (n) (+ n 100))
+      (defun ci-sync-caller-probe (n) (rontolisp:futurep (ci-sync-caller-inner n)))
+      (print (ci-sync-caller-probe 7))
+      (print (rontolisp:await (ci-sync-caller-inner 7)))
+    expected: |
+      T
+      107
   - name: future-as-value-combinators-then-catch-finally-success
     # Exercises then / then* / catch / finally on their SUCCESS channels across
     # every backend byte-identically. The catch / finally error channels are

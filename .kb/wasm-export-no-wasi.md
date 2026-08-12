@@ -76,10 +76,24 @@ the shaker now roots where nothing awaited before (`httpbin` +31), with
 Pinned by `WasmExportCompilerTest.anExportResolvesADegenerateFutureOnlyWhereOneCanExist`
 (the wrapper body, all three cases) and
 `WasmLispCompilerIntegrationTest.preview1ExportResolvesTheFutureItsTargetAnswers` /
-`anExportHandsBackAnAsyncImportsFutureWithoutForcingItByHand`. **Re-evaluation trigger**:
-asyncMode (`--component`, non-reactor) still keys its poll on `asyncDefunNames`, so the
-pass-through shape traps THERE -- measured, and filed with the second finding that masks
-it (a one-form async-defun gets inlined, so `futurep` answers NIL on the component where
-every other backend answers T) in `.todo/342`.
+`anExportHandsBackAnAsyncImportsFutureWithoutForcingItByHand`. **asyncMode
+(`--component`, non-reactor) makes the SAME dynamic decision (todo-342)**: the wrapper's
+poll / `_sched_loop` block was already fully dynamic (`_poll` passes a non-future
+through; the `ref.test` decides whether to drive the blocking loop), so the gate is
+`Ctx.asyncFuncBase >= 0` -- every asyncMode export polls, not just one whose target is
+an async-defun -- and a callback-lifted export takes the callback driver
+unconditionally (callback exports exist only under asyncMode, so the old
+non-async-target EXIT tail was unreachable and is gone). The cost is the poll +
+`ref.test` + `_sched_loop` branch in an asyncMode export wrapper whose target is NOT an
+async-defun (+25 bytes measured on the todo-342 probe, vs. P1's 2 --
+`_p1_future_await` needs no branch); an export whose target IS one already had the
+branch and stays byte-identical, as does every component with no async surface (no
+`asyncFuncBase`; verified over the size-report matrix and the Worker builds). The finding that MASKED the trap in
+the simplest spelling was the fusion inliner splicing a one-form async-defun's raw body
+into a synchronous caller (`futurep` answered NIL); asyncMode async-defuns are excluded
+from `Ctx.inlinableDefuns` (`.kb/wasm-int-fusion.md`). Pinned by
+`componentExportResolvesTheFutureItsTargetAnswers` /
+`componentAsyncDefunKeepsItsFutureThroughASyncCaller` and the
+`async-future-survives-a-synchronous-caller` ci-spec case.
 
 Tests: `WasmExportCompilerTest` (structural, no Docker), `WasmLispCompilerIntegrationTest` (`wasmtime --invoke`). Limitations (README "Exporting Lisp functions"). Component typed exports shipped in todo-92 (see `.kb/wasi-component.md`); follow-up in `.todo/021` (memory-ABI CI).
