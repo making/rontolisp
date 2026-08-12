@@ -29,10 +29,11 @@ target and takes its reactor shape under `--no-wasi`. The second row builds
 interpreted, so what the pair measures is that choosing the portable designator
 costs nothing in bytes.
 
-**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its module
-imports one host function instead of reaching for `rontolisp:fetch`, so what
-separates the two rows is the JSON parsing of the upstream answer, not a
-transport: a reactor's way out costs an import entry and a wrapper.
+**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its source
+calls the same `rontolisp:fetch` every backend answers, and `--host-fetch`
+lowers it onto ONE host import, so what separates the two rows is that lowering
+plus the JSON parsing of the upstream answer: a reactor's way out costs an
+import entry and a wrapper, not a transport of its own.
 
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
