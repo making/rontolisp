@@ -796,23 +796,34 @@ public final class WasmLispCompiler implements LispCompiler {
 	// _charvec_to_str (v) -> (ref null eq): normalizes a mutable character vector (the
 	// general array shape holding TYPE_CHAR elements, marked by meta offset i31 == 1)
 	// into the equivalent quote-framed runtime string (built via _str_fresh); any other
-	// value passes through unchanged. Called by the string consumers (stringp, char,
-	// subseq, string=/-equal, case/trim/concat, write-string, read-from-string, intern,
+	// value passes through unchanged. Called by the string consumers (char, subseq,
+	// string=/-equal, case/trim/concat, write-string, read-from-string, intern,
 	// make-symbol) and at the entry of _equal/_hash/_print_val/_princ_val so a character
 	// vector behaves as a string everywhere. Each TYPE_CHAR code point is written as its
 	// UTF-8 encoding (1-4 bytes) so the WASM string byte model can carry the full Unicode
 	// range without truncation; consumers that treat the byte array as an ASCII character
 	// index (char/schar/length/subseq) walk the UTF-8 through _str_char_count /
 	// _str_char_at. Reuses the unary TYPE_CALLABLE_BASE + 0 signature, so no new type
-	// entry.
+	// entry. The SHAPE half is _charvec_p's (below): this function renders, and asks that
+	// one whether there is anything to render.
 	static final int FUNC_CHARVEC_TO_STR = FUNC_WRITE_STR_GC + 1;
+
+	// _charvec_p (v) -> i32: 1 when v is a mutable character vector, else 0 -- the shape
+	// half of _charvec_to_str, split out so a PREDICATE need not render. Constant time:
+	// the eight ref.tests down to the meta-offset marker (i31 == 1) and nothing else, no
+	// allocation, no element walk. `stringp` is the whole reason it exists (its TYPE_CELL
+	// arm used to answer by rendering the vector and throwing the string away, so
+	// (stringp s) was O(length s) on every call), and _charvec_to_str calls it too, so
+	// the marker invariant has exactly one owner. Reuses the ((ref null eq)) -> i32
+	// signature (TYPE_RAT_GET), so no new type entry.
+	static final int FUNC_CHARVEC_P = FUNC_CHARVEC_TO_STR + 1;
 
 	// _str_char_count (str) -> i32: the number of Unicode characters in a
 	// UTF-8-encoded string (its content walk minus the surrounding quotes, counting one
 	// per lead byte -- byte with `(b & 0xC0) != 0x80`). The character-based length of
 	// TYPE_STRING; every WasmLengthCompiler string arm reads through it. Reuses the
 	// ((ref null eq)) -> i32 signature (TYPE_RAT_GET), so no new type entry.
-	static final int FUNC_STR_CHAR_COUNT = FUNC_CHARVEC_TO_STR + 1;
+	static final int FUNC_STR_CHAR_COUNT = FUNC_CHARVEC_P + 1;
 
 	// _str_char_at (str, i) -> i32: the i-th character's Unicode code point in a
 	// UTF-8-encoded string, from a byte walk that skips continuation bytes and decodes
@@ -4506,6 +4517,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_WRITE_STR_GC); // _write_str_gc (FUNC_WRITE_STR_GC)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _charvec_to_str
 															// (FUNC_CHARVEC_TO_STR)
+				fnDef.addFunction(TYPE_RAT_GET); // _charvec_p (FUNC_CHARVEC_P)
 				fnDef.addFunction(TYPE_RAT_GET); // _str_char_count (FUNC_STR_CHAR_COUNT)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_at (FUNC_STR_CHAR_AT)
 				fnDef.addFunction(TYPE_STR_TO_MEM); // _str_char_byte_offset
@@ -5093,6 +5105,9 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _charvec_to_str (FUNC_CHARVEC_TO_STR): normalize a mutable character
 				// vector into the equivalent runtime string.
 				code.addFunction(WasmStringRuntimeBuilder.buildCharvecToStrBody());
+				// _charvec_p (FUNC_CHARVEC_P): the shape half of the above -- is this
+				// value a mutable character vector? -- in constant time.
+				code.addFunction(WasmStringRuntimeBuilder.buildCharvecPBody());
 				// _str_char_count (FUNC_STR_CHAR_COUNT): count Unicode characters in a
 				// UTF-8-encoded string.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrCharCountBody());

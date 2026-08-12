@@ -75,11 +75,61 @@ where `_readFromString` and `intern`/`make-symbol`'s quote strip both
 the shared runtime bodies — JVM `emitArrayBranch` of
 `_lispToString`/`_lispToDisplayString` (which also covers equal-hash-table
 keys, keyed by rendered string) and `_eqv`'s equals fallback; WASM the
-entries of `_equal`, `_hash`, `_print_val`, `_princ_val` plus `stringp`.
+entries of `_equal`, `_hash`, `_print_val`, `_princ_val`.
 On the JVM everything is gated on `programUsesAnyArrayOp || usesFloatArray`
 (`Ctx.usesArrays`), so array-free programs stay byte-identical; on WASM the
 helper is always emitted (all module bytes shifted once, flag-dimension
 byte-identity contracts unaffected).
+
+**A PREDICATE does not normalize (todo-342, 2026-08-12)**: `stringp` was in
+that WASM list, and it is the one caller that never wanted the string. Its
+`TYPE_CELL` arm called `_charvec_to_str` and `ref.test`ed the result for
+`TYPE_STRING` — an O(1) question answered by rendering every element into a
+fresh string and keeping one bit, re-paid on every call, for the whole life of
+a value that never leaves the mutable representation. Measured (wasmtime 47,
+200,000 calls): 10.2 s for `(make-string 8192)`, 1.26 s for 1024, 0.11 s for
+64, against 4 ms for the `copy-seq` of the same 8192 vector (an ordinary
+`TYPE_STRING`) — exactly linear, while the interpreter and the JVM were flat.
+`(length s)` on the same value was already O(1); only the type predicate
+walked.
+
+The shape decision is therefore its own runtime function, **`_charvec_p`**
+(`FUNC_CHARVEC_P`, `WasmStringRuntimeBuilder.buildCharvecPBody`, appended
+right after `FUNC_CHARVEC_TO_STR`, `((ref null eq)) -> i32` reusing
+`TYPE_RAT_GET`): the eight `ref.test`s down to the marker compare and nothing
+else, 213 bytes of WASM (`_charvec_to_str` lost 158 of its 653 to the split).
+`stringp` calls only that; `_charvec_to_str` opens with it and then renders,
+so the marker invariant has ONE owner rather than one copy per caller.
+
+The alternative — inlining the tests at each `stringp` site, no new function
+index — lost on a MEASUREMENT, not a preference: in the same 200,000-iteration
+harness a bare truth test is 3-4 ms and the same loop with one call to an
+eqref-returning defun is also 3-4 ms, so the call frame is under 5 ns; of the
+9 ms the character-vector predicate now costs, essentially all of it is the
+eight tests, which inlining would still pay. It would buy ~1 ms per 200,000
+calls in exchange for one copy of the invariant per site plus ~200 bytes each.
+
+Same answers for every shape (the general/adjustable/multi-dimensional array,
+the packed vectors, the displaced array, hash table, struct, instance, closure,
+stream that share the `TYPE_CELL` box), now flat in the length: 9 ms for all of
+1, 1024 and 8192 (`--component` and `--optimize` alike). It costs no bytes
+either: the full runtime module is 58 SMALLER (`size-report` hello_world
+121,463 → 121,405, pi_approx 121,663 → 121,605 — the `stringp` sites each
+dropped a `ref.test`), and a program that never reaches the arm is
+BYTE-IDENTICAL at `--optimize` (both `size-report` rows and all eight
+`.kb/optimize-dead-code-elimination.md` print-fold rows unmoved). Pinned by
+`WasmLispCompilerIntegrationTest`'s
+`compileStringpClassifiesEveryCellShape` (the shapes) and
+`compileStringpOverACharVectorIsConstantTime` (the complexity class, as a
+ratio between two lengths so the pin does not depend on the machine).
+
+Not done, and deliberately: the OTHER callers (and the JVM's `_strv` at the
+same sites) still re-render their argument on every call, because the rendered
+string is never written back into the cell. Caching it there would fix that
+class outright, but a character vector is MUTABLE, so every write that can
+reach it would have to invalidate the cache and missing one is silent wrong
+output rather than slow output — a trade that wants its own measurement first.
+`.todo/343`.
 
 Mutation flows through SHARED expansions (`LispMacroExpander`):
 `expandReplace`, `expandFill` and `expandScharSetFunctional` branch at runtime on

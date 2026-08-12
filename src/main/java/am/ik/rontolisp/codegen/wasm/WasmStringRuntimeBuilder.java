@@ -402,24 +402,130 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _charvec_to_str} (FUNC_CHARVEC_TO_STR): normalizes a mutable
-	 * character vector into the equivalent quote-framed runtime string; any other value
-	 * is returned unchanged. A mutable character vector is the general array
+	 * Builds {@code _charvec_p} (FUNC_CHARVEC_P): 1 when the value is a mutable character
+	 * vector, else 0. The SHAPE half of {@link #buildCharvecToStrBody()}, and the one
+	 * owner of the marker invariant -- a mutable character vector is the general array
 	 * representation ({@code TYPE_CELL} box, header {@code (dims . (meta . data))} with
 	 * {@code dims}/{@code data} both {@code TYPE_HASH_BUCKETS} arrays) whose meta offset
-	 * ({@code meta.cdr.cdr}) is the i31 {@code 1} -- unambiguous, because an ordinary
-	 * array's offset is 0 and a displaced array (which can carry a real offset) holds a
-	 * {@code TYPE_CELL} target in its data slot, not a buckets array. The rendered length
-	 * is the fill pointer when present, else {@code dims[0]}; each element is
-	 * {@code ref.cast TYPE_CHAR} and its code point is emitted as its 1-4 byte UTF-8
-	 * encoding so a non-ASCII / non-BMP character is not silently truncated to one byte.
-	 * The bytes are assembled in transient scratch -- {@code CAPTURE_CUR} in capture mode
-	 * (so a character vector printing inside a {@code *-to-string} capture cannot clobber
-	 * the capture buffer, whose base is {@code HEAP_PTR}), else {@code HEAP_PTR} -- and
-	 * finalized via {@code _str_fresh} without advancing either pointer. The scratch is
-	 * grown to the worst case ({@code n * 4 + 2}, one 4-byte UTF-8 sequence per character
-	 * plus the two surrounding quotes); the actual byte length is passed to
-	 * {@code _str_fresh}.
+	 * ({@code meta.cdr.cdr}) is the i31 {@code 1}. That marker is unambiguous, because an
+	 * ordinary array's offset is 0 and a displaced array (which can carry a real offset)
+	 * holds a {@code TYPE_CELL} target in its data slot, not a buckets array.
+	 *
+	 * <p>
+	 * Eight {@code ref.test}s down to the marker compare, and no element walk, which is
+	 * the point: a PREDICATE over a character vector ({@code stringp}) used to answer by
+	 * calling {@code _charvec_to_str} and testing whether a string came back, so it
+	 * rendered the whole vector -- allocation and all -- to keep one bit, on every call.
+	 * @return the function body (signature {@code ((ref null eq))->i32}, TYPE_RAT_GET)
+	 */
+	static byte[] buildCharvecPBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: v = 0. locals: header = 1, meta = 2 (ref null eq).
+		w.write(1);
+		w.write(2);
+		w.writeRefType(true, Type.EQ.code());
+		int v = 0, header = 1, meta = 2;
+		// Result block: the 0/1 answer.
+		w.write(Instruction.BLOCK);
+		w.write(Type.I32);
+		// v is TYPE_CELL?
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		emitFalseUnless(w);
+		// header = cell.field0; a cons? (a plain value box holds anything else)
+		get(w, v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		set(w, header);
+		get(w, header);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitFalseUnless(w);
+		// header.car is the dims array? (a hash table's car is an i31 count; anything
+		// else is not an array)
+		emitConsField(w, header, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		emitFalseUnless(w);
+		// header.cdr is a cons?
+		emitConsField(w, header, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitFalseUnless(w);
+		// header.cdr.cdr (the data slot) is an element array? (a displaced array's data
+		// slot holds the target TYPE_CELL)
+		emitConsField(w, header, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		emitFalseUnless(w);
+		// meta = header.cdr.car; a cons whose cdr is a cons?
+		emitConsField(w, header, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		set(w, meta);
+		get(w, meta);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitFalseUnless(w);
+		emitConsField(w, meta, 1);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		emitFalseUnless(w);
+		// the marker: meta.cdr.cdr is an i31, and it is 1.
+		emitMetaOffset(w, meta);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		emitFalseUnless(w);
+		emitMetaOffset(w, meta);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		i32(w, 1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.END); // result block
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	// Consumes the i32 test on top of the stack: when it is 0, leaves 0 as the enclosing
+	// block's i32 result and branches out of it. Only valid one level inside that block.
+	private static void emitFalseUnless(WasmWriter w) {
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		w.write(Instruction.BR, 1);
+		w.write(Instruction.END);
+	}
+
+	/**
+	 * Builds {@code _charvec_to_str} (FUNC_CHARVEC_TO_STR): normalizes a mutable
+	 * character vector into the equivalent quote-framed runtime string; any other value
+	 * is returned unchanged. Whether the value IS one is {@code _charvec_p}'s answer
+	 * ({@link #buildCharvecPBody()}) -- this function only renders, so the marker
+	 * invariant is spelled once and a caller that needs the bit rather than the string
+	 * pays no walk. The rendered length is the fill pointer when present, else
+	 * {@code dims[0]}; each element is {@code ref.cast TYPE_CHAR} and its code point is
+	 * emitted as its 1-4 byte UTF-8 encoding so a non-ASCII / non-BMP character is not
+	 * silently truncated to one byte. The bytes are assembled in transient scratch --
+	 * {@code CAPTURE_CUR} in capture mode (so a character vector printing inside a
+	 * {@code *-to-string} capture cannot clobber the capture buffer, whose base is
+	 * {@code HEAP_PTR}), else {@code HEAP_PTR} -- and finalized via {@code _str_fresh}
+	 * without advancing either pointer. The scratch is grown to the worst case
+	 * ({@code n * 4 + 2}, one 4-byte UTF-8 sequence per character plus the two
+	 * surrounding quotes); the actual byte length is passed to {@code _str_fresh}.
 	 * @return the function body (signature {@code ((ref null eq))->(ref null eq)},
 	 * TYPE_CALLABLE_BASE + 0)
 	 */
@@ -437,16 +543,16 @@ final class WasmStringRuntimeBuilder {
 		// Result block: the normalized string, or v unchanged.
 		w.write(Instruction.BLOCK);
 		w.writeRefType(true, Type.EQ.code());
-		// if (!(v is TYPE_CELL)) return v
+		// if (!_charvec_p(v)) return v
 		get(w, v);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		WasmEmitHelper.emitCharvecPCall(w);
 		w.write(Instruction.I32_EQZ);
 		w.write(Instruction.IF, 0x40);
 		get(w, v);
 		w.write(Instruction.BR, 1);
 		w.write(Instruction.END);
-		// header = cell.field0; if (!(header is TYPE_CONS)) return v (a plain value box)
+		// header = cell.field0, data = header.cdr.cdr, meta = header.cdr.car: every cast
+		// below is a fact _charvec_p just established.
 		get(w, v);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
@@ -454,35 +560,6 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
 		w.writeUnsignedLeb128(0);
 		set(w, header);
-		get(w, header);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		// if (!(header.car is TYPE_HASH_BUCKETS)) return v (a hash table's car is an
-		// i31 count; anything else is not an array)
-		emitConsField(w, header, 0);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		// if (!(header.cdr is TYPE_CONS)) return v
-		emitConsField(w, header, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		// data = header.cdr.cdr; if (!(data is TYPE_HASH_BUCKETS)) return v (a displaced
-		// array's data slot holds the target TYPE_CELL)
 		emitConsField(w, header, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
@@ -490,16 +567,6 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.writeUnsignedLeb128(1);
 		set(w, data);
-		get(w, data);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		// meta = header.cdr.car; if (!(meta is TYPE_CONS && meta.cdr is TYPE_CONS))
-		// return v
 		emitConsField(w, header, 1);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
@@ -507,41 +574,6 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
 		w.writeUnsignedLeb128(0);
 		set(w, meta);
-		get(w, meta);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		emitConsField(w, meta, 1);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		// if (!(meta.cdr.cdr is i31 && i31 == 1)) return v (the marker)
-		emitMetaOffset(w, meta);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
-		emitMetaOffset(w, meta);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-		i32(w, 1);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.IF, 0x40);
-		get(w, v);
-		w.write(Instruction.BR, 1);
-		w.write(Instruction.END);
 		// n = fill pointer (meta.car) when present, else dims[0]
 		emitConsField(w, meta, 0);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);

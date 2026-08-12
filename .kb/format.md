@@ -113,8 +113,8 @@ digit printer and ~3.8 KB of runtime, in a program that no longer prints a float
 anywhere. `write-string` tracks the output column the same way, so a following `~&`
 is unaffected. The `write-string` sites additionally skip the character-vector
 normalizer for an argument that CANNOT be one
-(`compiler/StringValuedForms.certainlyString`; `_charvec_to_str` alone is 653 bytes
-of WASM) -- that set is closed and conservative on purpose, since answering true for
+(`compiler/StringValuedForms.certainlyString`; `_charvec_to_str` plus the
+`_charvec_p` shape test it calls is 708 bytes of WASM) -- that set is closed and conservative on purpose, since answering true for
 something that can also answer a character vector drops a normalization the semantics
 need. (`princ` of a certainly-string form now takes the same shortcut by itself, so
 the spelling here is no longer load-bearing for size -- it stays because `%fixed-decimal`

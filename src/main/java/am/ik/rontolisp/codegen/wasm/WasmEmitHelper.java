@@ -920,6 +920,29 @@ final class WasmEmitHelper {
 	}
 
 	/**
+	 * Emits {@code call FUNC_CHARVEC_P}: replaces a value on the stack with the i32
+	 * {@code 1}/{@code 0} answer to "is this a mutable character vector?". The shape half
+	 * of {@link #emitCharvecToStrCall(WasmLispCompiler.Ctx)}, for a caller that wants the
+	 * bit and not the string -- it runs in constant time and allocates nothing, where the
+	 * normalization renders every element. {@code stringp} is the caller that matters.
+	 * @param ctx the compilation context (its writer receives the instructions)
+	 */
+	static void emitCharvecPCall(WasmLispCompiler.Ctx ctx) {
+		emitCharvecPCall(ctx.writer);
+	}
+
+	/**
+	 * The raw-{@link WasmWriter} counterpart of
+	 * {@link #emitCharvecPCall(WasmLispCompiler.Ctx)}, for the runtime builders
+	 * ({@code _charvec_to_str} opens with it).
+	 * @param w the writer for the function body being emitted
+	 */
+	static void emitCharvecPCall(WasmWriter w) {
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_CHARVEC_P);
+	}
+
+	/**
 	 * Emits {@code call FUNC_STR_CHAR_COUNT}: replaces a {@code TYPE_STRING} value on the
 	 * stack with the i32 character count of its UTF-8 encoded content (byte count minus
 	 * two surrounding quotes, walking one increment per UTF-8 lead byte). Every

@@ -459,8 +459,9 @@ at hand -- it is every other renderer. Measured on the `size-report pi_approx` l
 ending in `(princ <the f64 result>)` was **6,307** -- +3,777 bytes to print one
 float, of which `_print_f64_no_nl` is **379**. The rest is `_princ_val` itself
 (1,540), the character-vector normalizer it calls on every value before dispatching
-(`_charvec_to_str`, 653) and the bignum / ratio / character / cons / array printers
-reachable only from it. Two shortcuts, both in `WasmPrintCompiler`, both above the
+(`_charvec_to_str`, 653 at that measurement -- 495 plus the 213-byte `_charvec_p`
+shape test it calls since todo-342) and the bignum / ratio / character / cons /
+array printers reachable only from it. Two shortcuts, both in `WasmPrintCompiler`, both above the
 literal fold:
 
 - **`princ` of a certainly-STRING form is compiled as `write-string`**

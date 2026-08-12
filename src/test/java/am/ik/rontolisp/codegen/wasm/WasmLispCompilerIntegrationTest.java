@@ -11958,6 +11958,61 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileStringpClassifiesEveryCellShape() throws Exception {
+		// stringp's TYPE_CELL arm asks _charvec_p for the marker shape instead of
+		// rendering the vector through _charvec_to_str, so this pins that the split
+		// kept every one of the normalization's early exits: only the marked rank-1
+		// character array (meta offset i31 == 1) is a string, and the values that
+		// share the TYPE_CELL box -- a general/adjustable/multi-dimensional array, a
+		// packed vector, a displaced array, a hash table, a struct, an instance, a
+		// closure, a stream -- are not.
+		assertThat(compileAndRun("""
+				(defstruct pt x)
+				(defclass cls () ((a :initform 1)))
+				(defparameter *cv* (make-array 3 :element-type 'character :fill-pointer 3 :adjustable t))
+				(print (list (stringp "abc") (stringp (make-string 3)) (stringp *cv*)
+				             (stringp (make-array 3 :element-type 'character :adjustable t))
+				             (stringp (copy-seq (make-string 3))) (stringp (symbol-name 'foo))))
+				(print (list (stringp (make-array 3)) (stringp (make-array 3 :adjustable t))
+				             (stringp (make-array '(2 2))) (stringp (make-array 3 :displaced-to (make-array 3)))
+				             (stringp (make-array 3 :element-type '(unsigned-byte 8)))
+				             (stringp (make-array 3 :element-type 'double-float))
+				             (stringp (make-hash-table))))
+				(print (list (stringp (make-pt :x 1)) (stringp (make-instance 'cls)) (stringp #'car)
+				             (stringp (lambda (x) x)) (stringp (make-string-output-stream))
+				             (stringp '(1 2)) (stringp 12345678901234567890) (stringp 1/3) (stringp #\\a)))
+				""")).isEqualTo("""
+				(T T T T T T)
+				(NIL NIL NIL NIL NIL NIL NIL)
+				(NIL NIL NIL NIL NIL NIL NIL NIL NIL)""");
+	}
+
+	@Test
+	void compileStringpOverACharVectorIsConstantTime() throws Exception {
+		// Todo 342. (stringp v) over a mutable character vector used to answer by
+		// calling _charvec_to_str -- rendering all of v into a fresh string, then
+		// keeping one bit of the result -- so it was O(length v) and re-paid on every
+		// call: 200,000 calls cost 10.2 s for an 8192-character vector against 0.1 s
+		// for a 64-character one (wasmtime 47, and ~1 ns per character per call on
+		// node 24 too). It now calls _charvec_p, which stops at the marker.
+		//
+		// A RATIO rather than a wall-clock bound, so the pin is the complexity class
+		// and not the speed of the machine that runs it: linear costs made the long
+		// vector ~850x the short one, constant ones make them equal, and the assertion
+		// sits between at 20x plus 50 ms of scheduling slack.
+		assertThat(compileAndRun("""
+				(defun stringp-ms (s iters)
+				  (let ((n 0) (start (get-internal-real-time)))
+				    (dotimes (i iters)
+				      (if (stringp s) (setq n (+ n 1))))
+				    (if (= n iters) (- (get-internal-real-time) start) -1)))
+				(let* ((short (stringp-ms (make-string 1) 200000))
+				       (long (stringp-ms (make-string 8192) 200000)))
+				  (print (and (>= short 0) (<= long (+ 50 (* 20 short))))))
+				""")).isEqualTo("T");
+	}
+
+	@Test
 	void compilePlainCharacterMakeArrayIsStillAString() throws Exception {
 		// Without :fill-pointer/:adjustable a rank-1 character array keeps the
 		// make-string lowering: an immutable simple string.

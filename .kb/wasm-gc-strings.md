@@ -39,7 +39,8 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
   `TYPE_CHAR` code point as its 1-4 byte UTF-8 sequence -- so `len` (field 1) is the
   BYTE length and can exceed the character count on non-ASCII input. Character-based
   accessors walk the byte data through three shared runtime helpers appended right
-  after `FUNC_CHARVEC_TO_STR`:
+  after `FUNC_CHARVEC_TO_STR` and its shape half `FUNC_CHARVEC_P`
+  (`.kb/adjustable-arrays.md`):
 
   - `FUNC_STR_CHAR_COUNT` `_str_char_count(str) -> i32` -- character count of a
     UTF-8-encoded string (walk bytes 1..len-1, count lead bytes, i.e. bytes with

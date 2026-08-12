@@ -77,6 +77,12 @@
 > PARAMETERS -- params have no raw representation; see the unboxed-locals
 > re-evaluation trigger).
 
+> Stage-4 item (6) again (2026-08-12, todo 342): narrowing the call to the
+> `TYPE_CELL` arm was right, but the call it narrowed to was LINEAR --
+> `_charvec_to_str` rendered the whole character vector to answer a predicate.
+> That arm calls `_charvec_p` now (the marker test alone, constant time); the
+> shape of the emission is otherwise unchanged. `.kb/adjustable-arrays.md`.
+
 > Counted-loop leaves (2026-08-08): a `dotimes` induction variable over a
 > LITERAL bound registers as a COUNTED `RawLocal` (no shadow), and its `RawLeaf`
 > therefore needs no snapshot, no guard and no `_int_new` in the fallback -- it
