@@ -2,7 +2,7 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**7,879 / 17,687 tests pass (44.5%)** -- 2,748 fail, 7,060 signal an error.
+**7,878 / 17,687 tests pass (44.5%)** -- 2,750 fail, 7,059 signal an error.
 
 7 top-level forms could not be read, 2,224 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
 
@@ -25,7 +25,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | pathnames | 215 | 21 | 3 | 191 | 9.8% | 17 |
 | printer | 505 | 99 | 74 | 332 | 19.6% | 92 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
-| reader | 560 | 52 | 287 | 221 | 9.3% | 40 |
+| reader | 560 | 51 | 289 | 220 | 9.1% | 40 |
 | sequences | 2,403 | 1,459 | 202 | 742 | 60.7% | 902 |
 | streams | 709 | 142 | 85 | 482 | 20.0% | 112 |
 | strings | 495 | 192 | 100 | 203 | 38.8% | 32 |
@@ -33,7 +33,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | symbols | 1,138 | 665 | 387 | 86 | 58.4% | 24 |
 | system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
 | types-and-classes | 613 | 263 | 235 | 115 | 42.9% | 31 |
-| **total** | **17,687** | **7,879** | **2,748** | **7,060** | **44.5%** | **2,231** |
+| **total** | **17,687** | **7,878** | **2,750** | **7,059** | **44.5%** | **2,231** |
 
 ## Most frequent failure reasons
 
@@ -61,9 +61,9 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 68 | `The function FLOAT-RADIX is undefined` |
 | 66 | `car expects a cons cell, got: A` |
 | 65 | `The variable *FLOATS* is unbound` |
+| 64 | `X expects 1 arguments, got 5` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
-| 63 | `X expects 1 arguments, got 5` |
-| 56 | `Unknown keyword argument: :X` |
+| 57 | `Unknown keyword argument: :X` |
 | 55 | `The variable #C is unbound` |
 | 54 | `The function NUNION is undefined` |
 | 53 | `The function SET-UP-PACKAGES is undefined` |
