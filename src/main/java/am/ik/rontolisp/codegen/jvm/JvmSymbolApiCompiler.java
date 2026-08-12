@@ -119,6 +119,17 @@ final class JvmSymbolApiCompiler {
 		}
 	}
 
+	/**
+	 * {@code %find-symbol-status}: a compile-time constant, decided by the shared fold so
+	 * both backends answer the same keyword (see
+	 * {@link LispMacroExpander#expandFindSymbolStatus}).
+	 */
+	static void compileFindSymbolStatus(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// The answer is a keyword or nil, both self-evaluating: no quote needed.
+		JvmExprCompiler.compileExpr(
+				LispMacroExpander.expandFindSymbolStatus(cons, ctx.packageTable, ctx.userDefunNames), ctx, className);
+	}
+
 	/** boundp: nil/t/keyword are self-bound, otherwise probe the {@code _genv} mirror. */
 	static void compileBoundp(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> parts = requireArgs(cons, 1, LispNames.BOUNDP);

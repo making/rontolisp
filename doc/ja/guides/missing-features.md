@@ -44,7 +44,10 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
   アリティのままです — それ以外の引数個数にはユーザ定義関数か `lambda` を
   渡してください。
 - CL で副次値を持つ他の組み込み関数（`read-from-string`、`macroexpand-1`、
-  `intern` など）は単一値のままです。
+  `subtypep` など）は単一値のままです —
+  [`find-symbol`](../reference/functions/find-symbol.md) と
+  [`intern`](../reference/functions/intern.md) はアクセス可能性ステータスを
+  返します。
 
 ## 非局所脱出
 

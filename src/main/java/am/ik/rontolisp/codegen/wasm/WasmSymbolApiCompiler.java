@@ -101,6 +101,17 @@ final class WasmSymbolApiCompiler {
 	}
 
 	/**
+	 * {@code %find-symbol-status}: a compile-time constant, decided by the shared fold so
+	 * both backends answer the same keyword (see
+	 * {@link LispMacroExpander#expandFindSymbolStatus}).
+	 */
+	static void compileFindSymbolStatus(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// The answer is a keyword or nil, both self-evaluating: no quote needed.
+		WasmExprCompiler
+			.compileExpr(LispMacroExpander.expandFindSymbolStatus(cons, ctx.packageTable, ctx.userDefunNames), ctx);
+	}
+
+	/**
 	 * fboundp: a literal quoted symbol folds at compile time (functions, macros, special
 	 * forms, car/cdr compositions, user defuns); a computed argument probes the runtime
 	 * {@code _fenv} then the compiled-function registry (functions only).

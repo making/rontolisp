@@ -5972,7 +5972,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
 			.isSorted()
-			.hasSize(391);
+			.hasSize(392);
 	}
 
 	@Test
@@ -8666,6 +8666,35 @@ class LispEvaluatorTest {
 		// postmodern's to-sql-name: (intern (string-upcase name) "KEYWORD")
 		assertThat(evalMulti("(intern (string-upcase \"some-col\") \"KEYWORD\")").print()).isEqualTo(":SOME-COL");
 		assertThat(evalMulti("(find-symbol \"CAR\" \"CL\")").print()).isEqualTo("CAR");
+	}
+
+	@Test
+	void findSymbolAnswersTheAccessibilityStatusAsItsSecondValue() {
+		// The ANSI suite's cl-symbols.lsp reads the status once per standard symbol:
+		// (multiple-value-bind (sym status) (find-symbol name 'common-lisp) ...).
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\" 'common-lisp))").print())
+			.isEqualTo("(CAR :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\" \"COMMON-LISP\"))").print())
+			.isEqualTo("(CAR :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\" :cl))").print()).isEqualTo("(CAR :EXTERNAL)");
+		// A name the cl package does not own: symbol and status are nil together.
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp))").print())
+			.isEqualTo("(NIL NIL)");
+		// cl-user uses cl, so a standard symbol reaches the current package inherited.
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\"))").print()).isEqualTo("(CAR :INHERITED)");
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"FOO\" :keyword))").print())
+			.isEqualTo("(:FOO :EXTERNAL)");
+		assertThat(evalMulti("(multiple-value-list (intern \"CAR\" 'common-lisp))").print())
+			.isEqualTo("(CAR :EXTERNAL)");
+		// A package that does not exist provides neither.
+		assertThat(evalMulti("(multiple-value-list (find-symbol \"CAR\" :simple-date))").print())
+			.isEqualTo("(NIL NIL)");
+	}
+
+	@Test
+	void symbolPlistReadsTheWholePropertyList() {
+		assertThat(evalMulti("(symbol-plist 'sp-none)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(evalMulti("(setf (get 'sp-x 'a) 1) (symbol-plist 'sp-x)").print()).isEqualTo("(A 1)");
 	}
 
 	@Test

@@ -447,6 +447,14 @@ public final class LispNames {
 	public static final String GET = "GET";
 
 	/**
+	 * The {@code symbol-plist} standard function: the whole property list {@code get}
+	 * indexes into, read out of the same {@code %symbol-plists} store. Its own prelude
+	 * entry (and its own copy of the store's {@code defvar}, which is a no-op once bound)
+	 * so a program that reads plists without ever calling {@code get} still gets a table.
+	 */
+	public static final String SYMBOL_PLIST = "SYMBOL-PLIST";
+
+	/**
 	 * The {@code type-of} standard function, a prelude defun over
 	 * {@link #CLASS_DESIGNATOR_INTERNAL}: the type NAME of a struct/CLOS instance (the
 	 * designator is the instance TAG), else the built-in type name the designator
@@ -1329,6 +1337,26 @@ public final class LispNames {
 	 * user-defined function), nil otherwise.
 	 */
 	public static final String FIND_SYMBOL = "FIND-SYMBOL";
+
+	/**
+	 * The internal accessor behind the SECOND value of {@code find-symbol} and
+	 * {@code intern}: the accessibility status keyword ({@code :external},
+	 * {@code :internal}, {@code :inherited}) of a name in a package, or nil when the
+	 * package does not provide it. Takes the same arguments as {@code find-symbol}, and
+	 * answers non-nil exactly when {@code find-symbol} answers a symbol -- the two are
+	 * lowered side by side by a multiple-value consumer (the {@code %array-disp-target} /
+	 * {@code %array-disp-offset} pattern).
+	 */
+	public static final String FIND_SYMBOL_STATUS = "%FIND-SYMBOL-STATUS";
+
+	/** The {@code :external} accessibility status keyword, spelled as it is stored. */
+	public static final String STATUS_EXTERNAL = ":EXTERNAL";
+
+	/** The {@code :internal} accessibility status keyword, spelled as it is stored. */
+	public static final String STATUS_INTERNAL = ":INTERNAL";
+
+	/** The {@code :inherited} accessibility status keyword, spelled as it is stored. */
+	public static final String STATUS_INHERITED = ":INHERITED";
 
 	/**
 	 * The {@code make-symbol} function. Returns a fresh uninterned symbol named

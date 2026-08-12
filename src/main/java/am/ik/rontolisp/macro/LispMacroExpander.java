@@ -8165,12 +8165,105 @@ public final class LispMacroExpander {
 		if ("KEYWORD".equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name, new LispSymbol(":KEYWORD")));
 		}
+		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) && name instanceof LispString str) {
+			// The cl package's membership IS knowledge the compile paths hold, so a
+			// literal
+			// name folds to the interpreter's answer here instead of taking the
+			// build-a-spelling deviation: nil for a name cl does not own, which is what
+			// keeps this value and %find-symbol-status nil together.
+			return PackageRegistry.isClSymbol(str.value()) ? quoteOf(str.value()) : LispNil.INSTANCE;
+		}
 		if (LispNames.CL_PKG.equalsIgnoreCase(pkg) || LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
 			return listToCons(List.of(new LispSymbol(LispNames.INTERN), name));
 		}
 		LispVal qualified = listToCons(
 				List.of(new LispSymbol(LispNames.CONCATENATE), quoteOf("STRING"), new LispString(pkg + ":"), name));
 		return listToCons(List.of(new LispSymbol(LispNames.INTERN), qualified));
+	}
+
+	/**
+	 * The compiled backends' answer for {@code %find-symbol-status} -- the SECOND value
+	 * of {@code find-symbol}/{@code intern} -- as a compile-time constant. One decision
+	 * shared by both compilers, because the status must not depend on which backend
+	 * compiled the call.
+	 * <p>
+	 * A LITERAL name is folded against the same compile-time view of the image that
+	 * {@link #expandFindSymbolInPackage} and the compilers' literal {@code find-symbol}
+	 * fold use, so the pair is nil together and the answer matches the interpreter's
+	 * registry-backed one. Anything the compile-time view cannot decide (a computed name,
+	 * a computed package designator) reports the status of the SPELLING the lowering
+	 * builds, which is the only symbol identity a compiled program has: a {@code PKG:}
+	 * spelling is external, an unqualified one is internal to the current package. The
+	 * residual divergence is the one {@code .todo/254} already owns -- a compiled
+	 * {@code find-symbol} answers a symbol where the interpreter answers nil -- and it
+	 * retires with the symbol-identity model {@code .todo/156} describes.
+	 * @param cons the find-symbol / intern call
+	 * @param packageTable the backend's baked package table
+	 * @param userDefunNames the Pass-1 user definition names
+	 * @return the status keyword, or nil
+	 */
+	public static LispVal expandFindSymbolStatus(LispCons cons, java.util.Map<String, String> packageTable,
+			java.util.Set<String> userDefunNames) {
+		List<LispVal> parts = cons.toList();
+		LispVal name = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
+		String literal = name instanceof LispString str ? str.value() : null;
+		if (parts.size() < 3) {
+			// (find-symbol NAME): the current package. A standard symbol reaches it
+			// through the use list, so it is inherited rather than external -- the
+			// interpreter's answer for every current package but cl itself.
+			return literal == null ? new LispSymbol(LispNames.STATUS_INTERNAL)
+					: imageStatus(literal, LispNames.STATUS_INHERITED, userDefunNames);
+		}
+		String pkg = literalPackageDesignator(parts.get(2));
+		if (pkg == null) {
+			// A computed designator builds the single-colon EXTERNAL spelling.
+			return new LispSymbol(LispNames.STATUS_EXTERNAL);
+		}
+		if (!packageTable.isEmpty() && !packageTable.containsKey(pkg)
+				&& !packageTable.containsKey(pkg.toUpperCase(java.util.Locale.ROOT))) {
+			return LispNil.INSTANCE;
+		}
+		if ("KEYWORD".equalsIgnoreCase(pkg)) {
+			return new LispSymbol(LispNames.STATUS_EXTERNAL);
+		}
+		if (LispNames.CL_PKG.equalsIgnoreCase(pkg)) {
+			return literal == null ? new LispSymbol(LispNames.STATUS_EXTERNAL) : clPackageStatus(literal);
+		}
+		if (LispNames.CL_USER_PKG.equalsIgnoreCase(pkg)) {
+			// cl-user provides every name (no intern table), so this arm never answers
+			// nil.
+			return literal != null && PackageRegistry.isClSymbol(literal) ? clUserStatus(literal)
+					: new LispSymbol(LispNames.STATUS_INTERNAL);
+		}
+		return new LispSymbol(LispNames.STATUS_EXTERNAL);
+	}
+
+	/** The status of a literal name in the {@code cl} package: nil unless cl owns it. */
+	private static LispVal clPackageStatus(String name) {
+		if (!PackageRegistry.isClSymbol(name)) {
+			return LispNil.INSTANCE;
+		}
+		return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : LispNames.STATUS_EXTERNAL);
+	}
+
+	/** The status of a standard symbol reached through {@code cl-user}'s use list. */
+	private static LispVal clUserStatus(String name) {
+		return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : LispNames.STATUS_INHERITED);
+	}
+
+	/**
+	 * The status of a literal name against the compile-time view of the image: the arms
+	 * of the compilers' literal {@code find-symbol} fold, in the same order, so the two
+	 * agree on which names are absent.
+	 */
+	private static LispVal imageStatus(String name, String standardStatus, java.util.Set<String> userDefunNames) {
+		if (!name.isEmpty() && name.charAt(0) == ':') {
+			return new LispSymbol(LispNames.STATUS_EXTERNAL);
+		}
+		if (PackageRegistry.isClSymbol(name)) {
+			return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : standardStatus);
+		}
+		return userDefunNames.contains(name) ? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
 	}
 
 	/**
@@ -8368,21 +8461,50 @@ public final class LispMacroExpander {
 	 * folded to a quoted keyword. Returns null for a computed designator.
 	 */
 	@Nullable private static String literalPackageDesignator(LispVal arg) {
+		return literalPackageDesignator(arg, false);
+	}
+
+	/**
+	 * @param quoted whether {@code arg} was reached through a {@code quote}, which is
+	 * what makes a BARE symbol a designator literal instead of a variable reference
+	 */
+	@Nullable private static String literalPackageDesignator(LispVal arg, boolean quoted) {
 		if (arg instanceof LispCons cons && cons.car() instanceof LispSymbol op
 				&& (LispNames.QUOTE.equals(op.name()) || LispNames.LOAD_TIME_VALUE.equals(op.name()))
 				&& cons.cdr() instanceof LispCons rest && rest.cdr() instanceof LispNil) {
-			return literalPackageDesignator(rest.car());
+			return literalPackageDesignator(rest.car(), LispNames.QUOTE.equals(op.name()));
 		}
 		return switch (arg) {
-			case LispString str -> str.value();
-			// A bare (non-keyword) symbol here is a VARIABLE REFERENCE holding a package
-			// value, not a designator literal -- reading its NAME as the package is how
-			// (find-symbol n ironclad) once built the doubly-qualified
-			// IRONCLAD::IRONCLAD:X.
-			case LispSymbol sym ->
-				sym.isKeyword() || sym.name().startsWith("#:") ? LispSymbol.displayName(sym.name()) : null;
+			case LispString str -> canonicalDesignator(str.value());
+			// An UNQUOTED bare (non-keyword) symbol here is a VARIABLE REFERENCE holding
+			// a package value, not a designator literal -- reading its NAME as the
+			// package
+			// is how (find-symbol n ironclad) once built the doubly-qualified
+			// IRONCLAD::IRONCLAD:X. Under a quote there is no such reading: (find-symbol
+			// "CAR" 'common-lisp) -- what the ANSI suite writes -- names the cl package.
+			// The designator is the symbol's MEMBER name (CL's own rule): a quoted lone
+			// symbol arrives package-RESOLVED, so the (intern name #.*package*) fold
+			// hands this CI-SXQ-RTE::CI-SXQ-RTE where the package is CI-SXQ-RTE -- which
+			// is exactly what the computed path's (string PKG) already answered.
+			case LispSymbol sym -> quoted || sym.isKeyword() || sym.name().startsWith("#:")
+					? canonicalDesignator(LispSymbol.memberName(sym.name())) : null;
 			default -> null;
 		};
+	}
+
+	/**
+	 * A built-in package NICKNAME resolved to the canonical name, so the cl / cl-user /
+	 * keyword arms of the lowerings below recognize every spelling of those three:
+	 * {@code common-lisp} is the standard name of the package this implementation calls
+	 * {@code cl}, and without the fold {@code (find-symbol "CAR" 'common-lisp)} built the
+	 * qualified spelling {@code COMMON-LISP:CAR} where the interpreter answered
+	 * {@code CAR}. Any other spelling is returned verbatim -- a user package's own case
+	 * is its own.
+	 */
+	private static String canonicalDesignator(String name) {
+		String upper = name.toUpperCase(java.util.Locale.ROOT);
+		String canonical = PackageRegistry.canonicalBuiltinName(upper);
+		return canonical.equals(upper) ? name : canonical;
 	}
 
 	/**
@@ -25162,18 +25284,19 @@ public final class LispMacroExpander {
 	 * are evaluated in order (nested {@code let}s) and the {@code values} expressions
 	 * (pure reads over the temps) yield the producer's values. Recognized multi-value
 	 * producers -- a literal {@code (values ...)} call and the two-value built-ins
-	 * {@code floor}/{@code ceiling}/{@code round}/{@code truncate} (quotient + remainder)
-	 * and {@code gethash} (value + present-p) -- lower purely syntactically with
-	 * {@code rest} null. Any other producer goes through the {@code %mv-spill} runtime
-	 * channel: the spill is cleared, the form is evaluated (a {@code values} tail inside
-	 * the callee stores its extra values in the spill as a fresh list), and {@code rest}
-	 * snapshots the spill -- the consumer reads value {@code i > 0} as
-	 * {@code (nth i-1 rest)}. This is how {@code multiple-value-bind} over a user
-	 * function sees the callee's tail values. Snapshotting also CLEARS the channel, so
-	 * values one consumer took cannot be read a second time by an enclosing one.
-	 * Deviation from CL: a producer that calls {@code values} in a NON-tail position with
-	 * no consumer of its own and then returns normally leaves a stale spill behind, so
-	 * the extra variables may read leftover values instead of nil.
+	 * {@code floor}/{@code ceiling}/{@code round}/{@code truncate} (quotient +
+	 * remainder), {@code gethash} (value + present-p), {@code array-displacement} (target
+	 * + offset) and {@code find-symbol}/{@code intern} (symbol + accessibility status) --
+	 * lower purely syntactically with {@code rest} null. Any other producer goes through
+	 * the {@code %mv-spill} runtime channel: the spill is cleared, the form is evaluated
+	 * (a {@code values} tail inside the callee stores its extra values in the spill as a
+	 * fresh list), and {@code rest} snapshots the spill -- the consumer reads value
+	 * {@code i > 0} as {@code (nth i-1 rest)}. This is how {@code multiple-value-bind}
+	 * over a user function sees the callee's tail values. Snapshotting also CLEARS the
+	 * channel, so values one consumer took cannot be read a second time by an enclosing
+	 * one. Deviation from CL: a producer that calls {@code values} in a NON-tail position
+	 * with no consumer of its own and then returns normally leaves a stale spill behind,
+	 * so the extra variables may read leftover values instead of nil.
 	 */
 	private record MvProducer(List<MvBinding> bindings, List<LispVal> values, @Nullable LispSymbol rest) {
 	}
@@ -25203,6 +25326,7 @@ public final class LispMacroExpander {
 			case LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND, LispNames.TRUNCATE -> size == 2 || size == 3;
 			case LispNames.GETHASH -> size == 3 || size == 4;
 			case LispNames.ARRAY_DISPLACEMENT -> size == 2;
+			case LispNames.FIND_SYMBOL, LispNames.INTERN -> size == 2 || size == 3;
 			default -> false;
 		};
 	}
@@ -25251,6 +25375,43 @@ public final class LispMacroExpander {
 					bindings.add(new MvBinding(arr, parts.get(1)));
 					values.add(mvCall(LispNames.ARRAY_DISP_TARGET, arr));
 					values.add(mvCall(LispNames.ARRAY_DISP_OFFSET, arr));
+					return new MvProducer(bindings, values, null);
+				}
+				case LispNames.FIND_SYMBOL, LispNames.INTERN: {
+					// (find-symbol name [pkg]) / (intern name [pkg]) -> symbol +
+					// accessibility status. The status is a second lookup over the SAME
+					// argument temps, so each argument is evaluated once however many
+					// values the consumer takes. Both lookups are pure -- rontolisp has
+					// no
+					// intern table, so intern never mutates one and the status cannot
+					// depend on which of the two runs first (CL's does: there the status
+					// is the one from BEFORE the intern).
+					String op = ((LispSymbol) cons.car()).name();
+					// A LITERAL argument is passed through rather than bound: it is what
+					// the compile paths fold both lookups against, and a temporary would
+					// hide it from them (the status would go from :inherited to the
+					// can't-tell :internal, and the symbol from CAR to a runtime build).
+					// It costs nothing to repeat -- evaluating a literal twice is free.
+					LispVal nameRef = parts.get(1);
+					if (!(nameRef instanceof LispString)) {
+						LispSymbol n = new LispSymbol(prefix + "_n");
+						bindings.add(new MvBinding(n, nameRef));
+						nameRef = n;
+					}
+					if (parts.size() == 3) {
+						LispVal pkgRef = parts.get(2);
+						if (literalPackageDesignator(pkgRef) == null) {
+							LispSymbol p = new LispSymbol(prefix + "_p");
+							bindings.add(new MvBinding(p, pkgRef));
+							pkgRef = p;
+						}
+						values.add(mvCall(op, nameRef, pkgRef));
+						values.add(mvCall(LispNames.FIND_SYMBOL_STATUS, nameRef, pkgRef));
+					}
+					else {
+						values.add(mvCall(op, nameRef));
+						values.add(mvCall(LispNames.FIND_SYMBOL_STATUS, nameRef));
+					}
 					return new MvProducer(bindings, values, null);
 				}
 				case LispNames.GETHASH: {

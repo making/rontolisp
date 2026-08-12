@@ -743,6 +743,7 @@ final class WasmExprCompiler {
 				case LispNames.SYMBOL_NAME -> WasmSymbolApiCompiler.compileSymbolName(cons, ctx);
 				case LispNames.INTERN -> WasmSymbolApiCompiler.compileIntern(cons, ctx);
 				case LispNames.FIND_SYMBOL -> WasmSymbolApiCompiler.compileFindSymbol(cons, ctx);
+				case LispNames.FIND_SYMBOL_STATUS -> WasmSymbolApiCompiler.compileFindSymbolStatus(cons, ctx);
 				// A runtime export/unexport (inside a defun body): the compiled package
 				// registry is frozen, so evaluate the arguments and yield t.
 				case LispNames.EXPORT, LispNames.UNEXPORT ->

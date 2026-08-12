@@ -24,8 +24,8 @@ T                                             <- SBCL also echoes the expanded-p
 | --- | --- | --- |
 | `read-from-string` | index after the object read | primary only |
 | `macroexpand-1` / `macroexpand` | expanded-p | primary only |
-| `intern` | `:internal` / `:external` / `:inherited` / nil | primary only |
-| `find-symbol` | same status keyword | primary only |
+| `intern` | `:internal` / `:external` / `:inherited` / nil | **done** (2026-08-12) |
+| `find-symbol` | same status keyword | **done** (2026-08-12) |
 | `get-setf-expansion` | 5 values (we DO return all 5 -- keep) | ok |
 | `parse-integer` | stop index (we DO publish it) | ok |
 | `floor`-family, `gethash`, `array-displacement` | remainder / present-p / offset | `.todo/212` |
@@ -75,6 +75,16 @@ inventory, and they are the two biggest single wins the suite reports:
 
 Both are wrong-VALUE failures, not signals: they will not show up as a missing
 operator anywhere, and they cost more tests than any absent function does.
+
+**The `find-symbol` row landed 2026-08-12** and the chapter went 4.2% -> 58.4%
+(+617 tests). It did NOT need the `%mv-spill` channel or `.todo/213`: the status is
+a SYNTACTIC second value, lowered beside the primary by
+`LispMacroExpander.lowerMvProducer` over an internal `%find-symbol-status` accessor
+(the `array-displacement` pattern), so it never crosses a function boundary. Every row
+left in this table whose extra value is a pure function of the same arguments can land
+the same way -- `read-from-string`'s index is not one of them (it depends on where the
+read stopped), which is why that row still waits on the channel. Mechanics:
+`.kb/symbol-runtime-api.md`.
 
 ## Verification
 

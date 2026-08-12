@@ -19,7 +19,7 @@ alphabetically.
 
 | what | costs | owner |
 | --- | --- | --- |
-| `find-symbol` has no status second value, so `cl-symbols.lsp` fails once per CL symbol | ~1,000 tests, the whole `symbols` chapter (4.2%) | .todo/214 |
+| ~~`find-symbol` has no status second value, so `cl-symbols.lsp` fails once per CL symbol~~ **CLOSED 2026-08-12**: `symbols` 4.2% -> **58.4%** (48 -> 665 of ~1,140), the largest single move the report has recorded | ~1,000 tests, the whole `symbols` chapter (4.2%) | .todo/214, `.kb/symbol-runtime-api.md` |
 | no runtime `make-package` and `defpackage` only as a LITERAL top-level form, so the chapter's own `set-up-packages` cannot be defined -- then the package-query API (`package-used-by-list`, `packagep`, `do-symbols`, `find-all-symbols`, ...) is missing on top | `packages` chapter (5.5%), 181 direct hits | .todo/038, .kb/packages.md |
 | `read-from-string` has no index second value | most of `reader`'s 288 wrong-value tests | .todo/214 |
 | the pathname accessors (`pathname-host`/`-device`/`-version`, `wild-pathname-p`, `pathname-match-p`, `enough-namestring`, `translate-logical-pathname`) and `*default-pathname-defaults*` | `pathnames` 9.8% + `files` 9.2% | .kb/pathnames.md |
@@ -66,6 +66,29 @@ the new information:
   rows)**: partly genuine arity checking, partly our functions being narrower
   than CL's (`&optional`/`&key` parameters we never took). Worth splitting the
   two before treating either as a gap.
+
+## Worked so far
+
+**Row 1, 2026-08-12** -- `find-symbol`/`intern` now answer the accessibility status
+as their second value, and `symbol-plist` exists (reaching the `:external` branch of
+`test-if-not-in-cl-package` calls it, so the status alone would have turned 1,002
+wrong-value failures into 1,002 signals). Measured with `ansi-test/measure.sh symbols`:
+**4.2% -> 58.4%**, +617 tests, which is ~+3.5 points on the whole suite. What is left in
+that chapter is a different list -- `set` / `makunbound` / `remprop` / `copy-symbol` /
+`gentemp` / `delete-package` / `do-symbols`, and the 364 ANSI CL symbols we simply do
+not have (`find-symbol` answers `:external` for the 614 that are in
+`PackageRegistry.CL_SYMBOLS` and nil for the rest -- deliberately, since claiming the
+full 978 would be answering for symbols the image does not carry).
+
+Three lowering bugs had to go first, all on the exact call the suite writes
+(`(find-symbol "CAR" 'common-lisp)`): a QUOTED bare designator read as computed, a
+built-in package nickname not canonicalized before the cl/cl-user/keyword arms, and
+`(find-symbol LITERAL 'cl)` taking the build-a-spelling deviation instead of the
+compile-time answer. Mechanics, the deviation that remains, and its re-evaluation
+trigger: `.kb/symbol-runtime-api.md`.
+
+Next by payoff, unchanged: `read-from-string`'s index (.todo/214, most of `reader`'s
+288 wrong-value tests), then runtime `make-package` (.todo/038).
 
 ## Reading caveat
 

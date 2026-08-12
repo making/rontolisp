@@ -405,3 +405,87 @@ Tests: the *InternIntoALiteralPackage* / *InternIntoAComputedPackage* /
 *InternIntoAnUnknownPackage* / *ApplyOfAnUndefinedRuntimeSymbol* groups in
 JvmLispCompilerTest + WasmLispCompilerIntegrationTest, and the
 `runtime-intern-funcall` ci-spec case.
+
+## `find-symbol`/`intern` answer the ACCESSIBILITY STATUS as a second value (`.todo/338-ansi-conformance-the-ranked-gap.md`, 2026-08-12)
+
+CL's `find-symbol` returns two values: the symbol and its accessibility status in the
+package (`:external` / `:internal` / `:inherited`, or nil). We returned the symbol
+alone. **What that costs is the single biggest number the ANSI report holds**:
+`symbols/cl-symbols.lsp` reads the status once per standard symbol
+(`(multiple-value-bind (sym status) (find-symbol name 'common-lisp) (or (not (eqt
+status :external)) ...))`), so a nil status failed 1,002 of that chapter's 1,141 tests
+and pinned it at 4.2% while its neighbours sat above 40%.
+
+**The status is a SYNTACTIC second value, not a spill value** — the
+`%array-disp-target`/`%array-disp-offset` pattern (`LispMacroExpander.lowerMvProducer`):
+a `find-symbol`/`intern` producer lowers to the call itself plus a
+`%find-symbol-status` call over the SAME argument temps, so every backend gets the
+second value from its own compile path and nothing has to cross a function boundary
+(`.todo/212`/`.todo/213` are untouched by this). Both lookups are pure, and because
+there is no intern table `intern` never mutates one — so the two may run in either
+order, unlike CL, where the status is the one from BEFORE the intern.
+
+**A literal argument is passed through, never bound to a temp.** This is the load-bearing
+detail: the compile paths decide both values by folding the LITERAL name and the LITERAL
+package designator, and a temporary hides both. Binding them cost `CAR :INHERITED` ->
+a runtime-built `COMMON-LISP:CAR` with the can't-tell `:INTERNAL`, on the compiled
+backends only.
+
+Where each backend decides it:
+
+- **Interpreter**: `PackageResolver.memberStatus`, which mirrors `memberSpelling` arm for
+  arm — that is what makes the pair nil TOGETHER (CL's own invariant, and the reason a
+  consumer may test the status instead of the symbol). `cl` owns the standard symbols
+  and exports all but the `%`-prefixed internals; `cl-user` uses `cl`, so a standard
+  symbol read through it is `:inherited`, and every other name is `:internal` (cl-user
+  provides every name — there is no intern table). `LispEvaluator`'s
+  `%find-symbol-status` adds the same definition-IS-an-interning probe find-symbol has
+  (`:internal` for a defun registered under the package's canonical spelling).
+- **JVM + WASM**: one shared fold, `LispMacroExpander.expandFindSymbolStatus`, called
+  from `Jvm`/`WasmSymbolApiCompiler.compileFindSymbolStatus` — a keyword or nil constant,
+  never a runtime call. A literal name folds against the same compile-time view the
+  literal `find-symbol` fold uses. Anything it cannot decide (computed name, computed
+  designator) reports the status of the SPELLING the lowering builds, which is the only
+  symbol identity a compiled program has: `PKG:` -> `:external`, bare -> `:internal`.
+
+Three pre-existing bugs in the lowering had to go first, all of them on the exact call
+the ANSI aux writes, `(find-symbol "CAR" 'common-lisp)`:
+
+1. **A QUOTED bare symbol was read as a computed designator.** `literalPackageDesignator`
+   rejects a bare non-keyword symbol on purpose (it is a VARIABLE holding a package
+   value — that reading once built `IRONCLAD::IRONCLAD:SHA256`), but the `quote` unwrap
+   recursed without remembering it had passed a quote. Now it carries the flag; under a
+   quote a bare symbol IS a designator literal.
+2. **A built-in package NICKNAME was not canonicalized** before the keyword/cl/cl-user
+   arms, so `common-lisp` (the STANDARD name of the package this implementation calls
+   `cl`) missed them and the qualified-spelling branch built `COMMON-LISP:CAR` where the
+   interpreter answered `CAR`. `canonicalDesignator` folds it through
+   `PackageRegistry.canonicalBuiltinName`; a non-builtin spelling is returned verbatim,
+   so a user package's own case is its own.
+3. **`(find-symbol LITERAL 'cl)` took the build-a-spelling deviation** instead of the
+   answer the compile paths can plainly compute. `cl`'s membership IS compile-time
+   knowledge, so a literal name now folds to the symbol or to nil exactly as the
+   interpreter answers — which is what keeps the value and the status nil together.
+   This retires the `cl` half of `.todo/254`; the user-package half (an unknown name in
+   `PKG` still yields `PKG:NAME`) stays there, and with it the computed-name arm above.
+
+Deviation, with its re-evaluation trigger: **a user package that uses `cl` answers nil
+for a standard symbol it does not own**, where CL answers `:inherited`. The status is
+deliberately pinned to `memberSpelling`'s admission test, and widening THAT is not free —
+sxql's `find-make-op` probes `(find-symbol name :sxql)` with `:errorp nil` and takes a
+symbol as "this operator exists", so admitting inherited symbols would hand it `CL:COUNT`
+and build the wrong op (the tripwire is `MitoE2eTest#countDaoIsUndefinedOnTheCompiledBackends`).
+Revisit when symbol IDENTITY lands (`.todo/156`): with a real home-package answer the
+probe can distinguish "inherited" from "owned" and both can be right.
+
+`symbol-plist` came with it, because the status alone does not make those 1,002 tests
+pass — reaching the `:external` branch calls it. It is a prelude entry
+(`LispPreludeLibrary`) over the same `%symbol-plists` store `get`/`(setf get)` use, and
+it carries its OWN copy of the store's `(defvar %symbol-plists nil)`: `defvar` assigns
+only when unbound, so a program that pulls in both entries gets one table. There is no
+`(setf symbol-plist)`.
+
+Tests: `LispEvaluatorTest#findSymbolAnswersTheAccessibilityStatusAsItsSecondValue` +
+`#symbolPlistReadsTheWholePropertyList`, the matching pairs in `JvmLispCompilerTest` and
+`WasmLispCompilerIntegrationTest`, and the `symbol-runtime-api` ci-spec case (all four
+backends). The cl function count moves 391 -> 392.

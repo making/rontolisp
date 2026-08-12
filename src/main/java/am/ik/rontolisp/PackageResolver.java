@@ -1630,6 +1630,57 @@ public final class PackageResolver {
 		return null;
 	}
 
+	/**
+	 * The accessibility status {@code (find-symbol name pkg)} answers as its SECOND
+	 * value: {@code :external}, {@code :internal}, {@code :inherited}, or null when the
+	 * package does not provide the name. Decided by exactly the admission test
+	 * {@link #memberSpelling} uses, so the pair is null together -- CL's own invariant,
+	 * and what lets a consumer read the status instead of testing the symbol.
+	 * <p>
+	 * A {@code cl} symbol is external unless it is one of the {@code %}-prefixed
+	 * internals, and it is INHERITED rather than external when read through
+	 * {@code cl-user}, which uses {@code cl}. Deviation: a user package that uses
+	 * {@code cl} still answers null for a standard symbol it does not own, because
+	 * {@code memberSpelling} does -- see {@code .kb/symbol-runtime-api.md}.
+	 * @param pkgDesignator the package name as given
+	 * @param member the verbatim symbol name
+	 * @return the status keyword spelling (with its leading colon), or null
+	 */
+	public @Nullable String memberStatus(String pkgDesignator, String member) {
+		String pkg = findPackageName(pkgDesignator);
+		if (pkg == null) {
+			throw new LispPackageException("No such package: " + pkgDesignator);
+		}
+		if ("keyword".equals(pkg)) {
+			return LispNames.STATUS_EXTERNAL;
+		}
+		if (LispNames.CL_PKG.equals(pkg)) {
+			return PackageRegistry.isClSymbol(member) ? clSymbolStatus(member, false) : null;
+		}
+		if (LispNames.CL_USER_PKG.equals(pkg)) {
+			// cl-user provides every name (there is no intern table); a standard symbol
+			// reaches it through the use list, everything else is its own.
+			return PackageRegistry.isClSymbol(member) ? clSymbolStatus(member, true) : LispNames.STATUS_INTERNAL;
+		}
+		LispPackage p = this.registry.get(pkg);
+		if (p.exports(member)) {
+			return LispNames.STATUS_EXTERNAL;
+		}
+		return p.owns(member) || p.imports().containsKey(member) ? LispNames.STATUS_INTERNAL : null;
+	}
+
+	/**
+	 * The status of a {@code cl} symbol read through {@code cl} itself or through a user.
+	 */
+	private static String clSymbolStatus(String member, boolean throughUseList) {
+		// The %-prefixed helpers are owned by cl but not exported, so they are internal
+		// wherever they are reached from.
+		if (member.startsWith("%")) {
+			return LispNames.STATUS_INTERNAL;
+		}
+		return throughUseList ? LispNames.STATUS_INHERITED : LispNames.STATUS_EXTERNAL;
+	}
+
 	private static String operatorMember(LispSymbol op) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
 		return qn == null ? op.name() : qn.member();

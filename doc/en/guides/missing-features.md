@@ -43,7 +43,10 @@ Lisp:
 - `multiple-value-call` with a built-in `#'name` keeps the wrapper's fixed
   arity — pass a user function or `lambda` for other argument counts;
 - other built-ins with secondary values in CL (`read-from-string`,
-  `macroexpand-1`, `intern`, ...) remain single-value.
+  `macroexpand-1`, `subtypep`, ...) remain single-value —
+  [`find-symbol`](../reference/functions/find-symbol.md) and
+  [`intern`](../reference/functions/intern.md) do answer the accessibility
+  status.
 
 ## Non-local exit
 

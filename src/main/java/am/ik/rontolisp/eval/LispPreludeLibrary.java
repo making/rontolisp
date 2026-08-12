@@ -302,6 +302,14 @@ public final class LispPreludeLibrary {
 				(defun class-name (class)
 				  (%obj-ref class 0))
 				""");
+		// symbol-plist carries its own copy of the store's defvar: defvar assigns only
+		// when
+		// unbound, so the two entries can both be spliced and the second one is a no-op.
+		SOURCES.put(LispNames.SYMBOL_PLIST, """
+				(defvar %symbol-plists nil)
+				(defun symbol-plist (symbol)
+				  (cdr (assoc symbol %symbol-plists)))
+				""");
 		SOURCES.put(LispNames.GET, """
 				(defvar %symbol-plists nil)
 				(defun get (symbol indicator &optional default)

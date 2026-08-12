@@ -109,6 +109,7 @@
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | すべてのスロットが未束縛の新しいインスタンス。initform も `initialize-instance` も実行しない |
 | `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
+| `symbol-plist` | `(symbol-plist 'sym)` | `get` が引く属性リスト全体(同じストアから)。`(setf symbol-plist)` はありません |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- 大文字化・小文字化で文字が変化するとき真（Unicode ケース表に従う） |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- 指定した基数(デフォルト10)での桁の重み、またはnil |
 | `digit-char` | `(digit-char 11 16)` | `#\B` -- 基数 (既定 10) における重みを表す文字、範囲外なら nil |

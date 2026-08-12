@@ -3111,6 +3111,22 @@ public final class Environment implements Scope {
 					|| env.lookupFunctionOrNull(name) != null || env.hasBinding(name);
 			return known ? new LispSymbol(name) : LispNil.INSTANCE;
 		}));
+		// The status second value, on the same resolver-less terms as find-symbol above:
+		// nil for exactly the names that one answers nil for.
+		env.defineFunction(LispNames.FIND_SYMBOL_STATUS, new LispFunction(LispNames.FIND_SYMBOL_STATUS, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.FIND_SYMBOL + " expects 1 or 2 arguments, got " + args.size());
+			}
+			String name = requireString(LispNames.FIND_SYMBOL, args.get(0));
+			if (!name.isEmpty() && name.charAt(0) == ':') {
+				return new LispSymbol(LispNames.STATUS_EXTERNAL);
+			}
+			if (PackageRegistry.isClSymbol(name)) {
+				return new LispSymbol(name.startsWith("%") ? LispNames.STATUS_INTERNAL : LispNames.STATUS_EXTERNAL);
+			}
+			return env.lookupFunctionOrNull(name) != null || env.hasBinding(name)
+					? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
+		}));
 		env.defineFunction(LispNames.COPY_LIST, new LispFunction(LispNames.COPY_LIST, args -> {
 			requireArgCount(LispNames.COPY_LIST, args, 1);
 			List<LispVal> elements = new java.util.ArrayList<>();

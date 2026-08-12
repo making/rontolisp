@@ -1548,6 +1548,56 @@ public final class LispEvaluator {
 			}
 			return LispNil.INSTANCE;
 		}));
+		// The SECOND value of find-symbol/intern, lowered beside the primary one by a
+		// multiple-value consumer. Every arm mirrors an arm of find-symbol above, so the
+		// two answer nil on exactly the same names -- CL's invariant, and the reason this
+		// is one function rather than a status flag threaded through the spill.
+		this.globalEnv.defineFunction(LispNames.FIND_SYMBOL_STATUS,
+				new LispFunction(LispNames.FIND_SYMBOL_STATUS, args -> {
+					if (args.size() == 2) {
+						if (!(args.get(0) instanceof LispString str)) {
+							throw new LispEvalException(
+									LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+						}
+						if (args.get(1) instanceof LispNil) {
+							return LispNil.INSTANCE;
+						}
+						String designator = packageDesignator(LispNames.FIND_SYMBOL, args.get(1));
+						String pkgName = this.packageResolver.findPackageName(designator);
+						if (pkgName == null) {
+							return LispNil.INSTANCE;
+						}
+						String status = this.packageResolver.memberStatus(designator, str.value());
+						if (status != null) {
+							return new LispSymbol(status);
+						}
+						// A definition IS an interning: a defun registered under the
+						// package's canonical spelling is internal to it.
+						String candidate = LispNames.CL_USER_PKG.equals(pkgName) ? str.value()
+								: PackageRegistry.qualifyInternal(pkgName, str.value());
+						return definedInImage(candidate) ? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
+					}
+					requireSingleArg(LispNames.FIND_SYMBOL, args);
+					if (!(args.get(0) instanceof LispString str)) {
+						throw new LispEvalException(
+								LispNames.FIND_SYMBOL + " expects a string, got " + args.get(0).print());
+					}
+					String name = str.value();
+					if (!name.isEmpty() && name.charAt(0) == ':') {
+						return new LispSymbol(LispNames.STATUS_EXTERNAL);
+					}
+					if (PackageRegistry.isClSymbol(name)) {
+						String status = this.packageResolver.memberStatus(this.packageResolver.currentPackageName(),
+								name);
+						return new LispSymbol(status != null ? status : LispNames.STATUS_INHERITED);
+					}
+					if (definedInImage(name)) {
+						return new LispSymbol(LispNames.STATUS_INTERNAL);
+					}
+					String spelling = this.packageResolver.internSpelling(name);
+					return !spelling.equals(name) && definedInImage(spelling)
+							? new LispSymbol(LispNames.STATUS_INTERNAL) : LispNil.INSTANCE;
+				}));
 		// intern overrides the package-blind Environment converter: a bare name is
 		// interned into the CURRENT package (the resolver's in-package state), so a
 		// macro-time (intern (concatenate ...)) under (in-package p) names the same

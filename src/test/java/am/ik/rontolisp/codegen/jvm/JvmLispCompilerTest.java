@@ -1598,6 +1598,27 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFindSymbolStatusSecondValue() throws Exception {
+		// Same answers as the interpreter, folded at compile time (the literal name and
+		// the literal designator are what the fold reads, so the mv lowering must not
+		// hide either behind a temporary).
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"CAR\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"CAR\" \"COMMON-LISP\")))"
+				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"CAR\")))"
+				+ "(print (multiple-value-list (find-symbol \"FOO\" :keyword)))"
+				+ "(print (multiple-value-list (intern \"CAR\" 'common-lisp)))"))
+			.isEqualTo("(CAR :EXTERNAL)\n(CAR :EXTERNAL)\n(NIL NIL)\n(CAR :INHERITED)\n"
+					+ "(:FOO :EXTERNAL)\n(CAR :EXTERNAL)");
+	}
+
+	@Test
+	void compileAndRunSymbolPlist() throws Exception {
+		assertThat(compileAndRun("(print (symbol-plist 'sp-none))(setf (get 'sp-x 'a) 1)(print (symbol-plist 'sp-x))"))
+			.isEqualTo("NIL\n(A 1)");
+	}
+
+	@Test
 	void compileAndRunBoundp() throws Exception {
 		assertThat(compileAndRun("(defvar *bp-var* 1) (print (boundp '*bp-var*)) (print (boundp '*bp-nope*))"
 				+ "(print (boundp :kw)) (print (boundp T)) (print (boundp nil))"
@@ -7263,12 +7284,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("391");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("392");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("391");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("392");
 	}
 
 	@Test

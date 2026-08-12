@@ -157,6 +157,7 @@ categories:
       - { slug: allocate-instance, name: "allocate-instance" }
       - { slug: class-name, name: "class-name" }
       - { slug: get, name: "get" }
+      - { slug: symbol-plist, name: "symbol-plist" }
       - { slug: case-char-p, name: "lower-case-p upper-case-p" }
       - { slug: digit-char-p, name: "digit-char-p" }
       - { slug: digit-char, name: "digit-char" }

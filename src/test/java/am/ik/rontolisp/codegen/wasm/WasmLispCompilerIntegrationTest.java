@@ -9271,7 +9271,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("391");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("392");
 	}
 
 	@Test
@@ -9424,6 +9424,27 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun(
 				"(setq n \"CAR\") (print (find-symbol n))" + "(setq m \"NO-SUCH-NAME\") (print (find-symbol m))"))
 			.isEqualTo("CAR\nNO-SUCH-NAME");
+	}
+
+	@Test
+	void findSymbolStatusSecondValue() throws Exception {
+		// The same compile-time fold the JVM backend uses (LispMacroExpander), so the
+		// status cannot depend on which backend compiled the call.
+		assertThat(compileAndRun("(print (multiple-value-list (find-symbol \"CAR\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"NO-SUCH-NAME\" 'common-lisp)))"
+				+ "(print (multiple-value-list (find-symbol \"CAR\")))"
+				+ "(print (multiple-value-list (find-symbol \"FOO\" :keyword)))"
+				+ "(print (multiple-value-list (intern \"CAR\" 'common-lisp)))"))
+			.isEqualTo("(CAR :EXTERNAL)\n(NIL NIL)\n(CAR :INHERITED)\n(:FOO :EXTERNAL)\n(CAR :EXTERNAL)");
+	}
+
+	@Test
+	void symbolPlistReadsTheWholePropertyList() throws Exception {
+		// The prelude splice mirrors the CLI pipeline (symbol-plist and get are prelude
+		// defuns, and (setf get) is the setf-function the place expansion needs).
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader
+			.readAllFromString("(print (symbol-plist 'sp-none))(setf (get 'sp-x 'a) 1)(print (symbol-plist 'sp-x))"))))
+			.isEqualTo("NIL\n(A 1)");
 	}
 
 	@Test
