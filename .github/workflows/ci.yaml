@@ -61,7 +61,7 @@ jobs:
     # re-run went from 10.5 s to 46.8 s). Watch the size step below instead; the
     # budget shared with the Maven caches is 10 GB.
     - name: Cache the wasmtime compiled modules
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.cache/wasmtime
         key: wasmtime-modules-${{ runner.os }}-${{ hashFiles('src/main/**', 'src/test/java/am/ik/rontolisp/codegen/wasm/**') }}
@@ -121,7 +121,7 @@ jobs:
       run: mv target/rontolisp target/${{ matrix.artifact-name }}
     - name: Upload artifact
       if: github.event_name != 'pull_request'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ matrix.artifact-name }}
         path: target/${{ matrix.artifact-name }}
@@ -151,7 +151,7 @@ jobs:
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         echo "is_snapshot=$IS_SNAPSHOT" >> "$GITHUB_OUTPUT"
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         path: artifacts
     - name: Build executable JAR
@@ -183,7 +183,7 @@ jobs:
         || gh api -X POST "repos/${{ github.repository }}/git/refs" \
              -f "ref=refs/tags/${VERSION}" -f "sha=${{ github.sha }}"
     - name: Create release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ steps.version.outputs.version }}
         target_commitish: ${{ github.sha }}

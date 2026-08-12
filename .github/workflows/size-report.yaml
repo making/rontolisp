@@ -39,14 +39,14 @@ jobs:
       uses: bytecodealliance/actions/wasmtime/setup@v1
       with:
         version: "v47.0.3"
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
     # The Worker builds pull clack / lack / tiny-routes / ningle through
     # ql:quickload. Carrying that cache keeps the job off the network and makes
     # the run reproducible against a dist that moved under it.
     - name: Cache the Quicklisp dist
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ~/.rontolisp/quicklisp
         key: quicklisp-${{ runner.os }}-${{ hashFiles('size-report/measure.sh') }}
