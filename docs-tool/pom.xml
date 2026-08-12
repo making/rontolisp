@@ -66,6 +66,25 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.5.2</version>
 			</plugin>
+			<!--
+				Same formatter, same version as the root project: this module is
+				outside that reactor, so it needs its own declaration to be held to
+				the one style. `validate` fails the build on unformatted sources;
+				`spring-javaformat:apply` fixes them.
+			-->
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+				<version>0.0.47</version>
+				<executions>
+					<execution>
+						<phase>validate</phase>
+						<goals>
+							<goal>validate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>

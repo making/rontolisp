@@ -329,7 +329,12 @@ does not need rebuilding unless Java sources changed).
 
 ### After Task Completion
 
-- Format (Java): `./mvnw spring-javaformat:apply`
+- Format (Java): `./mvnw spring-javaformat:apply`. `docs-tool/` is a separate
+  reactor with the same formatter pinned to the same version, so a change there also
+  needs `./mvnw -f docs-tool/pom.xml spring-javaformat:apply` -- its `validate`
+  execution fails the build otherwise. Wrap a block the formatter mangles (a javadoc
+  containing raw `<tag>` markup, say) in `// @formatter:off` / `// @formatter:on`
+  rather than skipping the formatter.
 - Format (Lisp): with a built exec jar, format the checked-in sources in place before the
   test run:
   ```bash

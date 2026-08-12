@@ -4,11 +4,10 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Renders the full HTML page shell around a rendered Markdown body: the top bar
- * (site title, playground link, language switcher, runtime status, reset), the
- * left sidebar navigation, the content, and previous/next links. The dark theme
- * lives in {@code assets/docs.css}; the runnable-cell wiring in
- * {@code assets/docs.js}.
+ * Renders the full HTML page shell around a rendered Markdown body: the top bar (site
+ * title, playground link, language switcher, runtime status, reset), the left sidebar
+ * navigation, the content, and previous/next links. The dark theme lives in
+ * {@code assets/docs.css}; the runnable-cell wiring in {@code assets/docs.js}.
  */
 public final class HtmlTemplate {
 
@@ -25,8 +24,8 @@ public final class HtmlTemplate {
 	}
 
 	/**
-	 * A navigation target: the docs-root-relative path of an HTML page plus its
-	 * display title. Used for previous/next links and the back link.
+	 * A navigation target: the docs-root-relative path of an HTML page plus its display
+	 * title. Used for previous/next links and the back link.
 	 */
 	public record Crumb(String docPath, String title) {
 	}
@@ -40,9 +39,9 @@ public final class HtmlTemplate {
 	 * @param currentDocPath docs-root-relative path of this page's HTML output
 	 * @param currentMdFile language-relative Markdown path (drives the language
 	 * switcher's same-page link), or {@code null} to omit it
-	 * @param activeNavDocPath docs-root-relative path of the sidebar entry to
-	 * highlight (may differ from {@code currentDocPath} for pages, such as the
-	 * per-function pages, that are not themselves sidebar entries)
+	 * @param activeNavDocPath docs-root-relative path of the sidebar entry to highlight
+	 * (may differ from {@code currentDocPath} for pages, such as the per-function pages,
+	 * that are not themselves sidebar entries)
 	 * @param bodyHtml the rendered Markdown body
 	 * @param tocHtml the right-hand "On this page" table of contents (an
 	 * {@code <aside class="toc">...} block), or an empty string to omit it
@@ -213,8 +212,8 @@ public final class HtmlTemplate {
 	}
 
 	/**
-	 * Computes the URL of the playground runtime ({@code rontoplayground.js}),
-	 * which sits one directory above the docs root.
+	 * Computes the URL of the playground runtime ({@code rontoplayground.js}), which sits
+	 * one directory above the docs root.
 	 */
 	static String runtimeSrc(String fromDocPath) {
 		int depth = 0;

@@ -3,6 +3,7 @@ package am.ik.rontolisp.docgen;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+// @formatter:off
 /**
  * Builds the right-hand "On this page" table of contents from a rendered
  * Markdown body. It collects the {@code <h2>}/{@code <h3>} headings (each already
@@ -15,6 +16,7 @@ import java.util.regex.Pattern;
  * pages get no TOC column.
  */
 public final class TocBuilder {
+	// @formatter:on
 
 	private TocBuilder() {
 	}

@@ -24,16 +24,15 @@ import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.data.MutableDataSet;
 
 /**
- * Agent-skill generator. Packages the documentation of one language into a Claude
- * skill -- a {@code SKILL.md} plus the whole doc tree as bundled references --
- * and publishes it next to the HTML site.
+ * Agent-skill generator. Packages the documentation of one language into a Claude skill
+ * -- a {@code SKILL.md} plus the whole doc tree as bundled references -- and publishes it
+ * next to the HTML site.
  *
  * <p>
- * The skill is GENERATED rather than written, so that the documentation stays the
- * single source of truth: the only hand-written text is
- * {@code skill/SKILL.template.md} on the classpath, which holds the frontmatter
- * and the routing prose and pulls everything else in through
- * {@code {{include:...}}} and the generated tables.
+ * The skill is GENERATED rather than written, so that the documentation stays the single
+ * source of truth: the only hand-written text is {@code skill/SKILL.template.md} on the
+ * classpath, which holds the frontmatter and the routing prose and pulls everything else
+ * in through {@code {{include:...}}} and the generated tables.
  *
  * <p>
  * Layout of the output directory:
@@ -74,10 +73,16 @@ public final class SkillGen {
 	/** The generated page listing every operator, under {@code references/}. */
 	static final String OPERATORS_PAGE = "operators.md";
 
-	/** The documentation page that IS the install page, relative to the language directory. */
+	/**
+	 * The documentation page that IS the install page, relative to the language
+	 * directory.
+	 */
 	static final String INSTALL_GUIDE = "getting-started/agent-skill.md";
 
-	/** The skill packaged as a Claude Code plugin, for an {@code archive} marketplace source. */
+	/**
+	 * The skill packaged as a Claude Code plugin, for an {@code archive} marketplace
+	 * source.
+	 */
 	static final String PLUGIN_ZIP = SKILL_NAME + "-plugin.zip";
 
 	/** The one-file marketplace that `claude plugin marketplace add <url>` reads. */
@@ -93,10 +98,10 @@ public final class SkillGen {
 	static final String DEFAULT_REPO_BASE = "https://github.com/making/rontolisp/blob/develop";
 
 	/**
-	 * What an example is made of, as far as a reader is concerned. The bundle is
-	 * text an agent reads, so a compiled artifact (`.wasm`) or a weight file
-	 * (`.bin`) is not merely large, it is unreadable -- the allowlist keeps binary
-	 * out by construction rather than by naming every kind of it.
+	 * What an example is made of, as far as a reader is concerned. The bundle is text an
+	 * agent reads, so a compiled artifact (`.wasm`) or a weight file (`.bin`) is not
+	 * merely large, it is unreadable -- the allowlist keeps binary out by construction
+	 * rather than by naming every kind of it.
 	 */
 	static final List<String> EXAMPLE_TEXT_EXTENSIONS = List.of("lisp", "asd", "md", "txt", "sh", "js", "mjs", "css",
 			"html", "json", "jsonc", "wit", "wat", "wac", "yaml", "yml", "toml", "rs", "py", "java", "xml", "sql",
@@ -208,8 +213,9 @@ public final class SkillGen {
 		if (!examplePages.isEmpty()) {
 			for (Map.Entry<String, String> page : examplePages.entrySet()) {
 				references.put(EXAMPLES_DIR + "/" + page.getKey(),
-						page.getKey().endsWith(".md") ? repoLinksForMissingFiles(page.getValue(), page.getKey(),
-								examplePages.keySet()) : page.getValue());
+						page.getKey().endsWith(".md")
+								? repoLinksForMissingFiles(page.getValue(), page.getKey(), examplePages.keySet())
+								: page.getValue());
 			}
 			references.put(EXAMPLES_PAGE, buildExampleIndex(examplePages));
 		}
@@ -241,7 +247,8 @@ public final class SkillGen {
 		Map<String, byte[]> archive = new LinkedHashMap<>();
 		archive.put(SKILL_NAME + "/SKILL.md", skill.getBytes(StandardCharsets.UTF_8));
 		for (Map.Entry<String, String> entry : references.entrySet()) {
-			archive.put(SKILL_NAME + "/references/" + entry.getKey(), entry.getValue().getBytes(StandardCharsets.UTF_8));
+			archive.put(SKILL_NAME + "/references/" + entry.getKey(),
+					entry.getValue().getBytes(StandardCharsets.UTF_8));
 		}
 		writeTarGz(this.out.resolve(SKILL_NAME + "-skill.tar.gz"), archive);
 		writeZip(this.out.resolve(SKILL_NAME + ".skill"), archive);
@@ -256,11 +263,12 @@ public final class SkillGen {
 			plugin.put("skills/" + entry.getKey(), entry.getValue());
 		}
 		writeZip(this.out.resolve(PLUGIN_ZIP), plugin);
-		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(summary, resolved), StandardCharsets.UTF_8);
+		Files.writeString(this.out.resolve(MARKETPLACE_JSON), marketplaceJson(summary, resolved),
+				StandardCharsets.UTF_8);
 
 		System.out.println("Generated skill " + SKILL_NAME + " " + resolved
-				+ (resolved.equals(this.version) ? "" : " (unchanged content; " + this.version + " not published)") + " (" + references.size()
-				+ " reference files) into " + this.out);
+				+ (resolved.equals(this.version) ? "" : " (unchanged content; " + this.version + " not published)")
+				+ " (" + references.size() + " reference files) into " + this.out);
 	}
 
 	// --- SKILL.md ---------------------------------------------------------
@@ -281,11 +289,10 @@ public final class SkillGen {
 	}
 
 	/**
-	 * Inlines {@code {{include:PATH}}} with the documentation page at PATH. The page
-	 * is demoted one heading level so it nests under the skill, and its relative
-	 * links are retargeted at the bundled copy of whatever they pointed at -- which
-	 * is what keeps the inlined text a view of the documentation rather than a fork
-	 * of it.
+	 * Inlines {@code {{include:PATH}}} with the documentation page at PATH. The page is
+	 * demoted one heading level so it nests under the skill, and its relative links are
+	 * retargeted at the bundled copy of whatever they pointed at -- which is what keeps
+	 * the inlined text a view of the documentation rather than a fork of it.
 	 */
 	private String substituteIncludes(String template, Path langDir) throws IOException {
 		Matcher matcher = INCLUDE.matcher(template);
@@ -305,11 +312,11 @@ public final class SkillGen {
 	}
 
 	/**
-	 * A digest of everything the bundle contains except the version itself, so that
-	 * two runs over the same documentation agree no matter how many commits went by
-	 * in between. Published in {@code version.json}, and fed back to the next run as
-	 * {@code --previous-hash}: that is what lets an unchanged skill keep its
-	 * version, which is what stops a client re-downloading it for nothing.
+	 * A digest of everything the bundle contains except the version itself, so that two
+	 * runs over the same documentation agree no matter how many commits went by in
+	 * between. Published in {@code version.json}, and fed back to the next run as
+	 * {@code --previous-hash}: that is what lets an unchanged skill keep its version,
+	 * which is what stops a client re-downloading it for nothing.
 	 */
 	static String contentDigest(Map<String, String> references, String skillWithoutVersion) throws IOException {
 		try {
@@ -338,9 +345,9 @@ public final class SkillGen {
 	}
 
 	/**
-	 * Rewrites the relative links of a page being inlined into {@code SKILL.md}, so
-	 * that they resolve from the bundle root instead of from the page's own
-	 * directory. Absolute and anchor-only links are left alone.
+	 * Rewrites the relative links of a page being inlined into {@code SKILL.md}, so that
+	 * they resolve from the bundle root instead of from the page's own directory.
+	 * Absolute and anchor-only links are left alone.
 	 */
 	String retargetLinks(String markdown, String pageRelativePath) {
 		return mapLinks(markdown, pageRelativePath,
@@ -349,18 +356,18 @@ public final class SkillGen {
 
 	/**
 	 * Rewrites the links of a page being MIRRORED into the bundle. The tree keeps its
-	 * shape, so a link that stays inside it still resolves as written; one that
-	 * escapes it (the site's playground, say) only exists on the web, and is turned
-	 * into the URL it means.
+	 * shape, so a link that stays inside it still resolves as written; one that escapes
+	 * it (the site's playground, say) only exists on the web, and is turned into the URL
+	 * it means.
 	 */
 	String siteLinksForMirroredPage(String markdown, String pageRelativePath) {
 		return mapLinks(markdown, pageRelativePath, (inTree, resolved) -> inTree ? null : siteUrl(resolved));
 	}
 
 	/**
-	 * Applies {@code mapper} to every real relative link. The mapper receives whether
-	 * the target resolves inside the language tree and its path relative to that
-	 * tree's root, and returns the new target (or null to leave the link alone).
+	 * Applies {@code mapper} to every real relative link. The mapper receives whether the
+	 * target resolves inside the language tree and its path relative to that tree's root,
+	 * and returns the new target (or null to leave the link alone).
 	 */
 	private String mapLinks(String markdown, String pageRelativePath,
 			java.util.function.BiFunction<Boolean, String, String> mapper) {
@@ -402,11 +409,11 @@ public final class SkillGen {
 	}
 
 	/**
-	 * Marks every character that sits inside a fenced block or an inline code span,
-	 * so that link handling can skip text that only LOOKS like a link -- these pages
-	 * quote JavaScript and Lisp that contains {@code ](...)}. A code span inside a
-	 * link label ({@code [`car`](car.md)}) is left alone: what disqualifies a match
-	 * is its target being inside code, not its label.
+	 * Marks every character that sits inside a fenced block or an inline code span, so
+	 * that link handling can skip text that only LOOKS like a link -- these pages quote
+	 * JavaScript and Lisp that contains {@code ](...)}. A code span inside a link label
+	 * ({@code [`car`](car.md)}) is left alone: what disqualifies a match is its target
+	 * being inside code, not its label.
 	 */
 	static boolean[] codeMask(String markdown) {
 		boolean[] mask = new boolean[markdown.length()];
@@ -464,9 +471,9 @@ public final class SkillGen {
 	// --- generated reference pages ---------------------------------------
 
 	/**
-	 * The existence check: every operator the implementation ships, by category,
-	 * straight from the catalogs the reference pages are built from. An agent
-	 * carrying Common Lisp priors needs one lookup, not 645 page reads.
+	 * The existence check: every operator the implementation ships, by category, straight
+	 * from the catalogs the reference pages are built from. An agent carrying Common Lisp
+	 * priors needs one lookup, not 645 page reads.
 	 */
 	static String buildOperatorIndex(List<Catalog> catalogs) {
 		StringBuilder md = new StringBuilder();
@@ -508,9 +515,8 @@ public final class SkillGen {
 
 	/**
 	 * Reads the example programs, keyed by path relative to the examples directory.
-	 * Documentation says what the language does; an example says what a whole
-	 * working program of some shape looks like, which is the other half of writing
-	 * one.
+	 * Documentation says what the language does; an example says what a whole working
+	 * program of some shape looks like, which is the other half of writing one.
 	 */
 	private Map<String, String> readExamples() throws IOException {
 		Map<String, String> files = new LinkedHashMap<>();
@@ -545,9 +551,9 @@ public final class SkillGen {
 	}
 
 	/**
-	 * Points an example's prose at the repository for the files the bundle leaves
-	 * out -- the compiled `.wasm` its README tells you to run, say. The link stays a
-	 * link, and says where the thing really is.
+	 * Points an example's prose at the repository for the files the bundle leaves out --
+	 * the compiled `.wasm` its README tells you to run, say. The link stays a link, and
+	 * says where the thing really is.
 	 */
 	String repoLinksForMissingFiles(String markdown, String pageRelativePath, java.util.Set<String> bundled) {
 		return mapLinks(markdown, pageRelativePath, (inTree, resolved) -> {
@@ -661,9 +667,9 @@ public final class SkillGen {
 	}
 
 	/**
-	 * The Guides section as a table for SKILL.md. These are the pages an agent
-	 * cannot guess from Common Lisp knowledge, so they are named in the skill body
-	 * itself rather than left to the index.
+	 * The Guides section as a table for SKILL.md. These are the pages an agent cannot
+	 * guess from Common Lisp knowledge, so they are named in the skill body itself rather
+	 * than left to the index.
 	 */
 	private static String buildGuidesTable(Nav nav) {
 		StringBuilder md = new StringBuilder("| Topic | Guide |\n| --- | --- |\n");
@@ -672,11 +678,7 @@ public final class SkillGen {
 				continue;
 			}
 			for (Nav.Page page : section.pages()) {
-				md.append("| ")
-					.append(page.title())
-					.append(" | `references/")
-					.append(page.file())
-					.append("` |\n");
+				md.append("| ").append(page.title()).append(" | `references/").append(page.file()).append("` |\n");
 			}
 		}
 		return md.toString().stripTrailing();
@@ -712,8 +714,8 @@ public final class SkillGen {
 
 	/**
 	 * The skill's own frontmatter description, collapsed to one line. Reused as the
-	 * plugin's and the marketplace's description so that what the skill says it is
-	 * for is stated once.
+	 * plugin's and the marketplace's description so that what the skill says it is for is
+	 * stated once.
 	 */
 	static String frontmatterDescription(String skill) throws IOException {
 		Matcher matcher = Pattern.compile("(?ms)^description:[ \t]*>?-?[ \t]*\r?\n(.*?)^\\w", Pattern.MULTILINE)
@@ -738,12 +740,12 @@ public final class SkillGen {
 	}
 
 	/**
-	 * A marketplace served as one static file. Because it is added by URL, Claude
-	 * Code downloads nothing but this JSON -- a relative plugin source would have no
-	 * checkout to be relative to -- so the plugin is an absolute {@code archive}
-	 * URL. That URL is deliberately unversioned: a client holding a stale copy of
-	 * this file still resolves, and the version it then installs is the one inside
-	 * the archive's {@code plugin.json}.
+	 * A marketplace served as one static file. Because it is added by URL, Claude Code
+	 * downloads nothing but this JSON -- a relative plugin source would have no checkout
+	 * to be relative to -- so the plugin is an absolute {@code archive} URL. That URL is
+	 * deliberately unversioned: a client holding a stale copy of this file still
+	 * resolves, and the version it then installs is the one inside the archive's
+	 * {@code plugin.json}.
 	 */
 	private String marketplaceJson(String summary, String version) {
 		return """
@@ -769,8 +771,8 @@ public final class SkillGen {
 				    }
 				  ]
 				}
-				""".formatted(SKILL_NAME, ownerName(), version, SKILL_NAME, jsonEscape(summary), version,
-				this.siteBase, this.siteBase, PLUGIN_ZIP);
+				""".formatted(SKILL_NAME, ownerName(), version, SKILL_NAME, jsonEscape(summary), version, this.siteBase,
+				this.siteBase, PLUGIN_ZIP);
 	}
 
 	/** The site's GitHub user, read off the site URL rather than hard-coded twice. */
@@ -796,9 +798,9 @@ public final class SkillGen {
 	}
 
 	/**
-	 * The install page is the manual's own Agent Skill guide, rendered into the
-	 * bundle's chrome: the instructions someone follows to install the skill exist
-	 * once, as a documentation page, not once here and once there.
+	 * The install page is the manual's own Agent Skill guide, rendered into the bundle's
+	 * chrome: the instructions someone follows to install the skill exist once, as a
+	 * documentation page, not once here and once there.
 	 */
 	private String renderInstallPage(Path langDir, String version) throws IOException {
 		Path guide = langDir.resolve(INSTALL_GUIDE);

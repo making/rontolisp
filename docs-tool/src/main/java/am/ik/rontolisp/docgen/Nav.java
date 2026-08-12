@@ -11,9 +11,9 @@ import java.util.Map;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * Navigation model for one language, loaded from a {@code nav.yaml} file. The
- * file lists the documentation structure as ordered sections of pages; the flat
- * page order also drives the previous/next links rendered on each page.
+ * Navigation model for one language, loaded from a {@code nav.yaml} file. The file lists
+ * the documentation structure as ordered sections of pages; the flat page order also
+ * drives the previous/next links rendered on each page.
  *
  * <p>
  * Expected {@code nav.yaml} shape:
@@ -37,8 +37,8 @@ public record Nav(String title, String langName, List<Section> sections) {
 	/**
 	 * A single documentation page.
 	 *
-	 * @param file the Markdown source path relative to the language directory
-	 * (e.g. {@code reference/data-types.md})
+	 * @param file the Markdown source path relative to the language directory (e.g.
+	 * {@code reference/data-types.md})
 	 * @param title the human-readable title shown in the sidebar and {@code <title>}
 	 */
 	public record Page(String file, String title) {

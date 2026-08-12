@@ -8,22 +8,21 @@ import java.util.regex.Pattern;
  *
  * <p>
  * flexmark renders a fenced {@code ```lisp} block as
- * {@code <pre><code class="language-lisp">...</code></pre>}. This transformer
- * replaces each such block with an editable {@code <textarea>} plus a Run button
- * and an output area, wired up by {@code docs.js} to the playground runtime
+ * {@code <pre><code class="language-lisp">...</code></pre>}. This transformer replaces
+ * each such block with an editable {@code <textarea>} plus a Run button and an output
+ * area, wired up by {@code docs.js} to the playground runtime
  * ({@code globalThis.rontoEval}).
  *
  * <p>
- * A {@code lisp} block that looks like a REPL transcript (it contains a line
- * starting with the {@code >} prompt, e.g. the ratio examples) is left as a
- * static, syntax-styled block, because its text is interleaved input/output
- * rather than an evaluable program. Non-{@code lisp} blocks (bash, console,
- * plain text) are never touched.
+ * A {@code lisp} block that looks like a REPL transcript (it contains a line starting
+ * with the {@code >} prompt, e.g. the ratio examples) is left as a static, syntax-styled
+ * block, because its text is interleaved input/output rather than an evaluable program.
+ * Non-{@code lisp} blocks (bash, console, plain text) are never touched.
  */
 public final class RunnableBlockTransformer {
 
-	private static final Pattern LISP_BLOCK = Pattern
-		.compile("<pre><code class=\"language-lisp\">(.*?)</code></pre>", Pattern.DOTALL);
+	private static final Pattern LISP_BLOCK = Pattern.compile("<pre><code class=\"language-lisp\">(.*?)</code></pre>",
+			Pattern.DOTALL);
 
 	private RunnableBlockTransformer() {
 	}

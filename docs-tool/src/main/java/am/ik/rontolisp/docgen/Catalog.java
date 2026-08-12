@@ -11,13 +11,12 @@ import java.util.Map;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * A group of per-operator reference pages (functions, macros, or special forms)
- * for one language, loaded from a {@code _catalog.yaml}. It groups the
- * individual pages into categories and defines their order, which drives the
- * previous/next links between the detail pages. The same mechanism powers the
- * built-in functions, macros, and special forms references: each owns a
- * directory of detail pages plus a table page ({@code index_page}) whose names
- * are linked to those detail pages.
+ * A group of per-operator reference pages (functions, macros, or special forms) for one
+ * language, loaded from a {@code _catalog.yaml}. It groups the individual pages into
+ * categories and defines their order, which drives the previous/next links between the
+ * detail pages. The same mechanism powers the built-in functions, macros, and special
+ * forms references: each owns a directory of detail pages plus a table page
+ * ({@code index_page}) whose names are linked to those detail pages.
  *
  * <p>
  * Expected shape (e.g. {@code reference/functions/_catalog.yaml}):
@@ -32,8 +31,8 @@ import org.yaml.snakeyaml.Yaml;
  *
  * @param baseDir the directory holding the detail pages and {@code _catalog.yaml},
  * relative to the language directory (e.g. {@code reference/functions})
- * @param indexPage the table page whose names link to the detail pages, relative
- * to the language directory (e.g. {@code reference/functions.md})
+ * @param indexPage the table page whose names link to the detail pages, relative to the
+ * language directory (e.g. {@code reference/functions.md})
  * @param categories the ordered groups of entries
  */
 public record Catalog(String baseDir, String indexPage, List<Category> categories) {
@@ -56,7 +55,10 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 		return this.baseDir + "/" + entry.slug() + ".md";
 	}
 
-	/** The relative href prefix from the index page to the detail pages (e.g. {@code functions/}). */
+	/**
+	 * The relative href prefix from the index page to the detail pages (e.g.
+	 * {@code functions/}).
+	 */
 	public String linkPrefix() {
 		int slash = this.baseDir.lastIndexOf('/');
 		return (slash < 0 ? this.baseDir : this.baseDir.substring(slash + 1)) + "/";
@@ -72,9 +74,9 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 	}
 
 	/**
-	 * Loads every catalog under a language directory, in path order. Both output
-	 * modes need the same set: the site links each table page to its detail pages,
-	 * and the skill bundle turns the same entries into its operator index.
+	 * Loads every catalog under a language directory, in path order. Both output modes
+	 * need the same set: the site links each table page to its detail pages, and the
+	 * skill bundle turns the same entries into its operator index.
 	 */
 	public static List<Catalog> discover(Path langDir) throws IOException {
 		try (java.util.stream.Stream<Path> paths = Files.walk(langDir)) {

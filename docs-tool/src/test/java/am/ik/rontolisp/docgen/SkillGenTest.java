@@ -23,9 +23,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Generates the skill bundle from the real {@code doc/} tree and checks it holds
- * together. The link assertion is the point: the skill is a view of the
- * documentation, so a page that is renamed or removed must break this build
- * rather than ship a bundle that points at nothing.
+ * together. The link assertion is the point: the skill is a view of the documentation, so
+ * a page that is renamed or removed must break this build rather than ship a bundle that
+ * points at nothing.
  */
 class SkillGenTest {
 
@@ -115,7 +115,8 @@ class SkillGenTest {
 	@Test
 	void versionIsPublishedWhereAClientCanPollIt() throws IOException {
 		assertThat(Files.readString(out.resolve("VERSION"), StandardCharsets.UTF_8)).isEqualTo("1.2.3\n");
-		assertThat(Files.readString(out.resolve("version.json"), StandardCharsets.UTF_8)).contains("\"version\": \"1.2.3\"")
+		assertThat(Files.readString(out.resolve("version.json"), StandardCharsets.UTF_8))
+			.contains("\"version\": \"1.2.3\"")
 			.contains("\"commit\": \"cafe123\"");
 		assertThat(Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8)).contains("1.2.3")
 			.doesNotContain("{{");
@@ -265,8 +266,8 @@ class SkillGenTest {
 	void aFileTheBundleLeavesOutIsLinkedInTheRepository() {
 		SkillGen generator = generator();
 		// `.wasm` is not mirrored, so its link has to say where the file lives.
-		assertThat(generator.repoLinksForMissingFiles("run [it](hello.wasm) and [read](hello.lisp)",
-				"hello/README.md", java.util.Set.of("hello/README.md", "hello/hello.lisp")))
+		assertThat(generator.repoLinksForMissingFiles("run [it](hello.wasm) and [read](hello.lisp)", "hello/README.md",
+				java.util.Set.of("hello/README.md", "hello/hello.lisp")))
 			.isEqualTo("run [it](https://repo.test/blob/develop/examples/hello/hello.wasm) and [read](hello.lisp)");
 	}
 
@@ -290,9 +291,9 @@ class SkillGenTest {
 
 	@Test
 	void linksAreRetargetedRelativeToTheBundleRoot() {
-		String retargeted = generator()
-			.retargetLinks("see [values](../reference/functions/values.md#x) and [http](https://x/y.md)",
-					"guides/missing-features.md");
+		String retargeted = generator().retargetLinks(
+				"see [values](../reference/functions/values.md#x) and [http](https://x/y.md)",
+				"guides/missing-features.md");
 		assertThat(retargeted).contains("(references/reference/functions/values.md#x)").contains("(https://x/y.md)");
 	}
 
@@ -307,7 +308,8 @@ class SkillGenTest {
 
 	@Test
 	void headingsAreDemotedSoTheIncludedPageNestsUnderTheSkill() {
-		assertThat(SkillGen.demoteHeadings("# Title\n\ntext\n\n## Section\n")).isEqualTo("## Title\n\ntext\n\n### Section\n");
+		assertThat(SkillGen.demoteHeadings("# Title\n\ntext\n\n## Section\n"))
+			.isEqualTo("## Title\n\ntext\n\n### Section\n");
 	}
 
 	private static void collectBrokenLinks(Path file, List<String> broken) throws IOException {

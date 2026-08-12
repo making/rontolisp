@@ -5,15 +5,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Turns the operator names in the first column of a reference table (Built-in
- * Functions, Macros, or Special Forms) into links to their per-operator detail
- * pages, so each table doubles as the index of its detail pages.
+ * Turns the operator names in the first column of a reference table (Built-in Functions,
+ * Macros, or Special Forms) into links to their per-operator detail pages, so each table
+ * doubles as the index of its detail pages.
  *
  * <p>
- * Only the first cell of each data row is rewritten (the operator name), never
- * the Example/Syntax/Result columns -- those mention names too, but as code
- * rather than as the row's subject. Names are matched in their HTML-escaped form
- * (e.g. {@code &lt;} for {@code <}).
+ * Only the first cell of each data row is rewritten (the operator name), never the
+ * Example/Syntax/Result columns -- those mention names too, but as code rather than as
+ * the row's subject. Names are matched in their HTML-escaped form (e.g. {@code &lt;} for
+ * {@code <}).
  */
 public final class TableLinkTransformer {
 
@@ -28,8 +28,7 @@ public final class TableLinkTransformer {
 	/**
 	 * Links operator names in {@code html}.
 	 * @param html the rendered table page body
-	 * @param escapedNameToSlug map from each HTML-escaped operator name to its page
-	 * slug
+	 * @param escapedNameToSlug map from each HTML-escaped operator name to its page slug
 	 * @param hrefPrefix the relative path prefix to the detail pages (e.g.
 	 * {@code functions/})
 	 */
