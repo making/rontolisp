@@ -189,7 +189,10 @@ but it stops being the only reason a reactor's bodies are strings). Gate:
 `(await (read-all s))` over a host-backed stream on a `--no-wasi` module, and
 `streamp` answering T on all four backends for the same program.
 
-**Phase 2 -- the envelope splits.** `%http-reactor-dispatch` takes head +
+**Phase 2 -- the envelope splits.** Fix `.todo/342` first or this phase
+measures the wrong thing: `read-all`'s `(stringp s)` fast path is O(body) on
+wasm whenever the body is a mutable buffer, which is what a pulled body is.
+`%http-reactor-dispatch` takes head +
 body source; `%http-reactor-request-tuple` passes a STREAM built from the
 source (`%http-body-stream` gains a from-thunk constructor beside its from-
 string one) instead of always buffering; `:raw-body :buffered` drains that
