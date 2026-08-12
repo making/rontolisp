@@ -53,4 +53,33 @@ entry (a second entry TRAPS) and clears it on return; a module that cannot suspe
 byte-identical. Mechanics, the measured corruption and the pins: `.kb/wasm-import.md`
 ("The re-entry guard").
 
+**The boundary RESOLVES a future its target answers (2026-08-12)**: an export declares a
+scalar/string, so a target that answers a FUTURE -- the settled `TYPE_P1_FUTURE` a
+degenerate async body produces outside asyncMode (`.kb/async-await.md`), or the one a
+`wasm-import ... :async t` wrapper builds -- must be resolved before the unbox, or the
+wrapper casts the struct to the declared type and traps with `illegal cast` on the very
+first call. `WasmExportCompiler.emitBody` calls `_p1_future_await` right after the target
+call; the `--component` wrapper's `asyncTarget` poll/`_sched_loop` branch is the same
+courtesy, and the reactor transport's `rontolisp::%future-force` (`http-reactor.lisp`) is
+the spelling every worked example had to use by hand. **Why the resolve is DYNAMIC rather
+than keyed on the target being an async-defun**: a plain defun handing back someone else's
+future has exactly the same boundary problem, and `_p1_future_await` passes a non-future
+straight through -- so ONE unconditional call covers both shapes and needs no `ref.test`
+around it. It costs 2 bytes on an export of a module that can hold a future at all
+(`Ctx.p1Futures`: after the async lowering, `%async-run` in the program or an `:async t`
+import -- those are the struct's only two producers) and NOTHING anywhere else, including
+a `:void` export whose value is dropped. Verified byte-for-byte over the whole
+`size-report/programs` flag matrix, `count-vowels` and the `--no-gc` Worker (identical);
+the four async Worker builds gain exactly the call, +2 bytes each, plus the helper body
+the shaker now roots where nothing awaited before (`httpbin` +31), with
+`httpbin-component`'s `handle-request` answering byte-identical JSON before and after.
+Pinned by `WasmExportCompilerTest.anExportResolvesADegenerateFutureOnlyWhereOneCanExist`
+(the wrapper body, all three cases) and
+`WasmLispCompilerIntegrationTest.preview1ExportResolvesTheFutureItsTargetAnswers` /
+`anExportHandsBackAnAsyncImportsFutureWithoutForcingItByHand`. **Re-evaluation trigger**:
+asyncMode (`--component`, non-reactor) still keys its poll on `asyncDefunNames`, so the
+pass-through shape traps THERE -- measured, and filed with the second finding that masks
+it (a one-form async-defun gets inlined, so `futurep` answers NIL on the component where
+every other backend answers T) in `.todo/342`.
+
 Tests: `WasmExportCompilerTest` (structural, no Docker), `WasmLispCompilerIntegrationTest` (`wasmtime --invoke`). Limitations (README "Exporting Lisp functions"). Component typed exports shipped in todo-92 (see `.kb/wasi-component.md`); follow-up in `.todo/021` (memory-ABI CI).

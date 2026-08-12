@@ -1944,6 +1944,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		else {
 			program = am.ik.rontolisp.macro.LispAsync.lowerProgram(program);
 		}
+		// Whether a degenerate TYPE_P1_FUTURE can exist in this module at all. It has
+		// exactly two producers outside asyncMode: the %async-run the lowering above
+		// leaves behind (WasmAsyncRunCompiler), and a `wasm-import ... :async t` wrapper
+		// (WasmImportCompiler). The export wrappers read it to decide whether a returned
+		// future must be resolved at the boundary; a module with neither producer cannot
+		// meet one and gains no instruction.
+		boolean p1Futures = !this.asyncMode
+				&& (programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || !suspendingImports.isEmpty());
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors
 		// use &key) so Pass 1 collects them as ordinary functions; the registries make
@@ -2666,6 +2674,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
+			.p1Futures(p1Futures)
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
 			.serveInitGlobalIndex(serveInitGlobalIndex)
 			.reentryGuardGlobalIndex(reentryGuardGlobalIndex)
@@ -6545,6 +6554,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> asyncDefunNames = Set.of();
 
 		/**
+		 * Whether a {@code TYPE_P1_FUTURE} can EXIST in this module: outside asyncMode a
+		 * future is the degenerate settled struct, and it has exactly two producers --
+		 * the {@code %async-run} the async lowering leaves behind, and a
+		 * {@code wasm-import ... :async t} wrapper. Read by the export wrappers, which
+		 * resolve such a future at the boundary instead of unboxing it as the declared
+		 * scalar; a module with neither producer gains no instruction.
+		 */
+		boolean p1Futures;
+
+		/**
 		 * The global index of the CURRENT task record (asyncMode), or -1. Frames store it
 		 * as their owner at creation; the callback-task runtime swaps it at every host
 		 * entry.
@@ -6658,6 +6677,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.layoutAddresses = builder.layoutAddresses;
 			this.asyncFuncBase = builder.asyncFuncBase;
 			this.asyncDefunNames = builder.asyncDefunNames;
+			this.p1Futures = builder.p1Futures;
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.reentryGuardGlobalIndex = builder.reentryGuardGlobalIndex;
@@ -6765,6 +6785,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int asyncFuncBase = -1;
 
 			private Set<String> asyncDefunNames = Set.of();
+
+			private boolean p1Futures;
 
 			private int currentTaskGlobalIndex = -1;
 
@@ -7006,6 +7028,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder asyncDefunNames(Set<String> asyncDefunNames) {
 				this.asyncDefunNames = asyncDefunNames;
+				return this;
+			}
+
+			Builder p1Futures(boolean p1Futures) {
+				this.p1Futures = p1Futures;
 				return this;
 			}
 

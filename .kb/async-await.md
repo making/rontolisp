@@ -219,7 +219,9 @@ async-runtime gate -- non-asyncMode WASM = `_p1_future_await`), because the
 host-driven reactor transport (`http-reactor.lisp`) resolves a future-valued
 application answer at its boundary with it (`.kb/clack.md`). Internal and
 deliberately undocumented: user code composes with `await`/`then`; this is for
-transports sitting where a boundary must block.
+transports sitting where a boundary must block. A `rontolisp:wasm-export`
+boundary no longer needs it spelled in the target: the wrapper resolves a
+returned future itself (`.kb/wasm-export-no-wasi.md`).
 
 ## http-handler interaction
 

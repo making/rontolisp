@@ -1489,6 +1489,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void anExportHandsBackAnAsyncImportsFutureWithoutForcingItByHand() throws Exception {
+		// The same export minus the %future-force: the target simply returns what the
+		// :async t import answered, which is a settled future. The boundary declares
+		// :int, so the wrapper resolves it instead of unboxing a future as one -- with
+		// no async-defun anywhere, which is why the module's future producer (and hence
+		// the wrapper's resolve) is decided from the import declaration too.
+		String host = """
+				(defun host-add (a b) (+ a b))
+				(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int :async t)
+				(defun plus (a b) (add a b))
+				(rontolisp:wasm-export 'plus :params '(:int :int) :returns :int)
+				""";
+		byte[] hostBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(host));
+		byte[] mainBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(main));
+		wasmtime.copyFileToContainer(Transferable.of(hostBytes), path("host.wasm"));
+		wasmtime.copyFileToContainer(Transferable.of(mainBytes), path("main.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "plus", "-W", "gc", "-W",
+				"exceptions=y", "--preload", "host=" + path("host.wasm"), path("main.wasm"), "20", "22");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("42");
+	}
+
+	@Test
 	void importedHostFunctionInsideUserPackageResolvesUnqualifiedName() throws Exception {
 		// A wasm-import declared inside a user package with a plain unqualified quoted
 		// name registers under the canonical qualified name (PackageResolver resolves
@@ -9690,6 +9716,37 @@ class WasmLispCompilerIntegrationTest {
 				(print (rontolisp:await (outer)))
 				(print (rontolisp:await (funcall (rontolisp:async-lambda (x) (* x 2)) 21)))
 				""")).isEqualTo("\"before\"\n\"in\"\n\"after\"\nT\n3\n3\n#<FUTURE>\n11\n42");
+	}
+
+	@Test
+	void preview1ExportResolvesTheFutureItsTargetAnswers() throws Exception {
+		// A wasm-export whose target answers a future -- the settled one a degenerate
+		// async body produces here -- used to unbox it as the declared scalar and trap
+		// with `illegal cast` on the very first call, so the only working spelling was
+		// an explicit rontolisp::%future-force inside the target. The wrapper resolves
+		// it now, the courtesy the --component wrapper's poll already extended. The
+		// resolve is dynamic, so the PASS-THROUGH shape -- a plain defun handing back
+		// an async function's future -- is covered by the same instruction.
+		String direct = """
+				(rontolisp:async-defun probe (n) (+ n 100))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		String awaited = """
+				(rontolisp:async-defun inner (n) (+ n 100))
+				(rontolisp:async-defun probe (n) (rontolisp:await (inner n)))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		String passThrough = """
+				(rontolisp:async-defun inner (n) (+ n 100))
+				(defun probe (n) (inner n))
+				(rontolisp:wasm-export 'probe :params '(:int) :returns :int)
+				""";
+		for (String program : List.of(direct, awaited, passThrough)) {
+			assertThat(compileAndInvoke(program, "probe", "7")).isEqualTo("107");
+			assertThat(compileNoWasiAndInvoke(program, "probe", "7")).isEqualTo("107");
+			assertThat(compileOptimizedAndInvoke(program, false, "probe", "7")).isEqualTo("107");
+			assertThat(compileOptimizedAndInvoke(program, true, "probe", "7")).isEqualTo("107");
+		}
 	}
 
 	@Test

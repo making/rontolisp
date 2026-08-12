@@ -955,6 +955,58 @@ class WasmExportCompilerTest {
 			.doesNotContain("http-dispatch");
 	}
 
+	private static byte[] compileNoWasi(String source) {
+		return new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(source));
+	}
+
+	// The LAST body of the code section, which on the core-module path is the export
+	// wrapper: the wrapper bodies are appended after every other function.
+	private static byte[] lastFunctionBody(byte[] module) {
+		int[] cursor = { 8 }; // past the magic + version header
+		while (cursor[0] < module.length) {
+			int sectionId = module[cursor[0]++] & 0xFF;
+			int sectionSize = readUnsignedLeb128(module, cursor);
+			if (sectionId != 10) { // not the code section
+				cursor[0] += sectionSize;
+				continue;
+			}
+			int count = readUnsignedLeb128(module, cursor);
+			byte[] body = new byte[0];
+			for (int i = 0; i < count; i++) {
+				int size = readUnsignedLeb128(module, cursor);
+				body = java.util.Arrays.copyOfRange(module, cursor[0], cursor[0] + size);
+				cursor[0] += size;
+			}
+			return body;
+		}
+		throw new IllegalStateException("no code section");
+	}
+
+	// `call <funcIndex>`, as the body bytes spell it.
+	private static byte[] callBytes(int funcIndex) {
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+		new am.ik.wasm.WasmWriter(out).write(am.ik.wasm.Instruction.CALL).writeUnsignedLeb128(funcIndex);
+		return out.toByteArray();
+	}
+
+	@Test
+	void anExportResolvesADegenerateFutureOnlyWhereOneCanExist() {
+		// Outside asyncMode a future is the settled TYPE_P1_FUTURE, and an export whose
+		// target answers one must resolve it rather than unbox it as the declared
+		// scalar. _p1_future_await passes a non-future through, so the wrapper needs no
+		// ref.test around the call -- but it costs a module that can never hold a
+		// future, and a :void export whose value is dropped anyway, exactly nothing:
+		// their wrappers unbox the target's result directly, as they always did.
+		String async = "(rontolisp:async-defun probe (n) (+ n 100))";
+		String plain = "(defun probe (n) (+ n 100))";
+		String scalar = "(rontolisp:wasm-export 'probe :params '(:int) :returns :int)";
+		String discarded = "(rontolisp:wasm-export 'probe :params '(:int))";
+		byte[] resolve = callBytes(WasmLispCompiler.FUNC_P1_FUTURE_AWAIT);
+		assertThat(containsBytes(lastFunctionBody(compileNoWasi(async + scalar)), resolve)).isTrue();
+		assertThat(containsBytes(lastFunctionBody(compileNoWasi(plain + scalar)), resolve)).isFalse();
+		assertThat(containsBytes(lastFunctionBody(compileNoWasi(async + discarded)), resolve)).isFalse();
+	}
+
 	@Test
 	void nonComponentCompileRecordsNoWitText() {
 		List<LispVal> program = LispReader

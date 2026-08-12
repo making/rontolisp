@@ -72,6 +72,9 @@ Limitations shared by every shape:
 - The exported name defaults to the bare Lisp name (`fact`) and can be renamed
   with `:as`; how arguments are written depends on the host
   (`wasmtime --invoke fact module.wasm 5`, `instance.exports.fact(5)`, ...).
+- The exported function may be a [`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md):
+  the boundary resolves the future it answers, so the host receives the
+  declared type and never a future.
 
 ### Export Modes at a Glance
 

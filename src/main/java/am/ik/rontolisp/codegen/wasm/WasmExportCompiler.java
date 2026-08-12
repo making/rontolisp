@@ -473,6 +473,23 @@ final class WasmExportCompiler {
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(targetFuncIndex);
+		// Outside asyncMode (Preview 1, --no-wasi, the reactor component) an async body
+		// is degenerate synchronous: calling one runs it to completion and hands back a
+		// SETTLED future, and so does a `wasm-import ... :async t`. The boundary declares
+		// a scalar/string, so the wrapper resolves the future here -- what the
+		// asyncTarget
+		// branch below already does for --component, and what the reactor transport and
+		// every worked example had to spell as an explicit %future-force. The resolve is
+		// DYNAMIC rather than keyed on the target being an async-defun, because a plain
+		// defun handing back someone else's future has exactly the same boundary problem;
+		// _p1_future_await passes a non-future straight through, so one unconditional
+		// call covers both and costs no branch. A module with no future producer at all
+		// keeps byte-identical wrappers (Ctx.p1Futures), and a :void export skips it --
+		// the body has already run, and the value is dropped.
+		if (ctx.p1Futures && decl.returnType() != BoundaryType.VOID) {
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_P1_FUTURE_AWAIT);
+		}
 		if (callbackDriven) {
 			// The CALLBACK driver: a settled target already delivered its result
 			// through task.return, so the wrapper answers EXIT; a still-pending one

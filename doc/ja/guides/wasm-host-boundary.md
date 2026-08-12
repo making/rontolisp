@@ -53,6 +53,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 
 - エクスポートできるのはトップレベルの `defun` のみで、宣言したパラメータ数はそのアリティと一致しなければならず、関数値を受け取ったり返したりする関数は対象外です。
 - エクスポート名はデフォルトで素の Lisp 名(`fact`)になり、`:as` で変更できます。引数の書き方はホストに依存します(`wasmtime --invoke fact module.wasm 5`、`instance.exports.fact(5)` など)。
+- エクスポートする関数は [`rontolisp:async-defun`](../reference/special-forms/rontolisp-async-defun.md) でも構いません。境界が返り値のフューチャーを解決するため、ホストが受け取るのは宣言した型であってフューチャーではありません。
 
 ### エクスポートモード早見表
 
