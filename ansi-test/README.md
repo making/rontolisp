@@ -11,6 +11,18 @@ ansi-test/measure.sh cons numbers   # one or more chapters only
 
 The report names the suite revision it measured; bump it in `fetch.sh`.
 
+## Who runs the whole suite
+
+`.github/workflows/ansi-report.yaml`, daily, and it commits the refreshed
+`results/interpreter.md` with `[skip ci]` when -- and only when -- a count moved.
+The checked-in report is therefore a series measured by one machine with one
+stall window, which is what makes a moved number mean something. Run the
+workflow by hand (`workflow_dispatch`) after a change expected to move it.
+
+Locally, measure a chapter at a time: a subset run writes `results/partial.md`
+and leaves the baseline untouched, so it cannot overwrite the series with a
+number taken on a different machine.
+
 ## How a run works
 
 `AnsiCompliance` (parent) starts one child JVM per chapter (`AnsiChapterRunner`), which

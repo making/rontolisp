@@ -1,0 +1,79 @@
+name: ANSI conformance
+
+# Re-run the ANSI Common Lisp test suite against the interpreter and commit the
+# refreshed ansi-test/results/interpreter.md, so the conformance numbers age with
+# the interpreter instead of with whoever last remembered to run measure.sh.
+#
+# Scheduled rather than run by hand during development: the report's value is
+# noticing that a number MOVED, and that only means something when the same
+# machine measures the same way every time. A day whose counts did not move
+# commits nothing (see the commit step below). Trigger it manually after a change
+# that is expected to move them.
+on:
+  schedule:
+  - cron: '41 4 * * *'
+  workflow_dispatch: {}
+  push:
+    branches:
+    - develop
+    paths:
+    - ansi-test/**
+    - .github/workflows/ansi-report.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up GraalVM 25
+      uses: graalvm/setup-graalvm@v1
+      with:
+        java-version: '25'
+        distribution: 'graalvm'
+        cache: maven
+    # The suite is a foreign repository pinned by fetch.sh rather than vendored, so
+    # cache it on that revision: a measurement must not be at the mercy of
+    # gitlab.common-lisp.net being reachable, and a bumped revision misses the
+    # cache and re-clones, which is exactly what a bump should do.
+    - name: Cache the ANSI suite
+      uses: actions/cache@v4
+      with:
+        path: ansi-test/suite
+        key: ansi-suite-${{ hashFiles('ansi-test/fetch.sh') }}
+    # measure.sh compiles OFFLINE so it cannot go to the network mid-measurement;
+    # populate the local repository here instead.
+    - name: Build the test classes
+      run: ./mvnw -V --no-transfer-progress -DskipTests test-compile
+    # A non-terminating form is detected by SILENCE, and a hosted runner is slower
+    # and more contended than a developer machine: widen the stall window so a form
+    # that is merely slow under contention is not recorded as a hang (which would
+    # skip it, and silently drop every test behind it from the counts).
+    - name: Measure
+      env:
+        ANSI_STALL: 180
+      run: ./ansi-test/measure.sh
+    - name: Commit the refreshed report
+      run: |
+        set -e
+        # Unlike the size report, nothing here is stamped with the run date or the
+        # commit -- the report names only the suite revision it measured -- so any
+        # diff at all is a real change in what the interpreter answers.
+        if git diff --quiet -- ansi-test/results; then
+          echo "conformance unchanged"
+          exit 0
+        fi
+        git diff --stat -- ansi-test/results
+        git config user.name  'github-actions[bot]'
+        git config user.email 'github-actions[bot]@users.noreply.github.com'
+        git add ansi-test/results
+        # [skip ci]: the commit touches only generated numbers, so nothing it can
+        # push is worth a CI run. GITHUB_TOKEN pushes already do not re-trigger
+        # workflows, but this also keeps the self-triggering `push` path above
+        # (ansi-test/**) from re-entering this job.
+        git commit -m 'Refresh the ANSI conformance report [skip ci]'
+        # A concurrent push during the run should retry, not clobber.
+        git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+        git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -223,6 +223,16 @@ pass rate plus the ranked list of what the failures blame. The suite is not
 vendored: `ansi-test/fetch.sh` clones it at a pinned revision into the
 git-ignored `ansi-test/suite/`, and every report names the revision it measured.
 
+**Do not run the whole suite in a session.** `.github/workflows/ansi-report.yaml`
+owns the checked-in report: it re-measures daily on one machine and commits the
+result `[skip ci]` only when a count actually moved. A local whole-suite run
+answers a different question -- a different machine, a different stall window --
+and the point of the report is the MOVEMENT, which only reads if the measurement
+does not drift with who took it. What a session runs is one chapter
+(`ansi-test/measure.sh cons`), which writes `results/partial.md` and leaves the
+baseline alone. After a change expected to move the numbers, dispatch the
+workflow rather than committing a locally measured `interpreter.md`.
+
 The driver (`src/test/java/am/ik/rontolisp/ansi/`) runs one child JVM per
 chapter and evaluates ONE TOP-LEVEL FORM AT A TIME under `catch (Throwable)`, so
 a form we cannot take costs that form and not the 700 tests behind it. Read
