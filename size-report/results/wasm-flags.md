@@ -5,7 +5,7 @@ the prose below it is [`../notes/wasm-flags.md`](../notes/wasm-flags.md).
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-12
-- rontolisp: 0.1.0-SNAPSHOT (`165a0bc`)
+- rontolisp: 0.1.0-SNAPSHOT (`6e5cc16`)
 - validated on: wasmtime 47.0.3 (5554cc1a6 2026-07-31)
 
 | Program | Flags | Module | WASI | Size (bytes) |
@@ -21,9 +21,9 @@ How the report is built and run: [../README.md](../README.md).
 | pi_approx | `--component --optimize=size` | component (command) | Preview 3 | 3,908 |
 | pi_approx (nogc source) | `--no-gc --optimize=size` | core (reactor) | Preview 1 | 1,042 |
 | zlib | (none) | core (command) | Preview 1 | 298,934 |
-| zlib | `--optimize` | core (command) | Preview 1 | 125,213 |
-| zlib | `--optimize=size` | core (command) | Preview 1 | 96,834 |
-| zlib | `--component --optimize=size` | component (command) | Preview 3 | 101,340 |
+| zlib | `--optimize` | core (command) | Preview 1 | 108,439 |
+| zlib | `--optimize=size` | core (command) | Preview 1 | 83,269 |
+| zlib | `--component --optimize=size` | component (command) | Preview 3 | 84,989 |
 
 ## What is measured
 
@@ -145,6 +145,19 @@ spread over chipz's defuns and the spliced runtime helpers alike. It is now one
 shared `_seq_len` callee, matching what the JVM backend always did
 (`.kb/length-runtime.md`), worth **-8.1%** on the `--optimize=size` row
 (105,393 -> 96,834) with the inflate loop's timing unchanged.
+
+**A generic's dispatcher lists only the branches some call can select.** The
+program's one entry is `(chipz:decompress nil 'chipz:gzip <ub8-vector>)`, and
+`decompress` is a defgeneric with 18 method variants -- pathname-to-pathname,
+stream-to-stream, every convenience pairing -- of which that call (and the
+library's own re-entry through `apply`) can select exactly two: the default
+method and the null/vector one. The optimizing compile now joins argument
+shapes over every call site of a generic and omits the dispatcher branches no
+site can satisfy (`.kb/optimize-dead-code-elimination.md`), so the sixteen dead
+method defuns and the pathname/stream helpers only they called shake out.
+Worth **-14.0%** on the `--optimize=size` row (96,834 -> 83,269), -16.1% on the
+component row, and -10.6% on the JVM class, every module still gunzipping the
+fixture byte-for-byte on all four backends.
 
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
