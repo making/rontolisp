@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rontolisp agent skill</title>
+<style>
+:root { color-scheme: dark; }
+body { margin: 0 auto; padding: 2rem 1.25rem 4rem; max-width: 44rem; background: #12151b; color: #d7dce5;
+       font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+h1 { font-size: 1.75rem; margin-bottom: .25rem; }
+h2 { font-size: 1.15rem; margin-top: 2.25rem; }
+p, li { color: #b7bfcc; }
+a { color: #8ab4f8; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+pre { background: #0c0e13; border: 1px solid #232833; border-radius: 6px; padding: .85rem 1rem;
+      overflow-x: auto; }
+pre code { color: #e6ebf3; }
+.version { display: inline-block; padding: .1rem .5rem; border: 1px solid #2c3342; border-radius: 999px;
+           font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; color: #9aa4b5; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #232833; vertical-align: top; }
+</style>
+</head>
+<body>
+<h1>rontolisp agent skill</h1>
+<p><span class="version">{{version}}</span></p>
+<p>
+An agent skill for writing and running <a href="{{site-base}}/docs/en/">rontolisp</a>
+programs. It assumes Common Lisp is already known and carries only the delta: which
+operators exist, which Common Lisp features are missing or partial, the rontolisp-only
+extensions, and how to run a program on each of the four backends. It is generated from
+the documentation on every deploy, so it never drifts from it.
+</p>
+
+<h2>Install (Claude Code)</h2>
+<pre><code>mkdir -p ~/.claude/skills &amp;&amp; \
+  curl -sSL {{site-base}}/skill/{{skill-name}}-skill.tar.gz | tar xz -C ~/.claude/skills</code></pre>
+<p>Project-local instead: extract into <code>.claude/skills</code> in the repository.</p>
+
+<h2>Install (Claude apps)</h2>
+<p>
+Upload <a href="{{skill-name}}.skill">{{skill-name}}.skill</a> as a skill.
+</p>
+
+<h2>Other agents</h2>
+<p>
+<a href="{{skill-name}}-full.md">{{skill-name}}-full.md</a> is the same content as one
+Markdown file, for tools without a skill loader.
+</p>
+
+<h2>Files</h2>
+<table>
+<tr><th>File</th><th>What it is</th></tr>
+<tr><td><a href="{{skill-name}}-skill.tar.gz">{{skill-name}}-skill.tar.gz</a></td><td>the skill directory, for <code>~/.claude/skills</code></td></tr>
+<tr><td><a href="{{skill-name}}.skill">{{skill-name}}.skill</a></td><td>the same tree as a zip</td></tr>
+<tr><td><a href="{{skill-name}}/SKILL.md">{{skill-name}}/SKILL.md</a></td><td>the skill body, readable in place</td></tr>
+<tr><td><a href="{{skill-name}}-full.md">{{skill-name}}-full.md</a></td><td>everything as a single Markdown file</td></tr>
+<tr><td><a href="VERSION">VERSION</a> / <a href="version.json">version.json</a></td><td>the current version, to check whether a local copy is stale</td></tr>
+</table>
+
+<h2>Updating</h2>
+<p>
+The version bumps automatically whenever the documentation or the generator changes.
+Compare a local copy against <code>{{site-base}}/skill/VERSION</code> and re-run the
+install command when it has moved.
+</p>
+</body>
+</html>

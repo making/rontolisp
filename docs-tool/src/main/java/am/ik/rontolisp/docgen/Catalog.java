@@ -71,6 +71,24 @@ public record Catalog(String baseDir, String indexPage, List<Category> categorie
 		return all;
 	}
 
+	/**
+	 * Loads every catalog under a language directory, in path order. Both output
+	 * modes need the same set: the site links each table page to its detail pages,
+	 * and the skill bundle turns the same entries into its operator index.
+	 */
+	public static List<Catalog> discover(Path langDir) throws IOException {
+		try (java.util.stream.Stream<Path> paths = Files.walk(langDir)) {
+			List<Path> catalogFiles = paths.filter(p -> p.getFileName().toString().equals("_catalog.yaml"))
+				.sorted()
+				.toList();
+			List<Catalog> catalogs = new ArrayList<>();
+			for (Path file : catalogFiles) {
+				catalogs.add(load(langDir, file));
+			}
+			return catalogs;
+		}
+	}
+
 	/** Loads a catalog from its {@code _catalog.yaml}. */
 	@SuppressWarnings("unchecked")
 	public static Catalog load(Path langDir, Path catalogYaml) throws IOException {

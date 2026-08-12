@@ -186,6 +186,14 @@ future `doc/<lang>/`) in the same commit -- same file set, same headings,
 byte-identical code fences; only prose and titles are translated. Layout,
 code-fence conventions, and the build/preview procedure: `.kb/documentation-site.md`.
 
+The same tree is also published as an **agent skill** (`docs-tool` `skill` mode ->
+`/skill/` on the Pages site), generated on every deploy. It is a VIEW of `doc/`, so
+a language rule is written on a doc page and inlined -- never restated in the skill
+template. Its test regenerates the bundle and fails on a link a doc rename broke,
+and `docs-tool` is not in the root reactor, so run
+`./mvnw -f docs-tool/pom.xml test` after touching `doc/` layout.
+`.kb/documentation-site.md`.
+
 After editing examples, normalize results and catch non-runnable examples:
 
 ```bash

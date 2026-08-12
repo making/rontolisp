@@ -68,8 +68,48 @@ cd web/dist && jwebserver -p 8000                                 # open http://
 ```
 
 In CI, `pages.yaml` builds the playground (`-Pweb`) first, then the docs into the
-same `web/dist` (never deleting it), then deploys -- so the deployed playground
-wasm and the docs come from the same commit (introspection examples like
-`rontolisp:list-macros` therefore agree in the deployed site even if a local
-`rontoplayground.js.wasm` is stale). The docgen and `DocExamplesTest` are also
-exercised by `./mvnw test`; the `-Drontolisp.doc.fix=true` helper is manual-only.
+same `web/dist` (never deleting it), then the agent skill (below), then deploys --
+so the deployed playground wasm and the docs come from the same commit
+(introspection examples like `rontolisp:list-macros` therefore agree in the
+deployed site even if a local `rontoplayground.js.wasm` is stale).
+`DocExamplesTest` is exercised by `./mvnw test`; `docs-tool` is NOT in the root
+reactor, so ITS tests run only in `pages.yaml` (which builds it WITHOUT
+`-DskipTests` on purpose) or when you run `./mvnw -f docs-tool/pom.xml test`
+yourself. The `-Drontolisp.doc.fix=true` helper is manual-only.
+
+## The agent skill (`docs-tool` `skill` mode)
+
+`java -jar docs-tool/target/rontolisp-docgen.jar skill --source doc --out
+web/dist/skill` writes an agent skill to `https://making.github.io/rontolisp/skill/`:
+`rontolisp/SKILL.md` + `rontolisp/references/**` (every `doc/en/**` page verbatim,
+plus a generated `contents.md` and `operators.md`), a `.tar.gz` and a `.skill` zip
+of that tree, `rontolisp-full.md` (all of it as one file), `VERSION` /
+`version.json`, and an install page.
+
+**The invariant: the skill is a VIEW of `doc/`, never a second copy of it.** The
+only hand-written text in it is
+`docs-tool/src/main/resources/skill/SKILL.template.md` -- frontmatter plus the
+"how to walk this bundle" routing. Everything else arrives through
+`{{include:PATH}}` (which demotes the page's headings one level and retargets its
+links) or a generated table. If you find yourself explaining a language rule in
+the template, that rule belongs on a doc page instead; inline it from there.
+
+- `SkillGen.CONTENTS_PAGE` is `contents.md`, not `index.md`: `doc/en/index.md`
+  mirrors to `references/index.md`, and a case-insensitive filesystem would let a
+  generated `INDEX.md` silently eat it.
+- Links are rewritten with a code mask (`SkillGen.codeMask`), because these pages
+  quote code containing `](...)`. A link that resolves OUT of the language tree
+  (`../../playground.html`) has no bundled counterpart and becomes the absolute
+  site URL it means.
+- `SkillGenTest` is the anti-rot gate: it regenerates from the real `doc/` tree and
+  fails when any bundled link no longer resolves, when the frontmatter or a
+  `{{placeholder}}` is broken, when `SKILL.md` grows past 500 lines, or when a
+  catalog entry is missing from `operators.md`. A doc rename that breaks the site
+  therefore breaks this build too.
+- The version is `<project major.minor>.<git rev-list --count HEAD -- doc
+  docs-tool>`, computed in `pages.yaml` (whose checkout needs `fetch-depth: 0`):
+  it bumps exactly when something that can change the skill changed. Local runs
+  default to `SkillGen.DEV_VERSION`. Both archives are written with fixed
+  timestamps so an unchanged bundle stays byte-identical.
+- Nothing is committed back to the repo -- the bundle is an artifact of the Pages
+  deploy, so there is no generated file in git to drift.

@@ -81,6 +81,12 @@ public final class DocGen {
 	}
 
 	public static void main(String[] args) throws IOException {
+		// `skill` selects the agent-skill bundle instead of the HTML site; both
+		// modes read the same doc/ tree, so they share this entry point.
+		if (args.length > 0 && "skill".equals(args[0])) {
+			SkillGen.main(java.util.Arrays.copyOfRange(args, 1, args.length));
+			return;
+		}
 		Path source = Path.of("doc");
 		Path out = Path.of("web/dist/docs");
 		String defaultLang = "en";
@@ -136,7 +142,7 @@ public final class DocGen {
 	private void generateLanguage(String lang, List<HtmlTemplate.Language> languageList) throws IOException {
 		Path langDir = this.source.resolve(lang);
 		Nav nav = Nav.load(langDir.resolve("nav.yaml"));
-		List<Catalog> catalogs = discoverCatalogs(langDir);
+		List<Catalog> catalogs = Catalog.discover(langDir);
 		// Each catalog's index page (the table) is linked to its detail pages.
 		Map<String, Catalog> indexToCatalog = new HashMap<>();
 		for (Catalog catalog : catalogs) {
@@ -153,20 +159,6 @@ public final class DocGen {
 
 		for (Catalog catalog : catalogs) {
 			renderDetailPages(lang, nav, languageList, langDir, catalog, indexTitle(nav, catalog));
-		}
-	}
-
-	/** Finds every {@code _catalog.yaml} under the language directory. */
-	private List<Catalog> discoverCatalogs(Path langDir) throws IOException {
-		try (Stream<Path> paths = Files.walk(langDir)) {
-			List<Path> catalogFiles = paths.filter(p -> p.getFileName().toString().equals("_catalog.yaml"))
-				.sorted()
-				.toList();
-			List<Catalog> catalogs = new ArrayList<>();
-			for (Path file : catalogFiles) {
-				catalogs.add(Catalog.load(langDir, file));
-			}
-			return catalogs;
 		}
 	}
 

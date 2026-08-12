@@ -46,6 +46,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
+      with:
+        # The skill version counts the commits that can change it, so the whole
+        # history has to be here.
+        fetch-depth: 0
     - name: Set up GraalVM 25
       uses: graalvm/setup-graalvm@v1
       with:
@@ -65,10 +69,33 @@ jobs:
     # Build the standalone Markdown -> HTML docs tool and render doc/ into
     # web/dist/docs. The web profile (above) recreates web/dist, so docs must
     # run after it and only add the docs/ subtree (it never deletes web/dist).
+    # Its tests are the gate on the agent skill: they regenerate the bundle from
+    # doc/ and fail on a link that no longer resolves, so a renamed page cannot
+    # ship a dead skill.
     - name: Build docs tool
-      run: ./mvnw -V --no-transfer-progress -f docs-tool/pom.xml -DskipTests package
+      run: ./mvnw -V --no-transfer-progress -f docs-tool/pom.xml package
     - name: Generate documentation site (doc -> web/dist/docs)
       run: java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
+    # The skill's version is <project major.minor>.<commits that can change it>,
+    # so it bumps by itself whenever the documentation or the generator moves and
+    # stays put when nothing did.
+    - name: Compute skill version
+      id: skill
+      run: |
+        set -e
+        BASE=$(./mvnw -q --no-transfer-progress help:evaluate -Dexpression=project.version -DforceStdout | tail -1)
+        MAJOR_MINOR=${BASE%-SNAPSHOT}
+        MAJOR_MINOR=${MAJOR_MINOR%.*}
+        PATCH=$(git rev-list --count HEAD -- doc docs-tool)
+        echo "version=${MAJOR_MINOR}.${PATCH}" >> "$GITHUB_OUTPUT"
+        echo "skill version ${MAJOR_MINOR}.${PATCH}"
+    - name: Generate agent skill (doc -> web/dist/skill)
+      run: |
+        java -jar docs-tool/target/rontolisp-docgen.jar skill \
+          --source doc --out web/dist/skill \
+          --version '${{ steps.skill.outputs.version }}' \
+          --commit '${{ github.sha }}' \
+          --site-base 'https://making.github.io/rontolisp'
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
       with:

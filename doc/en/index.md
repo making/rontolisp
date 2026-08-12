@@ -15,3 +15,6 @@ WebAssembly build as the [playground](../../playground.html):
 ```
 
 Press **Run** above (the rontolisp runtime loads on the first run).
+
+Working with an AI coding agent? These same pages are published as an
+[agent skill](../../skill/), regenerated on every deploy.

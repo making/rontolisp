@@ -20,6 +20,12 @@ same WebAssembly build that powers the playground -- press **Run** on any
 example to evaluate it. The Markdown sources live under [`doc/`](doc/) and are
 rendered to HTML by the standalone [`docs-tool/`](docs-tool/) generator.
 
+**For AI coding agents: [https://making.github.io/rontolisp/skill/](https://making.github.io/rontolisp/skill/)** --
+an agent skill generated from this same documentation on every deploy. It assumes
+Common Lisp is known and carries the delta: which operators exist, which Common
+Lisp features are missing or partial, the rontolisp-only extensions, and how to
+run a program on each backend.
+
 **Try it in your browser: [https://making.github.io/rontolisp/playground.html](https://making.github.io/rontolisp/playground.html)** -- a playground where rontolisp itself runs as WebAssembly. Evaluate expressions in the REPL, and compile your source to downloadable `.class` and `.wasm` files, entirely client-side. A companion page, [compile & run](https://making.github.io/rontolisp/compile-run.html), compiles a set of Lisp definitions to a WASM module in the browser, then lets you call any function from that module with arguments you supply -- no download, no server. See [`web/README.md`](web/README.md) for how it is built and deployed.
 
 ## Requirements
