@@ -132,6 +132,21 @@ Worth **-14.0%** on the `--optimize=size` row (96,834 -> 83,269), -16.1% on the
 component row, and -10.6% on the JVM class, every module still gunzipping the
 fixture byte-for-byte on all four backends.
 
+**The format symbol reaches the state machine's slot dispatch.** chipz stores
+the caller's `'chipz:gzip` into `inflate-state`'s `data-format` slot and picks
+the state-machine entry off the slot READ -- `(ecase (inflate-state-data-format
+state) (deflate ...) (zlib ...) (gzip ...))` -- so the caller-constant fold that
+had already removed the bzip2 arm stopped one hop short of the zlib half. The
+fold now tracks per-slot value sets (constructor arguments, initforms, `setf`
+writes; `.kb/library-defun-pruning.md`), which deletes the zlib/deflate arms,
+and the labels lowering stopped constructing closures for state functions
+nothing references any more (`.kb/flet-labels.md`), so the zlib state closures,
+`%make-zlib-header` and the adler32 runtime shake out. Worth **-7.0%** on the
+`--optimize=size` row (83,269 -> 77,444), -7.3% at `--optimize`, -6.9% on the
+component row and -9.1% on the JVM class; the no-flag module moves too
+(298,934 -> 294,968), because neither mechanism is gated on a flag. Every
+module still gunzips the fixture byte-for-byte on all four backends.
+
 **A constant table now costs its own bytes.** chipz spells every lookup table it
 has -- the two 256-entry CRC32 tables, the fixed-block code lengths, the
 distance/length codes, ~700 elements in all -- as

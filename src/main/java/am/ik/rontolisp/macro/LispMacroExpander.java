@@ -9751,6 +9751,193 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The slot-flow summary of one top-level {@code defstruct}, for
+	 * {@code ConstantCaseArmPruner}'s slot-carried value analysis: which constructors
+	 * write which slots (a BOA lambda list maps required parameters to same-named slots,
+	 * the keyword constructor maps {@code :slot} arguments), what each slot defaults to,
+	 * and the accessor prefix the include chain's readers/writers are spelled with.
+	 * Mirrors {@link #expandDefstruct}'s option grammar and must move with it. Parses
+	 * TOLERANTLY: an option this summary cannot attribute (a {@code :type} vector layout,
+	 * whose storage is writable through plain {@code aref}) marks the summary
+	 * {@link StructSlotFlow#opaque()} so the consumer widens every slot to unknown
+	 * instead of trusting a mapping that is wrong.
+	 * @param form the top-level form (resolved spelling)
+	 * @return the summary, or null when the form is not a {@code defstruct}
+	 */
+	public static @Nullable StructSlotFlow defstructSlotFlow(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !LispNames.DEFSTRUCT.equals(op.name()) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			return null;
+		}
+		LispSymbol nameSym;
+		boolean opaque = false;
+		boolean suppressConstructor = false;
+		List<StructSlotFlow.CtorFlow> constructors = new java.util.ArrayList<>();
+		boolean explicitConstructor = false;
+		String concNameOverride = null;
+		boolean concNameGiven = false;
+		String includeParent = null;
+		java.util.Map<String, LispVal> includeOverrides = new java.util.LinkedHashMap<>();
+		if (parts.get(1) instanceof LispSymbol plain) {
+			nameSym = plain;
+		}
+		else if (parts.get(1) instanceof LispCons header && header.car() instanceof LispSymbol headerName) {
+			nameSym = headerName;
+			for (LispVal option : header.toList().subList(1, header.toList().size())) {
+				if (!(option instanceof LispCons optCons) || !(optCons.car() instanceof LispSymbol optSym)
+						|| !optCons.isProperList()) {
+					opaque = true;
+					continue;
+				}
+				List<LispVal> optParts = optCons.toList();
+				LispVal optValue = optParts.size() > 1 ? optParts.get(1) : LispNil.INSTANCE;
+				switch (optSym.name()) {
+					case ":CONSTRUCTOR" -> {
+						explicitConstructor = true;
+						if (optValue instanceof LispSymbol s && optParts.size() <= 3) {
+							constructors.add(new StructSlotFlow.CtorFlow(prunerSpellings(s.name()),
+									optParts.size() == 3 ? optParts.get(2) : null));
+						}
+						else if (optValue instanceof LispNil) {
+							suppressConstructor = true;
+						}
+						else {
+							opaque = true;
+						}
+					}
+					case ":CONC-NAME" -> {
+						concNameGiven = true;
+						if (optValue instanceof LispSymbol s) {
+							PackageRegistry.QualifiedName cqn = PackageRegistry.splitQualified(s.name());
+							String raw = cqn == null ? s.name() : cqn.member();
+							concNameOverride = raw.startsWith(":") ? raw.substring(1) : raw;
+						}
+						else if (optValue instanceof LispString s) {
+							concNameOverride = s.value();
+						}
+						else {
+							concNameOverride = "";
+						}
+					}
+					case ":PREDICATE", ":COPIER", ":PRINT-OBJECT", ":PRINT-FUNCTION" -> {
+						// Readers only: neither defines a slot writer.
+					}
+					case ":INCLUDE" -> {
+						if (optValue instanceof LispSymbol inc) {
+							includeParent = inc.name();
+							for (LispVal override : optParts.subList(2, optParts.size())) {
+								if (override instanceof LispCons ovCons && ovCons.car() instanceof LispSymbol ovSlot
+										&& ovCons.isProperList()) {
+									List<LispVal> ovParts = ovCons.toList();
+									PackageRegistry.QualifiedName ovQn = PackageRegistry.splitQualified(ovSlot.name());
+									includeOverrides.put(ovQn == null ? ovSlot.name() : ovQn.member(),
+											ovParts.size() >= 2 ? ovParts.get(1) : LispNil.INSTANCE);
+								}
+								else {
+									opaque = true;
+								}
+							}
+						}
+						else {
+							opaque = true;
+						}
+					}
+					default -> opaque = true;
+				}
+			}
+		}
+		else {
+			return null;
+		}
+		String structName = nameSym.name();
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(structName);
+		String base = qn == null ? structName : qn.member();
+		String concName = concNameGiven ? (concNameOverride == null ? "" : concNameOverride) : base + "-";
+		if (!explicitConstructor && !suppressConstructor) {
+			constructors.add(new StructSlotFlow.CtorFlow(
+					spellingsInPackageOf(structName, affixFor("make-", base) + base), null));
+		}
+		List<StructSlotFlow.SlotFlow> ownSlots = new java.util.ArrayList<>();
+		List<LispVal> slotSpecs = parts.subList(2, parts.size());
+		if (!slotSpecs.isEmpty() && slotSpecs.get(0) instanceof LispString) {
+			slotSpecs = slotSpecs.subList(1, slotSpecs.size());
+		}
+		for (LispVal spec : slotSpecs) {
+			if (spec instanceof LispSymbol s) {
+				PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(s.name());
+				ownSlots
+					.add(new StructSlotFlow.SlotFlow(slotQn == null ? s.name() : slotQn.member(), LispNil.INSTANCE));
+			}
+			else if (spec instanceof LispCons specCons && specCons.car() instanceof LispSymbol s
+					&& specCons.isProperList()) {
+				List<LispVal> specParts = specCons.toList();
+				PackageRegistry.QualifiedName slotQn = PackageRegistry.splitQualified(s.name());
+				ownSlots.add(new StructSlotFlow.SlotFlow(slotQn == null ? s.name() : slotQn.member(),
+						specParts.size() > 1 ? specParts.get(1) : LispNil.INSTANCE));
+			}
+			else {
+				opaque = true;
+			}
+		}
+		return new StructSlotFlow(structName, prunerSpellings(structName), includeParent,
+				java.util.Map.copyOf(includeOverrides), List.copyOf(ownSlots), List.copyOf(constructors), concName,
+				base, opaque);
+	}
+
+	/**
+	 * The slot-flow summary of one {@code defstruct}, for the slot-carried value
+	 * analysis.
+	 *
+	 * @param structName the struct name as written (resolved spelling)
+	 * @param structSpellings the struct name in both qualified spellings
+	 * @param includeParent the {@code :include} parent name, or null
+	 * @param includeOverrides inherited-slot initform overrides, keyed by slot member
+	 * @param ownSlots the struct's OWN slots in order, each with its initform
+	 * @param constructors every constructor, each with its spellings and its BOA lambda
+	 * list (null = the keyword constructor)
+	 * @param concName the accessor prefix (member spelling)
+	 * @param caseBase the base name whose case the generated affixes follow
+	 * @param opaque true when an option this summary cannot attribute is present -- the
+	 * consumer must widen every slot of this struct to unknown
+	 */
+	public record StructSlotFlow(String structName, List<String> structSpellings, @Nullable String includeParent,
+			java.util.Map<String, LispVal> includeOverrides, List<SlotFlow> ownSlots, List<CtorFlow> constructors,
+			String concName, String caseBase, boolean opaque) {
+
+		/**
+		 * One slot.
+		 *
+		 * @param base the slot's member name
+		 * @param initform the slot's initform
+		 */
+		public record SlotFlow(String base, LispVal initform) {
+		}
+
+		/**
+		 * One constructor.
+		 *
+		 * @param spellings the constructor name in both qualified spellings
+		 * @param boaLambdaList the BOA lambda list, or null for the keyword constructor
+		 */
+		public record CtorFlow(List<String> spellings, @Nullable LispVal boaLambdaList) {
+		}
+
+		/**
+		 * The accessor spellings for one slot base name -- own or inherited; the caller
+		 * resolves the {@code :include} chain.
+		 * @param slotBase the slot base name
+		 * @return the accessor name in every spelling a reference can take
+		 */
+		public List<String> accessorSpellings(String slotBase) {
+			return spellingsInPackageOf(this.structName, this.concName + affixFor(slotBase, this.caseBase));
+		}
+	}
+
+	/**
 	 * The names a top-level {@code defclass}/{@code define-condition} defines, as the
 	 * tree-shaker's keep-keys: the class name plus every {@code :reader}/{@code
 	 * :accessor} name (which the expansion turns into methods on generics of those names,
@@ -24525,6 +24712,9 @@ public final class LispMacroExpander {
 		letParts.add(new LispSymbol(LispNames.LET));
 		List<LispVal> bindings = new java.util.ArrayList<>();
 		List<LispVal> setqs = new java.util.ArrayList<>();
+		// Per definition, the rewritten lambda (labels) or the raw one (flet), for the
+		// unreferenced-local drop below.
+		List<LispVal> defLambdas = new java.util.ArrayList<>();
 		int i = 0;
 		for (java.util.Map.Entry<String, LispSymbol> entry : fnVars.entrySet()) {
 			List<LispVal> dp = defParts.get(i++);
@@ -24554,24 +24744,82 @@ public final class LispMacroExpander {
 			LispVal lambda = listToCons(lambdaParts);
 			if (recursive) {
 				// labels: the lambdas see every sibling; bind nil first, setq after.
+				LispVal rewritten = rewriteLocalCalls(lambda, fnVars);
+				defLambdas.add(rewritten);
 				bindings.add(listToCons(List.of(entry.getValue(), LispNil.INSTANCE)));
-				setqs.add(listToCons(
-						List.of(new LispSymbol(LispNames.SETQ), entry.getValue(), rewriteLocalCalls(lambda, fnVars))));
+				setqs.add(listToCons(List.of(new LispSymbol(LispNames.SETQ), entry.getValue(), rewritten)));
 			}
 			else {
 				// flet: the lambdas see the outer function bindings only.
+				defLambdas.add(lambda);
 				bindings.add(listToCons(List.of(entry.getValue(), lambda)));
 			}
 		}
-		letParts.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings));
-		letParts.addAll(setqs);
+		List<LispVal> rewrittenBody = new java.util.ArrayList<>();
+		for (LispVal bodyForm : parts.subList(2, parts.size())) {
+			rewrittenBody.add(rewriteLocalCalls(bodyForm, fnVars));
+		}
+		// A local no surviving reference names is dropped, binding and all: constructing
+		// its closure is the expansion's only effect, so the drop is invisible -- and it
+		// is what lets a dead-branch prune upstream (a deleted case/ecase arm holding the
+		// only #'state reference) actually shed the local's body from the artifact.
+		// Reachability is computed on the REWRITTEN forms: every reference to a local is,
+		// by construction, an occurrence of its unique generated variable (a bare symbol
+		// spelling the ORIGINAL name is a variable in Lisp-2 and never meant the local).
+		// Roots are the body forms; for labels, a kept definition's lambda keeps what it
+		// names in turn (an flet definition sees only outer bindings and contributes no
+		// edges). Over-finding an occurrence (e.g. in quoted data) only KEEPS a local.
+		List<LispSymbol> varList = new java.util.ArrayList<>(fnVars.values());
+		java.util.Set<String> varNames = new java.util.HashSet<>();
+		varList.forEach(var -> varNames.add(var.name()));
+		java.util.Set<String> reachable = new java.util.HashSet<>();
+		for (LispVal bodyForm : rewrittenBody) {
+			collectMentionedNames(bodyForm, varNames, reachable);
+		}
+		if (recursive) {
+			boolean grew = true;
+			while (grew) {
+				grew = false;
+				for (int d = 0; d < varList.size(); d++) {
+					if (reachable.contains(varList.get(d).name())) {
+						java.util.Set<String> before = new java.util.HashSet<>(reachable);
+						collectMentionedNames(defLambdas.get(d), varNames, reachable);
+						grew |= !reachable.equals(before);
+					}
+				}
+			}
+		}
+		List<LispVal> keptBindings = new java.util.ArrayList<>();
+		List<LispVal> keptSetqs = new java.util.ArrayList<>();
+		for (int d = 0; d < varList.size(); d++) {
+			if (reachable.contains(varList.get(d).name())) {
+				keptBindings.add(bindings.get(d));
+				if (recursive) {
+					keptSetqs.add(setqs.get(d));
+				}
+			}
+		}
+		letParts.add(keptBindings.isEmpty() ? LispNil.INSTANCE : listToCons(keptBindings));
+		letParts.addAll(keptSetqs);
 		if (parts.size() == 2) {
 			letParts.add(LispNil.INSTANCE);
 		}
-		for (LispVal bodyForm : parts.subList(2, parts.size())) {
-			letParts.add(rewriteLocalCalls(bodyForm, fnVars));
-		}
+		letParts.addAll(rewrittenBody);
 		return listToCons(letParts);
+	}
+
+	/** Records which of the given names occur as a symbol anywhere in the tree. */
+	private static void collectMentionedNames(LispVal form, java.util.Set<String> names, java.util.Set<String> out) {
+		if (form instanceof LispSymbol sym) {
+			if (names.contains(sym.name())) {
+				out.add(sym.name());
+			}
+			return;
+		}
+		if (form instanceof LispCons cons) {
+			collectMentionedNames(cons.car(), names, out);
+			collectMentionedNames(cons.cdr(), names, out);
+		}
 	}
 
 	/**

@@ -129,6 +129,38 @@ class LispMacroExpanderTest {
 	}
 
 	@Test
+	void labelsDropsALocalNoSurvivingReferenceNames() {
+		// After an upstream dead-branch prune deletes the only #'dead reference, the
+		// expansion must not still construct its closure -- and dead's own reference to
+		// deeper must not keep deeper either.
+		LispCons form = (LispCons) LispReader
+			.readAllFromString(
+					"(labels ((keep (x) (helper x)) (helper (x) x) (dead (x) (deeper x)) (deeper (x) x)) (keep 1))")
+			.get(0);
+		String expanded = LispMacroExpander.expandLabels(form).print();
+		assertThat(expanded).contains("_KEEP", "_HELPER").doesNotContain("_DEAD", "_DEEPER");
+	}
+
+	@Test
+	void labelsKeepsALocalReferencedOnlyAsAValue() {
+		LispCons form = (LispCons) LispReader.readAllFromString("(labels ((k (x) x)) (mapcar #'k (list 1)))").get(0);
+		assertThat(LispMacroExpander.expandLabels(form).print()).contains("_K ");
+	}
+
+	@Test
+	void aSelfRecursiveLabelsLocalNothingElseNamesIsDropped() {
+		LispCons form = (LispCons) LispReader.readAllFromString("(labels ((lonely (x) (lonely x))) 42)").get(0);
+		assertThat(LispMacroExpander.expandLabels(form).print()).doesNotContain("_LONELY");
+	}
+
+	@Test
+	void fletDropsAnUnreferencedLocal() {
+		LispCons form = (LispCons) LispReader.readAllFromString("(flet ((used (x) x) (unused (x) x)) (used 2))").get(0);
+		String expanded = LispMacroExpander.expandFlet(form).print();
+		assertThat(expanded).contains("_USED").doesNotContain("_UNUSED");
+	}
+
+	@Test
 	void theRuntimeSubtypepTableIsEmittedInLatticeDeclarationOrder() {
 		// A computed (subtypep a b) makes the compiler bake the whole type lattice as a
 		// data table. Its order must be a function of the PROGRAM, never of the JVM run:

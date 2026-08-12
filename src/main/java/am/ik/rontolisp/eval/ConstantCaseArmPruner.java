@@ -239,6 +239,49 @@ final class ConstantCaseArmPruner {
 
 	}
 
+	/**
+	 * One tracked struct SLOT: the join set of every value the program can store into it.
+	 * Shared along the {@code :include} chain -- a parent's accessor and a child's
+	 * re-exposed accessor read the same storage, so they read the same set.
+	 */
+	private static final class SlotState {
+
+		final ValueSet set = new ValueSet();
+
+	}
+
+	/** One slot of one struct's layout: the shared state plus THIS struct's initform. */
+	private record SlotBinding(String member, SlotState state, LispVal initform) {
+	}
+
+	/** One tracked struct: its full slot chain (inherited first) and whether opaque. */
+	private static final class StructFlow {
+
+		final List<SlotBinding> slots = new ArrayList<>();
+
+		boolean opaque;
+
+	}
+
+	/** One tracked constructor: which struct it makes and how its arguments map. */
+	private static final class CtorState {
+
+		final StructFlow struct;
+
+		/** Required-parameter slot members in order; null = the keyword constructor. */
+		final @Nullable List<String> boaRequired;
+
+		/** The BOA lambda list has &-markers: every non-required slot goes TOP. */
+		final boolean boaHasMarkers;
+
+		CtorState(StructFlow struct, @Nullable List<String> boaRequired, boolean boaHasMarkers) {
+			this.struct = struct;
+			this.boaRequired = boaRequired;
+			this.boaHasMarkers = boaHasMarkers;
+		}
+
+	}
+
 	/** One tracked function: a defun, or one method of a generic family. */
 	private static final class Fn {
 
@@ -288,13 +331,186 @@ final class ConstantCaseArmPruner {
 		/** Names whose call returns a fresh struct instance. */
 		private final Set<String> instanceConstructors = new HashSet<>();
 
+		/** Accessor spelling -> the slot it reads/writes. */
+		private final Map<String, SlotState> slotsByAccessor = new HashMap<>();
+
+		/** Constructor spelling -> its argument-to-slot mapping. */
+		private final Map<String, CtorState> ctorsByName = new HashMap<>();
+
+		/** Struct-name spelling -> flow, for make-instance over a literal struct name. */
+		private final Map<String, StructFlow> structsByName = new HashMap<>();
+
 		private boolean dirty;
 
 		Analysis(List<LispVal> resolved) {
 			this.resolved = resolved;
 			collectFunctions();
 			if (!this.functions.isEmpty()) {
+				collectStructFlows();
+				if (!this.slotsByAccessor.isEmpty() && this.resolved.stream().anyMatch(Analysis::mentionsRuntimeRead)) {
+					// A runtime (read)/(read-from-string ...) can construct a #S literal
+					// whose slot values this walk never saw stored.
+					topAllSlots();
+				}
 				scanEscapes();
+			}
+		}
+
+		private static boolean mentionsRuntimeRead(LispVal form) {
+			if (form instanceof LispSymbol sym) {
+				String member = LispSymbol.memberName(sym.name());
+				return "READ".equals(member) || "READ-FROM-STRING".equals(member)
+						|| "READ-PRESERVING-WHITESPACE".equals(member);
+			}
+			if (form instanceof LispCons cons) {
+				return mentionsRuntimeRead(cons.car()) || mentionsRuntimeRead(cons.cdr());
+			}
+			return false;
+		}
+
+		// ----------------------------------------------------------------
+		// Struct slot flow: which values can a slot ever hold
+		// ----------------------------------------------------------------
+
+		private void collectStructFlows() {
+			Map<String, LispMacroExpander.StructSlotFlow> summaries = new HashMap<>();
+			Set<String> duplicated = new HashSet<>();
+			for (LispVal form : this.resolved) {
+				LispMacroExpander.StructSlotFlow summary = LispMacroExpander.defstructSlotFlow(form);
+				if (summary == null) {
+					continue;
+				}
+				for (String spelling : summary.structSpellings()) {
+					if (summaries.put(spelling, summary) != null) {
+						duplicated.add(spelling);
+					}
+				}
+			}
+			Map<LispMacroExpander.StructSlotFlow, StructFlow> flows = new IdentityHashMap<>();
+			for (LispMacroExpander.StructSlotFlow summary : new LinkedHashSet<>(summaries.values())) {
+				StructFlow flow = resolveFlow(summary, summaries, flows, new HashSet<>());
+				boolean redefined = summary.structSpellings().stream().anyMatch(duplicated::contains);
+				if (redefined) {
+					flow.opaque = true;
+				}
+				for (String spelling : summary.structSpellings()) {
+					this.structsByName.put(spelling, flow);
+				}
+				for (SlotBinding binding : flow.slots) {
+					for (String accessor : summary.accessorSpellings(binding.member())) {
+						SlotState existing = this.slotsByAccessor.putIfAbsent(accessor, binding.state());
+						if (existing != null && existing != binding.state()) {
+							// Two structs generate the same accessor spelling: neither
+							// mapping can be trusted.
+							existing.set.makeTop();
+							binding.state().set.makeTop();
+						}
+						if (this.functions.containsKey(accessor)) {
+							// A defun of the accessor's name: a call is ambiguous.
+							binding.state().set.makeTop();
+						}
+					}
+				}
+				for (LispMacroExpander.StructSlotFlow.CtorFlow ctor : summary.constructors()) {
+					List<String> required = null;
+					boolean markers = false;
+					if (ctor.boaLambdaList() != null) {
+						required = new ArrayList<>();
+						LispVal rest = ctor.boaLambdaList();
+						while (rest instanceof LispCons cell) {
+							if (cell.car() instanceof LispSymbol param) {
+								if (param.name().startsWith("&")) {
+									markers = true;
+									break;
+								}
+								required.add(LispSymbol.memberName(param.name()));
+							}
+							else {
+								// A non-symbol in the required section: unmappable.
+								flow.opaque = true;
+								break;
+							}
+							rest = cell.cdr();
+						}
+						if (!(rest instanceof LispNil) && !markers) {
+							flow.opaque = true;
+						}
+					}
+					for (String spelling : ctor.spellings()) {
+						if (this.ctorsByName.putIfAbsent(spelling, new CtorState(flow, required, markers)) != null
+								|| this.functions.containsKey(spelling)) {
+							// Ambiguous spelling (a second constructor, or a defun of the
+							// same name): trust neither side.
+							flow.opaque = true;
+							escapeName(spelling);
+						}
+					}
+				}
+				if (flow.opaque) {
+					topSlots(flow);
+				}
+			}
+		}
+
+		/**
+		 * Builds the full slot chain of one struct: the parent chain's slots (their
+		 * states SHARED, this child's {@code :include} overrides applied to the
+		 * initforms) followed by the own slots. An unresolvable or opaque parent leaves
+		 * the child tracking its own slots only -- the parent's slots simply stay
+		 * untracked, which reads as unknown everywhere.
+		 */
+		private StructFlow resolveFlow(LispMacroExpander.StructSlotFlow summary,
+				Map<String, LispMacroExpander.StructSlotFlow> summaries,
+				Map<LispMacroExpander.StructSlotFlow, StructFlow> flows,
+				Set<LispMacroExpander.StructSlotFlow> visiting) {
+			StructFlow done = flows.get(summary);
+			if (done != null) {
+				return done;
+			}
+			StructFlow flow = new StructFlow();
+			flows.put(summary, flow);
+			if (!visiting.add(summary)) {
+				flow.opaque = true;
+				return flow;
+			}
+			flow.opaque = summary.opaque();
+			if (summary.includeParent() != null) {
+				LispMacroExpander.StructSlotFlow parent = summaries.get(summary.includeParent());
+				if (parent != null) {
+					StructFlow parentFlow = resolveFlow(parent, summaries, flows, visiting);
+					if (parentFlow.opaque) {
+						flow.opaque = true;
+					}
+					for (SlotBinding inherited : parentFlow.slots) {
+						LispVal override = summary.includeOverrides().get(inherited.member());
+						flow.slots.add(override == null ? inherited
+								: new SlotBinding(inherited.member(), inherited.state(), override));
+					}
+				}
+			}
+			for (LispMacroExpander.StructSlotFlow.SlotFlow slot : summary.ownSlots()) {
+				flow.slots.add(new SlotBinding(slot.base(), new SlotState(), slot.initform()));
+			}
+			visiting.remove(summary);
+			return flow;
+		}
+
+		private void topSlots(StructFlow flow) {
+			for (SlotBinding binding : flow.slots) {
+				if (binding.state().set.makeTop()) {
+					this.dirty = true;
+				}
+			}
+		}
+
+		private void topAllSlots() {
+			for (SlotState slot : this.slotsByAccessor.values()) {
+				if (slot.set.makeTop()) {
+					this.dirty = true;
+				}
+			}
+			for (StructFlow flow : this.structsByName.values()) {
+				topSlots(flow);
 			}
 		}
 
@@ -461,6 +677,26 @@ final class ConstantCaseArmPruner {
 							entry.getValue().forEach(Fn::escape);
 						}
 					}
+					for (Map.Entry<String, SlotState> entry : this.slotsByAccessor.entrySet()) {
+						if (entry.getKey().equals(value) || LispSymbol.memberName(entry.getKey()).equals(value)) {
+							entry.getValue().set.makeTop();
+						}
+					}
+					for (Map.Entry<String, CtorState> entry : this.ctorsByName.entrySet()) {
+						if (entry.getKey().equals(value) || LispSymbol.memberName(entry.getKey()).equals(value)) {
+							topSlots(entry.getValue().struct);
+						}
+					}
+				}
+				case am.ik.rontolisp.LispInstance ignored ->
+					// A #S literal stores slot values with no constructor call in sight.
+					topAllSlots();
+				case am.ik.rontolisp.LispArray array -> {
+					// An array literal's elements are data: a symbol in one is as
+					// designator-capable as one in a quoted list.
+					for (LispVal element : array.data()) {
+						scanEscapes(element, true);
+					}
 				}
 				case LispCons cons -> {
 					if (!(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
@@ -475,6 +711,15 @@ final class ConstantCaseArmPruner {
 						case LispNames.FUNCTION -> {
 							if (parts.size() > 1 && parts.get(1) instanceof LispSymbol fnName) {
 								escapeName(fnName.name());
+							}
+							else if (parts.size() > 1 && parts.get(1) instanceof LispCons setter
+									&& setter.car() instanceof LispSymbol setf
+									&& "SETF".equals(LispSymbol.memberName(setf.name()))
+									&& setter.cdr() instanceof LispCons cell
+									&& cell.car() instanceof LispSymbol place) {
+								// #'(setf acc): a first-class writer this walk cannot see
+								// through.
+								escapeName(place.name());
 							}
 							else if (parts.size() > 1) {
 								scanEscapes(parts.get(1), false);
@@ -528,6 +773,14 @@ final class ConstantCaseArmPruner {
 								scanEscapes(parts.get(i), false);
 							}
 						}
+						case "WITH-SLOTS", "WITH-ACCESSORS" -> {
+							// Slot access outside the accessor spellings: stand the slot
+							// tracking down rather than model the binding grammar.
+							topAllSlots();
+							for (int i = 1; i < parts.size(); i++) {
+								scanEscapes(parts.get(i), false);
+							}
+						}
 						default -> {
 							for (LispVal part : parts) {
 								scanEscapes(part, asData);
@@ -545,6 +798,20 @@ final class ConstantCaseArmPruner {
 			if (fns != null) {
 				fns.forEach(Fn::escape);
 			}
+			SlotState slot = this.slotsByAccessor.get(name);
+			if (slot != null) {
+				// The accessor as a VALUE: (setf (funcall it ...)) forms, computed
+				// writes -- the slot can no longer claim to know its writers.
+				slot.set.makeTop();
+			}
+			CtorState ctor = this.ctorsByName.get(name);
+			if (ctor != null) {
+				topSlots(ctor.struct);
+			}
+			// The struct NAME in data is deliberately NOT a slot escape: type-specifier
+			// positions (typecase clause heads) put it there constantly, and a name alone
+			// writes nothing -- every way to construct through a name at run time
+			// (computed make-instance, a runtime read's #S) is a cliff of its own.
 		}
 
 		// ----------------------------------------------------------------
@@ -565,6 +832,7 @@ final class ConstantCaseArmPruner {
 			for (List<Fn> fns : this.functions.values()) {
 				fns.forEach(Fn::escape);
 			}
+			topAllSlots();
 		}
 
 		Set<LispCons> collectDeadArms(IntPredicate prunableSystemAt) {
@@ -693,6 +961,49 @@ final class ConstantCaseArmPruner {
 						last = walk(parts.get(i), env, deadArms);
 					}
 					return LispNames.PSETQ.equals(member) ? ValueSet.ofConstant(nilConstant()) : last;
+				}
+				case "SETF", "PSETF" -> {
+					// Variable places were poisoned up front; a tracked SLOT place joins
+					// the written value into the slot's set instead.
+					ValueSet last = ValueSet.ofConstant(nilConstant());
+					int i = 1;
+					for (; i + 1 < parts.size(); i += 2) {
+						ValueSet value = walk(parts.get(i + 1), env, deadArms);
+						slotWritePlace(parts.get(i), value, env, deadArms);
+						last = value;
+					}
+					if (i < parts.size()) {
+						// A trailing place with no value form: malformed, stay wide.
+						slotWritePlace(parts.get(i), ValueSet.ofTop(), env, deadArms);
+					}
+					return "PSETF".equals(member) ? ValueSet.ofConstant(nilConstant()) : last;
+				}
+				case "INCF", "DECF", "POP", "REMF" -> {
+					if (parts.size() > 1) {
+						slotWritePlace(parts.get(1), ValueSet.ofTop(), env, deadArms);
+					}
+					walkSequence(parts, 2, env, deadArms);
+					return ValueSet.ofTop();
+				}
+				case "PUSH", "PUSHNEW" -> {
+					walkAt(parts, 1, env, deadArms);
+					if (parts.size() > 2) {
+						slotWritePlace(parts.get(2), ValueSet.ofTop(), env, deadArms);
+					}
+					walkSequence(parts, 3, env, deadArms);
+					return ValueSet.ofTop();
+				}
+				case "ROTATEF", "SHIFTF" -> {
+					for (int i = 1; i < parts.size(); i++) {
+						slotWritePlace(parts.get(i), ValueSet.ofTop(), env, deadArms);
+						walk(parts.get(i), env, deadArms);
+					}
+					return ValueSet.ofTop();
+				}
+				case LispNames.DEFSTRUCT -> {
+					// Slot initforms are walked at each defaulting CONSTRUCTOR call; the
+					// definition itself computes nothing.
+					return ValueSet.ofTop();
 				}
 				case LispNames.COND -> {
 					ValueSet result = ValueSet.ofConstant(nilConstant());
@@ -840,6 +1151,10 @@ final class ConstantCaseArmPruner {
 					if (target != null && this.functions.containsKey(target)) {
 						return walkCall(target, parts, 2, LispNames.APPLY.equals(member), env, deadArms);
 					}
+					CtorState ctor = target == null ? null : this.ctorsByName.get(target);
+					if (ctor != null) {
+						return walkCtorCall(ctor, parts, 2, LispNames.APPLY.equals(member), env, deadArms);
+					}
 					walkSequence(parts, 1, env, deadArms);
 					return ValueSet.ofTop();
 				}
@@ -849,13 +1164,40 @@ final class ConstantCaseArmPruner {
 					return ValueSet.empty();
 				}
 				case LispNames.MAKE_INSTANCE, LispNames.MAKE_CONDITION -> {
+					if (LispNames.MAKE_INSTANCE.equals(member)) {
+						String className = parts.size() > 1 ? quotedSymbolName(parts.get(1)) : null;
+						StructFlow struct = className == null ? null : this.structsByName.get(className);
+						if (struct != null) {
+							return walkKeywordInit(struct, parts, 2, env, deadArms);
+						}
+						if (className == null) {
+							// A computed class can name a tracked struct; its initargs
+							// are writes this walk cannot map.
+							topAllSlots();
+						}
+					}
 					walkSequence(parts, 1, env, deadArms);
 					return ValueSet.ofNonKey();
 				}
 				default -> {
+					CtorState ctor = this.ctorsByName.get(op.name());
+					if (ctor != null && !this.functions.containsKey(op.name())) {
+						return walkCtorCall(ctor, parts, 1, false, env, deadArms);
+					}
 					if (this.instanceConstructors.contains(op.name())) {
+						if (ctor == null) {
+							// An instantiator the slot summary could not attribute.
+							topAllSlots();
+						}
 						walkSequence(parts, 1, env, deadArms);
 						return ValueSet.ofNonKey();
+					}
+					SlotState slot = this.slotsByAccessor.get(op.name());
+					if (slot != null && parts.size() == 2 && !this.functions.containsKey(op.name())) {
+						// A slot READ: bounded by everything the program can store there,
+						// whatever instance the argument holds.
+						walkAt(parts, 1, env, deadArms);
+						return slot.set;
 					}
 					if (this.functions.containsKey(op.name())) {
 						return walkCall(op.name(), parts, 1, false, env, deadArms);
@@ -864,6 +1206,209 @@ final class ConstantCaseArmPruner {
 					return ValueSet.ofTop();
 				}
 			}
+		}
+
+		/**
+		 * A call to a tracked struct constructor: contribute the argument values to the
+		 * slots the constructor's mapping says they initialize, and the INITFORM values
+		 * to every slot this call may leave defaulted.
+		 */
+		private ValueSet walkCtorCall(CtorState ctor, List<LispVal> parts, int firstArg, boolean apply, Env env,
+				@Nullable Set<LispCons> deadArms) {
+			List<ValueSet> argSets = new ArrayList<>(parts.size() - firstArg);
+			for (int i = firstArg; i < parts.size(); i++) {
+				argSets.add(walk(parts.get(i), env, deadArms));
+			}
+			StructFlow struct = ctor.struct;
+			if (struct.opaque) {
+				return ValueSet.ofNonKey();
+			}
+			if (apply) {
+				// The spread hides positions and keywords alike.
+				topSlots(struct);
+				return ValueSet.ofNonKey();
+			}
+			if (ctor.boaRequired == null) {
+				return walkSuppliedKeywords(struct, parts, firstArg, argSets);
+			}
+			Map<String, ValueSet> supplied = new HashMap<>();
+			for (int i = 0; i < ctor.boaRequired.size() && i < argSets.size(); i++) {
+				supplied.put(ctor.boaRequired.get(i), argSets.get(i));
+			}
+			for (SlotBinding binding : struct.slots) {
+				ValueSet value = supplied.get(binding.member());
+				if (value != null) {
+					if (binding.state().set.addAll(value)) {
+						this.dirty = true;
+					}
+				}
+				else if (ctor.boaHasMarkers) {
+					// An &optional/&key/&aux section may write this slot from forms the
+					// mapping does not model.
+					if (binding.state().set.makeTop()) {
+						this.dirty = true;
+					}
+				}
+				else if (!ctor.boaRequired.contains(binding.member())) {
+					// A required-but-unsupplied slot means the call errors before the
+					// body runs; everything else defaults to its initform.
+					joinInitform(binding);
+				}
+			}
+			return ValueSet.ofNonKey();
+		}
+
+		/** {@code (make-x :slot v ...)} / {@code (make-instance 'x :slot v ...)}. */
+		private ValueSet walkKeywordInit(StructFlow struct, List<LispVal> parts, int firstArg, Env env,
+				@Nullable Set<LispCons> deadArms) {
+			List<ValueSet> argSets = new ArrayList<>(parts.size() - firstArg);
+			for (int i = firstArg; i < parts.size(); i++) {
+				argSets.add(walk(parts.get(i), env, deadArms));
+			}
+			if (struct.opaque) {
+				return ValueSet.ofNonKey();
+			}
+			return walkSuppliedKeywords(struct, parts, firstArg, argSets);
+		}
+
+		private ValueSet walkSuppliedKeywords(StructFlow struct, List<LispVal> parts, int firstArg,
+				List<ValueSet> argSets) {
+			Map<String, ValueSet> supplied = new HashMap<>();
+			for (int i = 0; i + 1 < argSets.size(); i += 2) {
+				if (parts.get(firstArg + i) instanceof LispSymbol kw && kw.isKeyword()) {
+					// The first occurrence of a keyword wins in CL; joining every
+					// occurrence only widens.
+					supplied.merge(LispSymbol.memberName(kw.name().substring(1)), argSets.get(i + 1),
+							(a, b) -> joined(a, b));
+				}
+				else {
+					// A computed keyword: no mapping can be trusted.
+					topSlots(struct);
+					return ValueSet.ofNonKey();
+				}
+			}
+			if ((argSets.size() & 1) != 0) {
+				// An odd initarg list errors at run time; contribute nothing extra.
+				topSlots(struct);
+				return ValueSet.ofNonKey();
+			}
+			for (SlotBinding binding : struct.slots) {
+				ValueSet value = supplied.get(binding.member());
+				if (value != null) {
+					if (binding.state().set.addAll(value)) {
+						this.dirty = true;
+					}
+				}
+				else {
+					joinInitform(binding);
+				}
+			}
+			return ValueSet.ofNonKey();
+		}
+
+		private static ValueSet joined(ValueSet a, ValueSet b) {
+			ValueSet out = new ValueSet();
+			out.addAll(a);
+			out.addAll(b);
+			return out;
+		}
+
+		/**
+		 * The initform's value joins the slot when a constructor call may leave the slot
+		 * defaulted. Walked with no dead-arm sink: the initform's text lives in the
+		 * DEFSTRUCT form, whose provenance is not this call site's.
+		 */
+		private void joinInitform(SlotBinding binding) {
+			ValueSet value = walk(binding.initform(), Env.root(), null);
+			if (binding.state().set.addAll(value)) {
+				this.dirty = true;
+			}
+		}
+
+		/**
+		 * What a setf-family PLACE does to tracked slots: a direct accessor place joins
+		 * the written value, the read-modify-write places {@code expandSetf} lowers onto
+		 * an inner place recurse ({@code ldb}/{@code mask-field}/{@code getf} rewrite the
+		 * inner place from a computed value, {@code the} passes the value through), a
+		 * {@code slot-value} place writes by slot NAME, and any other cons place mutates
+		 * an object without touching a tracked slot. Subexpressions are walked here so
+		 * the caller does not walk the place as an expression as well.
+		 */
+		private void slotWritePlace(LispVal place, ValueSet value, Env env, @Nullable Set<LispCons> deadArms) {
+			if (!(place instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+				return;
+			}
+			List<LispVal> parts = cons.toList();
+			SlotState slot = this.slotsByAccessor.get(op.name());
+			if (slot != null && parts.size() == 2) {
+				walkAt(parts, 1, env, deadArms);
+				if (slot.set.addAll(value)) {
+					this.dirty = true;
+				}
+				return;
+			}
+			switch (LispSymbol.memberName(op.name())) {
+				case "SLOT-VALUE" -> {
+					walkSequence(parts, 1, env, deadArms);
+					String member = parts.size() > 2 ? quotedSymbolMember(parts.get(2)) : null;
+					if (member != null) {
+						topSlotsNamed(member);
+					}
+					else {
+						topAllSlots();
+					}
+				}
+				case "LDB", "MASK-FIELD" -> {
+					walkAt(parts, 1, env, deadArms);
+					if (parts.size() > 2) {
+						slotWritePlace(parts.get(2), ValueSet.ofTop(), env, deadArms);
+					}
+				}
+				case "THE" -> {
+					if (parts.size() > 2) {
+						slotWritePlace(parts.get(2), value, env, deadArms);
+					}
+				}
+				case "GETF" -> {
+					if (parts.size() > 1) {
+						slotWritePlace(parts.get(1), ValueSet.ofTop(), env, deadArms);
+					}
+					walkSequence(parts, 2, env, deadArms);
+				}
+				case "VALUES" -> {
+					for (int i = 1; i < parts.size(); i++) {
+						slotWritePlace(parts.get(i), ValueSet.ofTop(), env, deadArms);
+					}
+				}
+				default ->
+					// (aref ...), (gethash ...), (car ...), ...: object mutation, no
+					// tracked slot changes hands.
+					walkSequence(parts, 1, env, deadArms);
+			}
+		}
+
+		private void topSlotsNamed(String member) {
+			for (StructFlow flow : this.structsByName.values()) {
+				for (SlotBinding binding : flow.slots) {
+					if (binding.member().equals(member) && binding.state().set.makeTop()) {
+						this.dirty = true;
+					}
+				}
+			}
+		}
+
+		/** The symbol a literal {@code 'name} argument names, or null. */
+		private static @Nullable String quotedSymbolName(LispVal form) {
+			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+					&& cons.cdr() instanceof LispCons cell && cell.car() instanceof LispSymbol sym) {
+				return sym.name();
+			}
+			return null;
+		}
+
+		private static @Nullable String quotedSymbolMember(LispVal form) {
+			String name = quotedSymbolName(form);
+			return name == null ? null : LispSymbol.memberName(name);
 		}
 
 		/**

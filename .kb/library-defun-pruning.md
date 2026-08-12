@@ -340,6 +340,38 @@ execution (an `ecase`'s deleted keys still fall to its error), which is stronger
 than the carve-out; the one defeat is the documented computed-name forgery, and
 it lands on the `(t (error ...))` arm -- loud, typed, never silent.
 
+**Stage A flows through struct SLOTS too (todo-333, 2026-08-12).** chipz stores
+the format symbol into `inflate-state`'s `data-format` slot through the BOA
+constructor `(%make-inflate-state f)` and dispatches the state machine on the
+slot READ -- `(ecase (inflate-state-data-format state) (deflate ...) (zlib ...)
+(gzip ...))` inside `%inflate`'s labels -- so the parameter-only analysis
+stopped one hop short and the whole zlib half (`%make-zlib-header`, the adler32
+family, the zlib state closures) stayed. Now every `defstruct` contributes a
+per-SLOT value set, shared along the `:include` chain (a parent's accessor and a
+child's re-exposed accessor read the same storage): a keyword-constructor call
+maps `:slot` arguments, a BOA constructor maps its REQUIRED parameters to
+same-named slots (any `&`-marker widens every non-required slot to TOP), a slot
+a call leaves defaulted joins its INITFORM's value, and `(setf (accessor x) v)`
+joins the written value while the RMW places (`incf`/`push`/`ldb`/... on the
+slot place) and `(setf (slot-value ...))` widen. A slot read
+`(accessor x)` then answers with the join over every store the program can
+perform, whatever instance flows in. The parse is
+`LispMacroExpander.defstructSlotFlow`, beside `defstructDefinedNames` and
+mirroring `expandDefstruct`'s option grammar (a `:type` vector layout, whose
+storage plain `aref` can write, marks the summary opaque = all slots TOP).
+Escapes stand the tracking down the same way names do: an accessor or
+constructor spelling in quoted data/strings, `#'(setf accessor)`,
+`with-slots`/`with-accessors`, a `#S` literal, a computed-class
+`(make-instance ...)`, and -- the out-of-band writer a name scan cannot see -- a
+runtime `read`/`read-from-string`, which can construct `#S` syntax whose slot
+values no visible store performed (that one is a whole-program cliff on the slot
+tracking only). Deleting an arm this analysis kills still preserves every
+execution, by the same argument as the parameter flow. What actually sheds the
+BYTES behind a dead labels-state arm is the expansion-time drop of unreferenced
+locals in `.kb/flet-labels.md` -- the arm deletion removes the `#'state`
+reference, the expansion then stops constructing the closure, and the shakers
+collect its body and everything only it reached.
+
 **Stage B — instantiator-gated `typecase`/`etypecase` arms** (`GatedArm` /
 `GateContext` in the pruner): an arm whose clause head names a candidate
 struct/class contributes its references only once an INSTANTIATOR of that
@@ -364,8 +396,13 @@ Pinned by `LibraryDefunPrunerTest`:
 `theCallerConstantFlowsThroughAGenericAndApplyIntoTheCaseFold` (the chipz shape
 end to end, `apply #'f` + struct-constructor NON-KEY included),
 `aTypecaseArmOnAnUninstantiatedStructIsDeletedAndItsBodyPrunedWithIt`,
-`aTypecaseArmOpensWhenAnInstantiatorOfItsHeadGoesLive`; `ChipzE2eTest` is the
-end-to-end pin.
+`aTypecaseArmOpensWhenAnInstantiatorOfItsHeadGoesLive`; the slot flow by
+`aCaseArmNoStoredSlotValueCanReachIsFolded`,
+`aDefaultedSlotContributesItsInitformValue`, `aSetfOfTheSlotJoinsTheWrittenValue`,
+`aWriteThroughAChildConstructorReachesTheParentAccessorsRead`,
+`aReadModifyWriteOnTheSlotPlaceKeepsEveryArm`, `anEscapedAccessorNameKeepsEveryArm`
+and `aRuntimeReadStandsTheSlotTrackingDown`; `ChipzE2eTest` is the end-to-end
+pin.
 
 **Place semantics are load-bearing in Stage A's assignment poisoning
 (`poisonPlace`), in BOTH directions.** A cons place mutates an object and leaves

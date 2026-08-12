@@ -744,6 +744,127 @@ class LibraryDefunPrunerTest {
 	}
 
 	@Test
+	void aCaseArmNoStoredSlotValueCanReachIsFolded() {
+		// Slot-carried constants: the only writer of THING's MODE slot is the BOA
+		// constructor, called with 'fast everywhere -- so an ecase over the slot READ
+		// can only see FAST, whatever instance flows in, and the slow arm folds.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct (thing (:constructor %make-thing (mode))) (mode 'fast))
+				(defun run (thing)
+				  (ecase (thing-mode thing)
+				    (fast (do-fast))
+				    (slow (do-slow))))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (run (%make-thing 'fast)))
+				"""));
+		assertThat(memberNames(program)).contains("DO-FAST").doesNotContain("DO-SLOW");
+		assertThat(survivingPrintOf(program, "RUN")).doesNotContain("SLOW");
+	}
+
+	@Test
+	void aDefaultedSlotContributesItsInitformValue() {
+		// (make-thing) leaves MODE defaulted, so the initform's 'slow is a stored value:
+		// the slow arm stays, and the fast arm (which nothing stores) folds.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct thing (mode 'slow))
+				(defun run (thing)
+				  (ecase (thing-mode thing)
+				    (fast (do-fast))
+				    (slow (do-slow))))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (run (make-thing)))
+				"""));
+		assertThat(memberNames(program)).contains("DO-SLOW").doesNotContain("DO-FAST");
+	}
+
+	@Test
+	void aSetfOfTheSlotJoinsTheWrittenValue() {
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct (thing (:constructor %make-thing (mode))) (mode 'fast))
+				(defun run (thing which)
+				  (setf (thing-mode thing) which)
+				  (ecase (thing-mode thing)
+				    (fast (do-fast))
+				    (slow (do-slow))))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (run (%make-thing 'fast) 'slow))
+				"""));
+		assertThat(memberNames(program)).contains("DO-FAST", "DO-SLOW");
+	}
+
+	@Test
+	void aWriteThroughAChildConstructorReachesTheParentAccessorsRead() {
+		// :include aliases storage: the child's BOA constructor writes the slot the
+		// parent's accessor reads, so the join must be shared along the chain.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct (base (:conc-name b-)) (mode 'fast))
+				(defstruct (child (:include base) (:constructor %make-child (mode))))
+				(defun run (x)
+				  (ecase (b-mode x)
+				    (fast (do-fast))
+				    (slow (do-slow))))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (run (%make-child 'slow)))
+				"""));
+		assertThat(memberNames(program)).contains("DO-SLOW").doesNotContain("DO-FAST");
+	}
+
+	@Test
+	void aReadModifyWriteOnTheSlotPlaceKeepsEveryArm() {
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used))", demoSystem("""
+				(defstruct (thing (:constructor %make-thing (mode))) (mode 'fast))
+				(defun run (thing)
+				  (push 1 (thing-mode thing))
+				  (ecase (thing-mode thing)
+				    (fast (do-fast))
+				    (slow (do-slow))))
+				(defun do-fast () 1)
+				(defun do-slow () 2)
+				(defun used () (run (%make-thing 'fast)))
+				"""));
+		assertThat(memberNames(program)).contains("DO-FAST", "DO-SLOW");
+	}
+
+	@Test
+	void anEscapedAccessorNameKeepsEveryArm() {
+		// 'thing-mode in quoted data: an eval-family forge could write through the
+		// accessor, so the slot goes wide and both arms stay.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used)) (print '(demo::thing-mode))",
+				demoSystem("""
+						(defstruct (thing (:constructor %make-thing (mode))) (mode 'fast))
+						(defun run (thing)
+						  (ecase (thing-mode thing)
+						    (fast (do-fast))
+						    (slow (do-slow))))
+						(defun do-fast () 1)
+						(defun do-slow () 2)
+						(defun used () (run (%make-thing 'fast)))
+						"""));
+		assertThat(memberNames(program)).contains("DO-FAST", "DO-SLOW");
+	}
+
+	@Test
+	void aRuntimeReadStandsTheSlotTrackingDown() {
+		// (read) can construct a #S literal with slot values this walk never saw.
+		List<LispVal> program = systemPruned("(asdf:load-system :demo) (print (demo:used)) (print (read))",
+				demoSystem("""
+						(defstruct (thing (:constructor %make-thing (mode))) (mode 'fast))
+						(defun run (thing)
+						  (ecase (thing-mode thing)
+						    (fast (do-fast))
+						    (slow (do-slow))))
+						(defun do-fast () 1)
+						(defun do-slow () 2)
+						(defun used () (run (%make-thing 'fast)))
+						"""));
+		assertThat(memberNames(program)).contains("DO-FAST", "DO-SLOW");
+	}
+
+	@Test
 	void aTypecaseArmOnAnUninstantiatedStructIsDeletedAndItsBodyPrunedWithIt() {
 		// Stage B: no instantiator of SLOW-STATE is live, so the (slow-state #'do-slow)
 		// arm contributes no references -- do-slow and the struct leave, and the arm is

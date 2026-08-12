@@ -31,6 +31,26 @@ Both are `LispMacroExpander` expansions (CL_MACROS; no per-backend codegen).
 - **labels = letrec lowering**: bind vars to nil, `setq` each to its lambda; the
   lambdas capture the vars, `FreeVarAnalyzer.findCapturedVars` boxes them, so
   mutual recursion works in all backends (verified on all four).
+- **A local no surviving reference names is dropped, binding and all** (todo-333,
+  2026-08-12, unconditional -- every backend and the interpreter alike, since
+  constructing the closure is the binding's only effect). Reachability runs on
+  the REWRITTEN forms: every real reference to a local is an occurrence of its
+  unique `__<op><n>_<name>` variable (a bare original name is a variable in
+  Lisp-2 and never meant the local), so the roots are the rewritten body forms
+  and, for `labels`, a kept definition's rewritten lambda contributes its own
+  references (an `flet` definition sees only outer bindings -- no edges);
+  over-finding an occurrence, e.g. in quoted data, only KEEPS a local. Why this
+  exists: the labels lowering constructs every closure up front, so when
+  `ConstantCaseArmPruner` deletes the `case`/`ecase` arm holding the only
+  `#'state` reference (chipz's zlib states, `.kb/library-defun-pruning.md`), the
+  dead state's lambda still compiled into the module and kept everything its
+  body named -- the drop is what lets the shakers collect it. Pinned by
+  `LispMacroExpanderTest.labelsDropsALocalNoSurvivingReferenceNames` /
+  `labelsKeepsALocalReferencedOnlyAsAValue` /
+  `aSelfRecursiveLabelsLocalNothingElseNamesIsDropped` /
+  `fletDropsAnUnreferencedLocal`. NOTE it changes emitted bytes at EVERY level
+  (the no-flag zlib module moved with it), so "no-flag byte-identical" claims
+  predating it are historical.
 - **Unique variable names** (`__<op><counter>_<name>`, static `FLET_COUNTER`):
   NOT fixed names, because a JVM let-init lambda that captures a same-named
   outer variable miscompiles (see todo-062);
