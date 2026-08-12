@@ -658,6 +658,11 @@ class LispFormatterTest {
 			return walk.filter(Files::isRegularFile)
 				.filter(path -> path.toString().endsWith(".lisp") || path.toString().endsWith(".asd"))
 				.filter(path -> !path.toString().contains("/target/"))
+				// The ANSI suite checkout is foreign, git-ignored code we do not format;
+				// whether it survives the fixpoint is the suite's business, not ours, and
+				// a developer who ran ansi-test/fetch.sh must not get a different verdict
+				// from `./mvnw test` than one who did not.
+				.filter(path -> !path.toString().contains("/ansi-test/suite/"))
 				.sorted(Comparator.comparing(Path::toString))
 				.toList()
 				.stream();

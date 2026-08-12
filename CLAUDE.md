@@ -215,6 +215,25 @@ the numbers instead of sitting one directory up. That prose is
 `notes/`; anything written into `results/` by hand is gone at the next run.
 `size-report/README.md` stays the build-and-run page.
 
+### ANSI Conformance Belongs in `ansi-test/`
+
+`ansi-test/measure.sh` runs the ANSI Common Lisp test suite against the
+INTERPRETER and rewrites `ansi-test/results/interpreter.md` -- the per-chapter
+pass rate plus the ranked list of what the failures blame. The suite is not
+vendored: `ansi-test/fetch.sh` clones it at a pinned revision into the
+git-ignored `ansi-test/suite/`, and every report names the revision it measured.
+
+The driver (`src/test/java/am/ik/rontolisp/ansi/`) runs one child JVM per
+chapter and evaluates ONE TOP-LEVEL FORM AT A TIME under `catch (Throwable)`, so
+a form we cannot take costs that form and not the 700 tests behind it. Read
+`ansi-test/README.md` before changing it -- what the numbers mean depends on that
+choice and on the `rt.lsp` stand-in (`ansi-test/rt-shim.lisp`).
+
+A failing ANSI test is not automatically a bug worth fixing: the suite measures
+full ANSI CL, which this implementation does not set out to be. What the report
+is for is deciding WHICH gap to close next, and noticing when a change moves the
+number.
+
 ### Verifying Output Manually (all four backends)
 
 A program is "verified" only when it has been run on **all four** backends. Don't
