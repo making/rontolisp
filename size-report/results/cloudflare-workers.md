@@ -6,7 +6,7 @@ What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-wo
 How the report is built and run: [../README.md](../README.md).
 
 - measured: 2026-08-12
-- rontolisp: 0.1.0-SNAPSHOT (`477b29e`)
+- rontolisp: 0.1.0-SNAPSHOT (`bfb4f3e`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
@@ -22,6 +22,7 @@ How the report is built and run: [../README.md](../README.md).
 | httpbin-tiny-routes | `--no-wasi --optimize=size` | 279,404 | 82,291 | 2.6% |
 | httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 712,519 | 187,080 | 5.9% |
 | httpbin-ningle | `--no-wasi --optimize=size` | 2,262,293 | 524,322 | 16.7% |
+| dog-fetcher | `--no-wasi --optimize=size` | 259,646 | 77,663 | 2.5% |
 | httpbin-component (core module) | `--component --no-wasi --optimize=size` | 148,046 | 47,824 | 1.5% |
 
 The component row is the core module alone. Reached through `jco transpile`
@@ -57,6 +58,11 @@ target and takes its reactor shape under `--no-wasi`. The second row builds
 `examples/net/httpbin-clack.lisp` itself, the file that binds a socket when
 interpreted, so what the pair measures is that choosing the portable designator
 costs nothing in bytes.
+
+**`dog-fetcher` is `hello-tiny-routes` plus an outgoing request.** Its module
+imports one host function instead of reaching for `rontolisp:fetch`, so what
+separates the two rows is the JSON parsing of the upstream answer, not a
+transport: a reactor's way out costs an import entry and a wrapper.
 
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that

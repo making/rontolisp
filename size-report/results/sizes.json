@@ -1,7 +1,7 @@
 {
   "generated": "2026-08-12",
   "rontolisp": "0.1.0-SNAPSHOT",
-  "commit": "477b29e",
+  "commit": "bfb4f3e",
   "wasmtime": "wasmtime 47.0.3 (5554cc1a6 2026-07-31)",
   "artifacts": [
     {"family":"wasm","name":"hello_world_plain","flags":"","module":"core (command)","wasi":"Preview 1","bytes":121463},
@@ -29,6 +29,7 @@
     {"family":"workers","name":"httpbin-tiny-routes","flags":"--no-wasi --optimize=size","bytes":279404,"gzip":82291},
     {"family":"workers","name":"httpbin-tiny-routes (full tiny-routes)","flags":"--no-wasi --optimize=size","bytes":712519,"gzip":187080},
     {"family":"workers","name":"httpbin-ningle","flags":"--no-wasi --optimize=size","bytes":2262293,"gzip":524322},
+    {"family":"workers","name":"dog-fetcher","flags":"--no-wasi --optimize=size","bytes":259646,"gzip":77663},
     {"family":"workers","name":"httpbin-component (core module)","flags":"--component --no-wasi --optimize=size","bytes":148046,"gzip":47824},
     {"family":"workers","name":"httpbin-component (jco glue, .js)","flags":"jco transpile","bytes":116315}
   ]
