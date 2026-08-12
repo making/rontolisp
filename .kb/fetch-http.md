@@ -44,9 +44,10 @@ cannot serve `_initialize`). Envelope pinned by `HostFetchLibraryTest` (generate
 AND `examples/cloudflare-workers/dog-fetcher/src/index.js` against the records) and
 `FetchResponseShapeTest`; imports by `WasmImportCompilerTest`; the showcase — verified
 under `wrangler dev` against the real dog.ceo — is
-`examples/cloudflare-workers/dog-fetcher`, and `examples/net/dog-fetcher.lisp` compiles
-UNEDITED under `--no-wasi --host-fetch` (its `http-handler` lowers to the reactor
-transport, `.kb/clack.md`).
+`examples/cloudflare-workers/dog-fetcher`, itself a `:server :rontolisp` ONE-SOURCE
+program (interpreter/JVM socket, `wasmtime serve`, and the Worker — all four legs
+verified; `.kb/clack.md`), and `examples/net/dog-fetcher.lisp` compiles UNEDITED under
+`--no-wasi --host-fetch` (its `http-handler` lowers to the reactor transport).
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with

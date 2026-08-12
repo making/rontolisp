@@ -4,8 +4,15 @@
 ;;; the JVM and a wasi:http component: --host-fetch lowers it onto the Worker
 ;;; runtime's own fetch, imported as env.fetch and suspended through JSPI
 ;;; (src/index.js), so the source no longer spells its own transport.
+;;;
+;;; :server :rontolisp picks the transport per target at read time, so THIS
+;;; ONE SOURCE runs on every backend (the README has the commands):
+;;;   interpreter / JVM  -- a real socket on :8080, fetch over the JDK client
+;;;   --component        -- wasmtime serve, fetch over wasi:http
+;;;   --no-wasi --host-fetch (build.sh) -- the Worker: the host calls the
+;;;                         synthesized handle-request export, fetch is env.fetch
 
-(ql:quickload '("clack" "clack-handler-reactor" "tiny-routes/lite"))
+(ql:quickload '("clack" "tiny-routes/lite"))
 
 (defun json-response (status obj)
   (list status '(:content-type "application/json")
@@ -70,4 +77,4 @@
   (tiny:define-any "*" (req)
     (error-response 404 (format nil "no route for ~a" (tiny:path-info req)))))
 
-(clack:clackup *routes* :server :reactor :use-thread nil)
+(clack:clackup *routes* :server :rontolisp :port 8080 :use-thread nil)

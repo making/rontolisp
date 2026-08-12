@@ -9,7 +9,11 @@ component. A `--no-wasi` reactor imports no WASI, so `--host-fetch` lowers the
 call onto the one import a Worker host can always provide: its own `fetch`.
 
 Routes come from [tiny-routes](https://github.com/jeko2000/tiny-routes), loaded
-as `tiny-routes/lite` exactly as in [`../hello-tiny-routes`](../hello-tiny-routes).
+as `tiny-routes/lite` exactly as in [`../hello-tiny-routes`](../hello-tiny-routes),
+and the application is served with `:server :rontolisp` — the backend that
+picks its transport **per target at read time** — so this one `worker.lisp`
+runs on every backend, not only on Cloudflare (see
+[the same worker.lisp on every backend](#the-same-workerlisp-on-every-backend)).
 
 ```bash
 ./build.sh          # worker.lisp -> src/worker.wasm (--no-wasi --host-fetch)
@@ -98,14 +102,37 @@ is free to use more than one. It buys correctness, and it costs the isolate
 nothing else — everything that is not this module keeps running while a handler
 waits.
 
-## Driving it off Cloudflare
+## The same worker.lisp on every backend
 
-The module's client is `env.fetch`, so any host that provides that one function
-can drive it — node included (node has no JSPI, so a node host answers
-*synchronously*, which the boundary equally allows). The sibling
-`../../net/dog-fetcher.lisp` compiles to the same shape with no edit at all:
-its `rontolisp:http-handler` directive lowers to the host-driven
-`handle-request` export under `--no-wasi`.
+`:server :rontolisp` resolves the transport when the source is read for a
+target: a real socket on the interpreter/JVM, `wasi:http` under `--component`,
+and the host-driven `handle-request` export on a `--no-wasi` reactor (the
+`#+rontolisp-reactor` leg). `rontolisp:fetch` follows along — the JDK client,
+`wasi:http/client`, `env.fetch`. All four, from the repo root:
+
+```bash
+JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
+W=examples/cloudflare-workers/dog-fetcher/worker.lisp
+
+# 1. interpreter — a blocking server on :8080
+java -jar $JAR $W
+
+# 2. JVM class (keep the jar on the classpath)
+java -jar $JAR $W -o DogFetcher.class && java -cp $JAR:. DogFetcher
+
+# 3. WASI component under wasmtime serve (the socket flags: clack's own
+#    socket leg keeps wasi:sockets in the import surface)
+java -jar $JAR $W -o dog-fetcher.wasm --component && \
+  wasmtime serve -W gc=y -W exceptions=y -S cli=y -S tcp=y -S inherit-network=y dog-fetcher.wasm
+
+# 4. the Worker (this directory): build.sh + wrangler dev, as above
+```
+
+Off Cloudflare the reactor build is equally drivable from plain node: the
+module's client is `env.fetch`, and node has no JSPI, so a node host answers
+*synchronously* — which the boundary equally allows. The sibling
+`../../net/dog-fetcher.lisp` (the `rontolisp:http-handler` spelling of the same
+program) compiles to the same reactor shape with no edit at all.
 
 ## What's in here
 

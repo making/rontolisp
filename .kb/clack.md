@@ -167,7 +167,13 @@ and the choice is made at COMPILE time by the reader features — which is what
 lets ONE source (`examples/net/httpbin-clack.lisp`, clackup line included) run
 unchanged on the interpreter, the JVM, `wasmtime serve` AND a reactor host
 (verified on all four, workerd via `wrangler dev` for the reactor leg,
-2026-08-09):
+2026-08-09). Since todo-335 the FETCH-capable shape rides the same rule:
+`examples/cloudflare-workers/dog-fetcher/worker.lisp` is `:server :rontolisp`
+and runs on all four too — JDK client / wasi:http (its serve leg needs
+`wasmtime serve -S cli=y -S tcp=y -S inherit-network=y`, because clack's
+socket leg keeps wasi:sockets in the import surface) / `env.fetch` under
+`--no-wasi --host-fetch` (re-verified on all four legs, wrangler dev included,
+2026-08-12):
 
 - `#-rontolisp-wasm` (interpreter / JVM): the stoppable socket server above.
 - `#+(and rontolisp-wasm (not rontolisp-reactor))`: the
