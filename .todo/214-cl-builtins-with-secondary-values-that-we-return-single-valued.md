@@ -60,6 +60,22 @@ Each entry is the same small change, once the channel is decided:
   (`(IF T 1 NIL)` vs SBCL's `(IF T 1)`, and SBCL's pretty-printed line breaks):
   that is our `when` lowering and our printer, unrelated to multiple values.
 
+## What it costs, measured (2026-08-12)
+
+The ANSI test-suite harness (`ansi-test/`) puts a number on two rows of the
+inventory, and they are the two biggest single wins the suite reports:
+
+- `find-symbol`'s missing status keyword fails `symbols/cl-symbols.lsp` once per
+  CL symbol -- 1,002 of that chapter's 1,141 tests, which is why `symbols` sits
+  at 4.2% while its neighbours are above 40%. The tests do
+  `(multiple-value-bind (sym status) (find-symbol name 'common-lisp) ...)` and
+  read `status`; ours is always nil, so every symbol looks absent.
+- `read-from-string`'s missing index accounts for most of the `reader` chapter's
+  288 wrong-value tests (`(read-from-string "a 1")` must answer `A` and `1`).
+
+Both are wrong-VALUE failures, not signals: they will not show up as a missing
+operator anywhere, and they cost more tests than any absent function does.
+
 ## Verification
 
 - The REPL-vs-SBCL diff harness, kept with this item so the next visitor can
