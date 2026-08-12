@@ -39,7 +39,7 @@
 `rontolisp:await` に渡すとレスポンスの到着までサスペンドし、結果の
 プロパティリスト `(:status <integer> :headers <alist> :body <stream>)` が
 得られます — どのバックエンドでも `:body` は
-[非同期ストリーム](async.md#非同期ストリーム)で、
+[非同期ストリーム](async.md#asynchronous-streams)で、
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md)
 で読み尽くします:
 
@@ -60,7 +60,7 @@
 
 `fetch` が返った時点でリクエストは既に走っているので、複数のリクエストは
 オーバーラップします — 全部開始してからそれぞれを (どの順番でも) await
-します。これは future の一般的な[オーバーラップ](async.md#処理をオーバーラップさせる)の
+します。これは future の一般的な[オーバーラップ](async.md#overlapping-work)の
 挙動そのものです:
 
 ```lisp

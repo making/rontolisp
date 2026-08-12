@@ -11,7 +11,7 @@
 - `(:local-nicknames (nick actual)...)` は**別の**パッケージの短縮名を登録し、`nick:symbol` が `actual:symbol` と同様に解決されます — ライブラリが長いパッケージ名を短縮するのに使うイディオムです。lite 版: ニックネームは**グローバル**です（rontolisp にパッケージごとのニックネームスコープはありません）。衝突規則は `:nicknames` と同じです。`defpackage` の外では [`uiop:add-package-local-nickname`](../functions/uiop-add-package-local-nickname.md) で同じ登録ができます。
 - `(:documentation "...")` と `(:size n)` は受理されますが無視されます。
 
-既存パッケージの再定義はエラーで、`:shadow`/`:shadowing-import-from`(rontolisp にシンボルのシャドウイングはありません)およびその他の clause(`:intern` など)もエラーです。完全なルールは[パッケージ](../packages.md#ユーザー定義パッケージdefpackage)を参照してください。
+既存パッケージの再定義はエラーで、`:shadow`/`:shadowing-import-from`(rontolisp にシンボルのシャドウイングはありません)およびその他の clause(`:intern` など)もエラーです。完全なルールは[パッケージ](../packages.md#user-defined-packages-defpackage)を参照してください。
 
 ```lisp
 (defpackage :util (:use :cl) (:export :trim)) ; => util

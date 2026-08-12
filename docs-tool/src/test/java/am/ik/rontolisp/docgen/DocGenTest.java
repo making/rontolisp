@@ -1,13 +1,43 @@
 package am.ik.rontolisp.docgen;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class DocGenTest {
+
+	private static final Path DOC = Path.of("..", "doc");
+
+	private static final Pattern ID = Pattern.compile("\\bid=\"([^\"]*)\"");
+
+	private static final Pattern HREF = Pattern.compile("href=\"([^\"]*#[^\"]*)\"");
+
+	@TempDir
+	static Path site;
+
+	@BeforeAll
+	static void generateSite() throws IOException {
+		assumeTrue(Files.isDirectory(DOC), "run from the docs-tool module, next to doc/");
+		new DocGen(DOC, site, "en").generate();
+	}
 
 	private static Catalog functionCatalog() {
 		return new Catalog("reference/functions", "reference/functions.md",
@@ -104,9 +134,82 @@ class DocGenTest {
 		assertThat(TocBuilder.build(body)).contains("<a href=\"#a\"><code>fetch</code> options</a>");
 	}
 
+	/**
+	 * The anchor half of the link check {@link SkillGenTest} does for pages: a cross-page
+	 * link is written once and mirrored into every language tree, so a heading renamed in
+	 * one tree must break this build rather than ship a link that lands at the top of the
+	 * right page.
+	 */
+	@Test
+	void everyAnchorLinkResolvesInEveryLanguage() throws IOException {
+		Map<Path, Set<String>> ids = new HashMap<>();
+		try (Stream<Path> pages = Files.walk(site)) {
+			for (Path page : pages.filter(p -> p.toString().endsWith(".html")).toList()) {
+				Matcher matcher = ID.matcher(Files.readString(page, StandardCharsets.UTF_8));
+				Set<String> anchors = new HashSet<>();
+				while (matcher.find()) {
+					anchors.add(matcher.group(1));
+				}
+				ids.put(page.normalize(), anchors);
+			}
+		}
+		List<String> dead = new ArrayList<>();
+		for (Path page : ids.keySet()) {
+			Matcher matcher = HREF.matcher(Files.readString(page, StandardCharsets.UTF_8));
+			while (matcher.find()) {
+				String href = matcher.group(1);
+				if (href.contains("://") || href.startsWith("//")) {
+					continue;
+				}
+				String target = href.substring(0, href.indexOf('#'));
+				String fragment = href.substring(href.indexOf('#') + 1);
+				Path targetPage = target.isEmpty() ? page : page.getParent().resolve(target).normalize();
+				if (!ids.containsKey(targetPage) || !ids.get(targetPage).contains(fragment)) {
+					dead.add(site.relativize(page) + " -> " + href);
+				}
+			}
+		}
+		assertThat(dead).isEmpty();
+	}
+
+	@Test
+	void translatedPagesKeepTheReferenceLanguagesAnchors() throws IOException {
+		String ja = Files.readString(site.resolve("ja/guides/wasm-gc-module.html"), StandardCharsets.UTF_8);
+		// The heading TEXT is translated, its anchor is not -- that is what lets
+		// ja/compiling/wasm.md link to the same #no-wasi-reactor-mode as en.
+		assertThat(ja).contains("id=\"no-wasi-reactor-mode\"").doesNotContain("id=\"no-wasiリアクターモード\"");
+		assertThat(ja).contains("リアクター");
+	}
+
+	@Test
+	void aTranslationWithADifferentHeadingLayoutFailsTheBuild(@TempDir Path tmp) throws IOException {
+		Path source = tmp.resolve("doc");
+		writePage(source.resolve("en"), "English", "# Title\n\n## Options\n\ntext\n");
+		writePage(source.resolve("ja"), "日本語", "# タイトル\n\n## オプション\n\n## 余分\n\ntext\n");
+		assertThatThrownBy(() -> new DocGen(source, tmp.resolve("out"), "en").generate())
+			.isInstanceOf(IOException.class)
+			.hasMessageContaining("ja/index.md")
+			.hasMessageContaining("3 headings vs 2");
+	}
+
+	private static void writePage(Path langDir, String langName, String markdown) throws IOException {
+		Files.createDirectories(langDir);
+		Files.writeString(langDir.resolve("nav.yaml"), """
+				title: docs
+				lang_name: %s
+				sections:
+				  - title: Guide
+				    pages:
+				      - file: index.md
+				        title: Index
+				""".formatted(langName), StandardCharsets.UTF_8);
+		Files.writeString(langDir.resolve("index.md"), markdown, StandardCharsets.UTF_8);
+	}
+
 	@Test
 	void relativeLinksAreComputedFromDocsRoot() {
-		assertThat(HtmlTemplate.rel("en/reference/data-types.html", "assets/docs.css")).isEqualTo("../../assets/docs.css");
+		assertThat(HtmlTemplate.rel("en/reference/data-types.html", "assets/docs.css"))
+			.isEqualTo("../../assets/docs.css");
 		assertThat(HtmlTemplate.rel("en/index.html", "en/reference/data-types.html"))
 			.isEqualTo("reference/data-types.html");
 	}

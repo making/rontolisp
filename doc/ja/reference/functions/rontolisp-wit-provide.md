@@ -53,13 +53,13 @@ rontolisp はどのインターフェースについても**プロバイダを�
 ## プロバイダが尋ねられるメンバー
 
 インターフェースが宣言する関数ごとに 1 つ、綴りは
-[`wit-import` が束縛するとおり](rontolisp-wit-import.md#何が束縛されるか)です:
+[`wit-import` が束縛するとおり](rontolisp-wit-import.md#what-gets-bound)です:
 `"open"`、`"bucket-get"`、コンストラクタなら `"bucket-new"`。加えてリソースごとに
 **`"<resource>-drop"`** があり、その引数はハンドル 1 つだけです。この最後のメンバーは
 どの `.wit` も宣言していません。リソースの解放はインターフェースの関数ではなく
 コンポーネントモデルの canonical な組み込み機能だからです。そこで rontolisp
 がこれに
-[`<resource>-drop`](rontolisp-wit-import.md#リソースを解放する-resource-drop)
+[`<resource>-drop`](rontolisp-wit-import.md#releasing-a-resource-resource-drop)
 という名前を与え、他のメンバーと同じようにプロバイダへディスパッチします。
 
 **drop が何を*意味するか*を決めるのはプロバイダであり、プロバイダだけです。**

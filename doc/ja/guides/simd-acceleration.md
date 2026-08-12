@@ -36,7 +36,7 @@ JSON や `linalg` ライブラリと同様、`vec` は Lisp ソース(`vec.lisp`
 
 ## API
 
-構築: `vec:zeros` / `vec:ones` は長さ *n* の充填ベクトルを作り、`vec:arange` は `[0.0, 1.0, ..., n-1]` を作り、`vec:from-list` / `vec:to-list` はベクトルと Lisp リストを相互変換します(リスト系はインタプリタ・JVM・wasm-GC でのみ動作し、`--no-gc` では動きません)。`vec:zeros` / `vec:ones` / `vec:arange` は末尾に省略可能な `element-type` も取ります。`'single-float` を渡すとパックド単精度 (`#f`) ベクトルになります(デフォルトは倍精度)。[linalg のコンストラクタ](linear-algebra.md#単精度浮動小数点)と揃っており、JVM と WASM の `--simd` v128 経路を含む全バックエンドで保持されます。
+構築: `vec:zeros` / `vec:ones` は長さ *n* の充填ベクトルを作り、`vec:arange` は `[0.0, 1.0, ..., n-1]` を作り、`vec:from-list` / `vec:to-list` はベクトルと Lisp リストを相互変換します(リスト系はインタプリタ・JVM・wasm-GC でのみ動作し、`--no-gc` では動きません)。`vec:zeros` / `vec:ones` / `vec:arange` は末尾に省略可能な `element-type` も取ります。`'single-float` を渡すとパックド単精度 (`#f`) ベクトルになります(デフォルトは倍精度)。[linalg のコンストラクタ](linear-algebra.md#single-float-precision)と揃っており、JVM と WASM の `--simd` v128 経路を含む全バックエンドで保持されます。
 
 アクセス: `vec:aref` は要素を読み(`vec:aset` を介した `setf` の場所)、`vec:length` は要素数を返します。これらは汎用のパックド配列演算子への薄いラッパーなので、素の `aref` / `length` も使えます。
 

@@ -12,7 +12,7 @@ wasmtime run -W gc hello.wasm
 # 3
 ```
 
-エクスポートされた関数は**生のコア関数**です: スカラー(`:int`/`:float`/`:bool`)は素の数値として境界を渡るため、`wasmtime --invoke` や `instance.exports.fact(5)` が直接使えます。メモリ経由の `:string` と `:s-expr` はモジュールのエクスポートする `memory` を通じて `(ptr, len)` ペアを渡し、ホストが引数バイト列を書き込むための `__ronto_alloc(size)` バンプアロケータも併せてエクスポートされます — このプロトコルはメモリを読み書きできるホスト(JavaScript であって `wasmtime --invoke` ではない)を必要とし、[ブラウザガイドの「リアクターモジュールを手書きで呼ぶ」節](wasm-browser.md#リアクターモジュールを手書きで呼ぶ)で端から端まで解説します。モジュールのインスタンス化には依然として 8 つの WASI インポートを満たす必要があります。`wasmtime run` は自動で提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。あるいは [`--no-wasi`](#no-wasi-reactor-mode) で丸ごと取り除けます。
+エクスポートされた関数は**生のコア関数**です: スカラー(`:int`/`:float`/`:bool`)は素の数値として境界を渡るため、`wasmtime --invoke` や `instance.exports.fact(5)` が直接使えます。メモリ経由の `:string` と `:s-expr` はモジュールのエクスポートする `memory` を通じて `(ptr, len)` ペアを渡し、ホストが引数バイト列を書き込むための `__ronto_alloc(size)` バンプアロケータも併せてエクスポートされます — このプロトコルはメモリを読み書きできるホスト(JavaScript であって `wasmtime --invoke` ではない)を必要とし、[ブラウザガイドの「リアクターモジュールを手書きで呼ぶ」節](wasm-browser.md#reactor-modules-by-hand)で端から端まで解説します。モジュールのインスタンス化には依然として 8 つの WASI インポートを満たす必要があります。`wasmtime run` は自動で提供し、ブラウザホストは純粋計算関数に対して no-op スタブを供給できます。あるいは [`--no-wasi`](#no-wasi-reactor-mode) で丸ごと取り除けます。
 
 この形状での `wasm-export` の全体像(運ばれる型、`:as` による改名、アリティ一致、void 戻り値)は、[ホスト境界ガイド](wasm-host-boundary.md)を参照してください。
 
@@ -66,7 +66,7 @@ rontolisp fact.lisp --no-wasi -o fact.wasm
 wasmtime run --invoke fact -W gc fact.wasm 5      # => 120
 ```
 
-リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドのリアクターモジュールの節](wasm-browser.md#リアクターモジュールを手書きで呼ぶ)にあります。
+リアクターは JavaScript からも同様に簡単に駆動できます: **インポートオブジェクトがない**ため、ホスト側は「インスタンス化してからエクスポートを呼び出す」だけです(`WebAssembly.instantiate(bytes).then(({ instance }) => instance.exports.fact(5))`)。コピー＆ペーストして実行できる完全な Node + ブラウザの例は、[ブラウザガイドのリアクターモジュールの節](wasm-browser.md#reactor-modules-by-hand)にあります。
 
 WASI インポートスロットは内部のスタブで埋められるため、すべての関数インデックスは固定のままです(他のコード生成に変更はありません)。それらのスタブの振る舞いは 1 つのルールに従います: **答えがそのモジュールにとって真であるときスタブは答え、答えることが「本物と区別できない値の捏造」になるときは拒否する。** ただし**ホストが渡してきた値は捏造ではなく**、時計と乱数はそれで供給されます。リアクターには実際に出力先も環境変数もファイルも存在しないので、それらには答えます。一方、入力のバイトはリアクターだからといって真になるわけではないので、そちらには答えません。
 
@@ -96,7 +96,7 @@ WASI インポートスロットは内部のスタブで埋められるため、
 トップレベルがインスタンス化時に走るので、ホストが先回りできる隙間が存在しないためです。JavaScript
 を含む全体は[時計と乱数のガイド](clock-and-random.md)にあります。
 
-`--component` と組み合わせると、同じ契約が**リアクターコンポーネント**を生成します — 何もインポートせず、トップレベルフォームをインスタンス化時に実行するコンポーネントです。[コンポーネントガイド](wasm-component.md#リアクターコンポーネント--component---no-wasi)を参照してください。
+`--component` と組み合わせると、同じ契約が**リアクターコンポーネント**を生成します — 何もインポートせず、トップレベルフォームをインスタンス化時に実行するコンポーネントです。[コンポーネントガイド](wasm-component.md#reactor-components---component---no-wasi)を参照してください。
 
 **外向き HTTP** も時計・乱数と同じ形です: ホストにしか生成できない値。`--host-fetch` は [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) を注入される唯一のホストインポート `env.fetch(request-json) -> response-json` へ経路付けします — オプションも `(:status :headers :body)` の答えも他のバックエンドと同一で、`:body` は `rontolisp:read-all` が素通しする eager な文字列 1 つです。JavaScript ホストは自身の `fetch()` を `WebAssembly.Suspending` (JSPI — promise が確定するまで wasm スタック全体が停止するため、Lisp 側は普通の同期的な `(await (fetch ...))` のまま) の背後で実装し、その場合はすべてのエクスポートを `WebAssembly.promising` 経由で呼び、呼び出しを直列化しなければなりません — 再入されたエクスポートは両方の呼び出しを壊す代わりにトラップで拒否します。同期ホスト (JSPI のない node、テストスタブ) はそのまま答えれば済みます。ビルドはこの義務をそのまま出力します。実例は [`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/dog-fetcher) です。
 

@@ -22,9 +22,9 @@ import com.vladsch.flexmark.parser.Parser;
 import com.vladsch.flexmark.util.data.MutableDataSet;
 
 /**
- * Documentation site generator. Converts the Markdown under a source tree into a
- * static HTML site with a dark theme, sidebar navigation, previous/next links,
- * and interactive runnable Lisp examples.
+ * Documentation site generator. Converts the Markdown under a source tree into a static
+ * HTML site with a dark theme, sidebar navigation, previous/next links, and interactive
+ * runnable Lisp examples.
  *
  * <p>
  * Layout of the source tree:
@@ -36,8 +36,8 @@ import com.vladsch.flexmark.util.data.MutableDataSet;
  *   ja/ ...
  * </pre>
  *
- * Each language directory that contains a {@code nav.yaml} becomes a localized
- * site under {@code <out>/<lang>/}. The default language also gets a redirect at
+ * Each language directory that contains a {@code nav.yaml} becomes a localized site under
+ * {@code <out>/<lang>/}. The default language also gets a redirect at
  * {@code <out>/index.html}. Markdown links to {@code *.md} are rewritten to
  * {@code *.html}.
  *
@@ -52,6 +52,8 @@ public final class DocGen {
 
 	private static final Pattern MD_LINK = Pattern.compile("href=\"([^\"]*?)\\.md(#[^\"]*)?\"");
 
+	private static final Pattern HEADING_ID = Pattern.compile("(<h[1-6]\\b[^>]*\\bid=\")([^\"]*)(\")");
+
 	private final Path source;
 
 	private final Path out;
@@ -61,6 +63,18 @@ public final class DocGen {
 	private final Parser parser;
 
 	private final HtmlRenderer renderer;
+
+	/**
+	 * The heading anchors of the reference language, keyed by the doc-relative Markdown
+	 * path. A translated page keeps its own heading TEXT but takes these anchors: a
+	 * cross-page link is written once as {@code page.md#anchor} and mirrored verbatim
+	 * into every language tree, so an anchor slugged from the translated heading would
+	 * resolve in one tree only.
+	 */
+	private final Map<String, List<String>> referenceHeadingIds = new HashMap<>();
+
+	/** The language whose anchors every other language adopts. */
+	private String referenceLang;
 
 	public DocGen(Path source, Path out, String defaultLang) {
 		this.source = source;
@@ -72,9 +86,9 @@ public final class DocGen {
 	}
 
 	/**
-	 * The Markdown dialect of this documentation, shared by every HTML the tool
-	 * emits -- the site pages here and the skill's install page in
-	 * {@link SkillGen} -- so that a page reads the same wherever it is rendered.
+	 * The Markdown dialect of this documentation, shared by every HTML the tool emits --
+	 * the site pages here and the skill's install page in {@link SkillGen} -- so that a
+	 * page reads the same wherever it is rendered.
 	 */
 	static MutableDataSet markdownOptions() {
 		MutableDataSet options = new MutableDataSet();
@@ -125,6 +139,9 @@ public final class DocGen {
 		Files.createDirectories(this.out);
 		copyAssets();
 
+		// The default language sorts first, so it is rendered before any tree that
+		// has to adopt its anchors.
+		this.referenceLang = languages.get(0);
 		for (String lang : languages) {
 			generateLanguage(lang, languageList);
 		}
@@ -178,7 +195,7 @@ public final class DocGen {
 		if (!Files.exists(mdPath)) {
 			throw new IOException("Missing Markdown source: " + mdPath);
 		}
-		String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8));
+		String body = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), page.file(), lang);
 		// On a reference table page (functions/macros/special forms), link each
 		// operator name in the table to its detail page, so that one page is both
 		// the quick reference and the index of the detail pages.
@@ -205,7 +222,8 @@ public final class DocGen {
 			String docPath = lang + "/" + replaceExtension(catalog.mdFile(entry));
 			HtmlTemplate.Crumb prev = (i > 0) ? detailCrumb(lang, catalog, entries.get(i - 1)) : backlink;
 			HtmlTemplate.Crumb next = (i < entries.size() - 1) ? detailCrumb(lang, catalog, entries.get(i + 1)) : null;
-			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8));
+			String detailBody = renderBody(Files.readString(mdPath, StandardCharsets.UTF_8), catalog.mdFile(entry),
+					lang);
 			HtmlTemplate.PageContext ctx = new HtmlTemplate.PageContext(nav, lang, entry.name(), docPath,
 					catalog.mdFile(entry), indexDocPath, detailBody, TocBuilder.build(detailBody), backlink, prev, next,
 					languageList);
@@ -226,9 +244,9 @@ public final class DocGen {
 	}
 
 	/**
-	 * Maps each individual operator name (HTML-escaped, as it appears in the
-	 * rendered table) to its page slug. A grouped entry like {@code char schar}
-	 * maps every token to the same page.
+	 * Maps each individual operator name (HTML-escaped, as it appears in the rendered
+	 * table) to its page slug. A grouped entry like {@code char schar} maps every token
+	 * to the same page.
 	 */
 	static Map<String, String> buildNameToSlug(Catalog catalog) {
 		Map<String, String> map = new HashMap<>();
@@ -242,10 +260,54 @@ public final class DocGen {
 		return map;
 	}
 
-	private String renderBody(String markdown) {
+	private String renderBody(String markdown, String mdFile, String lang) throws IOException {
 		String body = this.renderer.render(this.parser.parse(markdown));
+		body = alignHeadingIds(body, mdFile, lang);
 		body = rewriteMarkdownLinks(body);
 		return RunnableBlockTransformer.transform(body);
+	}
+
+	/**
+	 * Gives a translated page the reference language's heading anchors, matched by
+	 * position. The trees are required to have the same heading layout, so a page whose
+	 * heading count differs from its reference counterpart is a translation that has
+	 * drifted -- it fails the build here rather than shipping anchors that point at the
+	 * wrong sections.
+	 */
+	private String alignHeadingIds(String body, String mdFile, String lang) throws IOException {
+		if (lang.equals(this.referenceLang)) {
+			this.referenceHeadingIds.put(mdFile, headingIds(body));
+			return body;
+		}
+		List<String> reference = this.referenceHeadingIds.get(mdFile);
+		if (reference == null) {
+			return body;
+		}
+		List<String> own = headingIds(body);
+		if (own.size() != reference.size()) {
+			throw new IOException("Heading layout of " + lang + "/" + mdFile + " differs from " + this.referenceLang
+					+ "/" + mdFile + ": " + own.size() + " headings vs " + reference.size()
+					+ ". Every language tree must have the same headings in the same order.");
+		}
+		Matcher matcher = HEADING_ID.matcher(body);
+		StringBuilder out = new StringBuilder();
+		int i = 0;
+		while (matcher.find()) {
+			String replacement = matcher.group(1) + reference.get(i++) + matcher.group(3);
+			matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+		}
+		matcher.appendTail(out);
+		return out.toString();
+	}
+
+	/** The {@code id} of every heading of a rendered body, in document order. */
+	static List<String> headingIds(String bodyHtml) {
+		List<String> ids = new ArrayList<>();
+		Matcher matcher = HEADING_ID.matcher(bodyHtml);
+		while (matcher.find()) {
+			ids.add(matcher.group(2));
+		}
+		return ids;
 	}
 
 	private void writePage(String docPath, String html) throws IOException {

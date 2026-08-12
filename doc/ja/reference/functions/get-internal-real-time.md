@@ -8,4 +8,4 @@
 (get-internal-real-time)
 ```
 
-典型的には `(- (get-internal-real-time) start)` のように使い、計算に要したミリ秒数を測ります。現在の時計を反映するため、値は非決定的です — ただし `--no-wasi` モジュールの時計はホストが書き込んだときだけ動くので、1 回の呼び出しの中では 2 回の測定値が一致します ([時計と乱数のガイド](../../guides/clock-and-random.md#時計を設定する----ronto-set-time))。
+典型的には `(- (get-internal-real-time) start)` のように使い、計算に要したミリ秒数を測ります。現在の時計を反映するため、値は非決定的です — ただし `--no-wasi` モジュールの時計はホストが書き込んだときだけ動くので、1 回の呼び出しの中では 2 回の測定値が一致します ([時計と乱数のガイド](../../guides/clock-and-random.md#setting-the-clock----ronto-set-time))。

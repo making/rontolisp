@@ -50,7 +50,7 @@ API である [`rontolisp:random-bytes`](../reference/functions/rontolisp-random
 
 ## ホストを持たないモジュール — `--no-wasi`
 
-[`--no-wasi` モジュール](wasm-gc-module.md#no-wasiリアクターモード)は何もインポートしないので、どちらの値にも出どころがありません。それに対する扱いは、このフラグ全体が従うルールに従います:
+[`--no-wasi` モジュール](wasm-gc-module.md#no-wasi-reactor-mode)は何もインポートしないので、どちらの値にも出どころがありません。それに対する扱いは、このフラグ全体が従うルールに従います:
 **答えがそのモジュールにとって真であるときスタブは答え、答えることが「本物と区別できない値の捏造」になるときは拒否する。**
 そして**ホストが渡してきた値は捏造ではありません** — 以下の 2 つのフックはそのためにあります。
 
@@ -65,7 +65,7 @@ API である [`rontolisp:random-bytes`](../reference/functions/rontolisp-random
 つの組み込みはいずれも演算子名を含む捕捉可能なエラーをシグナルします。
 
 ロード中に時計を読むライブラリにはそれを捕捉する呼び出し元がいないので、最初の実行任せにせず**ビルド**が名指しします —
-[実行する前にビルドが教えてくれること](wasm-gc-module.md#実行する前にビルドが教えてくれること)を参照してください。
+[実行する前にビルドが教えてくれること](wasm-gc-module.md#what-the-build-tells-you-before-you-run-it)を参照してください。
 
 ### 生成器にシードを与える — `__ronto_seed_random`
 
@@ -147,4 +147,4 @@ instance.exports._initialize();
 
 プログラム自身の `(defun random ...)`
 はインタプリタからは呼ばれますが、コンパイルバックエンドでは無視され、呼び出し位置には標準の演算子が出力されます(そのことは警告されます) —
-[COMMON-LISP 関数の再定義](../reference/function-namespace.md#common-lisp-関数の再定義)を参照してください。
+[COMMON-LISP 関数の再定義](../reference/function-namespace.md#redefining-a-common-lisp-function)を参照してください。

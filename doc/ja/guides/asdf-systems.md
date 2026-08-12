@@ -108,7 +108,7 @@ $ rontolisp
   通じて見つかるからです)、そして純粋なリテラル/条件値を持つトップレベル `defparameter`
   (解析時環境に評価されます) を書けます。`#+`/`#-`
   フィーチャ条件は動作し (ターゲットバックエンドのフィーチャーに対して評価されます。
-  [データ型](../reference/data-types.md#コメントフィーチャー条件features)を参照)、
+  [データ型](../reference/data-types.md#comments-feature-conditionals-and-features)を参照)、
   `#.` リード時評価フォームはその値が**使われる**場所で解決されます: ロード対象を
   決める句ではその `defparameter` に対して解決され (`(:file #.*string-file*)` の慣用形)、
   解決できない場合はファイルと句を名指しするエラーになります。無視されるメタデータ
@@ -206,7 +206,7 @@ Quicklisp ライブラリの中には、rontolisp 側を知り得ない実装ご
 | `mgl-pax-bootstrap` | [mgl-pax](https://github.com/melisgl/mgl-pax) でドキュメント化されたライブラリをロードできるようにする、`mgl-pax` パッケージ (ニックネーム `pax`) のスタブです (uuid の依存である trivial-utf-8 がハード依存しています。本物のシステムの `.asd` は `:defsystem-depends-on` を使います)。`pax:define-package` は `defpackage` として働き、`pax:defsection` はセクション名を `nil` の変数として定義し、**さらにセクションの `(シンボル ロケーティブ)` エントリを export します** — mgl-pax のドキュメント化されたデフォルトであり、この種のライブラリが公開 API を export する方法です。PAX-World 登録ヘルパーは `nil` を返す何もしない関数です。ドキュメントは生成されません |
 | `trivial-garbage` (ニックネーム `tg`) | GC ファイナライザを正直な no-op として提供します: `tg:finalize` は何も登録せずオブジェクトを返し、`tg:cancel-finalization` は `nil` を返す no-op です。GC フックを公開するバックエンドは存在せず — そして Common Lisp はファイナライザの実行を何も保証しないため、準拠したコンシューマは実行されなくても動作しなければなりません。`dbd-postgres` (このシムのコンシューマ) への実際的な帰結: リークした prepared statement は接続が閉じるまで残ります。`dbi:disconnect` を明示的に呼んでください |
 | `clack-handler-rontolisp` | [Clack](https://github.com/fukamachi/clack) のハンドラバックエンド: `run`/`stop` をエクスポートするパッケージ `clack.handler.rontolisp` で、Clack のアプリケーションプロトコルを rontolisp の組み込み HTTP サーバに橋渡しします。手動でロードすることはありません — `(clack:clackup app :server :rontolisp)` が実行時に名前で解決します (clack がパッケージ名から導出するドット区切りの綴り `clack.handler.rontolisp` でもこのシステムが応答します)。[Clack ガイド](clack.md)を参照 |
-| `clack-handler-reactor` | **ホスト駆動のリアクタ**向けの Clack ハンドラバックエンド: Cloudflare Worker、ブラウザページ、node や JVM への埋め込みなど、リクエストを既にホスト側でパースし、プログラムにソケットを渡す代わりにエクスポートされた関数を呼ぶホストのためのものです。パッケージ `clack.handler.reactor` は `run`/`stop` に加えて、その下にある `handle` (アプリケーションと JSON リクエスト文字列を受け取り JSON レスポンス文字列を返す) と `dispatch` (`clackup` が格納したアプリケーションに対する同じ操作) をエクスポートします。上のバックエンドと同じく、`(clack:clackup app :server :reactor)` がドット区切りの綴りも含めて解決します。[Clack ガイド](clack.md#リアクタを手で駆動する-clack-handler-reactor)を参照 |
+| `clack-handler-reactor` | **ホスト駆動のリアクタ**向けの Clack ハンドラバックエンド: Cloudflare Worker、ブラウザページ、node や JVM への埋め込みなど、リクエストを既にホスト側でパースし、プログラムにソケットを渡す代わりにエクスポートされた関数を呼ぶホストのためのものです。パッケージ `clack.handler.reactor` は `run`/`stop` に加えて、その下にある `handle` (アプリケーションと JSON リクエスト文字列を受け取り JSON レスポンス文字列を返す) と `dispatch` (`clackup` が格納したアプリケーションに対する同じ操作) をエクスポートします。上のバックエンドと同じく、`(clack:clackup app :server :reactor)` がドット区切りの綴りも含めて解決します。[Clack ガイド](clack.md#driving-the-reactor-by-hand-clack-handler-reactor)を参照 |
 
 シムは意図的に薄く作られています: ロード可能なライブラリが実際に呼ぶものだけを満たし、上流の完全な
 API は提供しません。

@@ -30,7 +30,7 @@ wasmtime run -W gc hello.wasm
 | WASI コマンドモジュール | (なし) | 全機能 | WASI Preview 1 対応の wasm-GC エンジン(`wasmtime run -W gc`) | [wasm-GC コアモジュール](../guides/wasm-gc-module.md) |
 | ライブラリ(リアクター)モジュール | `--no-wasi` | 全機能(純粋計算エクスポート) | インポート不要の任意の wasm-GC エンジン(Node 22+、現行ブラウザ。`--host-random` / `--host-fetch` を付けるとホストインポートがそれぞれ 1 つ増える) | [`--no-wasi` リアクターモード](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
 | WASI 0.3 コンポーネント | `--component` | 全機能 + コンポーネント限定 I/O(`rontolisp:fetch`、TCP ソケット) | wasmtime 46+ または wasm-GC 対応の別のコンポーネントホスト | [WASI 0.3 コンポーネント](../guides/wasm-component.md) |
-| リアクターコンポーネント | `--component --no-wasi` | 全機能(純粋計算エクスポート) | wasm-GC 対応の任意のコンポーネントホスト、空のインポートオブジェクト | [リアクターコンポーネント](../guides/wasm-component.md#リアクターコンポーネント--component---no-wasi) |
+| リアクターコンポーネント | `--component --no-wasi` | 全機能(純粋計算エクスポート) | wasm-GC 対応の任意のコンポーネントホスト、空のインポートオブジェクト | [リアクターコンポーネント](../guides/wasm-component.md#reactor-components---component---no-wasi) |
 | 素のコアモジュール | `--no-gc` | 数値/文字列[サブセット](../guides/wasm-nogc.md#eligible-subset) | wasm-GC も SIMD もない環境を含む**任意の** WebAssembly エンジン | [非 GC 出力](../guides/wasm-nogc.md) |
 | コンパクトな型付きコンポーネント | `--no-gc --component` | 数値/文字列[サブセット](../guides/wasm-nogc.md#eligible-subset) | 任意のコンポーネントホスト、**フラグゼロ** | [コンパクトなコンポーネント出力](../guides/wasm-nogc.md#compact-component-output---no-gc---component) |
 

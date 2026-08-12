@@ -428,7 +428,7 @@
 [tcp-connect](functions/rontolisp-tcp-connect.md)、
 [tcp-listen](functions/rontolisp-tcp-listen.md)、
 [tcp-accept](functions/rontolisp-tcp-accept.md)、
-[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-パッケージの関数)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
+[tcp-local-port](functions/rontolisp-tcp-local-port.md) のリファレンスページを参照してください。既存のCommon Lispコードとの互換のために、これらの上に[usocket互換シム](#usocket-package-functions)が用意されています。TLS版（`rontolisp:tls-connect` / `tls-listen` / `tls-listen-pem`）は同じストリームハンドルをTLSで包みます。
 [tls-connect](functions/rontolisp-tls-connect.md)、
 [tls-listen](functions/rontolisp-tls-listen.md)、
 [tls-listen-pem](functions/rontolisp-tls-listen-pem.md) のリファレンスページを参照してください。`rontolisp:wasm-export`、`rontolisp:wasm-import`、`rontolisp:wit-export`、`rontolisp:wit-import`
@@ -605,7 +605,7 @@ Quicklisp ディストリビューションからシステムをローカルキ�
 `asdf` サブセットを経由してロードします (`quicklisp` は組み込みのニックネーム)。
 **Common Lisp の一部ではありません**。シンボルは `ql:` 修飾子付きで参照します。
 下記の名前は個別のページにリンクしています。キャッシュのレイアウトと制約については
-[システムガイド](../guides/asdf-systems.md#quickload-でダウンロードする)を参照してください。
+[システムガイド](../guides/asdf-systems.md#downloading-with-quickload)を参照してください。
 
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
@@ -625,7 +625,7 @@ UDP(`socket-send` / `socket-receive`)、`wait-for-input`、`socket-server`、
 コンディション階層(`handler-case` での `usocket:socket-error`)は
 非対応です。変数 `usocket:*wildcard-host*`(`"0.0.0.0"`)と
 `usocket:*auto-port*`(`0`)が提供されます。全体像と制限の一覧は
-[TCPソケットガイド](../guides/tcp-sockets.md#usocket-互換シム)を参照して
+[TCPソケットガイド](../guides/tcp-sockets.md#the-usocket-compatible-shim)を参照して
 ください。
 
 | 関数 | 例 | 結果 |

@@ -29,7 +29,7 @@
 > サスペンド以降は呼び出し元と *真に並列に* 走ります。**`--component`** では
 > 本体は WASI 0.3 コンポーネントモデルの非同期 ABI 上の、協調的で
 > シングルスレッドの状態機械へコンパイルされます
-> ([後述](#内部の仕組み-wasi-preview-3-の-future-と-stream))。そうした
+> ([後述](#under-the-hood-wasi-preview-3-futures--streams))。そうした
 > コンポーネントは `wasmtime -W exceptions=y` を付けて実行する必要が
 > あります。**Preview 1** WASM には非同期のホスト I/O がないため、非同期本体は
 > 即座に最後まで走り (観測上は一貫した縮退的な同期モード)、`wait-for` と
@@ -57,7 +57,7 @@
 
 future は本体の最後のフォームの値で確定するか、本体がシグナルしたエラーで
 確定します (future を await したときに再シグナルされます —
-[エラー](#await-境界をまたぐエラー)を参照)。無名版は
+[エラー](#errors-across-the-await-barrier)を参照)。無名版は
 [`rontolisp:async-lambda`](../reference/special-forms/rontolisp-async-lambda.md)
 で、`(rontolisp:async (defun ...))` / `(rontolisp:async (lambda ...))` はその2つの
 等価な JavaScript 風の綴りです。

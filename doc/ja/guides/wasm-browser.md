@@ -45,7 +45,7 @@ npx @bytecodealliance/jco transpile cv.wasm -o dist
 </script>
 ```
 
-**印字する `--no-gc --component` はまだ jco では実行できません。** その[印字マイクロアダプタ](wasm-nogc.md#compact-component-output---no-gc---component)は `wasi:cli/stdout@0.3.0` をインポートし、すべてのエクスポートを async リフトするため、下記の GC コンポーネントと同じ jco のギャップ(jco は async リフトされたエクスポートを呼び出せず、`future` ランタイムも未完成)に当たります — そして WASI 0.3 シムはそもそも Node 専用です。コンポーネントの行き先が jco やブラウザであれば、プログラムを印字なしに保ってください。手書きのインポートオブジェクトを使う[素のモジュールパス](#リアクターモジュールを手書きで呼ぶ)は影響を受けません。
+**印字する `--no-gc --component` はまだ jco では実行できません。** その[印字マイクロアダプタ](wasm-nogc.md#compact-component-output---no-gc---component)は `wasi:cli/stdout@0.3.0` をインポートし、すべてのエクスポートを async リフトするため、下記の GC コンポーネントと同じ jco のギャップ(jco は async リフトされたエクスポートを呼び出せず、`future` ランタイムも未完成)に当たります — そして WASI 0.3 シムはそもそも Node 専用です。コンポーネントの行き先が jco やブラウザであれば、プログラムを印字なしに保ってください。手書きのインポートオブジェクトを使う[素のモジュールパス](#reactor-modules-by-hand)は影響を受けません。
 
 **wasm-GC の `--component` はロードされ計算もできますが、まだ印字はできません。** Chrome は wasm-GC、JSPI、正準 ABI のいずれにも対応しており、コンポーネントの同期エクスポートは正しい値を返します。残りを阻んでいるのは 2 つのギャップで、どちらも JavaScript 側にあります(wasmtime はすべて実行できます):
 

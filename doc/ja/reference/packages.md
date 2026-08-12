@@ -1,6 +1,6 @@
 # パッケージ
 
-rontolispには、一連の組み込みパッケージと[`defpackage` によるユーザー定義パッケージ](#ユーザー定義パッケージdefpackage)を持つ小さな名前空間(パッケージ)システムがあります:
+rontolispには、一連の組み込みパッケージと[`defpackage` によるユーザー定義パッケージ](#user-defined-packages-defpackage)を持つ小さな名前空間(パッケージ)システムがあります:
 
 - **`cl`** — 標準パッケージ。すべての組み込み関数、マクロ、特殊形式、および `*package*` 変数がここに属します。
 - **`cl-user`** — デフォルトの作業パッケージ。`cl` を *使用* するため、標準シンボルを修飾なしで利用できます。プログラム開始時のカレントパッケージです。ユーザ定義はここに置かれます。
@@ -8,12 +8,12 @@ rontolispには、一連の組み込みパッケージと[`defpackage` による
 - **`linalg`** — numpy スタイルのベクトル・行列演算(`linalg:zeros`、`linalg:matmul`、`linalg:solve` など)。Lisp ソースで一度だけ実装され、すべてのバックエンドで利用できます。`la` は組み込みのニックネームです。`cl` を **使用しません**。[ベクトルと行列ガイド](../guides/linear-algebra.md)を参照してください。
 - **`java`** — リフレクションによる Java 連携。JVM インタプリタ (`java -jar rontolisp.jar`) でのみ使え、コンパイラやネイティブバイナリでは使えません。`cl` を **使用しません**。`new`、`call`、`static`、`field`、`proxy` を所有します。[Java 連携ガイド](../guides/java-interop.md)を参照してください。
 - **`asdf`** — ASDF の限定的な API 互換サブセット(システム定義): `defsystem` と `load-system`。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md)を参照してください。
-- **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#quickload-でダウンロードする)を参照してください。
-- **`usocket`** — `rontolisp:tcp-*` ソケット組み込みの上に載った [usocket](https://github.com/usocket/usocket) 互換シム(`usocket:socket-connect`、`usocket:socket-listen` など)。Lisp ソースで一度だけ実装され、組み込み ASDF システム `"usocket"` としても登録されています。`cl` を **使用しません**。[TCPソケットガイド](../guides/tcp-sockets.md#usocket-互換シム)を参照してください。
+- **`ql`** — Quicklisp の限定的な API 互換サブセット: `quickload` は本物の Quicklisp ディストリビューションからシステムをダウンロードし、`asdf` サブセットを経由してロードします。`quicklisp` は組み込みのニックネームです。`cl` を **使用しません**。[システムガイド](../guides/asdf-systems.md#downloading-with-quickload)を参照してください。
+- **`usocket`** — `rontolisp:tcp-*` ソケット組み込みの上に載った [usocket](https://github.com/usocket/usocket) 互換シム(`usocket:socket-connect`、`usocket:socket-listen` など)。Lisp ソースで一度だけ実装され、組み込み ASDF システム `"usocket"` としても登録されています。`cl` を **使用しません**。[TCPソケットガイド](../guides/tcp-sockets.md#the-usocket-compatible-shim)を参照してください。
 
 シンボルはパッケージ修飾子で参照できます: `package:symbol`(例: `cl:car`、`rontolisp:version`)はパッケージの
 external(export 済み)シンボルに届き、`package::symbol` は internal を含む任意のシンボルに届きます —
-Common Lisp と同じシングル/ダブルコロンの区別です([external シンボルと internal シンボル](#external-シンボルと-internal-シンボル)を参照)。`*package*`
+Common Lisp と同じシングル/ダブルコロンの区別です([external シンボルと internal シンボル](#external-and-internal-symbols)を参照)。`*package*`
 はカレントパッケージの名前に評価され、`(in-package name)`
 はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。標準の Common Lisp 名
 `common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込み **ニックネーム** なので、ポータブルな
@@ -168,7 +168,7 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
   `defun` の **コンパイル時スナップショット** です。`load`/`eval` を通じて実行時に定義された関数(`--dynamic`
   を使っても)は含まれず、`(in-package :rontolisp)`
   が有効な間に定義された関数はどのパッケージにも列挙されません。
-- [ユーザー定義パッケージ](#ユーザー定義パッケージdefpackage)の `list-functions` は、そのパッケージの
+- [ユーザー定義パッケージ](#user-defined-packages-defpackage)の `list-functions` は、そのパッケージの
   `defun` を正規の修飾名で列挙します — export された関数は `mypkg:fn`、internal な関数は
   `mypkg::fn` です。ユーザーパッケージの `list-macros` と `list-special-forms` は `nil` です。
 - car/cdrの合成(`cadr`、`caddr` ...)はパターンで認識され列挙されないため、`list-functions`
@@ -204,4 +204,4 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 このパッケージのメンバーのうち2つは関数でもマクロでもなく、read 時リテラルです:
 `rontolisp:current-file` と `rontolisp:current-line` で、リーダがそのシンボルの位置に置換します。`in-package`
 ディレクティブの解釈より前に解決されるため、これらは上記の規則の例外で、常に修飾付きで書く必要があります。
-[ソース位置リテラル](data-types.md#ソース位置リテラルrontolispcurrent-filerontolispcurrent-line)を参照してください。
+[ソース位置リテラル](data-types.md#source-position-literals-rontolispcurrent-file-rontolispcurrent-line)を参照してください。

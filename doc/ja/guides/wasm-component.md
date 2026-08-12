@@ -102,7 +102,7 @@ wasmtime run -W gc=y -W exceptions=y -S http=y \
 - `:async` が意味を持つのはここだけです: Preview 1 / `--no-wasi` のコアエクスポートは無視し(そこではホストが直接 I/O を提供します)、`--no-gc --component` は拒否します(コンパクトなリアクターコンポーネントには非同期アダプタがありません)。
 - jco(1.25.2)は `:async t` エクスポートをトランスパイルして非同期として型付けしますが、まだ呼び出せません — 0.3 非同期 ABI のサポートが上流で未実装です(トランスパイルされた `run` を呼べないのと同系統のギャップです)。非同期エクスポートの検証済みパスは `wasmtime run --invoke` です。同期エクスポートはどちらでも動作します。
 - エクスポート名は lower-kebab-case のコンポーネントモデル名(`sum-squared`)でなければなりません。その文法から外れる Lisp 名については、コンパイラが `:as` での改名を求めます。
-- エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` のグローバルを読むエクスポートは未初期化の値を見ることになります(これは Preview 1 の `--invoke` の動作と一致します)。[後述のリアクター形状](#リアクターコンポーネント--component---no-wasi)はこれを解消します: そのトップレベルはインスタンス化時に実行されます。
+- エクスポートの呼び出しはプログラムのトップレベルを先に実行しないため、`defvar`/`defparameter` のグローバルを読むエクスポートは未初期化の値を見ることになります(これは Preview 1 の `--invoke` の動作と一致します)。[後述のリアクター形状](#reactor-components---component---no-wasi)はこれを解消します: そのトップレベルはインスタンス化時に実行されます。
 
 純粋計算のエクスポートキットには、コンパクトな [`--no-gc --component`](wasm-nogc.md#compact-component-output---no-gc---component) が同じ型付きエクスポート(ただし `:s-expr` なし)を、wasmtime のフラグを一切必要としない数百バイトのコンポーネントとして出力します。
 
@@ -133,4 +133,4 @@ $ wasmtime run -W gc=y --invoke 'greet("world")' greet.wasm
 
 I/O の契約は Preview 1 リアクターのものがそのまま適用されます: 出力(`print`、`format t`)は**破棄**され、入力・時刻・`random` は**トラップ**し、`with-open-file`/`open` は捕捉可能なエラーを**シグナル**します。インポートを持ち込むものは `--no-wasi` とはコンパイルできません — `rontolisp:fetch`、`rontolisp:http-handler`、`rontolisp:wait-for`、`rontolisp:wit-import` はそれぞれ衝突を名指しで報告します。
 
-JavaScript エンベッダにとって、これは WASI シムを一切必要としないコンポーネント形状です: `jco transpile greet.wasm --instantiation sync` が生成するグルーの `ImportObject` 型は文字通り空(`{}`)です。`clack:clackup ... :server :rontolisp` アプリケーションにも同じことが当てはまります — リアクタービルドの `handle-request` エクスポート([Clack ガイド](clack.md#ホストから呼ばれる場合-リアクタビルド)を参照)は `--component --no-wasi` でも動作し、Clack アプリケーションに型付きの `handle-request: func(p0: string) -> string` コンポーネントエクスポートを与えます。
+JavaScript エンベッダにとって、これは WASI シムを一切必要としないコンポーネント形状です: `jco transpile greet.wasm --instantiation sync` が生成するグルーの `ImportObject` 型は文字通り空(`{}`)です。`clack:clackup ... :server :rontolisp` アプリケーションにも同じことが当てはまります — リアクタービルドの `handle-request` エクスポート([Clack ガイド](clack.md#a-host-that-calls-you-the-reactor-build)を参照)は `--component --no-wasi` でも動作し、Clack アプリケーションに型付きの `handle-request: func(p0: string) -> string` コンポーネントエクスポートを与えます。

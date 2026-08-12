@@ -2,7 +2,7 @@
 
 `(format destination control-string args...)`
 
-Common Lisp の `format` のサブセットで、インタプリタと両コンパイラで共有されるマクロとして実装されています。リテラルの `control-string` はコンパイル時に展開され、計算された制御文字列は実行時に描画されます（[実行時の制御文字列](#実行時の制御文字列)を参照）。どちらでもディレクティブは同じです。destination が `t` の場合は `princ`/`prin1`/`terpri` 呼び出しに展開され、標準出力に書き出して nil を返します。destination が `nil` の場合は整形済み文字列を組み立てて返します（`princ-to-string`/`prin1-to-string` 呼び出しに展開され、内部の文字列連結で畳み込まれます）。それ以外の destination 式の場合は同じ方法で文字列を組み立てたうえで、その**値を実行時に判別**します — ストリームなら 1 回の `write-string` 呼び出しで書き込んで nil を返し（`with-output-to-string` の文字列ストリームまたはファイルストリーム）、`t` なら `*standard-output*` に書き、nil なら文字列を返します。この判定が実行時でなければならないのは、nil がストリームを表さないからです。nil は「文字列を返す」destination なので、自分の `&optional stream` 引数をそのまま渡す関数（`(defun render (x &optional stream) (format stream ...))` という Common Lisp の慣習）は、引数なしで呼ばれたときに文字列を返します。すべての引数は出力の前に左から右へ評価されます。
+Common Lisp の `format` のサブセットで、インタプリタと両コンパイラで共有されるマクロとして実装されています。リテラルの `control-string` はコンパイル時に展開され、計算された制御文字列は実行時に描画されます（[実行時の制御文字列](#runtime-control-strings)を参照）。どちらでもディレクティブは同じです。destination が `t` の場合は `princ`/`prin1`/`terpri` 呼び出しに展開され、標準出力に書き出して nil を返します。destination が `nil` の場合は整形済み文字列を組み立てて返します（`princ-to-string`/`prin1-to-string` 呼び出しに展開され、内部の文字列連結で畳み込まれます）。それ以外の destination 式の場合は同じ方法で文字列を組み立てたうえで、その**値を実行時に判別**します — ストリームなら 1 回の `write-string` 呼び出しで書き込んで nil を返し（`with-output-to-string` の文字列ストリームまたはファイルストリーム）、`t` なら `*standard-output*` に書き、nil なら文字列を返します。この判定が実行時でなければならないのは、nil がストリームを表さないからです。nil は「文字列を返す」destination なので、自分の `&optional stream` 引数をそのまま渡す関数（`(defun render (x &optional stream) (format stream ...))` という Common Lisp の慣習）は、引数なしで呼ばれたときに文字列を返します。すべての引数は出力の前に左から右へ評価されます。
 
 ```lisp
 (format t "Hello ~a, you are ~d!~%" 'world 42)

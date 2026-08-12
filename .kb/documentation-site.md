@@ -45,6 +45,23 @@ annotations / output blocks); only prose, headings, link text, `nav.yaml`
 executes `doc/en` examples, so a broken `doc/ja` code block will NOT be caught by
 the build -- this is why ja code fences must be copied verbatim from en.
 
+**Heading ANCHORS are the reference language's, in every tree (2026-08-12).** A
+translated heading keeps its translated TEXT and takes en's `id`: `DocGen`
+records the heading ids of the first-rendered (default) language per doc-relative
+path and, for every other language, replaces that page's generated ids
+positionally (`alignHeadingIds`). Before this, flexmark slugged each tree's ids
+from its own heading text, so `#no-wasi-reactor-mode` existed only in `en/` --
+94 of the site's anchor links were dead, all of them in `ja/`, whichever spelling
+the link used: an en-slug link found no such id, and a ja-slug link was the same
+anchor written twice, which the "mirror the link verbatim" rule above forbids.
+So an `[x](page.md#anchor)` is written ONCE, with the en slug, and copied into
+every tree. The positional match makes "same heading layout" load-bearing rather
+than advisory: a tree whose page has a different heading COUNT fails the build
+(`IOException` naming the file), and `DocGenTest`'s
+`everyAnchorLinkResolvesInEveryLanguage` walks the generated site and fails on
+any `#fragment` with no matching `id` -- the anchor half of the page-link check
+`SkillGenTest` already did.
+
 **Adding/editing pages.** Edit the Markdown; add new top-level pages to
 `doc/en/nav.yaml` (and `doc/ja/nav.yaml`). For a new function/macro/special form,
 add a per-operator page + a `_catalog.yaml` entry under the matching directory in

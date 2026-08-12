@@ -135,7 +135,7 @@ canonical な組み込み機能だからです。つまり束縛すべきもの�
 rontolisp はそれに名前を与えます。コンストラクタが束縛する `<resource>-new`
 と対になる **`<resource>-drop`** です。どちらも、WIT が関数として名付けないものに
 rontolisp が与えた綴りです。
-[リソースを解放する](#リソースを解放する-resource-drop)を参照してください。
+[リソースを解放する](#releasing-a-resource-resource-drop)を参照してください。
 
 ## どうローワリングされるか
 
@@ -378,7 +378,7 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   ビルドから来ます)。
 - リソースハンドルは不透明で — その整数から何かを読み取ってよいのは、それを手渡した
   当人だけです — rontolisp が勝手に解放することはありません。解放できるのは
-  [`<resource>-drop`](#リソースを解放する-resource-drop) だけです。WIT
+  [`<resource>-drop`](#releasing-a-resource-resource-drop) だけです。WIT
   リソースに `cl:close` は使えません。そのハンドルはプロバイダ (あるいはホスト)
   の私的な番号付けであって、rontolisp のストリームテーブルの枠ではないからです。
 - WASM バックエンドでは、他の関数と同様に 10 引数のアリティ制限が束縛にも適用されます。
