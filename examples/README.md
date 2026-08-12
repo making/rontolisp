@@ -9,7 +9,7 @@ runs identically on the interpreter, the JVM and WASM.
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02-ch08, ported |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
-| [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern |
+| [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API on top |
 | [`jvm/`](jvm) | `java:` interop and Swing GUIs (JVM only) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |
 | [`count-vowels/`](count-vowels), [`wit/`](wit) | Crossing the WASM boundary: exporting to a host, implementing a WIT world, calling one, composing with Rust |
