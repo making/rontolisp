@@ -154,6 +154,7 @@ makes a byte of input true, so that is not.
 | `with-open-file`, `open` | **signals** a catchable error naming WASI |
 | `(random n)`, `(random 1.0)` | works — a built-in generator, or the host's with `--host-random` |
 | `rontolisp:random-bytes` | **signals**, unless `--host-random` supplies real entropy |
+| `rontolisp:fetch` | **compile error**, unless `--host-fetch` routes it at the host's own HTTP client |
 | `get-universal-time` and the other clocks | the time the host set through `__ronto_set_time`; **signals** until it does |
 | `(sleep n)` | **signals** — nothing here can make an interval elapse |
 | `read`, `read-line`, `read-char` (standard input) | **traps** |
@@ -186,11 +187,30 @@ component** — a component that imports nothing, whose top-level forms run at
 instantiation — see
 [the component guide](wasm-component.md#reactor-components---component---no-wasi).
 
+**Outgoing HTTP** has the same shape as the clock and randomness: a value only
+the host can produce. `--host-fetch` routes
+[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) at ONE injected
+host import, `env.fetch(request-json) -> response-json` — same options, same
+`(:status :headers :body)` answer as every other backend, with `:body` one
+eager string that `rontolisp:read-all` passes through. A JavaScript host
+implements it with its own `fetch()` behind `WebAssembly.Suspending` (JSPI —
+the whole wasm stack parks until the promise settles, so the Lisp side stays
+ordinary synchronous-looking `(await (fetch ...))`) and then must enter every
+export through `WebAssembly.promising` and serialise calls; a synchronous host
+(node without JSPI, a test stub) just answers directly. The build prints
+exactly this obligation. The worked example is
+[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/dog-fetcher).
+
 A `--no-wasi` compile also reads the source with the `:rontolisp-reactor`
 feature active, which is how a `clack:clackup ... :server :rontolisp` program
 becomes a **served** reactor here: the handler backend stores the application
 and the compiler synthesizes a `handle-request` export the host calls per
 request — see [the Clack guide](clack.md#a-host-that-calls-you-the-reactor-build).
+A bare [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+directive lowers to the same transport (a reactor owns no socket, so "serve
+this handler" can only mean the host-driven envelope), so the one
+`http-handler` source serves a socket on the interpreter/JVM, `wasi:http`
+under `--component`, and the `handle-request` export here.
 
 Because the module is a reactor (not a WASI command), its top-level
 initializer is exported as **`_initialize`** rather than `_start`. A host

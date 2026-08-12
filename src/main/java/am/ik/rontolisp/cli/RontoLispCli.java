@@ -31,6 +31,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
+import am.ik.rontolisp.eval.HostFetchLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
 import am.ik.rontolisp.eval.HttpReactorInliner;
 import am.ik.rontolisp.eval.HttpReactorLibrary;
@@ -155,7 +156,7 @@ public final class RontoLispCli {
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
-					options.contains("--host-random"), inputFile);
+					options.contains("--host-random"), options.contains("--host-fetch"), inputFile);
 		}
 		else {
 			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
@@ -310,7 +311,7 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean hostRandom, @Nullable String entryFile) {
+			boolean noPrune, boolean wit, boolean hostRandom, boolean hostFetch, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -320,7 +321,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
-					noPrune, wit, hostRandom, entryFile);
+					noPrune, wit, hostRandom, hostFetch, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -351,7 +352,7 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean hostRandom, @Nullable String entryFile) {
+			boolean noPrune, boolean wit, boolean hostRandom, boolean hostFetch, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -371,6 +372,19 @@ public final class RontoLispCli {
 		if (hostRandom && noGc) {
 			throw new UnsupportedOperationException("--host-random cannot be combined with --no-gc: the scalar "
 					+ "(non-GC) backend has no `random` at all, so there is no draw to route");
+		}
+		// --host-fetch is the same family: it routes rontolisp:fetch at a host import on
+		// the wasm-GC reactor, so it means nothing anywhere else. The --no-wasi /
+		// --component half is the compiler's own guard, next to the contract it
+		// protects.
+		if (hostFetch && !outputFile.endsWith(".wasm")) {
+			throw new UnsupportedOperationException(
+					"--host-fetch requires a .wasm output: it routes rontolisp:fetch at a host import "
+							+ "(the interpreter and the JVM backend fetch through the JDK HttpClient)");
+		}
+		if (hostFetch && noGc) {
+			throw new UnsupportedOperationException("--host-fetch cannot be combined with --no-gc: the scalar "
+					+ "(non-GC) backend has no fetch (or strings) at all, so there is nothing to route");
 		}
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
@@ -423,6 +437,19 @@ public final class RontoLispCli {
 		// a canon lower, not just a core function; --no-prune / --dynamic disable that,
 		// like the library defun pruner.
 		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem(), !dynamic && !noPrune);
+		// The --no-wasi (wasm-GC) reactor legs, BEFORE the serve-mode switch below reads
+		// the program: a reactor owns no socket, so the rontolisp:http-handler directive
+		// lowers to the host-driven transport (the same leg clack:clackup takes there),
+		// which is also what lets the same http-handler source compile as a Worker; and
+		// under --host-fetch, rontolisp:fetch gets the env.fetch lowering spliced when
+		// the program fetches (before UserMacroExpander, so JsonLibrary and the prelude
+		// pick up the splice's own call sites).
+		if (outputFile.endsWith(".wasm") && noWasi && !noGc) {
+			loaded = HttpReactorInliner.lowerHttpHandler(loaded);
+			if (hostFetch) {
+				loaded = HostFetchLibrary.process(loaded);
+			}
+		}
 		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
 		// Lisp-source library (http.lisp) over a wit-imported wasi:http@0.3.0 surface,
 		// spliced HERE -- right after WitImportInliner, which http.lisp's own wit-import
@@ -612,7 +639,7 @@ public final class RontoLispCli {
 				// `random` draw is the host's entropy, which is also what makes
 				// rontolisp:random-bytes sound again.
 				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd,
-						hostRandom);
+						hostRandom, hostFetch);
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 			}
@@ -761,6 +788,15 @@ public final class RontoLispCli {
 		this.out.println("                     preview1 signature), so a JS host adds one line to its import");
 		this.out.println("                     object; rontolisp:random-bytes works, and no");
 		this.out.println("                     __ronto_seed_random export is emitted (nothing left to seed)");
+		this.out.println("  --host-fetch       With --no-wasi (core module only): route rontolisp:fetch at the");
+		this.out.println("                     HOST's own HTTP client. The module then imports exactly one");
+		this.out.println("                     function, env.fetch(request-json) -> response-json (strings via");
+		this.out.println("                     the wasm-import ABI), and fetch answers the same");
+		this.out.println("                     (:status :headers :body) plist as every other backend -- :body");
+		this.out.println("                     arrives as one eager string, which rontolisp:read-all passes");
+		this.out.println("                     through. A JS host implements it with fetch() behind");
+		this.out.println("                     WebAssembly.Suspending (JSPI) and enters exports via promising,");
+		this.out.println("                     or answers synchronously; the build prints the exact obligation");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");

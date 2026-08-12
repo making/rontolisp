@@ -493,6 +493,9 @@ public final class JvmLispCompiler implements LispCompiler {
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_STREAMP));
 		boolean usesAsyncRuntime = usesFetch || usesAsyncSpawn || usesStreamOps
 				|| programUsesSymbol(program, awaitQualified)
+				// %future-force (the function spelling of await, e.g. the http-reactor
+				// transport's boundary resolve) compiles to the same _await helper.
+				|| programUsesSymbol(program, LispNames.FUTURE_FORCE_QUALIFIED)
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.FUTUREP))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR));
 		MethodrefConstant fetchHelperMethod = usesFetch

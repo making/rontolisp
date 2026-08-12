@@ -768,14 +768,19 @@ public final class LispPreludeLibrary {
 				               (hex cp ""))))
 				          (t nil))))
 				""");
+		// A STRING passes through: a body that has already fully arrived (a --host-fetch
+		// reactor's :body, or the declared absent-body default) is its own drained
+		// value, so the one drain spelling works whatever shape :body took.
 		SOURCES.put(LispNames.READ_ALL, """
 				(rontolisp:async-defun rontolisp:read-all (s)
-				  (let ((acc "")
-				        (chunk (rontolisp:await (rontolisp:stream-read s))))
-				    (while chunk
-				      (setq acc (concatenate 'string acc chunk))
-				      (setq chunk (rontolisp:await (rontolisp:stream-read s))))
-				    acc))
+				  (if (stringp s)
+				      s
+				      (let ((acc "")
+				            (chunk (rontolisp:await (rontolisp:stream-read s))))
+				        (while chunk
+				          (setq acc (concatenate 'string acc chunk))
+				          (setq chunk (rontolisp:await (rontolisp:stream-read s))))
+				        acc)))
 				""");
 		// The future-as-value combinator quartet (rontolisp:then / then* / catch /
 		// finally): each returns a FRESH future that composes the input future's

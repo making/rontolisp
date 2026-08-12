@@ -16,12 +16,37 @@ the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
 `FUNC_P1_FUTURE_AWAIT` resolves it).
 
 `await`/`futurep` compile/run on every backend and WASM mode (Preview 1 included);
-**only `fetch` is component-only** (`WasmFetchCompiler` is a compile error outside
-`--component`; the JVM emits the fetch/await runtime when fetch or await is used).
-**On a `--no-wasi` reactor there is therefore no `fetch` at all** — it is wasi:http and a
-reactor imports no WASI — and the way out is the host's own client behind a
-`rontolisp:wasm-import`, asynchronous on the host side through JSPI:
-`.kb/wasm-import.md`, showcase `examples/cloudflare-workers/dog-fetcher`.
+**fetch itself needs a transport**: `WasmFetchCompiler` is a compile error on plain
+Preview 1 (no host wasi:http), and on `--no-wasi` WITHOUT `--host-fetch` (the message
+names the flag); the JVM emits the fetch/await runtime when fetch or await is used.
+**On a `--no-wasi` reactor, `--host-fetch` is the transport (todo-335, 2026-08-12)**:
+`HostFetchLibrary` (eval pkg) splices a generated Lisp lowering — one
+`rontolisp:wasm-import` of `env.fetch(request-json) -> response-json` (`:string` ->
+`:string`, riding the ordinary synthetic-defun machinery, appended after the program so
+user import ordinals are unchanged) plus envelope defuns whose JSON keys are DERIVED
+from `FetchResponseShape`'s records (a `request` record — url/method/headers/body,
+`body` an `option<string>` so an absent `:body` crosses as an absent key — beside the
+existing `response` record; the error arm is the reserved
+`FetchResponseShape.HOST_ENVELOPE_ERROR_KEY` and SIGNALS at the fetch). `fetch` is a
+plain defun over an async-defun runner, so it answers the settled `TYPE_P1_FUTURE`
+(started == settled: the host call blocks the wasm stack — synchronously, or suspended
+through JSPI — so `(await (fetch ...))` reads identically and never suspends; a
+transport failure signals at the CALL, the P1 degenerate divergence). `:body` is one
+EAGER STRING, which `read-all` passes through (the prelude's stringp arm — on every
+backend, so the drain spelling is target-free). The splice is gated on the program
+referencing `rontolisp:fetch` (a build that never fetches still imports NOTHING), the
+compiler guards the flag (`hostFetch` requires `noWasi`, rejects `component`; CLI
+rejects `.class`/`--no-gc`), and the BUILD prints the host obligation (a synchronous
+`env.fetch` is always valid; a `WebAssembly.Suspending` one requires
+`WebAssembly.promising` entry + serialised calls — `.todo/337` re-entrancy), plus a
+`NoWasiLoadPathRefusals` line when the LOAD PATH reaches a fetch (a suspending host
+cannot serve `_initialize`). Envelope pinned by `HostFetchLibraryTest` (generated Lisp
+AND `examples/cloudflare-workers/dog-fetcher/src/index.js` against the records) and
+`FetchResponseShapeTest`; imports by `WasmImportCompilerTest`; the showcase — verified
+under `wrangler dev` against the real dog.ceo — is
+`examples/cloudflare-workers/dog-fetcher`, and `examples/net/dog-fetcher.lisp` compiles
+UNEDITED under `--no-wasi --host-fetch` (its `http-handler` lowers to the reactor
+transport, `.kb/clack.md`).
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with

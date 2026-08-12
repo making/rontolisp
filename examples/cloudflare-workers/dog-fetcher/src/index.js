@@ -6,29 +6,41 @@ import module from "./worker.wasm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-// The module's way out: a URL in, a JSON envelope out.
-async function hostFetch(lisp, urlPtr, urlLen) {
+// env.fetch, the --host-fetch import: request JSON in, response JSON out. The
+// envelope is rontolisp's, derived from FetchResponseShape and pinned by
+// HostFetchLibraryTest, so this host and the compiler cannot drift apart:
+//   in   {"url": ..., "method": ..., "headers": [[name, value], ...],
+//         "body": ...}                       // body absent when the fetch has none
+//   out  {"status": ..., "headers": [[name, value], ...], "body": ...}
+//        {"error": "..."}                    // the transport failed; fetch signals
+async function hostFetch(lisp, ptr, len) {
   // Read before the await: memory growth detaches the buffer.
-  const url = decoder.decode(
-    new Uint8Array(lisp.memory.buffer, urlPtr, urlLen),
+  const request = JSON.parse(
+    decoder.decode(new Uint8Array(lisp.memory.buffer, ptr, len)),
   );
 
   let envelope;
   try {
-    const response = await fetch(url, {
-      headers: { accept: "application/json" },
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
     });
-    envelope = { status: response.status, body: await response.text() };
+    envelope = {
+      status: response.status,
+      headers: [...response.headers],
+      body: await response.text(),
+    };
   } catch (error) {
-    // status 0 is what worker.lisp turns into its 502; throwing would trap.
-    envelope = { status: 0, error: String(error) };
+    // The error arm becomes a Lisp condition at the fetch; throwing would trap.
+    envelope = { error: String(error) };
   }
 
   // A :string result is host-written bytes: allocate, return [ptr, len].
   const bytes = encoder.encode(JSON.stringify(envelope));
-  const ptr = lisp.__ronto_alloc(bytes.length);
-  new Uint8Array(lisp.memory.buffer, ptr, bytes.length).set(bytes);
-  return [ptr, bytes.length];
+  const out = lisp.__ronto_alloc(bytes.length);
+  new Uint8Array(lisp.memory.buffer, out, bytes.length).set(bytes);
+  return [out, bytes.length];
 }
 
 // Instantiated on the first request: a Worker forbids crypto in global scope.

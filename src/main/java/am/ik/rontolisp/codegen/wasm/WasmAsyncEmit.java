@@ -765,6 +765,7 @@ final class WasmAsyncEmit {
 			.component(proto.component)
 			.noWasi(proto.noWasi)
 			.hostRandom(proto.hostRandom)
+			.hostFetch(proto.hostFetch)
 			.serve(proto.serve)
 			.ehMode(proto.ehMode)
 			.condMessagesObservable(proto.condMessagesObservable)

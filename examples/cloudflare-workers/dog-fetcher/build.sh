@@ -3,7 +3,9 @@
 #
 # --no-wasi: the Worker calls the exported entry point directly, so the module
 #   needs no WASI imports -- it becomes a reactor (`_initialize`, not `_start`).
-#   Its ONE import is env.fetch, declared by worker.lisp's rontolisp:wasm-import.
+# --host-fetch: rontolisp:fetch is lowered onto the host's own fetch. The
+#   module's ONE import is env.fetch(request-json) -> response-json, which
+#   src/index.js provides behind WebAssembly.Suspending (JSPI).
 # --optimize=size: a Worker bundle has a size limit; tiny-routes/lite is what
 #   keeps cl-ppcre out of what the tree-shaker has to keep.
 #
@@ -22,7 +24,7 @@ if [[ ! -f "$jar" ]]; then
 fi
 
 echo "compiling worker.lisp -> src/worker.wasm"
-java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --optimize=size
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --host-fetch --optimize=size
 
 ls -l "$here/src/worker.wasm"
 echo "done. Run it with:  npx wrangler dev"

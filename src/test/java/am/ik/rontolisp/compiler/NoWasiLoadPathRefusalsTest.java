@@ -187,6 +187,49 @@ class NoWasiLoadPathRefusalsTest {
 				""")).contains("WITH-OPEN-FILE " + LINE);
 	}
 
+	// The --no-wasi --host-fetch build: mirrors the CLI's HostFetchLibrary splice (the
+	// env.fetch import + envelope defuns), without which a fetch program cannot compile.
+	private static String hostFetchWarnings(String source) {
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		try {
+			var loaded = am.ik.rontolisp.eval.HostFetchLibrary
+				.process(LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR));
+			var program = am.ik.rontolisp.eval.LispPreludeLibrary.process(
+					am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
+			new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, true).compile(program);
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		return err.toString();
+	}
+
+	@Test
+	void aLoadPathFetchUnderHostFetchStatesTheSynchronousHostObligation() {
+		// A suspending env.fetch may only run on a promising-entered stack, which
+		// _initialize is not -- a fact only the build can state, like the clock's.
+		assertThat(hostFetchWarnings("""
+				(defvar *first* (rontolisp:await (rontolisp:fetch "https://example.com/")))
+				""")).contains("rontolisp:FETCH " + LINE).contains("env.fetch must answer" + " synchronously");
+	}
+
+	@Test
+	void aFetchOnlyAnExportedHandlerReachesStatesOnlyTheImportObligation() {
+		// The handler runs when the HOST calls the export -- through promising if it
+		// suspends -- so no load-path line; the standing --host-fetch line still names
+		// what the host owes.
+		String warnings = hostFetchWarnings("""
+				(rontolisp:async-defun dog ()
+				  (rontolisp:await (rontolisp:fetch "https://example.com/")))
+				(defun run () (rontolisp::%future-force (dog)))
+				(rontolisp:wasm-export 'run :params '() :returns :string)
+				""");
+		assertThat(warnings).doesNotContain("rontolisp:FETCH " + LINE);
+		assertThat(warnings).contains("--host-fetch: this module imports env.fetch");
+	}
+
 	@Test
 	void aWasiCarryingBuildSaysNothing() {
 		// Every one of these works on a build that imports WASI, so the lines belong to

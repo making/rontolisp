@@ -272,6 +272,26 @@ class AsyncEvalTest {
 	}
 
 	@Test
+	void readAllPassesAStringThrough() {
+		// A body that has fully arrived (a --host-fetch reactor's :body, or the
+		// declared absent-body default "") is its own drained value, on every backend.
+		Run run = evalMulti("(rontolisp:await (rontolisp:read-all \"already here\"))");
+		assertThat(run.result()).isEqualTo(new LispString("already here"));
+	}
+
+	@Test
+	void futureForceResolvesAFutureFromSynchronousCode() {
+		// The FUNCTION spelling of await's resolve: legal in a plain defun, which is
+		// where the http-reactor transport resolves a future-valued application answer.
+		Run run = evalMulti("""
+				(rontolisp:async-defun answer () 41)
+				(defun sync-caller () (+ 1 (rontolisp::%future-force (answer))))
+				(sync-caller)
+				""");
+		assertThat(run.result().print()).isEqualTo("42");
+	}
+
+	@Test
 	void writeToClosedStreamSignals() {
 		assertThatThrownBy(() -> evalMulti("""
 				(defvar *s* (rontolisp:make-stream))

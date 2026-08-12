@@ -75,6 +75,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean hostRandom;
 
+	private final boolean hostFetch;
+
 	/**
 	 * The one import a {@code --host-random} module carries: preview1's
 	 * {@code random_get(buf, len) -> errno} signature exactly (so a host can forward its
@@ -228,6 +230,31 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
 			boolean simd, boolean hostRandom) {
+		this(dynamic, component, noWasi, optimize, serve, simd, hostRandom, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
+	 * @param optimize see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
+	 * @param serve see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
+	 * @param simd see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean)}
+	 * @param hostRandom see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean, boolean)}
+	 * @param hostFetch when {@code true} (the CLI's {@code --host-fetch}, which requires
+	 * {@code noWasi} and rejects {@code component}), {@code rontolisp:fetch} compiles on
+	 * the reactor: the call falls through to the {@code HostFetchLibrary} splice, whose
+	 * transport is one injected host import {@code env.fetch(request-json) ->
+	 * response-json} riding the ordinary {@code wasm-import} machinery. The zero-import
+	 * default is unchanged -- a program that never fetches gets no splice and no import.
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
+			boolean simd, boolean hostRandom, boolean hostFetch) {
 		this.dynamic = dynamic;
 		this.component = component;
 		this.noWasi = noWasi;
@@ -235,6 +262,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.serve = serve && component;
 		this.simd = simd;
 		this.hostRandom = hostRandom;
+		this.hostFetch = hostFetch;
 		// A serve component's entire surface is wasi:http -- its imports AND its
 		// handler export -- so a serve build cannot promise "no WASI imports".
 		if (this.serve && noWasi) {
@@ -257,6 +285,22 @@ public final class WasmLispCompiler implements LispCompiler {
 			throw new UnsupportedOperationException(
 					"--host-random cannot be combined with --component: a --no-wasi reactor component imports nothing "
 							+ "at all, and a plain --component build already draws `random` from wasi:random; "
+							+ "drop --component (core module) or drop --no-wasi (component)");
+		}
+		// --host-fetch lowers fetch at a host import, so it only means anything where
+		// fetch has no transport of its own in the first place.
+		if (hostFetch && !noWasi) {
+			throw new UnsupportedOperationException("--host-fetch requires --no-wasi: rontolisp:fetch on a "
+					+ "WASI build is the component's wasi:http surface (--component), not a host import");
+		}
+		// Same shape as --host-random: a reactor component's contract is that it
+		// imports NOTHING, and lifting a fetch import into its WIT world is a
+		// world-shape decision, not a core import one; a plain --component build
+		// already fetches over wasi:http.
+		if (hostFetch && component) {
+			throw new UnsupportedOperationException(
+					"--host-fetch cannot be combined with --component: a --no-wasi reactor component imports nothing "
+							+ "at all, and a plain --component build already fetches over wasi:http; "
 							+ "drop --component (core module) or drop --no-wasi (component)");
 		}
 	}
@@ -1749,7 +1793,21 @@ public final class WasmLispCompiler implements LispCompiler {
 			// so (the clock's line is a HOST OBLIGATION rather than a refusal: it names
 			// __ronto_set_time). Before the rewrite below, which is what takes the
 			// file-opening forms out of the program.
-			NoWasiLoadPathRefusals.report(program, this.hostRandom, this.component).forEach(CompileWarnings::warn);
+			NoWasiLoadPathRefusals.report(program, this.hostRandom, this.hostFetch, this.component)
+				.forEach(CompileWarnings::warn);
+			// --host-fetch states its host obligation once, whatever position fetch
+			// sits in: the compiler emits nothing for the suspension, so the BUILD is
+			// the only place that can say what the host now owes (the clock-hook
+			// precedent). A synchronous env.fetch is unconditionally valid; a
+			// suspending one (WebAssembly.Suspending) constrains how the exports are
+			// entered, and re-entrancy is on the host until the module guards it.
+			if (this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED)) {
+				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> response-json"
+						+ " and every rontolisp:fetch crosses it. A host may answer synchronously; a host whose"
+						+ " fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through"
+						+ " WebAssembly.promising, and must serialise calls (a suspended module can be"
+						+ " re-entered, which nothing in it is prepared for)");
+			}
 			// A --no-wasi module has no filesystem, so file-opening forms lower to
 			// call-time error stubs. First, so every scan below (usesRead/usesEval,
 			// EH mode, the funcall-dispatch gate) reads the program that is actually
@@ -2518,6 +2576,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.noWasi(this.noWasi)
 			.reactorComponent(this.component && this.noWasi)
 			.hostRandom(this.hostRandom)
+			.hostFetch(this.hostFetch)
 			.serve(this.serve)
 			.simd(this.simd)
 			.userFuncBase(userFuncBase())
@@ -6134,6 +6193,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		boolean hostRandom = false;
 
+		/**
+		 * True under {@code --no-wasi --host-fetch}: {@code rontolisp:fetch} is the
+		 * {@code HostFetchLibrary} splice over the injected {@code env.fetch} host
+		 * import, so the fetch call site falls through to the ordinary defun path instead
+		 * of the no-wasi rejection.
+		 */
+		boolean hostFetch = false;
+
 		// True in a rontolisp:http-handler (serve-mode) component.
 		boolean serve = false;
 
@@ -6469,6 +6536,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.noWasi = builder.noWasi;
 			this.reactorComponent = builder.reactorComponent;
 			this.hostRandom = builder.hostRandom;
+			this.hostFetch = builder.hostFetch;
 			this.serve = builder.serve;
 			this.ehMode = builder.ehMode;
 			this.condMessagesObservable = builder.condMessagesObservable;
@@ -6545,6 +6613,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean reactorComponent = false;
 
 			private boolean hostRandom = false;
+
+			private boolean hostFetch = false;
 
 			private boolean serve = false;
 
@@ -6695,6 +6765,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder hostRandom(boolean hostRandom) {
 				this.hostRandom = hostRandom;
+				return this;
+			}
+
+			Builder hostFetch(boolean hostFetch) {
+				this.hostFetch = hostFetch;
 				return this;
 			}
 

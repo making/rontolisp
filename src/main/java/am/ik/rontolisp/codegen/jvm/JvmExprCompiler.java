@@ -218,6 +218,12 @@ final class JvmExprCompiler {
 					JvmAwaitCompiler.compile(cons, ctx, className);
 					return;
 				}
+				if (LispNames.FUTURE_FORCE_INTERNAL.equals(qn.member())) {
+					// The function spelling of the resolve: same _await emission, legal
+					// outside async bodies (the http-reactor transport's boundary).
+					JvmAwaitCompiler.compile("rontolisp::" + LispNames.FUTURE_FORCE_INTERNAL, cons, ctx, className);
+					return;
+				}
 				if (JvmAsyncOpsCompiler.handles(qn.member())) {
 					JvmAsyncOpsCompiler.compile(qn.member(), cons, ctx, className);
 					return;

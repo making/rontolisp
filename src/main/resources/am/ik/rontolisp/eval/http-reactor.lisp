@@ -108,13 +108,22 @@
 (defun rontolisp::%http-reactor-handle (app request-json)
   "Run the Clack application APP against the JSON request REQUEST-JSON and
 answer the JSON response. See the envelope in this file's header."
+  ;; The application's answer may be a FUTURE (an async-defun handler, e.g. one
+  ;; awaiting rontolisp:fetch): resolve it at this boundary, the same courtesy
+  ;; %http-serve-request extends on the socket transports -- but through the
+  ;; %future-force FUNCTION, because this transport is synchronous code where
+  ;; the await special form is not legal. On a reactor the future is settled at
+  ;; creation, so the force never blocks.
   (handler-case (let* ((req (rontolisp:json-parse request-json))
                        (env
                         (rontolisp::%http-make-env
                          (rontolisp::%http-reactor-request-tuple req)))
+                       (answer (funcall app env))
                        (triple
                         (rontolisp::%http-normalize-response
-                         (funcall app env))))
+                         (if (rontolisp:futurep answer)
+                             (rontolisp::%future-force answer)
+                             answer))))
                   (rontolisp::%http-reactor-envelope (car triple)
                                                      (car (cdr triple))
                                                      (car (cdr (cdr triple)))))

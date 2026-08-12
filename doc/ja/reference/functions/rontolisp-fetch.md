@@ -95,6 +95,17 @@ JSON のレスポンスボディは
   (プロキシ型のハンドラ) でも動作します。`wasmtime serve -W gc=y -W exceptions=y` で
   実行してください — serve ホストは `wasi:http/client` をデフォルトで提供するため、
   `-S http=y` は不要です。
+- **`--no-wasi` リアクタ + `--host-fetch`**: 同じソースが (WASI を一切インポート
+  しない) リアクタでもコンパイルできます。注入される唯一のホストインポート
+  `env.fetch(request-json) -> response-json` — ホスト自身の HTTP クライアント
+  (JSPI 越しの Cloudflare Worker の `fetch`、あるいは任意の同期実装) — に
+  下ろされます。結果の plist は同一で、`:body` は **eager な文字列** 1 つ
+  (呼び出しの完了時点で全体が到着済み) です。
+  [`rontolisp:read-all`](rontolisp-read-all.md) は文字列を素通しするため、
+  上記の読み切りイディオムは編集不要です。future は生成時点で確定済み
+  (ホスト呼び出しがスタック全体をブロックした) なので、リクエストは重ならず、
+  トランスポート失敗は `await` ではなく `fetch` 呼び出しでシグナルされます。
+  フラグなしの `--no-wasi` はこれまで通りコンパイルエラーです。
 - **ブラウザ プレイグラウンド**: 真に非同期です。インタプリタは Web Worker 内で
   実行され、`fetch` はリクエストをページのメインスレッドに引き渡します。メイン
   スレッドがブラウザの本物の `fetch()` を (CORS の制約の下で) 実行している間も

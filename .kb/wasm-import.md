@@ -112,12 +112,15 @@ parked, sharing the globals and the `__ronto_alloc_mark`/`_reset` bracket (whose
 LIFO and cannot nest across interleaved requests). The example serialises calls onto one
 promise queue for that reason, measured at ~250 ms apart for eight concurrent upstream
 round trips; overlapping them would need a per-call allocator scope, not a second mark.
-Nothing in the compiler models any of this yet: the language cannot say that an import
-suspends (`.todo/336` proposes `:async t` -> a future resolved by `rontolisp:await`),
-`rontolisp:fetch` still refuses on a reactor so every Worker invents its own envelope
-(`.todo/335`), and the re-entrancy the mechanism creates is unguarded (`.todo/337`,
-which also records that this fired the documented re-evaluation trigger in
-`.kb/dynamic-special-variables.md`).
+The first consequence is now discharged for fetch: `--host-fetch` (todo-335, closed
+2026-08-12) lowers `rontolisp:fetch` itself onto an injected `env.fetch` import with a
+DERIVED envelope, so a Worker no longer declares this import by hand for HTTP -- the
+dog-fetcher example above now writes `(await (fetch ...))` and its build prints the
+promising/serialise obligation (`.kb/fetch-http.md` has the whole lowering). What
+remains open: the language still cannot say that a USER import suspends (`.todo/336`
+proposes `:async t` -> a future resolved by `rontolisp:await`), and the re-entrancy the
+mechanism creates is still unguarded (`.todo/337`, which also records that this fired
+the documented re-evaluation trigger in `.kb/dynamic-special-variables.md`).
 
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in

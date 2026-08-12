@@ -157,6 +157,55 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void httpHandlerDirectiveUnderNoWasiLowersToTheReactorExport() throws Exception {
+		// A reactor owns no socket, so the directive means the host-driven transport
+		// there: the same handle-request export + JSON envelope clack:clackup takes.
+		// The handler is an async-defun (the fetch-capable shape) -- the transport
+		// resolves its future at the boundary.
+		Path file = tempDir.resolve("app.lisp");
+		Files.writeString(file, """
+				(rontolisp:async-defun handle (env)
+				  (list 200 (list :content-type "text/plain") (list "ok")))
+				(rontolisp:http-handler 'handle 8080)
+				""");
+		Path wasmFile = tempDir.resolve("app.wasm");
+		runCli("", file.toString(), "-o", wasmFile.toString(), "--no-wasi");
+		String bytes = new String(Files.readAllBytes(wasmFile), StandardCharsets.ISO_8859_1);
+		assertThat(bytes).contains("handle-request");
+	}
+
+	@Test
+	void hostFetchGuardsNameTheBackendConflicts() throws Exception {
+		Path file = tempDir.resolve("f.lisp");
+		Files.writeString(file, "(print 1)");
+		assertThatThrownBy(
+				() -> runCli("", file.toString(), "-o", tempDir.resolve("f.class").toString(), "--host-fetch"))
+			.hasMessageContaining("--host-fetch requires a .wasm output");
+		assertThatThrownBy(() -> runCli("", file.toString(), "-o", tempDir.resolve("f.wasm").toString(), "--no-wasi",
+				"--no-gc", "--host-fetch"))
+			.hasMessageContaining("--host-fetch cannot be combined with --no-gc");
+	}
+
+	@Test
+	void hostFetchCompilesAFetchingReactorEndToEnd() throws Exception {
+		// The full CLI pipeline: the HostFetchLibrary splice, the JSON library and the
+		// prelude behind it, and the env.fetch import in the emitted module (the import
+		// section spells module and field as length-prefixed names).
+		Path file = tempDir.resolve("dog.lisp");
+		Files.writeString(file, """
+				(rontolisp:async-defun dog ()
+				  (let ((res (rontolisp:await (rontolisp:fetch "https://example.com/"))))
+				    (rontolisp:await (rontolisp:read-all (getf res :body)))))
+				(defun run () (rontolisp::%future-force (dog)))
+				(rontolisp:wasm-export 'run :params '() :returns :string)
+				""");
+		Path wasmFile = tempDir.resolve("dog.wasm");
+		runCli("", file.toString(), "-o", wasmFile.toString(), "--no-wasi", "--host-fetch");
+		String bytes = new String(Files.readAllBytes(wasmFile), StandardCharsets.ISO_8859_1);
+		assertThat(bytes).contains("\u0003env\u0005fetch");
+	}
+
+	@Test
 	void clackRontolispBackendWithoutNoWasiKeepsTheSocketDirective() throws Exception {
 		// The same source on a WASI target reads the #-rontolisp-reactor leg: the
 		// http-handler directive (a call-time error on Preview 1, the wasi:http

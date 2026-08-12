@@ -460,6 +460,40 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void httpHandlerDirectiveOnAReactorAnswersTheHostEnvelope() throws Exception {
+		// The --no-wasi lowering of the rontolisp:http-handler DIRECTIVE: the same
+		// source that binds a socket on the interpreter/JVM and serves wasi:http under
+		// --component becomes the host-driven reactor (the clackup leg) -- a
+		// handle-request export over the JSON envelope. The handler is an async-defun,
+		// so this also pins the transport's %future-force boundary resolve on the
+		// degenerate reactor future. Compiled --component --no-wasi so wasmtime can
+		// speak the string boundary via --invoke; the core-module variant is the same
+		// program minus the component wrap (driven by the node hosts in
+		// examples/cloudflare-workers).
+		var loaded = am.ik.rontolisp.eval.HttpReactorInliner.lowerHttpHandler(LispReader.readAllFromString("""
+				(rontolisp:async-defun handle (env)
+				  (list 200 (list :content-type "text/plain")
+				        (list (concatenate 'string "hello " (getf env :path-info)))))
+				(rontolisp:http-handler 'handle 8080)
+				""", am.ik.rontolisp.reader.Features.WASM_REACTOR));
+		loaded = am.ik.rontolisp.eval.HttpReactorInliner.process(loaded,
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+		loaded = am.ik.rontolisp.eval.HttpReactorLibrary.process(loaded);
+		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, false);
+		// GrayStreamsLibrary mirrors the CLI: the reactor's buffered request body is a
+		// Gray class, so gray.lisp must be spliced like RontoLispCli does.
+		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
+		byte[] component = new WasmLispCompiler(false, true, true, OptimizeLevel.DEFAULT).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(component), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--invoke",
+				"handle-request(\"{\\\"method\\\":\\\"GET\\\",\\\"target\\\":\\\"/dog\\\",\\\"headers\\\":{\\\"host\\\":\\\"h\\\"}}\")",
+				path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout()).contains("hello /dog").contains("\\\"status\\\":200");
+	}
+
+	@Test
 	void componentNoWasiReactorDiscardsOutputInsteadOfTrapping() throws Exception {
 		// The Preview 1 --no-wasi contract carried through the component wrap: the
 		// fd_write sink discards a top-level print (which now runs at INSTANTIATION,

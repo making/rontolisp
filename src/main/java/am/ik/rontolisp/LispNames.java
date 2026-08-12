@@ -3772,12 +3772,19 @@ public final class LispNames {
 	public static final String WASI_STREAM_NEW_INTERNAL = "%WASI-STREAM-NEW";
 
 	/**
-	 * The internal {@code rontolisp::%future-force} primitive of the {@code --component}
-	 * synchronous surface: blocks on the module scheduler ({@code _sched_loop}) until the
-	 * given future settles and yields its value (a rejection re-signals, like await). It
-	 * is what lets a synchronous built-in surface (the tcp-* wrappers in sockets.lisp)
-	 * sit on an asynchronous WIT import; async bodies get the await-shaped promotion
-	 * instead. Component-only.
+	 * The internal {@code rontolisp::%future-force} primitive: resolves a future to its
+	 * settled value from SYNCHRONOUS code (a rejection re-signals, like await) -- an
+	 * ordinary function, so unlike the {@code rontolisp:await} special form it is legal
+	 * outside an async body. Per backend: the interpreter joins
+	 * ({@code LispEvaluator.awaitValue}), the JVM calls the {@code _await} runtime, a
+	 * non-asyncMode WASM build resolves the degenerate settled future
+	 * ({@code _p1_future_await}), and an asyncMode {@code --component} build blocks on
+	 * the module scheduler ({@code _sched_loop}) -- which is what lets a synchronous
+	 * built-in surface (the tcp-* wrappers in sockets.lisp) sit on an asynchronous WIT
+	 * import there, while async bodies get the await-shaped promotion instead. The other
+	 * synchronous consumer is the host-driven reactor transport
+	 * ({@code http-reactor.lisp}), which resolves a future-valued application answer at
+	 * its boundary.
 	 */
 	public static final String FUTURE_FORCE_INTERNAL = "%FUTURE-FORCE";
 
@@ -4795,6 +4802,21 @@ public final class LispNames {
 	 * in call position after {@code PackageResolver} resolution.
 	 */
 	public static final String AWAIT_QUALIFIED = RONTOLISP_PKG + ":" + AWAIT;
+
+	/**
+	 * The canonical package-qualified spelling of {@code rontolisp:fetch}.
+	 */
+	public static final String FETCH_QUALIFIED = RONTOLISP_PKG + ":" + FETCH;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-force}, the
+	 * synchronous future resolver ({@link #FUTURE_FORCE_INTERNAL}) -- unlike the
+	 * {@code rontolisp:await} special form it is an ordinary function, callable outside
+	 * an async body, which is what lets a synchronous transport boundary (the host-driven
+	 * reactor's {@code %http-reactor-handle}) resolve an application's future-valued
+	 * answer on every backend.
+	 */
+	public static final String FUTURE_FORCE_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_FORCE_INTERNAL;
 
 	/**
 	 * The canonical package-qualified spelling of {@code rontolisp:then}.

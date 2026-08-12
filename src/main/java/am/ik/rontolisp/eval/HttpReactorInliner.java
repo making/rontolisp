@@ -63,7 +63,92 @@ public final class HttpReactorInliner {
 	/** The synthesized bridge defun the export names. */
 	static final String DISPATCH_BRIDGE = "%REACTOR-DISPATCH";
 
+	/**
+	 * The export a reactor's host calls, and the name the Clack handler backends'
+	 * {@code %http-reactor} marker states: JSON request in, JSON response out.
+	 */
+	public static final String EXPORT_NAME = "handle-request";
+
 	private HttpReactorInliner() {
+	}
+
+	/**
+	 * The {@code --no-wasi} lowering of the {@code rontolisp:http-handler} DIRECTIVE
+	 * itself: a reactor owns no socket, so "serve this handler" can only mean the
+	 * host-driven transport -- exactly the leg {@code clack:clackup} already takes there
+	 * ({@code #+rontolisp-reactor}). Every {@code (rontolisp:http-handler 'name ...)}
+	 * call becomes
+	 *
+	 * <pre>{@code
+	 * (progn (rontolisp::%http-reactor-register (function name))
+	 *        (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch "handle-request"))
+	 * }</pre>
+	 *
+	 * and the existing pipeline does the rest: {@link #process} lowers the marker and
+	 * synthesizes the {@code handle-request} wasm-export, {@link HttpReactorLibrary} /
+	 * {@code HttpServerLibrary} splice the transport and the server value model, and the
+	 * transport resolves an async-defun handler's future at its boundary -- so ONE
+	 * {@code http-handler} source serves a socket on the interpreter/JVM, wasi:http under
+	 * {@code --component}, and the host envelope on a reactor. The port argument (and an
+	 * optional {@code :raw-body} pair) is dropped unevaluated: a reactor host owns the
+	 * listening side, and the request body always arrives buffered in the envelope.
+	 * Called by the CLI for {@code --no-wasi} WASM builds (both core-module and reactor
+	 * component), before the serve-mode switch reads the program.
+	 * @param program the top-level forms
+	 * @return the program with every directive lowered; unchanged when none is present
+	 */
+	public static List<LispVal> lowerHttpHandler(List<LispVal> program) {
+		boolean[] found = new boolean[1];
+		List<LispVal> out = new ArrayList<>(program.size());
+		for (LispVal form : program) {
+			out.add(lowerDirective(form, found));
+		}
+		return found[0] ? out : program;
+	}
+
+	private static LispVal lowerDirective(LispVal form, boolean[] found) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name())) {
+			return form;
+		}
+		if (isHttpHandlerDirective(cons)) {
+			found[0] = true;
+			return LispReader
+				.readAllFromString("""
+						(progn (rontolisp::%%http-reactor-register (function %s))
+						       (rontolisp::%%http-reactor 'rontolisp::%s "%s"))
+						""".formatted(directiveHandlerName(cons), HttpReactorLibrary.DISPATCH, EXPORT_NAME),
+						Features.INTERPRETER)
+				.get(0);
+		}
+		LispVal car = lowerDirective(cons.car(), found);
+		LispVal cdr = lowerDirective(cons.cdr(), found);
+		if (car == cons.car() && cdr == cons.cdr()) {
+			return form;
+		}
+		return new LispCons(car, cdr);
+	}
+
+	private static boolean isHttpHandlerDirective(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol sym)) {
+			return false;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
+		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.HTTP_HANDLER.equals(qn.member());
+	}
+
+	// The directive's contract everywhere: a QUOTED literal handler name.
+	private static String directiveHandlerName(LispCons directive) {
+		if (directive.cdr() instanceof LispCons handlerCell && handlerCell.car() instanceof LispCons quote
+				&& quote.car() instanceof LispSymbol q && LispNames.QUOTE.equals(q.name())
+				&& quote.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+			return name.name();
+		}
+		throw new UnsupportedOperationException(LispNames.HTTP_HANDLER
+				+ " expects a quoted literal handler name (e.g. (rontolisp:http-handler 'handle 8080)), got: "
+				+ directive.print());
 	}
 
 	/**

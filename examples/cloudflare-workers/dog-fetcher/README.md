@@ -3,15 +3,16 @@
 [`../../net/dog-fetcher.lisp`](../../net/dog-fetcher.lisp)'s proxy shape on
 Cloudflare: every request asks [dog.ceo](https://dog.ceo) for a picture and
 answers with JSON. It is the first Worker here that does **outgoing** HTTP, and
-the only thing that makes it interesting: a `--no-wasi` reactor imports no WASI,
-so `rontolisp:fetch` — which is `wasi:http` — is not available. The client is
-the Worker runtime's own `fetch`, imported.
+the client is `rontolisp:fetch` itself — the same `(rontolisp:await
+(rontolisp:fetch ...))` that runs on the interpreter, the JVM and a `wasi:http`
+component. A `--no-wasi` reactor imports no WASI, so `--host-fetch` lowers the
+call onto the one import a Worker host can always provide: its own `fetch`.
 
 Routes come from [tiny-routes](https://github.com/jeko2000/tiny-routes), loaded
 as `tiny-routes/lite` exactly as in [`../hello-tiny-routes`](../hello-tiny-routes).
 
 ```bash
-./build.sh          # worker.lisp -> src/worker.wasm
+./build.sh          # worker.lisp -> src/worker.wasm (--no-wasi --host-fetch)
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -43,15 +44,14 @@ case that is not the upstream's own answer.
 
 ## The boundary
 
-One import, declared in `worker.lisp`:
-
-```lisp
-(rontolisp:wasm-import 'host-fetch
-                       :from "env" :as "fetch"
-                       :params '(:string) :returns :string)
-```
-
-and provided in `src/index.js`:
+No hand-written import and no bespoke envelope any more: `--host-fetch`
+(build.sh) injects one import, `env.fetch(request-json) -> response-json`, and
+lowers every `rontolisp:fetch` onto it — same options, same
+`(:status <int> :headers <alist> :body <string>)` answer as every other
+backend, with `:body` an eager string that `rontolisp:read-all` passes through.
+The JSON keys are derived from the compiler's own `FetchResponseShape` record
+and pinned by `HostFetchLibraryTest` against `src/index.js`, so the two sides
+cannot drift. The host's half is small:
 
 ```js
 fetch: new WebAssembly.Suspending((ptr, len) => hostFetch(exports, ptr, len)),
@@ -66,16 +66,16 @@ Three things are worth reading twice:
   export) is what joins them: the whole wasm stack parks until the promise
   settles and resumes with the result. **workerd runs it with no flag and no
   compatibility date opt-in** — verified under `wrangler dev` and on the
-  deployed edge, which is why the Lisp is ordinary synchronous code and not an
-  `async-defun`. A suspending
-  import may only be called on a stack entered through `promising`, so
-  `_initialize` must never reach one; here it only defines routes.
-- **The envelope is JSON, not a record.** A `wasm-import` carries flat values
-  and strings, so the host answers `{"status":200,"body":"..."}` — or
-  `{"status":0,"error":"..."}`, which is how a transport failure becomes this
-  Worker's 502 instead of a trap. Widening the seam to a method, headers and a
-  request body is the same directive with a JSON request string in place of the
-  URL.
+  deployed edge. A suspending import may only be called on a stack entered
+  through `promising`, so `_initialize` must never reach one; the build prints
+  exactly this obligation, and would print a warning line naming any fetch its
+  load path reaches.
+- **Awaiting still reads the same.** On the reactor the future `fetch` returns
+  is settled the moment the call returns (the stack was parked for the whole
+  round trip), so `await` never suspends and two fetches never overlap —
+  `dog-image` is an ordinary `async-defun`, and the route bodies (synchronous
+  tiny-routes functions, where `await` is not legal) simply return its FUTURE:
+  the reactor transport resolves a future-valued response at its boundary.
 - **A `:string` result is host-written bytes.** The host allocates with the
   module's exported `__ronto_alloc` and returns `[ptr, len]`; the per-request
   arena reset frees it along with everything else. Nothing may be kept across
@@ -98,14 +98,14 @@ is free to use more than one. It buys correctness, and it costs the isolate
 nothing else — everything that is not this module keeps running while a handler
 waits.
 
-## No `check.lisp`
+## Driving it off Cloudflare
 
-The sibling examples each ship one, and drive their handler on the interpreter,
-the JVM and wasmtime. This program's client is the host's, so there is nothing
-to drive it with off Cloudflare: the module imports `env.fetch`, which a plain
-`wasmtime run` cannot satisfy (it would need a `--preload`ed host module), and
-the other two backends have no such import at all. `npx wrangler dev` is the
-edit/run loop here.
+The module's client is `env.fetch`, so any host that provides that one function
+can drive it — node included (node has no JSPI, so a node host answers
+*synchronously*, which the boundary equally allows). The sibling
+`../../net/dog-fetcher.lisp` compiles to the same shape with no edit at all:
+its `rontolisp:http-handler` directive lowers to the host-driven
+`handle-request` export under `--no-wasi`.
 
 ## What's in here
 
@@ -122,6 +122,10 @@ The Worker sandbox and `--no-wasi` limitations of
 
 - **One in-flight request per isolate**, as above. Overlapping them needs an
   allocator scope per call, not just a second mark.
+- **Started == settled.** The reactor's fetch future is settled at creation
+  (the host call blocked the whole stack), so two fetches never overlap and a
+  transport failure signals at the `fetch` call rather than at `await` — the
+  documented degenerate-async shape of the Preview 1 backend.
 
 ## Rebuilding
 

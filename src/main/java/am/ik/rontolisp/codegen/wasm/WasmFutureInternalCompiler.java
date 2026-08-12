@@ -24,6 +24,19 @@ final class WasmFutureInternalCompiler {
 
 	static void compile(String member, LispCons cons, WasmLispCompiler.Ctx ctx) {
 		if (ctx.asyncFuncBase < 0) {
+			// %future-force is the one member with a meaning OUTSIDE asyncMode: every
+			// non-asyncMode future is the degenerate settled TYPE_P1_FUTURE, so the
+			// synchronous resolve IS the P1 await pass-through (non-futures included) --
+			// which is what lets the host-driven reactor transport resolve a
+			// future-valued application answer at its boundary.
+			if (LispNames.FUTURE_FORCE_INTERNAL.equals(member)) {
+				List<LispVal> forceArgs = cons.toList();
+				expectArgs(member, forceArgs, 1);
+				WasmExprCompiler.compileExpr(forceArgs.get(1), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_P1_FUTURE_AWAIT);
+				return;
+			}
 			throw new UnsupportedOperationException("rontolisp::" + member
 					+ " requires --component and an async program (it is an internal async-runtime binding)");
 		}

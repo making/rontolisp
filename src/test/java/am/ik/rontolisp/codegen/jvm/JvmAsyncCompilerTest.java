@@ -356,4 +356,24 @@ class JvmAsyncCompilerTest {
 				+ "\"rontolisp:FINALLY expects a future as its first argument\"");
 	}
 
+	@Test
+	void readAllPassesAStringThrough() throws Exception {
+		// A fully-arrived body (a --host-fetch reactor's :body shape) is its own
+		// drained value -- the same prelude source on every backend.
+		assertThat(compileAndRun("""
+				(print (rontolisp:await (rontolisp:read-all "already here")))
+				""")).isEqualTo("\"already here\"");
+	}
+
+	@Test
+	void futureForceResolvesAFutureFromSynchronousCode() throws Exception {
+		// The FUNCTION spelling of await's resolve (the http-reactor transport's
+		// boundary): same _await emission, legal inside a plain defun.
+		assertThat(compileAndRun("""
+				(rontolisp:async-defun answer () 41)
+				(defun sync-caller () (+ 1 (rontolisp::%future-force (answer))))
+				(print (sync-caller))
+				""")).isEqualTo("42");
+	}
+
 }

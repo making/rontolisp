@@ -197,7 +197,26 @@ Pinned by `AsyncEvalTest.thenChainsOnFutureSettledValue` etc.,
 definition for every backend), lazy-loaded on the interpreter and spliced on
 the compile paths -- which is why compiler tests that use it must mirror the
 CLI's `LispPreludeLibrary.process` pre-pass (JvmLispCompilerTest's
-compileAndRun does).
+compileAndRun does). Since todo-335 it PASSES A STRING THROUGH (a `stringp`
+arm before the drain loop): a body that has fully arrived -- a `--host-fetch`
+reactor's `:body`, or the declared absent-body default `""` -- is its own
+drained value, so `(await (read-all (getf res :body)))` is target-free.
+Pinned per backend (AsyncEvalTest / JvmAsyncCompilerTest) and end-to-end by
+the `read-all-passes-a-string-through` ci-spec case.
+
+## `%future-force`: the function spelling of the resolve
+
+`rontolisp::%future-force` (internal) resolves a future from SYNCHRONOUS code
+-- an ordinary function, so the lexical await-placement rule does not apply.
+Originally component-only (the blocking driver behind sockets.lisp's
+synchronous tcp surface); since todo-335 it exists on every backend
+(interpreter = `awaitValue`, JVM = the `_await` helper -- the emission is
+`JvmAwaitCompiler` under the caller-supplied name, and the usage joins the
+async-runtime gate -- non-asyncMode WASM = `_p1_future_await`), because the
+host-driven reactor transport (`http-reactor.lisp`) resolves a future-valued
+application answer at its boundary with it (`.kb/clack.md`). Internal and
+deliberately undocumented: user code composes with `await`/`then`; this is for
+transports sitting where a boundary must block.
 
 ## http-handler interaction
 

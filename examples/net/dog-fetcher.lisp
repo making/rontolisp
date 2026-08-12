@@ -17,6 +17,11 @@
 ;; carries the outbound fetch is host-provided by default):
 ;;   java -jar $JAR examples/net/dog-fetcher.lisp -o dog-fetcher.wasm --component && \
 ;;     wasmtime serve -W gc=y -W exceptions=y dog-fetcher.wasm
+;; Compile (--no-wasi reactor, THIS SAME SOURCE: http-handler becomes the
+;; host-driven handle-request export, and --host-fetch lowers fetch onto the
+;; host's own client, imported as env.fetch -- the Cloudflare Workers shape,
+;; see examples/cloudflare-workers/dog-fetcher):
+;;   java -jar $JAR examples/net/dog-fetcher.lisp -o dog-fetcher.wasm --no-wasi --host-fetch
 ;; Talk to it with:
 ;;   curl http://127.0.0.1:8080/
 

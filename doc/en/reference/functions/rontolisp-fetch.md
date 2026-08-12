@@ -94,6 +94,17 @@ request `:body` from an s-expression.
   [`rontolisp:http-handler`](rontolisp-http-handler.md) serve component (a
   proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y` —
   the serve host provides `wasi:http/client` by default, no `-S http=y` needed.
+- **`--no-wasi` reactor with `--host-fetch`**: the same source compiles on a
+  reactor (which imports no WASI), lowered onto ONE injected host import,
+  `env.fetch(request-json) -> response-json` — the host's own HTTP client
+  (a Cloudflare Worker's `fetch` behind JSPI, or any synchronous
+  implementation). The result plist is the same, with `:body` one **eager
+  string** (the whole reply arrived with the call), which
+  [`rontolisp:read-all`](rontolisp-read-all.md) passes through — so the drain
+  spelling above needs no edit. The future is settled at creation (the host
+  call blocked the whole stack): requests never overlap, and a transport
+  failure signals at the `fetch` call rather than at `await`. Without the
+  flag, `--no-wasi` keeps the compile error.
 - **Browser playground**: truly asynchronous. The interpreter runs in a Web
   Worker; `fetch` hands the request to the page's main thread, which runs the
   real browser `fetch()` (subject to CORS) while the program continues, so

@@ -12,14 +12,17 @@ is measured and deployed (`examples/cloudflare-workers/dog-fetcher`).
 Two things follow from "does not have to", and both are costs:
 
 - **The source cannot say what it does.** The same call is `(host-fetch url)`
-  here and `(await (fetch url))` on a component. A program that wants to run on
-  both spells its I/O twice, which is what the shipped example does by not using
-  `rontolisp:fetch` at all.
+  here and `(await (fetch url))` on a component. For FETCH this is solved:
+  todo-335's `--host-fetch` lowers `rontolisp:fetch` itself onto the host
+  import, so the shipped example now spells its I/O once. Any OTHER suspending
+  host function a program declares still cannot say so.
 - **The obligation is invisible.** A suspending import may only be called on a
   stack entered through `WebAssembly.promising`, so an export that can reach one
   traps if the host calls it directly, and `_initialize` must never reach one at
-  all. Today that is prose in a README; nothing in the build knows it, and the
-  program cannot be asked.
+  all. todo-335 made the build state this for `--host-fetch` (the standing
+  obligation line + a `NoWasiLoadPathRefusals` FETCH line when the load path
+  reaches one) -- reuse that shape for `:async t`; a hand-declared suspending
+  import still says nothing.
 
 ## Proposal
 

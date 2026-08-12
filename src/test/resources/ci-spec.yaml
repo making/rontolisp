@@ -1685,6 +1685,11 @@ cases:
       42
       NIL
       "ci-await"
+  - name: read-all-passes-a-string-through
+    source: |
+      (print (rontolisp:await (rontolisp:read-all "ci-read-all")))
+    expected: |
+      "ci-read-all"
   - name: async-wrapper-macro-expands-to-async-defun-and-lambda
     source: |
       (rontolisp:async (defun ci-async-wrap-add (a b) (+ a b)))

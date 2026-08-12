@@ -71,8 +71,31 @@ public final class FetchResponseShape {
 			    headers: list<tuple<string, string>>,
 			    body: stream<u8>,
 			  }
+
+			  /// The request a rontolisp:fetch call states: the fetch options plus the
+			  /// url. On a --no-wasi --host-fetch reactor this record IS the JSON the
+			  /// injected env.fetch import carries (field name = JSON key; headers as an
+			  /// array of [name, value] pairs; an absent option crosses as an absent key),
+			  /// and the response record above is the success arm of what comes back --
+			  /// with the body an eager string there, the whole reply having arrived when
+			  /// the import call returned.
+			  record request {
+			    url: string,
+			    method: string,
+			    headers: list<tuple<string, string>>,
+			    body: option<string>,
+			  }
 			}
 			""";
+
+	/**
+	 * The error arm of the {@code --host-fetch} envelope: a host whose transport failed
+	 * answers {@code {"<this key>": "<reason>"}} instead of the response record, and the
+	 * reactor fetch runtime signals that reason (WIT would spell the pair as a
+	 * {@code result<response, string>}; JSON has no variant, so the arm is this reserved
+	 * key).
+	 */
+	public static final String HOST_ENVELOPE_ERROR_KEY = "error";
 
 	/** The response {@code status} used when the plist has none. */
 	public static final int RESPONSE_STATUS_DEFAULT = 200;
@@ -81,6 +104,8 @@ public final class FetchResponseShape {
 	public static final String RESPONSE_BODY_DEFAULT = "";
 
 	private static final List<Field> RESPONSE_FIELDS;
+
+	private static final List<Field> REQUEST_FIELDS;
 
 	static {
 		WitDocument document = WitParser.parse(WIT);
@@ -94,6 +119,7 @@ public final class FetchResponseShape {
 			throw new IllegalStateException("http-plist WIT lacks the plist interface");
 		}
 		RESPONSE_FIELDS = fieldsOf(plist, "response");
+		REQUEST_FIELDS = fieldsOf(plist, "request");
 	}
 
 	private FetchResponseShape() {
@@ -117,6 +143,15 @@ public final class FetchResponseShape {
 	 */
 	public static List<Field> responseFields() {
 		return RESPONSE_FIELDS;
+	}
+
+	/**
+	 * The request record's fields, in record (= envelope) order — what a
+	 * {@code --host-fetch} request JSON carries.
+	 * @return the fields
+	 */
+	public static List<Field> requestFields() {
+		return REQUEST_FIELDS;
 	}
 
 	/**

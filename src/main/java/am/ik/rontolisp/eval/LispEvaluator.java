@@ -1663,6 +1663,18 @@ public final class LispEvaluator {
 			LispVal thunk = args.get(0);
 			return AsyncRuntime.run(() -> apply(thunk, List.of(), this.globalEnv));
 		}));
+		// %future-force: the FUNCTION spelling of await's resolve, for synchronous
+		// boundaries (the http-reactor transport resolving a future-valued application
+		// answer). A function, not a special form, so the lexical await-placement rule
+		// does not apply; a non-future passes through, like await.
+		String futureForceName = LispNames.FUTURE_FORCE_QUALIFIED;
+		this.globalEnv.defineFunction(futureForceName, new LispFunction(futureForceName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(
+						LispNames.FUTURE_FORCE_INTERNAL + " expects 1 argument, got " + args.size());
+			}
+			return awaitValue(args.get(0));
+		}));
 		// The thread primitives live here rather than in Environment because running the
 		// spawned function needs the evaluator's apply (the %async-run precedent). The
 		// handle is opaque (LispThread; the JVM backend hands out a marker-headed array

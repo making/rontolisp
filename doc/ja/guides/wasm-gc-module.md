@@ -78,6 +78,7 @@ WASI インポートスロットは内部のスタブで埋められるため、
 | `with-open-file`、`open` | WASI を名指しする**捕捉可能なエラーをシグナル** |
 | `(random n)`、`(random 1.0)` | 動く — 組み込みの生成器、または `--host-random` でホストの生成器 |
 | `rontolisp:random-bytes` | `--host-random` で本物のエントロピーを供給しない限り**シグナル** |
+| `rontolisp:fetch` | `--host-fetch` でホスト自身の HTTP クライアントへ経路付けしない限り**コンパイルエラー** |
 | `get-universal-time` などの時計 | ホストが `__ronto_set_time` で設定した時刻。設定されるまでは**シグナル** |
 | `(sleep n)` | **シグナル** — ここでは時間を経過させる手段がない |
 | `read`、`read-line`、`read-char`(標準入力) | **トラップ** |
@@ -97,7 +98,9 @@ WASI インポートスロットは内部のスタブで埋められるため、
 
 `--component` と組み合わせると、同じ契約が**リアクターコンポーネント**を生成します — 何もインポートせず、トップレベルフォームをインスタンス化時に実行するコンポーネントです。[コンポーネントガイド](wasm-component.md#リアクターコンポーネント--component---no-wasi)を参照してください。
 
-`--no-wasi` コンパイルはソースを `:rontolisp-reactor` フィーチャー有効で読みます。`clack:clackup ... :server :rontolisp` のプログラムがここで **serve する**リアクターになるのはこの仕組みです: ハンドラバックエンドがアプリケーションを保存し、コンパイラがホストがリクエストごとに呼ぶ `handle-request` エクスポートを合成します — [Clack ガイド](clack.md)の「ホストから呼ばれる場合」を参照してください。
+**外向き HTTP** も時計・乱数と同じ形です: ホストにしか生成できない値。`--host-fetch` は [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) を注入される唯一のホストインポート `env.fetch(request-json) -> response-json` へ経路付けします — オプションも `(:status :headers :body)` の答えも他のバックエンドと同一で、`:body` は `rontolisp:read-all` が素通しする eager な文字列 1 つです。JavaScript ホストは自身の `fetch()` を `WebAssembly.Suspending` (JSPI — promise が確定するまで wasm スタック全体が停止するため、Lisp 側は普通の同期的な `(await (fetch ...))` のまま) の背後で実装し、その場合はすべてのエクスポートを `WebAssembly.promising` 経由で呼び、呼び出しを直列化しなければなりません。同期ホスト (JSPI のない node、テストスタブ) はそのまま答えれば済みます。ビルドはこの義務をそのまま出力します。実例は [`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/dog-fetcher) です。
+
+`--no-wasi` コンパイルはソースを `:rontolisp-reactor` フィーチャー有効で読みます。`clack:clackup ... :server :rontolisp` のプログラムがここで **serve する**リアクターになるのはこの仕組みです: ハンドラバックエンドがアプリケーションを保存し、コンパイラがホストがリクエストごとに呼ぶ `handle-request` エクスポートを合成します — [Clack ガイド](clack.md)の「ホストから呼ばれる場合」を参照してください。素の [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md) ディレクティブも同じトランスポートに下ろされます (リアクターはソケットを持たないため、「このハンドラで serve する」はホスト駆動のエンベロープしか意味し得ません)。つまり 1 つの `http-handler` ソースが、インタプリタ／JVM ではソケットを、`--component` では `wasi:http` を、ここでは `handle-request` エクスポートを serve します。
 
 モジュールはリアクター(WASI コマンドではない)なので、トップレベルの初期化子は `_start` ではなく **`_initialize`** としてエクスポートされます。ホストはインスタンス化後に一度 `_initialize` を呼んでトップレベルフォーム(エクスポートされた関数が読む `defvar`/`defparameter`/`setq` のグローバル)を実行すべきです。トップレベル状態を持たない純粋計算リアクターは省略できます。
 

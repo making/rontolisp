@@ -192,6 +192,57 @@ class WasmImportCompilerTest {
 			.isEmpty();
 	}
 
+	// Mirrors the CLI pre-passes of a --no-wasi --host-fetch build: the HostFetchLibrary
+	// splice (the env.fetch wasm-import + the envelope defuns), then the JSON library
+	// and the prelude picking up the splice's own call sites.
+	private static byte[] compileHostFetch(String source) {
+		List<LispVal> loaded = am.ik.rontolisp.eval.HostFetchLibrary
+			.process(LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR));
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
+		return new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, true).compile(program);
+	}
+
+	@Test
+	void hostFetchLowersFetchAtEnvFetchAndAProgramThatNeverFetchesImportsNothing() {
+		// The whole point of the flag: rontolisp:fetch COMPILES on a --no-wasi reactor,
+		// carried by exactly one host import -- env.fetch -- and nothing else.
+		byte[] module = compileHostFetch("""
+				(rontolisp:async-defun dog ()
+				  (let* ((res (rontolisp:await (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
+				         (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
+				    body))
+				(defun run () (rontolisp::%future-force (dog)))
+				(rontolisp:wasm-export 'run :params '() :returns :string)
+				""");
+		assertThat(functionImports(module)).singleElement()
+			.satisfies(entry -> assertThat(entry).containsExactly("env", "fetch"));
+
+		// And the zero-import contract is untouched for a program that never fetches:
+		// asking for a host fetch costs an import only where fetch is used.
+		byte[] noFetch = compileHostFetch("""
+				(defun run () 1)
+				(rontolisp:wasm-export 'run :params '() :returns :int)
+				""");
+		assertThat(functionImports(noFetch)).isEmpty();
+	}
+
+	@Test
+	void withoutHostFetchANoWasiFetchNamesTheWayOut() {
+		assertThatThrownBy(() -> compileNoWasi("(defun f () (rontolisp:fetch \"https://x\"))"))
+			.hasMessageContaining("--host-fetch")
+			.hasMessageContaining("env.fetch");
+	}
+
+	@Test
+	void hostFetchRequiresNoWasiAndRejectsComponent() {
+		assertThatThrownBy(
+				() -> new WasmLispCompiler(false, false, false, OptimizeLevel.NONE, false, false, false, true))
+			.hasMessageContaining("--host-fetch requires --no-wasi");
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true, true, OptimizeLevel.NONE, false, false, false, true))
+			.hasMessageContaining("--host-fetch cannot be combined with --component");
+	}
+
 	@Test
 	void stringResultExportsTheAllocator() {
 		// A :string result is written into linear memory by the host via __ronto_alloc,

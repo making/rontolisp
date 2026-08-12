@@ -123,7 +123,13 @@ public final class NoWasiLoadPathRefusals {
 		/** {@code sleep}: no interval can elapse without a clock that moves. */
 		SLEEP,
 		/** The file-opening forms: a reactor has no filesystem. */
-		FILESYSTEM
+		FILESYSTEM,
+		/**
+		 * {@code fetch} under {@code --host-fetch}: a host obligation, not a refusal -- a
+		 * SUSPENDING {@code env.fetch} may only run on a stack entered through
+		 * {@code WebAssembly.promising}, which {@code _initialize} is not.
+		 */
+		FETCH
 
 	}
 
@@ -174,9 +180,13 @@ public final class NoWasiLoadPathRefusals {
 	private record At(boolean guarded, LispVal located, Map<String, Shape> env, Map<String, Local> locals) {
 	}
 
-	/** The definition heads whose body only runs when something CALLS them. */
+	/**
+	 * The definition heads whose body only runs when something CALLS them. This pass runs
+	 * BEFORE the async lowering, so {@code rontolisp:async-defun} is still spelled as
+	 * itself -- and it is a defun whose body runs at the call (eagerly, but at the call).
+	 */
 	private static final Set<String> DEFERRED_HEADS = Set.of(LispNames.DEFUN, LispNames.DEFMACRO, LispNames.DEFMETHOD,
-			LispNames.DEFGENERIC);
+			LispNames.DEFGENERIC, LispNames.ASYNC_DEFUN_QUALIFIED);
 
 	/** The heads whose name makes a better origin label than "a top-level form". */
 	private static final Set<String> NAMED_HEADS = Set.of(LispNames.DEFVAR, LispNames.DEFPARAMETER,
@@ -198,13 +208,18 @@ public final class NoWasiLoadPathRefusals {
 	 * {@link NoWasiFilesystemStubs#rewrite(List)} has replaced the file-opening forms
 	 * @param hostRandom whether {@code --host-random} routes {@code random_get} at a host
 	 * import, which makes the entropy API sound again
+	 * @param hostFetch whether {@code --host-fetch} routes {@code rontolisp:fetch} at the
+	 * {@code env.fetch} host import -- a load-path fetch then states the synchronous-host
+	 * obligation (a suspending import cannot serve {@code _initialize}); without the flag
+	 * a {@code --no-wasi} fetch is a compile error, so there is nothing to report
 	 * @param reactorComponent whether this is the {@code --component --no-wasi} reactor,
 	 * which carries no host hooks at all (its top level runs at instantiation, so there
 	 * is no window before the first read)
 	 * @return one line per primitive, position prefix included, in the order the load
 	 * path reaches them; empty when it reaches none
 	 */
-	public static List<String> report(List<LispVal> program, boolean hostRandom, boolean reactorComponent) {
+	public static List<String> report(List<LispVal> program, boolean hostRandom, boolean hostFetch,
+			boolean reactorComponent) {
 		Map<String, List<Body>> definitions = collectDefinitions(program);
 		// (clackup *app* ...) over a (defvar *app* (make-instance 'ningle:app)) states
 		// its argument as plainly as (clackup #'app) does, one indirection further out.
@@ -226,7 +241,7 @@ public final class NoWasiLoadPathRefusals {
 			Region region = queue.removeFirst();
 			Map<Call, Boolean> called = new LinkedHashMap<>();
 			Set<String> shadowed = ArgumentShapes.shadowedNames(region.body().forms());
-			Scan scan = new Scan(hostRandom, region.origin(), found, called, shadowed, returns);
+			Scan scan = new Scan(hostRandom, hostFetch, region.origin(), found, called, shadowed, returns);
 			Map<String, Shape> env = new HashMap<>(globals);
 			env.putAll(region.shapes());
 			At at = new At(region.guarded(), region.body().anchor(), scan.narrow(env), Map.of());
@@ -265,7 +280,7 @@ public final class NoWasiLoadPathRefusals {
 				continue;
 			}
 			int body = switch (head.name()) {
-				case LispNames.DEFUN, LispNames.DEFMACRO -> 3;
+				case LispNames.DEFUN, LispNames.DEFMACRO, LispNames.ASYNC_DEFUN_QUALIFIED -> 3;
 				// (defmethod name qualifier* (specialized-ll) body...)
 				case LispNames.DEFMETHOD -> bodyStart(parts, 2);
 				// A defgeneric has no body of its own; its :method clauses are below.
@@ -357,6 +372,8 @@ public final class NoWasiLoadPathRefusals {
 
 		private final boolean hostRandom;
 
+		private final boolean hostFetch;
+
 		private final String origin;
 
 		private final Map<String, Found> found;
@@ -375,9 +392,10 @@ public final class NoWasiLoadPathRefusals {
 		 */
 		private final Map<String, Shape> returns;
 
-		private Scan(boolean hostRandom, String origin, Map<String, Found> found, Map<Call, Boolean> called,
-				Set<String> shadowed, Map<String, Shape> returns) {
+		private Scan(boolean hostRandom, boolean hostFetch, String origin, Map<String, Found> found,
+				Map<Call, Boolean> called, Set<String> shadowed, Map<String, Shape> returns) {
 			this.hostRandom = hostRandom;
+			this.hostFetch = hostFetch;
 			this.origin = origin;
 			this.found = found;
 			this.called = called;
@@ -426,10 +444,12 @@ public final class NoWasiLoadPathRefusals {
 		private void operatorForm(LispCons cons, String name, At at) {
 			// Quoted data is not code; a declaration names nothing that runs; a lambda
 			// (or
-			// a #'f) is a VALUE -- whoever receives it decides when it is called; and a
-			// nested definition's body waits for its own caller.
+			// a #'f) is a VALUE -- whoever receives it decides when it is called (an
+			// async-lambda equally); and a nested definition's body waits for its own
+			// caller.
 			if (LispNames.QUOTE.equals(name) || LispNames.DECLARE.equals(name) || LispNames.LAMBDA.equals(name)
-					|| LispNames.FUNCTION.equals(name) || DEFERRED_HEADS.contains(name)) {
+					|| LispNames.ASYNC_LAMBDA_QUALIFIED.equals(name) || LispNames.FUNCTION.equals(name)
+					|| DEFERRED_HEADS.contains(name)) {
 				return;
 			}
 			Local local = at.locals().get(name);
@@ -440,7 +460,7 @@ public final class NoWasiLoadPathRefusals {
 				this.walkLocal(name, local, this.argShapes(cons.cdr(), at), at);
 				return;
 			}
-			Kind kind = kindOf(cons, name, this.hostRandom);
+			Kind kind = kindOf(cons, name, this.hostRandom, this.hostFetch);
 			// A guarded site is a program that already handles the refusal -- except for
 			// standard input, which traps rather than signalling, so no handler covers
 			// it.
@@ -716,11 +736,16 @@ public final class NoWasiLoadPathRefusals {
 	}
 
 	/** Which refusal this operator is, or {@code null} when it is not one. */
-	private static @Nullable Kind kindOf(LispCons cons, String name, boolean hostRandom) {
+	private static @Nullable Kind kindOf(LispCons cons, String name, boolean hostRandom, boolean hostFetch) {
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
 		if (qualified != null) {
 			if (!LispNames.RONTOLISP_PKG.equals(qualified.pkg())) {
 				return null;
+			}
+			// Without --host-fetch, a --no-wasi fetch is a COMPILE error (dead code
+			// included), so only the flagged build has a load-path fact to state.
+			if (LispNames.FETCH.equals(qualified.member()) && hostFetch) {
+				return Kind.FETCH;
 			}
 			boolean entropy = LispNames.RANDOM_BYTES.equals(qualified.member())
 					|| LispNames.RANDOM_BYTE_INTERNAL.equals(qualified.member());
@@ -742,7 +767,12 @@ public final class NoWasiLoadPathRefusals {
 
 	/** The operator a line names: the entropy pair reports as its public API. */
 	private static String reportedName(String name) {
-		return PackageRegistry.splitQualified(name) == null ? name : "rontolisp:" + LispNames.RANDOM_BYTES;
+		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
+		if (qualified == null) {
+			return name;
+		}
+		return LispNames.FETCH.equals(qualified.member()) ? "rontolisp:" + LispNames.FETCH
+				: "rontolisp:" + LispNames.RANDOM_BYTES;
 	}
 
 	private static String line(Found found, boolean reactorComponent) {
@@ -762,6 +792,10 @@ public final class NoWasiLoadPathRefusals {
 			case SLEEP -> "A --no-wasi module imports no timer, and its clock cannot advance while a call is running,"
 					+ " so no interval could elapse and this signals";
 			case FILESYSTEM -> "A --no-wasi module has no filesystem, so this signals";
+			case FETCH -> "Under --host-fetch this fetch crosses the env.fetch host import DURING _initialize"
+					+ " -- a stack no WebAssembly.promising entered, so a SUSPENDING host fetch"
+					+ " (WebAssembly.Suspending / JSPI) traps here; the host's env.fetch must answer"
+					+ " synchronously, or the fetch must move out of the load path";
 		};
 		return SourceProvenance.prefix(found.site()) + "warning: " + found.operator()
 				+ " is reachable from a top-level form of this --no-wasi module (" + found.origin()

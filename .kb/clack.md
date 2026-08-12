@@ -344,6 +344,30 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   / `%http-normalize-response`, exactly as every other transport does, so it
   cannot drift from what a SERVED request sees. All that is left in the library
   is the JSON envelope, documented in `http-reactor.lisp`'s own header.
+- **A FUTURE-valued application answer is resolved at the boundary (todo-335)**:
+  before normalizing, the handle checks `futurep` and resolves through
+  `rontolisp::%future-force` — the FUNCTION spelling of await's resolve, legal
+  in this synchronous transport where the `await` special form is not
+  (interpreter = `awaitValue`, JVM = the `_await` runtime, non-asyncMode WASM =
+  `_p1_future_await`, asyncMode = the `_sched_loop` force; `LispNames`
+  documents the table). That is what lets an `async-defun` handler — or a
+  tiny-routes ROUTE returning an async-defun's future, the fetch-capable Worker
+  shape — run on the reactor; on a reactor the future is settled at creation,
+  so the force never blocks. The socket transports already had this courtesy
+  through `%http-serve-request`'s await.
+- **The bare `rontolisp:http-handler` DIRECTIVE lowers to this transport under
+  `--no-wasi` (todo-335, `HttpReactorInliner.lowerHttpHandler`)**: a reactor
+  owns no socket, so the directive can only mean the host-driven envelope —
+  every `(rontolisp:http-handler 'name ...)` becomes
+  `(progn (%http-reactor-register (function name)) (%http-reactor '%http-reactor-dispatch "handle-request"))`
+  in the CLI, before the serve-mode switch reads the program (so
+  `--component --no-wasi` compiles it as a zero-import reactor component
+  instead of hitting the serve+no-wasi ctor error). The port and any
+  `:raw-body` pair are dropped unevaluated. One `http-handler` source now
+  serves a socket on the interpreter/JVM, wasi:http under `--component`, and
+  `handle-request` on a reactor — `examples/net/dog-fetcher.lisp` unedited is
+  the pin (`RontoLispCliTest`, the reactor-component invoke case in
+  `WasmLispCompilerIntegrationTest`).
 - **The envelope is an API now** — `{method, target, headers, body, scheme,
   remote-addr}` in, `{status, headers, body}` out. Two parts of it are
   load-bearing and were both found by measurement: `target` is the RAW request
