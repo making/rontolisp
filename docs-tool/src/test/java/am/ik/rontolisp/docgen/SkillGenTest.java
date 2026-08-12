@@ -118,6 +118,21 @@ class SkillGenTest {
 	}
 
 	@Test
+	void theInstallPageIsTheManualsOwnGuideRendered() throws IOException {
+		// One set of install instructions, written as a documentation page.
+		String guide = Files.readString(DOC.resolve("en").resolve(SkillGen.INSTALL_GUIDE), StandardCharsets.UTF_8);
+		String installCommand = guide.lines()
+			.filter(line -> line.contains("tar xz -C ~/.claude/skills"))
+			.findFirst()
+			.orElseThrow(() -> new AssertionError("the guide no longer shows a Claude Code install command"));
+		String page = Files.readString(out.resolve("index.html"), StandardCharsets.UTF_8);
+		assertThat(page).contains(installCommand.strip()).contains("<h1");
+		// It is served from /skill/, so its links into the manual must be URLs.
+		assertThat(page).contains("https://example.test/rontolisp/docs/en/guides/missing-features.html")
+			.doesNotContain("href=\"missing-features.md\"");
+	}
+
+	@Test
 	void bothArchivesCarryTheWholeBundle() throws IOException {
 		try (ZipFile zip = new ZipFile(out.resolve(SkillGen.SKILL_NAME + ".skill").toFile())) {
 			assertThat(zip.getEntry(SkillGen.SKILL_NAME + "/SKILL.md")).isNotNull();

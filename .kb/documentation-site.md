@@ -94,6 +94,15 @@ only hand-written text in it is
 links) or a generated table. If you find yourself explaining a language rule in
 the template, that rule belongs on a doc page instead; inline it from there.
 
+- The install page (`skill/index.html`) follows the same rule: it is
+  `SkillGen.INSTALL_GUIDE` = `doc/<lang>/guides/agent-skill.md` rendered (with
+  `DocGen.markdownOptions`, the shared dialect) into the chrome of
+  `skill/index.html`, so the install instructions someone follows exist once, as
+  a manual page. Because that page is served from `/skill/` rather than from
+  among the docs, its in-tree links are rewritten to absolute `docs/<lang>/*.html`
+  URLs -- which is also why the page's links to the artifacts are written
+  absolute in the Markdown: they have to work from both places.
+
 - `SkillGen.CONTENTS_PAGE` is `contents.md`, not `index.md`: `doc/en/index.md`
   mirrors to `references/index.md`, and a case-insensitive filesystem would let a
   generated `INDEX.md` silently eat it.

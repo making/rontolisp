@@ -79,6 +79,8 @@ sections:
         title: WASM 非 GC 出力（--no-gc）
       - file: guides/wasm-browser.md
         title: ブラウザでの WASM 実行
+      - file: guides/agent-skill.md
+        title: エージェントスキル
       - file: guides/missing-features.md
         title: 未対応のCL機能
       - file: guides/eval-limitations.md

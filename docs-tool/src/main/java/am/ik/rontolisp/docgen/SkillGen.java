@@ -19,6 +19,10 @@ import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import com.vladsch.flexmark.html.HtmlRenderer;
+import com.vladsch.flexmark.parser.Parser;
+import com.vladsch.flexmark.util.data.MutableDataSet;
+
 /**
  * Agent-skill generator. Packages the documentation of one language into a Claude
  * skill -- a {@code SKILL.md} plus the whole doc tree as bundled references --
@@ -69,6 +73,9 @@ public final class SkillGen {
 
 	/** The generated page listing every operator, under {@code references/}. */
 	static final String OPERATORS_PAGE = "operators.md";
+
+	/** The documentation page that IS the install page, relative to the language directory. */
+	static final String INSTALL_GUIDE = "guides/agent-skill.md";
 
 	private static final Pattern MD_LINK = Pattern.compile("\\[([^\\]]*)]\\(([^)\\s]+)\\)");
 
@@ -152,7 +159,7 @@ public final class SkillGen {
 		Files.writeString(this.out.resolve("version.json"), versionJson(), StandardCharsets.UTF_8);
 		Files.writeString(this.out.resolve(SKILL_NAME + "-full.md"), buildSingleFile(skill, references),
 				StandardCharsets.UTF_8);
-		Files.writeString(this.out.resolve("index.html"), renderInstallPage(), StandardCharsets.UTF_8);
+		Files.writeString(this.out.resolve("index.html"), renderInstallPage(langDir), StandardCharsets.UTF_8);
 
 		Map<String, byte[]> archive = new LinkedHashMap<>();
 		archive.put(SKILL_NAME + "/SKILL.md", skill.getBytes(StandardCharsets.UTF_8));
@@ -263,6 +270,11 @@ public final class SkillGen {
 		}
 		matcher.appendTail(out);
 		return out.toString();
+	}
+
+	/** A Markdown source path as the site publishes it. */
+	private static String asHtml(String path) {
+		return path.endsWith(".md") ? path.substring(0, path.length() - 3) + ".html" : path;
 	}
 
 	/** The published URL of a path that climbed out of the language tree. */
@@ -472,10 +484,26 @@ public final class SkillGen {
 				""".formatted(SKILL_NAME, this.version, this.commit, this.siteBase);
 	}
 
-	private String renderInstallPage() throws IOException {
+	/**
+	 * The install page is the manual's own Agent Skill guide, rendered into the
+	 * bundle's chrome: the instructions someone follows to install the skill exist
+	 * once, as a documentation page, not once here and once there.
+	 */
+	private String renderInstallPage(Path langDir) throws IOException {
+		Path guide = langDir.resolve(INSTALL_GUIDE);
+		if (!Files.exists(guide)) {
+			throw new IOException("The install page needs " + guide);
+		}
+		// The page sits at /skill/, not among the docs, so what it links to has to
+		// be named by URL rather than by neighbourhood.
+		String markdown = mapLinks(Files.readString(guide, StandardCharsets.UTF_8), INSTALL_GUIDE,
+				(inTree, resolved) -> inTree ? this.siteBase + "/docs/" + this.lang + "/" + asHtml(resolved)
+						: siteUrl(resolved));
+		MutableDataSet options = DocGen.markdownOptions();
+		String body = HtmlRenderer.builder(options).build().render(Parser.builder(options).build().parse(markdown));
 		return readResource(INDEX_HTML_RESOURCE).replace("{{version}}", this.version)
 			.replace("{{site-base}}", this.siteBase)
-			.replace("{{skill-name}}", SKILL_NAME);
+			.replace("{{body}}", body);
 	}
 
 	// --- filesystem helpers ----------------------------------------------
