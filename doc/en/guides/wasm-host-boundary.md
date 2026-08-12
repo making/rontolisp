@@ -170,7 +170,8 @@ Boundary details beyond the scalar types:
   import under JSPI — is declared with `:async t`: the call then returns a
   future that `rontolisp:await` resolves, the build prints the host's
   obligations (`Suspending` on the import, `promising` on the exports that can
-  reach it, serialised calls), and a call reachable from a top-level form of a
+  reach it, serialised calls — a re-entered export refuses with a trap instead
+  of corrupting both calls), and a call reachable from a top-level form of a
   `--no-wasi` module is a compile error (`_initialize` cannot suspend). The
   [reference page](../reference/functions/rontolisp-wasm-import.md) has the
   full contract.

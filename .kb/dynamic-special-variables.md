@@ -150,17 +150,23 @@ per-task store. This is NOT a claim that the wasm backends are concurrency-safe
 in general -- see `.todo/190` for a wasmCloud concurrency trap with a different
 cause.
 
-**That trigger has FIRED (2026-08-12), on a target the divergence did not
-anticipate.** A `--no-wasi` reactor whose host answers an import through JSPI
-(`WebAssembly.Suspending`, `.kb/wasm-import.md`) suspends the whole wasm stack
-mid-call and hands control back to the host's event loop, which may re-enter the
-export before the first call resumes -- exactly the "suspends a handler
-MID-extent" condition above, arriving through a host import rather than through
-`await`. The divergence is not retired yet because the shipped instance
-(`examples/cloudflare-workers/dog-fetcher`) serialises calls in its JavaScript,
-so nothing overlaps in practice; what is owed is the reproduction and the
-per-task store, tracked with the allocator half of the same problem in
-`.todo/337`.
+**That trigger FIRED (2026-08-12), and the answer is a refusal at the export
+boundary, not (yet) a per-task store.** A `--no-wasi` reactor whose host answers
+an import through JSPI (`WebAssembly.Suspending`, `.kb/wasm-import.md`) suspends
+the whole wasm stack mid-call and hands control back to the host's event loop,
+which may re-enter the export before the first call resumes -- exactly the
+"suspends a handler MID-extent" condition above, arriving through a host import
+rather than through `await`. Reproduced on node 24 `--experimental-wasm-jspi`
+(todo-337): two overlapped calls each binding the same special across the
+suspend read each other's binding back and leaked the outer value -- the exact
+pre-2026-07-27 JVM bug. The fix landed as the RE-ENTRY GUARD (todo-337,
+`.kb/wasm-import.md`): every export wrapper of a module that can suspend traps a
+second entry, so no two extents can interleave on the module global and the
+divergence's precondition -- one call at a time on one stack -- is re-established
+BY the module instead of assumed of the host. Re-evaluation trigger, restated:
+if the guard is ever relaxed to allow real overlap, the per-task store (the JVM
+`_d$` hybrid shape, byte-identical when nothing is let-bound) must land FIRST,
+together with a per-call allocator scope.
 
 Same shape as the pre-thread-scoped JVM design: `Ctx.specialVars`, specials
 unioned into `globals` (module-level

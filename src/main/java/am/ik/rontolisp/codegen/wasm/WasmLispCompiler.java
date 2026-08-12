@@ -1797,8 +1797,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			CompileWarnings.warn(":async t: this module imports " + String.join(", ", suspendingImports.values())
 					+ ", declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the"
 					+ " exports that can reach one through WebAssembly.promising, and serialise calls (a suspended"
-					+ " module can be re-entered, which nothing in it is prepared for); a host that answers"
-					+ " synchronously is equally valid -- the call then returns an already-settled future either way");
+					+ " module can be re-entered; a re-entered export refuses with a trap instead of corrupting"
+					+ " both calls); a host that answers synchronously is equally valid -- the call then returns"
+					+ " an already-settled future either way");
 			if (SuspendingImports.anyTakenAsValue(program, suspendingImports.keySet())) {
 				// #'name escaped: whoever received it can call it, so the per-export
 				// answer below would under-report -- widen it to every export instead.
@@ -1832,6 +1833,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 		}
+		// Whether a host import may SUSPEND (an :async t declaration, or --host-fetch's
+		// env.fetch with fetch actually used): control then returns to the host's event
+		// loop mid-call, so an export can be re-entered while the first call is parked.
+		// Nothing in the module owns its state per call -- the allocator bracket's marks
+		// interleave and the shallowly-bound specials share one global cell -- so the
+		// export wrappers of such a module carry a re-entry guard that traps the second
+		// entry instead of corrupting both calls. Any other module gains no guard, no
+		// global, no instruction.
+		boolean hostMaySuspend = !suspendingImports.isEmpty()
+				|| (this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED));
 		if (this.noWasi) {
 			// Every --no-wasi refusal is a call-time condition, which is right for a call
 			// site that may be dead -- but reached from a TOP-LEVEL form there is nothing
@@ -1847,13 +1858,14 @@ public final class WasmLispCompiler implements LispCompiler {
 			// the only place that can say what the host now owes (the clock-hook
 			// precedent). A synchronous env.fetch is unconditionally valid; a
 			// suspending one (WebAssembly.Suspending) constrains how the exports are
-			// entered, and re-entrancy is on the host until the module guards it.
+			// entered, and a re-entry is refused by the guard the wrappers carry.
 			if (this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED)) {
 				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> response-json"
 						+ " and every rontolisp:fetch crosses it. A host may answer synchronously; a host whose"
 						+ " fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through"
 						+ " WebAssembly.promising, and must serialise calls (a suspended module can be"
-						+ " re-entered, which nothing in it is prepared for)");
+						+ " re-entered; a re-entered export refuses with a trap instead of corrupting both"
+						+ " calls)");
 			}
 			// A --no-wasi module has no filesystem, so file-opening forms lower to
 			// call-time error stubs. First, so every scan below (usesRead/usesEval,
@@ -2474,13 +2486,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		// every other global so non-serve output is byte-identical (serve implies
 		// asyncMode, so taskSeqGlobalIndex is always valid here).
 		int serveInitGlobalIndex = this.serve ? taskSeqGlobalIndex + 1 : -1;
+		// The re-entry guard flag (a mut i32) of a module whose host import may suspend
+		// (hostMaySuspend above): every export wrapper sets it on entry and clears it on
+		// return, and a second entry -- a call arriving while the first is parked on the
+		// suspended import -- traps at the boundary instead of interleaving over the bump
+		// allocator and the shallow special bindings. Only when the module both can
+		// suspend and exports something, so every other module is byte-identical.
+		int lastModeGlobalIndex = this.serve ? serveInitGlobalIndex
+				: this.asyncMode ? taskSeqGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount;
+		int reentryGuardGlobalIndex = hostMaySuspend && !exportDecls.isEmpty() ? lastModeGlobalIndex + 1 : -1;
 		// The cached symbol t (built lazily by _t_sym) and the raw-local sentinel (a
 		// private TYPE_CELL instance no user value can be ref.eq to; "shadow ==
 		// sentinel" marks an unboxed local's raw i64 as authoritative -- null cannot
 		// mark it, because nil IS null), always the LAST globals so every mode-gated
 		// index above keeps its value.
-		int tSymGlobalIndex = 1 + (this.serve ? serveInitGlobalIndex
-				: this.asyncMode ? taskSeqGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount);
+		int tSymGlobalIndex = (reentryGuardGlobalIndex >= 0 ? reentryGuardGlobalIndex : lastModeGlobalIndex) + 1;
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
 
 		// Create string table. The page-6 component base exists to keep the static data
@@ -2648,6 +2668,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
 			.serveInitGlobalIndex(serveInitGlobalIndex)
+			.reentryGuardGlobalIndex(reentryGuardGlobalIndex)
 			.callbackExports(cbMode ? this.callbackExportsForTest : Set.of());
 
 		// Passes 2a-2c emit function BODIES, and a body is the only consumer of a string
@@ -4753,6 +4774,20 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// The re-entry guard flag at reentryGuardGlobalIndex, a (mut i32) = 0:
+				// set by every export wrapper on entry, cleared on return. A second
+				// entry while a call is parked on a suspending host import traps at
+				// the boundary instead of interleaving over the bump allocator and
+				// the shallow special bindings.
+				if (reentryGuardGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.write(Type.I32);
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.I32_CONST);
+						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+				}
 				// The cached symbol t at tSymGlobalIndex, a (mut (ref null eq)) = null,
 				// built lazily by _t_sym; then the raw-local sentinel at
 				// rawSentinelGlobalIndex, an immutable (ref null eq) initialized by the
@@ -6525,6 +6560,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		int serveInitGlobalIndex = -1;
 
 		/**
+		 * The global index of the re-entry guard flag (a {@code mut i32}), or -1 when the
+		 * module cannot suspend. A suspending host import ({@code wasm-import :async t},
+		 * or {@code --host-fetch}'s {@code env.fetch}) hands control back to the host's
+		 * event loop mid-call, so an export can be RE-ENTERED while the first call is
+		 * parked -- which the bump-allocator bracket and the shallowly-bound specials
+		 * cannot survive. Every export wrapper sets the flag on entry and clears it on
+		 * return; a second entry traps at the boundary instead of corrupting both calls.
+		 */
+		int reentryGuardGlobalIndex = -1;
+
+		/**
 		 * Export names (beyond serve's {@code handle}) given the CALLBACK-lift treatment
 		 * (the test hook); empty on every CLI path.
 		 */
@@ -6614,6 +6660,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.asyncDefunNames = builder.asyncDefunNames;
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
+			this.reentryGuardGlobalIndex = builder.reentryGuardGlobalIndex;
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
 			this.duplicatedDefunNames = builder.duplicatedDefunNames;
@@ -6722,6 +6769,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int currentTaskGlobalIndex = -1;
 
 			private int serveInitGlobalIndex = -1;
+
+			private int reentryGuardGlobalIndex = -1;
 
 			private Set<String> callbackExports = Set.of();
 
@@ -6967,6 +7016,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder serveInitGlobalIndex(int serveInitGlobalIndex) {
 				this.serveInitGlobalIndex = serveInitGlobalIndex;
+				return this;
+			}
+
+			Builder reentryGuardGlobalIndex(int reentryGuardGlobalIndex) {
+				this.reentryGuardGlobalIndex = reentryGuardGlobalIndex;
 				return this;
 			}
 

@@ -92,8 +92,10 @@ Everywhere else in these examples the Lisp call is synchronous and an isolate
 cannot interleave requests inside it. Suspending changes that: a handler waiting
 on dog.ceo returns control to the event loop, and a second request would enter
 the same module — the same globals, and the same bump allocator whose
-mark/reset bracket assumes it is alone. `index.js` therefore chains calls onto
-one promise queue.
+mark/reset bracket assumes it is alone. The module refuses that entry with a
+trap (the compiled export carries a re-entry guard), so a host that forgets the
+queue sees a failed request, not silently corrupted answers. `index.js`
+therefore chains calls onto one promise queue.
 
 The cost is real and measured: eight concurrent `GET /` under `wrangler dev`
 complete about 250 ms apart rather than together. On the deployed edge the same

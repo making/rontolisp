@@ -72,8 +72,8 @@ function instantiate() {
   };
 }
 
-// One Lisp call at a time: a suspended handler returns to the event loop, so a
-// second request would interleave inside the same globals and bump allocator.
+// One Lisp call at a time: a suspended handler returns to the event loop, and
+// the module's re-entry guard traps a second call while one is parked.
 let queue = Promise.resolve();
 function serialized(work) {
   const done = queue.then(work, work);

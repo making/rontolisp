@@ -70,9 +70,11 @@ spells both directions `async func`, and the directive carries the direction.)
 - The build prints what the host now owes: wrap the import in
   `WebAssembly.Suspending`, enter every export that can reach it through
   `WebAssembly.promising` (the build lists them), and serialise calls — a
-  suspended module can be re-entered, which nothing in it is prepared for. A
-  host that answers synchronously is equally valid; the call returns an
-  already-settled future either way.
+  suspended module can be re-entered, and a re-entered export **refuses with a
+  trap** instead of silently corrupting both calls (every export wrapper of a
+  module that can suspend carries a re-entry guard). A host that answers
+  synchronously is equally valid; the call returns an already-settled future
+  either way.
 - Under `--no-wasi`, a call reachable from a top-level form is a **compile
   error**: `_initialize` runs on a stack no `promising` entered, so a
   suspension there traps naming nobody. Move the call behind an export, or

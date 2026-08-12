@@ -394,6 +394,103 @@ class WasmImportCompilerTest {
 		return null;
 	}
 
+	@Test
+	void aSuspendingImportGuardsEveryExportAgainstReentry() {
+		// A parked JSPI call returns control to the host's event loop, so a second
+		// call can enter while the first still holds the allocator bracket and the
+		// shallowly-bound specials (the measured corruption: a special read back
+		// wrong, a returned (ptr,len) overwritten). A module that can suspend
+		// carries a guard global that EVERY export wrapper sets on entry -- a second
+		// entry traps at the boundary -- and clears on return.
+		String asyncSrc = """
+				(rontolisp:wasm-import 'slow :from "env" :params '(:int) :returns :int :async t)
+				(defun poke (n) (rontolisp::%future-force (slow n)))
+				(defun peek (n) (+ n 1))
+				(rontolisp:wasm-export 'poke :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'peek :params '(:int) :returns :int)
+				""";
+		String syncSrc = """
+				(rontolisp:wasm-import 'slow :from "env" :params '(:int) :returns :int)
+				(defun poke (n) (slow n))
+				(defun peek (n) (+ n 1))
+				(rontolisp:wasm-export 'poke :params '(:int) :returns :int)
+				(rontolisp:wasm-export 'peek :params '(:int) :returns :int)
+				""";
+		byte[] guarded = compileNoWasi(asyncSrc);
+		byte[] unguarded = compileNoWasi(syncSrc);
+		// One guard global (a mut i32, third from last -- the cached-t and raw-local
+		// sentinel globals stay the LAST two); a module that cannot suspend gains no
+		// global and no guard instruction.
+		assertThat(globalCount(guarded)).isEqualTo(globalCount(unguarded) + 1);
+		assertThat(countOf(unguarded, GUARD_TRAP_AND_SET)).isZero();
+		// Both wrappers check-and-set on entry (global.get g; if; unreachable; end;
+		// i32.const 1; global.set g) and clear on return (i32.const 0; global.set g).
+		int g = globalCount(guarded) - 3;
+		assertThat(countOf(guarded, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(2);
+		assertThat(countOf(guarded, new byte[] { 0x41, 0x00, 0x24, (byte) g })).isGreaterThanOrEqualTo(2);
+	}
+
+	@Test
+	void hostFetchGuardsExportsExactlyWhereFetchIsUsed() {
+		// --host-fetch's env.fetch is the other import a host may answer through
+		// WebAssembly.Suspending, so a module whose program fetches carries the same
+		// re-entry guard -- and one that never fetches (no import, nothing to suspend
+		// on) stays guard-free.
+		byte[] fetching = compileHostFetch("""
+				(rontolisp:async-defun dog ()
+				  (let* ((res (rontolisp:await (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
+				         (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
+				    body))
+				(defun run () (rontolisp::%future-force (dog)))
+				(rontolisp:wasm-export 'run :params '() :returns :string)
+				""");
+		int g = globalCount(fetching) - 3;
+		assertThat(countOf(fetching, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(1);
+		byte[] noFetch = compileHostFetch("""
+				(defun run () 1)
+				(rontolisp:wasm-export 'run :params '() :returns :int)
+				""");
+		assertThat(countOf(noFetch, GUARD_TRAP_AND_SET)).isZero();
+	}
+
+	// if (blocktype empty); unreachable; end; i32.const 1; global.set -- the re-entry
+	// guard's trap-and-set, minus the leading global.get whose index varies by module.
+	private static final byte[] GUARD_TRAP_AND_SET = { 0x04, 0x40, 0x00, 0x0b, 0x41, 0x01, 0x24 };
+
+	private static byte[] prependGlobalGet(int globalIndex, byte[] tail) {
+		byte[] result = new byte[tail.length + 2];
+		result[0] = 0x23;
+		result[1] = (byte) globalIndex;
+		System.arraycopy(tail, 0, result, 2, tail.length);
+		return result;
+	}
+
+	// Occurrences of needle in the module, optionally requiring the byte AFTER each
+	// match to equal trailing (the guard global's index following global.set).
+	private static int countOf(byte[] module, byte[] needle, byte... trailing) {
+		int count = 0;
+		outer: for (int i = 0; i <= module.length - needle.length - trailing.length; i++) {
+			for (int j = 0; j < needle.length; j++) {
+				if (module[i + j] != needle[j]) {
+					continue outer;
+				}
+			}
+			for (int j = 0; j < trailing.length; j++) {
+				if (module[i + needle.length + j] != trailing[j]) {
+					continue outer;
+				}
+			}
+			count++;
+		}
+		return count;
+	}
+
+	// The global section's entry count (0 when the section is absent).
+	private static int globalCount(byte[] module) {
+		byte[] payload = section(module, 6);
+		return payload == null ? 0 : readU(payload, new int[] { 0 });
+	}
+
 	private static String readName(byte[] buf, int[] p) {
 		int len = readU(buf, p);
 		String s = new String(buf, p[0], len, StandardCharsets.UTF_8);

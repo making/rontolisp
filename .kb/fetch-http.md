@@ -38,7 +38,8 @@ referencing `rontolisp:fetch` (a build that never fetches still imports NOTHING)
 compiler guards the flag (`hostFetch` requires `noWasi`, rejects `component`; CLI
 rejects `.class`/`--no-gc`), and the BUILD prints the host obligation (a synchronous
 `env.fetch` is always valid; a `WebAssembly.Suspending` one requires
-`WebAssembly.promising` entry + serialised calls — `.todo/337` re-entrancy), plus a
+`WebAssembly.promising` entry + serialised calls — a re-entered export refuses with a
+trap, the todo-337 guard in `.kb/wasm-import.md`), plus a
 `NoWasiLoadPathRefusals` line when the LOAD PATH reaches a fetch (a suspending host
 cannot serve `_initialize`). Envelope pinned by `HostFetchLibraryTest` (generated Lisp
 AND `examples/cloudflare-workers/dog-fetcher/src/index.js` against the records) and

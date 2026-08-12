@@ -378,6 +378,21 @@ final class WasmExportCompiler {
 	 * (or {@code -1} if no {@code :string} parameter is present)
 	 */
 	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex) {
+		// A module with a suspending host import (wasm-import :async t / --host-fetch)
+		// can be RE-ENTERED while a call is parked: JSPI returns control to the host's
+		// event loop mid-call. Nothing per call owns the allocator bracket (its marks
+		// interleave, they do not nest) or a shallowly-bound special (one module-global
+		// cell), so a second entry would silently corrupt BOTH calls -- refuse it with
+		// a trap at the boundary instead (the build warning names the serialise
+		// obligation this trap enforces). Set on entry, cleared on every return below.
+		if (ctx.reentryGuardGlobalIndex >= 0) {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(ctx.reentryGuardGlobalIndex);
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+			emitReentryGuardStore(ctx, 1);
+		}
 		// Serve mode: `handle` is the wasi:http/incoming-handler export, called once per
 		// request on a possibly REUSED instance (jco / wasmCloud). The canonical-ABI
 		// allocator (mem-http-client's cabi_realloc) is where the host writes a request's
@@ -533,10 +548,33 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(0);
 		}
-		if (ctx.ehMode) {
+		if (ctx.reentryGuardGlobalIndex >= 0) {
+			emitReentryGuardStore(ctx, 0);
+		}
+		if (ctx.ehMode && ctx.reentryGuardGlobalIndex >= 0) {
+			// The catch_all epilogue by hand: its landing pad re-raises the caught
+			// condition as a trap, and the guard must be cleared THERE too -- a host
+			// that catches the trap and then calls sequentially must not be refused
+			// as a re-entry it never made.
+			ctx.writer.write(Instruction.RETURN);
+			ctx.writer.write(Instruction.END); // try_table
+			ctx.writer.write(Instruction.END); // block
+			emitReentryGuardStore(ctx, 0);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.wasmCtrlDepth -= 2;
+		}
+		else if (ctx.ehMode) {
 			WasmEmitHelper.emitCatchAllEpilogue(ctx);
 		}
 		ctx.writer.write(Instruction.END);
+	}
+
+	// global.set of the re-entry guard flag (1 = a call is inside the module).
+	private static void emitReentryGuardStore(WasmLispCompiler.Ctx ctx, int value) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(value);
+		ctx.writer.write(Instruction.SET_GLOBAL);
+		ctx.writer.writeUnsignedLeb128(ctx.reentryGuardGlobalIndex);
 	}
 
 	private static void emitBoxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot, int strFromMemFuncIndex) {

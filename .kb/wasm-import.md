@@ -102,8 +102,8 @@ the result, so the Lisp calls it like any other function and nothing in the comp
 knows. That is what gives a reactor a way OUT at all — `rontolisp:fetch` is wasi:http and
 a reactor imports no WASI — and it needed no flag and no compatibility-date opt-in, under
 `wrangler dev` AND deployed (verified against the real dog.ceo, all five endpoints on
-both; node 24 has no JSPI, so a plain-node probe of such a module must stub the import
-synchronously). **Two
+both; a plain-node probe of such a module stubs the import synchronously, or runs node
+24 with `--experimental-wasm-jspi`, which has `Suspending`/`promising`). **Two
 consequences a host of a suspending import has to honour**, both learned here: (1) a
 suspending import may only be called on a stack entered through `promising`, so the
 `_initialize` load path must never reach one; (2) suspending RE-ENTERS the module —
@@ -118,8 +118,9 @@ DERIVED envelope, so a Worker no longer declares this import by hand for HTTP --
 dog-fetcher example above now writes `(await (fetch ...))` and its build prints the
 promising/serialise obligation (`.kb/fetch-http.md` has the whole lowering). A USER
 import says it suspends with `:async t` (todo-336, the section below); the re-entrancy
-the mechanism creates is still unguarded (`.todo/337`, which also records that this
-fired the documented re-evaluation trigger in `.kb/dynamic-special-variables.md`).
+the mechanism creates is refused by the export-wrapper guard (todo-337, the section
+below -- which is also what re-establishes the precondition of the shallow-binding
+divergence in `.kb/dynamic-special-variables.md`).
 
 **`:async t` -- a suspending host import is a future, not a secret (todo-336,
 2026-08-12)**: `(rontolisp:wasm-import 'host-fetch ... :async t)` declares that the host
@@ -154,6 +155,42 @@ value-widening, load-path error, handler does not silence it), `WasmImportCompil
 `asyncImportAnswersASettledFutureThatAwaitResolves` preload E2E (futurep -> T, await
 resolves, `#'`-funcall composes). Host-glue generation (the Suspending wrapper +
 promising entry JS) remains open: `.todo/340`.
+
+**The re-entry guard -- a module that can suspend refuses interleaved calls (todo-337,
+2026-08-12)**: a parked JSPI call returns control to the host's event loop, so a second
+call can enter an export while the first is suspended, and NOTHING in the module owns
+its state per call -- the `__ronto_alloc_mark`/`_reset` bracket's marks interleave (they
+do not nest), the shallowly-bound specials share one module-global cell
+(`.kb/dynamic-special-variables.md`), and a `(ptr,len)` result sits at un-advanced
+`HEAP_PTR` scratch. Measured on node 24 `--experimental-wasm-jspi` before the guard,
+BOTH corruptions are silent wrong bytes: a special read back after the resume answers
+the OTHER call's binding (and the outer value leaks), and the second resume's result
+copy overwrites the first's still-unread `(ptr,len)` (`"bb\"AAAAAAA"` where
+`"AAAAAAAAAA"` was returned). So a module that CAN suspend -- any `:async t` import
+declared, or `--host-fetch` with `rontolisp:fetch` actually used -- carries a guard
+global (a `mut i32`, third from last so the cached-t/raw-sentinel stay the last two;
+`reentryGuardGlobalIndex`, emitted only when the module also exports something), and
+EVERY export wrapper checks-and-sets it on entry (`global.get; if; unreachable; end` --
+a TRAP, because at export entry no Lisp handler can be active and output on a reactor
+is a sink, so the build warning is where the message lives; it names the trap) and
+clears it on every return, including the hand-rolled catch_all landing pad in EH mode
+(`WasmExportCompiler.emitReentryGuardStore`) so a host that catches a Lisp-error trap
+and then calls SEQUENTIALLY is not refused as a re-entry it never made. A serialising
+host (dog-fetcher's promise queue) and a synchronous host never see it; a
+non-serialising host gets `RuntimeError: unreachable` at the second entry, with the
+FIRST call completing correctly -- verified on node 24 JSPI with two overlapped calls
+(one binding a special across the suspend, one returning a string), both wrong before,
+"right or refused" after, and serial byte-behaviour unchanged. Any module that cannot
+suspend gains no guard, no global, no instruction (byte-identity re-verified across
+P1/no-wasi/component). Utility exports (`__ronto_alloc*`, the seed/clock hooks) stay
+unguarded -- they are the host's own bracket tools. Pinned by
+`WasmImportCompilerTest.aSuspendingImportGuardsEveryExportAgainstReentry` /
+`hostFetchGuardsExportsExactlyWhereFetchIsUsed` and the
+`aGuardedExportAnswersThroughASynchronousHost` preload E2E. **Deliberately NOT
+per-call state**: making the arena a per-call scope and the dynamic store per-task (the
+JVM `_d$` hybrid shape) would buy real overlap, but that is the concurrency the
+serialising host gave up on purpose -- pay it only when a workload is I/O-bound enough
+to want it, and land the per-task store BEFORE relaxing this guard.
 
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in

@@ -1465,6 +1465,30 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void aGuardedExportAnswersThroughASynchronousHost() throws Exception {
+		// An :async t import puts the re-entry guard into every export wrapper; a
+		// synchronous preloaded host never re-enters, so the guard must be
+		// invisible -- set on entry, cleared on return, the answer unchanged.
+		String host = """
+				(defun host-add (a b) (+ a b))
+				(rontolisp:wasm-export 'host-add :as "add" :params '(:int :int) :returns :int)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'add :from "host" :params '(:int :int) :returns :int :async t)
+				(defun plus (a b) (rontolisp::%future-force (add a b)))
+				(rontolisp:wasm-export 'plus :params '(:int :int) :returns :int)
+				""";
+		byte[] hostBytes = new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(host));
+		byte[] mainBytes = new WasmLispCompiler().compile(LispReader.readAllFromString(main));
+		wasmtime.copyFileToContainer(Transferable.of(hostBytes), path("host.wasm"));
+		wasmtime.copyFileToContainer(Transferable.of(mainBytes), path("main.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "--invoke", "plus", "-W", "gc", "-W",
+				"exceptions=y", "--preload", "host=" + path("host.wasm"), path("main.wasm"), "20", "22");
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("42");
+	}
+
+	@Test
 	void importedHostFunctionInsideUserPackageResolvesUnqualifiedName() throws Exception {
 		// A wasm-import declared inside a user package with a plain unqualified quoted
 		// name registers under the canonical qualified name (PackageResolver resolves

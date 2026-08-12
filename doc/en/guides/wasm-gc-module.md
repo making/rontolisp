@@ -196,7 +196,8 @@ eager string that `rontolisp:read-all` passes through. A JavaScript host
 implements it with its own `fetch()` behind `WebAssembly.Suspending` (JSPI —
 the whole wasm stack parks until the promise settles, so the Lisp side stays
 ordinary synchronous-looking `(await (fetch ...))`) and then must enter every
-export through `WebAssembly.promising` and serialise calls; a synchronous host
+export through `WebAssembly.promising` and serialise calls — a re-entered
+export refuses with a trap instead of corrupting both calls; a synchronous host
 (node without JSPI, a test stub) just answers directly. The build prints
 exactly this obligation. The worked example is
 [`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/dog-fetcher).

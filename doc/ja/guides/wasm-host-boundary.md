@@ -118,7 +118,7 @@ const { instance } = await WebAssembly.instantiate(bytes, imports);
 - `:string`/`:s-expr` の**引数**は、モジュールのエクスポートする `memory` 内への `(ptr, len)` ペアとしてホストに届きます(`:s-expr` 引数は先に読み取り可能なテキストへ印字されます)。
 - `:string` の**結果**はホストがリニアメモリに書き込む必要があります — エクスポートされた `__ronto_alloc` でバッファを確保し、`(ptr, len)` ペア(JavaScript では 2 要素配列)を返します。
 - `:s-expr` の**結果**は組み込みリーダーで解析されるため、ホストはリスト構造全体をテキストとして渡し返せます。
-- **非同期の**ホスト関数 — JSPI で `WebAssembly.Suspending` ラップされたインポート — は `:async t` で宣言します: 呼び出しは `rontolisp:await` で解決できる future を返し、ビルドはホストの義務(インポートの `Suspending` ラップ、そこへ到達しうるエクスポートの `promising` 経由呼び出し、呼び出しの直列化)を出力し、`--no-wasi` モジュールのトップレベルフォームから到達しうる呼び出しはコンパイルエラーになります(`_initialize` はサスペンドできない)。完全な契約は[リファレンスページ](../reference/functions/rontolisp-wasm-import.md)を参照してください。
+- **非同期の**ホスト関数 — JSPI で `WebAssembly.Suspending` ラップされたインポート — は `:async t` で宣言します: 呼び出しは `rontolisp:await` で解決できる future を返し、ビルドはホストの義務(インポートの `Suspending` ラップ、そこへ到達しうるエクスポートの `promising` 経由呼び出し、呼び出しの直列化 — 再入されたエクスポートは両方の呼び出しを壊す代わりにトラップで拒否します)を出力し、`--no-wasi` モジュールのトップレベルフォームから到達しうる呼び出しはコンパイルエラーになります(`_initialize` はサスペンドできない)。完全な契約は[リファレンスページ](../reference/functions/rontolisp-wasm-import.md)を参照してください。
 
 制限:
 
