@@ -18,11 +18,16 @@
 
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > `java.net.http.HttpClient` を使い、`fetch` が返った瞬間からリクエストは
-> バックグラウンドスレッドで走ります。WASMバックエンドは **componentモード
-> 専用** です (`--component`。非同期の `wasi:http@0.3.0` をimportします):
-> `fetch` はPreview 1 (コアモジュール) モードではコンパイルエラーになり、
-> fetchを使うcomponentは通常のフラグに加えて `-S http=y` を付けて実行する
-> 必要があります。**ブラウザプレイグラウンド** では本物のブラウザの
+> バックグラウンドスレッドで走ります。WASMでは `fetch` は代わりに通信を
+> 行えるホストを必要とし、それは **component** (`--component`。非同期の
+> `wasi:http@0.3.0` をimportし、通常のフラグに加えて `-S http=y` を付けて
+> 実行します) か、**`--host-fetch` 付きでビルドした `--no-wasi` リアクタ**
+> のどちらかです。後者は同じソースを `env.fetch` というひとつのimport経由で
+> ホスト自身のHTTPクライアントへ落とします — Cloudflare Workerやnode埋め込み
+> がfetchする仕組みがこれです
+> ([後述の節](#fetching-from-a-reactor---no-wasi---host-fetch))。どちらでも
+> ない場合、`fetch` はPreview 1 (コアモジュール) モードではコンパイルエラーに
+> なります。**ブラウザプレイグラウンド** では本物のブラウザの
 > `fetch()` が実行され (CORSの制約を受けます)、その間プログラムは続行
 > します。JSON関数は **すべての** バックエンド・すべてのWASMモードで動作
 > します。制限があるのは `fetch` 自体だけです。`await`、`futurep`、future
@@ -215,6 +220,56 @@ WASM componentにコンパイルして (wasmtime 46+。外向きHTTPを許可す
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
 wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
 ```
+
+## リアクタからのfetch (`--no-wasi --host-fetch`)
+
+[`--no-wasi` リアクタ](wasm-gc-module.md#no-wasi-reactor-mode)はWASIを一切
+importしないため、fetchを通す `wasi:http` を持ちません — しかしリアクタを
+駆動するホスト (Cloudflare Worker、node、ブラウザページ) は自前のHTTP
+クライアントを持っています。`--host-fetch` は `rontolisp:fetch` をそこへ、
+`env.fetch(request-json) -> response-json` というひとつの注入importとして
+経路付けします:
+
+```bash
+rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
+```
+
+Lisp側は何も変わりません — オプションも `(:status :headers :body)` の答えも
+同一です — が、このバックエンドに固有な点が3つあります:
+
+- **fetchはトップレベルではなくエクスポートの中に置く。** リアクタには
+  `_start` がありません: ホストがインスタンス化し、エクスポートされた関数を
+  呼びます。JavaScriptホストは `env.fetch` を `WebAssembly.Suspending` (JSPI)
+  で実装し、これはpromiseが確定するまでwasmスタック全体を停止させますが、
+  `_initialize` だけは停止できない唯一のスタックです — したがって
+  *ロードパス* が到達するfetchはそこで拒否されます。ビルドはそれを名指しで
+  警告します。
+- **`:body` はストリームではなくeagerな文字列ひとつ**です: 呼び出しと同時に
+  レスポンス全体が届いています。
+  [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) は
+  それを素通しするので、上記の読み尽くしの書き方は一切変更不要です。
+- **開始 == 確定。** future は `fetch` が返った時点で確定済みです (往復の間
+  スタック全体が停止していたため)。したがって `await` はサスペンドせず、
+  2つのfetchが重なることはなく、通信の失敗は `await` ではなく `fetch` の
+  呼び出しで signal されます — Preview 1 が一貫して持つ[退化した非同期の
+  形](async.md#under-the-hood-wasi-preview-3-futures--streams)です。
+
+引き換えにホスト側がひとつ義務を負い、これもビルドが表示します:
+すべてのエクスポートを `WebAssembly.promising` 経由で呼び、呼び出しを直列化
+すること。サスペンドしたハンドラはイベントループに制御を返すため、2つ目の
+リクエストが同じインスタンスに入るとグローバルとアロケータを共有してしまい
+ます — モジュールは両方の呼び出しを壊す代わりに、その再入をトラップで拒否
+します。同期的な `env.fetch` (JSPIのないnode、テストスタブ) にはこの義務は
+不要で、それも同様に有効です。
+
+典型的な形は served なリアクタです:
+[`http-handler`](http-handler.md) か
+[Clackアプリケーション](clack.md#a-host-that-calls-you-the-reactor-build)を
+これらのフラグでコンパイルすると `handle-request` がエクスポートされ、その
+ハンドラがfetchします。
+[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
+がまさにそれで、JavaScript側も含まれています — インタプリタ・JVM・
+`wasi:http` component でも動く、ひとつのソースです。
 
 HTTPではなく素のTCPを使う場合 — あるいは *サーバー* 側を実装する場合 —
 は [TCPソケットガイド](tcp-sockets.md)を参照してください。

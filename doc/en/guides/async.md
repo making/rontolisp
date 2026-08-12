@@ -260,6 +260,19 @@ signals at the *call* rather than at the `await`, and `wait-for` / the guest
 stream operations are rejected at compile time. **`--no-gc`** rejects the entire
 async surface by name.
 
+A **`--no-wasi` reactor** is a Preview 1 module, so those degenerate futures are
+what it has — and yet it is the one Preview 1 build that does real asynchronous
+host work, because the *host* does the waiting rather than the guest.
+[`--host-fetch`](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch)
+routes `rontolisp:fetch` at one host import, and a JavaScript host implements it
+with `WebAssembly.Suspending` (JSPI): the whole wasm stack parks until the
+promise settles, so `(await (fetch ...))` reads exactly as it does everywhere
+else, and by the time `fetch` returns its future is already settled. The price
+is paid on the host side, not in the Lisp — every export must be entered through
+`WebAssembly.promising` and calls must be serialised (a re-entered export
+refuses with a trap), and nothing on the **load path** may fetch, because
+`_initialize` is the one stack a suspending host cannot park.
+
 ## Where async shows up
 
 The async surface is small on purpose; most programs meet it through one of the
@@ -271,3 +284,6 @@ I/O features built on it:
   example, one that fetches) must itself be an `async-defun`.
 - [TCP Sockets](tcp-sockets.md) — a pending `tcp-accept` or socket read
   suspends only its own task inside a component.
+- [Host-driven reactors](wasm-gc-module.md#no-wasi-reactor-mode) — a synchronous
+  handler cannot `await`, so it returns the FUTURE an `async-defun` produced and
+  the reactor transport resolves it at the boundary.

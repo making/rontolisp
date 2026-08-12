@@ -229,6 +229,31 @@ $ rontolisp app.lisp -o worker.wasm --no-wasi --optimize=size
 ミドルウェアはレポートを `*error-output*` に書きますが、これは `--no-wasi` では
 破棄されるシンクで、それ以外のバックエンドでは本物の標準エラー出力です。
 
+### fetch するハンドラ: `--host-fetch`
+
+リアクタは何もインポートしません。それは HTTP クライアントも持たないという
+ことでもあるので、[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md)
+を呼ぶアプリケーション(プロキシ、API ゲートウェイ)にはもう 1 つフラグが必要
+です。`--host-fetch` は `fetch` をホスト自身のクライアントへ `env.fetch` という
+インポート 1 つとして落とします。上のモジュールとの違いはその 1 インポート
+だけです:
+
+```console
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
+```
+
+ルート本体は同期的なままで構いません。`await` できるのは `async-defun` /
+`async-lambda` の本体だけなので、fetch した値が必要なルートはそれを呼び、その
+**future** をそのまま返します — リアクタのトランスポートが future 値の
+レスポンスを境界で解決します。`--component` で `wasmtime serve` が行うのと
+同じです。このトランスポートに固有の残りの点(eager な `:body`、確定済みの
+future、JavaScript 側の JSPI の義務)は
+[fetch ガイド](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch)に
+あり、
+[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
+がこの形で作られたルーティング付き Worker です — インタプリタと JVM では
+ソケットを serve する、ひとつのソースです。
+
 ### リアクタを手で駆動する: `clack-handler-reactor`
 
 2 つ目の組み込みハンドラバックエンドは、リアクタの形を**明示的に、すべての

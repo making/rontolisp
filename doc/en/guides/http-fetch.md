@@ -18,10 +18,15 @@ assumes; here we cover only what is particular to making requests.
 
 > **Backend support.** The interpreter and JVM-compiled classes use the JDK
 > `java.net.http.HttpClient`; the request runs on a background thread from the
-> moment `fetch` returns. The WASM backend is **component-only**
-> (`--component`, importing the async `wasi:http@0.3.0`): `fetch` is a compile
-> error in Preview 1 (core-module) mode, and a fetch component must run with
-> `-S http=y` on top of the usual flags. In the **browser playground** `fetch`
+> moment `fetch` returns. On WASM `fetch` needs a host that can make the call
+> for it, which is either a **component** (`--component`, importing the async
+> `wasi:http@0.3.0`, run with `-S http=y` on top of the usual flags) or a
+> **`--no-wasi` reactor built with `--host-fetch`**, which lowers the same
+> source onto the host's own HTTP client through one `env.fetch` import — that
+> is how a Cloudflare Worker or a node embedding fetches
+> ([the section below](#fetching-from-a-reactor---no-wasi---host-fetch)). With
+> neither, `fetch` is a compile error in Preview 1 (core-module) mode. In the
+> **browser playground** `fetch`
 > runs the real browser `fetch()` (subject to CORS) while the program
 > continues. The JSON functions work on **every** backend and in every WASM
 > mode; only `fetch` itself is restricted. `await`, `futurep` and the future
@@ -208,6 +213,54 @@ imports are unavailable):
 rontolisp fetch-post.lisp -o fetch-post.wasm --component
 wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
 ```
+
+## Fetching from a reactor (`--no-wasi --host-fetch`)
+
+A [`--no-wasi` reactor](wasm-gc-module.md#no-wasi-reactor-mode) imports no
+WASI, so it has no `wasi:http` to fetch through — but the hosts that drive one
+(a Cloudflare Worker, node, a browser page) have an HTTP client of their own.
+`--host-fetch` routes `rontolisp:fetch` at it, as ONE injected import
+`env.fetch(request-json) -> response-json`:
+
+```bash
+rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
+```
+
+Nothing in the Lisp changes — same options, same
+`(:status :headers :body)` answer — but three things are particular to this
+backend:
+
+- **The fetch belongs inside an export, not at the top level.** A reactor has
+  no `_start`: the host instantiates it and calls an exported function. A
+  JavaScript host implements `env.fetch` with `WebAssembly.Suspending` (JSPI),
+  which parks the whole wasm stack until the promise settles, and
+  `_initialize` is the one stack it may not park — so a fetch the *load path*
+  reaches is refused there. The build prints a warning naming it.
+- **`:body` is one eager string**, not a stream: the whole reply arrived with
+  the call. [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md)
+  passes it through, so the drain spelling above needs no edit.
+- **Started == settled.** The future is settled the moment `fetch` returns
+  (the stack was parked for the entire round trip), so `await` never suspends,
+  two fetches never overlap, and a transport failure signals at the `fetch`
+  call rather than at the `await` — the [degenerate async
+  shape](async.md#under-the-hood-wasi-preview-3-futures--streams) Preview 1
+  has everywhere.
+
+The host side owes one obligation in return, which the build also prints:
+enter every export through `WebAssembly.promising` and serialise the calls. A
+suspended handler returns control to the event loop, and a second request
+entering the same instance would share its globals and its allocator — the
+module refuses that re-entry with a trap rather than corrupting both calls. A
+synchronous `env.fetch` (node without JSPI, a test stub) needs none of this
+and is equally valid.
+
+The usual shape is a served reactor: an
+[`http-handler`](http-handler.md) or a
+[Clack application](clack.md#a-host-that-calls-you-the-reactor-build) compiled
+with these flags exports `handle-request`, and its handler is what fetches.
+[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
+is exactly that, JavaScript side included — one source that also runs on the
+interpreter, the JVM and a `wasi:http` component.
 
 For raw TCP instead of HTTP — or to implement the *server* side — see the
 [TCP Sockets guide](tcp-sockets.md).

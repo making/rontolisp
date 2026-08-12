@@ -227,6 +227,29 @@ foreground. `clackup`'s default middlewares stay on everywhere: lack's
 `--no-wasi` is a discarding sink and on every other backend is real standard
 error.
 
+### A handler that fetches: `--host-fetch`
+
+A reactor imports nothing, which also means it has no HTTP client — so an
+application that calls [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md)
+(a proxy, an API gateway) needs one more flag. `--host-fetch` lowers `fetch`
+onto the host's own client as a single `env.fetch` import; that one import is
+the whole difference to the module above:
+
+```console
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
+```
+
+The route bodies stay synchronous. Only an `async-defun` / `async-lambda` body
+may `await`, so a route that needs a fetched value calls one and returns its
+**future** — the reactor transport resolves a future-valued response at the
+boundary, exactly as `wasmtime serve` does under `--component`. The
+[fetch guide](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch) has
+what else is particular to this transport (an eager `:body`, a settled future,
+and the JSPI obligation on the JavaScript side), and
+[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
+is a routed Worker built this way — one source that also serves a socket on the
+interpreter and the JVM.
+
 ### Driving the reactor by hand: `clack-handler-reactor`
 
 A second built-in handler backend makes the reactor shape **explicit and

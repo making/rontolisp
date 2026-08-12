@@ -249,6 +249,20 @@ await 中の非同期関数がサスペンドする対象です。
 ゲストのストリーム操作がコンパイル時に拒否される点だけです。**`--no-gc`** は
 非同期の表面全体を名指しで拒否します。
 
+**`--no-wasi` リアクタ**は Preview 1 モジュールなので、持っている future も
+この退化したものです — それでいて、本物の非同期ホスト I/O を行う唯一の
+Preview 1 ビルドでもあります。待つのがゲストではなく *ホスト* だからです。
+[`--host-fetch`](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch)
+は `rontolisp:fetch` をひとつのホストimportへ経路付けし、JavaScript ホストは
+それを `WebAssembly.Suspending` (JSPI) で実装します: promise が確定するまで
+wasm スタック全体が停止するため、`(await (fetch ...))` は他のどのバックエンド
+とも同じに読め、`fetch` が返った時点でその future はすでに確定しています。
+代償は Lisp 側ではなくホスト側が払います — すべてのエクスポートを
+`WebAssembly.promising` 経由で呼び、呼び出しを直列化しなければならず
+(再入されたエクスポートはトラップで拒否します)、また**ロードパス**は fetch に
+到達してはなりません。`_initialize` はサスペンドするホストが停止できない唯一の
+スタックだからです。
+
 ## 非同期が現れる場所
 
 非同期の表面は意図的に小さく保たれています。ほとんどのプログラムは、その上に
@@ -260,3 +274,6 @@ await 中の非同期関数がサスペンドする対象です。
   (たとえば fetch するもの) は自身が `async-defun` でなければならない。
 - [TCP ソケット](tcp-sockets.md) — コンポーネントの中では、保留中の
   `tcp-accept` やソケット読み取りは自分のタスクだけをサスペンドさせる。
+- [ホスト駆動のリアクタ](wasm-gc-module.md#no-wasi-reactor-mode) — 同期的な
+  ハンドラは `await` できないので、`async-defun` が生んだ FUTURE をそのまま
+  返し、リアクタのトランスポートが境界でそれを解決する。
