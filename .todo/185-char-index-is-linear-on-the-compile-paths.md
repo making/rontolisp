@@ -55,6 +55,29 @@ component, 1328 to 90 on WASM Preview 1 and 280 to 27 on the JVM -- and from 68 
 per access. That workaround belongs to that one emitter; it does nothing for user
 code.
 
+### Third sighting: it makes every Cloudflare Worker quadratic in body size (2026-08-13)
+
+A host-driven reactor hands the request over as ONE JSON string with the body
+inside it, so `json-parse` scans a body-sized string -- and `json-parse` is
+`(char s j)` in a loop. `examples/cloudflare-workers/httpbin` unedited
+(`--no-wasi --optimize=size`, one request per instance):
+
+| body | `handle-request` |
+| --- | --- |
+| 4 KiB | 24 ms |
+| 16 KiB | 252 ms |
+| 64 KiB | 3453 ms |
+| 256 KiB | **54701 ms** |
+
+Isolated on the same module: the `:string` boundary itself is FLAT (256 KiB
+crosses in 1.0 ms), and `json-parse` alone is 64.6 / 857.9 / 13188.5 ms at
+16K / 64K / 256K. The JVM compile path has the same shape (28 / 325 / 5238 ms);
+the interpreter, whose `json-parse` is Java, is linear (51 / 65 / 218 ms) -- so
+this is the walk, not the parser's algorithm. `.todo/341` changes the envelope
+so a body never rides inside JSON again, which lowers the exposure but not the
+shape: any user program parsing a large JSON string on a compile backend still
+pays it.
+
 ## What to do
 
 Per backend, make a character index O(1) or amortized O(1):
