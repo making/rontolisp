@@ -150,6 +150,18 @@ per-task store. This is NOT a claim that the wasm backends are concurrency-safe
 in general -- see `.todo/190` for a wasmCloud concurrency trap with a different
 cause.
 
+**That trigger has FIRED (2026-08-12), on a target the divergence did not
+anticipate.** A `--no-wasi` reactor whose host answers an import through JSPI
+(`WebAssembly.Suspending`, `.kb/wasm-import.md`) suspends the whole wasm stack
+mid-call and hands control back to the host's event loop, which may re-enter the
+export before the first call resumes -- exactly the "suspends a handler
+MID-extent" condition above, arriving through a host import rather than through
+`await`. The divergence is not retired yet because the shipped instance
+(`examples/cloudflare-workers/dog-fetcher`) serialises calls in its JavaScript,
+so nothing overlaps in practice; what is owed is the reproduction and the
+per-task store, tracked with the allocator half of the same problem in
+`.todo/337`.
+
 Same shape as the pre-thread-scoped JVM design: `Ctx.specialVars`, specials
 unioned into `globals` (module-level
 `(mut (ref null eq))`). A special binding saves the global into a temp local
