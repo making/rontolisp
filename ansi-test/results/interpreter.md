@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**7,254 / 17,689 tests pass (41.0%)** -- 3,370 fail, 7,065 signal an error.
+**7,879 / 17,687 tests pass (44.5%)** -- 2,748 fail, 7,060 signal an error.
 
-7 top-level forms could not be read, 2,222 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 2,224 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -12,7 +12,7 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | characters | 255 | 147 | 15 | 93 | 57.6% | 21 |
 | conditions | 665 | 374 | 216 | 75 | 56.2% | 25 |
 | cons | 1,702 | 558 | 93 | 1,051 | 32.8% | 105 |
-| data-and-control-flow | 1,378 | 915 | 121 | 342 | 66.4% | 68 |
+| data-and-control-flow | 1,378 | 917 | 121 | 340 | 66.5% | 68 |
 | environment | 209 | 81 | 10 | 118 | 38.8% | 18 |
 | eval-and-compile | 295 | 193 | 41 | 61 | 65.4% | 28 |
 | files | 87 | 8 | 3 | 76 | 9.2% | 17 |
@@ -21,19 +21,19 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | misc | 738 | 556 | 17 | 165 | 75.3% | 19 |
 | numbers | 1,368 | 521 | 61 | 786 | 38.1% | 107 |
 | objects | 695 | 239 | 163 | 293 | 34.4% | 238 |
-| packages | 455 | 25 | 42 | 388 | 5.5% | 72 |
+| packages | 455 | 31 | 36 | 388 | 6.8% | 72 |
 | pathnames | 215 | 21 | 3 | 191 | 9.8% | 17 |
 | printer | 505 | 99 | 74 | 332 | 19.6% | 92 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
-| reader | 560 | 52 | 288 | 220 | 9.3% | 40 |
-| sequences | 2,402 | 1,459 | 202 | 741 | 60.7% | 903 |
+| reader | 560 | 52 | 287 | 221 | 9.3% | 40 |
+| sequences | 2,403 | 1,459 | 202 | 742 | 60.7% | 902 |
 | streams | 709 | 142 | 85 | 482 | 20.0% | 112 |
 | strings | 495 | 192 | 100 | 203 | 38.8% | 32 |
 | structures | 960 | 311 | 241 | 408 | 32.4% | 46 |
-| symbols | 1,141 | 48 | 1,002 | 91 | 4.2% | 21 |
+| symbols | 1,138 | 665 | 387 | 86 | 58.4% | 24 |
 | system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
 | types-and-classes | 613 | 263 | 235 | 115 | 42.9% | 31 |
-| **total** | **17,689** | **7,254** | **3,370** | **7,065** | **41.0%** | **2,229** |
+| **total** | **17,687** | **7,879** | **2,748** | **7,060** | **44.5%** | **2,231** |
 
 ## Most frequent failure reasons
 
@@ -41,29 +41,29 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 |---:|---|
 | 370 | `IllegalArgumentException: X expects keyword arguments :X, got: :X` |
 | 290 | `IllegalArgumentException: X expects keyword arguments :test/:test-not/:key, got: :X` |
-| 222 | `The variable *MINI-UNIVERSE* is unbound` |
-| 206 | `Function expects 1 argument, got 2` |
+| 223 | `The variable *MINI-UNIVERSE* is unbound` |
+| 207 | `Function expects 1 argument, got 2` |
 | 200 | `The variable *UNIVERSE* is unbound` |
 | 181 | `The function MAKE-PACKAGE is undefined` |
 | 163 | `X: there is no class named X` |
 | 144 | `X expects 1 arguments, got 2` |
 | 139 | `X expects at least one dimension` |
-| 135 | `Function expects 1 argument, got 0` |
+| 136 | `Function expects 1 argument, got 0` |
 | 127 | `Not a function: X` |
 | 123 | `The function MERGE is undefined` |
-| 101 | `UnsupportedOperationException: setf does not support place: X` |
+| 104 | `UnsupportedOperationException: setf does not support place: X` |
 | 96 | `The function COUNT-IF-NOT is undefined` |
 | 92 | `X expects 2 arguments, got 4` |
 | 86 | `X expects 2 arguments, got 1` |
 | 84 | `X expects 1 arguments, got 0` |
 | 80 | `The variable *NUMBERS* is unbound` |
-| 76 | `complex numbers are not supported (imaginary part X)` |
+| 75 | `complex numbers are not supported (imaginary part X)` |
 | 68 | `The function FLOAT-RADIX is undefined` |
 | 66 | `car expects a cons cell, got: A` |
 | 65 | `The variable *FLOATS* is unbound` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
 | 63 | `X expects 1 arguments, got 5` |
-| 58 | `Unknown keyword argument: :X` |
+| 56 | `Unknown keyword argument: :X` |
 | 55 | `The variable #C is unbound` |
 | 54 | `The function NUNION is undefined` |
 | 53 | `The function SET-UP-PACKAGES is undefined` |
