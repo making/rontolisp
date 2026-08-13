@@ -95,15 +95,17 @@ request `:body` from an s-expression.
   proxy-style handler): run it with `wasmtime serve -W gc=y -W exceptions=y` —
   the serve host provides `wasi:http/client` by default, no `-S http=y` needed.
 - **`--no-wasi` reactor with `--host-fetch`**: the same source compiles on a
-  reactor (which imports no WASI), lowered onto ONE injected host import,
-  `env.fetch(request-json) -> response-json` — the host's own HTTP client
+  reactor (which imports no WASI), lowered onto two injected host imports —
+  `env.fetch(request-json) -> response-head-json` and
+  `env.readResponseBody(ptr, cap) -> i32` — over the host's own HTTP client
   (a Cloudflare Worker's `fetch` behind JSPI, or any synchronous
-  implementation). The result plist is the same, with `:body` one **eager
-  string** (the whole reply arrived with the call), which
-  [`rontolisp:read-all`](rontolisp-read-all.md) passes through — so the drain
-  spelling above needs no edit. The future is settled at creation (the host
-  call blocked the whole stack): requests never overlap, and a transport
-  failure signals at the `fetch` call rather than at `await`. Without the
+  implementation). The result plist is the same, `:body` the same asynchronous
+  stream: the head arrives with the call and the body is pulled a chunk at a
+  time as the drain asks for it, so a large or binary reply never becomes a
+  JSON string. The future is settled at creation (the host call blocked the
+  stack until the headers): requests never overlap, and a transport failure
+  before the head signals at the `fetch` call rather than at `await` — one
+  during the body signals at the drain, as on every other backend. Without the
   flag, `--no-wasi` keeps the compile error.
 - **Browser playground**: truly asynchronous. The interpreter runs in a Web
   Worker; `fetch` hands the request to the page's main thread, which runs the

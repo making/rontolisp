@@ -22,9 +22,9 @@
 > 行えるホストを必要とし、それは **component** (`--component`。非同期の
 > `wasi:http@0.3.0` をimportし、通常のフラグに加えて `-S http=y` を付けて
 > 実行します) か、**`--host-fetch` 付きでビルドした `--no-wasi` リアクタ**
-> のどちらかです。後者は同じソースを `env.fetch` というひとつのimport経由で
-> ホスト自身のHTTPクライアントへ落とします — Cloudflare Workerやnode埋め込み
-> がfetchする仕組みがこれです
+> のどちらかです。後者は同じソースを `env.fetch` (とレスポンスボディ用の
+> `env.readResponseBody`) というimport経由でホスト自身のHTTPクライアントへ
+> 落とします — Cloudflare Workerやnode埋め込みがfetchする仕組みがこれです
 > ([後述の節](#fetching-from-a-reactor---no-wasi---host-fetch))。どちらでも
 > ない場合、`fetch` はPreview 1 (コアモジュール) モードではコンパイルエラーに
 > なります。**ブラウザプレイグラウンド** では本物のブラウザの
@@ -227,15 +227,17 @@ wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
 importしないため、fetchを通す `wasi:http` を持ちません — しかしリアクタを
 駆動するホスト (Cloudflare Worker、node、ブラウザページ) は自前のHTTP
 クライアントを持っています。`--host-fetch` は `rontolisp:fetch` をそこへ、
-`env.fetch(request-json) -> response-json` というひとつの注入importとして
-経路付けします:
+2つの注入importとして経路付けします — リクエストとレスポンスのヘッドを運ぶ
+`env.fetch(request-json) -> response-head-json` と、ボディを運ぶ
+`env.readResponseBody(ptr, cap) -> i32` です:
 
 ```bash
 rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
 ```
 
 Lisp側は何も変わりません — オプションも `(:status :headers :body)` の答えも
-同一です — が、このバックエンドに固有な点が3つあります:
+同一で、`:body` は他と同じく非同期ストリームです — が、このバックエンドに
+固有な点が3つあります:
 
 - **fetchはトップレベルではなくエクスポートの中に置く。** リアクタには
   `_start` がありません: ホストがインスタンス化し、エクスポートされた関数を
@@ -244,15 +246,23 @@ Lisp側は何も変わりません — オプションも `(:status :headers :bo
   `_initialize` だけは停止できない唯一のスタックです — したがって
   *ロードパス* が到達するfetchはそこで拒否されます。ビルドはそれを名指しで
   警告します。
-- **`:body` はストリームではなくeagerな文字列ひとつ**です: 呼び出しと同時に
-  レスポンス全体が届いています。
-  [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) は
-  それを素通しするので、上記の読み尽くしの書き方は一切変更不要です。
-- **開始 == 確定。** future は `fetch` が返った時点で確定済みです (往復の間
-  スタック全体が停止していたため)。したがって `await` はサスペンドせず、
-  2つのfetchが重なることはなく、通信の失敗は `await` ではなく `fetch` の
-  呼び出しで signal されます — Preview 1 が一貫して持つ[退化した非同期の
-  形](async.md#under-the-hood-wasi-preview-3-futures--streams)です。
+- **ボディはヘッドの後から、1チャンクずつ届く。** `env.fetch` が答えるのは
+  ステータスとヘッダで、オクテットは読み尽くしが要求するたびに
+  `env.readResponseBody` 経由で、モジュールが渡すバッファへ引き込まれます
+  (ホストは書き込んだ個数を答え、`0` がストリーム終端です)。したがって大きな
+  レスポンスがJSON文字列になることはなく、*バイナリ*のレスポンスもオクテット
+  のまま渡り、Workerは上流のストリーミングレスポンスをそのまま自分の
+  クライアントへ転送できます。
+- **開始 == 確定。ただし確定するのはヘッド。** future は `fetch` が返った
+  時点で確定済みです (ヘッダまでの往復の間スタック全体が停止していたため)。
+  したがって `await` はサスペンドせず、2つのfetchが重なることもありません —
+  Preview 1 が一貫して持つ[退化した非同期の
+  形](async.md#under-the-hood-wasi-preview-3-futures--streams)です。よって
+  ヘッドより*前*の通信失敗は `fetch` の呼び出しで signal され、ボディ*途中*の
+  失敗は他のすべてのバックエンドと同様に読み尽くしで signal されます。生きて
+  いるレスポンスボディは同時にひとつだけです: 前のボディを読み尽くす前に次の
+  `fetch` を始めると、その読み尽くしは新しいレスポンスのオクテットを返す
+  代わりに signal します。
 
 引き換えにホスト側がひとつ義務を負い、これもビルドが表示します:
 すべてのエクスポートを `WebAssembly.promising` 経由で呼び、呼び出しを直列化

@@ -283,9 +283,12 @@ definition for every backend), lazy-loaded on the interpreter and spliced on
 the compile paths -- which is why compiler tests that use it must mirror the
 CLI's `LispPreludeLibrary.process` pre-pass (JvmLispCompilerTest's
 compileAndRun does). Since todo-335 it PASSES A STRING THROUGH (a `stringp`
-arm before the drain loop): a body that has fully arrived -- a `--host-fetch`
-reactor's `:body`, or the declared absent-body default `""` -- is its own
-drained value, so `(await (read-all (getf res :body)))` is target-free.
+arm before the drain loop): a body that has fully arrived is its own drained
+value, so `(await (read-all (getf res :body)))` is target-free. It is no longer
+the reason a `--host-fetch` reactor's bodies are strings -- todo-347 took that
+body out of its JSON envelope and `:body` is a stream on all four backends now
+(`.kb/fetch-http.md`) -- but the arm stays: a user plist, and the declared
+absent-body default `""`, still take it.
 Pinned per backend (AsyncEvalTest / JvmAsyncCompilerTest) and end-to-end by
 the `read-all-passes-a-string-through` ci-spec case.
 

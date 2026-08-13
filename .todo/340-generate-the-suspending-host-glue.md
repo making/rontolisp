@@ -25,6 +25,20 @@ the same kind of derivable boilerplate:
 - the serialisation queue todo-337's re-entrancy analysis demands (one promise
   chain; per-call allocator scopes are todo-337's problem, not this one's).
 
+**What the boundary looks like now (2026-08-13).** `.todo/341` and `.todo/347`
+landed ahead of this item, so the hand-written surface is bigger than the text
+above describes and MORE derivable, not less: a fetching reactor's
+`src/index.js` now writes four entries by hand -- `env.fetch`,
+`env.readResponseBody`, `env.readRequestBody`, `env.writeResponseBody` -- and
+three of them are the SAME `read(2)` / write shape over a cursor the host owns
+(`.kb/fetch-http.md`, `.kb/clack.md`). Their bodies are boilerplate a generator
+can write from the declarations; what is genuinely per-host is which source the
+cursor reads (a `ReadableStream` reader, a `Uint8Array`) and nothing else.
+`.todo/347` was ordered AFTER this item to avoid adding a hand-written import
+before generation existed; it went first anyway because the divergence it fixed
+was a correctness gap, and the cost is exactly one more entry in each of the
+three glue files.
+
 Open questions to settle first:
 
 - Where it hangs: an `--emit-js-glue` flag beside `--emit-wit`? The generator

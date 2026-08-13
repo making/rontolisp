@@ -271,20 +271,25 @@ class WasmImportCompilerTest {
 	}
 
 	// Mirrors the CLI pre-passes of a --no-wasi --host-fetch build: the HostFetchLibrary
-	// splice (the env.fetch wasm-import + the envelope defuns), then the JSON library
-	// and the prelude picking up the splice's own call sites.
+	// splice (the two env imports + the envelope defuns), the reactor transport whose
+	// body-source machinery the reply's stream rides, then the JSON library and the
+	// prelude picking up the splice's own call sites.
 	private static byte[] compileHostFetch(String source) {
 		List<LispVal> loaded = am.ik.rontolisp.eval.HostFetchLibrary
 			.process(LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR));
-		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
-			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
+		loaded = am.ik.rontolisp.eval.HttpReactorLibrary.process(loaded);
+		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, false);
+		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
 		return new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, true).compile(program);
 	}
 
 	@Test
 	void hostFetchLowersFetchAtEnvFetchAndAProgramThatNeverFetchesImportsNothing() {
 		// The whole point of the flag: rontolisp:fetch COMPILES on a --no-wasi reactor,
-		// carried by exactly one host import -- env.fetch -- and nothing else.
+		// carried by the host imports the boundary declares -- the head through
+		// env.fetch, the reply BODY out of band through env.readResponseBody -- and
+		// nothing else.
 		byte[] module = compileHostFetch("""
 				(rontolisp:async-defun dog ()
 				  (let* ((res (rontolisp:await (rontolisp:fetch "https://dog.ceo/api/breeds/image/random")))
@@ -293,8 +298,8 @@ class WasmImportCompilerTest {
 				(defun run () (rontolisp::%future-force (dog)))
 				(rontolisp:wasm-export 'run :params '() :returns :string)
 				""");
-		assertThat(functionImports(module)).singleElement()
-			.satisfies(entry -> assertThat(entry).containsExactly("env", "fetch"));
+		assertThat(functionImports(module).stream().map(entry -> String.join(".", entry)))
+			.containsExactlyInAnyOrder("env.fetch", "env.readResponseBody");
 
 		// And the zero-import contract is untouched for a program that never fetches:
 		// asking for a host fetch costs an import only where fetch is used.

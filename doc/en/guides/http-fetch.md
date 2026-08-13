@@ -22,7 +22,8 @@ assumes; here we cover only what is particular to making requests.
 > for it, which is either a **component** (`--component`, importing the async
 > `wasi:http@0.3.0`, run with `-S http=y` on top of the usual flags) or a
 > **`--no-wasi` reactor built with `--host-fetch`**, which lowers the same
-> source onto the host's own HTTP client through one `env.fetch` import — that
+> source onto the host's own HTTP client through an `env.fetch` import (plus
+> `env.readResponseBody` for the reply body) — that
 > is how a Cloudflare Worker or a node embedding fetches
 > ([the section below](#fetching-from-a-reactor---no-wasi---host-fetch)). With
 > neither, `fetch` is a compile error in Preview 1 (core-module) mode. In the
@@ -219,16 +220,17 @@ wasmtime run -W gc=y -W exceptions=y -S http=y fetch-post.wasm
 A [`--no-wasi` reactor](wasm-gc-module.md#no-wasi-reactor-mode) imports no
 WASI, so it has no `wasi:http` to fetch through — but the hosts that drive one
 (a Cloudflare Worker, node, a browser page) have an HTTP client of their own.
-`--host-fetch` routes `rontolisp:fetch` at it, as ONE injected import
-`env.fetch(request-json) -> response-json`:
+`--host-fetch` routes `rontolisp:fetch` at it, as two injected imports —
+`env.fetch(request-json) -> response-head-json` for the request and the reply's
+head, and `env.readResponseBody(ptr, cap) -> i32` for the reply's body:
 
 ```bash
 rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
 ```
 
 Nothing in the Lisp changes — same options, same
-`(:status :headers :body)` answer — but three things are particular to this
-backend:
+`(:status :headers :body)` answer, `:body` an asynchronous stream like
+everywhere else — but three things are particular to this backend:
 
 - **The fetch belongs inside an export, not at the top level.** A reactor has
   no `_start`: the host instantiates it and calls an exported function. A
@@ -236,15 +238,23 @@ backend:
   which parks the whole wasm stack until the promise settles, and
   `_initialize` is the one stack it may not park — so a fetch the *load path*
   reaches is refused there. The build prints a warning naming it.
-- **`:body` is one eager string**, not a stream: the whole reply arrived with
-  the call. [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md)
-  passes it through, so the drain spelling above needs no edit.
-- **Started == settled.** The future is settled the moment `fetch` returns
-  (the stack was parked for the entire round trip), so `await` never suspends,
-  two fetches never overlap, and a transport failure signals at the `fetch`
-  call rather than at the `await` — the [degenerate async
-  shape](async.md#under-the-hood-wasi-preview-3-futures--streams) Preview 1
-  has everywhere.
+- **The body arrives after the head, one chunk at a time.** `env.fetch`
+  answers status and headers; the octets are pulled through
+  `env.readResponseBody` as the drain asks for them, into a buffer the module
+  passes (the host answers how many it wrote, `0` for end of stream). So a
+  large reply never becomes a JSON string, a *binary* reply crosses as the
+  octets it is, and a Worker can forward a streamed upstream response straight
+  to its own client.
+- **Started == settled, and settled means the HEAD.** The future is settled the
+  moment `fetch` returns (the stack was parked for the round trip to the
+  headers), so `await` never suspends and two fetches never overlap — the
+  [degenerate async
+  shape](async.md#under-the-hood-wasi-preview-3-futures--streams) Preview 1 has
+  everywhere. A transport failure *before* the head therefore signals at the
+  `fetch` call; one *during* the body signals at the drain, like every other
+  backend. One reply body is live at a time: starting the next `fetch` before
+  draining the previous one makes that drain signal rather than answer the new
+  reply's octets.
 
 The host side owes one obligation in return, which the build also prints:
 enter every export through `WebAssembly.promising` and serialise the calls. A

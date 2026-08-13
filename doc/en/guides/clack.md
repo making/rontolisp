@@ -232,8 +232,9 @@ error.
 A reactor imports nothing, which also means it has no HTTP client — so an
 application that calls [`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md)
 (a proxy, an API gateway) needs one more flag. `--host-fetch` lowers `fetch`
-onto the host's own client as a single `env.fetch` import; that one import is
-the whole difference to the module above:
+onto the host's own client as an `env.fetch` import for the request and the
+reply's head, plus an `env.readResponseBody` import the reply's body is pulled
+through; those two imports are the whole difference to the module above:
 
 ```console
 $ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
@@ -244,8 +245,9 @@ may `await`, so a route that needs a fetched value calls one and returns its
 **future** — the reactor transport resolves a future-valued response at the
 boundary, exactly as `wasmtime serve` does under `--component`. The
 [fetch guide](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch) has
-what else is particular to this transport (an eager `:body`, a settled future,
-and the JSPI obligation on the JavaScript side), and
+what else is particular to this transport (a body pulled after the head, a
+future settled at the headers, and the JSPI obligation on the JavaScript side),
+and
 [`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
 is a routed Worker built this way — one source that also serves a socket on the
 interpreter and the JVM.

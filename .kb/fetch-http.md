@@ -19,11 +19,18 @@ the internal degenerate `TYPE_P1_FUTURE` struct (settled at creation;
 **fetch itself needs a transport**: `WasmFetchCompiler` is a compile error on plain
 Preview 1 (no host wasi:http), and on `--no-wasi` WITHOUT `--host-fetch` (the message
 names the flag); the JVM emits the fetch/await runtime when fetch or await is used.
-**On a `--no-wasi` reactor, `--host-fetch` is the transport (todo-335, 2026-08-12)**:
-`HostFetchLibrary` (eval pkg) splices a generated Lisp lowering — one
-`rontolisp:wasm-import` of `env.fetch(request-json) -> response-json` (`:string` ->
-`:string`, riding the ordinary synthetic-defun machinery, appended after the program so
-user import ordinals are unchanged) plus envelope defuns whose JSON keys are DERIVED
+**On a `--no-wasi` reactor, `--host-fetch` is the transport (todo-335, 2026-08-12;
+the body split out of the envelope by todo-347, 2026-08-13)**:
+`HostFetchLibrary` (eval pkg) splices a generated Lisp lowering — TWO
+`rontolisp:wasm-import`s (both riding the ordinary synthetic-defun machinery, appended
+after the program so user import ordinals are unchanged):
+
+```
+env.fetch(headPtr, headLen) -> (ptr, len)   ; request head JSON -> response HEAD json
+env.readResponseBody(ptr, cap) -> i32       ; :bytes, :async t; 0 = EOF, <0 = failed
+```
+
+plus envelope defuns whose JSON keys are DERIVED
 from `FetchResponseShape`'s records (a `request` record — url/method/headers/body,
 `body` an `option<string>` so an absent `:body` crosses as an absent key — beside the
 existing `response` record; the error arm is the reserved
@@ -31,9 +38,8 @@ existing `response` record; the error arm is the reserved
 plain defun over an async-defun runner, so it answers the settled `TYPE_P1_FUTURE`
 (started == settled: the host call blocks the wasm stack — synchronously, or suspended
 through JSPI — so `(await (fetch ...))` reads identically and never suspends; a
-transport failure signals at the CALL, the P1 degenerate divergence). `:body` is one
-EAGER STRING, which `read-all` passes through (the prelude's stringp arm — on every
-backend, so the drain spelling is target-free). The splice is gated on the program
+transport failure BEFORE the head signals at the CALL, the P1 degenerate divergence).
+The splice is gated on the program
 referencing `rontolisp:fetch` (a build that never fetches still imports NOTHING), the
 compiler guards the flag (`hostFetch` requires `noWasi`, rejects `component`; CLI
 rejects `.class`/`--no-gc`), and the BUILD prints the host obligation (a synchronous
@@ -44,11 +50,55 @@ trap, the todo-337 guard in `.kb/wasm-import.md`), plus a
 cannot serve `_initialize`). Envelope pinned by `HostFetchLibraryTest` (generated Lisp
 AND `examples/cloudflare-workers/dog-fetcher/src/index.js` against the records) and
 `FetchResponseShapeTest`; imports by `WasmImportCompilerTest`; the showcase — verified
-under `wrangler dev` against the real dog.ceo — is
+under `wrangler dev` against the real dog.ceo before the todo-347 split, and after it by
+driving the SHIPPED `src/index.js` (both imports behind `WebAssembly.Suspending`) under
+node 24 `--experimental-wasm-jspi` against a stub upstream that answers in 7-octet
+chunks — is
 `examples/cloudflare-workers/dog-fetcher`, itself a `:server :rontolisp` ONE-SOURCE
 program (interpreter/JVM socket, `wasmtime serve`, and the Worker — all four legs
 verified; `.kb/clack.md`), and `examples/net/dog-fetcher.lisp` compiles UNEDITED under
 `--no-wasi --host-fetch` (its `http-handler` lowers to the reactor transport).
+
+**The `:body` split, and what it changed (todo-347).** The reply body used to ride the
+response envelope as one JSON string, so a reactor's `:body` was an EAGER STRING decided
+before any Lisp ran: the whole reply was copied into linear memory twice, a BINARY reply
+could not cross at all (a `:string` result is a non-validating UTF-8 decode -- `ff fe 41`
+came back as code point 0x1FE062 and two NULs), and a Worker could not forward a streamed
+upstream response. The body now crosses through its own import and `:body` is
+`rontolisp::%stream-new` over a pull thunk on it, so the contract below is finally true on
+all four backends rather than three. Mechanics, all in `HostFetchLibrary`:
+
+- the thunk is the reactor's own transport calls (`%http-reactor-buffer` /
+  `%http-reactor-chunk` / `%http-reactor-body-stream`, `.kb/clack.md`), so ONE reused
+  receive buffer and ONE chunk-boundary UTF-8 decode serve both directions of every
+  reactor boundary. **Consequence to know before measuring a fetch-only build**: naming
+  them splices `http-reactor.lisp` (and with it `http-server.lisp`), which every real
+  `--host-fetch` program -- they are reactors -- already had. Lift the three helpers into
+  a library of their own if a fetch-only Worker ever needs those bytes back;
+- the thunk CALLS the import rather than taking `#'name` (the suspending-import report
+  follows calls), and its parameter is `token`, not `open` -- `NoWasiFilesystemStubs`
+  rewrites a variable of that name into a call to `cl:open`;
+- **the head's `"body"` key survives as the IN-BAND fallback**: a host that would rather
+  answer the whole reply at once still may, and that string is the already-buffered case
+  of the same abstract source. Absent -- the normal case -- puts the stream over the
+  import, and an absent-body reply (a HEAD, a 204) is that stream finding EOF at its
+  first pull;
+- **one live reply body, deliberately no handle.** The host has ONE read cursor, moved by
+  each `env.fetch`; a module-side counter (`%host-fetch-open`) makes draining a
+  SUPERSEDED body signal instead of answering the next reply's octets. Revisit if
+  `.todo/340`'s generated glue makes a per-response handle free;
+- **a NEGATIVE count is the error channel** the split needs: without one a transport that
+  died mid-body would look like a short body. It signals at the DRAIN, which is the
+  semantic change this forced -- the future now settles at the HEADERS, so only a failure
+  before them still signals at the call (documented in `doc/{en,ja}/guides/http-fetch.md`).
+
+Pinned by `WasmHostFetchBodyE2eTest` (node, a JS host sharing the module's memory: the
+portable drain over a body every chunk boundary of which falls inside a code point, one
+pull per chunk plus the EOF one, `ff fe 41` crossing exactly, the in-band fallback, a
+256 KiB reply never drained leaving `memory.buffer.byteLength` where it was over four
+fetches AND four drains of the same body ending where the first left it, the mid-body
+failure at the drain and the superseded-body guard). What ONE drain PEAKS at is not this
+boundary: the chunk decode's string output stream is `.todo/350`.
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with

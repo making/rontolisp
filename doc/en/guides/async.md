@@ -264,10 +264,12 @@ A **`--no-wasi` reactor** is a Preview 1 module, so those degenerate futures are
 what it has — and yet it is the one Preview 1 build that does real asynchronous
 host work, because the *host* does the waiting rather than the guest.
 [`--host-fetch`](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch)
-routes `rontolisp:fetch` at one host import, and a JavaScript host implements it
-with `WebAssembly.Suspending` (JSPI): the whole wasm stack parks until the
-promise settles, so `(await (fetch ...))` reads exactly as it does everywhere
-else, and by the time `fetch` returns its future is already settled. The price
+routes `rontolisp:fetch` at a pair of host imports (the head, then the body a
+chunk at a time), and a JavaScript host implements them with
+`WebAssembly.Suspending` (JSPI): the whole wasm stack parks until the promise
+settles, so `(await (fetch ...))` reads exactly as it does everywhere else, and
+by the time `fetch` returns its future — the reply's HEAD — is already
+settled. The price
 is paid on the host side, not in the Lisp — every export must be entered through
 `WebAssembly.promising` and calls must be serialised (a re-entered export
 refuses with a trap), and nothing on the **load path** may fetch, because

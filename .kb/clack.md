@@ -527,7 +527,12 @@ body — the todo's finding 2 — while one buffer grows it by nothing), and the
 count-to-chunk step is where the octets are copied out before the next read
 overwrites them. Reuse is sound because a reactor answers one request at a time;
 the re-entry guard a suspending module carries (`.kb/wasm-import.md`) refuses the
-overlap that would share the buffer.
+overlap that would share the buffer. **Its second consumer is the OUTGOING
+direction**: `--host-fetch`'s reply body is a pull thunk over these same two
+calls plus `%http-reactor-body-stream` (todo-347, `.kb/fetch-http.md`), which is
+why they are named in the transport rather than in the reactor bridge — a
+`--host-fetch` build shares the one buffer with the request body, and sharing is
+safe precisely because the count-to-chunk step copies out.
 
 **An EMPTY source is no body, and costs one look-ahead.** Once the body stops
 riding the envelope, "is there a body at all" is a question only the host can

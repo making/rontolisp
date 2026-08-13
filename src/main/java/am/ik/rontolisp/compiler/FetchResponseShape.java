@@ -50,8 +50,11 @@ import org.jspecify.annotations.Nullable;
  * {@code (name . value)} conses, not the positional 2-lists a
  * {@code list<tuple<string, string>>} would map to; a missing {@code status} defaults to
  * {@link #RESPONSE_STATUS_DEFAULT} and a missing {@code body} to
- * {@link #RESPONSE_BODY_DEFAULT}; a {@code body} may also be an eager string, not only a
- * stream. Defaults live here (WIT cannot express them) so they too are written once.
+ * {@link #RESPONSE_BODY_DEFAULT}. Defaults live here (WIT cannot express them) so they
+ * too are written once. The {@code stream<u8>} body is now what every backend really
+ * answers: the {@code --host-fetch} reactor's eager string was the last exception and
+ * went when its body left the JSON envelope for an import of its own
+ * ({@code eval/HostFetchLibrary}).
  */
 public final class FetchResponseShape {
 
@@ -77,8 +80,9 @@ public final class FetchResponseShape {
 			  /// injected env.fetch import carries (field name = JSON key; headers as an
 			  /// array of [name, value] pairs; an absent option crosses as an absent key),
 			  /// and the response record above is the success arm of what comes back --
-			  /// with the body an eager string there, the whole reply having arrived when
-			  /// the import call returned.
+			  /// its body left OUT, a second import (env.readResponseBody) carrying the
+			  /// octets, so the reply's `body` key there is a fallback a host may fill
+			  /// rather than the way a body normally crosses.
 			  record request {
 			    url: string,
 			    method: string,

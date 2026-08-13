@@ -3,9 +3,11 @@
 #
 # --no-wasi: the Worker calls the exported entry point directly, so the module
 #   needs no WASI imports -- it becomes a reactor (`_initialize`, not `_start`).
-# --host-fetch: rontolisp:fetch is lowered onto the host's own fetch. The
-#   module's ONE import is env.fetch(request-json) -> response-json, which
-#   src/index.js provides behind WebAssembly.Suspending (JSPI).
+# --host-fetch: rontolisp:fetch is lowered onto the host's own fetch. That
+#   costs two imports -- env.fetch(request-json) -> response-head-json and
+#   env.readResponseBody(ptr, cap) -> i32, which carries the reply's body a
+#   chunk at a time -- both provided by src/index.js behind
+#   WebAssembly.Suspending (JSPI).
 # --optimize=size: a Worker bundle has a size limit; tiny-routes/lite is what
 #   keeps cl-ppcre out of what the tree-shaker has to keep.
 #

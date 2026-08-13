@@ -253,10 +253,11 @@ await 中の非同期関数がサスペンドする対象です。
 この退化したものです — それでいて、本物の非同期ホスト I/O を行う唯一の
 Preview 1 ビルドでもあります。待つのがゲストではなく *ホスト* だからです。
 [`--host-fetch`](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch)
-は `rontolisp:fetch` をひとつのホストimportへ経路付けし、JavaScript ホストは
-それを `WebAssembly.Suspending` (JSPI) で実装します: promise が確定するまで
-wasm スタック全体が停止するため、`(await (fetch ...))` は他のどのバックエンド
-とも同じに読め、`fetch` が返った時点でその future はすでに確定しています。
+は `rontolisp:fetch` を 2 つのホストimport(ヘッド、続いてボディを 1 チャンク
+ずつ)へ経路付けし、JavaScript ホストはそれらを `WebAssembly.Suspending`
+(JSPI) で実装します: promise が確定するまで wasm スタック全体が停止するため、
+`(await (fetch ...))` は他のどのバックエンドとも同じに読め、`fetch` が返った
+時点でその future — レスポンスの**ヘッド** — はすでに確定しています。
 代償は Lisp 側ではなくホスト側が払います — すべてのエクスポートを
 `WebAssembly.promising` 経由で呼び、呼び出しを直列化しなければならず
 (再入されたエクスポートはトラップで拒否します)、また**ロードパス**は fetch に

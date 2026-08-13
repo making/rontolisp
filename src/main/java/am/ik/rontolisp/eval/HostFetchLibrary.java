@@ -14,12 +14,28 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The {@code --host-fetch} lowering of {@code rontolisp:fetch} on a {@code --no-wasi}
- * reactor: the transport is ONE injected host import,
- * {@code env.fetch(request-json) -> response-json}, and this class generates the Lisp
- * that carries {@code fetch}'s public contract across it — the request/response JSON
- * envelope derived from {@link FetchResponseShape}'s records (field name = JSON key, in
- * record order, never hand-written per host), the method validation at fetch time, and
- * the {@code (:status :headers :body)} result plist every other backend answers.
+ * reactor: the transport is TWO injected host imports — {@code env.fetch(request-json) ->
+ * response-json} for the request and the reply HEAD, and
+ * {@code env.readResponseBody(ptr, cap) -> i32} for the reply BODY — and this class
+ * generates the Lisp that carries {@code fetch}'s public contract across them: the
+ * request/response JSON envelope derived from {@link FetchResponseShape}'s records (field
+ * name = JSON key, in record order, never hand-written per host), the method validation
+ * at fetch time, and the {@code (:status :headers :body)} result plist every other
+ * backend answers.
+ *
+ * <p>
+ * <strong>The body is out of band, and that is what makes the plist's {@code :body} a
+ * STREAM here like everywhere else.</strong> It used to ride the response envelope as one
+ * JSON string, which cost the reply a full copy in linear memory before any Lisp ran,
+ * made a BINARY reply impossible (the {@code :string} decoder is non-validating, so the
+ * three octets {@code ff}/{@code fe}/{@code 41} came back as code point 0x1FE062 and two
+ * NULs) and left a Worker unable to forward a streamed upstream response. The body import
+ * is the mirror of the reactor's {@code env.readRequestBody} ({@link HttpReactorInliner})
+ * — the {@code read(2)} shape, where the CALLER passes the buffer and the host answers a
+ * count — so both directions of every reactor boundary now say the same thing, and the
+ * pull thunk over it rides the same reused buffer and chunk-boundary UTF-8 decode
+ * ({@code %http-reactor-buffer} / {@code -chunk} / {@code -body-stream},
+ * {@code .kb/clack.md}).
  *
  * <p>
  * The call returns a FUTURE like everywhere else — the defun body runs inside
@@ -27,11 +43,12 @@ import org.jspecify.annotations.Nullable;
  * {@code TYPE_P1_FUTURE}: the host import blocks the wasm stack (synchronously, or
  * suspended through JSPI), so the value is ready when the call returns and
  * {@code (rontolisp:await (rontolisp:fetch ...))} reads identically on every target.
- * Consequences of that degeneracy, documented as the flag's contract: started == settled
- * (two fetches never overlap), and a transport failure signals at the CALL rather than at
- * await (the Preview 1 async divergence, {@code .kb/async-await.md}). The {@code :body}
- * is an eager string — the whole reply arrived with the import call — which
- * {@code rontolisp:read-all} passes through, so the drain loop needs no edit either.
+ * Consequences of that degeneracy, documented as the flag's contract: started == settled,
+ * so two fetch HEADS never overlap, and a transport failure BEFORE the head signals at
+ * the CALL rather than at await (the Preview 1 async divergence,
+ * {@code .kb/async-await.md}). What the split changes is what "settled" covers: the
+ * future settles when the HEADERS arrive, so a failure mid-BODY signals at the DRAIN —
+ * which is what the other three backends have always done.
  *
  * <p>
  * Consumers: {@code RontoLispCli} calls {@link #process(List)} under
@@ -51,6 +68,15 @@ public final class HostFetchLibrary {
 
 	/** The import object entry the host must provide: {@code MODULE.FIELD}. */
 	public static final String IMPORT_FIELD = "fetch";
+
+	/**
+	 * The reply BODY's own import, beside {@link #IMPORT_FIELD}:
+	 * {@code (ptr, cap) -> i32}, "write up to cap octets of the body that the last
+	 * {@code env.fetch} opened at ptr and answer how many; 0 is end of stream, a NEGATIVE
+	 * count is a transport failure mid-body". The mirror of the reactor's
+	 * {@code readRequestBody} — same {@code read(2)} shape, same {@code env} module.
+	 */
+	public static final String BODY_IMPORT_FIELD = "readResponseBody";
 
 	// The supported methods, matching the interpreter/JVM runtimes and
 	// WasmFetchCompiler's compile-time literal check (the fourth spelling of this
@@ -137,6 +163,7 @@ public final class HostFetchLibrary {
 			.append("\" :as \"")
 			.append(IMPORT_FIELD)
 			.append("\"\n                       :params '(:string) :returns :string)\n");
+		appendBodyImport(src);
 		src.append("""
 				(defun rontolisp::%host-fetch-pairs (alist)
 				  ;; header alist -> a JSON array of [name, value] (a VECTOR: an empty
@@ -169,7 +196,15 @@ public final class HostFetchLibrary {
 				(rontolisp:async-defun rontolisp::%host-fetch-run (request-json)
 				  ;; The async frame is what makes fetch answer a future; the host call
 				  ;; blocks the wasm stack (JSPI or a synchronous host), so the future is
-				  ;; settled at creation and await never suspends.
+				  ;; settled at creation and await never suspends. What it settles to is
+				  ;; the HEAD -- the body is still on the wire, and pulling it is what
+				  ;; the stream below does.
+				  ;;
+				  ;; A round trip OPENS a body: the host's read cursor moves to this
+				  ;; reply, so any body left undrained from an earlier fetch is gone. The
+				  ;; counter is how a stream over the old one finds out (see
+				  ;; %host-fetch-pull) instead of silently reading this reply's octets.
+				  (setq rontolisp::%host-fetch-open (+ rontolisp::%host-fetch-open 1))
 				  (rontolisp::%host-fetch-parse
 				   (rontolisp::%host-fetch-send request-json)))
 				(defun rontolisp:fetch (url &rest options)
@@ -178,6 +213,65 @@ public final class HostFetchLibrary {
 				   (rontolisp::%host-fetch-request url (if options (car options) nil))))
 				""");
 		return src.toString();
+	}
+
+	// The reply BODY's import and the pull stream over it. Declared :async t like the
+	// reactor's two body imports: a host that STREAMS (a WebAssembly.Suspending wrapper
+	// over a ReadableStream reader -- which is the only way a JS host can read one at
+	// all) is a declared, supported host, and a host that answers synchronously is
+	// equally valid and pays nothing.
+	//
+	// The thunk CALLS the import rather than taking #'name, or the build's
+	// suspending-import report widens to "any export may suspend"; the transport calls
+	// around it are the reactor's own (%http-reactor-buffer / -chunk / -body-stream), so
+	// the ONE reused receive buffer and the chunk-boundary UTF-8 decode stay in one
+	// place -- a body cut into chunks by a host that knows nothing about code points is
+	// the normal case in this direction too.
+	//
+	// The pull parameter is TOKEN and not `open': a variable of that name is rewritten
+	// into a call to cl:open by the --no-wasi filesystem stub pass, which cannot tell a
+	// binding from a call (compiler/NoWasiFilesystemStubs; http-server.lisp carries the
+	// same note).
+	private static void appendBodyImport(StringBuilder src) {
+		src.append("(rontolisp:wasm-import 'rontolisp::%host-fetch-read-body :from \"")
+			.append(IMPORT_MODULE)
+			.append("\" :as \"")
+			.append(BODY_IMPORT_FIELD)
+			.append("\"\n                       :params '() :returns :bytes :async t)\n");
+		src.append("""
+				;; Which reply the live body belongs to -- see %host-fetch-run. The
+				;; boundary deliberately carries no handle: the host has ONE cursor, and
+				;; a counter turns "drained too late" into an error instead of into the
+				;; next reply's octets. Drain a body before starting the next fetch.
+				(defvar rontolisp::%host-fetch-open 0)
+				(defun rontolisp::%host-fetch-pull (token)
+				  ;; One chunk of the reply body, through the caller-passes-the-buffer
+				  ;; import: the module owns the buffer and the host writes into it.
+				  (unless (eql token rontolisp::%host-fetch-open)
+				    (error "fetch: the response body was superseded by a later fetch"))
+				  (let* ((buf (rontolisp::%http-reactor-buffer\s""").append(HttpReactorInliner.CHUNK_BYTES).append("""
+				))
+				         (n
+				          (rontolisp::%http-reactor-force
+				           (rontolisp::%host-fetch-read-body buf))))
+				    ;; A NEGATIVE count is the host reporting that the transfer failed
+				    ;; after the head crossed -- the mid-body failure every other backend
+				    ;; signals at the drain, and the reason the split needs an error
+				    ;; channel at all. 0 is end of stream.
+				    (when (and n (< n 0))
+				      (error "fetch: the response body failed mid-transfer"))
+				    (rontolisp::%http-reactor-chunk buf n)))
+				(defun rontolisp::%host-fetch-body (in-band)
+				  ;; The :body of the result plist: an asynchronous stream on this
+				  ;; backend too, which is the whole point of taking the body out of the
+				  ;; envelope. IN-BAND is the head's own "body" key -- a host that would
+				  ;; rather answer the whole reply at once still may, and that string is
+				  ;; the already-buffered case of the same abstract source.
+				  (rontolisp::%http-reactor-body-stream
+				   (or in-band
+				       (let ((token rontolisp::%host-fetch-open))
+				         (lambda () (rontolisp::%host-fetch-pull token))))))
+				""");
 	}
 
 	// (defun rontolisp::%host-fetch-request (url options) ...) -> the request JSON, its
@@ -224,9 +318,12 @@ public final class HostFetchLibrary {
 			String value = switch (field.name()) {
 				case "status" -> read;
 				case "headers" -> "(rontolisp::%host-fetch-alist " + read + ")";
-				// The declared default: on a reactor the body has fully arrived, so
-				// the absent-body reply of a HEAD is the eager empty string.
-				case "body" -> "(or " + read + " \"" + FetchResponseShape.RESPONSE_BODY_DEFAULT + "\")";
+				// The body does NOT ride the head: the key is the fallback a host may
+				// still fill, and its absence -- the normal case -- is what puts the
+				// stream over the body import here. An absent-body reply (a HEAD, a
+				// 204) is that stream finding end of stream at its first pull, which
+				// read-all drains to the declared default, the empty string.
+				case "body" -> "(rontolisp::%host-fetch-body " + read + ")";
 				default -> throw new IllegalStateException(
 						"The http-plist response record grew a field this lowering does not carry: " + field.name());
 			};

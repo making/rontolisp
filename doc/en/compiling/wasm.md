@@ -45,7 +45,7 @@ Crossing the two axes gives the six shapes:
 | Output shape | Flags | Language | Runs on | Details |
 | --- | --- | --- | --- | --- |
 | WASI command module | (none) | full | wasm-GC engine with WASI Preview 1 (`wasmtime run -W gc`) | [wasm-GC core module](../guides/wasm-gc-module.md) |
-| Library (reactor) module | `--no-wasi` | full (pure-compute exports) | any wasm-GC engine, no imports needed (Node 22+, current browsers; `--host-random` / `--host-fetch` add one host import each) | [`--no-wasi` reactor mode](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
+| Library (reactor) module | `--no-wasi` | full (pure-compute exports) | any wasm-GC engine, no imports needed (Node 22+, current browsers; `--host-random` adds one host import, `--host-fetch` two) | [`--no-wasi` reactor mode](../guides/wasm-gc-module.md#no-wasi-reactor-mode) |
 | WASI 0.3 component | `--component` | full, plus component-only I/O (`rontolisp:fetch`, TCP sockets) | wasmtime 46+ or another component host with wasm-GC | [WASI 0.3 component](../guides/wasm-component.md) |
 | Reactor component | `--component --no-wasi` | full (pure-compute exports) | any component host with wasm-GC, empty import object | [Reactor components](../guides/wasm-component.md#reactor-components---component---no-wasi) |
 | Plain core module | `--no-gc` | numeric/string [subset](../guides/wasm-nogc.md#eligible-subset) | **any** WebAssembly engine, even without wasm-GC or SIMD | [Non-GC output](../guides/wasm-nogc.md) |

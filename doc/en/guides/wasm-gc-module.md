@@ -189,10 +189,12 @@ instantiation — see
 
 **Outgoing HTTP** has the same shape as the clock and randomness: a value only
 the host can produce. `--host-fetch` routes
-[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) at ONE injected
-host import, `env.fetch(request-json) -> response-json` — same options, same
-`(:status :headers :body)` answer as every other backend, with `:body` one
-eager string that `rontolisp:read-all` passes through. A JavaScript host
+[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) at two injected
+host imports — `env.fetch(request-json) -> response-head-json` for the request
+and the reply's head, `env.readResponseBody(ptr, cap) -> i32` for its body,
+pulled a chunk at a time into a buffer the module passes. Same options, same
+`(:status :headers :body)` answer as every other backend, `:body` the same
+asynchronous stream. A JavaScript host
 implements it with its own `fetch()` behind `WebAssembly.Suspending` (JSPI —
 the whole wasm stack parks until the promise settles, so the Lisp side stays
 ordinary synchronous-looking `(await (fetch ...))`) and then must enter every

@@ -1912,9 +1912,11 @@ public final class WasmLispCompiler implements LispCompiler {
 			// suspending one (WebAssembly.Suspending) constrains how the exports are
 			// entered, and a re-entry is refused by the guard the wrappers carry.
 			if (this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED)) {
-				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> response-json"
-						+ " and every rontolisp:fetch crosses it. A host may answer synchronously; a host whose"
-						+ " fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through"
+				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> response-head-json"
+						+ " and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the"
+						+ " head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a"
+						+ " negative count = the transfer failed mid-body). A host may answer synchronously; a host"
+						+ " whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through"
 						+ " WebAssembly.promising, and must serialise calls (a suspended module can be"
 						+ " re-entered; a re-entered export refuses with a trap instead of corrupting both"
 						+ " calls)");

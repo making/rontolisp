@@ -27,9 +27,8 @@ To take the chunks one at a time instead, use
 [`rontolisp:stream-read`](rontolisp-stream-read.md).
 
 A **string** passes straight through (the future settles to the string
-itself): a body that has already fully arrived — a `--host-fetch` reactor's
-`:body` — is its own drained value, so the one drain spelling above works
-whatever shape `:body` took.
+itself): a body that has already fully arrived is its own drained value, so the
+one drain spelling above works whatever shape `:body` took.
 
 ## Backend support
 

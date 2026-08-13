@@ -131,8 +131,8 @@ this backend the future is DELIBERATELY DEGENERATE -- JSPI blocks the wasm stack
 wrapper wraps the boxed result in a settled kind-2 `TYPE_P1_FUTURE` (the `%async-run`
 struct; `WasmImportCompiler.buildWrapperBody` pushes the kind under the unboxed args) --
 started == settled is the option's documented CONTRACT here, exactly like
-`--host-fetch`'s eager `:body` string; the option buys one source that reads the same on
-every backend, not concurrency. Parsed by `WasmImportDirective` (`:async` takes literal
+`--host-fetch`'s fetch future settling at the reply's HEAD; the option buys one source
+that reads the same on every backend, not concurrency. Parsed by `WasmImportDirective` (`:async` takes literal
 `t`/`nil` only), so the interpreter/JVM stubs load it unchanged (the host does not exist
 there; the stub still signals at the call). A `wit-import`ed `async func` member lowers
 to exactly this option on Preview 1 (`WitImportDirective.wasmImportForm`), which is what
@@ -244,7 +244,8 @@ the wasmtime preload leg (`bytesBoundaryCrossesThePreloadBoundaryByLength`) pins
 plumbing through the values that DO cross two disjoint memories -- the lengths.
 
 **Its first consumers are the reactor's two bodies** (todo-341 Phases 2b and 3b,
-2026-08-13): `HttpReactorInliner` synthesizes
+2026-08-13; the third is `--host-fetch`'s reply body, todo-347 -- same result
+shape, same `env` module, `.kb/fetch-http.md`): `HttpReactorInliner` synthesizes
 `(wasm-import '%reactor-read-body :from "env" :as "readRequestBody" :params '()
 :returns :bytes :async t)` and
 `(wasm-import '%reactor-write-body :from "env" :as "writeResponseBody" :params

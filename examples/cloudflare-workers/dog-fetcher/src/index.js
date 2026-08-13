@@ -6,19 +6,33 @@ import module from "./worker.wasm";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-// env.fetch, the --host-fetch import: request JSON in, response JSON out. The
-// envelope is rontolisp's, derived from FetchResponseShape and pinned by
+// The upstream reply the module is currently reading, and what of its last
+// chunk did not fit in the buffer the module passed. One cursor, moved by each
+// env.fetch below -- which is sound for the same reason the request cursor is:
+// a suspended handler returns to the event loop, and the queue admits one Lisp
+// call at a time.
+let upstream = null;
+let upstreamRest = null;
+let upstreamFailed = null;
+
+// env.fetch, the --host-fetch import: request JSON in, response HEAD JSON out.
+// The envelope is rontolisp's, derived from FetchResponseShape and pinned by
 // HostFetchLibraryTest, so this host and the compiler cannot drift apart:
 //   in   {"url": ..., "method": ..., "headers": [[name, value], ...],
 //         "body": ...}                       // body absent when the fetch has none
-//   out  {"status": ..., "headers": [[name, value], ...], "body": ...}
+//   out  {"status": ..., "headers": [[name, value], ...]}
 //        {"error": "..."}                    // the transport failed; fetch signals
+// The reply BODY is NOT in there: it crosses through env.readResponseBody
+// below, so a large or binary reply never has to become a JSON string.
 async function hostFetch(lisp, ptr, len) {
   // Read before the await: memory growth detaches the buffer.
   const request = JSON.parse(
     decoder.decode(new Uint8Array(lisp.memory.buffer, ptr, len)),
   );
 
+  upstream = null;
+  upstreamRest = null;
+  upstreamFailed = null;
   let envelope;
   try {
     const response = await fetch(request.url, {
@@ -26,11 +40,9 @@ async function hostFetch(lisp, ptr, len) {
       headers: request.headers,
       body: request.body,
     });
-    envelope = {
-      status: response.status,
-      headers: [...response.headers],
-      body: await response.text(),
-    };
+    // The reader is the body; the module pulls it after this call returns.
+    upstream = response.body ? response.body.getReader() : null;
+    envelope = { status: response.status, headers: [...response.headers] };
   } catch (error) {
     // The error arm becomes a Lisp condition at the fetch; throwing would trap.
     envelope = { error: String(error) };
@@ -41,6 +53,35 @@ async function hostFetch(lisp, ptr, len) {
   const out = lisp.__ronto_alloc(bytes.length);
   new Uint8Array(lisp.memory.buffer, out, bytes.length).set(bytes);
   return [out, bytes.length];
+}
+
+// env.readResponseBody, the other half of the fetch boundary: write up to `cap`
+// octets of the reply that the last env.fetch opened at `ptr` and answer how
+// many. 0 is end of stream; a NEGATIVE count is a transfer that failed after
+// the head crossed, which the module signals at the drain -- the same place
+// every other backend does. Reading a ReadableStream is asynchronous, so this
+// one really does suspend.
+async function readResponseBody(lisp, ptr, cap) {
+  if (upstreamFailed) return -1;
+  try {
+    while (!upstreamRest || upstreamRest.length === 0) {
+      if (!upstream) return 0;
+      const { value, done } = await upstream.read();
+      if (done) {
+        upstream = null;
+        return 0;
+      }
+      upstreamRest = value;
+    }
+  } catch (error) {
+    upstreamFailed = error;
+    return -1;
+  }
+  // After the await: re-read memory.buffer, which a growth may have detached.
+  const n = Math.min(cap, upstreamRest.length);
+  new Uint8Array(lisp.memory.buffer, ptr, n).set(upstreamRest.subarray(0, n));
+  upstreamRest = upstreamRest.subarray(n);
+  return n;
 }
 
 // The request body the module pulls, and how much of it has already crossed.
@@ -77,6 +118,12 @@ function instantiate() {
       // promising() below -- _initialize must never reach it.
       fetch: new WebAssembly.Suspending((ptr, len) =>
         hostFetch(exports, ptr, len),
+      ),
+      // The reply body, out of band. Suspending too -- a ReadableStream is only
+      // readable asynchronously, which is exactly the host the module's
+      // :async t declaration allows for.
+      readResponseBody: new WebAssembly.Suspending((ptr, cap) =>
+        readResponseBody(exports, ptr, cap),
       ),
       // The request body, out of band: write up to `cap` octets at `ptr` and
       // answer how many, 0 for end of stream. Synchronous, so it needs no

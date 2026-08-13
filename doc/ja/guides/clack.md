@@ -235,9 +235,10 @@ $ rontolisp app.lisp -o worker.wasm --no-wasi --optimize=size
 リアクタは何もインポートしません。それは HTTP クライアントも持たないという
 ことでもあるので、[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md)
 を呼ぶアプリケーション(プロキシ、API ゲートウェイ)にはもう 1 つフラグが必要
-です。`--host-fetch` は `fetch` をホスト自身のクライアントへ `env.fetch` という
-インポート 1 つとして落とします。上のモジュールとの違いはその 1 インポート
-だけです:
+です。`--host-fetch` は `fetch` をホスト自身のクライアントへ、リクエストと
+レスポンスのヘッドを運ぶ `env.fetch` と、ボディを引き込む
+`env.readResponseBody` の 2 つのインポートとして落とします。上のモジュールとの
+違いはその 2 インポートだけです:
 
 ```console
 $ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
@@ -247,8 +248,8 @@ $ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --optimize=size
 `async-lambda` の本体だけなので、fetch した値が必要なルートはそれを呼び、その
 **future** をそのまま返します — リアクタのトランスポートが future 値の
 レスポンスを境界で解決します。`--component` で `wasmtime serve` が行うのと
-同じです。このトランスポートに固有の残りの点(eager な `:body`、確定済みの
-future、JavaScript 側の JSPI の義務)は
+同じです。このトランスポートに固有の残りの点(ヘッドの後から引き込まれる
+ボディ、ヘッダで確定する future、JavaScript 側の JSPI の義務)は
 [fetch ガイド](http-fetch.md#fetching-from-a-reactor---no-wasi---host-fetch)に
 あり、
 [`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)

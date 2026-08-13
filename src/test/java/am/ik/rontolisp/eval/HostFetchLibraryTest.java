@@ -38,20 +38,27 @@ class HostFetchLibraryTest {
 	@Test
 	void generatedLoweringCarriesTheDerivedEnvelope() {
 		String source = HostFetchLibrary.source();
-		// The one import, under the documented host module/field.
+		// The two imports, under the documented host module/fields: the head through
+		// env.fetch, the reply body out of band through env.readResponseBody.
 		assertThat(source).contains(":from \"" + HostFetchLibrary.IMPORT_MODULE + "\"")
-			.contains(":as \"" + HostFetchLibrary.IMPORT_FIELD + "\"");
+			.contains(":as \"" + HostFetchLibrary.IMPORT_FIELD + "\"")
+			.contains(":as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"");
 		// Request side: every record field crosses, as its own JSON key.
 		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
 			assertThat(source).as("request field '%s' is carried", field.name()).contains(field.keyword());
 		}
 		// Response side: every record field is read back by its JSON key, in record
-		// order inside the result plist, plus the reserved error arm.
+		// order inside the result plist, plus the reserved error arm. The body's key is
+		// the IN-BAND fallback now (a host that would rather answer at once), which is
+		// why it is still read here -- the normal case is the stream over the import.
 		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
 			assertThat(source).as("response field '%s' is read", field.name())
 				.contains("(gethash \"" + field.name() + "\" envelope)");
 		}
 		assertThat(source).contains("(gethash \"" + FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + "\" envelope)");
+		assertThat(source).as("the body is the stream every backend's :body is")
+			.contains("(rontolisp::%host-fetch-body (gethash \"" + FetchResponseShape.responseField("body").name()
+					+ "\" envelope))");
 	}
 
 	@Test
@@ -61,9 +68,17 @@ class HostFetchLibraryTest {
 		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
 			assertThat(host).as("the worker host reads request.%s", field.name()).contains("request." + field.name());
 		}
-		// ...and answers every response field, plus the error arm, as JSON keys.
+		// ...and answers every response field, plus the error arm -- the head's fields
+		// as JSON keys, the BODY through its own import, which is the split this
+		// boundary is. A record that grows a field fails here until the host carries it.
 		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
-			assertThat(host).as("the worker host answers '%s'", field.name()).contains(field.name() + ":");
+			if ("body".equals(field.name())) {
+				assertThat(host).as("the worker host provides the body import")
+					.contains(HostFetchLibrary.BODY_IMPORT_FIELD);
+			}
+			else {
+				assertThat(host).as("the worker host answers '%s'", field.name()).contains(field.name() + ":");
+			}
 		}
 		assertThat(host).contains(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + ":");
 	}

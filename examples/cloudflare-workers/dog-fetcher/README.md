@@ -6,7 +6,7 @@ answers with JSON. It is the first Worker here that does **outgoing** HTTP, and
 the client is `rontolisp:fetch` itself — the same `(rontolisp:await
 (rontolisp:fetch ...))` that runs on the interpreter, the JVM and a `wasi:http`
 component. A `--no-wasi` reactor imports no WASI, so `--host-fetch` lowers the
-call onto the one import a Worker host can always provide: its own `fetch`.
+call onto what a Worker host can always provide: its own `fetch`.
 
 Routes come from [tiny-routes](https://github.com/jeko2000/tiny-routes), loaded
 as `tiny-routes/lite` exactly as in [`../hello-tiny-routes`](../hello-tiny-routes),
@@ -49,21 +49,25 @@ case that is not the upstream's own answer.
 ## The boundary
 
 No hand-written import and no bespoke envelope any more: `--host-fetch`
-(build.sh) injects one import, `env.fetch(request-json) -> response-json`, and
-lowers every `rontolisp:fetch` onto it — same options, same
-`(:status <int> :headers <alist> :body <string>)` answer as every other
-backend, with `:body` an eager string that `rontolisp:read-all` passes through.
-The JSON keys are derived from the compiler's own `FetchResponseShape` record
-and pinned by `HostFetchLibraryTest` against `src/index.js`, so the two sides
-cannot drift. The host's half is small:
+(build.sh) injects two imports and lowers every `rontolisp:fetch` onto them —
+`env.fetch(request-json) -> response-head-json` for the request and the reply's
+head, and `env.readResponseBody(ptr, cap) -> i32` for the reply's body, pulled
+a chunk at a time. Same options, same
+`(:status <int> :headers <alist> :body <stream>)` answer as every other
+backend. The JSON keys are derived from the compiler's own `FetchResponseShape`
+record and pinned by `HostFetchLibraryTest` against `src/index.js`, so the two
+sides cannot drift. The host's half is small:
 
 ```js
 fetch: new WebAssembly.Suspending((ptr, len) => hostFetch(exports, ptr, len)),
+readResponseBody: new WebAssembly.Suspending((ptr, cap) =>
+  readResponseBody(exports, ptr, cap),
+),
 // ...
 handleRequest: WebAssembly.promising(exports["handle-request"]),
 ```
 
-Three things are worth reading twice:
+Four things are worth reading twice:
 
 - **A wasm import is a synchronous call and `fetch` is a promise.** JSPI
   (`WebAssembly.Suspending` on the import, `WebAssembly.promising` on the
@@ -75,11 +79,17 @@ Three things are worth reading twice:
   exactly this obligation, and would print a warning line naming any fetch its
   load path reaches.
 - **Awaiting still reads the same.** On the reactor the future `fetch` returns
-  is settled the moment the call returns (the stack was parked for the whole
-  round trip), so `await` never suspends and two fetches never overlap —
-  `dog-image` is an ordinary `async-defun`, and the route bodies (synchronous
-  tiny-routes functions, where `await` is not legal) simply return its FUTURE:
-  the reactor transport resolves a future-valued response at its boundary.
+  is settled the moment the call returns (the stack was parked for the round
+  trip to the headers), so `await` never suspends and two fetches never
+  overlap — `dog-image` is an ordinary `async-defun`, and the route bodies
+  (synchronous tiny-routes functions, where `await` is not legal) simply return
+  its FUTURE: the reactor transport resolves a future-valued response at its
+  boundary.
+- **The body is not in the head.** `env.fetch` answers status and headers; the
+  octets come through `env.readResponseBody` as `read-all` asks for them, so a
+  large reply never becomes a JSON string and a binary one crosses as the
+  octets it is. What that costs in exchange is stated below: a failure *during*
+  the body surfaces at the drain, and only one reply body is live at a time.
 - **A `:string` result is host-written bytes.** The host allocates with the
   module's exported `__ronto_alloc` and returns `[ptr, len]`; the per-request
   arena reset frees it along with everything else. Nothing may be kept across
@@ -151,10 +161,15 @@ The Worker sandbox and `--no-wasi` limitations of
 
 - **One in-flight request per isolate**, as above. Overlapping them needs an
   allocator scope per call, not just a second mark.
-- **Started == settled.** The reactor's fetch future is settled at creation
-  (the host call blocked the whole stack), so two fetches never overlap and a
-  transport failure signals at the `fetch` call rather than at `await` — the
-  documented degenerate-async shape of the Preview 1 backend.
+- **Started == settled, and settled means the HEAD.** The reactor's fetch
+  future is settled at creation (the host call blocked the stack until the
+  headers), so two fetches never overlap and a transport failure *before* the
+  head signals at the `fetch` call rather than at `await` — the documented
+  degenerate-async shape of the Preview 1 backend. A failure *during* the body
+  signals at the drain instead, as on every other backend.
+- **One live reply body.** The host has one read cursor, moved by each
+  `env.fetch`, so starting the next fetch before draining the previous reply
+  makes that drain signal rather than answer the new reply's octets.
 
 ## Rebuilding
 
