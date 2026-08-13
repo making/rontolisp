@@ -30,7 +30,8 @@ measured division that stands:
 - **Interpreter** — `LispEvaluator.buildClackEnv` / `normalizeClackResponse` /
   `responseHeaders` / `responseBody`, all Java; only the cold response arms
   (an `(unsigned-byte 8)` vector body) delegate to the library's
-  `%http-body-string`. The library loads EAGERLY at server start
+  `%http-body-string` — and then to `%http-body-text`, because the normalizer
+  hands octets through unflattened and this transport writes a String. The library loads EAGERLY at server start
   (`ensureHttpServerLoaded` — a lazy first-request load races
   one-virtual-thread-per-request, `.kb/concurrent-served-requests.md`), and
   lazily when a program calls a `RONTOLISP::%HTTP-*` function directly (the
@@ -162,9 +163,17 @@ keeps it regardless.
   `:headers` passes straight through. Every pair becomes its own header line
   (repeated `:set-cookie` correct by construction); `content-length` /
   `transfer-encoding` are dropped (the transport computes framing).
-- `body`: a LIST of strings (joined), nil, an `(unsigned-byte 8)` vector (one
-  char per octet; see the known non-byte-exact bug below), or a rontolisp
-  stream (drained — the one extra await). A **NIL element inside the list**
+- `body`: a LIST of strings (joined), nil, an `(unsigned-byte 8)` vector, or a
+  rontolisp stream (drained — the one extra await). The last TWO come back
+  UNCHANGED (todo-341 Phase 3b): only the transport knows what it can carry, so
+  the normalizer answers a string, octets or a stream, and a transport that
+  writes TEXT flattens the octets itself through `%http-body-text` (one char per
+  octet — `%http-serve-request` for the interpreter and the component,
+  `HttpHandlerJvmRuntime.toResponse` for the JVM, `%http-reactor-body-out`'s
+  no-sink arm for the reactor envelope). A transport that writes BYTES — the
+  reactor's `env.writeResponseBody` sink — takes them as they are and is
+  byte-exact; the three that flatten are not (the known bug below). A **NIL
+  element inside the list**
   contributes the empty string rather than signalling: that is how upstream
   renders it (clack-handler-hunchentoot writes every chunk through
   `flex:string-to-octets`, which answers `#()` for NIL), and it is the ordinary
@@ -191,7 +200,21 @@ served round trips by `HttpHandlerTest` / `HttpHandlerJvmTest` /
 
 ## Known bug in the same area (pre-existing, NOT part of the cutover)
 
-An `(unsigned-byte 8)` response body is not byte-exact: each octet becomes a
-code point and `writeResponse` re-encodes UTF-8, so any octet >= 0x80 is
-mangled. The fix is a fourth `binaryp` slot on the canonical response written
-as ISO-8859-1.
+An `(unsigned-byte 8)` response body is not byte-exact on the transports that
+write TEXT: each octet becomes a code point and the write re-encodes UTF-8, so
+any octet >= 0x80 is mangled. Measured on the interpreter's JDK server, 2026-08-13:
+a body of `ff fe 41` arrives as `c3 bf c3 be 41`. The comment that said "the
+transport writes those characters back out one byte each, so the bytes survive"
+was simply wrong — no transport did.
+
+What CHANGED with todo-341 Phase 3b is where the loss happens, not that it is
+gone: the shared normalizer no longer flattens (see the response contract
+above), so the octets are still octets when they reach a transport, and the
+reactor's byte-shaped sink is byte-exact. The three text transports flatten at
+their own write site — `%http-serve-request`, `HttpHandlerJvmRuntime.toResponse`
+and the reactor's no-sink envelope arm — which is what turns the fix from
+"unrecoverable" into a change at three named places. **`.todo/351`** carries it:
+the JDK transport wants `HttpHandlerSupport.Response` to hold `byte[]` the way
+`Request` already does, the component's `%http-write-body` wants the octets
+passed to `body-stream-write` unencoded, and the reactor envelope cannot be
+fixed at all (a JSON string is text — that is what the sink is for).

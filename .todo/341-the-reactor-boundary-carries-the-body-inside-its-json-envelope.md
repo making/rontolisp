@@ -29,9 +29,14 @@ measured, not argued:
 picking this up should say so out loud before spending the boundary change: the
 headline number that opened this item is gone, and it was taken by a one-line
 fix somewhere else. (Of those three, BINARY and STREAMING are done on the module
-side; MEMORY is done for the TRANSPORT and open for the DRAIN -- `.todo/350`.
-What is left here is the RESPONSE body's WASM boundary, Phase 3 step b -- its
-Lisp half landed 2026-08-13.)
+side in BOTH directions; MEMORY is done for the TRANSPORT both ways and open for
+the request DRAIN -- `.todo/350`.)
+
+**Every phase is now done** (2026-08-13) except the generation Phase 4 defers to
+`.todo/340`. What the boundary change UNCOVERED and did not close is one item of
+its own: a binary response body still does not survive the three transports that
+write TEXT -- the octets reach them intact now, which they did not before, but
+each flattens at its own write site. `.todo/351`.
 
 Since `:async t` landed, a suspending host import is a declared, supported fact,
 and the spike below shows the boundary can be rebuilt around it. Breaking the
@@ -513,14 +518,73 @@ are the reason a stream response body had never worked on this transport:
   the Preview 1 tier (`WasmFutureRuntimeBuilder.buildSyncForce`).
   `.kb/async-await.md`.
 
-*Still open (step b, the WASM boundary).* `env.writeResponseBody(ptr, len)` and
-the sink the synthesized bridge builds over it, plus the glue files. One thing
-the Lisp half deliberately left for it: an `(unsigned-byte 8)` response body is
-already TEXT by the time the sink sees it (`%http-body-string` renders it one
-character per octet, which is what every transport that writes the bytes back out
-one at a time needs), so a byte-shaped sink must not re-encode it as UTF-8 --
-which means `%http-normalize-response` has to stop flattening that arm, the same
-way it already keeps a stream.
+*Step b, the WASM boundary, done (2026-08-13).* The synthesized bridge now
+declares the mirror import and the sink over it, so the whole boundary is three
+entries:
+
+```
+handle-request(headPtr, headLen) -> (ptr, len)   ; the JSON head, no "body" key
+env.readRequestBody(ptr, cap) -> i32             ; :bytes, :async t; 0 = EOF
+env.writeResponseBody(ptr, len)                  ; :bytes param, :async t
+```
+
+**The direction flip is the point, not an asymmetry.** A chunk crossing IN is a
+`:bytes` RESULT into a buffer the module passes; one crossing OUT is a `:bytes`
+PARAMETER the wrapper stages and pops. Both say the CALLER owns the memory, and
+that is why the write import answers nothing: a host cannot short-read a write,
+and a chunk it has not taken by the time the call returns is one it never gets.
+
+The premise this step inherited turned out to be FALSE, and correcting it is
+what made the step work. It said an `(unsigned-byte 8)` response body is "already
+TEXT by the time the sink sees it ... which is what every transport that writes
+the bytes back out one at a time needs". No transport does that. Measured on the
+interpreter's JDK server: a body of `ff fe 41` arrives as `c3 bf c3 be 41`,
+because `%http-octets-string` makes it three code points and `writeResponse`
+UTF-8 encodes them. `.kb/http-server.md` had carried the double-encode as a known
+bug all along; what was new is that the flattening had no beneficiary at all.
+So `%http-body-string` stopped flattening -- an octet body comes back unchanged,
+exactly as a stream does -- and the four transports that write TEXT flatten at
+their own write sites through the new `%http-body-text`
+(`%http-serve-request`, `HttpHandlerJvmRuntime.toResponse`,
+`LispEvaluator.responseBody`'s cold arm, and the reactor's no-sink envelope arm).
+Behaviour on all four is byte-identical to before; what changed is that the
+octets now REACH a transport, so the reactor's byte sink is byte-exact and the
+remaining loss is at four named places instead of one shared one. **`.todo/351`**
+carries the rest.
+
+**A regression this step found and fixed, from Phase 2b step 2.** The request
+import was synthesized for every `WASM_GC` build, but the `%http-reactor` marker
+is not a reactor's alone -- `clack-handler-reactor` is host-driven on EVERY
+backend so a program can drive its own `dispatch` in-process, which is exactly
+what every `examples/cloudflare-workers/*/check.lisp` does, and those compile as
+plain WASI COMMAND modules too. Their host is `wasmtime run`, which satisfies no
+`env.*` import, so the module refused to INSTANTIATE whether or not anything
+called `handle-request`. Nine `ExamplesE2eTest` legs were red at `6ba952a5`
+(seven `wasm (run)` instantiation failures plus `httpbin/check.lisp` on the
+interpreter and the JVM, where the same import is an error-signalling stub the
+hand-written `%body-text` called unconditionally). `HttpReactorInliner.process`
+now takes a `reactor` flag (`--no-wasi`) beside the backend, and
+`httpbin/worker.lisp` guards its imports with
+`#+(and rontolisp-reactor (not rontolisp-component))` with the envelope-reading
+fallback under the negation. All 23 legs green.
+
+Gate, met: `WasmReactorResponseBodyE2eTest` (node, a host sharing the module's
+memory: the head's `"body"` key ABSENT, a binary body crossing exactly, a stream
+body forwarded as its own three chunks, a handler that fails MID-BODY whose 500
+rides the head and wins over the chunk already taken, and 256 KiB out with linear
+memory flat across four responses), `WasmReactorStreamingHostE2eTest` driving the
+same boundary with a SUSPENDING writer as well as a suspending reader, the
+`http-reactor-body-sink` and `http-response-normalizer` ci-spec cases (four
+backends), `HttpReactorInlinerTest`'s two new bridge-shape tests, and all 23
+`cloudflare-workers` example legs. `.kb/clack.md` / `.kb/wasm-import.md` /
+`.kb/http-server.md` have the mechanics.
+
+Glue: the three hand-written host files moved with it (`httpbin/src/index.js`,
+byte-identical in five directories; `hello-clack/src/index.js`, in three;
+`dog-fetcher/src/index.js`, which reads the chunks inside its promise queue), and
+`httpbin/worker.lisp` -- the library-free reactor -- writes the import and the
+sink out by hand, which is what that example is for. `httpbin-component` keeps
+the envelope in both directions.
 
 **Phase 4 -- the examples, and the glue that stops being hand-written. DONE with
 step 2 (2026-08-13), except the generation.** Ten of the eleven

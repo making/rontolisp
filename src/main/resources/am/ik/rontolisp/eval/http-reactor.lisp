@@ -343,6 +343,18 @@
     (rontolisp::%http-reactor-force (funcall sink chunk)))
   nil)
 
+(defun rontolisp::%http-reactor-octets (chunk)
+  ;; One response chunk -> the OCTETS a byte-shaped sink writes. Text is UTF-8
+  ;; encoded; an (unsigned-byte 8) chunk is already the octets the application
+  ;; meant and must NOT be encoded again -- which is why the shared normalizer
+  ;; stopped flattening that body into characters (http-server.lisp's
+  ;; %http-body-string): once flattened, a byte and a character the application
+  ;; chose are the same value, and every UTF-8 write doubles the high ones.
+  ;;
+  ;; Named here, beside %http-reactor-buffer / -chunk, for the same reason: a
+  ;; hand-written reactor gets the whole boundary by naming it.
+  (if (stringp chunk) (rontolisp::%http-utf8-encode chunk) chunk))
+
 (defun rontolisp::%http-reactor-stream-chunk (s)
   ;; One chunk from a rontolisp stream body, RESOLVED -- stream-read answers a
   ;; future, and this transport is synchronous code where await is not legal.
@@ -359,6 +371,12 @@
   ;; DRAINED into it -- which is the only thing a host that speaks the old shape
   ;; can be given, and is what this transport used to be missing entirely (a
   ;; stream reached json-stringify).
+  ;;
+  ;; An (unsigned-byte 8) body reaches the SINK as the octets it is, which is
+  ;; the whole reason the normalizer stopped flattening it; the head cannot
+  ;; carry those octets (a JSON string is text, and the finding-4 rule that
+  ;; sent the request body out of band applies in reverse), so without a sink
+  ;; it flattens here and keeps the shape a host already parses.
   (cond ((rontolisp:streamp body)
          (if sink
              (let ((chunk (rontolisp::%http-reactor-stream-chunk body)))
@@ -375,7 +393,7 @@
         (sink
          (rontolisp::%http-reactor-write sink body)
          nil)
-        (t body)))
+        (t (rontolisp::%http-body-text body))))
 
 (defun rontolisp::%http-reactor-envelope (status headers body sink)
   ;; The response HEAD. With a SINK the "body" key is ABSENT rather than empty:

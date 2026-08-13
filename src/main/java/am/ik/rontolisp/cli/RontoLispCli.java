@@ -501,7 +501,7 @@ public final class RontoLispCli {
 		// synthesized -- so a Worker source is (clack:clackup #'app :server
 		// :rontolisp) and nothing else. A no-op on the interpreter and the JVM (the
 		// shims do not even read the marker there).
-		loaded = HttpReactorInliner.process(loaded, witBackend);
+		loaded = HttpReactorInliner.process(loaded, witBackend, noWasi);
 		// The shared reactor machinery behind BOTH handler backends
 		// (http-reactor.lisp: the one app store, the JSON envelope over
 		// %http-make-env / %http-normalize-response): spliced for EVERY backend

@@ -387,42 +387,57 @@ how a handler that fails halfway through its body still answers one clean
 document — the 500 the transport catches into carries its report in band, and
 the host discards the chunks it already took.
 
-Passing no sink keeps the old shape exactly: the body rides the head, and a
-stream body is drained into it.
+An `(unsigned-byte 8)` response body reaches the sink as **octets**, not as
+text: a sink can write bytes, and a JSON head cannot carry them.
 
-### The WASM boundary: a head export and a body import
+Passing no sink keeps the old shape exactly: the body rides the head, a stream
+body is drained into it, and an octet body is rendered one character per octet
+(the only spelling a JSON string has for it).
 
-On a `--no-wasi` WASM module the source is not a Lisp value the host can pass,
-so the boundary is two entries and the compiler writes the second one for you:
+### The WASM boundary: a head export and two body imports
+
+On a `--no-wasi` WASM module neither a source nor a sink is a Lisp value the
+host can pass, so the boundary is three entries and the compiler writes the two
+imports for you:
 
 ```text
 module -> host   handle-request(headPtr, headLen) -> (ptr, len)   ; the JSON head
 host -> module   env.readRequestBody(ptr, cap) -> n               ; up to cap octets
                                                                   ;   at ptr; 0 = end
+host -> module   env.writeResponseBody(ptr, len)                  ; take these octets
 ```
 
-The head is the JSON above **without** the `"body"` key. The body crosses as raw
-octets into a buffer the module owns and reuses, which is what a JSON string
-could not do: a **binary** body arrives exactly (the string boundary decodes
-UTF-8, and does not validate), and *crossing* costs the module no linear memory
-at all — the envelope used to hold the body several times over. Reading it is
-not yet free: whichever way a handler drains `:raw-body`, decoding the octets
-to text currently costs about fifteen times the body in linear memory, reclaimed
-for reuse at the end of the request.
+The head is the JSON above **without** the `"body"` key, in either direction.
+The bodies cross as raw octets — in, into a buffer the module owns and reuses;
+out, straight out of the module's own memory — which is what a JSON string could
+not do: a **binary** body crosses exactly either way (the string boundary
+decodes UTF-8, and does not validate), and *crossing* costs the module no linear
+memory at all — the envelope used to hold the body several times over. Reading
+the request body is not yet free: whichever way a handler drains `:raw-body`,
+decoding the octets to text currently costs about fifteen times the body in
+linear memory, reclaimed for reuse at the end of the request.
 
-The import is declared `:async t`, so the host chooses how it answers. Returning
-the octets synchronously (read the body first, then call in) is the simple host,
-and it is what the Worker examples do. Wrapping the import in
-`WebAssembly.Suspending` and pulling from the request's own reader is the
-streaming host: it must then enter `handle-request` through
-`WebAssembly.promising` and serialise its calls, because a suspended module can
-be re-entered — the module refuses that with a trap rather than corrupting both
-calls, and the build prints the obligation.
+Note the direction flip in the two imports. A chunk crossing *in* is a result
+written into a buffer the module passes; one crossing *out* is a parameter the
+host reads and must copy before the call returns. Both are the same rule — the
+caller owns the memory — and both mean the host may not hold on to a pointer.
 
-Under `--component` the body stays inside the envelope: a component's host
-functions cross the canonical ABI rather than a core import. Everything above
-this section is unchanged either way, which is the point of the body source
-being an abstract value.
+Both imports are declared `:async t`, so the host chooses how it answers.
+Answering synchronously (read the body first, then call in; collect the response
+chunks as they arrive) is the simple host, and it is what the Worker examples
+do. Wrapping an import in `WebAssembly.Suspending` — pulling from the request's
+own reader, or writing to a stream that applies backpressure — is the streaming
+host: it must then enter `handle-request` through `WebAssembly.promising` and
+serialise its calls, because a suspended module can be re-entered — the module
+refuses that with a trap rather than corrupting both calls, and the build prints
+the obligation.
+
+Under `--component` both bodies stay inside the envelope: a component's host
+functions cross the canonical ABI rather than a core import. So does a plain
+WASI command module that drives its own `dispatch` in-process (what the
+examples' `check.lisp` files do), whose host is `wasmtime run` and satisfies no
+`env.*` import. Everything above this section is unchanged either way, which is
+the point of the source and the sink being abstract values.
 
 What the application then sees is the `:raw-body` mode. `clackup` and `handle`
 ask for the buffered one, the synchronous stream Clack promises (the source is

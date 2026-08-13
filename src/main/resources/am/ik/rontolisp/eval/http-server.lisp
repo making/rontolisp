@@ -503,22 +503,40 @@
     (get-output-stream-string out)))
 
 (defun rontolisp::%http-octets-string (v)
-  ;; An (unsigned-byte 8) vector body: one character per octet. The transport
-  ;; writes those characters back out one byte each, so the bytes survive.
+  ;; An (unsigned-byte 8) vector body -> one character per octet, for a
+  ;; transport whose response body is TEXT. Called by the transport, not by the
+  ;; normalizer: the octets are what the application meant, and a transport that
+  ;; can write bytes (the reactor's byte-shaped sink) must get them unflattened.
+  ;;
+  ;; The flattening is lossy on every transport that then UTF-8 encodes what it
+  ;; is given, which is all of them today -- see %http-body-string.
   (let ((out (make-string-output-stream)) (i 0) (n (length v)))
     (while (< i n)
       (write-char (code-char (aref v i)) out)
       (setq i (+ i 1)))
     (get-output-stream-string out)))
 
+(defun rontolisp::%http-body-text (body)
+  ;; The normalized body -> the STRING a text transport writes. Octets flatten
+  ;; one character per octet; a string is already it. A stream is the caller's
+  ;; problem (it needs an await, and only the async frames have one).
+  (if (stringp body) body (rontolisp::%http-octets-string body)))
+
 (defun rontolisp::%http-body-string (body)
-  ;; A Clack response body -> the string the transport writes. A rontolisp
-  ;; STREAM body (a proxied fetch response) is returned AS IS: draining it
-  ;; needs an await, and keeping this a plain defun keeps the whole normalizer
-  ;; synchronous -- %http-serve-request, the one async frame on the request
-  ;; path, drains it. On the interpreter every async-defun call costs a future
-  ;; and a virtual thread, so "one async frame per request" is a measured
-  ;; throughput property, not a style choice.
+  ;; A Clack response body -> what the transport writes: a STRING, an
+  ;; (unsigned-byte 8) vector, or a rontolisp STREAM. The last two are returned
+  ;; AS IS -- draining a stream needs an await, and keeping this a plain defun
+  ;; keeps the whole normalizer synchronous (%http-serve-request, the one async
+  ;; frame on the request path, drains it); on the interpreter every
+  ;; async-defun call costs a future and a virtual thread, so "one async frame
+  ;; per request" is a measured throughput property, not a style choice.
+  ;;
+  ;; OCTETS stay octets for the same reason a stream does: only the transport
+  ;; knows what it can carry. One that writes bytes -- the reactor's
+  ;; byte-shaped sink -- takes them as they are, and the rest flatten them
+  ;; through %http-body-text. Flattening HERE would make binary unrecoverable,
+  ;; because a flattened octet is indistinguishable from a character the
+  ;; application meant.
   ;;
   ;; A BARE STRING is deliberately rejected, as Clack itself rejects it (lack's
   ;; finalize-response wraps a string controller result in a list, so a bare
@@ -530,8 +548,7 @@
         ((stringp body)
          (error
           "http-handler: a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)"))
-        ((typep body '(vector (unsigned-byte 8)))
-         (rontolisp::%http-octets-string body))
+        ((typep body '(vector (unsigned-byte 8))) body)
         ((rontolisp:streamp body) body)
         (t (error "http-handler: unsupported response body type"))))
 
@@ -584,5 +601,11 @@
          (body (car (cdr (cdr triple)))))
     (if (stringp body)
         triple
-        (let ((drained (rontolisp:await (rontolisp::%http-drain body))))
-          (list (car triple) (car (cdr triple)) drained)))))
+        (if (rontolisp:streamp body)
+            (let ((drained (rontolisp:await (rontolisp::%http-drain body))))
+              (list (car triple) (car (cdr triple)) drained))
+            ;; Octets: these transports write TEXT, so they get the flattened
+            ;; spelling the normalizer used to hand out. What that costs a
+            ;; binary body is %http-body-text's note.
+            (list (car triple) (car (cdr triple))
+                  (rontolisp::%http-body-text body))))))

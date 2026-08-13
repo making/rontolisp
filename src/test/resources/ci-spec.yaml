@@ -8369,6 +8369,28 @@ cases:
                                                      #'ci-sink))
                  "in-band"
                  "out-of-band"))
+      ;; An (unsigned-byte 8) body reaches a SINK as the OCTETS it is, which is
+      ;; why %http-body-string stopped flattening it into characters: once
+      ;; flattened, a byte and a character the application chose are the same
+      ;; value, and every transport that UTF-8 encodes what it is given doubles
+      ;; the high ones. The head cannot carry octets (a JSON string is text), so
+      ;; without a sink it still gets the one-character-per-octet spelling.
+      (defun ci-sink-octets (env)
+        (declare (ignore env))
+        (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
+          (setf (aref v 0) #xFF)
+          (setf (aref v 1) #xFE)
+          (setf (aref v 2) #x41)
+          (list 200 nil v)))
+      (rontolisp::%http-reactor-register #'ci-sink-octets)
+      (setq *ci-sink-chunks* nil)
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}" nil
+                                                 #'ci-sink)))
+      (print (map 'list #'identity (car *ci-sink-chunks*)))
+      (print (map 'list #'char-code
+                  (ci-sink-head-body
+                   (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}"))))
     expected: |
       "hello, sink"
       NIL
@@ -8378,6 +8400,9 @@ cases:
       3
       "one two three"
       "in-band"
+      NIL
+      (255 254 65)
+      (255 254 65)
   - name: http-percent-decode
     source: |
       ;; Lenient by design: a malformed escape is copied verbatim, "+" is NOT a
@@ -8419,7 +8444,9 @@ cases:
       ;; values are stringified, repeated names stay repeated
       (print (rontolisp::%http-normalize-response
               (list 200 '((:x-a . 1) ("Set-Cookie" . "a=1") ("set-cookie" . "b=2")) nil)))
-      ;; an (unsigned-byte 8) vector body: one character per octet
+      ;; an (unsigned-byte 8) vector body comes back AS IS -- the normalizer no
+      ;; longer flattens it to one character per octet, because only a
+      ;; transport knows whether it can write bytes (see the tail of this case)
       (print (rontolisp::%http-normalize-response
               (list 200 nil (make-array 2 :element-type '(unsigned-byte 8)
                                           :initial-contents '(104 105)))))
@@ -8434,16 +8461,36 @@ cases:
       ;; a non-integer status is refused
       (print (handler-case (rontolisp::%http-normalize-response (list :ok nil nil))
                (error (e) :refused-status)))
+      ;; an (unsigned-byte 8) body comes back UNFLATTENED, the way a stream body
+      ;; does: only the transport knows whether it can write bytes, and once the
+      ;; octets are characters nothing can tell them from text the application
+      ;; chose. A transport that writes TEXT flattens them itself, which is what
+      ;; %http-body-text is.
+      (defvar *ci-norm-octets*
+        (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
+          (setf (aref v 0) #xFF)
+          (setf (aref v 1) #xFE)
+          (setf (aref v 2) #x41)
+          v))
+      (print (map 'list #'identity
+                  (car (cdr (cdr (rontolisp::%http-normalize-response
+                                  (list 200 nil *ci-norm-octets*)))))))
+      (print (map 'list #'char-code
+                  (rontolisp::%http-body-text *ci-norm-octets*)))
+      (print (rontolisp::%http-body-text "already text"))
     expected: |
       (200 (("content-type" . "text/plain")) "abc")
       (404 NIL "")
       (404 NIL "")
       (200 NIL "ab")
       (200 (("x-a" . "1") ("set-cookie" . "a=1") ("set-cookie" . "b=2")) "")
-      (200 NIL "hi")
+      (200 NIL #(104 105))
       (201 NIL "later")
       :REFUSED-BARE-STRING
       :REFUSED-STATUS
+      (255 254 65)
+      (255 254 65)
+      "already text"
   - name: http-buffered-body-stream
     source: |
       ;; The buffered :raw-body construction (the Gray class on the WASM

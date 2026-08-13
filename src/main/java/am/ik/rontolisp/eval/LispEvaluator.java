@@ -7564,11 +7564,19 @@ public final class LispEvaluator {
 			}
 			default -> {
 				// The cold arms (an (unsigned-byte 8) vector today) live once, in the
-				// shared library, rather than four times over.
+				// shared library, rather than four times over. Through %http-body-text,
+				// not %http-body-string: the normalizer hands octets through unflattened
+				// -- only the transport knows whether it can write bytes -- and this
+				// transport writes a String. That flattening is the known non-byte-exact
+				// bug, `.kb/http-server.md`.
 				LispVal text = apply(resolveFunction(
 						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, HttpServerLibrary.BODY_STRING)),
 						List.of(body), this.globalEnv);
-				return text instanceof LispString str ? str.value() : "";
+				LispVal flat = apply(
+						resolveFunction(
+								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, HttpServerLibrary.BODY_TEXT)),
+						List.of(text), this.globalEnv);
+				return flat instanceof LispString str ? str.value() : "";
 			}
 		}
 	}

@@ -243,15 +243,24 @@ full-length answer on an undersized buffer with no overrun, and the flat-memory 
 the wasmtime preload leg (`bytesBoundaryCrossesThePreloadBoundaryByLength`) pins the
 plumbing through the values that DO cross two disjoint memories -- the lengths.
 
-**Its first consumer is the reactor's request body** (todo-341 Phase 2b,
+**Its first consumers are the reactor's two bodies** (todo-341 Phases 2b and 3b,
 2026-08-13): `HttpReactorInliner` synthesizes
 `(wasm-import '%reactor-read-body :from "env" :as "readRequestBody" :params '()
-:returns :bytes :async t)` beside the `handle-request` export, so the head crosses
-as the JSON envelope and the body crosses as octets into one reused buffer -- the
-flat-memory property above, measured on a real Worker module. `.kb/clack.md` ("The
-WASM boundary") has the whole shape, including why the thunk CALLS the import
-instead of taking `#'name` (the suspending-import report follows calls) and why
-`--component` keeps the in-band body.
+:returns :bytes :async t)` and
+`(wasm-import '%reactor-write-body :from "env" :as "writeResponseBody" :params
+'(:bytes) :returns :void :async t)` beside the `handle-request` export, so the head
+crosses as the JSON envelope and both bodies cross as octets -- in, into one reused
+buffer; out, straight out of the module's memory -- the flat-memory property above,
+measured on a real Worker module in both directions. **The two spellings are the
+same rule, not an asymmetry**: a chunk crossing IN is a `:bytes` result into a
+caller-passed buffer, one crossing OUT is a `:bytes` parameter the wrapper stages and
+pops, and both say the caller owns the memory (which is why the write import answers
+nothing -- a host cannot short-read a write). `.kb/clack.md` ("The WASM boundary")
+has the whole shape, including why each thunk CALLS its import instead of taking
+`#'name` (the suspending-import report follows calls), why `--component` keeps the
+in-band bodies, and why a plain WASI COMMAND module keeps them too (its host is
+`wasmtime run`, which satisfies no `env.*` import, so declaring one there made the
+module refuse to instantiate).
 
 **The component path does NOT go through this compiler** (todo 128): `rontolisp:wasm-import`
 is still a Preview-1-only directive (`--component` throws). A `rontolisp:wit-import` under

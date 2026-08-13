@@ -124,7 +124,8 @@ public final class HttpHandlerJvmRuntime {
 	 * server writes.
 	 * @param triple the normalized response triple
 	 * @param drainedBody the triple's body after the emitted {@code _drain_body} pass (a
-	 * stream body arrives as its quoted concatenation)
+	 * stream body arrives as its quoted concatenation, an {@code (unsigned-byte 8)} body
+	 * as the packed vector the normalizer deliberately did not flatten)
 	 * @return the response to write back
 	 */
 	public static HttpHandlerSupport.Response toResponse(Object triple, @Nullable Object drainedBody) {
@@ -141,8 +142,24 @@ public final class HttpHandlerJvmRuntime {
 			}
 			cursor = cell[1];
 		}
-		String body = drainedBody instanceof String text ? unquote(text) : "";
+		String body = switch (drainedBody) {
+			case String text -> unquote(text);
+			// An (unsigned-byte 8) body: long[]{width, e0, ...} here. This transport
+			// writes TEXT, so it gets the same one-character-per-octet flattening
+			// %http-body-text applies on the other backends -- the shared normalizer
+			// keeps the octets precisely so a transport that can write bytes need not.
+			case long[] octets -> octetsText(octets);
+			case null, default -> "";
+		};
 		return new HttpHandlerSupport.Response(status, headers, body);
+	}
+
+	private static String octetsText(long[] octets) {
+		StringBuilder out = new StringBuilder(Math.max(0, octets.length - 1));
+		for (int i = 1; i < octets.length; i++) {
+			out.append((char) (octets[i] & 0xFF));
+		}
+		return out.toString();
 	}
 
 	private static @Nullable Object parseContentLength(@Nullable String value) {

@@ -346,16 +346,29 @@ rules, each load-bearing:
   than a fallback: this transport used to hand the stream value itself to
   `json-stringify`.
 
-An `(unsigned-byte 8)` response body is still text by the time it gets here —
-`%http-body-string` renders it one character per octet, as every transport that
-writes it back out one byte each needs — so a sink whose boundary is byte-shaped
-must not re-encode it as UTF-8. That is the open half of Phase 3: the WASM
-`env.writeResponseBody` entry, and what `%http-normalize-response` has to keep in
-order to feed it.
+An `(unsigned-byte 8)` response body reaches the sink as the OCTETS it is, and
+that is why the shared normalizer stopped flattening it: `%http-body-string`
+returns such a body unchanged, exactly as it returns a stream, because only the
+transport knows whether it can write bytes. Once flattened, a byte and a
+character the application chose are the same value, and every transport that
+UTF-8 encodes what it is given doubles the high ones. The three transports that
+write TEXT flatten it themselves, through `%http-body-text` (the old
+`%http-octets-string` behind a name that also passes a string through):
+`%http-serve-request` for the interpreter and the component,
+`HttpHandlerJvmRuntime.toResponse` for the JVM (a `long[]{width, e0, ...}`
+there), and `%http-reactor-body-out`'s no-sink arm for the envelope. **That
+flattening is still lossy on all three** — a binary response body comes out
+double-encoded on the socket transports, measured (`ff fe 41` → `c3 bf c3 be
+41`), which is `.todo/351`; keeping the octets in the normalizer is what makes
+fixing it a change at three write sites rather than an unrecoverable loss at
+one.
 
 Pinned by the `http-reactor-body-sink` ci-spec case (four backends: a string body
-with and without a sink, a stream body both ways, and the error arm staying in
-band) and `LispEvaluatorAsdfTest.aReactorSinkTakesTheResponseBodyOutOfTheHead`.
+with and without a sink, a stream body both ways, the error arm staying in band,
+and an octet body reaching the sink unflattened while the head still gets the
+flattened spelling), the `http-response-normalizer` case (the normalizer's
+widened contract, plus `%http-body-text` over both spellings) and
+`LispEvaluatorAsdfTest.aReactorSinkTakesTheResponseBodyOutOfTheHead`.
 
 Two backend bugs surfaced while wiring it, both pre-existing and both now pinned
 by the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case:
@@ -374,12 +387,12 @@ by the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case:
   `_p1_future_await` and that function is the same poll
   (`WasmFutureRuntimeBuilder.buildSyncForce`).
 
-### The WASM boundary: a head export and a body import (todo-341 Phase 2b)
+### The WASM boundary: a head export and two body imports (todo-341 Phases 2b / 3b)
 
-A host on the other side of a wasm boundary cannot pass a Lisp closure, so
-`HttpReactorInliner` writes the source itself. Beside the `handle-request`
-export it synthesizes, on the Preview 1 core-module backend, an import and the
-thunk over it:
+A host on the other side of a wasm boundary can pass neither a Lisp closure nor
+a Lisp sink, so `HttpReactorInliner` writes both itself. Beside the
+`handle-request` export it synthesizes, on the Preview 1 core-module backend,
+two imports and the thunks over them:
 
 ```lisp
 (rontolisp:wasm-import '%reactor-read-body :from "env" :as "readRequestBody"
@@ -387,12 +400,18 @@ thunk over it:
 (defun %reactor-read-chunk ()
   (let ((%reactor-buf (rontolisp::%http-reactor-buffer 65536)))
     (rontolisp::%http-reactor-chunk %reactor-buf (%reactor-read-body %reactor-buf))))
+(rontolisp:wasm-import '%reactor-write-body :from "env" :as "writeResponseBody"
+                       :params '(:bytes) :returns :void :async t)
+(defun %reactor-write-chunk (%reactor-chunk)
+  (%reactor-write-body (rontolisp::%http-reactor-octets %reactor-chunk)))
 (defun %reactor-dispatch (%reactor-json)
-  (rontolisp::%http-reactor-dispatch %reactor-json (function %reactor-read-chunk)))
+  (rontolisp::%http-reactor-dispatch %reactor-json (function %reactor-read-chunk)
+                                     (function %reactor-write-chunk)))
 ```
 
 so the whole boundary is `handle-request(headPtr, headLen) -> (ptr, len)` plus
-`env.readRequestBody(ptr, cap) -> n`. Four decisions in that, each load-bearing:
+`env.readRequestBody(ptr, cap) -> n` and `env.writeResponseBody(ptr, len)`. Five
+decisions in that, each load-bearing:
 
 - **`:bytes`, not `:string`** (`.kb/wasm-import.md`): the string decoder is
   non-validating, so a binary body cannot cross it, and a `:string` RESULT is
@@ -400,39 +419,62 @@ so the whole boundary is `handle-request(headPtr, headLen) -> (ptr, len)` plus
   findings 2 and 4). The `:bytes` result is caller-buffered and the wrapper pops
   its staging, so the body costs NO linear memory: measured, a 256 KiB body a
   handler drops leaves `memory.buffer.byteLength` where it was, where the
-  envelope used to hold the body about 17 times over.
-- **the import is CALLED, never taken as `#'value`**: the build's
+  envelope used to hold the body about 17 times over. Measured the same way on
+  the way out: 256 KiB streamed to the sink, four responses in a row, leaves it
+  where it was too.
+- **the DIRECTION flips between the two, and that is the same rule.** A chunk
+  crossing in is a `:bytes` RESULT into a buffer the module passes; one crossing
+  out is a `:bytes` PARAMETER the wrapper stages and pops. Both say the CALLER
+  owns the memory, so neither lets the host hold a pointer across the call — the
+  write import has no result at all, because a host cannot short-read a write
+  and a chunk it has not taken by the time the call returns is one it never gets.
+- **the imports are CALLED, never taken as `#'value`**: the build's
   suspending-import report follows calls, and an escaped import widens its
-  answer to "any export may suspend" (`.kb/wasm-import.md`).
+  answer to "any export may suspend" (`.kb/wasm-import.md`). That is why the
+  sink is `%reactor-write-chunk`, a defun that calls the import, rather than the
+  import itself.
 - **`:async t`**, so the HOST picks the strategy over one module: answering
-  synchronously (read the body, then call in — what every checked-in Worker glue
-  does) and suspending inside the call (`WebAssembly.Suspending` over the
-  request's own reader, entered through `promising`, calls serialised) are both
-  legal. The declaration is also what puts the re-entry guard on the exports,
-  which is the difference between a supported streaming host and a silent
-  corruption.
-- **Preview 1 core modules only.** `--component` keeps the whole body inside the
-  envelope's `"body"` key: a `wasm-import` is refused there (a component's host
-  functions cross the canonical ABI) and so is the packed array behind
-  `:bytes`. Re-evaluate when the component path grows a `list<u8>` lift —
-  nothing else about the split is Preview-1-specific. `--no-gc` keeps it too and
-  cannot serve at all anyway (below).
+  synchronously (read the body, then call in; collect the response chunks as
+  they arrive — what every checked-in Worker glue does) and suspending inside
+  the call (`WebAssembly.Suspending` over the request's own reader, or over a
+  writer that applies backpressure, entered through `promising`, calls
+  serialised) are both legal. The declaration is also what puts the re-entry
+  guard on the exports, which is the difference between a supported streaming
+  host and a silent corruption.
+- **Preview 1 core modules, and only a REACTOR.** `--component` keeps both
+  bodies inside the envelope's `"body"` keys: a `wasm-import` is refused there (a
+  component's host functions cross the canonical ABI) and so is the packed array
+  behind `:bytes`. Re-evaluate when the component path grows a `list<u8>` lift —
+  nothing else about the split is Preview-1-specific. `--no-gc` keeps them too
+  and cannot serve at all anyway (below). And so does a plain WASI COMMAND
+  module, for a different reason: the marker is not a reactor's alone
+  (`clack-handler-reactor` is host-driven on every backend, so a program drives
+  its own `dispatch` in-process to develop a Worker — every
+  `examples/cloudflare-workers/*/check.lisp`), and there the host is `wasmtime
+  run`, which satisfies no `env.*` import. Declaring one made those modules
+  refuse to INSTANTIATE whether or not anything called `handle-request`, so
+  `HttpReactorInliner.process` takes a `reactor` flag (`--no-wasi`) beside the
+  backend and the bodies follow it, not the backend alone.
 
 A HAND-WRITTEN reactor (one that exports `handle-request` itself, so nothing is
-synthesized) writes those three forms itself:
+synthesized) writes those forms itself:
 `examples/cloudflare-workers/httpbin/worker.lisp` is the worked example, and it
-is also where the two boundaries meet — the same file is built as a core module
-AND as a component by `httpbin-component/`, so its import is guarded by
-`#-rontolisp-component`. That feature exists for exactly this
-(`reader/Features.COMPONENT`, added under `--component` by the CLI): the reactor
-features cannot stand in for it, because a `--component --no-wasi` build IS a
-reactor and carries them too.
+is also where the boundaries meet — the same file is built as a core module, as
+a component by `httpbin-component/`, and as an ordinary function by its own
+`check.lisp` on three more backends, so its imports are guarded by
+`#+(and rontolisp-reactor (not rontolisp-component))` and it defines the
+envelope-reading fallback under the negation. Both halves of that guard are
+load-bearing, and for the two different reasons the last bullet names.
 
 Pinned by `WasmReactorBodyE2eTest` (node, a host that shares the module's
 memory: a body whose every character straddles a chunk boundary, a reader that
 answers 0 meaning no body, the envelope fallback, a binary body, and the flat
-linear memory), `HttpReactorInlinerTest`'s two bridge-shape tests, and
-`RontoLispCliTest.aComponentBuildReadsTheSourceWithTheComponentFeature`.
+linear memory), `WasmReactorResponseBodyE2eTest` (the same host on the way out:
+the absent `"body"` key, a binary body crossing exactly, a stream body forwarded
+as its own chunks, a handler failing MID-BODY whose 500 rides the head and wins
+over the chunks already taken, and 256 KiB out with flat memory),
+`HttpReactorInlinerTest`'s bridge-shape tests — including the WASI-command one —
+and `RontoLispCliTest.aComponentBuildReadsTheSourceWithTheComponentFeature`.
 
 **Both hosts, one build.** `WasmReactorStreamingHostE2eTest` drives a module
 compiled by the SAME pipeline, with no flag and no directive that differs, through

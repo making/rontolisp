@@ -50,6 +50,20 @@ const NO_BODY = new Uint8Array(0);
 let body = NO_BODY;
 let bodyOffset = 0;
 
+// And the response body coming back the same way. Read inside the queue too,
+// for the same reason the cursor is set there.
+let responseChunks = [];
+
+function responseBody() {
+  const all = new Uint8Array(responseChunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const chunk of responseChunks) {
+    all.set(chunk, at);
+    at += chunk.length;
+  }
+  return all;
+}
+
 // Instantiated on the first request: a Worker forbids crypto in global scope.
 let lisp = null;
 const lispInstance = () => (lisp ??= instantiate());
@@ -76,6 +90,15 @@ function instantiate() {
         );
         bodyOffset += n;
         return n;
+      },
+      // The response body, out of band and the other way round: take these
+      // octets, they are the next chunk. Copy now -- the module pops the
+      // staging behind the pointer when this returns. Synchronous for the same
+      // reason the reader is.
+      writeResponseBody: (ptr, len) => {
+        responseChunks.push(
+          new Uint8Array(exports.memory.buffer.slice(ptr, ptr + len)),
+        );
       },
     },
   });
@@ -143,13 +166,15 @@ export default {
 
     let reply;
     try {
-      reply = JSON.parse(
-        await serialized(() => {
-          body = bytes;
-          bodyOffset = 0;
-          return handleRequest(lispInstance(), input);
-        }),
-      );
+      // The chunks are read inside the critical section: they belong to the one
+      // call that is running, and a suspended handler returns to the event loop.
+      reply = await serialized(async () => {
+        body = bytes;
+        bodyOffset = 0;
+        responseChunks = [];
+        const head = JSON.parse(await handleRequest(lispInstance(), input));
+        return { ...head, body: head.body ?? responseBody() };
+      });
     } catch (error) {
       // Lisp errors answer 500 themselves, so this is a trap: the arena reset
       // was skipped and state may be half-written. Replace the instance.
@@ -159,7 +184,7 @@ export default {
     }
 
     // Headers as an ARRAY of pairs: that is what keeps two Set-Cookie headers two.
-    return new Response(reply.body ?? "", {
+    return new Response(reply.body, {
       status: reply.status ?? 200,
       headers: reply.headers ?? [],
     });

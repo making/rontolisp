@@ -477,7 +477,7 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:http-handler 'handle 8080)
 				""", am.ik.rontolisp.reader.Features.WASM_REACTOR));
 		loaded = am.ik.rontolisp.eval.HttpReactorInliner.process(loaded,
-				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
+				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, true);
 		loaded = am.ik.rontolisp.eval.HttpReactorLibrary.process(loaded);
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, false);
 		// GrayStreamsLibrary mirrors the CLI: the reactor's buffered request body is a

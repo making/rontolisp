@@ -88,10 +88,12 @@ after this one:
   "scheme": "https", "remote-addr": "203.0.113.7" }
 ```
 
-back:
+back — the response **head**, whose `"body"` key is likewise absent whenever the
+body crossed out of band (which is the normal case here; see the section after
+this one):
 
 ```json
-{ "status": 200, "headers": [["content-type", "application/json"]], "body": "..." }
+{ "status": 200, "headers": [["content-type", "application/json"]] }
 ```
 
 This is the envelope the built-in `clack-handler-reactor` backend speaks, which
@@ -111,35 +113,54 @@ On the way out, response `headers` are an **array of pairs, not an object**:
 `%http-normalize-response` answers an alist in which a name may repeat (two
 cookies, two `Set-Cookie` headers). An object would collapse the duplicates.
 
-## The body is not in the envelope
+## Neither body is in the envelope
 
-It crosses the other way instead, through the one import this module has:
+They cross the other way instead, through the two imports this module has:
 
 ```js
 readRequestBody(ptr, cap) -> n   // write up to cap octets at ptr, answer how
                                  // many; 0 is end of stream
+writeResponseBody(ptr, len)      // take these octets, they are the next chunk
 ```
 
-The module owns the buffer and hands it over per call, reusing one for every
-chunk of every request. Two things follow that a JSON string could not give: a
-**binary** body arrives exactly (the `:string` boundary decodes UTF-8 and does
-not validate, so arbitrary octets come back as garbage code points), and a large
-upload costs the module **no linear memory** — the envelope used to hold the body
-several times over, and a 256 KiB `POST` the handler drops now leaves
-`memory.buffer.byteLength` exactly where it was.
+Note the direction flip. Going *in*, the module owns the buffer and hands it
+over per call, reusing one for every chunk of every request; going *out*, the
+octets are the module's own and the host must copy them before the call returns.
+Both say the same thing — the caller owns the memory, so JavaScript may never
+hold on to a pointer — and the write import answers nothing, because a host
+cannot short-read a write.
 
-The import is declared `:async t`, which says the host *may* suspend while it
-reads. `src/index.js` answers synchronously — it reads the body first, then calls
-in — which the declaration allows and which needs nothing from the platform. A
-host that instead wraps the import in `WebAssembly.Suspending` streams the upload
-straight from `request.body`'s reader, at the price of entering `handle-request`
-through `WebAssembly.promising` and serialising its calls (see
-[`../dog-fetcher`](../dog-fetcher), which does that for its outgoing `fetch`).
+Two things follow that a JSON string could not give: a **binary** body crosses
+exactly in either direction (the `:string` boundary decodes UTF-8 and does not
+validate, so arbitrary octets come back as garbage code points), and a large
+upload or download costs the module **no linear memory** — the envelope used to
+hold the body several times over, and a 256 KiB `POST` the handler drops now
+leaves `memory.buffer.byteLength` exactly where it was.
 
-[`../httpbin-component`](../httpbin-component) builds **this same file** as a
-component, where a core import does not exist — a component's host functions
-cross the canonical ABI — so that build keeps the body in the envelope's `"body"`
-key. One `#-rontolisp-component` in `worker.lisp` is the whole difference.
+Both imports are declared `:async t`, which says the host *may* suspend.
+`src/index.js` answers synchronously — it reads the body first, then calls in,
+and collects the response chunks as they arrive — which the declaration allows
+and which needs nothing from the platform. A host that instead wraps an import in
+`WebAssembly.Suspending` streams the upload straight from `request.body`'s
+reader, or writes the response into a stream that applies backpressure, at the
+price of entering `handle-request` through `WebAssembly.promising` and
+serialising its calls (see [`../dog-fetcher`](../dog-fetcher), which does that
+for its outgoing `fetch`).
+
+The guard on both imports in `worker.lisp` is
+`#+(and rontolisp-reactor (not rontolisp-component))`, and each half answers a
+different host:
+
+- **not a reactor** — `check.lisp` drives `handle-request` as an ordinary
+  function on the interpreter, the JVM and a plain WASI command module, where
+  there is no JavaScript at all. A declared-but-unprovided import makes a command
+  module refuse to instantiate, so those builds keep the envelope's `"body"`.
+- **not a component** — [`../httpbin-component`](../httpbin-component) builds
+  **this same file** as a component, where a core import does not exist (a
+  component's host functions cross the canonical ABI), so that build keeps the
+  envelope too.
+
+One source, three boundaries.
 
 ## Nothing to shim: `--no-wasi`
 

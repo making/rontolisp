@@ -32,14 +32,15 @@ function disappears here. It is the entire benefit, and it is a genuine one.
 | Build tools | the rontolisp compiler | + `@bytecodealliance/jco` |
 | WASI imports to satisfy | none | none |
 | Top-level `defparameter` | works, via `_initialize` | works, at instantiation |
-| The request body | out of band, as octets through `env.readRequestBody` | inside the envelope's `"body"` key |
+| Both bodies | out of band, as octets through `env.readRequestBody` / `env.writeResponseBody` | inside the envelopes' `"body"` keys |
 
-That last row is the one place the shared source diverges, and it is one
-`#-rontolisp-component` in `worker.lisp`: a component's host functions cross the
-canonical ABI rather than a core import, so there is no byte-shaped import here
-to pull a body through. This build therefore pays what
-[`../httpbin`](../httpbin#the-body-is-not-in-the-envelope) stopped paying — the
-body JSON-escaped into the head, and no way to carry a binary one.
+That last row is the one place the shared source diverges, and it is the
+`(not rontolisp-component)` half of the guard on the two imports in
+`worker.lisp`: a component's host functions cross the canonical ABI rather than
+a core import, so there is no byte-shaped import here to carry a body through in
+either direction. This build therefore pays what
+[`../httpbin`](../httpbin#neither-body-is-in-the-envelope) stopped paying — each
+body JSON-escaped into its head, and no way to carry a binary one.
 
 `--no-wasi` is what makes the right column read that way: it asks for a
 component that **imports nothing** (`wasm-tools component wit` shows not a

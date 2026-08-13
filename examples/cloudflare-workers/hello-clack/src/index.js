@@ -22,6 +22,20 @@ const NO_BODY = new Uint8Array(0);
 let body = NO_BODY;
 let bodyOffset = 0;
 
+// And the response body coming back the same way, chunk by chunk, in order.
+// Reset per request.
+let responseChunks = [];
+
+function responseBody() {
+  const all = new Uint8Array(responseChunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const chunk of responseChunks) {
+    all.set(chunk, at);
+    at += chunk.length;
+  }
+  return all;
+}
+
 // Instantiated on the FIRST REQUEST, not at module scope: a Worker forbids
 // generating random values in the global scope, and the seed below has to be in
 // before `_initialize` runs the Lisp top level. So the cost lands on one
@@ -45,6 +59,16 @@ function instantiate() {
       );
       bodyOffset += n;
       return n;
+    },
+    // The response body, out of band and the other way round: take these
+    // octets, they are the next chunk. Copy now -- the module pops the staging
+    // behind the pointer when this returns. A body that never becomes a JSON
+    // string is also one that can be binary, and one a large response never
+    // holds twice.
+    writeResponseBody(ptr, len) {
+      responseChunks.push(
+        new Uint8Array(instance.exports.memory.buffer.slice(ptr, ptr + len)),
+      );
     },
   };
   instance = new WebAssembly.Instance(module, { env });
@@ -90,6 +114,7 @@ export default {
     // module pulls the octets from inside its own call.
     body = request.body ? new Uint8Array(await request.arrayBuffer()) : NO_BODY;
     bodyOffset = 0;
+    responseChunks = [];
     const headers = Object.fromEntries(request.headers);
     // lack/request parses no body without a content-length, and a chunked
     // request carries none -- set it from the octets we actually have.
@@ -120,7 +145,11 @@ export default {
     // The headers arrive as an ARRAY of [name, value] pairs, not an object:
     // that is what keeps a Clack application's two Set-Cookie headers two
     // headers instead of one.
-    return new Response(reply.body ?? "", {
+    //
+    // A "body" key is present only when the body did NOT cross out of band, and
+    // then it WINS: the 500 a failing handler answers rides the head, so the
+    // chunks taken before it are discarded rather than prepended to it.
+    return new Response(reply.body ?? responseBody(), {
       status: reply.status ?? 200,
       headers: reply.headers ?? [],
     });

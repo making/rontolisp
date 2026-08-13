@@ -1,5 +1,5 @@
 // index.js -- the whole Worker: Request -> JSON head + body octets -> Lisp ->
-// JSON -> Response.
+// JSON head + body octets -> Response.
 //
 // BYTE-IDENTICAL in every httpbin-* directory that drives the module directly
 // (httpbin-component has its own generated glue instead), and that is the
@@ -30,6 +30,20 @@ const NO_BODY = new Uint8Array(0);
 let body = NO_BODY;
 let bodyOffset = 0;
 
+// And the response body coming back the same way, chunk by chunk, in order.
+// Reset per request.
+let responseChunks = [];
+
+function responseBody() {
+  const all = new Uint8Array(responseChunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  for (const chunk of responseChunks) {
+    all.set(chunk, at);
+    at += chunk.length;
+  }
+  return all;
+}
+
 // `_initialize` is where the Lisp program's top-level forms run. ../../hello has
 // no such entry point at all -- it is --no-gc with nothing to initialise --
 // which is why it needs none of this.
@@ -56,6 +70,21 @@ function instantiate() {
       );
       bodyOffset += n;
       return n;
+    },
+    // The response body, out of band and the other way round: take these
+    // octets, they are the next chunk. COPY now -- the module pops the staging
+    // behind the pointer the moment this returns, and reuses it for the next
+    // chunk. A body that never becomes a JSON string is also a body that can be
+    // BINARY, and one a large or streamed response never holds twice.
+    //
+    // Declared `:async t` like the reader, so this may equally be a
+    // `WebAssembly.Suspending` that awaits a `TransformStream` writer -- which
+    // is how a Worker would apply real backpressure -- at the same price the
+    // reader's note names.
+    writeResponseBody(ptr, len) {
+      responseChunks.push(
+        new Uint8Array(instance.exports.memory.buffer.slice(ptr, ptr + len)),
+      );
     },
   };
   instance = new WebAssembly.Instance(module, { env });
@@ -138,6 +167,7 @@ export default {
     // await there without JSPI.
     body = request.body ? new Uint8Array(await request.arrayBuffer()) : NO_BODY;
     bodyOffset = 0;
+    responseChunks = [];
     const input = requestToHead(request, body.length);
     let reply;
     try {
@@ -153,7 +183,13 @@ export default {
     // The headers arrive as an ARRAY of [name, value] pairs, not an object:
     // that is what keeps a Clack application's two Set-Cookie headers two
     // headers instead of one.
-    return new Response(reply.body ?? "", {
+    //
+    // A "body" key is present only when the body did NOT cross out of band --
+    // absent and empty are different responses, which is why the Lisp side
+    // drops the key rather than emptying it. When it IS there it WINS: the 500
+    // a failing handler answers rides the head, so the chunks taken before it
+    // are discarded rather than prepended to it.
+    return new Response(reply.body ?? responseBody(), {
       status: reply.status ?? 200,
       headers: reply.headers ?? [],
     });

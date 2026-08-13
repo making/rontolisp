@@ -92,7 +92,7 @@ class WasmReactorStreamingHostE2eTest {
 			const enc = new TextEncoder(), dec = new TextDecoder();
 			const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
 
-			let inst, reader = null, pending = new Uint8Array(0), pulls = 0;
+			let inst, reader = null, pending = new Uint8Array(0), pulls = 0, out = [];
 
 			// (ptr, cap) -> n, the same contract a synchronous host answers -- except this
 			// one awaits the request body's reader, so the module parks here and the event
@@ -112,8 +112,21 @@ class WasmReactorStreamingHostE2eTest {
 			  return n;
 			}
 
+			// (ptr, len), and this one suspends too: a host writing to a socket applies
+			// backpressure, so the module parks in the MIDDLE of producing its response.
+			// The octets are copied before the await, because the module pops the staging
+			// behind them when the call returns.
+			async function writeResponseBody(ptr, len) {
+			  const chunk = new Uint8Array(inst.exports.memory.buffer.slice(ptr, ptr + len));
+			  await new Promise((resolve) => setTimeout(resolve, 0));
+			  out.push(chunk);
+			}
+
 			inst = new WebAssembly.Instance(mod, {
-			  env: { readRequestBody: new WebAssembly.Suspending(readRequestBody) },
+			  env: {
+			    readRequestBody: new WebAssembly.Suspending(readRequestBody),
+			    writeResponseBody: new WebAssembly.Suspending(writeResponseBody),
+			  },
 			});
 			inst.exports._initialize();
 			const handleRequest = WebAssembly.promising(inst.exports['handle-request']);
@@ -137,7 +150,7 @@ class WasmReactorStreamingHostE2eTest {
 			async function call(head, chunks) {
 			  reader = chunks ? streamOf(chunks).getReader() : null;
 			  pending = new Uint8Array(0);
-			  pulls = 0; turns = 0;
+			  pulls = 0; turns = 0; out = [];
 			  const x = inst.exports;
 			  const mark = x.__ronto_alloc_mark();
 			  const hb = enc.encode(head);
@@ -146,9 +159,13 @@ class WasmReactorStreamingHostE2eTest {
 			  inCall = true; setTimeout(tick, 0);
 			  const [rp, rl] = await handleRequest(p, hb.length);
 			  inCall = false;
-			  const out = dec.decode(new Uint8Array(x.memory.buffer.slice(rp, rp + rl)));
+			  const text = dec.decode(new Uint8Array(x.memory.buffer.slice(rp, rp + rl)));
 			  x.__ronto_alloc_reset(mark);
-			  return JSON.parse(out);
+			  const all = new Uint8Array(out.reduce((n, c) => n + c.length, 0));
+			  let at = 0;
+			  for (const c of out) { all.set(c, at); at += c.length; }
+			  const reply = JSON.parse(text);
+			  return { ...reply, body: reply.body ?? dec.decode(all) };
 			}
 
 			const head = (t) =>
@@ -196,7 +213,7 @@ class WasmReactorStreamingHostE2eTest {
 	private static byte[] compile() {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(MODULE, Features.WASM_REACTOR));
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary

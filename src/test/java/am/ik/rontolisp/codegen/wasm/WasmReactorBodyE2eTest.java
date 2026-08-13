@@ -84,7 +84,7 @@ class WasmReactorBodyE2eTest {
 			const fs = require('fs');
 			const enc = new TextEncoder(), dec = new TextDecoder();
 			const mod = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
-			let inst, body = new Uint8Array(0), pos = 0, pulls = 0;
+			let inst, body = new Uint8Array(0), pos = 0, pulls = 0, out = [];
 			const env = {
 			  // (ptr, cap) -> n: write up to cap octets at ptr and answer how many; 0 is
 			  // end of stream. The module owns the buffer and hands it over per call.
@@ -97,20 +97,35 @@ class WasmReactorBodyE2eTest {
 			    pos += n;
 			    return n;
 			  },
+			  // (ptr, len): the response body, out of band. COPY now -- the module pops
+			  // the staging behind these octets the moment the call returns.
+			  writeResponseBody: (ptr, len) => {
+			    out.push(new Uint8Array(inst.exports.memory.buffer.slice(ptr, ptr + len)));
+			  },
 			};
 			inst = new WebAssembly.Instance(mod, { env });
 			inst.exports._initialize();
+			// The chunks this host took, as one buffer.
+			function collected() {
+			  const all = new Uint8Array(out.reduce((n, c) => n + c.length, 0));
+			  let at = 0;
+			  for (const c of out) { all.set(c, at); at += c.length; }
+			  return all;
+			}
 			function call(head, bytes) {
-			  body = bytes; pos = 0; pulls = 0;
+			  body = bytes; pos = 0; pulls = 0; out = [];
 			  const x = inst.exports;
 			  const mark = x.__ronto_alloc_mark();
 			  const hb = enc.encode(head);
 			  const p = x.__ronto_alloc(hb.length);
 			  new Uint8Array(x.memory.buffer, p, hb.length).set(hb);
 			  const [rp, rl] = x['handle-request'](p, hb.length);
-			  const out = dec.decode(new Uint8Array(x.memory.buffer.slice(rp, rp + rl)));
+			  const text = dec.decode(new Uint8Array(x.memory.buffer.slice(rp, rp + rl)));
 			  x.__ronto_alloc_reset(mark);
-			  return JSON.parse(out);
+			  // The response body left the head too, so it is the chunks -- unless the
+			  // head carries a "body" key, which WINS (the 500 arm answers in band).
+			  const reply = JSON.parse(text);
+			  return { ...reply, body: reply.body ?? dec.decode(collected()) };
 			}
 			const head = (t, extra) =>
 			  JSON.stringify({ method: 'POST', target: t, headers: { host: 'h' }, ...extra });
@@ -148,7 +163,7 @@ class WasmReactorBodyE2eTest {
 	private static byte[] compile() {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(MODULE, Features.WASM_REACTOR));
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary

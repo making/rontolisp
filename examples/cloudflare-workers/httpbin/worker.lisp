@@ -27,11 +27,17 @@
 ;;; reads -- a WebAssembly.Suspending wrapper over a ReadableStream reader --
 ;;; and src/index.js answers synchronously, which the declaration allows.
 ;;;
-;;; #-rontolisp-component, because ../httpbin-component builds THIS FILE as a
-;;; component, whose host functions cross the canonical ABI instead of a core
-;;; import -- so that build keeps the body inside the envelope, and its
-;;; src/index.js still sends one. Same endpoints, one source, two boundaries.
-#-rontolisp-component
+;;; The guard is "a reactor that is not a component", and both halves are
+;;; load-bearing. #+rontolisp-reactor, because the import only exists where a
+;;; HOST does -- check.lisp drives handle-request as an ordinary function on the
+;;; interpreter, the JVM and a plain WASI command module, and there the envelope
+;;; is the only body there is (a declared-but-unprovided import makes the
+;;; command module refuse to instantiate; on the interpreter it signals at the
+;;; call). #-rontolisp-component, because ../httpbin-component builds THIS FILE
+;;; as a component, whose host functions cross the canonical ABI instead of a
+;;; core import -- so that build keeps the body inside the envelope, and its
+;;; src/index.js still sends one. Same endpoints, one source, three hosts.
+#+(and rontolisp-reactor (not rontolisp-component))
 (rontolisp:wasm-import '%read-request-body
                        :from "env"
                        :as "readRequestBody"
@@ -43,7 +49,7 @@
 ;; own, like %http-make-env: what this file writes out by hand is the ENVELOPE,
 ;; and neither the reused buffer nor the UTF-8 sequence that straddles two
 ;; chunks is envelope work.
-#-rontolisp-component
+#+(and rontolisp-reactor (not rontolisp-component))
 (defun %body-text (req)
   (declare (ignore req))
   (rontolisp::%http-reactor-body-text
@@ -51,7 +57,41 @@
      (let ((buf (rontolisp::%http-reactor-buffer 65536)))
        (rontolisp::%http-reactor-chunk buf (%read-request-body buf))))))
 
-#+rontolisp-component (defun %body-text (req) (gethash "body" req))
+#-(and rontolisp-reactor (not rontolisp-component))
+(defun %body-text (req) (gethash "body" req))
+
+;;; The response body leaves the envelope the same way, through the mirror
+;;; import: (ptr, len) OUT, "take these octets, they are the next chunk". No
+;;; result -- a host cannot short-read a write, and a chunk it has not taken by
+;;; the time the call returns is one it never gets, since the module reuses the
+;;; memory behind it. Note the direction flip: a chunk crossing out is a :bytes
+;;; PARAMETER where one crossing in is a :bytes RESULT, which is the same rule
+;;; -- the caller owns the memory -- applied both ways.
+#+(and rontolisp-reactor (not rontolisp-component))
+(rontolisp:wasm-import '%write-response-body
+                       :from "env"
+                       :as "writeResponseBody"
+                       :params '(:bytes)
+                       :returns :void
+                       :async t)
+
+;; The SINK. The encode is the transport's own name again: a text chunk becomes
+;; UTF-8, and an (unsigned-byte 8) body is already the octets it means.
+#+(and rontolisp-reactor (not rontolisp-component))
+(defun %body-sink (chunk)
+  (%write-response-body (rontolisp::%http-reactor-octets chunk)))
+
+;; T when the body was taken out of band. Every other build answers NIL and
+;; never names the transport's writer at all, so nothing of it is spliced there.
+#+(and rontolisp-reactor (not rontolisp-component))
+(defun %write-body (body)
+  (rontolisp::%http-reactor-write (function %body-sink) body)
+  t)
+
+#-(and rontolisp-reactor (not rontolisp-component))
+(defun %write-body (body)
+  (declare (ignore body))
+  nil)
 
 ;;; --- the endpoints -----------------------------------------------------------
 
@@ -146,22 +186,31 @@
         (rontolisp::%http-body-stream (%body-text req)) "HTTP/1.1"
         (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
 
-(defun %envelope (status headers body)
-  (rontolisp:json-stringify
-   (rontolisp:plist-hash-table
-    (list :status status :headers (%header-pairs headers) :body body))))
+;; With a SINK the body crosses out of band and the "body" key is ABSENT -- not
+;; empty: a host has to be able to tell "the body crossed" from "the body is the
+;; empty string". The chunks cross BEFORE this head, because the head is the
+;; return value, so a head that carries the key WINS over anything already
+;; written -- which is what makes the 500 below recoverable rather than a
+;; corrupt response.
+(defun %envelope (status headers body out-of-band)
+  (let* ((sent (and out-of-band (%write-body body)))
+         (head (list :status status :headers (%header-pairs headers))))
+    (rontolisp:json-stringify
+     (rontolisp:plist-hash-table
+      (if sent head (append head (list :body body)))))))
 
 ;; The host's entry point. It CATCHES: on a reactor an uncaught Lisp error is a
-;; trap that takes the whole instance down, so answer 500 and keep serving.
+;; trap that takes the whole instance down, so answer 500 and keep serving --
+;; in band, whether or not the body had a sink.
 (defun handle-request (request-json)
   (handler-case (let* ((req (rontolisp:json-parse request-json))
                        (env (rontolisp::%http-make-env (%request-tuple req)))
                        (triple
                         (rontolisp::%http-normalize-response (dispatch env))))
-                  (%envelope (car triple) (cadr triple) (caddr triple)))
+                  (%envelope (car triple) (cadr triple) (caddr triple) t))
     (error (e)
       (%envelope 500 (list (cons "content-type" "application/json"))
                  (format nil "~a~%"
                          (rontolisp:json-stringify
                           (rontolisp:plist-hash-table
-                           (list :error (format nil "~a" e)))))))))
+                           (list :error (format nil "~a" e))))) nil))))

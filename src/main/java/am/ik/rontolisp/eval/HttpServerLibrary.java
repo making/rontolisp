@@ -79,6 +79,14 @@ public final class HttpServerLibrary {
 	/** The cold response-body arms (an {@code (unsigned-byte 8)} vector today). */
 	public static final String BODY_STRING = "%HTTP-BODY-STRING";
 
+	/**
+	 * The normalized body rendered as the STRING a text transport writes -- an
+	 * {@code (unsigned-byte 8)} body one character per octet, a string unchanged. The
+	 * normalizer deliberately hands octets through (only a transport knows whether it can
+	 * write bytes), so every transport that cannot flattens here.
+	 */
+	public static final String BODY_TEXT = "%HTTP-BODY-TEXT";
+
 	// A reference to any of these (or to the http-handler directive / the stoppable
 	// server seam) means the program serves, so the library has to be present.
 	private static final Set<String> ENTRY_POINTS = Set.of(SERVE_REQUEST, MAKE_ENV, NORMALIZE_RESPONSE,
