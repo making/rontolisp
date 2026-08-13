@@ -101,9 +101,25 @@ public final class HttpHandlerSupport {
 	 *
 	 * @param status the HTTP status code
 	 * @param headers the response headers
-	 * @param body the response body (empty string for none)
+	 * @param body the response body octets, exactly as they go on the wire (empty if
+	 * none) -- bytes, not a string, so an {@code (unsigned-byte 8)} body survives the
+	 * trip out instead of being flattened to characters and re-encoded. The same shape
+	 * {@link Request} carries for the same reason.
 	 */
-	public record Response(int status, List<Header> headers, String body) {
+	public record Response(int status, List<Header> headers, byte[] body) {
+
+		/**
+		 * Creates a response whose body is TEXT, encoded as UTF-8 -- the ordinary
+		 * string-body case.
+		 * @param status the HTTP status code
+		 * @param headers the response headers
+		 * @param body the response body text
+		 * @return the response
+		 */
+		public static Response of(int status, List<Header> headers, String body) {
+			return new Response(status, headers, body.getBytes(StandardCharsets.UTF_8));
+		}
+
 	}
 
 	/** Adapts an incoming {@link Request} to a {@link Response}. */
@@ -293,7 +309,7 @@ public final class HttpHandlerSupport {
 				// response the shared normalizer rejected) was a bare 500.
 				System.err.println(LispNames.HTTP_HANDLER + ": handler failed: " + ex);
 				writeResponse(exchange,
-						new Response(500, List.of(new Header("content-type", "text/plain")), "Internal Server Error"));
+						Response.of(500, List.of(new Header("content-type", "text/plain")), "Internal Server Error"));
 				return;
 			}
 			writeResponse(exchange, response);
@@ -323,7 +339,7 @@ public final class HttpHandlerSupport {
 		for (Header header : response.headers()) {
 			exchange.getResponseHeaders().add(header.name(), header.value());
 		}
-		final byte[] body = response.body().getBytes(StandardCharsets.UTF_8);
+		final byte[] body = response.body();
 		// A zero-length response must pass -1 (no body) to HttpServer, not 0.
 		final long contentLength = body.length == 0 ? -1 : body.length;
 		exchange.sendResponseHeaders(response.status(), contentLength);

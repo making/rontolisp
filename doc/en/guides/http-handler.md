@@ -67,7 +67,8 @@ The handler returns Clack's positional response list `(status headers body)`:
   computes them); `nil` is fine.
 - `body` — a **list of strings** (joined), `nil` or omitted (an empty body —
   the two-element `(status headers)` form is valid), an `(unsigned-byte 8)`
-  vector, or a rontolisp stream (e.g. a proxied fetch body). A **bare string
+  vector (written byte for byte — a binary response is byte-exact), or a
+  rontolisp stream (e.g. a proxied fetch body). A **bare string
   signals an error** — deliberately, and faithfully to Clack, which refuses
   strings too. A pathname body means "serve this file" (lack's static-file
   middleware answers one); it is a distinct value here and is refused as

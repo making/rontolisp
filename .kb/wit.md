@@ -157,12 +157,22 @@ Chosen 2026-07-13 (user decision after weighing all three todo-124 options):
   `handler-case`, which today does not COMPILE on WASM — so there is no working WASM
   program whose behavior changes when catching lands; it starts compiling, unchanged.
 
-### Decision record: `list<u8>` = string
+### Decision record: `list<u8>` = string, and (since) a packed byte vector too
 
 A rontolisp string carrying the bytes one-per-char — the existing fetch/socket
 marshalling convention — NOT a list of ints (consing per byte would make large
 wasi:keyvalue values pathological). Distinct from WIT `string` (canonical-ABI UTF-8).
-An explicit bytes<->string helper can be added later if a real divergence shows up.
+
+**The divergence did show up**, and it is what widened this: a rontolisp string is
+stored UTF-8 (`.kb/wasm-gc-strings.md`), so staging one for a `list<u8>` parameter
+ENCODES — every byte >= 0x80 doubles, and a binary HTTP response body left the
+serve component mangled. So a `list<u8>` / `stream<u8>` parameter ALSO takes a
+packed `(unsigned-byte 8)` vector (`TYPE_I8ARR`), staged as its raw array bytes:
+`WasmComponentImportCompiler.emitStageBytesParam`, a `ref.test TYPE_I8ARR` whose
+else-arm is the string staging verbatim. A `string` parameter is untouched, so
+only the three `list<u8>`-shaped sites move a byte of emitted output. The `:bytes`
+boundary type's `_bytes_copy` is the same idea one layer out and is still
+core-module only (below).
 
 ## What todo 125 deliberately did NOT do
 

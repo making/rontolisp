@@ -3838,6 +3838,34 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void httpHandlerServesAnOctetBodyByteExactlyUnderWasmtimeServe() throws Exception {
+		// An (unsigned-byte 8) response body crosses the wasi:http body stream as the
+		// RAW octets it holds: %http-serve-request hands them to the transport
+		// unflattened, and stream<u8>.write stages a packed byte vector without the
+		// UTF-8 encode a string parameter gets. Asserting the wire bytes is the point --
+		// as text, the two octets >= #x80 would each come back doubled.
+		byte[] componentBytes = compileServeComponent("""
+				(defun handle (env)
+				  (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
+				    (setf (aref v 0) 255)
+				    (setf (aref v 1) 254)
+				    (setf (aref v 2) 65)
+				    (list 200 (list :content-type "application/octet-stream") v)))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(componentBytes), "/tmp/serve-octets.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"cd /tmp && wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8094 serve-octets.wasm"
+						+ " >/tmp/serve-octets.log 2>&1 &"
+						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/octets.out -w '%{http_code}'"
+						+ " http://127.0.0.1:8094/) && [ \"$code\" != 000 ]"
+						+ " && { od -An -tx1 /tmp/octets.out | tr -d ' \\n'; echo; exit 0; }; sleep 0.25; done;"
+						+ " cat /tmp/serve-octets.log; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve octet body; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("fffe41");
+	}
+
+	@Test
 	void httpHandlerRandomClockAndPrintUnderWasmtimeServe() throws Exception {
 		// Inside a served handler random / time / print must work: the serve component
 		// bridges the preview1 random_get / clock_time_get / fd_write imports to the

@@ -24,6 +24,7 @@ import am.ik.rontolisp.LispHashTable;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispInstance;
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispJavaObject;
 import am.ik.rontolisp.LispLayout;
 import am.ik.rontolisp.LispLambda;
@@ -7522,15 +7523,15 @@ public final class LispEvaluator {
 				value instanceof LispString str ? str.value() : Environment.displayString(value)));
 	}
 
-	// The Clack response body. A BARE STRING is refused as Clack itself refuses it
-	// (lack's finalize-response wraps a string controller result in a list, so a bare
-	// string here is a malformed response); a PATHNAME body -- lack/app/file's
-	// file-serving form, a distinct value -- falls to the unsupported-type arm until
-	// the transport can serve a file.
-	private String responseBody(LispVal body) {
+	// The Clack response body, as the OCTETS the transport puts on the wire. A BARE
+	// STRING is refused as Clack itself refuses it (lack's finalize-response wraps a
+	// string controller result in a list, so a bare string here is a malformed
+	// response); a PATHNAME body -- lack/app/file's file-serving form, a distinct value
+	// -- falls to the unsupported-type arm until the transport can serve a file.
+	private byte[] responseBody(LispVal body) {
 		switch (body) {
 			case LispNil ignored -> {
-				return "";
+				return EMPTY_BODY;
 			}
 			case LispString ignored -> throw new LispEvalException(LispNames.HTTP_HANDLER
 					+ ": a response body must be a list of strings, not a bare string -- wrap it, e.g. (list body)");
@@ -7550,7 +7551,7 @@ public final class LispEvaluator {
 								LispNames.HTTP_HANDLER + ": a list response body must hold strings");
 					}
 				}
-				return out.toString();
+				return out.toString().getBytes(StandardCharsets.UTF_8);
 			}
 			case LispStream stream -> {
 				// A proxied fetch body: drained here (buffered send).
@@ -7560,25 +7561,35 @@ public final class LispEvaluator {
 					drained.append(chunkStr.value());
 					chunk = awaitValue(LispFuture.of(stream.read()));
 				}
-				return drained.toString();
+				return drained.toString().getBytes(StandardCharsets.UTF_8);
 			}
 			default -> {
 				// The cold arms (an (unsigned-byte 8) vector today) live once, in the
-				// shared library, rather than four times over. Through %http-body-text,
-				// not %http-body-string: the normalizer hands octets through unflattened
-				// -- only the transport knows whether it can write bytes -- and this
-				// transport writes a String. That flattening is the known non-byte-exact
-				// bug, `.kb/http-server.md`.
-				LispVal text = apply(resolveFunction(
+				// shared library, rather than four times over. %http-body-string hands
+				// the octets back UNFLATTENED -- only the transport knows whether it can
+				// write bytes -- and this one can: they go out as they are.
+				LispVal normalized = apply(resolveFunction(
 						PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, HttpServerLibrary.BODY_STRING)),
 						List.of(body), this.globalEnv);
-				LispVal flat = apply(
-						resolveFunction(
-								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, HttpServerLibrary.BODY_TEXT)),
-						List.of(text), this.globalEnv);
-				return flat instanceof LispString str ? str.value() : "";
+				return switch (normalized) {
+					case LispIntVector octets -> octetsBytes(octets);
+					case LispString str -> str.value().getBytes(StandardCharsets.UTF_8);
+					default -> EMPTY_BODY;
+				};
 			}
 		}
+	}
+
+	private static final byte[] EMPTY_BODY = new byte[0];
+
+	// An (unsigned-byte 8) response body -> the raw octets. The elements are already
+	// masked to the width, so the narrowing cannot lose anything.
+	private static byte[] octetsBytes(LispIntVector octets) {
+		byte[] out = new byte[octets.length()];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = (byte) octets.elementAt(i);
+		}
+		return out;
 	}
 
 	private static LispVal second(LispCons cons) {

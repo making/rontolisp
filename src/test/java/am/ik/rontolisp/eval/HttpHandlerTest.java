@@ -54,10 +54,28 @@ class HttpHandlerTest {
 		return client.send(request, HttpResponse.BodyHandlers.ofString());
 	}
 
+	private static HttpResponse<byte[]> getBytes(int port, String path) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET().build();
+		return client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+	}
+
+	// The (unsigned-byte 8) response body every backend's round-trip test serves: three
+	// octets, two of them >= #x80, so a transport that flattens them into characters and
+	// UTF-8 encodes the result answers five bytes instead of three.
+	static final String OCTET_BODY_PROGRAM = """
+			(defun handle (env)
+			  (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
+			    (setf (aref v 0) 255)
+			    (setf (aref v 1) 254)
+			    (setf (aref v 2) 65)
+			    (list 200 (list :content-type "application/octet-stream") v)))
+			""";
+
 	@Test
 	void startServesHandlerResponse() throws Exception {
 		HttpServer server = HttpHandlerSupport.start(0,
-				request -> new HttpHandlerSupport.Response(201,
+				request -> HttpHandlerSupport.Response.of(201,
 						List.of(new HttpHandlerSupport.Header("content-type", "text/plain")),
 						"hello " + request.method() + " " + request.target()));
 		int port = server.getAddress().getPort();
@@ -73,7 +91,7 @@ class HttpHandlerTest {
 		// ephemeral port with a bind address, read the port back, serve, stop -- and
 		// the stop releases a blocked joiner.
 		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
-				request -> new HttpHandlerSupport.Response(200, List.of(), "stoppable " + request.target()));
+				request -> HttpHandlerSupport.Response.of(200, List.of(), "stoppable " + request.target()));
 		int port = (int) HttpHandlerSupport.serverPort(handle);
 		assertThat(port).isPositive();
 		assertThat(get(port, "/x").body()).isEqualTo("stoppable /x");
@@ -94,7 +112,7 @@ class HttpHandlerTest {
 		// must land in the join and return normally so the Lisp unwind-protect stops
 		// the server in an orderly unwind.
 		long handle = HttpHandlerSupport.startServer(0, "127.0.0.1",
-				request -> new HttpHandlerSupport.Response(200, List.of(), "ok"));
+				request -> HttpHandlerSupport.Response.of(200, List.of(), "ok"));
 		Thread joiner = Thread.ofVirtual().start(() -> HttpHandlerSupport.joinServer(handle));
 		Thread.sleep(50);
 		joiner.interrupt();
@@ -107,7 +125,7 @@ class HttpHandlerTest {
 	void startServerUnwrapsAQuoteWrappedAddress() throws Exception {
 		// The JVM backend passes its runtime string rep (quote-wrapped) as-is.
 		long handle = HttpHandlerSupport.startServer(0, "\"127.0.0.1\"",
-				request -> new HttpHandlerSupport.Response(200, List.of(), "wrapped"));
+				request -> HttpHandlerSupport.Response.of(200, List.of(), "wrapped"));
 		int port = (int) HttpHandlerSupport.serverPort(handle);
 		assertThat(get(port, "/").body()).isEqualTo("wrapped");
 		HttpHandlerSupport.stopServer(handle);
@@ -292,6 +310,19 @@ class HttpHandlerTest {
 				""".formatted(port), port);
 		HttpResponse<String> response = post(port, "/", "payload");
 		assertThat(response.body()).isEqualTo("POST:payload");
+	}
+
+	@Test
+	void directiveServesAnOctetBodyByteExactly() throws Exception {
+		// An (unsigned-byte 8) body is a documented Clack body shape, and the RAW
+		// response bytes are what has to match: the shared normalizer hands the octets
+		// through unflattened and this transport writes them as they are. Asserting the
+		// TEXT would pass on the flattening that used to double every octet >= #x80.
+		int port = freePort();
+		serveInBackground(OCTET_BODY_PROGRAM + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		HttpResponse<byte[]> response = getBytes(port, "/");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).containsExactly(0xff, 0xfe, 0x41);
 	}
 
 	@Test

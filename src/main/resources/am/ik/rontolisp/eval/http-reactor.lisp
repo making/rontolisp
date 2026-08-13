@@ -377,6 +377,12 @@
   ;; carry those octets (a JSON string is text, and the finding-4 rule that
   ;; sent the request body out of band applies in reverse), so without a sink
   ;; it flattens here and keeps the shape a host already parses.
+  ;;
+  ;; That last arm is the ONE place a binary response is still not byte-exact,
+  ;; and it is deliberate rather than pending: a host that wants one registers
+  ;; env.writeResponseBody. Taking bytes out of band is what the sink is FOR,
+  ;; and no encoding of octets into a JSON string would be the shape the hosts
+  ;; speaking the old envelope already parse.
   (cond ((rontolisp:streamp body)
          (if sink
              (let ((chunk (rontolisp::%http-reactor-stream-chunk body)))

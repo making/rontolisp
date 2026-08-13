@@ -68,9 +68,9 @@ standard `(status headers body)` list:
 | `:remote-addr` / `:remote-port` | the real peer on the interpreter and the JVM; `nil` on the WASI component (`wasi:http@0.3.0` exposes no peer accessor) |
 
 The response `body` may be a list of strings, a
-`(vector (unsigned-byte 8))` (each octet becomes the character of its code
-point), a rontolisp stream, or `nil`; the two-element `(status headers)` form
-is valid too. A bare string signals a clear error, as Clack itself refuses
+`(vector (unsigned-byte 8))` (written byte for byte, so a binary response is
+byte-exact), a rontolisp stream, or `nil`; the two-element `(status headers)`
+form is valid too. A bare string signals a clear error, as Clack itself refuses
 strings; a pathname body (lack's file-serving form) is a distinct value here and
 is refused too, until the transport can serve it. A function body is supported in Clack's delayed-response form (the
 responder is called with the final response list); the streaming-writer form
@@ -392,7 +392,9 @@ text: a sink can write bytes, and a JSON head cannot carry them.
 
 Passing no sink keeps the old shape exactly: the body rides the head, a stream
 body is drained into it, and an octet body is rendered one character per octet
-(the only spelling a JSON string has for it).
+(the only spelling a JSON string has for it). That last one is the ONE place a
+binary response is not byte-exact, and it is the reason the sink exists: a host
+that answers binary passes one.
 
 ### The WASM boundary: a head export and two body imports
 

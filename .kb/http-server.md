@@ -30,8 +30,8 @@ measured division that stands:
 - **Interpreter** — `LispEvaluator.buildClackEnv` / `normalizeClackResponse` /
   `responseHeaders` / `responseBody`, all Java; only the cold response arms
   (an `(unsigned-byte 8)` vector body) delegate to the library's
-  `%http-body-string` — and then to `%http-body-text`, because the normalizer
-  hands octets through unflattened and this transport writes a String. The library loads EAGERLY at server start
+  `%http-body-string`, whose packed vector `responseBody` then reads out as the
+  raw octets it answers. The library loads EAGERLY at server start
   (`ensureHttpServerLoaded` — a lazy first-request load races
   one-virtual-thread-per-request, `.kb/concurrent-served-requests.md`), and
   lazily when a program calls a `RONTOLISP::%HTTP-*` function directly (the
@@ -166,14 +166,11 @@ keeps it regardless.
 - `body`: a LIST of strings (joined), nil, an `(unsigned-byte 8)` vector, or a
   rontolisp stream (drained — the one extra await). The last TWO come back
   UNCHANGED (todo-341 Phase 3b): only the transport knows what it can carry, so
-  the normalizer answers a string, octets or a stream, and a transport that
-  writes TEXT flattens the octets itself through `%http-body-text` (one char per
-  octet — `%http-serve-request` for the interpreter and the component,
-  `HttpHandlerJvmRuntime.toResponse` for the JVM, `%http-reactor-body-out`'s
-  no-sink arm for the reactor envelope). A transport that writes BYTES — the
-  reactor's `env.writeResponseBody` sink — takes them as they are and is
-  byte-exact; the three that flatten are not (the known bug below). A **NIL
-  element inside the list**
+  the normalizer answers a string, octets or a stream, and every transport that
+  writes the wire itself writes the octets AS THEY ARE (byte-exact, see below).
+  Only the reactor envelope's no-sink arm still flattens them, through
+  `%http-body-text` (one char per octet), because its head is a JSON string. A
+  **NIL element inside the list**
   contributes the empty string rather than signalling: that is how upstream
   renders it (clack-handler-hunchentoot writes every chunk through
   `flex:string-to-octets`, which answers `#()` for NIL), and it is the ordinary
@@ -198,23 +195,50 @@ served round trips by `HttpHandlerTest` / `HttpHandlerJvmTest` /
 `WasmLispCompilerIntegrationTest` serve cases / `ClackE2eTest` /
 `LackEcosystemE2eTest` + `LackEcosystemWasmE2eTest`.
 
-## Known bug in the same area (pre-existing, NOT part of the cutover)
+## A binary response body is byte-exact — everywhere but one named place
 
-An `(unsigned-byte 8)` response body is not byte-exact on the transports that
-write TEXT: each octet becomes a code point and the write re-encodes UTF-8, so
-any octet >= 0x80 is mangled. Measured on the interpreter's JDK server, 2026-08-13:
-a body of `ff fe 41` arrives as `c3 bf c3 be 41`. The comment that said "the
-transport writes those characters back out one byte each, so the bytes survive"
-was simply wrong — no transport did.
+**An `(unsigned-byte 8)` response body reaches the wire as the octets it holds,
+on every transport that writes the wire.** It used to reach it double-encoded:
+the body was flattened one code point per octet and the transport then wrote
+`getBytes(UTF_8)`, so `ff fe 41` went out as `c3 bf c3 be 41` (measured on the
+interpreter's JDK server, 2026-08-13). The comment that justified the flattening
+— "the transport writes those characters back out one byte each, so the bytes
+survive" — was never true of any transport.
 
-What CHANGED with todo-341 Phase 3b is where the loss happens, not that it is
-gone: the shared normalizer no longer flattens (see the response contract
-above), so the octets are still octets when they reach a transport, and the
-reactor's byte-shaped sink is byte-exact. The three text transports flatten at
-their own write site — `%http-serve-request`, `HttpHandlerJvmRuntime.toResponse`
-and the reactor's no-sink envelope arm — which is what turns the fix from
-"unrecoverable" into a change at three named places. **`.todo/351`** carries it:
-the JDK transport wants `HttpHandlerSupport.Response` to hold `byte[]` the way
-`Request` already does, the component's `%http-write-body` wants the octets
-passed to `body-stream-write` unencoded, and the reactor envelope cannot be
-fixed at all (a JSON string is text — that is what the sink is for).
+The fix is one shape repeated per transport: **carry the octets, do not render
+them.**
+
+- The shared normalizer stopped flattening (todo-341 Phase 3b, the response
+  contract above) — the precondition for all of it, pinned by ci-spec
+  `http-response-normalizer`.
+- `%http-serve-request` hands a string OR an octet vector to the transport and
+  resolves only a STREAM body (that is the arm that needs the await).
+- **JDK (interpreter + JVM)**: `HttpHandlerSupport.Response` holds `byte[] body`
+  — the shape `Request` already had — with a `Response.of(status, headers,
+  String)` factory for the ordinary text body. `LispEvaluator.responseBody`
+  answers octets (its cold arm reads the packed `LispIntVector`
+  `%http-body-string` handed back) and `HttpHandlerJvmRuntime.toResponse` reads
+  the JVM `long[]{width, e0, ...}`; `writeResponse` no longer encodes anything.
+- **`--component`**: the octets cross `%http:body-stream-write` as a `list<u8>`,
+  and the canonical lowering takes a packed `(unsigned-byte 8)` vector for a
+  `list<u8>` / `stream<u8>` parameter — `WasmComponentImportCompiler`'s
+  `emitStageBytesParam`, which stages the raw array bytes instead of
+  `_str_to_mem`'s UTF-8 (`.kb/wit.md`, "list<u8> = string"). Any other value
+  takes the string path unchanged, so a `string` parameter is byte-identical.
+- **Reactor**: the byte-shaped `env.writeResponseBody` sink takes them as they
+  are (`WasmReactorResponseBodyE2eTest`).
+
+Pinned by `HttpHandlerTest.directiveServesAnOctetBodyByteExactly`, its
+`HttpHandlerJvmTest` twin and
+`WasmLispCompilerIntegrationTest.httpHandlerServesAnOctetBodyByteExactlyUnderWasmtimeServe`
+— all three assert the RAW response bytes, because the text spelling passes on
+the double-encode.
+
+**The one exception, deliberately**: the reactor envelope's NO-SINK arm
+(`%http-reactor-body-out`) still flattens through `%http-body-text`. Its head is
+a JSON string, which is text; a host that wants a binary response registers
+`env.writeResponseBody` — taking bytes out of band is what the sink is FOR.
+**Re-evaluation trigger**: this stays as long as the envelope's `"body"` key is
+a JSON string. Give the envelope a byte-shaped spelling and the arm goes.
+`%http-octets-string` / `%http-body-text` exist for that one caller, so a serve
+component (which references neither) does not carry them.

@@ -351,17 +351,13 @@ that is why the shared normalizer stopped flattening it: `%http-body-string`
 returns such a body unchanged, exactly as it returns a stream, because only the
 transport knows whether it can write bytes. Once flattened, a byte and a
 character the application chose are the same value, and every transport that
-UTF-8 encodes what it is given doubles the high ones. The three transports that
-write TEXT flatten it themselves, through `%http-body-text` (the old
-`%http-octets-string` behind a name that also passes a string through):
-`%http-serve-request` for the interpreter and the component,
-`HttpHandlerJvmRuntime.toResponse` for the JVM (a `long[]{width, e0, ...}`
-there), and `%http-reactor-body-out`'s no-sink arm for the envelope. **That
-flattening is still lossy on all three** — a binary response body comes out
-double-encoded on the socket transports, measured (`ff fe 41` → `c3 bf c3 be
-41`), which is `.todo/351`; keeping the octets in the normalizer is what makes
-fixing it a change at three write sites rather than an unrecoverable loss at
-one.
+UTF-8 encodes what it is given doubles the high ones — which is what a binary
+response used to cost (`ff fe 41` → `c3 bf c3 be 41`, measured). Every transport
+that writes the wire itself now takes the octets as they are and is byte-exact;
+the ONE that still flattens, through `%http-body-text`, is
+`%http-reactor-body-out`'s no-sink arm, because the envelope's `"body"` key is a
+JSON string. A host that wants a binary response registers the sink. Details and
+the per-transport mechanics: `.kb/http-server.md`.
 
 Pinned by the `http-reactor-body-sink` ci-spec case (four backends: a string body
 with and without a sink, a stream body both ways, the error arm staying in band,

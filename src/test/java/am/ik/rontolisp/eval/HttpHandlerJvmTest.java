@@ -60,6 +60,12 @@ class HttpHandlerJvmTest {
 		return client.send(request, HttpResponse.BodyHandlers.ofString());
 	}
 
+	private static HttpResponse<byte[]> getBytes(int port, String path) throws Exception {
+		HttpClient client = HttpClient.newHttpClient();
+		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET().build();
+		return client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+	}
+
 	private static void waitForPort(int port) throws InterruptedException {
 		long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
 		while (System.nanoTime() < deadline) {
@@ -169,6 +175,20 @@ class HttpHandlerJvmTest {
 				""".formatted(port), port);
 		HttpResponse<String> response = post(port, "/", "payload");
 		assertThat(response.body()).isEqualTo("POST:payload");
+	}
+
+	@Test
+	void compiledDirectiveServesAnOctetBodyByteExactly() throws Exception {
+		// The JVM twin of HttpHandlerTest#directiveServesAnOctetBodyByteExactly: the
+		// octets reach toResponse as the long[]{width, e0, ...} the normalizer did not
+		// flatten, and go out unencoded. The RAW bytes are the assertion; the text
+		// spelling would pass on the double-encode.
+		int port = freePort();
+		compileAndServeInBackground(
+				HttpHandlerTest.OCTET_BODY_PROGRAM + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		HttpResponse<byte[]> response = getBytes(port, "/");
+		assertThat(response.statusCode()).isEqualTo(200);
+		assertThat(response.body()).containsExactly(0xff, 0xfe, 0x41);
 	}
 
 	@Test

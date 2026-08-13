@@ -1268,7 +1268,7 @@ final class WasmComponentImportCompiler {
 				}
 				case WRITE -> {
 					if (async.stream()) {
-						emitStreamWrite();
+						emitStreamWrite(async.handleElement());
 					}
 					else {
 						emitFutureWrite(async);
@@ -1458,17 +1458,24 @@ final class WasmComponentImportCompiler {
 			this.w.writeUnsignedLeb128(this.strFromMemFuncIndex);
 		}
 
-		// stream.write of a whole Lisp string: the async built-in plus the BLOCKED
+		// stream.write of a whole Lisp payload: the async built-in plus the BLOCKED
 		// park, so one call carries the whole payload (the rendezvous the sync variant
-		// used to provide). Returns the accepted byte count.
-		private void emitStreamWrite() {
+		// used to provide). Returns the accepted byte count. A stream<u8> takes a
+		// packed (unsigned-byte 8) vector as its raw octets, which is what carries a
+		// BINARY response body out of a serve component unencoded.
+		private void emitStreamWrite(boolean handleElement) {
 			emitStagingPrologue();
 			int handle = allocI32();
 			getLocal(1);
 			WasmEmitHelper.castI31GetS(this.ctx);
 			setLocal(handle);
 			getLocal(handle);
-			emitStageStringParam(2);
+			if (handleElement) {
+				emitStageStringParam(2);
+			}
+			else {
+				emitStageBytesParam(2);
+			}
 			callImport();
 			emitBlockedWait(handle);
 			i32Const(4);
@@ -1699,7 +1706,7 @@ final class WasmComponentImportCompiler {
 						default -> throw paramUnsupported(prim.name());
 					}
 				}
-				case WitType.ListOf list when abi.isU8(list.element()) -> emitStageStringParam(slot);
+				case WitType.ListOf list when abi.isU8(list.element()) -> emitStageBytesParam(slot);
 				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
 				case WitType.BorrowOf ignored -> emitLowerHandleParam(slot);
 				case WitType.OwnOf ignored -> emitLowerHandleParam(slot);
@@ -1969,6 +1976,80 @@ final class WasmComponentImportCompiler {
 			}
 		}
 
+		// Stages a `list<u8>`-typed argument -- a WIT list of bytes, which is what a
+		// `stream<u8>` write carries too. A packed (unsigned-byte 8) vector crosses as
+		// the RAW octets it holds; anything else is the string spelling of a byte
+		// string (`.kb/wit.md`, "list<u8> = string") and stages exactly as a `string`
+		// parameter does. The distinction matters because the string staging UTF-8
+		// ENCODES: without this arm every octet >= 0x80 would double on the way out.
+		private void emitStageBytesParam(int slot) {
+			int ptr = allocI32();
+			int len = allocI32();
+			int idx = allocI32();
+			getLocal(slot);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+			this.w.write(Instruction.IF, 0x40);
+			// dst = HEAP_PTR; len = array.len(v); grow-guard to dst + len
+			loadCell(WasmLispCompiler.HEAP_PTR_ADDR);
+			setLocal(ptr);
+			getLocal(slot);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+			this.w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			setLocal(len);
+			WasmEmitHelper.emitGrowHeapTo(this.w, () -> {
+				getLocal(ptr);
+				getLocal(len);
+				this.w.write(Instruction.I32_ADD);
+			});
+			// idx = 0; while (idx < len) mem[ptr + idx] = v[idx]; idx++
+			i32Const(0);
+			setLocal(idx);
+			this.w.write(Instruction.BLOCK, 0x40);
+			this.w.write(Instruction.LOOP, 0x40);
+			getLocal(idx);
+			getLocal(len);
+			this.w.write(Instruction.I32_GE_U);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			getLocal(ptr);
+			getLocal(idx);
+			this.w.write(Instruction.I32_ADD);
+			getLocal(slot);
+			this.w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			this.w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+			getLocal(idx);
+			this.w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+			this.w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+			this.w.write(Instruction.I32_STORE8, 0x00, 0x00);
+			getLocal(idx);
+			i32Const(1);
+			this.w.write(Instruction.I32_ADD);
+			setLocal(idx);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END); // loop
+			this.w.write(Instruction.END); // block
+			// HEAP_PTR = align8(ptr + len)
+			i32Const(WasmLispCompiler.HEAP_PTR_ADDR);
+			getLocal(ptr);
+			getLocal(len);
+			this.w.write(Instruction.I32_ADD);
+			i32Const(7);
+			this.w.write(Instruction.I32_ADD);
+			i32Const(-8);
+			this.w.write(Instruction.I32_AND);
+			this.w.write(Instruction.I32_STORE, 0x02, 0x00);
+			this.w.write(Instruction.ELSE);
+			emitStageStringParam(slot);
+			setLocal(len);
+			setLocal(ptr);
+			this.w.write(Instruction.END);
+			getLocal(ptr);
+			getLocal(len);
+		}
+
 		// Stages a Lisp string / byte string into linear memory (advancing HEAP_PTR so a
 		// later staged parameter cannot clobber it -- the epilogue pops the whole
 		// region) and pushes its canonical (content ptr, content len) pair.
@@ -2087,11 +2168,11 @@ final class WasmComponentImportCompiler {
 							structGet(WasmLispCompiler.TYPE_CHAR, 0);
 							store(offset, Instruction.I32_STORE, 2);
 						}
-						case "string" -> emitStoreStringAt(slot, base, offset);
+						case "string" -> emitStoreStringAt(slot, base, offset, false);
 						default -> throw paramUnsupported(prim.name());
 					}
 				}
-				case WitType.ListOf list when abi.isU8(list.element()) -> emitStoreStringAt(slot, base, offset);
+				case WitType.ListOf list when abi.isU8(list.element()) -> emitStoreStringAt(slot, base, offset, true);
 				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
 				case WitType.BorrowOf ignored -> emitStoreHandleAt(slot, base, offset);
 				case WitType.OwnOf ignored -> emitStoreHandleAt(slot, base, offset);
@@ -2121,12 +2202,19 @@ final class WasmComponentImportCompiler {
 		}
 
 		// string / list<u8> at [base + offset]: stage the bytes above the heap mark and
-		// store the canonical (content ptr @+0, content len @+4) pair.
-		private void emitStoreStringAt(int slot, int base, int offset) {
+		// store the canonical (content ptr @+0, content len @+4) pair. `bytes` marks the
+		// list<u8> spelling, which additionally takes a packed (unsigned-byte 8) vector
+		// as its raw octets.
+		private void emitStoreStringAt(int slot, int base, int offset, boolean bytes) {
 			int save = this.i32Cursor;
 			int ptr = allocI32();
 			int len = allocI32();
-			emitStageStringParam(slot);
+			if (bytes) {
+				emitStageBytesParam(slot);
+			}
+			else {
+				emitStageStringParam(slot);
+			}
 			setLocal(len);
 			setLocal(ptr);
 			getLocal(base);

@@ -506,10 +506,13 @@
   ;; An (unsigned-byte 8) vector body -> one character per octet, for a
   ;; transport whose response body is TEXT. Called by the transport, not by the
   ;; normalizer: the octets are what the application meant, and a transport that
-  ;; can write bytes (the reactor's byte-shaped sink) must get them unflattened.
+  ;; can write bytes (the reactor's byte-shaped sink, and every transport that
+  ;; writes the wire itself) must get them unflattened.
   ;;
-  ;; The flattening is lossy on every transport that then UTF-8 encodes what it
-  ;; is given, which is all of them today -- see %http-body-string.
+  ;; The flattening is LOSSY wherever what it answers is then UTF-8 encoded --
+  ;; every octet >= #x80 doubles -- so the one caller left is the reactor
+  ;; envelope, whose response head is a JSON string and so cannot carry octets
+  ;; at all. A host that wants a binary body there provides a body sink.
   (let ((out (make-string-output-stream)) (i 0) (n (length v)))
     (while (< i n)
       (write-char (code-char (aref v i)) out)
@@ -517,9 +520,10 @@
     (get-output-stream-string out)))
 
 (defun rontolisp::%http-body-text (body)
-  ;; The normalized body -> the STRING a text transport writes. Octets flatten
-  ;; one character per octet; a string is already it. A stream is the caller's
-  ;; problem (it needs an await, and only the async frames have one).
+  ;; The normalized body -> the STRING a transport that can carry only TEXT
+  ;; writes. Octets flatten one character per octet; a string is already it. A
+  ;; stream is the caller's problem (it needs an await, and only the async
+  ;; frames have one). Lossy for a binary body -- see %http-octets-string.
   (if (stringp body) body (rontolisp::%http-octets-string body)))
 
 (defun rontolisp::%http-body-string (body)
@@ -532,11 +536,11 @@
   ;; per request" is a measured throughput property, not a style choice.
   ;;
   ;; OCTETS stay octets for the same reason a stream does: only the transport
-  ;; knows what it can carry. One that writes bytes -- the reactor's
-  ;; byte-shaped sink -- takes them as they are, and the rest flatten them
-  ;; through %http-body-text. Flattening HERE would make binary unrecoverable,
-  ;; because a flattened octet is indistinguishable from a character the
-  ;; application meant.
+  ;; knows what it can carry. Every transport that writes the wire itself takes
+  ;; them as they are; only the reactor envelope, whose head is a JSON string,
+  ;; flattens them through %http-body-text. Flattening HERE would make binary
+  ;; unrecoverable, because a flattened octet is indistinguishable from a
+  ;; character the application meant.
   ;;
   ;; A BARE STRING is deliberately rejected, as Clack itself rejects it (lack's
   ;; finalize-response wraps a string controller result in a list, so a bare
@@ -599,13 +603,14 @@
          (result (rontolisp:await (funcall app env)))
          (triple (rontolisp::%http-normalize-response result))
          (body (car (cdr (cdr triple)))))
-    (if (stringp body)
-        triple
-        (if (rontolisp:streamp body)
-            (let ((drained (rontolisp:await (rontolisp::%http-drain body))))
-              (list (car triple) (car (cdr triple)) drained))
-            ;; Octets: these transports write TEXT, so they get the flattened
-            ;; spelling the normalizer used to hand out. What that costs a
-            ;; binary body is %http-body-text's note.
-            (list (car triple) (car (cdr triple))
-                  (rontolisp::%http-body-text body))))))
+    (if (rontolisp:streamp body)
+        ;; A stream (a proxied fetch) is the ONE body this frame has to resolve:
+        ;; draining it needs an await, and only an async frame has one.
+        (let ((drained (rontolisp:await (rontolisp::%http-drain body))))
+          (list (car triple) (car (cdr triple)) drained))
+        ;; A string or an (unsigned-byte 8) vector reaches the transport as it
+        ;; is. Flattening octets here would hand every transport characters it
+        ;; then UTF-8 encodes, doubling each octet >= #x80; a transport that
+        ;; genuinely cannot write bytes flattens for itself, through
+        ;; %http-body-text.
+        triple)))

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -142,24 +143,27 @@ public final class HttpHandlerJvmRuntime {
 			}
 			cursor = cell[1];
 		}
-		String body = switch (drainedBody) {
-			case String text -> unquote(text);
-			// An (unsigned-byte 8) body: long[]{width, e0, ...} here. This transport
-			// writes TEXT, so it gets the same one-character-per-octet flattening
-			// %http-body-text applies on the other backends -- the shared normalizer
-			// keeps the octets precisely so a transport that can write bytes need not.
-			case long[] octets -> octetsText(octets);
-			case null, default -> "";
+		byte[] body = switch (drainedBody) {
+			case String text -> unquote(text).getBytes(StandardCharsets.UTF_8);
+			// An (unsigned-byte 8) body: long[]{width, e0, ...} here. The octets go out
+			// as they are -- which is why the shared normalizer deliberately did not
+			// flatten them into characters this transport would then UTF-8 encode.
+			case long[] octets -> octetsBytes(octets);
+			case null, default -> EMPTY_BODY;
 		};
 		return new HttpHandlerSupport.Response(status, headers, body);
 	}
 
-	private static String octetsText(long[] octets) {
-		StringBuilder out = new StringBuilder(Math.max(0, octets.length - 1));
-		for (int i = 1; i < octets.length; i++) {
-			out.append((char) (octets[i] & 0xFF));
+	private static final byte[] EMPTY_BODY = new byte[0];
+
+	// long[]{width, e0, ...} -> the raw octets. The elements are already masked to the
+	// element width, so the narrowing cannot lose anything.
+	private static byte[] octetsBytes(long[] octets) {
+		byte[] out = new byte[Math.max(0, octets.length - 1)];
+		for (int i = 0; i < out.length; i++) {
+			out[i] = (byte) octets[i + 1];
 		}
-		return out.toString();
+		return out;
 	}
 
 	private static @Nullable Object parseContentLength(@Nullable String value) {
