@@ -159,8 +159,145 @@ as ONE MODULE driven both ways on the reactor boundary -- `WasmReactorBodyE2eTes
 `ReadableStream`, `promising` entry, chunks delivered on the macrotask queue so the
 module demonstrably parks and resumes inside one export call) put the same
 `rontolisp:http-handler` program through the same reactor pipeline and expect the same
-answers from it. Host-glue generation (the Suspending wrapper +
-promising entry JS) remains open: `.todo/340`.
+answers from it.
+
+**`--emit-js-glue` -- the host half is written, not described (todo-340,
+2026-08-13)**: everything the obligation lines above STATE is derivable, so the flag
+WRITES it -- `compiler/HostGlueEmitter`, one ES module beside the `.wasm`
+(`out.wasm` -> `out.js`), the `gl-imports.js` precedent (a generated import object
+pinned against the declaration it was generated from) applied to a whole module.
+`WasmLispCompiler` builds a `HostGlueEmitter.Surface` from the facts it has already
+settled -- the parsed import/export declarations, the helper exports the module turns
+out to carry (`memoryHelpers`/`hostArena`/`seedRandom`/`setTime`), and the same
+`SuspendingImports` answers the obligation lines print -- and `hostGlueJs(fileName)`
+emits from it; nothing is re-walked and nothing is read back out of the bytes. What
+lands in the file: the import object (one key per `:from`, one property per `:as`),
+the `(ptr, len)` staging of every memory-typed value in both directions, the
+`__ronto_alloc_mark`/`_reset` bracket around a call with the result decoded BEFORE
+the pop, the `__ronto_seed_random`/`__ronto_set_time`/`_initialize` startup order, the
+`WebAssembly.Suspending` wrappers, the `WebAssembly.promising` entry for exactly the
+exports the build lists, and the one-call-at-a-time queue. **The host is left with what
+a declaration cannot state**: one plain function per import over ordinary JS values --
+a `:string` arrives decoded, a `:bytes` parameter as a `Uint8Array` copy, and a `:bytes`
+RESULT is answered with CHUNKS (`null` ends them) because the generated cursor holds
+whatever did not fit, so which source they come from (a `ReadableStream`, a
+`Uint8Array`) is all that is left to a host. Every cursor is dropped at the next entry:
+a body the module did not drain belongs to the call that could have.
+
+**Which entries suspend is the HOST's answer, not the declaration's, and that is
+measured.** `:async t` says the module TOLERATES a suspension there; the shipped Worker
+wraps `env.fetch` (which is NOT declared `:async t` -- `--host-fetch` leaves it plain so
+a load-path fetch stays a warning rather than the `:async t` error) and leaves
+`readRequestBody`/`writeResponseBody` plain although they ARE. Nor is the wrapper free:
+on node 24 JSPI an import answering SYNCHRONOUSLY through a `Suspending` still parks the
+stack and returns to the event loop -- two overlapped calls, second refused by the
+re-entry guard -- so wrapping every declared-tolerant import would buy suspension points
+the host never asked for. The generated file therefore exports `suspending(fn)`: a host
+marks its own entries, one mark switches the file into its JSPI shape (`promising` +
+queue + promise-answering entry points), no marks leaves the SAME file driving a
+synchronous host, and an unmarked entry answering a promise is reported by name at
+instantiation (`AsyncFunction`) or at the call. Two facts the emitter needs beyond the
+directives: `--host-random`'s `env.random_get` is IMPLEMENTED rather than asked for
+(preview1 fixes what it does, and writing linear memory is the glue's job anyway), and
+the promising list is `SuspendingImports.reaches` widened to the `FETCH` kind, because
+`--host-fetch` is the declaration that `env.fetch` may suspend.
+
+**Fixing the under-report that widening exposed.** `SuspendingImports.reaches` follows
+CALLS, and the reactor hands its two body bridges over as `#'name`
+(`HttpReactorInliner`), so no reactor export was ever listed -- the build printed the
+general obligation and named nothing, while `dog-fetcher/src/index.js` wrapped
+`handle-request` in `promising` by hand. The walk now takes a `followValues` flag
+(`NoWasiLoadPathRefusals.walk`), true ONLY for the reachability question: `#'name` and a
+literal lambda body count as reached, with no argument shapes carried in, because it is
+a MAY analysis and under-reporting there is a missing `promising`. The load-path report
+says what actually RUNS and never follows one. The obligation line now names
+`handle-request` on every reactor, which is what the glue emits.
+
+**What reviewing the generated file caught**, none of it visible from a passing build --
+a generator can write JavaScript that is wrong, or that is not JavaScript, and nothing
+downstream reads it:
+
+- **an EXPORT never becomes a local.** An entry point is a PROPERTY of the returned
+  object and the two locals an export declares are `entry$name`/`make$name`, because an
+  export called `call` or `bind` would otherwise sit beside the helper of that name and
+  make the whole file a `SyntaxError`. A name that is not a bare JS identifier (`:as
+  "new"`, `"do.it"`, `"2do"`) is REFUSED with the alias to change, and so is an import
+  whose `:from`/`:as` is not one -- a quote in a field would break the string literal it
+  is written into.
+- **two `wasm-import`s on one `(module, field)` are refused unless identical.** The core
+  module collapses them onto ONE slot, so only the last declared shape would survive the
+  object literal and silently unpack every caller of both (`:string` and `:bytes` share a
+  core signature, so the module stays valid): measured as `(send-text "hi")` reaching the
+  host as raw octets. The export side already refused its own version of this collision.
+- **`serially` always takes the queue**, even when nothing is marked suspending: the work
+  it runs AWAITS, so a second request lands inside it and moves the per-call state under
+  the first (`A saw B`). Only a bare entry point skips the queue when nothing can suspend
+  -- that call cannot be interleaved, and paying a promise for it would make every host
+  asynchronous.
+- **a read remainder belongs to its ARGUMENTS and to the call that asked for it.** The
+  cursor is dropped at every module entry and whenever the arguments change, and a host
+  whose SOURCE moves INSIDE one call drops it itself with `lisp.drop(key)` -- which
+  `dog-fetcher`'s `env.fetch` does, because a second fetch replaces the reply the glue is
+  still holding 34 KiB of. Without it the second reply came back as
+  `AAAAAA len=34767`: the leftovers of the first, served without the host being asked,
+  so the module-side superseded-body counter never saw the read either. Pinned by
+  `WasmHostGlueE2eTest.aHostWhoseSourceMovesInsideOneCallDropsWhatTheGlueStillHolds`,
+  which asserts BOTH answers.
+- **the header describes what was actually emitted**: the `serially` sketch names the
+  module's own first entry point, and the marking protocol is advertised only when a
+  suspension can reach one at all.
+- **`--emit-js-glue` refuses to overwrite a `.js` it did not write** (the marker is
+  `HostGlueEmitter.MARKER`): the glue is named after the module, so `-o src/index.wasm`
+  in a Worker directory aims straight at a hand-written `src/index.js`. And a
+  side-artifact flag without `-o` is an error rather than a silent interpretation
+  (`--emit-wit` was fixed with it -- a Worker source run through the interpreter tries to
+  bind a socket).
+
+**Two reachability holes the same review found, both a MISSING `promising`** (a JSPI
+trap, where a spare one costs only a promise): `followValues` walked `(lambda ...)` but
+not `#'(lambda ...)`, and the per-export walk is seeded from that export alone, so a
+function value handed over ANYWHERE ELSE -- `(defvar *f* #'helper)` funcalled from the
+export -- was invisible. `anyTakenAsValue` therefore no longer asks whether the IMPORT
+escaped but whether anything that REACHES one did, and widens to "any export" when so.
+Consequence, deliberately taken: a reactor hands its body bridges over as `#'name`, so a
+reactor now widens rather than listing -- one export either way, and soundness is the
+side to err on.
+
+**A divergence to know about**: `:bytes` as a RESULT is declared as "the host answers the
+value's FULL length, an undersized buffer is a retry", and the generated glue implements
+the STREAM reading of the same shape instead -- a host answers CHUNKS, the cursor holds
+what did not fit, and the count is what was written. Both of its real users
+(`readRequestBody`, `readResponseBody`) are streams, and a chunk source cannot know the
+buffer size to answer a full length against. A host that wants the retry convention
+writes that import by hand.
+
+**A latent gap the generator surfaced**: `WasmImportCompiler.usesStrFromMem` named only
+`:string`, so a module whose ONLY memory-typed boundary was an `:s-expr`-RETURNING import
+exported no `__ronto_alloc` -- and an `:s-expr` result is host-written bytes exactly like a
+`:string` one, so NO host could answer it (`TypeError: ex.__ronto_alloc is not a function`,
+reproduced on node before the fix; the generated glue's `write()` made it unmissable). The
+predicate now names both. Any module that already had a memory-typed export or a `:string`
+result is unchanged; pinned by `WasmImportCompilerTest.sexprResultExportsTheAllocatorToo`
+beside the `:string` case it sat next to.
+
+Host state that belongs to ONE call cannot be set beside the call (a suspended call
+returns to the event loop and the next request would move it), so the generated object
+exposes the critical section itself: `serially(work)` runs `work` in the queue and hands
+it entry points that enter directly, because the queue they would take is the one they
+are in. `examples/cloudflare-workers/dog-fetcher` is the worked example -- `src/worker.js`
+is generated and CHECKED IN (306 lines), `src/index.js` went from 239 lines to 145 of
+which none is boundary. Gated to `--no-wasi` core modules (a component is instantiated through jco; a
+`--no-gc` module imports nothing, so `new WebAssembly.Instance(module, {})` is its whole
+glue). Pinned by `HostGlueEmitterTest` (the checked-in `src/worker.js` byte-for-byte
+against what a four-line fetching reactor emits -- the glue depends on the DECLARATIONS
+alone, which is why the two agree; plus the promising selection, the no-import shape, the
+`--host-random` entry and the name-collision refusal), `RontoLispCliTest` (the flag writes
+the file; every other output shape is a clear error), and `WasmHostGlueE2eTest` (node 24
+JSPI: one generated file driving a suspending host, two overlapped calls both answering
+through the queue, then a synchronous host answering a STRING from the same file).
+Re-evaluation trigger: the queue is `.todo/348`'s subject -- once a reactor need not
+serialise, `serially` and the promise chain are what change, and the import object above
+them does not.
 
 **The re-entry guard -- a module that can suspend refuses interleaved calls (todo-337,
 2026-08-12)**: a parked JSPI call returns control to the host's event loop, so a second

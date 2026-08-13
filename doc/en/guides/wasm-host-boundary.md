@@ -211,3 +211,81 @@ Limitations:
 - Instantiating the module requires every declared import to be provided:
   `wasmtime run` needs a `--preload <module>=<file>.wasm` per import module
   name, and a JavaScript host passes an import object.
+
+## Generating the Host Glue (--emit-js-glue)
+
+Everything above is derived from a declaration, so the JavaScript half can be
+too. `--emit-js-glue` writes it next to the module (`out.wasm` -> `out.js`):
+the import object, the `(ptr, len)` staging in both directions, the
+`__ronto_alloc` bracket around a call, the `WebAssembly.Suspending` wrappers,
+the `WebAssembly.promising` entry for exactly the exports the build lists, and
+the one-call-at-a-time queue a module that can suspend needs.
+
+```console
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --emit-js-glue
+$ ls worker.*
+worker.js  worker.lisp  worker.wasm
+```
+
+The generated file asks for the one thing a declaration cannot state: what
+each host function *does*. `host` is a plain function per import, keyed by
+import module and field, taking and answering ordinary JavaScript values —
+never a `(ptr, len)` pair:
+
+```js
+import { instantiate, suspending } from "./worker.js";
+
+const lisp = instantiate(module, {
+  env: {
+    fetch: suspending(async (request) => hostFetch(request)),
+    readResponseBody: suspending(async () => nextChunk()),
+    readRequestBody: () => take(requestBody),
+    writeResponseBody: (chunk) => chunks.push(chunk),
+  },
+});
+const reply = await lisp.handleRequest(head);
+```
+
+A chunk source must eventually answer `null`, or the module pulls the same
+octets forever — `take()` above hands the body over once and then reports the
+end. The glue holds whatever did not fit and drops it at the next call into the
+module; a host whose source moves *inside* one call (a new upstream reply, say)
+drops it with `lisp.drop("env.readResponseBody")`, since only that side knows.
+
+`suspending()` is how a host says which of its entries answer a promise, and
+it is per entry because the wrapper is not free: an import that answers
+*synchronously* through one still parks the stack and returns to the event
+loop. Mark one and the file switches into its JSPI shape — the marked imports
+are wrapped, the entry points the build listed are entered through
+`promising`, and every call rides one promise chain. Mark none and the same
+file drives a synchronous host, where an entry point answers a value rather
+than a promise. A callback that answers a promise without being marked is
+reported by name rather than handing the module a `Promise` where an `i32` was
+due.
+
+Host state belonging to ONE call — what the module pulls during it, what the
+call leaves behind — is set inside that same critical section, because a
+suspended call returns to the event loop and the next request would otherwise
+move it:
+
+```js
+const reply = await lisp.serially(async (entry) => {
+  requestBody = bytes;
+  chunks = [];
+  return entry.handleRequest(head);
+});
+```
+
+An import a declaration alone would miss is written too: under `--host-random`
+the entropy source is *implemented* rather than asked for, since preview1 fixes
+what `random_get(buf, len)` does. And a `:bytes` result is answered with chunks
+(`null` ends them), never with the module's buffer: the generated cursor keeps
+whatever did not fit, so which source the chunks come from — a
+`ReadableStream`, a `Uint8Array` — is all a host is left to decide.
+
+The flag needs `--no-wasi` and a `.wasm` output: a component is instantiated
+through its own bindings generator, and a `--no-gc` module imports nothing, so
+`new WebAssembly.Instance(module, {})` is already the whole of its glue. The
+[dog-fetcher Worker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
+is the worked example: `src/worker.js` is generated and checked in, and
+`src/index.js` is only the host's own half.

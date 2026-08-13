@@ -338,6 +338,20 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void sexprResultExportsTheAllocatorToo() {
+		// The same rule, and it used to be missed: an :s-expr result is host-written
+		// bytes exactly like a :string one (the wrapper reads the text back and hands it
+		// to the embedded reader), so a module whose ONLY memory-typed boundary is such
+		// an import still owes its host the allocator. Without this the host had no
+		// __ronto_alloc to write the s-expression into and could not answer at all.
+		byte[] module = compile("""
+				(rontolisp:wasm-import 'ask :params '() :returns :s-expr)
+				(print (ask))
+				""");
+		assertThat(exportedFunctionIndex(module, "__ronto_alloc")).isNotNegative();
+	}
+
+	@Test
 	void intOnlyImportDoesNotExportTheAllocator() {
 		byte[] module = compile("""
 				(rontolisp:wasm-import 'add :params '(:int :int) :returns :int)

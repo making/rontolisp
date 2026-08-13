@@ -250,6 +250,25 @@ public final class NoWasiLoadPathRefusals {
 	 */
 	static Map<String, Found> walk(List<LispVal> program, boolean hostRandom, boolean hostFetch,
 			Set<String> suspendingImports, @Nullable String rootFunction) {
+		return walk(program, hostRandom, hostFetch, false, suspendingImports, rootFunction);
+	}
+
+	/**
+	 * The walk, with the choice of whether a function VALUE counts as reached. See
+	 * {@code Scan.followValues}: the load-path report says what RUNS and never follows
+	 * one; {@link SuspendingImports#reaches} asks what an export MAY reach and always
+	 * does.
+	 * @param program the resolved, flattened top-level forms
+	 * @param hostRandom whether {@code --host-random} routes {@code random_get}
+	 * @param hostFetch whether {@code --host-fetch} routes {@code rontolisp:fetch}
+	 * @param followValues whether {@code #'name} and a literal lambda body are walked
+	 * @param suspendingImports the {@code :async t} host-import names
+	 * @param rootFunction the function whose bodies seed the walk, or {@code null} for
+	 * the load path
+	 * @return the findings, keyed by reported operator, in reach order
+	 */
+	static Map<String, Found> walk(List<LispVal> program, boolean hostRandom, boolean hostFetch, boolean followValues,
+			Set<String> suspendingImports, @Nullable String rootFunction) {
 		Map<String, List<Body>> definitions = collectDefinitions(program);
 		// (clackup *app* ...) over a (defvar *app* (make-instance 'ningle:app)) states
 		// its argument as plainly as (clackup #'app) does, one indirection further out.
@@ -279,8 +298,8 @@ public final class NoWasiLoadPathRefusals {
 			Region region = queue.removeFirst();
 			Map<Call, Boolean> called = new LinkedHashMap<>();
 			Set<String> shadowed = ArgumentShapes.shadowedNames(region.body().forms());
-			Scan scan = new Scan(hostRandom, hostFetch, suspendingImports, region.origin(), found, called, shadowed,
-					returns);
+			Scan scan = new Scan(hostRandom, hostFetch, followValues, suspendingImports, region.origin(), found, called,
+					shadowed, returns);
 			Map<String, Shape> env = new HashMap<>(globals);
 			env.putAll(region.shapes());
 			At at = new At(region.guarded(), region.body().anchor(), scan.narrow(env), Map.of());
@@ -432,8 +451,19 @@ public final class NoWasiLoadPathRefusals {
 		 */
 		private final Map<String, Shape> returns;
 
-		private Scan(boolean hostRandom, boolean hostFetch, Set<String> suspendingImports, String origin,
-				Map<String, Found> found, Map<Call, Boolean> called, Set<String> shadowed, Map<String, Shape> returns) {
+		/**
+		 * Whether a function VALUE is followed as if it were called -- true only for the
+		 * reachability question ({@link SuspendingImports#reaches}), which is a MAY
+		 * analysis: whoever received {@code #'name} can call it, and the reactor's own
+		 * body bridges cross the host boundary exactly that way. The load-path report
+		 * states what actually RUNS, so it never follows one.
+		 */
+		private final boolean followValues;
+
+		private Scan(boolean hostRandom, boolean hostFetch, boolean followValues, Set<String> suspendingImports,
+				String origin, Map<String, Found> found, Map<Call, Boolean> called, Set<String> shadowed,
+				Map<String, Shape> returns) {
+			this.followValues = followValues;
 			this.hostRandom = hostRandom;
 			this.hostFetch = hostFetch;
 			this.suspendingImports = suspendingImports;
@@ -488,9 +518,36 @@ public final class NoWasiLoadPathRefusals {
 			// a #'f) is a VALUE -- whoever receives it decides when it is called (an
 			// async-lambda equally); and a nested definition's body waits for its own
 			// caller.
-			if (LispNames.QUOTE.equals(name) || LispNames.DECLARE.equals(name) || LispNames.LAMBDA.equals(name)
-					|| LispNames.ASYNC_LAMBDA_QUALIFIED.equals(name) || LispNames.FUNCTION.equals(name)
-					|| DEFERRED_HEADS.contains(name)) {
+			if (LispNames.QUOTE.equals(name) || LispNames.DECLARE.equals(name) || DEFERRED_HEADS.contains(name)) {
+				return;
+			}
+			if (LispNames.FUNCTION.equals(name)) {
+				// #'name is a VALUE: whoever receives it decides when it is called. Under
+				// followValues that IS the answer being asked for -- the reactor hands
+				// its
+				// two body bridges over exactly like this, and the imports behind them
+				// are
+				// what an export can reach -- so record it as a call under unknown
+				// arguments.
+				if (this.followValues && cons.cdr() instanceof LispCons rest) {
+					if (rest.car() instanceof LispSymbol fn) {
+						this.called.merge(new Call(fn.name(), List.of()), at.guarded(), (a, b) -> a && b);
+					}
+					else {
+						// #'(lambda ...) is the same value written the other way.
+						this.form(rest.car(), at);
+					}
+				}
+				return;
+			}
+			if (LispNames.LAMBDA.equals(name) || LispNames.ASYNC_LAMBDA_QUALIFIED.equals(name)) {
+				// The same for an anonymous one, and with NO shapes carried in: a
+				// may-analysis that pruned a branch on a stale binding would
+				// under-report,
+				// and under-reporting here is a missing WebAssembly.promising.
+				if (this.followValues && cons.cdr() instanceof LispCons rest) {
+					this.args(rest.cdr(), new At(at.guarded(), at.located(), Map.of(), at.locals()));
+				}
 				return;
 			}
 			Local local = at.locals().get(name);

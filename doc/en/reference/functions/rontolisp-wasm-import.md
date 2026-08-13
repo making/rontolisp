@@ -91,7 +91,10 @@ spells both directions `async func`, and the directive carries the direction.)
   trap** instead of silently corrupting both calls (every export wrapper of a
   module that can suspend carries a re-entry guard). A host that answers
   synchronously is equally valid; the call returns an already-settled future
-  either way.
+  either way. `--emit-js-glue` WRITES that half rather than describing it (the
+  [host boundary guide](../../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)):
+  the host is then left with what its functions do, and says which of them
+  suspend.
 - Under `--no-wasi`, a call reachable from a top-level form is a **compile
   error**: `_initialize` runs on a stack no `promising` entered, so a
   suspension there traps naming nobody. Move the call behind an export, or

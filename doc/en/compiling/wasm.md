@@ -65,7 +65,9 @@ Two complementary directives declare what crosses the module/host boundary:
   spell out the boundary by hand, in rontolisp's own type designators (`:int`,
   `:float`, `:string`, `:s-expr`, ...). The same directive compiles into four
   different host contracts depending on the output shape (raw core function,
-  typed component-model export, ...).
+  typed component-model export, ...). Under `--no-wasi`,
+  [`--emit-js-glue`](../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)
+  writes the JavaScript half of that boundary from the same declarations.
 - [**WIT contracts (`wit-export` / `wit-import`)**](../guides/wit-contracts.md)
   drive the boundary from a `.wit` file — one contract, checked on every
   backend, with per-backend implementations (typed component-model exports

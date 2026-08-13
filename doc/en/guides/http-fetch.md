@@ -262,7 +262,10 @@ suspended handler returns control to the event loop, and a second request
 entering the same instance would share its globals and its allocator — the
 module refuses that re-entry with a trap rather than corrupting both calls. A
 synchronous `env.fetch` (node without JSPI, a test stub) needs none of this
-and is equally valid.
+and is equally valid. Adding
+[`--emit-js-glue`](wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)
+writes that obligation as JavaScript beside the module — both imports, the
+`promising` entry and the queue — leaving the host only what its `fetch` does.
 
 The usual shape is a served reactor: an
 [`http-handler`](http-handler.md) or a

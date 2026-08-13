@@ -271,6 +271,10 @@ Lisp側は何も変わりません — オプションも `(:status :headers :bo
 ます — モジュールは両方の呼び出しを壊す代わりに、その再入をトラップで拒否
 します。同期的な `env.fetch` (JSPIのないnode、テストスタブ) にはこの義務は
 不要で、それも同様に有効です。
+[`--emit-js-glue`](wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)
+を付ければ、その義務が JavaScript としてモジュールの隣に書き出されます —
+2つのインポート、`promising` エントリ、キューまで — ホストに残るのは自分の
+`fetch` が何をするかだけです。
 
 典型的な形は served なリアクタです:
 [`http-handler`](http-handler.md) か

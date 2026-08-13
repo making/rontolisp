@@ -31,6 +31,7 @@ import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.ToplevelStatements;
+import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.CompileWarnings;
@@ -38,6 +39,7 @@ import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
+import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
 import am.ik.rontolisp.compiler.NoWasiLoadPathRefusals;
@@ -318,6 +320,23 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private @Nullable String componentWit;
+
+	/**
+	 * The JavaScript host glue for the module compiled by the last {@link #compile} call
+	 * (the CLI's {@code --emit-js-glue} output), or {@code null} when the last compile
+	 * was not a {@code --no-wasi} core module -- the only shape a JS host instantiates
+	 * itself (a component's host glue is jco's, and the boundary the glue writes does not
+	 * exist there). The surface it is emitted from is the same set of derived facts the
+	 * {@code :async t} obligation lines are printed from; see {@link HostGlueEmitter}.
+	 * @param fileName the glue's own file name, so its usage sketch names the real import
+	 * @return the ES module source, or {@code null} when there is no glue to write
+	 */
+	public @Nullable String hostGlueJs(String fileName) {
+		HostGlueEmitter.Surface surface = this.hostGlue;
+		return surface == null ? null : HostGlueEmitter.emit(fileName, surface);
+	}
+
+	private HostGlueEmitter.@Nullable Surface hostGlue;
 
 	/**
 	 * The index of the first user defun: the fixed runtime helpers, plus -- under
@@ -1864,6 +1883,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// --host-fetch precedent). Skipped under --component, where the directive is
 		// rejected outright below.
 		Map<String, String> suspendingImports = this.component ? Map.of() : SuspendingImports.declared(program);
+		// A function that can reach a suspending import escaped as #'name: the per-export
+		// walk is seeded from that export alone, so a value handed over anywhere ELSE is
+		// invisible to it and the answer below would under-report -- which is a MISSING
+		// WebAssembly.promising, not a wasted one. Kept as a variable because the
+		// generated host glue widens the same way (compiler/HostGlueEmitter).
+		boolean anySuspendingImportEscapes = (!suspendingImports.isEmpty() || this.hostFetch)
+				&& SuspendingImports.anyTakenAsValue(program, suspendingImports.keySet(), this.hostFetch);
 		if (!suspendingImports.isEmpty()) {
 			CompileWarnings.warn(":async t: this module imports " + String.join(", ", suspendingImports.values())
 					+ ", declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the"
@@ -1871,11 +1897,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					+ " module can be re-entered; a re-entered export refuses with a trap instead of corrupting"
 					+ " both calls); a host that answers synchronously is equally valid -- the call then returns"
 					+ " an already-settled future either way");
-			if (SuspendingImports.anyTakenAsValue(program, suspendingImports.keySet())) {
-				// #'name escaped: whoever received it can call it, so the per-export
-				// answer below would under-report -- widen it to every export instead.
-				CompileWarnings.warn(":async t: a suspending import is taken as a value (#'name), so ANY export may"
-						+ " reach one -- enter every export through WebAssembly.promising");
+			if (anySuspendingImportEscapes) {
+				// Whoever received it can call it, so the per-export answer below would
+				// under-report -- widen it to every export instead.
+				CompileWarnings.warn(":async t: a function that can reach a suspending import is taken as a value"
+						+ " (#'name), so ANY export may reach one -- enter every export through"
+						+ " WebAssembly.promising");
 			}
 			else {
 				List<String> exportsReaching = new ArrayList<>();
@@ -3388,6 +3415,41 @@ public final class WasmLispCompiler implements LispCompiler {
 				exportBodies.add(finalBody.toByteArray());
 				exportPlans.add(new ExportPlan(decl, target.funcIndex(), wrapperTypeIndex++, wrapperFuncIndex++));
 			}
+		}
+
+		// The host glue the CLI's --emit-js-glue writes (compiler/HostGlueEmitter): the
+		// JavaScript half of this boundary, from the same declarations the module was
+		// built from, so the two sides cannot drift -- the gl-imports.js precedent. Built
+		// HERE because every fact it needs is settled by now and none of it is re-walked:
+		// the import/export declarations, the helper exports the module turns out to
+		// carry (memoryHelpers/hostArena/seedRandom/setTime), and -- for the promising
+		// entries -- the same suspending-import question the obligation lines above
+		// asked. --component instantiates through jco instead, and a WASI module's host
+		// is wasmtime, so only a --no-wasi core module has glue to write at all.
+		if (this.noWasi && !this.component) {
+			List<HostGlueEmitter.Import> glueImports = new ArrayList<>();
+			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
+				glueImports
+					.add(new HostGlueEmitter.Import(decl.module(), decl.field(), decl.paramTypes(), decl.returnType()));
+			}
+			// --host-random routes random_get at an import no directive named, and one
+			// the glue IMPLEMENTS rather than asks for: preview1 fixes what
+			// random_get(buf, len) does, and filling linear memory is this side's job
+			// anyway. Its declared shape is preview1's own, so a host that would rather
+			// forward its WASI implementation still can.
+			HostGlueEmitter.Import entropy = this.hostRandom ? new HostGlueEmitter.Import(HOST_RANDOM_MODULE,
+					HOST_RANDOM_FIELD, List.of(BoundaryType.S32, BoundaryType.S32), BoundaryType.S32) : null;
+			List<HostGlueEmitter.Export> glueExports = new ArrayList<>();
+			for (ExportPlan plan : exportPlans) {
+				WasmExportCompiler.Decl decl = plan.decl();
+				boolean promising = hostMaySuspend && (anySuspendingImportEscapes
+						|| suspendingImports.containsKey(decl.name())
+						|| SuspendingImports.reaches(program, suspendingImports.keySet(), this.hostFetch, decl.name()));
+				glueExports.add(
+						new HostGlueEmitter.Export(decl.exportName(), decl.paramTypes(), decl.returnType(), promising));
+			}
+			this.hostGlue = new HostGlueEmitter.Surface(glueImports, entropy, glueExports, hostArena, seedRandom,
+					setTime, "_initialize");
 		}
 
 		// Canonical string ABI for --component :string/:s-expr exports (todo 92 Tier 2):

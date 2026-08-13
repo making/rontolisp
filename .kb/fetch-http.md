@@ -85,12 +85,22 @@ all four backends rather than three. Mechanics, all in `HostFetchLibrary`:
   first pull;
 - **one live reply body, deliberately no handle.** The host has ONE read cursor, moved by
   each `env.fetch`; a module-side counter (`%host-fetch-open`) makes draining a
-  SUPERSEDED body signal instead of answering the next reply's octets. Revisit if
-  `.todo/340`'s generated glue makes a per-response handle free;
+  SUPERSEDED body signal instead of answering the next reply's octets. Re-evaluated when
+  the glue became generated (todo-340): it does NOT make a handle free -- the generator
+  moved the leftover-holding cursor into emitted code, but the cursor is still ONE per
+  import and the protocol still carries no call identity, so a per-response handle is
+  still a boundary change. It is `.todo/348`'s: identity is what relaxing the re-entry
+  guard would force onto all three body imports at once;
 - **a NEGATIVE count is the error channel** the split needs: without one a transport that
   died mid-body would look like a short body. It signals at the DRAIN, which is the
   semantic change this forced -- the future now settles at the HEADERS, so only a failure
   before them still signals at the call (documented in `doc/{en,ja}/guides/http-fetch.md`).
+
+The host half of both imports is now GENERATED (`--emit-js-glue`, `.kb/wasm-import.md`):
+`examples/cloudflare-workers/dog-fetcher/src/worker.js` is emitted from these two
+declarations and checked in, and `src/index.js` keeps only the envelope above and the
+`ReadableStream` the reply body is pulled from -- which is why `HostFetchLibraryTest`
+still pins it against `FetchResponseShape`.
 
 Pinned by `WasmHostFetchBodyE2eTest` (node, a JS host sharing the module's memory: the
 portable drain over a body every chunk boundary of which falls inside a code point, one

@@ -136,10 +136,19 @@ final class WasmImportCompiler {
 	}
 
 	/**
-	 * Returns whether the declaration's result is host-written bytes in linear memory.
+	 * Returns whether the declaration's result is host-written bytes in linear memory --
+	 * a {@code :string} and an {@code :s-expr} alike, since both cross as the
+	 * {@code (ptr, len)} pair the HOST reserves with the exported {@code __ronto_alloc}
+	 * and the wrapper reads back with {@code _str_from_mem} (the {@code :s-expr} one then
+	 * hands the text to the embedded reader). Naming only {@code :string} left a module
+	 * whose ONLY memory-typed boundary was an {@code :s-expr}-returning import without
+	 * the allocator export, so no host could answer it at all -- found by generating the
+	 * host glue for one ({@code compiler/HostGlueEmitter}).
+	 * @param decl the parsed declaration
+	 * @return whether the result is host-written bytes
 	 */
 	static boolean usesStrFromMem(Decl decl) {
-		return decl.returnType() == BoundaryType.STRING;
+		return decl.returnType() == BoundaryType.STRING || decl.returnType() == BoundaryType.S_EXPR;
 	}
 
 	/** Returns whether the declaration's result is parsed with the embedded reader. */

@@ -24,7 +24,7 @@ Module sizes are measured rather than quoted here:
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
-| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | `hello-clack/src/index.js` plus the JSPI bridge |
+| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | The only one that is GENERATED: `--emit-js-glue` writes `src/worker.js` from the declarations, and `src/index.js` is the host's own half |
 
 ## Which one should I copy?
 

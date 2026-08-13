@@ -484,7 +484,11 @@ checked-in glue file does it yet, and the reason is not the module: a suspending
 body import forces the promising/queue serialisation on every request (the
 re-entry guard, `.kb/wasm-import.md`), and `httpbin/src/index.js` is deliberately
 synchronous and byte-identical in five directories. `.todo/348` is the trigger --
-once a reactor need not serialise, the streaming glue costs nothing.
+once a reactor need not serialise, the streaming glue costs nothing. What
+`--emit-js-glue` (todo-340) changed about that choice is only its PRICE: both
+shapes now come out of one generated file, and a host switches by marking its own
+entries with the glue's `suspending()` -- so the day 348 lands, a streaming
+`httpbin` is four `suspending(...)` wrappers and no new boundary code.
 
 **What the transport does NOT hold, and what reading still costs.** The boundary
 is flat in both hosts: a 256 KiB body a handler drops leaves linear memory where

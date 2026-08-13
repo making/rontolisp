@@ -40,7 +40,7 @@ wasmtime run -W gc hello.wasm
 
 モジュールとホストの境界を渡るものは、2 つの補完的なディレクティブで宣言します:
 
-- [**`rontolisp:wasm-export` / `rontolisp:wasm-import`**](../guides/wasm-host-boundary.md) は境界を、rontolisp 自身の型指定子(`:int`、`:float`、`:string`、`:s-expr`、...)で手書きで綴ります。同じディレクティブは出力形状に応じて 4 つの異なるホスト契約にコンパイルされます(生のコア関数、型付きコンポーネントモデルエクスポートなど)。
+- [**`rontolisp:wasm-export` / `rontolisp:wasm-import`**](../guides/wasm-host-boundary.md) は境界を、rontolisp 自身の型指定子(`:int`、`:float`、`:string`、`:s-expr`、...)で手書きで綴ります。同じディレクティブは出力形状に応じて 4 つの異なるホスト契約にコンパイルされます(生のコア関数、型付きコンポーネントモデルエクスポートなど)。`--no-wasi` では [`--emit-js-glue`](../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue) が同じ宣言からその境界の JavaScript 側を書き出します。
 - [**WIT 契約(`wit-export` / `wit-import`)**](../guides/wit-contracts.md) は `.wit` ファイルから境界を駆動します — 1 つの契約がすべてのバックエンドで検査され、実装はバックエンドごとに異なります(`--component` では型付きコンポーネントモデルエクスポート、インタプリタと JVM ではプロバイダコールバック)。[`--emit-wit`](../guides/wit-contracts.md#emitting-the-wit-world---emit-wit) と [`--scaffold-wit`](../guides/wit-contracts.md#scaffolding-an-implementation---scaffold-wit) も同ガイドで扱います。
 
 ## ブラウザでコンポーネントを実行する

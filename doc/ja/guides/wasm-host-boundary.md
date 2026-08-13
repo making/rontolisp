@@ -140,3 +140,47 @@ const { instance } = await WebAssembly.instantiate(bytes, imports);
 - インタプリタと JVM バックエンドでは、このディレクティブは呼び出すとエラーを通知するスタブを定義します。共有ソースはどこでもロードできますが、実際にインポートを呼び出すには WASM ホストが必要です。
 - インポートされた関数にも wasm-GC 値モデルの他の関数と同じ 10 パラメータのアリティ上限があります。
 - モジュールのインスタンス化には宣言したすべてのインポートの提供が必要です: `wasmtime run` はインポートモジュール名ごとに `--preload <module>=<file>.wasm` を必要とし、JavaScript ホストはインポートオブジェクトを渡します。
+
+## ホストグルーの生成 (--emit-js-glue)
+
+ここまでのすべては宣言から導出されるので、JavaScript 側も同じく導出できます。`--emit-js-glue` はそれをモジュールの隣に書き出します(`out.wasm` -> `out.js`): インポートオブジェクト、双方向の `(ptr, len)` ステージング、呼び出しを囲む `__ronto_alloc` ブラケット、`WebAssembly.Suspending` ラッパー、ビルドが列挙したエクスポートちょうどに対する `WebAssembly.promising` エントリ、そしてサスペンドしうるモジュールが必要とする「一度に 1 呼び出し」のキューです。
+
+```console
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --emit-js-glue
+$ ls worker.*
+worker.js  worker.lisp  worker.wasm
+```
+
+生成されたファイルが要求するのは、宣言では表現できない唯一のこと — 各ホスト関数が実際に*何をするか*だけです。`host` はインポートごとの素の関数で、インポートモジュールとフィールドをキーとし、普通の JavaScript 値を受け取って返します — `(ptr, len)` ペアではありません:
+
+```js
+import { instantiate, suspending } from "./worker.js";
+
+const lisp = instantiate(module, {
+  env: {
+    fetch: suspending(async (request) => hostFetch(request)),
+    readResponseBody: suspending(async () => nextChunk()),
+    readRequestBody: () => take(requestBody),
+    writeResponseBody: (chunk) => chunks.push(chunk),
+  },
+});
+const reply = await lisp.handleRequest(head);
+```
+
+チャンクのソースは最終的に `null` を返さなければなりません。さもないとモジュールは同じオクテットを永久に引き取り続けます — 上の `take()` はボディを一度だけ渡してから終端を報告します。入り切らなかった分はグルーが保持し、次にモジュールへ入るときに捨てます。1 回の呼び出しの*内側*でソースが動くホスト(新しい上流レスポンスなど)は `lisp.drop("env.readResponseBody")` で捨てます — それを知っているのはその側だけだからです。
+
+`suspending()` は、自分のどのエントリが promise を返すかをホストが宣言する方法です。エントリ単位なのは、ラッパーがただではないからです: そのラッパー越しに*同期的に*答えるインポートでも、スタックは park して一度イベントループに戻ります。1 つでもマークすればファイルは JSPI の形に切り替わり — マークされたインポートがラップされ、ビルドが列挙したエントリポイントが `promising` 経由になり、すべての呼び出しが 1 本の promise チェーンに乗ります。1 つもマークしなければ同じファイルが同期ホストを駆動し、エントリポイントは promise ではなく値を返します。マークされていないコールバックが promise を返した場合は、`i32` を待つモジュールに `Promise` を渡す代わりに、名前を挙げて報告されます。
+
+1 回の呼び出しに属するホスト側の状態 — その呼び出し中にモジュールが引き取るもの、呼び出しが残していくもの — は、同じクリティカルセクションの内側で設定します。サスペンドした呼び出しはイベントループに戻るため、そうしないと次のリクエストがそれを動かしてしまうからです:
+
+```js
+const reply = await lisp.serially(async (entry) => {
+  requestBody = bytes;
+  chunks = [];
+  return entry.handleRequest(head);
+});
+```
+
+宣言だけでは取りこぼすインポートも書き出されます: `--host-random` のエントロピー源は、preview1 が `random_get(buf, len)` の意味を固定しているため、要求するのではなく*実装*されます。また `:bytes` の結果はモジュールのバッファではなくチャンクで答えます(`null` が終端)。生成されたカーソルが入り切らなかった分を保持するので、チャンクの出どころ — `ReadableStream` か `Uint8Array` か — だけがホストの決めることとして残ります。
+
+このフラグは `--no-wasi` と `.wasm` 出力を必要とします: コンポーネントは自身のバインディングジェネレータ経由でインスタンス化され、`--no-gc` モジュールは何もインポートしないので `new WebAssembly.Instance(module, {})` がグルーのすべてです。[dog-fetcher Worker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher) が実例です: `src/worker.js` は生成されてチェックインされており、`src/index.js` はホスト自身の半分だけです。

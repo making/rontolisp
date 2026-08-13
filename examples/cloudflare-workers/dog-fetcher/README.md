@@ -16,7 +16,7 @@ runs on every backend, not only on Cloudflare (see
 [the same worker.lisp on every backend](#the-same-workerlisp-on-every-backend)).
 
 ```bash
-./build.sh          # worker.lisp -> src/worker.wasm (--no-wasi --host-fetch)
+./build.sh          # worker.lisp -> src/worker.wasm + src/worker.js
 npx wrangler dev    # http://localhost:8787
 npx wrangler deploy
 ```
@@ -56,15 +56,26 @@ a chunk at a time. Same options, same
 `(:status <int> :headers <alist> :body <stream>)` answer as every other
 backend. The JSON keys are derived from the compiler's own `FetchResponseShape`
 record and pinned by `HostFetchLibraryTest` against `src/index.js`, so the two
-sides cannot drift. The host's half is small:
+sides cannot drift.
+
+**And the JavaScript half is not hand-written either.** `--emit-js-glue`
+(build.sh) writes [`src/worker.js`](src/worker.js) from the same declarations
+the module was built from: the import object, the `(ptr, len)` staging both
+ways, the `__ronto_alloc` bracket, the `WebAssembly.Suspending` wrappers, the
+`WebAssembly.promising` entry and the one-call-at-a-time queue. It is generated
+and checked in, and pinned by `HostGlueEmitterTest`. What is left in
+`src/index.js` is what a declaration cannot state — what each host function
+*does*, and which of them suspend:
 
 ```js
-fetch: new WebAssembly.Suspending((ptr, len) => hostFetch(exports, ptr, len)),
-readResponseBody: new WebAssembly.Suspending((ptr, cap) =>
-  readResponseBody(exports, ptr, cap),
-),
-// ...
-handleRequest: WebAssembly.promising(exports["handle-request"]),
+const lisp = instantiate(module, {
+  env: {
+    fetch: suspending(hostFetch),
+    readResponseBody: suspending(readResponseBody),
+    readRequestBody: () => { ... },
+    writeResponseBody: (chunk) => responseChunks.push(chunk),
+  },
+});
 ```
 
 Four things are worth reading twice:
@@ -76,8 +87,12 @@ Four things are worth reading twice:
   compatibility date opt-in** — verified under `wrangler dev` and on the
   deployed edge. A suspending import may only be called on a stack entered
   through `promising`, so `_initialize` must never reach one; the build prints
-  exactly this obligation, and would print a warning line naming any fetch its
-  load path reaches.
+  exactly this obligation (and writes it, into `src/worker.js`), and would print
+  a warning line naming any fetch its load path reaches. Which entries actually
+  suspend is this file's choice, not the module's: `suspending()` marks the two
+  that answer promises, and the other two stay plain calls, because the wrapper
+  is not free — an import that answers *synchronously* through one still parks
+  the stack and returns to the event loop.
 - **Awaiting still reads the same.** On the reactor the future `fetch` returns
   is settled the moment the call returns (the stack was parked for the round
   trip to the headers), so `await` never suspends and two fetches never
@@ -93,8 +108,9 @@ Four things are worth reading twice:
 - **A `:string` result is host-written bytes.** The host allocates with the
   module's exported `__ronto_alloc` and returns `[ptr, len]`; the per-request
   arena reset frees it along with everything else. Nothing may be kept across
-  the `await` — growing the module's memory detaches `memory.buffer`, so
-  `index.js` reads its argument before awaiting and re-reads the buffer after.
+  the `await` — growing the module's memory detaches `memory.buffer`. All of
+  that is `src/worker.js`'s job now: `hostFetch` in `index.js` takes and answers
+  a plain string and never sees a pointer.
 
 ## One Lisp call at a time
 
@@ -104,8 +120,10 @@ on dog.ceo returns control to the event loop, and a second request would enter
 the same module — the same globals, and the same bump allocator whose
 mark/reset bracket assumes it is alone. The module refuses that entry with a
 trap (the compiled export carries a re-entry guard), so a host that forgets the
-queue sees a failed request, not silently corrupted answers. `index.js`
-therefore chains calls onto one promise queue.
+queue sees a failed request, not silently corrupted answers. The generated glue
+owns that queue; `index.js` joins it with `lisp.serially(...)`, because the
+request body and the response chunks belong to the one call that is running and
+a suspended handler would otherwise let the next request move them.
 
 The cost is real and measured: eight concurrent `GET /` under `wrangler dev`
 complete about 250 ms apart rather than together. On the deployed edge the same
@@ -151,7 +169,8 @@ program) compiles to the same reactor shape with no edit at all.
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | The whole program. This is what `build.sh` compiles. |
-| [`src/index.js`](src/index.js) | The Worker: `../hello-clack/src/index.js` plus the JSPI bridge and the queue. |
+| [`src/index.js`](src/index.js) | The Worker's own half: what each host function does, and the Request/Response mapping. |
+| [`src/worker.js`](src/worker.js) | The boundary, GENERATED by `--emit-js-glue` from worker.lisp's declarations. Do not edit; `./build.sh` rewrites it. |
 | `src/worker.wasm` | A build product — run `./build.sh` first. |
 
 ## Limitations

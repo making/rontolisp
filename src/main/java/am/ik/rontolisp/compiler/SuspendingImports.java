@@ -2,11 +2,14 @@ package am.ik.rontolisp.compiler;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.SourceProvenance;
 
@@ -89,10 +92,29 @@ public final class SuspendingImports {
 	 * @return {@code true} when a call chain from the function reaches an import
 	 */
 	public static boolean reaches(List<LispVal> program, Set<String> suspendingImports, String function) {
-		return NoWasiLoadPathRefusals.walk(program, false, false, suspendingImports, function)
+		return reaches(program, suspendingImports, false, function);
+	}
+
+	/**
+	 * Whether the given function can reach an import the HOST may suspend -- the
+	 * {@code :async t} ones, and under {@code --host-fetch} also {@code env.fetch}, whose
+	 * suspension the flag rather than a declaration allows for (the lowering leaves the
+	 * import plain, because a load-path fetch is a WARNING there and an {@code :async t}
+	 * one is an error; the build's own {@code --host-fetch} obligation line already names
+	 * the same {@code promising} requirement).
+	 * @param program the resolved, flattened top-level forms
+	 * @param suspendingImports the {@code :async t} import names ({@link #declared})
+	 * @param hostFetch whether {@code --host-fetch} routes {@code rontolisp:fetch}
+	 * @param function the (export target) function name
+	 * @return {@code true} when a call chain from the function reaches such an import
+	 */
+	public static boolean reaches(List<LispVal> program, Set<String> suspendingImports, boolean hostFetch,
+			String function) {
+		return NoWasiLoadPathRefusals.walk(program, false, hostFetch, true, suspendingImports, function)
 			.values()
 			.stream()
-			.anyMatch(found -> found.kind() == NoWasiLoadPathRefusals.Kind.SUSPEND);
+			.anyMatch(found -> found.kind() == NoWasiLoadPathRefusals.Kind.SUSPEND
+					|| (hostFetch && found.kind() == NoWasiLoadPathRefusals.Kind.FETCH));
 	}
 
 	/**
@@ -104,14 +126,47 @@ public final class SuspendingImports {
 	 * @return {@code true} when an import is taken as a value
 	 */
 	public static boolean anyTakenAsValue(List<LispVal> program, Set<String> suspendingImports) {
-		for (LispVal form : program) {
-			for (String name : suspendingImports) {
-				if (NoWasiLoadPathRefusals.takenAsValue(form, name)) {
-					return true;
-				}
+		return anyTakenAsValue(program, suspendingImports, false);
+	}
+
+	/**
+	 * Whether any function that can reach an import the host may suspend escapes as a
+	 * VALUE ({@code #'name}) anywhere in the program -- the import itself, or anything
+	 * that calls one. The per-export walk is seeded from that export's own bodies, so a
+	 * value handed over somewhere ELSE (a {@code defvar} of {@code #'helper} the export
+	 * later {@code funcall}s) is invisible to it, and under-reporting there is a missing
+	 * {@code WebAssembly.promising} rather than a wasted one -- so it widens the answer
+	 * to "any export" instead.
+	 * @param program the resolved, flattened top-level forms
+	 * @param suspendingImports the {@code :async t} import names ({@link #declared})
+	 * @param hostFetch whether {@code --host-fetch} routes {@code rontolisp:fetch}
+	 * @return {@code true} when such a value escapes
+	 */
+	public static boolean anyTakenAsValue(List<LispVal> program, Set<String> suspendingImports, boolean hostFetch) {
+		Set<String> escaping = new LinkedHashSet<>();
+		program.forEach(form -> collectFunctionValues(form, escaping));
+		for (String name : escaping) {
+			if (suspendingImports.contains(name) || reaches(program, suspendingImports, hostFetch, name)) {
+				return true;
 			}
 		}
 		return false;
+	}
+
+	// Every name written as #'name anywhere in a form, quoted data included: a quote does
+	// not stop a program from later applying what it holds, and this is the conservative
+	// side of the question.
+	private static void collectFunctionValues(LispVal form, Set<String> into) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && LispNames.FUNCTION.equals(head.name())
+				&& cons.cdr() instanceof LispCons rest && rest.car() instanceof LispSymbol name) {
+			into.add(name.name());
+			return;
+		}
+		collectFunctionValues(cons.car(), into);
+		collectFunctionValues(cons.cdr(), into);
 	}
 
 }

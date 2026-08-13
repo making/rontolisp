@@ -27,6 +27,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
@@ -156,9 +157,20 @@ public final class RontoLispCli {
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
-					options.contains("--host-random"), options.contains("--host-fetch"), inputFile);
+					options.contains("--emit-js-glue"), options.contains("--host-random"),
+					options.contains("--host-fetch"), inputFile);
 		}
 		else {
+			// A side-artifact flag names a file to write BESIDE the output, so without
+			// one there is nothing it could mean -- and interpreting the program instead
+			// is the least useful answer (a Worker source would try to bind a socket).
+			// Fail fast, the same way the flags do on the wrong output shape.
+			for (String flag : List.of("--emit-wit", "--emit-js-glue")) {
+				if (options.contains(flag)) {
+					throw new UnsupportedOperationException(
+							flag + " writes a file next to a compiled output, so it needs -o <file>");
+				}
+			}
 			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
 		}
 	}
@@ -311,7 +323,8 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean hostRandom, boolean hostFetch, @Nullable String entryFile) {
+			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			@Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -321,7 +334,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
-					noPrune, wit, hostRandom, hostFetch, entryFile);
+					noPrune, wit, jsGlue, hostRandom, hostFetch, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -352,13 +365,24 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean hostRandom, boolean hostFetch, @Nullable String entryFile) {
+			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			@Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
 		if (wit && !(component && outputFile.endsWith(".wasm"))) {
 			throw new UnsupportedOperationException(
 					"--emit-wit requires --component and a .wasm output (e.g. -o out.wasm --component --emit-wit)");
+		}
+		// --emit-js-glue writes the host half of a boundary only a --no-wasi core module
+		// has: a component is instantiated through its own bindings (jco), and --no-gc
+		// rejects rontolisp:wasm-import outright, so there is no import object to write
+		// and `new WebAssembly.Instance(module, {})` is already the whole of its glue.
+		if (jsGlue && !(noWasi && !component && !noGc && outputFile.endsWith(".wasm"))) {
+			throw new UnsupportedOperationException("--emit-js-glue requires --no-wasi and a .wasm output, without"
+					+ " --component (a component's host glue is its bindings generator's) or --no-gc (which imports"
+					+ " nothing: `new WebAssembly.Instance(module, {})` is the whole glue)"
+					+ " -- e.g. -o out.wasm --no-wasi --emit-js-glue");
 		}
 		// --host-random routes the wasm-GC backend's random_get slot at a host import,
 		// so it means nothing anywhere else. The backend-selection half is checked here
@@ -599,6 +623,8 @@ public final class RontoLispCli {
 				: LibraryDefunPruner.stripSystemMarkers(program);
 		byte[] bytes;
 		String witText = null;
+		String glueText = null;
+		String glueFile = jsGlue ? outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".js" : null;
 		if (outputFile.endsWith(".wasm")) {
 			if (noGc) {
 				// --no-gc selects the separate scalar (non-GC) lowering: a plain MVP
@@ -652,6 +678,9 @@ public final class RontoLispCli {
 						hostRandom, hostFetch);
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
+				if (glueFile != null) {
+					glueText = compiler.hostGlueJs(Path.of(glueFile).getFileName().toString());
+				}
 			}
 		}
 		else {
@@ -667,6 +696,21 @@ public final class RontoLispCli {
 			if (wit) {
 				String witFile = outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".wit";
 				Files.writeString(Path.of(witFile), Objects.requireNonNull(witText));
+			}
+			if (glueFile != null) {
+				// The glue's name is the module's, so in a Worker directory `-o
+				// src/index.wasm` aims it straight at a hand-written src/index.js. Only
+				// a file this flag wrote before is overwritten; anything else is the
+				// host's own and is refused by name, because the build has already
+				// committed the .wasm by the time we get here.
+				Path glue = Path.of(glueFile);
+				if (Files.exists(glue)
+						&& !Files.readString(glue, StandardCharsets.UTF_8).startsWith(HostGlueEmitter.MARKER)) {
+					throw new UnsupportedOperationException("--emit-js-glue would overwrite " + glueFile
+							+ ", which it did not write (it does not start with \"" + HostGlueEmitter.MARKER
+							+ "\"). Compile to a different -o name, or move that file aside");
+				}
+				Files.writeString(glue, Objects.requireNonNull(glueText));
 			}
 		}
 		catch (IOException ex) {
@@ -777,6 +821,14 @@ public final class RontoLispCli {
 		this.out.println("                     and binding generators (e.g. jco) need no wasm-tools introspection");
 		this.out.println("                     It is the only thing that reports what the component actually");
 		this.out.println("                     IMPORTS -- a hand-written world states only the export side");
+		this.out.println("  --emit-js-glue     With --no-wasi: also write the JavaScript host glue next to");
+		this.out.println("                     the .wasm output (out.wasm -> out.js), derived from the");
+		this.out.println("                     program's own wasm-import/wasm-export declarations: the");
+		this.out.println("                     import object, the (ptr, len) staging and __ronto_alloc");
+		this.out.println("                     bracket, the WebAssembly.Suspending / promising entries a");
+		this.out.println("                     JSPI host needs, and the one-call-at-a-time queue. A host");
+		this.out.println("                     then supplies only what a declaration cannot say: one plain");
+		this.out.println("                     function per import");
 		this.out.println("  --scaffold-wit W   Generate a skeleton implementing the WIT world W instead of");
 		this.out.println("                     compiling: a rontolisp:wit-export directive plus one defun stub");
 		this.out.println("                     per export (with -o FILE; prints to stdout otherwise). Pick the");
