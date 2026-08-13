@@ -39,6 +39,18 @@ import am.ik.rontolisp.macro.LispMacroExpander;
  * function, not CL's).
  *
  * <p>
+ * Only a form in OPERATOR position is a call: the walk descends into a list's ELEMENTS,
+ * never into its tail as if the tail were itself a form. {@code open} is an ordinary
+ * variable name as well as a CL function, and a tail-walking rewrite turns
+ * {@code (setq open t)} into a {@code setq} with one argument. What the walk still cannot
+ * tell apart is a BINDING from a call -- {@code (let ((open nil)) ...)} and
+ * {@code (defun f (open) ...)} spell the binding exactly like {@code (open nil)} spells
+ * the call -- so a {@code --no-wasi} program that binds the name that way still gets it
+ * stubbed. The failure is loud (a malformed binding the backend rejects), never a wrong
+ * module, and the fix is the binding-position knowledge {@code ShadowedBuiltins}'s walker
+ * already carries.
+ *
+ * <p>
  * WASM {@code --no-wasi} only -- the JVM and the WASI-carrying WASM targets have real
  * files, and the interpreter always does. This divergence is per-target fact, not policy
  * drift: it is the same "no filesystem" line {@code .kb/wasm-export-no-wasi.md} already
@@ -106,8 +118,16 @@ public final class NoWasiFilesystemStubs {
 				return SourceProvenance.inherit(cons, stub(args, head.name()));
 			}
 		}
+		// Otherwise walk the ELEMENTS, each of them a form, and never the tail as if it
+		// were one: a cdr whose own car is OPEN is an argument list or a binding, not a
+		// call. (setq open t) is the case that taught this -- rewriting the tail turned
+		// it into (setq (progn t (error ...))), a setq with one argument.
+		return rewriteElements(cons, userOpen);
+	}
+
+	private static LispVal rewriteElements(LispCons cons, boolean userOpen) {
 		LispVal car = rewriteForm(cons.car(), userOpen);
-		LispVal cdr = rewriteForm(cons.cdr(), userOpen);
+		LispVal cdr = cons.cdr() instanceof LispCons rest ? rewriteElements(rest, userOpen) : cons.cdr();
 		return LispCons.rebuilt(cons, car, cdr);
 	}
 

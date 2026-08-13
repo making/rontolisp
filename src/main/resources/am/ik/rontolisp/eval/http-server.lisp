@@ -67,10 +67,13 @@
   ;; less than END when the tail bytes lead a sequence the range does not
   ;; finish, which is exactly the state a CHUNKED body source has to carry over
   ;; to its next chunk.
-  (let ((i start) (open nil))
-    (while (and (< i end) (not open))
+  ;; SPLIT, not `open': a variable named OPEN is rewritten as a call to cl:open
+  ;; by the --no-wasi filesystem stub pass, which cannot tell a binding from a
+  ;; call (compiler/NoWasiFilesystemStubs).
+  (let ((i start) (split nil))
+    (while (and (< i end) (not split))
       (let ((len (rontolisp::%http-utf8-length (aref v i))))
-        (if (<= (+ i len) end) (setq i (+ i len)) (setq open t))))
+        (if (<= (+ i len) end) (setq i (+ i len)) (setq split t))))
     i))
 
 (defun rontolisp::%http-utf8-decode-octets (v start end)
