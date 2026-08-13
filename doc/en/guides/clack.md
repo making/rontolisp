@@ -340,6 +340,10 @@ A chunk boundary may fall inside a UTF-8 sequence: a host reading a socket knows
 nothing about code points, so the open sequence is carried into the next chunk
 rather than decoded as two malformed characters.
 
+Octets stay octets. The buffered `:raw-body` is itself a byte stream, so a chunk
+that arrived as an `(unsigned-byte 8)` vector reaches it unchanged: a binary
+upload is byte-exact, and only a source handing over text is ever decoded.
+
 A source that is empty at its **first** call is no body at all — `:raw-body`
 stays `nil`, exactly as for a request whose `"body"` is absent, because that is
 what upstream's `(when raw-body ...)` guards expect and a bodiless `GET` must

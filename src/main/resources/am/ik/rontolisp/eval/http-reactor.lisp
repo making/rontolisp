@@ -262,8 +262,11 @@
             text)))))
 
 (defun rontolisp::%http-reactor-body-text (source)
-  ;; The body source drained to ONE string. What :buffered costs, and the only
-  ;; place the whole body has to exist at once.
+  ;; The body source drained to ONE string, for a caller that wants TEXT and
+  ;; nothing else -- a hand-written reactor whose endpoints echo the body
+  ;; (examples/cloudflare-workers/httpbin). The transport's own :buffered mode
+  ;; does NOT come through here: it wants octets, and %http-reactor-body-octets
+  ;; below is that drain.
   (if (stringp source)
       source
       (let ((next (rontolisp::%http-reactor-text-source source)))
@@ -272,6 +275,39 @@
             (while chunk
               (write-string chunk out)
               (setq chunk (funcall next))))))))
+
+(defun rontolisp::%http-reactor-body-octets (source)
+  ;; The body source drained to ONE (unsigned-byte 8) vector -- what :buffered
+  ;; costs, and the shape the bivalent Gray stream actually wants. A chunk that
+  ;; arrived as OCTETS crosses untouched: this is the mirror of
+  ;; %http-reactor-text-source, and the reason the buffered mode does not go
+  ;; through that one. Decoding a chunk to text so %http-body-stream can UTF-8
+  ;; encode it again would cost a second pass over the whole body AND corrupt a
+  ;; binary one, since the decoder is lenient by design.
+  ;;
+  ;; The chunks are collected and blitted once rather than concatenated as they
+  ;; arrive: a body pulled in n chunks must cost one copy, not n.
+  (if (stringp source)
+      (rontolisp::%http-utf8-encode source)
+      (let ((chunks nil) (total 0) (done nil))
+        (while (not done)
+          (let ((chunk (rontolisp::%http-reactor-pull source)))
+            (if (or (null chunk) (= (length chunk) 0))
+                (setq done t)
+                (let ((v
+                       (if (stringp chunk)
+                           (rontolisp::%http-utf8-encode chunk)
+                           chunk)))
+                  (setq chunks (cons v chunks))
+                  (setq total (+ total (length v)))))))
+        (let ((out (make-array total :element-type '(unsigned-byte 8))) (k 0))
+          (dolist (v (nreverse chunks))
+            (let ((i 0) (n (length v)))
+              (while (< i n)
+                (setf (aref out k) (aref v i))
+                (setq i (+ i 1))
+                (setq k (+ k 1)))))
+          out))))
 
 (defun rontolisp::%http-reactor-body-stream (source)
   ;; The rontolisp-native :raw-body: ONE first-class pull stream whatever the
@@ -306,7 +342,7 @@
                  (let ((rest (rontolisp::%http-reactor-pushback head source)))
                    (if buffered
                        (rontolisp::%http-body-stream
-                        (rontolisp::%http-reactor-body-text rest))
+                        (rontolisp::%http-reactor-body-octets rest))
                        (rontolisp::%http-reactor-body-stream rest))))))))
 
 (defun rontolisp::%http-reactor-request-body (source in-band buffered)

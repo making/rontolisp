@@ -553,8 +553,18 @@ directive, because a reactor has no `http-handler` call at run time:
 
 - **`:buffered`** — what both Clack handler backends' `run` registers, and
   what `clack.handler.reactor:handle` always passes: the source is drained
-  (`%http-reactor-body-text`) into `http-server.lisp`'s bivalent Gray stream,
-  so a lack middleware's `read-byte` / `file-position` work as before.
+  (`%http-reactor-body-octets`) into `http-server.lisp`'s bivalent Gray stream,
+  so a lack middleware's `read-byte` / `file-position` work as before. The drain
+  answers OCTETS, not text, and that is a correctness rule rather than a saved
+  pass: the Gray stream IS a byte stream, so a chunk that arrived as octets
+  reaches it unchanged and a binary upload is byte-exact. Decoding each chunk to
+  text and letting `%http-body-stream` UTF-8 encode it again doubled every high
+  byte (`ff fe 41` → `c3 bf c3 be 41`, measured) — the request-side twin of the
+  loss `%http-body-string` stopped inflicting on the way out, and for the same
+  reason: the decoder is lenient by construction, so a byte that starts no
+  sequence answers its own character. `%http-body-stream` therefore takes EITHER
+  spelling; `%http-reactor-body-text` stays for a caller that wants text and
+  nothing else (`examples/cloudflare-workers/httpbin` echoes the body).
 - **`:stream` (the default)** — `%http-reactor-body-stream` builds a
   first-class rontolisp pull stream over the source with
   `rontolisp::%stream-new` (todo-341 Phase 1), so the portable
@@ -578,9 +588,10 @@ Pinned by the `http-reactor-body-source` ci-spec case (all four backends: a
 pull thunk, an in-band string and no body at all through the default mode,
 then the same pull source through `:buffered`, then an OCTET pull source
 through both modes whose every character straddles a chunk boundary, then the
-same two modes over a HOST READER filling a four-octet buffer, and a reader that
-is empty answering both nil and the envelope fallback), the five
-`LispEvaluatorAsdfTest` reactor-body tests, and
+same two modes over a HOST READER filling a four-octet buffer, a reader that
+is empty answering both nil and the envelope fallback, and a BINARY body read
+back with `read-byte` through `:buffered`), the six `LispEvaluatorAsdfTest`
+reactor-body tests, and
 `HttpReactorInlinerTest.theLoweredHttpHandlerDirectiveKeepsItsRawBodyMode`.
 
 **And a program can skip the shim too.** `handle` is thirty lines over

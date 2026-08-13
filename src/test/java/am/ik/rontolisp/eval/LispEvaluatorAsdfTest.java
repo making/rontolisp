@@ -304,6 +304,41 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void aReactorBuffersAnOctetBodyAsTheOctetsItIs() {
+		// The buffered :raw-body is a BIVALENT stream over OCTETS, so a body that
+		// already arrived as octets must reach it as those octets. Decoding each
+		// chunk to text and letting %http-body-stream UTF-8 encode it again is not
+		// merely a second pass over the body: the decoder is lenient by construction
+		// -- a byte that starts no sequence answers its own character -- so the ff fe
+		// 41 a binary upload carries came back as c3 bf c3 be 41, the very double
+		// encode that sent the body out of band in the first place.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defun octets (&rest bs)
+				  (let ((v (make-array (length bs) :element-type '(unsigned-byte 8))) (k 0))
+				    (dolist (b bs) (setf (aref v k) b) (setq k (+ k 1)))
+				    v))
+				(defvar *chunks* (list (octets #xFF #xFE) (octets #x41)))
+				(defun pull ()
+				  (if *chunks*
+				      (let ((c (car *chunks*))) (setq *chunks* (cdr *chunks*)) c)
+				      nil))
+				(defun app (env)
+				  (list 200 nil
+				        (list (format nil "~a"
+				                      (let ((out nil))
+				                        (do ((b (read-byte (getf env :raw-body) nil nil)
+				                                (read-byte (getf env :raw-body) nil nil)))
+				                            ((null b))
+				                          (setq out (cons b out)))
+				                        (nreverse out))))))
+				(print (clack.handler.reactor:handle
+				        #'app "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\"}" #'pull))
+				""", Map.of(), List.of());
+		assertThat(output).contains("(255 254 65)");
+	}
+
+	@Test
 	void aReactorSourceThatIsEmptyIsNoBodyAndFallsBackToTheEnvelope() {
 		// Once the body stops riding the envelope, "is there a body at all" is a
 		// question only the host can answer -- a reader answers 0 for a bodiless GET

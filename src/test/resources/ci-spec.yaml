@@ -8290,6 +8290,28 @@ cases:
       (print (ci-reactor-body
               (rontolisp::%http-reactor-dispatch
                "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-host-chunk)))
+      ;; A BINARY body through :buffered is the octets it is. The buffered
+      ;; :raw-body is bivalent over octets, so a chunk that arrived as octets
+      ;; must reach it untouched: decoding it to text so the Gray stream can
+      ;; UTF-8 encode it again is lenient by construction -- a byte that starts
+      ;; no sequence answers its own character -- and ff fe 41 came back as
+      ;; c3 bf c3 be 41, the very double encode that sent the body out of band.
+      (defun ci-reactor-bytes-app (env)
+        (let ((body (getf env :raw-body)))
+          (list 200 nil
+                (list (format nil "~a"
+                              (let ((out nil))
+                                (do ((b (read-byte body nil nil)
+                                        (read-byte body nil nil)))
+                                    ((null b))
+                                  (setq out (cons b out)))
+                                (nreverse out)))))))
+      (rontolisp::%http-reactor-register #'ci-reactor-bytes-app :buffered)
+      (setq *ci-reactor-chunks*
+            (list (ci-reactor-octets #xFF #xFE) (ci-reactor-octets #x41)))
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-pull)))
     expected: |
       "hello"
       "in-band"
@@ -8301,6 +8323,7 @@ cases:
       "-"
       "still-in-band"
       "あい"
+      "(255 254 65)"
   - name: http-reactor-body-sink
     source: |
       ;; The RESPONSE body leaves the head the same way the request body did:

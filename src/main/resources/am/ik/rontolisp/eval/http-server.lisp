@@ -373,9 +373,17 @@
   ;; nil for an absent or empty body -- upstream guards :raw-body with
   ;; (when raw-body ...), and most requests are bodiless, so this is also the
   ;; allocation a GET does not pay.
+  ;;
+  ;; BODY is the TEXT a transport read, or the OCTETS a byte-shaped one did.
+  ;; Taking both is not a convenience: the class below is bivalent over octets,
+  ;; so encoding is what a text body needs and re-encoding is what a byte body
+  ;; must never get. The decoder above is lenient by construction -- a byte that
+  ;; starts no sequence answers its own character -- so a binary body decoded to
+  ;; text and encoded again comes back doubled (ff fe 41 -> c3 bf c3 be 41),
+  ;; which is the same loss %http-body-string stopped inflicting on the way out.
   (if (or (null body) (= (length body) 0))
       nil
-      (let ((v (rontolisp::%http-utf8-encode body)))
+      (let ((v (if (stringp body) (rontolisp::%http-utf8-encode body) body)))
         (make-instance 'rontolisp::http-request-body-stream
                        :octets v
                        :index 0

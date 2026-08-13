@@ -45,20 +45,23 @@
                        :returns :bytes
                        :async t)
 
-;; The request body as text. The two rontolisp:: names below are the transport's
-;; own, like %http-make-env: what this file writes out by hand is the ENVELOPE,
-;; and neither the reused buffer nor the UTF-8 sequence that straddles two
-;; chunks is envelope work.
+;; The request body, in whichever shape it arrived: OCTETS pulled through the
+;; import, or the envelope's own string where there is no import. The Gray body
+;; stream below is bivalent over octets and takes either, so the pulled body is
+;; never decoded and encoded again. The two rontolisp:: names below are the
+;; transport's own, like %http-make-env: what this file writes out by hand is
+;; the ENVELOPE, and neither the reused buffer nor the drain that empties it is
+;; envelope work.
 #+(and rontolisp-reactor (not rontolisp-component))
-(defun %body-text (req)
+(defun %body-source (req)
   (declare (ignore req))
-  (rontolisp::%http-reactor-body-text
+  (rontolisp::%http-reactor-body-octets
    (lambda ()
      (let ((buf (rontolisp::%http-reactor-buffer 65536)))
        (rontolisp::%http-reactor-chunk buf (%read-request-body buf))))))
 
 #-(and rontolisp-reactor (not rontolisp-component))
-(defun %body-text (req) (gethash "body" req))
+(defun %body-source (req) (gethash "body" req))
 
 ;;; The response body leaves the envelope the same way, through the mirror
 ;;; import: (ptr, len) OUT, "take these octets, they are the next chunk". No
@@ -183,7 +186,7 @@
 (defun %request-tuple (req)
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
         (%header-alist (gethash "headers" req))
-        (rontolisp::%http-body-stream (%body-text req)) "HTTP/1.1"
+        (rontolisp::%http-body-stream (%body-source req)) "HTTP/1.1"
         (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
 
 ;; With a SINK the body crosses out of band and the "body" key is ABSENT -- not

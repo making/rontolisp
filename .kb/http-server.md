@@ -138,6 +138,17 @@ The buffered construction is per backend too, and this is a measured decision:
   directly must run `HttpServerLibrary.process` THEN (after macro expansion)
   `GrayStreamsLibrary.process`, mirroring the CLI.
 
+`%http-body-stream` takes the TEXT a transport read **or** the OCTETS a
+byte-shaped one did, and the second spelling is a correctness rule, not a
+convenience: the class it builds is a byte stream, so a body that already is
+octets is stored as it is. Encoding is what a text body needs and re-encoding is
+what a byte body must never get — the decoder here is lenient by construction, a
+byte that starts no sequence answering its own character, so a binary body
+decoded to text and encoded again comes back doubled (`ff fe 41` →
+`c3 bf c3 be 41`). That is the request-side twin of the loss `%http-body-string`
+stopped inflicting on the way out, and it is why a reactor's `:buffered` drain
+answers octets (`.kb/clack.md`).
+
 **Module-size filter**: `HttpServerLibrary.process(program, bufferBody)` drops
 the buffered-body half (the Gray class + `%http-body-stream` +
 `%http-utf8-encode`) from a default-mode program — on a WASM serve component
