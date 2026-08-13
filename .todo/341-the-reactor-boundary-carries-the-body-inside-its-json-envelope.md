@@ -2,23 +2,31 @@
 
 Difficulty: High
 
-A host-driven reactor (`--no-wasi` / `--no-gc`, every Cloudflare Worker in
-`examples/cloudflare-workers/`) meets the program at ONE export,
+A host-driven reactor (`--no-wasi`; a `--no-gc` one cannot carry the HTTP
+transport at all, see Phase 2a below) meets the program at ONE export,
 `handle-request(request-json) -> response-json`, and the request BODY rides
 inside that JSON string (`eval/http-reactor.lisp`'s envelope header,
 `HttpReactorInliner`: "the request body always arrives buffered in the
 envelope"). Everything below follows from that one decision, and all of it is
 measured, not argued:
 
-- the body path is **quadratic** -- 256 KiB of body costs 55 s;
-- the arena holds the body **17x** over;
+- ~~the body path is **quadratic** -- 256 KiB of body costs 55 s~~ -- **CLOSED
+  by `.todo/185`, not by this item** (2026-08-13). The quadratic was
+  `(char s i)` walking from index 0 on the compile backends, which this item
+  reported as a third sighting; with that fixed the same unedited module answers
+  a 256 KiB body in **197 ms**, and the curve is linear. Re-measured table below;
+- the arena holds the body **17x** over -- **unchanged**, to the kilobyte;
 - a **binary** body cannot cross at all;
-- `:raw-body` is a synchronous buffered stream on the reactor while it is an
-  asynchronous stream on the other three backends, so a checked-in example that
-  drains it the portable way answers **500** as soon as a request carries a
-  body (finding 6 -- this one is a live bug, not a design smell);
+- ~~`:raw-body` is a synchronous buffered stream on the reactor while it is an
+  asynchronous stream on the other three backends~~ -- **CLOSED by Phase 2a**
+  (finding 6, 2026-08-13);
 - the host must read the whole body before it may call in, so a Worker cannot
   stream an upload even though its own `Request.body` is a `ReadableStream`.
+
+**So the motivation is now MEMORY, BINARY and STREAMING -- not speed.** Anyone
+picking this up should say so out loud before spending the boundary change: the
+headline number that opened this item is gone, and it was taken by a one-line
+fix somewhere else.
 
 Since `:async t` landed, a suspending host import is a declared, supported fact,
 and the spike below shows the boundary can be rebuilt around it. Breaking the
@@ -93,6 +101,22 @@ has a Java implementation) and quadratic on the JVM compile path too (16K/64K/
 Fixing `.todo/185` would take the constant down but not the shape: the body
 would still be JSON-escaped text, still copied several times, still un-binary,
 still not a stream. Both are worth doing and neither substitutes for the other.
+
+**Re-measured after `.todo/185` closed** (2026-08-13, `714b9086`; node 24.19,
+same module built the same way, one request per instance, one run per size).
+The prediction above held exactly -- the constant went, the shape stayed:
+
+| body | `handle-request` | vs. before | arena growth | linear memory |
+| --- | --- | --- | --- | --- |
+| 4 KiB | 21 ms | 1.1x | +68 KiB | 256 KiB |
+| 16 KiB | 21 ms | **12x** | +272 KiB | 256 -> 384 KiB |
+| 64 KiB | 46 ms | **75x** | +1088 KiB | 256 -> 1216 KiB |
+| 256 KiB | 197 ms | **277x** | **+4352 KiB** | 256 -> 4672 KiB |
+
+4x the body now costs ~4x the time -- linear. The arena and linear-memory
+columns are IDENTICAL to the kilobyte, which is the point: `.todo/185` took the
+time and left every byte. What this item is still for is those two columns,
+plus binary and streaming.
 
 **6. The portable drain is BROKEN on a reactor today.**
 `examples/net/httpbin.lisp` -- checked in, and commented "The env :raw-body is
@@ -323,13 +347,18 @@ example compiles `--no-wasi` in CI (`examples/net/httpbin.lisp` is pinned on
 
 **Phase 2b -- the WASM boundary splits.** What is left of Phase 2: the
 synthesized export still takes the whole envelope as one `:string`, so a wasm
-host cannot yet pass a source out of band and the quadratic of finding 5 is
-untouched. `handle-request(headPtr, headLen)` plus the
+host cannot yet pass a source out of band, and the arena still holds the body
+17x. `handle-request(headPtr, headLen)` plus the
 `env.readRequestBody(ptr, cap) -> i32` import of the design above (`:bytes`,
 Phase 0, `:async t` optional per finding 1), `HttpReactorInliner` synthesizing
 the thunk over it, and the four glue files moving with it -- which is why
-Phase 4 (the examples) is really the same landing as this one. Gate: the
-finding-5 table re-measured (the target is linear and one body-sized copy).
+Phase 4 (the examples) is really the same landing as this one.
+
+Gate: the finding-5 table re-measured, and the TARGET is now only the last two
+columns -- **one body-sized copy instead of 17, and linear memory that does not
+grow with the body** (the time column is already linear and is no longer what
+this buys), plus a binary body crossing exactly and an upload the host streams
+rather than buffers.
 
 **Phase 3 -- the response body, symmetrically.** Today it is one string in
 linear memory, so a large or streamed response pays the same way. Same
