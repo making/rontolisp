@@ -28,9 +28,17 @@ import java.util.List;
  * {@code unicode-letter-p} are asserted here alongside the normalizations -- and the
  * exercise leads with the two lines that pin the deferral itself (see the comment on
  * {@code EXERCISE}). {@code unicode-letter-p} answering T for {@code #\A} is the derived
- * table's doing: upstream's own letter loop keys every data-derived entry on {@code nil},
+ * data's doing: upstream's own letter loop keys every data-derived entry on {@code nil},
  * because a file's {@code pushnew} onto {@code *features*} never reaches the reader that
  * would enable {@code #+utf-32} in {@code char-from-hexstring}.
+ *
+ * <p>
+ * That predicate's last three codepoints pin the UNION its sorted ranges replaced the
+ * ~127,000-entry letter table with: {@code #x4DB4} is inside the hardcoded CJK Ext A
+ * loop, {@code #x4DB5} is one past its end and has no {@code UnicodeData.txt} row of its
+ * own, and {@code #x4DBF} is that block's LAST marker -- a row, but eleven codepoints
+ * past where the loop stopped. A merge that closed the gap between them, or that lost
+ * either source, shows up here and nowhere else.
  *
  * <p>
  * All four backends produce the same code-point sequences: the WASM GC string byte data
@@ -48,7 +56,8 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 
 	// The first two lines pin the LAZINESS, and both are load-bearing. The `null` row
 	// is the whole claim of Uax15Tables' deferral: after loading the system every one of
-	// the five derived tables is still NIL, so nothing in the load built one. The second
+	// the five globals is still NIL, so nothing in the load built one -- and the letter
+	// table's row is stronger than the other four, since nothing ever will. The second
 	// line then forces the COMPOSITION map first, through the one route that reaches it
 	// without going through the canonical decomposition map (uax-15::compose, which the
 	// normalize entry points never reach until nfd has run) -- the builder relocated into
@@ -82,11 +91,11 @@ class Uax15E2eTest extends AsdfLibraryE2eSupport {
 			(let ((illegal (uax-15:get-illegal-char-list :nfc)))
 			  (print (list (length illegal) (first illegal) (car (last illegal)))))
 			(print (mapcar (lambda (code) (uax-15:unicode-letter-p (code-char code)))
-			               (list #x41 #x3042 #x30 #x4E00)))
+			               (list #x41 #x3042 #x30 #x4E00 #x4DB4 #x4DB5 #x4DBF)))
 			""";
 
 	private static final List<String> EXPECTED = List.of("(T T T T T)", "(197)", "(197)", "(65 778)", "(49 49 8260 50)",
-			"(102 102)", "(197)", "230", "(1231 (832 NIL) (71984 T))", "(T T NIL T)");
+			"(102 102)", "(197)", "230", "(1231 (832 NIL) (71984 T))", "(T T NIL T T NIL T)");
 
 	@Override
 	protected String systemDir() {

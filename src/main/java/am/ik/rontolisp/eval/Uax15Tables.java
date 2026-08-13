@@ -2,10 +2,14 @@ package am.ik.rontolisp.eval;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.jspecify.annotations.Nullable;
 
@@ -37,19 +41,34 @@ import org.jspecify.annotations.Nullable;
  * becomes {@code (defvar *canonical-comp-map* nil)} plus a builder whose body is that
  * same {@code maphash}, RELOCATED verbatim;</li>
  * <li>{@code (defparameter *unicode-letters* ...)} + the nine hardcoded CJK / Hangul /
- * Tangut range loops becomes {@code (defvar *unicode-letters* nil)} plus a builder whose
- * body is those same nine loops, RELOCATED verbatim, followed by the data-derived letter
- * entries.</li>
+ * Tangut range loops becomes {@code (defvar *unicode-letters* nil)} -- a global with no
+ * reader left -- plus the union of both sources as sorted inclusive codepoint RANGES and
+ * the {@code %lite-unicode-letter-p} that binary-searches them.</li>
  * </ul>
  *
  * <p>
- * <b>In {@code src/uax-15.lisp}</b>, the {@code let} that folds
+ * <b>In {@code src/uax-15.lisp}</b>, two spans: the {@code let} that folds
  * {@code DerivedNormalizationProps.txt} into the four illegal-character lists becomes the
  * source RANGE rows as data, expanded on demand inside {@code get-illegal-char-list} and
- * cached.
+ * cached; and {@code unicode-letter-p}'s body becomes a call to
+ * {@code %lite-unicode-letter-p}, docstring kept verbatim.
  *
  * <p>
- * <b>In every component that READS one of the five tables</b> ({@code
+ * That second one is why the letter table is GONE rather than merely lazy. It was
+ * ~127,000 hash entries -- 21,765 data-derived plus ~105,000 from the nine range loops --
+ * built for one consumer that only ever asks whether a character is IN it, and building
+ * it cost 444 ms interpreted / 55 ms on a component and then stayed live for the rest of
+ * the program. The same membership is 1,332 integers of sorted ranges, searched in log
+ * time, built on the first call and never rebuilt. Going through a named predicate rather
+ * than inlining the search into {@code unicode-letter-p} is what lets the no-data-files
+ * fallback answer the same question from the real eager table
+ * ({@link #fallbackBuilders}), so the replacement in {@code src/uax-15.lisp} needs no
+ * condition of its own. The trade this makes -- a repeat LOOKUP now costs what the build
+ * used to, and only past ~11,000 calls would the table have paid off -- is measured per
+ * backend in {@code .kb/asdf.md}.
+ *
+ * <p>
+ * <b>In every component that READS one of the four remaining tables</b> ({@code
  * src/normalize-backend.lisp} and {@code src/uax-15.lisp}), each bare read {@code *T*}
  * becomes {@code (or *T* (%lite-build-T))}, so the first read builds the table and every
  * later one hits it. The read counts are an explicit inventory ({@link #FORCED_READS}):
@@ -63,10 +82,10 @@ import org.jspecify.annotations.Nullable;
  * Two facts make the {@code (or ...)} protocol correct, and both are load-bearing:
  *
  * <ul>
- * <li>All five globals must start out {@code nil}. Three already do; the two the last two
- * spans cover are upstream {@code defparameter}s of a FRESH, hence non-nil (TRUE),
+ * <li>All four table globals must start out {@code nil}. Three already do; the
+ * composition map is an upstream {@code defparameter} of a FRESH, hence non-nil (TRUE),
  * {@code make-hash-table}, which would make {@code or} short-circuit onto that empty
- * table forever -- so those two initializers move INTO their builder.</li>
+ * table forever -- so that initializer moves INTO its builder.</li>
  * <li>The relocated {@code maphash} reads {@code *canonical-decomp-map*} and the reads
  * inside {@code precomputed-tables.lisp} are never rewritten (that file is full of
  * {@code (setf (gethash K *T*) V)} write places, which the substitution must not touch),
@@ -94,7 +113,8 @@ import org.jspecify.annotations.Nullable;
  * codepoint through {@code char-from-hexstring}, whose {@code #+utf-32} branch is dead
  * because a file's own {@code pushnew} onto {@code *features*} never reaches the reader
  * -- so upstream collapses all 21,765 data-derived letters onto a single {@code nil} key
- * and {@code (unicode-letter-p #\A)} answers NIL. The derived table has the real keys.
+ * and {@code (unicode-letter-p #\A)} answers NIL. The derived ranges carry the real
+ * codepoints.
  */
 final class Uax15Tables {
 
@@ -123,18 +143,39 @@ final class Uax15Tables {
 	 */
 	private static final int CHUNK = 1000;
 
-	/** The letter categories the replaced loop selects, in the order it lists them. */
-	private static final List<String> LETTER_CATEGORIES = List.of("Ll", "Lu", "Lm", "Lt", "Lo");
+	/** The letter categories the replaced loop selects. */
+	private static final Set<String> LETTER_CATEGORIES = Set.of("Ll", "Lu", "Lm", "Lt", "Lo");
 
 	/**
-	 * The five derived tables, by the global each publishes, in the order
+	 * The four derived tables, by the global each publishes, in the order
 	 * {@code precomputed-tables.lisp} defines them. One list drives the builder names on
 	 * BOTH sides -- the definitions emitted into that file and the forced reads emitted
 	 * into the components that read them -- so the two can never drift apart, which is
 	 * the whole safety of the no-data-files fallback ({@link #fallbackBuilders}).
 	 */
 	private static final List<String> LAZY_TABLES = List.of("*canonical-combining-class*", "*canonical-decomp-map*",
-			"*compatible-decomp-map*", "*canonical-comp-map*", "*unicode-letters*");
+			"*compatible-decomp-map*", "*canonical-comp-map*");
+
+	/**
+	 * The fifth global {@code precomputed-tables.lisp} publishes, and the one with no
+	 * builder: the derived letter RANGES answer its only consumer, so the global keeps
+	 * its upstream definition and stays {@code nil} for the life of the program. A read
+	 * of it anywhere but the fallback predicate would therefore answer as if no character
+	 * were a letter, which is why every component is scanned for it.
+	 */
+	private static final String LETTER_TABLE = "*unicode-letters*";
+
+	/**
+	 * The hardcoded CJK / Hangul / Tangut range loops, as they are spelled in the letter
+	 * span. Their codepoints are merged into the derived ranges instead of being run, so
+	 * this rewrite has to READ a reader conditional the relocated loops used to leave to
+	 * the reader: six of the nine sit behind {@code #-utf-16}, which is always live here
+	 * ({@code utf-16} is not a rontolisp feature and uax-15 declares no
+	 * {@code :rontolisp-features}), and {@link #hardcodedLetterRanges} throws on any
+	 * other conditional rather than guess at one.
+	 */
+	private static final Pattern LETTER_RANGE_LOOP = Pattern
+		.compile("\\(loop for code from #x([0-9A-Fa-f]+) below #x([0-9A-Fa-f]+)");
 
 	/**
 	 * Component file to the EXACT number of bare reads of each table it is expected to
@@ -147,7 +188,7 @@ final class Uax15Tables {
 			orderedCounts("*canonical-combining-class*", 1, "*canonical-decomp-map*", 1, "*compatible-decomp-map*", 1,
 					"*canonical-comp-map*", 1),
 			LIBRARY_FILE, orderedCounts("*canonical-combining-class*", 1, "*canonical-decomp-map*", 2,
-					"*compatible-decomp-map*", 1, "*canonical-comp-map*", 1, "*unicode-letters*", 1));
+					"*compatible-decomp-map*", 1, "*canonical-comp-map*", 1));
 
 	private Uax15Tables() {
 	}
@@ -179,8 +220,9 @@ final class Uax15Tables {
 		}
 		String forced = forceReads(componentFile, source);
 		if (LIBRARY_FILE.equals(componentFile)) {
-			String lists = rewriteIllegalCharLists(forced == null ? source : forced, baseDir, loader);
-			return lists != null ? lists : forced;
+			String letterP = rewriteUnicodeLetterP(forced == null ? source : forced);
+			String lists = rewriteIllegalCharLists(letterP, baseDir, loader);
+			return lists != null ? lists : letterP;
 		}
 		return forced;
 	}
@@ -200,15 +242,12 @@ final class Uax15Tables {
 			// tables that are lazy because the tables file still matched its own markers,
 			// and a bare read that never forces one. That fails as a NIL hash table at
 			// whichever API call first needs that one table, naming neither uax-15 nor
-			// this class -- so it has to be caught here instead.
+			// this class -- so it has to be caught here instead. The letter table is
+			// scanned for on the same grounds and a stronger one: nothing builds it now.
 			for (String table : LAZY_TABLES) {
-				if (source.contains(table)) {
-					throw new IllegalStateException("the " + SYSTEM + " release in the quicklisp cache reads " + table
-							+ " from " + componentFile
-							+ ", which is not in the forced-read inventory (a renamed or new component?);"
-							+ " the derived-table rewrite in Uax15Tables must be updated for it");
-				}
+				requireNoRead(source, componentFile, table);
 			}
+			requireNoRead(source, componentFile, LETTER_TABLE);
 			return null;
 		}
 		String rewritten = source;
@@ -223,6 +262,20 @@ final class Uax15Tables {
 			rewritten = rewritten.replace(table, "(or " + table + " (" + builderName(table) + "))");
 		}
 		return rewritten;
+	}
+
+	/**
+	 * Requires that {@code source} does not name the given global at all.
+	 * @throws IllegalStateException when it does -- the global would read {@code nil}
+	 * there, which is a wrong ANSWER on the letter table and a crash on the other four
+	 */
+	private static void requireNoRead(String source, String componentFile, String global) {
+		if (source.contains(global)) {
+			throw new IllegalStateException(
+					"the " + SYSTEM + " release in the quicklisp cache reads " + global + " from " + componentFile
+							+ ", which is not in the forced-read inventory (a renamed or new component?);"
+							+ " the derived-table rewrite in Uax15Tables must be updated for it");
+		}
 	}
 
 	/**
@@ -251,10 +304,10 @@ final class Uax15Tables {
 		List<Integer> combiningClasses = new ArrayList<>();
 		List<Integer> canonicalDecomp = new ArrayList<>();
 		List<Integer> compatibleDecomp = new ArrayList<>();
-		Map<String, TreeSet<Integer>> letters = new LinkedHashMap<>();
-		for (String category : LETTER_CATEGORIES) {
-			letters.put(category, new TreeSet<>());
-		}
+		// One set for all five letter categories: the only consumer asks whether a
+		// character is a letter, never which kind, so the categories merge here and the
+		// merged ranges are shorter than the per-category ones would be.
+		TreeSet<Integer> letters = new TreeSet<>();
 		for (String line : data.split("\n")) {
 			String row = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
 			if (row.isEmpty()) {
@@ -280,18 +333,17 @@ final class Uax15Tables {
 					target.add(Integer.parseInt(parts[i].trim(), 16));
 				}
 			}
-			TreeSet<Integer> category = letters.get(fields[2]);
-			if (category != null) {
-				category.add(code);
+			if (LETTER_CATEGORIES.contains(fields[2])) {
+				letters.add(code);
 			}
 		}
-		// Both relocated spans are read off the ORIGINAL source, before any replacement
-		// shifts their offsets.
+		// The relocated span and the letter loops are read off the ORIGINAL source,
+		// before any replacement shifts their offsets.
 		String compMapInit = valueFormOf(source, TABLES_FILE, "(defparameter *canonical-comp-map*");
 		String compMapFill = formAt(source, TABLES_FILE, "(maphash");
-		String lettersInit = valueFormOf(source, TABLES_FILE, "(defparameter *unicode-letters*");
-		String letterLoops = spanBody(source, TABLES_FILE, "(defparameter *unicode-letters*",
-				"(loop for code from #x2CEB0");
+		List<int[]> letterRanges = ranges(letters);
+		letterRanges.addAll(hardcodedLetterRanges(
+				spanBody(source, TABLES_FILE, "(defparameter *unicode-letters*", "(loop for code from #x2CEB0")));
 
 		StringBuilder tables = new StringBuilder();
 		tables.append(HELPERS);
@@ -329,32 +381,17 @@ final class Uax15Tables {
 			.append(compMapFill)
 			.append("\n  *canonical-comp-map*)\n");
 
-		StringBuilder lettersForms = new StringBuilder("\n(defvar *unicode-letters* nil)\n");
-		StringBuilder letterFills = new StringBuilder();
-		for (Map.Entry<String, TreeSet<Integer>> entry : letters.entrySet()) {
-			String name = "%lite-letters-" + entry.getKey().toLowerCase() + "-data";
-			lettersForms.append(dataFunction(name, ranges(entry.getValue())));
-			letterFills.append("  (%lite-fill-letters (%lite-ints (")
-				.append(name)
-				.append(")) *unicode-letters* \"")
-				.append(entry.getKey())
-				.append("\")\n");
-		}
-		// The nine range loops keep running BEFORE the data-derived entries, which is the
-		// order the emitted file has always had (upstream runs its own letter loop first,
-		// but that loop is dead here -- its keys collapse to nil -- and the derived fill
-		// that replaces it has always been appended after the ranges). Both write the
-		// same
-		// keys for the CJK/Hangul/Tangut ranges and only the last writer's category
-		// string
-		// survives, so the order is preserved deliberately, not incidentally.
-		lettersForms.append("\n(defun %lite-build-unicode-letters ()\n  (setf *unicode-letters* ")
-			.append(lettersInit)
-			.append(")\n")
-			.append(letterLoops)
-			.append('\n')
-			.append(letterFills)
-			.append("  *unicode-letters*)\n");
+		StringBuilder lettersForms = new StringBuilder("""
+
+				;; The letter table keeps its upstream name and its nil value, and that is
+				;; all it is now: the ~127,000 entries it used to hold (the data-derived
+				;; letters plus the nine hardcoded CJK / Hangul / Tangut range loops) served
+				;; ONE predicate that only ever asked whether a character was in it. Both
+				;; sources are merged into the sorted inclusive ranges below and searched.
+				(defvar *unicode-letters* nil)
+				""");
+		lettersForms.append(dataFunction("%lite-letter-range-data", mergedRanges(letterRanges)))
+			.append(LETTER_PREDICATE);
 
 		String rewritten = replaceForm(source, TABLES_FILE, "(defvar *unicode-data*", """
 				;; Nothing outside this file ever read the rows: the tables below are the
@@ -364,13 +401,62 @@ final class Uax15Tables {
 		rewritten = replaceForm(rewritten, TABLES_FILE, "(let ((canonical-decomp-map", tables.toString());
 		rewritten = replaceSpan(rewritten, TABLES_FILE, "(defparameter *canonical-comp-map*", "(maphash",
 				compMap.toString());
-		return replaceSpan(rewritten, TABLES_FILE, "(defparameter *unicode-letters*", "(loop for code from #x2CEB0",
-				lettersForms.toString());
+		rewritten = replaceSpan(rewritten, TABLES_FILE, "(defparameter *unicode-letters*",
+				"(loop for code from #x2CEB0", lettersForms.toString());
+		// Every letter-table mention this file had lived in the span just replaced. One
+		// left anywhere else is a WRITE into a table nothing builds any more, or a read
+		// that answers "no character is a letter" -- both silent, so pin the count.
+		int mentions = count(rewritten, LETTER_TABLE);
+		if (mentions != 1) {
+			throw new IllegalStateException("the " + SYSTEM + " release in the quicklisp cache mentions " + LETTER_TABLE
+					+ " outside the letter span in " + TABLES_FILE + " (found " + mentions
+					+ " after the rewrite, expected the emitted defvar alone);"
+					+ " the derived-table rewrite in Uax15Tables must be updated for it");
+		}
+		return rewritten;
 	}
 
 	/**
-	 * {@return identity builders for all five tables, appended to the REAL source when
-	 * the bundled data files cannot be read}
+	 * The predicate that replaces the letter table, emitted after its range data.
+	 *
+	 * <p>
+	 * Written for an INTERPRETER that pays per evaluated form, since that is the backend
+	 * a search costs the most on. Three shapes were measured over 10,000 misses in the
+	 * same 666-range vector, warm, on one machine (ms): this recursion reading the vector
+	 * out of its global 180, the same recursion taking the vector as a fourth argument
+	 * 346, a {@code loop} with the bounds in mutable bindings 282. So the bounds are the
+	 * only arguments, the vector is read where it lives, and {@code low}/{@code high} are
+	 * EVEN indices into the flat pair run -- no midpoint has to be doubled back into one.
+	 */
+	private static final String LETTER_PREDICATE = """
+
+			(defvar *lite-letter-ranges* nil)
+
+			(defun %lite-letter-range-p (code low high)
+			  "True when CODE is inside one of the *lite-letter-ranges* pairs between the
+			even pair indices LOW and HIGH."
+			  (if (> low high)
+			      nil
+			      ;; The midpoint rounded DOWN to a pair start, so low = high answers itself.
+			      (let ((mid (* 2 (floor (+ low high) 4))))
+			        (cond ((< code (aref *lite-letter-ranges* mid))
+			               (%lite-letter-range-p code low (- mid 2)))
+			              ((> code (aref *lite-letter-ranges* (+ mid 1)))
+			               (%lite-letter-range-p code (+ mid 2) high))
+			              (t t)))))
+
+			(defun %lite-unicode-letter-p (char)
+			  "True when CHAR is a character whose codepoint falls in a letter range."
+			  (when (characterp char)
+			    (let ((ranges (or *lite-letter-ranges*
+			                      (setf *lite-letter-ranges*
+			                            (coerce (%lite-ints (%lite-letter-range-data)) 'vector)))))
+			      (%lite-letter-range-p (char-code char) 0 (- (length ranges) 2)))))
+			""";
+
+	/**
+	 * {@return identity builders for all four lazy tables plus the letter predicate,
+	 * appended to the REAL source when the bundled data files cannot be read}
 	 *
 	 * <p>
 	 * That source builds every table eagerly, so each global is already non-nil and the
@@ -378,6 +464,13 @@ final class Uax15Tables {
 	 * builder. They exist only so the name resolves. Generating them from
 	 * {@link #LAZY_TABLES} -- the same list the forced reads name -- is what makes it
 	 * impossible for the fallback to define a different set than the readers call.
+	 *
+	 * <p>
+	 * {@code %lite-unicode-letter-p} is the one that is not an identity: with no derived
+	 * ranges to search, the real letter table IS the answer, and this is the whole reason
+	 * {@code unicode-letter-p}'s replacement calls a name instead of inlining the search
+	 * -- it makes that replacement unconditional and keeps the two paths from disagreeing
+	 * about which one the data files decided.
 	 */
 	private static String fallbackBuilders() {
 		StringBuilder out = new StringBuilder("""
@@ -390,7 +483,28 @@ final class Uax15Tables {
 		for (String table : LAZY_TABLES) {
 			out.append("(defun ").append(builderName(table)).append(" () ").append(table).append(")\n");
 		}
-		return out.toString();
+		return out.append("""
+
+				;; No derived ranges either, so the predicate reads the table that was built
+				;; above -- upstream's own body, which is what unicode-letter-p now calls.
+				(defun %lite-unicode-letter-p (char)
+				  (when (gethash char *unicode-letters*) t))
+				""").toString();
+	}
+
+	/**
+	 * Replaces {@code unicode-letter-p}'s hash lookup with a call to the predicate
+	 * {@link #rewriteTables} publishes, keeping the upstream docstring verbatim.
+	 * @throws IllegalStateException when the release still names the letter table
+	 * anywhere else in this component -- it is {@code nil} for the life of the program
+	 * now, so such a read would silently answer that no character is a letter
+	 */
+	private static String rewriteUnicodeLetterP(String source) {
+		String rewritten = replaceForm(source, LIBRARY_FILE, "(defun unicode-letter-p",
+				"(defun unicode-letter-p (char)\n  " + documentationOf(source, LIBRARY_FILE, "(defun unicode-letter-p")
+						+ "\n  (%lite-unicode-letter-p char))");
+		requireNoRead(rewritten, LIBRARY_FILE, LETTER_TABLE);
+		return rewritten;
 	}
 
 	private static @Nullable String rewriteIllegalCharLists(String source, @Nullable String baseDir,
@@ -455,7 +569,7 @@ final class Uax15Tables {
 				    (nreverse expanded)))
 
 				(defun get-illegal-char-list (normalization-form)
-				  """).append(documentationOf(source, "(defun get-illegal-char-list")).append("""
+				  """).append(documentationOf(source, LIBRARY_FILE, "(defun get-illegal-char-list")).append("""
 
 				  ;; Expanded on first use and cached: the four lists together are 36,532
 				  ;; entries, and no caller exists in uax-15, cl-postgres or Postmodern.
@@ -510,14 +624,6 @@ final class Uax15Tables {
 			             (dotimes (i count) (push (pop ints) mapped))
 			             (setf (gethash code table) (nreverse mapped))))
 			  table)
-
-			(defun %lite-fill-letters (ints table category)
-			  "INTS is inclusive codepoint range pairs, all of CATEGORY."
-			  (loop while ints
-			        do (let* ((low (pop ints)) (high (pop ints)))
-			             (loop for code from low to high
-			                   do (setf (gethash (code-char code) table) category))))
-			  table)
 			""";
 
 	/**
@@ -548,10 +654,10 @@ final class Uax15Tables {
 	}
 
 	/**
-	 * {@return the codepoints as a flat run of inclusive range pairs}
+	 * {@return the codepoints as inclusive {@code [low, high]} ranges, ascending}
 	 */
-	private static List<Integer> ranges(TreeSet<Integer> codes) {
-		List<Integer> flat = new ArrayList<>();
+	private static List<int[]> ranges(TreeSet<Integer> codes) {
+		List<int[]> ranges = new ArrayList<>();
 		int low = -1;
 		int high = -1;
 		for (int code : codes) {
@@ -562,16 +668,64 @@ final class Uax15Tables {
 				high = code;
 			}
 			else {
-				flat.add(low);
-				flat.add(high);
+				ranges.add(new int[] { low, high });
 				low = high = code;
 			}
 		}
 		if (low >= 0) {
-			flat.add(low);
-			flat.add(high);
+			ranges.add(new int[] { low, high });
+		}
+		return ranges;
+	}
+
+	/**
+	 * {@return the given ranges sorted, coalesced and flattened to a run of inclusive
+	 * low/high pairs} Touching and overlapping ranges merge, so the emitted run is the
+	 * shortest one describing exactly the same set of codepoints -- which is the whole
+	 * correctness claim of the rewrite: the union of the data-derived letters and the
+	 * hardcoded loops is the key set of the table it replaces, member for member.
+	 */
+	private static List<Integer> mergedRanges(List<int[]> ranges) {
+		ranges.sort(Comparator.comparingInt(range -> range[0]));
+		List<Integer> flat = new ArrayList<>();
+		for (int[] range : ranges) {
+			int last = flat.size() - 1;
+			if (!flat.isEmpty() && range[0] <= flat.get(last) + 1) {
+				flat.set(last, Math.max(flat.get(last), range[1]));
+			}
+			else {
+				flat.add(range[0]);
+				flat.add(range[1]);
+			}
 		}
 		return flat;
+	}
+
+	/**
+	 * {@return the inclusive ranges of the hardcoded CJK / Hangul / Tangut letter loops
+	 * in the given letter-span text} Each is
+	 * {@code (loop for code from #xLOW below #xHIGH)}, so the inclusive end is one below
+	 * the loop's.
+	 * @throws IllegalStateException when a loop is spelled some other way, or sits behind
+	 * a reader conditional other than the always-live {@code #-utf-16} -- either would
+	 * make this reading of the span disagree with what the reader would have run
+	 */
+	private static List<int[]> hardcodedLetterRanges(String span) {
+		List<int[]> ranges = new ArrayList<>();
+		Matcher matcher = LETTER_RANGE_LOOP.matcher(span);
+		while (matcher.find()) {
+			ranges
+				.add(new int[] { Integer.parseInt(matcher.group(1), 16), Integer.parseInt(matcher.group(2), 16) - 1 });
+		}
+		int loops = count(span, "(loop for code from ");
+		int conditionals = count(span, "#+") + count(span, "#-");
+		if (ranges.size() != loops || conditionals != count(span, "#-utf-16")) {
+			throw new IllegalStateException("the " + SYSTEM + " release in the quicklisp cache spells its " + loops
+					+ " hardcoded letter range loop(s) in " + TABLES_FILE + " some other way (" + ranges.size()
+					+ " matched, " + conditionals + " reader conditional(s));"
+					+ " the derived-table rewrite in Uax15Tables must be updated for it");
+		}
+		return ranges;
 	}
 
 	/**
@@ -696,10 +850,18 @@ final class Uax15Tables {
 	/**
 	 * {@return the docstring literal of the {@code defun} starting with {@code marker},
 	 * so the replacement keeps the upstream documentation verbatim}
+	 * @throws IllegalStateException when that form holds no string at all -- the next
+	 * string in the file belongs to some later form, and splicing it in as documentation
+	 * is the one failure here that would look like a successful rewrite
 	 */
-	private static String documentationOf(String source, String marker) {
-		int defun = source.indexOf(marker);
+	private static String documentationOf(String source, String componentFile, String marker) {
+		int defun = markerAt(source, componentFile, marker);
 		int open = source.indexOf('"', defun);
+		if (open < 0 || open >= endOfForm(source, defun, componentFile)) {
+			throw new IllegalStateException(
+					"the " + SYSTEM + " release in the quicklisp cache no longer documents '" + marker + "' in "
+							+ componentFile + "; the derived-table rewrite in Uax15Tables must be updated for it");
+		}
 		int i = open + 1;
 		while (i < source.length() && source.charAt(i) != '"') {
 			i += source.charAt(i) == '\\' ? 2 : 1;

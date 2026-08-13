@@ -12,6 +12,10 @@ import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 class Uax15TablesTest {
 
 	// Fields: codepoint;name;category;combining class;bidi;decomposition;...
+	// The last two rows are the CJK range MARKERS: UnicodeData.txt gives a block's first
+	// and last codepoint one row each and nothing in between, which is why the hardcoded
+	// loops exist and why merging the two sources has to leave a hole between #x3401 and
+	// the loop's own end.
 	private static final String UNICODE_DATA = """
 			0041;LATIN CAPITAL LETTER A;Lu;0;L;;;;;N;;;;0061;
 			0042;LATIN CAPITAL LETTER B;Lu;0;L;;;;;N;;;;0062;
@@ -19,6 +23,8 @@ class Uax15TablesTest {
 			00C0;LATIN CAPITAL LETTER A WITH GRAVE;Lu;0;L;0041 0300;;;;N;;;;00E0;
 			0300;COMBINING GRAVE ACCENT;Mn;230;NSM;;;;;N;NON-SPACING GRAVE;;;;
 			00A0;NO-BREAK SPACE;Zs;0;CS;<noBreak> 0020;;;;N;;;;;
+			3400;<CJK Ideograph Extension A, First>;Lo;0;L;;;;;N;;;;;
+			4DBF;<CJK Ideograph Extension A, Last>;Lo;0;L;;;;;N;;;;;
 			""";
 
 	private static final String DERIVED_PROPS = """
@@ -94,6 +100,7 @@ class Uax15TablesTest {
 			      (:nfkc nfkc-illegal-list))))
 
 			(defun unicode-letter-p (char)
+			  "Returns T if the character is one of the unicode characters falling into a letter category."
 			  (when (gethash char *unicode-letters*)
 			    t))
 			""";
@@ -137,11 +144,14 @@ class Uax15TablesTest {
 		assertThat(dataOf(rewritten, "%lite-combining-class-data")).isEqualTo("768 230");
 		assertThat(dataOf(rewritten, "%lite-canonical-decomp-data")).isEqualTo("2 192 65 768");
 		assertThat(dataOf(rewritten, "%lite-compatible-decomp-data")).isEqualTo("1 160 32");
-		// Letters keep their category, as inclusive codepoint ranges: A and B are
-		// adjacent uppercase, a is the only lowercase, and no other category appears.
-		assertThat(dataOf(rewritten, "%lite-letters-lu-data")).isEqualTo("65 66 192 192");
-		assertThat(dataOf(rewritten, "%lite-letters-ll-data")).isEqualTo("97 97");
-		assertThat(dataOf(rewritten, "%lite-letters-lo-data")).isEmpty();
+		// One run of inclusive ranges for all five letter categories, and it is the
+		// UNION of the data rows and the hardcoded loops -- member for member the key
+		// set of the table it replaces. A and B are adjacent uppercase, a is the only
+		// lowercase. The CJK block shows both halves: the loop's #x3400..#x4DB4 swallows
+		// the data row at #x3400, while the block's LAST marker at #x4DBF stays a range
+		// of its own, the loop having stopped eleven codepoints short of it.
+		assertThat(dataOf(rewritten, "%lite-letter-range-data"))
+			.isEqualTo("65 66 97 97 192 192 13312 19892 19903 19903 183984 191455");
 		// Untouched forms stay exactly as upstream wrote them.
 		assertThat(rewritten).contains("(defvar *canonical-decomp-map* nil)")
 			.contains("#|\nLetter characters in ranges\n|#");
@@ -157,15 +167,17 @@ class Uax15TablesTest {
 				(defun %lite-build-canonical-combining-class ()
 				  (setf *canonical-combining-class*
 				        (%lite-fill-pairs (%lite-ints (%lite-combining-class-data)) (make-hash-table))))""");
-		// The two upstream defparameters initialize to a NON-NIL (empty) hash table. Left
-		// alone, (or *T* ...) would short-circuit onto it and the builder would never
-		// run, so both are demoted to nil and their initializer moves into the builder.
+		// The composition map's upstream defparameter initializes to a NON-NIL (empty)
+		// hash table. Left alone, (or *T* ...) would short-circuit onto it and the
+		// builder would never run, so it is demoted to nil and its initializer moves
+		// into the builder. The letter table is demoted too and stays nil: nothing
+		// builds it any more.
 		assertThat(rewritten).contains("(defvar *canonical-comp-map* nil)")
 			.contains("(defvar *unicode-letters* nil)")
 			.doesNotContain("(defparameter *canonical-comp-map*")
 			.doesNotContain("(defparameter *unicode-letters*")
 			.contains("(setf *canonical-comp-map* (make-hash-table :test #'equal))")
-			.contains("(setf *unicode-letters* (make-hash-table :size 170000))");
+			.doesNotContain("(setf *unicode-letters*");
 		// Nothing outside a builder assigns a table: no top-level fill survives.
 		assertThat(rewritten.indexOf("(setf *canonical-combining-class*"))
 			.isGreaterThan(rewritten.indexOf("(defun %lite-build-canonical-combining-class ()"));
@@ -184,20 +196,49 @@ class Uax15TablesTest {
 		assertThat(force).as("the composition-map builder forces its source table").isBetween(builder, maphash);
 	}
 
-	// The nine hardcoded range loops move into the letter builder VERBATIM, reader
-	// conditionals and all, and keep running BEFORE the data-derived entries -- the order
-	// the emitted file has always had, which is the REVERSE of upstream's own (its letter
-	// loop runs first, but is dead here). Both write the
-	// CJK/Hangul/Tangut keys and only the last writer's category string survives.
+	// The hardcoded range loops are READ, not relocated: their codepoints are in the
+	// range run above, so neither they nor the dead data-derived loop survive, and the
+	// letter table has no builder at all -- the predicate searches the ranges instead.
 	@Test
-	void relocatesTheLetterRangeLoopsIntoTheBuilderAheadOfTheDerivedEntries() {
+	void foldsTheLetterRangeLoopsIntoTheRangesInsteadOfRunningThem() {
 		String rewritten = rewriteTables();
-		int builder = rewritten.indexOf("(defun %lite-build-unicode-letters ()");
-		int lastLoop = rewritten.indexOf("#-utf-16 (loop for code from #x2CEB0", builder);
-		int derived = rewritten.indexOf("(%lite-fill-letters (%lite-ints (%lite-letters-ll-data))", builder);
-		assertThat(builder).isNotNegative();
-		assertThat(lastLoop).as("the last range loop is relocated verbatim").isBetween(builder, derived);
-		assertThat(rewritten.indexOf("(loop for x in uax-15::*unicode-data*")).isGreaterThan(builder);
+		assertThat(rewritten).doesNotContain("(loop for code from #x")
+			.doesNotContain("(loop for x in uax-15::*unicode-data*")
+			.doesNotContain("%lite-build-unicode-letters")
+			.doesNotContain("%lite-fill-letters");
+		assertThat(rewritten.indexOf("(defun %lite-unicode-letter-p (char)"))
+			.as("the predicate follows the ranges it searches")
+			.isGreaterThan(rewritten.indexOf("(defun %lite-letter-range-data ()"));
+	}
+
+	// The rewrite has to READ a reader conditional the relocated loops used to leave to
+	// the reader, so a loop it cannot read must not be silently skipped -- the ranges
+	// would simply be missing those codepoints, and unicode-letter-p would answer NIL for
+	// every CJK ideograph with nothing pointing at why.
+	@Test
+	void failsLoudlyWhenALetterRangeLoopIsSpelledSomeOtherWay() {
+		String toForm = TABLES_SOURCE.replace("from #x3400 below #x4DB5", "from #x3400 to #x4DB4");
+		assertThatIllegalStateException()
+			.isThrownBy(() -> Uax15Tables.rewrite("src/precomputed-tables.lisp", toForm, "uax-15", LOADER))
+			.withMessageContaining("hardcoded letter range loop(s)")
+			.withMessageContaining("Uax15Tables");
+		String otherFeature = TABLES_SOURCE.replace("#-utf-16 (loop for code from #x2CEB0",
+				"#+sbcl (loop for code from #x2CEB0");
+		assertThatIllegalStateException()
+			.isThrownBy(() -> Uax15Tables.rewrite("src/precomputed-tables.lisp", otherFeature, "uax-15", LOADER))
+			.withMessageContaining("reader conditional");
+	}
+
+	// After the span replacement the tables file names the letter table exactly once,
+	// in the defvar. A mention anywhere else is a write into a table nothing builds, or
+	// a read that answers "no character is a letter" -- both silent, so pin the count.
+	@Test
+	void failsLoudlyWhenTheTablesFileStillNamesTheLetterTableElsewhere() {
+		String extraRead = TABLES_SOURCE + "\n(defun letter-count () (hash-table-count *unicode-letters*))\n";
+		assertThatIllegalStateException()
+			.isThrownBy(() -> Uax15Tables.rewrite("src/precomputed-tables.lisp", extraRead, "uax-15", LOADER))
+			.withMessageContaining("outside the letter span")
+			.withMessageContaining("Uax15Tables");
 	}
 
 	// Every read of a derived table in a component that has one becomes a forcing read.
@@ -212,15 +253,26 @@ class Uax15TablesTest {
 			.contains("(gethash s (or *canonical-comp-map* (%lite-build-canonical-comp-map)))");
 		String library = Uax15Tables.rewrite("src/uax-15.lisp", LIBRARY_SOURCE, "uax-15", LOADER);
 		assertThat(library).isNotNull();
-		// Both reads on the :nfkd line, the whole-body read of the accessor, and the
-		// letter table.
+		// Both reads on the :nfkd line and the whole-body read of the accessor.
 		assertThat(library)
 			.contains("(:nfkd (list (or *canonical-decomp-map* (%lite-build-canonical-decomp-map))"
 					+ " (or *compatible-decomp-map* (%lite-build-compatible-decomp-map))))")
-			.contains("  (or *canonical-combining-class* (%lite-build-canonical-combining-class)))")
-			.contains("(gethash char (or *unicode-letters* (%lite-build-unicode-letters)))");
+			.contains("  (or *canonical-combining-class* (%lite-build-canonical-combining-class)))");
 		// A component that reads none is left alone entirely.
 		assertThat(Uax15Tables.rewrite("src/utilities.lisp", "(in-package :uax-15)", "uax-15", LOADER)).isNull();
+	}
+
+	// The letter table is the one global with no builder, so its read is not forced but
+	// REMOVED: the exported predicate keeps its docstring and calls the range search, and
+	// nothing in the component names the table any more.
+	@Test
+	void replacesTheLetterLookupWithTheRangeSearchKeepingTheDocstring() {
+		String library = Uax15Tables.rewrite("src/uax-15.lisp", LIBRARY_SOURCE, "uax-15", LOADER);
+		assertThat(library).isNotNull();
+		assertThat(library).contains("""
+				(defun unicode-letter-p (char)
+				  "Returns T if the character is one of the unicode characters falling into a letter category."
+				  (%lite-unicode-letter-p char))""").doesNotContain("*unicode-letters*");
 	}
 
 	@Test
@@ -303,6 +355,12 @@ class Uax15TablesTest {
 			.withMessageContaining("reads *canonical-combining-class* from src/uax15-api.lisp")
 			.withMessageContaining("not in the forced-read inventory")
 			.withMessageContaining("Uax15Tables");
+		// The letter table is scanned for on stronger grounds than the other four: it has
+		// no builder at all, so a second reader would answer that nothing is a letter.
+		assertThatIllegalStateException().isThrownBy(() -> Uax15Tables.rewrite("src/letters-api.lisp",
+				"(in-package :uax-15)\n(defun letter-count () (hash-table-count *unicode-letters*))\n", "uax-15",
+				LOADER))
+			.withMessageContaining("reads *unicode-letters* from src/letters-api.lisp");
 		// A component that mentions none of the five is still left alone.
 		assertThat(Uax15Tables.rewrite("src/trivial-utf-16.lisp",
 				"(in-package :uax-15)\n;; the first char from *unicode-data*\n", "uax-15", LOADER))
@@ -325,6 +383,14 @@ class Uax15TablesTest {
 		for (String called : buildersCalledIn(backend + library)) {
 			assertThat(rewritten).as("fallback defines " + called).contains("(defun " + called + " () *");
 		}
+		// unicode-letter-p is replaced either way -- there are no ranges to search here,
+		// so the fallback answers it from the table the real source built eagerly. That
+		// is
+		// what lets the replacement be unconditional and the two paths agree.
+		assertThat(library).contains("(%lite-unicode-letter-p char))");
+		assertThat(rewritten).contains("""
+				(defun %lite-unicode-letter-p (char)
+				  (when (gethash char *unicode-letters*) t))""");
 		// The illegal-character lists have no fallback builder: that span simply keeps
 		// the real (slow) source, as it always did.
 		assertThat(library).contains("*derived-normalization-props-data-file*");
@@ -386,7 +452,7 @@ class Uax15TablesTest {
 				names.add(name);
 			}
 		}
-		assertThat(names).as("every table is forced somewhere").hasSize(5);
+		assertThat(names).as("every table is forced somewhere").hasSize(4);
 		return names;
 	}
 
