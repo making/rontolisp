@@ -64,22 +64,23 @@ argument BY CODE POINT, not by UTF-16 code unit. A supplementary code point
   position, `_str_char_byte_offset` translates a character index to a byte
   offset for `subseq`. Length / char / subseq lower through those helpers.
 
-**COST, and it is not uniform.** A character index is O(1) on the interpreter
-and O(i) on all three compile backends -- the JVM's `offsetByCodePoints` and
-wasm's UTF-8 decode both walk from the start -- so a left-to-right `dotimes` scan
-is linear interpreted and QUADRATIC compiled. Measured 2026-07-26 over one
-48,000-character literal, forward scan: interpreter 23 ms, JVM 195 ms, wasm
-Preview 1 1045 ms, component 981 ms; 20,000 accesses at a fixed index cost
-10/10/10 ms interpreted against 5/96/147 (JVM) and 1/435/867 (wasm P1) at index
-0 / 24,000 / 47,999. The interpreter used to be the WORST of the four (632 ms at
-index 0, because `charRef` rebuilt the whole Java `String` from the `int[]` on
-every call, then counted its code points, then walked to the index); that is
-fixed. Generated bulk data must therefore be emitted as MANY SHORT string
-literals rather than a few long ones -- `eval/Uax15Tables` cuts its derived runs
-at 1,000 characters for exactly this reason, worth ~15x on either WASM backend and
-~10x on the JVM over a 56 KB run ([[asdf]]). It is worth nothing on the
-interpreter, which is the point: chunking buys the COMPILE paths, the `charRef`
-fix bought the interpreter. Making the compile paths O(1) is `.todo/185`.
+**COST: uniform now, and it was not.** A character index is O(1) or amortized
+O(1) on all four backends, so a left-to-right `dotimes` scan is LINEAR
+everywhere -- the WASM string carries a character-index cursor and the JVM proves
+its string free of surrogate pairs and remembers that. The full mechanism, the
+measurements and what is still not constant: [[string-index-cost]].
+
+Before that, a character index was O(i) on all three compile backends (the JVM's
+`offsetByCodePoints` and wasm's UTF-8 decode both walked from the start), which
+made a scan quadratic -- 195 ms (JVM) / 1045 ms (wasm P1) / 981 ms (component)
+over one 48,000-character literal against the interpreter's 23. Two consequences
+of that era are still worth knowing: the interpreter used to be the WORST of the
+four (632 ms at index 0, because `charRef` rebuilt the whole Java `String` from
+the `int[]` on every call, then counted its code points, then walked to the
+index), and generated bulk data was cut into MANY SHORT string literals to keep
+each scan bounded -- `eval/Uax15Tables` still cuts its derived runs at 1,000
+characters ([[asdf]]), which was worth ~15x on either WASM backend and ~10x on
+the JVM over a 56 KB run and is worth nothing now.
 
 ## String comparison family = ONE code-point walk
 
@@ -316,6 +317,8 @@ same code point compare equal even though they are not the same reference:
   `JvmLispCompilerTest#compileAndRunStringCaseOpsAreFullUnicodeAndLengthPreserving`.
 
 ## Related
+- [[string-index-cost]] -- what makes those walks amortized O(1) on every
+  backend (the WASM per-string cursor, the JVM surrogate-pair proof).
 - [[wasm-gc-strings]] -- the WASM byte model behind these code-point walks
   (todo 159), and the mem-module-min-pages patch that unblocked uax-15's
   static UnicodeData.

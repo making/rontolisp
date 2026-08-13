@@ -18,10 +18,10 @@ import am.ik.rontolisp.LispVal;
  * ({@code double[]} / {@code float[]}) all pick different array classes.
  *
  * <p>
- * Strings are UTF-16 buffers with surrounding double quotes; a Lisp CHARACTER index walks
- * the buffer by code point ({@link String#offsetByCodePoints(int, int)}), so the same
- * astral glyph reads back as one indexed character on {@code (char s i)} / {@code (aref s
- * i)} / {@code (subseq s a b)}.
+ * Strings are UTF-16 buffers with surrounding double quotes; a Lisp CHARACTER index is a
+ * CODE POINT index, translated by {@link JvmStringIndexRuntimeBuilder}'s {@code _cpoff},
+ * so the same astral glyph reads back as one indexed character on {@code (char s i)} /
+ * {@code (aref s i)} / {@code (subseq s a b)}.
  */
 final class JvmCharCompiler {
 
@@ -32,8 +32,8 @@ final class JvmCharCompiler {
 	 * {@code (char string index)} / {@code (schar string index)}: the code point at
 	 * index. The quote-framed string carries its content in {@code [1, length-1)}; the
 	 * index is a Lisp CHARACTER position and is translated to a UTF-16 code-unit offset
-	 * via {@code String.offsetByCodePoints(1, index)} so a supplementary code point
-	 * counts as one indexed character.
+	 * via {@code _cpoff} ({@link JvmStringIndexRuntimeBuilder}) so a supplementary code
+	 * point counts as one indexed character.
 	 */
 	static void compileChar(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		List<LispVal> args = cons.toList();
@@ -44,16 +44,18 @@ final class JvmCharCompiler {
 		ctx.emitU2(ctx.stringClass.index());
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(sSlot);
-		// codeUnit = s.offsetByCodePoints(1, index) -- 1 skips the leading quote, then
-		// walk `index` code points to land on the requested character's lead unit.
+		// codeUnit = _cpoff(s, index): the offset of the index-th CHARACTER inside the
+		// framing quotes, which is 1 + index unless a surrogate pair is in the way.
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(sSlot);
-		ctx.emit(Opcode.ICONST_1);
 		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
 		JvmEmitHelper.unboxLong(ctx);
 		ctx.emit(Opcode.L2I);
-		ctx.emit(Opcode.INVOKEVIRTUAL);
-		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, "offsetByCodePoints", "(II)I").index());
+		ctx.emit(Opcode.INVOKESTATIC);
+		ctx.emitU2(JvmEmitHelper
+			.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
+					JvmStringIndexRuntimeBuilder.OFFSET_DESC)
+			.index());
 		// cp = s.codePointAt(codeUnit)
 		int cuSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ISTORE);

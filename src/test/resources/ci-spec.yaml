@@ -6478,6 +6478,71 @@ cases:
       3
       "a😀b"
       (97 233 128512 98 DONE)
+  - name: character-index-is-not-linear-in-the-index
+    source: |
+      ;; Whatever an earlier index left behind, an index answers by its own position:
+      ;; forward, backward and jumping orders all read the same characters out of one
+      ;; mixed ASCII / two-byte / three-byte / astral string.
+      (defvar *scan-mixed* "aé😀bあc😀dé")
+      (defun scan-cps-of (s order)
+        (mapcar (lambda (i) (char-code (char s i))) order))
+      (print (scan-cps-of *scan-mixed* '(0 1 2 3 4 5 6 7 8)))
+      (print (scan-cps-of *scan-mixed* '(8 7 6 5 4 3 2 1 0)))
+      (print (scan-cps-of *scan-mixed* '(4 0 8 2 6 1 5 3 7)))
+      (print (length *scan-mixed*))
+      (print (subseq *scan-mixed* 2 5))
+      (print (char-code (char *scan-mixed* 0)))
+      ;; A character index costs the same wherever it lands, so scanning ONE long
+      ;; string costs what scanning the SAME characters in short chunks costs.
+      ;; Every compile backend used to walk from the first byte on every (char s i)
+      ;; -- the JVM through String.offsetByCodePoints, both WASM backends through
+      ;; the UTF-8 decode -- which made a left-to-right scan quadratic and made the
+      ;; chunked half 64x cheaper than the whole-string half below.
+      (defun scan-sum-of (s)
+        (let ((total 0))
+          (dotimes (i (length s))
+            (setq total (+ total (char-code (char s i)))))
+          total))
+      ;; Both strings are the same 16 characters repeated, so the long one IS the
+      ;; short one 128 times. Each is grown from the literal rather than the shorter
+      ;; (defvar *scan-long* *scan-short*), which the compile paths get wrong
+      ;; (.todo/345).
+      (defvar *scan-short* "0123456789abcdef")
+      (dotimes (i 6) (setq *scan-short* (concatenate 'string *scan-short* *scan-short*)))
+      (defvar *scan-long* "0123456789abcdef")
+      (dotimes (i 13) (setq *scan-long* (concatenate 'string *scan-long* *scan-long*)))
+      (scan-sum-of "warm")
+      (defvar *scan-t0* (get-internal-real-time))
+      (defvar *scan-whole* (scan-sum-of *scan-long*))
+      (defvar *scan-t1* (get-internal-real-time))
+      (defvar *scan-chunked* 0)
+      (dotimes (k 128) (setq *scan-chunked* (+ *scan-chunked* (scan-sum-of *scan-short*))))
+      (defvar *scan-t2* (get-internal-real-time))
+      ;; Both halves must have read the same characters for the times to compare.
+      (print (= *scan-whole* *scan-chunked*))
+      (print (if (<= (- *scan-t1* *scan-t0*) (+ 500 (* 6 (- *scan-t2* *scan-t1*))))
+                 'scan-flat
+                 'scan-quadratic))
+      ;; (length s) is the same walk, so it may not be linear in the length either.
+      (defvar *scan-acc* 0)
+      (defvar *scan-t3* (get-internal-real-time))
+      (dotimes (k 20000) (setq *scan-acc* (+ *scan-acc* (length *scan-long*))))
+      (defvar *scan-t4* (get-internal-real-time))
+      (dotimes (k 20000) (setq *scan-acc* (+ *scan-acc* (length *scan-short*))))
+      (defvar *scan-t5* (get-internal-real-time))
+      (print (if (<= (- *scan-t4* *scan-t3*) (+ 500 (* 6 (- *scan-t5* *scan-t4*))))
+                 'length-flat
+                 'length-quadratic))
+    expected: |
+      (97 233 128512 98 12354 99 128512 100 233)
+      (233 100 128512 99 12354 98 128512 233 97)
+      (12354 97 233 128512 128512 233 99 98 100)
+      9
+      "😀bあ"
+      97
+      T
+      SCAN-FLAT
+      LENGTH-FLAT
   - name: string-case-ops-full-unicode
     source: |
       ;; string-upcase / string-downcase / string-capitalize are defined by CLHS

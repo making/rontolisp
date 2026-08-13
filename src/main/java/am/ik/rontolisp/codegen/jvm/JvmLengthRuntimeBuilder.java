@@ -42,16 +42,16 @@ final class JvmLengthRuntimeBuilder {
 	}
 
 	static LengthMethod build(ConstantPool cp, ClassConstant objectArrayClass, ClassConstant stringClass,
-			MethodrefConstant longValueOf) {
+			MethodrefConstant longValueOf, ClassConstant selfClass) {
 		ClassConstant arrayListClass = cp.addClass(cp.addUtf8("java/util/ArrayList"));
 		ClassConstant rtExClass = cp.addClass(cp.addUtf8("java/lang/RuntimeException"));
-		MethodrefConstant stringLength = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()I")));
-		// codePointCount(int begin, int end) returns the CHARACTER-visible length. Using
-		// [1, length-1) skips the surrounding quote framing so a supplementary code
-		// point in the content counts as one character.
-		MethodrefConstant stringCodePointCount = cp.addMethodref(stringClass,
-				cp.addNameAndType(cp.addUtf8("codePointCount"), cp.addUtf8("(II)I")));
+		// _scount(s) returns the CHARACTER-visible length of the content inside the
+		// surrounding quote framing, so a supplementary code point in it counts as one
+		// character -- and answers without re-counting a string it has already proven
+		// free of surrogate pairs (JvmStringIndexRuntimeBuilder).
+		MethodrefConstant stringCharCount = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_METHOD),
+						cp.addUtf8(JvmStringIndexRuntimeBuilder.COUNT_DESC)));
 		MethodrefConstant alGet = cp.addMethodref(arrayListClass,
 				cp.addNameAndType(cp.addUtf8("get"), cp.addUtf8("(I)Ljava/lang/Object;")));
 		MethodrefConstant alSize = cp.addMethodref(arrayListClass,
@@ -68,22 +68,15 @@ final class JvmLengthRuntimeBuilder {
 		int loop = a.label();
 		int done = a.label();
 
-		// String: return v.codePointCount(1, v.length() - 1) -- the character-visible
-		// length inside the surrounding quote framing. A supplementary code point counts
-		// as one character, matching (length "😀") == 1 on every backend after todo 153.
+		// String: return _scount(v) -- the character-visible length inside the
+		// surrounding quote framing. A supplementary code point counts as one character,
+		// matching (length "😀") == 1 on every backend after todo 153.
 		a.aload(0);
 		a.instanceOf(stringClass);
 		a.branch(Opcode.IFEQ, notString);
 		a.aload(0);
 		a.checkcast(stringClass);
-		a.astore(3);
-		a.aload(3);
-		a.iconst(1);
-		a.aload(3);
-		a.invokevirtual(stringLength);
-		a.iconst(1);
-		a.op(Opcode.ISUB);
-		a.invokevirtual(stringCodePointCount);
+		a.invokestatic(stringCharCount);
 		a.op(Opcode.I2L);
 		a.invokestatic(longValueOf);
 		a.areturn();

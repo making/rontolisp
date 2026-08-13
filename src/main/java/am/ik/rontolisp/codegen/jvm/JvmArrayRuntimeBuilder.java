@@ -302,12 +302,13 @@ final class JvmArrayRuntimeBuilder {
 		// follows the displacement chain, so every accessor goes through it. A string
 		// is a rank-1 character array in CL: on a runtime String the string's content
 		// lives in [1, length-1) (the surrounding quotes are the framing), and the
-		// requested character index walks BY CODE POINT via s.offsetByCodePoints(1, i)
+		// requested character index is translated BY CODE POINT via _cpoff(s, i)
 		// -> s.codePointAt(codeUnit) so a supplementary code point counts as one
 		// indexed element -- matching the (length s) contract everywhere else.
 		ClassConstant strClass = cp.addClass(cp.addUtf8("java/lang/String"));
-		MethodrefConstant strOffsetByCodePoints = cp.addMethodref(strClass,
-				cp.addNameAndType(cp.addUtf8("offsetByCodePoints"), cp.addUtf8("(II)I")));
+		MethodrefConstant strCpOffset = cp.addMethodref(selfClass,
+				cp.addNameAndType(cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_METHOD),
+						cp.addUtf8(JvmStringIndexRuntimeBuilder.OFFSET_DESC)));
 		MethodrefConstant strCodePointAt = cp.addMethodref(strClass,
 				cp.addNameAndType(cp.addUtf8("codePointAt"), cp.addUtf8("(I)I")));
 		JvmAsm a1 = new JvmAsm();
@@ -315,17 +316,16 @@ final class JvmArrayRuntimeBuilder {
 		a1.instanceOf(strClass);
 		int a1NotString = a1.label();
 		a1.branch(Opcode.IFEQ, a1NotString);
-		// s = (String) arr; codeUnit = s.offsetByCodePoints(1, ((Long)i).intValue());
+		// s = (String) arr; codeUnit = _cpoff(s, ((Long)i).intValue());
 		// return int[]{s.codePointAt(codeUnit)}.
 		a1.aload(0);
 		a1.checkcast(strClass);
 		a1.astore(3); // slot 3: s
 		a1.aload(3);
-		a1.iconst(1);
 		a1.aload(1);
 		a1.checkcast(longClass);
 		a1.invokevirtual(longIntValue);
-		a1.invokevirtual(strOffsetByCodePoints);
+		a1.invokestatic(strCpOffset);
 		a1.istore(4); // slot 4: codeUnit
 		a1.aload(3);
 		a1.iload(4);

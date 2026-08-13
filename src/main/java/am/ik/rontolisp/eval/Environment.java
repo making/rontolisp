@@ -3443,9 +3443,10 @@ public final class Environment implements Scope {
 		if (val instanceof LispString str) {
 			// Index by CODE POINT: a supplementary character is one indexed element, not
 			// two surrogate halves. Matches the LENGTH/CHAR contract everywhere else.
-			String s = str.value();
-			int codeUnit = s.offsetByCodePoints(0, index);
-			return new LispChar(s.codePointAt(codeUnit));
+			// One slot read, like charRef: rebuilding the Java String and walking to the
+			// index made `replace` over a string quadratic, with a whole-string
+			// allocation per element (.kb/string-index-cost.md).
+			return new LispChar(str.codePointAt(index));
 		}
 		if (val instanceof LispArray arr) {
 			return arr.readFlat(index);

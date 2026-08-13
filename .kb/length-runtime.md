@@ -24,6 +24,11 @@ that grew past a few hundred bytes becomes a callee.
   `FUNC_ARR_SET` as the new `FX_FUNC_LAST`; type `TYPE_CALLABLE_BASE + 0`) is
   that ladder once, 310 bytes, answering the i31-boxed count.
 
+Both bodies answer a STRING length through the character-count helper of their
+backend (`_str_char_count` on WASM, `_scount` on the JVM), and neither of those
+recounts a string it has already counted -- see [[string-index-cost]] for why
+`(length s)` in a loop head is not a per-call walk of the whole string.
+
 **The `DeclaredArrayTypes` short-circuit stays at the site**: an argument whose
 representation is pinned to a packed integer vector compiles to a trapping
 `ref.cast` + `array.len` directly (`.kb/declarations-type-checks.md`) and never

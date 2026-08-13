@@ -17,7 +17,8 @@ reclaims them like cons cells and closures.
 ## Representation
 
 ```
-TYPE_STRING (rec-group type 4) = struct { i32 id, i32 len, (ref null eq) data }
+TYPE_STRING (rec-group type 4) = struct { i32 id, i32 len, (ref null eq) data,
+                                          (mut i32) ci, (mut i32) cb }
 $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
 ```
 
@@ -43,8 +44,7 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
   (`.kb/adjustable-arrays.md`):
 
   - `FUNC_STR_CHAR_COUNT` `_str_char_count(str) -> i32` -- character count of a
-    UTF-8-encoded string (walk bytes 1..len-1, count lead bytes, i.e. bytes with
-    `(b & 0xC0) != 0x80`). Every `(length s)` on a string reads through it.
+    UTF-8-encoded string. Every `(length s)` on a string reads through it.
   - `FUNC_STR_CHAR_AT` `_str_char_at(str, i) -> i32` -- the i-th character's code
     point. Delegates the walk to `_str_char_byte_offset` and decodes the 1-4 byte
     UTF-8 sequence at the returned position. Every `(char s i)` / `(schar s i)` and
@@ -55,6 +55,15 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
     `len - 1`, the closing quote's position, when i is at or past the character
     count so subseq's end walk lands on the string terminator). `_subseq`'s string
     branch reads it twice to translate a character range into a byte range.
+
+  **Neither of those two walks from byte 0**: fields 3/4 are the string's own
+  character-index CURSOR ("character `ci` starts at byte `cb`", seeded `(0, 1)` by
+  both builders), which makes an index into a single-byte string one compare and a
+  scan of any string linear instead of quadratic. The mechanism, its soundness
+  argument (a string's bytes never change after it is built) and the store rule are
+  [[string-index-cost]]; the two extra fields are the only reason TYPE_STRING is
+  five fields wide, and every `struct.new` for it lives in `_str_build` /
+  `_str_fresh`.
 
   ASCII case-fold and byte-level equality on the raw byte data stay correct without
   further changes: an ASCII byte-equal string comparison matches character-for-character
@@ -217,6 +226,8 @@ does not import a `"mem"/"memory"` (a non-rontolisp embedder or a small program
 whose min stayed at four) the fallback returns the unchanged resource.
 
 ## Related
+- [[string-index-cost]] -- the character-index cursor in fields 3/4, and the JVM
+  half of the same invariant.
 - [[27-wasm-gc-heap-never-grows]] -- the linear string heap this retires.
 - [[read-load-streams]] -- string streams + the reader.
 - [[symbol-runtime-api]] -- `intern`/`make-symbol`/`gensym` identity.

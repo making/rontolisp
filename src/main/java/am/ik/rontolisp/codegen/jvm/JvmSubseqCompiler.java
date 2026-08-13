@@ -46,11 +46,14 @@ final class JvmSubseqCompiler {
 		int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
 		int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();
 		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
-		// offsetByCodePoints(begin, cpDelta): the UTF-16 code-unit index reached by
-		// walking cpDelta code points from position `begin`. Used to translate a
-		// character range (start, end) into byte offsets so a supplementary code point
-		// in the middle is one indexed step, matching (length s) after todo 153.
-		int offsetByCP = JvmEmitHelper.stringMethod(ctx, "offsetByCodePoints", "(II)I").index();
+		// _cpoff(s, i): the UTF-16 code-unit index of the i-th CHARACTER inside the
+		// framing quotes. Used to translate a character range (start, end) into code-unit
+		// offsets so a supplementary code point in the middle is one indexed step,
+		// matching (length s) after todo 153.
+		int cpOffset = JvmEmitHelper
+			.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
+					JvmStringIndexRuntimeBuilder.OFFSET_DESC)
+			.index();
 		StringConstant quote = ctx.cp.addString("\"");
 
 		int seqSlot = ctx.allocTemp();
@@ -122,14 +125,13 @@ final class JvmSubseqCompiler {
 		asm.aload(seqSlot);
 		asm.checkcast(ctx.stringClass);
 		asm.astore(sSlot);
-		// a = s.offsetByCodePoints(1, start) -- 1 skips the leading quote.
+		// a = _cpoff(s, start) -- the offset of character `start` past the leading quote.
 		asm.aload(sSlot);
-		asm.iconst(1);
 		asm.iload(startSlot);
-		asm.op(Opcode.INVOKEVIRTUAL);
-		asm.u2(offsetByCP);
+		asm.op(Opcode.INVOKESTATIC);
+		asm.u2(cpOffset);
 		asm.istore(aSlot);
-		// b = (end < 0) ? s.length() - 1 : s.offsetByCodePoints(1, end)
+		// b = (end < 0) ? s.length() - 1 : _cpoff(s, end)
 		int haveEnd = asm.label();
 		int gotB = asm.label();
 		asm.iload(endSlot);
@@ -143,10 +145,9 @@ final class JvmSubseqCompiler {
 		asm.branch(Opcode.GOTO, gotB);
 		asm.bind(haveEnd);
 		asm.aload(sSlot);
-		asm.iconst(1);
 		asm.iload(endSlot);
-		asm.op(Opcode.INVOKEVIRTUAL);
-		asm.u2(offsetByCP);
+		asm.op(Opcode.INVOKESTATIC);
+		asm.u2(cpOffset);
 		asm.istore(bSlot);
 		asm.bind(gotB);
 		// result = "\"" + s.substring(a, b) + "\""

@@ -5639,6 +5639,111 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRun("(let ((cp 128513)) (print (eq (code-char cp) (code-char cp))))")).isEqualTo("T");
 	}
 
+	// A character index costs the same wherever it lands: scanning ONE long string costs
+	// what scanning the SAME characters in short chunks costs. Before, _str_char_at
+	// decoded the UTF-8 data forward from byte 0 on every call, so a left-to-right scan
+	// was quadratic and the whole-string half below was 64x the chunked one (4,230 ms
+	// against 66 ms over 131,072 characters). The comparison is against the chunked half
+	// rather than a wall-clock constant so the bound does not depend on the machine.
+	@Test
+	void aCharacterIndexDoesNotDecodeFromTheStartOfTheString() throws Exception {
+		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"0123456789abcdef\"")), "ASCII");
+	}
+
+	// Same over multi-byte content, where the byte offset of a character genuinely has to
+	// be walked: the cursor is what keeps a scan linear, not an ASCII shortcut.
+	@Test
+	void aCharacterIndexDoesNotDecodeFromTheStartOfAMultiByteString() throws Exception {
+		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"あいうえおかきくけこさしすせそた\"")), "Hiragana");
+	}
+
+	// Builds a 1,024-character string and the 131,072-character string that IS that
+	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
+	// grow from the same literal rather than the shorter (defvar *long* *short*), which
+	// the compile paths get wrong (.todo/345).
+	private static final String SCAN_PROGRAM = """
+			(defun scan-sum (s)
+			  (let ((total 0))
+			    (dotimes (i (length s))
+			      (setq total (+ total (char-code (char s i)))))
+			    total))
+			(defvar *short* %1$s)
+			(dotimes (i 6) (setq *short* (concatenate 'string *short* *short*)))
+			(defvar *long* %1$s)
+			(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
+			(scan-sum "warm")
+			(defvar *t0* (get-internal-real-time))
+			(defvar *whole* (scan-sum *long*))
+			(defvar *t1* (get-internal-real-time))
+			(defvar *chunked* 0)
+			(dotimes (k 128) (setq *chunked* (+ *chunked* (scan-sum *short*))))
+			(defvar *t2* (get-internal-real-time))
+			(print (= *whole* *chunked*))
+			(princ (- *t1* *t0*)) (terpri)
+			(princ (- *t2* *t1*)) (terpri)
+			""";
+
+	private static void assertScanIsFlat(String output, String label) {
+		String[] lines = output.split("\n");
+		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
+		long whole = Long.parseLong(lines[1].trim());
+		long chunked = Long.parseLong(lines[2].trim());
+		assertThat(whole)
+			.as("%s: scanning 131,072 characters as one string (%d ms) against the same "
+					+ "characters in 1,024-character chunks (%d ms)", label, whole, chunked)
+			.isLessThanOrEqualTo(500 + 6 * chunked);
+	}
+
+	// An index outside the string answers whatever it answered before (bounds are
+	// unchecked on this backend, .todo/186) -- what matters here is that it cannot leave
+	// the string's index cursor pointing outside its byte array, which would trap on
+	// every LATER index. A negative index is the dangerous one: it is the only input that
+	// can walk backwards past the opening quote.
+	@Test
+	void anOutOfRangeIndexLeavesTheStringUsable() throws Exception {
+		assertThat(compileAndRun("""
+				(defvar *s* "hello")
+				(char *s* -1)
+				(char *s* -9)
+				(char *s* 99)
+				(princ (char-code (char *s* 1)))
+				(princ " ")
+				(princ (length *s*))
+				(princ " ")
+				(princ (char-code (char *s* 4)))
+				""")).isEqualTo("101 5 111");
+	}
+
+	// (length s) reads the same walk, so it may not be linear in the length either:
+	// 20,000 (length *long*) calls against 20,000 (length *short*) ones. Before, every
+	// call counted the UTF-8 lead bytes of the whole string (5,510 ms against 40 ms).
+	@Test
+	void aStringLengthDoesNotRecountTheWholeStringOnEveryCall() throws Exception {
+		String output = compileAndRun("""
+				(defvar *short* "0123456789abcdef")
+				(dotimes (i 6) (setq *short* (concatenate 'string *short* *short*)))
+				(defvar *long* "0123456789abcdef")
+				(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
+				(defvar *acc* 0)
+				(defvar *t0* (get-internal-real-time))
+				(dotimes (k 20000) (setq *acc* (+ *acc* (length *long*))))
+				(defvar *t1* (get-internal-real-time))
+				(dotimes (k 20000) (setq *acc* (+ *acc* (length *short*))))
+				(defvar *t2* (get-internal-real-time))
+				(print (= *acc* (* 20000 (+ 131072 1024))))
+				(princ (- *t1* *t0*)) (terpri)
+				(princ (- *t2* *t1*)) (terpri)
+				""");
+		String[] lines = output.split("\n");
+		assertThat(lines[0]).as("the two halves must be the lengths they claim").isEqualTo("T");
+		long whole = Long.parseLong(lines[1].trim());
+		long chunked = Long.parseLong(lines[2].trim());
+		assertThat(whole)
+			.as("20,000 lengths of a 131,072-character string (%d ms) against 20,000 of a "
+					+ "1,024-character one (%d ms)", whole, chunked)
+			.isLessThanOrEqualTo(500 + 6 * chunked);
+	}
+
 	@Test
 	void stringCaseOpsAreFullUnicode() throws Exception {
 		// The string case operators decode the UTF-8 content one code point at a time

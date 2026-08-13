@@ -7957,6 +7957,63 @@ class JvmLispCompilerTest {
 				""")).isEqualTo("1\n4\n128512\n\"é😀\"");
 	}
 
+	// A character index costs the same wherever it lands: scanning ONE long string costs
+	// what scanning the SAME characters in short chunks costs. Before, the index was
+	// turned into a UTF-16 code-unit offset with String.offsetByCodePoints(1, i), which
+	// walks -- so a left-to-right scan was quadratic and the whole-string half below was
+	// 64x the chunked one (893 ms vs 14 ms over 131,072 characters). The comparison is
+	// against the chunked half rather than a wall-clock constant so the bound does not
+	// depend on the machine.
+	@Test
+	void compileACharacterIndexDoesNotWalkFromTheStartOfTheString() throws Exception {
+		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"0123456789abcdef\"")), "ASCII");
+	}
+
+	// Same, for a string the JVM cannot store as LATIN1: its content decides the storage
+	// (Hiragana is two bytes a character), and the cheap "no surrogates" probe is only
+	// O(1) on the LATIN1 half. The verdict per string is what carries the non-LATIN1 one.
+	@Test
+	void compileACharacterIndexDoesNotWalkForANonLatin1String() throws Exception {
+		assertScanIsFlat(compileAndRun(SCAN_PROGRAM.formatted("\"あいうえおかきくけこさしすせそた\"")), "Hiragana");
+	}
+
+	// Builds a 1,024-character string and the 131,072-character string that IS that
+	// string 128 times over, scans each, and prints the two elapsed times in ms. Both
+	// grow from the same literal rather than the shorter (defvar *long* *short*), which
+	// the compile paths get wrong (.todo/345).
+	private static final String SCAN_PROGRAM = """
+			(defun scan-sum (s)
+			  (let ((total 0))
+			    (dotimes (i (length s))
+			      (setq total (+ total (char-code (char s i)))))
+			    total))
+			(defvar *short* %1$s)
+			(dotimes (i 6) (setq *short* (concatenate 'string *short* *short*)))
+			(defvar *long* %1$s)
+			(dotimes (i 13) (setq *long* (concatenate 'string *long* *long*)))
+			(scan-sum "warm")
+			(defvar *t0* (get-internal-real-time))
+			(defvar *whole* (scan-sum *long*))
+			(defvar *t1* (get-internal-real-time))
+			(defvar *chunked* 0)
+			(dotimes (k 128) (setq *chunked* (+ *chunked* (scan-sum *short*))))
+			(defvar *t2* (get-internal-real-time))
+			(print (= *whole* *chunked*))
+			(princ (- *t1* *t0*)) (terpri)
+			(princ (- *t2* *t1*)) (terpri)
+			""";
+
+	private static void assertScanIsFlat(String output, String label) {
+		String[] lines = output.split("\n");
+		assertThat(lines[0]).as("the two halves must scan the same characters").isEqualTo("T");
+		long whole = Long.parseLong(lines[1].trim());
+		long chunked = Long.parseLong(lines[2].trim());
+		assertThat(whole)
+			.as("%s: scanning 131,072 characters as one string (%d ms) against the same "
+					+ "characters in 1,024-character chunks (%d ms)", label, whole, chunked)
+			.isLessThanOrEqualTo(500 + 6 * chunked);
+	}
+
 	@Test
 	void compileParseInteger() throws Exception {
 		assertThat(compileAndRun("""

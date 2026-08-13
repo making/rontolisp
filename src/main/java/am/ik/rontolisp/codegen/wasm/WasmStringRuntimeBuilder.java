@@ -96,10 +96,11 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
-		// return struct.new TYPE_STRING (off, len, arr)
+		// return struct.new TYPE_STRING (off, len, arr, ci = 0, cb = 1)
 		get(w, off);
 		get(w, len);
 		get(w, arr);
+		emitSeedCursor(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END); // function
@@ -165,10 +166,11 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		// return struct.new TYPE_STRING (id, len, arr)
+		// return struct.new TYPE_STRING (id, len, arr, ci = 0, cb = 1)
 		get(w, id);
 		get(w, len);
 		get(w, arr);
+		emitSeedCursor(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 		w.write(Instruction.END); // function
@@ -818,30 +820,34 @@ final class WasmStringRuntimeBuilder {
 
 	/**
 	 * Builds {@code _str_char_count} (FUNC_STR_CHAR_COUNT): returns the number of Unicode
-	 * characters in a UTF-8 encoded {@code TYPE_STRING}. Walks the string's
-	 * {@code $str_bytes} array from index 1 to {@code len - 1} (the interior between the
-	 * two surrounding quote bytes) and counts UTF-8 lead bytes -- a byte {@code b} is a
-	 * lead byte iff {@code (b & 0xC0) != 0x80}. This is the character-based length; every
-	 * {@code (length s)} for a string reads through this so a source-literal string and a
-	 * char-vec-derived string both report their true character count.
+	 * characters in a UTF-8 encoded {@code TYPE_STRING}. Resumes the character-index
+	 * cursor (fields 3/4, see {@link #buildStrCharByteOffsetBody()}) rather than counting
+	 * from the first byte: a cursor sitting on the closing quote ({@code cb == len - 1})
+	 * already holds the count, so a repeated {@code (length s)} is one compare. Otherwise
+	 * the walk resumes at {@code cb} and leaves the cursor on the terminator, which both
+	 * answers every later {@code length} in constant time and -- for a single-byte
+	 * string, where the cursor then reads {@code cb == ci + 1} -- makes every later
+	 * character index constant time as well. Every {@code (length s)} for a string reads
+	 * through this, so a source-literal string and a char-vec-derived string both report
+	 * their true character count.
 	 * @return the function body (signature {@code ((ref null eq)) -> i32}, TYPE_RAT_GET)
 	 */
 	static byte[] buildStrCharCountBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: str = 0. locals: arr = 1 ($str_bytes); len = 2, i = 3, count = 4,
-		// b = 5 (i32).
-		w.write(2);
+		// params: str = 0. locals: s = 1 (TYPE_STRING), arr = 2 ($str_bytes); len = 3,
+		// pos = 4, count = 5, b = 6, step = 7 (i32).
+		w.write(3);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STRING);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(4);
+		w.write(5);
 		w.write(Type.I32);
-		int str = 0, arr = 1, len = 2, i = 3, count = 4, b = 5;
-		// arr = str.data; len = array.len(arr)
-		setStrArray(w, str, arr);
-		get(w, arr);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		set(w, len);
+		int str = 0, s = 1, arr = 2, len = 3, pos = 4, count = 5, b = 6, step = 7;
+		// s = (TYPE_STRING) str; arr = s.data; len = array.len(arr)
+		castStringLocal(w, str, s);
+		setStrDataAndLen(w, s, arr, len);
 		// If len < 2 the value is not a real string; return 0 for safety.
 		get(w, len);
 		i32(w, 2);
@@ -850,40 +856,52 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 0);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
-		// count = 0; i = 1
-		i32(w, 0);
-		set(w, count);
+		// The cursor is on the closing quote: everything before it has been counted.
+		getCursor(w, s, CURSOR_BYTE);
+		set(w, pos);
+		get(w, pos);
+		get(w, len);
 		i32(w, 1);
-		set(w, i);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		getCursor(w, s, CURSOR_CHAR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// count = cursor character index; resume the walk at its byte offset.
+		getCursor(w, s, CURSOR_CHAR);
+		set(w, count);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		get(w, i);
+		get(w, pos);
 		get(w, len);
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
-		arrGetLocal(w, arr, i);
+		arrGetLocal(w, arr, pos);
 		set(w, b);
-		// if ((b & 0xC0) != 0x80) count++
-		get(w, b);
-		i32(w, 0xC0);
-		w.write(Instruction.I32_AND);
-		i32(w, 0x80);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.IF, 0x40);
+		emitUtf8Width(w, b, step);
+		get(w, pos);
+		get(w, step);
+		w.write(Instruction.I32_ADD);
+		set(w, pos);
 		get(w, count);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		set(w, count);
-		w.write(Instruction.END);
-		get(w, i);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		set(w, i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		// Park the cursor on the terminator: (count, len - 1) is a valid pair -- those
+		// count characters do occupy bytes [1, len - 1) -- and it only ever moves the
+		// cursor forward.
+		get(w, len);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, pos);
+		setCursorFrom(w, s, CURSOR_CHAR, count);
+		setCursorFrom(w, s, CURSOR_BYTE, pos);
 		get(w, count);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -898,44 +916,117 @@ final class WasmStringRuntimeBuilder {
 	 * callers scanning to a computed end-of-range land on the string terminator.
 	 * {@code subseq} calls this twice (start and end) to translate a character range to a
 	 * byte range.
+	 *
+	 * <p>
+	 * The walk resumes from the string's own CURSOR (fields 3/4: character {@code ci}
+	 * starts at byte {@code cb}, seeded {@code (0, 1)} by the builders) instead of
+	 * restarting at the first byte, which is what keeps a left-to-right scan linear
+	 * instead of quadratic. Two facts do all the work:
+	 *
+	 * <ul>
+	 * <li>{@code cb == ci + 1} says the {@code ci} characters before the cursor are one
+	 * byte each, so ANY index at or below {@code ci} is {@code 1 + i} -- the whole answer
+	 * for a single-byte string, at any index, in any order.
+	 * <li>otherwise the walk starts at whichever of the cursor and the string start is
+	 * nearer, forwards or backwards, and the cursor follows the index it answered.
+	 * </ul>
+	 *
+	 * <p>
+	 * The cursor is only ever stored when the walk landed exactly on character {@code i}
+	 * ({@code remaining == 0}); an index past the end answers the terminator without
+	 * claiming a character lives there. Reaching the general path at all implies
+	 * {@code i > ci || cb != ci + 1}, so the store can never cost the single-byte-prefix
+	 * fact the fast path above reads. A string's bytes never change after it is built (an
+	 * indexed write rebuilds, {@code .kb/string-write-runtime.md}), so a cursor cannot go
+	 * stale.
 	 * @return the function body (signature {@code ((ref null eq), i32) -> i32},
 	 * TYPE_STR_TO_MEM)
 	 */
 	static byte[] buildStrCharByteOffsetBody() {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: str = 0, i = 1. locals: arr = 2 ($str_bytes);
-		// len = 3, pos = 4, remaining = 5, b = 6, step = 7 (i32).
-		w.write(2);
+		// params: str = 0, i = 1. locals: s = 2 (TYPE_STRING), arr = 3 ($str_bytes);
+		// len = 4, pos = 5, remaining = 6, b = 7, step = 8, ci = 9, cb = 10 (i32).
+		w.write(3);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STRING);
 		w.write(1);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(5);
+		w.write(7);
 		w.write(Type.I32);
-		int str = 0, iParam = 1, arr = 2, len = 3, pos = 4, remaining = 5, b = 6, step = 7;
-		setStrArray(w, str, arr);
-		get(w, arr);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		set(w, len);
-		// remaining = i; pos = 1 (skip opening quote)
+		int str = 0, iParam = 1, s = 2, arr = 3, len = 4, pos = 5, remaining = 6, b = 7, step = 8, ci = 9, cb = 10;
+		// A negative index answers character 0's offset, which is what the plain walk
+		// answered (its remaining <= 0 exit fired before the first step). Clamping here
+		// rather than letting one flow through is not politeness: a negative index would
+		// otherwise walk BACKWARDS past the opening quote and store a cursor pointing
+		// outside the array, and every later index on that string would trap.
+		i32(w, 0);
 		get(w, iParam);
+		get(w, iParam);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.SELECT);
+		set(w, iParam);
+		castStringLocal(w, str, s);
+		setStrDataAndLen(w, s, arr, len);
+		getCursor(w, s, CURSOR_CHAR);
+		set(w, ci);
+		getCursor(w, s, CURSOR_BYTE);
+		set(w, cb);
+		// Single-byte prefix (cb == ci + 1) and i within it: the offset is 1 + i.
+		get(w, cb);
+		get(w, ci);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
+		get(w, iParam);
+		get(w, ci);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 1);
+		get(w, iParam);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		// Anchor at the cursor when it is at or before i, or nearer to i than the start
+		// is; otherwise start from the first character.
+		get(w, iParam);
+		get(w, ci);
+		w.write(Instruction.I32_GE_S);
+		get(w, ci);
+		get(w, iParam);
+		w.write(Instruction.I32_SUB);
+		get(w, iParam);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		get(w, cb);
+		set(w, pos);
+		get(w, iParam);
+		get(w, ci);
+		w.write(Instruction.I32_SUB);
 		set(w, remaining);
+		w.write(Instruction.ELSE);
 		i32(w, 1);
 		set(w, pos);
+		get(w, iParam);
+		set(w, remaining);
+		w.write(Instruction.END);
+		// Forward: step over one UTF-8 sequence per remaining character, stopping at the
+		// closing quote so an index past the end lands on the terminator.
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		// exit when pos >= len - 1
+		get(w, remaining);
+		i32(w, 0);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.BR_IF, 1);
 		get(w, pos);
 		get(w, len);
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_GE_S);
 		w.write(Instruction.BR_IF, 1);
-		// exit when remaining == 0 (pos is now at the i-th character's first byte)
-		get(w, remaining);
-		i32(w, 0);
-		w.write(Instruction.I32_LE_S);
-		w.write(Instruction.BR_IF, 1);
-		// b = arr[pos]; determine UTF-8 sequence width
 		arrGetLocal(w, arr, pos);
 		set(w, b);
 		emitUtf8Width(w, b, step);
@@ -950,6 +1041,52 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		// Backward: one character back is one byte back plus every continuation byte
+		// (0b10xxxxxx) below it. Only reached when the anchor was the cursor and i is
+		// before it, so it can never step below the opening quote.
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, remaining);
+		i32(w, 0);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, pos);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.BR_IF, 1);
+		arrGetLocal(w, arr, pos);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, pos);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop (continuation bytes)
+		w.write(Instruction.END); // block
+		get(w, remaining);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, remaining);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop (characters)
+		w.write(Instruction.END); // block
+		// Record where character i lives, unless the walk ran off the end first.
+		get(w, remaining);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, 0x40);
+		setCursorFrom(w, s, CURSOR_CHAR, iParam);
+		setCursorFrom(w, s, CURSOR_BYTE, pos);
+		w.write(Instruction.END);
 		get(w, pos);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
@@ -1579,6 +1716,62 @@ final class WasmStringRuntimeBuilder {
 	private static void i32(WasmWriter w, int value) {
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(value);
+	}
+
+	// TYPE_STRING's character-index cursor: character CURSOR_CHAR of the string starts at
+	// byte CURSOR_BYTE of its $str_bytes array. Both are (mut i32) and both are seeded
+	// (0, 1) -- character 0 always starts right after the opening quote -- so the pair is
+	// valid from the moment a string is built. See buildStrCharByteOffsetBody().
+	private static final int CURSOR_CHAR = 3;
+
+	private static final int CURSOR_BYTE = 4;
+
+	// Pushes the seed cursor operands a struct.new TYPE_STRING needs after its data
+	// array.
+	private static void emitSeedCursor(WasmWriter w) {
+		i32(w, 0);
+		i32(w, 1);
+	}
+
+	// Pushes cursor field `field` of the TYPE_STRING held in sLocal.
+	private static void getCursor(WasmWriter w, int sLocal, int field) {
+		get(w, sLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(field);
+	}
+
+	// Stores valueLocal into cursor field `field` of the TYPE_STRING held in sLocal.
+	private static void setCursorFrom(WasmWriter w, int sLocal, int field, int valueLocal) {
+		get(w, sLocal);
+		get(w, valueLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(field);
+	}
+
+	// sLocal = (TYPE_STRING) paramLocal -- the concrete type, so the cursor fields are
+	// reachable and the data array read below needs no second cast of the parameter.
+	private static void castStringLocal(WasmWriter w, int paramLocal, int sLocal) {
+		get(w, paramLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		set(w, sLocal);
+	}
+
+	// arrLocal = the $str_bytes data array (field 2) of the TYPE_STRING in sLocal;
+	// lenLocal = its byte length.
+	private static void setStrDataAndLen(WasmWriter w, int sLocal, int arrLocal, int lenLocal) {
+		get(w, sLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, arrLocal);
+		get(w, arrLocal);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		set(w, lenLocal);
 	}
 
 	// Sets arrLocal to the $str_bytes data array (field 2) of the string at the given

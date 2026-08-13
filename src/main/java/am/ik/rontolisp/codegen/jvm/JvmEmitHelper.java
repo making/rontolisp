@@ -248,6 +248,13 @@ final class JvmEmitHelper {
 		return ctx.cp.addMethodref(ctx.stringClass, ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
 	}
 
+	/** A static-method reference into the class being generated (a runtime helper). */
+	static ConstantPool.MethodrefConstant selfMethod(JvmLispCompiler.Ctx ctx, String className, String name,
+			String desc) {
+		return ctx.cp.addMethodref(ctx.cp.addClass(ctx.cp.addUtf8(className)),
+				ctx.cp.addNameAndType(ctx.cp.addUtf8(name), ctx.cp.addUtf8(desc)));
+	}
+
 	/**
 	 * Coerces the {@code Object} on the stack (Long or BigInteger) to a
 	 * {@code BigInteger}.

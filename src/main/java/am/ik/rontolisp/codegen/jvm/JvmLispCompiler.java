@@ -1877,7 +1877,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		// computation lives in one method so each call site is a single invokestatic,
 		// keeping main within the JVM's 64 KB per-method limit.
 		final JvmLengthRuntimeBuilder.LengthMethod lengthMethodBody = JvmLengthRuntimeBuilder.build(cp,
-				objectArrayClass, stringClass, longValueOf);
+				objectArrayClass, stringClass, longValueOf, thisClass);
+
+		// The character-index helpers (_cpoff / _scount) every string index and every
+		// string length reads through. Emitted unconditionally for the same reason
+		// _length is: the sites are generated internally too, and the pair is ~60 bytes.
+		final List<JvmStringIndexRuntimeBuilder.StringIndexMethod> stringIndexMethods = JvmStringIndexRuntimeBuilder
+			.build(cp, thisClass, stringClass);
+		final List<Utf8Constant> stringIndexFieldNames = java.util.Arrays.stream(JvmStringIndexRuntimeBuilder.FIELDS)
+			.map(cp::addUtf8)
+			.toList();
+		final Utf8Constant stringIndexFieldDesc = cp.addUtf8(JvmStringIndexRuntimeBuilder.FIELD_DESC);
 
 		Utf8Constant mainUtf8 = cp.addUtf8("main");
 		Utf8Constant mainDesc = cp.addUtf8("([Ljava/lang/String;)V");
@@ -2012,6 +2022,16 @@ public final class JvmLispCompiler implements LispCompiler {
 					.writeU2(gensymCtrFieldName)
 					.writeU2(gensymCtrFieldDesc)
 					.writeU2(0));
+				// The two strings last PROVEN to hold no surrogate pair, so a character
+				// index into one is 1 + i. Deliberately NOT volatile: a String is
+				// immutable and a reference field is written atomically, so a racing
+				// reader sees an older string (a re-probe) but never a torn pair.
+				for (Utf8Constant siName : stringIndexFieldNames) {
+					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
+						.writeU2(siName)
+						.writeU2(stringIndexFieldDesc)
+						.writeU2(0));
+				}
 				if (httpHandlerRuntime != null) {
 					f.add(w -> w.writeU2(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC)
 						.writeU2(httpHandlerRuntime.handlerFieldName())
@@ -2589,6 +2609,16 @@ public final class JvmLispCompiler implements LispCompiler {
 								attr.writeU2(lengthMethodBody.maxStack())
 									.writeU2(lengthMethodBody.maxLocals())
 									.writeCode((Object[]) lengthMethodBody.code().toArray(new Integer[0]))
+									.writeU2(0)
+									.writeU2(0);
+							})));
+				}
+				for (JvmStringIndexRuntimeBuilder.StringIndexMethod sm : stringIndexMethods) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(sm.maxStack())
+									.writeU2(sm.maxLocals())
+									.writeCode((Object[]) sm.code().toArray(new Integer[0]))
 									.writeU2(0)
 									.writeU2(0);
 							})));

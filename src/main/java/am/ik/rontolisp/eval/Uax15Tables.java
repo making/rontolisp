@@ -81,12 +81,13 @@ import org.jspecify.annotations.Nullable;
  * library-scale class past the 65534-entry class-format ceiling -- see
  * {@code .kb/jvm-method-size-limits.md}, where that overflow is what made this
  * substitution look like an operand-stack bug. The runs are emitted as a QUOTED LIST of
- * short chunks rather than one long literal, because {@code (char s i)} costs O(i) on
- * every COMPILE backend -- the UTF-8 walk in wasm's {@code _str_char_at}, the code-point
- * walk in the JVM's {@code offsetByCodePoints} -- which makes a single-literal scan
- * quadratic: at {@link #CHUNK} a 56 KB payload scans ~15x faster on either WASM backend
- * and ~10x faster on the JVM. The interpreter indexes a slot, so chunking is neutral
- * there; it is the three compile backends this buys.
+ * short chunks rather than one long literal, which is what keeps any one of them clear of
+ * the same 65535-byte {@code CONSTANT_Utf8} ceiling. Chunking used to buy far more than
+ * that -- {@code (char s i)} cost O(i) on every COMPILE backend, so a single-literal scan
+ * was quadratic and {@link #CHUNK} was worth ~15x on either WASM backend and ~10x on the
+ * JVM -- but a character index is amortized O(1) everywhere now
+ * ({@code .kb/string-index-cost.md}), so the chunk size is a constant-pool decision
+ * alone.
  *
  * <p>
  * One BEHAVIOR difference, and it is a fix: the replaced letter loop passes each hex
@@ -111,13 +112,14 @@ final class Uax15Tables {
 
 	/**
 	 * How long an emitted string literal chunk may get. A {@code CONSTANT_Utf8} allows
-	 * 65535 bytes, so the ceiling is not what sets this: {@code (char s i)} costs O(i) on
-	 * every compile backend, so a scan of one N-character literal is quadratic and a scan
-	 * of N/C chunks of C characters is not. Measured over a 55,811-character run at this
-	 * size against one literal (ms): component 90 against 1439, WASM Preview 1 90 against
-	 * 1328, JVM 27 against 280, interpreter 67 against 68 (it indexes a slot, so it is
-	 * flat -- chunking is for the compile paths). A number is never split: chunks are cut
-	 * between integers.
+	 * 65535 bytes and a run can be several times that, so a run has to be cut somewhere;
+	 * this size is what it was cut to when the cut was also worth ~15x in scan time
+	 * (measured over a 55,811-character run against one literal, ms: component 90 against
+	 * 1439, WASM Preview 1 90 against 1328, JVM 27 against 280, interpreter 67 against
+	 * 68). That reason is gone -- a character index is amortized O(1) on every backend
+	 * now, {@code .kb/string-index-cost.md} -- and the ceiling is what is left, so this
+	 * could be raised toward it if the chunk COUNT ever costs something. A number is
+	 * never split: chunks are cut between integers.
 	 */
 	private static final int CHUNK = 1000;
 
@@ -476,9 +478,9 @@ final class Uax15Tables {
 			;; The tables below are emitted as decimal runs in string literals rather than
 			;; as numeric literals: an integer literal costs two JVM constant pool entries
 			;; and there are tens of thousands of them (.kb/jvm-method-size-limits.md).
-			;; Each run is a LIST of short chunks, never one long literal: (char s i) costs
-			;; O(i) on both WASM backends and O(length) on the JVM, so scanning one long
-			;; literal is quadratic. A number never straddles a chunk boundary.
+			;; Each run is a LIST of short chunks, never one long literal, so no chunk can
+			;; approach the JVM's 65535-byte constant limit. A number never straddles a
+			;; chunk boundary.
 			(defun %lite-ints (chunks)
 			  "The decimal integers of the string chunks of CHUNKS, in order."
 			  (let ((ints '()) (value 0) (digits nil))

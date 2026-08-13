@@ -3753,17 +3753,20 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
 					});
-					// type 4: string struct {i32 id, i32 len, (ref null eq) data}. id is
-					// the
-					// canonical integer identity (interned offset or runtime id, compared
-					// with i32.eq); len is the byte length; data is the $str_bytes GC
-					// array
-					// holding the quote-framed bytes (nil until a builder fills it -- see
-					// FUNC_STR_BUILD).
+					// type 4: string struct {i32 id, i32 len, (ref null eq) data,
+					// (mut i32) ci, (mut i32) cb}. id is the canonical integer identity
+					// (interned offset or runtime id, compared with i32.eq); len is the
+					// byte length; data is the $str_bytes GC array holding the
+					// quote-framed bytes (nil until a builder fills it -- see
+					// FUNC_STR_BUILD). ci/cb are the character-index cursor
+					// (_str_char_byte_offset): character ci starts at byte cb, seeded
+					// (0, 1) by every builder.
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+						fields.addField(true, w -> w.write(Type.I32));
+						fields.addField(true, w -> w.write(Type.I32));
 					});
 					// type 5: cell struct {(mut ref null eq) value}
 					rec.addSubFinalStruct(fields -> {
