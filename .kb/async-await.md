@@ -305,6 +305,19 @@ transports sitting where a boundary must block. A `rontolisp:wasm-export`
 boundary no longer needs it spelled in the target: the wrapper resolves a
 returned future itself (`.kb/wasm-export-no-wasi.md`).
 
+**In asyncMode it is `_sched_loop`, and that function has TWO shapes.** With a
+scheduler (the module binds an async-calling interface) it blocks on the task
+waitable-set until the driven future settles. Without one it used to be an
+UNREACHABLE STUB, so `%future-force` trapped outright in an asyncMode module
+that only ever builds guest futures -- an `async-defun` that never suspends, a
+`%stream-new` pull stream's read. Nothing in such a module CAN suspend, so every
+future in it is settled by the time anything forces it, and the force is now the
+same poll the Preview 1 tier does (`WasmFutureRuntimeBuilder.buildSyncForce` ->
+`OFF_POLL`; a plain value passes through, a settled chain flattens, a rejection
+re-signals). Pinned by the `%future-force` line of the
+`stream-new-builds-a-pull-stream-on-every-backend` ci-spec case, which runs on
+all four backends.
+
 ## http-handler interaction
 
 A handler that awaits (fetch inside serve) must itself be an async-defun; the

@@ -319,6 +319,61 @@ ONE transport therefore serves every backend: on the interpreter and the JVM
 the host passes a closure or a string directly, and on the WASM backends the
 synthesized export builds the thunk over a host import — the next section.
 
+### The body SINK: the response leaves the head too (todo-341 Phase 3)
+
+Symmetrically, and for the same three reasons: beside the head the transport
+takes an optional BODY SINK — a function of one argument taking the next chunk,
+possibly answering a FUTURE so a suspending host writer is legal
+(`%http-reactor-write` resolves it through the same `%http-reactor-force`). Given
+one, `%http-reactor-body-out` writes every chunk to it and the head's `"body"`
+key is **dropped**; given none, the body rides the head as it always did. Three
+rules, each load-bearing:
+
+- **the key is ABSENT, not empty**, when there is a sink. A host has to be able
+  to tell "the body crossed out of band" from "the body is the empty string" —
+  the two are different responses and only the key's presence separates them.
+- **the chunks cross BEFORE the head**, because the head is the return value. So
+  the head's own `"body"` key, when it has one, WINS over anything already
+  written — which is what makes a handler error mid-body recoverable: the 500
+  the transport catches into carries its report in band, and the host discards
+  the chunks it already took rather than prepending them to it. That is why the
+  error arm passes no sink.
+- **a STREAM body is forwarded, not collected.** `%http-normalize-response`
+  hands a stream body through untouched (`%http-body-string`'s `streamp` arm),
+  and with a sink the transport pulls it chunk at a time
+  (`%http-reactor-stream-chunk`, the resolve again) straight into the sink.
+  Without a sink it is DRAINED into the envelope — which is also a fix rather
+  than a fallback: this transport used to hand the stream value itself to
+  `json-stringify`.
+
+An `(unsigned-byte 8)` response body is still text by the time it gets here —
+`%http-body-string` renders it one character per octet, as every transport that
+writes it back out one byte each needs — so a sink whose boundary is byte-shaped
+must not re-encode it as UTF-8. That is the open half of Phase 3: the WASM
+`env.writeResponseBody` entry, and what `%http-normalize-response` has to keep in
+order to feed it.
+
+Pinned by the `http-reactor-body-sink` ci-spec case (four backends: a string body
+with and without a sink, a stream body both ways, and the error arm staying in
+band) and `LispEvaluatorAsdfTest.aReactorSinkTakesTheResponseBodyOutOfTheHead`.
+
+Two backend bugs surfaced while wiring it, both pre-existing and both now pinned
+by the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case:
+
+- **the JVM answered `(consp a-stream)` = T.** A stream is an `Object[3]` there
+  and nothing in the cons-shaped predicates excluded it, so
+  `%http-body-string`'s `consp` arm caught a stream body before its `streamp` arm
+  could — the JVM alone. `JvmEmitHelper.emitAsyncValueExclusion` (gated on
+  `Ctx.mayUseAsyncValues`, so a program with no async runtime is byte-identical)
+  is the counterpart of the instance exclusion beside it.
+- **`%future-force` trapped in an asyncMode module with no scheduler.**
+  `OFF_SCHED_LOOP` was an unreachable stub when the module binds no
+  async-calling interface. But nothing in such a module can suspend, so every
+  future in it is settled by the time anything forces it: forcing is POLLING
+  there, exactly as on the Preview 1 tier where `%future-force` compiles to
+  `_p1_future_await` and that function is the same poll
+  (`WasmFutureRuntimeBuilder.buildSyncForce`).
+
 ### The WASM boundary: a head export and a body import (todo-341 Phase 2b)
 
 A host on the other side of a wasm boundary cannot pass a Lisp closure, so
@@ -529,8 +584,8 @@ mentions `%http-body-stream`). Measured when that shape landed (both builds were
 roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
 (283,200 B).
 
-- `%http-reactor-handle` is `(app request-json &optional body buffered) ->
-  response-json` (the head and the body source, above). It converts
+- `%http-reactor-handle` is `(app request-json &optional body buffered sink) ->
+  response-head-json` (the head, the body source and the body sink, above). It converts
   nothing itself: it builds the raw tuple and calls `rontolisp::%http-make-env`
   / `%http-normalize-response`, exactly as every other transport does, so it
   cannot drift from what a SERVED request sees. All that is left in the library

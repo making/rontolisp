@@ -30,7 +30,8 @@ picking this up should say so out loud before spending the boundary change: the
 headline number that opened this item is gone, and it was taken by a one-line
 fix somewhere else. (Of those three, BINARY and STREAMING are done on the module
 side; MEMORY is done for the TRANSPORT and open for the DRAIN -- `.todo/350`.
-What is left here is the RESPONSE body, Phase 3.)
+What is left here is the RESPONSE body's WASM boundary, Phase 3 step b -- its
+Lisp half landed 2026-08-13.)
 
 Since `:async t` landed, a suspending host import is a declared, supported fact,
 and the spike below shows the boundary can be rebuilt around it. Breaking the
@@ -471,6 +472,55 @@ linear memory, so a large or streamed response pays the same way. Same
 convention in reverse (`env.writeResponseBody(ptr, len)`, the module choosing
 where those bytes sit), and `%http-normalize-response`'s stream arm stops being
 drained before sending on this transport.
+
+*Step a, the LISP half, done (2026-08-13)* -- the half that moves no host glue,
+exactly as Phase 2a was:
+
+- `%http-reactor-handle` / `-dispatch` (and both `clack.handler.reactor` entries)
+  take an optional BODY SINK beside the head: a one-argument chunk writer,
+  possibly answering a FUTURE, so a suspending host writer is legal
+  (`%http-reactor-write` resolves it through the same `%http-reactor-force` the
+  request side uses). Given one the head's `"body"` key is **absent** -- not
+  empty: a host must be able to tell "the body crossed out of band" from "the
+  body is the empty string" -- and given none nothing changed.
+- **a STREAM body is forwarded, not collected** (`%http-reactor-body-out`): the
+  transport pulls it chunk at a time straight into the sink. Without a sink it is
+  DRAINED into the envelope, which is a fix and not a fallback -- this transport
+  used to hand the stream value itself to `json-stringify`.
+- the chunks cross BEFORE the head, so a head carrying a `"body"` key WINS over
+  anything already written. That is what makes a handler error mid-body
+  recoverable: the 500 arm passes no sink and answers its report in band.
+
+Gate, met: the `http-reactor-body-sink` ci-spec case (four backends: a string
+body with and without a sink, a stream body both ways, the error arm staying in
+band) and `LispEvaluatorAsdfTest.aReactorSinkTakesTheResponseBodyOutOfTheHead`.
+`.kb/clack.md` ("The body SINK") has the mechanics.
+
+**Two backend bugs it surfaced, both pre-existing, both fixed here** -- and both
+are the reason a stream response body had never worked on this transport:
+
+- **the JVM answered `(consp a-stream)` = T.** A stream is an `Object[3]` there
+  and nothing in the cons-shaped predicates excluded it, so `%http-body-string`'s
+  `consp` arm caught a stream body before its `streamp` arm could -- on the JVM
+  alone (the interpreter and both WASM backends answer nil).
+  `JvmEmitHelper.emitAsyncValueExclusion`, gated on `Ctx.mayUseAsyncValues` so an
+  async-free program stays byte-identical. `.kb/instance-syntax.md` has it beside
+  the instance exclusion it mirrors.
+- **`%future-force` trapped in an asyncMode module with no scheduler.**
+  `OFF_SCHED_LOOP` was an unreachable stub when the module binds no async-calling
+  interface -- but nothing in such a module can suspend, so every future in it is
+  settled by the time anything forces it. Forcing is polling there, exactly as on
+  the Preview 1 tier (`WasmFutureRuntimeBuilder.buildSyncForce`).
+  `.kb/async-await.md`.
+
+*Still open (step b, the WASM boundary).* `env.writeResponseBody(ptr, len)` and
+the sink the synthesized bridge builds over it, plus the glue files. One thing
+the Lisp half deliberately left for it: an `(unsigned-byte 8)` response body is
+already TEXT by the time the sink sees it (`%http-body-string` renders it one
+character per octet, which is what every transport that writes the bytes back out
+one at a time needs), so a byte-shaped sink must not re-encode it as UTF-8 --
+which means `%http-normalize-response` has to stop flattening that arm, the same
+way it already keeps a stream.
 
 **Phase 4 -- the examples, and the glue that stops being hand-written. DONE with
 step 2 (2026-08-13), except the generation.** Ten of the eleven

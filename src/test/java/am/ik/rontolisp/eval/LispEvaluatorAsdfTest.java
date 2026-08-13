@@ -335,6 +335,32 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void aReactorSinkTakesTheResponseBodyOutOfTheHead() {
+		// The response body leaves the head the same way the request body did: given a
+		// sink, every chunk goes to it and the head carries NO "body" key, so a host can
+		// tell "the body crossed out of band" from "the body is the empty string". A
+		// STREAM body is forwarded chunk at a time rather than being collected first,
+		// which is the whole point -- it used to reach json-stringify unresolved.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defvar *chunks* nil)
+				(defun sink (chunk) (setq *chunks* (cons chunk *chunks*)) nil)
+				(defvar *parts* '("one " "two " "three"))
+				(defun part ()
+				  (if *parts*
+				      (let ((c (car *parts*))) (setq *parts* (cdr *parts*)) c)
+				      nil))
+				(defun app (env)
+				  (declare (ignore env))
+				  (list 200 nil (rontolisp::%stream-new #'part (lambda () nil))))
+				(print (clack.handler.reactor:handle
+				        #'app "{\\"method\\":\\"GET\\",\\"target\\":\\"/\\"}" nil #'sink))
+				(print (reverse *chunks*))
+				""", Map.of(), List.of());
+		assertThat(output).doesNotContain("body").contains("(\"one \" \"two \" \"three\")");
+	}
+
+	@Test
 	void theReactorDispatcherAnswersAPortableStreamRawBodyByDefault() {
 		// The reactor's OWN default is rontolisp's asynchronous stream -- the
 		// http-handler directive's default, and what makes the portable

@@ -200,6 +200,19 @@ JVM predicates' instance exclusion + `_equal` instance arm
 byte-identical to a build that never knew about instances — that is the
 invariant the gate exists for.
 
+**It has a sibling, and the pair is the whole exclusion list.** The JVM's
+cons-shaped predicates (`consp`/`listp`/`atom`) answer for an `Object[]` that is
+not a ratio, not a funcref and not an instance — which left the ASYNC values,
+also `Object[]`s: a stream and a stream-read token are `Object[3]`s headed by an
+interned marker, and this backend alone answered `(consp a-stream)` = T (the
+interpreter and both WASM backends answer nil). `JvmEmitHelper.emitAsyncValueExclusion`
+is that exclusion, gated the same way on `Ctx.mayUseAsyncValues` (the compiler's
+`usesAsyncRuntime`) so a program without the async runtime stays byte-identical,
+and comparing the marker by IDENTITY exactly as `_streamp` / `_futurep` do. Pinned
+by the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case; what it
+cost before it was found is in `.kb/clack.md` (a stream response body took
+`%http-body-string`'s `consp` arm on the JVM).
+
 Only CONSTRUCTION needs the gate on; the reading primitives compile to a
 constant nil when it is off (there is provably nothing to read), so an
 over-approximation costs one unused type entry and an under-approximation is a

@@ -1158,6 +1158,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesHashTables(usesHashTables)
 			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
+			.mayUseAsyncValues(usesAsyncRuntime)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
 			.userDefunNames(Set.copyOf(userDefinedNames))
@@ -3974,6 +3975,15 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean mayUseInstances = false;
 
 		/**
+		 * True when an async runtime value -- a stream or a stream-read token, both
+		 * {@code Object[3]} headed by an interned marker -- can exist in this class.
+		 * Gates the async-value exclusion in the cons-shaped predicates, so a program
+		 * without the async runtime compiles byte-identically. Shared across every
+		 * context.
+		 */
+		boolean mayUseAsyncValues = false;
+
+		/**
 		 * True for the single context that compiles top-level forms (the {@code main}
 		 * body), false for defun/lambda bodies. When the embedded {@code eval} runtime is
 		 * present, a top-level global variable binding is mirrored into the runtime's
@@ -4165,6 +4175,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesHashTables = builder.usesHashTables;
 			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
+			this.mayUseAsyncValues = builder.mayUseAsyncValues;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
 			this.warnedClRedefinitions = builder.warnedClRedefinitions;
@@ -4409,6 +4420,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesSeqString = false;
 
 			private boolean mayUseInstances = false;
+
+			private boolean mayUseAsyncValues = false;
 
 			private String className = "";
 
@@ -4800,6 +4813,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder mayUseInstances(boolean mayUseInstances) {
 				this.mayUseInstances = mayUseInstances;
+				return this;
+			}
+
+			Builder mayUseAsyncValues(boolean mayUseAsyncValues) {
+				this.mayUseAsyncValues = mayUseAsyncValues;
 				return this;
 			}
 

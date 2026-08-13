@@ -62,7 +62,25 @@
 ;;;;                                     ;   two cookies answers two Set-Cookie
 ;;;;                                     ;   headers. The host feeds it to the
 ;;;;                                     ;   Headers constructor as is.
-;;;;         "body": "..."}
+;;;;         "body": "..."}              ; ABSENT when the caller passed a body
+;;;;                                     ;   SINK -- see below.
+;;;;
+;;;; The response body leaves the head the same way the request's did: beside
+;;;; the head the transport takes an optional BODY SINK, a function of one
+;;;; argument taking the next chunk (possibly answering a FUTURE, so a
+;;;; suspending host writer is legal). Given one, every chunk goes to it and the
+;;;; "body" key is DROPPED from the head -- so a host can tell "the body crossed
+;;;; out of band" from "the body is the empty string", a STREAM body is
+;;;; forwarded chunk at a time instead of being collected into one string first,
+;;;; and a large response never has to exist in memory twice. Given none, the
+;;;; body rides the head exactly as before (a stream is drained into it), which
+;;;; is what keeps every host written against the shape above working.
+;;;;
+;;;; The chunks cross BEFORE the head, because the head is the return value --
+;;;; so the head's own "body" key, when there is one, WINS over anything already
+;;;; written. That is not a curiosity: it is how a handler error mid-body is
+;;;; recoverable, since the 500 below carries its report in band and the host
+;;;; must discard the chunks it already took rather than prepending them to it.
 ;;;;
 ;;;; :remote-port is always nil (a reactor host exposes no peer port), and
 ;;;; :server-name / :server-port come from the Host header.
@@ -314,18 +332,68 @@
    "HTTP/1.1" (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req)
    nil))
 
-(defun rontolisp::%http-reactor-envelope (status headers body)
-  (rontolisp:json-stringify
-   (rontolisp:plist-hash-table
-    (list :status status
-          :headers (rontolisp::%http-reactor-header-pairs headers)
-          :body body))))
+(defun rontolisp::%http-reactor-write (sink chunk)
+  ;; One response chunk out, RESOLVED. A host writer that suspends answers a
+  ;; future, and it has to have TAKEN the chunk before the next one is produced:
+  ;; the chunks cross in order, and on a byte-shaped boundary they cross through
+  ;; one buffer. An empty chunk is not written at all -- a sink is fed only what
+  ;; the body actually has, the same rule the pull adapter follows in the other
+  ;; direction.
+  (when (> (length chunk) 0)
+    (rontolisp::%http-reactor-force (funcall sink chunk)))
+  nil)
+
+(defun rontolisp::%http-reactor-stream-chunk (s)
+  ;; One chunk from a rontolisp stream body, RESOLVED -- stream-read answers a
+  ;; future, and this transport is synchronous code where await is not legal.
+  (rontolisp::%http-reactor-force (rontolisp:stream-read s)))
+
+(defun rontolisp::%http-reactor-body-out (body sink)
+  ;; The normalized response body -> what the head's "body" key carries, having
+  ;; handed everything else to the SINK.
+  ;;
+  ;; With a sink the body LEAVES the head: each chunk is written out of band and
+  ;; the key is dropped, so a STREAM body (a proxied fetch response) is
+  ;; forwarded chunk at a time rather than being collected into one string
+  ;; first. Without one the body rides the head as before, and a stream is
+  ;; DRAINED into it -- which is the only thing a host that speaks the old shape
+  ;; can be given, and is what this transport used to be missing entirely (a
+  ;; stream reached json-stringify).
+  (cond ((rontolisp:streamp body)
+         (if sink
+             (let ((chunk (rontolisp::%http-reactor-stream-chunk body)))
+               (while chunk
+                 (rontolisp::%http-reactor-write sink chunk)
+                 (setq chunk (rontolisp::%http-reactor-stream-chunk body)))
+               nil)
+             (with-output-to-string (out)
+               (let ((chunk (rontolisp::%http-reactor-stream-chunk body)))
+                 (while chunk
+                   (write-string chunk out)
+                   (setq chunk
+                         (rontolisp::%http-reactor-stream-chunk body)))))))
+        (sink
+         (rontolisp::%http-reactor-write sink body)
+         nil)
+        (t body)))
+
+(defun rontolisp::%http-reactor-envelope (status headers body sink)
+  ;; The response HEAD. With a SINK the "body" key is ABSENT rather than empty:
+  ;; the body crossed out of band, and a host has to be able to tell the two
+  ;; apart. Without one the key is the whole body, as it always was.
+  (let ((head
+         (list :status status
+               :headers (rontolisp::%http-reactor-header-pairs headers))))
+    (rontolisp:json-stringify
+     (rontolisp:plist-hash-table
+      (if sink head (append head (list :body body)))))))
 
 (defun rontolisp::%http-reactor-handle
-    (app request-json &optional body buffered)
+    (app request-json &optional body buffered sink)
   "Run the Clack application APP against the JSON request head REQUEST-JSON and
-the body source BODY and answer the JSON response. BUFFERED selects the
-:raw-body shape. See the envelope in this file's header."
+the body source BODY and answer the JSON response head. BUFFERED selects the
+:raw-body shape; SINK, when given, takes the response body out of band. See the
+envelope in this file's header."
   ;; The application's answer may be a FUTURE (an async-defun handler, e.g. one
   ;; awaiting rontolisp:fetch): resolve it at this boundary, the same courtesy
   ;; %http-serve-request extends on the socket transports -- but through the
@@ -344,22 +412,27 @@ the body source BODY and answer the JSON response. BUFFERED selects the
                              (rontolisp::%future-force answer)
                              answer))))
                   (rontolisp::%http-reactor-envelope (car triple)
-                                                     (car (cdr triple))
-                                                     (car (cdr (cdr triple)))))
+                   (car (cdr triple))
+                   (rontolisp::%http-reactor-body-out (car (cdr (cdr triple)))
+                                                      sink) sink))
     (error (e)
+      ;; In band whether or not there is a sink: an error is the LAST word, and
+      ;; a head that carries a "body" key wins over whatever crossed before it,
+      ;; so a handler that failed mid-body still answers one clean document.
       (rontolisp::%http-reactor-envelope 500
        (list (cons "content-type" "application/json"))
        (format nil "~a~%"
                (rontolisp:json-stringify
-                (rontolisp:plist-hash-table
-                 (list :error (format nil "~a" e)))))))))
+                (rontolisp:plist-hash-table (list :error (format nil "~a" e)))))
+       nil))))
 
-(defun rontolisp::%http-reactor-dispatch (request-json &optional body)
+(defun rontolisp::%http-reactor-dispatch (request-json &optional body sink)
   "Run the application the handler backend stored against the JSON request head
-REQUEST-JSON and the optional body source BODY and answer the JSON response.
-The host's entry point: on the WASM backends the synthesized wasm-export calls
-this, on every other backend the host calls it directly. BODY is nil, a string
-or a pull thunk (see this file's header); a host that leaves it out keeps the
-envelope's own \"body\" key."
+REQUEST-JSON and the optional body source BODY and answer the JSON response
+head. The host's entry point: on the WASM backends the synthesized wasm-export
+calls this, on every other backend the host calls it directly. BODY is nil, a
+string or a pull thunk and SINK is nil or a one-argument chunk writer (see this
+file's header); a host that leaves them out keeps the envelope's own \"body\"
+key in both directions."
   (rontolisp::%http-reactor-handle rontolisp::%http-reactor-app request-json
-                                   body rontolisp::%http-reactor-buffered))
+                                   body rontolisp::%http-reactor-buffered sink))

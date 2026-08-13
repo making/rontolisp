@@ -54,20 +54,22 @@
   (:use :cl)
   (:export :handle :dispatch :run :stop))
 
-(defun clack.handler.reactor:handle (app request-json &optional body)
+(defun clack.handler.reactor:handle (app request-json &optional body sink)
   "Run the Clack application APP against the JSON request head REQUEST-JSON and
-the optional body source BODY, and answer the JSON response. The envelope and
-the body source are documented in http-reactor.lisp. The body is always the
+the optional body source BODY, and answer the JSON response head. SINK, when
+given, takes the response body out of band. The envelope, the body source and
+the sink are documented in http-reactor.lisp. The REQUEST body is always the
 BUFFERED one here: this is Clack's entry point, and Clack's :raw-body is a
 synchronous stream."
-  (rontolisp::%http-reactor-handle app request-json body t))
+  (rontolisp::%http-reactor-handle app request-json body t sink))
 
-(defun clack.handler.reactor:dispatch (request-json &optional body)
+(defun clack.handler.reactor:dispatch (request-json &optional body sink)
   "Run the application CLACKUP stored against the JSON request head
-REQUEST-JSON and the optional body source BODY, and answer the JSON response.
-The host's entry point: on the WASM backends the synthesized wasm-export calls
-this, on every other backend the host calls it directly."
-  (rontolisp::%http-reactor-dispatch request-json body))
+REQUEST-JSON and the optional body source BODY, and answer the JSON response
+head. SINK, when given, takes the response body out of band. The host's entry
+point: on the WASM backends the synthesized wasm-export calls this, on every
+other backend the host calls it directly."
+  (rontolisp::%http-reactor-dispatch request-json body sink))
 
 ;; clackup's protocol. A reactor owns no socket, so run starts nothing and stop
 ;; has nothing to stop; what run does own is the app store and -- on the WASM

@@ -52,6 +52,7 @@ final class JvmListpCompiler {
 		ctx.emit(Opcode.IFNE);
 		ctx.emitU2(0);
 		int ifInstancePos = JvmEmitHelper.emitInstanceExclusion(ctx, tempSlot);
+		int[] asyncValuePos = JvmEmitHelper.emitAsyncValueExclusion(ctx, tempSlot);
 		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
 		JvmEmitHelper.compileTrue(ctx);
 		int gotoEndPos = ctx.code.size();
@@ -62,6 +63,9 @@ final class JvmListpCompiler {
 		JvmEmitHelper.patchBranch(ctx, ifFuncRefPos, ctx.code.size());
 		if (ifInstancePos >= 0) {
 			JvmEmitHelper.patchBranch(ctx, ifInstancePos, ctx.code.size());
+		}
+		for (int pos : asyncValuePos) {
+			JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
 		}
 		ctx.emit(Opcode.ACONST_NULL);
 		JvmEmitHelper.patchBranch(ctx, gotoEndPos, ctx.code.size());

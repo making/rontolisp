@@ -255,7 +255,7 @@ final class WasmFutureRuntimeBuilder {
 			case OFF_WAKE -> buildWake(base, futureType);
 			case OFF_POLL -> buildPoll(futureType);
 			case OFF_SUBTASK_FUTURE -> sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched);
-			case OFF_SCHED_LOOP -> sched == null ? buildUnreachableStub() : buildSchedLoop(base, futureType, sched);
+			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
 			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched);
 			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType);
 			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb);
@@ -824,6 +824,25 @@ final class WasmFutureRuntimeBuilder {
 		globalGet(w, sched.setGlobal());
 		callOrdinal(w, sched.ordinals().join());
 		getLocal(w, FUT);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// _sched_loop in a module that binds NO async-calling interface: there is no
+	// waitable-set to block on, and nothing in such a module can suspend -- every future
+	// it can build is settled by the time anything forces it. So forcing IS polling here,
+	// exactly as it is on the Preview 1 tier, where %future-force compiles to
+	// _p1_future_await and that function is the same poll. It used to be an unreachable
+	// stub, which trapped its one legal caller: %future-force, the synchronous resolve
+	// the
+	// reactor transport (a stream response body) and sockets.lisp both spell.
+	private static byte[] buildSyncForce(int base) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		w.write(0); // no locals
+		getLocal(w, 0);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(base + OFF_POLL);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}

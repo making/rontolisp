@@ -348,6 +348,48 @@ when no source is passed — or when the source turns out to be empty, so a host
 may start handing a reader over without also having to stop filling the
 envelope. A host written against the shape above keeps working unchanged.
 
+### Taking the response body separately
+
+Symmetrically, `handle` and `dispatch` take a fourth optional argument, the
+**body sink**: a function of one argument, called with each chunk of the
+response body. It may answer a future, so a host that suspends while it writes
+can hand one over.
+
+Given a sink, the JSON answer is the response **head** and its `"body"` key is
+**absent** — so a host can tell "the body crossed out of band" from "the body is
+the empty string". A **stream** response body (a proxied `fetch`) is then
+forwarded chunk at a time instead of being collected into one string first.
+
+```lisp
+(ql:quickload "clack-handler-reactor")
+
+(defun app (env)
+  (declare (ignore env))
+  (list 200 '(:content-type "text/plain") (list "hello")))
+
+(defvar *chunks* nil)
+(defun sink (chunk) (setq *chunks* (cons chunk *chunks*)) nil)
+
+(princ (clack.handler.reactor:handle
+        #'app "{\"method\":\"GET\",\"target\":\"/hi\"}" nil #'sink))
+(terpri)
+(princ (car *chunks*))
+```
+
+```
+{"status":200,"headers":[["content-type","text/plain"]]}
+hello
+```
+
+The chunks cross **before** the head, because the head is the return value. So a
+head that does carry a `"body"` key wins over anything already written: that is
+how a handler that fails halfway through its body still answers one clean
+document — the 500 the transport catches into carries its report in band, and
+the host discards the chunks it already took.
+
+Passing no sink keeps the old shape exactly: the body rides the head, and a
+stream body is drained into it.
+
 ### The WASM boundary: a head export and a body import
 
 On a `--no-wasi` WASM module the source is not a Lisp value the host can pass,

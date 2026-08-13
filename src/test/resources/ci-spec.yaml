@@ -1702,7 +1702,12 @@ cases:
     # chunk, the close protocol runs exactly once at end of stream, and a read
     # past the end is nil. The four representations differ (a pull-mode
     # LispStream, the JVM's Object[3] with the thunk pair where the queue would
-    # be, TYPE_P1_STREAM, TYPE_WASI_STREAM) and the answers must not.
+    # be, TYPE_P1_STREAM, TYPE_WASI_STREAM) and the answers must not -- which
+    # covers the CONS-shaped predicates (the JVM's Object[3] is an Object[] like
+    # a cons cell is, and nothing excluded it there) and the SYNCHRONOUS resolve
+    # (%future-force, legal where await is not: an asyncMode module that binds no
+    # async-calling interface has no scheduler to block on and nothing in it can
+    # suspend, so forcing is polling there, exactly as on the Preview 1 tier).
     source: |
       (defvar *ci-stream-chunks* '("ab" "cd"))
       (defvar *ci-stream-closes* 0)
@@ -1717,7 +1722,11 @@ cases:
                             (lambda () (setq *ci-stream-closes* (+ *ci-stream-closes* 1)) nil)))
       (print (rontolisp:streamp *ci-stream*))
       (print (rontolisp:streamp 42))
+      (print (consp *ci-stream*))
+      (print (listp *ci-stream*))
+      (print (atom *ci-stream*))
       (print *ci-stream*)
+      (print (rontolisp::%future-force (rontolisp:stream-read *ci-stream*)))
       (print (rontolisp:await (rontolisp:read-all *ci-stream*)))
       (print *ci-stream-closes*)
       (print (rontolisp:await (rontolisp:stream-read *ci-stream*)))
@@ -1726,8 +1735,12 @@ cases:
     expected: |
       T
       NIL
+      NIL
+      NIL
+      T
       #<STREAM>
-      "abcd"
+      "ab"
+      "cd"
       1
       NIL
       1
@@ -8288,6 +8301,83 @@ cases:
       "-"
       "still-in-band"
       "あい"
+  - name: http-reactor-body-sink
+    source: |
+      ;; The RESPONSE body leaves the head the same way the request body did:
+      ;; beside the head the transport takes an optional BODY SINK, and every
+      ;; chunk goes to it instead of into the envelope's "body" key -- which is
+      ;; then ABSENT, so a host can tell "the body crossed out of band" from
+      ;; "the body is the empty string". A stream body is FORWARDED chunk at a
+      ;; time rather than collected into one string first.
+      (defvar *ci-sink-chunks* nil)
+      (defun ci-sink (chunk)
+        (setq *ci-sink-chunks* (cons chunk *ci-sink-chunks*))
+        nil)
+      (defun ci-sink-text ()
+        (let ((out ""))
+          (dolist (c (reverse *ci-sink-chunks*))
+            (setq out (concatenate 'string out c)))
+          out))
+      (defun ci-sink-head-body (json)
+        (gethash "body" (rontolisp:json-parse json)))
+      (defun ci-sink-app (env)
+        (declare (ignore env))
+        (list 200 nil (list "hello, sink")))
+      (rontolisp::%http-reactor-register #'ci-sink-app)
+      ;; no sink: the body rides the head, exactly as every host that has not
+      ;; moved still expects
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}")))
+      (setq *ci-sink-chunks* nil)
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}" nil
+                                                 #'ci-sink)))
+      (print (ci-sink-text))
+      ;; A STREAM body -- what a proxied fetch response is. Without a sink it is
+      ;; drained into the head (it used to reach json-stringify unresolved);
+      ;; with one it crosses as the three chunks the application produced.
+      (defvar *ci-sink-parts* nil)
+      (defun ci-sink-part ()
+        (if *ci-sink-parts*
+            (let ((c (car *ci-sink-parts*)))
+              (setq *ci-sink-parts* (cdr *ci-sink-parts*))
+              c)
+            nil))
+      (defun ci-sink-stream-app (env)
+        (declare (ignore env))
+        (setq *ci-sink-parts* (list "one " "two " "three"))
+        (list 200 nil (rontolisp::%stream-new #'ci-sink-part (lambda () nil))))
+      (rontolisp::%http-reactor-register #'ci-sink-stream-app)
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}")))
+      (setq *ci-sink-chunks* nil)
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}" nil
+                                                 #'ci-sink)))
+      (print (length *ci-sink-chunks*))
+      (print (ci-sink-text))
+      ;; A handler that FAILS answers its 500 report in band whether or not
+      ;; there is a sink: the head is the last word, so a head carrying a "body"
+      ;; key wins over whatever crossed before it.
+      (defun ci-sink-boom (env)
+        (declare (ignore env))
+        (error "boom"))
+      (rontolisp::%http-reactor-register #'ci-sink-boom)
+      (setq *ci-sink-chunks* nil)
+      (print (if (ci-sink-head-body
+                  (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}" nil
+                                                     #'ci-sink))
+                 "in-band"
+                 "out-of-band"))
+    expected: |
+      "hello, sink"
+      NIL
+      "hello, sink"
+      "one two three"
+      NIL
+      3
+      "one two three"
+      "in-band"
   - name: http-percent-decode
     source: |
       ;; Lenient by design: a malformed escape is copied verbatim, "+" is NOT a

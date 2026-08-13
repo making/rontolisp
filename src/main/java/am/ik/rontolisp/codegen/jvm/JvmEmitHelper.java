@@ -120,6 +120,56 @@ final class JvmEmitHelper {
 	}
 
 	/**
+	 * Emits the ASYNC-VALUE exclusion shared by the cons-shaped predicates
+	 * ({@code consp}/{@code listp}/{@code atom}): a stream and a stream-read token are
+	 * {@code Object[3]}s headed by an interned marker string
+	 * ({@link JvmAsyncRuntimeBuilder}), and neither is a cons -- the interpreter and both
+	 * WASM backends answer nil for {@code (consp a-stream)}, and this backend answered T
+	 * because nothing here excluded them. The marker is compared by IDENTITY, exactly as
+	 * {@code _streamp} / {@code _futurep} compare it: both loads come from the same
+	 * class's constant pool entry. The value must already be in {@code tempSlot} and
+	 * known to be a non-ratio {@code Object[]}. Nothing is emitted when the program
+	 * carries no async runtime, so such a program compiles byte-identically to a build
+	 * that never knew about them.
+	 * @param ctx the compilation context
+	 * @param tempSlot the local holding the value
+	 * @return the branch positions to patch to the not-a-cons target, empty when no test
+	 * was emitted
+	 */
+	static int[] emitAsyncValueExclusion(JvmLispCompiler.Ctx ctx, int tempSlot) {
+		if (!ctx.mayUseAsyncValues) {
+			return new int[0];
+		}
+		// Length first, like the runtime's own marker test: it rejects every cons
+		// (Object[2]) before a string comparison is reached.
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(tempSlot);
+		ctx.emit(Opcode.CHECKCAST);
+		ctx.emitU2(ctx.objectArrayClass.index());
+		ctx.emit(Opcode.ARRAYLENGTH);
+		ctx.emit(Opcode.ICONST_3);
+		int ifNotTriplePos = ctx.code.size();
+		ctx.emit(Opcode.IF_ICMPNE);
+		ctx.emitU2(0);
+		int[] positions = new int[2];
+		String[] markers = { JvmAsyncRuntimeBuilder.SMARKER, JvmAsyncRuntimeBuilder.RMARKER };
+		for (int i = 0; i < markers.length; i++) {
+			ctx.emit(Opcode.ALOAD);
+			ctx.emit(tempSlot);
+			ctx.emit(Opcode.CHECKCAST);
+			ctx.emitU2(ctx.objectArrayClass.index());
+			ctx.emit(Opcode.ICONST_0);
+			ctx.emit(Opcode.AALOAD);
+			compileUnspelledLiteral(markers[i], ctx);
+			positions[i] = ctx.code.size();
+			ctx.emit(Opcode.IF_ACMPEQ);
+			ctx.emitU2(0);
+		}
+		patchBranch(ctx, ifNotTriplePos, ctx.code.size());
+		return positions;
+	}
+
+	/**
 	 * Compiles the Lisp boolean true. It is the symbol {@code t} (represented at runtime
 	 * as the bare String {@code "t"}, like any other symbol), so it prints as {@code t}
 	 * and is {@code eq} to a quoted {@code 't}, matching the interpreter.
