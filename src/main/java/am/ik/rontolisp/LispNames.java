@@ -3797,9 +3797,11 @@ public final class LispNames {
 	 * Nothing about it is WASI: {@code --component} builds it over the wasi byte-stream
 	 * built-ins ({@code TYPE_WASI_STREAM}, synthesized by http.lisp for request/response
 	 * bodies), and a Preview 1 / {@code --no-wasi} module over a host import or any Lisp
-	 * closure ({@code TYPE_P1_STREAM}). WASM backends only -- the read thunk is PULLED
-	 * lazily, which the interpreter's and the JVM's buffered stream values cannot
-	 * express.
+	 * closure ({@code TYPE_P1_STREAM}). Every backend has it: the interpreter builds a
+	 * PULL-mode {@link LispStream} and the JVM the same three fields as an
+	 * {@code Object[3]}, so a body that has not arrived yet crosses as a stream rather
+	 * than as a buffer. The one mode nothing has is a guest WRITE end
+	 * ({@code rontolisp:make-stream}), which stays interpreter/JVM-only.
 	 */
 	public static final String STREAM_NEW_INTERNAL = "%STREAM-NEW";
 
@@ -4886,8 +4888,9 @@ public final class LispNames {
 
 	/**
 	 * The canonical internal-qualified spelling of {@code rontolisp::%stream-new}, the
-	 * ONE producer of a first-class stream value on the WASM backends -- which is what
-	 * the compilers gate the stream type and runtime on.
+	 * ONE producer of a PULL stream on every backend -- which is what the compilers gate
+	 * the stream type and runtime on (the JVM's async runtime, the WASM tiers' stream
+	 * type and its two runtime functions).
 	 */
 	public static final String STREAM_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + STREAM_NEW_INTERNAL;
 

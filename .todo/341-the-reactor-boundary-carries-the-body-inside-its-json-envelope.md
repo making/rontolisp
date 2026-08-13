@@ -204,13 +204,13 @@ Not done here, deliberately: nothing HTTP-shaped. The boundary entries
 `env.readRequestBody` / `env.writeResponseBody` are Phases 2 and 3; this phase
 only made a type that can express them.
 
-**Phase 1 -- Preview 1 gets a real stream value. WASM DONE (2026-08-13); the
-interpreter/JVM half is the remainder.** `TYPE_P1_STREAM
-{mut i32 eof, mut readFn, mut closeFn}` -- the same three fields as
-`TYPE_WASI_STREAM` -- with `stream-read` answering a settled `TYPE_P1_FUTURE`
-of the next chunk and `stream-close` running the close thunk once.
+**Phase 1 -- a real stream value on every backend. DONE (2026-08-13).**
+`TYPE_P1_STREAM {mut i32 eof, mut readFn, mut closeFn}` -- the same three fields
+as `TYPE_WASI_STREAM` -- with `stream-read` answering a settled `TYPE_P1_FUTURE`
+of the next chunk and `stream-close` running the close thunk once, plus the
+interpreter/JVM halves of the same primitive.
 
-What landed:
+What landed on the WASM side:
 
 - `WasmP1StreamRuntimeBuilder`, two functions (`_p1_stream_read` /
   `_p1_stream_close`). Nothing on this tier can suspend, so there is no pending
@@ -235,27 +235,36 @@ What landed:
   `stream-read`/`stream-close` keep it: `streamp` there is now the CONSTANT NIL,
   because nothing being a stream is an answer, not a failure (it used to signal).
 
-Gate, met for WASM: `WasmHostStreamE2eTest` -- a `--no-wasi` module pulling its
-body one chunk at a time through a suspending host import and draining it with
-the portable `(await (read-all s))`, against a JS host that shares its memory
-(chunks reassembled in order, one pull per chunk plus the EOF one, close
-protocol run exactly once) -- plus
-`WasmLispCompilerIntegrationTest.preview1HasAFirstClassStreamValueOverAPairOfThunks`.
-`.kb/async-await.md` has the mechanics.
+And on the interpreter/JVM side, which is what makes `%stream-new` portable
+enough for Phase 2's `%http-body-stream` (clack-handler-reactor runs on every
+backend):
 
-REMAINDER (do this before Phase 2 needs it): `%stream-new` is WASM-only. The
-interpreter's `LispStream` and the JVM's `{SMARKER, queue, state}` are buffered
-PUSH-side values with no way to express a pull, so neither can build a stream
-over a thunk today -- and Phase 2's `%http-body-stream` from-thunk constructor
-runs on every backend (clack-handler-reactor does). That is also why the
-four-backend half of this gate -- `streamp` answering T on all four for the same
-program -- is still open: there is no portable spelling that constructs a stream
-(`make-stream` is a compile error on WASM). Two pieces: a pull mode on
-`LispStream` (it must call a Lisp function, so the thunk arrives as a callback
-the evaluator closes over -- the root package may not import `eval`), and the
-JVM's hand-assembled counterpart, where `_stream_read` can simply answer
-`CompletableFuture.completedFuture(chunk)` for a pull stream instead of the
-`{RMARKER, queue, state}` token. Then the ci-spec case.
+- The interpreter gets a PULL mode on `LispStream` (`LispStream.pull`): no
+  buffer, no write end, one thunk call per read. The thunks arrive as a
+  `Supplier`/`Runnable` the EVALUATOR closes over -- the root package may not
+  import `eval` -- and the evaluator's callback also does the RESOLVE
+  (`awaitValue` of the applied thunk), so `LispStream` never sees a future and
+  the "resolve before the end-of-stream test" rule is one rule, not four.
+- The JVM's pull stream is the buffered stream's `Object[3]` with the
+  `{readFn, closeFn}` pair where the queue would be, so `_streamp` and the
+  `#<STREAM>` print are untouched; `_stream_read` runs the thunk through `_await`
+  and answers a settled future rather than the `{RMARKER, queue, state}` token.
+  `_drain_body` now reads through `_stream_read` + `_await` instead of taking
+  off the queue directly -- ONE drain for both modes, and shorter than what it
+  replaced.
+- `stream-write` on a pull stream is its OWN refusal ("the stream has no write
+  end") on both, rather than the misleading "the stream is closed".
+
+Gate, met: the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case
+(one program, four backends, identical output -- the `streamp`-answers-T half
+that was open), the `AsyncEvalTest`/`JvmAsyncCompilerTest` pairs (the same drain
+plus an ASYNC read thunk and the no-write-end edge),
+`WasmLispCompilerIntegrationTest.preview1HasAFirstClassStreamValueOverAPairOfThunks`,
+and `WasmHostStreamE2eTest` -- a `--no-wasi` module pulling its body one chunk at
+a time through a suspending host import and draining it with the portable
+`(await (read-all s))`, against a JS host that shares its memory (chunks
+reassembled in order, one pull per chunk plus the EOF one, close protocol run
+exactly once). `.kb/async-await.md` has the mechanics.
 
 Also still adjacent, and untouched: `--host-fetch`'s response `:body`, an eager
 string today, can become the same stream value (`read-all`'s `stringp` arm stays

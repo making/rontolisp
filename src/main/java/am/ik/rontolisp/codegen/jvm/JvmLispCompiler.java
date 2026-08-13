@@ -486,6 +486,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean usesAsyncSpawn = programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || usesHttpHandler;
 		boolean usesStreamOps = programUsesSymbol(program,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.MAKE_STREAM))
+				// %stream-new, the from-thunk (PULL) constructor every backend shares.
+				|| programUsesSymbol(program, LispNames.STREAM_NEW_INTERNAL_QUALIFIED)
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE))
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE))
@@ -521,6 +523,10 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodrefConstant makeStreamHelperMethod = usesAsyncRuntime
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_METHOD),
 						cp.addUtf8(JvmAsyncRuntimeBuilder.MAKE_STREAM_DESC)))
+				: null;
+		MethodrefConstant streamNewHelperMethod = usesAsyncRuntime
+				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_NEW_METHOD),
+						cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_NEW_DESC)))
 				: null;
 		MethodrefConstant streamReadHelperMethod = usesAsyncRuntime
 				? cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8(JvmAsyncRuntimeBuilder.STREAM_READ_METHOD),
@@ -1125,6 +1131,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.futurepHelper(futurepHelperMethod)
 			.streampHelper(streampHelperMethod)
 			.makeStreamHelper(makeStreamHelperMethod)
+			.streamNewHelper(streamNewHelperMethod)
 			.streamReadHelper(streamReadHelperMethod)
 			.streamWriteHelper(streamWriteHelperMethod)
 			.streamCloseHelper(streamCloseHelperMethod)
@@ -3773,6 +3780,8 @@ public final class JvmLispCompiler implements LispCompiler {
 
 		final @Nullable MethodrefConstant makeStreamHelper;
 
+		final @Nullable MethodrefConstant streamNewHelper;
+
 		final @Nullable MethodrefConstant streamReadHelper;
 
 		final @Nullable MethodrefConstant streamWriteHelper;
@@ -4207,6 +4216,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.futurepHelper = builder.futurepHelper;
 			this.streampHelper = builder.streampHelper;
 			this.makeStreamHelper = builder.makeStreamHelper;
+			this.streamNewHelper = builder.streamNewHelper;
 			this.streamReadHelper = builder.streamReadHelper;
 			this.streamWriteHelper = builder.streamWriteHelper;
 			this.streamCloseHelper = builder.streamCloseHelper;
@@ -4331,6 +4341,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private @Nullable MethodrefConstant streampHelper;
 
 			private @Nullable MethodrefConstant makeStreamHelper;
+
+			private @Nullable MethodrefConstant streamNewHelper;
 
 			private @Nullable MethodrefConstant streamReadHelper;
 
@@ -4618,6 +4630,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder makeStreamHelper(@Nullable MethodrefConstant makeStreamHelper) {
 				this.makeStreamHelper = makeStreamHelper;
+				return this;
+			}
+
+			Builder streamNewHelper(@Nullable MethodrefConstant streamNewHelper) {
+				this.streamNewHelper = streamNewHelper;
 				return this;
 			}
 

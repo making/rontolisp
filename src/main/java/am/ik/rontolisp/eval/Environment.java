@@ -1677,7 +1677,9 @@ public final class Environment implements Scope {
 				stream.write(chunk);
 			}
 			catch (IllegalStateException ex) {
-				throw new LispEvalException(LispNames.STREAM_WRITE + ": the stream is closed");
+				// The stream tells the two refusals apart: closed, or a pull stream,
+				// which has no write end at all.
+				throw new LispEvalException(LispNames.STREAM_WRITE + ": " + ex.getMessage());
 			}
 			return LispFuture.settled(LispNil.INSTANCE);
 		}));

@@ -109,6 +109,54 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void streamNewBuildsAPullStreamOverAPairOfThunks() throws Exception {
+		// The compiled twin of AsyncEvalTest#streamNewBuildsAPullStreamOverAPairOfThunks:
+		// a pull stream is the same Object[3] as a buffered one with the thunk pair
+		// where the queue would be, so streamp and the #<STREAM> print are unchanged
+		// while nothing is buffered.
+		assertThat(compileAndRun("""
+				(defvar *chunks* '("ab" "cd"))
+				(defvar *closes* 0)
+				(defun next-chunk ()
+				  (if *chunks*
+				      (let ((c (car *chunks*))) (setq *chunks* (cdr *chunks*)) c)
+				      nil))
+				(defvar *s* (rontolisp::%stream-new #'next-chunk
+				                                    (lambda () (setq *closes* (+ *closes* 1)) nil)))
+				(print (rontolisp:streamp *s*))
+				(print (rontolisp:futurep *s*))
+				(print *s*)
+				(print (rontolisp:await (rontolisp:read-all *s*)))
+				(print *closes*)
+				(print (rontolisp:await (rontolisp:stream-read *s*)))
+				(rontolisp:stream-close *s*)
+				(print *closes*)
+				""")).isEqualTo("T\nNIL\n#<STREAM>\n\"abcd\"\n1\nNIL\n1");
+	}
+
+	@Test
+	void aPullStreamResolvesAnAsynchronousReadThunk() throws Exception {
+		// The chunk arrives as a future and is resolved AT THE READ, before the
+		// end-of-stream test (a future wrapping nil is not nil).
+		assertThat(compileAndRun("""
+				(defvar *left* 2)
+				(rontolisp:async-defun slow-chunk ()
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (if (> *left* 0) (progn (setq *left* (- *left* 1)) "z") nil))
+				(defvar *s* (rontolisp::%stream-new #'slow-chunk (lambda () nil)))
+				(print (rontolisp:await (rontolisp:read-all *s*)))
+				""")).isEqualTo("\"zz\"");
+	}
+
+	@Test
+	void aPullStreamHasNoWriteEnd() throws Exception {
+		assertThat(compileAndRun("""
+				(let ((s (rontolisp::%stream-new (lambda () nil) (lambda () nil))))
+				  (print (handler-case (rontolisp:stream-write s "x") (error (e) (princ-to-string e)))))
+				""")).contains("no write end");
+	}
+
+	@Test
 	void twoAsyncBodiesProgressConcurrently() throws Exception {
 		assertThat(compileAndRun("""
 				(defvar *s1* (rontolisp:make-stream))

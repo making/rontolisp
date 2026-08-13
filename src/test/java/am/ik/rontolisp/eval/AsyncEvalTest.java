@@ -260,6 +260,59 @@ class AsyncEvalTest {
 	}
 
 	@Test
+	void streamNewBuildsAPullStreamOverAPairOfThunks() {
+		// rontolisp::%stream-new, the from-thunk constructor every backend shares: a
+		// read thunk, a close thunk and a drained flag is all a stream IS. Nothing is
+		// buffered -- read-all pulls chunk by chunk, the close protocol runs exactly
+		// once at end of stream, and a read past the end is nil. The WASM tiers build
+		// their own struct from the same three parts and answer the same way.
+		Run run = evalMulti("""
+				(defvar *chunks* '("ab" "cd"))
+				(defvar *closes* 0)
+				(defun next-chunk ()
+				  (if *chunks*
+				      (let ((c (car *chunks*))) (setq *chunks* (cdr *chunks*)) c)
+				      nil))
+				(defvar *s* (rontolisp::%stream-new #'next-chunk
+				                                    (lambda () (setq *closes* (+ *closes* 1)) nil)))
+				(list (rontolisp:streamp *s*)
+				      (rontolisp:futurep *s*)
+				      (rontolisp:await (rontolisp:read-all *s*))
+				      *closes*
+				      (rontolisp:await (rontolisp:stream-read *s*))
+				      (progn (rontolisp:stream-close *s*) *closes*))
+				""");
+		assertThat(run.result().print()).isEqualTo("(T NIL \"abcd\" 1 NIL 1)");
+	}
+
+	@Test
+	void aPullStreamResolvesAnAsynchronousReadThunk() {
+		// The read thunk may itself await (an async-lambda here, a suspending host
+		// import on the WASM tiers), so the chunk arrives as a future. It is resolved
+		// AT THE READ, before the end-of-stream test -- a future wrapping nil is not
+		// nil, so without that such a thunk could never report end of stream.
+		Run run = evalMulti("""
+				(defvar *left* 2)
+				(rontolisp:async-defun slow-chunk ()
+				  (rontolisp:await (rontolisp:wait-for 1))
+				  (if (> *left* 0) (progn (setq *left* (- *left* 1)) "z") nil))
+				(defvar *s* (rontolisp::%stream-new #'slow-chunk (lambda () nil)))
+				(rontolisp:await (rontolisp:read-all *s*))
+				""");
+		assertThat(run.result()).isEqualTo(new LispString("zz"));
+	}
+
+	@Test
+	void aPullStreamHasNoWriteEnd() {
+		// Its chunks come from its read thunk, so the refusal is its own rather than
+		// "the stream is closed".
+		assertThatThrownBy(() -> evalMulti("""
+				(defvar *s* (rontolisp::%stream-new (lambda () nil) (lambda () nil)))
+				(rontolisp:stream-write *s* "x")
+				""")).hasMessageContaining("no write end");
+	}
+
+	@Test
 	void readAllDrainsAStream() {
 		Run run = evalMulti("""
 				(defvar *s* (rontolisp:make-stream))

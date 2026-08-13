@@ -27,6 +27,12 @@ import am.ik.rontolisp.compiler.FetchResponseShape;
  * ride the queue, the flag closes it, and end of stream is the {@code SMARKER} string
  * itself as a re-enqueued poison pill (an interned marker no reader-producible value can
  * alias), so no pending-read bookkeeping is needed;</li>
+ * <li>a PULL stream ({@code rontolisp::%stream-new}) is the same {@code Object[3]} with a
+ * {@code {readFn, closeFn}} pair where the queue would be, so {@code _streamp} and the
+ * {@code #<STREAM>} print need no second shape. Nothing is buffered: {@code _stream_read}
+ * runs the read thunk right there and answers a SETTLED future, and the first nil chunk
+ * runs the close thunk once -- the same protocol the WASM tiers' stream runtimes
+ * implement;</li>
  * <li>an asynchronous body runs on a virtual thread: {@code _async_run} instantiates the
  * generated class (which {@code implements Runnable}), hands it the body funref, a fresh
  * future and the eager-start handoff latch, starts the thread and waits on the latch --
@@ -72,6 +78,10 @@ final class JvmAsyncRuntimeBuilder {
 	static final String MAKE_STREAM_METHOD = "_make_stream";
 
 	static final String MAKE_STREAM_DESC = "()Ljava/lang/Object;";
+
+	static final String STREAM_NEW_METHOD = "_stream_new";
+
+	static final String STREAM_NEW_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	static final String STREAM_READ_METHOD = "_stream_read";
 
@@ -210,6 +220,13 @@ final class JvmAsyncRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("_invoke_0"), cp.addUtf8("(Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant releaseHandoff = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(RELEASE_HANDOFF_METHOD), cp.addUtf8(RELEASE_HANDOFF_DESC)));
+		// Self-references: a pull stream's read resolves the thunk's answer through the
+		// generic _await (a thunk may answer a future), and _drain_body reads through
+		// _stream_read so one drain serves both stream modes.
+		MethodrefConstant awaitSelf = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC)));
+		MethodrefConstant streamReadSelf = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC)));
 
 		ConstantPool.StringConstant sMarker = cp.addString(SMARKER);
 		ConstantPool.StringConstant rMarker = cp.addString(RMARKER);
@@ -555,11 +572,66 @@ final class JvmAsyncRuntimeBuilder {
 					List.of()));
 		}
 
-		// --- _stream_read(s): {RMARKER, q, state} token (the take happens at await)
+		// --- _stream_new(readFn, closeFn): the PULL stream rontolisp::%stream-new
+		// builds, {SMARKER, {readFn, closeFn}, AtomicInteger(0)}. Same Object[3] as a
+		// buffered stream, with the thunk pair where the chunk queue would be, so every
+		// consumer that only asks "is this a stream" (_streamp, the printer) is
+		// untouched.
+		{
+			Asm a = new Asm();
+			a.iconst(3);
+			a.anewarray(objectClass);
+			a.op(Opcode.DUP);
+			a.iconst(0);
+			a.ldc(sMarker.index());
+			a.aastore();
+			a.op(Opcode.DUP);
+			a.iconst(1);
+			a.iconst(2);
+			a.anewarray(objectClass);
+			a.op(Opcode.DUP);
+			a.iconst(0);
+			a.aload(0);
+			a.aastore();
+			a.op(Opcode.DUP);
+			a.iconst(1);
+			a.aload(1);
+			a.aastore();
+			a.aastore();
+			a.op(Opcode.DUP);
+			a.iconst(2);
+			a.op(Opcode.NEW);
+			a.u2(atomicIntClass.index());
+			a.op(Opcode.DUP);
+			a.iconst(0);
+			a.op(Opcode.INVOKESPECIAL);
+			a.u2(atomicIntCtor.index());
+			a.aastore();
+			a.areturn();
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_NEW_METHOD), cp.addUtf8(STREAM_NEW_DESC), 8, 2, a.finish(),
+					List.of()));
+		}
+
+		// --- _stream_read(s): a buffered stream answers the {RMARKER, q, state} token
+		// (the take happens at await); a PULL stream has nothing to defer to, so it runs
+		// the read thunk here and answers a settled future -- resolving the thunk's
+		// answer BEFORE the end-of-stream test, because a thunk that awaits answers a
+		// future and a future wrapping nil is not nil. The first nil chunk runs the close
+		// thunk once (the drain closes exactly once; a read past the end is nil).
 		{
 			Asm a = new Asm();
 			int bad = a.label();
+			int pull = a.label();
+			int drained = a.label();
+			int settle = a.label();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
+			a.aload(0);
+			a.checkcast(objectArrayClass);
+			a.iconst(1);
+			a.aaload();
+			a.op(Opcode.INSTANCEOF);
+			a.u2(queueClass.index());
+			a.branch(Opcode.IFEQ, pull);
 			a.iconst(3);
 			a.anewarray(objectClass);
 			a.op(Opcode.DUP);
@@ -581,9 +653,59 @@ final class JvmAsyncRuntimeBuilder {
 			a.aaload();
 			a.aastore();
 			a.areturn();
+			a.bind(pull);
+			// fns (slot 1), state (slot 2)
+			a.aload(0);
+			a.checkcast(objectArrayClass);
+			a.iconst(1);
+			a.aaload();
+			a.checkcast(objectArrayClass);
+			a.astore(1);
+			a.aload(0);
+			a.checkcast(objectArrayClass);
+			a.iconst(2);
+			a.aaload();
+			a.checkcast(atomicIntClass);
+			a.astore(2);
+			a.aload(2);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(atomicIntGet.index());
+			a.branch(Opcode.IFNE, drained);
+			// chunk (slot 3) = _await(_invoke_0(readFn))
+			a.aload(1);
+			a.iconst(0);
+			a.aaload();
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(invoke0.index());
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(awaitSelf.index());
+			a.astore(3);
+			a.aload(3);
+			a.branch(Opcode.IFNONNULL, settle);
+			a.aload(2);
+			a.iconst(1);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(atomicIntGetAndSet.index());
+			a.branch(Opcode.IFNE, settle);
+			a.aload(1);
+			a.iconst(1);
+			a.aaload();
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(invoke0.index());
+			a.op(Opcode.POP);
+			a.bind(settle);
+			a.aload(3);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(futureCompleted.index());
+			a.areturn();
+			a.bind(drained);
+			a.aconstNull();
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(futureCompleted.index());
+			a.areturn();
 			a.bind(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-read expects a stream");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC), 5, 1, a.finish(),
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC), 5, 4, a.finish(),
 					List.of()));
 		}
 
@@ -593,7 +715,17 @@ final class JvmAsyncRuntimeBuilder {
 			int bad = a.label();
 			int nilChunk = a.label();
 			int closed = a.label();
+			int noWriteEnd = a.label();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
+			// A pull stream has no buffer to append to -- its chunks come from its read
+			// thunk -- so the refusal is its own, not "the stream is closed".
+			a.aload(0);
+			a.checkcast(objectArrayClass);
+			a.iconst(1);
+			a.aaload();
+			a.op(Opcode.INSTANCEOF);
+			a.u2(queueClass.index());
+			a.branch(Opcode.IFEQ, noWriteEnd);
 			a.aload(1);
 			a.branch(Opcode.IFNULL, nilChunk);
 			// closed?
@@ -625,15 +757,19 @@ final class JvmAsyncRuntimeBuilder {
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: a chunk must not be nil");
 			a.bind(closed);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream is closed");
+			a.bind(noWriteEnd);
+			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-write: the stream has no write end");
 			methods.add(new AsyncMethod(cp.addUtf8(STREAM_WRITE_METHOD), cp.addUtf8(STREAM_WRITE_DESC), 3, 2,
 					a.finish(), List.of()));
 		}
 
-		// --- _stream_close(s)
+		// --- _stream_close(s): end the stream once -- the poison pill for a buffered
+		// stream, the close thunk for a pull one
 		{
 			Asm a = new Asm();
 			int bad = a.label();
 			int already = a.label();
+			int pull = a.label();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, bad);
 			a.aload(0);
 			a.checkcast(objectArrayClass);
@@ -648,45 +784,59 @@ final class JvmAsyncRuntimeBuilder {
 			a.checkcast(objectArrayClass);
 			a.iconst(1);
 			a.aaload();
+			a.astore(1);
+			a.aload(1);
+			a.op(Opcode.INSTANCEOF);
+			a.u2(queueClass.index());
+			a.branch(Opcode.IFEQ, pull);
+			a.aload(1);
 			a.checkcast(queueClass);
 			a.ldc(sMarker.index());
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(queueOffer.index());
+			a.op(Opcode.POP);
+			a.branch(Opcode.GOTO, already);
+			a.bind(pull);
+			a.aload(1);
+			a.checkcast(objectArrayClass);
+			a.iconst(1);
+			a.aaload();
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(invoke0.index());
 			a.op(Opcode.POP);
 			a.bind(already);
 			a.aconstNull();
 			a.areturn();
 			a.bind(bad);
 			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit, "stream-close expects a stream");
-			methods.add(new AsyncMethod(cp.addUtf8(STREAM_CLOSE_METHOD), cp.addUtf8(UNARY_DESC), 3, 1, a.finish(),
+			methods.add(new AsyncMethod(cp.addUtf8(STREAM_CLOSE_METHOD), cp.addUtf8(UNARY_DESC), 3, 2, a.finish(),
 					List.of()));
 		}
 
 		// --- _drain_body(v): for http-handler response marshaling -- a stream drains
-		// to its quoted string concatenation; any other value passes through
+		// to its quoted string concatenation; any other value passes through. The chunks
+		// come through _stream_read + _await rather than off the queue directly, which
+		// is what makes ONE drain serve both stream modes (and leaves the buffered one
+		// where it was: that pair takes the chunk, re-enqueues the pill at the end and
+		// answers nil).
 		{
 			Asm a = new Asm();
 			int passThrough = a.label();
 			emitMarkerTest(a, objectArrayClass, sMarker, 0, passThrough);
-			a.aload(0);
-			a.checkcast(objectArrayClass);
-			a.iconst(1);
-			a.aaload();
-			a.checkcast(queueClass);
-			a.astore(1); // q
 			ConstantPool.StringConstant empty = cp.addString("");
 			a.ldc(empty.index());
 			a.astore(2); // acc (raw)
 			int loop = a.label();
 			int done = a.label();
 			a.bind(loop);
-			a.aload(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(queueTake.index());
+			a.aload(0);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(streamReadSelf.index());
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(awaitSelf.index());
 			a.astore(3); // chunk
 			a.aload(3);
-			a.ldc(sMarker.index());
-			a.branch(Opcode.IF_ACMPEQ, done);
+			a.branch(Opcode.IFNULL, done);
 			a.aload(2);
 			a.aload(3);
 			a.checkcast(stringClass);
@@ -704,12 +854,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.astore(2);
 			a.branch(Opcode.GOTO, loop);
 			a.bind(done);
-			// re-enqueue the pill, quote-wrap the accumulation
-			a.aload(1);
-			a.ldc(sMarker.index());
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(queueOffer.index());
-			a.op(Opcode.POP);
+			// quote-wrap the accumulation
 			a.ldc(quote.index());
 			a.aload(2);
 			a.op(Opcode.INVOKEVIRTUAL);

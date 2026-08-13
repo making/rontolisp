@@ -58,15 +58,19 @@ every backend; see the "Future-as-value combinators" section below).
   playground substitutes it (`src/web/java/.../Target_AsyncRuntime.java`, body
   runs synchronously to completion -- async bodies do not overlap in the
   playground, fetch still does via the SAB broker). Values: `LispFuture` (wraps
-  CompletableFuture) and `LispStream` (chunks + pending reads + close + fail;
-  `fail` drains buffered chunks first). After the first suspension the body runs
+  CompletableFuture) and `LispStream` -- push mode (chunks + pending reads +
+  close + fail; `fail` drains buffered chunks first) or PULL mode (a read thunk
+  + a close thunk, no buffer and no write end; see `%stream-new` below). After
+  the first suspension the body runs
   in REAL PARALLEL with the caller -- global state races are the user's business
   (documented divergence from the component backend's cooperative model).
 - **JVM**: `JvmAsyncRuntimeBuilder` (hand-assembled). A future is a bare
   CompletableFuture; a stream is
   `{SMARKER, LinkedBlockingQueue, AtomicInteger}` with the interned SMARKER
   string re-enqueued as the EOF poison pill; `stream-read` returns an
-  `{RMARKER, queue, state}` token whose blocking take happens at `_await`. The
+  `{RMARKER, queue, state}` token whose blocking take happens at `_await` (a
+  PULL stream is the same `Object[3]` with a thunk pair instead of the queue,
+  and answers a settled future instead of a token -- `%stream-new` below). The
   generated class `implements Runnable` (instance fields `_asyncFn` /
   `_asyncFuture` / `_asyncLatch`), `_async_run` spawns `Thread.ofVirtual()`.
   An error in the body CANNOT ride the `_condTl` ThreadLocal across threads, so
@@ -203,17 +207,41 @@ Pinned by `AsyncEvalTest.thenChainsOnFutureSettledValue` etc.,
 `NoGcWasmCompilerTest.asyncAwaitSurfaceIsRejected` and the
 `future-as-value-combinators-then-catch-finally` ci-spec case.
 
-## `%stream-new` and the Preview 1 stream value (todo-341 Phase 1)
+## `%stream-new`, the four-backend pull stream (todo-341 Phase 1)
 
 `rontolisp::%stream-new` (internal; was `%wasi-stream-new` until Phase 1) is the
-ONE producer of a first-class stream value on the WASM backends, and it takes
-exactly what a stream IS: a read thunk, a close thunk, and a drained flag the
-runtime keeps. Nothing about that is WASI, which is why the same primitive now
-serves both tiers -- `--component` builds a `TYPE_WASI_STREAM` from it (http.lisp,
-above), and a NON-asyncMode module (Preview 1, `--no-wasi`, the reactor
-components) builds a `TYPE_P1_STREAM {mut i32 eof, mut readFn, mut closeFn}`,
-the same three fields. `WasmStreamCompiler` picks the tier; `WasmFutureInternalCompiler`
-builds the struct.
+ONE producer of a first-class PULL stream, and it takes exactly what a stream
+IS: a read thunk, a close thunk, and a drained flag the runtime keeps. It exists
+on ALL FOUR backends, over four representations that must answer identically
+(the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case is that
+gate):
+
+| backend | representation | where |
+| --- | --- | --- |
+| interpreter | a PULL-mode `LispStream` (`LispStream.pull`) | `LispEvaluator` defines the primitive, beside `%async-run`/`%future-force` |
+| JVM | `{SMARKER, {readFn, closeFn}, AtomicInteger}` -- the buffered stream's `Object[3]` with the thunk pair where the queue would be | `JvmAsyncRuntimeBuilder._stream_new` |
+| `--component` | `TYPE_WASI_STREAM {eof, readFn, closeFn}` | `WasmFutureInternalCompiler` |
+| Preview 1 / `--no-wasi` | `TYPE_P1_STREAM`, the same three fields | ditto |
+
+Nothing about it is WASI, which is why the same primitive serves both WASM
+tiers -- `--component` wraps the wasi byte-stream built-ins with it (http.lisp,
+above) and a NON-asyncMode module (Preview 1, `--no-wasi`, the reactor
+components) a host import or any Lisp closure. `WasmStreamCompiler` picks the
+tier; `WasmFutureInternalCompiler` builds the struct.
+
+Two things the interpreter/JVM halves are deliberate about:
+
+- **The thunk's answer is resolved AT THE READ, before the end-of-stream test**
+  -- the same rule as the WASM tiers below, for the same reason. The
+  interpreter resolves in the callback `LispEvaluator` closes over (`awaitValue`
+  of the applied thunk), so `LispStream` never sees a future and the root
+  package still imports nothing from `eval`; the JVM's `_stream_read` calls the
+  generic `_await`.
+- **The write end is what a pull stream does NOT have.**
+  `rontolisp:stream-write` on one is its own refusal ("the stream has no write
+  end"), not "the stream is closed" -- and the JVM's `_drain_body` reads through
+  `_stream_read` + `_await` rather than off the queue directly, so ONE drain
+  serves both modes. Guest `make-stream` stays interpreter/JVM-only.
 
 The P1 tier is `WasmP1StreamRuntimeBuilder`, two functions:
 `_p1_stream_read` answers a SETTLED `TYPE_P1_FUTURE` of the next chunk (nothing
@@ -239,15 +267,14 @@ Two details worth keeping:
   `stream-read`/`stream-close`, but `streamp` there is the CONSTANT NIL rather
   than an error: nothing being a stream is an answer, not a failure.
 
-`%stream-new` is WASM-only. The interpreter's `LispStream` and the JVM's
-`{SMARKER, queue, state}` are buffered, push-side values with no way to express a
-PULL, so a from-thunk stream on those two backends is still open work
-(todo-341 Phase 1, remainder) -- which is also why the four-backend `streamp`
-gate is not closed yet. Gates that ARE closed:
-`WasmHostStreamE2eTest` (a `--no-wasi` module pulling its body one chunk at a
-time through a suspending host import and draining it with the portable
-`(await (read-all s))`, against a JS host that shares its memory) and
-`WasmLispCompilerIntegrationTest.preview1HasAFirstClassStreamValueOverAPairOfThunks`.
+Gates: the ci-spec case above (all four backends, one program), the per-backend
+`AsyncEvalTest`/`JvmAsyncCompilerTest` pairs
+(`streamNewBuildsAPullStreamOverAPairOfThunks` and the async-thunk /
+no-write-end edges),
+`WasmLispCompilerIntegrationTest.preview1HasAFirstClassStreamValueOverAPairOfThunks`,
+and `WasmHostStreamE2eTest` (a `--no-wasi` module pulling its body one chunk at
+a time through a suspending host import and draining it with the portable
+`(await (read-all s))`, against a JS host that shares its memory).
 
 ## read-all is prelude Lisp
 

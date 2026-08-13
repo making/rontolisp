@@ -12,9 +12,9 @@ import am.ik.rontolisp.LispVal;
  * Compiles the async/await member functions of the {@code rontolisp} package that map 1:1
  * onto {@code JvmAsyncRuntimeBuilder} helpers: {@code %async-run} (the lowered
  * {@code async-defun}/{@code async-lambda} primitive), {@code futurep}, {@code streamp},
- * {@code make-stream}, {@code stream-read}, {@code stream-write} and
- * {@code stream-close}. Each compiles its evaluated arguments and one
- * {@code invokestatic}.
+ * {@code make-stream}, {@code %stream-new} (the internal from-thunk PULL constructor),
+ * {@code stream-read}, {@code stream-write} and {@code stream-close}. Each compiles its
+ * evaluated arguments and one {@code invokestatic}.
  */
 final class JvmAsyncOpsCompiler {
 
@@ -24,7 +24,8 @@ final class JvmAsyncOpsCompiler {
 	static boolean handles(String member) {
 		return switch (member) {
 			case LispNames.ASYNC_RUN, LispNames.FUTUREP, LispNames.ASYNC_STREAMP, LispNames.MAKE_STREAM,
-					LispNames.STREAM_READ, LispNames.STREAM_WRITE, LispNames.STREAM_CLOSE, LispNames.WAIT_FOR ->
+					LispNames.STREAM_NEW_INTERNAL, LispNames.STREAM_READ, LispNames.STREAM_WRITE,
+					LispNames.STREAM_CLOSE, LispNames.WAIT_FOR ->
 				true;
 			default -> false;
 		};
@@ -34,7 +35,7 @@ final class JvmAsyncOpsCompiler {
 		List<LispVal> args = cons.toList();
 		int arity = switch (member) {
 			case LispNames.MAKE_STREAM -> 0;
-			case LispNames.STREAM_WRITE -> 2;
+			case LispNames.STREAM_NEW_INTERNAL, LispNames.STREAM_WRITE -> 2;
 			default -> 1;
 		};
 		if (args.size() != arity + 1) {
@@ -46,6 +47,7 @@ final class JvmAsyncOpsCompiler {
 			case LispNames.FUTUREP -> ctx.futurepHelper;
 			case LispNames.ASYNC_STREAMP -> ctx.streampHelper;
 			case LispNames.MAKE_STREAM -> ctx.makeStreamHelper;
+			case LispNames.STREAM_NEW_INTERNAL -> ctx.streamNewHelper;
 			case LispNames.STREAM_READ -> ctx.streamReadHelper;
 			case LispNames.STREAM_WRITE -> ctx.streamWriteHelper;
 			case LispNames.STREAM_CLOSE -> ctx.streamCloseHelper;

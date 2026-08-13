@@ -1695,6 +1695,42 @@ cases:
       (print (rontolisp:await (rontolisp:read-all "ci-read-all")))
     expected: |
       "ci-read-all"
+  - name: stream-new-builds-a-pull-stream-on-every-backend
+    # rontolisp::%stream-new is the ONE producer of a stream value that every
+    # backend has, and it takes exactly what a stream IS: a read thunk, a close
+    # thunk and a drained flag. Nothing is buffered -- read-all pulls chunk by
+    # chunk, the close protocol runs exactly once at end of stream, and a read
+    # past the end is nil. The four representations differ (a pull-mode
+    # LispStream, the JVM's Object[3] with the thunk pair where the queue would
+    # be, TYPE_P1_STREAM, TYPE_WASI_STREAM) and the answers must not.
+    source: |
+      (defvar *ci-stream-chunks* '("ab" "cd"))
+      (defvar *ci-stream-closes* 0)
+      (defun ci-stream-next ()
+        (if *ci-stream-chunks*
+            (let ((c (car *ci-stream-chunks*)))
+              (setq *ci-stream-chunks* (cdr *ci-stream-chunks*))
+              c)
+            nil))
+      (defvar *ci-stream* (rontolisp::%stream-new
+                            #'ci-stream-next
+                            (lambda () (setq *ci-stream-closes* (+ *ci-stream-closes* 1)) nil)))
+      (print (rontolisp:streamp *ci-stream*))
+      (print (rontolisp:streamp 42))
+      (print *ci-stream*)
+      (print (rontolisp:await (rontolisp:read-all *ci-stream*)))
+      (print *ci-stream-closes*)
+      (print (rontolisp:await (rontolisp:stream-read *ci-stream*)))
+      (rontolisp:stream-close *ci-stream*)
+      (print *ci-stream-closes*)
+    expected: |
+      T
+      NIL
+      #<STREAM>
+      "abcd"
+      1
+      NIL
+      1
   - name: async-wrapper-macro-expands-to-async-defun-and-lambda
     source: |
       (rontolisp:async (defun ci-async-wrap-add (a b) (+ a b)))

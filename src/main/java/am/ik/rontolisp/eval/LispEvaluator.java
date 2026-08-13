@@ -1725,6 +1725,22 @@ public final class LispEvaluator {
 			}
 			return awaitValue(args.get(0));
 		}));
+		// %stream-new: the from-thunk stream constructor every backend shares -- a read
+		// thunk, a close thunk and a drained flag is all a stream IS. Here rather than in
+		// Environment for the %async-run reason: pulling a chunk means APPLYING a Lisp
+		// function. The resolve is the evaluator's too, so LispStream never sees a future
+		// -- a thunk that answers one (an async-lambda, a suspending host import on the
+		// WASM tiers) settles here, at the read, exactly where the WASM tiers resolve it.
+		String streamNewName = LispNames.STREAM_NEW_INTERNAL_QUALIFIED;
+		this.globalEnv.defineFunction(streamNewName, new LispFunction(streamNewName, args -> {
+			if (args.size() != 2) {
+				throw new LispEvalException(LispNames.STREAM_NEW_INTERNAL + " expects 2 arguments, got " + args.size());
+			}
+			LispVal readFn = args.get(0);
+			LispVal closeFn = args.get(1);
+			return LispStream.pull(() -> awaitValue(apply(readFn, List.of(), this.globalEnv)),
+					() -> apply(closeFn, List.of(), this.globalEnv));
+		}));
 		// The thread primitives live here rather than in Environment because running the
 		// spawned function needs the evaluator's apply (the %async-run precedent). The
 		// handle is opaque (LispThread; the JVM backend hands out a marker-headed array
