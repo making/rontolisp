@@ -239,6 +239,38 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void aReactorPullSourceMayHandOverOctetsAndACodePointMaySpanTwoChunks() {
+		// A chunk is a string OR an (unsigned-byte 8) vector -- the shape a
+		// byte-shaped host boundary reads into a reusable buffer. The host doing the
+		// cutting knows nothing about code points, so the sequence left open by one
+		// chunk has to be carried into the next: both characters below straddle the
+		// boundary, and decoding the chunks independently would answer four
+		// malformed ones.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defun octets (&rest bs)
+				  (let ((v (make-array (length bs) :element-type '(unsigned-byte 8))) (k 0))
+				    (dolist (b bs) (setf (aref v k) b) (setq k (+ k 1)))
+				    v))
+				(defvar *chunks* (list (octets #xE3 #x81 #x82 #xE3) (octets #x81 #x84)))
+				(defun pull ()
+				  (if *chunks*
+				      (let ((c (car *chunks*))) (setq *chunks* (cdr *chunks*)) c)
+				      nil))
+				(defun app (env)
+				  (list 200 nil
+				        (list (with-output-to-string (out)
+				                (do ((ch (read-char (getf env :raw-body) nil nil)
+				                         (read-char (getf env :raw-body) nil nil)))
+				                    ((null ch))
+				                  (write-char ch out))))))
+				(print (clack.handler.reactor:handle
+				        #'app "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\"}" #'pull))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"body\\\":\\\"あい\\\"");
+	}
+
+	@Test
 	void theReactorDispatcherAnswersAPortableStreamRawBodyByDefault() {
 		// The reactor's OWN default is rontolisp's asynchronous stream -- the
 		// http-handler directive's default, and what makes the portable

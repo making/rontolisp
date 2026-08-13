@@ -125,33 +125,98 @@
   (let ((chunk (funcall thunk)))
     (if (rontolisp:futurep chunk) (rontolisp::%future-force chunk) chunk)))
 
+(defun rontolisp::%http-reactor-decode-chunk (v carry)
+  ;; One OCTET chunk plus the bytes the previous chunk left open -> (text .
+  ;; carry). The split is the whole point: a UTF-8 sequence that straddles a
+  ;; chunk boundary must not decode as two malformed characters, and the host
+  ;; that cut the body into chunks knows nothing about code points -- it read
+  ;; whatever the socket gave it.
+  (let ((n (length v)) (i 0) (head ""))
+    (when carry
+      ;; Finish the open sequence from the front of this chunk. If the chunk is
+      ;; shorter than what is still missing, the carry simply grows.
+      (let ((need
+             (- (rontolisp::%http-utf8-length (car carry)) (length carry))))
+        (while (and (> need 0) (< i n))
+          (setq carry (append carry (list (aref v i))))
+          (setq i (+ i 1))
+          (setq need (- need 1)))
+        (when (= need 0)
+          (setq head (rontolisp::%http-utf8-decode carry))
+          (setq carry nil))))
+    (let ((end (rontolisp::%http-utf8-complete-end v i n)))
+      (let ((text
+             (concatenate 'string head
+                          (rontolisp::%http-utf8-decode-octets v i end)))
+            (tail nil)
+            (k end))
+        (while (< k n)
+          (setq tail (cons (aref v k) tail))
+          (setq k (+ k 1)))
+        (cons text (if carry carry (nreverse tail)))))))
+
+(defun rontolisp::%http-reactor-text-source (source)
+  ;; The body source -> a THUNK answering the next chunk of TEXT, nil at end of
+  ;; stream. This is where the source's two chunk spellings become one: a chunk
+  ;; is a string (already text -- the in-band envelope body, and what a host
+  ;; that hands over decoded text pulls) or an (unsigned-byte 8) VECTOR, which
+  ;; is what a byte-shaped host boundary reads into a reusable buffer. Both
+  ;; drains below read through this, so neither has to know which arrived.
+  ;;
+  ;; Never answers "" before the end: an empty answer IS end of stream to both
+  ;; consumers, and a chunk whose every byte was carried over decodes to
+  ;; nothing.
+  (if (stringp source)
+      (let ((sent nil))
+        (lambda ()
+          (if sent
+              nil
+              (progn
+                (setq sent t)
+                source))))
+      (let ((carry nil) (done nil))
+        (lambda ()
+          (let ((text nil))
+            (while (and (not done) (null text))
+              (let ((chunk (rontolisp::%http-reactor-pull source)))
+                (cond ((or (null chunk) (= (length chunk) 0))
+                       (setq done t)
+                       (when carry
+                         ;; A body that ends mid-sequence is malformed; the
+                         ;; decoder's lenient rule answers the bytes as
+                         ;; characters rather than losing them.
+                         (setq text (rontolisp::%http-utf8-decode carry))
+                         (setq carry nil)))
+                      ((stringp chunk) (setq text chunk))
+                      (t (let ((res
+                                (rontolisp::%http-reactor-decode-chunk chunk
+                                                                       carry)))
+                           (setq carry (cdr res))
+                           (when (> (length (car res)) 0)
+                             (setq text (car res))))))))
+            text)))))
+
 (defun rontolisp::%http-reactor-body-text (source)
-  ;; The body source drained to ONE string: a string is already it, and a pull
-  ;; thunk is looped until it reports end of stream. What :buffered costs, and
-  ;; the only place the whole body has to exist at once.
+  ;; The body source drained to ONE string. What :buffered costs, and the only
+  ;; place the whole body has to exist at once.
   (if (stringp source)
       source
-      (with-output-to-string (out)
-        (let ((chunk (rontolisp::%http-reactor-pull source)))
-          (while (and chunk (> (length chunk) 0))
-            (write-string chunk out)
-            (setq chunk (rontolisp::%http-reactor-pull source)))))))
+      (let ((next (rontolisp::%http-reactor-text-source source)))
+        (with-output-to-string (out)
+          (let ((chunk (funcall next)))
+            (while chunk
+              (write-string chunk out)
+              (setq chunk (funcall next))))))))
 
 (defun rontolisp::%http-reactor-body-stream (source)
   ;; The rontolisp-native :raw-body: ONE first-class pull stream whatever the
   ;; source was, so (rontolisp:await (rontolisp:read-all (getf env :raw-body)))
   ;; -- the portable spelling every other backend already serves -- is what a
   ;; handler writes on a reactor too. An already-buffered string becomes the
-  ;; stream that answers it once and then EOF; a thunk IS the read side.
-  (if (stringp source)
-      (let ((sent nil))
-        (rontolisp::%stream-new (lambda ()
-                                  (if sent
-                                      nil
-                                      (progn
-                                        (setq sent t)
-                                        source))) (lambda () nil)))
-      (rontolisp::%stream-new source (lambda () nil))))
+  ;; stream that answers it once and then EOF; a chunked source IS the read
+  ;; side, one host pull per stream read.
+  (rontolisp::%stream-new (rontolisp::%http-reactor-text-source source)
+                          (lambda () nil)))
 
 (defun rontolisp::%http-reactor-raw-body (source buffered)
   ;; The body source -> the :raw-body value the registered mode asks for. nil

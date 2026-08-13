@@ -75,6 +75,17 @@ proper per request (lack-request `rplacd`s it; mount/session `setf getf` into
 it). Pinned across all four backends by ci-spec `http-clack-environment-shape`
 / `http-percent-decode`.
 
+**The UTF-8 decoder is a RANGE decoder** (`%http-utf8-decode-octets v start
+end`, plus `%http-utf8-length` for one lead byte and `%http-utf8-complete-end`
+for where a range's last COMPLETE sequence ends). `%http-utf8-decode` — the
+percent-decoder's list spelling — is one line over it. The range shape is not
+generality for its own sake: a CHUNKED body source (`.kb/clack.md`, "The head
+and the body source") has to ask where a chunk may be cut without splitting a
+code point, which is exactly `%http-utf8-complete-end`, and it decodes octets
+that arrive in a packed vector rather than a list. Lenient in both spellings: a
+byte that leads no valid sequence, and a sequence the range truncates, come
+back as their own characters, so attacker input never signals.
+
 ## `:raw-body` — two modes, a compile-time constant
 
 The directive (and the `rontolisp::%http-server-start` seam) take

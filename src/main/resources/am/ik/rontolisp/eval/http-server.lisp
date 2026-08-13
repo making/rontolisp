@@ -49,41 +49,73 @@
         ((and (>= c 65) (<= c 70)) (- c 55))
         (t -1)))
 
-(defun rontolisp::%http-utf8-decode (bytes)
-  ;; A list of UTF-8 bytes -> the string it encodes. A byte that starts no
-  ;; valid sequence becomes its own character, so malformed input never
-  ;; signals.
+(defun rontolisp::%http-utf8-length (b)
+  ;; How many bytes the sequence led by B occupies. A byte that leads no valid
+  ;; sequence (a stray continuation byte, #xF8..#xFF) answers 1, which is what
+  ;; makes the decoder below hand it back as its own character instead of
+  ;; signalling.
+  (cond ((< b #x80) 1)
+        ((< b #xC0) 1)
+        ((< b #xE0) 2)
+        ((< b #xF0) 3)
+        ((< b #xF8) 4)
+        (t 1)))
+
+(defun rontolisp::%http-utf8-complete-end (v start end)
+  ;; The index in [START, END] just past the last COMPLETE sequence -- i.e.
+  ;; where a chunk boundary may fall without splitting a code point. Only ever
+  ;; less than END when the tail bytes lead a sequence the range does not
+  ;; finish, which is exactly the state a CHUNKED body source has to carry over
+  ;; to its next chunk.
+  (let ((i start) (open nil))
+    (while (and (< i end) (not open))
+      (let ((len (rontolisp::%http-utf8-length (aref v i))))
+        (if (<= (+ i len) end) (setq i (+ i len)) (setq open t))))
+    i))
+
+(defun rontolisp::%http-utf8-decode-octets (v start end)
+  ;; The range [START, END) of an octet VECTOR -> the string it encodes. A byte
+  ;; that starts no valid sequence, and a sequence the range truncates, become
+  ;; their own characters, so malformed input never signals.
   (with-output-to-string (s)
-    (let ((rest bytes))
-      (while rest
-        (let ((b (car rest))
-              (b1 (car (cdr rest)))
-              (b2 (car (cdr (cdr rest))))
-              (b3 (car (cdr (cdr (cdr rest))))))
+    (let ((i start))
+      (while (< i end)
+        (let ((b (aref v i))
+              (b1 (if (< (+ i 1) end) (aref v (+ i 1)) nil))
+              (b2 (if (< (+ i 2) end) (aref v (+ i 2)) nil))
+              (b3 (if (< (+ i 3) end) (aref v (+ i 3)) nil)))
           (cond ((< b #x80)
                  (write-char (code-char b) s)
-                 (setq rest (cdr rest)))
+                 (setq i (+ i 1)))
                 ((and (>= b #xC0) (< b #xE0) b1)
                  (write-char
                   (code-char (logior (ash (logand b #x1F) 6) (logand b1 #x3F)))
                   s)
-                 (setq rest (cdr (cdr rest))))
+                 (setq i (+ i 2)))
                 ((and (>= b #xE0) (< b #xF0) b1 b2)
                  (write-char (code-char
                               (logior (ash (logand b #x0F) 12)
                                       (ash (logand b1 #x3F) 6)
                                       (logand b2 #x3F))) s)
-                 (setq rest (cdr (cdr (cdr rest)))))
-                ((and (>= b #xF0) b1 b2 b3)
+                 (setq i (+ i 3)))
+                ((and (>= b #xF0) (< b #xF8) b1 b2 b3)
                  (write-char (code-char
                               (logior (ash (logand b #x07) 18)
                                       (ash (logand b1 #x3F) 12)
                                       (ash (logand b2 #x3F) 6)
                                       (logand b3 #x3F))) s)
-                 (setq rest (cdr (cdr (cdr (cdr rest))))))
+                 (setq i (+ i 4)))
                 (t
                  (write-char (code-char b) s)
-                 (setq rest (cdr rest)))))))))
+                 (setq i (+ i 1)))))))))
+
+(defun rontolisp::%http-utf8-decode (bytes)
+  ;; A LIST of UTF-8 bytes -> the string it encodes: the percent-decoder's
+  ;; spelling, and the one a chunk boundary's carried-over bytes take. The
+  ;; range decoder above owns the rules; a percent escape run and a carry are
+  ;; both a handful of bytes, so the coerce is not worth avoiding.
+  (let ((v (coerce bytes 'vector)))
+    (rontolisp::%http-utf8-decode-octets v 0 (length v))))
 
 (defun rontolisp::%http-escape-run (s i n)
   ;; (bytes . next-index) for the run of consecutive %XX escapes starting at i.

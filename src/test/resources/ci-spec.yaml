@@ -8177,6 +8177,11 @@ cases:
               c)
             nil))
       (defun ci-reactor-body (json) (gethash "body" (rontolisp:json-parse json)))
+      (defun ci-reactor-octets (&rest bs)
+        (let ((v (make-array (length bs) :element-type '(unsigned-byte 8)))
+              (k 0))
+          (dolist (b bs) (setf (aref v k) b) (setq k (+ k 1)))
+          v))
       ;; the DEFAULT mode: :raw-body is a rontolisp pull stream whatever the
       ;; source was, so the portable (await (read-all ...)) drain -- the one
       ;; every other backend already serves -- is what a reactor handler writes
@@ -8200,11 +8205,36 @@ cases:
       (print (ci-reactor-body
               (rontolisp::%http-reactor-dispatch
                "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-pull)))
+      ;; A chunk may also be OCTETS -- what a byte-shaped host boundary reads
+      ;; into a reusable buffer -- and the host cutting the body knows nothing
+      ;; about code points, so every one of these five characters is split
+      ;; across a chunk boundary. Carrying the open sequence over is what keeps
+      ;; the drain from decoding it as ten malformed ones.
+      (rontolisp::%http-reactor-register #'ci-reactor-stream-app)
+      (setq *ci-reactor-chunks*
+            (list (ci-reactor-octets #xE3 #x81)
+                  (ci-reactor-octets #x93 #xE3 #x82)
+                  (ci-reactor-octets #x93 #xE3 #x81 #xAB)
+                  (ci-reactor-octets #xE3 #x81 #xA1 #xE3)
+                  (ci-reactor-octets #x81 #xAF)))
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-pull)))
+      ;; and the same octets reach a CLACK application through :buffered
+      (rontolisp::%http-reactor-register #'ci-reactor-buffered-app :buffered)
+      (setq *ci-reactor-chunks*
+            (list (ci-reactor-octets #xE3 #x81 #x82 #xE3)
+                  (ci-reactor-octets #x81 #x84)))
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-pull)))
     expected: |
       "hello"
       "in-band"
       "-"
       "buffered"
+      "こんにちは"
+      "あい"
   - name: http-percent-decode
     source: |
       ;; Lenient by design: a malformed escape is copied verbatim, "+" is NOT a

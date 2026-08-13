@@ -320,6 +320,26 @@ the host passes a closure or a string directly, and on the WASM backends the
 synthesized export will build the thunk over a host import (Phase 2b — the
 export still takes the whole envelope today).
 
+**A chunk is a string OR OCTETS** (an `(unsigned-byte 8)` vector), and both
+drains read through ONE adapter, `%http-reactor-text-source`, so neither has to
+know which arrived. Octets are the shape a byte-shaped host boundary has — the
+`:bytes` import of Phase 2b reads into a REUSABLE buffer, which is the only
+convention that keeps linear memory flat (the todo's finding 2), and a `:string`
+result cannot carry arbitrary bytes at all (finding 4). Two rules the adapter
+owns, and both are load-bearing:
+
+- **an open UTF-8 sequence is carried into the next chunk**
+  (`%http-reactor-decode-chunk`, over `http-server.lisp`'s
+  `%http-utf8-complete-end` / `%http-utf8-decode-octets`). The host that cut the
+  body into chunks read whatever the socket gave it and knows nothing about code
+  points, so a multi-byte character straddling a boundary is the NORMAL case,
+  not a corner one; decoding each chunk independently answers two malformed
+  characters per split. A body that ENDS mid-sequence keeps the decoder's lenient
+  rule — the bytes come back as characters rather than being dropped.
+- **the adapter never answers `""` before the end**: an empty answer IS end of
+  stream to both consumers, and a chunk whose every byte was carried over
+  decodes to nothing. It pulls again instead.
+
 Which SHAPE the application then sees is the `:raw-body` mode, and on a
 reactor the mode is REGISTERED with the app (`%http-reactor-register app
 [:buffered]`, the `%http-reactor-buffered` flag) rather than read off a
@@ -350,7 +370,8 @@ with or without a body stream. Its reactors are the `wasm-export`-only ones
 
 Pinned by the `http-reactor-body-source` ci-spec case (all four backends: a
 pull thunk, an in-band string and no body at all through the default mode,
-then the same pull source through `:buffered`), the two
+then the same pull source through `:buffered`, then an OCTET pull source
+through both modes whose every character straddles a chunk boundary), the three
 `LispEvaluatorAsdfTest` reactor-body tests, and
 `HttpReactorInlinerTest.theLoweredHttpHandlerDirectiveKeepsItsRawBodyMode`.
 

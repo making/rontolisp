@@ -345,10 +345,39 @@ earlier: `examples/examples.yaml` has no reactor backend, so no checked-in
 example compiles `--no-wasi` in CI (`examples/net/httpbin.lisp` is pinned on
 `jvm-compile` and `wasm-component` only).
 
-**Phase 2b -- the WASM boundary splits.** What is left of Phase 2: the
-synthesized export still takes the whole envelope as one `:string`, so a wasm
-host cannot yet pass a source out of band, and the arena still holds the body
-17x. `handle-request(headPtr, headLen)` plus the
+**Phase 2b -- the WASM boundary splits.**
+
+*Step 1, the CHUNK TYPE, done (2026-08-13).* Before the wasm boundary can hand
+a source over there has to be a source shape it can hand over: the `:bytes`
+import reads into a reusable buffer and answers OCTETS, and a `:string` result
+is exactly what finding 2 and finding 4 rule out. So a chunk is now a string
+**or** an `(unsigned-byte 8)` vector, and both drains read through ONE adapter,
+`%http-reactor-text-source` -- which is also where the two rules a chunked
+source needs live:
+
+- an open UTF-8 sequence is CARRIED into the next chunk. The host that cut the
+  body knows nothing about code points, so a character straddling a boundary is
+  the normal case, not a corner one -- decoding each chunk on its own answers
+  two malformed characters per split. `http-server.lisp`'s decoder became a
+  RANGE decoder for this (`%http-utf8-decode-octets` / `%http-utf8-length` /
+  `%http-utf8-complete-end`; the old list spelling is one line over it);
+- the adapter never answers `""` before the end, because an empty answer IS end
+  of stream to both consumers and a chunk whose every byte was carried over
+  decodes to nothing.
+
+Nothing outside `http-reactor.lisp` / `http-server.lisp` moved, and no host
+glue changed. Gate: the `http-reactor-body-source` ci-spec case grew an octet
+pull source through BOTH modes whose every character straddles a chunk boundary
+(four backends), plus a third `LispEvaluatorAsdfTest` reactor-body test through
+the Clack shim. `.kb/clack.md` / `.kb/http-server.md` have the mechanics.
+
+Known and deliberately left: `:buffered` over an octet source decodes to text
+and `%http-body-stream` re-encodes it to octets. Phase 2b step 2 should hand
+the buffered mode the octets directly rather than adding a second conversion.
+
+*What is left.* The synthesized export still takes the whole envelope as one
+`:string`, so a wasm host cannot yet pass a source out of band, and the arena
+still holds the body 17x. `handle-request(headPtr, headLen)` plus the
 `env.readRequestBody(ptr, cap) -> i32` import of the design above (`:bytes`,
 Phase 0, `:async t` optional per finding 1), `HttpReactorInliner` synthesizing
 the thunk over it, and the four glue files moving with it -- which is why
