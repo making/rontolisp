@@ -106,7 +106,12 @@ takes its UTF-8 path). The interpreter and the JVM also have
 in reactor mode (`--no-wasi`, or `--no-gc`) additionally has
 `:rontolisp-reactor` — the module's entry points are exports a host calls,
 which is how the Clack handler backend picks its transport (see the
-[Clack guide](../guides/clack.md)). The variable `*features*` reads as the active feature list
+[Clack guide](../guides/clack.md)) — and a `--component` compile additionally
+has `:rontolisp-component`, which names the component BOUNDARY rather than a
+backend: a component's host functions cross the canonical ABI, so
+[`rontolisp:wasm-import`](../guides/wasm-gc-module.md) is refused there and a
+source that declares one guards it with `#-rontolisp-component`. (A
+`--component --no-wasi` build is a reactor too, so it has both.) The variable `*features*` reads as the active feature list
 (a quoted list of keywords; it cannot be assigned). On the interpreter it is a
 real global variable; on the JVM/WASM compile path it is substituted at read
 time like `pi` -- a constant, so binding the name (e.g. a lambda parameter

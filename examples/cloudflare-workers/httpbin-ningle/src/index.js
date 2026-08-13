@@ -1,4 +1,5 @@
-// index.js -- the whole Worker: Request -> JSON -> Lisp -> JSON -> Response.
+// index.js -- the whole Worker: Request -> JSON head + body octets -> Lisp ->
+// JSON -> Response.
 //
 // BYTE-IDENTICAL in every httpbin-* directory that drives the module directly
 // (httpbin-component has its own generated glue instead), and that is the
@@ -6,7 +7,7 @@
 // sibling copies this file rather than editing it.
 //
 // The envelope is documented in ../../httpbin/README.md; two of its fields are
-// easy to get wrong, and requestToJson below says which.
+// easy to get wrong, and requestToHead below says which.
 
 import module from "./worker.wasm";
 
@@ -22,15 +23,47 @@ const decoder = new TextDecoder();
 let lisp = null;
 const lispInstance = () => (lisp ??= instantiate());
 
+// The request body the module is about to pull, and how much of it has already
+// crossed. Module-level rather than passed in, because the module asks for it
+// from inside its own call -- see readRequestBody below.
+const NO_BODY = new Uint8Array(0);
+let body = NO_BODY;
+let bodyOffset = 0;
+
 // `_initialize` is where the Lisp program's top-level forms run. ../../hello has
 // no such entry point at all -- it is --no-gc with nothing to initialise --
 // which is why it needs none of this.
 function instantiate() {
-  const instance = new WebAssembly.Instance(module, {});
+  let instance;
+  const env = {
+    // The request body, out of band. The module owns the buffer and hands it
+    // over per call -- write up to `cap` octets at `ptr` and answer how many,
+    // 0 for end of stream -- so nothing here may hold on to the pointer, and
+    // the body never has to exist as one JSON-escaped string inside the
+    // envelope. A binary upload crosses exactly for the same reason.
+    //
+    // Synchronous, which is one of the two hosts the module accepts: it
+    // declares the import `:async t`, so a host may equally wrap this in
+    // `WebAssembly.Suspending` and pull straight from `request.body`'s reader
+    // -- at the price of entering `handle-request` through
+    // `WebAssembly.promising` and serialising the calls, because a suspended
+    // module can be re-entered (see ../../dog-fetcher for that shape).
+    readRequestBody(ptr, cap) {
+      const n = Math.min(cap, body.length - bodyOffset);
+      if (n <= 0) return 0;
+      new Uint8Array(instance.exports.memory.buffer, ptr, n).set(
+        body.subarray(bodyOffset, bodyOffset + n),
+      );
+      bodyOffset += n;
+      return n;
+    },
+  };
+  instance = new WebAssembly.Instance(module, { env });
   // Hand the module real entropy before its top level runs: a --no-wasi build
-  // imports nothing, so its `random` starts from a constant and every isolate
-  // would otherwise draw the same sequence. Seeding here -- BEFORE _initialize
-  // -- also covers the load-time draws inside quickloaded libraries.
+  // imports nothing else, so its `random` starts from a constant and every
+  // isolate would otherwise draw the same sequence. Seeding here -- BEFORE
+  // _initialize -- also covers the load-time draws inside quickloaded
+  // libraries.
   instance.exports.__ronto_seed_random(
     new BigUint64Array(crypto.getRandomValues(new Uint8Array(8)).buffer)[0],
   );
@@ -45,7 +78,9 @@ function instantiate() {
 }
 
 // Synchronous on purpose: a Worker isolate interleaves concurrent requests only
-// at `await` points, so nothing else can allocate inside the bracket.
+// at `await` points, so nothing else can allocate inside the bracket -- and
+// nothing else can take the body cursor above, which is the same guarantee the
+// module's own re-entry guard makes on the other side.
 function handleRequest(lisp, input) {
   // The module's clock moves only when we move it, so move it per request. That
   // is not a workaround for a frozen clock -- a Worker's own `Date.now()` is
@@ -70,17 +105,15 @@ function handleRequest(lisp, input) {
 }
 
 /** The raw facts the Lisp side turns into the Clack environment. */
-async function requestToJson(request) {
+function requestToHead(request, bodyLength) {
   const url = new URL(request.url);
-  const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  const body = hasBody ? await request.text() : "";
   const headers = Object.fromEntries(request.headers);
 
   // Forward content-length. `%http-make-env` reads :content-length off the
   // header table, and lack/request's body parsing returns nothing without it --
   // while a request that arrived chunked has no content-length header at all.
-  // We have just read the body, so set it from the bytes we actually hold.
-  if (body) headers["content-length"] = String(encoder.encode(body).length);
+  // We are holding the body, so set it from the octets we actually have.
+  if (bodyLength) headers["content-length"] = String(bodyLength);
 
   return JSON.stringify({
     method: request.method,
@@ -94,13 +127,18 @@ async function requestToJson(request) {
     // peer port to report, so :remote-port stays nil.
     "remote-addr": request.headers.get("cf-connecting-ip"),
     headers,
-    body,
   });
 }
 
 export default {
   async fetch(request) {
-    const input = await requestToJson(request);
+    // `request.body` is null exactly when there is none, so a GET reads
+    // nothing. This is the one place a synchronous host has to buffer: the
+    // module pulls the octets from inside its own call, and this side cannot
+    // await there without JSPI.
+    body = request.body ? new Uint8Array(await request.arrayBuffer()) : NO_BODY;
+    bodyOffset = 0;
+    const input = requestToHead(request, body.length);
     let reply;
     try {
       reply = JSON.parse(handleRequest(lispInstance(), input));

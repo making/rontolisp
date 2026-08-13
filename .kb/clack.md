@@ -317,8 +317,67 @@ written before the split working unchanged.
 
 ONE transport therefore serves every backend: on the interpreter and the JVM
 the host passes a closure or a string directly, and on the WASM backends the
-synthesized export will build the thunk over a host import (Phase 2b — the
-export still takes the whole envelope today).
+synthesized export builds the thunk over a host import — the next section.
+
+### The WASM boundary: a head export and a body import (todo-341 Phase 2b)
+
+A host on the other side of a wasm boundary cannot pass a Lisp closure, so
+`HttpReactorInliner` writes the source itself. Beside the `handle-request`
+export it synthesizes, on the Preview 1 core-module backend, an import and the
+thunk over it:
+
+```lisp
+(rontolisp:wasm-import '%reactor-read-body :from "env" :as "readRequestBody"
+                       :params '() :returns :bytes :async t)
+(defun %reactor-read-chunk ()
+  (let ((%reactor-buf (rontolisp::%http-reactor-buffer 65536)))
+    (rontolisp::%http-reactor-chunk %reactor-buf (%reactor-read-body %reactor-buf))))
+(defun %reactor-dispatch (%reactor-json)
+  (rontolisp::%http-reactor-dispatch %reactor-json (function %reactor-read-chunk)))
+```
+
+so the whole boundary is `handle-request(headPtr, headLen) -> (ptr, len)` plus
+`env.readRequestBody(ptr, cap) -> n`. Four decisions in that, each load-bearing:
+
+- **`:bytes`, not `:string`** (`.kb/wasm-import.md`): the string decoder is
+  non-validating, so a binary body cannot cross it, and a `:string` RESULT is
+  host-allocated per call, which is what makes chunking pointless (todo-341
+  findings 2 and 4). The `:bytes` result is caller-buffered and the wrapper pops
+  its staging, so the body costs NO linear memory: measured, a 256 KiB body a
+  handler drops leaves `memory.buffer.byteLength` where it was, where the
+  envelope used to hold the body about 17 times over.
+- **the import is CALLED, never taken as `#'value`**: the build's
+  suspending-import report follows calls, and an escaped import widens its
+  answer to "any export may suspend" (`.kb/wasm-import.md`).
+- **`:async t`**, so the HOST picks the strategy over one module: answering
+  synchronously (read the body, then call in — what every checked-in Worker glue
+  does) and suspending inside the call (`WebAssembly.Suspending` over the
+  request's own reader, entered through `promising`, calls serialised) are both
+  legal. The declaration is also what puts the re-entry guard on the exports,
+  which is the difference between a supported streaming host and a silent
+  corruption.
+- **Preview 1 core modules only.** `--component` keeps the whole body inside the
+  envelope's `"body"` key: a `wasm-import` is refused there (a component's host
+  functions cross the canonical ABI) and so is the packed array behind
+  `:bytes`. Re-evaluate when the component path grows a `list<u8>` lift —
+  nothing else about the split is Preview-1-specific. `--no-gc` keeps it too and
+  cannot serve at all anyway (below).
+
+A HAND-WRITTEN reactor (one that exports `handle-request` itself, so nothing is
+synthesized) writes those three forms itself:
+`examples/cloudflare-workers/httpbin/worker.lisp` is the worked example, and it
+is also where the two boundaries meet — the same file is built as a core module
+AND as a component by `httpbin-component/`, so its import is guarded by
+`#-rontolisp-component`. That feature exists for exactly this
+(`reader/Features.COMPONENT`, added under `--component` by the CLI): the reactor
+features cannot stand in for it, because a `--component --no-wasi` build IS a
+reactor and carries them too.
+
+Pinned by `WasmReactorBodyE2eTest` (node, a host that shares the module's
+memory: a body whose every character straddles a chunk boundary, a reader that
+answers 0 meaning no body, the envelope fallback, a binary body, and the flat
+linear memory), `HttpReactorInlinerTest`'s two bridge-shape tests, and
+`RontoLispCliTest.aComponentBuildReadsTheSourceWithTheComponentFeature`.
 
 **A chunk is a string OR OCTETS** (an `(unsigned-byte 8)` vector), and both
 drains read through ONE adapter, `%http-reactor-text-source`, so neither has to
@@ -339,6 +398,32 @@ owns, and both are load-bearing:
 - **the adapter never answers `""` before the end**: an empty answer IS end of
   stream to both consumers, and a chunk whose every byte was carried over
   decodes to nothing. It pulls again instead.
+
+**A host READER is a source in two lines** (`%http-reactor-buffer` /
+`%http-reactor-chunk`) — the `read(2)` shape every byte-shaped boundary takes,
+and the shape the WASM `:bytes` import has: the caller owns one buffer and hands
+it over, the reader fills up to its length and answers how many octets it wrote
+(possibly as a FUTURE — a suspending import answers one), and 0 is end of
+stream. Both halves live in the transport rather than in each host's bridge
+because BOTH are load-bearing: the buffer is allocated once and REUSED for every
+chunk of every request (a buffer per chunk grows the host's memory by the whole
+body — the todo's finding 2 — while one buffer grows it by nothing), and the
+count-to-chunk step is where the octets are copied out before the next read
+overwrites them. Reuse is sound because a reactor answers one request at a time;
+the re-entry guard a suspending module carries (`.kb/wasm-import.md`) refuses the
+overlap that would share the buffer.
+
+**An EMPTY source is no body, and costs one look-ahead.** Once the body stops
+riding the envelope, "is there a body at all" is a question only the host can
+answer — a reader answers 0 for a bodiless GET — so `%http-reactor-raw-body`
+pulls once before deciding, and pushes that chunk back
+(`%http-reactor-pushback`) so the application still gets it. What the rule
+preserves is upstream's: `:raw-body` is nil for a bodiless request in BOTH modes
+(lack guards it with `(when raw-body ...)`), which an unread pull source would
+otherwise turn into a stream every GET pays for. The same look-ahead is what
+lets an empty source FALL BACK to the envelope's own `"body"` key
+(`%http-reactor-request-body`), so a host may start handing over a reader
+without also having to stop filling the envelope in the same commit.
 
 Which SHAPE the application then sees is the `:raw-body` mode, and on a
 reactor the mode is REGISTERED with the app (`%http-reactor-register app
@@ -371,7 +456,9 @@ with or without a body stream. Its reactors are the `wasm-export`-only ones
 Pinned by the `http-reactor-body-source` ci-spec case (all four backends: a
 pull thunk, an in-band string and no body at all through the default mode,
 then the same pull source through `:buffered`, then an OCTET pull source
-through both modes whose every character straddles a chunk boundary), the three
+through both modes whose every character straddles a chunk boundary, then the
+same two modes over a HOST READER filling a four-octet buffer, and a reader that
+is empty answering both nil and the envelope fallback), the five
 `LispEvaluatorAsdfTest` reactor-body tests, and
 `HttpReactorInlinerTest.theLoweredHttpHandlerDirectiveKeepsItsRawBodyMode`.
 

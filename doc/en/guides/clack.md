@@ -330,12 +330,54 @@ inside it:
 - `nil` — no body;
 - a string — the body, already read;
 - a function of no arguments — a **pull source**: each call answers the next
-  chunk and `nil` or `""` for the end, and it may answer a future, so a host
-  that suspends while it reads can hand one over.
+  chunk — a string, or an `(unsigned-byte 8)` vector for a host that hands over
+  raw octets — with `nil` or an empty chunk for the end. It may answer a future,
+  so a host that suspends while it reads can hand one over.
+
+A chunk boundary may fall inside a UTF-8 sequence: a host reading a socket knows
+nothing about code points, so the open sequence is carried into the next chunk
+rather than decoded as two malformed characters.
+
+A source that is empty at its **first** call is no body at all — `:raw-body`
+stays `nil`, exactly as for a request whose `"body"` is absent, because that is
+what upstream's `(when raw-body ...)` guards expect and a bodiless `GET` must
+not pay for a stream it would only find empty.
 
 The envelope's `"body"` key is exactly the string case, and it is what is used
-when no source is passed — a host written against the shape above keeps
-working unchanged.
+when no source is passed — or when the source turns out to be empty, so a host
+may start handing a reader over without also having to stop filling the
+envelope. A host written against the shape above keeps working unchanged.
+
+### The WASM boundary: a head export and a body import
+
+On a `--no-wasi` WASM module the source is not a Lisp value the host can pass,
+so the boundary is two entries and the compiler writes the second one for you:
+
+```text
+module -> host   handle-request(headPtr, headLen) -> (ptr, len)   ; the JSON head
+host -> module   env.readRequestBody(ptr, cap) -> n               ; up to cap octets
+                                                                  ;   at ptr; 0 = end
+```
+
+The head is the JSON above **without** the `"body"` key. The body crosses as raw
+octets into a buffer the module owns and reuses, which is what a JSON string
+could not do: a **binary** body arrives exactly (the string boundary decodes
+UTF-8, and does not validate), and a large upload costs the module no linear
+memory at all — the envelope used to hold it several times over.
+
+The import is declared `:async t`, so the host chooses how it answers. Returning
+the octets synchronously (read the body first, then call in) is the simple host,
+and it is what the Worker examples do. Wrapping the import in
+`WebAssembly.Suspending` and pulling from the request's own reader is the
+streaming host: it must then enter `handle-request` through
+`WebAssembly.promising` and serialise its calls, because a suspended module can
+be re-entered — the module refuses that with a trap rather than corrupting both
+calls, and the build prints the obligation.
+
+Under `--component` the body stays inside the envelope: a component's host
+functions cross the canonical ABI rather than a core import. Everything above
+this section is unchanged either way, which is the point of the body source
+being an abstract value.
 
 What the application then sees is the `:raw-body` mode. `clackup` and `handle`
 ask for the buffered one, the synchronous stream Clack promises (the source is

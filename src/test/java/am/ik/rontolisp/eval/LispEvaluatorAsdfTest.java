@@ -271,6 +271,70 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void aReactorSourceMayBeAHostReaderFillingOneBuffer() {
+		// The read(2) shape the WASM boundary takes, written here as ordinary Lisp:
+		// the caller owns ONE buffer and hands it over, the reader fills up to its
+		// length and answers how many octets it wrote, 0 for end of stream. Reusing
+		// the buffer is the whole memory argument for chunking, so the adapter that
+		// turns (buffer, count) into a chunk is the transport's, not each host's.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defvar *octets* (list #xE3 #x81 #x82 #xE3 #x81 #x84))
+				(defun host-read (buf)
+				  (let ((n 0) (cap (length buf)))
+				    (while (and (< n cap) *octets*)
+				      (setf (aref buf n) (car *octets*))
+				      (setq *octets* (cdr *octets*))
+				      (setq n (+ n 1)))
+				    n))
+				(defun pull ()
+				  (let ((buf (rontolisp::%http-reactor-buffer 4)))
+				    (rontolisp::%http-reactor-chunk buf (host-read buf))))
+				(defun app (env)
+				  (list 200 nil
+				        (list (with-output-to-string (out)
+				                (do ((ch (read-char (getf env :raw-body) nil nil)
+				                         (read-char (getf env :raw-body) nil nil)))
+				                    ((null ch))
+				                  (write-char ch out))))))
+				(print (clack.handler.reactor:handle
+				        #'app "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\"}" #'pull))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"body\\\":\\\"あい\\\"");
+	}
+
+	@Test
+	void aReactorSourceThatIsEmptyIsNoBodyAndFallsBackToTheEnvelope() {
+		// Once the body stops riding the envelope, "is there a body at all" is a
+		// question only the host can answer -- a reader answers 0 for a bodiless GET
+		// -- and the answer has to reach the application as the same nil an absent
+		// "body" key does, because upstream guards :raw-body with
+		// (when raw-body ...). The look-ahead that decides it pushes its chunk back,
+		// so an empty source also leaves the envelope's own key winning rather than
+		// shadowing it.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defun empty () nil)
+				(defun app (env)
+				  (list 200 nil (list (if (getf env :raw-body) "a-stream" "none"))))
+				(print (clack.handler.reactor:handle
+				        #'app "{\\"method\\":\\"GET\\",\\"target\\":\\"/\\"}" #'empty))
+				(defun echo (env)
+				  (list 200 nil
+				        (list (with-output-to-string (out)
+				                (do ((ch (read-char (getf env :raw-body) nil nil)
+				                         (read-char (getf env :raw-body) nil nil)))
+				                    ((null ch))
+				                  (write-char ch out))))))
+				(print (clack.handler.reactor:handle
+				        #'echo
+				        "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\",\\"body\\":\\"in-band\\"}"
+				        #'empty))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"body\\\":\\\"none\\\"").contains("\\\"body\\\":\\\"in-band\\\"");
+	}
+
+	@Test
 	void theReactorDispatcherAnswersAPortableStreamRawBodyByDefault() {
 		// The reactor's OWN default is rontolisp's asynchronous stream -- the
 		// http-handler directive's default, and what makes the portable

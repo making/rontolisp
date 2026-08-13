@@ -79,11 +79,13 @@ compiler synthesizes one from a marker the handler backend leaves behind.
 
 ## The envelope, and two fields the JavaScript side must get right
 
-The request and response are JSON because the other side is JavaScript. Out:
+The request and response are JSON because the other side is JavaScript. Out —
+this is the request **head**; the body does not ride in it, see the section
+after this one:
 
 ```json
 { "method": "GET", "target": "/path?a=1", "headers": {"host": "..."},
-  "body": "", "scheme": "https", "remote-addr": "203.0.113.7" }
+  "scheme": "https", "remote-addr": "203.0.113.7" }
 ```
 
 back:
@@ -108,6 +110,36 @@ load-bearing, and both fail quietly:
 On the way out, response `headers` are an **array of pairs, not an object**:
 `%http-normalize-response` answers an alist in which a name may repeat (two
 cookies, two `Set-Cookie` headers). An object would collapse the duplicates.
+
+## The body is not in the envelope
+
+It crosses the other way instead, through the one import this module has:
+
+```js
+readRequestBody(ptr, cap) -> n   // write up to cap octets at ptr, answer how
+                                 // many; 0 is end of stream
+```
+
+The module owns the buffer and hands it over per call, reusing one for every
+chunk of every request. Two things follow that a JSON string could not give: a
+**binary** body arrives exactly (the `:string` boundary decodes UTF-8 and does
+not validate, so arbitrary octets come back as garbage code points), and a large
+upload costs the module **no linear memory** — the envelope used to hold the body
+several times over, and a 256 KiB `POST` the handler drops now leaves
+`memory.buffer.byteLength` exactly where it was.
+
+The import is declared `:async t`, which says the host *may* suspend while it
+reads. `src/index.js` answers synchronously — it reads the body first, then calls
+in — which the declaration allows and which needs nothing from the platform. A
+host that instead wraps the import in `WebAssembly.Suspending` streams the upload
+straight from `request.body`'s reader, at the price of entering `handle-request`
+through `WebAssembly.promising` and serialising its calls (see
+[`../dog-fetcher`](../dog-fetcher), which does that for its outgoing `fetch`).
+
+[`../httpbin-component`](../httpbin-component) builds **this same file** as a
+component, where a core import does not exist — a component's host functions
+cross the canonical ABI — so that build keeps the body in the envelope's `"body"`
+key. One `#-rontolisp-component` in `worker.lisp` is the whole difference.
 
 ## Nothing to shim: `--no-wasi`
 

@@ -187,6 +187,34 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void aComponentBuildReadsTheSourceWithTheComponentFeature() throws Exception {
+		// #+rontolisp-reactor cannot say "not a component" -- a --component --no-wasi
+		// build IS a reactor and carries it too -- so the component BOUNDARY has its own
+		// feature. A source that declares a core wasm-import (which a component refuses
+		// outright, its host functions crossing the canonical ABI) guards it with
+		// #-rontolisp-component and still compiles both ways;
+		// examples/cloudflare-workers/httpbin/worker.lisp is built both ways on exactly
+		// this line.
+		Path file = tempDir.resolve("both.lisp");
+		Files.writeString(file, """
+				#-rontolisp-component
+				(rontolisp:wasm-import 'pull :from "env" :as "pull" :params '() :returns :int)
+				#-rontolisp-component
+				(defun body () (pull))
+				#+rontolisp-component
+				(defun body () 0)
+				(rontolisp:wasm-export 'body :params '() :returns :int)
+				""");
+		Path core = tempDir.resolve("core.wasm");
+		runCli("", file.toString(), "-o", core.toString(), "--no-wasi");
+		assertThat(new String(Files.readAllBytes(core), StandardCharsets.ISO_8859_1)).contains("envpull");
+
+		Path component = tempDir.resolve("component.wasm");
+		runCli("", file.toString(), "-o", component.toString(), "--component", "--no-wasi");
+		assertThat(new String(Files.readAllBytes(component), StandardCharsets.ISO_8859_1)).doesNotContain("envpull");
+	}
+
+	@Test
 	void hostFetchCompilesAFetchingReactorEndToEnd() throws Exception {
 		// The full CLI pipeline: the HostFetchLibrary splice, the JSON library and the
 		// prelude behind it, and the env.fetch import in the emitted module (the import

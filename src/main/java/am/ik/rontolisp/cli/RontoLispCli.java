@@ -412,6 +412,16 @@ public final class RontoLispCli {
 		boolean reactor = noWasi || noGc;
 		Features features = outputFile.endsWith(".wasm") ? (reactor ? Features.WASM_REACTOR : Features.WASM)
 				: Features.JVM;
+		// And #+rontolisp-component selects code for the COMPONENT BOUNDARY, which is a
+		// different boundary rather than a different backend: a component's host
+		// functions cross the canonical ABI, so the core-module directives
+		// (rontolisp:wasm-import / a :bytes type) are refused there and a source that
+		// wants one needs a way to say "not on this target" -- the reactor features
+		// above cannot, since a reactor component carries them too. Additive, like every
+		// other target-describing feature.
+		if (component && outputFile.endsWith(".wasm")) {
+			features = features.with(List.of(Features.COMPONENT));
+		}
 		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc, component);
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the

@@ -237,6 +237,16 @@ full-length answer on an undersized buffer with no overrun, and the flat-memory 
 the wasmtime preload leg (`bytesBoundaryCrossesThePreloadBoundaryByLength`) pins the
 plumbing through the values that DO cross two disjoint memories -- the lengths.
 
+**Its first consumer is the reactor's request body** (todo-341 Phase 2b,
+2026-08-13): `HttpReactorInliner` synthesizes
+`(wasm-import '%reactor-read-body :from "env" :as "readRequestBody" :params '()
+:returns :bytes :async t)` beside the `handle-request` export, so the head crosses
+as the JSON envelope and the body crosses as octets into one reused buffer -- the
+flat-memory property above, measured on a real Worker module. `.kb/clack.md` ("The
+WASM boundary") has the whole shape, including why the thunk CALLS the import
+instead of taking `#'name` (the suspending-import report follows calls) and why
+`--component` keeps the in-band body.
+
 **The component path does NOT go through this compiler** (todo 128): `rontolisp:wasm-import`
 is still a Preview-1-only directive (`--component` throws). A `rontolisp:wit-import` under
 `--component` instead lowers to the internal `rontolisp::%component-import` form, which

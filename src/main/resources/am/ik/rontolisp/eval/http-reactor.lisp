@@ -22,13 +22,16 @@
 ;;;;   nil       no body,
 ;;;;   a string  already buffered (what the envelope's own "body" key carries,
 ;;;;             and what a host that prefers today's shape hands over),
-;;;;   a THUNK   arity 0, answering the next chunk (a string), nil or "" for
-;;;;             end of stream -- possibly a FUTURE of one, so a suspending
-;;;;             host import is a legal pull source.
+;;;;   a THUNK   arity 0, answering the next chunk -- a string or an
+;;;;             (unsigned-byte 8) vector -- with nil or an empty chunk for end
+;;;;             of stream, possibly as a FUTURE, so a suspending host import
+;;;;             is a legal pull source.
 ;;;;
 ;;;; -- so ONE transport serves every backend: on the interpreter and the JVM
 ;;;; the host passes a closure or a string directly, and on the WASM backends
-;;;; the synthesized export builds the thunk over a host import. The body key
+;;;; the synthesized export builds the thunk over a byte-shaped host import
+;;;; (%http-reactor-buffer / -chunk below are that thunk's two halves: one
+;;;; reused receive buffer, and the read(2) count -> chunk step). The body key
 ;;;; below is exactly the string case of that source, which is why the
 ;;;; envelope keeps working unchanged.
 ;;;;
@@ -116,14 +119,58 @@
     (dolist (pair alist) (setq out (cons (list (car pair) (cdr pair)) out)))
     (coerce (nreverse out) 'vector)))
 
+(defun rontolisp::%http-reactor-force (value)
+  ;; A future -> what it holds, anything else unchanged. A suspending host
+  ;; import and an async-lambda both answer a settled future, and a future
+  ;; wrapping nil is not nil -- without the resolve a source could never report
+  ;; end of stream. The same rule %stream-new applies at the read, applied here
+  ;; because this transport is synchronous code where await is not legal.
+  (if (rontolisp:futurep value) (rontolisp::%future-force value) value))
+
 (defun rontolisp::%http-reactor-pull (thunk)
-  ;; One chunk from a pull source, RESOLVED: a suspending host import and an
-  ;; async-lambda both answer a settled future here, and a future wrapping nil
-  ;; is not nil -- without the resolve such a source could never report EOF.
-  ;; The same rule %stream-new applies at the read, applied here because this
-  ;; transport is synchronous code where await is not legal.
-  (let ((chunk (funcall thunk)))
-    (if (rontolisp:futurep chunk) (rontolisp::%future-force chunk) chunk)))
+  ;; One chunk from a pull source, RESOLVED.
+  (rontolisp::%http-reactor-force (funcall thunk)))
+
+(defun rontolisp::%http-reactor-pushback (chunk source)
+  ;; SOURCE with CHUNK put back in front of it. What the look-ahead below needs:
+  ;; deciding whether a pull source has a body at all costs one pull, and that
+  ;; chunk is the application's.
+  (let ((held chunk))
+    (lambda ()
+      (if held
+          (let ((c held))
+            (setq held nil)
+            c)
+          (rontolisp::%http-reactor-pull source)))))
+
+;; The ONE receive buffer a host reader fills. Allocated on first use and reused
+;; for every chunk of every request: reuse is the whole memory argument for
+;; chunking a body -- a buffer per chunk grows the host's memory by the whole
+;; body, one buffer grows it by nothing -- and it is sound because a reactor
+;; answers one request at a time (a module that can suspend refuses the overlap
+;; that would share it).
+(defvar rontolisp::%http-reactor-chunk-buffer nil)
+
+(defun rontolisp::%http-reactor-buffer (size)
+  ;; The receive buffer, at least SIZE octets. Grown rather than replaced per
+  ;; call, so a second caller asking for more does not leave the first reading
+  ;; into a buffer that is too small.
+  (let ((buf rontolisp::%http-reactor-chunk-buffer))
+    (if (and buf (>= (length buf) size))
+        buf
+        (setq rontolisp::%http-reactor-chunk-buffer
+              (make-array size :element-type '(unsigned-byte 8))))))
+
+(defun rontolisp::%http-reactor-chunk (buffer n)
+  ;; What a HOST READER wrote into BUFFER -> the chunk a pull source answers.
+  ;; N is how many octets it wrote -- possibly a future, since a suspending
+  ;; import answers one -- and 0 (or nil) is end of stream. This is the read(2)
+  ;; shape the byte-shaped boundaries take: the caller owns the buffer, so the
+  ;; octets are COPIED out here, before the next read overwrites them.
+  (let ((count (rontolisp::%http-reactor-force n)))
+    (if (or (null count) (<= count 0))
+        nil
+        (subseq buffer 0 (min count (length buffer))))))
 
 (defun rontolisp::%http-reactor-decode-chunk (v carry)
   ;; One OCTET chunk plus the bytes the previous chunk left open -> (text .
@@ -220,14 +267,38 @@
 
 (defun rontolisp::%http-reactor-raw-body (source buffered)
   ;; The body source -> the :raw-body value the registered mode asks for. nil
-  ;; (and an empty in-band body) stays nil in BOTH modes: upstream guards
-  ;; :raw-body with (when raw-body ...), and a bodiless GET must not pay for a
-  ;; stream it would only find empty.
+  ;; (and an EMPTY source of either spelling) stays nil in BOTH modes: upstream
+  ;; guards :raw-body with (when raw-body ...), and a bodiless GET must not pay
+  ;; for a stream it would only find empty.
+  ;;
+  ;; Which costs a pull source ONE look-ahead, because "is there a body" is a
+  ;; question only the host can answer once the body stopped riding the
+  ;; envelope: a reader answers 0 for a GET, and that IS the answer. The chunk
+  ;; the look-ahead took is pushed back, so nothing is lost when there is one.
   (cond ((null source) nil)
-        ((and (stringp source) (= (length source) 0)) nil)
-        (buffered (rontolisp::%http-body-stream
-                   (rontolisp::%http-reactor-body-text source)))
-        (t (rontolisp::%http-reactor-body-stream source))))
+        ((stringp source)
+         (if (= (length source) 0)
+             nil
+             (if buffered
+                 (rontolisp::%http-body-stream source)
+                 (rontolisp::%http-reactor-body-stream source))))
+        (t (let ((head (rontolisp::%http-reactor-pull source)))
+             (if (or (null head) (= (length head) 0))
+                 nil
+                 (let ((rest (rontolisp::%http-reactor-pushback head source)))
+                   (if buffered
+                       (rontolisp::%http-body-stream
+                        (rontolisp::%http-reactor-body-text rest))
+                       (rontolisp::%http-reactor-body-stream rest))))))))
+
+(defun rontolisp::%http-reactor-request-body (source in-band buffered)
+  ;; SOURCE is the body the host passed out of band, IN-BAND the envelope's own
+  ;; "body" key. The source wins -- and an empty one falls back to the key,
+  ;; which is what lets a host hand over a reader that answers "no body" for a
+  ;; GET without also having to stop filling the envelope. Both are the same
+  ;; abstract source, so this is one function twice, not a second policy.
+  (let ((body (rontolisp::%http-reactor-raw-body source buffered)))
+    (if body body (rontolisp::%http-reactor-raw-body in-band buffered))))
 
 (defun rontolisp::%http-reactor-request-tuple (req body buffered)
   ;; The positional raw tuple %http-make-env consumes:
@@ -239,7 +310,7 @@
   ;; which is what keeps a host that has not moved yet working unchanged.
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
    (rontolisp::%http-reactor-header-alist (gethash "headers" req))
-   (rontolisp::%http-reactor-raw-body (or body (gethash "body" req)) buffered)
+   (rontolisp::%http-reactor-request-body body (gethash "body" req) buffered)
    "HTTP/1.1" (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req)
    nil))
 

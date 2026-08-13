@@ -63,6 +63,19 @@ public final class Features {
 	public static final Features WASM_REACTOR = new Features(
 			List.of("rontolisp", "rontolisp-wasm", "unicode", "rontolisp-reactor"), true);
 
+	/**
+	 * The feature naming the component BOUNDARY, added to whichever WASM set is in force
+	 * under {@code --component} ({@link #with}). It describes a boundary rather than a
+	 * backend, and that is why the reactor features above cannot stand in for it: a
+	 * {@code --component --no-wasi} build IS a reactor and carries
+	 * {@code :rontolisp-reactor} too, while its host functions cross the canonical ABI
+	 * instead of core imports -- so {@code rontolisp:wasm-import} (and the {@code :bytes}
+	 * boundary type) is refused there, and a source that declares one says
+	 * {@code #-rontolisp-component} to keep compiling as a component
+	 * ({@code examples/cloudflare-workers/httpbin/worker.lisp}, built both ways).
+	 */
+	public static final String COMPONENT = "rontolisp-component";
+
 	private final List<String> names;
 
 	private final boolean substituteFeaturesVar;

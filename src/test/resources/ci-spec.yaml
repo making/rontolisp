@@ -4880,6 +4880,13 @@ cases:
         3
         :RONTOLISP
         :UNICODE
+      # ... and a component carries one MORE than Preview 1: :rontolisp-component,
+      # the boundary feature a source guards a core wasm-import with (the reactor
+      # features cannot say "not a component" -- a reactor component has them too).
+      wasm_component: |
+        4
+        :RONTOLISP
+        :UNICODE
   - name: reader-sharp-dot-generated-defconstants
     # fast-http's multipart-parser idiom: #. generates definitions via a
     # backquoted eval-when whose datum value is CODE, evaluated in place. The
@@ -8228,12 +8235,58 @@ cases:
       (print (ci-reactor-body
               (rontolisp::%http-reactor-dispatch
                "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-pull)))
+      ;; The source a HOST READER makes: the read(2) shape the WASM boundary
+      ;; takes, written here as ordinary Lisp so all four backends run the same
+      ;; adapter. The caller owns ONE buffer and hands it over; the reader fills
+      ;; up to its length and answers how many octets it wrote, 0 for end of
+      ;; stream. Four octets at a time, so every character still straddles.
+      (defvar *ci-reactor-octets* nil)
+      (defun ci-reactor-read (buf)
+        (let ((n 0) (cap (length buf)))
+          (while (and (< n cap) *ci-reactor-octets*)
+            (setf (aref buf n) (car *ci-reactor-octets*))
+            (setq *ci-reactor-octets* (cdr *ci-reactor-octets*))
+            (setq n (+ n 1)))
+          n))
+      (defun ci-reactor-host-chunk ()
+        (let ((buf (rontolisp::%http-reactor-buffer 4)))
+          (rontolisp::%http-reactor-chunk buf (ci-reactor-read buf))))
+      (rontolisp::%http-reactor-register #'ci-reactor-stream-app)
+      (setq *ci-reactor-octets*
+            (list #xE3 #x81 #x93 #xE3 #x82 #x93 #xE3 #x81 #xAB #xE3 #x81 #xA1
+                  #xE3 #x81 #xAF))
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-host-chunk)))
+      ;; A reader that answers 0 at the first read is NO BODY -- once the body
+      ;; stops riding the envelope, that is the only way to ask -- so :raw-body
+      ;; stays nil rather than becoming a stream a bodiless GET would only find
+      ;; empty. The look-ahead that decides it costs one pull and pushes the
+      ;; chunk back, which the reassembled body above is what proves.
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"GET\",\"target\":\"/\"}" #'ci-reactor-host-chunk)))
+      ;; ... and an empty source falls back to the envelope's own "body" key, so
+      ;; a host may hand over a reader without also having to stop filling it.
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"POST\",\"target\":\"/\",\"body\":\"still-in-band\"}"
+               #'ci-reactor-host-chunk)))
+      (rontolisp::%http-reactor-register #'ci-reactor-buffered-app :buffered)
+      (setq *ci-reactor-octets* (list #xE3 #x81 #x82 #xE3 #x81 #x84))
+      (print (ci-reactor-body
+              (rontolisp::%http-reactor-dispatch
+               "{\"method\":\"POST\",\"target\":\"/\"}" #'ci-reactor-host-chunk)))
     expected: |
       "hello"
       "in-band"
       "-"
       "buffered"
       "こんにちは"
+      "あい"
+      "こんにちは"
+      "-"
+      "still-in-band"
       "あい"
   - name: http-percent-decode
     source: |

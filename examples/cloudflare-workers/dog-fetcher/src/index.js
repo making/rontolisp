@@ -43,6 +43,13 @@ async function hostFetch(lisp, ptr, len) {
   return [out, bytes.length];
 }
 
+// The request body the module pulls, and how much of it has already crossed.
+// Set inside the queue below, not beside it: a suspended handler returns to the
+// event loop, so a second request must not move the cursor under the first.
+const NO_BODY = new Uint8Array(0);
+let body = NO_BODY;
+let bodyOffset = 0;
+
 // Instantiated on the first request: a Worker forbids crypto in global scope.
 let lisp = null;
 const lispInstance = () => (lisp ??= instantiate());
@@ -57,6 +64,19 @@ function instantiate() {
       fetch: new WebAssembly.Suspending((ptr, len) =>
         hostFetch(exports, ptr, len),
       ),
+      // The request body, out of band: write up to `cap` octets at `ptr` and
+      // answer how many, 0 for end of stream. Synchronous, so it needs no
+      // Suspending -- the module declares the import :async t and accepts
+      // either host.
+      readRequestBody: (ptr, cap) => {
+        const n = Math.min(cap, body.length - bodyOffset);
+        if (n <= 0) return 0;
+        new Uint8Array(exports.memory.buffer, ptr, n).set(
+          body.subarray(bodyOffset, bodyOffset + n),
+        );
+        bodyOffset += n;
+        return n;
+      },
     },
   });
   exports = instance.exports;
@@ -106,18 +126,29 @@ async function handleRequest(lisp, input) {
 export default {
   async fetch(request) {
     const url = new URL(request.url);
+    const bytes = request.body
+      ? new Uint8Array(await request.arrayBuffer())
+      : NO_BODY;
+    const headers = Object.fromEntries(request.headers);
+    // lack/request parses no body without a content-length, and a chunked
+    // request carries none -- set it from the octets we actually have.
+    if (bytes.length) headers["content-length"] = String(bytes.length);
     const input = JSON.stringify({
       method: request.method,
       // The RAW target: the Lisp side splits and decodes it.
       target: url.pathname + url.search,
       scheme: url.protocol.replace(":", ""),
-      headers: Object.fromEntries(request.headers),
+      headers,
     });
 
     let reply;
     try {
       reply = JSON.parse(
-        await serialized(() => handleRequest(lispInstance(), input)),
+        await serialized(() => {
+          body = bytes;
+          bodyOffset = 0;
+          return handleRequest(lispInstance(), input);
+        }),
       );
     } catch (error) {
       // Lisp errors answer 500 themselves, so this is a trap: the arena reset

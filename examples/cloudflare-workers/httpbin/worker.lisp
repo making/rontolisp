@@ -13,9 +13,45 @@
 ;;; All that is left to write is the JSON envelope.
 ;;;
 ;;; Nothing here does I/O, which is what lets build.sh compile with --no-wasi:
-;;; the module imports nothing at all.
+;;; the only thing the module imports is the request body below.
 
 (rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
+
+;;; The body does NOT ride the envelope. The host hands it over through a
+;;; byte-shaped import instead -- (ptr, cap) in, "how many octets I wrote" out,
+;;; 0 for end of stream -- writing into ONE buffer the module keeps and reuses
+;;; for every chunk of every request. Two things follow that a JSON string
+;;; cannot give: a BINARY body crosses exactly (the string boundary's decoder is
+;;; non-validating), and a large upload no longer costs linear memory
+;;; proportional to its own size. :async t says the host MAY suspend while it
+;;; reads -- a WebAssembly.Suspending wrapper over a ReadableStream reader --
+;;; and src/index.js answers synchronously, which the declaration allows.
+;;;
+;;; #-rontolisp-component, because ../httpbin-component builds THIS FILE as a
+;;; component, whose host functions cross the canonical ABI instead of a core
+;;; import -- so that build keeps the body inside the envelope, and its
+;;; src/index.js still sends one. Same endpoints, one source, two boundaries.
+#-rontolisp-component
+(rontolisp:wasm-import '%read-request-body
+                       :from "env"
+                       :as "readRequestBody"
+                       :params '()
+                       :returns :bytes
+                       :async t)
+
+;; The request body as text. The two rontolisp:: names below are the transport's
+;; own, like %http-make-env: what this file writes out by hand is the ENVELOPE,
+;; and neither the reused buffer nor the UTF-8 sequence that straddles two
+;; chunks is envelope work.
+#-rontolisp-component
+(defun %body-text (req)
+  (declare (ignore req))
+  (rontolisp::%http-reactor-body-text
+   (lambda ()
+     (let ((buf (rontolisp::%http-reactor-buffer 65536)))
+       (rontolisp::%http-reactor-chunk buf (%read-request-body buf))))))
+
+#+rontolisp-component (defun %body-text (req) (gethash "body" req))
 
 ;;; --- the endpoints -----------------------------------------------------------
 
@@ -101,11 +137,13 @@
 ;; The positional tuple %http-make-env consumes. "target" is RAW -- path and
 ;; query still joined and still encoded, because %http-make-env owns that split
 ;; -- and the Host header supplies :server-name / :server-port, so the two
-;; placeholders below never win when the host sends one.
+;; placeholders below never win when the host sends one. The body is DRAINED
+;; here rather than streamed: the endpoints echo it whole, and buffering it is
+;; the one thing Clack's :raw-body would do anyway.
 (defun %request-tuple (req)
   (list (or (gethash "method" req) "GET") (or (gethash "target" req) "/")
         (%header-alist (gethash "headers" req))
-        (rontolisp::%http-body-stream (gethash "body" req)) "HTTP/1.1"
+        (rontolisp::%http-body-stream (%body-text req)) "HTTP/1.1"
         (gethash "scheme" req) "localhost" 80 (gethash "remote-addr" req) nil))
 
 (defun %envelope (status headers body)

@@ -83,7 +83,12 @@ UTF-8 のパスを選びます。インタプリタと JVM には加えて
 [`rontolisp:make-thread`](functions/rontolisp-make-thread.md) を参照)。また、リアクタモードの
 WASM コンパイル(`--no-wasi` または `--no-gc`)には
 `:rontolisp-reactor` が加わります — モジュールのエントリポイントはホストが呼ぶエクスポートである、という意味で、Clack
-のハンドラバックエンドがトランスポートを選ぶ手掛かりです([Clack ガイド](../guides/clack.md)を参照)。変数
+のハンドラバックエンドがトランスポートを選ぶ手掛かりです([Clack ガイド](../guides/clack.md)を参照)。`--component`
+のコンパイルにはさらに `:rontolisp-component`
+が加わります。これはバックエンドではなく**バウンダリ**の名前です。コンポーネントのホスト関数は canonical ABI
+を通るので [`rontolisp:wasm-import`](../guides/wasm-gc-module.md)
+はそこでは拒否され、これを宣言するソースは `#-rontolisp-component` で囲みます(`--component --no-wasi`
+のビルドはリアクタでもあるので、両方が立ちます)。変数
 `*features*` はアクティブなフィーチャーのリストとして読まれます(quote
 されたキーワードのリストで、代入はできません)。インタープリタでは本物のグローバル変数です。JVM / WASM
 コンパイルパスでは `pi` と同様に read 時に置換される定数なので、この名前の束縛（例:

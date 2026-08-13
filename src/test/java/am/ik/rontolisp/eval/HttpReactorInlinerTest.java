@@ -32,10 +32,40 @@ class HttpReactorInlinerTest {
 		String printed = print(out);
 		// The bridge and its export are APPENDED after the program, so a
 		// package-qualified dispatcher name resolves whatever package it ended in.
-		assertThat(printed).contains(
-				"(DEFUN %REACTOR-DISPATCH (%REACTOR-JSON) " + "(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON))");
+		assertThat(printed).contains("(DEFUN %REACTOR-DISPATCH (%REACTOR-JSON) "
+				+ "(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON (FUNCTION %REACTOR-READ-CHUNK)))");
 		assertThat(printed).contains("(RONTOLISP:WASM-EXPORT (QUOTE %REACTOR-DISPATCH) :AS \"handle-request\" "
 				+ ":PARAMS (QUOTE (:STRING)) :RETURNS :STRING)");
+	}
+
+	@Test
+	void thePreview1BridgeTakesTheBodyOutOfTheEnvelope() {
+		String printed = print(
+				HttpReactorInliner.process(LispReader.readAllFromString(SHIM), WitExportDirective.Backend.WASM_GC));
+		// The head still crosses as the JSON string; the body crosses as octets through
+		// a caller-buffered :bytes import, declared suspending so a host that STREAMS
+		// the upload is a supported host rather than a silent re-entrancy hazard.
+		assertThat(printed).contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-READ-BODY) :FROM \"env\" "
+				+ ":AS \"readRequestBody\" :PARAMS (QUOTE NIL) :RETURNS :BYTES :ASYNC T)");
+		// The import is CALLED, never taken as #'value: the build's suspending-import
+		// report follows calls, and an escaped import widens it to "any export".
+		assertThat(printed).contains("(%REACTOR-READ-BODY %REACTOR-BUF)")
+			.contains("(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON (FUNCTION %REACTOR-READ-CHUNK))");
+	}
+
+	@Test
+	void theComponentBridgeKeepsTheInBandBody() {
+		// A :bytes import is a wasm-import over a packed array, and --component has
+		// neither -- so a reactor component keeps the whole body inside the envelope's
+		// "body" key, which the transport still accepts. Same for --no-gc, which cannot
+		// carry the HTTP transport at all.
+		for (WitExportDirective.Backend backend : List.of(WitExportDirective.Backend.WASM_COMPONENT,
+				WitExportDirective.Backend.WASM_NO_GC)) {
+			String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM), backend));
+			assertThat(printed).as("%s", backend)
+				.doesNotContain("WASM-IMPORT")
+				.contains("(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON)");
+		}
 	}
 
 	@Test

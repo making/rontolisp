@@ -375,19 +375,62 @@ Known and deliberately left: `:buffered` over an octet source decodes to text
 and `%http-body-stream` re-encodes it to octets. Phase 2b step 2 should hand
 the buffered mode the octets directly rather than adding a second conversion.
 
-*What is left.* The synthesized export still takes the whole envelope as one
-`:string`, so a wasm host cannot yet pass a source out of band, and the arena
-still holds the body 17x. `handle-request(headPtr, headLen)` plus the
-`env.readRequestBody(ptr, cap) -> i32` import of the design above (`:bytes`,
-Phase 0, `:async t` optional per finding 1), `HttpReactorInliner` synthesizing
-the thunk over it, and the four glue files moving with it -- which is why
-Phase 4 (the examples) is really the same landing as this one.
+*Step 2, the BOUNDARY, done (2026-08-13).* The synthesized export now takes the
+request HEAD and pulls the body out of band, so the whole wasm boundary is the
+two entries of the design:
 
-Gate: the finding-5 table re-measured, and the TARGET is now only the last two
-columns -- **one body-sized copy instead of 17, and linear memory that does not
-grow with the body** (the time column is already linear and is no longer what
-this buys), plus a binary body crossing exactly and an upload the host streams
-rather than buffers.
+```
+handle-request(headPtr, headLen) -> (ptr, len)   ; the JSON head, no "body" key
+env.readRequestBody(ptr, cap) -> i32             ; :bytes, :async t; 0 = EOF
+```
+
+`HttpReactorInliner` synthesizes the import and the thunk over it beside the
+bridge; the thunk is two transport calls (`%http-reactor-buffer` /
+`%http-reactor-chunk`), so the reused buffer and the chunk-boundary decode stay
+in ONE place and a hand-written reactor gets them by naming them. Three rules
+came out of building it, all in `.kb/clack.md`:
+
+- the thunk CALLS the import rather than taking `#'name`, or the build's
+  suspending-import report widens to "any export may suspend";
+- an empty source is NO BODY (`:raw-body` nil, upstream's `(when raw-body ...)`),
+  which once the body left the envelope only the host can answer -- so the
+  transport pulls ONCE and pushes the chunk back, and an empty source still falls
+  back to the envelope's own `"body"` key;
+- **Preview 1 core modules only**: `--component` refuses both `wasm-import` and
+  the packed array behind `:bytes`, so a reactor component keeps the in-band
+  body. Re-evaluate when the component path grows a `list<u8>` lift.
+
+**Measured, same shape as the finding-5 table** (node 24.19, `--no-wasi
+--optimize=size`, one instance, arena bracket per request). The last two columns
+were the target, and the boundary column is now flat:
+
+| body | boundary (handler drops it) | with the handler's own `read-all` |
+| --- | --- | --- |
+| 4 KiB | 256 KiB, +0 | 256 KiB, +0 |
+| 16 KiB | 256 KiB, +0 | 256 -> 384 KiB |
+| 64 KiB | 256 KiB, +0 | 256 -> 1088 KiB |
+| 256 KiB | **256 KiB, +0** | 256 -> 4160 KiB |
+
+So the envelope's 17x is gone: what a 256 KiB body costs the TRANSPORT is now
+zero linear memory, four requests in a row. The right column is what the
+handler's own drain costs (`read-all` builds the body as one string, ~16x its
+size), which is the same on every backend and is not this boundary -- worth its
+own item, and worth remembering before quoting the left column as "the body is
+free".
+
+A binary body crosses exactly (the `ff fe 41` a `:string` result corrupts), and
+the `#-rontolisp-component` guard needed a reader feature that did not exist:
+`:rontolisp-component` (`reader/Features.COMPONENT`), because
+`:rontolisp-reactor` cannot say "not a component" -- a reactor component has it
+too.
+
+*Still open after step 2.* The response body (Phase 3) and the STREAMING host.
+The module is ready for the second one -- the import is `:async t`, so a host may
+wrap it in `WebAssembly.Suspending` and pull from `request.body`'s reader -- but
+every checked-in glue file answers synchronously (it reads the body, then calls
+in), so "a Worker cannot stream an upload" is still true of the EXAMPLES. Making
+one of them stream is a small, self-contained follow-up: the promising/serialise
+shape is already written in `dog-fetcher`.
 
 **Phase 3 -- the response body, symmetrically.** Today it is one string in
 linear memory, so a large or streamed response pays the same way. Same
@@ -395,20 +438,26 @@ convention in reverse (`env.writeResponseBody(ptr, len)`, the module choosing
 where those bytes sit), and `%http-normalize-response`'s stream arm stops being
 drained before sending on this transport.
 
-**Phase 4 -- the examples, and the glue that stops being hand-written.** Ten of
-the eleven `examples/cloudflare-workers/` directories speak this envelope
-(`hello/` is the exception: three direct `wasm-export`s, no reactor), through
-FOUR distinct glue files -- `httpbin/src/index.js` (byte-identical in five
-directories), `hello-clack/src/index.js` (in three), `dog-fetcher/src/index.js`
-and `httpbin-component`'s generated glue. All four move, and
-`httpbin/worker.lisp`'s hand-rolled `read-char` drain becomes the library path.
-Two things to fix while there: `dog-fetcher/src/index.js` sends NO body at all
-today (it inherited hello-clack's bodyless envelope, so a POST to it is
-silently dropped), and `httpbin/src/index.js` reads the body of every non-GET
-request even when the route drops it. This is where `.todo/340` (generate the
-suspending host glue) should land rather than earlier -- with a uniform
-boundary the glue is derivable, and generating it is what stops the copies from
-drifting.
+**Phase 4 -- the examples, and the glue that stops being hand-written. DONE with
+step 2 (2026-08-13), except the generation.** Ten of the eleven
+`examples/cloudflare-workers/` directories speak this envelope (`hello/` is the
+exception: three direct `wasm-export`s, no reactor), through FOUR distinct glue
+files -- `httpbin/src/index.js` (byte-identical in five directories),
+`hello-clack/src/index.js` (in three), `dog-fetcher/src/index.js` and
+`httpbin-component`'s generated glue. The first three moved with the boundary
+(each provides `env.readRequestBody` and stops filling `"body"`);
+`httpbin-component` keeps the envelope, which is now a documented divergence
+rather than a copy left behind. `httpbin/worker.lisp` -- the library-free one --
+writes the import and the two transport calls out by hand, which is what that
+example is for; its `read-char` drain over the buffered `:raw-body` is unchanged.
+Both fixes-while-there landed: `dog-fetcher` sent NO body at all (a POST was
+silently dropped) and now sends one, and the httpbin glue reads the body only
+when `request.body` is non-null instead of on every non-GET.
+
+What is NOT done: `.todo/340` (generate the suspending host glue). With a uniform
+boundary the glue is derivable -- and it is now three near-identical files that
+differ only in the arena bracket, which is exactly the drift generation would
+stop.
 
 ## What breaks, deliberately
 

@@ -47,6 +47,20 @@ import org.jspecify.annotations.Nullable;
  * spliced definitions whatever package the program ended in.
  *
  * <p>
+ * On the Preview 1 core-module backend the bridge also takes the request BODY OUT OF THE
+ * ENVELOPE, which is what the synthesized {@code env.readRequestBody} import is: the head
+ * stays a JSON string and stays small, and the body crosses as raw octets through a
+ * {@code :bytes} host import that reads into ONE reused buffer (the {@code read(2)} shape
+ * -- {@code .kb/wasm-import.md}). Two things follow that the envelope could not give: a
+ * BINARY body crosses exactly (the {@code :string} decoder is non-validating and corrupts
+ * arbitrary bytes), and the body no longer costs linear memory proportional to its own
+ * size. The import is declared {@code :async t}, so a host that STREAMS the upload -- a
+ * {@code WebAssembly.Suspending} wrapper over a {@code ReadableStream} reader -- is a
+ * declared, supported host rather than a silent re-entrancy hazard; a host that answers
+ * synchronously is equally valid and pays nothing (the future is settled at creation on
+ * this backend).
+ *
+ * <p>
  * The precedent is exact and deliberate: {@link HttpLibrary} reads the
  * {@code rontolisp:http-handler} directive NESTED in the {@code clack-handler-rontolisp}
  * shim's {@code run} the same way, for the same reason. It is a SEPARATE marker rather
@@ -63,11 +77,33 @@ public final class HttpReactorInliner {
 	/** The synthesized bridge defun the export names. */
 	static final String DISPATCH_BRIDGE = "%REACTOR-DISPATCH";
 
+	/** The synthesized body-pull defun, and the import it calls. */
+	static final String CHUNK_BRIDGE = "%REACTOR-READ-CHUNK";
+
+	static final String READ_BODY_IMPORT = "%REACTOR-READ-BODY";
+
 	/**
 	 * The export a reactor's host calls, and the name the Clack handler backends'
 	 * {@code %http-reactor} marker states: JSON request in, JSON response out.
 	 */
 	public static final String EXPORT_NAME = "handle-request";
+
+	/**
+	 * The host module and field of the request-body import: {@code (ptr, cap) -> i32},
+	 * "write up to cap octets at ptr and answer how many; 0 is end of stream". The
+	 * {@code env} module is where every other injected host hook of this backend lives
+	 * ({@code env.fetch}, {@code env.random_get}).
+	 */
+	static final String READ_BODY_MODULE = "env";
+
+	static final String READ_BODY_FIELD = "readRequestBody";
+
+	/**
+	 * The receive buffer handed to the import, in octets. One buffer serves every chunk
+	 * of every request, so this is the whole per-instance cost of the body path -- big
+	 * enough that an ordinary request crosses in one read, small enough to be free.
+	 */
+	static final int CHUNK_BYTES = 65536;
 
 	private HttpReactorInliner() {
 	}
@@ -199,14 +235,47 @@ public final class HttpReactorInliner {
 			return rewritten;
 		}
 		List<LispVal> out = new ArrayList<>(rewritten);
-		// The envelope is a JSON request string in, a JSON response string out -- the
+		// The head is a JSON request string in, a JSON response string out -- the
 		// handler backend's documented API, so the boundary types are fixed here rather
 		// than being another thing the marker carries.
-		out.addAll(LispReader.readAllFromString("""
-				(defun %s (%%reactor-json) (%s %%reactor-json))
+		String bodyArgument = bodySource(backend) ? " (function " + CHUNK_BRIDGE + ")" : "";
+		String bridge = """
+				%s(defun %s (%%reactor-json) (%s %%reactor-json%s))
 				(rontolisp:wasm-export '%s :as "%s" :params '(:string) :returns :string)
-				""".formatted(DISPATCH_BRIDGE, marker[0], DISPATCH_BRIDGE, marker[1]), Features.INTERPRETER));
+				""".formatted(bodyImport(backend), DISPATCH_BRIDGE, marker[0], bodyArgument, DISPATCH_BRIDGE,
+				marker[1]);
+		out.addAll(LispReader.readAllFromString(bridge, Features.INTERPRETER));
 		return out;
+	}
+
+	// Whether this backend takes the request body OUT of the envelope. Preview 1 core
+	// modules only, and the reason is the boundary type, not the transport: a :bytes
+	// import is a wasm-import (which --component rejects outright, its host functions
+	// going through the canonical ABI instead) over a packed array (which --no-gc has
+	// no representation for). So a reactor COMPONENT keeps the whole body inside the
+	// envelope's "body" key -- correct, just paying the copies. Re-evaluate when the
+	// component path grows a list<u8> lift: `.kb/wit.md` / `.kb/wasm-import.md` say what
+	// is missing, and nothing else about the split is Preview-1-specific -- the Lisp
+	// half already runs on every backend.
+	private static boolean bodySource(WitExportDirective.Backend backend) {
+		return backend == WitExportDirective.Backend.WASM_GC;
+	}
+
+	// The body import and the pull thunk over it, or nothing on a backend that keeps the
+	// in-band body. The thunk calls the import DIRECTLY rather than taking it as #'value:
+	// the build's suspending-import report follows calls, and an escaped import widens
+	// its answer to "any export may suspend".
+	private static String bodyImport(WitExportDirective.Backend backend) {
+		if (!bodySource(backend)) {
+			return "";
+		}
+		return """
+				(rontolisp:wasm-import '%s :from "%s" :as "%s" :params '() :returns :bytes :async t)
+				(defun %s ()
+				  (let ((%%reactor-buf (rontolisp::%%http-reactor-buffer %d)))
+				    (rontolisp::%%http-reactor-chunk %%reactor-buf (%s %%reactor-buf))))
+				""".formatted(READ_BODY_IMPORT, READ_BODY_MODULE, READ_BODY_FIELD, CHUNK_BRIDGE, CHUNK_BYTES,
+				READ_BODY_IMPORT);
 	}
 
 	// Rewrites every NESTED (rontolisp::%http-reactor 'name "export") call inside the
