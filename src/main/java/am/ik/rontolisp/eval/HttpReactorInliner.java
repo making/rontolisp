@@ -80,7 +80,7 @@ public final class HttpReactorInliner {
 	 * call becomes
 	 *
 	 * <pre>{@code
-	 * (progn (rontolisp::%http-reactor-register (function name))
+	 * (progn (rontolisp::%http-reactor-register (function name) :buffered)
 	 *        (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch "handle-request"))
 	 * }</pre>
 	 *
@@ -89,11 +89,12 @@ public final class HttpReactorInliner {
 	 * {@code HttpServerLibrary} splice the transport and the server value model, and the
 	 * transport resolves an async-defun handler's future at its boundary -- so ONE
 	 * {@code http-handler} source serves a socket on the interpreter/JVM, wasi:http under
-	 * {@code --component}, and the host envelope on a reactor. The port argument (and an
-	 * optional {@code :raw-body} pair) is dropped unevaluated: a reactor host owns the
-	 * listening side, and the request body always arrives buffered in the envelope.
-	 * Called by the CLI for {@code --no-wasi} WASM builds (both core-module and reactor
-	 * component), before the serve-mode switch reads the program.
+	 * {@code --component}, and the host envelope on a reactor. The port argument is
+	 * dropped unevaluated (a reactor host owns the listening side); the {@code :raw-body}
+	 * mode is NOT -- it rides the registration, so the directive's default
+	 * ({@code :stream}, rontolisp's own asynchronous body) means on a reactor what it
+	 * means everywhere else. Called by the CLI for {@code --no-wasi} WASM builds (both
+	 * core-module and reactor component), before the serve-mode switch reads the program.
 	 * @param program the top-level forms
 	 * @return the program with every directive lowered; unchanged when none is present
 	 */
@@ -117,10 +118,10 @@ public final class HttpReactorInliner {
 			found[0] = true;
 			return LispReader
 				.readAllFromString("""
-						(progn (rontolisp::%%http-reactor-register (function %s))
+						(progn (rontolisp::%%http-reactor-register (function %s)%s)
 						       (rontolisp::%%http-reactor 'rontolisp::%s "%s"))
-						""".formatted(directiveHandlerName(cons), HttpReactorLibrary.DISPATCH, EXPORT_NAME),
-						Features.INTERPRETER)
+						""".formatted(directiveHandlerName(cons), directiveRawBodyMode(cons),
+						HttpReactorLibrary.DISPATCH, EXPORT_NAME), Features.INTERPRETER)
 				.get(0);
 		}
 		LispVal car = lowerDirective(cons.car(), found);
@@ -137,6 +138,24 @@ public final class HttpReactorInliner {
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(sym.name());
 		return qn != null && LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.HTTP_HANDLER.equals(qn.member());
+	}
+
+	// The directive's optional (:raw-body :stream|:buffered) pair, as the registration's
+	// trailing argument (empty for the default). The pair is a COMPILE-TIME literal on
+	// every backend, so reading it here rather than evaluating it is the contract, not a
+	// shortcut; an unknown value is left to the transports' own validation, which is
+	// where the message a user sees comes from.
+	private static String directiveRawBodyMode(LispCons directive) {
+		List<LispVal> args = directive.toList();
+		for (int i = 2; i + 1 < args.size(); i++) {
+			if (args.get(i) instanceof LispSymbol key && key.isKeyword()
+					&& LispNames.RAW_BODY_KEYWORD.equalsIgnoreCase(key.name())
+					&& args.get(i + 1) instanceof LispSymbol mode
+					&& LispNames.BUFFERED_KEYWORD.equalsIgnoreCase(mode.name())) {
+				return " " + LispNames.BUFFERED_KEYWORD.toLowerCase(Locale.ROOT);
+			}
+		}
+		return "";
 	}
 
 	// The directive's contract everywhere: a QUOTED literal handler name.

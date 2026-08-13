@@ -110,11 +110,11 @@ drain loop reaches `stream-read`, which Preview 1 stubs. Nothing catches it:
 `examples/examples.yaml` pins that file on `jvm-compile` and `wasm-component`
 only, and the Worker examples that DO run a reactor with a body
 (`cloudflare-workers/httpbin`, `-clack`) all read the body the buffered way
-instead. **Phase 2 is what fixes this** (Phase 1 was the original guess and is
-not enough: the reactor's `:raw-body` is a Gray instance, and no stream TYPE
-makes `read-all` able to drain one -- what has to change is which value
-`:raw-body` holds). Until then the portable spelling is three-backend, not
-four, and the comment in that file is wrong.
+instead. **Phase 2a fixed this** (2026-08-13; Phase 1 was the original guess
+and was not enough: the reactor's `:raw-body` was a Gray instance, and no
+stream TYPE makes `read-all` able to drain one -- what had to change is which
+value `:raw-body` holds, which in turn needed the directive's `:raw-body` mode
+to reach the reactor at all). The comment in that file is right again.
 
 ## The design
 
@@ -275,20 +275,61 @@ Finding 6 is NOT fixed here (its paragraph above is corrected accordingly): what
 Phase 1 bought is the value the reactor's `:raw-body` can BECOME, and moving
 `:raw-body` onto it is Phase 2.
 
-**Phase 2 -- the envelope splits.** (`.todo/342` is done, 2026-08-12: that
-fast path's `(stringp s)` was O(body) on wasm whenever the body is a mutable
-buffer, which is what a pulled body is, and is constant time now -- so this
-phase measures what it means to.)
-`%http-reactor-dispatch` takes head +
-body source; `%http-reactor-request-tuple` passes a STREAM built from the
-source (`%http-body-stream` gains a from-thunk constructor beside its from-
-string one) instead of always buffering; `:raw-body :buffered` drains that
-stream into the existing Gray class, so Clack applications are untouched. The
-synthesized export changes shape accordingly (`HttpReactorInliner`), and the
-`:raw-body` mode the directive currently drops unevaluated starts meaning
-something on a reactor. Gate: the finding-5 table re-measured (the target is
-linear and one body-sized copy), plus the existing four-backend ci-spec http
-cases unchanged.
+**Phase 2a -- the transport takes a head and a body source. DONE
+(2026-08-13).** (`.todo/342` is done, 2026-08-12: that fast path's
+`(stringp s)` was O(body) on wasm whenever the body is a mutable buffer, which
+is what a pulled body is, and is constant time now -- so the measuring half of
+this phase measures what it means to.)
+
+The LISP half of the split, which is the half that does not move a single host
+glue file:
+
+- `%http-reactor-dispatch` / `-handle` (and both `clack.handler.reactor`
+  entries) take an optional BODY SOURCE beside the head: nil, a string, or a
+  PULL THUNK (arity 0, next chunk, nil/`""` = EOF, possibly a FUTURE of one --
+  `%http-reactor-pull` resolves it, since this transport is synchronous code
+  where `await` is not legal). The envelope's `"body"` key IS the string case
+  and is the fallback, so nothing that speaks the old envelope changed.
+- **`:raw-body` means something on a reactor now**, and that is what fixed
+  finding 6. The mode is REGISTERED with the app (`%http-reactor-register app
+  [:buffered]`, `%http-reactor-buffered`) because a reactor has no
+  `http-handler` call at run time; both Clack backends' `run` register
+  `:buffered`, and `HttpReactorInliner.lowerHttpHandler` now THREADS the
+  directive's pair instead of dropping it. Default (`:stream`) builds a
+  first-class pull stream over the source with Phase 1's `%stream-new`
+  (`%http-reactor-body-stream`); `:buffered` drains the same source
+  (`%http-reactor-body-text`) into the existing Gray class, so Clack
+  applications are untouched.
+- Verified against the finding-6 program itself: `examples/net/httpbin.lisp`
+  unedited, `--no-wasi`, a 5-byte POST through a plain node host answers 200
+  with the echoed `data` where the todo measured a 500.
+
+Gate, met: the `http-reactor-body-source` ci-spec case (four backends: a pull
+thunk, an in-band string and no body at all in the default mode, then the same
+pull source under `:buffered`), the two `LispEvaluatorAsdfTest` reactor-body
+tests, `HttpReactorInlinerTest.theLoweredHttpHandlerDirectiveKeepsItsRawBodyMode`,
+and the existing four-backend ci-spec http cases unchanged. `.kb/clack.md`
+("The head and the body source") has the mechanics.
+
+One premise of this item corrected on the way: **a `--no-gc` reactor cannot
+carry the HTTP transport at all**, and could not before this phase either --
+`http-server.lisp`'s `%http-drain` / `%http-serve-request` are `async-defun`s,
+which that backend rejects by name, so the splice fails long before anything
+asks for a stream. The `--no-gc` Worker is the `wasm-export`-only one
+(`examples/cloudflare-workers/hello`). A gate that would have caught this
+earlier: `examples/examples.yaml` has no reactor backend, so no checked-in
+example compiles `--no-wasi` in CI (`examples/net/httpbin.lisp` is pinned on
+`jvm-compile` and `wasm-component` only).
+
+**Phase 2b -- the WASM boundary splits.** What is left of Phase 2: the
+synthesized export still takes the whole envelope as one `:string`, so a wasm
+host cannot yet pass a source out of band and the quadratic of finding 5 is
+untouched. `handle-request(headPtr, headLen)` plus the
+`env.readRequestBody(ptr, cap) -> i32` import of the design above (`:bytes`,
+Phase 0, `:async t` optional per finding 1), `HttpReactorInliner` synthesizing
+the thunk over it, and the four glue files moving with it -- which is why
+Phase 4 (the examples) is really the same landing as this one. Gate: the
+finding-5 table re-measured (the target is linear and one body-sized copy).
 
 **Phase 3 -- the response body, symmetrically.** Today it is one string in
 linear memory, so a large or streamed response pays the same way. Same

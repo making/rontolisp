@@ -321,6 +321,34 @@ Two details the host side must get right:
 Response headers cross as an **array of pairs**, not an object, so an
 application that sets two cookies still answers two `Set-Cookie` headers.
 
+### Passing the body separately
+
+The JSON above is the request **head**. `handle` and `dispatch` take one more
+optional argument, the **body source**, so the body does not have to ride
+inside it:
+
+- `nil` — no body;
+- a string — the body, already read;
+- a function of no arguments — a **pull source**: each call answers the next
+  chunk and `nil` or `""` for the end, and it may answer a future, so a host
+  that suspends while it reads can hand one over.
+
+The envelope's `"body"` key is exactly the string case, and it is what is used
+when no source is passed — a host written against the shape above keeps
+working unchanged.
+
+What the application then sees is the `:raw-body` mode. `clackup` and `handle`
+ask for the buffered one, the synchronous stream Clack promises (the source is
+drained into it whatever shape it had). A reactor built from a bare
+`rontolisp:http-handler` keeps **that directive's** default instead — a
+rontolisp stream, drained the same way as on every other backend:
+
+```lisp
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (list 200 '(:content-type "text/plain") (list body))))
+```
+
 A complete Worker built this way — the JavaScript side and the measurements
 included — is
 [`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack).

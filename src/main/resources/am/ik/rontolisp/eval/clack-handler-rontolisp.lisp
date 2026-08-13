@@ -47,8 +47,10 @@
 ;; what a rontolisp program wants (nothing is buffered, the component streams
 ;; it lazily), while Clack's :raw-body is a SYNCHRONOUS stream a middleware
 ;; reads with read-line / read-byte / file-position. See .kb/http-server.md.
-;; The reactor leg gets the same buffered body from the envelope's
-;; already-read "body" string (http-reactor.lisp).
+;; The reactor leg asks the shared transport for it by REGISTERING the mode
+;; with the app, which is what makes the reactor's own default (rontolisp's
+;; asynchronous stream, the http-handler directive's default) reachable at all
+;; (http-reactor.lisp).
 ;;
 ;; Compatibility notes:
 ;; - ONE clack server per process: the compiled backends dispatch every request
@@ -104,7 +106,7 @@
 (defun clack.handler.rontolisp:run
     (app &key (port 5000) (address "127.0.0.1") debug &allow-other-keys)
   (declare (ignore port address debug))
-  (rontolisp::%http-reactor-register app)
+  (rontolisp::%http-reactor-register app :buffered)
   (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
                             "handle-request"))
 

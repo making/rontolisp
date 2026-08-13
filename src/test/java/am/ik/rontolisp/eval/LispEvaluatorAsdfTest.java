@@ -212,6 +212,51 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void theReactorHandlerShimTakesTheBodyOutOfBandAsAPullSource() {
+		// The transport takes a request HEAD and a BODY SOURCE, and a Clack
+		// application must not be able to tell which shape the host had: a pull thunk
+		// -- what a host that streams an upload passes -- reaches the application as
+		// the same buffered :raw-body an in-band "body" string does, because Clack's
+		// :raw-body is a synchronous stream either way.
+		String output = run("""
+				(ql:quickload "clack-handler-reactor")
+				(defvar *chunks* '("he" "llo"))
+				(defun pull ()
+				  (if *chunks*
+				      (let ((c (car *chunks*))) (setq *chunks* (cdr *chunks*)) c)
+				      nil))
+				(defun app (env)
+				  (list 200 nil
+				        (list (with-output-to-string (out)
+				                (do ((ch (read-char (getf env :raw-body) nil nil)
+				                         (read-char (getf env :raw-body) nil nil)))
+				                    ((null ch))
+				                  (write-char ch out))))))
+				(print (clack.handler.reactor:handle
+				        #'app "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\"}" #'pull))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"body\\\":\\\"hello\\\"");
+	}
+
+	@Test
+	void theReactorDispatcherAnswersAPortableStreamRawBodyByDefault() {
+		// The reactor's OWN default is rontolisp's asynchronous stream -- the
+		// http-handler directive's default, and what makes the portable
+		// (await (read-all (getf env :raw-body))) drain work on a reactor too. Clack's
+		// backends opt into :buffered at registration; nothing else does.
+		String output = run("""
+				(rontolisp:async-defun app (env)
+				  (list 200 nil
+				        (list (rontolisp:await
+				               (rontolisp:read-all (getf env :raw-body))))))
+				(rontolisp::%http-reactor-register #'app)
+				(print (rontolisp::%http-reactor-dispatch
+				        "{\\"method\\":\\"POST\\",\\"target\\":\\"/\\",\\"body\\":\\"streamed\\"}"))
+				""", Map.of(), List.of());
+		assertThat(output).contains("\\\"body\\\":\\\"streamed\\\"");
+	}
+
+	@Test
 	void quickloadResolvesBuiltinUsocketWithoutDownloading() {
 		// A built-in system short-circuits before the QuicklispClient is even
 		// created, so no network or cache is touched.

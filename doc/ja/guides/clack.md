@@ -325,6 +325,35 @@ report を載せた 500 を返します。
 レスポンスヘッダはオブジェクトではなく**ペアの配列**として渡されます。これに
 より、Cookie を 2 つ設定するアプリケーションは `Set-Cookie` を 2 本返せます。
 
+### ボディを分けて渡す
+
+上の JSON はリクエストの**ヘッド**です。`handle` と `dispatch` はもう 1 つ
+省略可能な引数、**ボディソース**を取るので、ボディをその中に載せる必要は
+ありません:
+
+- `nil` — ボディなし;
+- 文字列 — 読み込み済みのボディ;
+- 引数なしの関数 — **プルソース**: 呼ぶたびに次のチャンクを返し、終端では
+  `nil` または `""` を返します。future を返してもよいので、読み込み中に
+  サスペンドするホストもそのまま渡せます。
+
+エンベロープの `"body"` キーはちょうどこの文字列のケースであり、ソースを
+渡さなかったときに使われます — 上の形に合わせて書かれたホストはそのまま
+動きます。
+
+アプリケーションが実際に見る形は `:raw-body` モードで決まります。`clackup` と
+`handle` は Clack が約束する同期ストリーム（バッファ済み）を要求します
+（ソースがどの形であってもそこへドレインされます）。素の
+`rontolisp:http-handler` から作られたリアクタは**そのディレクティブの**
+デフォルト、つまり rontolisp のストリームを保ち、他のバックエンドと同じ形で
+ドレインできます:
+
+```lisp
+(rontolisp:async-defun handle (env)
+  (let ((body (rontolisp:await (rontolisp:read-all (getf env :raw-body)))))
+    (list 200 '(:content-type "text/plain") (list body))))
+```
+
 この方法で作った完全な Worker — JavaScript 側と実測値を添えたもの — は
 [`examples/cloudflare-workers/httpbin-clack/`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin-clack)
 にあります。その隣の

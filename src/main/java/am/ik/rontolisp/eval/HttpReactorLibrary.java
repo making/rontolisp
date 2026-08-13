@@ -95,6 +95,14 @@ public final class HttpReactorLibrary {
 	 * {@code HttpReactorInliner} synthesized -- prepends the library definitions. A
 	 * program that already defines {@link #HANDLE} and a program that never touches the
 	 * machinery are returned unchanged.
+	 *
+	 * <p>
+	 * The library's {@code :raw-body} switch names {@code rontolisp::%stream-new}, which
+	 * {@code --no-gc} rejects by name -- and that costs nothing, because the transport
+	 * also rides {@code http-server.lisp}, whose {@code %http-drain} /
+	 * {@code %http-serve-request} are {@code async-defun}s that backend already refuses:
+	 * a {@code --no-gc} reactor cannot carry the HTTP transport at all, with or without a
+	 * body stream.
 	 * @param program the top-level forms
 	 * @return the program with the reactor library spliced in when used
 	 */
@@ -105,6 +113,15 @@ public final class HttpReactorLibrary {
 		List<LispVal> out = new ArrayList<>(forms());
 		out.addAll(program);
 		return out;
+	}
+
+	private static @Nullable String defunName(LispVal form) {
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
+				&& LispNames.DEFUN.equals(member(op.name())) && cons.cdr() instanceof LispCons rest
+				&& rest.car() instanceof LispSymbol name) {
+			return member(name.name());
+		}
+		return null;
 	}
 
 	/**
@@ -127,9 +144,7 @@ public final class HttpReactorLibrary {
 
 	private static boolean definesHandle(List<LispVal> program) {
 		for (LispVal form : program) {
-			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op
-					&& LispNames.DEFUN.equals(member(op.name())) && cons.cdr() instanceof LispCons rest
-					&& rest.car() instanceof LispSymbol name && HANDLE.equals(member(name.name()))) {
+			if (HANDLE.equals(defunName(form))) {
 				return true;
 			}
 		}

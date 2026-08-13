@@ -82,6 +82,13 @@ The directive (and the `rontolisp::%http-server-start` seam) take
 the program (BEFORE `HttpLibrary` rewrites the directive away — order in
 `RontoLispCli`), and one flag describes the program (one handler slot).
 
+The HOST-DRIVEN REACTOR carries the same two modes but decides them at RUN
+time, registered with the application (`%http-reactor-register app
+[:buffered]`), because there is no `http-handler` call left on that transport
+— `.kb/clack.md`, "The head and the body source". Since todo-341 Phase 2 the
+directive's mode reaches it: it used to be dropped, and the reactor always
+buffered.
+
 - **`:stream`** — rontolisp-native: the asynchronous stream, drained with
   `(rontolisp:await (rontolisp:read-all ...))`; a bodiless request gets an
   already-closed stream. Nothing is buffered on the component (the body

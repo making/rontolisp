@@ -294,12 +294,65 @@ backend:
 ```
 
 Below `clackup` sit two functions, and BOTH are public: `handle`
-`(app request-json) -> response-json` is the adapter, and `dispatch`
-`(request-json) -> response-json` runs it over the application `run` stored —
-both thin names over the shared `%http-reactor-handle` / `-dispatch`, so the
-designators cannot drift. A program that wants no clack at all can still call
-`handle` directly with its own `wasm-export` — that is the shape this shim
-shipped with, and it still works.
+`(app request-json &optional body) -> response-json` is the adapter, and
+`dispatch` `(request-json &optional body) -> response-json` runs it over the
+application `run` stored — both thin names over the shared
+`%http-reactor-handle` / `-dispatch`, so the designators cannot drift. A
+program that wants no clack at all can still call `handle` directly with its
+own `wasm-export` — that is the shape this shim shipped with, and it still
+works.
+
+### The head and the body source (todo-341 Phase 2)
+
+The transport takes a request HEAD — the JSON envelope — and a BODY SOURCE,
+the optional second argument above. The source is an abstract Lisp value, one
+of `nil` (no body), a STRING (already buffered), or a PULL THUNK: arity 0,
+answering the next chunk, `nil` or `""` for end of stream, and possibly a
+FUTURE of one so a suspending host import is a legal source
+(`%http-reactor-pull` resolves it, the same rule `%stream-new` applies at the
+read — this transport is synchronous code where `await` is not legal). The
+envelope's own `"body"` key is exactly the STRING case, and is the fallback
+when the caller passes no source, which is what keeps every host glue file
+written before the split working unchanged.
+
+ONE transport therefore serves every backend: on the interpreter and the JVM
+the host passes a closure or a string directly, and on the WASM backends the
+synthesized export will build the thunk over a host import (Phase 2b — the
+export still takes the whole envelope today).
+
+Which SHAPE the application then sees is the `:raw-body` mode, and on a
+reactor the mode is REGISTERED with the app (`%http-reactor-register app
+[:buffered]`, the `%http-reactor-buffered` flag) rather than read off a
+directive, because a reactor has no `http-handler` call at run time:
+
+- **`:buffered`** — what both Clack handler backends' `run` registers, and
+  what `clack.handler.reactor:handle` always passes: the source is drained
+  (`%http-reactor-body-text`) into `http-server.lisp`'s bivalent Gray stream,
+  so a lack middleware's `read-byte` / `file-position` work as before.
+- **`:stream` (the default)** — `%http-reactor-body-stream` builds a
+  first-class rontolisp pull stream over the source with
+  `rontolisp::%stream-new` (todo-341 Phase 1), so the portable
+  `(await (read-all (getf env :raw-body)))` drain works on a reactor too. That
+  is what closed the todo's finding 6: `rontolisp:http-handler`'s `:raw-body`
+  argument used to be DROPPED by `HttpReactorInliner.lowerHttpHandler` and the
+  reactor always buffered, so `examples/net/httpbin.lisp` — whose drain is the
+  portable one — answered 500 on `--no-wasi` as soon as a request carried a
+  body. The mode now rides the synthesized registration.
+
+An empty or absent body stays `nil` in BOTH modes: upstream guards `:raw-body`
+with `(when raw-body ...)`, and a bodiless GET must not pay for a stream.
+
+`--no-gc` has neither mode: it rejects the async surface by name, and
+`http-server.lisp`'s own `%http-drain` / `%http-serve-request` are
+`async-defun`s, so that backend cannot carry the HTTP transport at all —
+with or without a body stream. Its reactors are the `wasm-export`-only ones
+(`examples/cloudflare-workers/hello`).
+
+Pinned by the `http-reactor-body-source` ci-spec case (all four backends: a
+pull thunk, an in-band string and no body at all through the default mode,
+then the same pull source through `:buffered`), the two
+`LispEvaluatorAsdfTest` reactor-body tests, and
+`HttpReactorInlinerTest.theLoweredHttpHandlerDirectiveKeepsItsRawBodyMode`.
 
 **And a program can skip the shim too.** `handle` is thirty lines over
 `%http-make-env` / `%http-normalize-response` plus the JSON envelope, so a
@@ -345,7 +398,8 @@ mentions `%http-body-stream`). Measured when that shape landed (both builds were
 roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
 (283,200 B).
 
-- `%http-reactor-handle` is `(app request-json) -> response-json`. It converts
+- `%http-reactor-handle` is `(app request-json &optional body buffered) ->
+  response-json` (the head and the body source, above). It converts
   nothing itself: it builds the raw tuple and calls `rontolisp::%http-make-env`
   / `%http-normalize-response`, exactly as every other transport does, so it
   cannot drift from what a SERVED request sees. All that is left in the library
@@ -365,11 +419,12 @@ roughly twice today's size then): ~140 KB over the pre-Clack handler it replaced
   `--no-wasi` (todo-335, `HttpReactorInliner.lowerHttpHandler`)**: a reactor
   owns no socket, so the directive can only mean the host-driven envelope —
   every `(rontolisp:http-handler 'name ...)` becomes
-  `(progn (%http-reactor-register (function name)) (%http-reactor '%http-reactor-dispatch "handle-request"))`
+  `(progn (%http-reactor-register (function name) [:buffered]) (%http-reactor '%http-reactor-dispatch "handle-request"))`
   in the CLI, before the serve-mode switch reads the program (so
   `--component --no-wasi` compiles it as a zero-import reactor component
-  instead of hitting the serve+no-wasi ctor error). The port and any
-  `:raw-body` pair are dropped unevaluated. One `http-handler` source now
+  instead of hitting the serve+no-wasi ctor error). The port is dropped
+  unevaluated; the `:raw-body` pair is NOT — it rides the registration
+  (todo-341 Phase 2, above). One `http-handler` source now
   serves a socket on the interpreter/JVM, wasi:http under `--component`, and
   `handle-request` on a reactor — `examples/net/dog-fetcher.lisp` unedited is
   the pin (`RontoLispCliTest`, the reactor-component invoke case in

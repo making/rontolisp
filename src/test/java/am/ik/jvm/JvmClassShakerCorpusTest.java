@@ -70,8 +70,10 @@ class JvmClassShakerCorpusTest {
 
 	@Test
 	void optimizesTheWholeCorpusWithoutDecoderGapsAndBehavesIdentically() throws Exception {
-		// Mirror the CLI compile path: user macros (defmacro) are expanded, the
-		// JSON, linalg, URL, prelude (equalp/string<) and usocket libraries are spliced
+		// Mirror the CLI compile path: user macros (defmacro) are expanded, and the
+		// reactor transport (the corpus drives %http-reactor-dispatch), the server value
+		// model, the JSON, linalg, URL, prelude (equalp/string<) and usocket libraries
+		// are spliced
 		// by the pre-passes, and the LibraryDefunPruner drops the spliced defuns the
 		// corpus never reaches -- so the shaker decodes exactly the class the real CLI
 		// emits (the per-backend unit tests keep full-library codegen coverage).
@@ -92,7 +94,8 @@ class JvmClassShakerCorpusTest {
 				.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UrlLibrary
 					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
 						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
-							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))))));
+							.process(am.ik.rontolisp.eval.HttpReactorLibrary.process(inlined),
+									am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))))));
 
 		byte[] plain = new JvmLispCompiler("Test", false, OptimizeLevel.NONE).compile(program);
 		// The corpus class is the one that once crossed the JVM 65535 constant-pool

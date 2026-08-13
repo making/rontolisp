@@ -54,17 +54,20 @@
   (:use :cl)
   (:export :handle :dispatch :run :stop))
 
-(defun clack.handler.reactor:handle (app request-json)
-  "Run the Clack application APP against the JSON request REQUEST-JSON and
-answer the JSON response. The envelope is documented in http-reactor.lisp."
-  (rontolisp::%http-reactor-handle app request-json))
+(defun clack.handler.reactor:handle (app request-json &optional body)
+  "Run the Clack application APP against the JSON request head REQUEST-JSON and
+the optional body source BODY, and answer the JSON response. The envelope and
+the body source are documented in http-reactor.lisp. The body is always the
+BUFFERED one here: this is Clack's entry point, and Clack's :raw-body is a
+synchronous stream."
+  (rontolisp::%http-reactor-handle app request-json body t))
 
-(defun clack.handler.reactor:dispatch (request-json)
-  "Run the application CLACKUP stored against the JSON request REQUEST-JSON and
-answer the JSON response. The host's entry point: on the WASM backends the
-synthesized wasm-export calls this, on every other backend the host calls it
-directly."
-  (rontolisp::%http-reactor-dispatch request-json))
+(defun clack.handler.reactor:dispatch (request-json &optional body)
+  "Run the application CLACKUP stored against the JSON request head
+REQUEST-JSON and the optional body source BODY, and answer the JSON response.
+The host's entry point: on the WASM backends the synthesized wasm-export calls
+this, on every other backend the host calls it directly."
+  (rontolisp::%http-reactor-dispatch request-json body))
 
 ;; clackup's protocol. A reactor owns no socket, so run starts nothing and stop
 ;; has nothing to stop; what run does own is the app store and -- on the WASM
@@ -74,7 +77,11 @@ directly."
 ;; identical.
 (defun clack.handler.reactor:run (app &rest ignored)
   (declare (ignore ignored))
-  (rontolisp::%http-reactor-register app)
+  ;; :buffered is what a Clack application needs -- a SYNCHRONOUS :raw-body
+  ;; stream a middleware reads with read-line / read-byte / file-position --
+  ;; and is the one thing this backend asks the transport for; the reactor's
+  ;; own default is rontolisp's asynchronous stream.
+  (rontolisp::%http-reactor-register app :buffered)
   #+rontolisp-wasm
   (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch "handle-request")
   nil)

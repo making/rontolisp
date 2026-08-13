@@ -106,6 +106,21 @@ class HttpReactorInlinerTest {
 	}
 
 	@Test
+	void theLoweredHttpHandlerDirectiveKeepsItsRawBodyMode() {
+		// The port is dropped (a reactor host owns the listening side), but the
+		// :raw-body mode is NOT: it rides the registration, so the directive's default
+		// -- rontolisp's own asynchronous body -- reaches the transport instead of the
+		// reactor silently buffering, and :buffered still asks for the Clack shape.
+		List<LispVal> streaming = HttpReactorInliner
+			.lowerHttpHandler(LispReader.readAllFromString("(rontolisp:http-handler 'handle 8080)"));
+		assertThat(print(streaming)).contains("(RONTOLISP::%HTTP-REACTOR-REGISTER (FUNCTION HANDLE))");
+
+		List<LispVal> buffered = HttpReactorInliner.lowerHttpHandler(
+				LispReader.readAllFromString("(rontolisp:http-handler 'handle 8080 :raw-body :buffered)"));
+		assertThat(print(buffered)).contains("(RONTOLISP::%HTTP-REACTOR-REGISTER (FUNCTION HANDLE) :BUFFERED)");
+	}
+
+	@Test
 	void isANoOpOnTheInterpreterAndJvm() {
 		// There the shim never even reads the marker (#+rontolisp-wasm); this guards
 		// the case where some other source carries one.
