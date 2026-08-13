@@ -5499,6 +5499,10 @@ public final class NoGcWasmCompiler implements LispCompiler {
 			throw new UnsupportedOperationException("--no-gc does not support the :s-expr export type for '"
 					+ decl.name() + "' (it needs a cons/reader/printer runtime)");
 		}
+		if (type == BoundaryType.BYTES) {
+			throw new UnsupportedOperationException("--no-gc does not support the :bytes export type for '"
+					+ decl.name() + "' (the scalar backend has no arrays, so there is no byte vector to carry)");
+		}
 	}
 
 	private static LispVal progn(List<LispVal> body) {

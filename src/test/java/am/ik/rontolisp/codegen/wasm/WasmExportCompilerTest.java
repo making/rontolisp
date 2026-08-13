@@ -111,6 +111,43 @@ class WasmExportCompilerTest {
 	}
 
 	@Test
+	void bytesResultTakesACallerBufferAndAnswersTheFullLength() {
+		// :bytes is caller-buffered on the result side (the read(2) shape): the export
+		// signature gains a trailing (ptr,cap) pair the host passes, and the single i32
+		// result is the vector's FULL length -- an undersized buffer is a retry, not a
+		// truncation. A :bytes parameter flattens like a string: raw (ptr,len).
+		WasmExportCompiler.Decl decl = parse("(rontolisp:wasm-export 'pull :params '(:int :bytes) :returns :bytes)");
+		assertThat(WasmExportCompiler.usesBytes(decl)).isTrue();
+		assertThat(WasmExportCompiler.usesMemory(decl)).isTrue();
+		assertThat(WasmExportCompiler.paramWasmTypes(decl)).containsExactly(am.ik.wasm.Type.I32, am.ik.wasm.Type.I32,
+				am.ik.wasm.Type.I32, am.ik.wasm.Type.I32, am.ik.wasm.Type.I32);
+		assertThat(WasmExportCompiler.resultWasmTypes(decl)).containsExactly(am.ik.wasm.Type.I32);
+		assertThat(WasmExportCompiler.paramSlotCount(decl)).isEqualTo(5);
+	}
+
+	@Test
+	void bytesExportCompilesOnTheCoreModulePathsAndIsRefusedElsewhere() {
+		// :bytes is a core-module (Preview 1 / --no-wasi) transfer. The component
+		// boundary would have to lift it as a canonical-ABI list<u8> (its own change),
+		// and --no-gc has no arrays at all -- both reject with the reason.
+		String program = """
+				(defun blen (v) (length v))
+				(rontolisp:wasm-export 'blen :params '(:bytes) :returns :int)
+				""";
+		List<LispVal> parsed = LispReader.readAllFromString(program);
+		assertThat(compile(program)).isNotEmpty();
+		assertThat(new WasmLispCompiler(false, false, true).compile(LispReader.readAllFromString(program)))
+			.isNotEmpty();
+		assertThatThrownBy(() -> new WasmLispCompiler(false, true, false).compile(parsed))
+			.hasMessageContaining(":bytes")
+			.hasMessageContaining("--component");
+		assertThatThrownBy(() -> new NoGcWasmCompiler().compile(LispReader.readAllFromString("""
+				(defun bzero (v) 0)
+				(rontolisp:wasm-export 'bzero :params '(:bytes) :returns :int)
+				"""))).hasMessageContaining(":bytes");
+	}
+
+	@Test
 	void defaultsExportNameToTheLispName() {
 		assertThat(parse("(rontolisp:wasm-export 'fact :params '(:int) :returns :int)").exportName()).isEqualTo("fact");
 	}

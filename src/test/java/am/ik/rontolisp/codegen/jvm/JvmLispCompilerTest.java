@@ -1256,6 +1256,17 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunWasmImportStubCarriesTheBytesReceiveBufferArity() {
+		// A :returns :bytes import takes one extra trailing argument (the caller-passed
+		// receive buffer), so the stub must load with that arity: the call below reaches
+		// the host-function error, not an arity mismatch.
+		assertThatThrownBy(() -> compileAndRun("(rontolisp:wasm-import 'pull :params '() :returns :bytes)"
+				+ "(print (pull (make-array 3 :element-type '(unsigned-byte 8))))"))
+			.hasRootCauseMessage(
+					"PULL is a host function declared by rontolisp:wasm-import; it can only be called from a compiled WASM module");
+	}
+
+	@Test
 	void compileAndRunAddition() throws Exception {
 		assertThat(compileAndRun("(print (+ 1 2))")).isEqualTo("3");
 	}

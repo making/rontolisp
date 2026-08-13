@@ -41,10 +41,26 @@ WASM ホスト (ブラウザの JavaScript、または wasmtime にプリロー�
 | `:bool` | `i32` | `nil` crosses as `0`, anything else as `1`; a non-zero result reads back as `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | the argument is printed to readable text; a result is parsed by the embedded reader |
+| `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as raw bytes — no UTF-8 in either direction |
 
 `:string` の戻り値は、ホストがリニアメモリに書き込み (バッファはエクスポート
 された `__ronto_alloc` で確保)、`(ptr, len)` のペア (JavaScript からは要素数 2 の
 配列) として返す必要があります。
+
+`:bytes` の**結果**は呼び出し側バッファ方式 (`read(2)` の形) です: Lisp
+シグネチャの末尾に受信用の `(unsigned-byte 8)` ベクタが 1 つ加わり、ホスト
+関数は末尾の `(ptr, cap)` ペア付きで呼ばれます — *`ptr` に最大 `cap` バイトを
+書き込み、値の全長を返す*。Lisp の呼び出しはその全長を返すため、バッファより
+長い結果は黙った切り詰めではなく、より大きいバッファでのリトライになります。
+ラッパーのステージングは返却時にポップされるため、1 つのバッファを使い回す
+pull ループはリニアメモリをフラットに保ちます。
+
+```lisp
+(rontolisp:wasm-import 'read-chunk :from "env" :as "readChunk"
+                       :params '() :returns :bytes)   ; => READ-CHUNK
+;; (read-chunk buf) => the chunk's full length; up to (length buf) bytes
+;; of buf are overwritten. On the JS side: readChunk(ptr, cap) -> n.
+```
 
 ## `:async t` — サスペンドしうるホスト関数
 

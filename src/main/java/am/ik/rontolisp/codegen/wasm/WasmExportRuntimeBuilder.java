@@ -427,4 +427,261 @@ final class WasmExportRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _bytes_from_mem(ptr i32, len i32) -> (ref null eq)}: copies
+	 * {@code len} raw bytes from linear memory into a fresh {@code (unsigned-byte 8)}
+	 * vector (a bare {@code TYPE_I8ARR} array) -- <strong>no UTF-8 decode</strong>, which
+	 * is the point of the {@code :bytes} boundary type: the string decoder is
+	 * non-validating and corrupts arbitrary binary. Used to box a {@code :bytes} export
+	 * argument a host wrote into memory.
+	 * @return the function body bytes (signature {@code (i32,i32) -> (ref null eq)},
+	 * reuses TYPE_RAT_NEW)
+	 */
+	static byte[] buildBytesFromMemBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int ptr = 0;
+		final int len = 1;
+		final int arr = 2;
+		final int idx = 3;
+		// locals: arr (ref null TYPE_I8ARR), idx (i32)
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_I8ARR);
+		w.write(1);
+		w.write(Type.I32);
+		// arr = array.new_default TYPE_I8ARR (len)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(len);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		// idx = 0; while (idx < len) arr[idx] = mem[ptr+idx]; idx++
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(len);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(ptr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _bytes_copy(v (ref null eq), ptr i32, cap i32) -> i32}: copies
+	 * {@code min(len,cap)} raw bytes of the {@code (unsigned-byte 8)} vector {@code v}
+	 * into {@code linear[ptr..)} and returns the vector's FULL length {@code len} -- the
+	 * caller-passes-the-buffer {@code read(2)} convention of a {@code :bytes} result: an
+	 * undersized buffer is a retry, not a truncation. The {@code ref.cast} traps on a
+	 * non-byte-vector value (exact-or-trap). The destination is caller-owned
+	 * ({@code __ronto_alloc}'d by the host or staged by an import wrapper), so no grow
+	 * guard: an out-of-memory pointer traps on the store.
+	 * @return the function body bytes (signature {@code ((ref null eq),i32,i32) -> i32})
+	 */
+	static byte[] buildBytesCopyBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int v = 0;
+		final int ptr = 1;
+		final int cap = 2;
+		final int arr = 3;
+		final int len = 4;
+		final int count = 5;
+		final int idx = 6;
+		// locals: arr (ref null TYPE_I8ARR), len/count/idx (i32)
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_I8ARR);
+		w.write(3);
+		w.write(Type.I32);
+		// arr = ref.cast v ; len = array.len(arr)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(len);
+		// count = min(len, cap) (unsigned)
+		emitMinU(w, len, cap, count);
+		// idx = 0; while (idx < count) mem[ptr+idx] = array.get_u(arr, idx); idx++
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(count);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(ptr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// return len (the FULL length)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(len);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _bytes_fill(v (ref null eq), ptr i32, n i32) -> i32}: copies
+	 * {@code min(array.len(v), n)} raw bytes from {@code linear[ptr..)} into the
+	 * {@code (unsigned-byte 8)} vector {@code v} and returns {@code n} unchanged -- the
+	 * receive half of a {@code :bytes} import result (the host wrote up to the buffer's
+	 * capacity and answered the full length {@code n}; bytes past {@code n} in the vector
+	 * are left untouched, like {@code read(2)}).
+	 * @return the function body bytes (signature {@code ((ref null eq),i32,i32) -> i32})
+	 */
+	static byte[] buildBytesFillBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int v = 0;
+		final int ptr = 1;
+		final int n = 2;
+		final int arr = 3;
+		final int alen = 4;
+		final int count = 5;
+		final int idx = 6;
+		// locals: arr (ref null TYPE_I8ARR), alen/count/idx (i32)
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_I8ARR);
+		w.write(3);
+		w.write(Type.I32);
+		// arr = ref.cast v ; alen = array.len(arr)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(v);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(alen);
+		// count = min(alen, n) (unsigned)
+		emitMinU(w, alen, n, count);
+		// idx = 0; while (idx < count) array.set(arr, idx, mem[ptr+idx]); idx++
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(count);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(arr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(ptr);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_I8ARR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// return n (the host's full-length answer, unchanged)
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	// local[out] = min(local[a], local[b]), unsigned.
+	private static void emitMinU(WasmWriter w, int a, int b, int out) {
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(a);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(b);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(a);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(b);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(out);
+	}
+
 }

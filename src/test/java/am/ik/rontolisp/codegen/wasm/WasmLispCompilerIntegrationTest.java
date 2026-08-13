@@ -1436,6 +1436,32 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void bytesBoundaryCrossesThePreloadBoundaryByLength() throws Exception {
+		// A preloaded wasm host has its own linear memory, so byte CONTENT cannot cross
+		// this pair (that is a JS-host affair -- WasmBytesBoundaryE2eTest round-trips
+		// the ff fe 41 content on node). What a wasm-host pair still proves end-to-end
+		// under a real engine is the whole :bytes plumbing -- parameter staging, the
+		// caller-passed (ptr,cap) result convention, the full-length answer -- through
+		// the values that DO cross: the lengths.
+		String host = """
+				(defun host-blen (v) (length v))
+				(defun host-bsrc () (make-array 5 :element-type '(unsigned-byte 8)))
+				(rontolisp:wasm-export 'host-blen :as "blen" :params '(:bytes) :returns :int)
+				(rontolisp:wasm-export 'host-bsrc :as "bsrc" :params '() :returns :bytes)
+				""";
+		String main = """
+				(rontolisp:wasm-import 'blen :from "host" :params '(:bytes) :returns :int)
+				(rontolisp:wasm-import 'bsrc :from "host" :params '() :returns :bytes)
+				(let ((buf (make-array 3 :element-type '(unsigned-byte 8))))
+				  (print (blen buf))
+				  (print (bsrc buf)))
+				""";
+		assertThat(compileAndRunWithPreload(host, main, OptimizeLevel.NONE)).isEqualTo("""
+				3
+				5""");
+	}
+
+	@Test
 	void asyncImportAnswersASettledFutureThatAwaitResolves() throws Exception {
 		// :async t: the call answers a FUTURE -- rontolisp:await resolves it and
 		// futurep sees it, like an `async func` binding on every other backend. The

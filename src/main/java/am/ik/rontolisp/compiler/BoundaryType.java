@@ -114,6 +114,20 @@ public enum BoundaryType {
 	S_EXPR(":S-EXPR", null),
 
 	/**
+	 * {@code bytes}: an {@code (unsigned-byte 8)} vector, crossing as raw bytes in linear
+	 * memory with <strong>no UTF-8 decode in either direction</strong> — the
+	 * byte-transfer counterpart of {@link #STRING}, which is a value ("{@code :string} is
+	 * a value, {@code :bytes} is a transfer"). As a parameter it is {@code (ptr,len)}
+	 * like a string; as a RESULT the <strong>caller passes the buffer</strong> (the
+	 * {@code read(2)} shape): the signature gains a trailing {@code (ptr,cap)} pair and
+	 * the result is the value's FULL byte length, so an undersized buffer is a retry, not
+	 * a truncation. Currently a core-module (Preview&nbsp;1 / {@code --no-wasi}) wasm-GC
+	 * boundary type with no WIT spelling; lifting it as a component-model
+	 * {@code list<u8>} is its own change.
+	 */
+	BYTES(":BYTES", null),
+
+	/**
 	 * No result: the wrapper discards the Lisp return value and has no WASM result.
 	 * Selected when {@code :returns} is omitted, or given as {@code nil}, {@code '()} or
 	 * {@code :void}. A parameter can never have this type.

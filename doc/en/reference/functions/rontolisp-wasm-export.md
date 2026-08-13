@@ -51,6 +51,13 @@ The type designators and their boundary representations are:
 | `:bool` | `bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `string` | `(ptr, len)` | s-expression text in linear memory (any value except a function); no WIT type of its own |
+| `:bytes` | — | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as raw bytes, no UTF-8 in either direction; GC core-module shapes only |
+
+A `:bytes` **result** is caller-buffered (the `read(2)` shape): the export's
+core signature gains a trailing `(ptr, cap)` pair the host passes — reserve
+`cap` bytes with the exported `__ronto_alloc` — the wrapper copies at most
+`cap` bytes there, and the single `i32` result is the vector's **full** length,
+so an undersized buffer is a retry, not a truncation.
 
 **The boundary carries the value exactly, or the call traps.** A value the
 declared type cannot state — a negative returned through `:u32`, `300` through
@@ -103,4 +110,8 @@ way.
   added only when the program prints (see
   [Printing](../../guides/wasm-nogc.md#printing-print--princ--terpri)).
 - The non-GC backend (`--no-gc`) supports `:int`/`:long`/`:float`/`:bool`/`:string`
-  but not `:s-expr`, which needs the cons/reader/printer runtime.
+  but not `:s-expr`, which needs the cons/reader/printer runtime, and not
+  `:bytes`, which needs arrays.
+- `:bytes` is a GC core-module (Preview 1 / `--no-wasi`) boundary type:
+  `--component` rejects it (there is no `list<u8>` lift yet), so it has no WIT
+  spelling.

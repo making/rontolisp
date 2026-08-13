@@ -34,6 +34,16 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory; a component-model `string` under `--component` |
 | `:s-expr` | `(ptr, len)` | s-expression text (any value except a function); GC value model only |
+| `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as **raw bytes** — no UTF-8 in either direction; GC core-module shapes only (not `--component`, not `--no-gc`) |
+
+`:string` は*値*を運びます(デコードされ、呼び出しごとに割り当てられます)。
+`:bytes` は*転送*です: **呼び出し側がバッファを渡す** `read(2)` の形です。
+`:bytes` の**結果**はエクスポートのパラメータに `(ptr, cap)` ペアを追加し —
+ホストが(例えば `__ronto_alloc` で)`cap` バイトを確保し、ラッパーはそこへ
+最大 `cap` バイトをコピーします — 単一の `i32` 結果はベクタの**全長**です。
+バッファが小さすぎた場合は切り詰めではなくリトライになります。転送に
+呼び出しごとの割り当てを使わないことが、チャンク単位の pull ループの
+メモリをフラットに保ちます。
 
 副作用を目的とする関数は、`:returns` を省略する(または `nil`、`'()`、`:void` を与える)ことで **void** の結果を宣言できます。ラッパーは Lisp の戻り値を破棄し、WASM の結果を持ちません。同様に、`:params` の省略・`nil`・`'()` は引数なしを意味します。
 
@@ -66,6 +76,7 @@ wasmtime run --invoke fact -W gc fact.wasm 5
 | スカラー | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void |
 | `:string` | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) | 手動の `(ptr,len)` + `__ronto_alloc` | コンポーネントモデル `string`(正準 ABI) |
 | `:s-expr` | 手動の `(ptr,len)` | コンポーネントモデル `string`(印字テキスト) | 非対応 | 非対応 |
+| `:bytes` | 手動の `(ptr,len)` / 呼び出し側バッファの結果 | 非対応(`list<u8>` リフトは未対応) | 非対応 | 非対応 |
 | 関数本体で使える機能 | 言語全機能 | 言語全機能 | [非 GC サブセット](wasm-nogc.md#eligible-subset) | [非 GC サブセット](wasm-nogc.md#eligible-subset) |
 | エクスポート内の I/O | 動作する(実 WASI インポート。`--no-wasi` では出力は破棄、`random` は組み込み生成器、`getenv`/ファイル検索は「無い」と答え、時計はホストが `__ronto_set_time` で書き込んだ値、入力はトラップ) | 同期エクスポートでも通常は動作する。[`:async t`](wasm-component.md#component-model-function-exports-wasm-export) で残余のトラップリスクを除去 | `print` のみ(単一の `fd_write` インポート) | `print` のみ(組み込み WASI 0.3 stdout ブリッジ。エクスポートは async リフトになる) |
 | プログラムのトップレベル | `_start` として実行 | `wasi:cli/run` として共存 | `defun` + ディレクティブのみ | `defun` + ディレクティブのみ |
@@ -119,6 +130,8 @@ const { instance } = await WebAssembly.instantiate(bytes, imports);
 - `:string`/`:s-expr` の**引数**は、モジュールのエクスポートする `memory` 内への `(ptr, len)` ペアとしてホストに届きます(`:s-expr` 引数は先に読み取り可能なテキストへ印字されます)。
 - `:string` の**結果**はホストがリニアメモリに書き込む必要があります — エクスポートされた `__ronto_alloc` でバッファを確保し、`(ptr, len)` ペア(JavaScript では 2 要素配列)を返します。
 - `:s-expr` の**結果**は組み込みリーダーで解析されるため、ホストはリスト構造全体をテキストとして渡し返せます。
+- `:bytes` の**引数**は `(unsigned-byte 8)` ベクタを生の `(ptr, len)` ペアとしてステージします — UTF-8 エンコードを通らないため、任意のバイナリが正確に渡ります。
+- `:bytes` の**結果**は呼び出し側バッファ方式です: Lisp シグネチャの末尾に受信用の `(unsigned-byte 8)` ベクタが 1 つ加わり、ホスト関数は末尾の `(ptr, cap)` ペア付きで呼ばれます — *`ptr` に最大 `cap` バイトを書き込み、全長 `n` を返す*。呼び出しは `n` を返し(バッファ長を超える `n` は「より大きいバッファでリトライ」の合図)、ラッパーのステージングは返却時にポップされるため、1 つのバッファを使い回す pull ループはリニアメモリをフラットに保ちます。
 - **非同期の**ホスト関数 — JSPI で `WebAssembly.Suspending` ラップされたインポート — は `:async t` で宣言します: 呼び出しは `rontolisp:await` で解決できる future を返し、ビルドはホストの義務(インポートの `Suspending` ラップ、そこへ到達しうるエクスポートの `promising` 経由呼び出し、呼び出しの直列化 — 再入されたエクスポートは両方の呼び出しを壊す代わりにトラップで拒否します)を出力し、`--no-wasi` モジュールのトップレベルフォームから到達しうる呼び出しはコンパイルエラーになります(`_initialize` はサスペンドできない)。完全な契約は[リファレンスページ](../reference/functions/rontolisp-wasm-import.md)を参照してください。
 
 制限:

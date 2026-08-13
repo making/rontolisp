@@ -26,12 +26,19 @@ import am.ik.wasm.WasmWriter;
  *
  * <p>
  * The type designators are shared with {@link WasmExportCompiler} ({@code :int},
- * {@code :float}, {@code :bool}, {@code :string}, {@code :s-expr}; a {@code :returns} of
- * {@code :void}/nil returns {@code nil} to Lisp). A {@code :string}/{@code :s-expr}
- * parameter reaches the host as {@code (ptr,len)} into linear memory; a {@code :string}
- * result must be written into linear memory by the host (via the exported
- * {@code __ronto_alloc}) and returned as {@code (ptr,len)}; a {@code :s-expr} result is
- * parsed with the embedded reader.
+ * {@code :float}, {@code :bool}, {@code :string}, {@code :s-expr}, {@code :bytes}; a
+ * {@code :returns} of {@code :void}/nil returns {@code nil} to Lisp). A
+ * {@code :string}/{@code :s-expr} parameter reaches the host as {@code (ptr,len)} into
+ * linear memory; a {@code :string} result must be written into linear memory by the host
+ * (via the exported {@code __ronto_alloc}) and returned as {@code (ptr,len)}; a
+ * {@code :s-expr} result is parsed with the embedded reader. A {@code :bytes} parameter
+ * is an {@code (unsigned-byte 8)} vector staged as raw {@code (ptr,len)} bytes (no UTF-8
+ * encode); a {@code :bytes} RESULT follows the caller-passes-the-buffer {@code read(2)}
+ * shape -- the Lisp signature gains one trailing buffer-vector parameter, the host is
+ * called with a trailing {@code (ptr,cap)} pair ("write up to cap bytes at ptr") and
+ * answers the value's FULL length, which the call returns; the wrapper copies
+ * {@code min(n,cap)} bytes into the caller's vector and pops its staged regions, so a
+ * pull loop over one reused buffer keeps linear memory flat.
  *
  * <p>
  * Because every {@code FUNC_*} function index is a fixed compile-time constant, the
@@ -57,10 +64,13 @@ final class WasmImportCompiler {
 	 * widening them to the rest of the {@link BoundaryType} family is its own change (an
 	 * import's inbound value is a host promise, so the same "carries it exactly or traps"
 	 * rule has to be worked through for every WASI import a program already makes). See
-	 * {@code .kb/wit.md}.
+	 * {@code .kb/wit.md}. {@code :bytes} is the byte-transfer type: an
+	 * {@code (unsigned-byte 8)} vector crossing as raw bytes with no UTF-8 decode -- a
+	 * {@code :string} result's non-validating decoder corrupts arbitrary bytes, so binary
+	 * needs its own designator, not care at the call site.
 	 */
 	private static final List<BoundaryType> KNOWN_PARAM_TYPES = List.of(BoundaryType.S32, BoundaryType.FLOAT,
-			BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR);
+			BoundaryType.BOOL, BoundaryType.STRING, BoundaryType.S_EXPR, BoundaryType.BYTES);
 
 	private WasmImportCompiler() {
 	}
@@ -137,11 +147,35 @@ final class WasmImportCompiler {
 		return decl.returnType() == BoundaryType.S_EXPR;
 	}
 
+	/** Returns whether any declared type is the {@code :bytes} boundary type. */
+	static boolean usesBytes(Decl decl) {
+		return decl.returnType() == BoundaryType.BYTES || decl.paramTypes().contains(BoundaryType.BYTES);
+	}
+
+	/**
+	 * The arity of the Lisp-visible function the declaration defines. A {@code :bytes}
+	 * RESULT adds one trailing parameter -- the {@code (unsigned-byte 8)} vector the
+	 * caller passes as the receive buffer (the caller-passes-the-buffer {@code read(2)}
+	 * shape); the call answers the value's full byte length, so an undersized buffer is a
+	 * retry, not a truncation.
+	 * @param decl the parsed declaration
+	 * @return the Lisp-side parameter count
+	 */
+	static int lispArity(Decl decl) {
+		return decl.paramTypes().size() + (decl.returnType() == BoundaryType.BYTES ? 1 : 0);
+	}
+
 	/** Returns the WASM parameter types of the imported function's host signature. */
 	static Type[] hostParamTypes(Decl decl) {
 		List<Type> types = new ArrayList<>();
 		for (BoundaryType t : decl.paramTypes()) {
 			WasmExportCompiler.appendWasmTypes(types, t);
+		}
+		// A :bytes RESULT is caller-buffered: the wrapper passes a trailing (ptr,cap)
+		// pair -- "write up to cap bytes at ptr" -- and the host answers the full length.
+		if (decl.returnType() == BoundaryType.BYTES) {
+			types.add(Type.I32);
+			types.add(Type.I32);
 		}
 		return types.toArray(new Type[0]);
 	}
@@ -153,6 +187,9 @@ final class WasmImportCompiler {
 	static Type[] hostResultTypes(Decl decl) {
 		if (decl.returnType() == BoundaryType.VOID) {
 			return new Type[0];
+		}
+		if (decl.returnType() == BoundaryType.BYTES) {
+			return new Type[] { Type.I32 };
 		}
 		List<Type> types = new ArrayList<>();
 		WasmExportCompiler.appendWasmTypes(types, decl.returnType());
@@ -170,20 +207,83 @@ final class WasmImportCompiler {
 	 * @param ordinal the import's ordinal (0-based declaration order)
 	 * @param strFromMemFuncIndex the function index of the {@code _str_from_mem} helper
 	 * (or {@code -1} when no {@code :string} result is present)
+	 * @param allocFuncIndex the function index of {@code __ronto_alloc} (or {@code -1}
+	 * when no {@code :bytes} type is present)
+	 * @param bytesCopyFuncIndex the function index of the {@code _bytes_copy} helper (or
+	 * {@code -1} when no {@code :bytes} type is present)
+	 * @param bytesFillFuncIndex the function index of the {@code _bytes_fill} helper (or
+	 * {@code -1} when no {@code :bytes} type is present)
 	 * @return the code entry bytes
 	 */
 	static byte[] buildWrapperBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Decl decl, int ordinal,
-			int strFromMemFuncIndex) {
+			int strFromMemFuncIndex, int allocFuncIndex, int bytesCopyFuncIndex, int bytesFillFuncIndex) {
 		int numParams = decl.paramTypes().size();
-		// An :s-expr result needs two scratch i32 locals for the (ptr,len) the host
-		// returns; they sit right after the env+param slots, before any (ref null eq)
-		// temps handed out by allocTemp.
-		int numI32Temps = needsReader(decl) ? 2 : 0;
-		int ptrSlot = numParams + 1;
+		int numLispParams = lispArity(decl);
+		boolean bytesResult = decl.returnType() == BoundaryType.BYTES;
+		int numBytesParams = (int) decl.paramTypes().stream().filter(t -> t == BoundaryType.BYTES).count();
+		boolean bytesStaging = bytesResult || numBytesParams > 0;
+		// i32 scratch locals, right after the env+param slots and before any
+		// (ref null eq) temps handed out by allocTemp:
+		// - an :s-expr result needs two, for the (ptr,len) the host returns;
+		// - :bytes staging needs a heap mark (the staged regions are POPPED on return,
+		// so a pull-loop caller's arena stays flat -- the finding-2 shape), a (ptr,len)
+		// pair per :bytes parameter, and (ptr,cap,n) for a :bytes result.
+		int sExprTemps = needsReader(decl) ? 2 : 0;
+		int ptrSlot = numLispParams + 1;
+		int markSlot = numLispParams + 1 + sExprTemps;
+		int bytesParamBase = markSlot + 1;
+		int resultPtrSlot = bytesParamBase + 2 * numBytesParams;
+		int resultCapSlot = resultPtrSlot + 1;
+		int resultLenSlot = resultPtrSlot + 2;
+		int numI32Temps = sExprTemps + (bytesStaging ? 1 + 2 * numBytesParams + (bytesResult ? 3 : 0) : 0);
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(bodyStream);
 		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
-		ctx.nextLocal = numParams + 1 + numI32Temps;
+		ctx.nextLocal = numLispParams + 1 + numI32Temps;
+		if (bytesStaging) {
+			// mark = HEAP_PTR; every staged buffer below is a bump allocation popped
+			// back to this mark on return (a stack discipline, like the host arena API).
+			ctx.writer.write(Instruction.I32_CONST);
+			ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(markSlot);
+			// Stage each :bytes parameter: len = array.len(arg), ptr = __ronto_alloc(len)
+			// (grow-guarded), then copy the vector's raw bytes into [ptr, ptr+len). The
+			// ref.cast inside the length read traps on a non-byte-vector argument --
+			// exact-or-trap, like every other boundary type.
+			int k = 0;
+			for (int i = 0; i < numParams; i++) {
+				if (decl.paramTypes().get(i) != BoundaryType.BYTES) {
+					continue;
+				}
+				int lenSlot = bytesParamBase + 2 * k + 1;
+				int bufPtrSlot = bytesParamBase + 2 * k;
+				emitByteVectorLen(ctx, i + 1);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(lenSlot);
+				emitAllocInto(ctx, lenSlot, bufPtrSlot, allocFuncIndex);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(i + 1);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(bufPtrSlot);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(lenSlot);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(bytesCopyFuncIndex);
+				ctx.writer.write(Instruction.DROP);
+				k++;
+			}
+			// Stage the :bytes result's receive region: cap = array.len(buffer) -- the
+			// trailing Lisp argument -- and ptr = __ronto_alloc(cap). The host writes up
+			// to cap bytes there and answers the full length.
+			if (bytesResult) {
+				emitByteVectorLen(ctx, numLispParams);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(resultCapSlot);
+				emitAllocInto(ctx, resultCapSlot, resultPtrSlot, allocFuncIndex);
+			}
+		}
 		if (decl.async()) {
 			// The future's kind field goes under the boxed result: the wrapper builds the
 			// settled (kind 2) TYPE_P1_FUTURE the moment the host call returns -- on this
@@ -194,20 +294,67 @@ final class WasmImportCompiler {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(2);
 		}
+		int k = 0;
 		for (int i = 0; i < numParams; i++) {
-			emitUnboxParam(ctx, decl.paramTypes().get(i), i + 1);
+			if (decl.paramTypes().get(i) == BoundaryType.BYTES) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(bytesParamBase + 2 * k);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(bytesParamBase + 2 * k + 1);
+				k++;
+			}
+			else {
+				emitUnboxParam(ctx, decl.paramTypes().get(i), i + 1);
+			}
+		}
+		if (bytesResult) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultPtrSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultCapSlot);
 		}
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(PLACEHOLDER_FUNC_BASE + ordinal);
-		emitBoxResult(ctx, decl.returnType(), ptrSlot, strFromMemFuncIndex);
+		if (bytesResult) {
+			// n = the host's answer (the value's FULL length); copy min(n, cap) bytes
+			// out of the staged region into the caller's vector, pop the heap back to
+			// the mark, and answer n exactly (through _int_new, so any i32 length
+			// crosses).
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultLenSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(numLispParams);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultPtrSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultLenSlot);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(bytesFillFuncIndex);
+			ctx.writer.write(Instruction.DROP);
+			emitHeapRestore(ctx, markSlot);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultLenSlot);
+			ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
+		}
+		else {
+			emitBoxResult(ctx, decl.returnType(), ptrSlot, strFromMemFuncIndex);
+			if (bytesStaging) {
+				// The staged parameter regions are dead once the host call returned (a
+				// :string/:s-expr result was already copied out of linear memory by the
+				// boxing above), so pop the heap back to the mark.
+				emitHeapRestore(ctx, markSlot);
+			}
+		}
 		if (decl.async()) {
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_P1_FUTURE);
 		}
 		ctx.writer.write(Instruction.END);
-		// Local declarations: the i32 scratch pair (when present), then the
+		// Local declarations: the i32 scratch run (when present), then the
 		// (ref null eq) temps allocated by allocTemp during unboxing.
-		int numEqTemps = ctx.nextLocal - (numParams + 1 + numI32Temps);
+		int numEqTemps = ctx.nextLocal - (numLispParams + 1 + numI32Temps);
 		ByteArrayOutputStream entry = new ByteArrayOutputStream();
 		WasmWriter entryWriter = new WasmWriter(entry);
 		int groups = (numI32Temps > 0 ? 1 : 0) + (numEqTemps > 0 ? 1 : 0);
@@ -222,6 +369,38 @@ final class WasmImportCompiler {
 		}
 		entryWriter.write((Object) bodyStream.toByteArray());
 		return entry.toByteArray();
+	}
+
+	// Pushes array.len of the (unsigned-byte 8) vector in the given local slot; the
+	// ref.cast traps on any other value (the boundary's exact-or-trap rule).
+	private static void emitByteVectorLen(WasmLispCompiler.Ctx ctx, int slot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_I8ARR);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+	}
+
+	// local[ptrSlot] = __ronto_alloc(local[sizeSlot]) -- a grow-guarded bump allocation.
+	private static void emitAllocInto(WasmLispCompiler.Ctx ctx, int sizeSlot, int ptrSlot, int allocFuncIndex) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(sizeSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(allocFuncIndex);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(ptrSlot);
+	}
+
+	// HEAP_PTR = local[markSlot]: pops the wrapper's staged regions. A plain store is
+	// safe here -- nothing between the mark and this restore can intern a symbol (the
+	// only writer of the permanent low region), unlike the exported
+	// __ronto_alloc_reset, which must clamp to the intern high-water mark.
+	private static void emitHeapRestore(WasmLispCompiler.Ctx ctx, int markSlot) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(markSlot);
+		ctx.writer.write(Instruction.I32_STORE, 0x02, 0x00);
 	}
 
 	// Pushes the host-ABI value(s) of the boxed Lisp argument in the given local slot.

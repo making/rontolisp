@@ -161,14 +161,45 @@ may be allocated per call; an unbounded byte stream may not.
 
 Phases, each independently landable and each with its own gate:
 
-**Phase 0 -- the boundary types.** A `:bytes` designator for
+**Phase 0 -- the boundary types. DONE (2026-08-13).** A `:bytes` designator for
 `wasm-import`/`wasm-export` params and results: an `(unsigned-byte 8)` vector,
 no UTF-8 decode in either direction (finding 4), and a RESULT declared `:bytes`
 takes the caller-passed (ptr, cap) pair and answers a length rather than
 allocating (finding 2, and the design note above). Both are general -- they are
-what any byte-shaped host import needs, HTTP or not. Gate: a preload E2E
-round-tripping arbitrary bytes (including the `ff fe 41` that finding 4
-corrupts today), and the finding-2 table re-measured flat.
+what any byte-shaped host import needs, HTTP or not.
+
+What landed, and the two things a later phase inherits from it:
+
+- `BoundaryType.BYTES` (no WIT spelling), accepted by both directives on the GC
+  CORE-module paths; `--component` refuses eagerly naming the missing `list<u8>`
+  lift, `--no-gc` refuses naming the missing arrays. The value is the bare
+  `TYPE_I8ARR` packed vector, so `aref`/`length` on it are the ordinary ones.
+- **The result convention is the whole point**: one trailing Lisp parameter (the
+  receive buffer) and a trailing host `(ptr, cap)` pair, answering the FULL
+  length -- so an undersized buffer is a retry. Every backend derives the arity
+  from ONE place (`WasmImportDirective.lispParamCount` /
+  `WasmImportCompiler.lispArity`), which is what keeps the interpreter/JVM stubs
+  loading at the same arity.
+- The import wrapper takes a HEAP MARK on entry and pops to it on return, so the
+  staged `(ptr,len)` regions do not accumulate. That is what makes the finding-2
+  table flat, and it is why a `:bytes` parameter is bump-ALLOCATED rather than
+  staged at the un-advanced `HEAP_PTR` scratch the `:string` boundary uses:
+  several can coexist within one call.
+- Three gated helpers (`_bytes_from_mem`, `_bytes_copy`, `_bytes_fill`) sharing
+  one appended signature; a module without the designator is byte-identical
+  (pinned).
+
+Gate, met: `WasmBytesBoundaryE2eTest` (node-gated, plain JS host -- content can
+only cross against a host that shares the module's memory) round-trips
+`ff fe 41` exactly in all four directions, checks the full-length answer on an
+undersized buffer with no overrun, and pins the flat-memory pull loop (10000
+pulls staging 64 KiB each, `memory.buffer.byteLength` unchanged). The wasmtime
+preload leg pins the plumbing through the lengths, which are what cross two
+disjoint memories. `.kb/wasm-import.md` has the mechanics.
+
+Not done here, deliberately: nothing HTTP-shaped. The boundary entries
+`env.readRequestBody` / `env.writeResponseBody` are Phases 2 and 3; this phase
+only made a type that can express them.
 
 **Phase 1 -- Preview 1 gets a real stream value.** `TYPE_P1_STREAM
 {mut i32 eof, mut readFn, mut closeFn}` -- the same three fields as

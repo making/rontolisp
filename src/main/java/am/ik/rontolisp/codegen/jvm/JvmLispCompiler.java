@@ -3275,7 +3275,10 @@ public final class JvmLispCompiler implements LispCompiler {
 	// signals an error, since the imported host function only exists in WASM output.
 	private static DefunDecl wasmImportStub(WasmImportDirective directive) {
 		List<String> paramNames = new ArrayList<>();
-		for (int i = 0; i < directive.paramTypes().size(); i++) {
+		// lispParamCount, not the declared parameter count: a :returns :bytes import
+		// takes one extra trailing argument (the caller-passed receive buffer), and the
+		// stub must load with the arity the WASM wrapper will have.
+		for (int i = 0; i < directive.lispParamCount(); i++) {
 			paramNames.add("%wasm-import-p" + i);
 		}
 		LispVal body = new LispCons(new LispSymbol(LispNames.ERROR),

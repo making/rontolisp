@@ -4,9 +4,9 @@
 the reverse of `wasm-export`: it declares a host function (JS import object key
 `module`, property `field`; wasmtime `--preload module=...`) and makes it callable from
 Lisp like a top-level defun. Type designators are shared with `WasmExportCompiler`
-(`:int`/`:float`/`:bool`/`:string`/`:s-expr`, `:void` return). Generic parsing lives in
-`am.ik.rontolisp.compiler.WasmImportDirective` (shared with the JVM backend); WASM-side
-validation/codegen in `WasmImportCompiler`.
+(`:int`/`:float`/`:bool`/`:string`/`:s-expr`/`:bytes`, `:void` return). Generic parsing
+lives in `am.ik.rontolisp.compiler.WasmImportDirective` (shared with the JVM backend);
+WASM-side validation/codegen in `WasmImportCompiler`.
 
 **How the fixed-index invariant survives adding imports**: the WASM spec puts all
 imported functions before all defined ones, so a new import would shift every `FUNC_*`
@@ -206,6 +206,36 @@ Lisp strings via `:string` params, handle-table one-liner JS bindings, `:string`
 for shader info logs -- staged to Pages via pom.xml); cube, galaxy,
 heat3d and robot-arm all pull the WebGL2 boundary from `examples/browser/webgl-common/gl.lisp`,
 and `webgl-common/gl-imports.js` is staged beside them because their pages import it.
+
+**`:bytes` -- the byte-TRANSFER type, and the caller-passes-the-buffer result rule
+(todo-341 Phase 0, 2026-08-13)**: an `(unsigned-byte 8)` vector (the bare `TYPE_I8ARR`
+array, `.kb/packed-integer-vectors.md`) crosses as RAW bytes -- no UTF-8 in either
+direction, because the `:string` decoder is non-validating and hands back garbage code
+points for arbitrary binary (`ff fe 41` -> code point 0x1FE062). The line worth keeping:
+**`:string` is a value, `:bytes` is a transfer.** A parameter stages as `(ptr,len)` like
+a string (but bump-ALLOCATED, not at un-advanced scratch, so several can coexist); a
+RESULT is the `read(2)` shape -- the Lisp signature gains ONE trailing parameter (the
+receive buffer vector; `WasmImportDirective.lispParamCount` / `WasmImportCompiler
+.lispArity`, which every backend's stub/wrapper arity derives from), the host is called
+with a trailing `(ptr, cap)` pair and answers the value's FULL length (undersized buffer
+= retry, never truncation), and the wrapper copies `min(n,cap)` back and POPS the heap
+to its entry mark -- a plain `HEAP_PTR` store, safe because nothing between mark and
+restore can intern -- so a pull loop over one reused buffer keeps linear memory flat
+(the todo-341 finding-2 gate: 10000 pulls staging 64 KiB each, memory flat, pinned).
+Same convention on the export side: a `:bytes`-returning export's core signature gains
+the trailing `(ptr,cap)` and returns the full length as its single i32. Three helpers,
+gated on the designator appearing (everything else byte-identical, pinned by
+`bytesHelpersRideOnlyABytesDeclaringModule`): `_bytes_from_mem` (fresh vector from
+linear, reuses TYPE_RAT_NEW), `_bytes_copy` (vector -> mem, returns full length) and
+`_bytes_fill` (mem -> vector, returns n) sharing one appended `((ref null eq),i32,i32)
+->i32` signature at the abiTypeBase block (`WasmExportRuntimeBuilder`). Modes: GC core
+modules only -- `--component` refuses eagerly (no `list<u8>` lift yet; the refusal names
+it) and `--no-gc` refuses (no arrays). Content round-trip can only be proven against a
+host that shares the module's memory, so the E2E is a JS host on node
+(`WasmBytesBoundaryE2eTest`, node-gated): `ff fe 41` exact in all four directions,
+full-length answer on an undersized buffer with no overrun, and the flat-memory loop;
+the wasmtime preload leg (`bytesBoundaryCrossesThePreloadBoundaryByLength`) pins the
+plumbing through the values that DO cross two disjoint memories -- the lengths.
 
 **The component path does NOT go through this compiler** (todo 128): `rontolisp:wasm-import`
 is still a Preview-1-only directive (`--component` throws). A `rontolisp:wit-import` under

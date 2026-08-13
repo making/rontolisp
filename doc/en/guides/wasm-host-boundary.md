@@ -45,6 +45,16 @@ The type designators and their boundary representations are:
 | `:bool` | `i32` | `0` is `nil`, any non-zero value is `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory; a component-model `string` under `--component` |
 | `:s-expr` | `(ptr, len)` | s-expression text (any value except a function); GC value model only |
+| `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as **raw bytes** — no UTF-8 in either direction; GC core-module shapes only (not `--component`, not `--no-gc`) |
+
+`:string` carries a *value* (decoded, allocated per call); `:bytes` carries a
+*transfer*: the **caller passes the buffer**, the `read(2)` shape. A `:bytes`
+**result** appends a `(ptr, cap)` pair to the export's parameters — the host
+reserves `cap` bytes (e.g. with `__ronto_alloc`) and the wrapper copies at most
+`cap` bytes there — and the single `i32` result is the vector's **full**
+length, so an undersized buffer is a retry, not a truncation. No per-call
+allocation is spent on the transfer, which is what keeps a chunked pull loop's
+memory flat.
 
 A side-effecting function can declare a **void** result by omitting `:returns`
 (or giving it as `nil`, `'()` or `:void`); the wrapper then discards the Lisp
@@ -88,6 +98,7 @@ the `--no-gc` / `--component` flags:
 | Scalars | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void | `:int`/`:long`/`:float`/`:bool`/void |
 | `:string` | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) | manual `(ptr,len)` + `__ronto_alloc` | component-model `string` (canonical ABI) |
 | `:s-expr` | manual `(ptr,len)` | component-model `string` (printed text) | not supported | not supported |
+| `:bytes` | manual `(ptr,len)` / caller-buffered result | not supported (no `list<u8>` lift yet) | not supported | not supported |
 | Function body may use | the full language | the full language | the [non-GC subset](wasm-nogc.md#eligible-subset) | the [non-GC subset](wasm-nogc.md#eligible-subset) |
 | I/O inside the export | works (real WASI imports; under `--no-wasi` output is discarded, `random` runs on a built-in generator, `getenv`/file lookups answer nothing, the clock is the one the host wrote through `__ronto_set_time` and input traps) | usually works even in a sync export; [`:async t`](wasm-component.md#component-model-function-exports-wasm-export) removes the residual trap risk | `print` only (one `fd_write` import) | `print` only (built-in WASI 0.3 stdout bridge; the exports become async lifts) |
 | Program top level | runs as `_start` | co-exists as `wasi:cli/run` | `defun` + directives only | `defun` + directives only |
@@ -169,6 +180,15 @@ Boundary details beyond the scalar types:
   `(ptr, len)` pair (a two-element array in JavaScript).
 - An `:s-expr` **result** is parsed with the embedded reader, so the host can
   hand back a whole list structure as text.
+- A `:bytes` **argument** is an `(unsigned-byte 8)` vector staged as a raw
+  `(ptr, len)` pair — no UTF-8 encode, so arbitrary binary crosses exactly.
+- A `:bytes` **result** is caller-buffered: the Lisp signature gains one
+  trailing parameter, the `(unsigned-byte 8)` vector to receive into, and the
+  host is called with a trailing `(ptr, cap)` pair — *write up to `cap` bytes
+  at `ptr`, return the full length `n`*. The call answers `n` (an `n` above the
+  buffer's length means "retry with a bigger buffer"), and the wrapper's
+  staging is popped on return, so a pull loop over one reused buffer keeps
+  linear memory flat.
 - An **asynchronous** host function — a `WebAssembly.Suspending`-wrapped
   import under JSPI — is declared with `:async t`: the call then returns a
   future that `rontolisp:await` resolves, the build prints the host's

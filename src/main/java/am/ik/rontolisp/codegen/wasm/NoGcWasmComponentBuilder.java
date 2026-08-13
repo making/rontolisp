@@ -337,10 +337,10 @@ final class NoGcWasmComponentBuilder {
 			case S64, U64 -> "i64";
 			case FLOAT -> "f64";
 			case VOID -> "void";
-			// --no-gc has no cons/reader/printer runtime, so it rejects :s-expr long
-			// before
-			// a component lift is planned (NoGcWasmCompiler.requireSupported).
-			case S_EXPR -> throw new UnsupportedOperationException("rontolisp:wasm-export type "
+			// --no-gc has no cons/reader/printer runtime (no :s-expr) and no arrays (no
+			// :bytes), so it rejects both long before a component lift is planned
+			// (NoGcWasmCompiler.requireSupported).
+			case S_EXPR, BYTES -> throw new UnsupportedOperationException("rontolisp:wasm-export type "
 					+ decl.returnType().designator() + " has no component post-return signature");
 		};
 	}

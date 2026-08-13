@@ -108,6 +108,70 @@ class WasmImportCompilerTest {
 	}
 
 	@Test
+	void parsesBytesAndDerivesTheCallerBufferShape() {
+		// :bytes is the byte-transfer type: a parameter crosses as raw (ptr,len); a
+		// RESULT follows the caller-passes-the-buffer read(2) shape -- the Lisp
+		// signature gains one trailing buffer-vector parameter, the host is called with
+		// a trailing (ptr,cap) pair and answers the value's FULL length.
+		WasmImportCompiler.Decl pull = parse("(rontolisp:wasm-import 'pull :params '(:int) :returns :bytes)");
+		assertThat(pull.paramTypes()).containsExactly(BoundaryType.S32);
+		assertThat(pull.returnType()).isEqualTo(BoundaryType.BYTES);
+		assertThat(WasmImportCompiler.lispArity(pull)).isEqualTo(2);
+		assertThat(WasmImportCompiler.hostParamTypes(pull)).containsExactly(am.ik.wasm.Type.I32, am.ik.wasm.Type.I32,
+				am.ik.wasm.Type.I32);
+		assertThat(WasmImportCompiler.hostResultTypes(pull)).containsExactly(am.ik.wasm.Type.I32);
+		WasmImportCompiler.Decl sink = parse("(rontolisp:wasm-import 'sink :params '(:bytes) :returns :int)");
+		assertThat(WasmImportCompiler.lispArity(sink)).isEqualTo(1);
+		assertThat(WasmImportCompiler.hostParamTypes(sink)).containsExactly(am.ik.wasm.Type.I32, am.ik.wasm.Type.I32);
+		assertThat(WasmImportCompiler.hostResultTypes(sink)).containsExactly(am.ik.wasm.Type.I32);
+	}
+
+	@Test
+	void bytesImportCompilesToACallableWrapperWithTheBufferArity() {
+		// The synthetic defun carries the Lisp arity (declared params + the trailing
+		// receive buffer for a :bytes result), so an ordinary call site with the buffer
+		// argument compiles; the module carries the import entry like any other.
+		byte[] module = compileNoWasi("""
+				(rontolisp:wasm-import 'pull :from "host" :params '() :returns :bytes)
+				(rontolisp:wasm-import 'sink :from "host" :params '(:bytes) :returns :int)
+				(defun probe ()
+				  (let ((buf (make-array 3 :element-type '(unsigned-byte 8))))
+				    (+ (pull buf) (sink buf))))
+				(rontolisp:wasm-export 'probe :params '() :returns :int)
+				""");
+		List<String[]> imports = functionImports(module);
+		assertThat(imports).hasSize(2);
+		assertThat(imports.get(0)).containsExactly("host", "pull");
+		assertThat(imports.get(1)).containsExactly("host", "sink");
+	}
+
+	@Test
+	void bytesHelpersRideOnlyABytesDeclaringModule() {
+		// The three _bytes_* marshalling helpers (and their one appended signature) are
+		// emitted exactly when the designator appears; a module without :bytes keeps its
+		// function count -- the gating that preserves byte-identity everywhere else.
+		String withoutBytes = """
+				(rontolisp:wasm-import 'geta :from "host" :params '() :returns :string)
+				(print (geta))
+				""";
+		String withBytes = """
+				(rontolisp:wasm-import 'geta :from "host" :params '() :returns :string)
+				(rontolisp:wasm-import 'sink :from "host" :params '(:bytes) :returns :int)
+				(print (geta))
+				""";
+		// The :bytes module adds exactly its own import wrapper (one function) plus the
+		// three helpers.
+		assertThat(functionCount(compile(withBytes))).isEqualTo(functionCount(compile(withoutBytes)) + 4);
+	}
+
+	// The number of entries in the function section (defined functions, imports
+	// excluded).
+	private static int functionCount(byte[] module) {
+		byte[] section = Objects.requireNonNull(section(module, 3));
+		return readU(section, new int[] { 0 });
+	}
+
+	@Test
 	void rejectsUnknownOption() {
 		assertThatThrownBy(() -> parse("(rontolisp:wasm-import 'g :wat 1)")).hasMessageContaining(":WAT");
 	}

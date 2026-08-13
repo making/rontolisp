@@ -42,6 +42,19 @@ public record WasmImportDirective(String name, String module, String field, List
 	public static final String DEFAULT_MODULE = "env";
 
 	/**
+	 * The arity of the Lisp-visible function this directive declares. Normally the
+	 * declared parameter count; a {@code :returns :bytes} import adds ONE trailing
+	 * parameter — the {@code (unsigned-byte 8)} vector the caller passes as the receive
+	 * buffer (the caller-passes-the-buffer {@code read(2)} shape; the call answers the
+	 * value's full byte length). Every backend derives the stub / wrapper arity from
+	 * this, so the same source loads with one arity everywhere.
+	 * @return the Lisp-side parameter count
+	 */
+	public int lispParamCount() {
+		return this.paramTypes.size() + (":BYTES".equals(this.returnType) ? 1 : 0);
+	}
+
+	/**
 	 * Returns whether the given form is a {@code (rontolisp:wasm-import ...)} directive.
 	 * @param form the top-level form
 	 * @return {@code true} if it is a rontolisp:wasm-import directive

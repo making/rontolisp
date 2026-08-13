@@ -2223,7 +2223,9 @@ public final class WasmLispCompiler implements LispCompiler {
 						"rontolisp:wasm-import name collides with an existing function: " + decl.name());
 			}
 			List<String> paramNames = new ArrayList<>();
-			for (int i = 0; i < decl.paramTypes().size(); i++) {
+			// lispArity, not the declared parameter count: a :returns :bytes import takes
+			// one extra trailing argument, the caller-passed receive buffer.
+			for (int i = 0; i < WasmImportCompiler.lispArity(decl); i++) {
 				paramNames.add("%wasm-import-p" + i);
 			}
 			importWrappers.put(decl.name(), decl);
@@ -2992,9 +2994,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// A component-import wrapper stages arguments and lifts string results through
 		// the same helper pair (__ronto_alloc for the return area, _str_from_mem for
 		// host-written bytes), so any bound interface forces the helpers on.
-		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || !componentImportWrappers.isEmpty()
-				|| !componentAsyncWrappers.isEmpty() || !componentCallStartWrappers.isEmpty()
-				|| !componentTaskReturnWrappers.isEmpty();
+		// The :bytes boundary type (raw (unsigned-byte 8) transfers, both directions):
+		// its wrappers stage through __ronto_alloc and call the three _bytes_* helpers
+		// below, all gated on the designator actually appearing so every other module
+		// stays byte-identical.
+		boolean bytesBoundary = exportDecls.stream().anyMatch(WasmExportCompiler::usesBytes)
+				|| importDecls.stream().anyMatch(WasmImportCompiler::usesBytes);
+		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || bytesBoundary
+				|| !componentImportWrappers.isEmpty() || !componentAsyncWrappers.isEmpty()
+				|| !componentCallStartWrappers.isEmpty() || !componentTaskReturnWrappers.isEmpty();
 		int allocFuncIndex = memoryHelpers ? exportHelperBase : -1;
 		int strFromMemFuncIndex = memoryHelpers ? exportHelperBase + 1 : -1;
 		// Host arena API: __ronto_alloc_mark / __ronto_alloc_reset, appended right after
@@ -3007,6 +3015,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		int memoryHelperCount = memoryHelpers ? (hostArena ? 4 : 2) : 0;
 		int allocMarkFuncIndex = hostArena ? exportHelperBase + 2 : -1;
 		int allocResetFuncIndex = hostArena ? exportHelperBase + 3 : -1;
+		// The :bytes marshalling helpers, appended right after the memory helpers:
+		// _bytes_from_mem ((i32,i32)->(ref null eq), reuses TYPE_RAT_NEW), then
+		// _bytes_copy and _bytes_fill (((ref null eq),i32,i32)->i32, one appended
+		// signature at abiTypeBase shared by both).
+		int bytesFromMemFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount : -1;
+		int bytesCopyFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount + 1 : -1;
+		int bytesFillFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount + 2 : -1;
+		int bytesHelperCount = bytesBoundary ? 3 : 0;
 		// __ronto_seed_random (i64) -> (): the host's escape hatch out of the --no-wasi
 		// generator's constant start state (WasmIoRuntimeBuilder.buildSeedRandomBody).
 		// Appended after the memory helpers, so it shifts only the COMPUTED wrapper/ABI
@@ -3016,7 +3032,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the hook is not emitted at all rather than exported as a no-op that a host
 		// could reasonably read as "seeding still matters here".
 		boolean seedRandom = this.noWasi && !this.component && !this.hostRandom;
-		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount : -1;
+		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount + bytesHelperCount : -1;
 		// __ronto_set_time (i64) -> (): the same move for the clock -- the host hands
 		// over the one value it really knows and the module could never invent
 		// (WasmIoRuntimeBuilder.buildSetTimeBody). Emitted on every --no-wasi CORE
@@ -3025,8 +3041,9 @@ public final class WasmLispCompiler implements LispCompiler {
 		// same reason: its top level runs at instantiation, so there is no window in
 		// which a host could set the time before the load-time reads.
 		boolean setTime = this.noWasi && !this.component;
-		int setTimeFuncIndex = setTime ? exportHelperBase + memoryHelperCount + (seedRandom ? 1 : 0) : -1;
-		int helperFuncCount = memoryHelperCount + (seedRandom ? 1 : 0) + (setTime ? 1 : 0);
+		int setTimeFuncIndex = setTime ? exportHelperBase + memoryHelperCount + bytesHelperCount + (seedRandom ? 1 : 0)
+				: -1;
+		int helperFuncCount = memoryHelperCount + bytesHelperCount + (seedRandom ? 1 : 0) + (setTime ? 1 : 0);
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
 		// a serve+fetch program's two spliced halves may each call
 		// wasi:http/types.fields-append, body-stream-read, ... in their own
@@ -3166,7 +3183,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		{
 			for (WasmImportCompiler.Decl decl : importWrappers.values()) {
 				int ordinal = Objects.requireNonNull(importSlotIndex.get(decl.module() + " " + decl.field()));
-				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, strFromMemFuncIndex);
+				byte[] body = WasmImportCompiler.buildWrapperBody(ctxBuilder, decl, ordinal, strFromMemFuncIndex,
+						allocFuncIndex, bytesCopyFuncIndex, bytesFillFuncIndex);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(decl.name())), body);
 			}
 			for (WasmComponentImportCompiler.Decl decl : componentImportWrappers.values()) {
@@ -3223,6 +3241,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				// synchronously with no canonical options; :string/:s-expr lift through
 				// the canonical string ABI over the appended cabi_realloc / post-return
 				// / retptr-shim helpers (todo 92 Tier 2).
+				// :bytes is a core-module transfer (Preview 1 / --no-wasi): the component
+				// boundary would have to lift it as a canonical-ABI list<u8>, which is
+				// its
+				// own change, so refuse it eagerly with the reason.
+				if (this.component && WasmExportCompiler.usesBytes(decl)) {
+					throw new UnsupportedOperationException("rontolisp:wasm-export '" + decl.name()
+							+ "' declares :bytes, a core-module (Preview 1 / --no-wasi) boundary type; the"
+							+ " --component path does not lift it yet");
+				}
 				if (this.component && !this.serve) {
 					if (!WasmExportCompiler.COMPONENT_EXPORT_NAME.matcher(decl.exportName()).matches()) {
 						throw new UnsupportedOperationException("rontolisp:wasm-export name '" + decl.exportName()
@@ -3259,7 +3286,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// emission; the (ref null eq) temps allocTemp hands out follow.
 				List<Type> scratch = WasmExportCompiler.scratchTypes(decl);
 				wrapperCtx.nextLocal = paramSlots + scratch.size();
-				WasmExportCompiler.emitBody(wrapperCtx, decl, target.funcIndex(), strFromMemFuncIndex);
+				WasmExportCompiler.emitBody(wrapperCtx, decl, target.funcIndex(), strFromMemFuncIndex,
+						bytesFromMemFuncIndex, bytesCopyFuncIndex);
 				// Prepend the local declarations: the scratch locals (one run each, so
 				// the
 				// declaration order matches the slot order), then the (ref null eq)
@@ -4326,6 +4354,21 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addFunc(new Type[0], new Type[] { Type.I32 });
 					types.addFunc(new Type[] { Type.I32 }, new Type[0]);
 				}
+				// The :bytes helper signature ((ref null eq),i32,i32) -> i32, shared by
+				// _bytes_copy and _bytes_fill (_bytes_from_mem reuses the fixed
+				// TYPE_RAT_NEW). Appended only when the designator appears, so every
+				// other module's type section is untouched.
+				if (bytesBoundary) {
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(3);
+						w.writeRefType(true, Type.EQ.code());
+						w.write(Type.I32);
+						w.write(Type.I32);
+						w.write(1);
+						w.write(Type.I32);
+					});
+				}
 				// The host hooks' shared (i64) -> () signature, last of the appended
 				// block (a --no-wasi core module never takes the component string-ABI
 				// branch above). __ronto_seed_random and __ronto_set_time have the same
@@ -4649,12 +4692,19 @@ public final class WasmLispCompiler implements LispCompiler {
 						fnDef.addFunction(abiTypeBase + 1);
 					}
 				}
-				// The host hooks, which share the (i64)->() signature following them.
-				if (seedRandom) {
+				// The :bytes marshalling helpers: _bytes_from_mem (TYPE_RAT_NEW), then
+				// _bytes_copy / _bytes_fill sharing the one appended signature.
+				if (bytesBoundary) {
+					fnDef.addFunction(TYPE_RAT_NEW);
+					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 				}
+				// The host hooks, which share the (i64)->() signature following them.
+				if (seedRandom) {
+					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0));
+				}
 				if (setTime) {
-					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
+					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0));
 				}
 				// Export wrapper functions (host-callable), one per
 				// (rontolisp:wasm-export ...).
@@ -5257,6 +5307,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						code.addFunction(WasmExportRuntimeBuilder.buildAllocMarkBody());
 						code.addFunction(WasmExportRuntimeBuilder.buildAllocResetBody());
 					}
+				}
+				// The :bytes marshalling helper bodies, matching the function-section
+				// order.
+				if (bytesBoundary) {
+					code.addFunction(WasmExportRuntimeBuilder.buildBytesFromMemBody());
+					code.addFunction(WasmExportRuntimeBuilder.buildBytesCopyBody());
+					code.addFunction(WasmExportRuntimeBuilder.buildBytesFillBody());
 				}
 				// __ronto_seed_random: the host's replacement for the generator's
 				// constant start state, matching the function-section order.

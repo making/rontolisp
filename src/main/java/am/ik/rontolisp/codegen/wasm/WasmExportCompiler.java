@@ -42,6 +42,13 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code :bool} -- {@code i32} (0 = nil, non-zero = the symbol {@code t})</li>
  * <li>{@code :string} -- {@code (ptr,len)} bytes in linear memory</li>
  * <li>{@code :s-expr} -- {@code (ptr,len)} s-expression text in linear memory</li>
+ * <li>{@code :bytes} -- an {@code (unsigned-byte 8)} vector as raw bytes, no UTF-8 decode
+ * in either direction. A parameter is {@code (ptr,len)} like a string; a RESULT follows
+ * the caller-passes-the-buffer {@code read(2)} shape: the export signature gains a
+ * trailing {@code (ptr,cap)} pair, the wrapper copies {@code min(len,cap)} bytes there,
+ * and the single {@code i32} result is the vector's FULL length -- an undersized buffer
+ * is a retry, not a truncation. Core-module (Preview&nbsp;1 / {@code --no-wasi}) wasm-GC
+ * paths only</li>
  * </ul>
  *
  * <p>
@@ -286,7 +293,17 @@ final class WasmExportCompiler {
 		for (BoundaryType t : decl.paramTypes()) {
 			slots += slotsForType(t);
 		}
+		// A :bytes result adds the trailing caller-passed (ptr,cap) pair to the wrapper's
+		// parameter list (see paramWasmTypes), so the scratch locals sit after it.
+		if (decl.returnType() == BoundaryType.BYTES) {
+			slots += 2;
+		}
 		return slots;
+	}
+
+	/** Returns whether any declared type is the {@code :bytes} boundary type. */
+	static boolean usesBytes(Decl decl) {
+		return decl.returnType() == BoundaryType.BYTES || decl.paramTypes().contains(BoundaryType.BYTES);
 	}
 
 	/**
@@ -326,6 +343,13 @@ final class WasmExportCompiler {
 		for (BoundaryType t : decl.paramTypes()) {
 			appendWasmTypes(types, t);
 		}
+		// A :bytes RESULT is caller-buffered: the host passes (ptr,cap) as two trailing
+		// parameters and the wrapper answers the full length (the read(2) shape), so no
+		// per-call __ronto_alloc is left behind for a byte transfer.
+		if (decl.returnType() == BoundaryType.BYTES) {
+			types.add(Type.I32);
+			types.add(Type.I32);
+		}
 		return types.toArray(new Type[0]);
 	}
 
@@ -335,6 +359,11 @@ final class WasmExportCompiler {
 	static Type[] resultWasmTypes(Decl decl) {
 		if (decl.returnType() == BoundaryType.VOID) {
 			return new Type[0];
+		}
+		// A :bytes result is the value's FULL byte length; the bytes went out through the
+		// caller-passed (ptr,cap) pair appended in paramWasmTypes.
+		if (decl.returnType() == BoundaryType.BYTES) {
+			return new Type[] { Type.I32 };
 		}
 		List<Type> types = new ArrayList<>();
 		appendWasmTypes(types, decl.returnType());
@@ -376,8 +405,13 @@ final class WasmExportCompiler {
 	 * @param targetFuncIndex the WASM function index of the exported defun
 	 * @param strFromMemFuncIndex the function index of the {@code _str_from_mem} helper
 	 * (or {@code -1} if no {@code :string} parameter is present)
+	 * @param bytesFromMemFuncIndex the function index of the {@code _bytes_from_mem}
+	 * helper (or {@code -1} when no {@code :bytes} type is present)
+	 * @param bytesCopyFuncIndex the function index of the {@code _bytes_copy} helper (or
+	 * {@code -1} when no {@code :bytes} type is present)
 	 */
-	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex) {
+	static void emitBody(WasmLispCompiler.Ctx ctx, Decl decl, int targetFuncIndex, int strFromMemFuncIndex,
+			int bytesFromMemFuncIndex, int bytesCopyFuncIndex) {
 		// A module with a suspending host import (wasm-import :async t / --host-fetch)
 		// can be RE-ENTERED while a call is parked: JSPI returns control to the host's
 		// event loop mid-call. Nothing per call owns the allocator bracket (its marks
@@ -475,7 +509,7 @@ final class WasmExportCompiler {
 		// Box each parameter from its wasm slot(s) into the internal (ref null eq) value.
 		int slot = 0;
 		for (BoundaryType t : decl.paramTypes()) {
-			emitBoxParam(ctx, t, slot, strFromMemFuncIndex);
+			emitBoxParam(ctx, t, slot, strFromMemFuncIndex, bytesFromMemFuncIndex);
 			slot += slotsForType(t);
 		}
 		ctx.writer.write(Instruction.CALL);
@@ -568,7 +602,7 @@ final class WasmExportCompiler {
 		// The scratch locals sit right after the parameter slots (see scratchTypes).
 		// (A callback-lifted export cannot reach here: it exists only under asyncMode,
 		// where the callbackDriven branch above returned.)
-		emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl));
+		emitUnboxResult(ctx, decl.returnType(), paramSlotCount(decl), bytesCopyFuncIndex);
 		if (ctx.reentryGuardGlobalIndex >= 0) {
 			emitReentryGuardStore(ctx, 0);
 		}
@@ -598,7 +632,8 @@ final class WasmExportCompiler {
 		ctx.writer.writeUnsignedLeb128(ctx.reentryGuardGlobalIndex);
 	}
 
-	private static void emitBoxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot, int strFromMemFuncIndex) {
+	private static void emitBoxParam(WasmLispCompiler.Ctx ctx, BoundaryType type, int slot, int strFromMemFuncIndex,
+			int bytesFromMemFuncIndex) {
 		switch (type) {
 			// Every value of these types fits the i31 house integer exactly (the widest
 			// is
@@ -666,6 +701,16 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
 			}
+			case BYTES -> {
+				// (ptr,len) -> a fresh (unsigned-byte 8) vector copied out of linear
+				// memory, raw bytes, no UTF-8 decode.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(slot);
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(slot + 1);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(bytesFromMemFuncIndex);
+			}
 			// :void is never a parameter.
 			case VOID -> throw new UnsupportedOperationException(
 					"rontolisp:wasm-export type " + type.designator() + " is not a wasm-GC parameter type");
@@ -692,7 +737,8 @@ final class WasmExportCompiler {
 		return type.isInteger() && type.bits() < 32;
 	}
 
-	private static void emitUnboxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int scratchSlot) {
+	private static void emitUnboxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int scratchSlot,
+			int bytesCopyFuncIndex) {
 		switch (type) {
 			// Every integer result normalizes through the backend's own number-to-f64
 			// conversion (an i31, a ratio or a float all cross), then converts with a
@@ -727,6 +773,22 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
 				emitStringResult(ctx);
+			}
+			case BYTES -> {
+				// The returned (unsigned-byte 8) vector goes out through the CALLER's
+				// buffer: _bytes_copy writes min(len,cap) raw bytes at the trailing
+				// (ptr,cap) parameter pair and answers the vector's FULL length, so an
+				// undersized buffer is a retry, not a truncation -- and no __ronto_alloc
+				// is spent on the transfer (the finding that motivated the shape: a
+				// per-chunk allocation grows the arena by the whole body). A non-vector
+				// return value fails _bytes_copy's ref.cast: exact-or-trap, like every
+				// other boundary type.
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(scratchSlot - 2); // ptr
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(scratchSlot - 1); // cap
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(bytesCopyFuncIndex);
 			}
 			case VOID -> ctx.writer.write(Instruction.DROP); // discard the Lisp return
 																// value
@@ -871,7 +933,7 @@ final class WasmExportCompiler {
 	}
 
 	private static boolean isMemoryType(BoundaryType type) {
-		return type == BoundaryType.STRING || type == BoundaryType.S_EXPR;
+		return type == BoundaryType.STRING || type == BoundaryType.S_EXPR || type == BoundaryType.BYTES;
 	}
 
 	/**
@@ -897,6 +959,12 @@ final class WasmExportCompiler {
 			case FLOAT -> am.ik.wasm.ComponentWriter.VT_F64;
 			case BOOL -> am.ik.wasm.ComponentWriter.VT_BOOL;
 			case STRING, S_EXPR -> am.ik.wasm.ComponentWriter.VT_STRING;
+			// Lifting :bytes as a component-model list<u8> is its own change (for now it
+			// is a core-module transfer); refusing here is what makes the --component
+			// export path reject the designator with a clear message.
+			case BYTES -> throw new UnsupportedOperationException(
+					"rontolisp:wasm-export :bytes is a core-module (Preview 1 / --no-wasi) boundary type; the"
+							+ " --component path does not lift it yet");
 			case VOID -> null;
 		};
 	}
@@ -935,6 +1003,9 @@ final class WasmExportCompiler {
 			case STRING, S_EXPR, S8, S16, S32, U8, U16, U32, BOOL -> "i32";
 			case S64, U64 -> "i64";
 			case FLOAT -> "f64";
+			// Unreachable: componentValType already refused the declaration.
+			case BYTES ->
+				throw new UnsupportedOperationException("rontolisp:wasm-export :bytes has no component-model lift");
 			case VOID -> "void";
 		};
 	}
@@ -973,7 +1044,11 @@ final class WasmExportCompiler {
 			case S8, S16, S32, U8, U16, U32, BOOL -> types.add(Type.I32);
 			case S64, U64 -> types.add(Type.I64);
 			case FLOAT -> types.add(Type.F64);
-			case STRING, S_EXPR -> {
+			// A :bytes PARAMETER flattens like a string: (ptr,len) raw bytes. (A :bytes
+			// RESULT never reaches here -- paramWasmTypes/resultWasmTypes special-case
+			// its
+			// caller-buffered (ptr,cap)+length shape.)
+			case STRING, S_EXPR, BYTES -> {
 				types.add(Type.I32);
 				types.add(Type.I32);
 			}

@@ -41,10 +41,27 @@ The type designators are shared with
 | `:bool` | `i32` | `nil` crosses as `0`, anything else as `1`; a non-zero result reads back as `t` |
 | `:string` | `(ptr, len)` | UTF-8 bytes in linear memory |
 | `:s-expr` | `(ptr, len)` | the argument is printed to readable text; a result is parsed by the embedded reader |
+| `:bytes` | `(ptr, len)` argument / `(ptr, cap) -> len` result | an `(unsigned-byte 8)` vector as raw bytes — no UTF-8 in either direction |
 
 A `:string` result must be written into linear memory by the host (reserve the
 buffer with the exported `__ronto_alloc`) and returned as a `(ptr, len)` pair
 (a two-element array from JavaScript).
+
+A `:bytes` **result** is caller-buffered (the `read(2)` shape): the Lisp
+signature gains one trailing parameter — the `(unsigned-byte 8)` vector to
+receive into — and the host function is called with a trailing `(ptr, cap)`
+pair: *write up to `cap` bytes at `ptr` and return the value's full length*.
+The Lisp call answers that full length, so a result longer than the buffer is
+a retry with a bigger buffer, never a silent truncation; the wrapper's staging
+is popped on return, so a pull loop over one reused buffer keeps linear memory
+flat.
+
+```lisp
+(rontolisp:wasm-import 'read-chunk :from "env" :as "readChunk"
+                       :params '() :returns :bytes)   ; => READ-CHUNK
+;; (read-chunk buf) => the chunk's full length; up to (length buf) bytes
+;; of buf are overwritten. On the JS side: readChunk(ptr, cap) -> n.
+```
 
 ## `:async t` — a host function that may suspend
 
