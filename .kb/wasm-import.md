@@ -153,7 +153,13 @@ program). Pinned by `SuspendingImportsTest` (obligation lines, export listing,
 value-widening, load-path error, handler does not silence it), `WasmImportCompilerTest.parsesAsyncOption`,
 `WitImportDirectiveTest.lowersAnAsyncFuncMemberWithAsyncTOnPreview1` and the
 `asyncImportAnswersASettledFutureThatAwaitResolves` preload E2E (futurep -> T, await
-resolves, `#'`-funcall composes). Host-glue generation (the Suspending wrapper +
+resolves, `#'`-funcall composes). That "a synchronous host is equally valid" is pinned
+as ONE MODULE driven both ways on the reactor boundary -- `WasmReactorBodyE2eTest`
+(synchronous) and `WasmReactorStreamingHostE2eTest` (`WebAssembly.Suspending` over a
+`ReadableStream`, `promising` entry, chunks delivered on the macrotask queue so the
+module demonstrably parks and resumes inside one export call) put the same
+`rontolisp:http-handler` program through the same reactor pipeline and expect the same
+answers from it. Host-glue generation (the Suspending wrapper +
 promising entry JS) remains open: `.todo/340`.
 
 **The re-entry guard -- a module that can suspend refuses interleaved calls (todo-337,

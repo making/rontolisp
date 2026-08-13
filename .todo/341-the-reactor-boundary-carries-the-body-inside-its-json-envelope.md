@@ -20,13 +20,17 @@ measured, not argued:
 - ~~`:raw-body` is a synchronous buffered stream on the reactor while it is an
   asynchronous stream on the other three backends~~ -- **CLOSED by Phase 2a**
   (finding 6, 2026-08-13);
-- the host must read the whole body before it may call in, so a Worker cannot
-  stream an upload even though its own `Request.body` is a `ReadableStream`.
+- ~~the host must read the whole body before it may call in, so a Worker cannot
+  stream an upload even though its own `Request.body` is a `ReadableStream`~~ --
+  **the MODULE side is CLOSED** by Phase 2b (step 2, and step 3 pins a suspending
+  host end to end); no checked-in glue file streams yet, and step 3 says why.
 
 **So the motivation is now MEMORY, BINARY and STREAMING -- not speed.** Anyone
 picking this up should say so out loud before spending the boundary change: the
 headline number that opened this item is gone, and it was taken by a one-line
-fix somewhere else.
+fix somewhere else. (Of those three, BINARY and STREAMING are done on the module
+side; MEMORY is done for the TRANSPORT and open for the DRAIN -- `.todo/350`.
+What is left here is the RESPONSE body, Phase 3.)
 
 Since `:async t` landed, a suspending host import is a declared, supported fact,
 and the spike below shows the boundary can be rebuilt around it. Breaking the
@@ -412,11 +416,11 @@ were the target, and the boundary column is now flat:
 | 256 KiB | **256 KiB, +0** | 256 -> 4160 KiB |
 
 So the envelope's 17x is gone: what a 256 KiB body costs the TRANSPORT is now
-zero linear memory, four requests in a row. The right column is what the
-handler's own drain costs (`read-all` builds the body as one string, ~16x its
-size), which is the same on every backend and is not this boundary -- worth its
-own item, and worth remembering before quoting the left column as "the body is
-free".
+zero linear memory, four requests in a row. The right column is what READING the
+body costs, which is not this boundary -- and is worth remembering before quoting
+the left column as "the body is free". (This paragraph used to say the right
+column was `read-all` building the body as one string. It is not: a drain that
+keeps nothing pays the same. See step 3 above and `.todo/350`.)
 
 A binary body crosses exactly (the `ff fe 41` a `:string` result corrupts), and
 the `#-rontolisp-component` guard needed a reader feature that did not exist:
@@ -424,13 +428,43 @@ the `#-rontolisp-component` guard needed a reader feature that did not exist:
 `:rontolisp-reactor` cannot say "not a component" -- a reactor component has it
 too.
 
-*Still open after step 2.* The response body (Phase 3) and the STREAMING host.
-The module is ready for the second one -- the import is `:async t`, so a host may
-wrap it in `WebAssembly.Suspending` and pull from `request.body`'s reader -- but
-every checked-in glue file answers synchronously (it reads the body, then calls
-in), so "a Worker cannot stream an upload" is still true of the EXAMPLES. Making
-one of them stream is a small, self-contained follow-up: the promising/serialise
-shape is already written in `dog-fetcher`.
+*Step 3, the STREAMING HOST, verified (2026-08-13).* The second host the
+`:async t` declaration promises is now a pinned fact rather than a design claim:
+`WasmReactorStreamingHostE2eTest` puts a `rontolisp:http-handler` program through
+the SAME reactor pipeline the synchronous test compiles, then drives it with
+`WebAssembly.Suspending` over a `ReadableStream`'s reader,
+entered with `WebAssembly.promising`, with the chunks handed over on the
+MACROTASK queue -- so a host that had not parked inside `handle-request` could
+not have them at all. Eight 2-octet chunks of `こんにちは` (every boundary inside
+a code point) come back as the text that was sent, an empty reader is still no
+body, and 256 KiB streamed to a handler that drops it leaves linear memory where
+it was. Nothing in the compiler changed and no flag differs: which host drives it
+is not a build-time question, which is the whole point of the declaration.
+
+*Still open after step 3.* The response body (Phase 3), and making a CHECKED-IN
+Worker glue file stream. The second is no longer a question of whether the module
+supports it -- the test above is the shape, ~40 lines of JS -- but of which
+example should pay for it: a suspending body import forces the promising/queue
+serialisation on every request (`.kb/wasm-import.md`, the re-entry guard), and
+`httpbin/src/index.js` is deliberately synchronous AND byte-identical in five
+directories, so converting it would trade all five directories' concurrency for
+a streaming upload none of their handlers needs. `dog-fetcher` already
+serialises (its `fetch` import suspends) but its routes are GET-only, so the
+streaming path there would be dead code. The honest trigger is `.todo/348`:
+once a reactor no longer has to serialise, a streaming glue costs nothing and
+every directory can have it.
+
+**And the memory column is NOT closed** -- the boundary is, the drain is not.
+The Phase 2b table above blames the right column on `read-all` building the body
+as one string; re-measured, that attribution is wrong. A handler that drains the
+body chunk at a time and keeps NOTHING pays the same ~15x, because
+`%http-utf8-decode-octets` decodes each chunk with a per-character `write-char`
+into a `with-output-to-string`, and a WASM string output stream persists a
+linear-memory copy plus a 12-byte record PER WRITE. Measured: 256 KiB -> 4.1 MB,
+1 MiB -> 15.9 MB, 4 MiB -> 63.0 MB of linear memory, against a flat 256 KiB for
+the same body never read. Root cause and the two fix shapes: **`.todo/350`** --
+it is not this boundary, and closing it is what makes streaming a body actually
+bounded.
 
 **Phase 3 -- the response body, symmetrically.** Today it is one string in
 linear memory, so a large or streamed response pays the same way. Same

@@ -362,8 +362,11 @@ host -> module   env.readRequestBody(ptr, cap) -> n               ; up to cap oc
 The head is the JSON above **without** the `"body"` key. The body crosses as raw
 octets into a buffer the module owns and reuses, which is what a JSON string
 could not do: a **binary** body arrives exactly (the string boundary decodes
-UTF-8, and does not validate), and a large upload costs the module no linear
-memory at all — the envelope used to hold it several times over.
+UTF-8, and does not validate), and *crossing* costs the module no linear memory
+at all — the envelope used to hold the body several times over. Reading it is
+not yet free: whichever way a handler drains `:raw-body`, decoding the octets
+to text currently costs about fifteen times the body in linear memory, reclaimed
+for reuse at the end of the request.
 
 The import is declared `:async t`, so the host chooses how it answers. Returning
 the octets synchronously (read the body first, then call in) is the simple host,

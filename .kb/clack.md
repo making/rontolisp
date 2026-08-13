@@ -379,6 +379,29 @@ answers 0 meaning no body, the envelope fallback, a binary body, and the flat
 linear memory), `HttpReactorInlinerTest`'s two bridge-shape tests, and
 `RontoLispCliTest.aComponentBuildReadsTheSourceWithTheComponentFeature`.
 
+**Both hosts, one build.** `WasmReactorStreamingHostE2eTest` drives a module
+compiled by the SAME pipeline, with no flag and no directive that differs, through
+the other host the `:async t` declaration allows: a
+`WebAssembly.Suspending` over a `ReadableStream`'s reader, entered through
+`WebAssembly.promising`, with the chunks delivered on the macrotask queue -- so
+the module demonstrably PARKS inside `handle-request` and resumes, which a host
+that had merely buffered could not fake. That is what makes "a Worker may stream
+an upload" a property of the boundary rather than of a particular glue file. No
+checked-in glue file does it yet, and the reason is not the module: a suspending
+body import forces the promising/queue serialisation on every request (the
+re-entry guard, `.kb/wasm-import.md`), and `httpbin/src/index.js` is deliberately
+synchronous and byte-identical in five directories. `.todo/348` is the trigger --
+once a reactor need not serialise, the streaming glue costs nothing.
+
+**What the transport does NOT hold, and what reading still costs.** The boundary
+is flat in both hosts: a 256 KiB body a handler drops leaves linear memory where
+it was. DRAINING it is not flat, and not because of `read-all` -- a drain that
+keeps nothing pays the same, because `%http-utf8-decode-octets` decodes each
+chunk with a per-character `write-char` and a WASM string output stream persists
+a linear copy plus a 12-byte record PER WRITE (~15 bytes per character; 4 MiB of
+body -> 63 MB of linear memory). That is `.todo/350`, not this boundary, and it
+is the reason "the body is free" may only be said of the transport.
+
 **A chunk is a string OR OCTETS** (an `(unsigned-byte 8)` vector), and both
 drains read through ONE adapter, `%http-reactor-text-source`, so neither has to
 know which arrived. Octets are the shape a byte-shaped host boundary has — the
