@@ -87,7 +87,8 @@ every backend; see the "Future-as-value combinators" section below).
   (`.kb/wasm-import.md`);
   `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) is P1's await resolver
   (pass-through for non-futures, recursive flatten of the memoized value), and
-  `futurep` ref.tests it. Streams are a compile error. CAVEAT: an async body's
+  `futurep` ref.tests it. **Streams are real here too** (todo-341 Phase 1): see
+  the P1 stream section below. CAVEAT: an async body's
   ERROR signals at the CALL, not at await (eager run-to-completion) --
   observably identical when the await is adjacent.
 - **--component (asyncMode)**: async-defun/async-lambda (and a top level with
@@ -136,7 +137,7 @@ every backend; see the "Future-as-value combinators" section below).
   asyncMode FORCES EH mode, so an async component needs
   `wasmtime -W exceptions=y`. Component streams: `TYPE_WASI_STREAM
   {eof, readFn, closeFn}` wraps the wasi-backed body streams http.lisp
-  produces (`rontolisp::%wasi-stream-new` over two arity-0 Lisp thunks; the
+  produces (`rontolisp::%stream-new` over two arity-0 Lisp thunks; the
   close protocol lives in http.lisp, runs once at EOF or stream-close).
   stream-read of a chunk the host has IN FLIGHT is a PENDING future: the
   read wrapper registers it on the scheduler registry -- entries are
@@ -154,7 +155,9 @@ every backend; see the "Future-as-value combinators" section below).
   compile errors, and the write-side built-ins keep the blocking
   waitable-set park (correct-if-sequential).
 - **--no-gc**: the whole async surface is rejected by name with
-  "... is not supported with --no-gc (use the default GC backend)".
+  "... is not supported with --no-gc (use the default GC backend)" --
+  `rontolisp::%stream-new` included, so the diagnostic names the primitive
+  rather than the struct it cannot build.
 - **wait-for**: interpreter = `AsyncRuntime.timer` and JVM = `_wait_for`, both
   `new CompletableFuture().completeOnTimeout(nil, ms, MILLISECONDS)` (the JDK's
   shared delayer -- no new thread site; the Web Image substitution settles
@@ -199,6 +202,52 @@ Pinned by `AsyncEvalTest.thenChainsOnFutureSettledValue` etc.,
 `componentFinallyRunsOnBothPathsAndPreservesOutcome`,
 `NoGcWasmCompilerTest.asyncAwaitSurfaceIsRejected` and the
 `future-as-value-combinators-then-catch-finally` ci-spec case.
+
+## `%stream-new` and the Preview 1 stream value (todo-341 Phase 1)
+
+`rontolisp::%stream-new` (internal; was `%wasi-stream-new` until Phase 1) is the
+ONE producer of a first-class stream value on the WASM backends, and it takes
+exactly what a stream IS: a read thunk, a close thunk, and a drained flag the
+runtime keeps. Nothing about that is WASI, which is why the same primitive now
+serves both tiers -- `--component` builds a `TYPE_WASI_STREAM` from it (http.lisp,
+above), and a NON-asyncMode module (Preview 1, `--no-wasi`, the reactor
+components) builds a `TYPE_P1_STREAM {mut i32 eof, mut readFn, mut closeFn}`,
+the same three fields. `WasmStreamCompiler` picks the tier; `WasmFutureInternalCompiler`
+builds the struct.
+
+The P1 tier is `WasmP1StreamRuntimeBuilder`, two functions:
+`_p1_stream_read` answers a SETTLED `TYPE_P1_FUTURE` of the next chunk (nothing
+here can suspend, so there is no pending arm and no scheduler), and
+`_p1_stream_close` runs the close thunk once. The first nil chunk flips `eof`
+and runs the close protocol, so a drain closes exactly once and a read past EOF
+is nil -- the interpreter/JVM/component contract.
+
+Two details worth keeping:
+
+- **The read thunk's answer is resolved through `_p1_future_await` before the
+  end-of-stream test.** On this tier a `wasm-import ... :async t` call and an
+  `async-lambda` both answer a settled future, and a future wrapping nil is not
+  nil -- without the resolve such a thunk could never report EOF. A plain value
+  passes through unchanged, so a synchronous thunk costs one call.
+- **Everything is gated on `%stream-new` appearing** (`WasmLispCompiler.usesP1Streams`):
+  the type goes at `p1StreamTypeBase()` and the two functions at
+  `p1StreamFuncBase()` -- the slots the async block would have used, which cannot
+  be present at the same time -- so no other type or function index moves and a
+  module without streams is byte-identical
+  (`WasmLispCompilerTest.theP1StreamBlockRidesOnlyAStreamCreatingModule`).
+  A module that can hold NO stream keeps the call-time error stub for
+  `stream-read`/`stream-close`, but `streamp` there is the CONSTANT NIL rather
+  than an error: nothing being a stream is an answer, not a failure.
+
+`%stream-new` is WASM-only. The interpreter's `LispStream` and the JVM's
+`{SMARKER, queue, state}` are buffered, push-side values with no way to express a
+PULL, so a from-thunk stream on those two backends is still open work
+(todo-341 Phase 1, remainder) -- which is also why the four-backend `streamp`
+gate is not closed yet. Gates that ARE closed:
+`WasmHostStreamE2eTest` (a `--no-wasi` module pulling its body one chunk at a
+time through a suspending host import and draining it with the portable
+`(await (read-all s))`, against a JS host that shares its memory) and
+`WasmLispCompilerIntegrationTest.preview1HasAFirstClassStreamValueOverAPairOfThunks`.
 
 ## read-all is prelude Lisp
 

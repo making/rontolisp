@@ -871,6 +871,36 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * Emits the {@code TYPE_P1_STREAM} print branch ("#&lt;STREAM&gt;", the tag every
+	 * backend's opaque stream value shares; the string is added to the table lazily, so
+	 * it exists only in modules that can hold a stream). A no-op when no stream value can
+	 * exist ({@code p1StreamTypeIndex < 0}), keeping every other module byte-identical.
+	 *
+	 * <p>
+	 * Mandatory rather than cosmetic where the type DOES exist: the printer's tail
+	 * assumes a cons and would trap on {@code ref.cast $cons}.
+	 */
+	private static void emitPrintStream(WasmWriter w, WasmLispCompiler.StringTable st, int p1StreamTypeIndex) {
+		if (p1StreamTypeIndex < 0) {
+			return;
+		}
+		WasmLispCompiler.StringTable.StringEntry streamStr = st.addString("#<STREAM>");
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(p1StreamTypeIndex);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(streamStr.offset());
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(streamStr.length());
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_WRITE_STR);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Emits the {@code TYPE_INSTANCE} print branch: {@code #S(NAME :SLOT value ...)} for
 	 * a struct layout, {@code #<NAME :SLOT value ...>} for a class one, and for the
 	 * PATHNAME layout {@code #P"namestring"} under {@code prin1} / the bare namestring
@@ -2262,7 +2292,7 @@ final class WasmRuntimeBuilder {
 	 * cons struct (list).
 	 */
 	static byte[] buildPrintValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
-			int instanceTypeIndex) {
+			int p1StreamTypeIndex, int instanceTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2439,6 +2469,10 @@ final class WasmRuntimeBuilder {
 		// asyncMode: a first-class TYPE_FUTURE prints the same "#<FUTURE>" tag.
 		emitPrintFuture(w, st, futureTypeIndex);
 
+		// The degenerate tier's TYPE_P1_STREAM prints the same "#<STREAM>" tag as the
+		// async block's TYPE_WASI_STREAM (and as the interpreter/JVM opaque value).
+		emitPrintStream(w, st, p1StreamTypeIndex);
+
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
 		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINT_VAL, instanceTypeIndex, 5, 6, 7);
 		emitPrintArray(w, st, WasmLispCompiler.FUNC_PRINT_VAL, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, simd);
@@ -2544,7 +2578,7 @@ final class WasmRuntimeBuilder {
 	 * strings and uses FUNC_PRINC_VAL for recursive cons printing.
 	 */
 	static byte[] buildPrincValBody(WasmLispCompiler.StringTable st, boolean simd, int futureTypeIndex,
-			int instanceTypeIndex) {
+			int p1StreamTypeIndex, int instanceTypeIndex) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
@@ -2777,6 +2811,10 @@ final class WasmRuntimeBuilder {
 
 		// asyncMode: a first-class TYPE_FUTURE prints the same "#<FUTURE>" tag.
 		emitPrintFuture(w, st, futureTypeIndex);
+
+		// The degenerate tier's TYPE_P1_STREAM prints the same "#<STREAM>" tag as the
+		// async block's TYPE_WASI_STREAM (and as the interpreter/JVM opaque value).
+		emitPrintStream(w, st, p1StreamTypeIndex);
 
 		// Check array (TYPE_CELL box with a TYPE_HASH_BUCKETS dims array as header car).
 		emitPrintInstance(w, st, WasmLispCompiler.FUNC_PRINC_VAL, instanceTypeIndex, 6, 7, 8);

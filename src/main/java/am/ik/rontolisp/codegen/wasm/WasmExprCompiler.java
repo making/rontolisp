@@ -352,7 +352,7 @@ final class WasmExprCompiler {
 						|| LispNames.FUTURE_SETTLE_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_REJECT_INTERNAL.equals(qn.member())
 						|| LispNames.SUBTASK_FUTURE_INTERNAL.equals(qn.member())
-						|| LispNames.WASI_STREAM_NEW_INTERNAL.equals(qn.member())
+						|| LispNames.STREAM_NEW_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_FORCE_INTERNAL.equals(qn.member())) {
 					WasmFutureInternalCompiler.compile(qn.member(), cons, ctx);
 					return;
@@ -464,21 +464,30 @@ final class WasmExprCompiler {
 				}
 				if (LispNames.ASYNC_STREAMP.equals(qn.member()) || LispNames.STREAM_READ.equals(qn.member())
 						|| LispNames.STREAM_CLOSE.equals(qn.member())) {
-					// asyncMode --component: streamp/stream-read/stream-close operate on
-					// the first-class TYPE_WASI_STREAM values fetch/serve bodies produce.
-					if (ctx.wasiStreamTypeIndex >= 0) {
-						WasmWasiStreamCompiler.compile(qn.member(), cons, ctx);
+					// streamp/stream-read/stream-close operate on whichever first-class
+					// stream value this module can hold: the TYPE_WASI_STREAM of an
+					// asyncMode --component's fetch/serve bodies, or the TYPE_P1_STREAM a
+					// Preview 1 / --no-wasi module builds over a host import.
+					if (ctx.wasiStreamTypeIndex >= 0 || ctx.p1StreamTypeIndex >= 0) {
+						WasmStreamCompiler.compile(qn.member(), cons, ctx);
 						return;
 					}
-					// No stream value can exist here (Preview 1, or a component that
-					// neither fetches nor serves), so any executed call has a bug to
-					// report -- but the SITE may be dead code (the
-					// clack-handler-rontolisp bridge drains a request body it can never
-					// receive on Preview 1), so it signals at CALL time, never rejects
-					// the program (the todo-195 socket policy).
+					// No stream value can EXIST here (nothing names %stream-new, and
+					// there is no async block to produce one). The predicate is still
+					// total -- nothing is a stream, so streamp is nil ...
+					if (LispNames.ASYNC_STREAMP.equals(qn.member())) {
+						WasmStreamCompiler.compileStreampConstantNil(cons, ctx);
+						return;
+					}
+					// ... but reading or closing one really is a bug to report. The SITE
+					// may still be dead code (the clack-handler-rontolisp bridge drains a
+					// request body it can never receive on Preview 1), so it signals at
+					// CALL time and never rejects the program (the todo-195 socket
+					// policy).
 					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub("rontolisp:" + qn.member()
-							+ " requires the interpreter, the JVM backend or an asynchronous --component program"
-							+ " (streams come from rontolisp:fetch / rontolisp:http-handler bodies there)"), ctx);
+							+ " requires a stream value, and this module can hold none (they come from"
+							+ " rontolisp:fetch / rontolisp:http-handler bodies on an asynchronous --component"
+							+ " program, and from rontolisp::%stream-new elsewhere)"), ctx);
 					return;
 				}
 				if (LispNames.MAKE_STREAM.equals(qn.member()) || LispNames.STREAM_WRITE.equals(qn.member())) {

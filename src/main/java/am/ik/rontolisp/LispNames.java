@@ -3790,14 +3790,18 @@ public final class LispNames {
 	public static final String SUBTASK_FUTURE_INTERNAL = "%SUBTASK-FUTURE";
 
 	/**
-	 * The internal {@code rontolisp::%wasi-stream-new} primitive of the
-	 * {@code --component} async import layer: takes a read thunk and a close thunk
-	 * (arity-0 function values over a wasi byte-stream handle) and returns a first-class
-	 * stream value ({@code TYPE_WASI_STREAM}) that
+	 * The internal {@code rontolisp::%stream-new} primitive: takes a read thunk and a
+	 * close thunk (arity-0 function values over whatever the chunks come from) and
+	 * returns a first-class stream value that
 	 * {@code rontolisp:stream-read}/{@code stream-close}/{@code streamp} operate on.
-	 * Synthesized by http.lisp for request/response bodies; component-only.
+	 * Nothing about it is WASI: {@code --component} builds it over the wasi byte-stream
+	 * built-ins ({@code TYPE_WASI_STREAM}, synthesized by http.lisp for request/response
+	 * bodies), and a Preview 1 / {@code --no-wasi} module over a host import or any Lisp
+	 * closure ({@code TYPE_P1_STREAM}). WASM backends only -- the read thunk is PULLED
+	 * lazily, which the interpreter's and the JVM's buffered stream values cannot
+	 * express.
 	 */
-	public static final String WASI_STREAM_NEW_INTERNAL = "%WASI-STREAM-NEW";
+	public static final String STREAM_NEW_INTERNAL = "%STREAM-NEW";
 
 	/**
 	 * The internal {@code rontolisp::%future-force} primitive: resolves a future to its
@@ -4879,6 +4883,13 @@ public final class LispNames {
 	 * {@code async func} member's binding under {@code --component}.
 	 */
 	public static final String SUBTASK_FUTURE_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + SUBTASK_FUTURE_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%stream-new}, the
+	 * ONE producer of a first-class stream value on the WASM backends -- which is what
+	 * the compilers gate the stream type and runtime on.
+	 */
+	public static final String STREAM_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + STREAM_NEW_INTERNAL;
 
 	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used

@@ -793,6 +793,11 @@ final class WasmAsyncEmit {
 			.futureTypeIndex(proto.futureTypeIndex)
 			.frameTypeIndex(proto.frameTypeIndex)
 			.wasiStreamTypeIndex(proto.wasiStreamTypeIndex)
+			// Same reason as the instance pair below: freshCtx builds the SYNCHRONOUS top
+			// level too, and a top-level %stream-new must not compile with no stream type
+			// while the same form inside a defun has one.
+			.p1StreamTypeIndex(proto.p1StreamTypeIndex)
+			.p1StreamFuncBase(proto.p1StreamFuncBase)
 			// NOT optional: freshCtx also builds the SYNCHRONOUS top level, so without
 			// these a top-level %obj-* would compile with no type index and no layout
 			// addresses while the same form inside a defun worked.

@@ -70,17 +70,15 @@
          (pair (funcall consume thing (car res)))
          (stream (car pair))
          (trailers (car (cdr pair))))
-    (rontolisp::%wasi-stream-new
-                                 ;; One built-in read per call: the next chunk, nil = EOF, or -- when the host
-                                 ;; reports the read in flight -- a PENDING future the scheduler settles (the
-                                 ;; stream runtime passes it through, so the task keeps running meanwhile).
-                                 (lambda () (%http:body-stream-read stream))
-                                 (lambda ()
-                                   (%http:body-stream-drop-readable stream)
-                                   (%http:trailers-future-drop-readable
-                                    trailers)
-                                   (%http:transmit-future-write (cdr res)
-                                                                :ok)))))
+    (rontolisp::%stream-new
+                            ;; One built-in read per call: the next chunk, nil = EOF, or -- when the host
+                            ;; reports the read in flight -- a PENDING future the scheduler settles (the
+                            ;; stream runtime passes it through, so the task keeps running meanwhile).
+                            (lambda () (%http:body-stream-read stream))
+                            (lambda ()
+                              (%http:body-stream-drop-readable stream)
+                              (%http:trailers-future-drop-readable trailers)
+                              (%http:transmit-future-write (cdr res) :ok)))))
 
 ;;; --- body writing (shared): stream the bytes, close, resolve the trailers ---
 

@@ -10121,17 +10121,55 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void asyncStreamsAreACompileErrorInPreview1Mode() throws Exception {
+	void guestCreatedStreamsStayACompileErrorInPreview1Mode() throws Exception {
 		assertThatThrownBy(() -> compileAndRun("(print (rontolisp:make-stream))"))
 			.hasMessageContaining("guest-created streams are not available on the WASM backends yet");
-		// stream-read/stream-close/streamp compile to CALL-time error stubs since
-		// todo-228 (the clack-handler-rontolisp bridge carries a body drain that is
-		// dead code on Preview 1): the message is handler-case-catchable, and an
-		// uncaught one is the usual silent trap.
+		// A module that never names %stream-new can hold no stream value at all, so
+		// stream-read/stream-close compile to CALL-time error stubs since todo-228 (the
+		// clack-handler-rontolisp bridge carries a body drain that is dead code there):
+		// the message is handler-case-catchable, and an uncaught one is the usual silent
+		// trap. streamp is NOT one of them -- nothing being a stream is an answer, not a
+		// failure, so it is the constant nil.
 		assertThat(compileAndRun("(print (handler-case (rontolisp:stream-read 1) (error (e) (princ-to-string e))))"))
-			.contains("requires the interpreter, the JVM backend or an asynchronous --component program");
+			.contains("requires a stream value, and this module can hold none");
+		assertThat(compileAndRun("(print (rontolisp:streamp 1)) (print (rontolisp:streamp \"x\"))"))
+			.isEqualTo("NIL\nNIL");
 		assertThatThrownBy(() -> compileAndRun("(defun bad () (rontolisp:await 1))"))
 			.hasMessageContaining("only allowed inside");
+	}
+
+	@Test
+	void preview1HasAFirstClassStreamValueOverAPairOfThunks() throws Exception {
+		// The degenerate tier's TYPE_P1_STREAM: rontolisp::%stream-new over a read thunk
+		// and a close thunk, drained the portable way. Nothing here can suspend, so every
+		// stream-read answers a SETTLED future -- but the surface is the one every other
+		// backend has: streamp -> T, the prelude read-all concatenates the chunks, the
+		// close protocol runs exactly once at EOF, and a read past EOF is nil.
+		assertThat(compileAndRunCombinatorsP1("""
+				(defvar *chunks* '("ab" "cd"))
+				(defvar *closes* 0)
+				(defun next-chunk ()
+				  (if *chunks*
+				      (let ((c (car *chunks*))) (setq *chunks* (cdr *chunks*)) c)
+				      nil))
+				(defvar *s* (rontolisp::%stream-new #'next-chunk
+				                                    (lambda () (setq *closes* (+ *closes* 1)) nil)))
+				(print (rontolisp:streamp *s*))
+				(print (rontolisp:streamp 42))
+				(print *s*)
+				(print (rontolisp:await (rontolisp:read-all *s*)))
+				(print *closes*)
+				(print (rontolisp:await (rontolisp:stream-read *s*)))
+				(rontolisp:stream-close *s*)
+				(print *closes*)
+				""")).isEqualTo("""
+				T
+				NIL
+				#<STREAM>
+				"abcd"
+				1
+				NIL
+				1""");
 	}
 
 	@Test

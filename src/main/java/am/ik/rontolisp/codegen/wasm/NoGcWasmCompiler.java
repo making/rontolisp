@@ -350,6 +350,7 @@ public final class NoGcWasmCompiler implements LispCompiler {
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ),
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE),
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_CLOSE),
+				LispNames.STREAM_NEW_INTERNAL_QUALIFIED,
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.READ_ALL),
 				PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.WAIT_FOR))) {
 			if (referencesSymbol(program, asyncName)) {

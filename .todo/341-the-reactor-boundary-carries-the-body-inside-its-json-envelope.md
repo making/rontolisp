@@ -110,8 +110,11 @@ drain loop reaches `stream-read`, which Preview 1 stubs. Nothing catches it:
 `examples/examples.yaml` pins that file on `jvm-compile` and `wasm-component`
 only, and the Worker examples that DO run a reactor with a body
 (`cloudflare-workers/httpbin`, `-clack`) all read the body the buffered way
-instead. Phase 1 is what fixes this; until then the portable spelling is
-three-backend, not four, and the comment in that file is wrong.
+instead. **Phase 2 is what fixes this** (Phase 1 was the original guess and is
+not enough: the reactor's `:raw-body` is a Gray instance, and no stream TYPE
+makes `read-all` able to drain one -- what has to change is which value
+`:raw-body` holds). Until then the portable spelling is three-backend, not
+four, and the comment in that file is wrong.
 
 ## The design
 
@@ -201,24 +204,67 @@ Not done here, deliberately: nothing HTTP-shaped. The boundary entries
 `env.readRequestBody` / `env.writeResponseBody` are Phases 2 and 3; this phase
 only made a type that can express them.
 
-**Phase 1 -- Preview 1 gets a real stream value.** `TYPE_P1_STREAM
+**Phase 1 -- Preview 1 gets a real stream value. WASM DONE (2026-08-13); the
+interpreter/JVM half is the remainder.** `TYPE_P1_STREAM
 {mut i32 eof, mut readFn, mut closeFn}` -- the same three fields as
-`TYPE_WASI_STREAM`, in the base type table beside `TYPE_P1_FUTURE` -- with
-`stream-read` answering a settled `TYPE_P1_FUTURE` of the next chunk and
-`stream-close` running the close thunk once. Most of the runtime already
-exists: `WasmFutureRuntimeBuilder.buildWasiStreamRead` has a `sched == null`
-degenerate path that is exactly this (call the read thunk, close once at EOF,
-wrap settled), and `%wasi-stream-new` is already thunk-driven with nothing
-WASI about it. What is new is the type index (adding one to the base table
-shifts `TYPE_STR_BYTES` and the wrapper/import type derivations) and settling
-over `TYPE_P1_FUTURE` instead of `TYPE_FUTURE`. This RETIRES the "no stream
-value can exist here" call-time stubs in `WasmExprCompiler` for Preview 1, and
-with them the divergence in `.kb/async-await.md`. Adjacent once it exists:
-`--host-fetch`'s response `:body`, an eager string today, can become the same
-stream value (`read-all`'s `stringp` arm stays -- it is pinned and useful --
-but it stops being the only reason a reactor's bodies are strings). Gate:
-`(await (read-all s))` over a host-backed stream on a `--no-wasi` module, and
-`streamp` answering T on all four backends for the same program.
+`TYPE_WASI_STREAM` -- with `stream-read` answering a settled `TYPE_P1_FUTURE`
+of the next chunk and `stream-close` running the close thunk once.
+
+What landed:
+
+- `WasmP1StreamRuntimeBuilder`, two functions (`_p1_stream_read` /
+  `_p1_stream_close`). Nothing on this tier can suspend, so there is no pending
+  arm and no scheduler -- which is why it is its OWN builder rather than the
+  `sched == null` path of `buildWasiStreamRead`: sharing would have meant
+  threading a second future type and a second settle shape through every arm of
+  a function whose whole body is the pending case.
+- `%wasi-stream-new` is now `rontolisp::%stream-new`: nothing about it was ever
+  WASI (a read thunk, a close thunk, a flag), and both tiers build their stream
+  from it. `WasmStreamCompiler` (was `WasmWasiStreamCompiler`) picks the tier.
+- The type went NOT in the base table but in the slot the async block would have
+  used (`p1StreamTypeBase()` / `p1StreamFuncBase()`; the two modes are mutually
+  exclusive), so no existing type or function index moves and the byte-identity
+  invariant below is kept rather than spent -- pinned by
+  `WasmLispCompilerTest.theP1StreamBlockRidesOnlyAStreamCreatingModule`.
+- The read thunk's answer is resolved through `_p1_future_await` before the EOF
+  test. A `:async t` import and an `async-lambda` both answer a SETTLED future
+  here, and a future wrapping nil is not nil -- without the resolve such a thunk
+  could never report EOF. That is what makes "the host pulls the chunks" (finding
+  1) work as written.
+- The call-time stub is retired where a stream can exist. Where none can, only
+  `stream-read`/`stream-close` keep it: `streamp` there is now the CONSTANT NIL,
+  because nothing being a stream is an answer, not a failure (it used to signal).
+
+Gate, met for WASM: `WasmHostStreamE2eTest` -- a `--no-wasi` module pulling its
+body one chunk at a time through a suspending host import and draining it with
+the portable `(await (read-all s))`, against a JS host that shares its memory
+(chunks reassembled in order, one pull per chunk plus the EOF one, close
+protocol run exactly once) -- plus
+`WasmLispCompilerIntegrationTest.preview1HasAFirstClassStreamValueOverAPairOfThunks`.
+`.kb/async-await.md` has the mechanics.
+
+REMAINDER (do this before Phase 2 needs it): `%stream-new` is WASM-only. The
+interpreter's `LispStream` and the JVM's `{SMARKER, queue, state}` are buffered
+PUSH-side values with no way to express a pull, so neither can build a stream
+over a thunk today -- and Phase 2's `%http-body-stream` from-thunk constructor
+runs on every backend (clack-handler-reactor does). That is also why the
+four-backend half of this gate -- `streamp` answering T on all four for the same
+program -- is still open: there is no portable spelling that constructs a stream
+(`make-stream` is a compile error on WASM). Two pieces: a pull mode on
+`LispStream` (it must call a Lisp function, so the thunk arrives as a callback
+the evaluator closes over -- the root package may not import `eval`), and the
+JVM's hand-assembled counterpart, where `_stream_read` can simply answer
+`CompletableFuture.completedFuture(chunk)` for a pull stream instead of the
+`{RMARKER, queue, state}` token. Then the ci-spec case.
+
+Also still adjacent, and untouched: `--host-fetch`'s response `:body`, an eager
+string today, can become the same stream value (`read-all`'s `stringp` arm stays
+-- it is pinned and useful -- but it stops being the only reason a reactor's
+bodies are strings).
+
+Finding 6 is NOT fixed here (its paragraph above is corrected accordingly): what
+Phase 1 bought is the value the reactor's `:raw-body` can BECOME, and moving
+`:raw-body` onto it is Phase 2.
 
 **Phase 2 -- the envelope splits.** (`.todo/342` is done, 2026-08-12: that
 fast path's `(stringp s)` was O(body) on wasm whenever the body is a mutable

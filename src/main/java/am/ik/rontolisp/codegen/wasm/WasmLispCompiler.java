@@ -333,11 +333,22 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * The index of {@code _dispatch_11}, the first EXTRA per-arity dispatcher: right
-	 * after the {@code --simd} and async blocks, so adding one moves no fixed index --
-	 * only {@link #userFuncBase()}, which every consumer already reads dynamically. Only
-	 * meaningful when {@link #extraCallArity} is non-zero.
+	 * after the {@code --simd} block and whichever of the async / P1-stream blocks this
+	 * module has, so adding one moves no fixed index -- only {@link #userFuncBase()},
+	 * which every consumer already reads dynamically. Only meaningful when
+	 * {@link #extraCallArity} is non-zero.
 	 */
 	private int extraDispatchFuncBase() {
+		return p1StreamFuncBase() + (this.usesP1Streams ? WasmP1StreamRuntimeBuilder.FUNC_COUNT : 0);
+	}
+
+	/**
+	 * The index of {@code _p1_stream_read}: right after the async block, which cannot be
+	 * present at the same time ({@link #usesP1Streams} is a non-asyncMode gate), so the
+	 * two blocks share the slot and neither moves a fixed index. Only meaningful when
+	 * {@link #usesP1Streams} is set.
+	 */
+	private int p1StreamFuncBase() {
 		return asyncFuncBase() + (this.asyncMode ? WasmFutureRuntimeBuilder.FUNC_COUNT : 0);
 	}
 
@@ -382,9 +393,9 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	/**
 	 * The index of the {@code callable_arity_11} signature, the first EXTRA callable
-	 * type: right after the fixed, {@code --simd}, async and instance types, so adding
-	 * one moves no existing type index. Only meaningful when {@link #extraCallArity} is
-	 * non-zero.
+	 * type: right after the fixed, {@code --simd}, async / P1-stream and instance types,
+	 * so adding one moves no existing type index. Only meaningful when
+	 * {@link #extraCallArity} is non-zero.
 	 */
 	private int extraCallableTypeBase() {
 		return instanceTypeBase() + (this.usesInstances ? INSTANCE_TYPE_COUNT : 0);
@@ -397,6 +408,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the index the instance struct would occupy
 	 */
 	private int instanceTypeBase() {
+		return p1StreamTypeBase() + (this.usesP1Streams ? 1 : 0);
+	}
+
+	/**
+	 * The index of {@code TYPE_P1_STREAM}: right after the fixed types, the
+	 * {@code --simd} block and the async block -- which cannot be present at the same
+	 * time, so the two share the slot -- and before the instance type, so adding it moves
+	 * no existing type index. Only meaningful when {@link #usesP1Streams} is set.
+	 */
+	private int p1StreamTypeBase() {
 		return asyncTypeBase() + (this.asyncMode ? ASYNC_TYPE_COUNT : 0);
 	}
 
@@ -416,6 +437,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * instances, the same conditional-index discipline {@code --simd} and async use.
 	 */
 	private boolean usesInstances;
+
+	/**
+	 * Whether the degenerate (non-asyncMode) tier's first-class stream value can exist in
+	 * this module: the program names {@code rontolisp::%stream-new}, its one producer.
+	 * Adds ONE type entry ({@code TYPE_P1_STREAM}) and the two-function
+	 * {@link WasmP1StreamRuntimeBuilder} block, both in the slots asyncMode would have
+	 * used -- the two modes are mutually exclusive -- so a program without streams is
+	 * byte-identical to a build that never knew about them.
+	 */
+	private boolean usesP1Streams;
 
 	/**
 	 * How many per-arity dispatchers past {@link #MAX_CALLABLE_ARITY} this program asks
@@ -1486,6 +1517,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// fixedTypeCount()).
 	static final int ASYNC_TYPE_COUNT = 4;
 
+	// --- the P1 stream struct (usesP1Streams only) --------------------------------
+	//
+	// TYPE_P1_STREAM {mut i32 eof, mut readFn, mut closeFn} at p1StreamTypeBase(), in its
+	// OWN rec group: the degenerate tier's first-class stream value, structurally the
+	// same three fields as the async block's TYPE_WASI_STREAM (a stream is a read thunk,
+	// a close thunk and a drained flag -- nothing about that is WASI). The two never
+	// coexist (asyncMode is --component-only), so they share the slot and no other type
+	// index moves. The shape collides with nothing else: TYPE_VBLOCK is the only other
+	// 3-field struct and its fields are {i32, i32, eqref}, all immutable.
+
 	// --- the instance struct (usesInstances only) ---------------------------------
 	//
 	// TYPE_INSTANCE = struct {i32 layout address (const), (ref null eq) slots (MUT)},
@@ -1955,14 +1996,19 @@ public final class WasmLispCompiler implements LispCompiler {
 		else {
 			program = am.ik.rontolisp.macro.LispAsync.lowerProgram(program);
 		}
+		// Whether the degenerate tier's first-class stream value can exist: the program
+		// names %stream-new, its one producer. Outside asyncMode only -- a --component
+		// async program builds TYPE_WASI_STREAMs from the same primitive instead.
+		this.usesP1Streams = !this.asyncMode && programUsesSymbol(program, LispNames.STREAM_NEW_INTERNAL_QUALIFIED);
 		// Whether a degenerate TYPE_P1_FUTURE can exist in this module at all. It has
-		// exactly two producers outside asyncMode: the %async-run the lowering above
-		// leaves behind (WasmAsyncRunCompiler), and a `wasm-import ... :async t` wrapper
-		// (WasmImportCompiler). The export wrappers read it to decide whether a returned
-		// future must be resolved at the boundary; a module with neither producer cannot
+		// exactly three producers outside asyncMode: the %async-run the lowering above
+		// leaves behind (WasmAsyncRunCompiler), a `wasm-import ... :async t` wrapper
+		// (WasmImportCompiler), and the settled future every stream-read of the line
+		// above answers. The export wrappers read it to decide whether a returned
+		// future must be resolved at the boundary; a module with no producer cannot
 		// meet one and gains no instruction.
-		boolean p1Futures = !this.asyncMode
-				&& (programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED) || !suspendingImports.isEmpty());
+		boolean p1Futures = !this.asyncMode && (programUsesSymbol(program, LispNames.ASYNC_RUN_QUALIFIED)
+				|| !suspendingImports.isEmpty() || this.usesP1Streams);
 		// Splice top-level defstructs/defclasses/defgenerics/defmethods into their
 		// generated defuns before lambda-list desugaring (the generated constructors
 		// use &key) so Pass 1 collects them as ordinary functions; the registries make
@@ -2608,6 +2654,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			indirectCallArities.add(0);
 			indirectCallArities.add(1);
 		}
+		// The degenerate tier's stream runtime calls its read/close thunks through the
+		// same arity-0 dispatch, and unlike %async-run (which registers the arity at its
+		// own call site) a stream can be created by a program that never lowers one.
+		if (this.usesP1Streams) {
+			indirectCallArities.add(0);
+		}
 
 		// When eval is used, _eval applies any registered function via the dispatch
 		// functions, so ensure a real dispatch body exists for every registered arity.
@@ -2688,6 +2740,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			.futureTypeIndex(this.asyncMode ? asyncTypeBase() : -1)
 			.frameTypeIndex(this.asyncMode ? asyncTypeBase() + 1 : -1)
 			.wasiStreamTypeIndex(this.asyncMode ? asyncTypeBase() + 2 : -1)
+			.p1StreamTypeIndex(this.usesP1Streams ? p1StreamTypeBase() : -1)
+			.p1StreamFuncBase(this.usesP1Streams ? p1StreamFuncBase() : -1)
 			.instanceTypeIndex(this.usesInstances ? instanceTypeBase() : -1)
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
@@ -3454,14 +3508,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		byte[] printI32Body = WasmRuntimeBuilder.buildPrintI32Core(true);
 		byte[] writeStrBody = WasmRuntimeBuilder.buildWriteStrBody();
 		byte[] printValBody = WasmRuntimeBuilder.buildPrintValBody(stringTable, this.simd,
-				this.asyncMode ? asyncTypeBase() : -1, this.usesInstances ? instanceTypeBase() : -1);
+				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
+				this.usesInstances ? instanceTypeBase() : -1);
 		byte[] printI32NoNlBody = WasmRuntimeBuilder.buildPrintI32Core(false);
 		byte[] printF64Body = WasmRuntimeBuilder.buildPrintF64Core(true, stringTable);
 		byte[] printF64NoNlBody = WasmRuntimeBuilder.buildPrintF64Core(false, stringTable);
 		byte[] appendBody = WasmRuntimeBuilder.buildAppendBody();
 		byte[] readLineBody = WasmRuntimeBuilder.buildReadLineBody(stringTable);
 		byte[] princValBody = WasmRuntimeBuilder.buildPrincValBody(stringTable, this.simd,
-				this.asyncMode ? asyncTypeBase() : -1, this.usesInstances ? instanceTypeBase() : -1);
+				this.asyncMode ? asyncTypeBase() : -1, this.usesP1Streams ? p1StreamTypeBase() : -1,
+				this.usesInstances ? instanceTypeBase() : -1);
 
 		// Build the eval runtime (interpreter + function-name registry). The registry
 		// maps a symbol-name string offset to (funcId, arity). Because the string table
@@ -4273,6 +4329,19 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(Type.I32);
 					});
 				}
+				if (this.usesP1Streams) {
+					// TYPE_P1_STREAM {mut i32 eof, mut readFn, mut closeFn} in its OWN
+					// rec group: the degenerate tier's stream value, the same shape the
+					// async block gives TYPE_WASI_STREAM (which cannot be present at the
+					// same time, so the two share this slot). Nothing else in the module
+					// is a 3-field struct of {i32, eqref, eqref}, so a 1-member group is
+					// enough to keep ref.test discriminating.
+					types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
+						fields.addField(true, w -> w.write(Type.I32));
+						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+					}));
+				}
 				if (this.usesInstances) {
 					// TYPE_INSTANCE {i32 layout address (MUT -- change-class swaps it),
 					// (ref null eq) slots (mut)} in its OWN rec group, so it can never
@@ -4664,6 +4733,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (this.asyncMode) {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						fnDef.addFunction(WasmFutureRuntimeBuilder.typeIndexOf(i, asyncTypeBase() + 3));
+					}
+				}
+				// The degenerate tier's stream runtime, in the slot the async block would
+				// have taken (the two never coexist).
+				if (this.usesP1Streams) {
+					for (int i = 0; i < WasmP1StreamRuntimeBuilder.FUNC_COUNT; i++) {
+						fnDef.addFunction(WasmP1StreamRuntimeBuilder.typeIndexOf(i));
 					}
 				}
 				// The EXTRA per-arity dispatchers, right after the async block, over the
@@ -5282,6 +5358,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					for (int i = 0; i < WasmFutureRuntimeBuilder.FUNC_COUNT; i++) {
 						code.addFunction(WasmFutureRuntimeBuilder.build(i, asyncFuncBase(), asyncTypeBase(),
 								asyncTypeBase() + 1, asyncTypeBase() + 2, currentTaskGlobalIndex, sched, cb));
+					}
+				}
+				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()
+				// order.
+				if (this.usesP1Streams) {
+					for (int i = 0; i < WasmP1StreamRuntimeBuilder.FUNC_COUNT; i++) {
+						code.addFunction(WasmP1StreamRuntimeBuilder.build(i, p1StreamTypeBase()));
 					}
 				}
 				// The EXTRA per-arity dispatcher bodies, in extraDispatchFuncBase()
@@ -6609,6 +6692,18 @@ public final class WasmLispCompiler implements LispCompiler {
 		int wasiStreamTypeIndex = -1;
 
 		/**
+		 * The {@code TYPE_P1_STREAM} type index, or -1 when no stream value can exist in
+		 * this module (asyncMode, or a program that never names {@code %stream-new}).
+		 */
+		int p1StreamTypeIndex = -1;
+
+		/**
+		 * The degenerate tier's stream runtime base function index
+		 * ({@code _p1_stream_read}), or -1 when {@link #p1StreamTypeIndex} is.
+		 */
+		int p1StreamFuncBase = -1;
+
+		/**
 		 * The {@code TYPE_INSTANCE} type index, or -1 when the program uses no instance
 		 * primitive.
 		 */
@@ -6753,6 +6848,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.futureTypeIndex = builder.futureTypeIndex;
 			this.frameTypeIndex = builder.frameTypeIndex;
 			this.wasiStreamTypeIndex = builder.wasiStreamTypeIndex;
+			this.p1StreamTypeIndex = builder.p1StreamTypeIndex;
+			this.p1StreamFuncBase = builder.p1StreamFuncBase;
 			this.instanceTypeIndex = builder.instanceTypeIndex;
 			this.layoutAddresses = builder.layoutAddresses;
 			this.asyncFuncBase = builder.asyncFuncBase;
@@ -6857,6 +6954,10 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int frameTypeIndex = -1;
 
 			private int wasiStreamTypeIndex = -1;
+
+			private int p1StreamTypeIndex = -1;
+
+			private int p1StreamFuncBase = -1;
 
 			private int instanceTypeIndex = -1;
 
@@ -7108,6 +7209,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder asyncDefunNames(Set<String> asyncDefunNames) {
 				this.asyncDefunNames = asyncDefunNames;
+				return this;
+			}
+
+			Builder p1StreamTypeIndex(int p1StreamTypeIndex) {
+				this.p1StreamTypeIndex = p1StreamTypeIndex;
+				return this;
+			}
+
+			Builder p1StreamFuncBase(int p1StreamFuncBase) {
+				this.p1StreamFuncBase = p1StreamFuncBase;
 				return this;
 			}
 

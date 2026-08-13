@@ -119,7 +119,7 @@ compile error.
   (`contents: option<stream<u8>>` + a trailers future), so `%http-body-value` serves
   both directions: it runs `consume-body` (which MOVES its resource) eagerly and
   wraps the (stream, trailers, transmit-res) protocol into a first-class stream
-  value via `rontolisp::%wasi-stream-new` -- the read thunk issues one built-in read
+  value via `rontolisp::%stream-new` -- the read thunk issues one built-in read
   per call (an in-flight chunk = a PENDING future the scheduler settles, so the task
   keeps running), and the close thunk (run ONCE, at EOF or an early stream-close) drops
   the readable end + the unread trailers and resolves the transmit future ok (an

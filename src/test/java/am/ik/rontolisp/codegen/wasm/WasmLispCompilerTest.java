@@ -879,6 +879,36 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void theP1StreamBlockRidesOnlyAStreamCreatingModule() {
+		// TYPE_P1_STREAM and the two _p1_stream_* runtime functions are emitted exactly
+		// when the program names rontolisp::%stream-new -- their one producer -- so every
+		// other module stays byte-identical to a build that never knew about streams. The
+		// type goes in the slot the async block would take (the two never coexist) and
+		// before the instance one, so the plain module's type section stays a strict
+		// PREFIX of the stream module's.
+		String withoutStream = """
+				(defun rd () nil)
+				(defun cl () nil)
+				(defvar *s* (cons #'rd #'cl))
+				(print (rontolisp:streamp *s*))
+				""";
+		String withStream = """
+				(defun rd () nil)
+				(defun cl () nil)
+				(defvar *s* (rontolisp::%stream-new #'rd #'cl))
+				(print (rontolisp:streamp *s*))
+				""";
+		byte[] plain = compile(withoutStream);
+		byte[] stream = compile(withStream);
+		assertThat(typeSectionCount(stream) - typeSectionCount(plain)).as("TYPE_P1_STREAM, and nothing else")
+			.isEqualTo(1);
+		assertThat(typeSectionEntries(stream)).as("the plain types are a prefix of the stream module's")
+			.startsWith(typeSectionEntries(plain));
+		assertThat(functionCount(stream) - functionCount(plain)).as("_p1_stream_read + _p1_stream_close")
+			.isEqualTo(WasmP1StreamRuntimeBuilder.FUNC_COUNT);
+	}
+
+	@Test
 	void simdComposesWithComponentAndOptimize() {
 		// --simd is orthogonal to the output mode: the packed arrays are ordinary GC
 		// objects, so a component core needs no extra pages, and the tree shaker decodes
