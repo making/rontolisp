@@ -488,12 +488,16 @@ once a reactor need not serialise, the streaming glue costs nothing.
 
 **What the transport does NOT hold, and what reading still costs.** The boundary
 is flat in both hosts: a 256 KiB body a handler drops leaves linear memory where
-it was. DRAINING it is not flat, and not because of `read-all` -- a drain that
-keeps nothing pays the same, because `%http-utf8-decode-octets` decodes each
-chunk with a per-character `write-char` and a WASM string output stream persists
-a linear copy plus a 12-byte record PER WRITE (~15 bytes per character; 4 MiB of
-body -> 63 MB of linear memory). That is `.todo/350`, not this boundary, and it
-is the reason "the body is free" may only be said of the transport.
+it was. DRAINING it is now flat too: `%http-utf8-decode-octets` decodes each
+chunk with a per-character `write-char`, and a WASM string output stream appends
+into one GC byte buffer rather than persisting a linear copy plus a 12-byte
+record per WRITE, so a chunk-at-a-time drain of a 4 MiB body costs ~850 BYTES of
+arena (the 12-byte record of each chunk's stream) and grows linear memory not at
+all -- it used to cost ~15 bytes per character, 63 MB for that body. See
+[[read-load-streams]]. What a drain that KEEPS the body still costs is the body:
+`read-all` builds it as one string, and a single string build stages its bytes
+through the reused scratch, so linear memory grows once to the largest body and
+is reused from there.
 
 **A chunk is a string OR OCTETS** (an `(unsigned-byte 8)` vector), and both
 drains read through ONE adapter, `%http-reactor-text-source`, so neither has to

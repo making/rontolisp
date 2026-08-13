@@ -127,14 +127,17 @@ in `WasmStringRuntimeBuilder`):
 - `FUNC_STR_FRESH` `_str_fresh(off,len)` -- id = counter++. RUNTIME strings:
   concatenate/subseq/case/trim, read string literals, read-line, the capture path
   (`princ-to-string`/`prin1-to-string`/`concatenate`), `gensym`/`make-symbol`, `uiop:getenv`,
-  fetch response, the host `:string` boundary, string-stream contents.
+  fetch response, the host `:string` boundary. (A string output stream's contents is
+  the one runtime string built WITHOUT it -- `_str_stream_contents` copies GC array to
+  GC array and stamps the same counter id itself.)
 - `FUNC_STR_TO_MEM` `_str_to_mem(str,ptr)->len` -- copies a string's array (quotes
   included) into `linear[ptr..)`; the array->linear bridge for the paths that still
   need a linear pointer: `open`/`load` path, the reader input scratch
   (`read-from-string`/`read`, which RESERVE the scratch so parse-time interns/builds
   stack above the unparsed input), `intern`, the host `:string` boundary
   (`WasmExportCompiler.emitStringResult`, reused by imports), the fetch wire, `tcp`
-  host, and the string-stream copies.
+  host, and a string INPUT stream's source copy (an output stream needs no linear
+  pointer at all).
 - `FUNC_WRITE_STR_GC` `_write_str_gc(str,from,to,esc)` -- the print path for a string
   value: appends `[from,to)` straight from the GC array to `CAPTURE_CUR` in capture
   mode (no linear staging, so it can never alias the capture buffer while printing
@@ -151,15 +154,25 @@ in `WasmStringRuntimeBuilder`):
   `\n`/`\t` (CL prints a newline literally). See
   [core-representation.md](core-representation.md) for the all-backend table.
 
-## String streams (eager copy)
+## String streams: the OUTPUT half holds GC bytes, the input half a linear copy
 
 `WasmStringStreamRuntimeBuilder` chunks / input records referenced string bytes by
-linear offset, which a GC array cannot provide. Now appending / opening COPIES the
-content into a PERSISTENT linear buffer (`_str_to_mem`, bump-advanced) and the chunk /
-cursor references that copy; `_str_stream_contents` / the string-stream read-line
-finalize via `_str_fresh`. These per-stream copies + 12-byte records bump-allocate and
-are not reclaimed -- a string stream is short-lived and comparatively rare, unlike the
-reclaimable runtime strings this representation targets. Details:
+linear offset, which a GC array cannot provide.
+
+An OUTPUT stream keeps none: its record `[kind=1][slot][len]` names a per-stream
+`$str_bytes` GC buffer through a module-global table (a `TYPE_HASH_BUCKETS` indexed by
+`slot`), appends into it with `array.copy` and DOUBLES it when it runs out
+(`_ostream_room`, `FUNC_OSTREAM_ROOM`). So a write costs GC-heap bytes the engine
+reclaims, amortised, and linear memory holds nothing but the 12-byte record. It used to
+cost a PERSISTENT linear copy of the content plus a 12-byte chunk record PER WRITE
+(~15 bytes per character on a `write-char` loop, never reclaimed before the enclosing
+arena reset). `_close` hands the slot back to a free list threaded through the table's
+own entries, so a resident reactor's live-stream count is what bounds the table.
+
+An INPUT stream still copies its source string into a persistent linear buffer
+(`_str_to_mem`, bump-advanced) once at open, and `[kind=0][cursor][end]` walks that
+copy; the string-stream read-line finalizes via `_str_fresh`. That copy is per STREAM,
+not per read, and it is what makes `_read_line`'s linear scan work unchanged. Details:
 [[read-load-streams]].
 
 ## The host arena API pops to the intern high-water (todo 124)
@@ -172,9 +185,11 @@ pool's high-water, stored by `_intern` right after its permanent advance). Poppi
 would free bytes the intern registry (`RT_INTERN_COUNT_ADDR`) still points at, dangling
 every symbol interned during the call. So a call that interns a NEW symbol keeps the host's
 buffer (the permanent bytes are stacked above it) and every other call pops all the way
-back. String-stream buffers (below) are permanent too but are NOT guarded -- same trade the
-component `cabi_post_*` already makes: a stream that escapes its call is the caller's
-problem. Details: [[wasm-export-no-wasi]].
+back. A string INPUT stream's source copy (above) is permanent too but is NOT guarded --
+same trade the component `cabi_post_*` already makes: a stream that escapes its call is the
+caller's problem. That trade is also why an output stream's free list lives in the TABLE
+(GC) and only its head in a fixed cell: a free list threaded through the arena would hand
+out records the reset had already given back. Details: [[wasm-export-no-wasi]].
 
 ## Grow guards kept
 

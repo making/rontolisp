@@ -98,7 +98,8 @@ pull per chunk plus the EOF one, `ff fe 41` crossing exactly, the in-band fallba
 256 KiB reply never drained leaving `memory.buffer.byteLength` where it was over four
 fetches AND four drains of the same body ending where the first left it, the mid-body
 failure at the drain and the superseded-body guard). What ONE drain PEAKS at is not this
-boundary: the chunk decode's string output stream is `.todo/350`.
+boundary either: the chunk decode's string output stream used to persist a linear copy
+per WRITE, and appends into a GC byte buffer since (`[[read-load-streams]]`).
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with

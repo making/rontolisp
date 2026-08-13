@@ -46,7 +46,43 @@ A runtime reader/parser is emitted into the compiled output (like `eval`). Inter
 
 **WASM runtime intern table and heap base are computed, not fixed**: `_intern` appends 8-byte `(offset,len)` records for symbols first seen at runtime to a table whose base it loads from the `RT_INTERN_BASE_ADDR` (152) cell; the heap bump pointer lives at `HEAP_PTR_ADDR` (84). Both cells are seeded by active data segments at instantiation (never in `_start` -- hosts can call exports without running it) with values computed from the final static-data size in `WasmLispCompiler.compile`: `rtInternBase = max(RT_INTERN_MIN_BASE=8192, 16-aligned end of the string segment)`, `heapBase = rtInternBase + RT_INTERN_REGION_SIZE (8192)`, and the Preview 1 memory page count grows with `heapBase` (minimum 4 pages). The bases used to be the fixed constants 8192/16384; once a large program's interned-string segment (which also holds the eval function registry, appended last) outgrew 8192, runtime interning silently overwrote static strings and registry records -- symptoms ranged from `eval` returning nil for a defined function to garbled prints, and shifted with any layout change. First hit by the concatenated `CiSpecE2eTest` program; pinned by `WasmLispCompilerIntegrationTest#runtimeInternTableSurvivesLargeStaticData`.
 
-**String streams (`with-output-to-string` / `with-input-from-string`) + print-family stream args**: the two macros are `LispMacroExpander` expansions over three `%`-internal builtins (`%make-string-output-stream`, `%make-string-input-stream`, `%string-stream-contents`; classified in `PackageRegistry.CL_INTERNALS`), following the with-open-file let/close shape (`expandWithOutputToString` fetches the contents, then closes; `expandWithInputFromString` mirrors `__wof_result` with `__wifs_result`). String streams live in the same handle space as file streams: interpreter = a `StringWriter` / `BufferedReader(StringReader)` entry in the `streams` table (so `read`/`read-line`/`write-line` work unchanged; `write-line`'s writer dispatch was widened from `BufferedWriter` to `Writer`); JVM = the same in the `_streams` table (`_makeStringOutputStream`/`_makeStringInputStream`/`_stringStreamContents` in `JvmIoRuntimeBuilder`); WASM = a **negative i31 handle** whose absolute value is a 12-byte record in linear memory (a WASI fd is never negative) -- output records head a `[off][len][next]` chunk list referencing the original string bytes (the bump allocator never moves them, so appends copy nothing; `_str_stream_contents` concatenates), input records hold a `[cursor][end]` range consumed by a branch at the top of `_read_line` (which makes `_read` work for free); `_write_line` grew a chunk-append branch, `_close` skips `fd_close` for negative handles (`WasmStringStreamRuntimeBuilder` + branches in `WasmIoRuntimeBuilder`/`WasmRuntimeBuilder.buildReadLineBody`). On top of this, `print`/`prin1`/`princ`/`terpri` accept an optional stream argument on all three backends (interpreter routes through a shared `emitTo`; JVM renders then calls the new `_writeStr(String, Object)` -- non-`Long` handles, i.e. nil/t, go to `System.out` and update the `_col` fresh-line tracking; WASM renders via `FUNC_PRINC_TO_STR`/`FUNC_PRIN1_TO_STR` then calls `_write_stream_str`, whose stdout path delegates to `_write_str` keeping `LINE_START_ADDR` tracking). `write-string` (function; write-line minus the newline, optional stream) and `write-to-string` (a prin1-to-string alias; both wrappers in `BuiltinFunctionWrappers`) round out the set, and `expandFormat` accepts a non-literal destination expression by building the string exactly like `format nil` and emitting one `(write-string <string> __format_stream)` (destination bound first, so it evaluates before the args). Compiled `print`-family return values keep the existing convention (nil on the compile backends, todo-063). `read` on a string stream inherits the line-oriented one-datum-per-line semantics of the stream `read` on every backend. Runtime `_eval` interpreters and `--no-gc` do not know string streams.
+**String streams (`with-output-to-string` / `with-input-from-string`) + print-family stream args**: the two macros are `LispMacroExpander` expansions over three `%`-internal builtins (`%make-string-output-stream`, `%make-string-input-stream`, `%string-stream-contents`; classified in `PackageRegistry.CL_INTERNALS`), following the with-open-file let/close shape (`expandWithOutputToString` fetches the contents, then closes; `expandWithInputFromString` mirrors `__wof_result` with `__wifs_result`). String streams live in the same handle space as file streams: interpreter = a `StringWriter` / `BufferedReader(StringReader)` entry in the `streams` table (so `read`/`read-line`/`write-line` work unchanged; `write-line`'s writer dispatch was widened from `BufferedWriter` to `Writer`); JVM = the same in the `_streams` table (`_makeStringOutputStream`/`_makeStringInputStream`/`_stringStreamContents` in `JvmIoRuntimeBuilder`); WASM = a **negative i31 handle** whose absolute value is a 12-byte record in linear memory (a WASI fd is never negative) -- an output record is `[kind=1][slot][len]` over a per-stream `$str_bytes` GC byte buffer reached through a module-global table (see the paragraph below), input records hold a `[cursor][end]` range over a persistent linear copy of the source string, consumed by a branch at the top of `_read_line` (which makes `_read` work for free); `_write_line` grew an append branch, `_close` skips `fd_close` for negative handles and hands an output record's table slot back (`WasmStringStreamRuntimeBuilder` + branches in `WasmIoRuntimeBuilder`/`WasmRuntimeBuilder.buildReadLineBody`). On top of this, `print`/`prin1`/`princ`/`terpri` accept an optional stream argument on all three backends (interpreter routes through a shared `emitTo`; JVM renders then calls the new `_writeStr(String, Object)` -- non-`Long` handles, i.e. nil/t, go to `System.out` and update the `_col` fresh-line tracking; WASM renders via `FUNC_PRINC_TO_STR`/`FUNC_PRIN1_TO_STR` then calls `_write_stream_str`, whose stdout path delegates to `_write_str` keeping `LINE_START_ADDR` tracking). `write-string` (function; write-line minus the newline, optional stream) and `write-to-string` (a prin1-to-string alias; both wrappers in `BuiltinFunctionWrappers`) round out the set, and `expandFormat` accepts a non-literal destination expression by building the string exactly like `format nil` and emitting one `(write-string <string> __format_stream)` (destination bound first, so it evaluates before the args). Compiled `print`-family return values keep the existing convention (nil on the compile backends, todo-063). `read` on a string stream inherits the line-oriented one-datum-per-line semantics of the stream `read` on every backend. Runtime `_eval` interpreters and `--no-gc` do not know string streams.
+
+**A string OUTPUT stream costs linear memory NOTHING per write (WASM)**: the record
+`[kind=1][slot][len]` names, through the module-global buffer table, one `$str_bytes` GC
+array holding what a string holds -- the frame quote `"` at index 0, the content at
+`[1, 1+len)`. Every append (`_write_stream_str`, `_write_line`, `fresh-line`'s newline)
+asks `_ostream_room(rec, n)` (`FUNC_OSTREAM_ROOM`, reusing the `(i32,i32)->(ref null eq)`
+signature `TYPE_RAT_NEW`, appended after the last fixed helper) for room for `n` more
+bytes and `array.copy`s into it; the buffer DOUBLES when it runs out, so writing k bytes
+one at a time copies O(k) in total, and `_str_stream_contents` is one `array.copy` out
+into the fresh `TYPE_STRING`. It used to be a `[off][len][next]` chunk list: because a
+GC string has no stable linear address, each append COPIED its content into a persistent
+linear buffer and linked a 12-byte chunk record at it -- **15 bytes of linear memory per
+CHARACTER** on a `write-char` loop (the shape `%http-utf8-decode-octets` and
+`%http-percent-decode` take), reclaimed only at the enclosing `__ronto_alloc_reset`, i.e.
+a whole request on a reactor and never in a program without one. Three consequences the
+layout is chosen for, and each is a trap if you move it:
+- **The table is the GC ROOT** a linear-memory record cannot be. It is a
+  `TYPE_HASH_BUCKETS` in the module's LAST global (after the cached `t` and the raw-local
+  sentinel), created by the first `_make_str_ostream` and doubled from there, so a program
+  that opens no string stream carries a null and nothing else.
+- **`_close` recycles the slot, not the record.** A freed slot goes on a free list
+  threaded through the table's own entries (a free slot holds the next as an i31; the head
+  is the `OSTREAM_FREE_ADDR` cell, a slot index + 1 so zero is the empty list), which puts
+  the list on the GC heap where the arena reset a host performs between calls cannot reach
+  it. The record's 12 bytes are NOT recycled for exactly that reason -- a free list in the
+  arena would hand out records the reset had already given back, and the two allocators
+  would alias. So a stream still costs 12 bytes of arena, and only that.
+- **A closed stream is closed**: `_close` sets kind 2 and slot -1, so a double close is a
+  no-op and a write after one traps at the table read rather than landing in whichever
+  stream inherited the slot. CL leaves operating on a closed stream undefined, and
+  `with-output-to-string` fetches the contents BEFORE closing, so nothing portable notices.
+Pinned by `WasmStringStreamArenaE2eTest` (node, a JS host reading `__ronto_alloc_mark`
+across calls: 65536 characters written one `write-char` at a time and the same 65536
+written as 64 `write-string`s of 1 KiB each cost the arena the same nothing -- they used
+to differ by 15x) on top of the whole `withOutputToString*` / `stringOutputStream*` /
+`freshLine*` family in `WasmLispCompilerIntegrationTest`.
 
 **The public string-output-stream names + the clear-on-read contract**:
 `make-string-output-stream` and `get-output-stream-string` are the CL spellings of
@@ -59,9 +95,8 @@ non-clearing peek plus a separate clearing alias: `with-output-to-string` fetche
 closes, so it cannot tell the difference, and one primitive with one semantics is auditable
 where a "which of the two did this call site want" pair is not. Per backend the clear is
 `StringWriter.getBuffer().setLength(0)` (interpreter and, in bytecode, `_stringStreamContents`)
-and `head = tail = 0` on the output record (`WasmStringStreamRuntimeBuilder.buildContentsBody`;
-the chunk bytes stay where the bump allocator put them -- nothing references them once the
-chain head is gone). Pinned by `stringOutputStreamNamesClearOnRead` in the JVM/WASM suites,
+and `len = 0` on the output record (`WasmStringStreamRuntimeBuilder.buildContentsBody`; the
+BUFFER stays -- the stream is live and the writes after the clear reuse it). Pinned by `stringOutputStreamNamesClearOnRead` in the JVM/WASM suites,
 `evalStringOutputStreamNamesClearOnRead`, and the `postmodern-language-incidentals` ci-spec case.
 `make-string-input-stream` is the CL spelling of `%make-string-input-stream`, wired the same way
 (`LispMacroExpander.expandMakeStringInputStream`, dispatched in `Jvm/WasmExprCompiler`; a real

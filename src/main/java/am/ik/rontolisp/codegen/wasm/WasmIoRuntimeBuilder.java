@@ -581,26 +581,41 @@ final class WasmIoRuntimeBuilder {
 	 * Builds the _close(stream) function body. Closes the file descriptor via WASI
 	 * fd_close and returns the symbol {@code T}.
 	 * @param st the string table (for the {@code T} symbol)
+	 * @param ostreamTableGlobal the module global holding the string output-stream buffer
+	 * table
 	 * @return the function body bytes
 	 */
-	static byte[] buildCloseBody(WasmLispCompiler.StringTable st) {
+	static byte[] buildCloseBody(WasmLispCompiler.StringTable st, int ostreamTableGlobal) {
 		WasmLispCompiler.StringTable.StringEntry t = st.addBodyString("T");
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// param: FD_VAL=0 (ref) ; i32 local: FD=1
+		// param: FD_VAL=0 (ref) ; i32 locals: FD=1, REC=2, SLOT=3
 		w.write(1);
-		w.write(1);
+		w.write(3);
 		w.write(Type.I32);
-		final int FD = 1;
+		final int FD = 1, REC = 2, SLOT = 3;
 		// fd = i31.get_s(fd_val)
 		getLocal(w, 0);
 		refCast(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
 		setLocal(w, FD);
-		// fd_close only for a real USER fd -- a negative handle is a string stream whose
-		// record just becomes garbage (the bump allocator never frees), and the process
-		// standard streams (0/1/2, among them the *error-output* designator) outlive a
-		// close of them, as they do on the interpreter and the JVM.
+		// A negative handle is a string stream: an OUTPUT one hands its buffer table slot
+		// back so the bytes become collectable and the slot is reused (the record's own
+		// 12 bytes stay -- see WasmStringStreamRuntimeBuilder), an input one is nothing
+		// but its record and needs no unwinding.
+		getLocal(w, FD);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		getLocal(w, FD);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, REC);
+		WasmStringStreamRuntimeBuilder.emitCloseOutputRecord(w, REC, SLOT, ostreamTableGlobal);
+		w.write(Instruction.END);
+		// fd_close only for a real USER fd -- the process standard streams (0/1/2, among
+		// them the *error-output* designator) outlive a close of them, as they do on the
+		// interpreter and the JVM.
 		getLocal(w, FD);
 		i32(w, (int) am.ik.rontolisp.compiler.StreamDesignators.FIRST_USER_HANDLE);
 		w.write(Instruction.I32_GE_S);
@@ -628,29 +643,19 @@ final class WasmIoRuntimeBuilder {
 	static byte[] buildWriteLineBody(WasmLispCompiler.StringTable st) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5,
-		// CHUNK=6, TAIL=7 (the last three only for the string-stream branch)
+		// params: STR=0 (ref), FD_VAL=1 (ref) ; i32 locals: OFF=2, LEN=3, FD=4, REC=5
+		// (the last only for the string-stream branch)
 		w.write(1);
-		w.write(6);
+		w.write(4);
 		w.write(Type.I32);
-		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4, REC = 5, CHUNK = 6, TAIL = 7;
+		final int STR = 0, FD_VAL = 1, OFF = 2, LEN = 3, FD = 4, REC = 5;
 		final int IOV = WasmLispCompiler.IOV_OFFSET;
 		final int NWRITTEN = WasmLispCompiler.NWRITTEN_OFFSET;
 
-		// The string's bytes live on the GC heap: copy them into linear scratch at
-		// HEAP_PTR
-		// so OFF/LEN name a real linear range (off = base, len = total incl. quotes).
-		// HEAP_PTR is NOT advanced yet -- the fd_write branch consumes the copy
-		// immediately,
-		// while the string-output-stream branch below PERSISTS it before linking a chunk.
-		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		setLocal(w, OFF);
-		getLocal(w, STR);
-		getLocal(w, OFF);
-		WasmEmitHelper.emitStrToMemCall(w);
-		setLocal(w, LEN);
 		// fd = stream is an i31 handle ? i31.get_s(stream) : 1 (stdout) -- nil and the
-		// designator t (a redirected *standard-output*'s default) both mean stdout.
+		// designator t (a redirected *standard-output*'s default) both mean stdout. The
+		// dispatch comes FIRST: the string-output-stream branch copies GC array to GC
+		// array and must not stage the string into linear memory at all.
 		getLocal(w, FD_VAL);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.I32_EQZ);
@@ -672,7 +677,7 @@ final class WasmIoRuntimeBuilder {
 		w.write(Instruction.END);
 		setLocal(w, FD);
 		// A negative handle is a string output stream: append the content and a newline
-		// as chunks (see WasmStringStreamRuntimeBuilder) and return the string.
+		// to its byte buffer (see WasmStringStreamRuntimeBuilder) and return the string.
 		getLocal(w, FD);
 		i32(w, 0);
 		w.write(Instruction.I32_LT_S);
@@ -681,27 +686,30 @@ final class WasmIoRuntimeBuilder {
 		getLocal(w, FD);
 		w.write(Instruction.I32_SUB);
 		setLocal(w, REC);
-		// Persist the content copy: HEAP_PTR = OFF + LEN (past the copy), so the chunk's
-		// referenced bytes survive the next write.
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		getLocal(w, OFF);
-		getLocal(w, LEN);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.I32_STORE, 0x02, 0x00);
-		WasmStringStreamRuntimeBuilder.emitAppendChunk(w, REC, CHUNK, TAIL, () -> {
-			getLocal(w, OFF);
-			i32(w, 1);
-			w.write(Instruction.I32_ADD);
-		}, () -> {
-			getLocal(w, LEN);
-			i32(w, 2);
-			w.write(Instruction.I32_SUB);
-		});
-		WasmStringStreamRuntimeBuilder.emitAppendChunk(w, REC, CHUNK, TAIL, () -> i32(w, st.newline.offset()),
-				() -> i32(w, st.newline.length()));
+		getLocal(w, STR);
+		WasmEmitHelper.emitStrBytesArray(w);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		setLocal(w, LEN);
+		WasmStringStreamRuntimeBuilder.emitAppend(w, REC, LEN, () -> {
+			getLocal(w, STR);
+			WasmEmitHelper.emitStrBytesArray(w);
+		}, () -> i32(w, 1));
+		WasmStringStreamRuntimeBuilder.emitAppendByte(w, REC, 10);
 		getLocal(w, STR);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
+		// The string's bytes live on the GC heap: copy them into linear scratch at
+		// HEAP_PTR so OFF/LEN name a real linear range (off = base, len = total incl.
+		// quotes). HEAP_PTR is NOT advanced -- the fd_write below consumes the copy
+		// immediately.
+		loadMem32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		setLocal(w, OFF);
+		getLocal(w, STR);
+		getLocal(w, OFF);
+		WasmEmitHelper.emitStrToMemCall(w);
+		setLocal(w, LEN);
 		// iov.ptr = off + 1 ; iov.len = len - 2 (strip surrounding quotes)
 		i32(w, IOV);
 		getLocal(w, OFF);

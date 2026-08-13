@@ -487,14 +487,14 @@ class WasmImportCompilerTest {
 				""";
 		byte[] guarded = compileNoWasi(asyncSrc);
 		byte[] unguarded = compileNoWasi(syncSrc);
-		// One guard global (a mut i32, third from last -- the cached-t and raw-local
-		// sentinel globals stay the LAST two); a module that cannot suspend gains no
-		// global and no guard instruction.
+		// One guard global (a mut i32, fourth from last -- the cached-t, raw-local
+		// sentinel and string-stream table globals stay the LAST three); a module that
+		// cannot suspend gains no global and no guard instruction.
 		assertThat(globalCount(guarded)).isEqualTo(globalCount(unguarded) + 1);
 		assertThat(countOf(unguarded, GUARD_TRAP_AND_SET)).isZero();
 		// Both wrappers check-and-set on entry (global.get g; if; unreachable; end;
 		// i32.const 1; global.set g) and clear on return (i32.const 0; global.set g).
-		int g = globalCount(guarded) - 3;
+		int g = globalCount(guarded) - UNCONDITIONAL_TRAILING_GLOBALS - 1;
 		assertThat(countOf(guarded, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(2);
 		assertThat(countOf(guarded, new byte[] { 0x41, 0x00, 0x24, (byte) g })).isGreaterThanOrEqualTo(2);
 	}
@@ -513,7 +513,7 @@ class WasmImportCompilerTest {
 				(defun run () (rontolisp::%future-force (dog)))
 				(rontolisp:wasm-export 'run :params '() :returns :string)
 				""");
-		int g = globalCount(fetching) - 3;
+		int g = globalCount(fetching) - UNCONDITIONAL_TRAILING_GLOBALS - 1;
 		assertThat(countOf(fetching, prependGlobalGet(g, GUARD_TRAP_AND_SET), (byte) g)).isEqualTo(1);
 		byte[] noFetch = compileHostFetch("""
 				(defun run () 1)
@@ -521,6 +521,11 @@ class WasmImportCompilerTest {
 				""");
 		assertThat(countOf(noFetch, GUARD_TRAP_AND_SET)).isZero();
 	}
+
+	// The globals every module ends with, whatever its mode: the cached symbol t, the
+	// raw-local sentinel and the string output-stream buffer table. The re-entry guard
+	// is the last MODE-GATED global, so it sits just below them.
+	private static final int UNCONDITIONAL_TRAILING_GLOBALS = 3;
 
 	// if (blocktype empty); unreachable; end; i32.const 1; global.set -- the re-entry
 	// guard's trap-and-set, minus the leading global.get whose index varies by module.

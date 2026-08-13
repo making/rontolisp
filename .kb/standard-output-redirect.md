@@ -230,8 +230,10 @@ gate.
   pattern over `_write_stream_str` (which already dispatched null/t
   → stdout, negative i31 → string-stream record, fd → `fd_write`). The module
   global is seeded with `(call $_t_sym)` in `_start`. `_fresh_line_stream`
-  (`FUNC_FRESH_LINE_STREAM`, body in `WasmStringStreamRuntimeBuilder`) walks
-  the record's chunk chain for the last written byte. `_write_line`'s fd
+  (`FUNC_FRESH_LINE_STREAM`, body in `WasmStringStreamRuntimeBuilder`) reads the
+  last written byte straight out of the record's byte buffer (index `len`;
+  index 0 is the frame quote), a record nothing was written to being AT a line
+  start. `_write_line`'s fd
   dispatch is now i31-tested so a `t` value cannot trap. `--no-gc` is
   unchanged (it rejects specials).
 
@@ -239,7 +241,8 @@ gate.
 
 `fresh-line` now takes an optional stream argument everywhere. On a string
 stream the line-start test is EXACT (contents inspected: `StringWriter` buffer
-on interpreter/JVM, chunk-chain walk on WASM -- empty writes are skipped). On
+on interpreter/JVM, the record's byte buffer on WASM -- and a stream nothing was
+written to is at a line start). On
 any other stream (a file/fd) the column is unknown and a newline is ALWAYS
 written -- deliberately the same rule on every backend, instead of per-handle
 column tracking only some backends could afford. Stdout keeps the existing

@@ -1170,7 +1170,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// index above shifts.
 	static final int FUNC_SEQ_LEN = FUNC_ARR_SET + 1;
 
-	static final int FX_FUNC_LAST = FUNC_SEQ_LEN;
+	// _ostream_room (i32 rec, i32 n) -> (ref null eq): the string OUTPUT stream's byte
+	// buffer, grown (doubling) to hold n more content bytes. The one place the
+	// per-stream buffer table is indexed, so every append -- _write_stream_str,
+	// _write_line, fresh-line's newline -- and _str_stream_contents route through it.
+	// Reuses the (i32,i32) -> (ref null eq) signature (TYPE_RAT_NEW), so no new type
+	// entry; appended after the last fixed helper so no index above shifts.
+	static final int FUNC_OSTREAM_ROOM = FUNC_SEQ_LEN + 1;
+
+	static final int FX_FUNC_LAST = FUNC_OSTREAM_ROOM;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -1750,6 +1758,17 @@ public final class WasmLispCompiler implements LispCompiler {
 	// --no-wasi module reads this cell; every other build calls the clock_time_get
 	// import, whose slot here stays the trapping backstop.
 	static final int HOST_TIME_ADDR = 224;
+
+	// The string output-stream buffer table's two bookkeeping cells (232/236, still
+	// below the DATA_BASE_OFFSET=256 headroom): the high-water of slots ever handed out,
+	// and the head of the free list of slots handed BACK by _close -- a slot index + 1,
+	// so the untouched-memory zero is the empty list. The list itself is threaded
+	// through the table's own entries (a free slot holds the next such value as an i31),
+	// which puts it on the GC heap where the arena reset a host performs between calls
+	// cannot reach it. See WasmStringStreamRuntimeBuilder.
+	static final int OSTREAM_SLOT_ADDR = 232;
+
+	static final int OSTREAM_FREE_ADDR = 236;
 
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
@@ -2571,6 +2590,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		// index above keeps its value.
 		int tSymGlobalIndex = (reentryGuardGlobalIndex >= 0 ? reentryGuardGlobalIndex : lastModeGlobalIndex) + 1;
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
+		// The string output-stream buffer table (a TYPE_HASH_BUCKETS of $str_bytes,
+		// created by the first _make_str_ostream and doubled from there): the GC root the
+		// stream records reach their bytes through, since a linear-memory record cannot
+		// hold a reference. Last of all, for the same reason the two above are.
+		int ostreamTableGlobalIndex = rawSentinelGlobalIndex + 1;
 
 		// Create string table. The page-6 component base exists to keep the static data
 		// clear of the OTHER writers of the shared memory (the adapter's page-5 scratch,
@@ -4720,6 +4744,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				fnDef.addFunction(TYPE_ARR_SET); // _arr_set (header, flat, value) ->
 													// value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _seq_len (value) -> length
+				fnDef.addFunction(TYPE_RAT_NEW); // _ostream_room (rec, n) -> buffer
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -4967,6 +4992,17 @@ public final class WasmLispCompiler implements LispCompiler {
 					g.writeUnsignedLeb128(TYPE_CELL);
 					g.write(Instruction.END);
 				});
+				// The string output-stream buffer table at ostreamTableGlobalIndex, a
+				// (mut (ref null eq)) = null: allocated by the first _make_str_ostream,
+				// so a program that opens no string stream carries the null and nothing
+				// else.
+				gs.add(g -> {
+					g.writeRefType(true, Type.EQ.code());
+					g.write(am.ik.wasm.Mutability.VAR.code());
+					g.write(Instruction.REF_NULL);
+					g.writeHeapType(Type.EQ.code());
+					g.write(Instruction.END);
+				});
 			})
 			// Export section -- component mode exports `run` (the i32-returning _start)
 			// for
@@ -5182,7 +5218,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					.addFunction(WasmStringRuntimeBuilder.buildStringEqBody(true, stringTable))
 					.addFunction(WasmStringRuntimeBuilder.buildTrimBody())
 					.addFunction(WasmIoRuntimeBuilder.buildOpenBody())
-					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable))
+					.addFunction(WasmIoRuntimeBuilder.buildCloseBody(stringTable, ostreamTableGlobalIndex))
 					.addFunction(WasmIoRuntimeBuilder.buildWriteLineBody(stringTable))
 					.addFunction(WasmRuntimeBuilder.buildEqualBody(this.usesInstances ? instanceTypeBase() : -1))
 					.addFunction(WasmGetenvRuntimeBuilder.build());
@@ -5208,7 +5244,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// string-stream runtime helper bodies (FUNC_WRITE_STREAM_STR,
 				// FUNC_MAKE_STR_OSTREAM, FUNC_MAKE_STR_ISTREAM, FUNC_STR_STREAM_CONTENTS)
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildWriteStreamStrBody());
-				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody());
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeOutputStreamBody(ostreamTableGlobalIndex));
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildMakeInputStreamBody());
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildContentsBody());
 				// symbol-API helper bodies (FUNC_MAKE_SYMBOL .. FUNC_FMAKUNBOUND)
@@ -5345,6 +5381,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildArrSetBody());
 				// shared generic sequence-length dispatch body (FUNC_SEQ_LEN)
 				code.addFunction(WasmLengthCompiler.buildSeqLenBody());
+				// string output-stream buffer helper body (FUNC_OSTREAM_ROOM)
+				code.addFunction(WasmStringStreamRuntimeBuilder.buildOstreamRoomBody(ostreamTableGlobalIndex));
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {
