@@ -101,6 +101,30 @@ public final class FetchResponseShape {
 	 */
 	public static final String HOST_ENVELOPE_ERROR_KEY = "error";
 
+	/**
+	 * The import-object key the {@code --host-fetch} transport lives under -- the reactor
+	 * boundary's own module, so a host writes one {@code env} object and not two
+	 * ({@link ReactorEnvelope#HOST_MODULE}).
+	 */
+	public static final String HOST_IMPORT_MODULE = ReactorEnvelope.HOST_MODULE;
+
+	/**
+	 * The field carrying the request and the reply HEAD: the {@code request} record above
+	 * as JSON in, the {@code response} record (or the {@link #HOST_ENVELOPE_ERROR_KEY}
+	 * arm) as JSON out. Both shapes are fixed by this class, which is what lets a
+	 * generated host implement it rather than be asked for it.
+	 */
+	public static final String HOST_IMPORT_FIELD = "fetch";
+
+	/**
+	 * The field carrying the reply BODY, declared only on the streaming boundary
+	 * ({@code --host-boundary=streaming}): {@code (ptr, cap) -> i32}, the same
+	 * {@code read(2)} shape as the reactor's own body imports, with a NEGATIVE count
+	 * reporting a transfer that failed after the head crossed. Its absence in a module is
+	 * how a reader tells that the {@code body} key above carries the whole reply.
+	 */
+	public static final String HOST_BODY_IMPORT_FIELD = "readResponseBody";
+
 	/** The response {@code status} used when the plist has none. */
 	public static final int RESPONSE_STATUS_DEFAULT = 200;
 

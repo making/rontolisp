@@ -285,19 +285,145 @@ returns to the event loop and the next request would move it), so the generated 
 exposes the critical section itself: `serially(work)` runs `work` in the queue and hands
 it entry points that enter directly, because the queue they would take is the one they
 are in. `examples/cloudflare-workers/dog-fetcher` is the worked example -- `src/worker.js`
-is generated and CHECKED IN (306 lines), `src/index.js` went from 239 lines to 145 of
-which none is boundary. Gated to `--no-wasi` core modules (a component is instantiated through jco; a
+is generated and CHECKED IN, and its `src/index.js` lost every line that was boundary.
+Gated to `--no-wasi` core modules (a component is instantiated through jco; a
 `--no-gc` module imports nothing, so `new WebAssembly.Instance(module, {})` is its whole
-glue). Pinned by `HostGlueEmitterTest` (the checked-in `src/worker.js` byte-for-byte
-against what a four-line fetching reactor emits -- the glue depends on the DECLARATIONS
-alone, which is why the two agree; plus the promising selection, the no-import shape, the
-`--host-random` entry and the name-collision refusal), `RontoLispCliTest` (the flag writes
+glue). Pinned by `HostGlueEmitterTest` (each checked-in `src/worker.js` byte-for-byte
+against what a four-line fetching reactor emits on its boundary -- the glue depends on the
+DECLARATIONS alone, which is why the two agree; plus the promising selection, the
+no-import shape, the `--host-random` entry and the name-collision refusal),
+`RontoLispCliTest` (the flag writes
 the file; every other output shape is a clear error), and `WasmHostGlueE2eTest` (node 24
 JSPI: one generated file driving a suspending host, two overlapped calls both answering
 through the queue, then a synchronous host answering a STRING from the same file).
 Re-evaluation trigger: the queue is `.todo/348`'s subject -- once a reactor need not
 serialise, `serially` and the promise chain are what change, and the import object above
 them does not.
+
+**`--host-boundary` -- WHICH boundary, and what each costs (todo-351, 2026-08-14)**: a
+reactor's bodies leaving the envelope (`.kb/clack.md`) was unconditional on the Preview 1
+core module, and `--host-fetch`'s reply body with them. What that buys is real; what it
+costs was paid by every program, including the ones that fetch one JSON document and
+answer one. `compiler/HostBoundary` makes it a choice, and the choice is a MODULE
+decision -- it changes the import list -- so it is a flag of its own rather than a value on
+`--emit-js-glue`, which stays a boolean and now REFUSES one by name (an unvalidated value
+used to parse and be discarded, compiling the other boundary without a word).
+
+| | `streaming` (default) | `envelope` |
+| --- | --- | --- |
+| imports | `env.readRequestBody`, `env.writeResponseBody`, +`env.readResponseBody` and `env.fetch` under `--host-fetch` | `env.fetch` under `--host-fetch`, else NOTHING |
+| host state | one cursor per reading import, plus whatever holds its source | none |
+| binary body | crosses exactly | flattened one character per octet |
+| large body | linear memory flat | copied |
+| streamed upstream reply | forwarded chunk at a time | buffered first |
+| generated host | `instantiate` | + `defaultHost()` + `worker(module)` |
+| module size | within ~1% of each other, sign not stable -- see `size-report/results/cloudflare-workers.md` |  |
+
+**It is not a size decision -- do not sell it as one, and do not quote a bound.** The
+todo-351 spike measured 148,533 B against 147,959 B (48,912 / 49,029 gzip -9 -n) on a
+clack-free ticker, the envelope one marginally LARGER gzipped; the shipped
+`btc-ticker` measures the other way round and about 1% apart on both. Which sign it
+lands on is a property of the program and of the tree shaker, not of the boundary,
+which is exactly why `size-report` measures both rows rather than a README asserting
+one. The 20 lines of host glue are not the point either; the STATE is. Both defects the todo-340 review turned up on this surface were state-lifetime bugs (a
+reply cursor outliving its source, an instance selected outside the critical section), and
+an envelope host has no cursor to outlive anything.
+
+**What that lets the emitter WRITE.** Both halves that remain are fixed by the transport
+rather than chosen by the program, so `Surface` gained the two facts saying so
+(`derivedFetch`, `envelopeExport`) and the file emits them: `defaultHost()` (the
+`env.fetch` host half, from `FetchResponseShape` in both directions, error arm included)
+and `worker(module, options)` (a `Request` onto `ReactorEnvelope.REQUEST_KEYS`, a
+`Response` off `RESPONSE_KEYS`, the instance created on the first request and retired if a
+call traps, the queue taken when the fetch can suspend). A Worker is then
+`export default worker(module)` and nothing else --
+`examples/cloudflare-workers/btc-ticker` is that, three lines, byte-pinned like
+dog-fetcher. Both are DEFAULTS: `options.host` is laid over the derived entries one at a
+time, so a host replacing `env.fetch` keeps the rest of `env`. Neither is written on the
+streaming boundary, and that line is the whole rule -- a body out of band means the host
+owns the reader the octets come from and knows when the source moved under it, which is
+exactly what a declaration cannot state.
+
+**Two facts, derived from the IMPORTS rather than threaded down from the flag.**
+`WasmLispCompiler` reads `derivedFetch` off "`--host-fetch`, the program really calls
+`rontolisp:fetch`, `env.fetch` imported, `env.readResponseBody` not" and `envelopeExport`
+off "no `env.readRequestBody`, and an export that is BOTH the synthesized bridge defun and
+the transport's own export name". A flag is a request; what the module imports is the
+answer, and the glue has to describe the module it was emitted beside. Both fingerprints
+need both halves, and the review that added the second half of each is why: `env.fetch` by
+module+field alone matches a program's OWN import of that name (`--host-fetch` splices
+nothing for a program that never fetches, so the glue would have offered to implement
+rontolisp's HTTP envelope into a slot meaning something else), and `%reactor-dispatch` by
+member name alone matches a function a program happened to spell that way. Note what still
+follows: `examples/cloudflare-workers/httpbin`, which exports `handle-request` by HAND,
+gets no `worker()` -- migrating the `httpbin-*` family onto the generated glue is a
+separate, smaller win this makes possible and does not require.
+
+**`ReactorEnvelope` (in `compiler`) is where the envelope's names now live** -- the bridge
+defun, the export name, the six request keys, the three response keys, the `env` module
+and the two body fields -- because three packages that may not import each other needed
+them (`eval` synthesizes, `codegen.wasm` recognises, `HostGlueEmitter` maps), and an API
+spelled three times drifts. `FetchResponseShape` gained the `env.fetch` field names for
+the same reason. `ReactorEnvelopeTest` pins both key lists against `http-reactor.lisp`,
+the file that really reads and writes them, in both directions -- the response one
+scoped to `%http-reactor-envelope`, since the 500 arm's `:error` rides the error
+DOCUMENT's plist and is not an envelope key.
+
+**`rontolisp-body-imports`, and why the guard it replaces was wrong.** A hand-written
+reactor guards its own body imports with a reader feature now
+(`reader/Features.BODY_IMPORTS`), present exactly where those imports exist. It replaced
+`#+(and rontolisp-reactor (not rontolisp-component))`, which enumerated two of the targets
+that cannot carry them instead of naming the imports: it silently included `--no-gc` (a
+reactor with no packed-array representation for `:bytes` at all) and could not have
+followed a flag. `examples/cloudflare-workers/httpbin/worker.lisp` is the consumer -- one source
+whose imports the feature turns on for the streaming core module and off for the
+interpreter, the JVM, a WASI command module, a component and the envelope boundary
+alike. Pinned by `RontoLispCliTest.theStreamingBoundaryReadsTheSourceWithTheBodyImportsFeature`,
+which is the only shape that CAN pin it: no Java reads the feature back, so only a source
+branching on it can show it working (the `#-rontolisp-component` precedent).
+
+**What reviewing the generated `worker()` caught**, none of it visible from a passing
+build, and all of it the same shape as the todo-340 round -- state whose LIFETIME the
+emitted code got wrong:
+
+- **the instance is bound at admission, so `poisoned` has to be re-read inside the
+  critical section.** `live().serially(...)` evaluates `live()` before the queue admits
+  anything, so a request already in the queue holds the instance an earlier parked call is
+  about to trap. Measured: after a host import throws across the boundary, the two
+  requests behind it answered 200 with the trapped call's special binding still shallow
+  bound and its counter still advancing. The module's own re-entry guard does not save
+  them -- the EH landing pad CLEARS it on exactly the path that poisons the instance. The
+  hand-written `dog-fetcher/src/index.js` had the check; the generated copy had dropped it.
+- **the WHOLE handler belongs in the try.** Only the module call was guarded, so
+  `await request.arrayBuffer()` on an aborted upload and `new Response` on a status or
+  header the application is free to produce (0, 999, a newline in a value) escaped as an
+  unhandled rejection -- on Cloudflare a 1101 page with nothing in the log. `poisoned` is
+  now set only when the call ENTERED the module, since a refused Response says nothing
+  about the instance.
+- **`new Response("", { status: 204 })` is a TypeError.** The envelope always carries the
+  `"body"` key without a sink, so an ordinary 204 came back as a logged 500 with the
+  instance discarded; the mapping answers `head.body || null`.
+- **the decoder must `ignoreBOM`.** These octets are a VALUE: the default decoder deletes
+  a leading U+FEFF, shortening a BOM-prefixed request body by a character while the
+  `content-length` the same mapping just wrote still counts three.
+- **an options hook is awaited.** An async `remoteAddr` crossed as `{}` -- a 200 with an
+  empty hash table where an address was due, and no diagnostic anywhere.
+- **the three-line sketch is only written when the file answers EVERY import.** A
+  `--host-fetch` build whose only fetch sits on the LOAD path imports `env.fetch` while no
+  export is promising, so no host half is written -- and `worker(module)` 500s on every
+  request. The sketch now says `worker(module, { host })` there.
+
+**The default does not move, and neither does `dog-fetcher`.** The pair is the controlled
+comparison -- `dog-fetcher` streaming, `btc-ticker` envelope -- the way `httpbin` /
+`httpbin-clack` is for clack. The streaming MODULE is byte-identical to its pre-flag
+output; its glue moved by exactly the `ignoreBOM` line above. Pinned additionally by
+`RontoLispCliTest` (each
+refused mode name; the flag refused on every output shape that has no choice to make; the
+same source compiled twice, only the streaming build declaring the body imports),
+`HostFetchLibraryTest` (both boundaries carry the same derived envelope; the envelope one
+names neither the import nor the cursor nor the reactor's receive machinery) and
+`WasmHostGlueE2eTest` (`worker(module)` against a real `node:http` upstream: a GET, a POST
+body through the envelope, `remoteAddr`, and two overlapped requests both answering).
 
 **The re-entry guard -- a module that can suspend refuses interleaved calls (todo-337,
 2026-08-12)**: a parked JSPI call returns control to the host's event loop, so a second

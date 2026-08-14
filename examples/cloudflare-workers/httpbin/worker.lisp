@@ -27,17 +27,20 @@
 ;;; reads -- a WebAssembly.Suspending wrapper over a ReadableStream reader --
 ;;; and src/index.js answers synchronously, which the declaration allows.
 ;;;
-;;; The guard is "a reactor that is not a component", and both halves are
-;;; load-bearing. #+rontolisp-reactor, because the import only exists where a
-;;; HOST does -- check.lisp drives handle-request as an ordinary function on the
-;;; interpreter, the JVM and a plain WASI command module, and there the envelope
-;;; is the only body there is (a declared-but-unprovided import makes the
-;;; command module refuse to instantiate; on the interpreter it signals at the
-;;; call). #-rontolisp-component, because ../httpbin-component builds THIS FILE
-;;; as a component, whose host functions cross the canonical ABI instead of a
-;;; core import -- so that build keeps the body inside the envelope, and its
-;;; src/index.js still sends one. Same endpoints, one source, three hosts.
-#+(and rontolisp-reactor (not rontolisp-component))
+;;; The guard names the thing itself: #+rontolisp-body-imports is present
+;;; exactly where these two imports exist -- a --no-wasi wasm-GC core module
+;;; built on the streaming boundary (--host-boundary=streaming, the default).
+;;; Every other way of running THIS FILE lacks them, each for its own reason,
+;;; and the one feature covers all of them: check.lisp drives handle-request as
+;;; an ordinary function on the interpreter and the JVM; a plain WASI command
+;;; module's host is `wasmtime run`, which satisfies no env.* import (a
+;;; declared-but-unprovided one makes it refuse to instantiate);
+;;; ../httpbin-component builds this file as a component, whose host functions
+;;; cross the canonical ABI instead of a core import; and --host-boundary=envelope
+;;; asks for the in-band body on purpose. Every one of them keeps the envelope's
+;;; own "body" key, which is what the #- half below answers with. Same
+;;; endpoints, one source, every host.
+#+rontolisp-body-imports
 (rontolisp:wasm-import '%read-request-body
                        :from "env"
                        :as "readRequestBody"
@@ -52,7 +55,7 @@
 ;; transport's own, like %http-make-env: what this file writes out by hand is
 ;; the ENVELOPE, and neither the reused buffer nor the drain that empties it is
 ;; envelope work.
-#+(and rontolisp-reactor (not rontolisp-component))
+#+rontolisp-body-imports
 (defun %body-source (req)
   (declare (ignore req))
   (rontolisp::%http-reactor-body-octets
@@ -60,8 +63,7 @@
      (let ((buf (rontolisp::%http-reactor-buffer 65536)))
        (rontolisp::%http-reactor-chunk buf (%read-request-body buf))))))
 
-#-(and rontolisp-reactor (not rontolisp-component))
-(defun %body-source (req) (gethash "body" req))
+#-rontolisp-body-imports (defun %body-source (req) (gethash "body" req))
 
 ;;; The response body leaves the envelope the same way, through the mirror
 ;;; import: (ptr, len) OUT, "take these octets, they are the next chunk". No
@@ -70,7 +72,7 @@
 ;;; memory behind it. Note the direction flip: a chunk crossing out is a :bytes
 ;;; PARAMETER where one crossing in is a :bytes RESULT, which is the same rule
 ;;; -- the caller owns the memory -- applied both ways.
-#+(and rontolisp-reactor (not rontolisp-component))
+#+rontolisp-body-imports
 (rontolisp:wasm-import '%write-response-body
                        :from "env"
                        :as "writeResponseBody"
@@ -80,18 +82,18 @@
 
 ;; The SINK. The encode is the transport's own name again: a text chunk becomes
 ;; UTF-8, and an (unsigned-byte 8) body is already the octets it means.
-#+(and rontolisp-reactor (not rontolisp-component))
+#+rontolisp-body-imports
 (defun %body-sink (chunk)
   (%write-response-body (rontolisp::%http-reactor-octets chunk)))
 
 ;; T when the body was taken out of band. Every other build answers NIL and
 ;; never names the transport's writer at all, so nothing of it is spliced there.
-#+(and rontolisp-reactor (not rontolisp-component))
+#+rontolisp-body-imports
 (defun %write-body (body)
   (rontolisp::%http-reactor-write (function %body-sink) body)
   t)
 
-#-(and rontolisp-reactor (not rontolisp-component))
+#-rontolisp-body-imports
 (defun %write-body (body)
   (declare (ignore body))
   nil)

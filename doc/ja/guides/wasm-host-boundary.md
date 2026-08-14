@@ -141,6 +141,37 @@ const { instance } = await WebAssembly.instantiate(bytes, imports);
 - インポートされた関数にも wasm-GC 値モデルの他の関数と同じ 10 パラメータのアリティ上限があります。
 - モジュールのインスタンス化には宣言したすべてのインポートの提供が必要です: `wasmtime run` はインポートモジュール名ごとに `--preload <module>=<file>.wasm` を必要とし、JavaScript ホストはインポートオブジェクトを渡します。
 
+## ボディ境界の選択 (--host-boundary)
+
+HTTP リアクター — ホストがエントリポイントを呼ぶ `--no-wasi` モジュールであり、そこでは [`clack:clackup`](clack.md) と [`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md) がこれにコンパイルされます — は双方向に 1 つの JSON エンベロープで話します。`--host-boundary` が決めるのは、**ボディ**がそのエンベロープの中に乗るか、その横を渡るかです。これは**モジュールがインポートするもの**を変えるので、`--emit-js-glue` の値ではなく独立したフラグになっています。
+
+| | `streaming` (デフォルト) | `envelope` |
+| --- | --- | --- |
+| リクエストボディ | `env.readRequestBody(ptr, cap) -> i32`、1 回の呼び出しで 1 チャンク | エンベロープの `"body"` キー |
+| レスポンスボディ | `env.writeResponseBody(ptr, len)`、1 回の呼び出しで 1 チャンク | ヘッドの `"body"` キー |
+| `rontolisp:fetch` の応答ボディ (`--host-fetch`) | `env.readResponseBody(ptr, cap) -> i32` | 応答ヘッドの `"body"` キー |
+| ホスト側の状態 | 読み取りインポートごとに 1 カーソル | なし |
+| バイナリボディ | 正確に渡る | 1 オクテット 1 文字に平坦化される |
+| 大きなボディ | リニアメモリを二重に消費しない | コピーされる |
+| ストリーミングされた上流応答 | チャンク単位で転送 | バッファしてから転送 |
+| 生成されるホスト側 | `instantiate` のみ | 加えて `defaultHost()` と `worker(module)` |
+
+```console
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --host-boundary=envelope
+$ wasm-tools print worker.wasm | grep -oE '\(import "[^"]+" "[^"]+"'
+(import "env" "fetch"
+```
+
+どちらの形も他方の部分集合ではなく、モジュールサイズもどちら向きにも 1% 程度しか違わないため、これはサイズの判断ではありません。`streaming` がデフォルトなのは、データを失いようがない側だからです。すべてのボディが**ドキュメント**である場合 — JSON を 1 つ取得して JSON を 1 つ返す Worker — は `envelope` を選んでください。そこではコピーの代償は取るに足らず、ホストは寿命管理を誤りうる状態を持たなくなります。
+
+`--host-boundary` は `--no-wasi` と `.wasm` 出力を必要とし、`--component` や `--no-gc` とは併用できません: その 2 つはすでに in-band です(コンポーネントのホスト関数は canonical ABI を渡り、`--no-gc` は何もインポートしません)。素の WASI コマンドモジュールも同様で、そのホストは `wasmtime run` であり `env.*` インポートを何も満たしません。手書きのリアクター — `clack:clackup` を経由せず自前のエンベロープアダプタを書くもの — は `rontolisp-body-imports` リーダーフィーチャーでビルドに追従します。これらのインポートが存在する場所ちょうどで有効になります:
+
+```lisp
+#+rontolisp-body-imports
+(rontolisp:wasm-import '%read-request-body :from "env" :as "readRequestBody"
+                       :params '() :returns :bytes :async t)
+```
+
 ## ホストグルーの生成 (--emit-js-glue)
 
 ここまでのすべては宣言から導出されるので、JavaScript 側も同じく導出できます。`--emit-js-glue` はそれをモジュールの隣に書き出します(`out.wasm` -> `out.js`): インポートオブジェクト、双方向の `(ptr, len)` ステージング、呼び出しを囲む `__ronto_alloc` ブラケット、`WebAssembly.Suspending` ラッパー、ビルドが列挙したエクスポートちょうどに対する `WebAssembly.promising` エントリ、そしてサスペンドしうるモジュールが必要とする「一度に 1 呼び出し」のキューです。
@@ -183,4 +214,15 @@ const reply = await lisp.serially(async (entry) => {
 
 宣言だけでは取りこぼすインポートも書き出されます: `--host-random` のエントロピー源は、preview1 が `random_get(buf, len)` の意味を固定しているため、要求するのではなく*実装*されます。また `:bytes` の結果はモジュールのバッファではなくチャンクで答えます(`null` が終端)。生成されたカーソルが入り切らなかった分を保持するので、チャンクの出どころ — `ReadableStream` か `Uint8Array` か — だけがホストの決めることとして残ります。
 
-このフラグは `--no-wasi` と `.wasm` 出力を必要とします: コンポーネントは自身のバインディングジェネレータ経由でインスタンス化され、`--no-gc` モジュールは何もインポートしないので `new WebAssembly.Instance(module, {})` がグルーのすべてです。[dog-fetcher Worker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher) が実例です: `src/worker.js` は生成されてチェックインされており、`src/index.js` はホスト自身の半分だけです。
+**トランスポートがすでに固定しているホスト関数は、このファイルが書き出します。** リアクター境界の 2 つの半分はプログラムの選択ではまったくなく、[`envelope` 境界](#choosing-the-body-boundary---host-boundary)では — ホストが供給しなければならないインポートへボディが逃げないため — どちらも導出できます。生成ファイルはそれらをエクスポートします: `--host-fetch` が双方向を固定する `env.fetch` の実装である `defaultHost()` と、`Request` をエンベロープへ、ヘッドを `Response` へ写す `worker(module)` です。Worker はこれで 3 行になります:
+
+```js
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+```
+
+どちらもデフォルトであって置き換えではありません。`worker(module, options)` は `host`(導出されたエントリの上に 1 つずつ重ねるインポートエントリ)と `remoteAddr`(エンベロープの任意項目であるクライアントアドレスを返す `(request, env, ctx) => string`)を受け取ります。後者はランタイム中立なファイルが推測してはならない唯一のものです(Cloudflare では `(r) => r.headers.get("cf-connecting-ip")`)。`streaming` 境界ではどちらも書き出されません。そこではオクテットの出どころのリーダーをホストが所有し、ソースがいつ差し替わったかを知っているのもホストだけで、どちらも宣言では表現できないからです。
+
+このフラグは `--no-wasi` と `.wasm` 出力を必要とします: コンポーネントは自身のバインディングジェネレータ経由でインスタンス化され、`--no-gc` モジュールは何もインポートしないので `new WebAssembly.Instance(module, {})` がグルーのすべてです。境界ごとに 1 つずつ、2 つの実例があります: `streaming` の [dog-fetcher](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)(`src/worker.js` は生成されてチェックインされ、`src/index.js` はホスト自身の半分)と、`envelope` の [btc-ticker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/btc-ticker)(`src/index.js` は上の 3 行)です。

@@ -437,30 +437,66 @@ decisions in that, each load-bearing:
   serialised) are both legal. The declaration is also what puts the re-entry
   guard on the exports, which is the difference between a supported streaming
   host and a silent corruption.
-- **Preview 1 core modules, and only a REACTOR.** `--component` keeps both
-  bodies inside the envelope's `"body"` keys: a `wasm-import` is refused there (a
-  component's host functions cross the canonical ABI) and so is the packed array
-  behind `:bytes`. Re-evaluate when the component path grows a `list<u8>` lift —
-  nothing else about the split is Preview-1-specific. `--no-gc` keeps them too
-  and cannot serve at all anyway (below). And so does a plain WASI COMMAND
-  module, for a different reason: the marker is not a reactor's alone
-  (`clack-handler-reactor` is host-driven on every backend, so a program drives
-  its own `dispatch` in-process to develop a Worker — every
-  `examples/cloudflare-workers/*/check.lisp`), and there the host is `wasmtime
-  run`, which satisfies no `env.*` import. Declaring one made those modules
-  refuse to INSTANTIATE whether or not anything called `handle-request`, so
-  `HttpReactorInliner.process` takes a `reactor` flag (`--no-wasi`) beside the
-  backend and the bodies follow it, not the backend alone.
+- **Preview 1 core modules, only a REACTOR, and only when ASKED FOR
+  (`--host-boundary=streaming`, the default; todo-351).** Three conditions, and
+  they answer three different questions -- can this target carry the imports, is
+  this build a reactor at all, and was the split wanted.
+  - CAN: `--component` keeps both bodies inside the envelope's `"body"` keys, a
+    `wasm-import` being refused there (a component's host functions cross the
+    canonical ABI) and so is the packed array behind `:bytes`. Re-evaluate when
+    the component path grows a `list<u8>` lift — nothing else about the split is
+    Preview-1-specific. `--no-gc` keeps them too and cannot serve at all anyway
+    (below).
+  - IS: a plain WASI COMMAND module keeps them for a different reason. The
+    marker is not a reactor's alone (`clack-handler-reactor` is host-driven on
+    every backend, so a program drives its own `dispatch` in-process to develop
+    a Worker — every `examples/cloudflare-workers/*/check.lisp`), and there the
+    host is `wasmtime run`, which satisfies no `env.*` import. Declaring one made
+    those modules refuse to INSTANTIATE whether or not anything called
+    `handle-request`, so `HttpReactorInliner.process` takes a `reactor` flag
+    (`--no-wasi`) beside the backend.
+  - WAS IT WANTED: `--host-boundary=envelope` declines the split on a target that
+    could take it. A Worker whose every body is a DOCUMENT has no use for a
+    cursor, and what the split really costs is not bytes (the modules measure
+    about 1% apart, either way round) but host-side STATE — four host functions
+    and three cursors against none. `compiler/HostBoundary` is the vocabulary; the flag
+    joins the two flags above in `bodyOutOfBand`, one `if`.
+
+**The abstract body source is NORMALIZED at every entry (todo-351).** The header
+says a source is `nil`, a string or a 0-arity thunk; what a HOST can put in the
+envelope's `"body"` key is anything JSON has, and its own spelling of "there is
+none" is `null`, which `json-parse` answers as the symbol `NULL`. Non-nil and not
+a string, that used to fall through to the pull arm and be FUNCALLED -- the
+instance down, on every backend, for a host writing the natural thing.
+`%http-reactor-source` is the one guard (`nil` / string / `functionp`, everything
+else no body) and both entries take it: `%http-reactor-raw-body`, which is the
+request path, and `%http-reactor-body-stream`, which is what `--host-fetch`'s
+reply rides. The widening is deliberately in the SHARED normalizer rather than in
+the envelope-boundary arm that surfaced it -- the same key on the same transport
+means the same thing whichever boundary filled it.
+
+**And an EMPTY already-buffered source is end of stream at the FIRST read.**
+`%http-reactor-text-source`'s own rule is "never answer `""` before the end", and
+its string arm broke it: `""` came back as a chunk and EOF only at the second
+read, so the two boundaries handed a chunk-counting consumer different chunk
+counts for the same 204 (the pull arm's reader answers 0 and is done). `sent`
+starts true for an empty source. `read-all` was never affected, which is why it
+took the boundary pair to notice.
 
 A HAND-WRITTEN reactor (one that exports `handle-request` itself, so nothing is
 synthesized) writes those forms itself:
 `examples/cloudflare-workers/httpbin/worker.lisp` is the worked example, and it
 is also where the boundaries meet — the same file is built as a core module, as
 a component by `httpbin-component/`, and as an ordinary function by its own
-`check.lisp` on three more backends, so its imports are guarded by
-`#+(and rontolisp-reactor (not rontolisp-component))` and it defines the
-envelope-reading fallback under the negation. Both halves of that guard are
-load-bearing, and for the two different reasons the last bullet names.
+`check.lisp` on three more backends. Its imports are guarded by
+`#+rontolisp-body-imports` (`reader/Features.BODY_IMPORTS`, added exactly where
+the imports exist), and it defines the envelope-reading fallback under the
+negation. That feature REPLACED
+`#+(and rontolisp-reactor (not rontolisp-component))`, which spelled out two of
+the targets that cannot carry the imports rather than the imports themselves —
+so it silently got `--no-gc` wrong (a reactor with no `:bytes` representation)
+and could not have followed a flag at all. A guard that names the thing means
+what it says.
 
 Pinned by `WasmReactorBodyE2eTest` (node, a host that shares the module's
 memory: a body whose every character straddles a chunk boundary, a reader that

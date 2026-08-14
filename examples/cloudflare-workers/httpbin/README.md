@@ -147,20 +147,26 @@ price of entering `handle-request` through `WebAssembly.promising` and
 serialising its calls (see [`../dog-fetcher`](../dog-fetcher), which does that
 for its outgoing `fetch`).
 
-The guard on both imports in `worker.lisp` is
-`#+(and rontolisp-reactor (not rontolisp-component))`, and each half answers a
-different host:
+The guard on both imports in `worker.lisp` is `#+rontolisp-body-imports` — the
+feature a build carries exactly where those two imports exist, which is a
+`--no-wasi` wasm-GC core module on the **streaming** boundary
+(`--host-boundary=streaming`, the default). Every other way of running this same
+file lacks them, and the `#-` half answers all of them with the envelope's own
+`"body"` key:
 
-- **not a reactor** — `check.lisp` drives `handle-request` as an ordinary
-  function on the interpreter, the JVM and a plain WASI command module, where
-  there is no JavaScript at all. A declared-but-unprovided import makes a command
-  module refuse to instantiate, so those builds keep the envelope's `"body"`.
-- **not a component** — [`../httpbin-component`](../httpbin-component) builds
-  **this same file** as a component, where a core import does not exist (a
-  component's host functions cross the canonical ABI), so that build keeps the
-  envelope too.
+- **the interpreter and the JVM** — `check.lisp` drives `handle-request` as an
+  ordinary function, where there is no JavaScript at all.
+- **a plain WASI command module** — its host is `wasmtime run`, which satisfies
+  no `env.*` import; a declared-but-unprovided one makes the module refuse to
+  instantiate.
+- **a component** — [`../httpbin-component`](../httpbin-component) builds this
+  same file that way, and a component's host functions cross the canonical ABI
+  rather than a core import.
+- **`--host-boundary=envelope`** — the in-band body asked for on purpose. That
+  is what [`../btc-ticker`](../btc-ticker) is, and the reason the guard names the
+  imports rather than the targets that lack them: a flag can turn them off too.
 
-One source, three boundaries.
+One source, four boundaries.
 
 ## Nothing to shim: `--no-wasi`
 

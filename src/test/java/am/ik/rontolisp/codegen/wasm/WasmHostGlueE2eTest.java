@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
@@ -46,6 +47,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * The module is the same in all three, and so is the glue file: it is generated once,
  * from the declarations, and neither run edits it.
+ *
+ * <p>
+ * The last case is the OTHER boundary ({@code --host-boundary=envelope}), where the file
+ * writes the host too: {@code worker(module)} against a real {@code node:http} upstream
+ * and real {@code Request}/{@code Response} objects, with nothing supplied but the one
+ * thing a generated file may not guess -- which header carries the client address. Three
+ * lines of driver, which is all of
+ * {@code examples/cloudflare-workers/btc-ticker/src/index.js}.
  */
 @EnabledIf("am.ik.rontolisp.codegen.wasm.WasmHostGlueE2eTest#jspiIsAvailable")
 class WasmHostGlueE2eTest {
@@ -235,16 +244,120 @@ class WasmHostGlueE2eTest {
 		assertThat(runNode(driver).lines().toList()).containsExactly("dropped BBBBBB 300", "kept AAAAAA 34767");
 	}
 
+	// The ENVELOPE boundary, where every body rides the head -- so the glue writes the
+	// two halves the transport fixes and the host writes nothing at all. The upstream URL
+	// comes out of the QUERY STRING because the stub server below binds an ephemeral port
+	// (surefire runs two forks with intra-class parallelism 16; a fixed port is a flake).
+	private static final String ENVELOPE_MODULE = """
+			(rontolisp:async-defun grab (url)
+			  (let* ((res (rontolisp:await (rontolisp:fetch url)))
+			         (body (rontolisp:await (rontolisp:read-all (getf res :body)))))
+			    (list (getf res :status) body)))
+			(rontolisp:async-defun app (env)
+			  ;; /nothing answers 204 with an empty body -- the one status a Response
+			  ;; may NOT be constructed with a body for, and the envelope always
+			  ;; carries the "body" key.
+			  (if (equal (getf env :path-info) "/nothing")
+			      (list 204 nil (list ""))
+			      (let* ((raw (getf env :raw-body))
+			             (sent (if raw (rontolisp:await (rontolisp:read-all raw)) ""))
+			             (up
+			              (rontolisp:await
+			               (grab
+			                (concatenate 'string "http://127.0.0.1:"
+			                             (getf env :query-string) "/up")))))
+			        (list 200 (list :content-type "text/plain")
+			              (list (format nil "~a ~a ~a [~a] ~a ~a"
+			                            (if (eq (getf env :request-method) :post) "POST"
+			                                "GET")
+			                            (getf env :path-info) (getf env :remote-addr) sent
+			                            (car up) (car (cdr up))))))))
+			(rontolisp:http-handler 'app)
+			""";
+
+	// The emitted host, driven as a host: `worker(module)` is the WHOLE Worker, and the
+	// three lines below are all of examples/cloudflare-workers/btc-ticker/src/index.js.
+	// The upstream is a real node:http server rather than a stubbed env.fetch, because
+	// what is under test here is the env.fetch the GLUE wrote -- stubbing it would test
+	// nothing.
+	private static final String ENVELOPE_DRIVER = """
+			import { createServer } from "node:http";
+			import { readFileSync } from "node:fs";
+			import { worker } from "./glue.js";
+
+			const server = createServer((request, response) => {
+			  request.resume();
+			  request.on("end", () => {
+			    response.writeHead(200, { "content-type": "text/plain" });
+			    response.end("\\u3053\\u3093\\u306b\\u3061\\u306f");
+			  });
+			});
+			await new Promise((r) => server.listen(0, "127.0.0.1", r));
+			const port = server.address().port;
+
+			const module = new WebAssembly.Module(readFileSync(new URL("./glue.wasm", import.meta.url)));
+			console.log("imports", WebAssembly.Module.imports(module).map((i) => i.module + "." + i.name).join(","));
+
+			// Which header carries the client address is the platform's business, so the
+			// generated file does not guess -- this is the one thing it asks for.
+			const app = worker(module, { remoteAddr: (r) => r.headers.get("x-real-ip") });
+
+			const get = await app.fetch(
+			  new Request(`http://x.test/hello?${port}`, { headers: { "x-real-ip": "203.0.113.7" } }),
+			);
+			console.log(get.status, get.headers.get("content-type"), (await get.text()).trim());
+
+			// A request BODY, through the envelope's own "body" key.
+			const post = await app.fetch(
+			  new Request(`http://x.test/echo?${port}`, { method: "POST", body: "\\u307b\\u3052" }),
+			);
+			console.log((await post.text()).trim());
+
+			// Two OVERLAPPING requests: worker() runs them through the generated queue, so
+			// both answer -- without it the module's re-entry guard would trap one.
+			const both = await Promise.all([
+			  app.fetch(new Request(`http://x.test/a?${port}`)).then((r) => r.text()),
+			  app.fetch(new Request(`http://x.test/b?${port}`)).then((r) => r.text()),
+			]);
+			console.log("overlapped", both.map((t) => t.trim()).join(" | "));
+
+			// 204 answered with an EMPTY body: the envelope always carries the "body" key,
+			// and `new Response("", { status: 204 })` is a TypeError -- so a handler doing
+			// the ordinary thing would come back as a 500 with the instance thrown away.
+			const empty = await app.fetch(new Request(`http://x.test/nothing?${port}`));
+			console.log("empty", empty.status, (await empty.text()).length);
+			server.close();
+			""";
+
+	@Test
+	void theEmittedWorkerHalfIsTheWholeHostOnTheEnvelopeBoundary() throws Exception {
+		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
+				true);
+		Files.write(this.tempDir.resolve("glue.wasm"),
+				compiler.compile(program(ENVELOPE_MODULE, HostBoundary.ENVELOPE)));
+		Files.writeString(this.tempDir.resolve("glue.js"),
+				java.util.Objects.requireNonNull(compiler.hostGlueJs("glue.js")), StandardCharsets.UTF_8);
+		Path driver = this.tempDir.resolve("envelope.mjs");
+		Files.writeString(driver, ENVELOPE_DRIVER, StandardCharsets.UTF_8);
+		assertThat(runNode(driver).lines().toList()).containsExactly("imports env.fetch",
+				"200 text/plain GET /hello 203.0.113.7 [] 200 こんにちは", "POST /echo NIL [ほげ] 200 こんにちは",
+				"overlapped GET /a NIL [] 200 こんにちは | GET /b NIL [] 200 こんにちは", "empty 204 0");
+	}
+
 	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order.
 	private static List<LispVal> program() {
 		return program(MODULE);
 	}
 
 	private static List<LispVal> program(String source) {
+		return program(source, HostBoundary.STREAMING);
+	}
+
+	private static List<LispVal> program(String source, HostBoundary boundary) {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(source, Features.WASM_REACTOR));
-		loaded = HostFetchLibrary.process(loaded);
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true);
+		loaded = HostFetchLibrary.process(loaded, boundary);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		return GrayStreamsLibrary

@@ -59,7 +59,17 @@ program (interpreter/JVM socket, `wasmtime serve`, and the Worker — all four l
 verified; `.kb/clack.md`), and `examples/net/dog-fetcher.lisp` compiles UNEDITED under
 `--no-wasi --host-fetch` (its `http-handler` lowers to the reactor transport).
 
-**The `:body` split, and what it changed (todo-347).** The reply body used to ride the
+**The `:body` split, and what it changed (todo-347)** -- and, since todo-351, what
+DECLINING it costs (`--host-boundary=envelope`, `compiler/HostBoundary`): the import, the
+counter, the pull thunk and the negative-count channel are all gone, `%host-fetch-body`
+collapses to its in-band arm over the head's own `"body"` key, and the module imports
+`env.fetch` alone. `:body` is still the same first-class stream -- the in-band arm was
+always the already-buffered case of the same abstract source -- so nothing a program
+writes changes; what it pays instead is the copy and the flattening the split was built to
+avoid, which is nothing worth naming for a document-shaped reply and is why the SPLIT is
+still the default. Read the rest of this block as what that default buys.
+
+The reply body used to ride the
 response envelope as one JSON string, so a reactor's `:body` was an EAGER STRING decided
 before any Lisp ran: the whole reply was copied into linear memory twice, a BINARY reply
 could not cross at all (a `:string` result is a non-validating UTF-8 decode -- `ff fe 41`
@@ -100,7 +110,12 @@ The host half of both imports is now GENERATED (`--emit-js-glue`, `.kb/wasm-impo
 `examples/cloudflare-workers/dog-fetcher/src/worker.js` is emitted from these two
 declarations and checked in, and `src/index.js` keeps only the envelope above and the
 `ReadableStream` the reply body is pulled from -- which is why `HostFetchLibraryTest`
-still pins it against `FetchResponseShape`.
+still pins it against `FetchResponseShape`. **Without the split the host half is generated
+TOO** (todo-351): `env.fetch`'s two directions are both fixed by `FetchResponseShape`, so
+with no reader for a host to own, what it DOES is the same twenty lines in every program
+and the glue writes them (`defaultHost()`). That is the line the emitter draws, and it is
+the split itself: a body out of band is a reader the host owns and a cursor whose lifetime
+only it can see, and neither is derivable from a declaration.
 
 Pinned by `WasmHostFetchBodyE2eTest` (node, a JS host sharing the module's memory: the
 portable drain over a body every chunk boundary of which falls inside a code point, one

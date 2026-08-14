@@ -162,7 +162,11 @@ export default {
     }
 
     // Headers as an ARRAY of pairs: that is what keeps two Set-Cookie headers two.
-    return new Response(reply.body, {
+    // An EMPTY body becomes null rather than crossing as itself: 204/205/304 may
+    // only be constructed with a null body (`new Response(new Uint8Array(0),
+    // { status: 204 })` is a TypeError), and an empty body is the same response
+    // either way.
+    return new Response(reply.body?.length ? reply.body : null, {
       status: reply.status ?? 200,
       headers: reply.headers ?? [],
     });

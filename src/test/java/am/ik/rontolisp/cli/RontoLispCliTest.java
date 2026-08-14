@@ -6,6 +6,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
@@ -319,6 +320,123 @@ class RontoLispCliTest {
 				() -> runCli("", file.toString(), "-o", wasmFile.toString(), "--no-wasi", "--no-gc", "--emit-js-glue"))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("--emit-js-glue requires --no-wasi");
+	}
+
+	@Test
+	void anUnknownHostBoundaryIsRefusedByName() throws Exception {
+		// The flag used to be spelled --emit-js-glue=envelope, which PARSED (the key is
+		// in CliOptions.noValueKeys, which still takes an `=` form) and was thrown away:
+		// a build script asking for one boundary silently got the other. Both spellings
+		// of that mistake now say so.
+		Path file = tempDir.resolve("test.lisp");
+		Files.writeString(file, "(print 1)");
+		Path wasmFile = tempDir.resolve("test.wasm");
+		for (String bad : List.of("simple", "in-band", "ENVELOPE", "")) {
+			assertThatThrownBy(
+					() -> runCli("", file.toString(), "-o", wasmFile.toString(), "--no-wasi", "--host-boundary=" + bad))
+				.as("--host-boundary=%s", bad)
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("unknown --host-boundary '" + bad + "'")
+				.hasMessageContaining("streaming, envelope");
+		}
+		assertThatThrownBy(
+				() -> runCli("", file.toString(), "-o", wasmFile.toString(), "--no-wasi", "--emit-js-glue=envelope"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--emit-js-glue takes no value")
+			.hasMessageContaining("--host-boundary=");
+	}
+
+	@Test
+	void aHostBoundaryOutsideANoWasiCoreModuleIsAClearError() throws Exception {
+		// A reactor component is in band already, --no-gc imports nothing, and a WASI
+		// command module has no host to import from -- so on none of the three is there a
+		// boundary to choose. Refusing beats accepting a flag that would do nothing.
+		Path file = tempDir.resolve("test.lisp");
+		Files.writeString(file, "(print 1)");
+		Path wasmFile = tempDir.resolve("test.wasm");
+		Path classFile = tempDir.resolve("Test.class");
+		List<String[]> refused = List.of(new String[] { "-o", wasmFile.toString() },
+				new String[] { "-o", wasmFile.toString(), "--no-wasi", "--component" },
+				new String[] { "-o", wasmFile.toString(), "--no-wasi", "--no-gc" },
+				new String[] { "-o", classFile.toString(), "--no-wasi" });
+		for (String[] flags : refused) {
+			List<String> args = new java.util.ArrayList<>(List.of(file.toString()));
+			args.addAll(List.of(flags));
+			args.add("--host-boundary=envelope");
+			assertThatThrownBy(() -> runCli("", args.toArray(new String[0]))).as("%s", String.join(" ", args))
+				.isInstanceOf(UnsupportedOperationException.class)
+				.hasMessageContaining("--host-boundary requires --no-wasi");
+		}
+	}
+
+	@Test
+	void theEnvelopeBoundaryBuildsAModuleWithNoBodyImports() throws Exception {
+		// The boundary is a MODULE decision, and this is what it decides: the same source
+		// compiled twice, and only the streaming build declares the body imports. The
+		// checks are on the emitted names in the import section, the way
+		// aComponentBuildReadsTheSourceWithTheComponentFeature reads envpull.
+		Path file = tempDir.resolve("w.lisp");
+		Files.writeString(file, """
+				(rontolisp:async-defun app (env)
+				  (declare (ignore env))
+				  (let ((res (rontolisp:await (rontolisp:fetch "https://example.test/"))))
+				    (list (getf res :status) nil (list "ok"))))
+				(rontolisp:http-handler 'app)
+				""");
+		Path streaming = tempDir.resolve("streaming.wasm");
+		runCli("", file.toString(), "-o", streaming.toString(), "--no-wasi", "--host-fetch");
+		String split = new String(Files.readAllBytes(streaming), StandardCharsets.ISO_8859_1);
+		assertThat(split).contains("readRequestBody").contains("writeResponseBody").contains("readResponseBody");
+
+		Path envelope = tempDir.resolve("envelope.wasm");
+		runCli("", file.toString(), "-o", envelope.toString(), "--no-wasi", "--host-fetch", "--host-boundary=envelope");
+		String inBand = new String(Files.readAllBytes(envelope), StandardCharsets.ISO_8859_1);
+		// The import section is length-prefixed, so env.fetch reads as "\3env\5fetch".
+		assertThat(inBand).as("one import, and it is env.fetch")
+			.contains("\u0003env\u0005fetch")
+			.doesNotContain("readRequestBody")
+			.doesNotContain("writeResponseBody")
+			.doesNotContain("readResponseBody");
+	}
+
+	@Test
+	void theStreamingBoundaryReadsTheSourceWithTheBodyImportsFeature() throws Exception {
+		// The feature a HAND-WRITTEN reactor guards its own body imports with
+		// (examples/cloudflare-workers/httpbin/worker.lisp). Pinned the way
+		// aComponentBuildReadsTheSourceWithTheComponentFeature pins
+		// #-rontolisp-component:
+		// one source read twice, the guarded declaration surviving in exactly one build.
+		// Without this, dropping the Features.BODY_IMPORTS widening would stay green and
+		// silently flip that example to its in-band arm on every build.
+		Path file = tempDir.resolve("hand.lisp");
+		Files.writeString(file, """
+				#+rontolisp-body-imports
+				(rontolisp:wasm-import '%pull :from "env" :as "readRequestBody"
+				                       :params '() :returns :bytes :async t)
+				#+rontolisp-body-imports
+				(defun body (buf) (%pull buf))
+				#-rontolisp-body-imports
+				(defun body (buf) (declare (ignore buf)) nil)
+				(defun handle (json) (if (body nil) json json))
+				(rontolisp:wasm-export 'handle :params '(:string) :returns :string)
+				""");
+		Path streaming = tempDir.resolve("hand-streaming.wasm");
+		runCli("", file.toString(), "-o", streaming.toString(), "--no-wasi");
+		assertThat(new String(Files.readAllBytes(streaming), StandardCharsets.ISO_8859_1))
+			.as("the default boundary HAS the body imports, so the guarded declaration is read")
+			.contains("readRequestBody");
+
+		Path envelope = tempDir.resolve("hand-envelope.wasm");
+		runCli("", file.toString(), "-o", envelope.toString(), "--no-wasi", "--host-boundary=envelope");
+		assertThat(new String(Files.readAllBytes(envelope), StandardCharsets.ISO_8859_1))
+			.as("the envelope boundary has none, so the same source takes its #- arm")
+			.doesNotContain("readRequestBody");
+
+		// And nor does any target that could not carry them whatever the flag said.
+		Path component = tempDir.resolve("hand-component.wasm");
+		runCli("", file.toString(), "-o", component.toString(), "--no-wasi", "--component");
+		assertThat(new String(Files.readAllBytes(component), StandardCharsets.ISO_8859_1))
+			.doesNotContain("readRequestBody");
 	}
 
 	@Test

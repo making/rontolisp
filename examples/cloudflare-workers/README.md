@@ -7,7 +7,10 @@ dev`, then `npx wrangler deploy`.
 Two subjects — a greeting and a mini [httpbin](https://httpbin.org) — written
 once with **no library** and then once in the idiom of each web library. The
 point of the set is how differently the same endpoints come out, so the versions
-share no code and are not meant to diff cleanly against each other.
+share no code and are not meant to diff cleanly against each other. Two more
+directories are about the **boundary** rather than the library:
+[`dog-fetcher/`](dog-fetcher) and [`btc-ticker/`](btc-ticker) both call out over
+HTTP, on the two shapes `--host-boundary` chooses between.
 
 Module sizes are measured rather than quoted here:
 [`size-report/results/cloudflare-workers.md`](../../size-report/results/cloudflare-workers.md).
@@ -24,7 +27,8 @@ Module sizes are measured rather than quoted here:
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
-| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | The only one that is GENERATED: `--emit-js-glue` writes `src/worker.js` from the declarations, and `src/index.js` is the host's own half |
+| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | GENERATED: `--emit-js-glue` writes `src/worker.js` from the declarations, and `src/index.js` is the host's own half |
+| [`btc-ticker/`](btc-ticker) | **The Worker with nothing in it.** One outgoing request, one JSON answer — on the `--host-boundary=envelope` boundary, where every body rides the envelope and the module imports exactly one function | GENERATED, and all of it: `src/index.js` is three lines |
 
 ## Which one should I copy?
 
@@ -47,9 +51,15 @@ Module sizes are measured rather than quoted here:
   magnitude the largest and slowest to start of the four, and the reason is not
   ningle: it reads every request through the `lack-request` chain, which is also
   what lets its controllers ignore streams and JSON parsing entirely.
-- **`dog-fetcher/`** when the Worker has to call something else. It is the one
-  directory whose module imports a host function, and the only place the
-  synchronous-Lisp/asynchronous-JavaScript seam is dealt with.
+- **`btc-ticker/`** when the Worker fetches a document and answers a document.
+  It is the smallest complete thing here that talks to the outside world, and
+  the only one whose JavaScript is three lines, because on that boundary both
+  halves of the host are fixed by the transport and the build writes them.
+- **`dog-fetcher/`** when a body is not a document — an upload, an image, a
+  reply to forward as it arrives. Same seam, one boundary out: the bodies stream
+  through imports of their own, and its `src/index.js` is what saying so costs.
+  It is also where the synchronous-Lisp/asynchronous-JavaScript seam is
+  explained in full; both directories rely on it.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string
   marshalling, yes. Everywhere else, no.
@@ -128,8 +138,8 @@ loop happens locally: every directory with a handler has a `check.lisp` that
 drives it on the interpreter, the JVM and wasmtime.
 `httpbin-clack-one-source/` needs none — its program IS
 `../net/httpbin-clack.lisp`, so its loop is serving that file and `curl`; and
-`dog-fetcher/` cannot have one, because its HTTP client is an import only a
-Worker provides. Every other Lisp source here is pinned by
+`dog-fetcher/` and `btc-ticker/` cannot have one, because their HTTP client is
+an import only a Worker provides. Every other Lisp source here is pinned by
 `examples/examples.yaml`:
 
 ```bash
@@ -139,11 +149,14 @@ Worker provides. Every other Lisp source here is pinned by
 
 ## Deploying
 
-**All eleven are deployed to the real edge**, not only run under `wrangler dev`,
-and every endpoint in the tables above was checked there with `curl` — including
-the 405, the 404, the unparseable body, both `/status` answers, and
-`dog-fetcher/`'s outgoing request, whose JSPI bridge needs nothing on the edge
-that it did not need locally.
+**Eleven of the twelve are deployed to the real edge**, not only run under
+`wrangler dev`, and every endpoint in the tables above was checked there with
+`curl` — including the 405, the 404, the unparseable body, both `/status`
+answers, and `dog-fetcher/`'s outgoing request, whose JSPI bridge needs nothing
+on the edge that it did not need locally. `btc-ticker/` is the exception so far:
+it has been driven end to end against the real bitFlyer API through its own
+generated `worker()` on node 24 JSPI, which is the same code path workerd runs,
+but not yet deployed.
 
 Cloudflare budget-checks **Worker Startup Time** at deploy, and `wrangler
 deploy` prints it when it has one to report. Going through `clack:clackup`

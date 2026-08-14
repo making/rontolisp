@@ -194,8 +194,9 @@ class NoWasiLoadPathRefusalsTest {
 		PrintStream oldErr = System.err;
 		System.setErr(new PrintStream(err));
 		try {
-			var loaded = am.ik.rontolisp.eval.HostFetchLibrary
-				.process(LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR));
+			var loaded = am.ik.rontolisp.eval.HostFetchLibrary.process(
+					LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR),
+					HostBoundary.STREAMING);
 			var program = am.ik.rontolisp.eval.LispPreludeLibrary.process(
 					am.ik.rontolisp.eval.JsonLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
 			new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false, true).compile(program);

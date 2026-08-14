@@ -1,4 +1,4 @@
-# Build products and local tool state, for all three Worker projects here.
+# Build products and local tool state, for every Worker project here.
 # Every .wasm is produced by the directory's build.sh; dist/ is jco's output.
 *.wasm
 dist/

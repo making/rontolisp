@@ -212,6 +212,54 @@ Limitations:
   `wasmtime run` needs a `--preload <module>=<file>.wasm` per import module
   name, and a JavaScript host passes an import object.
 
+## Choosing the Body Boundary (--host-boundary)
+
+An HTTP reactor — a `--no-wasi` module whose entry point a host calls, which is
+what [`clack:clackup`](clack.md) and
+[`rontolisp:http-handler`](../reference/functions/rontolisp-http-handler.md)
+compile to there — speaks one JSON envelope in each direction. What
+`--host-boundary` decides is whether a **body** rides inside that envelope or
+crosses beside it, and it changes what the **module imports**, so it is a flag
+of its own rather than a value on `--emit-js-glue`.
+
+| | `streaming` (default) | `envelope` |
+| --- | --- | --- |
+| Request body | `env.readRequestBody(ptr, cap) -> i32`, a chunk per call | the envelope's `"body"` key |
+| Response body | `env.writeResponseBody(ptr, len)`, a chunk per call | the head's `"body"` key |
+| `rontolisp:fetch` reply body (`--host-fetch`) | `env.readResponseBody(ptr, cap) -> i32` | the reply head's `"body"` key |
+| Host-side state | a cursor per reading import | none |
+| Binary body | crosses exactly | flattened one character per octet |
+| Large body | never doubles linear memory | copied |
+| Streamed upstream reply | forwarded chunk at a time | buffered, then forwarded |
+| Generated host half | `instantiate` only | plus `defaultHost()` and `worker(module)` |
+
+```console
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --host-boundary=envelope
+$ wasm-tools print worker.wasm | grep -oE '\(import "[^"]+" "[^"]+"'
+(import "env" "fetch"
+```
+
+Neither shape is a subset of the other, and the module sizes land within about
+1% of each other either way round, so this is not a size decision. `streaming`
+is the default because it is the one that cannot lose data. Pick `envelope` when every
+body is a **document** — a Worker that fetches one JSON reply and answers one —
+because then the copy costs nothing worth naming and the host stops keeping
+state whose lifetime it has to get right.
+
+`--host-boundary` needs `--no-wasi` and a `.wasm` output, without `--component`
+or `--no-gc`: those two are in band already (a component's host functions cross
+the canonical ABI, and `--no-gc` imports nothing at all), and so is a plain WASI
+command module, whose host is `wasmtime run` and satisfies no `env.*` import. A
+hand-written reactor — one that spells out its own envelope adapter instead of
+going through `clack:clackup` — follows the build with the `rontolisp-body-imports`
+reader feature, which is present exactly where those imports are:
+
+```lisp
+#+rontolisp-body-imports
+(rontolisp:wasm-import '%read-request-body :from "env" :as "readRequestBody"
+                       :params '() :returns :bytes :async t)
+```
+
 ## Generating the Host Glue (--emit-js-glue)
 
 Everything above is derived from a declaration, so the JavaScript half can be
@@ -283,9 +331,36 @@ what `random_get(buf, len)` does. And a `:bytes` result is answered with chunks
 whatever did not fit, so which source the chunks come from — a
 `ReadableStream`, a `Uint8Array` — is all a host is left to decide.
 
+**Where the transport already fixed a host function, the file writes that too.**
+Two halves of a reactor's boundary are not the program's choice at all, and on
+the [`envelope` boundary](#choosing-the-body-boundary---host-boundary) — where
+no body escapes through an import a host would have to feed — both are
+derivable, so the generated file exports them: `defaultHost()`, the `env.fetch`
+half `--host-fetch` fixes in both directions, and `worker(module)`, which maps a
+`Request` onto the envelope and a `Response` off it. A Worker is then three
+lines:
+
+```js
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+```
+
+Both are defaults, not replacements. `worker(module, options)` takes `host` —
+import entries laid over the derived ones one at a time — and `remoteAddr`, a
+`(request, env, ctx) => string` for the envelope's optional client address,
+which is the one thing a runtime-neutral file may not guess (on Cloudflare it is
+`(r) => r.headers.get("cf-connecting-ip")`). On the `streaming` boundary neither
+is written, because there the host owns the reader the octets come from and
+knows when the source moved under it, and no declaration states either.
+
 The flag needs `--no-wasi` and a `.wasm` output: a component is instantiated
 through its own bindings generator, and a `--no-gc` module imports nothing, so
-`new WebAssembly.Instance(module, {})` is already the whole of its glue. The
-[dog-fetcher Worker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
-is the worked example: `src/worker.js` is generated and checked in, and
-`src/index.js` is only the host's own half.
+`new WebAssembly.Instance(module, {})` is already the whole of its glue. Two
+worked examples, one per boundary:
+[dog-fetcher](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
+on `streaming`, where `src/worker.js` is generated and checked in and
+`src/index.js` is the host's own half, and
+[btc-ticker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/btc-ticker)
+on `envelope`, where `src/index.js` is the three lines above.

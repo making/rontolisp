@@ -3,24 +3,19 @@
 // The host half of this module's boundary, derived from the program's own
 // declarations: one import-object entry per rontolisp:wasm-import, one entry
 // point per rontolisp:wasm-export, and every piece of linear-memory plumbing
-// between them -- the (ptr, len) pair a :string crosses as, the __ronto_alloc
-// bracket around a call, and the read(2) cursor a :bytes result is pulled
-// through.
+// between them -- the (ptr, len) pair a :string crosses as and the __ronto_alloc
+// bracket around a call.
 //
 // What a declaration cannot state is what a host function DOES, so that is the
 // one thing this file asks for: `host` is a plain function per import, keyed by
 // import module and field, taking and answering ordinary JavaScript values --
-// never a (ptr, len) pair, and, where an entry answers `chunk` below, a
-// Uint8Array or a string with null for the end of them.
+// never a (ptr, len) pair.
 //
 //   import { instantiate, suspending } from "./worker.js";
 //
 //   const lisp = instantiate(module, {
 //     env: {
-//       fetch: (text) => text,
-//       readResponseBody: () => chunk,
-//       readRequestBody: () => chunk,
-//       writeResponseBody: (chunk) => {},
+//       fetch: (text) => text,   // or leave it to defaultHost()
 //     },
 //   });
 //   await lisp.handleRequest(text);
@@ -34,6 +29,14 @@
 // calls. Host state that belongs to ONE such call is set inside that section:
 //
 //   await lisp.serially(async (entry) => { ...; return entry.handleRequest(...) });
+//
+// This module's boundary is the reactor envelope, so the Request/Response half
+// is derivable too and `worker` below is it:
+//
+//   import module from "./worker.wasm";
+//   import { worker } from "./worker.js";
+//
+//   export default worker(module);
 //
 // Regenerate it, never edit it: --emit-js-glue on the compile that wrote the
 // .wasm beside it.
@@ -76,11 +79,6 @@ export function instantiate(module, host = {}) {
   const readString = (ptr, len) =>
     decoder.decode(new Uint8Array(exports.memory.buffer, ptr, len));
 
-  // Octets, COPIED: the module pops the staging behind the pointer the moment
-  // the call returns, so a chunk not taken by then is one the host never gets.
-  const readBytes = (ptr, len) =>
-    new Uint8Array(exports.memory.buffer.slice(ptr, ptr + len));
-
   // Bytes the HOST hands over live in the module's own bump allocator, and
   // cross as the (ptr, len) pair every memory-typed value is.
   const write = (octets) => {
@@ -89,8 +87,6 @@ export function instantiate(module, host = {}) {
     return [ptr, octets.length];
   };
   const writeString = (value) => write(encoder.encode(String(value)));
-  const octets = (chunk) =>
-    typeof chunk === "string" ? encoder.encode(chunk) : chunk;
 
   // A host answers a value, or -- from an entry it marked suspending -- a promise
   // of one. Both shapes ride one expression, which is what lets this file drive a
@@ -139,89 +135,12 @@ export function instantiate(module, host = {}) {
     return new WebAssembly.Suspending(wrap(key, given[SUSPENDING]));
   };
 
-  // A :bytes RESULT is the read(2) shape: the MODULE owns the buffer and asks
-  // for up to `cap` octets, so what a host answers is the next CHUNK and this
-  // holds whatever did not fit. That remainder is the read side's only state,
-  // and it is why a host supplies chunks rather than a reader -- which source
-  // they come from (a ReadableStream, a Uint8Array) is all that is left to it.
-  const readers = new Map();
-  const reader = (what, source) => {
-    let rest = null;
-    let from = null;
-    // A body the module did not drain belongs to the call that could have and
-    // to no other, so every cursor is dropped at the next entry below -- and a
-    // host whose SOURCE moves inside one call (a new upstream reply opened by
-    // another import) drops this one itself with lisp.drop(key), because what
-    // did not fit is held here and nothing else can see the source move.
-    readers.set(what, () => {
-      rest = null;
-      from = null;
-    });
-    const drain = (ptr, cap) => {
-      const n = Math.min(cap, rest.length);
-      new Uint8Array(exports.memory.buffer, ptr, n).set(rest.subarray(0, n));
-      rest = rest.subarray(n);
-      return n;
-    };
-    // A read that FAILS answers a NEGATIVE count. Throwing would trap the
-    // instance; the count is an error channel the module turns into a Lisp
-    // condition where the octets are consumed, which is where every other
-    // backend reports a transfer that broke mid-body.
-    const failed = (error) => {
-      console.error(what + " failed:", error);
-      return -1;
-    };
-    return (args, ptr, cap) => {
-      // The remainder belongs to the arguments that asked for it: a source
-      // selected by argument must not be served the previous one's octets.
-      const key = JSON.stringify(args);
-      if (from !== key) {
-        rest = null;
-        from = key;
-      }
-      if (rest !== null && rest.length !== 0) return drain(ptr, cap);
-      try {
-        const answer = settle(what, source(...args), (chunk) => {
-          rest = chunk == null ? new Uint8Array(0) : octets(chunk);
-          return rest.length === 0 ? 0 : drain(ptr, cap);
-        });
-        return typeof answer?.then === "function"
-          ? answer.then(undefined, failed)
-          : answer;
-      } catch (error) {
-        return failed(error);
-      }
-    };
-  };
-
-  // What a read import left over, thrown away on demand. A host calls it when
-  // the SOURCE behind that import moves under it INSIDE one call -- a new
-  // upstream reply, say -- since the remainder is held above and nothing else
-  // can see the source move. With no argument it drops every one of them.
-  const drop = (key) =>
-    key === undefined ? readers.forEach((f) => f()) : readers.get(key)?.();
-
   const imports = {
     env: {
       // (:string) -> :string
       fetch: bind("env", "fetch", (what, call) => {
         return (p0, p0Len) =>
           settle(what, call(readString(p0, p0Len)), writeString);
-      }),
-      // () -> :bytes
-      readResponseBody: bind("env", "readResponseBody", (what, call) => {
-        const read = reader(what, call);
-        return (ptr, cap) => read([], ptr, cap);
-      }),
-      // () -> :bytes
-      readRequestBody: bind("env", "readRequestBody", (what, call) => {
-        const read = reader(what, call);
-        return (ptr, cap) => read([], ptr, cap);
-      }),
-      // (:bytes) -> :void
-      writeResponseBody: bind("env", "writeResponseBody", (what, call) => {
-        return (p0, p0Len) =>
-          settle(what, call(readBytes(p0, p0Len)), () => undefined);
       }),
     },
   };
@@ -276,7 +195,6 @@ export function instantiate(module, host = {}) {
   // the one call the queue admits.
   const call = (run, entry, stage, decode) => {
     const work = () => {
-      readers.forEach((drop) => drop());
       // The module's clock moves only when the host moves it, so move it per
       // call. Not a workaround for a frozen clock -- a Worker's own Date.now()
       // is frozen for the duration of a request as a timing-attack mitigation,
@@ -327,7 +245,148 @@ export function instantiate(module, host = {}) {
   return {
     exports,
     handleRequest: make$handleRequest(serialised),
-    drop,
     serially,
+  };
+}
+
+/**
+ * The half of this boundary the module's own declarations FIX, ready to hand to
+ * `instantiate` -- or to leave to `worker` below, which passes it for you. What
+ * a host is still free to do is override it: whatever it supplies wins, entry by
+ * entry.
+ *
+ * @returns {object} the import-object entries this file implements itself
+ */
+export function defaultHost() {
+  return {
+    env: {
+      fetch: suspending(async (head) => {
+        const request = JSON.parse(head);
+        try {
+          const response = await fetch(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+          });
+          return JSON.stringify({
+            status: response.status,
+            headers: [...response.headers],
+            body: await response.text(),
+          });
+        } catch (error) {
+          // The error arm becomes a Lisp condition at the fetch CALL; throwing
+          // here would trap the instance instead, and take the request with it.
+          return JSON.stringify({ error: String(error) });
+        }
+      }),
+    },
+  };
+}
+
+/**
+ * This module as a fetch handler -- the whole Worker, with nothing left over:
+ *
+ *   import module from "./worker.wasm";
+ *   import { worker } from "./worker.js";
+ *
+ *   export default worker(module);
+ *
+ * A Request becomes the envelope the module's entry point takes, the head it
+ * answers becomes a Response, and the instance is created on the FIRST REQUEST
+ * (a Worker forbids drawing entropy in global scope) and retired if a call ever
+ * traps.
+ *
+ * @param {WebAssembly.Module} module the compiled module
+ * @param {object} [options] `host` -- import entries, laid over defaultHost()'s
+ *   one at a time; `remoteAddr` -- (request, env, ctx) => the client
+ *   address, since which header carries it is the platform's business and not
+ *   this file's (`(r) => r.headers.get("cf-connecting-ip")` on Cloudflare)
+ * @returns {object} `{ fetch(request, env, ctx) }`
+ */
+export function worker(module, options = {}) {
+  // The derived half, with whatever the caller supplied laid over it ENTRY BY
+  // ENTRY: a host that wants its own env.fetch must not thereby lose the rest
+  // of `env`.
+  const given = options.host ?? {};
+  const base = defaultHost();
+  const host = {};
+  for (const key of new Set([...Object.keys(base), ...Object.keys(given)])) {
+    host[key] = { ...(base[key] ?? {}), ...(given[key] ?? {}) };
+  }
+  let instance = null;
+  // Set when a call TRAPPED: that instance skipped its arena reset and its Lisp
+  // state may be half-written, so nothing else may run on it. A Lisp ERROR is not
+  // this -- the transport answers 500 itself and the instance is fine.
+  let poisoned = false;
+  const live = () => {
+    if (poisoned) {
+      instance = null;
+      poisoned = false;
+    }
+    return (instance ??= instantiate(module, host));
+  };
+
+  // The request head. `target` stays RAW -- path and query still joined and
+  // still percent-encoded -- because the shared normalizer on the other side
+  // owns that split, and a pre-split path leaves the query string nil.
+  const envelope = async (request, remoteAddr) => {
+    const url = new URL(request.url);
+    const headers = Object.fromEntries(request.headers);
+    const octets = request.body
+      ? new Uint8Array(await request.arrayBuffer())
+      : null;
+    // A body with no content-length is a body the request parser does not read,
+    // and a chunked request carries none -- so set it from the octets we have.
+    if (octets?.length) headers["content-length"] = String(octets.length);
+    const head = {
+      method: request.method,
+      target: url.pathname + url.search,
+      headers,
+      scheme: url.protocol.replace(":", ""),
+    };
+    if (octets?.length) head.body = decoder.decode(octets);
+    if (remoteAddr != null) head["remote-addr"] = remoteAddr;
+    return JSON.stringify(head);
+  };
+
+  return {
+    // EVERYTHING is inside the try, not just the module call: reading an
+    // aborted upload rejects, and `new Response` throws on a status or a
+    // header an application is free to produce (0, 999, a newline in a
+    // value). Outside it those escape as an unhandled rejection, which the
+    // platform answers with its own error page and nothing in the log.
+    async fetch(request, env, ctx) {
+      let entered = false;
+      try {
+        const remoteAddr = await options.remoteAddr?.(request, env, ctx);
+        const input = await envelope(request, remoteAddr);
+        const head = JSON.parse(
+          await live().serially((lisp) => {
+            // Re-read INSIDE the critical section: the instance was bound at
+            // admission, and a call parked ahead of this one can poison it
+            // before this one runs. Refusing is the whole point -- a
+            // half-unwound instance answers wrong rather than failing, and
+            // the module's own re-entry guard is cleared by the landing pad
+            // on exactly the path that poisons it.
+            if (poisoned) throw new Error("instance discarded by an earlier trap");
+            entered = true;
+            return lisp.handleRequest(input);
+          }),
+        );
+        // Headers as an ARRAY of pairs, which keeps two Set-Cookie two.
+        return new Response(head.body || null, {
+          status: head.status ?? 200,
+          headers: head.headers ?? [],
+        });
+      } catch (error) {
+        console.error("handle-request failed:", error);
+        // Only a call that ENTERED the module can have left it half-written.
+        // A mapping, or a Response the platform refused, says nothing about
+        // the instance, and discarding it would cost the next request a
+        // reinstantiation for someone else's bad header.
+        if (entered) poisoned = true;
+        return new Response("internal error\n", { status: 500 });
+      }
+    },
   };
 }

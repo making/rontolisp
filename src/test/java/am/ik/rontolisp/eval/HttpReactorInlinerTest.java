@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -28,7 +29,7 @@ class HttpReactorInlinerTest {
 	@Test
 	void synthesizesTheExportFromANestedMarker() {
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
-				WitExportDirective.Backend.WASM_GC, true);
+				WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		String printed = print(out);
 		// The bridge and its export are APPENDED after the program, so a
 		// package-qualified dispatcher name resolves whatever package it ended in.
@@ -42,7 +43,7 @@ class HttpReactorInlinerTest {
 	@Test
 	void thePreview1BridgeTakesTheBodyOutOfTheEnvelope() {
 		String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
-				WitExportDirective.Backend.WASM_GC, true));
+				WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING));
 		// The head still crosses as the JSON string; the body crosses as octets through
 		// a caller-buffered :bytes import, declared suspending so a host that STREAMS
 		// the upload is a supported host rather than a silent re-entrancy hazard.
@@ -58,7 +59,7 @@ class HttpReactorInlinerTest {
 	@Test
 	void thePreview1BridgeTakesTheResponseBodyOutOfTheEnvelopeToo() {
 		String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
-				WitExportDirective.Backend.WASM_GC, true));
+				WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING));
 		// The mirror of the pull import, and deliberately NOT its symmetric spelling: a
 		// chunk crossing OUT is a :bytes PARAMETER (the module owns the octets, the host
 		// takes them), where one crossing IN is a :bytes RESULT into a module-owned
@@ -80,7 +81,8 @@ class HttpReactorInlinerTest {
 		// carry the HTTP transport at all.
 		for (WitExportDirective.Backend backend : List.of(WitExportDirective.Backend.WASM_COMPONENT,
 				WitExportDirective.Backend.WASM_NO_GC)) {
-			String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM), backend, true));
+			String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM), backend, true,
+					HostBoundary.STREAMING));
 			assertThat(printed).as("%s", backend)
 				.doesNotContain("WASM-IMPORT")
 				.contains("(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON)");
@@ -96,14 +98,14 @@ class HttpReactorInlinerTest {
 		// satisfies no env.* import -- declaring one there makes the module refuse to
 		// INSTANTIATE, whether or not anything calls handle-request.
 		String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
-				WitExportDirective.Backend.WASM_GC, false));
+				WitExportDirective.Backend.WASM_GC, false, HostBoundary.STREAMING));
 		assertThat(printed).doesNotContain("WASM-IMPORT").contains("(RONTOLISP::%HTTP-REACTOR-DISPATCH %REACTOR-JSON)");
 	}
 
 	@Test
 	void lowersTheMarkerCallSiteButKeepsTheAppStore() {
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
-				WitExportDirective.Backend.WASM_GC, true);
+				WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		// Nothing defines %http-reactor -- leaving the call in would be an undefined
 		// function at run time. The register call around it must survive; the marker
 		// itself (the name with no trailing dash) must be gone.
@@ -123,7 +125,7 @@ class HttpReactorInlinerTest {
 				  (rontolisp::%http-reactor-register app)
 				  (rontolisp::%http-reactor 'rontolisp::%http-reactor-dispatch
 				                            "handle-request"))
-				"""), WitExportDirective.Backend.WASM_GC, true);
+				"""), WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		String printed = print(out);
 		assertThat(printed).doesNotContain("(RONTOLISP::%HTTP-REACTOR (QUOTE");
 		int first = printed.indexOf("(DEFUN %REACTOR-DISPATCH");
@@ -139,7 +141,7 @@ class HttpReactorInlinerTest {
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM + """
 				(rontolisp:wasm-export 'handle-request :params '(:string) :returns :string)
 				(defun handle-request (json) (clack.handler.reactor:handle #'app json))
-				"""), WitExportDirective.Backend.WASM_GC, true);
+				"""), WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		String printed = print(out);
 		assertThat(printed).doesNotContain("%REACTOR-DISPATCH");
 		// The marker still has to go: nothing defines it. (The register call and the
@@ -154,7 +156,7 @@ class HttpReactorInlinerTest {
 				(rontolisp:wasm-export 'my-entry :as "handle-request"
 				                       :params '(:string) :returns :string)
 				(defun my-entry (json) json)
-				"""), WitExportDirective.Backend.WASM_GC, true);
+				"""), WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		assertThat(print(out)).doesNotContain("%REACTOR-DISPATCH");
 	}
 
@@ -163,7 +165,7 @@ class HttpReactorInlinerTest {
 		List<LispVal> out = HttpReactorInliner.process(LispReader.readAllFromString(SHIM + """
 				(rontolisp:wasm-export 'ping :returns :int)
 				(defun ping () 42)
-				"""), WitExportDirective.Backend.WASM_GC, true);
+				"""), WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		assertThat(print(out)).contains("%REACTOR-DISPATCH");
 	}
 
@@ -187,26 +189,32 @@ class HttpReactorInlinerTest {
 		// There the shim never even reads the marker (#+rontolisp-wasm); this guards
 		// the case where some other source carries one.
 		List<LispVal> program = LispReader.readAllFromString(SHIM);
-		assertThat(HttpReactorInliner.process(program, WitExportDirective.Backend.OTHER, true)).isSameAs(program);
+		assertThat(HttpReactorInliner.process(program, WitExportDirective.Backend.OTHER, true, HostBoundary.STREAMING))
+			.isSameAs(program);
 	}
 
 	@Test
 	void isANoOpWithoutAMarker() {
 		List<LispVal> program = LispReader.readAllFromString("(defun f (x) x)");
-		assertThat(HttpReactorInliner.process(program, WitExportDirective.Backend.WASM_GC, true)).isSameAs(program);
+		assertThat(
+				HttpReactorInliner.process(program, WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING))
+			.isSameAs(program);
 	}
 
 	@Test
 	void leavesQuotedDataAlone() {
 		List<LispVal> program = LispReader
 			.readAllFromString("(defvar *x* '(rontolisp::%http-reactor 'dispatch \"handle-request\"))");
-		assertThat(HttpReactorInliner.process(program, WitExportDirective.Backend.WASM_GC, true)).isSameAs(program);
+		assertThat(
+				HttpReactorInliner.process(program, WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING))
+			.isSameAs(program);
 	}
 
 	@Test
 	void rejectsANonLiteralExportName() {
 		List<LispVal> program = LispReader.readAllFromString("(defun run (a) (rontolisp::%http-reactor 'dispatch a))");
-		assertThatThrownBy(() -> HttpReactorInliner.process(program, WitExportDirective.Backend.WASM_GC, true))
+		assertThatThrownBy(() -> HttpReactorInliner.process(program, WitExportDirective.Backend.WASM_GC, true,
+				HostBoundary.STREAMING))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("literal string export name");
 	}

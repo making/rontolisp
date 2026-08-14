@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HttpReactorInliner;
@@ -186,7 +187,7 @@ class WasmReactorResponseBodyE2eTest {
 	private static byte[] compile() {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(MODULE, Features.WASM_REACTOR));
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary

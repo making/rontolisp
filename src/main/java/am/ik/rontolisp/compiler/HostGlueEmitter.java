@@ -26,6 +26,21 @@ import org.jspecify.annotations.Nullable;
  * generated {@code instantiate} asks its caller for.
  *
  * <p>
+ * <strong>Except where the TRANSPORT already fixed it.</strong> Two halves of a
+ * {@code --no-wasi} reactor's boundary are not the program's choice at all, and where a
+ * build carries both, the file writes them and the Worker is three lines
+ * ({@code Surface#derivedFetch} / {@code Surface#envelopeExport}): {@code --host-fetch}
+ * states both directions of {@code env.fetch} ({@link FetchResponseShape}), so its host
+ * half is the same twenty lines in every program; and the reactor's entry point takes the
+ * JSON envelope ({@link ReactorEnvelope}), so mapping a {@code Request} onto it and a
+ * {@code Response} off it is transport work. Both are DEFAULTS, never replacements -- a
+ * host still supplies its own {@code env.fetch}, or drives {@code instantiate} directly,
+ * and the generated {@code worker} lays whatever it is given over the derived entries one
+ * at a time. Neither is written for the STREAMING boundary, and that is the line: with a
+ * body out of band the host owns the reader the octets come from and knows when the
+ * source moved under it, which is exactly the thing a declaration cannot state.
+ *
+ * <p>
  * <strong>Whether an import really suspends is the HOST's decision, not the
  * declaration's.</strong> {@code :async t} says the module TOLERATES a suspension there
  * (the call answers a future either way), and a host answering synchronously is equally
@@ -78,9 +93,21 @@ public final class HostGlueEmitter {
 	 * @param setTime whether it exports {@code __ronto_set_time}
 	 * @param initExport the top-level entry point a host runs once after instantiation
 	 * ({@code _initialize}), or {@code null} when the module has none
+	 * @param derivedFetch whether the {@code --host-fetch} import is one this file can
+	 * IMPLEMENT rather than ask for: both directions of {@code env.fetch} are fixed by
+	 * {@link FetchResponseShape}, so its host half is the same twenty lines in every
+	 * program -- but only once the reply body rides the head too
+	 * ({@code --host-boundary=envelope}). With the body out of band the host owns the
+	 * reader the octets come from, which is exactly what a declaration cannot state
+	 * @param envelopeExport the reactor entry point whose WHOLE boundary is the JSON
+	 * envelope ({@link ReactorEnvelope}) -- head and both bodies -- so mapping a
+	 * {@code Request} onto it and a {@code Response} off it is transport work this file
+	 * can write; {@code null} when the module has no such entry point, or when its bodies
+	 * left the envelope
 	 */
 	public record Surface(List<Import> imports, @Nullable Import entropy, List<Export> exports, boolean arena,
-			boolean seedRandom, boolean setTime, @Nullable String initExport) {
+			boolean seedRandom, boolean setTime, @Nullable String initExport, boolean derivedFetch,
+			@Nullable String envelopeExport) {
 
 		/**
 		 * Every import-object entry, whoever implements it, grouped by module in order.
@@ -142,7 +169,11 @@ public final class HostGlueEmitter {
 		out.append("""
 
 				const encoder = new TextEncoder();
-				const decoder = new TextDecoder();
+				// ignoreBOM, because these octets are a VALUE and not a document: a
+				// leading U+FEFF is a character the other side chose, and the default
+				// decoder deletes it -- silently shortening a BOM-prefixed request body
+				// by one character while the content-length beside it still counts three.
+				const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 				const SUSPENDING = Symbol.for("rontolisp.suspending");
 				""");
@@ -164,6 +195,8 @@ public final class HostGlueEmitter {
 					""");
 		}
 		instantiate(out, surface);
+		defaultHost(out, surface);
+		worker(out, fileName, surface);
 		return out.toString();
 	}
 
@@ -249,17 +282,26 @@ public final class HostGlueEmitter {
 				// The host half of this module's boundary, derived from the program's own
 				// declarations: one import-object entry per rontolisp:wasm-import, one entry
 				// point per rontolisp:wasm-export, and every piece of linear-memory plumbing
-				// between them -- the (ptr, len) pair a :string crosses as, the __ronto_alloc
+				// between them -- the (ptr, len) pair a :string crosses as""");
+		out.append(hasReader(surface) ? """
+				, the __ronto_alloc
 				// bracket around a call, and the read(2) cursor a :bytes result is pulled
 				// through.
+				""" : """
+				 and the __ronto_alloc
+				// bracket around a call.
+				""");
+		out.append("""
 				//
 				// What a declaration cannot state is what a host function DOES, so that is the
 				// one thing this file asks for: `host` is a plain function per import, keyed by
 				// import module and field, taking and answering ordinary JavaScript values --
-				// never a (ptr, len) pair, and, where an entry answers `chunk` below, a
+				// never a (ptr, len) pair""");
+		out.append(hasReader(surface) ? """
+				, and, where an entry answers `chunk` below, a
 				// Uint8Array or a string with null for the end of them.
-				//
-				""");
+				""" : ".\n");
+		out.append("//\n");
 		out.append("//   import { instantiate")
 			.append(canSuspend(surface) ? ", suspending" : "")
 			.append(" } from \"./")
@@ -275,7 +317,10 @@ public final class HostGlueEmitter {
 				module = imp.module();
 				out.append("//     ").append(jsKey(module)).append(": {\n");
 			}
-			out.append("//       ").append(jsKey(imp.field())).append(": ").append(sketch(imp)).append(",\n");
+			out.append("//       ").append(jsKey(imp.field())).append(": ").append(sketch(imp)).append(",");
+			// An entry the file IMPLEMENTS is still the host's to override, so it stays
+			// in the sketch -- with the note that supplying it is optional.
+			out.append(derived(surface, imp) ? "   // or leave it to defaultHost()\n" : "\n");
 		}
 		if (module != null) {
 			out.append("//     },\n//   });\n");
@@ -304,6 +349,21 @@ public final class HostGlueEmitter {
 			out.append("//\n//   await lisp.serially(async (entry) => { ...; return entry.")
 				.append(first)
 				.append("(...) });\n");
+		}
+		if (surface.envelopeExport() != null) {
+			out.append("""
+					//
+					// This module's boundary is the reactor envelope, so the Request/Response half
+					// is derivable too and `worker` below is it:
+					//
+					""");
+			out.append("//   import module from \"./").append(moduleFile(fileName)).append("\";\n");
+			out.append("//   import { worker } from \"./").append(fileName).append("\";\n//\n");
+			// The three-line form is only honest when this file implements every import
+			// the module has: with one left over, worker(module) instantiates and fails
+			// at the first request, and the host has to be handed in.
+			out.append(selfContained(surface) ? "//   export default worker(module);\n"
+					: "//   export default worker(module, { host });   // the imports above are still yours\n");
 		}
 		out.append("""
 				//
@@ -375,6 +435,329 @@ public final class HostGlueEmitter {
 		startup(out, surface);
 		exports(out, surface);
 		out.append("}\n");
+	}
+
+	// --host-fetch over the ENVELOPE boundary: what env.fetch does is fixed in both
+	// directions by FetchResponseShape (the request record in, the response record out,
+	// the reserved error key on a throw), so the host half is the same in every program
+	// and is written here rather than asked for. Only over that boundary: with the reply
+	// body out of band the host also owns the reader the octets come from and knows when
+	// the source moved, and neither is derivable.
+	private static void defaultHost(StringBuilder out, Surface surface) {
+		if (!writesFetch(surface)) {
+			return;
+		}
+		out.append("""
+
+				/**
+				 * The half of this boundary the module's own declarations FIX, ready to hand to
+				 * `instantiate` -- or to leave to `worker` below, which passes it for you. What
+				 * a host is still free to do is override it: whatever it supplies wins, entry by
+				 * entry.
+				 *
+				 * @returns {object} the import-object entries this file implements itself
+				 */
+				export function defaultHost() {
+				  return {
+				""");
+		out.append("    ").append(jsKey(FetchResponseShape.HOST_IMPORT_MODULE)).append(": {\n");
+		out.append("      ")
+			.append(jsKey(FetchResponseShape.HOST_IMPORT_FIELD))
+			.append(": suspending(async (head) => {\n");
+		out.append("        const request = JSON.parse(head);\n        try {\n");
+		out.append("          const response = await fetch(request.").append(requestField("url")).append(", {\n");
+		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
+			if (!"url".equals(field.name())) {
+				out.append("            ")
+					.append(field.name())
+					.append(": request.")
+					.append(requestField(field.name()))
+					.append(",\n");
+			}
+		}
+		out.append("          });\n          return JSON.stringify({\n");
+		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
+			out.append("            ").append(field.name()).append(": ").append(switch (field.name()) {
+				case "status" -> "response.status";
+				// An ARRAY of pairs, never an object: a name may repeat.
+				case "headers" -> "[...response.headers]";
+				// The whole reply, in the head: that IS this boundary.
+				case "body" -> "await response.text()";
+				default -> throw new UnsupportedOperationException(
+						"--emit-js-glue: the http-plist response record grew a field this host half does not answer: "
+								+ field.name());
+			}).append(",\n");
+		}
+		out.append("          });\n");
+		out.append("        } catch (error) {\n");
+		out.append("          // The error arm becomes a Lisp condition at the fetch CALL; throwing\n");
+		out.append("          // here would trap the instance instead, and take the request with it.\n");
+		out.append("          return JSON.stringify({ ")
+			.append(jsKey(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY))
+			.append(": String(error) });\n");
+		out.append("        }\n      }),\n    },\n  };\n}\n");
+	}
+
+	// Every request-record field is answered from the same-named property of the parsed
+	// envelope; the switch exists so a field this half does not carry fails the BUILD
+	// rather than crossing as undefined.
+	private static String requestField(String name) {
+		return switch (name) {
+			case "url", "method", "headers", "body" -> name;
+			default -> throw new UnsupportedOperationException(
+					"--emit-js-glue: the http-plist request record grew a field this host half does not send: " + name);
+		};
+	}
+
+	// Whether the --host-fetch host half above is written at all. A JSPI wrapper is what
+	// lets a promise answer a synchronous import, so a build where no export is entered
+	// through `promising` has nowhere to put one -- there the host supplies its own
+	// env.fetch and `instantiate` says so by name if it forgets.
+	private static boolean writesFetch(Surface surface) {
+		return surface.derivedFetch() && canSuspend(surface);
+	}
+
+	// Whether this import is one defaultHost() answers.
+	private static boolean derived(Surface surface, Import imp) {
+		return writesFetch(surface) && FetchResponseShape.HOST_IMPORT_MODULE.equals(imp.module())
+				&& FetchResponseShape.HOST_IMPORT_FIELD.equals(imp.field());
+	}
+
+	// Whether this file answers EVERY import the module has, so `worker(module)` really
+	// is the whole Worker. It is not enough that the boundary is the envelope: a program
+	// may import something of its own, and a --host-fetch build whose only fetch sits on
+	// the LOAD path imports env.fetch while no export is promising -- so no host half is
+	// written for it, and a caller taking the three-line sketch at its word would get a
+	// 500 on every request from an import nobody supplied.
+	private static boolean selfContained(Surface surface) {
+		return surface.imports().stream().allMatch(imp -> derived(surface, imp));
+	}
+
+	// The whole Worker, over an entry point whose boundary is the envelope and nothing
+	// else. Mapping a Request onto that envelope and a Response off it is TRANSPORT work
+	// -- the keys are ReactorEnvelope's, fixed by the shared normalizer on the other side
+	// -- so it is written here rather than copied into every host. The one thing that is
+	// not transport work is which header carries the client address, and that is the one
+	// thing left to the caller.
+	private static void worker(StringBuilder out, String fileName, Surface surface) {
+		String export = surface.envelopeExport();
+		if (export == null) {
+			return;
+		}
+		String entry = jsName(export);
+		boolean suspends = canSuspend(surface);
+		boolean whole = selfContained(surface);
+		out.append("\n/**\n * This module as a fetch handler")
+			.append(whole ? " -- the whole Worker, with nothing left over" : "")
+			.append(":\n *\n");
+		out.append(" *   import module from \"./").append(moduleFile(fileName)).append("\";\n");
+		out.append(" *   import { worker } from \"./").append(fileName).append("\";\n *\n");
+		out.append(whole ? " *   export default worker(module);\n"
+				: " *   export default worker(module, { host });   // the imports are still yours\n");
+		out.append("""
+				 *
+				 * A Request becomes the envelope the module's entry point takes, the head it
+				 * answers becomes a Response, and the instance is created on the FIRST REQUEST
+				 * (a Worker forbids drawing entropy in global scope) and retired if a call ever
+				 * traps.
+				 *
+				 * @param {WebAssembly.Module} module the compiled module
+				""");
+		out.append(" * @param {object} [options] ");
+		if (!surface.needsHost()) {
+			// Nothing to supply: this module imports nothing at all.
+			out.append("`remoteAddr` -- ");
+		}
+		else if (writesFetch(surface)) {
+			out.append("`host` -- import entries, laid over defaultHost()'s\n *   one at a time; `remoteAddr` -- ");
+		}
+		else {
+			out.append("`host` -- one plain function per import, keyed by\n"
+					+ " *   module and field, as `instantiate` takes it; `remoteAddr` -- ");
+		}
+		out.append("""
+				(request, env, ctx) => the client
+				 *   address, since which header carries it is the platform's business and not
+				 *   this file's (`(r) => r.headers.get("cf-connecting-ip")` on Cloudflare)
+				 * @returns {object} `{ fetch(request, env, ctx) }`
+				 */
+				export function worker(module, options = {}) {
+				""");
+		workerHost(out, surface);
+		out.append("""
+				  let instance = null;
+				  // Set when a call TRAPPED: that instance skipped its arena reset and its Lisp
+				  // state may be half-written, so nothing else may run on it. A Lisp ERROR is not
+				  // this -- the transport answers 500 itself and the instance is fine.
+				  let poisoned = false;
+				  const live = () => {
+				    if (poisoned) {
+				      instance = null;
+				      poisoned = false;
+				    }
+				""");
+		out.append("    return (instance ??= instantiate(module")
+			.append(surface.needsHost() ? ", host" : "")
+			.append("));\n  };\n");
+		envelopeRequest(out);
+		out.append("""
+
+				  return {
+				    // EVERYTHING is inside the try, not just the module call: reading an
+				    // aborted upload rejects, and `new Response` throws on a status or a
+				    // header an application is free to produce (0, 999, a newline in a
+				    // value). Outside it those escape as an unhandled rejection, which the
+				    // platform answers with its own error page and nothing in the log.
+				    async fetch(request, env, ctx) {
+				      let entered = false;
+				      try {
+				        const remoteAddr = await options.remoteAddr?.(request, env, ctx);
+				        const input = await envelope(request, remoteAddr);
+				""");
+		if (suspends) {
+			out.append("""
+					        const head = JSON.parse(
+					          await live().serially((lisp) => {
+					            // Re-read INSIDE the critical section: the instance was bound at
+					            // admission, and a call parked ahead of this one can poison it
+					            // before this one runs. Refusing is the whole point -- a
+					            // half-unwound instance answers wrong rather than failing, and
+					            // the module's own re-entry guard is cleared by the landing pad
+					            // on exactly the path that poisons it.
+					            if (poisoned) throw new Error("instance discarded by an earlier trap");
+					            entered = true;
+					""");
+			out.append("            return lisp.").append(entry).append("(input);\n");
+			out.append("          }),\n        );\n");
+		}
+		else {
+			// Nothing can be parked, so nothing can have poisoned the instance between
+			// binding it and calling it: a synchronous call cannot be interleaved.
+			out.append("        entered = true;\n        const head = JSON.parse(live().")
+				.append(entry)
+				.append("(input));\n");
+		}
+		envelopeResponse(out);
+		out.append("      } catch (error) {\n");
+		out.append("        console.error(\"").append(export).append(" failed:\", error);\n");
+		out.append("""
+				        // Only a call that ENTERED the module can have left it half-written.
+				        // A mapping, or a Response the platform refused, says nothing about
+				        // the instance, and discarding it would cost the next request a
+				        // reinstantiation for someone else's bad header.
+				        if (entered) poisoned = true;
+				        return new Response("internal error\\n", { status: 500 });
+				      }
+				    },
+				  };
+				}
+				""");
+	}
+
+	// The import object worker() instantiates with.
+	private static void workerHost(StringBuilder out, Surface surface) {
+		if (!surface.needsHost()) {
+			return;
+		}
+		if (!writesFetch(surface)) {
+			out.append("  const host = options.host ?? {};\n");
+			return;
+		}
+		out.append("""
+				  // The derived half, with whatever the caller supplied laid over it ENTRY BY
+				  // ENTRY: a host that wants its own env.fetch must not thereby lose the rest
+				  // of `env`.
+				  const given = options.host ?? {};
+				  const base = defaultHost();
+				  const host = {};
+				  for (const key of new Set([...Object.keys(base), ...Object.keys(given)])) {
+				    host[key] = { ...(base[key] ?? {}), ...(given[key] ?? {}) };
+				  }
+				""");
+	}
+
+	// A Request -> the request head, key by key. The keys are the envelope's own
+	// (ReactorEnvelope.REQUEST_KEYS): a key this mapping does not answer fails the BUILD,
+	// so growing the envelope cannot silently drop one here.
+	private static void envelopeRequest(StringBuilder out) {
+		out.append("""
+
+				  // The request head. `target` stays RAW -- path and query still joined and
+				  // still percent-encoded -- because the shared normalizer on the other side
+				  // owns that split, and a pre-split path leaves the query string nil.
+				  const envelope = async (request, remoteAddr) => {
+				    const url = new URL(request.url);
+				    const headers = Object.fromEntries(request.headers);
+				    const octets = request.body
+				      ? new Uint8Array(await request.arrayBuffer())
+				      : null;
+				    // A body with no content-length is a body the request parser does not read,
+				    // and a chunked request carries none -- so set it from the octets we have.
+				    if (octets?.length) headers["content-length"] = String(octets.length);
+				    const head = {
+				""");
+		List<String> conditional = new ArrayList<>();
+		for (String key : ReactorEnvelope.REQUEST_KEYS) {
+			switch (key) {
+				case "method" -> out.append("      method: request.method,\n");
+				case "target" -> out.append("      target: url.pathname + url.search,\n");
+				case "headers" -> out.append("      headers,\n");
+				case "scheme" -> out.append("      scheme: url.protocol.replace(\":\", \"\"),\n");
+				// Both optional, and ABSENT rather than empty when there is none: the
+				// envelope's own defaults are what fills them in.
+				case "body" -> conditional.add("    if (octets?.length) head." + key + " = decoder.decode(octets);");
+				case "remote-addr" ->
+					conditional.add("    if (remoteAddr != null) head[\"" + key + "\"] = remoteAddr;");
+				default -> throw new UnsupportedOperationException(
+						"--emit-js-glue: the reactor request envelope grew a key this mapping does not fill: " + key);
+			}
+		}
+		out.append("    };\n");
+		for (String line : conditional) {
+			out.append(line).append('\n');
+		}
+		out.append("    return JSON.stringify(head);\n  };\n");
+	}
+
+	// The response head -> a Response, key by key, same rule as above.
+	private static void envelopeResponse(StringBuilder out) {
+		Map<String, String> reply = new LinkedHashMap<>();
+		for (String key : ReactorEnvelope.RESPONSE_KEYS) {
+			reply.put(key, switch (key) {
+				case "status" -> "head.status ?? 200";
+				case "headers" -> "head.headers ?? []";
+				// NOT `?? null`: the envelope always carries the key without a sink, so
+				// an empty body arrives as "" -- and `new Response("", {status: 204})`
+				// is a TypeError (204/205/304 may only be constructed with a null body).
+				// An empty string and no body are the same response anyway.
+				case "body" -> "head.body || null";
+				default -> throw new UnsupportedOperationException(
+						"--emit-js-glue: the reactor response envelope grew a key this mapping does not read: " + key);
+			});
+		}
+		out.append("""
+				        // Headers as an ARRAY of pairs, which keeps two Set-Cookie two.
+				""");
+		out.append("        return new Response(").append(replyKey(reply, "body")).append(", {\n");
+		out.append("          status: ").append(replyKey(reply, "status")).append(",\n");
+		out.append("          headers: ").append(replyKey(reply, "headers")).append(",\n        });\n");
+	}
+
+	// The .wasm this glue was written beside: the flag names the glue after the module
+	// (out.wasm -> out.js), so the sketch can name the real file rather than a
+	// placeholder.
+	private static String moduleFile(String fileName) {
+		return (fileName.endsWith(".js") ? fileName.substring(0, fileName.length() - ".js".length()) : fileName)
+				+ ".wasm";
+	}
+
+	private static String replyKey(Map<String, String> reply, String key) {
+		String value = reply.get(key);
+		if (value == null) {
+			throw new UnsupportedOperationException("--emit-js-glue: the reactor response envelope no longer carries '"
+					+ key + "', which this mapping is written around");
+		}
+		return value;
 	}
 
 	// Only the helpers this module's declarations actually reach are written: a program

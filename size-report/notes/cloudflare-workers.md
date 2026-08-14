@@ -35,6 +35,17 @@ lowers it onto ONE host import, so what separates the two rows is that lowering
 plus the JSON parsing of the upstream answer: a reactor's way out costs an
 import entry and a wrapper, not a transport of its own.
 
+**The two `btc-ticker` rows are the same source on the two host BOUNDARIES**, and
+they are here to keep anyone from selling that choice as a size decision. The
+first is `--host-boundary=envelope` (every body rides the JSON envelope; the
+module imports `env.fetch` and nothing else), the second the default streaming
+boundary (three more imports, carrying the request body, the response body and
+the reply's body as octets). They land within a rounding error of each other,
+and which way the difference falls is not stable across compiler changes. What
+the boundary really trades is host-side STATE -- four host functions and three
+cursors against none -- and how much of the host the build can therefore write
+for you; `examples/cloudflare-workers/btc-ticker/README.md` has that table.
+
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
 is ningle or its router myway: ningle reads every request through the

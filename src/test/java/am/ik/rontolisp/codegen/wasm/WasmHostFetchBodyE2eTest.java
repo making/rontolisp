@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HostFetchLibrary;
@@ -218,7 +219,8 @@ class WasmHostFetchBodyE2eTest {
 	// source machinery the reply's stream rides, then the JSON library and the prelude
 	// picking up the splice's own call sites.
 	private static byte[] compile() {
-		List<LispVal> loaded = HostFetchLibrary.process(LispReader.readAllFromString(MODULE, Features.WASM_REACTOR));
+		List<LispVal> loaded = HostFetchLibrary.process(LispReader.readAllFromString(MODULE, Features.WASM_REACTOR),
+				HostBoundary.STREAMING);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary

@@ -145,6 +145,17 @@
   ;; because this transport is synchronous code where await is not legal.
   (if (rontolisp:futurep value) (rontolisp::%future-force value) value))
 
+(defun rontolisp::%http-reactor-source (source)
+  ;; Any value -> the abstract body source this file's header describes: nil, a
+  ;; string, or a 0-arity thunk. Anything else is NO BODY, and the case that
+  ;; makes this a normalizer rather than a nicety is `"body": null` -- JSON's own
+  ;; spelling of "there is none", which json-parse answers as the symbol NULL.
+  ;; Non-nil and not a string, it used to reach the pull arm below and be
+  ;; funcalled, so a host writing the natural thing took the instance down. One
+  ;; guard here covers every entry: the envelope's request body, the in-band
+  ;; fallback, and a --host-fetch reply.
+  (if (or (null source) (stringp source) (functionp source)) source nil))
+
 (defun rontolisp::%http-reactor-pull (thunk)
   ;; One chunk from a pull source, RESOLVED.
   (rontolisp::%http-reactor-force (funcall thunk)))
@@ -230,9 +241,13 @@
   ;;
   ;; Never answers "" before the end: an empty answer IS end of stream to both
   ;; consumers, and a chunk whose every byte was carried over decodes to
-  ;; nothing.
+  ;; nothing. Which is why an EMPTY already-buffered source starts SENT: "" is
+  ;; the buffered spelling of "no body", so it must be end of stream at the
+  ;; first read, exactly as a reader answering 0 is -- otherwise the two
+  ;; boundaries hand a chunk-counting consumer different chunk counts for the
+  ;; same 204.
   (if (stringp source)
-      (let ((sent nil))
+      (let ((sent (= (length source) 0)))
         (lambda ()
           (if sent
               nil
@@ -316,7 +331,12 @@
   ;; handler writes on a reactor too. An already-buffered string becomes the
   ;; stream that answers it once and then EOF; a chunked source IS the read
   ;; side, one host pull per stream read.
-  (rontolisp::%stream-new (rontolisp::%http-reactor-text-source source)
+  ;;
+  ;; NIL (and anything that is not a source at all) is the EMPTY stream rather
+  ;; than an error: a caller holding the envelope's own "body" key holds
+  ;; whatever the host put there, and "no body" is the commonest thing it is.
+  (rontolisp::%stream-new (rontolisp::%http-reactor-text-source
+                           (or (rontolisp::%http-reactor-source source) ""))
                           (lambda () nil)))
 
 (defun rontolisp::%http-reactor-raw-body (source buffered)
@@ -329,7 +349,11 @@
   ;; question only the host can answer once the body stopped riding the
   ;; envelope: a reader answers 0 for a GET, and that IS the answer. The chunk
   ;; the look-ahead took is pushed back, so nothing is lost when there is one.
-  (cond ((null source) nil)
+  ;;
+  ;; The first arm normalizes rather than testing null, so a "body" key the host
+  ;; filled with something that is neither text nor a thunk -- JSON null, the
+  ;; ordinary spelling -- is no body instead of a funcall on it.
+  (cond ((null (rontolisp::%http-reactor-source source)) nil)
         ((stringp source)
          (if (= (length source) 0)
              nil

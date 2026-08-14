@@ -27,6 +27,7 @@ import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
+import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
@@ -153,12 +154,25 @@ public final class RontoLispCli {
 
 		if (options.contains("-o")) {
 			String outputFile = Objects.requireNonNull(options.get("-o"));
+			// --emit-js-glue is a boolean and stays one: it writes a file, where
+			// --host-boundary changes what the MODULE imports. A value on it used to be
+			// accepted and thrown away (the key is in CliOptions.noValueKeys, which still
+			// takes an `=` form), so the mode a build script asked for compiled the other
+			// boundary without a word. Name the flag that means it instead.
+			String glueValue = options.get("--emit-js-glue");
+			if (glueValue != null && !glueValue.isEmpty()) {
+				throw new IllegalArgumentException("--emit-js-glue takes no value ('" + glueValue
+						+ "' given): it writes the JavaScript half of whatever boundary was built."
+						+ " The boundary itself is --host-boundary=" + HostBoundary.spellings());
+			}
 			compileToFile(source, baseDir, systemPath, outputFile, options.contains("--dynamic"),
 					options.contains("--component"), options.contains("--no-wasi"),
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
 					options.contains("--emit-js-glue"), options.contains("--host-random"),
-					options.contains("--host-fetch"), inputFile);
+					options.contains("--host-fetch"),
+					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
+					inputFile);
 		}
 		else {
 			// A side-artifact flag names a file to write BESIDE the output, so without
@@ -324,7 +338,7 @@ public final class RontoLispCli {
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
 			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
-			@Nullable String entryFile) {
+			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
 		// malformed binding list a walker casts and fails on -- can still name
@@ -334,7 +348,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
-					noPrune, wit, jsGlue, hostRandom, hostFetch, entryFile);
+					noPrune, wit, jsGlue, hostRandom, hostFetch, hostBoundary, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -366,7 +380,7 @@ public final class RontoLispCli {
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
 			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
-			@Nullable String entryFile) {
+			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
 		// output; fail fast instead of silently ignoring the request.
@@ -410,6 +424,20 @@ public final class RontoLispCli {
 			throw new UnsupportedOperationException("--host-fetch cannot be combined with --no-gc: the scalar "
 					+ "(non-GC) backend has no fetch (or strings) at all, so there is nothing to route");
 		}
+		// --host-boundary chooses between two shapes only the --no-wasi wasm-GC core
+		// module HAS. Everywhere else the envelope is not a choice: a reactor component's
+		// host functions cross the canonical ABI (no :bytes import to take a body out
+		// through), --no-gc has no packed array to carry one in, and a WASI command
+		// module's host is `wasmtime run`, which satisfies no env.* import. Refused
+		// rather than ignored -- a build script that names a boundary it is not getting
+		// is exactly the silence this flag exists to end.
+		if (hostBoundary != null && !(noWasi && !component && !noGc && outputFile.endsWith(".wasm"))) {
+			throw new UnsupportedOperationException("--host-boundary requires --no-wasi and a .wasm output, without"
+					+ " --component (whose host functions cross the canonical ABI, so its bodies are in band"
+					+ " already) or --no-gc (which imports nothing at all)"
+					+ " -- e.g. -o out.wasm --no-wasi --host-boundary=" + HostBoundary.ENVELOPE.spelling());
+		}
+		HostBoundary boundary = hostBoundary == null ? HostBoundary.STREAMING : hostBoundary;
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -446,6 +474,15 @@ public final class RontoLispCli {
 		if (component && outputFile.endsWith(".wasm")) {
 			features = features.with(List.of(Features.COMPONENT));
 		}
+		// And #+rontolisp-body-imports selects the code a HAND-WRITTEN reactor needs only
+		// where the :bytes body imports really exist: the --no-wasi wasm-GC core module,
+		// built with the streaming boundary. It follows the FLAG, which is what no
+		// combination of target features could do -- and it says the thing itself, where
+		// the guard it replaces spelled out the targets that cannot carry the imports and
+		// quietly got --no-gc wrong.
+		if (outputFile.endsWith(".wasm") && noWasi && !component && !noGc && boundary.bodiesOutOfBand()) {
+			features = features.with(List.of(Features.BODY_IMPORTS));
+		}
 		WitExportDirective.Backend witBackend = witBackend(outputFile, noGc, component);
 		// (rontolisp:wit-import "kv.wit" :interface "..."): bind a WIT interface's
 		// functions. Unlike wit-export this runs BEFORE UserMacroExpander, because the
@@ -481,7 +518,7 @@ public final class RontoLispCli {
 		if (outputFile.endsWith(".wasm") && noWasi && !noGc) {
 			loaded = HttpReactorInliner.lowerHttpHandler(loaded);
 			if (hostFetch) {
-				loaded = HostFetchLibrary.process(loaded);
+				loaded = HostFetchLibrary.process(loaded, boundary);
 			}
 		}
 		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
@@ -525,7 +562,7 @@ public final class RontoLispCli {
 		// synthesized -- so a Worker source is (clack:clackup #'app :server
 		// :rontolisp) and nothing else. A no-op on the interpreter and the JVM (the
 		// shims do not even read the marker there).
-		loaded = HttpReactorInliner.process(loaded, witBackend, noWasi);
+		loaded = HttpReactorInliner.process(loaded, witBackend, noWasi, boundary);
 		// The shared reactor machinery behind BOTH handler backends
 		// (http-reactor.lisp: the one app store, the JSON envelope over
 		// %http-make-env / %http-normalize-response): spliced for EVERY backend
@@ -851,16 +888,32 @@ public final class RontoLispCli {
 		this.out.println("                     object; rontolisp:random-bytes works, and no");
 		this.out.println("                     __ronto_seed_random export is emitted (nothing left to seed)");
 		this.out.println("  --host-fetch       With --no-wasi (core module only): route rontolisp:fetch at the");
-		this.out.println("                     HOST's own HTTP client. The module then imports exactly two");
-		this.out.println("                     functions, env.fetch(request-json) -> response-head-json (the");
-		this.out.println("                     request and the reply's head, strings via the wasm-import ABI)");
-		this.out.println("                     and env.readResponseBody(ptr, cap) -> i32 (the reply's body, a");
+		this.out.println("                     HOST's own HTTP client. The module then imports");
+		this.out.println("                     env.fetch(request-json) -> response-json (strings via the");
+		this.out.println("                     wasm-import ABI) -- plus, on the streaming boundary below,");
+		this.out.println("                     env.readResponseBody(ptr, cap) -> i32 for the reply's body (a");
 		this.out.println("                     chunk per call into a buffer the module passes; 0 ends it), and");
 		this.out.println("                     fetch answers the same (:status :headers :body) plist as every");
 		this.out.println("                     other backend, :body the same asynchronous stream. A JS host");
 		this.out.println("                     implements them with fetch() behind WebAssembly.Suspending");
 		this.out.println("                     (JSPI) and enters exports via promising, or answers");
 		this.out.println("                     synchronously; the build prints the exact obligation");
+		this.out.println("  --host-boundary=B  With --no-wasi (core module only): where an HTTP body crosses.");
+		this.out.println("                     Both shapes speak the same JSON envelope; B says whether a body");
+		this.out.println("                     rides inside it or streams beside it");
+		this.out.println("                       streaming  (default) the request and response bodies leave the");
+		this.out.println("                                  envelope through env.readRequestBody /");
+		this.out.println("                                  env.writeResponseBody -- and, with --host-fetch,");
+		this.out.println("                                  env.readResponseBody. Binary crosses exactly, a");
+		this.out.println("                                  large body never doubles linear memory, and a");
+		this.out.println("                                  streamed upstream reply forwards chunk at a time");
+		this.out.println("                       envelope   every body rides the envelope's own \"body\" key.");
+		this.out.println("                                  No body imports and no host-side cursor: a Worker");
+		this.out.println("                                  that fetches one document and answers one imports");
+		this.out.println("                                  at most env.fetch. It pays a copy per body and");
+		this.out.println("                                  cannot carry binary. What is left is fixed by the");
+		this.out.println("                                  transport, so --emit-js-glue writes the whole host");
+		this.out.println("                                  half of it -- a Worker is then three lines");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");

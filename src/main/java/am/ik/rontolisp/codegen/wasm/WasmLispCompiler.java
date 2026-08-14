@@ -37,6 +37,7 @@ import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
@@ -44,10 +45,12 @@ import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NoWasiFilesystemStubs;
 import am.ik.rontolisp.compiler.NoWasiLoadPathRefusals;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.compiler.ReactorEnvelope;
 import am.ik.rontolisp.compiler.RuntimeNameProducers;
 import am.ik.rontolisp.compiler.ShadowedBuiltins;
 import am.ik.rontolisp.compiler.StreamDesignators;
 import am.ik.rontolisp.compiler.SuspendingImports;
+import am.ik.rontolisp.compiler.WasmImportDirective;
 import am.ik.wasm.ExternalKind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Section;
@@ -337,6 +340,31 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	private HostGlueEmitter.@Nullable Surface hostGlue;
+
+	// Whether the module imports env.<field>. The injected boundaries all live in the one
+	// `env` module (compiler/ReactorEnvelope.HOST_MODULE), and their presence is what
+	// says
+	// which SHAPE of the boundary was built -- read here rather than threaded down from
+	// the flag, because the imports are the answer and a flag is only a request.
+	private static boolean imported(java.util.Map<String, WasmImportCompiler.Decl> importWrappers, String field) {
+		return importWrappers.values()
+			.stream()
+			.anyMatch(decl -> ReactorEnvelope.HOST_MODULE.equals(decl.module()) && field.equals(decl.field()));
+	}
+
+	// The same question asked of the PROGRAM, for the obligation lines the build prints
+	// before the directives have been parsed into decls.
+	private static boolean declaresImport(List<LispVal> program, String field) {
+		for (LispVal form : program) {
+			if (WasmImportDirective.isImportForm(form) && form instanceof LispCons cons) {
+				WasmImportDirective directive = WasmImportDirective.parse(cons);
+				if (ReactorEnvelope.HOST_MODULE.equals(directive.module()) && field.equals(directive.field())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 
 	/**
 	 * The index of the first user defun: the fixed runtime helpers, plus -- under
@@ -1958,10 +1986,19 @@ public final class WasmLispCompiler implements LispCompiler {
 			// suspending one (WebAssembly.Suspending) constrains how the exports are
 			// entered, and a re-entry is refused by the guard the wrappers carry.
 			if (this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED)) {
-				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> response-head-json"
-						+ " and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both -- the"
-						+ " head with the call, the reply BODY pulled out of band afterwards (0 = end of stream, a"
-						+ " negative count = the transfer failed mid-body). A host may answer synchronously; a host"
+				// Which imports it really names is the BOUNDARY's answer
+				// (--host-boundary), so the line reads the splice rather than restating
+				// one shape: with the reply body in band there is no second import, no
+				// pull and no mid-body failure to warn about.
+				boolean split = declaresImport(program, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
+				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> " + (split
+						? "response-head-json"
+								+ " and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both"
+								+ " -- the head with the call, the reply BODY pulled out of band afterwards (0 = end"
+								+ " of stream, a negative count = the transfer failed mid-body)."
+						: "response-json" + ", and every rontolisp:fetch crosses it whole -- the reply's body rides the"
+								+ " head's own \"body\" key (--host-boundary=envelope).")
+						+ " A host may answer synchronously; a host"
 						+ " whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through"
 						+ " WebAssembly.promising, and must serialise calls (a suspended module can be"
 						+ " re-entered; a re-entered export refuses with a trap instead of corrupting both"
@@ -3448,8 +3485,44 @@ public final class WasmLispCompiler implements LispCompiler {
 				glueExports.add(
 						new HostGlueEmitter.Export(decl.exportName(), decl.paramTypes(), decl.returnType(), promising));
 			}
+			// The two halves of this boundary the glue can WRITE rather than ask for --
+			// both read off the imports that are here, never off a flag threaded down,
+			// because what the module really imports is the whole of the question.
+			//
+			// A --host-fetch build whose reply body did NOT leave the envelope
+			// (--host-boundary=envelope) fixes BOTH directions of env.fetch: the request
+			// envelope and the whole reply, error arm included (compiler
+			// /FetchResponseShape). With the body out of band the host also owns the
+			// reader the octets come from and when the cursor moves, which is precisely
+			// what a declaration cannot state -- so there the glue asks.
+			// programUsesSymbol as well as the import: --host-fetch splices the
+			// declaration ONLY for a program that fetches, so without that clause a
+			// program declaring its OWN env.fetch -- any shape, any meaning -- would be
+			// offered a host half implementing rontolisp's HTTP envelope for it.
+			boolean derivedFetch = this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED)
+					&& imported(importWrappers, FetchResponseShape.HOST_IMPORT_FIELD)
+					&& !imported(importWrappers, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
+			// And the reactor's own entry point is the whole envelope -- a Request in, a
+			// Response out -- exactly when the bodies stayed inside it. Recognised by the
+			// synthesized BRIDGE defun rather than by the export name, because
+			// "handle-request" is a name any program may choose and only this one is the
+			// boundary the compile path built (compiler/ReactorEnvelope).
+			// BOTH names, because the member alone is only half a fingerprint: a
+			// program may spell a function %reactor-dispatch, and the synthesized bridge
+			// is always exported under the transport's own export name as well.
+			String envelopeExport = null;
+			if (!imported(importWrappers, ReactorEnvelope.REQUEST_BODY_FIELD)) {
+				for (ExportPlan plan : exportPlans) {
+					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(plan.decl().name());
+					String member = qn == null ? plan.decl().name() : qn.member();
+					if (ReactorEnvelope.BRIDGE_FUNCTION.equalsIgnoreCase(member)
+							&& ReactorEnvelope.EXPORT_NAME.equals(plan.decl().exportName())) {
+						envelopeExport = plan.decl().exportName();
+					}
+				}
+			}
 			this.hostGlue = new HostGlueEmitter.Surface(glueImports, entropy, glueExports, hostArena, seedRandom,
-					setTime, "_initialize");
+					setTime, "_initialize", derivedFetch, envelopeExport);
 		}
 
 		// Canonical string ABI for --component :string/:s-expr exports (todo 92 Tier 2):

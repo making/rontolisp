@@ -28,16 +28,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Pins the {@code --emit-js-glue} output against the declarations it is derived from --
  * the {@link GlImportObjectTest} rule applied to the host boundary of a {@code --no-wasi}
- * reactor: {@code examples/cloudflare-workers/dog-fetcher/src/worker.js} is CHECKED IN,
- * and this asserts it is exactly what a fetching reactor's build writes, so the shipped
- * Worker and the compiler cannot drift apart.
+ * reactor. TWO checked-in files, one per boundary
+ * ({@link am.ik.rontolisp.compiler.HostBoundary}), and this asserts each is exactly what
+ * its build writes, so neither shipped Worker can drift from the compiler:
+ * {@code dog-fetcher/src/worker.js} on the streaming boundary, and
+ * {@code btc-ticker/src/worker.js} on the envelope one -- which additionally carries the
+ * two halves the transport fixes, the {@code env.fetch} host half and the whole
+ * {@code worker()}.
  *
  * <p>
- * The glue is derived from the DECLARATIONS alone, which is why the program compiled here
- * is four lines rather than the example's whole tiny-routes application: the same
- * {@code --no-wasi --host-fetch} reactor shape declares the same four imports and the
- * same {@code handle-request} export, so it emits the same file byte for byte. (Verified:
- * the example's own build writes this file unchanged.)
+ * The glue is derived from the DECLARATIONS alone, which is why the programs compiled
+ * here are four lines rather than the examples' own: the same
+ * {@code --no-wasi --host-fetch} reactor shape declares the same imports and the same
+ * {@code handle-request} export, so it emits the same file byte for byte. (Verified: each
+ * example's own build writes its file unchanged.)
  *
  * <p>
  * Regenerate after changing the emitter with
@@ -46,6 +50,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class HostGlueEmitterTest {
 
 	private static final Path WORKER_GLUE = Path.of("examples/cloudflare-workers/dog-fetcher/src/worker.js");
+
+	private static final Path TICKER_GLUE = Path.of("examples/cloudflare-workers/btc-ticker/src/worker.js");
 
 	private static final String FIX = "./mvnw -Drontolisp.glue.fix=true -Dtest=HostGlueEmitterTest#fixWorkerGlue test";
 
@@ -71,16 +77,26 @@ class HostGlueEmitterTest {
 			.isEqualTo(fetchingReactorGlue());
 	}
 
+	@Test
+	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
+	void theCheckedInTickerGlueIsWhatAnEnvelopeReactorBuildWrites() throws IOException {
+		assertThat(Files.readString(TICKER_GLUE, StandardCharsets.UTF_8))
+			.as("%s is stale -- regenerate it with: %s (or examples/cloudflare-workers/btc-ticker/build.sh)",
+					TICKER_GLUE, FIX)
+			.isEqualTo(envelopeReactorGlue());
+	}
+
 	/**
-	 * Maintenance helper: rewrites the checked-in Worker glue. Enabled only with
+	 * Maintenance helper: rewrites both checked-in Worker glue files. Enabled only with
 	 * {@code -Drontolisp.glue.fix=true}.
-	 * @throws IOException if the file cannot be written
+	 * @throws IOException if a file cannot be written
 	 */
 	@Test
 	@EnabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
 	void fixWorkerGlue() throws IOException {
 		Files.writeString(WORKER_GLUE, fetchingReactorGlue(), StandardCharsets.UTF_8);
-		System.out.println("Wrote " + WORKER_GLUE);
+		Files.writeString(TICKER_GLUE, envelopeReactorGlue(), StandardCharsets.UTF_8);
+		System.out.println("Wrote " + WORKER_GLUE + " and " + TICKER_GLUE);
 	}
 
 	@Test
@@ -106,6 +122,41 @@ class HostGlueEmitterTest {
 		// level.
 		assertThat(glue.indexOf("__ronto_seed_random")).isLessThan(glue.indexOf("exports._initialize()"));
 		assertThat(glue.indexOf("__ronto_set_time")).isLessThan(glue.indexOf("exports._initialize()"));
+	}
+
+	@Test
+	void theEnvelopeBoundaryWritesTheHostHalvesTheTransportFixes() {
+		String glue = envelopeReactorGlue();
+		// Nothing of the split survives: no body imports, and so no read cursor, no
+		// `drop` to discard one, and nothing for a host to implement but env.fetch --
+		// which this file implements itself.
+		assertThat(glue).doesNotContain(HostFetchLibrary.BODY_IMPORT_FIELD)
+			.doesNotContain("readRequestBody")
+			.doesNotContain("writeResponseBody")
+			.doesNotContain("const readers = new Map()")
+			.doesNotContain("drop,");
+		assertThat(glue).contains("export function defaultHost() {")
+			.contains("fetch: suspending(async (head) => {")
+			.contains("const response = await fetch(request.url, {")
+			// The reply's whole body rides the head here -- that IS this boundary.
+			.contains("body: await response.text(),")
+			.contains("return JSON.stringify({ error: String(error) });");
+		// ...and the whole Worker over the envelope, entered through the queue because
+		// the derived fetch can suspend.
+		assertThat(glue).contains("export function worker(module, options = {}) {")
+			.contains("async fetch(request, env, ctx) {")
+			.contains("target: url.pathname + url.search,")
+			.contains("head[\"remote-addr\"] = remoteAddr;")
+			.contains("await live().serially((lisp) => {")
+			// The instance is bound at admission but re-checked INSIDE the section: a
+			// call parked ahead of this one can poison it in between.
+			.contains("if (poisoned) throw new Error(\"instance discarded by an earlier trap\");")
+			.contains("return lisp.handleRequest(input);")
+			.contains("return new Response(head.body || null, {");
+		// The streaming boundary writes NEITHER: with a body out of band the host owns
+		// the reader the octets come from, which no declaration states.
+		assertThat(fetchingReactorGlue()).doesNotContain("export function defaultHost")
+			.doesNotContain("export function worker");
 	}
 
 	@Test
@@ -174,7 +225,7 @@ class HostGlueEmitterTest {
 		HostGlueEmitter.Surface surface = new HostGlueEmitter.Surface(List.of(), null,
 				List.of(new HostGlueEmitter.Export("do-it", List.of(), BoundaryType.VOID, false),
 						new HostGlueEmitter.Export("doIt", List.of(), BoundaryType.VOID, false)),
-				false, false, false, null);
+				false, false, false, null, false, null);
 		assertThatThrownBy(() -> HostGlueEmitter.emit("glue.js", surface))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("doIt")
@@ -184,11 +235,21 @@ class HostGlueEmitterTest {
 	// --- the builds ------------------------------------------------------------------
 
 	private static String fetchingReactorGlue() {
-		// The CLI's --no-wasi --host-fetch reactor pipeline, in its order.
+		return reactorGlue(HostBoundary.STREAMING);
+	}
+
+	private static String envelopeReactorGlue() {
+		return reactorGlue(HostBoundary.ENVELOPE);
+	}
+
+	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order. The BOUNDARY is
+	// the only difference between the two shipped Workers' glue, which is the point of
+	// running one pipeline twice rather than writing two.
+	private static String reactorGlue(HostBoundary boundary) {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(FETCHING_REACTOR, Features.WASM_REACTOR));
-		loaded = HostFetchLibrary.process(loaded);
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true);
+		loaded = HostFetchLibrary.process(loaded, boundary);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary

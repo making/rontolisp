@@ -275,8 +275,9 @@ class WasmImportCompilerTest {
 	// body-source machinery the reply's stream rides, then the JSON library and the
 	// prelude picking up the splice's own call sites.
 	private static byte[] compileHostFetch(String source) {
-		List<LispVal> loaded = am.ik.rontolisp.eval.HostFetchLibrary
-			.process(LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR));
+		List<LispVal> loaded = am.ik.rontolisp.eval.HostFetchLibrary.process(
+				LispReader.readAllFromString(source, am.ik.rontolisp.reader.Features.WASM_REACTOR),
+				am.ik.rontolisp.compiler.HostBoundary.STREAMING);
 		loaded = am.ik.rontolisp.eval.HttpReactorLibrary.process(loaded);
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary

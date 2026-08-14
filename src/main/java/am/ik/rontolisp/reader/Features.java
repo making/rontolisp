@@ -76,6 +76,27 @@ public final class Features {
 	 */
 	public static final String COMPONENT = "rontolisp-component";
 
+	/**
+	 * The feature naming the {@code :bytes} BODY IMPORTS a reactor's HTTP boundary can
+	 * take its request and response bodies through, added to the WASM set exactly where
+	 * they exist: a {@code --no-wasi} wasm-GC core module built with
+	 * {@code --host-boundary=streaming} (the default; {@link #with}). It is what a
+	 * HAND-WRITTEN reactor -- one that spells out its own envelope adapter instead of
+	 * going through {@code clack:clackup} -- guards its own
+	 * {@code env.readRequestBody}/{@code env.writeResponseBody} declarations with, so a
+	 * source can follow the boundary the build chose.
+	 *
+	 * <p>
+	 * It replaces the double negative such a source had to write before:
+	 * {@code #+(and rontolisp-reactor (not rontolisp-component))} spelled out the two
+	 * targets that CANNOT carry the imports (a component's host functions cross the
+	 * canonical ABI; a WASI command module has no host to import from) and quietly got
+	 * {@code --no-gc} wrong, which is a reactor with no packed-array representation for
+	 * {@code :bytes} at all. Naming the thing itself makes the guard mean what it says --
+	 * and makes it follow the flag, which no combination of target features could.
+	 */
+	public static final String BODY_IMPORTS = "rontolisp-body-imports";
+
 	private final List<String> names;
 
 	private final boolean substituteFeaturesVar;

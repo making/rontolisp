@@ -11,6 +11,8 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.HostBoundary;
+import am.ik.rontolisp.compiler.ReactorEnvelope;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -47,20 +49,30 @@ import org.jspecify.annotations.Nullable;
  * spliced definitions whatever package the program ended in.
  *
  * <p>
- * On the Preview 1 core-module backend the bridge also takes BOTH BODIES OUT OF THE
- * ENVELOPE, which is what the synthesized {@code env.readRequestBody} /
- * {@code env.writeResponseBody} imports are: the head stays a JSON string and stays
- * small, and the bodies cross as raw octets through {@code :bytes} host imports -- in,
- * into ONE reused buffer the module passes (the {@code read(2)} shape --
- * {@code .kb/wasm-import.md}); out, as a parameter the host takes before the call
- * returns. Two things follow that the envelope could not give: a BINARY body crosses
- * exactly in either direction (the {@code :string} decoder is non-validating and corrupts
- * arbitrary bytes), and neither body costs linear memory proportional to its own size.
- * Both imports are declared {@code :async t}, so a host that STREAMS -- a
- * {@code WebAssembly.Suspending} wrapper over a {@code ReadableStream} reader, or over a
- * response writer that applies backpressure -- is a declared, supported host rather than
- * a silent re-entrancy hazard; a host that answers synchronously is equally valid and
- * pays nothing (the future is settled at creation on this backend).
+ * On the Preview 1 core-module backend the bridge can also take BOTH BODIES OUT OF THE
+ * ENVELOPE ({@code --host-boundary=streaming}, the default), which is what the
+ * synthesized {@code env.readRequestBody} / {@code env.writeResponseBody} imports are:
+ * the head stays a JSON string and stays small, and the bodies cross as raw octets
+ * through {@code :bytes} host imports -- in, into ONE reused buffer the module passes
+ * (the {@code read(2)} shape -- {@code .kb/wasm-import.md}); out, as a parameter the host
+ * takes before the call returns. Two things follow that the envelope could not give: a
+ * BINARY body crosses exactly in either direction (the {@code :string} decoder is
+ * non-validating and corrupts arbitrary bytes), and neither body costs linear memory
+ * proportional to its own size. Both imports are declared {@code :async t}, so a host
+ * that STREAMS -- a {@code WebAssembly.Suspending} wrapper over a {@code ReadableStream}
+ * reader, or over a response writer that applies backpressure -- is a declared, supported
+ * host rather than a silent re-entrancy hazard; a host that answers synchronously is
+ * equally valid and pays nothing (the future is settled at creation on this backend).
+ *
+ * <p>
+ * {@code --host-boundary=envelope} declines all of that and keeps both bodies in the
+ * envelope's own {@code "body"} key: the bridge is then the one-argument call, the module
+ * imports neither {@code env.*} body function, and no host-side cursor exists to outlive
+ * the call that opened it. The Lisp half needs nothing for it -- the dispatcher's body
+ * source and sink are {@code &optional} and their absence has always meant the in-band
+ * key, which is what {@code --component}, {@code --no-gc}, a WASI command module, the
+ * interpreter and the JVM run today. What it costs is the other side of the list above: a
+ * binary body is flattened, and a large one is copied.
  *
  * <p>
  * The precedent is exact and deliberate: {@link HttpLibrary} reads the
@@ -77,7 +89,7 @@ import org.jspecify.annotations.Nullable;
 public final class HttpReactorInliner {
 
 	/** The synthesized bridge defun the export names. */
-	static final String DISPATCH_BRIDGE = "%REACTOR-DISPATCH";
+	static final String DISPATCH_BRIDGE = ReactorEnvelope.BRIDGE_FUNCTION;
 
 	/** The synthesized body-pull defun, and the import it calls. */
 	static final String CHUNK_BRIDGE = "%REACTOR-READ-CHUNK";
@@ -93,7 +105,7 @@ public final class HttpReactorInliner {
 	 * The export a reactor's host calls, and the name the Clack handler backends'
 	 * {@code %http-reactor} marker states: JSON request in, JSON response out.
 	 */
-	public static final String EXPORT_NAME = "handle-request";
+	public static final String EXPORT_NAME = ReactorEnvelope.EXPORT_NAME;
 
 	/**
 	 * The host module and field of the request-body import: {@code (ptr, cap) -> i32},
@@ -101,9 +113,9 @@ public final class HttpReactorInliner {
 	 * {@code env} module is where every other injected host hook of this backend lives
 	 * ({@code env.fetch}, {@code env.random_get}).
 	 */
-	static final String READ_BODY_MODULE = "env";
+	static final String READ_BODY_MODULE = ReactorEnvelope.HOST_MODULE;
 
-	static final String READ_BODY_FIELD = "readRequestBody";
+	static final String READ_BODY_FIELD = ReactorEnvelope.REQUEST_BODY_FIELD;
 
 	/**
 	 * The field of the response-body import, the mirror of {@link #READ_BODY_FIELD}:
@@ -111,7 +123,7 @@ public final class HttpReactorInliner {
 	 * host cannot short-read a write, and a chunk it has not taken by the time the call
 	 * returns is a chunk it never gets, since the module reuses the memory behind it.
 	 */
-	static final String WRITE_BODY_FIELD = "writeResponseBody";
+	static final String WRITE_BODY_FIELD = ReactorEnvelope.RESPONSE_BODY_FIELD;
 
 	/**
 	 * The receive buffer handed to the import, in octets. One buffer serves every chunk
@@ -234,9 +246,15 @@ public final class HttpReactorInliner {
 	 * in-process to develop a Worker), and there the host is {@code wasmtime run}, which
 	 * satisfies no {@code env.*} import. Such a module keeps the in-band envelope; only a
 	 * reactor, whose whole entry point IS a host call, takes the bodies out of it.
+	 * @param boundary which shape of that reactor boundary was asked for
+	 * ({@code --host-boundary}). {@link HostBoundary#ENVELOPE} keeps the bodies in band
+	 * on a backend that COULD take them out, which is the one thing the two parameters
+	 * above cannot express: they say what the target is capable of, this says what was
+	 * wanted.
 	 * @return the program, with the reactor export synthesized when applicable
 	 */
-	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend, boolean reactor) {
+	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend, boolean reactor,
+			HostBoundary boundary) {
 		if (backend == WitExportDirective.Backend.OTHER) {
 			return program;
 		}
@@ -260,19 +278,21 @@ public final class HttpReactorInliner {
 		// The head is a JSON request string in, a JSON response string out -- the
 		// handler backend's documented API, so the boundary types are fixed here rather
 		// than being another thing the marker carries.
-		String bodyArgument = bodyOutOfBand(backend, reactor)
+		String bodyArgument = bodyOutOfBand(backend, reactor, boundary)
 				? " (function " + CHUNK_BRIDGE + ") (function " + WRITE_BRIDGE + ")" : "";
 		String bridge = """
 				%s(defun %s (%%reactor-json) (%s %%reactor-json%s))
 				(rontolisp:wasm-export '%s :as "%s" :params '(:string) :returns :string)
-				""".formatted(bodyImport(backend, reactor), DISPATCH_BRIDGE, marker[0], bodyArgument, DISPATCH_BRIDGE,
-				marker[1]);
+				""".formatted(bodyImport(backend, reactor, boundary), DISPATCH_BRIDGE, marker[0], bodyArgument,
+				DISPATCH_BRIDGE, marker[1]);
 		out.addAll(LispReader.readAllFromString(bridge, Features.INTERPRETER));
 		return out;
 	}
 
-	// Whether this backend takes the bodies OUT of the envelope, in BOTH directions.
-	// Preview 1 core modules only, and the reason is the boundary type, not the
+	// Whether this build takes the bodies OUT of the envelope, in BOTH directions. Two
+	// halves, and they answer different questions.
+	//
+	// CAN it: Preview 1 core modules only, and the reason is the boundary type, not the
 	// transport: a :bytes import is a wasm-import (which --component rejects outright,
 	// its host functions going through the canonical ABI instead) over a packed array
 	// (which --no-gc has no representation for). So a reactor COMPONENT keeps both
@@ -282,8 +302,13 @@ public final class HttpReactorInliner {
 	// else about the split is Preview-1-specific -- the Lisp half already runs on every
 	// backend. A WASI COMMAND module keeps them too, for a different reason -- see the
 	// `reactor` parameter above: it has no host to import from.
-	private static boolean bodyOutOfBand(WitExportDirective.Backend backend, boolean reactor) {
-		return reactor && backend == WitExportDirective.Backend.WASM_GC;
+	//
+	// WAS it asked for: --host-boundary. Everything above says the split is possible;
+	// only the flag says it is wanted. A Worker that fetches one JSON document and
+	// answers one has no use for a cursor, and the boundary it pays for should be the one
+	// with nothing in it (`.kb/wasm-import.md`, the boundary table).
+	private static boolean bodyOutOfBand(WitExportDirective.Backend backend, boolean reactor, HostBoundary boundary) {
+		return reactor && backend == WitExportDirective.Backend.WASM_GC && boundary.bodiesOutOfBand();
 	}
 
 	// The two body imports and the thunks over them, or nothing on a backend that keeps
@@ -296,8 +321,8 @@ public final class HttpReactorInliner {
 	// octets and the host takes them), where a chunk crossing in is a :bytes RESULT into
 	// a buffer the module passes. Both are the same rule -- the caller owns the memory --
 	// applied to the two directions.
-	private static String bodyImport(WitExportDirective.Backend backend, boolean reactor) {
-		if (!bodyOutOfBand(backend, reactor)) {
+	private static String bodyImport(WitExportDirective.Backend backend, boolean reactor, HostBoundary boundary) {
+		if (!bodyOutOfBand(backend, reactor, boundary)) {
 			return "";
 		}
 		return """
