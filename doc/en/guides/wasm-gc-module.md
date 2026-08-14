@@ -202,7 +202,7 @@ export through `WebAssembly.promising` and serialise calls — a re-entered
 export refuses with a trap instead of corrupting both calls; a synchronous host
 (node without JSPI, a test stub) just answers directly. The build prints
 exactly this obligation. The worked example is
-[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/main/examples/cloudflare-workers/dog-fetcher).
+[`examples/cloudflare-workers/dog-fetcher`](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher).
 
 A `--no-wasi` compile also reads the source with the `:rontolisp-reactor`
 feature active, which is how a `clack:clackup ... :server :rontolisp` program
