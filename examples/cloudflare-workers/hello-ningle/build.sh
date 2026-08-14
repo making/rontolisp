@@ -10,6 +10,13 @@
 #   keeps the module down. ningle has no size opt-in to offer the way
 #   tiny-routes does: myway compiles every rule to a cl-ppcre scanner, so the
 #   regex engine is genuinely reachable and the shaker is right to keep it.
+# --emit-js-glue: write src/worker.js beside the module -- the host half of this
+#   boundary, from the program's own declarations. This module imports NOTHING
+#   (the default `envelope` boundary keeps every body inside the head), so the
+#   whole of that half is fixed by the transport and the glue writes all of it,
+#   the Request -> envelope -> Response mapping included. src/index.js is then
+#   three lines. It is CHECKED IN and pinned by HostGlueEmitterTest, so
+#   regenerate it here rather than editing it.
 #
 # The first run downloads clack/lack/ningle into ~/.rontolisp/quicklisp; after
 # that the build is offline.
@@ -25,8 +32,9 @@ if [[ ! -f "$jar" ]]; then
   exit 1
 fi
 
-echo "compiling worker.lisp -> src/worker.wasm"
-java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --optimize=size
+echo "compiling worker.lisp -> src/worker.wasm + src/worker.js"
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" \
+  --no-wasi --optimize=size --emit-js-glue
 
-ls -l "$here/src/worker.wasm"
+ls -l "$here/src/worker.wasm" "$here/src/worker.js"
 echo "done. Run it with:  npx wrangler dev"

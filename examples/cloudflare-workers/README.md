@@ -18,14 +18,14 @@ Module sizes are measured rather than quoted here:
 | Directory | Written as | Host glue |
 | --- | --- | --- |
 | [`hello/`](hello) | **Start here.** Three `wasm-export`ed functions JavaScript calls directly. `--no-gc`, a plain MVP module with zero imports | 32 lines, no dependencies |
-| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** One application function and `clack:clackup` — the whole of [Clack](https://github.com/fukamachi/clack)'s API | 45 lines, one file |
-| [`hello-tiny-routes/`](hello-tiny-routes) | [tiny-routes](https://github.com/jeko2000/tiny-routes): a route table composed with `define-routes`, threaded through middleware with `pipe`. Loaded as `tiny-routes/lite`, so no regex engine ships | `hello-clack/src/index.js`, byte-identical |
-| [`hello-ningle/`](hello-ningle) | [ningle](https://github.com/fukamachi/ningle): routes assigned to a CLOS *object*, a bare string as a controller, an overridden `not-found` **method** | `hello-clack/src/index.js`, byte-identical |
-| [`httpbin/`](httpbin) | **No library.** Five echo endpoints, 405, 404, `handler-case` — plus the reactor adapter written out by hand, so clack never ships | 54 lines, boundary included |
-| [`httpbin-clack/`](httpbin-clack) | Plain Clack: an application *function*, a `cond` over `:path-info`, and one middleware — a function from application to application | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-clack-one-source/`](httpbin-clack-one-source) | **No `worker.lisp` at all**: `build.sh` compiles [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) unchanged, the file that binds a socket locally. One source, four hosts | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | `httpbin/src/index.js`, byte-identical |
-| [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
+| [`hello-clack/`](hello-clack) | **Start here if you want Clack.** One application function and `clack:clackup` — the whole of [Clack](https://github.com/fukamachi/clack)'s API | GENERATED, and all of it: `src/index.js` is three lines |
+| [`hello-tiny-routes/`](hello-tiny-routes) | [tiny-routes](https://github.com/jeko2000/tiny-routes): a route table composed with `define-routes`, threaded through middleware with `pipe`. Loaded as `tiny-routes/lite`, so no regex engine ships | GENERATED — the same file `hello-clack` gets, because the declarations are the same |
+| [`hello-ningle/`](hello-ningle) | [ningle](https://github.com/fukamachi/ningle): routes assigned to a CLOS *object*, a bare string as a controller, an overridden `not-found` **method** | GENERATED — the same file `hello-clack` gets, because the declarations are the same |
+| [`httpbin/`](httpbin) | **No library.** Five echo endpoints, 405, 404, `handler-case` — plus the reactor adapter written out by hand, so clack never ships | 54 lines, boundary included — the one hand-written host left here |
+| [`httpbin-clack/`](httpbin-clack) | Plain Clack: an application *function*, a `cond` over `:path-info`, and one middleware — a function from application to application | GENERATED, and all of it: `src/index.js` is a `worker(module)` call |
+| [`httpbin-clack-one-source/`](httpbin-clack-one-source) | **No `worker.lisp` at all**: `build.sh` compiles [`net/httpbin-clack.lisp`](../net/httpbin-clack.lisp) unchanged, the file that binds a socket locally. One source, four hosts | GENERATED — the same file `httpbin-clack` gets |
+| [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | GENERATED — the same file `httpbin-clack` gets |
+| [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | GENERATED — the same file `httpbin-clack` gets |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
 | [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP, streaming bodies.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | GENERATED, and all of it: `src/index.js` is three lines |
 | [`btc-ticker/`](btc-ticker) | **The Worker with nothing in it.** One outgoing request, one JSON answer — on the DEFAULT boundary, where every body rides the envelope and the module imports exactly one function | GENERATED, and all of it: `src/index.js` is three lines |
@@ -164,9 +164,11 @@ but not yet deployed.
 Cloudflare budget-checks **Worker Startup Time** at deploy, and `wrangler
 deploy` prints it when it has one to report. Going through `clack:clackup`
 instead of calling the handler backend directly is what moves that number; the
-per-request cost does not follow it. It is also why `httpbin/src/index.js`
-instantiates at **module scope**: both work, but there the cost is paid once per
-isolate outside the request path, where the deploy-time check can see it.
+per-request cost does not follow it. Module scope would be the nicer place to
+pay it — that is where the deploy-time check can see it — but a Worker forbids
+drawing entropy there, and the seed has to be in before `_initialize` runs the
+Lisp top level. So every host here, hand-written or generated, instantiates on
+the **first request** instead, and nothing checks the cost at deploy time.
 
 **One gotcha, and it is not your code**: for several minutes after a Worker's
 *first* deploy its fresh `*.workers.dev` hostname answers intermittently with

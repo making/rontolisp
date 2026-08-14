@@ -109,9 +109,9 @@ all four backends rather than three. Mechanics, all in `HostFetchLibrary`:
 
 The host half of both imports is now GENERATED (`--emit-js-glue`, `.kb/wasm-import.md`):
 `examples/cloudflare-workers/dog-fetcher/src/worker.js` is emitted from these two
-declarations and checked in, and `src/index.js` keeps only the envelope above and the
-`ReadableStream` the reply body is pulled from -- which is why `HostFetchLibraryTest`
-still pins it against `FetchResponseShape`. **Without the split the host half is generated
+declarations and checked in, and `src/index.js` is `worker(module)` -- the envelope above
+and the `ReadableStream` the reply body is pulled from are both in the generated file,
+which is why `HostFetchLibraryTest` still pins it against `FetchResponseShape`. **Without the split the host half is generated
 TOO** (todo-351): `env.fetch`'s two directions are both fixed by `FetchResponseShape`, so
 with no reader for a host to own, what it DOES is the same twenty lines in every program
 and the glue writes them (`defaultHost()`). That is the line the emitter draws, and it is

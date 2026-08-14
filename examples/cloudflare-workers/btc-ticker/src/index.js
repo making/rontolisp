@@ -5,9 +5,10 @@
 // the Request -> envelope -> Response mapping. Nothing is left to say here.
 //
 // The other boundary is ../dog-fetcher: there the bodies stream through imports
-// of their own, the host owns the readers behind them, and its src/index.js is
-// the ninety-odd lines that say what each one does and map Request onto the
-// envelope.
+// of their own -- and its src/index.js is these same three lines, because the
+// readers behind those imports are the Request the glue is already holding and
+// the Response it is already building. What the boundary changes is what happens
+// to a body, not how much host it costs.
 
 import module from "./worker.wasm";
 import { worker } from "./worker.js";

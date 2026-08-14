@@ -289,10 +289,12 @@ is generated and CHECKED IN, and its `src/index.js` is three lines (todo-351 fin
 that: the derived host halves cover the streaming boundary too).
 Gated to `--no-wasi` core modules (a component is instantiated through jco; a
 `--no-gc` module imports nothing, so `new WebAssembly.Instance(module, {})` is its whole
-glue). Pinned by `HostGlueEmitterTest` (each checked-in `src/worker.js` byte-for-byte
-against what a four-line fetching reactor emits on its boundary -- the glue depends on the
-DECLARATIONS alone, which is why the two agree; plus the promising selection, the
-no-import shape, the `--host-random` entry and the name-collision refusal),
+glue). Pinned by `HostGlueEmitterTest` (every checked-in `src/worker.js` byte-for-byte
+against what its shape emits -- four shapes over nine files, a reactor that FETCHES and one
+that only ANSWERS on each boundary; the glue depends on the DECLARATIONS alone, which is
+why one derived string covers a whole family and why that is asserted rather than assumed;
+plus the promising selection, the no-import shape, the `--host-random` entry and the
+name-collision refusal),
 `RontoLispCliTest` (the flag writes
 the file; every other output shape is a clear error), and `WasmHostGlueE2eTest` (node 24
 JSPI: one generated file driving a suspending host, two overlapped calls both answering
@@ -380,8 +382,9 @@ relayed").
 **Two facts, derived from the IMPORTS rather than threaded down from the flag.**
 `WasmLispCompiler` reads `derivedFetch` off "`--host-fetch`, the program really calls
 `rontolisp:fetch`, `env.fetch` imported, `env.readResponseBody` not" and `envelopeExport`
-off "no `env.readRequestBody`, and an export that is BOTH the synthesized bridge defun and
-the transport's own export name". A flag is a request; what the module imports is the
+off "an export that is BOTH the synthesized bridge defun and the transport's own export
+name" -- on EITHER boundary, since todo-351 made `worker()` fill the body imports too.
+A flag is a request; what the module imports is the
 answer, and the glue has to describe the module it was emitted beside. Both fingerprints
 need both halves, and the review that added the second half of each is why: `env.fetch` by
 module+field alone matches a program's OWN import of that name (`--host-fetch` splices
@@ -389,8 +392,29 @@ nothing for a program that never fetches, so the glue would have offered to impl
 rontolisp's HTTP envelope into a slot meaning something else), and `%reactor-dispatch` by
 member name alone matches a function a program happened to spell that way. Note what still
 follows: `examples/cloudflare-workers/httpbin`, which exports `handle-request` by HAND,
-gets no `worker()` -- migrating the `httpbin-*` family onto the generated glue is a
-separate, smaller win this makes possible and does not require.
+gets no `worker()`.
+
+**Every other shipped Worker took the generated glue (todo-352).** The seven reactors that
+go through `clack:clackup` -- the `hello-*` trio on the envelope boundary, the four
+`httpbin-*` on streaming -- had two hand-written hosts between them, copied byte for byte
+across the directories; their `build.sh` now passes `--emit-js-glue` and their
+`src/index.js` is the `worker(module)` call. The four `httpbin-*` pass one option,
+`remoteAddr: (r) => r.headers.get("cf-connecting-ip")`, because their hand-written host
+sent Clack's `:remote-addr` and dropping it would have been a silent regression -- which
+header carries the client address is exactly the thing `worker()` leaves to its caller.
+`examples/cloudflare-workers/httpbin` stays hand-written, and that is a fair thing for the
+"no library, boundary included" example to be; giving the compile path a way to recognise
+a HAND-WRITTEN envelope export is the bigger decision nobody has needed yet. What the
+migration bought is one copy of the state whose LIFETIME is what goes wrong: every defect
+this surface has produced (the todo-340 and todo-351 reviews) was a state-lifetime bug,
+and two of them existed in a generated file only because a hand-written one had been
+transcribed imperfectly. One behavioural difference, and it is the generated shape rather than
+this migration: the four streaming Workers now enter through `serially`, so a request
+takes one promise hop and the module calls are ordered by the queue instead of by the
+isolate's own single thread. That is what makes the per-call body state safe to set
+inside the section, and `dog-fetcher` has shipped it since todo-351. Verified before and
+after under node 24 on one Worker of each family -- the transcripts, binary echo
+included, are identical -- and under `wrangler dev` for `httpbin-clack`.
 
 **`ReactorEnvelope` (in `compiler`) is where the envelope's names now live** -- the bridge
 defun, the export name, the six request keys, the three response keys, the `env` module

@@ -522,12 +522,13 @@ that had merely buffered could not fake. That is what makes "a Worker may stream
 an upload" a property of the boundary rather than of a particular glue file. No
 checked-in glue file does it yet, and the reason is not the module: a suspending
 body import forces the promising/queue serialisation on every request (the
-re-entry guard, `.kb/wasm-import.md`), and `httpbin/src/index.js` is deliberately
-synchronous and byte-identical in five directories. `.todo/348` is the trigger --
-once a reactor need not serialise, the streaming glue costs nothing. What
-`--emit-js-glue` (todo-340) changed about that choice is only its PRICE: both
-shapes now come out of one generated file, and a host switches by marking its own
-entries with the glue's `suspending()` -- so the day 348 lands, a streaming
+re-entry guard, `.kb/wasm-import.md`), and the generated `worker()` every
+`httpbin-*` directory now runs (todo-352) answers those imports SYNCHRONOUSLY --
+from the octets it already read -- for exactly that reason. `.todo/348` is the
+trigger -- once a reactor need not serialise, the streaming glue costs nothing.
+What `--emit-js-glue` (todo-340) changed about that choice is only its PRICE:
+both shapes come out of one generated file, and a host switches by marking its
+own entries with the glue's `suspending()` -- so the day 348 lands, a streaming
 `httpbin` is four `suspending(...)` wrappers and no new boundary code.
 
 **What the transport does NOT hold, and what reading still costs.** The boundary
@@ -648,7 +649,11 @@ reactor that wants NO clack package in the module at all can write those lines
 itself and export its own `handle-request`.
 `examples/cloudflare-workers/httpbin` is exactly that: the same five endpoints
 answering the same documents as `examples/cloudflare-workers/httpbin-clack`,
-over the SAME envelope (one `src/index.js`, byte-identical between them). The
+over the SAME envelope. The two hosts differ only in who WROTE them: the
+clack one takes the generated `worker()` (todo-352), the library-free one keeps
+a hand-written host because it exports `handle-request` by hand and only the
+SYNTHESIZED bridge is recognised as the envelope's entry point
+([[wasm-import]]). The
 two are written in their own idiom rather than kept diff-clean against each
 other (2026-08-10) — the library-free one is plain defuns and a `dispatch`
 `cond`, the clack one an application FUNCTION plus a middleware — but the

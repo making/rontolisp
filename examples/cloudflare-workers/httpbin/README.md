@@ -39,7 +39,7 @@ curl         http://localhost:8787/nope                   # 404
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | **The whole program**: the endpoints plus the reactor adapter |
 | [`check.lisp`](check.lisp) | Drives it with no Cloudflare in sight — the local edit/run loop |
-| [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response` |
+| [`src/index.js`](src/index.js) | The whole Worker: `Request` -> JSON -> Lisp -> JSON -> `Response`. The one **hand-written** host left in these directories — see below |
 | `src/worker.wasm` | A build product — run `./build.sh` first |
 
 ## The interface is one exported function
@@ -96,9 +96,17 @@ this one):
 { "status": 200, "headers": [["content-type", "application/json"]] }
 ```
 
-This is the envelope the built-in `clack-handler-reactor` backend speaks, which
-is why `src/index.js` is byte-identical across these directories. Two fields are
-load-bearing, and both fail quietly:
+This is the envelope the built-in `clack-handler-reactor` backend speaks, and
+the reason every other Worker here gets its host **generated**: mapping a
+`Request` onto it and a `Response` off it is transport work, fixed by the
+envelope rather than chosen by the program, so `--emit-js-glue` writes it (see
+[`../httpbin-clack`](../httpbin-clack/README.md#and-the-javascript-half-is-not-hand-written-either)).
+This directory is the exception, and on purpose: it declares
+`(rontolisp:wasm-export 'handle-request ...)` **by hand**, the compile path
+recognises the *synthesized* bridge rather than the export name, and no
+`worker()` is emitted for a hand-written one. Which is a fair thing for the "no
+library, boundary included" example to be — what the generated file would say is
+written out here instead. Two fields are load-bearing, and both fail quietly:
 
 - **Pass the raw target** (`url.pathname + url.search`) as one string, not a
   pre-split path plus a query object. `%http-make-env` does the `?` split and

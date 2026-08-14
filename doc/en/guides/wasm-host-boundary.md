@@ -379,10 +379,12 @@ top of the generated file then says `worker(module, { host })` instead.
 
 The flag needs `--no-wasi` and a `.wasm` output: a component is instantiated
 through its own bindings generator, and a `--no-gc` module imports nothing, so
-`new WebAssembly.Instance(module, {})` is already the whole of its glue. Two
-worked examples, one per boundary:
-[dog-fetcher](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)
-on `streaming`, where `src/worker.js` is generated and checked in and
-`src/index.js` is the host's own half, and
-[btc-ticker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/btc-ticker)
-on `envelope`, where `src/index.js` is the three lines above.
+`new WebAssembly.Instance(module, {})` is already the whole of its glue. Nine
+worked examples on both boundaries — every reactor under
+[examples/cloudflare-workers](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers)
+but one: `src/worker.js` is generated and checked in, and `src/index.js` is the
+three lines above.
+[httpbin](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/httpbin)
+is the exception, and says so: it declares its `rontolisp:wasm-export` by hand,
+and only the *synthesized* bridge is recognised as the envelope's own entry
+point, so no `worker()` is written for it and its host stays hand-written.

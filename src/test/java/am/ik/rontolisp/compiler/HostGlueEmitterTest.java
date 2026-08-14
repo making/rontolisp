@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
@@ -28,20 +29,27 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Pins the {@code --emit-js-glue} output against the declarations it is derived from --
  * the {@link GlImportObjectTest} rule applied to the host boundary of a {@code --no-wasi}
- * reactor. TWO checked-in files, one per boundary
- * ({@link am.ik.rontolisp.compiler.HostBoundary}), and this asserts each is exactly what
- * its build writes, so neither shipped Worker can drift from the compiler:
- * {@code dog-fetcher/src/worker.js} on the streaming boundary, and
- * {@code btc-ticker/src/worker.js} on the envelope one -- which additionally carries the
- * two halves the transport fixes, the {@code env.fetch} host half and the whole
- * {@code worker()}.
+ * reactor. FOUR shapes, and this asserts every checked-in Worker glue is exactly what its
+ * build writes, so no shipped Worker can drift from the compiler: a reactor that FETCHES
+ * on each boundary ({@link am.ik.rontolisp.compiler.HostBoundary}) --
+ * {@code dog-fetcher/src/worker.js} streaming and {@code btc-ticker/src/worker.js}
+ * envelope, the latter carrying the {@code env.fetch} host half as well -- and a reactor
+ * that does not, on each boundary: the {@code hello-*} trio, which imports nothing at
+ * all, and the four {@code httpbin-*} directories that go through {@code clackup}.
  *
  * <p>
  * The glue is derived from the DECLARATIONS alone, which is why the programs compiled
- * here are four lines rather than the examples' own: the same
- * {@code --no-wasi --host-fetch} reactor shape declares the same imports and the same
- * {@code handle-request} export, so it emits the same file byte for byte. (Verified: each
- * example's own build writes its file unchanged.)
+ * here are a handful of lines rather than the examples' own, and why one file per SHAPE
+ * covers seven directories: the same reactor shape declares the same imports and the same
+ * {@code handle-request} export, so it emits the same file byte for byte. That is
+ * asserted rather than assumed -- every directory in a family is pinned against the one
+ * derived string. (Verified: each example's own build writes its file unchanged.)
+ *
+ * <p>
+ * {@code examples/cloudflare-workers/httpbin} is deliberately absent: it writes its
+ * {@code rontolisp:wasm-export} by hand, the compile path recognises the SYNTHESIZED
+ * bridge, and so no {@code worker()} is emitted for it and its host stays hand-written
+ * ({@code .kb/wasm-import.md}).
  *
  * <p>
  * Regenerate after changing the emitter with
@@ -49,9 +57,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class HostGlueEmitterTest {
 
-	private static final Path WORKER_GLUE = Path.of("examples/cloudflare-workers/dog-fetcher/src/worker.js");
+	private static final List<Path> WORKER_GLUE = glueIn("dog-fetcher");
 
-	private static final Path TICKER_GLUE = Path.of("examples/cloudflare-workers/btc-ticker/src/worker.js");
+	private static final List<Path> TICKER_GLUE = glueIn("btc-ticker");
+
+	// One file between three directories, and one between four: the glue is derived from
+	// the declarations, and these carry the same ones. The claim their READMEs make is
+	// checked here rather than asserted there.
+	private static final List<Path> HELLO_GLUE = glueIn("hello-clack", "hello-ningle", "hello-tiny-routes");
+
+	private static final List<Path> HTTPBIN_GLUE = glueIn("httpbin-clack", "httpbin-clack-one-source", "httpbin-ningle",
+			"httpbin-tiny-routes");
 
 	private static final String FIX = "./mvnw -Drontolisp.glue.fix=true -Dtest=HostGlueEmitterTest#fixWorkerGlue test";
 
@@ -68,35 +84,67 @@ class HostGlueEmitterTest {
 			(rontolisp:http-handler 'app)
 			""";
 
+	// And of the seven Workers that only answer: the same synthesized bridge with no
+	// env.fetch beside it, which on the envelope boundary leaves a module importing
+	// NOTHING and on the streaming one the reactor's own two body imports.
+	private static final String ANSWERING_REACTOR = """
+			(defun app (env)
+			  (declare (ignore env))
+			  (list 200 (list :content-type "text/plain") (list "ok")))
+			(rontolisp:http-handler 'app)
+			""";
+
 	@Test
 	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
 	void theCheckedInWorkerGlueIsWhatAFetchingReactorBuildWrites() throws IOException {
-		assertThat(Files.readString(WORKER_GLUE, StandardCharsets.UTF_8))
-			.as("%s is stale -- regenerate it with: %s (or examples/cloudflare-workers/dog-fetcher/build.sh)",
-					WORKER_GLUE, FIX)
-			.isEqualTo(fetchingReactorGlue());
+		assertPinned(WORKER_GLUE, fetchingReactorGlue());
 	}
 
 	@Test
 	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
 	void theCheckedInTickerGlueIsWhatAnEnvelopeReactorBuildWrites() throws IOException {
-		assertThat(Files.readString(TICKER_GLUE, StandardCharsets.UTF_8))
-			.as("%s is stale -- regenerate it with: %s (or examples/cloudflare-workers/btc-ticker/build.sh)",
-					TICKER_GLUE, FIX)
-			.isEqualTo(envelopeReactorGlue());
+		assertPinned(TICKER_GLUE, envelopeReactorGlue());
+	}
+
+	@Test
+	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
+	void theCheckedInHelloGlueIsWhatAnAnsweringEnvelopeReactorBuildWrites() throws IOException {
+		assertPinned(HELLO_GLUE, answeringEnvelopeGlue());
+	}
+
+	@Test
+	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
+	void theCheckedInHttpbinGlueIsWhatAnAnsweringStreamingReactorBuildWrites() throws IOException {
+		assertPinned(HTTPBIN_GLUE, answeringStreamingGlue());
+	}
+
+	private static void assertPinned(List<Path> paths, String expected) throws IOException {
+		for (Path path : paths) {
+			assertThat(Files.readString(path, StandardCharsets.UTF_8))
+				.as("%s is stale -- regenerate it with: %s (or that directory's build.sh)", path, FIX)
+				.isEqualTo(expected);
+		}
 	}
 
 	/**
-	 * Maintenance helper: rewrites both checked-in Worker glue files. Enabled only with
+	 * Maintenance helper: rewrites every checked-in Worker glue file. Enabled only with
 	 * {@code -Drontolisp.glue.fix=true}.
 	 * @throws IOException if a file cannot be written
 	 */
 	@Test
 	@EnabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
 	void fixWorkerGlue() throws IOException {
-		Files.writeString(WORKER_GLUE, fetchingReactorGlue(), StandardCharsets.UTF_8);
-		Files.writeString(TICKER_GLUE, envelopeReactorGlue(), StandardCharsets.UTF_8);
-		System.out.println("Wrote " + WORKER_GLUE + " and " + TICKER_GLUE);
+		write(WORKER_GLUE, fetchingReactorGlue());
+		write(TICKER_GLUE, envelopeReactorGlue());
+		write(HELLO_GLUE, answeringEnvelopeGlue());
+		write(HTTPBIN_GLUE, answeringStreamingGlue());
+	}
+
+	private static void write(List<Path> paths, String glue) throws IOException {
+		for (Path path : paths) {
+			Files.writeString(path, glue, StandardCharsets.UTF_8);
+			System.out.println("Wrote " + path);
+		}
 	}
 
 	@Test
@@ -189,6 +237,53 @@ class HostGlueEmitterTest {
 	}
 
 	@Test
+	void aReactorThatOnlyANSWERSIsAWholeWorkerWithNoHostAtAll() {
+		// The hello-* trio. On the envelope boundary a reactor that never fetches
+		// imports NOTHING -- so there is no host half to ask for or to implement -- and
+		// worker(module) is still the whole Worker, because mapping a Request onto the
+		// envelope is transport work either way. The hand-written host this replaced
+		// still declared env.readRequestBody / env.writeResponseBody, which this module
+		// does not link.
+		String glue = answeringEnvelopeGlue();
+		assertThat(glue).contains("const imports = {};")
+			.contains("export function instantiate(module) {")
+			.contains("export function worker(module, options = {}) {")
+			.contains("return (instance ??= instantiate(module));")
+			.doesNotContain("export function defaultHost")
+			.doesNotContain("readRequestBody")
+			.doesNotContain("writeResponseBody")
+			.doesNotContain("options.host");
+		// Nothing can suspend, so the call is entered directly: no marking protocol, no
+		// promising entry, and no queue to pay a promise for.
+		assertThat(glue).contains("const head = JSON.parse(live().handleRequest(input));")
+			.doesNotContain("serially")
+			.doesNotContain("WebAssembly.promising");
+		// The body rides the head in both directions, which is what `envelope` means.
+		assertThat(glue).contains("if (octets?.length) head.body = decoder.decode(octets);")
+			.contains("const body = head.body;");
+	}
+
+	@Test
+	void aStreamingReactorThatOnlyANSWERSStillWritesItsOwnBodyImports() {
+		// The httpbin-* four. Nothing fetches, so no env.fetch half is written -- but
+		// the reactor's own two body imports are still worker()'s to fill, from the
+		// Request it is holding and the Response it is building.
+		String glue = answeringStreamingGlue();
+		assertThat(glue).doesNotContain("export function defaultHost")
+			.doesNotContain(HostFetchLibrary.BODY_IMPORT_FIELD)
+			.doesNotContain("let upstream = null;");
+		assertThat(glue).contains("const base = {};")
+			.contains("readRequestBody: () => {")
+			.contains("writeResponseBody: (chunk) => responseChunks.push(chunk),")
+			.contains("requestBody = octets;")
+			.contains("const body = head.body ?? collected();");
+		// The body imports are declared :async t, so a host MAY suspend in them and the
+		// call goes through the queue -- which is the only difference from the trio
+		// above that is not about a body.
+		assertThat(glue).contains("await live().serially((lisp) => {");
+	}
+
+	@Test
 	void anExportThatCannotReachASuspendingImportIsNotEnteredThroughPromising() {
 		String glue = glueOf("""
 				(rontolisp:wasm-import 'pull :from "net" :as "pull" :params '(:string) :returns :string :async t)
@@ -264,29 +359,48 @@ class HostGlueEmitterTest {
 	// --- the builds ------------------------------------------------------------------
 
 	private static String fetchingReactorGlue() {
-		return reactorGlue(HostBoundary.STREAMING);
+		return reactorGlue(FETCHING_REACTOR, HostBoundary.STREAMING, true);
 	}
 
 	private static String envelopeReactorGlue() {
-		return reactorGlue(HostBoundary.ENVELOPE);
+		return reactorGlue(FETCHING_REACTOR, HostBoundary.ENVELOPE, true);
 	}
 
-	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order. The BOUNDARY is
-	// the only difference between the two shipped Workers' glue, which is the point of
-	// running one pipeline twice rather than writing two.
-	private static String reactorGlue(HostBoundary boundary) {
+	private static String answeringEnvelopeGlue() {
+		return reactorGlue(ANSWERING_REACTOR, HostBoundary.ENVELOPE, false);
+	}
+
+	private static String answeringStreamingGlue() {
+		return reactorGlue(ANSWERING_REACTOR, HostBoundary.STREAMING, false);
+	}
+
+	// The CLI's --no-wasi reactor pipeline, in its order, with --host-fetch's splice
+	// under the same condition the CLI puts it under. The PROGRAM and the BOUNDARY are
+	// the only differences between the four shipped shapes' glue, which is the point of
+	// running one pipeline four times rather than writing four.
+	private static String reactorGlue(String source, HostBoundary boundary, boolean hostFetch) {
 		List<LispVal> loaded = HttpReactorInliner
-			.lowerHttpHandler(LispReader.readAllFromString(FETCHING_REACTOR, Features.WASM_REACTOR));
-		loaded = HostFetchLibrary.process(loaded, boundary);
+			.lowerHttpHandler(LispReader.readAllFromString(source, Features.WASM_REACTOR));
+		if (hostFetch) {
+			loaded = HostFetchLibrary.process(loaded, boundary);
+		}
 		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary
 			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
 		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				true);
+				hostFetch);
 		compiler.compile(program);
 		return glue(compiler, "worker.js");
+	}
+
+	// examples/cloudflare-workers/<dir>/src/worker.js, for every directory that carries
+	// the SAME one.
+	private static List<Path> glueIn(String... directories) {
+		return Stream.of(directories)
+			.map(directory -> Path.of("examples/cloudflare-workers", directory, "src", "worker.js"))
+			.toList();
 	}
 
 	private static String glueOf(String source) {
