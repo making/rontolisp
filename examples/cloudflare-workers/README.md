@@ -28,7 +28,7 @@ Module sizes are measured rather than quoted here:
 | [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
 | [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP, streaming bodies.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | GENERATED, and all of it: `src/index.js` is three lines |
-| [`btc-ticker/`](btc-ticker) | **The Worker with nothing in it.** One outgoing request, one JSON answer — on the `--host-boundary=envelope` boundary, where every body rides the envelope and the module imports exactly one function | GENERATED, and all of it: `src/index.js` is three lines |
+| [`btc-ticker/`](btc-ticker) | **The Worker with nothing in it.** One outgoing request, one JSON answer — on the DEFAULT boundary, where every body rides the envelope and the module imports exactly one function | GENERATED, and all of it: `src/index.js` is three lines |
 
 ## Which one should I copy?
 
@@ -52,14 +52,14 @@ Module sizes are measured rather than quoted here:
   ningle: it reads every request through the `lack-request` chain, which is also
   what lets its controllers ignore streams and JSON parsing entirely.
 - **`btc-ticker/`** when the Worker fetches a document and answers a document —
-  which is most of them. `--host-boundary=envelope` is the shape to reach for:
-  the module imports one host function, nothing on the JavaScript side keeps
-  state, and there is no cursor whose lifetime anyone has to get right.
+  which is most of them, and which is what a build gets for saying nothing: the
+  module imports one host function, nothing on the JavaScript side keeps state,
+  and there is no cursor whose lifetime anyone has to get right.
 - **`dog-fetcher/`** when a body is **binary, large, or relayed** — an image, an
   upload, an upstream reply to forward as it arrives. Those are the cases the
   envelope cannot serve (it carries a body as JSON text, so a non-UTF-8 byte does
-  not survive, and it holds the whole thing in memory), and they are why
-  `streaming` is still the default. It costs no more JavaScript: the glue writes
+  not survive, and it holds the whole thing in memory), so its `build.sh` ASKS
+  for `--host-boundary=streaming`. It costs no more JavaScript: the glue writes
   the body imports too, so this `src/index.js` is also three lines. It is where
   the synchronous-Lisp/asynchronous-JavaScript seam is explained in full; both
   directories rely on it.

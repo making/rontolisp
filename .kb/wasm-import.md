@@ -310,27 +310,36 @@ decision -- it changes the import list -- so it is a flag of its own rather than
 `--emit-js-glue`, which stays a boolean and now REFUSES one by name (an unvalidated value
 used to parse and be discarded, compiling the other boundary without a word).
 
-| | `streaming` (default) | `envelope` |
+| | `envelope` (DEFAULT) | `streaming` |
 | --- | --- | --- |
-| imports | `env.readRequestBody`, `env.writeResponseBody`, +`env.readResponseBody` and `env.fetch` under `--host-fetch` | `env.fetch` under `--host-fetch`, else NOTHING |
-| host state | one cursor per reading import, plus whatever holds its source | none |
-| binary body | crosses exactly | flattened one character per octet |
-| large body | linear memory flat | copied |
-| streamed upstream reply | forwarded chunk at a time | buffered first |
+| imports | `env.fetch` under `--host-fetch`, else NOTHING | `env.readRequestBody`, `env.writeResponseBody`, +`env.readResponseBody` and `env.fetch` under `--host-fetch` |
+| host state | none | one cursor per reading import, plus whatever holds its source |
+| binary body | DESTROYED -- `ff fe 41` in, `ef bf bd ef bf bd 41` out | crosses exactly |
+| large body | copied, memory proportional | linear memory flat |
+| streamed upstream reply | buffered first | forwarded chunk at a time |
 | generated host | `instantiate` + `defaultHost()` + `worker(module)`, the SAME on both |
 | module size | within ~1% of each other, sign not stable -- see `size-report/results/cloudflare-workers.md` |  |
 
-**Which to REACH FOR: `envelope`, unless a body is binary, large, or relayed.**
-The default stays `streaming` and that is not a contradiction -- a default has to
-be the shape that cannot lose data, and the envelope one silently does: measured,
-a `ff fe 41` request body arrives as the SEVEN bytes `ef bf bd ef bf bd 41` (two
-U+FFFD where two octets were, the JSON text round trip doing it) with the
-`content-length` beside it still saying three. So the flag is opt-in for the
-common case rather than opt-out for the dangerous one, and the guides say
-"reach for envelope" while the CLI keeps answering `streaming` to a build that
-said nothing. Re-evaluate that split only if the build ever learns to tell that a
-program's reachable code touches a body as BYTES -- which is a `read-byte`
-reachability question, not a flag one.
+**The DEFAULT is `envelope`, and it moved there on purpose (2026-08-14).** The
+first cut kept `streaming` as the default and recommended `envelope` in the
+guides; that was rejected, correctly -- a default IS the recommendation for
+everyone who does not read the guide, and two answers to one question means the
+tool and the docs disagree with the tool winning. So the recommendation was
+carried into the default and the in-tree consumers that need the other one were
+migrated in the same change.
+
+**What that broke, stated plainly.** Every `--no-wasi` reactor rebuilt without
+the flag changes shape. For a body that is a document, nothing observable; for a
+BINARY one, measured destruction -- `ff fe 41` arrives as the seven bytes
+`ef bf bd ef bf bd 41` (two U+FFFD where two octets were, the JSON text round
+trip doing it) with the `content-length` beside it still saying three, and
+nothing reporting it. `--host-boundary=streaming` gets the old module back
+byte-for-byte. The five `httpbin*` Worker examples ECHO request bodies and now
+say so in their `build.sh`; the three `hello*` ones read no body and were left on
+the new default unchanged (verified: their hand-written host answers correctly,
+with two import-object entries the envelope module simply does not link).
+This is the house policy rather than an exception: a rebuild is an acceptable
+price for the better default, and every consumer is in-tree.
 
 **It is not a size decision -- do not sell it as one, and do not quote a bound.** The
 todo-351 spike measured 148,533 B against 147,959 B (48,912 / 49,029 gzip -9 -n) on a

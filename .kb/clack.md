@@ -455,12 +455,16 @@ decisions in that, each load-bearing:
     those modules refuse to INSTANTIATE whether or not anything called
     `handle-request`, so `HttpReactorInliner.process` takes a `reactor` flag
     (`--no-wasi`) beside the backend.
-  - WAS IT WANTED: `--host-boundary=envelope` declines the split on a target that
-    could take it. A Worker whose every body is a DOCUMENT has no use for a
-    cursor, and what the split really costs is not bytes (the modules measure
-    about 1% apart, either way round) but host-side STATE — four host functions
-    and three cursors against none. `compiler/HostBoundary` is the vocabulary; the flag
-    joins the two flags above in `bodyOutOfBand`, one `if`.
+  - WAS IT ASKED FOR: `--host-boundary=streaming`, and it has to be, because the
+    DEFAULT is `envelope` (2026-08-14). A Worker whose every body is a DOCUMENT
+    has no use for a cursor, and what the split really costs is not bytes (the
+    modules measure about 1% apart, either way round) but host-side STATE — four
+    host functions and three cursors against none — so the shape most Workers
+    want is the one they get for saying nothing. `compiler/HostBoundary` is the
+    vocabulary; the flag joins the two conditions above in `bodyOutOfBand`, one
+    `if`. Consequence to know before touching a reactor: a rebuild without the
+    flag moves the bodies IN BAND, which destroys a binary one
+    (`.kb/wasm-import.md` has the measurement).
 
 **The abstract body source is NORMALIZED at every entry (todo-351).** The header
 says a source is `nil`, a string or a 0-arity thunk; what a HOST can put in the

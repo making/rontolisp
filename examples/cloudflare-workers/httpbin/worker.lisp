@@ -29,7 +29,8 @@
 ;;;
 ;;; The guard names the thing itself: #+rontolisp-body-imports is present
 ;;; exactly where these two imports exist -- a --no-wasi wasm-GC core module
-;;; built on the streaming boundary (--host-boundary=streaming, the default).
+;;; built with --host-boundary=streaming, which build.sh ASKS for because the
+;;; default is the in-band envelope and these endpoints echo arbitrary bodies.
 ;;; Every other way of running THIS FILE lacks them, each for its own reason,
 ;;; and the one feature covers all of them: check.lisp drives handle-request as
 ;;; an ordinary function on the interpreter and the JVM; a plain WASI command

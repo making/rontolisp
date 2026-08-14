@@ -5,13 +5,14 @@
 #   needs no WASI imports -- it becomes a reactor (`_initialize`, not `_start`).
 # --host-fetch: rontolisp:fetch is lowered onto the host's own fetch, imported
 #   as env.fetch(request-json) -> response-json.
-# --host-boundary=envelope: every body rides the envelope's own "body" key --
-#   the request's, the response's, and the reply of that fetch. So there is no
-#   env.readRequestBody, no env.writeResponseBody and no env.readResponseBody,
-#   and no host-side cursor behind any of them: this module imports exactly ONE
-#   function. It pays a copy per body and cannot carry binary, which is nothing
-#   for a few hundred bytes of JSON. ../dog-fetcher is the same program shape on
-#   the other boundary; the two are meant to be read together.
+# No --host-boundary: the DEFAULT is `envelope`, and that is what this Worker
+#   wants. Every body rides the envelope's own "body" key -- the request's, the
+#   response's, and the reply of that fetch -- so there is no env.readRequestBody,
+#   no env.writeResponseBody and no env.readResponseBody, and no host-side cursor
+#   behind any of them: this module imports exactly ONE function. It pays a copy
+#   per body and cannot carry binary, which is nothing for a few hundred bytes of
+#   JSON. ../dog-fetcher asks for --host-boundary=streaming because its bodies are
+#   not documents; the two are meant to be read together.
 # --emit-js-glue: write src/worker.js beside the module. On this boundary both
 #   remaining halves are fixed by the transport rather than chosen by the
 #   program, so the glue writes BOTH -- the env.fetch host half and a
@@ -36,7 +37,7 @@ fi
 
 echo "compiling worker.lisp -> src/worker.wasm + src/worker.js"
 java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" \
-  --no-wasi --host-fetch --host-boundary=envelope --optimize=size --emit-js-glue
+  --no-wasi --host-fetch --optimize=size --emit-js-glue
 
 ls -l "$here/src/worker.wasm" "$here/src/worker.js"
 echo "done. Run it with:  npx wrangler dev"

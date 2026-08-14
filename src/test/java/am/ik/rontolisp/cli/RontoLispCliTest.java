@@ -372,7 +372,8 @@ class RontoLispCliTest {
 	@Test
 	void theEnvelopeBoundaryBuildsAModuleWithNoBodyImports() throws Exception {
 		// The boundary is a MODULE decision, and this is what it decides: the same source
-		// compiled twice, and only the streaming build declares the body imports. The
+		// compiled twice, and only the build that ASKS for streaming declares the body
+		// imports -- the one that says nothing gets the envelope. The
 		// checks are on the emitted names in the import section, the way
 		// aComponentBuildReadsTheSourceWithTheComponentFeature reads envpull.
 		Path file = tempDir.resolve("w.lisp");
@@ -384,12 +385,14 @@ class RontoLispCliTest {
 				(rontolisp:http-handler 'app)
 				""");
 		Path streaming = tempDir.resolve("streaming.wasm");
-		runCli("", file.toString(), "-o", streaming.toString(), "--no-wasi", "--host-fetch");
+		runCli("", file.toString(), "-o", streaming.toString(), "--no-wasi", "--host-fetch",
+				"--host-boundary=streaming");
 		String split = new String(Files.readAllBytes(streaming), StandardCharsets.ISO_8859_1);
 		assertThat(split).contains("readRequestBody").contains("writeResponseBody").contains("readResponseBody");
 
+		// ...and the DEFAULT is the envelope, so saying nothing is the second leg.
 		Path envelope = tempDir.resolve("envelope.wasm");
-		runCli("", file.toString(), "-o", envelope.toString(), "--no-wasi", "--host-fetch", "--host-boundary=envelope");
+		runCli("", file.toString(), "-o", envelope.toString(), "--no-wasi", "--host-fetch");
 		String inBand = new String(Files.readAllBytes(envelope), StandardCharsets.ISO_8859_1);
 		// The import section is length-prefixed, so env.fetch reads as "\3env\5fetch".
 		assertThat(inBand).as("one import, and it is env.fetch")
@@ -421,15 +424,15 @@ class RontoLispCliTest {
 				(rontolisp:wasm-export 'handle :params '(:string) :returns :string)
 				""");
 		Path streaming = tempDir.resolve("hand-streaming.wasm");
-		runCli("", file.toString(), "-o", streaming.toString(), "--no-wasi");
+		runCli("", file.toString(), "-o", streaming.toString(), "--no-wasi", "--host-boundary=streaming");
 		assertThat(new String(Files.readAllBytes(streaming), StandardCharsets.ISO_8859_1))
-			.as("the default boundary HAS the body imports, so the guarded declaration is read")
+			.as("the streaming boundary HAS the body imports, so the guarded declaration is read")
 			.contains("readRequestBody");
 
 		Path envelope = tempDir.resolve("hand-envelope.wasm");
-		runCli("", file.toString(), "-o", envelope.toString(), "--no-wasi", "--host-boundary=envelope");
+		runCli("", file.toString(), "-o", envelope.toString(), "--no-wasi");
 		assertThat(new String(Files.readAllBytes(envelope), StandardCharsets.ISO_8859_1))
-			.as("the envelope boundary has none, so the same source takes its #- arm")
+			.as("the DEFAULT boundary has none, so the same source takes its #- arm")
 			.doesNotContain("readRequestBody");
 
 		// And nor does any target that could not carry them whatever the flag said.

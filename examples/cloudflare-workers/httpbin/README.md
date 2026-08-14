@@ -149,10 +149,10 @@ for its outgoing `fetch`).
 
 The guard on both imports in `worker.lisp` is `#+rontolisp-body-imports` — the
 feature a build carries exactly where those two imports exist, which is a
-`--no-wasi` wasm-GC core module on the **streaming** boundary
-(`--host-boundary=streaming`, the default). Every other way of running this same
-file lacks them, and the `#-` half answers all of them with the envelope's own
-`"body"` key:
+`--no-wasi` wasm-GC core module built with **`--host-boundary=streaming`** —
+which this directory's `build.sh` asks for, the default being the in-band
+envelope. Every other way of running this same file lacks them, and the `#-`
+half answers all of them with the envelope's own `"body"` key:
 
 - **the interpreter and the JVM** — `check.lisp` drives `handle-request` as an
   ordinary function, where there is no JavaScript at all.
@@ -162,9 +162,12 @@ file lacks them, and the `#-` half answers all of them with the envelope's own
 - **a component** — [`../httpbin-component`](../httpbin-component) builds this
   same file that way, and a component's host functions cross the canonical ABI
   rather than a core import.
-- **`--host-boundary=envelope`** — the in-band body asked for on purpose. That
-  is what [`../btc-ticker`](../btc-ticker) is, and the reason the guard names the
-  imports rather than the targets that lack them: a flag can turn them off too.
+- **the DEFAULT boundary** — `envelope`, the in-band body. That is what
+  [`../btc-ticker`](../btc-ticker) is, and it is why this directory's `build.sh`
+  has to ASK for `--host-boundary=streaming`: these endpoints echo arbitrary
+  request bodies, so the octets have to stay octets. It is also the reason the
+  guard names the imports rather than the targets that lack them — a flag turns
+  them off too.
 
 One source, four boundaries.
 

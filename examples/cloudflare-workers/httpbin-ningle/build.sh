@@ -13,6 +13,12 @@
 #
 # The first run downloads clack/lack/ningle into ~/.rontolisp/quicklisp; after
 # that the build is offline.
+# --host-boundary=streaming: this Worker ECHOES request bodies, so they must
+#   cross as octets rather than as JSON text in the envelope -- which is what
+#   src/index.js feeds through env.readRequestBody / env.writeResponseBody, and
+#   what lets a BINARY body come back exactly. Asked for, because the default is
+#   `envelope` (see ../btc-ticker), where a body rides the head instead.
+#
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -26,7 +32,7 @@ if [[ ! -f "$jar" ]]; then
 fi
 
 echo "compiling worker.lisp -> src/worker.wasm"
-java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --optimize=size
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --host-boundary=streaming --optimize=size
 
 ls -l "$here/src/worker.wasm"
 echo "done. Run it with:  npx wrangler dev"

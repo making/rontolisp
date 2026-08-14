@@ -437,7 +437,7 @@ public final class RontoLispCli {
 					+ " already) or --no-gc (which imports nothing at all)"
 					+ " -- e.g. -o out.wasm --no-wasi --host-boundary=" + HostBoundary.ENVELOPE.spelling());
 		}
-		HostBoundary boundary = hostBoundary == null ? HostBoundary.STREAMING : hostBoundary;
+		HostBoundary boundary = hostBoundary == null ? HostBoundary.ENVELOPE : hostBoundary;
 		// Inline top-level (load "path") forms at compile time: the compilers collect
 		// defuns in a static pass that a runtime load cannot feed, so a program split
 		// across files (a console driver loading a rendering-free core) would otherwise
@@ -901,19 +901,20 @@ public final class RontoLispCli {
 		this.out.println("  --host-boundary=B  With --no-wasi (core module only): where an HTTP body crosses.");
 		this.out.println("                     Both shapes speak the same JSON envelope; B says whether a body");
 		this.out.println("                     rides inside it or streams beside it");
-		this.out.println("                       streaming  (default) the request and response bodies leave the");
-		this.out.println("                                  envelope through env.readRequestBody /");
-		this.out.println("                                  env.writeResponseBody -- and, with --host-fetch,");
-		this.out.println("                                  env.readResponseBody. Binary crosses exactly, a");
-		this.out.println("                                  large body never doubles linear memory, and a");
-		this.out.println("                                  streamed upstream reply forwards chunk at a time");
-		this.out.println("                       envelope   every body rides the envelope's own \"body\" key.");
-		this.out.println("                                  No body imports and no host-side cursor: a Worker");
-		this.out.println("                                  that fetches one document and answers one imports");
-		this.out.println("                                  at most env.fetch. It pays a copy per body and");
-		this.out.println("                                  cannot carry binary. What is left is fixed by the");
-		this.out.println("                                  transport, so --emit-js-glue writes the whole host");
-		this.out.println("                                  half of it -- a Worker is then three lines");
+		this.out.println("                       envelope   (default) every body rides the envelope's own");
+		this.out.println("                                  \"body\" key. No body imports and no host-side");
+		this.out.println("                                  cursor: a Worker that reads one document and");
+		this.out.println("                                  answers one imports at most env.fetch");
+		this.out.println("                       streaming  the request and response bodies leave the envelope");
+		this.out.println("                                  through env.readRequestBody / env.writeResponseBody");
+		this.out.println("                                  -- and, with --host-fetch, env.readResponseBody.");
+		this.out.println("                                  Ask for it when a body is BINARY (the envelope");
+		this.out.println("                                  carries one as JSON text, so ff fe 41 arrives as");
+		this.out.println("                                  seven bytes), LARGE (the envelope costs linear");
+		this.out.println("                                  memory proportional to it) or RELAYED from an");
+		this.out.println("                                  upstream reply you would forward a chunk at a time");
+		this.out.println("                     Either way --emit-js-glue writes the whole host half, so the");
+		this.out.println("                     JavaScript is three lines on both");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");

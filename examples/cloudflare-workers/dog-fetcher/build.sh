@@ -3,11 +3,15 @@
 #
 # --no-wasi: the Worker calls the exported entry point directly, so the module
 #   needs no WASI imports -- it becomes a reactor (`_initialize`, not `_start`).
-# --host-fetch: rontolisp:fetch is lowered onto the host's own fetch. That
-#   costs two imports -- env.fetch(request-json) -> response-head-json and
-#   env.readResponseBody(ptr, cap) -> i32, which carries the reply's body a
-#   chunk at a time -- both answered by src/index.js behind
-#   WebAssembly.Suspending (JSPI).
+# --host-fetch: rontolisp:fetch is lowered onto the host's own fetch, imported
+#   as env.fetch(request-json) -> response-head-json.
+# --host-boundary=streaming: the bodies leave the JSON envelope and cross as
+#   octets through imports of their own -- env.readRequestBody,
+#   env.writeResponseBody, and env.readResponseBody for the reply of that fetch.
+#   ASKED FOR, because the default is `envelope`: this Worker relays an upstream
+#   reply and wants it forwarded a chunk at a time rather than held whole, and
+#   the envelope would carry a body as JSON text, which no binary survives.
+#   ../btc-ticker is the same program shape on the default boundary.
 # --emit-js-glue: write src/worker.js beside the module -- the import object,
 #   the linear-memory plumbing, the Suspending/promising wiring and the one-call
 #   queue, all derived from the same declarations the module was built from.
@@ -32,8 +36,8 @@ if [[ ! -f "$jar" ]]; then
 fi
 
 echo "compiling worker.lisp -> src/worker.wasm + src/worker.js"
-java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" --no-wasi --host-fetch --optimize=size \
-  --emit-js-glue
+java -jar "$jar" "$here/worker.lisp" -o "$here/src/worker.wasm" \
+  --no-wasi --host-fetch --host-boundary=streaming --optimize=size --emit-js-glue
 
 ls -l "$here/src/worker.wasm" "$here/src/worker.js"
 echo "done. Run it with:  npx wrangler dev"

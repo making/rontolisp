@@ -222,27 +222,28 @@ compile to there — speaks one JSON envelope in each direction. What
 crosses beside it, and it changes what the **module imports**, so it is a flag
 of its own rather than a value on `--emit-js-glue`.
 
-| | `streaming` (default) | `envelope` |
+| | `envelope` (default) | `streaming` |
 | --- | --- | --- |
-| Request body | `env.readRequestBody(ptr, cap) -> i32`, a chunk per call | the envelope's `"body"` key |
-| Response body | `env.writeResponseBody(ptr, len)`, a chunk per call | the head's `"body"` key |
-| `rontolisp:fetch` reply body (`--host-fetch`) | `env.readResponseBody(ptr, cap) -> i32` | the reply head's `"body"` key |
-| Host-side state | a cursor per reading import | none |
-| Binary body | crosses exactly | flattened one character per octet |
-| Large body | never doubles linear memory | copied |
-| Streamed upstream reply | forwarded chunk at a time | buffered, then forwarded |
+| Request body | the envelope's `"body"` key | `env.readRequestBody(ptr, cap) -> i32`, a chunk per call |
+| Response body | the head's `"body"` key | `env.writeResponseBody(ptr, len)`, a chunk per call |
+| `rontolisp:fetch` reply body (`--host-fetch`) | the reply head's `"body"` key | `env.readResponseBody(ptr, cap) -> i32` |
+| Host-side state | none | a cursor per reading import |
+| Binary body | does NOT survive — `ff fe 41` arrives as `ef bf bd ef bf bd 41` | crosses exactly |
+| Large body | linear memory grows with it | stays flat |
+| Streamed upstream reply | buffered, then forwarded | forwarded chunk at a time |
 | Generated host half | `instantiate`, `defaultHost()` and `worker(module)` — the same on both |
 
 ```console
-$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --host-boundary=envelope
+$ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch
 $ wasm-tools print worker.wasm | grep -oE '\(import "[^"]+" "[^"]+"'
 (import "env" "fetch"
 ```
 
-**Reach for `envelope` first.** A body that is a *document* — a Worker that reads
-one JSON request and answers one JSON reply — pays a copy nobody can measure and
-gets back a boundary with no host-side state in it, which is where the bugs on
-this surface have all been. Stay on `streaming` when one of these is true:
+**`envelope` is the default, and it is the one to want.** A body that is a
+*document* — a Worker that reads one JSON request and answers one JSON reply —
+pays a copy nobody can measure and gets back a boundary with no host-side state
+in it, which is where the bugs on this surface have all been. Ask for
+`--host-boundary=streaming` when one of these is true:
 
 - **a body is BINARY** — an image, a file, protobuf, anything already compressed.
   The envelope carries a body as JSON text, so bytes that are not valid UTF-8 do
@@ -256,10 +257,15 @@ this surface have all been. Stay on `streaming` when one of these is true:
   time instead of holding the whole thing first.
 
 Neither shape is a subset of the other, and the module sizes land within about
-1% of each other either way round, so this is not a size decision. `streaming`
-stays the DEFAULT for the same reason the list above is short: it is the shape
-that cannot lose data, and a default that silently mangles a binary upload is
-not one worth having.
+1% of each other either way round, so this is not a size decision either. It is
+not an ergonomics decision either: `--emit-js-glue` writes the host half of
+both, so the JavaScript is three lines whichever you pick.
+
+**The default moved here, and a rebuild is how you feel it.** Before this, every
+`--no-wasi` reactor took the bodies out of the envelope; a module rebuilt without
+the flag now keeps them in it, which is a real regression for the three cases
+above and nothing at all for everything else. Add `--host-boundary=streaming` and
+the module is byte-for-byte what it was.
 
 `--host-boundary` needs `--no-wasi` and a `.wasm` output, without `--component`
 or `--no-gc`: those two are in band already (a component's host functions cross

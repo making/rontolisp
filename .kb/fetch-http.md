@@ -60,7 +60,8 @@ verified; `.kb/clack.md`), and `examples/net/dog-fetcher.lisp` compiles UNEDITED
 `--no-wasi --host-fetch` (its `http-handler` lowers to the reactor transport).
 
 **The `:body` split, and what it changed (todo-347)** -- and, since todo-351, what
-DECLINING it costs (`--host-boundary=envelope`, `compiler/HostBoundary`): the import, the
+NOT asking for it costs -- it is opt-in now, `--host-boundary=streaming` against a default
+of `envelope` (`compiler/HostBoundary`): without it the import, the
 counter, the pull thunk and the negative-count channel are all gone, `%host-fetch-body`
 collapses to its in-band arm over the head's own `"body"` key, and the module imports
 `env.fetch` alone. `:body` is still the same first-class stream -- the in-band arm was

@@ -18,20 +18,30 @@ import org.jspecify.annotations.Nullable;
  * import of its own.
  *
  * <ul>
- * <li>{@link #STREAMING} (the default, and what every reactor built before this flag got)
- * takes both request and reply bodies out of the envelope: four host functions
- * ({@code env.readRequestBody}, {@code env.writeResponseBody}, and under
+ * <li>{@link #STREAMING} takes both request and reply bodies out of the envelope: four
+ * host functions ({@code env.readRequestBody}, {@code env.writeResponseBody}, and under
  * {@code --host-fetch} {@code env.readResponseBody} beside {@code env.fetch}) and the
  * host-side cursor each of them needs. What that buys is real — a BINARY body crosses
  * exactly, a large one never doubles linear memory, and a Worker can forward a streamed
  * upstream reply chunk at a time.</li>
- * <li>{@link #ENVELOPE} keeps every body inside the envelope's own {@code "body"} key, in
- * both directions and on both sides of a {@code --host-fetch} call. A program that
- * fetches one JSON document and answers one JSON document has no use for a cursor, and
- * this is the shape with nothing in it: no body imports, no host-side reader state, and —
- * because what is left is fixed by the transport rather than chosen by the program — a
- * host half the build can WRITE ({@code --emit-js-glue}, {@link HostGlueEmitter}).</li>
+ * <li>{@link #ENVELOPE}, the DEFAULT, keeps every body inside the envelope's own
+ * {@code "body"} key, in both directions and on both sides of a {@code --host-fetch}
+ * call. A program that fetches one JSON document and answers one JSON document — most of
+ * them — has no use for a cursor, and this is the shape with nothing in it: no body
+ * imports and no host-side reader state.</li>
  * </ul>
+ *
+ * <p>
+ * <strong>The default IS the recommendation, and moving it here broke things on
+ * purpose.</strong> An existing {@code --no-wasi} reactor rebuilt without the flag
+ * changes shape: a binary body stops crossing exactly (the envelope carries a body as
+ * JSON text, so {@code ff fe 41} arrives as the seven bytes {@code ef bf bd ef bf bd 41})
+ * and a large one costs linear memory proportional to itself. That is a real regression
+ * for the programs it hits, and it is the price of not having a default that disagrees
+ * with the advice: the shape most Workers want is the one they get for saying nothing,
+ * and the three cases that want the other are named above, in the guides, and in the two
+ * shipped examples. A build that needs the split says {@code --host-boundary=streaming}
+ * and is byte-for-byte what it was.
  *
  * <p>
  * <strong>It is a MODULE decision, not a glue decision</strong>, which is why it is a
@@ -61,14 +71,15 @@ import org.jspecify.annotations.Nullable;
 public enum HostBoundary {
 
 	/**
-	 * {@code --host-boundary=streaming}, the default: the bodies leave the envelope
-	 * through {@code :bytes} imports of their own.
+	 * {@code --host-boundary=streaming}: the bodies leave the envelope through
+	 * {@code :bytes} imports of their own. Asked for, never assumed.
 	 */
 	STREAMING("streaming"),
 
 	/**
-	 * {@code --host-boundary=envelope}: every body rides the envelope's {@code "body"}
-	 * key, and the module imports nothing but what the program itself declared.
+	 * {@code --host-boundary=envelope}, the DEFAULT: every body rides the envelope's
+	 * {@code "body"} key, and the module imports nothing but what the program itself
+	 * declared.
 	 */
 	ENVELOPE("envelope");
 
@@ -102,12 +113,12 @@ public enum HostBoundary {
 	 * neither.
 	 * @param value the option value as the CLI parsed it, or {@code null} when the flag
 	 * is absent
-	 * @return the selected boundary, {@link #STREAMING} when the flag is absent
+	 * @return the selected boundary, {@link #ENVELOPE} when the flag is absent
 	 * @throws IllegalArgumentException if the value names no boundary
 	 */
 	public static HostBoundary parse(@Nullable String value) {
 		if (value == null) {
-			return STREAMING;
+			return ENVELOPE;
 		}
 		for (HostBoundary boundary : values()) {
 			if (value.equals(boundary.spelling)) {

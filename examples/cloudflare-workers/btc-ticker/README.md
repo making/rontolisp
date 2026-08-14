@@ -3,7 +3,8 @@
 One outgoing request, one JSON answer: ask
 [bitFlyer](https://lightning.bitflyer.com/docs?lang=en) what a bitcoin costs in
 yen, and say so. It is the hello world of the **envelope boundary**
-(`--host-boundary=envelope`), and the whole of its JavaScript is:
+(the default; `build.sh` passes no `--host-boundary`), and the whole of its
+JavaScript is:
 
 ```js
 import module from "./worker.wasm";
@@ -44,15 +45,15 @@ streams beside it through imports of its own.
 | A large body | copied | never doubles linear memory |
 | A streamed upstream reply | buffered, then forwarded | forwarded chunk at a time |
 
-**Reach for this boundary first.** Most Workers read a document and answer one,
-and there the copy is unmeasurable while the state it removes is where the bugs
-were. Go back to `streaming` when a body is **binary** (the envelope carries a
+**This is the DEFAULT boundary** — `build.sh` names no `--host-boundary` at all.
+Most Workers read a document and answer one, and there the copy is unmeasurable
+while the state it removes is where the bugs were. Ask for
+`--host-boundary=streaming` when a body is **binary** (the envelope carries a
 body as JSON text, so `ff fe 41` arrives as the seven bytes
 `ef bf bd ef bf bd 41` with the `content-length` still saying three), **large**
 (linear memory grows with it), or **relayed** from an upstream reply you would
-rather forward a chunk at a time. That short list is also why `streaming` is
-still what a build with no flag gets: a default has to be the shape that cannot
-lose data.
+rather forward a chunk at a time — which is [`../dog-fetcher`](../dog-fetcher),
+and the five `httpbin*` Workers, all of which say so in their own `build.sh`.
 
 **It is not a size decision.** The same source on the two boundaries lands within
 about 1% either way — measured, both raw and gzipped, in
