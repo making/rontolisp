@@ -344,6 +344,92 @@ class WasmHostGlueE2eTest {
 				"overlapped GET /a NIL [] 200 こんにちは | GET /b NIL [] 200 こんにちは", "empty 204 0");
 	}
 
+	// The STREAMING boundary through the SAME `worker(module)`: what the envelope one
+	// gets for free, on the shape whose bodies leave the envelope. The handler proves
+	// the two things that shape exists for -- a binary request body crossing exactly,
+	// and a reply half-drained before the next fetch, whose leftover octets the derived
+	// env.fetch has to discard or the second drain answers the first reply's.
+	private static final String STREAMING_MODULE = """
+			(rontolisp:async-defun grab (url) (rontolisp:await (rontolisp:fetch url)))
+			(defun read-bytes (stream)
+			  (if (null stream)
+			      nil
+			      (let ((out nil))
+			        (do ((b (read-byte stream nil nil) (read-byte stream nil nil)))
+			            ((null b))
+			          (setq out (cons b out)))
+			        (nreverse out))))
+			(rontolisp:async-defun app (env)
+			  (if (equal (getf env :path-info) "/echo")
+			      (let ((got (read-bytes (getf env :raw-body))))
+			        (list 200 (list :content-type "text/plain")
+			              (list (format nil "n=~a ~a" (length got) got))))
+			      (let* ((port (getf env :query-string))
+			             (r1
+			              (rontolisp:await
+			               (grab (concatenate 'string "http://127.0.0.1:" port "/big"))))
+			             (head
+			              (rontolisp:await (rontolisp:stream-read (getf r1 :body))))
+			             (r2
+			              (rontolisp:await
+			               (grab (concatenate 'string "http://127.0.0.1:" port "/small"))))
+			             (all (rontolisp:await (rontolisp:read-all (getf r2 :body)))))
+			        (declare (ignore head))
+			        (list 200 (list :content-type "text/plain")
+			              (list (format nil "~a ~a" (subseq all 0 6) (length all)))))))
+			;; :buffered is the Clack raw-body shape, which is what read-byte needs.
+			(rontolisp:http-handler 'app :raw-body :buffered)
+			""";
+
+	private static final String STREAMING_DRIVER = """
+			import { createServer } from "node:http";
+			import { readFileSync } from "node:fs";
+			import { worker } from "./glue.js";
+
+			const server = createServer((request, response) => {
+			  request.resume();
+			  response.writeHead(200, { "content-type": "text/plain" });
+			  response.end(request.url.startsWith("/big") ? "A".repeat(100003) : "B".repeat(300));
+			});
+			await new Promise((r) => server.listen(0, "127.0.0.1", r));
+			const port = server.address().port;
+
+			const module = new WebAssembly.Module(readFileSync(new URL("./glue.wasm", import.meta.url)));
+			console.log("imports", WebAssembly.Module.imports(module).map((i) => i.module + "." + i.name).join(","));
+
+			// Three lines of host on the boundary whose bodies are OUT of the envelope.
+			const app = worker(module);
+
+			// A binary request body, through the :bytes import rather than the head.
+			const echo = await app.fetch(
+			  new Request("http://x.test/echo", { method: "POST", body: new Uint8Array([0xff, 0xfe, 0x41]) }),
+			);
+			console.log("binary", (await echo.text()).trim());
+
+			// A reply half-drained, then a second fetch: the derived env.fetch drops what
+			// the glue is still holding, so the second drain is its own 300 octets.
+			const two = await app.fetch(new Request(`http://x.test/?${port}`));
+			console.log("superseded", (await two.text()).trim());
+			server.close();
+			""";
+
+	@Test
+	void theEmittedWorkerHalfServesTheStreamingBoundaryToo() throws Exception {
+		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
+				true);
+		Files.write(this.tempDir.resolve("glue.wasm"),
+				compiler.compile(program(STREAMING_MODULE, HostBoundary.STREAMING)));
+		Files.writeString(this.tempDir.resolve("glue.js"),
+				java.util.Objects.requireNonNull(compiler.hostGlueJs("glue.js")), StandardCharsets.UTF_8);
+		Path driver = this.tempDir.resolve("streaming.mjs");
+		Files.writeString(driver, STREAMING_DRIVER, StandardCharsets.UTF_8);
+		assertThat(runNode(driver).lines().toList()).containsExactly(
+				"imports env.fetch,env.readResponseBody,env.readRequestBody,env.writeResponseBody",
+				// The three octets the ENVELOPE boundary cannot carry: there they arrive
+				// as seven, two U+FFFD where two octets were.
+				"binary n=3 (255 254 65)", "superseded BBBBBB 300");
+	}
+
 	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order.
 	private static List<LispVal> program() {
 		return program(MODULE);

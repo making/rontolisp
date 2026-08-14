@@ -154,7 +154,7 @@ HTTP リアクター — ホストがエントリポイントを呼ぶ `--no-was
 | バイナリボディ | 正確に渡る | 1 オクテット 1 文字に平坦化される |
 | 大きなボディ | リニアメモリを二重に消費しない | コピーされる |
 | ストリーミングされた上流応答 | チャンク単位で転送 | バッファしてから転送 |
-| 生成されるホスト側 | `instantiate` のみ | 加えて `defaultHost()` と `worker(module)` |
+| 生成されるホスト側 | `instantiate` と `defaultHost()` と `worker(module)` — 両者で同じ |
 
 ```console
 $ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --host-boundary=envelope
@@ -220,7 +220,7 @@ const reply = await lisp.serially(async (entry) => {
 
 宣言だけでは取りこぼすインポートも書き出されます: `--host-random` のエントロピー源は、preview1 が `random_get(buf, len)` の意味を固定しているため、要求するのではなく*実装*されます。また `:bytes` の結果はモジュールのバッファではなくチャンクで答えます(`null` が終端)。生成されたカーソルが入り切らなかった分を保持するので、チャンクの出どころ — `ReadableStream` か `Uint8Array` か — だけがホストの決めることとして残ります。
 
-**トランスポートがすでに固定しているホスト関数は、このファイルが書き出します。** リアクター境界の 2 つの半分はプログラムの選択ではまったくなく、[`envelope` 境界](#choosing-the-body-boundary---host-boundary)では — ホストが供給しなければならないインポートへボディが逃げないため — どちらも導出できます。生成ファイルはそれらをエクスポートします: `--host-fetch` が双方向を固定する `env.fetch` の実装である `defaultHost()` と、`Request` をエンベロープへ、ヘッドを `Response` へ写す `worker(module)` です。Worker はこれで 3 行になります:
+**トランスポートがすでに固定しているホスト関数は、このファイルが書き出します。** リアクター境界の 2 つの半分はプログラムの選択ではまったくないので、生成ファイルはそれらをエクスポートします: `--host-fetch` が双方向を固定する `env.fetch` の実装である `defaultHost()` と、`Request` をエンベロープへ、ヘッドを `Response` へ写す `worker(module)` です。これは**どちらの**[境界](#choosing-the-body-boundary---host-boundary)でも成り立ちます: ボディがエンベロープを離れる側でも、その出どころのリーダーは `worker()` がすでに持っている `Request` と、これから組み立てる `Response` なので、ボディのインポートも書き出されます。Worker はこれで 3 行になります:
 
 ```js
 import module from "./worker.wasm";
@@ -229,6 +229,6 @@ import { worker } from "./worker.js";
 export default worker(module);
 ```
 
-どちらもデフォルトであって置き換えではありません。`worker(module, options)` は `host`(導出されたエントリの上に 1 つずつ重ねるインポートエントリ)と `remoteAddr`(エンベロープの任意項目であるクライアントアドレスを返す `(request, env, ctx) => string`)を受け取ります。後者はランタイム中立なファイルが推測してはならない唯一のものです(Cloudflare では `(r) => r.headers.get("cf-connecting-ip")`)。`streaming` 境界ではどちらも書き出されません。そこではオクテットの出どころのリーダーをホストが所有し、ソースがいつ差し替わったかを知っているのもホストだけで、どちらも宣言では表現できないからです。
+どちらもデフォルトであって置き換えではありません。`worker(module, options)` は `host`(導出されたエントリの上に 1 つずつ重ねるインポートエントリ)と `remoteAddr`(エンベロープの任意項目であるクライアントアドレスを返す `(request, env, ctx) => string`)を受け取ります。後者はランタイム中立なファイルが推測してはならない唯一のものです(Cloudflare では `(r) => r.headers.get("cf-connecting-ip")`)。書き出されないのはプログラム自身が宣言したインポートです: それは `instantiate` が名前で要求し続け、生成ファイル冒頭のスケッチも `worker(module, { host })` に変わります。
 
 このフラグは `--no-wasi` と `.wasm` 出力を必要とします: コンポーネントは自身のバインディングジェネレータ経由でインスタンス化され、`--no-gc` モジュールは何もインポートしないので `new WebAssembly.Instance(module, {})` がグルーのすべてです。境界ごとに 1 つずつ、2 つの実例があります: `streaming` の [dog-fetcher](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/dog-fetcher)(`src/worker.js` は生成されてチェックインされ、`src/index.js` はホスト自身の半分)と、`envelope` の [btc-ticker](https://github.com/making/rontolisp/tree/develop/examples/cloudflare-workers/btc-ticker)(`src/index.js` は上の 3 行)です。

@@ -152,11 +152,40 @@ class HostGlueEmitterTest {
 			// call parked ahead of this one can poison it in between.
 			.contains("if (poisoned) throw new Error(\"instance discarded by an earlier trap\");")
 			.contains("return lisp.handleRequest(input);")
-			.contains("return new Response(head.body || null, {");
-		// The streaming boundary writes NEITHER: with a body out of band the host owns
-		// the reader the octets come from, which no declaration states.
-		assertThat(fetchingReactorGlue()).doesNotContain("export function defaultHost")
-			.doesNotContain("export function worker");
+			.contains("const body = head.body;")
+			.contains("return new Response(body?.length ? body : null, {");
+	}
+
+	@Test
+	void theStreamingBoundaryWritesThemToo() {
+		// The host half is derivable on BOTH boundaries: where a body is out of band,
+		// the reader it comes from is the platform Request/Response the generated
+		// worker() is already holding, so it writes those entries as well and the
+		// deployment's own file is three lines either way. What differs is only the
+		// DATA -- which is the whole point of the pair.
+		String glue = fetchingReactorGlue();
+		assertThat(glue).contains("export function defaultHost(lisp) {")
+			.contains("export function worker(module, options = {}) {")
+			// the reply body's reader, and the cursor a second fetch supersedes
+			.contains("upstream = response.body ? response.body.getReader() : null;")
+			.contains("lisp?.()?.drop(\"env." + HostFetchLibrary.BODY_IMPORT_FIELD + "\");")
+			// the reactor's two bodies, per-call state owned by worker()
+			.contains("readRequestBody: () => {")
+			.contains("writeResponseBody: (chunk) => responseChunks.push(chunk),")
+			.contains("requestBody = octets;")
+			.contains("const body = head.body ?? collected();");
+		// Out of band the head carries no body key in either direction: the request's
+		// would be a second copy the transport ignores, and the reply's absence is what
+		// puts the module's stream over the import.
+		assertThat(glue).doesNotContain("head.body = decoder.decode(octets)")
+			.doesNotContain("body: await response.text(),");
+		// In band, none of that exists and the head carries both.
+		String envelope = envelopeReactorGlue();
+		assertThat(envelope).contains("export function defaultHost() {")
+			.contains("body: await response.text(),")
+			.contains("head.body = decoder.decode(octets);")
+			.doesNotContain("upstream")
+			.doesNotContain("responseChunks");
 	}
 
 	@Test

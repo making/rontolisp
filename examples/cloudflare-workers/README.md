@@ -27,7 +27,7 @@ Module sizes are measured rather than quoted here:
 | [`httpbin-tiny-routes/`](httpbin-tiny-routes) | tiny-routes: route macros, a `/status/:code` template, declining, and middleware that reads the body, parses the query and sets the content type | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-ningle/`](httpbin-ningle) | ningle: routes assigned in a loop, a controller that returns a string and mutates `*response*`, a request that arrives already parsed, a regex rule that declines | `httpbin/src/index.js`, byte-identical |
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
-| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | GENERATED: `--emit-js-glue` writes `src/worker.js` from the declarations, and `src/index.js` is the host's own half |
+| [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP, streaming bodies.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | GENERATED, and all of it: `src/index.js` is three lines |
 | [`btc-ticker/`](btc-ticker) | **The Worker with nothing in it.** One outgoing request, one JSON answer — on the `--host-boundary=envelope` boundary, where every body rides the envelope and the module imports exactly one function | GENERATED, and all of it: `src/index.js` is three lines |
 
 ## Which one should I copy?
@@ -53,14 +53,15 @@ Module sizes are measured rather than quoted here:
   what lets its controllers ignore streams and JSON parsing entirely.
 - **`btc-ticker/`** when the Worker fetches a document and answers a document —
   which is most of them. `--host-boundary=envelope` is the shape to reach for:
-  both halves of the host are fixed by the transport, so the build writes them
-  and the JavaScript is three lines.
+  the module imports one host function, nothing on the JavaScript side keeps
+  state, and there is no cursor whose lifetime anyone has to get right.
 - **`dog-fetcher/`** when a body is **binary, large, or relayed** — an image, an
   upload, an upstream reply to forward as it arrives. Those are the cases the
   envelope cannot serve (it carries a body as JSON text, so a non-UTF-8 byte does
   not survive, and it holds the whole thing in memory), and they are why
-  `streaming` is still the default. It is also where the
-  synchronous-Lisp/asynchronous-JavaScript seam is explained in full; both
+  `streaming` is still the default. It costs no more JavaScript: the glue writes
+  the body imports too, so this `src/index.js` is also three lines. It is where
+  the synchronous-Lisp/asynchronous-JavaScript seam is explained in full; both
   directories rely on it.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string

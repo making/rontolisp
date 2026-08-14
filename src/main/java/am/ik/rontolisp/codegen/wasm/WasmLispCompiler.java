@@ -3500,25 +3500,24 @@ public final class WasmLispCompiler implements LispCompiler {
 			// program declaring its OWN env.fetch -- any shape, any meaning -- would be
 			// offered a host half implementing rontolisp's HTTP envelope for it.
 			boolean derivedFetch = this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED)
-					&& imported(importWrappers, FetchResponseShape.HOST_IMPORT_FIELD)
-					&& !imported(importWrappers, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
-			// And the reactor's own entry point is the whole envelope -- a Request in, a
-			// Response out -- exactly when the bodies stayed inside it. Recognised by the
-			// synthesized BRIDGE defun rather than by the export name, because
-			// "handle-request" is a name any program may choose and only this one is the
-			// boundary the compile path built (compiler/ReactorEnvelope).
-			// BOTH names, because the member alone is only half a fingerprint: a
-			// program may spell a function %reactor-dispatch, and the synthesized bridge
-			// is always exported under the transport's own export name as well.
+					&& imported(importWrappers, FetchResponseShape.HOST_IMPORT_FIELD);
+			// And the reactor's own entry point takes the whole envelope -- a Request in,
+			// a Response out -- on EITHER boundary: where the bodies left it, the reader
+			// they come from is the platform Request the glue is already holding and the
+			// Response it is already building, so that half stays derivable too.
+			// Recognised by the synthesized BRIDGE defun rather than by the export name,
+			// because "handle-request" is a name any program may choose and only this one
+			// is the boundary the compile path built (compiler/ReactorEnvelope). BOTH
+			// names, because the member alone is only half a fingerprint: a program may
+			// spell a function %reactor-dispatch, and the synthesized bridge is always
+			// exported under the transport's own export name as well.
 			String envelopeExport = null;
-			if (!imported(importWrappers, ReactorEnvelope.REQUEST_BODY_FIELD)) {
-				for (ExportPlan plan : exportPlans) {
-					PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(plan.decl().name());
-					String member = qn == null ? plan.decl().name() : qn.member();
-					if (ReactorEnvelope.BRIDGE_FUNCTION.equalsIgnoreCase(member)
-							&& ReactorEnvelope.EXPORT_NAME.equals(plan.decl().exportName())) {
-						envelopeExport = plan.decl().exportName();
-					}
+			for (ExportPlan plan : exportPlans) {
+				PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(plan.decl().name());
+				String member = qn == null ? plan.decl().name() : qn.member();
+				if (ReactorEnvelope.BRIDGE_FUNCTION.equalsIgnoreCase(member)
+						&& ReactorEnvelope.EXPORT_NAME.equals(plan.decl().exportName())) {
+					envelopeExport = plan.decl().exportName();
 				}
 			}
 			this.hostGlue = new HostGlueEmitter.Surface(glueImports, entropy, glueExports, hostArena, seedRandom,

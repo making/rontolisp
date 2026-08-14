@@ -39,7 +39,7 @@ streams beside it through imports of its own.
 | --- | --- | --- |
 | Module imports | `env.fetch` | `env.fetch`, `env.readResponseBody`, `env.readRequestBody`, `env.writeResponseBody` |
 | Host-side state | none | the upstream reader, the request body, the response chunks, the cursor `lisp.drop` discards |
-| `src/index.js` | 3 lines | ~95, saying what each host function does and mapping Request onto the envelope |
+| `src/index.js` | 3 lines | 3 lines — the glue writes that half on both boundaries |
 | A binary body | flattened | crosses exactly |
 | A large body | copied | never doubles linear memory |
 | A streamed upstream reply | buffered, then forwarded | forwarded chunk at a time |
@@ -63,8 +63,10 @@ turned up was a state-lifetime bug — a reply cursor outliving its source, an
 instance bound outside the critical section it is used in. An envelope host has
 no cursor to outlive anything.
 
-And because both halves that remain are fixed by the transport rather than
-chosen by the program, `--emit-js-glue` writes them:
+The host half is written for you either way — `--emit-js-glue` derives it on both
+boundaries, so `../dog-fetcher`'s `src/index.js` is three lines too. What this
+boundary removes is not JavaScript, it is STATE: there is no reader for the host
+to own and no cursor whose lifetime it has to get right.
 
 - **`env.fetch`** — `--host-fetch` states both directions of its envelope
   (rontolisp's own `FetchResponseShape`, pinned by `HostFetchLibraryTest`), so

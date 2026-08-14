@@ -26,7 +26,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class HostFetchLibraryTest {
 
-	private static final Path WORKER_HOST = Path.of("examples/cloudflare-workers/dog-fetcher/src/index.js");
+	// The shipped host half. GENERATED since the glue learned to write it on both
+	// boundaries (src/index.js is three lines now), which is why this reads worker.js:
+	// the file that really speaks the envelope is the one to hold to the record.
+	private static final Path WORKER_HOST = Path.of("examples/cloudflare-workers/dog-fetcher/src/worker.js");
 
 	@Test
 	void spliceHappensExactlyWhenTheProgramFetches() {
@@ -115,6 +118,10 @@ class HostFetchLibraryTest {
 			}
 		}
 		assertThat(host).contains(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY + ":");
+		// And the file the deployment actually imports is now three lines over it.
+		assertThat(Files.readString(Path.of("examples/cloudflare-workers/dog-fetcher/src/index.js"),
+				StandardCharsets.UTF_8))
+			.contains("export default worker(module);");
 	}
 
 	@ParameterizedTest

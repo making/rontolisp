@@ -231,7 +231,7 @@ of its own rather than a value on `--emit-js-glue`.
 | Binary body | crosses exactly | flattened one character per octet |
 | Large body | never doubles linear memory | copied |
 | Streamed upstream reply | forwarded chunk at a time | buffered, then forwarded |
-| Generated host half | `instantiate` only | plus `defaultHost()` and `worker(module)` |
+| Generated host half | `instantiate`, `defaultHost()` and `worker(module)` — the same on both |
 
 ```console
 $ rontolisp worker.lisp -o worker.wasm --no-wasi --host-fetch --host-boundary=envelope
@@ -347,13 +347,14 @@ whatever did not fit, so which source the chunks come from — a
 `ReadableStream`, a `Uint8Array` — is all a host is left to decide.
 
 **Where the transport already fixed a host function, the file writes that too.**
-Two halves of a reactor's boundary are not the program's choice at all, and on
-the [`envelope` boundary](#choosing-the-body-boundary---host-boundary) — where
-no body escapes through an import a host would have to feed — both are
-derivable, so the generated file exports them: `defaultHost()`, the `env.fetch`
-half `--host-fetch` fixes in both directions, and `worker(module)`, which maps a
-`Request` onto the envelope and a `Response` off it. A Worker is then three
-lines:
+Two halves of a reactor's boundary are not the program's choice at all, so the
+generated file exports them: `defaultHost()`, the `env.fetch` half
+`--host-fetch` fixes in both directions, and `worker(module)`, which maps a
+`Request` onto the envelope and a `Response` off it. That holds on **either**
+[boundary](#choosing-the-body-boundary---host-boundary): where a body leaves the
+envelope, the reader it comes from is the `Request` `worker()` is already
+holding and the `Response` it is already building, so the body imports are
+written too. A Worker is then three lines:
 
 ```js
 import module from "./worker.wasm";
@@ -366,9 +367,9 @@ Both are defaults, not replacements. `worker(module, options)` takes `host` —
 import entries laid over the derived ones one at a time — and `remoteAddr`, a
 `(request, env, ctx) => string` for the envelope's optional client address,
 which is the one thing a runtime-neutral file may not guess (on Cloudflare it is
-`(r) => r.headers.get("cf-connecting-ip")`). On the `streaming` boundary neither
-is written, because there the host owns the reader the octets come from and
-knows when the source moved under it, and no declaration states either.
+`(r) => r.headers.get("cf-connecting-ip")`). What is NOT written is an import
+the program declared itself: `instantiate` still names it, and the sketch at the
+top of the generated file then says `worker(module, { host })` instead.
 
 The flag needs `--no-wasi` and a `.wasm` output: a component is instantiated
 through its own bindings generator, and a `--no-gc` module imports nothing, so

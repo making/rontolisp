@@ -285,7 +285,8 @@ returns to the event loop and the next request would move it), so the generated 
 exposes the critical section itself: `serially(work)` runs `work` in the queue and hands
 it entry points that enter directly, because the queue they would take is the one they
 are in. `examples/cloudflare-workers/dog-fetcher` is the worked example -- `src/worker.js`
-is generated and CHECKED IN, and its `src/index.js` lost every line that was boundary.
+is generated and CHECKED IN, and its `src/index.js` is three lines (todo-351 finished
+that: the derived host halves cover the streaming boundary too).
 Gated to `--no-wasi` core modules (a component is instantiated through jco; a
 `--no-gc` module imports nothing, so `new WebAssembly.Instance(module, {})` is its whole
 glue). Pinned by `HostGlueEmitterTest` (each checked-in `src/worker.js` byte-for-byte
@@ -316,7 +317,7 @@ used to parse and be discarded, compiling the other boundary without a word).
 | binary body | crosses exactly | flattened one character per octet |
 | large body | linear memory flat | copied |
 | streamed upstream reply | forwarded chunk at a time | buffered first |
-| generated host | `instantiate` | + `defaultHost()` + `worker(module)` |
+| generated host | `instantiate` + `defaultHost()` + `worker(module)`, the SAME on both |
 | module size | within ~1% of each other, sign not stable -- see `size-report/results/cloudflare-workers.md` |  |
 
 **Which to REACH FOR: `envelope`, unless a body is binary, large, or relayed.**
@@ -341,20 +342,31 @@ one. The 20 lines of host glue are not the point either; the STATE is. Both defe
 reply cursor outliving its source, an instance selected outside the critical section), and
 an envelope host has no cursor to outlive anything.
 
-**What that lets the emitter WRITE.** Both halves that remain are fixed by the transport
-rather than chosen by the program, so `Surface` gained the two facts saying so
-(`derivedFetch`, `envelopeExport`) and the file emits them: `defaultHost()` (the
-`env.fetch` host half, from `FetchResponseShape` in both directions, error arm included)
-and `worker(module, options)` (a `Request` onto `ReactorEnvelope.REQUEST_KEYS`, a
-`Response` off `RESPONSE_KEYS`, the instance created on the first request and retired if a
-call traps, the queue taken when the fetch can suspend). A Worker is then
-`export default worker(module)` and nothing else --
-`examples/cloudflare-workers/btc-ticker` is that, three lines, byte-pinned like
-dog-fetcher. Both are DEFAULTS: `options.host` is laid over the derived entries one at a
-time, so a host replacing `env.fetch` keeps the rest of `env`. Neither is written on the
-streaming boundary, and that line is the whole rule -- a body out of band means the host
-owns the reader the octets come from and knows when the source moved under it, which is
-exactly what a declaration cannot state.
+**What that lets the emitter WRITE -- on BOTH boundaries.** The halves a reactor's
+boundary leaves are fixed by the transport rather than chosen by the program, so `Surface`
+gained the two facts saying so (`derivedFetch`, `envelopeExport`) and the file emits them:
+`defaultHost()` (the `env.fetch` host half, from `FetchResponseShape` in both directions,
+error arm included) and `worker(module, options)` (a `Request` onto
+`ReactorEnvelope.REQUEST_KEYS`, a `Response` off `RESPONSE_KEYS`, the instance created on
+the first request and retired if a call traps, the queue taken when the fetch can
+suspend). A Worker is then `export default worker(module)` and nothing else -- BOTH
+shipped ones are that, three lines each, byte-pinned. `options.host` is laid over the
+derived entries one at a time, so a host replacing `env.fetch` keeps the rest of `env`.
+
+**The line the first cut drew here was wrong, and it is worth writing down why.** It said
+the streaming halves are not derivable, because "with a body out of band the host owns the
+reader the octets come from". That is true of `instantiate`, whose caller is an arbitrary
+host -- and false of `worker()`, which IS the host: the request body's octets are the
+`Request` it is already holding, the response chunks are the `Response` it is already
+building, and the reply body is the `fetch` its own `defaultHost()` just made. So
+`worker()` writes all four, `defaultHost(lisp)` takes a thunk answering the instance
+because ITS cursor is the one a second fetch inside one call supersedes (`lisp.drop`), and
+the two body imports live in `worker()` rather than `defaultHost()` because they are
+per-CALL state and the call is `worker()`'s. **The consequence is the point of the whole
+item**: the boundary is no longer an ERGONOMICS decision at all. Both shapes cost three
+lines of host, and what separates them is only what happens to a body -- which is what the
+guides now say ("reach for envelope; stay on streaming when a body is binary, large or
+relayed").
 
 **Two facts, derived from the IMPORTS rather than threaded down from the flag.**
 `WasmLispCompiler` reads `derivedFetch` off "`--host-fetch`, the program really calls
@@ -405,7 +417,9 @@ emitted code got wrong:
   requests behind it answered 200 with the trapped call's special binding still shallow
   bound and its counter still advancing. The module's own re-entry guard does not save
   them -- the EH landing pad CLEARS it on exactly the path that poisons the instance. The
-  hand-written `dog-fetcher/src/index.js` had the check; the generated copy had dropped it.
+  hand-written `dog-fetcher/src/index.js` had the check; the generated copy had dropped
+  it -- and that copy is now the only one, so the check had to come back before the hand
+  written file went away.
 - **the WHOLE handler belongs in the try.** Only the module call was guarded, so
   `await request.arrayBuffer()` on an aborted upload and `new Response` on a status or
   header the application is free to produce (0, 999, a newline in a value) escaped as an

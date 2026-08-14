@@ -320,7 +320,8 @@ public final class HostGlueEmitter {
 			out.append("//       ").append(jsKey(imp.field())).append(": ").append(sketch(imp)).append(",");
 			// An entry the file IMPLEMENTS is still the host's to override, so it stays
 			// in the sketch -- with the note that supplying it is optional.
-			out.append(derived(surface, imp) ? "   // or leave it to defaultHost()\n" : "\n");
+			String answered = answeredBy(surface, imp);
+			out.append(answered == null ? "\n" : "   // or leave it to " + answered + "\n");
 		}
 		if (module != null) {
 			out.append("//     },\n//   });\n");
@@ -437,16 +438,17 @@ public final class HostGlueEmitter {
 		out.append("}\n");
 	}
 
-	// --host-fetch over the ENVELOPE boundary: what env.fetch does is fixed in both
-	// directions by FetchResponseShape (the request record in, the response record out,
-	// the reserved error key on a throw), so the host half is the same in every program
-	// and is written here rather than asked for. Only over that boundary: with the reply
-	// body out of band the host also owns the reader the octets come from and knows when
-	// the source moved, and neither is derivable.
+	// --host-fetch's host half: what env.fetch DOES is fixed in both directions by
+	// FetchResponseShape (the request record in, the response record out, the reserved
+	// error key on a throw), so it is the same in every program and is written here
+	// rather than asked for -- on BOTH boundaries. Where the reply body is out of band
+	// the platform Response's own reader is where the octets come from, so the same
+	// function that opened it answers the pull too, and the pair is still derivable.
 	private static void defaultHost(StringBuilder out, Surface surface) {
 		if (!writesFetch(surface)) {
 			return;
 		}
+		boolean pulled = pullsReplyBody(surface);
 		out.append("""
 
 				/**
@@ -455,16 +457,40 @@ public final class HostGlueEmitter {
 				 * a host is still free to do is override it: whatever it supplies wins, entry by
 				 * entry.
 				 *
-				 * @returns {object} the import-object entries this file implements itself
-				 */
-				export function defaultHost() {
-				  return {
 				""");
+		if (pulled) {
+			out.append("""
+					 * @param {Function} lisp a thunk answering the instantiated object, or null
+					 *   before there is one. Only the reply-body cursor needs it: a second fetch
+					 *   inside ONE call REPLACES the reply this file is reading, and the octets
+					 *   the glue is still holding belong to a reply nobody may read again --
+					 *   which only this side can see.
+					""");
+		}
+		out.append(" * @returns {object} the import-object entries this file implements itself\n */\n");
+		out.append("export function defaultHost(").append(pulled ? "lisp" : "").append(") {\n");
+		if (pulled) {
+			out.append("""
+					  // The reply this file is currently reading. The generated cursor holds what
+					  // of a chunk did not fit; this is only WHERE the octets come from.
+					  let upstream = null;
+					""");
+		}
+		out.append("  return {\n");
 		out.append("    ").append(jsKey(FetchResponseShape.HOST_IMPORT_MODULE)).append(": {\n");
 		out.append("      ")
 			.append(jsKey(FetchResponseShape.HOST_IMPORT_FIELD))
 			.append(": suspending(async (head) => {\n");
-		out.append("        const request = JSON.parse(head);\n        try {\n");
+		out.append("        const request = JSON.parse(head);\n");
+		if (pulled) {
+			out.append("        upstream = null;\n");
+			out.append("        lisp?.()?.drop(\"")
+				.append(FetchResponseShape.HOST_IMPORT_MODULE)
+				.append('.')
+				.append(FetchResponseShape.HOST_BODY_IMPORT_FIELD)
+				.append("\");\n");
+		}
+		out.append("        try {\n");
 		out.append("          const response = await fetch(request.").append(requestField("url")).append(", {\n");
 		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
 			if (!"url".equals(field.name())) {
@@ -475,18 +501,27 @@ public final class HostGlueEmitter {
 					.append(",\n");
 			}
 		}
-		out.append("          });\n          return JSON.stringify({\n");
+		out.append("          });\n");
+		if (pulled) {
+			out.append("          // The reader IS the body; the module pulls it after this returns.\n");
+			out.append("          upstream = response.body ? response.body.getReader() : null;\n");
+		}
+		out.append("          return JSON.stringify({\n");
 		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
-			out.append("            ").append(field.name()).append(": ").append(switch (field.name()) {
+			String value = switch (field.name()) {
 				case "status" -> "response.status";
 				// An ARRAY of pairs, never an object: a name may repeat.
 				case "headers" -> "[...response.headers]";
-				// The whole reply, in the head: that IS this boundary.
-				case "body" -> "await response.text()";
+				// Out of band, the head carries no body at all -- the key's ABSENCE is
+				// what puts the module's stream over the import below.
+				case "body" -> pulled ? null : "await response.text()";
 				default -> throw new UnsupportedOperationException(
 						"--emit-js-glue: the http-plist response record grew a field this host half does not answer: "
 								+ field.name());
-			}).append(",\n");
+			};
+			if (value != null) {
+				out.append("            ").append(field.name()).append(": ").append(value).append(",\n");
+			}
 		}
 		out.append("          });\n");
 		out.append("        } catch (error) {\n");
@@ -495,7 +530,27 @@ public final class HostGlueEmitter {
 		out.append("          return JSON.stringify({ ")
 			.append(jsKey(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY))
 			.append(": String(error) });\n");
-		out.append("        }\n      }),\n    },\n  };\n}\n");
+		out.append("        }\n      }),\n");
+		if (pulled) {
+			out.append("      ").append(jsKey(FetchResponseShape.HOST_BODY_IMPORT_FIELD)).append(": suspending(\n");
+			out.append("""
+					        // The next chunk of the reply the last fetch opened, null at the end
+					        // of it. Reading a ReadableStream is asynchronous, so this one really
+					        // does suspend; a read that THROWS becomes the negative count the
+					        // module signals at the drain, which the glue answers on our behalf.
+					        async () => {
+					          if (!upstream) return null;
+					          const { value, done } = await upstream.read();
+					          if (done) {
+					            upstream = null;
+					            return null;
+					          }
+					          return value;
+					        },
+					      ),
+					""");
+		}
+		out.append("    },\n  };\n}\n");
 	}
 
 	// Every request-record field is answered from the same-named property of the parsed
@@ -517,20 +572,48 @@ public final class HostGlueEmitter {
 		return surface.derivedFetch() && canSuspend(surface);
 	}
 
-	// Whether this import is one defaultHost() answers.
-	private static boolean derived(Surface surface, Import imp) {
-		return writesFetch(surface) && FetchResponseShape.HOST_IMPORT_MODULE.equals(imp.module())
-				&& FetchResponseShape.HOST_IMPORT_FIELD.equals(imp.field());
+	// Whether the reply body is out of band, i.e. --host-boundary=streaming. Read off
+	// the import rather than a flag: the import IS the boundary.
+	private static boolean pullsReplyBody(Surface surface) {
+		return has(surface, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
+	}
+
+	// The same question for the reactor's own two bodies.
+	private static boolean reactorBodiesOutOfBand(Surface surface) {
+		return has(surface, ReactorEnvelope.REQUEST_BODY_FIELD) || has(surface, ReactorEnvelope.RESPONSE_BODY_FIELD);
+	}
+
+	private static boolean has(Surface surface, String field) {
+		return surface.imports()
+			.stream()
+			.anyMatch(i -> ReactorEnvelope.HOST_MODULE.equals(i.module()) && field.equals(i.field()));
+	}
+
+	// Whether this import is one this file answers, and which half answers it:
+	// defaultHost() owns what --host-fetch fixes, worker() owns the reactor's bodies --
+	// because those are per-CALL state, and the call is worker()'s.
+	private static @Nullable String answeredBy(Surface surface, Import imp) {
+		if (!ReactorEnvelope.HOST_MODULE.equals(imp.module())) {
+			return null;
+		}
+		if (writesFetch(surface) && (FetchResponseShape.HOST_IMPORT_FIELD.equals(imp.field())
+				|| FetchResponseShape.HOST_BODY_IMPORT_FIELD.equals(imp.field()))) {
+			return "defaultHost()";
+		}
+		if (surface.envelopeExport() != null && (ReactorEnvelope.REQUEST_BODY_FIELD.equals(imp.field())
+				|| ReactorEnvelope.RESPONSE_BODY_FIELD.equals(imp.field()))) {
+			return "worker()";
+		}
+		return null;
 	}
 
 	// Whether this file answers EVERY import the module has, so `worker(module)` really
-	// is the whole Worker. It is not enough that the boundary is the envelope: a program
-	// may import something of its own, and a --host-fetch build whose only fetch sits on
-	// the LOAD path imports env.fetch while no export is promising -- so no host half is
-	// written for it, and a caller taking the three-line sketch at its word would get a
-	// 500 on every request from an import nobody supplied.
+	// is the whole Worker. A program may import something of its own, and a --host-fetch
+	// build whose only fetch sits on the LOAD path imports env.fetch while no export is
+	// promising -- so no host half is written for it, and a caller taking the three-line
+	// sketch at its word would get a 500 on every request from an import nobody supplied.
 	private static boolean selfContained(Surface surface) {
-		return surface.imports().stream().allMatch(imp -> derived(surface, imp));
+		return surface.imports().stream().allMatch(imp -> answeredBy(surface, imp) != null);
 	}
 
 	// The whole Worker, over an entry point whose boundary is the envelope and nothing
@@ -583,13 +666,16 @@ public final class HostGlueEmitter {
 				 */
 				export function worker(module, options = {}) {
 				""");
-		workerHost(out, surface);
 		out.append("""
 				  let instance = null;
 				  // Set when a call TRAPPED: that instance skipped its arena reset and its Lisp
 				  // state may be half-written, so nothing else may run on it. A Lisp ERROR is not
 				  // this -- the transport answers 500 itself and the instance is fine.
 				  let poisoned = false;
+				""");
+		workerBodyState(out, surface);
+		workerHost(out, surface);
+		out.append("""
 				  const live = () => {
 				    if (poisoned) {
 				      instance = null;
@@ -599,7 +685,7 @@ public final class HostGlueEmitter {
 		out.append("    return (instance ??= instantiate(module")
 			.append(surface.needsHost() ? ", host" : "")
 			.append("));\n  };\n");
-		envelopeRequest(out);
+		envelopeRequest(out, surface);
 		out.append("""
 
 				  return {
@@ -612,8 +698,12 @@ public final class HostGlueEmitter {
 				      let entered = false;
 				      try {
 				        const remoteAddr = await options.remoteAddr?.(request, env, ctx);
-				        const input = await envelope(request, remoteAddr);
+				        const octets = request.body
+				          ? new Uint8Array(await request.arrayBuffer())
+				          : null;
+				        const input = envelope(request, octets, remoteAddr);
 				""");
+		boolean bodies = reactorBodiesOutOfBand(surface);
 		if (suspends) {
 			out.append("""
 					        const head = JSON.parse(
@@ -625,19 +715,31 @@ public final class HostGlueEmitter {
 					            // the module's own re-entry guard is cleared by the landing pad
 					            // on exactly the path that poisons it.
 					            if (poisoned) throw new Error("instance discarded by an earlier trap");
-					            entered = true;
 					""");
+			if (bodies) {
+				out.append("""
+						            // Per-call state, set HERE and not beside the call: a suspended
+						            // handler returns to the event loop, so the next request would
+						            // otherwise move it under this one.
+						            requestBody = octets;
+						            responseChunks = [];
+						""");
+			}
+			out.append("            entered = true;\n");
 			out.append("            return lisp.").append(entry).append("(input);\n");
 			out.append("          }),\n        );\n");
 		}
 		else {
 			// Nothing can be parked, so nothing can have poisoned the instance between
 			// binding it and calling it: a synchronous call cannot be interleaved.
+			if (bodies) {
+				out.append("        requestBody = octets;\n        responseChunks = [];\n");
+			}
 			out.append("        entered = true;\n        const head = JSON.parse(live().")
 				.append(entry)
 				.append("(input));\n");
 		}
-		envelopeResponse(out);
+		envelopeResponse(out, surface);
 		out.append("      } catch (error) {\n");
 		out.append("        console.error(\"").append(export).append(" failed:\", error);\n");
 		out.append("""
@@ -654,21 +756,69 @@ public final class HostGlueEmitter {
 				""");
 	}
 
-	// The import object worker() instantiates with.
+	// The reactor's two body imports are per-CALL state -- the octets of the request
+	// being served, and the chunks the answer is made of -- so they belong to worker(),
+	// which owns the call, and not to defaultHost(), which is built once.
+	private static void workerBodyState(StringBuilder out, Surface surface) {
+		if (!reactorBodiesOutOfBand(surface)) {
+			return;
+		}
+		out.append("""
+				  // The request body the module pulls, and the response body coming back the
+				  // same way. Both belong to the ONE call running below, which is where they
+				  // are set.
+				  let requestBody = null;
+				  let responseChunks = [];
+				  const collected = () => {
+				    const all = new Uint8Array(
+				      responseChunks.reduce((n, chunk) => n + chunk.length, 0),
+				    );
+				    let at = 0;
+				    for (const chunk of responseChunks) {
+				      all.set(chunk, at);
+				      at += chunk.length;
+				    }
+				    return all;
+				  };
+				""");
+	}
+
+	// The import object worker() instantiates with: the halves this file implements,
+	// with whatever the caller supplied laid over them ENTRY BY ENTRY -- a host that
+	// wants its own env.fetch must not thereby lose the rest of `env`.
 	private static void workerHost(StringBuilder out, Surface surface) {
 		if (!surface.needsHost()) {
 			return;
 		}
-		if (!writesFetch(surface)) {
+		boolean fetch = writesFetch(surface);
+		boolean bodies = reactorBodiesOutOfBand(surface);
+		if (!fetch && !bodies) {
 			out.append("  const host = options.host ?? {};\n");
 			return;
 		}
+		out.append("  const base = ");
+		// defaultHost() takes the instance because ITS cursor is the one a second fetch
+		// inside one call supersedes; the body entries below need no such thing.
+		out.append(fetch ? "defaultHost(" + (pullsReplyBody(surface) ? "() => instance" : "") + ")" : "{}")
+			.append(";\n");
+		if (bodies) {
+			out.append("  base.").append(jsKey(ReactorEnvelope.HOST_MODULE)).append(" = {\n");
+			out.append("    ...(base.").append(jsKey(ReactorEnvelope.HOST_MODULE)).append(" ?? {}),\n");
+			out.append("    ").append(jsKey(ReactorEnvelope.REQUEST_BODY_FIELD)).append(": () => {\n");
+			out.append("""
+					      // Handed over ONCE: a chunk source that never answers null is one the
+					      // module pulls forever.
+					      const chunk = requestBody;
+					      requestBody = null;
+					      return chunk;
+					    },
+					""");
+			out.append("    ")
+				.append(jsKey(ReactorEnvelope.RESPONSE_BODY_FIELD))
+				.append(": (chunk) => responseChunks.push(chunk),\n  };\n");
+		}
 		out.append("""
-				  // The derived half, with whatever the caller supplied laid over it ENTRY BY
-				  // ENTRY: a host that wants its own env.fetch must not thereby lose the rest
-				  // of `env`.
 				  const given = options.host ?? {};
-				  const base = defaultHost();
 				  const host = {};
 				  for (const key of new Set([...Object.keys(base), ...Object.keys(given)])) {
 				    host[key] = { ...(base[key] ?? {}), ...(given[key] ?? {}) };
@@ -679,18 +829,16 @@ public final class HostGlueEmitter {
 	// A Request -> the request head, key by key. The keys are the envelope's own
 	// (ReactorEnvelope.REQUEST_KEYS): a key this mapping does not answer fails the BUILD,
 	// so growing the envelope cannot silently drop one here.
-	private static void envelopeRequest(StringBuilder out) {
+	private static void envelopeRequest(StringBuilder out, Surface surface) {
+		boolean inBandBody = !reactorBodiesOutOfBand(surface);
 		out.append("""
 
 				  // The request head. `target` stays RAW -- path and query still joined and
 				  // still percent-encoded -- because the shared normalizer on the other side
 				  // owns that split, and a pre-split path leaves the query string nil.
-				  const envelope = async (request, remoteAddr) => {
+				  const envelope = (request, octets, remoteAddr) => {
 				    const url = new URL(request.url);
 				    const headers = Object.fromEntries(request.headers);
-				    const octets = request.body
-				      ? new Uint8Array(await request.arrayBuffer())
-				      : null;
 				    // A body with no content-length is a body the request parser does not read,
 				    // and a chunked request carries none -- so set it from the octets we have.
 				    if (octets?.length) headers["content-length"] = String(octets.length);
@@ -703,9 +851,16 @@ public final class HostGlueEmitter {
 				case "target" -> out.append("      target: url.pathname + url.search,\n");
 				case "headers" -> out.append("      headers,\n");
 				case "scheme" -> out.append("      scheme: url.protocol.replace(\":\", \"\"),\n");
-				// Both optional, and ABSENT rather than empty when there is none: the
-				// envelope's own defaults are what fills them in.
-				case "body" -> conditional.add("    if (octets?.length) head." + key + " = decoder.decode(octets);");
+				// The body key rides the head only where the module has no import to pull
+				// it through; out of band it would be a second copy the transport
+				// ignores.
+				// ABSENT rather than empty either way -- the envelope's own default fills
+				// it.
+				case "body" -> {
+					if (inBandBody) {
+						conditional.add("    if (octets?.length) head." + key + " = decoder.decode(octets);");
+					}
+				}
 				case "remote-addr" ->
 					conditional.add("    if (remoteAddr != null) head[\"" + key + "\"] = remoteAddr;");
 				default -> throw new UnsupportedOperationException(
@@ -720,25 +875,28 @@ public final class HostGlueEmitter {
 	}
 
 	// The response head -> a Response, key by key, same rule as above.
-	private static void envelopeResponse(StringBuilder out) {
+	private static void envelopeResponse(StringBuilder out, Surface surface) {
 		Map<String, String> reply = new LinkedHashMap<>();
 		for (String key : ReactorEnvelope.RESPONSE_KEYS) {
 			reply.put(key, switch (key) {
 				case "status" -> "head.status ?? 200";
 				case "headers" -> "head.headers ?? []";
-				// NOT `?? null`: the envelope always carries the key without a sink, so
-				// an empty body arrives as "" -- and `new Response("", {status: 204})`
-				// is a TypeError (204/205/304 may only be constructed with a null body).
-				// An empty string and no body are the same response anyway.
-				case "body" -> "head.body || null";
+				// Out of band the key is ABSENT and the chunks are the body -- except on
+				// the error arm, which answers in band on purpose and must WIN over
+				// whatever crossed before it, which is what `??` gets right.
+				case "body" -> reactorBodiesOutOfBand(surface) ? "head.body ?? collected()" : "head.body";
 				default -> throw new UnsupportedOperationException(
 						"--emit-js-glue: the reactor response envelope grew a key this mapping does not read: " + key);
 			});
 		}
 		out.append("""
 				        // Headers as an ARRAY of pairs, which keeps two Set-Cookie two.
+				        // An EMPTY body becomes null whichever shape it arrived in: 204/205/304
+				        // may only be constructed with a null body, and "" and a zero-length
+				        // Uint8Array are the same response as none.
 				""");
-		out.append("        return new Response(").append(replyKey(reply, "body")).append(", {\n");
+		out.append("        const body = ").append(replyKey(reply, "body")).append(";\n");
+		out.append("        return new Response(body?.length ? body : null, {\n");
 		out.append("          status: ").append(replyKey(reply, "status")).append(",\n");
 		out.append("          headers: ").append(replyKey(reply, "headers")).append(",\n        });\n");
 	}

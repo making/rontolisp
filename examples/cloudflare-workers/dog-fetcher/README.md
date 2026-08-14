@@ -48,33 +48,45 @@ case that is not the upstream's own answer.
 
 ## The boundary
 
-No hand-written import and no bespoke envelope any more: `--host-fetch`
-(build.sh) injects two imports and lowers every `rontolisp:fetch` onto them —
+No hand-written import and no bespoke envelope: `--host-fetch` (build.sh)
+injects two imports and lowers every `rontolisp:fetch` onto them —
 `env.fetch(request-json) -> response-head-json` for the request and the reply's
-head, and `env.readResponseBody(ptr, cap) -> i32` for the reply's body, pulled
-a chunk at a time. Same options, same
-`(:status <int> :headers <alist> :body <stream>)` answer as every other
-backend. The JSON keys are derived from the compiler's own `FetchResponseShape`
-record and pinned by `HostFetchLibraryTest` against `src/index.js`, so the two
-sides cannot drift.
+head, and `env.readResponseBody(ptr, cap) -> i32` for the reply's body, pulled a
+chunk at a time. Same options, same
+`(:status <int> :headers <alist> :body <stream>)` answer as every other backend.
+Beside them the reactor transport declares two more,
+`env.readRequestBody` / `env.writeResponseBody`, so the request and response
+bodies leave the envelope the same way. **That is what
+`--host-boundary=streaming` (the default) means**, and it is the whole difference
+to [`../btc-ticker`](../btc-ticker), which declines it.
 
-**And the JavaScript half is not hand-written either.** `--emit-js-glue`
-(build.sh) writes [`src/worker.js`](src/worker.js) from the same declarations
-the module was built from: the import object, the `(ptr, len)` staging both
-ways, the `__ronto_alloc` bracket, the `WebAssembly.Suspending` wrappers, the
-`WebAssembly.promising` entry and the one-call-at-a-time queue. It is generated
-and checked in, and pinned by `HostGlueEmitterTest`. What is left in
-`src/index.js` is what a declaration cannot state — what each host function
-*does*, and which of them suspend:
+**And the JavaScript half is not hand-written either — none of it.**
+`--emit-js-glue` (build.sh) writes [`src/worker.js`](src/worker.js) from the
+same declarations the module was built from: the import object, the
+`(ptr, len)` staging both ways, the `__ronto_alloc` bracket, the
+`WebAssembly.Suspending` wrappers, the `WebAssembly.promising` entry, the
+one-call-at-a-time queue, **all four host functions**, and the
+`Request -> envelope -> Response` mapping over them. It is generated and checked
+in, and pinned by `HostGlueEmitterTest`. [`src/index.js`](src/index.js) is:
 
 ```js
-const lisp = instantiate(module, {
-  env: {
-    fetch: suspending(hostFetch),
-    readResponseBody: suspending(readResponseBody),
-    readRequestBody: () => { ... },
-    writeResponseBody: (chunk) => responseChunks.push(chunk),
-  },
+import module from "./worker.wasm";
+import { worker } from "./worker.js";
+
+export default worker(module);
+```
+
+The four host functions look like the one thing a declaration cannot state —
+what a host *does* — and for a caller of `instantiate` they are. Inside
+`worker()` they are not: the octets a request body comes from are the `Request`
+it is already holding, the response chunks are the `Response` it is already
+building, and the reply body is the `fetch` its own `defaultHost()` just made.
+A host that wants any of them back supplies it, laid over the derived entry:
+
+```js
+export default worker(module, {
+  remoteAddr: (request) => request.headers.get("cf-connecting-ip"),
+  host: { env: { fetch: suspending(myOwnFetch) } },
 });
 ```
 
@@ -87,12 +99,12 @@ Four things are worth reading twice:
   compatibility date opt-in** — verified under `wrangler dev` and on the
   deployed edge. A suspending import may only be called on a stack entered
   through `promising`, so `_initialize` must never reach one; the build prints
-  exactly this obligation (and writes it, into `src/worker.js`), and would print
-  a warning line naming any fetch its load path reaches. Which entries actually
-  suspend is this file's choice, not the module's: `suspending()` marks the two
-  that answer promises, and the other two stay plain calls, because the wrapper
-  is not free — an import that answers *synchronously* through one still parks
-  the stack and returns to the event loop.
+  exactly this obligation, and would print a warning line naming any fetch its
+  load path reaches. Which entries actually suspend is the HOST's answer, not
+  the module's: the generated file marks the two that answer promises and leaves
+  the other two plain calls, because the wrapper is not free — an import that
+  answers *synchronously* through one still parks the stack and returns to the
+  event loop.
 - **Awaiting still reads the same.** On the reactor the future `fetch` returns
   is settled the moment the call returns (the stack was parked for the round
   trip to the headers), so `await` never suspends and two fetches never
@@ -103,14 +115,17 @@ Four things are worth reading twice:
 - **The body is not in the head.** `env.fetch` answers status and headers; the
   octets come through `env.readResponseBody` as `read-all` asks for them, so a
   large reply never becomes a JSON string and a binary one crosses as the
-  octets it is. What that costs in exchange is stated below: a failure *during*
-  the body surfaces at the drain, and only one reply body is live at a time.
+  octets it is — three bytes `ff fe 41` arrive as three. The envelope boundary
+  cannot do that (it would make them seven), which is the reason to be on this
+  one. What it costs in exchange is stated below: a failure *during* the body
+  surfaces at the drain, and only one reply body is live at a time.
 - **A `:string` result is host-written bytes.** The host allocates with the
   module's exported `__ronto_alloc` and returns `[ptr, len]`; the per-request
   arena reset frees it along with everything else. Nothing may be kept across
   the `await` — growing the module's memory detaches `memory.buffer`. All of
-  that is `src/worker.js`'s job now: `hostFetch` in `index.js` takes and answers
-  a plain string and never sees a pointer.
+  that is `src/worker.js`'s job: a host function that replaces one of the
+  derived entries takes and answers plain JavaScript values and never sees a
+  pointer.
 
 ## One Lisp call at a time
 
@@ -121,9 +136,12 @@ the same module — the same globals, and the same bump allocator whose
 mark/reset bracket assumes it is alone. The module refuses that entry with a
 trap (the compiled export carries a re-entry guard), so a host that forgets the
 queue sees a failed request, not silently corrupted answers. The generated glue
-owns that queue; `index.js` joins it with `lisp.serially(...)`, because the
-request body and the response chunks belong to the one call that is running and
-a suspended handler would otherwise let the next request move them.
+owns that queue AND everything that has to sit inside it: the request body and
+the response chunks belong to the one call that is running, and a suspended
+handler would otherwise let the next request move them under it. It also
+re-checks, inside that section, whether the instance an earlier parked call has
+since trapped — because binding the instance happens when a request is admitted,
+and the trap happens later.
 
 The cost is real and measured: eight concurrent `GET /` under `wrangler dev`
 complete about 250 ms apart rather than together. On the deployed edge the same
@@ -169,7 +187,7 @@ program) compiles to the same reactor shape with no edit at all.
 | File | Purpose |
 | --- | --- |
 | [`worker.lisp`](worker.lisp) | The whole program. This is what `build.sh` compiles. |
-| [`src/index.js`](src/index.js) | The Worker's own half: what each host function does, and the Request/Response mapping. |
+| [`src/index.js`](src/index.js) | Three lines over the generated `worker()`. |
 | [`src/worker.js`](src/worker.js) | The boundary, GENERATED by `--emit-js-glue` from worker.lisp's declarations. Do not edit; `./build.sh` rewrites it. |
 | `src/worker.wasm` | A build product — run `./build.sh` first. |
 

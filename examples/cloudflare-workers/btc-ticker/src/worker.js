@@ -304,20 +304,17 @@ export function defaultHost() {
  * @returns {object} `{ fetch(request, env, ctx) }`
  */
 export function worker(module, options = {}) {
-  // The derived half, with whatever the caller supplied laid over it ENTRY BY
-  // ENTRY: a host that wants its own env.fetch must not thereby lose the rest
-  // of `env`.
-  const given = options.host ?? {};
-  const base = defaultHost();
-  const host = {};
-  for (const key of new Set([...Object.keys(base), ...Object.keys(given)])) {
-    host[key] = { ...(base[key] ?? {}), ...(given[key] ?? {}) };
-  }
   let instance = null;
   // Set when a call TRAPPED: that instance skipped its arena reset and its Lisp
   // state may be half-written, so nothing else may run on it. A Lisp ERROR is not
   // this -- the transport answers 500 itself and the instance is fine.
   let poisoned = false;
+  const base = defaultHost();
+  const given = options.host ?? {};
+  const host = {};
+  for (const key of new Set([...Object.keys(base), ...Object.keys(given)])) {
+    host[key] = { ...(base[key] ?? {}), ...(given[key] ?? {}) };
+  }
   const live = () => {
     if (poisoned) {
       instance = null;
@@ -329,12 +326,9 @@ export function worker(module, options = {}) {
   // The request head. `target` stays RAW -- path and query still joined and
   // still percent-encoded -- because the shared normalizer on the other side
   // owns that split, and a pre-split path leaves the query string nil.
-  const envelope = async (request, remoteAddr) => {
+  const envelope = (request, octets, remoteAddr) => {
     const url = new URL(request.url);
     const headers = Object.fromEntries(request.headers);
-    const octets = request.body
-      ? new Uint8Array(await request.arrayBuffer())
-      : null;
     // A body with no content-length is a body the request parser does not read,
     // and a chunked request carries none -- so set it from the octets we have.
     if (octets?.length) headers["content-length"] = String(octets.length);
@@ -359,7 +353,10 @@ export function worker(module, options = {}) {
       let entered = false;
       try {
         const remoteAddr = await options.remoteAddr?.(request, env, ctx);
-        const input = await envelope(request, remoteAddr);
+        const octets = request.body
+          ? new Uint8Array(await request.arrayBuffer())
+          : null;
+        const input = envelope(request, octets, remoteAddr);
         const head = JSON.parse(
           await live().serially((lisp) => {
             // Re-read INSIDE the critical section: the instance was bound at
@@ -374,7 +371,11 @@ export function worker(module, options = {}) {
           }),
         );
         // Headers as an ARRAY of pairs, which keeps two Set-Cookie two.
-        return new Response(head.body || null, {
+        // An EMPTY body becomes null whichever shape it arrived in: 204/205/304
+        // may only be constructed with a null body, and "" and a zero-length
+        // Uint8Array are the same response as none.
+        const body = head.body;
+        return new Response(body?.length ? body : null, {
           status: head.status ?? 200,
           headers: head.headers ?? [],
         });
