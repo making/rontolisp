@@ -35,7 +35,9 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 - `:body` — リクエストボディを文字列で指定します (ボディがなければ省略します)。
 
 `:headers` がそのフィールドを指定していない限り、すべてのリクエストは
-`User-Agent: rontolisp/<version>` を伴います (大文字小文字を区別せずに照合するため、
+`User-Agent: rontolisp/<version> (<git-commit>)` を伴います — バージョンと短縮コミットは
+[`rontolisp:version`](rontolisp-version.md) が報告するものと同じで、ビルド時に git
+リポジトリがなければコミットは省略されます (大文字小文字を区別せずに照合するため、
 指定した場合はその綴りと値が優先されます)。ブラウザ プレイグラウンドと
 `--host-fetch` リアクタでは、このフィールドはそれを所有するホストに任せます。
 

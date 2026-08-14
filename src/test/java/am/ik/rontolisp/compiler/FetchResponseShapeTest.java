@@ -80,11 +80,23 @@ class FetchResponseShapeTest {
 		// The one request header fetch adds on the caller's behalf. A change here is a
 		// change to what every backend puts on the wire.
 		assertThat(FetchResponseShape.USER_AGENT_HEADER).isEqualTo("User-Agent");
-		assertThat(FetchResponseShape.defaultUserAgent()).isEqualTo("rontolisp/" + Version.getVersion());
+		assertThat(FetchResponseShape.defaultUserAgent()).startsWith("rontolisp/" + Version.getVersion());
 		// HTTP field names are case-insensitive, so the "did the caller set one" test is.
 		assertThat(FetchResponseShape.isUserAgentHeader("user-agent")).isTrue();
 		assertThat(FetchResponseShape.isUserAgentHeader("USER-AGENT")).isTrue();
 		assertThat(FetchResponseShape.isUserAgentHeader("X-User-Agent")).isFalse();
+	}
+
+	@Test
+	void theUserAgentNamesTheBuildNotJustTheRelease() {
+		assertThat(FetchResponseShape.userAgent("1.2.3", "af7bf32")).isEqualTo("rontolisp/1.2.3 (af7bf32)");
+		// No git repository at build time: no comment at all rather than "(unknown)".
+		assertThat(FetchResponseShape.userAgent("1.2.3", Version.UNKNOWN)).isEqualTo("rontolisp/1.2.3");
+		assertThat(FetchResponseShape.userAgent("1.2.3", "")).isEqualTo("rontolisp/1.2.3");
+		// Anything that is not a plain hash is left off rather than escaped: a
+		// parenthesis would end the header comment and a quote would end the generated
+		// Lisp literal.
+		assertThat(FetchResponseShape.userAgent("1.2.3", "af7(bf32)\"")).isEqualTo("rontolisp/1.2.3");
 	}
 
 	@Test

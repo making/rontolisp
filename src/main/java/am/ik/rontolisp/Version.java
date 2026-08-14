@@ -21,7 +21,13 @@ import org.jspecify.annotations.Nullable;
  */
 public final class Version {
 
-	private static final String UNKNOWN = "unknown";
+	/**
+	 * What every accessor answers when the build information is unavailable -- the
+	 * resource is absent, or the property was left unexpanded (a build with no git
+	 * repository leaves the git ones so). A caller that formats build info tests against
+	 * this rather than printing it.
+	 */
+	public static final String UNKNOWN = "unknown";
 
 	private static final String VERSION;
 

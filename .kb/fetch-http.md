@@ -140,11 +140,18 @@ cutover a handler receives the Clack environment and returns the Clack response
 client side, a different thing.
 
 **The ONE request header we add on the caller's behalf is `User-Agent:
-rontolisp/<version>`** (todo-346), and only when the caller's `:headers` alist names no
+rontolisp/<version> (<git-commit>)`** (todo-346) -- the abbreviated commit is an RFC 9110
+comment after the product token, so a request names the BUILD that made it; it is dropped
+entirely when the build had no git repository to read it from (never `(unknown)`), and
+anything that is not a plain hash is dropped rather than escaped, because a parenthesis
+would end the comment and this string is baked into generated Lisp source, where a quote
+would end the literal. It is added only when the caller's `:headers` alist names no
 user-agent field -- the test is case-insensitive, HTTP field names being so, and any
 value the caller gave is theirs, the empty string included. It is declared once beside
 the response shape, in `compiler/FetchResponseShape` (`USER_AGENT_HEADER`,
-`defaultUserAgent()`, `isUserAgentHeader`), because three transports that each default
+`defaultUserAgent()` over the `userAgent(version, commit)` seam that lets the
+composition be pinned off a build's own commit, `isUserAgentHeader`), because three
+transports that each default
 differently are three different requests: the JDK writes `Java-http-client/<jdk>` when
 no field is set and the component writes NOTHING, which is the bug this closes (fly.io's
 edge answers an agent-less request `402 Payment Required`, so the same program that

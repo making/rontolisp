@@ -144,7 +144,8 @@ public final class FetchResponseShape {
 	 * whatever the transport underneath happens to default to — the JDK's
 	 * {@code Java-http-client/<jdk>} on the interpreter/JVM, nothing at all on the
 	 * component (which some origins answer with a 4xx). The value is
-	 * {@link #defaultUserAgent()}.
+	 * {@link #defaultUserAgent()}: the version AND the commit, so a request identifies
+	 * the build that made it.
 	 *
 	 * <p>
 	 * A caller who set the field owns it, in any spelling ({@link #isUserAgentHeader};
@@ -209,12 +210,47 @@ public final class FetchResponseShape {
 
 	/**
 	 * The {@link #USER_AGENT_HEADER} value a caller-silent request carries:
-	 * {@code rontolisp/<version>}, the version {@code rontolisp --version} and
-	 * {@code rontolisp:version} report.
+	 * {@code rontolisp/<version> (<git-commit>)} — the same version and abbreviated
+	 * commit {@code rontolisp --version} and {@code rontolisp:version} report, so what an
+	 * origin logs names the build that reached it and not just the release.
 	 * @return the default user-agent value
 	 */
 	public static String defaultUserAgent() {
-		return "rontolisp/" + Version.getVersion();
+		return userAgent(Version.getVersion(), Version.getGitCommit());
+	}
+
+	/**
+	 * Builds the user-agent value out of a version and a commit id — the seam
+	 * {@link #defaultUserAgent()} reads {@link Version} through, so the composition is
+	 * pinnable without a build that has to sit on a given commit. The commit is an RFC
+	 * 9110 comment after the product token, and is left off entirely (rather than read as
+	 * {@code (unknown)}) when the build had no git repository to take it from.
+	 * @param version the project version
+	 * @param commit the abbreviated git commit id, or {@link Version#UNKNOWN} when there
+	 * was none
+	 * @return the user-agent value
+	 */
+	static String userAgent(String version, String commit) {
+		String product = "rontolisp/" + version;
+		return isCommitId(commit) ? product + " (" + commit + ")" : product;
+	}
+
+	// Only a plain hash reaches the header. The build writes one, or Version.UNKNOWN when
+	// it had no git repository to read (an unexpanded property lands there too), and
+	// anything else is left OFF rather than escaped: a parenthesis would end the header
+	// comment, and the same string is baked into generated Lisp source, where a quote
+	// would end the literal.
+	private static boolean isCommitId(String commit) {
+		if (commit.isEmpty()) {
+			return false;
+		}
+		for (int i = 0; i < commit.length(); i++) {
+			char c = commit.charAt(i);
+			if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**

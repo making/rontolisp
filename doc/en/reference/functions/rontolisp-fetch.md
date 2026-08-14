@@ -35,10 +35,12 @@ The optional second argument is an options property list. Recognized keys:
 - `:headers` — request headers, an alist of `(name . value)` string pairs.
 - `:body` — the request body as a string (omit for no body).
 
-Every request carries `User-Agent: rontolisp/<version>` unless `:headers` already
-names that field (matched case-insensitively, so your own spelling and value win);
-the browser playground and a `--host-fetch` reactor leave the field to the host,
-which owns it there.
+Every request carries `User-Agent: rontolisp/<version> (<git-commit>)` — the version
+and abbreviated commit [`rontolisp:version`](rontolisp-version.md) reports, the
+commit omitted when the build had no git repository — unless `:headers` already names
+that field (matched case-insensitively, so your own spelling and value win). The
+browser playground and a `--host-fetch` reactor leave the field to the host, which
+owns it there.
 
 The options are validated when `fetch` is called (like the JavaScript `fetch`,
 which throws synchronously on invalid arguments).
