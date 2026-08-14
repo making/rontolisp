@@ -5,25 +5,27 @@ the prose below it is [`../notes/cloudflare-workers.md`](../notes/cloudflare-wor
 What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/).
 How the report is built and run: [../README.md](../README.md).
 
-- measured: 2026-08-13
-- rontolisp: 0.1.0-SNAPSHOT (`ae84a36`)
+- measured: 2026-08-14
+- rontolisp: 0.1.0-SNAPSHOT (`9b059b3`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 227,307 | 70,127 | 2.2% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 251,933 | 75,189 | 2.4% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 684,068 | 180,352 | 5.7% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,249,623 | 521,159 | 16.6% |
-| httpbin | `--no-wasi --optimize=size` | 147,150 | 47,515 | 1.5% |
-| httpbin-clack | `--no-wasi --optimize=size` | 242,788 | 73,515 | 2.3% |
-| httpbin-clack-one-source | `--no-wasi --optimize=size` | 242,410 | 73,428 | 2.3% |
-| httpbin-tiny-routes | `--no-wasi --optimize=size` | 279,353 | 82,489 | 2.6% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 712,229 | 187,223 | 6.0% |
-| httpbin-ningle | `--no-wasi --optimize=size` | 2,255,369 | 523,015 | 16.6% |
-| dog-fetcher | `--no-wasi --host-fetch --optimize=size` | 258,434 | 78,916 | 2.5% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 147,280 | 47,662 | 1.5% |
+| hello-clack | `--no-wasi --optimize=size` | 235,352 | 73,033 | 2.3% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 259,977 | 78,504 | 2.5% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 692,257 | 183,079 | 5.8% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,270,892 | 525,598 | 16.7% |
+| httpbin | `--no-wasi --optimize=size` | 155,332 | 50,095 | 1.6% |
+| httpbin-clack | `--no-wasi --optimize=size` | 250,832 | 77,343 | 2.5% |
+| httpbin-clack-one-source | `--no-wasi --optimize=size` | 250,441 | 77,020 | 2.4% |
+| httpbin-tiny-routes | `--no-wasi --optimize=size` | 288,006 | 85,501 | 2.7% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 720,441 | 190,591 | 6.1% |
+| httpbin-ningle | `--no-wasi --optimize=size` | 2,276,636 | 527,857 | 16.8% |
+| dog-fetcher | `--no-wasi --host-fetch --optimize=size` | 267,222 | 81,901 | 2.6% |
+| btc-ticker | `--no-wasi --host-fetch --host-boundary=envelope --optimize=size` | 239,948 | 74,847 | 2.4% |
+| btc-ticker (streaming boundary) | `--no-wasi --host-fetch --optimize=size` | 242,138 | 75,502 | 2.4% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 149,294 | 48,198 | 1.5% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **116,315 B** of it.
@@ -64,6 +66,17 @@ calls the same `rontolisp:fetch` every backend answers, and `--host-fetch`
 lowers it onto ONE host import, so what separates the two rows is that lowering
 plus the JSON parsing of the upstream answer: a reactor's way out costs an
 import entry and a wrapper, not a transport of its own.
+
+**The two `btc-ticker` rows are the same source on the two host BOUNDARIES**, and
+they are here to keep anyone from selling that choice as a size decision. The
+first is `--host-boundary=envelope` (every body rides the JSON envelope; the
+module imports `env.fetch` and nothing else), the second the default streaming
+boundary (three more imports, carrying the request body, the response body and
+the reply's body as octets). They land within a rounding error of each other,
+and which way the difference falls is not stable across compiler changes. What
+the boundary really trades is host-side STATE -- four host functions and three
+cursors against none -- and how much of the host the build can therefore write
+for you; `examples/cloudflare-workers/btc-ticker/README.md` has that table.
 
 **The routing library is not what the ningle rows measure.** Both of them are an
 order of magnitude above their tiny-routes neighbours, and almost none of that
