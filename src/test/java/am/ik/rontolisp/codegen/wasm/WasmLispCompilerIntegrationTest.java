@@ -3293,6 +3293,97 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopUtilityHelpersCompileAndRun() throws Exception {
+		// The four uiop/utility members with real codegen shape -- strcat (a &rest call
+		// into the spliced reduce/strcat), string-prefix-p (string= with :end2), nest (a
+		// pure syntactic rearrangement) and while-collecting (a let + flet whose
+		// collector functions mutate the accumulators they close over) -- plus the
+		// selection those bodies drag in -- which is why this goes through
+		// LispPreludeLibrary.process (it calls UiopLibrary.process): the plain
+		// compileAndRun helper compiles the program as written, and uiop functions only
+		// exist once their definitions are spliced. The JVM twin is
+		// JvmLispCompilerTest.compileAndRunUiopUtilityHelpers.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (uiop:strcat "a" nil #\\b "c"))
+				(print (list (uiop:string-prefix-p "ab" "abc") (uiop:string-prefix-p "b" "abc")))
+				(print (uiop:nest (list 1) (list 2) (list 3)))
+				(print (multiple-value-list
+				        (uiop:while-collecting (foo bar)
+				          (dolist (x (list (list 'a 1) (list 'b 2)))
+				            (foo (first x))
+				            (bar (second x))))))
+				(print (uiop:access-at (list :a (list 10 20)) (list :a 1)))
+				(print (list (uiop:timestamp< 1 2) (uiop:latest-timestamp 3 1 2)))
+				(print (let ((l (list 1))) (uiop:appendf l (list 2 3)) l))
+				""")))).isEqualTo("""
+				"abc"
+				(T NIL)
+				(1 (2 (3)))
+				((A B) (1 2))
+				20
+				(T 3)
+				(1 2 3)""");
+	}
+
+	@Test
+	void uiopUnimplementedMacroDropsItsArgumentFormsCompilesAndRuns() throws Exception {
+		// A macro nothing implements yet must not evaluate what it was handed. Its
+		// synthesized stub is a real variadic defun (the name has to be fboundp), so
+		// the ordinary call path FINDS it and compiles the argument forms first --
+		// which is why the lowering has to happen in the expression compiler's uiop
+		// branch, ahead of the call path. The spec list here is non-empty on purpose:
+		// with (), the arguments are the nil literal and the bug is invisible. The JVM
+		// twin is
+		// JvmLispCompilerTest.compileAndRunUiopUnimplementedMacroDropsItsArgumentForms.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (handler-case (uiop:with-current-directory ("/tmp") (defun um-probe () 1))
+				         (uiop:not-implemented-error () :signalled)))
+				(print (fboundp 'um-probe))
+				""")))).isEqualTo("""
+				:SIGNALLED
+				NIL""");
+	}
+
+	@Test
+	void uiopWithUpgradabilitySplicesItsDefinitionsCompilesAndRuns() throws Exception {
+		// Upstream wraps every one of its definitions in with-upgradability; rontolisp
+		// lowers it to progn, and the top-level flattening has to splice that progn or
+		// Pass 1 never collects the defuns.
+		assertThat(compileAndRun("""
+				(uiop:with-upgradability ()
+				  (defun up-a (x) (* x 2))
+				  (defvar *up-v* 5))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (uiop/utility:with-upgradability ()
+				    (defun up-b (x) (+ x 1))))
+				(print (list (up-a 3) (up-b 3) *up-v*))
+				""")).isEqualTo("(6 4 5)");
+	}
+
+	@Test
+	void uiopMuffledConditionsAndStyleWarnCompileAndRun() throws Exception {
+		// with-muffled-conditions expands into call-with-muffled-conditions, a spliced
+		// defun the program never names -- the surface-form rule in UiopLibrary is what
+		// selects it, and without that this compiled to a call-time "undefined function".
+		// Its body is handler-bind + muffle-warning, so the whole module is in EH mode
+		// (compileAndRunProgram passes -W exceptions=y). style-warn signals uiop's own
+		// simple-style-warning, which really is a style-warning, so a handler for the CL
+		// supertype catches it. The JVM twin is
+		// JvmLispCompilerTest.compileAndRunUiopMuffledConditionsAndStyleWarn.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (uiop:with-muffled-conditions ('(warning)) (warn "quiet") :muffled))
+				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
+				         (uiop:style-warn "styled ~A" 2)
+				         :sw-done))
+				(print (handler-case (uiop:register-hook-function '*h* (lambda () 1))
+				         (uiop:not-implemented-error (c) :nie)))
+				""")))).isEqualTo("""
+				:MUFFLED
+				:SW-DONE
+				:NIE""");
+	}
+
+	@Test
 	void loopAnaphoricItOutsideClUserCompilesAndRuns() throws Exception {
 		// Read outside cl-user the anaphor arrives package-qualified; missing it here
 		// fails at COMPILE time, not at run time.

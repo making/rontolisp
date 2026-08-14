@@ -83,6 +83,21 @@ class UiopLibraryTest {
 	}
 
 	@Test
+	void theOtherMacrosSelectWhatTheirExpansionsCall() {
+		// Same rule, same reason: none of these callees occurs in the program, so the
+		// compiled program said "The function UIOP/UTILITY:X is undefined" at run time
+		// while the interpreter (which lazy-loads on resolution) worked. Only the DIRECT
+		// callee is listed in the table; the fixpoint pulls the rest in, which is what
+		// the match-condition-p entry below checks.
+		assertThat(splicedNames("(uiop:with-muffled-conditions ('(warning)) (warn \"x\"))")).contains(
+				"UIOP/UTILITY:CALL-WITH-MUFFLED-CONDITIONS", "UIOP/UTILITY:MATCH-ANY-CONDITION-P",
+				"UIOP/UTILITY:MATCH-CONDITION-P");
+		assertThat(splicedNames("(uiop:uiop-debug)")).contains("UIOP/UTILITY:LOAD-UIOP-DEBUG-UTILITY");
+		assertThat(splicedNames("(let ((s 1)) (uiop:latest-timestamp-f s 5))"))
+			.contains("UIOP/UTILITY:LATEST-TIMESTAMP", "UIOP/UTILITY:TIMESTAMPS-LATEST");
+	}
+
+	@Test
 	void aSecondRunSplicesNothingMore() {
 		// LispPreludeLibrary.process drives this pass, so a pipeline that also calls it
 		// directly would otherwise prepend a second copy of every definition.

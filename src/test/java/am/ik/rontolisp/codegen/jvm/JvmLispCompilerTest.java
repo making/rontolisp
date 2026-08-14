@@ -1610,6 +1610,91 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopUtilityHelpers() throws Exception {
+		// The four uiop/utility members with real codegen shape: strcat (a &rest call
+		// into the spliced reduce/strcat), string-prefix-p (string= with :end2), nest (a
+		// pure syntactic rearrangement) and while-collecting (a let + flet whose
+		// collector functions mutate the accumulators they close over). Selection is the
+		// other half of what this pins: the compile path splices only the definitions the
+		// program reaches, so a missing edge shows up here as "the function
+		// UIOP/UTILITY:X is undefined".
+		assertThat(compileAndRun("""
+				(print (uiop:strcat "a" nil #\\b "c"))
+				(print (list (uiop:string-prefix-p "ab" "abc") (uiop:string-prefix-p "b" "abc")))
+				(print (uiop:nest (list 1) (list 2) (list 3)))
+				(print (multiple-value-list
+				        (uiop:while-collecting (foo bar)
+				          (dolist (x (list (list 'a 1) (list 'b 2)))
+				            (foo (first x))
+				            (bar (second x))))))
+				(print (uiop:access-at (list :a (list 10 20)) (list :a 1)))
+				(print (list (uiop:timestamp< 1 2) (uiop:latest-timestamp 3 1 2)))
+				(print (let ((l (list 1))) (uiop:appendf l (list 2 3)) l))
+				""")).isEqualTo("""
+				"abc"
+				(T NIL)
+				(1 (2 (3)))
+				((A B) (1 2))
+				20
+				(T 3)
+				(1 2 3)""");
+	}
+
+	@Test
+	void compileAndRunUiopUnimplementedMacroDropsItsArgumentForms() throws Exception {
+		// A macro nothing implements yet must not evaluate what it was handed. Its
+		// synthesized stub is a real variadic defun (the name has to be fboundp), so
+		// the ordinary call path FINDS it and compiles the argument forms first --
+		// which is why the lowering has to happen in the expression compiler's uiop
+		// branch, ahead of the call path. The spec list here is non-empty on purpose:
+		// with (), the arguments are the nil literal and the bug is invisible.
+		assertThat(compileAndRun("""
+				(print (handler-case (uiop:with-current-directory ("/tmp") (defun um-probe () 1))
+				         (uiop:not-implemented-error () :signalled)))
+				(print (fboundp 'um-probe))
+				""")).isEqualTo("""
+				:SIGNALLED
+				NIL""");
+	}
+
+	@Test
+	void compileAndRunUiopWithUpgradabilitySplicesItsDefinitions() throws Exception {
+		// Upstream wraps every one of its definitions in with-upgradability; rontolisp
+		// lowers it to progn, and the top-level flattening has to splice that progn or
+		// Pass 1 never collects the defuns. Both spellings, and one nested in an
+		// eval-when, which is how a real uiop-shaped file writes it.
+		assertThat(compileAndRun("""
+				(uiop:with-upgradability ()
+				  (defun up-a (x) (* x 2))
+				  (defvar *up-v* 5))
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (uiop/utility:with-upgradability ()
+				    (defun up-b (x) (+ x 1))))
+				(print (list (up-a 3) (up-b 3) *up-v*))
+				""")).isEqualTo("(6 4 5)");
+	}
+
+	@Test
+	void compileAndRunUiopMuffledConditionsAndStyleWarn() throws Exception {
+		// with-muffled-conditions expands into call-with-muffled-conditions, a spliced
+		// defun the program never names -- the surface-form rule in UiopLibrary is what
+		// selects it, and without that this compiled to a call-time "undefined function".
+		// style-warn signals uiop's own simple-style-warning, which really is a
+		// style-warning, so a handler for the CL supertype catches it.
+		assertThat(compileAndRun("""
+				(print (uiop:with-muffled-conditions ('(warning)) (warn "quiet") :muffled))
+				(print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
+				         (uiop:style-warn "styled ~A" 2)
+				         :sw-done))
+				(print (handler-case (uiop:register-hook-function '*h* (lambda () 1))
+				         (uiop:not-implemented-error (c) :nie)))
+				""")).isEqualTo("""
+				:MUFFLED
+				:SW-DONE
+				:NIE""");
+	}
+
+	@Test
 	void compileAndRunApplyOfAnUndefinedRuntimeSymbolSignals() {
 		// _apply's symbol-designator miss used to return nil SILENTLY; it must fail
 		// loudly like the funcall dispatcher (the tree-shaker carve-out contract:

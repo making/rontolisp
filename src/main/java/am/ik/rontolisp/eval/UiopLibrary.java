@@ -78,9 +78,9 @@ public final class UiopLibrary {
 	 * absent here has no Lisp-source implementation yet, so every one of its exports is
 	 * stubbed.
 	 */
-	private static final Map<String, String> RESOURCES = Map.of("UIOP/UTILITY", "uiop-utility.lisp", "UIOP/PATHNAME",
-			"uiop-pathname.lisp", "UIOP/FILESYSTEM", "uiop-filesystem.lisp", "UIOP/STREAM", "uiop-stream.lisp",
-			"UIOP/IMAGE", "uiop-image.lisp");
+	private static final Map<String, String> RESOURCES = Map.of("UIOP/PACKAGE", "uiop-package.lisp", "UIOP/UTILITY",
+			"uiop-utility.lisp", "UIOP/PATHNAME", "uiop-pathname.lisp", "UIOP/FILESYSTEM", "uiop-filesystem.lisp",
+			"UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp");
 
 	/**
 	 * Members the interpreter defines in Java (and the compilers lower or wrap
@@ -152,6 +152,81 @@ public final class UiopLibrary {
 	 */
 	public static Set<String> definedNames() {
 		return tables().definitions().keySet();
+	}
+
+	/**
+	 * Returns every CONDITION- or CLASS-kind member the library defines, in inventory
+	 * order. The interpreter registers all of them on its first uiop load, which is the
+	 * {@code not-implemented-error} rule the skeleton established generalized to the
+	 * whole inventory -- and for the same reason, one step further: a handler's type test
+	 * is built from the class tags known when the {@code handler-bind} form is EXPANDED,
+	 * so a condition class that first appears while the body runs is invisible to the
+	 * handler that was meant to catch it. The compile paths splice every reachable
+	 * definition before anything runs and never see that window; registering the 19
+	 * classes up front is what closes it here. They are
+	 * {@code define-condition}/{@code defclass} forms only, so the cost is a registry
+	 * entry each.
+	 * @return the condition and class names, home-qualified
+	 */
+	public static Set<String> conditionAndClassNames() {
+		Set<String> names = new LinkedHashSet<>();
+		for (UiopExports.Entry entry : UiopExports.entries()) {
+			if (entry.is("condition") || entry.is("class")) {
+				String qualified = UiopExports.qualified(entry.symbol());
+				if (definesName(qualified)) {
+					names.add(qualified);
+				}
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Returns the name plus every library definition reachable from it, to a fixpoint and
+	 * in inventory order: the interpreter's lazy load needs the same closure
+	 * {@link #process} splices on the compile paths, or the two disagree about what a
+	 * definition brings with it.
+	 *
+	 * <p>
+	 * The case that forces it is a name a body mentions but never CALLS:
+	 * {@code style-warn} signals {@code (make-condition 'uiop:simple-style-warning ...)},
+	 * and a quoted condition name is not a function resolution, so nothing would ever
+	 * trigger the class's own load -- the warning then had no report and no
+	 * {@code style-warning} supertype on the interpreter while the compile paths had
+	 * both.
+	 * @param qualifiedName the home-qualified name
+	 * @return the closure, in inventory order (empty when nothing defines the name)
+	 */
+	public static Set<String> closureOf(String qualifiedName) {
+		if (!definesName(qualifiedName)) {
+			return Set.of();
+		}
+		Set<String> selected = new LinkedHashSet<>();
+		selected.add(qualifiedName);
+		boolean grew = true;
+		while (grew) {
+			grew = false;
+			for (String name : List.copyOf(selected)) {
+				Set<String> referenced = new LinkedHashSet<>();
+				for (LispVal form : formsFor(name)) {
+					collectSymbols(form, referenced);
+				}
+				for (String candidate : definedNames()) {
+					if (referenced.contains(candidate) && selected.add(candidate)) {
+						grew = true;
+					}
+				}
+			}
+		}
+		// Inventory order, like the splice: the load order of a group is then the same
+		// on every backend.
+		Set<String> ordered = new LinkedHashSet<>();
+		for (String name : definedNames()) {
+			if (selected.contains(name)) {
+				ordered.add(name);
+			}
+		}
+		return ordered;
 	}
 
 	/**
@@ -261,22 +336,42 @@ public final class UiopLibrary {
 	}
 
 	/**
-	 * Whether a definition the program never NAMES is nonetheless reached from it.
-	 * {@code uiop:with-temporary-file} is the one such case: its EXPANSION runs inside
-	 * the expression compilers, long after this pass, and calls the prelude's
-	 * {@code %temp-file-name} -- which in turn calls the two definitions below. The
-	 * delete is pulled in whatever {@code :keep} says, because reading that option here
-	 * would duplicate the expansion's rule
+	 * The definitions a uiop MACRO's expansion calls, per macro. Every one of these
+	 * expansions runs inside the expression compilers, long after this pass, so the names
+	 * it introduces never occur in the program this pass looks at -- without the table
+	 * the compiled program says {@code The function UIOP/UTILITY:X is undefined} at run
+	 * time while the interpreter (which lazy-loads on resolution) works.
+	 *
+	 * <p>
+	 * Only the DIRECT callee needs listing: {@link #process}'s fixpoint pulls in whatever
+	 * that one reaches in turn ({@code call-with-muffled-conditions} drags
+	 * {@code match-any-condition-p}, {@code match-condition-p} and {@code find-symbol*}
+	 * along). {@code with-temporary-file} reaches its three through the prelude's
+	 * {@code %temp-file-name}, and the delete is pulled in whatever {@code :keep} says,
+	 * because reading that option here would duplicate the expansion's rule
 	 * ({@code LispPreludeLibrary.referencedBySurfaceForm} makes the mirror-image decision
 	 * for the prelude half).
 	 */
+	private static final Map<String, List<String>> MACRO_EXPANSION_CALLEES = Map.of(LispNames.WITH_TEMPORARY_FILE,
+			List.of(LispNames.ENSURE_DIRECTORY_PATHNAME, LispNames.DEFAULT_TEMPORARY_DIRECTORY,
+					LispNames.DELETE_FILE_IF_EXISTS),
+			LispNames.WITH_MUFFLED_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_CONDITIONS), LispNames.UIOP_DEBUG,
+			List.of(LispNames.LOAD_UIOP_DEBUG_UTILITY), LispNames.LATEST_TIMESTAMP_F,
+			List.of(LispNames.LATEST_TIMESTAMP));
+
+	/** Whether a definition the program never NAMES is nonetheless reached from it. */
 	private static boolean reachedBySurfaceForm(String name, Set<String> occurring) {
-		if (!occurring.contains(UiopExports.qualified(LispNames.WITH_TEMPORARY_FILE))) {
-			return false;
+		for (Map.Entry<String, List<String>> entry : MACRO_EXPANSION_CALLEES.entrySet()) {
+			if (!occurring.contains(UiopExports.qualified(entry.getKey()))) {
+				continue;
+			}
+			for (String callee : entry.getValue()) {
+				if (name.equals(UiopExports.qualified(callee))) {
+					return true;
+				}
+			}
 		}
-		return name.equals(UiopExports.qualified(LispNames.ENSURE_DIRECTORY_PATHNAME))
-				|| name.equals(UiopExports.qualified(LispNames.DEFAULT_TEMPORARY_DIRECTORY))
-				|| name.equals(UiopExports.qualified(LispNames.DELETE_FILE_IF_EXISTS));
+		return false;
 	}
 
 	private static void collectSymbols(LispVal form, Set<String> into) {

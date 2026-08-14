@@ -329,37 +329,30 @@ final class JvmExprCompiler {
 				JvmGetenvCompiler.compile(cons, ctx, className);
 				return;
 			}
-			// uiop:with-temporary-file is a MACRO, so it cannot reach the uiop stub
-			// lowering (which only sees function-call shapes) -- and it has a real
-			// expansion, not a stub: smart-buffer's disk-spill path runs it.
-			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_TEMPORARY_FILE)) {
-				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), ctx, className);
-				return;
-			}
-			// The other uiop MACROS with real expansions, same reason: the binding trio
-			// and with-deprecation (whose top-level occurrences the flattening pass has
-			// already spliced -- this reaches the ones nested in an expression).
+			// The uiop MACROS with real expansions. A macro cannot reach the uiop stub
+			// lowering (which only sees function-call shapes), and these are not stubs:
+			// smart-buffer's disk-spill path runs with-temporary-file, and the
+			// definition wrappers (with-deprecation / with-upgradability) reach here for
+			// the occurrences nested in an expression -- the flattening pass has already
+			// spliced the top-level ones. One dispatcher shared with the interpreter,
+			// the WASM compiler and FreeVarAnalyzer.
 			if (qn != null && UiopExports.isUiopFamily(qn.pkg())) {
-				switch (qn.member()) {
-					case LispNames.IF_LET -> {
-						compileExpr(LispMacroExpander.expandUiopIfLet(cons), ctx, className);
-						return;
-					}
-					case LispNames.WHEN_LET -> {
-						compileExpr(LispMacroExpander.expandUiopWhenLet(cons), ctx, className);
-						return;
-					}
-					case LispNames.WHEN_LET_STAR -> {
-						compileExpr(LispMacroExpander.expandUiopWhenLetStar(cons), ctx, className);
-						return;
-					}
-					case LispNames.WITH_DEPRECATION -> {
-						compileExpr(LispMacroExpander.expandUiopWithDeprecation(cons), ctx, className);
-						return;
-					}
-					default -> {
-						// Other uiop members fall through to the stub lowering.
-					}
+				// Other uiop members fall through to the stub lowering.
+				LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+				if (uiopMacro != null) {
+					compileExpr(uiopMacro, ctx, className);
+					return;
+				}
+				// A uiop MACRO nothing implements yet, lowered HERE rather than in
+				// JvmFunctionCallCompiler: its synthesized stub is a real variadic defun
+				// (so the name is fboundp), which means the ordinary call path finds it
+				// and compiles its ARGUMENT FORMS before signalling -- and a macro that
+				// does nothing must not evaluate what it was handed. The stub lowering
+				// further down only runs for a name with no defun at all.
+				LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+				if (uiopStub != null) {
+					compileExpr(uiopStub, ctx, className);
+					return;
 				}
 			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander

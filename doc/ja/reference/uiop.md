@@ -27,10 +27,10 @@
 
 | サブパッケージ | 内容 | 実装済み |
 |-------------|------|---------|
-| `uiop/package` | シンボルとパッケージの操作 (`find-symbol*`、`intern*`、`define-package`) | 2 / 31 |
+| `uiop/package` | シンボルとパッケージの操作 (`find-symbol*`、`intern*`、`define-package`) | 4 / 31 |
 | `uiop/package-local-nicknames` | パッケージローカルニックネーム API | 1 / 3 |
 | `uiop/package*` | `uiop/package` が定義するがエクスポートしない 3 つのコンディション・型名 | 0 / 3 |
-| `uiop/utility` | 移植性のあるヘルパ (`emptyp`、`split-string`、`if-let`、`not-implemented-error`) | 7 / 68 |
+| [`uiop/utility`](uiop/utility.md) | 移植性のあるヘルパ (`strcat`、`split-string`、`if-let`、`not-implemented-error`) | 68 / 68 |
 | `uiop/version` | バージョン比較と非推奨コンディション | 1 / 15 |
 | `uiop/os` | ホストの識別、環境変数、作業ディレクトリ | 1 / 22 |
 | `uiop/pathname` | パス名の代数 (`merge-pathnames*`、`ensure-directory-pathname`) | 2 / 50 |
@@ -50,7 +50,8 @@
 
 ## 実装済みのもの
 
-各名前は個別のページにリンクしています。
+uiop の他のすべてがその上に書かれている移植性ヘルパ群 `uiop/utility` の 68 個は
+完全に実装済みで、[専用のページ](uiop/utility.md)があります。残りは以下のとおりです。
 
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
@@ -67,20 +68,16 @@
 | `uiop:delete-file-if-exists` | `(uiop:delete-file-if-exists "scratch.txt")` | ファイルを削除します。存在しない場合はシグナルではなく `nil` を返します — UIOP がこれをエクスポートしている理由そのものです |
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — パス名のホスト OS の綴り。ここでは名前文字列そのものなので `namestring` と同じです |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
-| `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
-| `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — 空でない文字列の最初の文字。空文字列や文字列以外では `nil` |
-| `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — 空でない文字列の最後の文字。空文字列や文字列以外では `nil` |
-| `uiop:split-string` | `(uiop:split-string "a.b.c" :separator ".")` | `("a" "b" "c")` — `:separator` のいずれかの文字で分割(上流のセマンティクス: 右から左へ走査し、`:max` は分割されなかった先頭部を残します) |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです |
-| `uiop:not-implemented-error` | `(uiop:not-implemented-error "chdir")` | 同名のコンディションを、対象の操作名とともにシグナルします。以下の未実装メンバがすべてシグナルするのがこれです |
-| `uiop:parameter-error` | `(uiop:parameter-error "~S: bad ~S" 'f 1)` | `uiop:parameter-error` をシグナルします: 操作は存在するが、そのパラメータ (の組み合わせ) は受け付けない、という意味です |
 | `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | コンディションのレポートを出力します (ライト版: どのバックエンドも Lisp レベルのコールスタックを持たないため、出力されるのはコンディション自体だけです) |
 
-4 つのメンバは**マクロ**で、呼び出されるのではなくコンパイラが展開します:
-[`uiop:if-let`](macros/uiop-if-let.md)、
-`uiop:with-temporary-file`、
+`uiop/utility` 以外の 3 つのメンバは**マクロ**で、呼び出されるのではなくコンパイラが
+展開します: `uiop:with-temporary-file`、
 [`uiop:with-deprecation`](macros/uiop-with-deprecation.md)、
 `uiop:define-package` (リテラルなトップレベル呼び出しは `defpackage` と同様に処理されます)。
+`uiop/utility` 自身のマクロ — [`uiop:if-let`](macros/uiop-if-let.md)、
+`uiop:nest`、`uiop:while-collecting`、`uiop:with-upgradability` など — は
+[そのページ](uiop/utility.md#macros)にあります。
 
 ## 未実装のもの
 

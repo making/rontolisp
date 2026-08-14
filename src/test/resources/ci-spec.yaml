@@ -8819,7 +8819,7 @@ cases:
                (uiop:not-implemented-error (c) (princ-to-string c))))
       ;; An unimplemented MACRO drops its argument forms rather than evaluating
       ;; them: ci-uiop-probe must NOT be defined by the time the handler runs.
-      (print (handler-case (uiop:with-upgradability () (defun ci-uiop-probe () 1))
+      (print (handler-case (uiop:with-current-directory ("/tmp") (defun ci-uiop-probe () 1))
                (uiop:not-implemented-error () :signalled)))
       (print (fboundp 'ci-uiop-probe))
     expected: |
@@ -8829,6 +8829,59 @@ cases:
       "Not (currently) implemented on rontolisp: UIOP/OS:CHDIR"
       :SIGNALLED
       NIL
+  - name: uiop-utility-helpers
+    source: |
+      ;; uiop/utility's portable helpers, the layer everything else in uiop is
+      ;; written in. strcat's contract is the one worth pinning: nil is the empty
+      ;; string and a character is a string of length one, so an optional piece
+      ;; concatenates without a test around it.
+      (print (uiop:strcat "a" nil #\b "c"))
+      (print (list (uiop:string-prefix-p "ab" "abc") (uiop:string-suffix-p "abc" "bc")
+                   (uiop:string-enclosed-p "a" "abc" "c")))
+      (print (uiop:frob-substrings "hello world" (list "o") "0"))
+      ;; stripln returns the stripped string AND the ending it removed, so strcat
+      ;; of the two reconstitutes the original.
+      (defun ci-uiop-strip (s) (multiple-value-bind (a b) (uiop:stripln s) (list a (length b))))
+      (print (ci-uiop-strip (uiop:strcat "hi" uiop:+crlf+)))
+      (print (uiop:remove-plist-keys (list :b :c) (list :a 1 :b 2 :c 3)))
+      (print (list (uiop:timestamp< 1 2) (uiop:latest-timestamp 3 1 2)
+                   (uiop:earliest-timestamp 3 1 2)))
+      (print (uiop:access-at (list :a (list 10 20)) (list :a 1)))
+      ;; nest is syntax; while-collecting binds one collector FUNCTION per name and
+      ;; answers one list each; with-upgradability is a progn whose definitions stay
+      ;; top-level (rontolisp has no image to upgrade).
+      (print (uiop:nest (list 1) (list 2) (list 3)))
+      (print (multiple-value-list
+              (uiop:while-collecting (ci-foo ci-bar)
+                (dolist (x (list (list 'a 1) (list 'b 2)))
+                  (ci-foo (first x))
+                  (ci-bar (second x))))))
+      (uiop:with-upgradability () (defun ci-uiop-up (x) (* x 2)))
+      (print (ci-uiop-up 21))
+      ;; One character type here, so the base-char quartet answers one type, index 0.
+      (print (list uiop:+max-character-type-index+ (uiop:base-string-p "abc")
+                   (uiop:strings-common-element-type (list "a"))))
+      ;; A uiop condition is a real condition class: style-warn's simple-style-warning
+      ;; is caught by a handler for the CL supertype, and the muffle-warning restart
+      ;; suppresses the report.
+      (print (handler-bind ((style-warning (lambda (c) (muffle-warning c))))
+               (uiop:style-warn "styled ~A" 2)
+               :sw-done))
+      (print (uiop:with-muffled-conditions ('(warning)) (warn "quiet") :muffled))
+    expected: |
+      "abc"
+      (T T T)
+      "hell0 w0rld"
+      ("hi" 2)
+      (:A 1)
+      (T 3 1)
+      20
+      (1 (2 (3)))
+      ((A B) (1 2))
+      42
+      (0 T CHARACTER)
+      :SW-DONE
+      :MUFFLED
 
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report

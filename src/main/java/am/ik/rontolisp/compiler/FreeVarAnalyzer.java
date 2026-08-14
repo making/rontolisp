@@ -361,28 +361,6 @@ public final class FreeVarAnalyzer {
 						case LispNames.WITH_OPEN_STREAM ->
 							collectFreeVars(LispMacroExpander.expandWithOpenStream(cons, true), boundVars,
 									knownFunctions, globals, specialNames, freeVars);
-						// uiop:with-temporary-file BINDS its :stream / :pathname
-						// variables, and they sit in a keyword plist the default walk
-						// would read as ordinary arguments -- smart-buffer's check-limit
-						// closes over exactly those.
-						case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED ->
-							collectFreeVars(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), boundVars,
-									knownFunctions, globals, specialNames, freeVars);
-						// The uiop binding trio BINDS the variables of its binding list,
-						// which the default walk would read as call forms ((a (f)) as a
-						// call to a); with-deprecation's level list would read the same
-						// way.
-						case LispNames.UIOP_IF_LET_QUALIFIED -> collectFreeVars(LispMacroExpander.expandUiopIfLet(cons),
-								boundVars, knownFunctions, globals, specialNames, freeVars);
-						case LispNames.UIOP_WHEN_LET_QUALIFIED ->
-							collectFreeVars(LispMacroExpander.expandUiopWhenLet(cons), boundVars, knownFunctions,
-									globals, specialNames, freeVars);
-						case LispNames.UIOP_WHEN_LET_STAR_QUALIFIED ->
-							collectFreeVars(LispMacroExpander.expandUiopWhenLetStar(cons), boundVars, knownFunctions,
-									globals, specialNames, freeVars);
-						case LispNames.UIOP_WITH_DEPRECATION_QUALIFIED ->
-							collectFreeVars(LispMacroExpander.expandUiopWithDeprecation(cons), boundVars,
-									knownFunctions, globals, specialNames, freeVars);
 						// with-mutex / with-lock-held is the OPPOSITE shape of the with-*
 						// stream macros: its one-element spec holds a VALUE, not a
 						// binding, so the default walk would read (lock) as a call and
@@ -445,6 +423,19 @@ public final class FreeVarAnalyzer {
 							// (go tag): the tag is a label, not a variable reference.
 						}
 						default -> {
+							// A uiop macro with a real expansion is expanded before
+							// walking, through the ONE dispatcher the interpreter and
+							// both compilers also use: several of them BIND (if-let /
+							// when-let's binding list, while-collecting's collectors,
+							// with-temporary-file's :stream / :pathname plist entries --
+							// smart-buffer's check-limit closes over exactly those) and
+							// nest REARRANGES its forms, all of which the default walk
+							// below would read as ordinary call forms.
+							LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+							if (uiopMacro != null) {
+								collectFreeVars(uiopMacro, boundVars, knownFunctions, globals, specialNames, freeVars);
+								break;
+							}
 							// Function call or special form: the operator resolves in
 							// the function namespace (Lisp-2), so only the argument
 							// subexpressions can reference variables
@@ -558,25 +549,6 @@ public final class FreeVarAnalyzer {
 								localVars, knownFunctions, captured, insideLambda);
 						case LispNames.WITH_OPEN_STREAM ->
 							collectCapturedVars(LispMacroExpander.expandWithOpenStream(cons, true), localVars,
-									knownFunctions, captured, insideLambda);
-						// The :stream / :pathname plist entries are BINDINGS (same
-						// reason as in collectFreeVars).
-						case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED ->
-							collectCapturedVars(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), localVars,
-									knownFunctions, captured, insideLambda);
-						// The uiop binding trio binds its binding list, with-deprecation
-						// carries a level list (same reason as in collectFreeVars).
-						case LispNames.UIOP_IF_LET_QUALIFIED ->
-							collectCapturedVars(LispMacroExpander.expandUiopIfLet(cons), localVars, knownFunctions,
-									captured, insideLambda);
-						case LispNames.UIOP_WHEN_LET_QUALIFIED ->
-							collectCapturedVars(LispMacroExpander.expandUiopWhenLet(cons), localVars, knownFunctions,
-									captured, insideLambda);
-						case LispNames.UIOP_WHEN_LET_STAR_QUALIFIED ->
-							collectCapturedVars(LispMacroExpander.expandUiopWhenLetStar(cons), localVars,
-									knownFunctions, captured, insideLambda);
-						case LispNames.UIOP_WITH_DEPRECATION_QUALIFIED ->
-							collectCapturedVars(LispMacroExpander.expandUiopWithDeprecation(cons), localVars,
 									knownFunctions, captured, insideLambda);
 						// The lock spec holds a VALUE, not a binding (same reason as in
 						// collectFreeVars).
@@ -702,6 +674,14 @@ public final class FreeVarAnalyzer {
 							// (go tag): the tag is a label, not a variable reference.
 						}
 						default -> {
+							// A uiop macro with a real expansion binds / rearranges
+							// forms the default walk would misread (same reason, and the
+							// same dispatcher, as in collectFreeVars).
+							LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+							if (uiopMacro != null) {
+								collectCapturedVars(uiopMacro, localVars, knownFunctions, captured, insideLambda);
+								break;
+							}
 							// Lisp-2: the operator symbol is not a variable reference
 							List<LispVal> parts = cons.toList();
 							for (int i = 1; i < parts.size(); i++) {

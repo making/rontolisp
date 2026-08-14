@@ -7841,7 +7841,9 @@ public final class LispMacroExpander {
 
 	private static final java.util.Set<String> UIOP_MACRO_EXPANSIONS = java.util.Set.of(LispNames.IF_LET,
 			LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION, LispNames.WITH_TEMPORARY_FILE,
-			LispNames.DEFINE_PACKAGE);
+			LispNames.DEFINE_PACKAGE, LispNames.WITH_UPGRADABILITY, LispNames.NEST, LispNames.WHILE_COLLECTING,
+			LispNames.APPENDF, LispNames.LATEST_TIMESTAMP_F, LispNames.WITH_MUFFLED_CONDITIONS, LispNames.UIOP_DEBUG,
+			LispNames.COMPATFMT);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -8169,6 +8171,278 @@ public final class LispMacroExpander {
 	public static LispVal expandUiopWithDeprecation(LispCons cons) {
 		List<LispVal> parts = cons.toList();
 		return prognOrNil(parts.subList(Math.min(2, parts.size()), parts.size()));
+	}
+
+	/**
+	 * Expands {@code (uiop:with-upgradability () definitions...)} into
+	 * {@code (progn definitions...)}. Upstream wraps every one of its own definitions in
+	 * this so that ASDF can redefine itself inside a running image: the body is evaluated
+	 * at compile, load AND run time and each function is declared {@code notinline} so a
+	 * frame already on the stack sees the new definition. rontolisp has no image to
+	 * upgrade -- a program is compiled once and run -- and no separate compile-time
+	 * evaluation to schedule, so {@code progn} is the whole meaning here. That is a
+	 * semantic CHOICE rather than an omission, and it is written down in
+	 * {@code .kb/uiop.md}: the alternative (leaving it a {@code not-implemented-error}
+	 * stub) would make every upstream-shaped definition file unloadable. Like
+	 * {@link #expandUiopWithDeprecation} the {@code progn} splices at top level
+	 * ({@link #flattenTopLevel}), so the wrapped {@code defun}s stay top-level
+	 * definitions.
+	 * @param cons the with-upgradability expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithUpgradability(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		return prognOrNil(parts.subList(Math.min(2, parts.size()), parts.size()));
+	}
+
+	/**
+	 * Expands {@code (uiop:nest form...)} -- the anti-indentation macro -- by nesting
+	 * each form inside the previous one's tail, right to left:
+	 *
+	 * <pre>
+	 * (uiop:nest (with-a) (with-b x) body) -&gt; (with-a (with-b x body))
+	 * </pre>
+	 *
+	 * A non-cons form is wrapped into a one-element list first, so {@code (nest progn a)}
+	 * is {@code (progn a)} -- upstream's {@code `(,@outer ,inner)} does the same by
+	 * splicing. With no forms at all the value is nil.
+	 * @param cons the nest expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopNest(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> forms = parts.subList(1, parts.size());
+		if (forms.isEmpty()) {
+			return LispNil.INSTANCE;
+		}
+		LispVal inner = forms.get(forms.size() - 1);
+		for (int i = forms.size() - 2; i >= 0; i--) {
+			List<LispVal> outer = new java.util.ArrayList<>(
+					forms.get(i) instanceof LispCons outerCons && outerCons.isProperList() ? outerCons.toList()
+							: List.of(forms.get(i)));
+			outer.add(inner);
+			inner = listToCons(outer);
+		}
+		return inner;
+	}
+
+	/**
+	 * Expands {@code (uiop:while-collecting (c1 c2 ...) body...)}: one local collector
+	 * FUNCTION per name, and one list per collector returned as multiple values, in
+	 * order.
+	 *
+	 * <pre>
+	 * (uiop:while-collecting (foo bar) body...) -&gt;
+	 *   (let ((__wc_FOO nil) (__wc_BAR nil))
+	 *     (flet ((foo (__wc_x) (setq __wc_FOO (cons __wc_x __wc_FOO)) (values))
+	 *            (bar (__wc_x) (setq __wc_BAR (cons __wc_x __wc_BAR)) (values)))
+	 *       body...
+	 *       (values (reverse __wc_FOO) (reverse __wc_BAR))))
+	 * </pre>
+	 *
+	 * The accumulators are named after their collector rather than counter-gensymed, so
+	 * the same source expands to the same forms on every backend
+	 * ({@code .kb/emitted-output-determinism.md}); the collector functions themselves
+	 * keep the names the body calls.
+	 * @param cons the while-collecting expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWhileCollecting(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WHILE_COLLECTING)
+					+ " expects (while-collecting (collector...) body...): " + cons.print());
+		}
+		List<LispVal> collectors = parts.get(1) instanceof LispCons list ? list.toList() : List.of();
+		List<LispVal> bindings = new java.util.ArrayList<>();
+		List<LispVal> functions = new java.util.ArrayList<>();
+		List<LispVal> results = new java.util.ArrayList<>();
+		results.add(new LispSymbol(LispNames.VALUES));
+		for (LispVal collector : collectors) {
+			if (!(collector instanceof LispSymbol name)) {
+				throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WHILE_COLLECTING)
+						+ " expects symbols as collector names: " + cons.print());
+			}
+			LispSymbol acc = new LispSymbol(WHILE_COLLECTING_ACC_PREFIX + name.name());
+			LispSymbol arg = new LispSymbol(WHILE_COLLECTING_ARG_VAR);
+			bindings.add(listToCons(List.of(acc, LispNil.INSTANCE)));
+			functions.add(listToCons(List.of(name, listToCons(List.of(arg)),
+					listToCons(List.of(new LispSymbol(LispNames.SETQ), acc, fmtCall(LispNames.CONS, arg, acc))),
+					listToCons(List.of(new LispSymbol(LispNames.VALUES))))));
+			results.add(callOf(LispNames.REVERSE, acc));
+		}
+		List<LispVal> flet = new java.util.ArrayList<>();
+		flet.add(new LispSymbol(LispNames.FLET));
+		flet.add(bindings.isEmpty() ? LispNil.INSTANCE : listToCons(functions));
+		flet.addAll(parts.subList(2, parts.size()));
+		flet.add(listToCons(results));
+		return listToCons(List.of(new LispSymbol(LispNames.LET),
+				bindings.isEmpty() ? LispNil.INSTANCE : listToCons(bindings), listToCons(flet)));
+	}
+
+	/**
+	 * The accumulator variable {@link #expandUiopWhileCollecting} gives each collector.
+	 */
+	private static final String WHILE_COLLECTING_ACC_PREFIX = "__wc_";
+
+	/**
+	 * The collector functions' one parameter; their bodies are the only code that sees
+	 * it.
+	 */
+	private static final String WHILE_COLLECTING_ARG_VAR = "__wc_x";
+
+	/**
+	 * Expands {@code (uiop:appendf place list...)} into
+	 * {@code (setf place (append place list...))} -- upstream's
+	 * {@code (define-modify-macro appendf (&rest args) append)}. Expanded here rather
+	 * than written as a {@code define-modify-macro} in the uiop Lisp source because the
+	 * compile path runs {@code UserMacroExpander} BEFORE the uiop splice and would never
+	 * see one.
+	 * @param cons the appendf expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopAppendf(LispCons cons) {
+		return expandUiopModifyMacro(cons, LispNames.APPEND, UiopExports.qualified(LispNames.APPENDF));
+	}
+
+	/**
+	 * Expands {@code (uiop:latest-timestamp-f place timestamp...)} into
+	 * {@code (setf place (uiop:latest-timestamp place timestamp...))}, the
+	 * {@code define-modify-macro} over {@code latest-timestamp}. See
+	 * {@link #expandUiopAppendf} for why it is expanded here.
+	 * @param cons the latest-timestamp-f expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopLatestTimestampF(LispCons cons) {
+		return expandUiopModifyMacro(cons, UiopExports.qualified(LispNames.LATEST_TIMESTAMP),
+				UiopExports.qualified(LispNames.LATEST_TIMESTAMP_F));
+	}
+
+	/**
+	 * The shape both uiop {@code define-modify-macro}s share:
+	 * {@code (setf PLACE (OP PLACE arg...))}. The place form is written twice, which is
+	 * what {@code define-modify-macro} exists to avoid for a place with side-effecting
+	 * subforms -- and is exactly what rontolisp's own {@link #expandDefineModifyMacro}
+	 * produces, so the two agree.
+	 */
+	private static LispVal expandUiopModifyMacro(LispCons cons, String operator, String who) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2) {
+			throw new UnsupportedOperationException(who + " expects (place &rest args): " + cons.print());
+		}
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(operator));
+		call.add(parts.get(1));
+		call.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(LispNames.SETF), parts.get(1), listToCons(call)));
+	}
+
+	/**
+	 * Expands {@code (uiop:with-muffled-conditions (conditions) body...)} into
+	 * {@code (uiop:call-with-muffled-conditions (lambda () body...) conditions)} --
+	 * upstream's own shorthand, over the {@code handler-bind} + {@code muffle-warning}
+	 * function in {@code uiop-utility.lisp}. The conditions form is evaluated ONCE,
+	 * inside the call, exactly as upstream's backquote places it.
+	 * @param cons the with-muffled-conditions expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithMuffledConditions(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec) || spec.toList().size() != 1) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_MUFFLED_CONDITIONS)
+					+ " expects (with-muffled-conditions (conditions) body...): " + cons.print());
+		}
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(LispNil.INSTANCE);
+		thunk.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_MUFFLED_CONDITIONS)),
+				listToCons(thunk), spec.toList().get(0)));
+	}
+
+	/**
+	 * Expands {@code (uiop:uiop-debug key...)} into
+	 * {@code (uiop:load-uiop-debug-utility key...)}. Upstream additionally wraps it in an
+	 * {@code (eval-when (:compile-toplevel :load-toplevel :execute) ...)} so the debug
+	 * definitions exist while the rest of the file compiles; rontolisp's single-pass top
+	 * level has nothing to schedule, and the loader signals anyway.
+	 * @param cons the uiop-debug expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopDebug(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> call = new java.util.ArrayList<>();
+		call.add(new LispSymbol(UiopExports.qualified(LispNames.LOAD_UIOP_DEBUG_UTILITY)));
+		call.addAll(parts.subList(1, parts.size()));
+		return listToCons(call);
+	}
+
+	/**
+	 * Expands {@code (uiop:compatfmt format)} to {@code format} unchanged. Upstream
+	 * strips the pretty-printer directives out of the string on the implementations whose
+	 * {@code format} cannot read them (GCL, Genera) and leaves it alone everywhere else;
+	 * rontolisp reads them all, so the unchanged arm is the only one.
+	 * @param cons the compatfmt expression
+	 * @return the format form
+	 */
+	public static LispVal expandUiopCompatfmt(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException(
+					UiopExports.qualified(LispNames.COMPATFMT) + " expects (compatfmt format): " + cons.print());
+		}
+		return parts.get(1);
+	}
+
+	/**
+	 * The ONE dispatcher for every {@code uiop} macro that has a real expansion, shared
+	 * by the interpreter, both compilers and {@code FreeVarAnalyzer}. Having one table
+	 * rather than four parallel switch statements is what makes "identical on all four
+	 * backends" structural instead of a review promise: a macro added here reaches every
+	 * consumer at once, and {@link #hasUiopMacroExpansion} (which decides what
+	 * {@code eval.UiopLibrary} must not stub and what
+	 * {@link #expandUnimplementedUiopMacro} must not lower) is derived from the same
+	 * list.
+	 *
+	 * <p>
+	 * Operators are matched in BOTH the {@code uiop:} spelling a program writes and the
+	 * home sub-package's, since callers sit on either side of package resolution.
+	 * @param cons the form
+	 * @param unwindProtect whether {@code with-temporary-file}'s cleanup should ride an
+	 * {@code unwind-protect} (true everywhere except a non-EH WASM module)
+	 * @return the expansion, or {@code null} when the operator is not a uiop macro with
+	 * one
+	 */
+	@Nullable public static LispVal expandUiopMacro(LispCons cons, boolean unwindProtect) {
+		if (!(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !UiopExports.isUiopFamily(qn.pkg()) || !UIOP_MACRO_EXPANSIONS.contains(qn.member())) {
+			return null;
+		}
+		if (!UiopExports.denotes(qn.pkg(), qn.member(), qn.member())) {
+			// A uiop sub-package that does not actually export this member: not ours.
+			return null;
+		}
+		return switch (qn.member()) {
+			case LispNames.IF_LET -> expandUiopIfLet(cons);
+			case LispNames.WHEN_LET -> expandUiopWhenLet(cons);
+			case LispNames.WHEN_LET_STAR -> expandUiopWhenLetStar(cons);
+			case LispNames.WITH_DEPRECATION -> expandUiopWithDeprecation(cons);
+			case LispNames.WITH_UPGRADABILITY -> expandUiopWithUpgradability(cons);
+			case LispNames.WITH_TEMPORARY_FILE -> expandUiopWithTemporaryFile(cons, unwindProtect);
+			case LispNames.NEST -> expandUiopNest(cons);
+			case LispNames.WHILE_COLLECTING -> expandUiopWhileCollecting(cons);
+			case LispNames.APPENDF -> expandUiopAppendf(cons);
+			case LispNames.LATEST_TIMESTAMP_F -> expandUiopLatestTimestampF(cons);
+			case LispNames.WITH_MUFFLED_CONDITIONS -> expandUiopWithMuffledConditions(cons);
+			case LispNames.UIOP_DEBUG -> expandUiopDebug(cons);
+			case LispNames.COMPATFMT -> expandUiopCompatfmt(cons);
+			// define-package is read-time surgery the package resolver performs, not an
+			// expression lowering; it is in the table so nothing stubs it.
+			default -> null;
+		};
 	}
 
 	/**
@@ -28981,9 +29255,23 @@ public final class LispMacroExpander {
 	private static boolean isTopLevelSpliceForm(LispVal form) {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol sym && cons.isProperList()
 				&& (LispNames.PROGN.equals(sym.name()) || LispNames.LOCALLY.equals(sym.name())
-						|| ((LispNames.EVAL_WHEN.equals(sym.name())
-								|| LispNames.UIOP_WITH_DEPRECATION_QUALIFIED.equals(sym.name()))
+						|| ((LispNames.EVAL_WHEN.equals(sym.name()) || isUiopDefinitionWrapper(sym.name()))
 								&& cons.toList().size() >= 2));
+	}
+
+	/**
+	 * Whether the operator is one of the two uiop macros that WRAP top-level definitions
+	 * and lower to {@code progn}: {@code with-deprecation} (a library's deprecated
+	 * defuns) and {@code with-upgradability} (which upstream puts around every one of its
+	 * own). Recognized in BOTH spellings, because {@link #flattenTopLevel} runs on either
+	 * side of package resolution -- {@code UserMacroExpander} calls it on the surface
+	 * program, the compilers after resolution.
+	 */
+	private static boolean isUiopDefinitionWrapper(String operator) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(operator);
+		return qn != null && UiopExports.isUiopFamily(qn.pkg())
+				&& (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_DEPRECATION)
+						|| UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_UPGRADABILITY));
 	}
 
 	private static void flattenTopLevelInto(LispVal form, List<LispVal> out) {
@@ -28997,12 +29285,12 @@ public final class LispMacroExpander {
 				}
 				return;
 			}
-			// eval-when drops its situation list; uiop:with-deprecation drops its level
-			// list the same way -- it wraps a library's deprecated top-level defuns
-			// (tiny-routes' response.lisp does, inside an eval-when), and burying those
-			// in an expression would stop them being definitions at all.
-			if (LispNames.EVAL_WHEN.equals(sym.name())
-					|| LispNames.UIOP_WITH_DEPRECATION_QUALIFIED.equals(sym.name())) {
+			// eval-when drops its situation list; uiop:with-deprecation and
+			// uiop:with-upgradability drop their leading form the same way -- they wrap
+			// top-level defuns (tiny-routes' response.lisp does the first, inside an
+			// eval-when; upstream uiop puts the second around every one of its own), and
+			// burying those in an expression would stop them being definitions at all.
+			if (LispNames.EVAL_WHEN.equals(sym.name()) || isUiopDefinitionWrapper(sym.name())) {
 				List<LispVal> parts = cons.toList();
 				if (parts.size() >= 2) {
 					for (int i = 2; i < parts.size(); i++) {

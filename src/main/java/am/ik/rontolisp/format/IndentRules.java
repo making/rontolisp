@@ -70,11 +70,19 @@ public final class IndentRules {
 				// (uiop:with-deprecation (LEVEL) definitions...): the level list is the
 				// distinguished argument. Spelled out rather than left to the with-
 				// guess.
-				"with-deprecation")) {
+				"with-deprecation",
+				// (uiop:while-collecting (COLLECTOR...) body...): the collector list is
+				// the distinguished argument. It has no with-/do- prefix, so the naming
+				// convention would read it as a call and align the whole body under the
+				// collector list.
+				"while-collecting")) {
 			rules.put(name, Style.body(1, 2));
 		}
-		// No distinguished argument: every subform is a body form.
-		for (String name : List.of("progn", "locally", "tagbody", "ignore-errors", "time", "with-standard-io-syntax")) {
+		// No distinguished argument: every subform is a body form. (uiop:nest FORM...)
+		// is the extreme case -- it exists precisely to flatten nesting, so laying it
+		// out as a call would undo what the writer used it for.
+		for (String name : List.of("progn", "locally", "tagbody", "ignore-errors", "time", "with-standard-io-syntax",
+				"nest")) {
 			rules.put(name, Style.body(0, 2));
 		}
 		// Operator plus operands or options -- no body, so a short one stays on one line

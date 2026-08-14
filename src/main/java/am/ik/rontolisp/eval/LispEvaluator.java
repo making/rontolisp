@@ -3377,24 +3377,37 @@ public final class LispEvaluator {
 
 	/**
 	 * Evaluates ONE uiop definition ({@code eval.UiopLibrary}) into the global
-	 * environment, once. The {@code not-implemented-error} pair goes in first whatever
-	 * the name is: every synthesized stub signals it, and a quoted condition name is not
-	 * a function resolution, so nothing else would trigger its load.
+	 * environment, once -- with two things pulled in around it, both because a CLASS
+	 * cannot be lazy the way a function can. Every uiop condition and class goes in first
+	 * whatever the name is ({@code UiopLibrary.conditionAndClassNames}): a quoted
+	 * condition name is not a function resolution, so nothing would trigger its own load,
+	 * and a handler's type test is built from the class tags known when the
+	 * {@code handler-bind} was expanded, so a class first registered while the body runs
+	 * is invisible to the handler meant to catch it. And the name's whole
+	 * {@code UiopLibrary.closureOf} closure goes in with it, which is exactly what the
+	 * compile paths splice.
 	 * @param name the home-qualified uiop name
 	 * @return its global function binding, or {@code null} when the definition binds a
 	 * variable rather than a function
 	 */
 	@Nullable private LispVal loadUiopDefinition(String name) {
 		synchronized (this.libraryLoadLock) {
-			String conditions = UiopExports.qualified(LispNames.NOT_IMPLEMENTED_ERROR);
-			if (this.loadedUiopNames.add(conditions)) {
-				for (LispVal form : UiopLibrary.formsFor(conditions)) {
-					eval(form, this.globalEnv);
+			for (String conditionName : UiopLibrary.conditionAndClassNames()) {
+				if (this.loadedUiopNames.add(conditionName)) {
+					for (LispVal form : UiopLibrary.formsFor(conditionName)) {
+						eval(form, this.globalEnv);
+					}
 				}
 			}
-			if (this.loadedUiopNames.add(name)) {
-				for (LispVal form : UiopLibrary.formsFor(name)) {
-					eval(form, this.globalEnv);
+			// The CLOSURE, not just this name: a definition may reach another one it
+			// never calls (style-warn signals a quoted condition name), and the compile
+			// paths splice exactly this set -- loading less here is how the interpreter
+			// ends up with a condition class the other three backends have.
+			for (String reachable : UiopLibrary.closureOf(name)) {
+				if (this.loadedUiopNames.add(reachable)) {
+					for (LispVal form : UiopLibrary.formsFor(reachable)) {
+						eval(form, this.globalEnv);
+					}
 				}
 			}
 			return this.globalEnv.lookupFunctionOrNull(name);
@@ -3687,6 +3700,64 @@ public final class LispEvaluator {
 		}
 	}
 
+	private boolean uiopConditionClassesLoaded;
+
+	/**
+	 * Whether {@link #ensureUiopConditionClassesLoaded} is mid-flight. The report
+	 * renderer is rebuilt from the whole class table, so rebuilding it once per class
+	 * registered would be twenty passes for one answer; the outer call rebuilds once,
+	 * after the last class lands.
+	 */
+	private boolean loadingUiopConditionClasses;
+
+	/**
+	 * Registers every uiop condition and class
+	 * ({@code UiopLibrary.conditionAndClassNames} -- 19 {@code define-condition}s and one
+	 * {@code defclass}) the first time the program touches the condition system at all,
+	 * which is what {@link #ensureConditionReportRuntimeLoaded} marks.
+	 *
+	 * <p>
+	 * A CLASS cannot be lazy the way a function can. Two things go wrong if uiop's arrive
+	 * only when some uiop FUNCTION is first resolved: a handler's type test is built from
+	 * the class tags known at EXPANSION time, so a class registered while the body runs
+	 * is invisible to the handler that was meant to catch it; and a program that only
+	 * NAMES a uiop condition ({@code (make-condition 'uiop:simple-style-warning)}) never
+	 * resolves a uiop function at all. Both were cross-backend divergences --
+	 * {@code (handler-bind ((warning #'muffle-warning)) (uiop:style-warn "x"))} muffled
+	 * the warning on the JVM and both WASM backends, which splice every reachable uiop
+	 * definition before anything runs, and printed it here.
+	 *
+	 * <p>
+	 * Registering them on first condition-system use rather than in the constructor
+	 * confines the cost to programs that have conditions at all, and it introduces no
+	 * divergence of its own: a program can only observe a class it NAMES, and naming it
+	 * is exactly what makes the compile path splice its definition too
+	 * ({@code UiopLibrary.process} collects quoted symbols).
+	 */
+	private void ensureUiopConditionClassesLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.uiopConditionClassesLoaded) {
+				return;
+			}
+			// Set before evaluating: each define-condition below re-enters
+			// ensureConditionReportRuntimeLoaded, which is what called us.
+			this.uiopConditionClassesLoaded = true;
+			this.loadingUiopConditionClasses = true;
+			try {
+				for (String name : UiopLibrary.conditionAndClassNames()) {
+					if (this.loadedUiopNames.add(name)) {
+						for (LispVal form : UiopLibrary.formsFor(name)) {
+							eval(form, this.globalEnv);
+						}
+					}
+				}
+			}
+			finally {
+				this.loadingUiopConditionClasses = false;
+			}
+		}
+	}
+
 	private LispVal evalCons(LispCons cons, Environment env) {
 		LispVal head = cons.car();
 		// A dotted tail is only meaningful as data (inside quote); in call position it
@@ -3921,20 +3992,6 @@ public final class LispEvaluator {
 					return evalWitExport(cons);
 				case LispNames.WIT_IMPORT_QUALIFIED:
 					return evalWitImport(cons);
-				case LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED:
-					// The one uiop with-* macro with a real expansion (smart-buffer's
-					// disk-spill path runs it), the usocket:with-* pattern.
-					return eval(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), env);
-				case LispNames.UIOP_IF_LET_QUALIFIED:
-					return eval(LispMacroExpander.expandUiopIfLet(cons), env);
-				case LispNames.UIOP_WHEN_LET_QUALIFIED:
-					return eval(LispMacroExpander.expandUiopWhenLet(cons), env);
-				case LispNames.UIOP_WHEN_LET_STAR_QUALIFIED:
-					return eval(LispMacroExpander.expandUiopWhenLetStar(cons), env);
-				case LispNames.UIOP_WITH_DEPRECATION_QUALIFIED:
-					// A progn of the definitions: rontolisp has no deprecation-warning
-					// channel, so the level form is ignored (documented, not silent).
-					return eval(LispMacroExpander.expandUiopWithDeprecation(cons), env);
 				case LispNames.USOCKET_WITH_CLIENT_SOCKET_QUALIFIED:
 					return eval(LispMacroExpander.expandUsocketWithClientSocket(cons), env);
 				case LispNames.USOCKET_WITH_CONNECTED_SOCKET_QUALIFIED:
@@ -3994,11 +4051,20 @@ public final class LispEvaluator {
 			if (LispNames.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
 			}
-			// A uiop MACRO nothing implements yet lowers to not-implemented-error with
-			// its argument forms dropped -- the same expansion both compilers apply, so
-			// an unimplemented (uiop:with-upgradability () (defun f ...)) signals here
-			// too rather than defining f first. The function-kind members are ordinary
-			// calls and fall through to the lazy load below.
+			// The uiop MACROS. First the ones with a real expansion -- the one
+			// dispatcher both compilers and FreeVarAnalyzer also call, which is what
+			// makes the four backends agree by construction rather than by four
+			// parallel switch statements kept in step.
+			LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, true);
+			if (uiopMacro != null) {
+				return eval(uiopMacro, env);
+			}
+			// Then a uiop macro nothing implements yet: it lowers to
+			// not-implemented-error with its argument forms dropped -- the same
+			// expansion both compilers apply, so an unimplemented
+			// (uiop:with-input-file ...) signals here too rather than running its body
+			// first. The function-kind members are ordinary calls and fall through to
+			// the lazy load below.
 			LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
 			if (uiopStub != null) {
 				return eval(uiopStub, env);
@@ -6014,9 +6080,20 @@ public final class LispEvaluator {
 	 * forms (which is where the routing turns ON: before one of them runs, no condition
 	 * value can exist and every printing operator stays in its historical shape) and from
 	 * the printing operators once it is on.
+	 *
+	 * <p>
+	 * Also the one place uiop's condition CLASSES are registered
+	 * ({@link #ensureUiopConditionClassesLoaded}): "the program has conditions" is
+	 * exactly when they have to exist, and a class cannot be lazy the way a function can.
 	 */
 	private void ensureConditionReportRuntimeLoaded() {
 		synchronized (this.libraryLoadLock) {
+			ensureUiopConditionClassesLoaded();
+			if (this.loadingUiopConditionClasses) {
+				// Re-entered from one of those define-conditions: the outer call rebuilds
+				// the renderer once, when the whole group is registered.
+				return;
+			}
 			int stamp = this.closRegistry.classes().size() * 31 + this.closRegistry.conditionReports().size();
 			if (stamp == this.conditionReportRuntimeStamp) {
 				return;

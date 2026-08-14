@@ -6476,6 +6476,90 @@ public final class LispNames {
 	public static final String UIOP_WITH_DEPRECATION_QUALIFIED = UIOP_VERSION_PKG + ":" + WITH_DEPRECATION;
 
 	/**
+	 * {@code uiop:with-upgradability () definitions...} -- upstream wraps EVERY one of
+	 * its own definitions in this so ASDF can redefine itself inside a running image (the
+	 * forms are re-evaluated at compile, load and run time and the functions declared
+	 * {@code notinline}). rontolisp has no image to upgrade and no separate compile-time
+	 * evaluation to schedule, so the expansion is {@code (progn
+	 * definitions...)} -- a semantic CHOICE, not an omission ({@code .kb/uiop.md}). Like
+	 * {@link #WITH_DEPRECATION} it wraps top-level definitions, so it splices at top
+	 * level ({@code LispMacroExpander.flattenTopLevel}) instead of burying them in an
+	 * expression.
+	 */
+	public static final String WITH_UPGRADABILITY = "WITH-UPGRADABILITY";
+
+	/**
+	 * {@code uiop:nest form...} -- the anti-indentation macro: it nests each form inside
+	 * the previous one's tail, so {@code (nest (with-a) (with-b) body)} is
+	 * {@code (with-a (with-b body))}. Purely syntactic, so the expansion is the whole
+	 * implementation.
+	 */
+	public static final String NEST = "NEST";
+
+	/**
+	 * {@code uiop:while-collecting (collector...) body...} -- binds one local collector
+	 * FUNCTION per name; calling it inside the body appends to that name's list, and the
+	 * form answers one list per collector as multiple values, in order.
+	 */
+	public static final String WHILE_COLLECTING = "WHILE-COLLECTING";
+
+	/**
+	 * {@code uiop:appendf place &rest lists} -- upstream's
+	 * {@code (define-modify-macro appendf (&rest args) append)}. Expanded here rather
+	 * than defined with {@code define-modify-macro} in the uiop Lisp source, because the
+	 * compile path expands user macros ({@code UserMacroExpander}) BEFORE the uiop splice
+	 * and would therefore never see it.
+	 */
+	public static final String APPENDF = "APPENDF";
+
+	/**
+	 * {@code uiop:latest-timestamp-f place &rest timestamps} -- the
+	 * {@code define-modify-macro} over {@link #LATEST_TIMESTAMP}, expanded here for the
+	 * same reason as {@link #APPENDF}.
+	 */
+	public static final String LATEST_TIMESTAMP_F = "LATEST-TIMESTAMP-F";
+
+	/**
+	 * {@code uiop:latest-timestamp &rest timestamps} -- {@link #LATEST_TIMESTAMP_F}'s
+	 * accumulator.
+	 */
+	public static final String LATEST_TIMESTAMP = "LATEST-TIMESTAMP";
+
+	/**
+	 * {@code uiop:with-muffled-conditions (conditions) body...} -- shorthand for
+	 * {@link #CALL_WITH_MUFFLED_CONDITIONS} over a thunk of the body.
+	 */
+	public static final String WITH_MUFFLED_CONDITIONS = "WITH-MUFFLED-CONDITIONS";
+
+	/**
+	 * {@code uiop:call-with-muffled-conditions thunk conditions} -- runs the thunk under
+	 * a {@code handler-bind} that invokes the {@code muffle-warning} restart for every
+	 * condition matching one of the patterns. Lisp source ({@code uiop-utility.lisp});
+	 * named here because {@link #WITH_MUFFLED_CONDITIONS} expands into it.
+	 */
+	public static final String CALL_WITH_MUFFLED_CONDITIONS = "CALL-WITH-MUFFLED-CONDITIONS";
+
+	/**
+	 * {@code uiop:uiop-debug &rest keys} -- loads a developer's personal debug file. The
+	 * expansion is the {@link #LOAD_UIOP_DEBUG_UTILITY} call (upstream additionally wraps
+	 * it in an {@code eval-when}, which rontolisp's single-pass top level does not need);
+	 * the loader itself signals, because a run-time {@code load} of a computed pathname
+	 * is not something any backend has.
+	 */
+	public static final String UIOP_DEBUG = "UIOP-DEBUG";
+
+	/** {@code uiop:load-uiop-debug-utility} -- what {@link #UIOP_DEBUG} expands into. */
+	public static final String LOAD_UIOP_DEBUG_UTILITY = "LOAD-UIOP-DEBUG-UTILITY";
+
+	/**
+	 * {@code uiop:compatfmt format} -- upstream strips the pretty-printer directives from
+	 * the format string on the implementations that cannot read them (GCL, Genera).
+	 * rontolisp reads them all, so the expansion is the string unchanged, which is also
+	 * upstream's own {@code #-(or gcl genera)} arm.
+	 */
+	public static final String COMPATFMT = "COMPATFMT";
+
+	/**
 	 * {@code uiop:symbol-call package name &rest args} -- real UIOP's late-binding call:
 	 * look the name up in the package at RUN time and apply it. Not a stub on the
 	 * interpreter (a global function in {@code LispEvaluator} over the package resolver's

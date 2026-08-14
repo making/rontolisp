@@ -576,38 +576,32 @@ final class WasmExprCompiler {
 							+ " under --component is the spliced environment.lisp binding, but the program was compiled without it (eval/EnvironmentLibrary.process must run on the compile path)");
 				}
 			}
-			// uiop:with-temporary-file is a MACRO, so it cannot reach the uiop stub
-			// lowering (which only sees function-call shapes) -- and it has a real
-			// expansion, not a stub. unwindProtect = ctx.ehMode, like the usocket
-			// with-*s below: outside EH mode the cleanup runs on normal exit only.
-			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_TEMPORARY_FILE)) {
-				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, ctx.ehMode), ctx);
-				return;
-			}
-			// The other uiop MACROS with real expansions, same reason: the binding trio
-			// and with-deprecation (whose top-level occurrences the flattening pass has
-			// already spliced -- this reaches the ones nested in an expression).
+			// The uiop MACROS with real expansions. A macro cannot reach the uiop stub
+			// lowering (which only sees function-call shapes), and these are not stubs:
+			// smart-buffer's disk-spill path runs with-temporary-file, and the
+			// definition wrappers (with-deprecation / with-upgradability) reach here for
+			// the occurrences nested in an expression -- the flattening pass has already
+			// spliced the top-level ones. One dispatcher shared with the interpreter,
+			// the JVM compiler and FreeVarAnalyzer; unwindProtect = ctx.ehMode, like the
+			// usocket with-*s below, so outside EH mode with-temporary-file's cleanup
+			// runs on normal exit only.
 			if (qn != null && UiopExports.isUiopFamily(qn.pkg())) {
-				switch (qn.member()) {
-					case LispNames.IF_LET -> {
-						compileExpr(LispMacroExpander.expandUiopIfLet(cons), ctx);
-						return;
-					}
-					case LispNames.WHEN_LET -> {
-						compileExpr(LispMacroExpander.expandUiopWhenLet(cons), ctx);
-						return;
-					}
-					case LispNames.WHEN_LET_STAR -> {
-						compileExpr(LispMacroExpander.expandUiopWhenLetStar(cons), ctx);
-						return;
-					}
-					case LispNames.WITH_DEPRECATION -> {
-						compileExpr(LispMacroExpander.expandUiopWithDeprecation(cons), ctx);
-						return;
-					}
-					default -> {
-						// Other uiop members fall through to the stub lowering.
-					}
+				// Other uiop members fall through to the stub lowering.
+				LispVal uiopMacro = LispMacroExpander.expandUiopMacro(cons, ctx.ehMode);
+				if (uiopMacro != null) {
+					compileExpr(uiopMacro, ctx);
+					return;
+				}
+				// A uiop MACRO nothing implements yet, lowered HERE rather than in
+				// WasmFunctionCallCompiler: its synthesized stub is a real variadic defun
+				// (so the name is fboundp), which means the ordinary call path finds it
+				// and compiles its ARGUMENT FORMS before signalling -- and a macro that
+				// does nothing must not evaluate what it was handed. The stub lowering
+				// further down only runs for a name with no defun at all.
+				LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+				if (uiopStub != null) {
+					compileExpr(uiopStub, ctx);
+					return;
 				}
 			}
 			// The usocket with-* convenience macros are built-in LispMacroExpander

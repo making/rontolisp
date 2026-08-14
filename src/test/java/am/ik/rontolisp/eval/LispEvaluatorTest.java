@@ -1959,6 +1959,214 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopStringHelpers() {
+		// strcat's contract is the interesting one: nil is the empty string and a
+		// character is a string of length one, so a caller can concatenate an optional
+		// piece without testing it first.
+		assertThat(eval("(uiop:strcat \"a\" nil #\\b \"c\")")).isEqualTo(new LispString("abc"));
+		assertThat(eval("(uiop:strcat)")).isEqualTo(new LispString(""));
+		assertThat(eval("(uiop:reduce/strcat (list \"aa\" \"bb\" \"cc\") :start 1)")).isEqualTo(new LispString("bbcc"));
+		assertThat(eval("(uiop:reduce/strcat (list 1 22) :key #'princ-to-string)")).isEqualTo(new LispString("122"));
+		assertThat(eval("(uiop:string-prefix-p \"ab\" \"abc\")")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:string-prefix-p \"abc\" \"ab\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:string-suffix-p \"abc\" \"bc\")")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:string-suffix-p \"abc\" \"a\")")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:string-enclosed-p \"a\" \"abc\" \"c\")")).isSameAs(LispTrue.INSTANCE);
+		// A symbol is a string designator on both sides, as upstream.
+		assertThat(eval("(uiop:string-prefix-p \"FO\" 'foo)")).isSameAs(LispTrue.INSTANCE);
+		// stripln returns the stripped string AND the ending, so strcat of the two
+		// reconstitutes the original.
+		assertThat(eval("""
+				(multiple-value-bind (s e) (uiop:stripln (uiop:strcat "hi" uiop:+crlf+))
+				  (list s (length e) (equal e uiop:+crlf+)))
+				""").print()).isEqualTo("(\"hi\" 2 T)");
+		assertThat(eval("""
+				(multiple-value-bind (s e) (uiop:stripln (uiop:strcat "hi" uiop:+lf+))
+				  (list s (equal e uiop:+lf+)))
+				""").print()).isEqualTo("(\"hi\" T)");
+		assertThat(eval("(multiple-value-list (uiop:stripln \"hi\"))").print()).isEqualTo("(\"hi\" NIL)");
+		assertThat(eval("(list (length uiop:+cr+) (length uiop:+lf+) (length uiop:+crlf+))").print())
+			.isEqualTo("(1 1 2)");
+		assertThat(eval("(uiop:standard-case-symbol-name \"foo\")")).isEqualTo(new LispString("FOO"));
+		assertThat(eval("(uiop:standard-case-symbol-name 'foo)")).isEqualTo(new LispString("FOO"));
+		assertThat(eval("(uiop:find-standard-case-symbol \"car\" :cl)").print()).isEqualTo("CAR");
+		assertThat(eval("(uiop:find-standard-case-symbol \"definitely-absent\" :cl nil)")).isEqualTo(LispNil.INSTANCE);
+		// frob-substrings: each substring is replaced (or removed with no frob), and a
+		// later substring never matches inside an earlier match.
+		assertThat(eval("(uiop:frob-substrings \"hello world\" (list \"o\") \"0\")"))
+			.isEqualTo(new LispString("hell0 w0rld"));
+		assertThat(eval("(uiop:frob-substrings \"hello world\" (list \"l\"))")).isEqualTo(new LispString("heo word"));
+	}
+
+	@Test
+	void evalUiopCharacterTypeQuartetAnswersOneCharacterType() {
+		// rontolisp has ONE character type -- (subtypep 'character 'base-char) is true --
+		// so upstream's own derivation collapses to a single-element vector, index 0 and
+		// a false +non-base-chars-exist-p+; base-string-p is then upstream's (and) = t
+		// for every string, and the common element type is the constant 'character.
+		assertThat(eval("(subtypep 'character 'base-char)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(length uiop:+character-types+)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(aref uiop:+character-types+ 0)").print()).isEqualTo("CHARACTER");
+		assertThat(eval("uiop:+max-character-type-index+")).isEqualTo(new LispInteger(0));
+		assertThat(eval("uiop:+non-base-chars-exist-p+")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:character-type-index #\\a)")).isEqualTo(new LispInteger(0));
+		assertThat(eval("(uiop:base-string-p \"abc\")")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:strings-common-element-type (list \"a\" #\\b))").print()).isEqualTo("CHARACTER");
+	}
+
+	@Test
+	void evalUiopTimestampFamily() {
+		// A timestamp is a REAL or a boolean, where t is -infinity and nil is +infinity.
+		assertThat(eval("(uiop:timestamp< 1 2)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:timestamp< 2 1)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:timestamp< t 3)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:timestamp< t t)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:timestamp< 3 nil)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:timestamp< nil 3)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:timestamp<= 2 2)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:earlier-timestamp 1 2)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(uiop:later-timestamp 1 2)")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(uiop:earliest-timestamp 3 1 2)")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(uiop:latest-timestamp 3 1 2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(uiop:timestamps-earliest (list 3 1))")).isEqualTo(new LispInteger(1));
+		assertThat(eval("(uiop:timestamps-latest (list 3 1))")).isEqualTo(new LispInteger(3));
+		// The empty list has no bound, so earliest is +infinity (nil) and latest is
+		// -infinity (t) -- the reduce initial values upstream picks.
+		assertThat(eval("(uiop:timestamps-earliest nil)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:timestamps-latest nil)")).isSameAs(LispTrue.INSTANCE);
+		// timestamps< chains from nil = +infinity, so nothing non-empty is increasing.
+		// Upstream's own answer, kept rather than "fixed".
+		assertThat(eval("(uiop:timestamps< nil)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:timestamps< (list 1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:timestamp*< 1 2)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(let ((s 1)) (uiop:latest-timestamp-f s 5 3) s)")).isEqualTo(new LispInteger(5));
+	}
+
+	@Test
+	void evalUiopAccessAtAndFunctionDesignators() {
+		// An AT specifier is a list of accessors applied in turn: an integer is ELT, a
+		// keyword is GETF, nil is identity, a symbol or function is called, a cons is a
+		// partially applied call (ensure-function).
+		assertThat(eval("(uiop:access-at (list :a (list 10 20)) (list :a 1))")).isEqualTo(new LispInteger(20));
+		assertThat(eval("(uiop:access-at (list 1 2 3) 2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(uiop:access-at (list 1 2) nil)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(uiop:access-at (list 1 2) 'length)")).isEqualTo(new LispInteger(2));
+		assertThat(eval("(uiop:access-at 3 (list (list '+ 4)))")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(uiop:access-at-count 4)")).isEqualTo(new LispInteger(5));
+		assertThat(eval("(uiop:access-at-count (list 2 :x))")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(uiop:access-at-count :k)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(funcall (uiop:ensure-function 'car) (list 9 8))")).isEqualTo(new LispInteger(9));
+		assertThat(eval("(funcall (uiop:ensure-function 7))")).isEqualTo(new LispInteger(7));
+		assertThat(eval("(funcall (uiop:ensure-function '(lambda (x) (* x 2))) 21)")).isEqualTo(new LispInteger(42));
+		assertThat(eval("(uiop:call-function (list '+ 1) 2)")).isEqualTo(new LispInteger(3));
+		assertThat(eval("(uiop:call-function \"car\" (list 4 5))")).isEqualTo(new LispInteger(4));
+	}
+
+	@Test
+	void evalUiopListPlistAndHashHelpers() {
+		assertThat(eval("(uiop:ensure-list 1)").print()).isEqualTo("(1)");
+		assertThat(eval("(uiop:ensure-list (list 1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(uiop:length=n-p (list 1 2) 2)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:length=n-p (list 1 2) 3)")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:length=n-p nil 0)")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:remove-plist-key :b (list :a 1 :b 2 :c 3))").print()).isEqualTo("(:A 1 :C 3)");
+		assertThat(eval("(uiop:remove-plist-keys (list :b :c) (list :a 1 :b 2 :c 3))").print()).isEqualTo("(:A 1)");
+		assertThat(eval("(let ((l (list 1))) (uiop:appendf l (list 2 3)) l)").print()).isEqualTo("(1 2 3)");
+		// ensure-gethash answers the entry AND whether it was already there, computing
+		// the default through call-function only on a miss.
+		assertThat(eval("""
+				(let ((h (make-hash-table :test 'equal)))
+				  (list (multiple-value-list (uiop:ensure-gethash "k" h (constantly 5)))
+				        (multiple-value-list (uiop:ensure-gethash "k" h (constantly 6)))))
+				""").print()).isEqualTo("((5 NIL) (5 T))");
+		assertThat(eval("(gethash 2 (uiop:list-to-hash-set (list 1 2)))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:lexicographic< #'< (list 1 2) (list 1 3))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:lexicographic< #'< (list 1 3) (list 1 2))")).isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:lexicographic<= #'< (list 1 2) (list 1 2))")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void evalUiopMacros() {
+		// nest is purely syntactic: each form is nested inside the previous one's tail.
+		assertThat(eval("(uiop:nest (list 1) (list 2) (list 3))").print()).isEqualTo("(1 (2 (3)))");
+		assertThat(eval("(uiop:nest (let ((%n 2))) (* %n 3))")).isEqualTo(new LispInteger(6));
+		// while-collecting binds one collector FUNCTION per name and answers one list
+		// each, in order, as multiple values.
+		assertThat(eval("""
+				(multiple-value-list
+				 (uiop:while-collecting (%foo %bar)
+				   (dolist (x (list (list 'a 1) (list 'b 2)))
+				     (%foo (first x))
+				     (%bar (second x)))))
+				""").print()).isEqualTo("((A B) (1 2))");
+		// with-upgradability is a progn: rontolisp has no image to upgrade.
+		assertThat(eval("(uiop:with-upgradability () 1 2 3)")).isEqualTo(new LispInteger(3));
+		// compatfmt keeps the string: rontolisp reads every directive upstream strips.
+		assertThat(eval("(uiop:compatfmt \"~3i~_ok\")")).isEqualTo(new LispString("~3i~_ok"));
+		assertThat(eval("(uiop:parse-body '((declare (ignore x)) (+ 1 2)))").print()).isEqualTo("((+ 1 2))");
+		assertThat(eval("(multiple-value-list (uiop:parse-body '(\"doc\" (+ 1 2)) :documentation t))").print())
+			.isEqualTo("(((+ 1 2)) NIL \"doc\")");
+		// A lone string is the BODY, not documentation -- the ordering rule a
+		// macro-writing library depends on.
+		assertThat(eval("(multiple-value-list (uiop:parse-body '(\"doc\") :documentation t))").print())
+			.isEqualTo("((\"doc\") NIL NIL)");
+	}
+
+	@Test
+	void evalUiopConditionHelpers() {
+		assertThat(eval("(uiop:match-condition-p 'error (make-condition 'simple-error))")).isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:match-condition-p 'warning (make-condition 'simple-error))"))
+			.isEqualTo(LispNil.INSTANCE);
+		assertThat(eval("(uiop:match-any-condition-p (make-condition 'simple-error) (list 'warning 'error))"))
+			.isSameAs(LispTrue.INSTANCE);
+		assertThat(eval("(uiop:match-condition-p #'(lambda (c) (typep c 'error)) (make-condition 'simple-error))"))
+			.isSameAs(LispTrue.INSTANCE);
+		// with-muffled-conditions invokes the muffle-warning restart for every condition
+		// matching one of the patterns; the body's value is the form's value.
+		assertThat(eval("(uiop:with-muffled-conditions ('(warning)) (warn \"quiet\") :muffled)").print())
+			.isEqualTo(":MUFFLED");
+		// style-warn signals uiop's own simple-style-warning, which really is a
+		// style-warning: a handler for the CL supertype catches it. The class is
+		// registered before the first handler form is expanded, or the interpreter would
+		// miss what the compile paths catch.
+		assertThat(eval("""
+				(handler-bind ((style-warning (lambda (c) (muffle-warning c))))
+				  (uiop:style-warn "styled ~A" 2)
+				  :done)
+				""").print()).isEqualTo(":DONE");
+		assertThat(eval("""
+				(let ((c (make-condition 'uiop:simple-style-warning
+				                         :format-control "x" :format-arguments nil)))
+				  (list (typep c 'style-warning) (typep c 'simple-condition)
+				        (princ-to-string c)))
+				""").print()).isEqualTo("(T T \"x\")");
+		assertThat(
+				eval("(list (uiop:boolean-to-feature-expression t) (uiop:boolean-to-feature-expression nil))").print())
+			.isEqualTo("((:AND) (:OR))");
+		assertThat(eval("(uiop:symbol-test-to-feature-expression \"CAR\" :cl)").print()).isEqualTo("(:AND)");
+		assertThat(eval("(uiop:symbol-test-to-feature-expression \"DEFINITELY-ABSENT\" :cl)").print())
+			.isEqualTo("(:OR)");
+	}
+
+	@Test
+	void uiopUtilityMembersWithoutAPrimitiveNameThemselves() {
+		// The two members of uiop/utility rontolisp cannot implement, and why: pushing
+		// onto a hook needs (setf (symbol-value ...)) -- not a place on any backend --
+		// and the debug loader needs a run-time load of a computed pathname. They carry
+		// real definitions that signal, rather than a synthesized stub, so the message
+		// says what is missing instead of only which name.
+		assertThat(eval("""
+				(handler-case (uiop:register-hook-function '*h* (lambda () 1))
+				  (uiop:not-implemented-error (c) (princ-to-string c)))
+				""").print()).contains("REGISTER-HOOK-FUNCTION", "symbol-value");
+		assertThat(eval("""
+				(handler-case (uiop:uiop-debug)
+				  (uiop:not-implemented-error (c) (princ-to-string c)))
+				""").print()).contains("LOAD-UIOP-DEBUG-UTILITY", "computed pathname");
+		assertThat(eval("(consp uiop:*uiop-debug-utility*)")).isSameAs(LispTrue.INSTANCE);
+	}
+
+	@Test
 	void bareGetenvIsNotACommonLispFunction() {
 		// Common Lisp has no getenv: the only spelling is uiop's. An unqualified call is
 		// an ordinary unknown symbol, not a built-in.

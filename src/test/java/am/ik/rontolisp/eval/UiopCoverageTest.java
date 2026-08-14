@@ -117,16 +117,56 @@ class UiopCoverageTest {
 
 	@Test
 	void anUnimplementedMacroDoesNotEvaluateTheFormsItWasHanded() {
-		// (uiop:with-upgradability () (defun f ...)) must not define f before signalling:
-		// a macro that does nothing must do nothing with the forms it was handed.
+		// (uiop:with-current-directory (d) (defun f ...)) must not define f before
+		// signalling: a macro that does nothing must do nothing with the forms it was
+		// handed. with-upgradability used to be the example here and is a real expansion
+		// now, so the probe moved to a macro of a sub-package nothing implements yet.
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
 		for (LispVal form : LispReader.readAllFromString("""
-				(handler-case (uiop:with-upgradability () (defun %uiop-probe () 1))
+				(handler-case (uiop:with-current-directory ("/tmp") (defun %uiop-probe () 1))
 				  (uiop:not-implemented-error (c) c))
 				""")) {
 			evaluator.eval(form);
 		}
 		assertThat(evaluator.eval(LispReader.readFromString("(fboundp '%uiop-probe)"))).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
+	void anImplementedMacroIsNeverAlsoStubbed() {
+		// The two tables that must not drift: a uiop macro LispMacroExpander expands is
+		// never given a not-implemented-error definition, and every macro with an
+		// expansion really is a macro in the inventory.
+		for (UiopExports.Entry entry : UiopExports.entries()) {
+			if (LispMacroExpander.hasUiopMacroExpansion(entry.symbol())) {
+				assertThat(entry.is("macro")).as(entry.symbol() + " has a macro expansion but is not a macro").isTrue();
+				assertThat(UiopLibrary.formsFor(UiopExports.qualified(entry.symbol())))
+					.as(entry.symbol() + " has a macro expansion and a definition")
+					.isEmpty();
+			}
+		}
+	}
+
+	@Test
+	void withUpgradabilityIsAPrognSoItsDefinitionsStayTopLevel() {
+		// Upstream wraps EVERY one of its definitions in with-upgradability; rontolisp
+		// has no image to upgrade, so it lowers to progn -- and the top-level flattening
+		// has to splice that progn, or the wrapped defuns never become definitions on
+		// the compile paths. Both spellings, since the pass runs on either side of
+		// package resolution.
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream()));
+		for (LispVal form : LispReader.readAllFromString("""
+				(uiop:with-upgradability () (defun %uiop-up () 7) (defvar *%uiop-up* 8))
+				""")) {
+			evaluator.eval(form);
+		}
+		assertThat(evaluator.eval(LispReader.readFromString("(list (%uiop-up) *%uiop-up*)")).print())
+			.isEqualTo("(7 8)");
+		List<LispVal> flattened = LispMacroExpander.flattenTopLevel(LispReader.readAllFromString("""
+				(uiop/utility:with-upgradability () (defun a () 1) (defun b () 2))
+				(uiop:with-upgradability () (defun c () 3))
+				"""));
+		assertThat(flattened).hasSize(3);
+		assertThat(flattened.stream().map(LispVal::print)).allMatch(form -> form.startsWith("(DEFUN "));
 	}
 
 	@Test

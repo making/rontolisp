@@ -80,9 +80,11 @@ without deduplicating the six names two sub-packages both export).
 ## `eval.UiopLibrary`: one home for every definition
 
 Real definitions live in `uiop-<sub-package>.lisp` resources next to the class
-(currently `utility`, `pathname`, `filesystem`, `stream`, `image`), in canonical
-shape. Everything the inventory lists that no resource defines gets a stub
-SYNTHESIZED from its kind:
+(currently `package`, `utility`, `pathname`, `filesystem`, `stream`, `image`), in
+canonical shape. **A resource may only define names the inventory lists** --
+`build()` fails loudly otherwise -- so there are no private helpers: a body that
+wants one uses `flet`/`labels`. Everything the inventory lists that no resource
+defines gets a stub SYNTHESIZED from its kind:
 
 | kind | stub |
 |---|---|
@@ -118,20 +120,127 @@ Stub caveats, deliberate and documented rather than silent:
   but the CALL FORM never reaches it: `LispMacroExpander.expandUnimplementedUiopMacro`
   lowers it to `not-implemented-error` with its argument forms DROPPED. A macro
   that does nothing must not evaluate what it was handed -- an unimplemented
-  `(uiop:with-upgradability () (defun f ...))` would otherwise define `f` before
-  signalling. The evaluator and both compilers share that one expansion, which
-  is what makes the four backends agree.
+  `(uiop:with-current-directory (d) (defun f ...))` would otherwise define `f`
+  before signalling. The evaluator and both compilers share that one expansion,
+  which is what makes the four backends agree.
+  **On the compile paths it must be applied in the expression compiler's uiop
+  branch, AHEAD of the ordinary call path**, precisely because the stub is a real
+  variadic `defun`: the call path finds it in `ctx.functions` and compiles the
+  argument forms before the call, so `expandUiopStubCall` (which only runs for a
+  name with no defun at all) never gets the chance. Found 2026-08-14 in todo-354:
+  `(uiop:with-current-directory ("/tmp") ...)` compiled `("/tmp")` as a CALL and
+  died with `The function "/tmp" is undefined` on both compile paths while the
+  interpreter signalled correctly. It was invisible until then because every
+  test used a macro with an EMPTY spec list, whose arguments are the nil literal.
+  Pinned by `compileAndRunUiopUnimplementedMacroDropsItsArgumentForms` /
+  `uiopUnimplementedMacroDropsItsArgumentFormsCompilesAndRuns` and the ci-spec
+  case, all with a non-empty spec.
+
+## The macros: ONE dispatcher, not four switch statements
+
+A uiop macro cannot be a `defmacro` in a resource. The compile path runs
+`UserMacroExpander` BEFORE the uiop splice, so a `defmacro` (or a
+`define-modify-macro`) spliced afterwards is never expanded and the backends,
+which have no macro support of their own, see a call of an undefined name. Every
+uiop macro with a real expansion is therefore a Java expansion in
+`LispMacroExpander`, listed in `UIOP_MACRO_EXPANSIONS` (which is also what
+`UiopLibrary` asks so it does not stub over one, and what
+`expandUnimplementedUiopMacro` asks so it does not lower one to an error).
+
+**`LispMacroExpander.expandUiopMacro(cons, unwindProtect)` is the single
+dispatcher**, called from `LispEvaluator.evalCons`, `JvmExprCompiler`,
+`WasmExprCompiler` and BOTH `FreeVarAnalyzer` walks. It replaced four parallel
+switch statements that had to be kept in step by review; a macro added to the
+table now reaches every consumer at once. `unwindProtect` exists for
+`with-temporary-file` alone (`ctx.ehMode` on WASM, true everywhere else).
+`FreeVarAnalyzer` needs it because several of these BIND (`if-let`/`when-let`'s
+binding list, `while-collecting`'s collectors, `with-temporary-file`'s
+`:stream`/`:pathname` plist) or REARRANGE (`nest`) forms the default walk would
+read as ordinary calls.
+
+`with-deprecation` and `with-upgradability` additionally splice at TOP LEVEL
+(`flattenTopLevel`, via `isUiopDefinitionWrapper`, which matches both spellings
+because that pass runs on either side of package resolution): both wrap
+definitions, and burying those in an expression stops them being definitions at
+all.
+
+## `uiop/utility`'s decisions (todo-354)
+
+- **`with-upgradability` -> `progn`.** Upstream wraps every one of its
+  definitions in it so ASDF can redefine itself inside a running image
+  (compile/load/run evaluation plus `notinline`). rontolisp has no image to
+  upgrade and no separate compile-time evaluation to schedule, so `progn` is the
+  whole meaning. A semantic CHOICE, not an omission -- leaving it a stub would
+  make every upstream-shaped definition file unloadable.
+- **One character type.** `(subtypep 'character 'base-char)` and
+  `(subtypep 'base-char 'character)` both answer `t` here, so running UPSTREAM'S
+  OWN derivation gives `+character-types+` = `#(character)`,
+  `+max-character-type-index+` = 0, `character-type-index` = 0 and
+  `+non-base-chars-exist-p+` = `(plusp 0)` = NIL. `base-string-p` is then
+  upstream's `(and)` = `t` for every string and `strings-common-element-type` is
+  the constant `'character`. **`.todo/354` proposed `+non-base-chars-exist-p+`
+  true; that reading is self-inconsistent** -- it would make `base-string-p`
+  false for every string while the common element type stayed `character`. Note
+  `array-element-type` signals on a string here, so `base-string-p` cannot ask it
+  anyway.
+- **`register-hook-function` signals.** It pushes onto a variable named at RUN
+  time, i.e. `(setf (symbol-value var) ...)`, which is not a setf place on any
+  backend and has no `cl:set` either. The definition is real and the message
+  names the missing primitive; the alternative (dropping the hook silently) would
+  let an image-hook caller believe it registered something. **Re-evaluation
+  trigger: the day `(setf (symbol-value ...))` becomes a place, this body is
+  three lines of `pushnew`.**
+- **`uiop-debug` / `load-uiop-debug-utility` / `*uiop-debug-utility*`.** The
+  variable holds upstream's default form (it is data); the loader signals,
+  because loading it needs a run-time `load` of a COMPUTED pathname and `load` is
+  a compile-time splice on every backend.
+- **`match-condition-p`'s STRING pattern** compares against
+  `simple-condition-format-control`, which here answers the ALREADY FORMATTED
+  message (rontolisp builds it at signal time). A pattern carrying format
+  directives cannot match; one without them still does.
+- **`coerce-class` drops upstream's `*package*` fallback** for a keyword
+  designator. `PackageResolver` turns `*package*` into a compile-time constant,
+  so it has no run-time value a resource can read -- and upstream calls that arm
+  backward compatibility anyway.
+- **`ensure-function`'s `:package` is accepted and ignored**: `read-from-string`
+  reads into the current package on every backend, with no run-time `*package*`
+  rebinding to hang it on.
+- `timestamps<` chains from `nil` = +infinity, so a non-empty list is never
+  "increasing". Upstream's own answer, kept rather than corrected, and pinned so
+  nobody "fixes" it.
+- `frob-substrings` returns a FRESH string where upstream returns the original
+  object when nothing was frobbed: upstream's identity shortcut is a
+  `return-from` out of a `labels` function, i.e. a cross-lambda exit, which would
+  put every program using it into EH mode on WASM.
+
+`find-symbol*` / `find-package*` (`uiop-package.lisp`) landed with this item
+rather than with `.todo/361`: `find-standard-case-symbol`, `coerce-class` and
+`symbol-test-to-feature-expression` are all written over `find-symbol*`, and
+routing them around it would leave three copies of "look a name up in a package,
+error or not". Its compiled-backend status answer is the one
+`.kb/symbol-runtime-api.md` describes (`.todo/254`).
 
 ## Selection, not pruning
 
 `UiopLibrary.process` prepends only the definitions the program reaches,
 computed to a fixpoint on a `PackageResolver.resolveProgram` copy (so a
-`uiop:name` occurrence is matched as the home symbol it denotes). One
-surface-form rule, mirroring `LispPreludeLibrary.referencedBySurfaceForm`:
-`uiop:with-temporary-file`'s expansion runs inside the expression compilers,
-long after this pass, and reaches `ensure-directory-pathname` /
-`default-temporary-directory` / `delete-file-if-exists` through the prelude's
-`%temp-file-name`, so seeing the surface form selects those three.
+`uiop:name` occurrence is matched as the home symbol it denotes).
+
+**`MACRO_EXPANSION_CALLEES` is the surface-form rule**, mirroring
+`LispPreludeLibrary.referencedBySurfaceForm`: a uiop MACRO's expansion runs
+inside the expression compilers, long after this pass, so the names it introduces
+never occur in the program this pass sees. Without an entry the compiled program
+says `The function UIOP/UTILITY:X is undefined` at run time while the interpreter
+(which lazy-loads on resolution) works -- a four-backend divergence that costs
+nothing to introduce and is invisible until someone runs the compiled artifact.
+Only the DIRECT callee is listed; the fixpoint pulls in the rest.
+
+| surface macro | direct callee(s) |
+|---|---|
+| `with-temporary-file` | `ensure-directory-pathname`, `default-temporary-directory`, `delete-file-if-exists` (through the prelude's `%temp-file-name`) |
+| `with-muffled-conditions` | `call-with-muffled-conditions` |
+| `uiop-debug` | `load-uiop-debug-utility` |
+| `latest-timestamp-f` | `latest-timestamp` |
 
 **uiop is NOT in `LibraryDefunPruner`'s prunable set** (the usocket precedent).
 `.todo/353` proposed splicing all 429 and letting the pruner shake them out;
@@ -148,11 +257,35 @@ reintroduce exactly the "undefined function" this library exists to abolish.
 Re-running it is a no-op: a definition the program already carries is not
 spliced again (`UiopLibraryTest.aSecondRunSplicesNothingMore`).
 
-The interpreter lazy-loads ONE name's forms on first resolution
+The interpreter lazy-loads on first resolution
 (`LispEvaluator.loadUiopDefinition`), reachable from both the function and the
-variable lookup. It loads the `not-implemented-error` pair first whatever the
-name is: every stub signals it, and a quoted condition name is not a function
-resolution, so nothing else would trigger its load.
+variable lookup. Two things go in around the name asked for, and both exist
+because **a CLASS cannot be lazy the way a function can**:
+
+- the whole `UiopLibrary.closureOf(name)` CLOSURE, not just that name -- the same
+  set `process` splices. `style-warn` signals
+  `(make-condition 'uiop:simple-style-warning ...)`, and a quoted condition name
+  is not a function resolution, so nothing would ever have triggered the class's
+  own load;
+- every uiop condition and class (`UiopLibrary.conditionAndClassNames`, 19 rows)
+  on the first touch of the condition system at all --
+  `ensureConditionReportRuntimeLoaded` calls
+  `ensureUiopConditionClassesLoaded`. A handler's type test is built from the
+  class tags known when the `handler-bind` was EXPANDED, so a class registered
+  while the body runs is invisible to the handler meant to catch it, and a
+  program that only NAMES a uiop condition never resolves a uiop function at
+  all. Measured symptom:
+  `(handler-bind ((warning #'muffle-warning)) (uiop:style-warn "x"))` muffled on
+  the JVM and both WASM backends and printed on the interpreter. Registering
+  them on first condition-system use rather than in the constructor confines the
+  cost to programs that have conditions, and adds no divergence of its own: a
+  program can only observe a class it NAMES, and naming it is what makes the
+  compile path splice its definition too (`process` collects quoted symbols).
+
+The residual, and it is NOT uiop-specific: a type test is baked at expansion
+time, so a condition class first registered inside an already-entered
+`handler-bind` body still misses. It reproduces with a plain `eval`'d
+`define-condition` and belongs to the condition system, not here.
 
 ## What moved, and why `merge-pathnames*` was the tell
 
@@ -174,13 +307,16 @@ gone.
 
 ## Documentation shape
 
-One page, `doc/{en,ja}/reference/uiop.md`, with a section per sub-package
-concern: the model, a coverage table over the 15, the implemented-member table
-(with links to the existing per-operator pages), and what an unimplemented
-member signals. `reference/functions.md` keeps a pointer only. When a
-sub-package's section outgrows the page -- an item landing 30-70 real members --
-it moves to `reference/uiop/<sub-package>.md`, which is `.todo/353`'s proposal
-arrived at when it pays. Per-operator detail pages stay for names a user program
+`doc/{en,ja}/reference/uiop.md` is the model page: the sub-package model, a
+coverage table over the 15, the implemented-member table for everything still
+small enough to sit there, and what an unimplemented member signals.
+`reference/functions.md` keeps a pointer only.
+
+**A sub-package that fills up moves to `reference/uiop/<sub-package>.md`** --
+`.todo/353`'s proposal arrived at when it pays. `uiop/utility` was the first
+(todo-354, 61 members at once): `reference/uiop/utility.md`, its own `nav.yaml`
+entry in every language tree, and the parent page keeps the coverage row (now a
+link) and one sentence. Per-operator detail pages stay for names a user program
 actually calls, not for all 429.
 
 ## Tests
@@ -190,11 +326,20 @@ actually calls, not for all 429.
   or macro, `boundp` for a variable, a registered type otherwise); the
   hard-coded `LispNames` spellings agree with the inventory; the unimplemented
   member signals naming the operation; the unimplemented MACRO does not evaluate
-  its forms; and the printed per-sub-package coverage.
+  its forms; an implemented macro is never ALSO stubbed; `with-upgradability`'s
+  top-level splice; and the printed per-sub-package coverage.
 - `UiopLibraryTest` -- selection: both spellings select the one definition, the
-  fixpoint, the stub dragging in the condition it signals, the
-  `with-temporary-file` surface rule, idempotence, the already-defined guard,
-  and that the prelude pass drives this one.
+  fixpoint, the stub dragging in the condition it signals, the four
+  `MACRO_EXPANSION_CALLEES` surface rules, idempotence, the already-defined
+  guard, and that the prelude pass drives this one.
+- Behaviour: the `evalUiop*` block of `LispEvaluatorTest` (strings, the character
+  quartet, timestamps, `access-at` + function designators, lists/plists/hashes,
+  the macros, the condition helpers, and the two that name what is missing);
+  `JvmLispCompilerTest.compileAndRunUiop*` and the `uiop*CompileAndRun` /
+  `uiopWithUpgradability*` cases of `WasmLispCompilerIntegrationTest` for the
+  four with real codegen shape (`strcat`, `string-prefix-p`, `nest`,
+  `while-collecting`) plus the splice-selection they depend on; and the
+  `uiop-utility-helpers` ci-spec case end to end on all four.
 
 ## Deliberate extras (`uiop` owns them; the inventory does not list them)
 
