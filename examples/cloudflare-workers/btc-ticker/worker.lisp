@@ -31,31 +31,14 @@
   (list status '(:content-type "application/json")
         (list (format nil "~a~%" (rontolisp:json-stringify obj)))))
 
-;; A Clack application is a function of the request environment. This one
-;; ignores it: there is one endpoint and it takes no arguments.
-;;
-;; It is an ASYNC-DEFUN, and that has nothing to do with the boundary -- the
-;; same source compiles on either one, and on the interpreter, the JVM and
-;; --component. What asks for it is `await': only an async frame may await, and
-;; this application has to look AT the price to choose 200 or 502. So it awaits,
-;; so it is an async-defun, and what it answers is a FUTURE of the response --
-;; which every rontolisp transport resolves at its boundary (the reactor's
-;; %http-reactor-handle, the socket transports' %http-serve-request, wasmtime
-;; serve under --component).
-;;
-;; The other shape keeps `app' an ordinary Clack function and puts the await one
-;; level down, returning that helper's future:
-;;
-;;   (rontolisp:async-defun answer (env) ... (rontolisp:await (ticker)) ...)
-;;   (defun app (env) (answer env))
-;;
-;; Prefer it as soon as anything WRAPS the application -- Clack middleware, a
-;; router -- because a wrapper that inspects the response list would be handed a
-;; future instead. ../dog-fetcher is written that way for exactly that reason:
-;; its routes are composed by tiny-routes. Here nothing wraps `app', so the
-;; await stays where it reads best.
-(rontolisp:async-defun app (env)
-  (declare (ignore env))
+;; Awaiting needs an async frame, so the response is built in one -- and the
+;; application below just hands its FUTURE over, which the reactor transport
+;; resolves at the boundary. ../dog-fetcher is shaped this way because
+;; tiny-routes generates its route bodies as plain lambdas, where `await' is a
+;; compile error; here it is a choice, and the reason to make it is that
+;; anything WRAPPING the application (Clack middleware, a router) would
+;; otherwise be handed the future where it expects the response list.
+(rontolisp:async-defun ticker-response ()
   (let ((price (rontolisp:await (ticker))))
     (if price
         (json-response 200
@@ -63,5 +46,11 @@
         (json-response 502
                        (rontolisp:plist-hash-table
                         (list :error "the bitFlyer API did not answer"))))))
+
+;; A Clack application is a function of the request environment. This one
+;; ignores it: there is one endpoint and it takes no arguments.
+(defun app (env)
+  (declare (ignore env))
+  (ticker-response))
 
 (clack:clackup #'app :server :rontolisp :port 8080 :use-thread nil)

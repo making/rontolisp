@@ -86,6 +86,27 @@ re-entrancy the two of them create. `worker()` owns all of it —
 [`../dog-fetcher`](../dog-fetcher/README.md#one-lisp-call-at-a-time) explains
 what it is doing.
 
+## Why the application hands over a future
+
+`rontolisp:await` is legal only inside an `async-defun` / `async-lambda`, and
+this Worker has to look *at* the fetched price to choose 200 or 502. So the
+response is built in an `async-defun` and `app` — an ordinary Clack function —
+returns its **future**, which every rontolisp transport resolves at its own
+boundary (the reactor's dispatcher, the socket servers, `wasmtime serve`).
+
+That is the same shape as [`../dog-fetcher`](../dog-fetcher), and there it is
+not a choice: tiny-routes generates its route bodies as plain lambdas, where
+`await` is a compile error. Here it is one, and the reason to make it is that
+anything **wrapping** the application — Clack middleware, a router — would
+otherwise be handed the future where it expects the response list.
+
+Nothing stops an `async-defun` from *being* the application when nothing wraps
+it (`(rontolisp:async-defun app (env) ... (rontolisp:await ...) ...)`, four
+lines shorter, and what the
+[Clack guide](../../../doc/en/guides/clack.md) shows for a handler). This
+directory takes the other one so that the only thing separating it from
+`../dog-fetcher` is the boundary.
+
 ## The same worker.lisp on every backend
 
 `:server :rontolisp` resolves the transport when the source is read for a
