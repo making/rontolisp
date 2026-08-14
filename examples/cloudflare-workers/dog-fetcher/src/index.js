@@ -12,6 +12,14 @@
 import module from "./worker.wasm";
 import { instantiate, suspending } from "./worker.js";
 
+// The instance. Declared up here because a host function below reaches back
+// into it (`lisp.drop`) while being an ARGUMENT to the `instantiate` that
+// produces it -- the one circular reference in this file, and the reason this
+// is a mutable binding rather than a parameter. Assigned on the first request:
+// a Worker forbids drawing entropy in global scope, and the glue seeds the
+// module's generator before running its top level.
+let lisp = null;
+
 // The upstream reply the module is currently reading. The generated glue holds
 // what of a chunk did not fit; this is only WHERE the octets come from, which is
 // the one thing it cannot derive.
@@ -82,9 +90,6 @@ function responseBody() {
   return all;
 }
 
-// Instantiated on the first request: a Worker forbids crypto in global scope,
-// and the glue seeds the module's generator before running its top level.
-let lisp = null;
 // Set when a call TRAPPED: that instance skipped its arena reset and its Lisp
 // state may be half-written, so nothing else may run on it. The flag rather
 // than a bare `lisp = null` is what protects a request already QUEUED on it --
