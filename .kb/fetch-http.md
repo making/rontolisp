@@ -139,6 +139,38 @@ cutover a handler receives the Clack environment and returns the Clack response
 (`.kb/http-server.md`), while fetch deliberately keeps this plist -- it is the
 client side, a different thing.
 
+**The ONE request header we add on the caller's behalf is `User-Agent:
+rontolisp/<version>`** (todo-346), and only when the caller's `:headers` alist names no
+user-agent field -- the test is case-insensitive, HTTP field names being so, and any
+value the caller gave is theirs, the empty string included. It is declared once beside
+the response shape, in `compiler/FetchResponseShape` (`USER_AGENT_HEADER`,
+`defaultUserAgent()`, `isUserAgentHeader`), because three transports that each default
+differently are three different requests: the JDK writes `Java-http-client/<jdk>` when
+no field is set and the component writes NOTHING, which is the bug this closes (fly.io's
+edge answers an agent-less request `402 Payment Required`, so the same program that
+worked on the interpreter came back empty under `--component`). Hence the JDK paths set
+it EXPLICITLY, overriding a default rather than filling a hole: interpreter in
+`HttpSupport.requestAsync`, JVM as a scan pass over the header alist plus a conditional
+`Builder.header` in the emitted `_fetch`, component through the generated
+`%http-user-agent-header` / `%http-default-user-agent` defuns (a module has no `Version`
+to read) that http.lisp's `%fetch-user-agent-set-p` and `%fetch-send` call -- both
+dropped by the reachability walk in a serve-only component. **Sending NO user-agent is
+deliberately not offered**: with no field set the JDK client writes its own, so a
+suppression option would mean something different per backend.
+
+Two backends are exceptions, and the reason is WHO OWNS THE FIELD, not that the default
+is unwanted -- re-evaluate either one the day that changes: the **browser playground**
+(`Target_HttpSupport` substitutes `requestAsync` whole, so the default is structurally
+absent; `User-Agent` is a forbidden header name a page may not set) and **`--host-fetch`
+reactors** (the request record crosses the caller's headers only; the host's own
+`fetch` supplies the agent, and in a browser-shaped host it may not be overridden).
+Pinned by `LispEvaluatorTest#fetchSendsADefaultUserAgent` and
+`JvmLispCompilerTest#compileAndRunFetchSendsADefaultUserAgent` -- a local server echoing
+what it RECEIVED, both the default and a caller's lowercase `("user-agent" . ...)`
+winning -- the `/agent` leg of the opt-in `componentFetchOverHttp`, and
+`FetchResponseShapeTest` / `HttpLibraryTest` for the generated literals and the
+serve-only drop.
+
 **Error timing** is JS-like: options are validated at `fetch` time; request/transport
 failures surface at `await` -- EVERY backend signals there (on WASM the send result's
 error arm becomes a `rontolisp:wit-error` condition, catchable with `handler-case`; the

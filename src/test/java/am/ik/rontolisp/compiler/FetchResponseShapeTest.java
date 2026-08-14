@@ -3,6 +3,7 @@ package am.ik.rontolisp.compiler;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.Version;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -72,6 +73,27 @@ class FetchResponseShapeTest {
 			.contains("(defun %http-response-body (plist)\n  (or (getf plist :BODY) \"\"))")
 			.contains("(defun %http-response-headers (plist)\n  (getf plist :HEADERS))")
 			.doesNotContain("%http-request-");
+	}
+
+	@Test
+	void theDefaultUserAgentIsDeclaredOnce() {
+		// The one request header fetch adds on the caller's behalf. A change here is a
+		// change to what every backend puts on the wire.
+		assertThat(FetchResponseShape.USER_AGENT_HEADER).isEqualTo("User-Agent");
+		assertThat(FetchResponseShape.defaultUserAgent()).isEqualTo("rontolisp/" + Version.getVersion());
+		// HTTP field names are case-insensitive, so the "did the caller set one" test is.
+		assertThat(FetchResponseShape.isUserAgentHeader("user-agent")).isTrue();
+		assertThat(FetchResponseShape.isUserAgentHeader("USER-AGENT")).isTrue();
+		assertThat(FetchResponseShape.isUserAgentHeader("X-User-Agent")).isFalse();
+	}
+
+	@Test
+	void lispHelpersCarryTheUserAgentLiterals() {
+		// The component has no Version to read at run time, so http.lisp spells neither
+		// the field name nor the value: both cross as generated defuns.
+		assertThat(FetchResponseShape.lispHelpersSource())
+			.contains("(defun %http-user-agent-header ()\n  \"" + FetchResponseShape.USER_AGENT_HEADER + "\")")
+			.contains("(defun %http-default-user-agent ()\n  \"" + FetchResponseShape.defaultUserAgent() + "\")");
 	}
 
 }

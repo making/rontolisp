@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import am.ik.rontolisp.Version;
 import am.ik.wit.WitDocument;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitParser;
@@ -29,6 +30,12 @@ import org.jspecify.annotations.Nullable;
  * {@link #lispHelpersSource()}, the generated builder/accessor defuns {@code http.lisp}'s
  * fetch half calls in place of literal {@code (list :status ...)} forms.</li>
  * </ul>
+ *
+ * <p>
+ * The one REQUEST fact every backend shares lives here too — {@link #USER_AGENT_HEADER}
+ * and {@link #defaultUserAgent()}, the header fetch adds when the caller set none — for
+ * the same reason: three transports that each default differently are three different
+ * requests.
  *
  * <p>
  * This class is the fetch-only remainder of the pre-Clack {@code HttpPlistShape}: the
@@ -131,6 +138,24 @@ public final class FetchResponseShape {
 	/** The response {@code body} used when the plist has none. */
 	public static final String RESPONSE_BODY_DEFAULT = "";
 
+	/**
+	 * The one request header {@code rontolisp:fetch} sets on the caller's behalf, so a
+	 * caller-silent request goes out IDENTICALLY on every backend instead of carrying
+	 * whatever the transport underneath happens to default to — the JDK's
+	 * {@code Java-http-client/<jdk>} on the interpreter/JVM, nothing at all on the
+	 * component (which some origins answer with a 4xx). The value is
+	 * {@link #defaultUserAgent()}.
+	 *
+	 * <p>
+	 * A caller who set the field owns it, in any spelling ({@link #isUserAgentHeader};
+	 * HTTP field names are case-insensitive) and with any value, the empty string
+	 * included: only the ABSENT case is filled in. Suppressing the field entirely is
+	 * deliberately not offered — the JDK path cannot express it (with no field set the
+	 * client writes its own), so a suppression option would be one more thing that means
+	 * something different per backend.
+	 */
+	public static final String USER_AGENT_HEADER = "User-Agent";
+
 	private static final List<Field> RESPONSE_FIELDS;
 
 	private static final List<Field> REQUEST_FIELDS;
@@ -183,6 +208,27 @@ public final class FetchResponseShape {
 	}
 
 	/**
+	 * The {@link #USER_AGENT_HEADER} value a caller-silent request carries:
+	 * {@code rontolisp/<version>}, the version {@code rontolisp --version} and
+	 * {@code rontolisp:version} report.
+	 * @return the default user-agent value
+	 */
+	public static String defaultUserAgent() {
+		return "rontolisp/" + Version.getVersion();
+	}
+
+	/**
+	 * Whether a request-header name is the {@link #USER_AGENT_HEADER} field. HTTP field
+	 * names are case-insensitive, so this is the test each backend applies to the
+	 * caller's headers before adding the default.
+	 * @param name the request-header name
+	 * @return {@code true} when the name is the user-agent field
+	 */
+	public static boolean isUserAgentHeader(String name) {
+		return USER_AGENT_HEADER.equalsIgnoreCase(name);
+	}
+
+	/**
 	 * The response field of the given name.
 	 * @param name the field name
 	 * @return the field
@@ -218,7 +264,10 @@ public final class FetchResponseShape {
 	/**
 	 * The Lisp helper defuns the WASM component path uses in place of hand-written plist
 	 * forms, generated from the record: a positional builder (parameters named after the
-	 * fields, in record order) and a per-field accessor applying the declared default.
+	 * fields, in record order) and a per-field accessor applying the declared default,
+	 * plus {@code %http-user-agent-header} / {@code %http-default-user-agent} —
+	 * {@link #USER_AGENT_HEADER} and {@link #defaultUserAgent()} as literals, so the
+	 * component spells neither itself (and has no {@link Version} to read at run time).
 	 * {@code eval/HttpLibrary} splices them next to {@code http.lisp}; unreferenced
 	 * helpers are dropped by its reachability walk.
 	 * @return the generated Lisp source
@@ -229,6 +278,8 @@ public final class FetchResponseShape {
 		for (Field field : RESPONSE_FIELDS) {
 			appendAccessor(source, "%http-response-" + field.name(), field, responseDefaultExpr(field.name()));
 		}
+		source.append("(defun %http-user-agent-header ()\n  \"").append(USER_AGENT_HEADER).append("\")\n");
+		source.append("(defun %http-default-user-agent ()\n  \"").append(defaultUserAgent()).append("\")\n");
 		return source.toString();
 	}
 

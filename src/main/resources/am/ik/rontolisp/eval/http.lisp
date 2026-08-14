@@ -113,6 +113,19 @@
             :payload :other
             :message (concatenate 'string "fetch: unsupported method: " m))))))
 
+(defun %fetch-user-agent-set-p (headers)
+  ;; Whether the caller's alist already names the user-agent field. HTTP field names
+  ;; are case-insensitive, so ("user-agent" . "x") is the caller setting it just as
+  ;; much as ("User-Agent" . "x") is; only the ABSENT case takes the default below.
+  ;; The name comes from the generated %http-user-agent-header, like the value: the
+  ;; header fetch adds is declared once, in compiler/FetchResponseShape.
+  (when headers
+    (let ((pair (car headers)))
+      (if (and (consp pair) (stringp (car pair))
+               (string-equal (car pair) (%http-user-agent-header)))
+          t
+          (%fetch-user-agent-set-p (cdr headers))))))
+
 (defun %fetch-send (url options)
   ;; scheme://authority/path -- the scheme's colon is the first colon. Returns the
   ;; send future with the request already fully in flight: the async-lowered send
@@ -128,8 +141,16 @@
            (authority (if slash (subseq rest 0 slash) rest))
            (path (if slash (subseq rest slash) "/"))
            (body (getf options :BODY))
+           (headers (getf options :HEADERS))
            (fields (%http:fields-new)))
-      (%http-add-headers fields (getf options :HEADERS))
+      (%http-add-headers fields headers)
+      ;; The one header we add on the caller's behalf. Without it a caller-silent
+      ;; request goes out with NO user-agent at all -- the java.net.http backends write
+      ;; their own, so the same program sent a different request here, and an origin
+      ;; that rejects agent-less traffic answered it with a 4xx.
+      (unless (%fetch-user-agent-set-p headers)
+        (%http:fields-append fields (%http-user-agent-header)
+                             (%http-default-user-agent)))
       (let* ((bodypair (if body (%http:body-stream-new) nil))
              (trailers (%http:trailers-future-new))
              (reqpair

@@ -34,6 +34,11 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 - `:headers` — リクエストヘッダ。`(name . value)` の文字列ペアの連想リストです。
 - `:body` — リクエストボディを文字列で指定します (ボディがなければ省略します)。
 
+`:headers` がそのフィールドを指定していない限り、すべてのリクエストは
+`User-Agent: rontolisp/<version>` を伴います (大文字小文字を区別せずに照合するため、
+指定した場合はその綴りと値が優先されます)。ブラウザ プレイグラウンドと
+`--host-fetch` リアクタでは、このフィールドはそれを所有するホストに任せます。
+
 オプションは `fetch` の呼び出し時に検証されます (不正な引数に対して同期的に
 例外を投げる JavaScript の `fetch` と同じです)。
 

@@ -7255,6 +7255,38 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void fetchSendsADefaultUserAgent() throws Exception {
+		// A caller-silent request carries OUR agent string, not the JDK's
+		// Java-http-client/<jdk>: fetch sends the same request on every backend, and the
+		// component path has no client of its own to default it.
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/agent", exchange -> {
+			java.util.List<String> received = exchange.getRequestHeaders().get("User-Agent");
+			byte[] body = String.join("|", (received == null) ? java.util.List.<String>of() : received)
+				.getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/agent";
+			LispVal sent = eval("(rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch \"" + url
+					+ "\")) :body)))");
+			assertThat(sent).isEqualTo(new LispString(am.ik.rontolisp.compiler.FetchResponseShape.defaultUserAgent()));
+			// A caller who set the field owns it -- including under a different spelling,
+			// HTTP field names being case-insensitive -- and gets exactly one value.
+			LispVal custom = eval("(rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch \""
+					+ url + "\" (list :headers (list (cons \"user-agent\" \"custom/1\"))))) :body)))");
+			assertThat(custom).isEqualTo(new LispString("custom/1"));
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
 	void fetchSendsMethodAndBody() throws Exception {
 		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
 			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);

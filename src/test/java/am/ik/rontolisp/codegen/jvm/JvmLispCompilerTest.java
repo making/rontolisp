@@ -7423,6 +7423,39 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunFetchSendsADefaultUserAgent() throws Exception {
+		// The emitted _fetch sets the agent EXPLICITLY, overriding the JDK's
+		// Java-http-client/<jdk> default, so a compiled program sends the same request as
+		// the interpreter and the component
+		// (LispEvaluatorTest#fetchSendsADefaultUserAgent).
+		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/agent", exchange -> {
+			java.util.List<String> received = exchange.getRequestHeaders().get("User-Agent");
+			byte[] body = String.join("|", (received == null) ? java.util.List.<String>of() : received)
+				.getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/agent";
+			assertThat(compileAndRun("(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await"
+					+ " (rontolisp:fetch \"" + url + "\")) :body))))"))
+				.isEqualTo("\"" + am.ik.rontolisp.compiler.FetchResponseShape.defaultUserAgent() + "\"");
+			// The caller's own spelling wins, and only the caller's value is sent.
+			assertThat(compileAndRun(
+					"(print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await" + " (rontolisp:fetch \"" + url
+							+ "\" (list :headers (list (cons \"user-agent\" \"custom/1\")))))" + " :body))))"))
+				.isEqualTo("\"custom/1\"");
+		}
+		finally {
+			server.stop(0);
+		}
+	}
+
+	@Test
 	void compileAndRunFetchRejectsUnsupportedMethod() throws Exception {
 		com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
 			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);

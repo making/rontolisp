@@ -10903,6 +10903,19 @@ class WasmLispCompilerIntegrationTest {
 			exchange.getResponseBody().write(body);
 			exchange.close();
 		});
+		// Echoes the received User-Agent: the component has no HTTP client of its own to
+		// default the field, so a caller-silent request used to go out with none at all
+		// (and origins that reject agent-less traffic answered it with a 4xx). It carries
+		// FetchResponseShape.defaultUserAgent() now, the same string the interpreter and
+		// the JVM send (LispEvaluatorTest#fetchSendsADefaultUserAgent).
+		server.createContext("/agent", exchange -> {
+			java.util.List<String> received = exchange.getRequestHeaders().get("User-Agent");
+			byte[] body = String.join("|", (received == null) ? java.util.List.<String>of() : received)
+				.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
 		// Echoes "<method>:<request-body>" so the test can verify the method and body are
 		// sent.
 		server.createContext("/echo", exchange -> {
@@ -10919,6 +10932,7 @@ class WasmLispCompilerIntegrationTest {
 			String base = "http://127.0.0.1:" + server.getAddress().getPort();
 			String url = base + "/hello";
 			String echo = base + "/echo";
+			String agent = base + "/agent";
 			String program = "(let ((r (rontolisp:await (rontolisp:fetch \"" + url + "\"))))"
 					+ " (print (getf r :status))"
 					+ " (print (rontolisp:await (rontolisp:read-all (getf r :body)))) (print (getf r :headers)))"
@@ -10933,7 +10947,13 @@ class WasmLispCompilerIntegrationTest {
 					+ "       (p2 (rontolisp:fetch \"" + echo + "\" (list :method \"POST\" :body \"two\"))))"
 					+ "   (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await p2) :body))))"
 					+ "   (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await p1) :body))))"
-					+ "   (print (getf (rontolisp:await p1) :status)))";
+					+ "   (print (getf (rontolisp:await p1) :status)))"
+					// the request we send on the caller's behalf, and the caller's own
+					// spelling of it winning (HTTP field names are case-insensitive)
+					+ " (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch \"" + agent
+					+ "\")) :body))))"
+					+ " (print (rontolisp:await (rontolisp:read-all (getf (rontolisp:await (rontolisp:fetch \"" + agent
+					+ "\" (list :headers (list (cons \"user-agent\" \"custom/1\"))))) :body))))";
 			byte[] componentBytes = compileFetchComponent(program);
 			java.nio.file.Path wasm = tempDir.resolve("fetch.component.wasm");
 			java.nio.file.Files.write(wasm, componentBytes);
@@ -10949,7 +10969,9 @@ class WasmLispCompilerIntegrationTest {
 				.contains("\"got-header\"")
 				.contains("\"POST:hi\"")
 				.contains("\"POST:two\"")
-				.contains("\"POST:one\"");
+				.contains("\"POST:one\"")
+				.contains("\"" + am.ik.rontolisp.compiler.FetchResponseShape.defaultUserAgent() + "\"")
+				.contains("\"custom/1\"");
 		}
 		finally {
 			server.stop(0);

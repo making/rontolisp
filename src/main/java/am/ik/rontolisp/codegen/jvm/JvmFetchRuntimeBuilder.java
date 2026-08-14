@@ -10,6 +10,7 @@ import am.ik.jvm.ConstantPool.ClassConstant;
 import am.ik.jvm.ConstantPool.MethodrefConstant;
 import am.ik.jvm.ConstantPool.Utf8Constant;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 
 /**
  * Builds the JVM bytecode for the {@code rontolisp:fetch} built-in, emitted as a
@@ -25,9 +26,12 @@ import am.ik.jvm.Opcode;
  * The optional {@code options} argument is a property list; {@code :method} (default
  * {@code "GET"}; one of GET/HEAD/POST/PUT/DELETE/OPTIONS/PATCH, matched
  * case-insensitively and sent in canonical upper case), {@code :headers} (a
- * request-header alist) and {@code :body} (a request body string) are recognized. The
- * methods are only emitted when the program actually uses {@code rontolisp:fetch} or
- * {@code rontolisp:await}.
+ * request-header alist) and {@code :body} (a request body string) are recognized. A
+ * request whose headers name no user-agent gets
+ * {@link FetchResponseShape#defaultUserAgent()} baked in at codegen time -- set
+ * explicitly, so the JDK does not write its own {@code Java-http-client/<jdk>} and the
+ * request matches the other backends. The methods are only emitted when the program
+ * actually uses {@code rontolisp:fetch} or {@code rontolisp:await}.
  */
 final class JvmFetchRuntimeBuilder {
 
@@ -109,6 +113,9 @@ final class JvmFetchRuntimeBuilder {
 		MethodrefConstant runtimeExceptionInit = cp.addMethodref(runtimeExceptionClass,
 				cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("(Ljava/lang/String;)V")));
 
+		ConstantPool.StringConstant userAgentName = cp.addString(FetchResponseShape.USER_AGENT_HEADER);
+		ConstantPool.StringConstant userAgentValue = cp.addString(FetchResponseShape.defaultUserAgent());
+
 		ConstantPool.StringConstant methodKey = cp.addString(":method");
 		ConstantPool.StringConstant headersKey = cp.addString(":headers");
 		ConstantPool.StringConstant bodyKey = cp.addString(":body");
@@ -124,7 +131,7 @@ final class JvmFetchRuntimeBuilder {
 		// Local slots: 0 url, 1 options, 2 builder, 3 cursor, 9 request headers,
 		// 10 method value, 11 plist cursor, 15 request-body value,
 		// 16 canonical method (String), 17 method scratch (unquoted String),
-		// 18 body publisher.
+		// 18 body publisher, 19 user-agent seen (null = the caller set none).
 		Asm a = new Asm();
 
 		// --- options parsing: method (10), request headers (9), request body (15) ---
@@ -196,6 +203,44 @@ final class JvmFetchRuntimeBuilder {
 		a.u2(newBuilder.index()); // [builder]
 		a.astore(2);
 
+		// Scan the request-header alist (slot 9) for a caller-supplied user-agent, in any
+		// spelling (HTTP field names are case-insensitive), into slot 19. A separate pass
+		// because the setting loop below cannot answer the question until it has seen the
+		// LAST pair, and the default has to be decided before any header is set.
+		a.aconstNull();
+		a.astore(19);
+		a.aload(9);
+		a.astore(3); // cursor = request headers
+		int uaLoop = a.label();
+		int uaEnd = a.label();
+		a.bind(uaLoop);
+		a.aload(3);
+		a.branch(Opcode.IFNULL, uaEnd);
+		a.aload(3);
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload(); // [pair]
+		a.checkcast(objectArrayClass);
+		a.iconst(0);
+		a.aaload(); // [name]
+		stripQuotesValue(a, stringClass, stringLength, stringSubstring); // [name']
+		a.ldc(userAgentName.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(stringEqualsIgnoreCase.index()); // [bool]
+		int uaNext = a.label();
+		a.branch(Opcode.IFEQ, uaNext);
+		a.ldc(userAgentName.index());
+		a.astore(19); // seen (any non-null marks it)
+		a.branch(Opcode.GOTO, uaEnd);
+		a.bind(uaNext);
+		a.aload(3);
+		a.checkcast(objectArrayClass);
+		a.iconst(1);
+		a.aaload();
+		a.astore(3);
+		a.branch(Opcode.GOTO, uaLoop);
+		a.bind(uaEnd);
+
 		// Iterate the request-header alist (slot 9) and set each header.
 		a.aload(9);
 		a.astore(3); // cursor = request headers
@@ -235,6 +280,21 @@ final class JvmFetchRuntimeBuilder {
 		a.astore(3);
 		a.branch(Opcode.GOTO, hLoop);
 		a.bind(hEnd);
+
+		// A caller-silent request carries rontolisp's own user-agent rather than the
+		// JDK's Java-http-client/<jdk>: the same request on every backend.
+		int uaDone = a.label();
+		a.aload(19);
+		a.branch(Opcode.IFNONNULL, uaDone);
+		a.aload(2); // [builder]
+		a.ldc(userAgentName.index()); // [builder, name]
+		a.ldc(userAgentValue.index()); // [builder, name, value]
+		a.op(Opcode.INVOKEINTERFACE);
+		a.u2(builderHeader.index());
+		a.op(3); // count: this + 2 args
+		a.op(0);
+		a.op(Opcode.POP); // discard returned builder
+		a.bind(uaDone);
 
 		// builder.method(canonicalMethod, publisher)
 		a.aload(2); // [builder]

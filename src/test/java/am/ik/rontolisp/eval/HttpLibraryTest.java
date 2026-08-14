@@ -5,6 +5,7 @@ import java.util.List;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.LispReader;
 import org.junit.jupiter.api.Test;
@@ -57,6 +58,27 @@ class HttpLibraryTest {
 			.readAllFromString("(rl:async-defun rontolisp:fetch (url) url)\n(rontolisp:fetch \"https://example.com\")");
 		List<LispVal> out = HttpLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT, false);
 		assertThat(out).isEqualTo(program);
+	}
+
+	@Test
+	void processSplicesTheDefaultUserAgentWithTheFetchHalf() {
+		// The component has no HTTP client of its own to default the field, so the
+		// generated literals travel with the fetch half -- and only with it: a serve-only
+		// component never sends a request, so the reachability walk drops them.
+		List<LispVal> fetching = HttpLibrary.process(
+				LispReader.readAllFromString("(rl:await (rl:fetch \"https://example.com\"))"),
+				WitExportDirective.Backend.WASM_COMPONENT, false);
+		assertThat(definesDefun(fetching, "%HTTP-USER-AGENT-HEADER")).isTrue();
+		assertThat(definesDefun(fetching, "%HTTP-DEFAULT-USER-AGENT")).isTrue();
+		assertThat(definesDefun(fetching, "%FETCH-USER-AGENT-SET-P")).isTrue();
+		assertThat(printAll(fetching)).contains(FetchResponseShape.defaultUserAgent());
+
+		List<LispVal> serving = HttpLibrary.process(LispReader.readAllFromString("""
+				(defun my-handler (req) req)
+				(rontolisp:http-handler 'my-handler 8080)
+				"""), WitExportDirective.Backend.WASM_COMPONENT, true);
+		assertThat(definesDefun(serving, "%HTTP-DEFAULT-USER-AGENT")).isFalse();
+		assertThat(definesDefun(serving, "%FETCH-USER-AGENT-SET-P")).isFalse();
 	}
 
 	@Test

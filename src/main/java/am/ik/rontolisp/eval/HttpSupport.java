@@ -17,6 +17,7 @@ import java.util.concurrent.Flow;
 
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispStream;
+import am.ik.rontolisp.compiler.FetchResponseShape;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -62,13 +63,16 @@ final class HttpSupport {
 	 * rather than throwing, so every failure surfaces at await time. This is the seam the
 	 * browser playground substitutes (see
 	 * {@code src/web/java/.../eval/Target_HttpSupport.java}), where the request is
-	 * buffered and an already-completed future with a one-chunk body stream is returned.
-	 * The per-request client is intentionally not closed: {@code close()} would block
-	 * until the in-flight request completes, and the compiled JVM backend leaves its
-	 * client to be garbage-collected the same way.
+	 * buffered and an already-completed future with a one-chunk body stream is returned
+	 * -- and where the default user-agent below is deliberately absent, the browser
+	 * owning that field and forbidding a page from setting it. The per-request client is
+	 * intentionally not closed: {@code close()} would block until the in-flight request
+	 * completes, and the compiled JVM backend leaves its client to be garbage-collected
+	 * the same way.
 	 * @param method the HTTP method (e.g. {@code "GET"}, {@code "POST"})
 	 * @param url the request URL
-	 * @param requestHeaders the request headers to set
+	 * @param requestHeaders the request headers to set; when they name no user-agent,
+	 * {@link FetchResponseShape#defaultUserAgent()} is added
 	 * @param body the request body, or {@code null} for no body
 	 * @return a future settling to the response status, headers and body stream
 	 */
@@ -80,8 +84,16 @@ final class HttpSupport {
 			HttpRequest.BodyPublisher publisher = (body == null) ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofString(body);
 			HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url)).method(method, publisher);
+			boolean userAgentSet = false;
 			for (Header header : requestHeaders) {
 				builder.header(header.name(), header.value());
+				userAgentSet = userAgentSet || FetchResponseShape.isUserAgentHeader(header.name());
+			}
+			if (!userAgentSet) {
+				// Set it EXPLICITLY rather than letting the JDK write its own
+				// Java-http-client/<jdk>: fetch sends the same request on every backend
+				// (FetchResponseShape.USER_AGENT_HEADER).
+				builder.header(FetchResponseShape.USER_AGENT_HEADER, FetchResponseShape.defaultUserAgent());
 			}
 			request = builder.build();
 			client = HttpClient.newHttpClient();
