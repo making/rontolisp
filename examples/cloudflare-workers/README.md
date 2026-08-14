@@ -51,15 +51,17 @@ Module sizes are measured rather than quoted here:
   magnitude the largest and slowest to start of the four, and the reason is not
   ningle: it reads every request through the `lack-request` chain, which is also
   what lets its controllers ignore streams and JSON parsing entirely.
-- **`btc-ticker/`** when the Worker fetches a document and answers a document.
-  It is the smallest complete thing here that talks to the outside world, and
-  the only one whose JavaScript is three lines, because on that boundary both
-  halves of the host are fixed by the transport and the build writes them.
-- **`dog-fetcher/`** when a body is not a document — an upload, an image, a
-  reply to forward as it arrives. Same seam, one boundary out: the bodies stream
-  through imports of their own, and its `src/index.js` is what saying so costs.
-  It is also where the synchronous-Lisp/asynchronous-JavaScript seam is
-  explained in full; both directories rely on it.
+- **`btc-ticker/`** when the Worker fetches a document and answers a document —
+  which is most of them. `--host-boundary=envelope` is the shape to reach for:
+  both halves of the host are fixed by the transport, so the build writes them
+  and the JavaScript is three lines.
+- **`dog-fetcher/`** when a body is **binary, large, or relayed** — an image, an
+  upload, an upstream reply to forward as it arrives. Those are the cases the
+  envelope cannot serve (it carries a body as JSON text, so a non-UTF-8 byte does
+  not survive, and it holds the whole thing in memory), and they are why
+  `streaming` is still the default. It is also where the
+  synchronous-Lisp/asynchronous-JavaScript seam is explained in full; both
+  directories rely on it.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string
   marshalling, yes. Everywhere else, no.

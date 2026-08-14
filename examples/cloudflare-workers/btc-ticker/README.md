@@ -44,6 +44,16 @@ streams beside it through imports of its own.
 | A large body | copied | never doubles linear memory |
 | A streamed upstream reply | buffered, then forwarded | forwarded chunk at a time |
 
+**Reach for this boundary first.** Most Workers read a document and answer one,
+and there the copy is unmeasurable while the state it removes is where the bugs
+were. Go back to `streaming` when a body is **binary** (the envelope carries a
+body as JSON text, so `ff fe 41` arrives as the seven bytes
+`ef bf bd ef bf bd 41` with the `content-length` still saying three), **large**
+(linear memory grows with it), or **relayed** from an upstream reply you would
+rather forward a chunk at a time. That short list is also why `streaming` is
+still what a build with no flag gets: a default has to be the shape that cannot
+lose data.
+
 **It is not a size decision.** The same source on the two boundaries lands within
 about 1% either way — measured, both raw and gzipped, in
 [`size-report/results/cloudflare-workers.md`](../../../size-report/results/cloudflare-workers.md),

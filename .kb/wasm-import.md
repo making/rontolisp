@@ -319,6 +319,18 @@ used to parse and be discarded, compiling the other boundary without a word).
 | generated host | `instantiate` | + `defaultHost()` + `worker(module)` |
 | module size | within ~1% of each other, sign not stable -- see `size-report/results/cloudflare-workers.md` |  |
 
+**Which to REACH FOR: `envelope`, unless a body is binary, large, or relayed.**
+The default stays `streaming` and that is not a contradiction -- a default has to
+be the shape that cannot lose data, and the envelope one silently does: measured,
+a `ff fe 41` request body arrives as the SEVEN bytes `ef bf bd ef bf bd 41` (two
+U+FFFD where two octets were, the JSON text round trip doing it) with the
+`content-length` beside it still saying three. So the flag is opt-in for the
+common case rather than opt-out for the dangerous one, and the guides say
+"reach for envelope" while the CLI keeps answering `streaming` to a build that
+said nothing. Re-evaluate that split only if the build ever learns to tell that a
+program's reachable code touches a body as BYTES -- which is a `read-byte`
+reachability question, not a flag one.
+
 **It is not a size decision -- do not sell it as one, and do not quote a bound.** The
 todo-351 spike measured 148,533 B against 147,959 B (48,912 / 49,029 gzip -9 -n) on a
 clack-free ticker, the envelope one marginally LARGER gzipped; the shipped

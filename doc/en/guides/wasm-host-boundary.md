@@ -239,12 +239,27 @@ $ wasm-tools print worker.wasm | grep -oE '\(import "[^"]+" "[^"]+"'
 (import "env" "fetch"
 ```
 
+**Reach for `envelope` first.** A body that is a *document* — a Worker that reads
+one JSON request and answers one JSON reply — pays a copy nobody can measure and
+gets back a boundary with no host-side state in it, which is where the bugs on
+this surface have all been. Stay on `streaming` when one of these is true:
+
+- **a body is BINARY** — an image, a file, protobuf, anything already compressed.
+  The envelope carries a body as JSON text, so bytes that are not valid UTF-8 do
+  not survive: `ff fe 41` arrives as the seven bytes
+  `ef bf bd ef bf bd 41`, two replacement characters where two octets were, with
+  the `content-length` beside it still saying three. Nothing reports it.
+- **a body is LARGE** — the envelope puts it in linear memory whole, so memory
+  grows with the body; the split reads through one reused buffer and stays flat
+  however big it gets.
+- **you are relaying an upstream reply** — the split forwards it a chunk at a
+  time instead of holding the whole thing first.
+
 Neither shape is a subset of the other, and the module sizes land within about
 1% of each other either way round, so this is not a size decision. `streaming`
-is the default because it is the one that cannot lose data. Pick `envelope` when every
-body is a **document** — a Worker that fetches one JSON reply and answers one —
-because then the copy costs nothing worth naming and the host stops keeping
-state whose lifetime it has to get right.
+stays the DEFAULT for the same reason the list above is short: it is the shape
+that cannot lose data, and a default that silently mangles a binary upload is
+not one worth having.
 
 `--host-boundary` needs `--no-wasi` and a `.wasm` output, without `--component`
 or `--no-gc`: those two are in band already (a component's host functions cross
