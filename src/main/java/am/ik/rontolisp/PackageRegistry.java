@@ -397,16 +397,20 @@ public final class PackageRegistry {
 	/**
 	 * The canonical names of the packages the constructor seeds (plus {@code keyword},
 	 * the designator of the keyword package accepted by {@code intern}). Kept in sync
-	 * with the constructor by hand; used by {@link #isBuiltinPackageName} for the upcase
-	 * reader mode's canonical fold, which must not depend on a registry instance.
+	 * with the constructor by hand -- except the 15 uiop sub-packages, which come from
+	 * {@link UiopExports} because the constructor seeds them from the same inventory;
+	 * used by {@link #isBuiltinPackageName} for the upcase reader mode's canonical fold,
+	 * which must not depend on a registry instance.
 	 */
-	private static final Set<String> BUILTIN_PACKAGE_NAMES = Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG,
-			LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG, LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG,
-			LispNames.ASDF_PKG, LispNames.QL_PKG, LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG,
-			LispNames.CLOSER_COMMON_LISP_PKG, LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG,
-			LispNames.TRIVIAL_GRAY_STREAMS_PKG, LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
-			LispNames.BABEL_ENCODINGS_PKG, LispNames.UIOP_IMAGE_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
-			LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, "KEYWORD");
+	private static final Set<String> BUILTIN_PACKAGE_NAMES = union(
+			Set.of(LispNames.CL_PKG, LispNames.CL_USER_PKG, LispNames.RONTOLISP_PKG, LispNames.LINALG_PKG,
+					LispNames.VEC_PKG, LispNames.USOCKET_PKG, LispNames.JAVA_PKG, LispNames.ASDF_PKG, LispNames.QL_PKG,
+					LispNames.UIOP_PKG, LispNames.CLOSER_MOP_PKG, LispNames.CLOSER_COMMON_LISP_PKG,
+					LispNames.FLEXI_STREAMS_PKG, LispNames.FLOAT_FEATURES_PKG, LispNames.TRIVIAL_GRAY_STREAMS_PKG,
+					LispNames.BORDEAUX_THREADS_PKG, LispNames.BT2_PKG, LispNames.BABEL_PKG,
+					LispNames.BABEL_ENCODINGS_PKG, LispNames.SWANK_PKG, LispNames.TRIVIAL_CLTL2_PKG,
+					LispNames.MGL_PAX_PKG, LispNames.TRIVIAL_GARBAGE_PKG, "KEYWORD"),
+			Set.copyOf(UiopExports.subPackages()));
 
 	/**
 	 * Creates a registry seeded with the built-in packages.
@@ -497,53 +501,52 @@ public final class PackageRegistry {
 		// spelling is ql; quicklisp is a built-in nickname. Does not use cl; the symbol
 		// is external.
 		define(new LispPackage(LispNames.QL_PKG, List.of(), new HashSet<>(Set.of(LispNames.QUICKLOAD))));
-		// A mostly-stub rendering of ASDF's uiop utility package: real libraries name it
-		// in (:import-from #:uiop) clauses and call it on platform-only paths (e.g.
-		// uiop:native-namestring on a pathname branch). Four members have real
-		// definitions -- getenv (the only spelling of "read an environment variable"
-		// rontolisp offers, since Common Lisp has none), file-exists-p (== probe-file),
-		// merge-pathnames*, add-package-local-nickname (lite: a GLOBAL nickname) and
-		// the directory-listing trio (directory-files / subdirectories /
-		// collect-sub*directories, Lisp source over cl:directory); the rest resolve but
-		// are undefined-function errors when called.
-		// uiop/image: real UIOP is a bundle of sub-packages that the uiop package
-		// re-exports, and a library may name either spelling -- lack-middleware-backtrace
-		// spells (:import-from :uiop/image :print-condition-backtrace), which fails at
-		// READ time when the package is absent. The one member lives here (its home
-		// package, as upstream) and uiop imports it below, so both spellings name the
-		// SAME symbol rather than two functions with one member name.
-		define(new LispPackage(LispNames.UIOP_IMAGE_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.PRINT_CONDITION_BACKTRACE))));
-		Set<String> uiopExternals = new HashSet<>(Set.of(LispNames.NATIVE_NAMESTRING, LispNames.NAMESTRING,
-				LispNames.GETENV, LispNames.OS_UNIX_P, LispNames.OS_MACOSX_P, LispNames.ADD_PACKAGE_LOCAL_NICKNAME,
-				LispNames.MERGE_PATHNAMES_STAR, LispNames.FILE_EXISTS_P, LispNames.RUN_PROGRAM, LispNames.EMPTYP,
-				LispNames.FIRST_CHAR, LispNames.LAST_CHAR, LispNames.SPLIT_STRING, LispNames.DIRECTORY_EXISTS_P,
-				LispNames.COLLECT_SUB_DIRECTORIES, LispNames.DIRECTORY_FILES, LispNames.SUBDIRECTORIES,
-				LispNames.READ_FILE_STRING, LispNames.SYMBOL_CALL, LispNames.PRINT_CONDITION_BACKTRACE,
-				// The temporary-file quartet smart-buffer's disk-spill path spells (the
-				// with-temporary-file one is a macro, expanded like usocket:with-*).
-				LispNames.ENSURE_DIRECTORY_PATHNAME, LispNames.DEFAULT_TEMPORARY_DIRECTORY,
-				LispNames.DELETE_FILE_IF_EXISTS, LispNames.WITH_TEMPORARY_FILE,
-				// Four more MACROS with real expansions (same pattern): the binding trio
-				// UIOP re-exports from its own alexandria-style utilities, and
-				// with-deprecation, which wraps a library's deprecated defuns and is a
-				// LOAD-time failure when it is merely absent.
-				LispNames.IF_LET, LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION,
-				// define-package is external in real uiop too; a literal top-level call
-				// is consumed by PackageResolver.resolve like defpackage (dbi's package
-				// headers spell it uiop:define-package).
-				LispNames.DEFINE_PACKAGE));
+		// uiop, as upstream builds it: `uiop` IS `uiop/driver`, a re-export of 15
+		// sub-packages, and a library may name either spelling --
+		// lack-middleware-backtrace
+		// spells (:import-from :uiop/image :print-condition-backtrace), which is a READ
+		// error when the package is absent. Every sub-package owns the names its OWN rows
+		// in the inventory list (UiopExports, from the checked-in uiop-exports.txt); a
+		// name
+		// a second sub-package also exports is an import redirect to the home one
+		// (uiop/backward-driver re-exports five uiop/configuration names), and so is
+		// every
+		// member of uiop itself. Both spellings therefore name the SAME symbol rather
+		// than
+		// two functions with one member name. What is DEFINED behind those names is
+		// eval.UiopLibrary's business -- see .kb/uiop.md.
+		for (String subPackage : UiopExports.subPackages()) {
+			Set<String> externals = UiopExports.externals(subPackage);
+			Map<String, String> redirects = new HashMap<>();
+			for (String name : externals) {
+				String home = UiopExports.homePackage(name);
+				if (home != null && !home.equals(subPackage)) {
+					redirects.put(name, home);
+				}
+			}
+			define(new LispPackage(subPackage, List.of(), new HashSet<>(externals), Set.copyOf(externals),
+					Map.copyOf(redirects)));
+		}
+		Map<String, String> uiopImports = new HashMap<>(UiopExports.homePackages());
+		// namestring is IMPORTED from cl rather than owned: upstream's uiop/driver
+		// inherits CL's through (:use :uiop/common-lisp), rontolisp's cl:namestring is a
+		// real prelude function, and two same-member symbols would be two functions of
+		// which only one is defined. Deliberately EXTERNAL here, where upstream leaves it
+		// merely accessible.
+		uiopImports.put(LispNames.NAMESTRING, LispNames.CL_PKG);
+		Set<String> uiopExternals = new HashSet<>(uiopImports.keySet());
+		// when-let / when-let* are alexandria's names, not uiop's: real uiop exports
+		// if-let only. Kept as rontolisp EXTRAS (owned by uiop, hence no redirect) rather
+		// than dropped, because programs already spell them.
+		uiopExternals.add(LispNames.WHEN_LET);
+		uiopExternals.add(LispNames.WHEN_LET_STAR);
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
 		// Internal in real UIOP too: every call site spells it
 		// uiop::get-pathname-defaults. Owned by the package rather than reached by
 		// the resolver's tolerance for an unknown :: member.
 		uiopSymbols.add(LispNames.GET_PATHNAME_DEFAULTS);
-		// namestring is IMPORTED from cl rather than owned: real UIOP re-exports CL's,
-		// rontolisp's cl:namestring is a real prelude function, and two same-member
-		// symbols would be two functions of which only one is defined.
 		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, Set.copyOf(uiopExternals),
-				Map.of(LispNames.PRINT_CONDITION_BACKTRACE, LispNames.UIOP_IMAGE_PKG, LispNames.NAMESTRING,
-						LispNames.CL_PKG)));
+				Map.copyOf(uiopImports)));
 		// The dependency-shim packages behind the built-in ASDF systems of the same
 		// names (see eval.ShimLibraries): closer-mop (nickname c2mop),
 		// flexi-streams, org.shirakumo.float-features (nickname float-features) and

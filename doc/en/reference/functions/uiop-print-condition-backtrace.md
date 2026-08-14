@@ -23,5 +23,5 @@ re-exports it -- `uiop:print-condition-backtrace` names the same function.
 
 ## Backend support
 
-Works on all four backends: it is a prelude definition written in rontolisp
+Works on all four backends: it is a uiop library definition written in rontolisp
 itself and compiled into the program when used.

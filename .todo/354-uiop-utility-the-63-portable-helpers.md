@@ -2,13 +2,24 @@
 
 Difficulty: Medium
 
-Depends on `.todo/353` (sub-package skeleton + `UiopCoverageTest`). **Take this
-one first of the twelve**: `not-implemented-error` and `parameter-error` live
-here and every other item signals through them, and `strcat` / `ensure-list` /
-`nest` are what upstream's other sub-packages are written in.
+**`.todo/353` (the skeleton) has landed.** The 15 sub-packages are registered,
+the target is the checked-in `uiop-exports.txt` (435 export rows / 429 distinct
+symbols), and every export nothing implements yet already signals
+`uiop:not-implemented-error` naming the operation -- so this item REPLACES stubs,
+it does not add names. Read `.kb/uiop.md` first: a definition carries its HOME
+sub-package's spelling, and a new one goes in that sub-package's `.lisp` resource.
+Measured coverage here today (`UiopCoverageTest.printCoverage`, the authority for
+every count below): **7 / 68 (`emptyp`, `first-char`, `last-char`, `split-string`, `if-let`, plus `not-implemented-error` and `parameter-error`, which landed with the skeleton because every other item signals through them)**.
 
-`uiop/utility` has 68 portable externals; 5 are present (`emptyp`,
-`first-char`, `last-char`, `split-string`, `if-let`). The other **63**:
+Depends on `.todo/353` (sub-package skeleton + `UiopCoverageTest`). **Take this
+one first of the twelve**: `strcat` / `ensure-list` / `nest` are what upstream's
+other sub-packages are written in. (`not-implemented-error` and `parameter-error`
+also live here and every other item signals through them, so they landed with the
+skeleton rather than waiting for this item.)
+
+`uiop/utility` has 68 portable externals; 7 are present (`emptyp`,
+`first-char`, `last-char`, `split-string`, `if-let`, and the two the skeleton
+landed: `not-implemented-error` / `parameter-error`). The other **61**:
 
 ```
 ACCESS-AT ACCESS-AT-COUNT APPENDF BASE-STRING-P BOOLEAN-TO-FEATURE-EXPRESSION
@@ -19,7 +30,7 @@ FIND-STANDARD-CASE-SYMBOL FROB-SUBSTRINGS LATER-TIMESTAMP LATEST-TIMESTAMP
 LATEST-TIMESTAMP-F LENGTH=N-P LEXICOGRAPHIC< LEXICOGRAPHIC<= +LF+
 LIST-TO-HASH-SET LOAD-UIOP-DEBUG-UTILITY MATCH-ANY-CONDITION-P
 MATCH-CONDITION-P +MAX-CHARACTER-TYPE-INDEX+ NEST +NON-BASE-CHARS-EXIST-P+
-NOT-IMPLEMENTED-ERROR PARAMETER-ERROR PARSE-BODY REDUCE/STRCAT
+PARSE-BODY REDUCE/STRCAT
 REGISTER-HOOK-FUNCTION REMOVE-PLIST-KEY REMOVE-PLIST-KEYS SIMPLE-STYLE-WARNING
 STANDARD-CASE-SYMBOL-NAME STRCAT STRING-ENCLOSED-P STRING-PREFIX-P
 STRINGS-COMMON-ELEMENT-TYPE STRING-SUFFIX-P STRIPLN STYLE-WARN

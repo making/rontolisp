@@ -17,10 +17,10 @@ directory), which leaves `specified` unchanged -- the same answer
 
 ## Backend support
 
-The interpreter has it as an ordinary runtime function. On the JVM and both WASM
-backends only the calls the compiler can **fold to a literal** survive: an
-argument that is a string literal, or a reference to a top-level
-`defparameter` bound to one, is merged at compile time (this is what resolves
-`(uiop:merge-pathnames* *data-directory* "UnicodeData.txt")` in a bundled
-library). A call whose arguments are only known at run time signals an
-undefined-function error there.
+Works on all four backends: it is a Lisp-source definition over
+[`merge-pathnames`](merge-pathnames.md), compiled into the program when used.
+The compile paths additionally **fold to a literal** every call whose arguments
+they can resolve at compile time -- a string literal, or a reference to a
+top-level `defparameter` bound to one -- which is what makes
+`(uiop:merge-pathnames* *data-directory* "UnicodeData.txt")` in a bundled library
+cost nothing at run time.

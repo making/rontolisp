@@ -17,6 +17,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.ConcatenateForms;
@@ -324,22 +325,21 @@ final class JvmExprCompiler {
 			// uiop:getenv is a real built-in, not part of the uiop stub lowering: Common
 			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
 			// here, ahead of JvmFunctionCallCompiler's expandUiopStubCall.
-			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GETENV.equals(qn.member())) {
+			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.GETENV)) {
 				JvmGetenvCompiler.compile(cons, ctx, className);
 				return;
 			}
 			// uiop:with-temporary-file is a MACRO, so it cannot reach the uiop stub
 			// lowering (which only sees function-call shapes) -- and it has a real
 			// expansion, not a stub: smart-buffer's disk-spill path runs it.
-			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())
-					&& LispNames.WITH_TEMPORARY_FILE.equals(qn.member())) {
+			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_TEMPORARY_FILE)) {
 				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, true), ctx, className);
 				return;
 			}
 			// The other uiop MACROS with real expansions, same reason: the binding trio
 			// and with-deprecation (whose top-level occurrences the flattening pass has
 			// already spliced -- this reaches the ones nested in an expression).
-			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())) {
+			if (qn != null && UiopExports.isUiopFamily(qn.pkg())) {
 				switch (qn.member()) {
 					case LispNames.IF_LET -> {
 						compileExpr(LispMacroExpander.expandUiopIfLet(cons), ctx, className);

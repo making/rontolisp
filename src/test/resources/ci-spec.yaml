@@ -8801,6 +8801,35 @@ cases:
       3
       3
 
+  - name: uiop-sub-packages-and-not-implemented-error
+    source: |
+      ;; uiop is upstream's 15-sub-package bundle: uiop imports every member from
+      ;; the sub-package that defines it, so both spellings name the ONE symbol.
+      (print (list (uiop:emptyp "") (uiop/utility:emptyp "")))
+      ;; merge-pathnames* through a function boundary -- non-literal arguments, so
+      ;; the compile-time pathname fold cannot see them. It used to be an
+      ;; interpreter-only built-in, i.e. "The function UIOP:MERGE-PATHNAMES* is
+      ;; undefined" on the JVM and both WASM backends (.kb/uiop.md).
+      (defun ci-uiop-merge (a b) (uiop:merge-pathnames* a b))
+      (print (ci-uiop-merge "b.txt" "/tmp/"))
+      (print (uiop:ensure-directory-pathname "src"))
+      ;; A member nothing implements yet signals uiop:not-implemented-error naming
+      ;; the operation -- never "undefined function", and the same on all four.
+      (print (handler-case (uiop:chdir "/tmp")
+               (uiop:not-implemented-error (c) (princ-to-string c))))
+      ;; An unimplemented MACRO drops its argument forms rather than evaluating
+      ;; them: ci-uiop-probe must NOT be defined by the time the handler runs.
+      (print (handler-case (uiop:with-upgradability () (defun ci-uiop-probe () 1))
+               (uiop:not-implemented-error () :signalled)))
+      (print (fboundp 'ci-uiop-probe))
+    expected: |
+      (T T)
+      #P"/tmp/b.txt"
+      #P"src/"
+      "Not (currently) implemented on rontolisp: UIOP/OS:CHDIR"
+      :SIGNALLED
+      NIL
+
 # Cases that END the program, so they cannot join the corpus above: each is
 # compiled and run on its own, and what it asserts is the standard-error report
 # plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own

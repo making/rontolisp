@@ -37,6 +37,8 @@ sections:
         title: Functions
       - file: reference/packages.md
         title: Packages
+      - file: reference/uiop.md
+        title: The uiop Package
       - file: reference/function-namespace.md
         title: Function Namespace
   - title: Guides

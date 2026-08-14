@@ -19,6 +19,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.StructLiteralFolder;
 
@@ -7712,27 +7713,39 @@ public final class LispMacroExpander {
 	 * @return the lowered expression
 	 */
 	/**
-	 * If {@code cons} calls a {@code uiop:} member with no real definition (the package
-	 * stub: the name resolves, but calling it is an error), lowers the call into an
-	 * evaluate-args-then-signal form mirroring the interpreter's undefined-function error
-	 * at call time -- so a library carrying such a call on a cold branch (jzon's pathname
-	 * handling) still compiles. Returns null for any other operator. The members that DO
-	 * have a definition either lower here ({@code file-exists-p},
-	 * {@code get-pathname-defaults}) or are dispatched by each backend's expression
-	 * compiler before this is consulted ({@code getenv}).
+	 * Lowers a {@code uiop} call whose operator is not an ordinary function call of a
+	 * spliced definition. Three kinds:
+	 * <ul>
+	 * <li>the FOLDS -- {@code file-exists-p} onto {@code probe-file},
+	 * {@code namestring}/{@code native-namestring} onto {@code cl:namestring},
+	 * {@code get-pathname-defaults} onto {@code ""} and {@code symbol-call} onto a
+	 * runtime {@code intern} + {@code funcall}. Each has a Lisp definition too
+	 * ({@code eval.UiopLibrary}); the fold is what keeps a direct call from dragging it
+	 * in;</li>
+	 * <li>a MACRO nothing implements yet: it lowers to {@code uiop:not-implemented-error}
+	 * with its argument forms DROPPED, because a macro that does nothing must not
+	 * evaluate the forms it was handed (an unimplemented
+	 * {@code (uiop:with-upgradability () (defun f ...))} would otherwise define f before
+	 * signalling);</li>
+	 * <li>everything else -- {@code null}, i.e. an ordinary call. It reaches the
+	 * {@code not-implemented-error} stub {@code UiopLibrary} spliced for it, which is why
+	 * this no longer carries a blanket "every other uiop call is an error" arm.</li>
+	 * </ul>
+	 * Operators are matched in both the {@code uiop:} spelling a program writes and the
+	 * home sub-package's, since this runs after package resolution.
 	 * @param cons the call expression
-	 * @return the lowered expression, or null when the operator is not a uiop member
+	 * @return the lowered expression, or null when the call needs no lowering
 	 */
 	@Nullable public static LispVal expandUiopStubCall(LispCons cons) {
 		if (!(cons.car() instanceof LispSymbol op)) {
 			return null;
 		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-		if (qn == null || !LispNames.UIOP_PKG.equals(qn.pkg())) {
+		if (qn == null || !UiopExports.isUiopFamily(qn.pkg())) {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
-		if (LispNames.SYMBOL_CALL.equals(qn.member()) && parts.size() >= 3) {
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SYMBOL_CALL) && parts.size() >= 3) {
 			// REAL since todo-229 (retiring the "no runtime name table" divergence
 			// recorded in .kb/asdf.md): late-bind the name through the runtime 2-arg
 			// intern and the _lookup registry. The two fixed temps keep the
@@ -7753,7 +7766,8 @@ public final class LispMacroExpander {
 					List.of(listToCons(List.of(pkgVar, parts.get(1))), listToCons(List.of(nameVar, parts.get(2)))));
 			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, listToCons(call)));
 		}
-		if (LispNames.GET_PATHNAME_DEFAULTS.equals(qn.member()) && parts.size() == 1) {
+		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GET_PATHNAME_DEFAULTS.equals(qn.member())
+				&& parts.size() == 1) {
 			// Not a stub: the one uiop pathname accessor with a real cross-backend
 			// answer. See LispNames.GET_PATHNAME_DEFAULTS for why it is "". Only the
 			// no-argument shape (the one every call site uses) is answered; the
@@ -7761,33 +7775,73 @@ public final class LispMacroExpander {
 			// silently discarding the argument.
 			return new LispString("");
 		}
-		if (LispNames.NAMESTRING.equals(qn.member()) && parts.size() == 2) {
+		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.NAMESTRING.equals(qn.member()) && parts.size() == 2) {
 			// Not a stub: real UIOP re-exports CL's namestring, and rontolisp's CL one is
 			// prelude Lisp, so both spellings must name the one function rather than
 			// leaving uiop:namestring a call-time error.
 			return listToCons(List.of(new LispSymbol(LispNames.NAMESTRING_CL), parts.get(1)));
 		}
-		if (LispNames.NATIVE_NAMESTRING.equals(qn.member()) && parts.size() == 2) {
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.NATIVE_NAMESTRING) && parts.size() == 2) {
 			// Not a stub either: a rontolisp namestring IS the host spelling (no
 			// backend translates), so uiop:native-namestring is CL's namestring. jzon's
 			// pathname stringify method and trivial-mimes' mime-probe call it on real
 			// pathname values now that #P"..." denotes one.
 			return listToCons(List.of(new LispSymbol(LispNames.NAMESTRING_CL), parts.get(1)));
 		}
-		if (LispNames.FILE_EXISTS_P.equals(qn.member()) && parts.size() == 2) {
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.FILE_EXISTS_P) && parts.size() == 2) {
 			// Not a stub either: uiop:file-exists-p IS probe-file (same contract -- the
 			// truename on success, nil otherwise), so it lowers onto the primitive on
 			// every backend. Only the 1-argument shape (the one real uiop exports) is
 			// answered.
 			return listToCons(List.of(new LispSymbol(LispNames.PROBE_FILE), parts.get(1)));
 		}
-		List<LispVal> progn = new java.util.ArrayList<>();
-		progn.add(new LispSymbol(LispNames.PROGN));
-		progn.addAll(parts.subList(1, parts.size()));
-		progn.add(listToCons(List.of(new LispSymbol(LispNames.ERROR),
-				new LispString("The function " + op.name() + " is undefined"))));
-		return listToCons(progn);
+		return expandUnimplementedUiopMacro(cons);
 	}
+
+	/**
+	 * If {@code cons} calls a {@code uiop} MACRO nothing implements yet, lowers it to
+	 * {@code uiop:not-implemented-error} with its argument forms DROPPED -- a macro that
+	 * does nothing must not evaluate the forms it was handed, or an unimplemented
+	 * {@code (uiop:with-upgradability () (defun f ...))} would define f before
+	 * signalling. Returns null for everything else, including a function-kind member: an
+	 * ordinary call of it reaches the stub {@code eval.UiopLibrary} defines, which
+	 * signals the same condition. Shared by the evaluator and
+	 * {@link #expandUiopStubCall}, so all four backends signal identically.
+	 * @param cons the call expression
+	 * @return the lowered expression, or null
+	 */
+	@Nullable public static LispVal expandUnimplementedUiopMacro(LispCons cons) {
+		if (!(cons.car() instanceof LispSymbol op)) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !UiopExports.isUiopFamily(qn.pkg())) {
+			return null;
+		}
+		UiopExports.Entry entry = UiopExports.entry(qn.member());
+		if (entry == null || !entry.is("macro") || hasUiopMacroExpansion(qn.member())) {
+			return null;
+		}
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(LispNames.NOT_IMPLEMENTED_ERROR)),
+				new LispString(op.name())));
+	}
+
+	/**
+	 * Returns whether the named {@code uiop} member is one of the built-in macro
+	 * expansions this class performs, rather than a name a definition stands behind.
+	 * {@code eval.UiopLibrary} asks so it does not stub over an expansion, and
+	 * {@link #expandUiopStubCall} so it does not lower one to
+	 * {@code not-implemented-error}.
+	 * @param member the unqualified member name, upper-case
+	 * @return {@code true} when a built-in expansion handles the form
+	 */
+	public static boolean hasUiopMacroExpansion(String member) {
+		return UIOP_MACRO_EXPANSIONS.contains(member);
+	}
+
+	private static final java.util.Set<String> UIOP_MACRO_EXPANSIONS = java.util.Set.of(LispNames.IF_LET,
+			LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION, LispNames.WITH_TEMPORARY_FILE,
+			LispNames.DEFINE_PACKAGE);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -7945,7 +7999,7 @@ public final class LispMacroExpander {
 		List<LispVal> cleanup = new java.util.ArrayList<>();
 		cleanup.add(new LispSymbol(LispNames.PROGN));
 		cleanup.add(callOf(LispNames.CLOSE, stream));
-		LispVal delete = fmtCall(LispNames.UIOP_PKG + ":" + LispNames.DELETE_FILE_IF_EXISTS, path);
+		LispVal delete = fmtCall(UiopExports.qualified(LispNames.DELETE_FILE_IF_EXISTS), path);
 		if (isLiteralNil(keep)) {
 			cleanup.add(delete);
 		}
@@ -26828,8 +26882,8 @@ public final class LispMacroExpander {
 			// uiop:symbol-call lowers to (funcall (intern ...) ...) INSIDE the
 			// per-expression compilers, after this scan ran -- so the pre-lowering
 			// spelling must count as a runtime-designator use itself (todo-229).
-			if (LispNames.SYMBOL_CALL.equals(member) && qn != null && LispNames.UIOP_PKG.equals(qn.pkg())
-					&& cons.isProperList() && cons.toList().size() >= 3) {
+			if (qn != null && UiopExports.denotes(qn.pkg(), member, LispNames.SYMBOL_CALL) && cons.isProperList()
+					&& cons.toList().size() >= 3) {
 				return true;
 			}
 		}

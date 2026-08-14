@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.ClRedefinitionWarnings;
 import am.ik.rontolisp.compiler.CompileWarnings;
@@ -559,7 +560,7 @@ final class WasmExprCompiler {
 			// uiop:getenv is a real built-in, not part of the uiop stub lowering: Common
 			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
 			// here, ahead of WasmFunctionCallCompiler's expandUiopStubCall.
-			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GETENV.equals(qn.member())) {
+			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.GETENV)) {
 				// Under --component getenv is the spliced environment.lisp defun over
 				// wit-imported wasi:cli/environment (eval/EnvironmentLibrary): fall
 				// through to the ordinary call path, which resolves it -- there is no
@@ -579,15 +580,14 @@ final class WasmExprCompiler {
 			// lowering (which only sees function-call shapes) -- and it has a real
 			// expansion, not a stub. unwindProtect = ctx.ehMode, like the usocket
 			// with-*s below: outside EH mode the cleanup runs on normal exit only.
-			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())
-					&& LispNames.WITH_TEMPORARY_FILE.equals(qn.member())) {
+			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.WITH_TEMPORARY_FILE)) {
 				compileExpr(LispMacroExpander.expandUiopWithTemporaryFile(cons, ctx.ehMode), ctx);
 				return;
 			}
 			// The other uiop MACROS with real expansions, same reason: the binding trio
 			// and with-deprecation (whose top-level occurrences the flattening pass has
 			// already spliced -- this reaches the ones nested in an expression).
-			if (qn != null && LispNames.UIOP_PKG.equals(qn.pkg())) {
+			if (qn != null && UiopExports.isUiopFamily(qn.pkg())) {
 				switch (qn.member()) {
 					case LispNames.IF_LET -> {
 						compileExpr(LispMacroExpander.expandUiopIfLet(cons), ctx);

@@ -558,45 +558,10 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 
 `uiop` パッケージは ASDF の移植性レイヤであり、Common Lisp が標準化しなかった操作に
 対して処理系非依存のライブラリがすでに使っている綴りです。**Common Lisp の一部では
-ありません**。シンボルは `uiop:` 修飾子付きで参照します — 修飾なしの綴りはありません。
-rontolisp が実装しているメンバは以下のとおりで、各名前は個別のページにリンクしています。
-
-| 関数 | 例 | 結果 |
-|----------|---------|--------|
-| `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
-| `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
-| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すれば（末尾に `/` を付けた）そのパス名、存在しなければ `nil` — `file-exists-p` のディレクトリ版であり、空のディレクトリと存在しないディレクトリを区別できる唯一の手段です |
-| `uiop:directory-files` | `(uiop:directory-files "db/" "*.up.sql")` | ディレクトリのうちディレクトリでないエントリ — `(directory "db/*.*")` からサブディレクトリを除いたものです。UIOP の省略可能な第 2 引数 (名前と型のみのワイルドカードのパス名文字列) は `directory` とまったく同じ規則で絞り込みます。省略するとすべてを一覧し、ディレクトリ部分を含むパターンはエラーです |
-| `uiop:subdirectories` | `(uiop:subdirectories "src/")` | ディレクトリのサブディレクトリを、それぞれ末尾に `/` を付けて返します |
-| `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | ディレクトリツリーを走査します。`collectp` が `collector` へ渡すものを、`recursep` が降りていく先を決めます。渡されるディレクトリはルートも含めてすべてディレクトリ形式です |
-| `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | ファイルの内容全体を 1 つの文字列として返します。ファイルを入力用に開けるすべてのバックエンドで動きます。lite 版: 本家 UIOP の `&rest` キーワードは受け付けて無視します (`:external-format` は rontolisp には存在せず、どのバックエンドも UTF-8 で読みます) |
-| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ。インタプリタでは実行時の関数、コンパイル済みバックエンドではコンパイラがリテラルへ畳み込める呼び出しのみ |
-| `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — パス名のホスト OS の綴り。ここでは名前文字列そのものなので `namestring` と同じです |
-| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
-| `uiop:emptyp` | `(uiop:emptyp "")` | `nil` および長さ 0 のベクタ・文字列に対して `t`、それ以外は `nil` |
-| `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — 空でない文字列の最初の文字。空文字列や文字列以外では `nil` |
-| `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — 空でない文字列の最後の文字。空文字列や文字列以外では `nil` |
-| `uiop:split-string` | `(uiop:split-string "a.b.c" :separator ".")` | `("a" "b" "c")` — `:separator` のいずれかの文字で分割(上流のセマンティクス: 右から左へ走査し、`:max` は分割されなかった先頭部を残します) |
-| `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです。インタプリタのみ。コンパイル済みバックエンドは名前から関数への実行時テーブルを持たないため、呼び出しはコンパイルできますが実行するとエラーになります |
-| `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | コンディションのレポートを出力します (ライト版: どのバックエンドも Lisp レベルのコールスタックを持たないため、出力されるのはコンディション自体だけです)。`uiop:print-condition-backtrace` としても再エクスポートされています |
-
-`uiop::get-pathname-defaults` (本物の UIOP でも内部シンボルなので二重コロンで綴ります)
-も実装されており、すべてのバックエンドで `""` を返します。相対パスはホストの作業
-ディレクトリを基準に解決され、`""` はまさにそれを指す名前文字列なので、
-`(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
-
-`uiop:namestring` と `uiop:native-namestring` も実装されており、
-[`namestring`](functions/namestring.md) そのものです。本家 UIOP が Common Lisp の
-`namestring` を再エクスポートしているのと同じで、rontolisp の名前文字列はもともと
-ホストの綴りです。
-
-パッケージの残りは**名前解決のためのスタブ**です。
-`uiop:os-unix-p`、`uiop:os-macosx-p`、`uiop:run-program` は
-解決はされる (ので `(:import-from #:uiop)` 句でこれらを挙げるライブラリは読み込め、
-コンパイルできる) ものの、呼び出すと undefined-function エラーになります。未実装ではなく
-意図的です: 外部プロセスの起動 (`run-program`) はどのバックエンドのサンドボックスの外に
-あり、黙って何もしないよりエラーの方が正直な答えだからです。
-黙って何もしなかったり空リストを返したりするより、エラーを返す方が誠実だからです。
+ありません**。シンボルは `uiop:` 修飾子付きで参照し、修飾なしの綴りはありません。
+15 個のサブパッケージと 429 個のエクスポートがあるため、独立したページを設けています:
+**[uiop パッケージ](uiop.md)** — サブパッケージの構成、実装済みのもの、未実装のメンバが
+シグナルするものについて説明しています。
 
 ## ql パッケージの関数
 

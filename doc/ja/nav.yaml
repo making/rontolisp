@@ -37,6 +37,8 @@ sections:
         title: 関数
       - file: reference/packages.md
         title: パッケージ
+      - file: reference/uiop.md
+        title: uiop パッケージ
       - file: reference/function-namespace.md
         title: 関数名前空間
   - title: ガイド

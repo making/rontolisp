@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -108,12 +109,13 @@ public final class EnvironmentLibrary {
 	}
 
 	// Whether the symbol names uiop:getenv, in any source spelling (uiop:getenv,
-	// uiop::getenv): this scan runs before PackageResolver normalizes the program, so it
-	// must normalize itself. There is deliberately no cl:getenv alias to recognize
-	// (.kb/time-environment-builtins.md).
+	// uiop::getenv, and the home sub-package's uiop/os:getenv): this scan runs before
+	// PackageResolver normalizes the program, so it must normalize itself, but a spliced
+	// library source is already canonical. There is deliberately no cl:getenv alias to
+	// recognize (.kb/time-environment-builtins.md).
 	private static boolean namesGetenv(String symbolName) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
-		return qn != null && LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GETENV.equals(qn.member());
+		return qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.GETENV);
 	}
 
 	// A defun head in any source spelling: bare defun, cl:defun and

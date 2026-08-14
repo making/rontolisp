@@ -2,6 +2,15 @@
 
 Difficulty: Medium
 
+**`.todo/353` (the skeleton) has landed.** The 15 sub-packages are registered,
+the target is the checked-in `uiop-exports.txt` (435 export rows / 429 distinct
+symbols), and every export nothing implements yet already signals
+`uiop:not-implemented-error` naming the operation -- so this item REPLACES stubs,
+it does not add names. Read `.kb/uiop.md` first: a definition carries its HOME
+sub-package's spelling, and a new one goes in that sub-package's `.lisp` resource.
+Measured coverage here today (`UiopCoverageTest.printCoverage`, the authority for
+every count below): **1 / 30 (`print-condition-backtrace`)**.
+
 Depends on `.todo/353`, `.todo/354`.
 
 30 externals; one present (`print-condition-backtrace`, lite -- it prints the

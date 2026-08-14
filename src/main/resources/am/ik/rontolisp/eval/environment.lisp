@@ -29,7 +29,7 @@
                       :interface "wasi:cli/environment@0.3.0"
                       :package %environ)
 
-(defun uiop:getenv (%getenv-name)
+(defun uiop/os:getenv (%getenv-name)
   (do ((%getenv-rest (%environ:get-environment) (cdr %getenv-rest)))
       ((null %getenv-rest) nil)
     (if (string= (car (car %getenv-rest)) %getenv-name)

@@ -5140,12 +5140,24 @@ public final class LispNames {
 	/** The canonical qualified spelling of {@code asdf:system-source-directory}. */
 	public static final String ASDF_SYSTEM_SOURCE_DIRECTORY = ASDF_PKG + ":" + SYSTEM_SOURCE_DIRECTORY;
 
-	/** The canonical qualified spelling of {@code uiop:merge-pathnames*}. */
-	public static final String UIOP_MERGE_PATHNAMES_STAR = "UIOP:MERGE-PATHNAMES*";
+	/**
+	 * {@code uiop:not-implemented-error} -- upstream's own name for "this implementation
+	 * cannot do that", both the condition and the function that signals it. Every uiop
+	 * export nothing implements yet is a stub that signals it naming the operation
+	 * ({@code eval.UiopLibrary}), so no uiop name reaches a caller as an undefined
+	 * function.
+	 */
+	public static final String NOT_IMPLEMENTED_ERROR = "NOT-IMPLEMENTED-ERROR";
+
+	/**
+	 * {@code uiop:parameter-error} -- upstream's companion condition for "this operation
+	 * exists but does not accept that parameter (combination)".
+	 */
+	public static final String PARAMETER_ERROR = "PARAMETER-ERROR";
 
 	/**
 	 * {@code uiop:emptyp} -- true for {@code nil} and for an empty vector. A real UIOP
-	 * definition (a {@code LispPreludeLibrary} entry, verbatim upstream), not a stub.
+	 * definition ({@code uiop-utility.lisp}, verbatim upstream), not a stub.
 	 */
 	public static final String EMPTYP = "EMPTYP";
 
@@ -6206,19 +6218,54 @@ public final class LispNames {
 	 */
 	public static final String RESOLVE_BINDING_VALUE = "RESOLVE-BINDING-VALUE";
 
-	/** The {@code uiop} stub package (and built-in ASDF system) name. */
+	/**
+	 * The {@code uiop} package (and built-in ASDF system) name. It is upstream's
+	 * {@code uiop/driver}: a re-export of 15 sub-packages, each of which OWNS the members
+	 * it defines, so a {@code uiop:name} occurrence canonicalizes to the sub-package's
+	 * spelling. The sub-package names below are the ones this file has to spell; the
+	 * whole table is {@code UiopExports} (see {@code .kb/uiop.md}).
+	 */
 	public static final String UIOP_PKG = "UIOP";
+
+	/** The {@code uiop/package} sub-package: the symbol and package surgery family. */
+	public static final String UIOP_PACKAGE_PKG = "UIOP/PACKAGE";
+
+	/** The {@code uiop/package-local-nicknames} sub-package. */
+	public static final String UIOP_PACKAGE_LOCAL_NICKNAMES_PKG = "UIOP/PACKAGE-LOCAL-NICKNAMES";
+
+	/** The {@code uiop/utility} sub-package: the portable helpers. */
+	public static final String UIOP_UTILITY_PKG = "UIOP/UTILITY";
+
+	/** The {@code uiop/version} sub-package: version comparison and deprecation. */
+	public static final String UIOP_VERSION_PKG = "UIOP/VERSION";
+
+	/** The {@code uiop/os} sub-package: host identity and the environment. */
+	public static final String UIOP_OS_PKG = "UIOP/OS";
+
+	/** The {@code uiop/pathname} sub-package: the pathname algebra. */
+	public static final String UIOP_PATHNAME_PKG = "UIOP/PATHNAME";
+
+	/** The {@code uiop/filesystem} sub-package: probe, walk and mutate. */
+	public static final String UIOP_FILESYSTEM_PKG = "UIOP/FILESYSTEM";
+
+	/** The {@code uiop/stream} sub-package: file contents, temporary files, safe I/O. */
+	public static final String UIOP_STREAM_PKG = "UIOP/STREAM";
 
 	/**
 	 * {@code uiop:native-namestring} -- real: a rontolisp namestring IS the host spelling
 	 * (no backend translates), so it is CL's {@code namestring}. Lowered onto it on the
-	 * compile paths ({@code LispMacroExpander.expandUiopStubCall}); a Java function on
-	 * the interpreter. jzon's pathname stringify method and trivial-mimes'
-	 * {@code mime-probe} are the callers that made it real.
+	 * compile paths ({@code LispMacroExpander.expandUiopStubCall}) and a Lisp definition
+	 * ({@code uiop-filesystem.lisp}) for every other position. jzon's pathname stringify
+	 * method and trivial-mimes' {@code mime-probe} are the callers that made it real.
 	 */
 	public static final String NATIVE_NAMESTRING = "NATIVE-NAMESTRING";
 
-	/** {@code uiop:namestring} (stub). */
+	/**
+	 * {@code uiop:namestring} -- a rontolisp EXTRA: upstream's uiop only INHERITS CL's
+	 * (through {@code :use :uiop/common-lisp}) rather than exporting it, so
+	 * {@code uiop:namestring} would not read there. Kept external and imported from
+	 * {@code cl}, so both spellings name the one prelude function.
+	 */
 	public static final String NAMESTRING = "NAMESTRING";
 
 	/**
@@ -6230,12 +6277,12 @@ public final class LispNames {
 	public static final String GETENV = "GETENV";
 
 	/** The canonical package-qualified spelling of {@link #GETENV}. */
-	public static final String UIOP_GETENV = UIOP_PKG + ":" + GETENV;
+	public static final String UIOP_GETENV = UIOP_OS_PKG + ":" + GETENV;
 
-	/** {@code uiop:os-unix-p} (stub). */
+	/** {@code uiop:os-unix-p} (a {@code not-implemented-error} stub). */
 	public static final String OS_UNIX_P = "OS-UNIX-P";
 
-	/** {@code uiop:os-macosx-p} (stub). */
+	/** {@code uiop:os-macosx-p} (a {@code not-implemented-error} stub). */
 	public static final String OS_MACOSX_P = "OS-MACOSX-P";
 
 	/**
@@ -6359,7 +6406,7 @@ public final class LispNames {
 	public static final String WITH_TEMPORARY_FILE = "WITH-TEMPORARY-FILE";
 
 	/** The canonical package-qualified spelling of {@link #WITH_TEMPORARY_FILE}. */
-	public static final String UIOP_WITH_TEMPORARY_FILE_QUALIFIED = UIOP_PKG + ":" + WITH_TEMPORARY_FILE;
+	public static final String UIOP_WITH_TEMPORARY_FILE_QUALIFIED = UIOP_STREAM_PKG + ":" + WITH_TEMPORARY_FILE;
 
 	/**
 	 * The {@code %temp-file-name} internal helper: a namestring naming a file that does
@@ -6392,7 +6439,7 @@ public final class LispNames {
 	public static final String IF_LET = "IF-LET";
 
 	/** The canonical package-qualified spelling of {@link #IF_LET}. */
-	public static final String UIOP_IF_LET_QUALIFIED = UIOP_PKG + ":" + IF_LET;
+	public static final String UIOP_IF_LET_QUALIFIED = UIOP_UTILITY_PKG + ":" + IF_LET;
 
 	/**
 	 * {@code uiop:when-let bindings body...} -- {@link #IF_LET} with an implicit
@@ -6426,7 +6473,7 @@ public final class LispNames {
 	public static final String WITH_DEPRECATION = "WITH-DEPRECATION";
 
 	/** The canonical package-qualified spelling of {@link #WITH_DEPRECATION}. */
-	public static final String UIOP_WITH_DEPRECATION_QUALIFIED = UIOP_PKG + ":" + WITH_DEPRECATION;
+	public static final String UIOP_WITH_DEPRECATION_QUALIFIED = UIOP_VERSION_PKG + ":" + WITH_DEPRECATION;
 
 	/**
 	 * {@code uiop:symbol-call package name &rest args} -- real UIOP's late-binding call:
@@ -6440,13 +6487,13 @@ public final class LispNames {
 	public static final String SYMBOL_CALL = "SYMBOL-CALL";
 
 	/** The canonical package-qualified spelling of {@link #SYMBOL_CALL}. */
-	public static final String UIOP_SYMBOL_CALL = UIOP_PKG + ":" + SYMBOL_CALL;
+	public static final String UIOP_SYMBOL_CALL = UIOP_PACKAGE_PKG + ":" + SYMBOL_CALL;
 
 	/**
-	 * The {@code uiop/image} package name. Real UIOP is a bundle of packages that the
-	 * {@code uiop} package re-exports; libraries name the sub-package directly in an
-	 * {@code (:import-from :uiop/image ...)} clause, which fails at read time when the
-	 * package is absent. Only {@link #PRINT_CONDITION_BACKTRACE} lives here.
+	 * The {@code uiop/image} sub-package: the command line, exit and the dump hooks.
+	 * Libraries name a sub-package directly in an {@code (:import-from :uiop/image ...)}
+	 * clause, which fails at read time when the package is absent -- this was the first
+	 * one registered, before the whole bundle was.
 	 */
 	public static final String UIOP_IMAGE_PKG = "UIOP/IMAGE";
 

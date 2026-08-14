@@ -208,7 +208,7 @@ public final class PackageResolver {
 
 	private boolean isUiopOperator(LispSymbol op) {
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
-		return qn != null && LispNames.UIOP_PKG.equals(this.registry.canonicalName(qn.pkg()));
+		return qn != null && UiopExports.isUiopFamily(this.registry.canonicalName(qn.pkg()));
 	}
 
 	/**
@@ -223,7 +223,7 @@ public final class PackageResolver {
 			return false;
 		}
 		String pkg = this.registry.canonicalName(qn.pkg());
-		return LispNames.UIOP_PKG.equals(pkg) || LispNames.MGL_PAX_PKG.equals(pkg);
+		return UiopExports.isUiopFamily(pkg) || LispNames.MGL_PAX_PKG.equals(pkg);
 	}
 
 	private boolean isMglPaxOperator(LispSymbol op) {

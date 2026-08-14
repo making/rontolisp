@@ -8,6 +8,8 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.macro.FormatRenderer;
 
 /**
@@ -94,7 +96,22 @@ public final class RuntimeNameProducers {
 	 * over-approximation -- a kept row costs bytes, a missing one costs a resolution.
 	 */
 	private static final Set<String> BUILDS_SYMBOLS = Set.of(LispNames.INTERN, LispNames.FIND_SYMBOL,
-			LispNames.MAKE_SYMBOL, LispNames.UIOP_SYMBOL_CALL);
+			LispNames.MAKE_SYMBOL);
+
+	/**
+	 * Whether the operator is one of {@link #BUILDS_SYMBOLS} or {@code uiop:symbol-call}.
+	 * The uiop one is matched in BOTH spellings ({@code uiop:} and its home
+	 * {@code uiop/package:}) because this scan has callers on either side of package
+	 * resolution -- {@code GenericDispatchNarrowing} runs before it, the backends' gate
+	 * after.
+	 */
+	private static boolean buildsSymbols(String name) {
+		if (BUILDS_SYMBOLS.contains(name)) {
+			return true;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(name);
+		return qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SYMBOL_CALL);
+	}
 
 	/**
 	 * Whether the program can resolve a function name this compile never sees spelled
@@ -145,7 +162,7 @@ public final class RuntimeNameProducers {
 
 	private static boolean scanBuilders(LispVal val) {
 		if (val instanceof LispSymbol sym) {
-			return BUILDS_SYMBOLS.contains(sym.name());
+			return buildsSymbols(sym.name());
 		}
 		LispVal cur = val;
 		if (isKeywordPackageIntern(cur)) {

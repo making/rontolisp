@@ -15,7 +15,7 @@ class EnvironmentLibraryTest {
 	void processSplicesEnvironmentLibraryForAGetenvReference() {
 		List<LispVal> program = LispReader.readAllFromString("(print (uiop:getenv \"DATABASE_URL\"))");
 		List<LispVal> out = EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
-		assertThat(HttpLibraryTest.definesDefun(out, "UIOP:GETENV")).isTrue();
+		assertThat(HttpLibraryTest.definesDefun(out, "UIOP/OS:GETENV")).isTrue();
 		// The lowered wit-import binds exactly the one member the defun calls.
 		assertThat(out.stream().map(LispVal::print)).anyMatch(form -> form.contains("get-environment"));
 	}
@@ -23,10 +23,11 @@ class EnvironmentLibraryTest {
 	@Test
 	void processSplicesForTheDoubleColonSpelling() {
 		// The splice scan runs before PackageResolver normalizes the program, so it must
-		// normalize the spelling itself.
+		// normalize the spelling itself -- and the defun it splices carries getenv's HOME
+		// package (uiop/os), the spelling a resolved uiop:getenv reference becomes.
 		List<LispVal> program = LispReader.readAllFromString("(print (uiop::getenv \"DATABASE_URL\"))");
 		List<LispVal> out = EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
-		assertThat(HttpLibraryTest.definesDefun(out, "UIOP:GETENV")).isTrue();
+		assertThat(HttpLibraryTest.definesDefun(out, "UIOP/OS:GETENV")).isTrue();
 	}
 
 	@Test

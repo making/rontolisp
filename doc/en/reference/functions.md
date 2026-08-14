@@ -601,48 +601,13 @@ layout and the search-path details.
 
 ## uiop Package Functions
 
-The `uiop` package is ASDF's portability layer, the spelling
+The `uiop` package is ASDF's portability layer — the spelling
 implementation-independent libraries already use for the operations Common Lisp
 never standardized. It is **not part of Common Lisp**; reference its symbols
-with the `uiop:` qualifier — there are no unqualified spellings. rontolisp
-implements the members below; each name links to its own page.
-
-| Function | Example | Result |
-|----------|---------|--------|
-| `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed here because Common Lisp has no `getenv`. All backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
-| `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
-| `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
-| `uiop:directory-files` | `(uiop:directory-files "db/" "*.up.sql")` | the non-directory entries of a directory — `(directory "db/*.*")` with the subdirectories dropped. UIOP's optional second argument, the namestring of a name-and-type wildcard, filters them exactly as `directory` matches; omitting it lists everything, and a pattern carrying a directory component is an error |
-| `uiop:subdirectories` | `(uiop:subdirectories "src/")` | the subdirectories of a directory, each with its trailing `/` |
-| `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
-| `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | the whole file as one string. Runs on every backend that can open a file for input. Lite: real UIOP's `&rest` keys are accepted and ignored (`:external-format` has no rontolisp surface — every backend reads UTF-8) |
-| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — the defaults-aware pathname merge. A real runtime function on the interpreter; on the compiled backends only the calls the compiler folds to a literal |
-| `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — the host-OS spelling of a pathname, which here IS the namestring, so this is `namestring` |
-| `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
-| `uiop:emptyp` | `(uiop:emptyp "")` | `t` for `nil` and for a zero-length vector or string, `nil` otherwise |
-| `uiop:first-char` | `(uiop:first-char "hello")` | `#\h` — the first character of a non-empty string, `nil` for an empty string or a non-string |
-| `uiop:last-char` | `(uiop:last-char "hello")` | `#\o` — the last character of a non-empty string, `nil` for an empty string or a non-string |
-| `uiop:split-string` | `(uiop:split-string "a.b.c" :separator ".")` | `("a" "b" "c")` — split on any character of `:separator` (upstream's semantics: right-to-left scan, `:max` keeps the unsplit head) |
-| `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | look the name up in the package at run time and apply it — UIOP's late-binding call into a system the caller does not depend on. Interpreter only; the compiled backends carry no run-time name-to-function table, so the call compiles and signals when executed |
-| `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | print a report for a condition (lite: the condition alone — no backend carries a Lisp-level call stack). Re-exported as `uiop:print-condition-backtrace` |
-
-`uiop::get-pathname-defaults` (internal in real UIOP too, so it is spelled with
-the double colon) is implemented as well and answers `""` on every backend: a
-relative path resolves against the host's working directory, and `""` is the
-namestring designating exactly that, so `(merge-pathnames x
-(uiop::get-pathname-defaults))` yields `x`.
-
-`uiop:namestring` and `uiop:native-namestring` are implemented too, as the very
-function [`namestring`](functions/namestring.md) is — real UIOP re-exports Common
-Lisp's, and a rontolisp namestring already is the host spelling.
-
-The rest of the package is a **name-resolution stub**: `uiop:os-unix-p`,
-`uiop:os-macosx-p` and `uiop:run-program`
-resolve — so a library naming them in an `(:import-from #:uiop)` clause reads and
-compiles — but calling one signals an undefined-function error. That is
-deliberate rather than unfinished: spawning an external process (`run-program`)
-is outside every backend's sandbox, and an error is a more honest answer than a
-silent no-op.
+with the `uiop:` qualifier, never unqualified. It is 15 sub-packages and 429
+exports, so it has a page of its own: **[The uiop Package](uiop.md)** — the
+sub-package layout, what is implemented, and what an unimplemented member
+signals.
 
 ## ql Package Functions
 

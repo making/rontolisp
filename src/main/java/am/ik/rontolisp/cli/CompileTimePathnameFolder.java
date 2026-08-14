@@ -21,6 +21,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.PathnameOps;
 import org.jspecify.annotations.Nullable;
@@ -39,7 +40,7 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The primitives handled are: {@link LispNames#MAKE_PATHNAME},
- * {@link LispNames#UIOP_MERGE_PATHNAMES_STAR}, {@link LispNames#ASDF_FIND_SYSTEM} and
+ * {@code uiop:merge-pathnames*}, {@link LispNames#ASDF_FIND_SYSTEM} and
  * {@link LispNames#ASDF_SYSTEM_SOURCE_DIRECTORY}. The pass also detects
  * {@code (defparameter *NAME* <folded string>)} at top level: the recorded literal feeds
  * later folds that reference the same {@code *NAME*} inside another primitive's argument
@@ -399,7 +400,7 @@ final class CompileTimePathnameFolder {
 		if (qn == null) {
 			return false;
 		}
-		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.MERGE_PATHNAMES_STAR.equals(qn.member())) {
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)) {
 			return true;
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())
@@ -486,7 +487,7 @@ final class CompileTimePathnameFolder {
 		if (qn == null) {
 			return null;
 		}
-		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.MERGE_PATHNAMES_STAR.equals(qn.member())) {
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)) {
 			return reduceMergePathnames(args, systems, parameters, writtenPaths);
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())) {

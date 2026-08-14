@@ -2248,7 +2248,7 @@ public final class Environment implements Scope {
 		// uiop:getenv: the value of an environment variable as a string, or nil if unset.
 		// Homed in uiop, not cl: Common Lisp has no getenv, and uiop's is the portable
 		// spelling every implementation-independent library already uses.
-		String getenvName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.GETENV);
+		String getenvName = LispNames.UIOP_GETENV;
 		env.defineFunction(getenvName, new LispFunction(getenvName, args -> {
 			requireArgCount(getenvName, args, 1);
 			if (!(args.get(0) instanceof LispString name)) {

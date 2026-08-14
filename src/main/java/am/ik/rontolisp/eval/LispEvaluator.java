@@ -43,6 +43,7 @@ import am.ik.rontolisp.LispStructLiteral;
 import am.ik.rontolisp.StructLiteralFolder;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
@@ -100,6 +101,11 @@ public final class LispEvaluator {
 	private boolean simd = false;
 
 	private final java.util.Set<String> loadedPreludeNames = new java.util.HashSet<>();
+
+	// The uiop definitions already evaluated into the global environment, keyed by their
+	// home-package spelling. uiop is 429 externals of which a program touches a handful,
+	// so it loads ONE name at a time (the loadedPreludeNames pattern) rather than whole.
+	private final java.util.Set<String> loadedUiopNames = new java.util.HashSet<>();
 
 	// Whether the GENERATED restart runtime (the two stack globals plus
 	// %run-handlers/find-restart/invoke-restart/...) has been evaluated into the
@@ -1285,7 +1291,7 @@ public final class LispEvaluator {
 		// package names (jzon's README: (uiop:add-package-local-nickname '#:jzon
 		// '#:com.inuoe.jzon)). The optional third argument (the package to scope the
 		// nickname to) is accepted and ignored.
-		String addNicknameName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
+		String addNicknameName = UiopExports.qualified(LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
 		this.globalEnv.defineFunction(addNicknameName, new LispFunction(addNicknameName, args -> {
 			if (args.size() < 2 || args.size() > 3) {
 				throw new LispEvalException(
@@ -2332,51 +2338,13 @@ public final class LispEvaluator {
 			}
 			return new LispString(PathnameOps.mergePathnames(relative, base.endsWith("/") ? base : base + "/"));
 		}));
-		// uiop:merge-pathnames* -- the safer defaults-aware merge, portable across
-		// ASDF-loaded libraries. See PathnameOps for the string-level semantics; the
-		// answer is a pathname VALUE, as real UIOP's is (and as the compile-time fold
-		// produces, so the two renderings agree).
-		String mergePathnamesStarName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.MERGE_PATHNAMES_STAR);
-		this.globalEnv.defineFunction(mergePathnamesStarName, new LispFunction(mergePathnamesStarName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
-				throw new LispEvalException(LispNames.UIOP_MERGE_PATHNAMES_STAR
-						+ " expects (specified [defaults]), got " + args.size() + " arguments");
-			}
-			String specified = PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(0));
-			String defaults = args.size() > 1 ? PathnameOps.namestring(LispNames.UIOP_MERGE_PATHNAMES_STAR, args.get(1))
-					: "";
-			return PathnameOps.pathnameValue(PathnameOps.mergePathnames(specified, defaults));
-		}));
-		// uiop:file-exists-p == probe-file (same contract: the truename on success, nil
-		// otherwise). Implemented directly over the SourceLoader rather than through the
-		// prelude probe-file (which is lazy-loaded and not yet resolvable here); kept
-		// identical to the compile paths' lowering in
-		// LispMacroExpander.expandUiopStubCall, which spells it (probe-file x).
-		String fileExistsPName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.FILE_EXISTS_P);
-		this.globalEnv.defineFunction(fileExistsPName, new LispFunction(fileExistsPName, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(fileExistsPName + " expects 1 argument, got " + args.size());
-			}
-			String path = PathnameOps.designatorNamestring(args.get(0));
-			if (path == null) {
-				throw new LispEvalException(fileExistsPName + " expects a pathname designator");
-			}
-			return this.sourceLoader.exists(path) ? PathnameOps.pathnameValue(path) : LispNil.INSTANCE;
-		}));
-		// uiop:native-namestring -- a rontolisp namestring IS the host spelling, so this
-		// is CL's namestring. Java-side (not a prelude splice) for the same reason as
-		// file-exists-p above; jzon's pathname stringify method calls it.
-		String nativeNamestringName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NATIVE_NAMESTRING);
-		this.globalEnv.defineFunction(nativeNamestringName, new LispFunction(nativeNamestringName, args -> {
-			if (args.size() != 1) {
-				throw new LispEvalException(nativeNamestringName + " expects 1 argument, got " + args.size());
-			}
-			String path = PathnameOps.designatorNamestring(args.get(0));
-			if (path == null) {
-				throw new LispEvalException(nativeNamestringName + " expects a pathname designator");
-			}
-			return new LispString(path);
-		}));
+		// merge-pathnames* / file-exists-p / native-namestring used to be Java built-ins
+		// here. They are Lisp source now (uiop-pathname.lisp, uiop-filesystem.lisp),
+		// which
+		// is what gives them to the JVM and both WASM backends as well: merge-pathnames*
+		// with non-literal arguments was "The function UIOP:MERGE-PATHNAMES* is
+		// undefined"
+		// on all three. The interpreter lazy-loads them like any other uiop definition.
 		// uiop::get-pathname-defaults (internal in real UIOP too) -- the pathname
 		// relative names resolve against. Every backend resolves a relative path
 		// against the host's working directory, and "" is the namestring designating
@@ -2399,7 +2367,7 @@ public final class LispEvaluator {
 		// so there the call lowers to the generic uiop call-time error instead. lack's
 		// find-package-or-load reaches it only on the quicklisp branch, which rontolisp
 		// never takes (:quicklisp is not in *features*, so the asdf branch runs).
-		String symbolCallName = PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.SYMBOL_CALL);
+		String symbolCallName = UiopExports.qualified(LispNames.SYMBOL_CALL);
 		this.globalEnv.defineFunction(symbolCallName, new LispFunction(symbolCallName, args -> {
 			if (args.size() < 2) {
 				throw new LispEvalException(LispNames.UIOP_SYMBOL_CALL + " expects (package name &rest args), got "
@@ -3395,10 +3363,42 @@ public final class LispEvaluator {
 			ensureUsocketLoaded();
 			value = this.globalEnv.lookupOrNull(name);
 		}
+		if (value == null && UiopLibrary.definesName(name)) {
+			// uiop exports variables too (49 of them), so the same lazy load has to be
+			// reachable from a variable read.
+			loadUiopDefinition(name);
+			value = this.globalEnv.lookupOrNull(name);
+		}
 		if (value == null) {
 			throw new LispEvalException("The variable " + name + " is unbound");
 		}
 		return value;
+	}
+
+	/**
+	 * Evaluates ONE uiop definition ({@code eval.UiopLibrary}) into the global
+	 * environment, once. The {@code not-implemented-error} pair goes in first whatever
+	 * the name is: every synthesized stub signals it, and a quoted condition name is not
+	 * a function resolution, so nothing else would trigger its load.
+	 * @param name the home-qualified uiop name
+	 * @return its global function binding, or {@code null} when the definition binds a
+	 * variable rather than a function
+	 */
+	@Nullable private LispVal loadUiopDefinition(String name) {
+		synchronized (this.libraryLoadLock) {
+			String conditions = UiopExports.qualified(LispNames.NOT_IMPLEMENTED_ERROR);
+			if (this.loadedUiopNames.add(conditions)) {
+				for (LispVal form : UiopLibrary.formsFor(conditions)) {
+					eval(form, this.globalEnv);
+				}
+			}
+			if (this.loadedUiopNames.add(name)) {
+				for (LispVal form : UiopLibrary.formsFor(name)) {
+					eval(form, this.globalEnv);
+				}
+			}
+			return this.globalEnv.lookupFunctionOrNull(name);
+		}
 	}
 
 	/**
@@ -3993,6 +3993,15 @@ public final class LispEvaluator {
 			}
 			if (LispNames.isCarCdrComposition(sym.name())) {
 				return eval(LispMacroExpander.expandCarCdrComposition(cons), env);
+			}
+			// A uiop MACRO nothing implements yet lowers to not-implemented-error with
+			// its argument forms dropped -- the same expansion both compilers apply, so
+			// an unimplemented (uiop:with-upgradability () (defun f ...)) signals here
+			// too rather than defining f first. The function-kind members are ordinary
+			// calls and fall through to the lazy load below.
+			LispVal uiopStub = LispMacroExpander.expandUnimplementedUiopMacro(cons);
+			if (uiopStub != null) {
+				return eval(uiopStub, env);
 			}
 			// User macros defined with defmacro: expand (evaluating the macro body with
 			// the unevaluated argument forms bound) and evaluate the expansion. Checked
@@ -5893,6 +5902,15 @@ public final class LispEvaluator {
 					eval(form, this.globalEnv);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The uiop family (uiop-*.lisp plus the not-implemented-error stubs
+			// UiopLibrary synthesizes for every export nothing implements yet) loads the
+			// same way, one definition at a time.
+			if (UiopLibrary.definesName(name)) {
+				LispVal loaded = loadUiopDefinition(name);
 				if (loaded != null) {
 					return loaded;
 				}

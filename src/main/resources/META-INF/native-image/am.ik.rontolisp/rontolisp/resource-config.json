@@ -342,6 +342,18 @@
           "typeReachable": "am.ik.rontolisp.eval.GrayStreamsLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/gray\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.UiopExports"
+        },
+        "pattern": "am/ik/rontolisp/uiop-exports\\.txt"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UiopLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/uiop-.*\\.lisp"
       }
     ]
   }

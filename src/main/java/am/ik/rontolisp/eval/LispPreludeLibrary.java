@@ -13,6 +13,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
+import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
@@ -58,17 +59,13 @@ import org.jspecify.annotations.Nullable;
  * wraps the answer back into a pathname; {@code truename} is {@code probe-file} plus a
  * signal on a missing file, which is what makes the {@code (ignore-errors (truename x))}
  * existence-probe idiom work.</li>
- * <li>{@code uiop/image:print-condition-backtrace} -- lite: prints the CONDITION and no
- * backtrace (no backend carries a Lisp-level call stack).</li>
- * <li>{@code directory} plus {@code uiop:directory-exists-p} /
- * {@code uiop:directory-files} / {@code uiop:subdirectories} /
- * {@code uiop:collect-sub*directories} -- the directory-LISTING family, one rendering of
- * the pattern / prefix / kind / ordering rules over the single {@code %list-directory}
- * primitive each backend implements.</li>
- * <li>{@code uiop:ensure-directory-pathname} / {@code uiop:default-temporary-directory} /
- * {@code uiop:delete-file-if-exists} plus the {@code %temp-file-name} helper -- the
- * temporary-file trio {@code uiop:with-temporary-file} expands over (smart-buffer's
- * disk-spill path).</li>
+ * <li>{@code directory} -- the directory-LISTING primitive, one rendering of the pattern
+ * / prefix / kind / ordering rules over the single {@code %list-directory} primitive each
+ * backend implements. uiop's listing family sits on top of it in
+ * {@code uiop-filesystem.lisp}.</li>
+ * <li>{@code %temp-file-name} -- the uniqueness rule {@code uiop:with-temporary-file}'s
+ * expansion calls (smart-buffer's disk-spill path). The uiop half of that trio is
+ * {@code UiopLibrary}'s.</li>
  * <li>{@code char-name} -- the standard character names ({@code Space}, {@code Newline},
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
@@ -133,60 +130,6 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, """
 				(defun make-load-form-saving-slots (object &key slot-names environment)
 				  (error "make-load-form-saving-slots is not supported (no fasl dumper)"))
-				""");
-		// Three real UIOP sequence/character utilities, bodies VERBATIM from upstream
-		// utility.lisp. They join the uiop package rather than the stub lowering
-		// because they are pure Lisp one-liners over primitives every backend has --
-		// quri's render-uri calls all three to decide whether to insert a path slash.
-		SOURCES.put(LispNames.EMPTYP, """
-				(defun uiop:emptyp (x)
-				  (or (null x) (and (vectorp x) (zerop (length x)))))
-				""");
-		SOURCES.put(LispNames.FIRST_CHAR, """
-				(defun uiop:first-char (s)
-				  (and (stringp s) (plusp (length s)) (char s 0)))
-				""");
-		SOURCES.put(LispNames.LAST_CHAR, """
-				(defun uiop:last-char (s)
-				  (and (stringp s) (plusp (length s)) (char s (1- (length s)))))
-				""");
-		// uiop:split-string -- upstream's semantics (split on ANY character of the
-		// separator sequence, scanning right to left so :max keeps the UNsplit head:
-		// ("a.b.c" :max 2 -> ("a.b" "c")), empty string -> ("")), rewritten without
-		// upstream's flet-return-from-outer-block shape: a `return` inside `do` would
-		// exit do's own nil block, so the loop carries an explicit done flag instead.
-		// sxql's sql-symbol tokenizer calls it on every dotted column name.
-		SOURCES.put(LispNames.SPLIT_STRING, """
-				(defun uiop:split-string (string &key max (separator '(#\\Space #\\Tab)))
-				  (let ((end (length string)))
-				    (if (zerop end)
-				        (list "")
-				        (let ((parts nil) (words 0) (done nil))
-				          (do ()
-				              (done)
-				            (if (and max (>= words (1- max)))
-				                (setq done t)
-				                (let ((start (position-if (lambda (c) (find c separator))
-				                                          string :end end :from-end t)))
-				                  (if (null start)
-				                      (setq done t)
-				                      (progn
-				                        (setq parts (cons (subseq string (1+ start) end) parts))
-				                        (setq words (1+ words))
-				                        (setq end start))))))
-				          (cons (subseq string 0 end) parts)))))
-				""");
-		// uiop/image:print-condition-backtrace -- lite: no backend carries a Lisp-level
-		// call stack, so there is no backtrace to print and the honest rendering is the
-		// condition alone. Real UIOP's own fallback for an implementation without a
-		// backtrace API is the same shape. Defined in its home package (uiop/image);
-		// the uiop package IMPORTS the name (PackageRegistry), so both spellings a
-		// library may use name this one function. lack-middleware-backtrace calls it as
-		// the first line of its error report.
-		SOURCES.put(LispNames.PRINT_CONDITION_BACKTRACE, """
-				(defun uiop/image:print-condition-backtrace (%pcb-condition &key (stream *error-output*) count)
-				  (format stream "~A~%" %pcb-condition)
-				  (values))
 				""");
 		SOURCES.put(LispNames.SXHASH, """
 				(defun sxhash (obj)
@@ -652,97 +595,13 @@ public final class LispPreludeLibrary {
 				                ((and (string/= %dir-n "") (probe-file %dir-p)) (list (pathname %dir-p)))
 				                (t nil))))))
 				""");
-		SOURCES.put(LispNames.DIRECTORY_EXISTS_P, """
-				(defun uiop:directory-exists-p (%de-path)
-				  (let ((%de-d (%dir-namestring %de-path)))
-				    (if (%list-directory (if (string= %de-d "") "." %de-d)) (pathname %de-d) nil)))
-				""");
-		// The optional PATTERN is UIOP's own second argument: a name-and-type wildcard
-		// (never a directory one -- real UIOP signals "Invalid file pattern" for that and
-		// so does this), appended to the directory and matched by the same `directory`
-		// rules. mito's migration reader spells it (uiop:directory-files dir "*.up.sql").
-		SOURCES.put(LispNames.DIRECTORY_FILES, """
-				(defun uiop:directory-files (%df-dir &optional (%df-pat "*.*"))
-				  (when (position #\\/ (%path-ns %df-pat))
-				    (error "Invalid file pattern ~S" %df-pat))
-				  (let ((%df-acc nil))
-				    (dolist (%df-e (directory (concatenate 'string (%dir-namestring %df-dir) (%path-ns %df-pat))))
-				      (let ((%df-s (namestring %df-e)))
-				        (unless (char= (char %df-s (- (length %df-s) 1)) #\\/)
-				          (setq %df-acc (cons %df-e %df-acc)))))
-				    (nreverse %df-acc)))
-				""");
-		// Chunked, NOT (make-string (file-length s)): file-length answers nil on both
-		// WASM backends (no WASI filestat call is imported, .kb/read-load-streams.md), so
-		// sizing the buffer from it traps there. The loop also reads EOF at most once --
-		// it stops as soon as a read comes back short -- because a SECOND read past EOF
-		// traps on the --component backend (the adapter's stream_read after the writable
-		// end dropped).
-		SOURCES.put(LispNames.READ_FILE_STRING, """
-				(defun uiop:read-file-string (%rfs-file &rest %rfs-keys)
-				  (with-open-file (%rfs-in %rfs-file)
-				    (let ((%rfs-acc "") (%rfs-buf (make-string 4096)) (%rfs-n 4096))
-				      (while (= %rfs-n 4096)
-				        (setq %rfs-n (read-sequence %rfs-buf %rfs-in))
-				        (when (> %rfs-n 0)
-				          (setq %rfs-acc (concatenate 'string %rfs-acc (subseq %rfs-buf 0 %rfs-n)))))
-				      %rfs-acc)))
-				""");
-		SOURCES.put(LispNames.SUBDIRECTORIES, """
-				(defun uiop:subdirectories (%sd-dir)
-				  (let ((%sd-acc nil))
-				    (dolist (%sd-e (directory (concatenate 'string (%dir-namestring %sd-dir) "*.*")))
-				      (let ((%sd-s (namestring %sd-e)))
-				        (when (char= (char %sd-s (- (length %sd-s) 1)) #\\/)
-				          (setq %sd-acc (cons %sd-e %sd-acc)))))
-				    (nreverse %sd-acc)))
-				""");
-		SOURCES.put(LispNames.COLLECT_SUB_DIRECTORIES, """
-				(defun uiop:collect-sub*directories (%cd-dir %cd-collectp %cd-recursep %cd-collector)
-				  (let ((%cd-d (pathname (%dir-namestring %cd-dir))))
-				    (when (funcall %cd-collectp %cd-d)
-				      (funcall %cd-collector %cd-d))
-				    (dolist (%cd-sub (uiop:subdirectories %cd-d))
-				      (when (funcall %cd-recursep %cd-sub)
-				        (uiop:collect-sub*directories %cd-sub %cd-collectp %cd-recursep %cd-collector))))
-				  nil)
-				""");
-		// The temporary-file trio. A pathname's namestring is flat, so "the pathname
-		// in directory form" is "the namestring with a trailing slash":
-		// merge-pathnames against one of these appends, which is exactly what
-		// smart-buffer's *temporary-directory* is built by.
-		SOURCES.put(LispNames.ENSURE_DIRECTORY_PATHNAME, """
-				(defun uiop:ensure-directory-pathname (%edp-path)
-				  (let ((%edp-s (namestring %edp-path)))
-				    (pathname
-				      (if (or (string= %edp-s "")
-				              (char= (char %edp-s (- (length %edp-s) 1)) #\\/))
-				          %edp-s
-				          (concatenate 'string %edp-s "/")))))
-				""");
-		// $TMPDIR or /tmp/: getenv is the one environment reader every backend has, and
-		// a backend whose environment is empty (both WASM ones without --env) takes the
-		// fallback rather than failing.
-		SOURCES.put(LispNames.DEFAULT_TEMPORARY_DIRECTORY, """
-				(defun uiop:default-temporary-directory ()
-				  (let ((%dtd-e (uiop:getenv "TMPDIR")))
-				    (uiop:ensure-directory-pathname
-				      (if (and %dtd-e (string/= %dtd-e "")) %dtd-e "/tmp"))))
-				""");
-		// delete-file with the missing-file file-error swallowed -- the whole reason
-		// real UIOP exports it. Over the %delete-file primitive rather than over
-		// delete-file, so the "missing file" answer is nil in one step.
-		SOURCES.put(LispNames.DELETE_FILE_IF_EXISTS, """
-				(defun uiop:delete-file-if-exists (%dfe-path)
-				  (if (and %dfe-path (%delete-file (%path-ns %dfe-path))) t nil))
-				""");
 		// The uniqueness rule behind uiop:with-temporary-file: create the directory,
 		// then draw random names until one names nothing. Deliberately NOT seeded from
 		// the clock -- (random n) is the one entropy source every backend shares.
 		SOURCES.put(LispNames.TEMP_FILE_NAME, """
 				(defun %temp-file-name (%tfn-dir %tfn-prefix %tfn-type)
-				  (let ((%tfn-d (namestring (uiop:ensure-directory-pathname
-				                              (or %tfn-dir (uiop:default-temporary-directory)))))
+				  (let ((%tfn-d (namestring (uiop/pathname:ensure-directory-pathname
+				                              (or %tfn-dir (uiop/stream:default-temporary-directory)))))
 				        (%tfn-p (or %tfn-prefix "tmp"))
 				        (%tfn-t (if %tfn-type (concatenate 'string "." %tfn-type) ""))
 				        (%tfn-n nil))
@@ -1333,6 +1192,12 @@ public final class LispPreludeLibrary {
 	 * @return the program with the referenced prelude definitions spliced in
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		// uiop rides this pass. The two libraries are mutually dependent -- a uiop body
+		// calls namestring / pathname / directory here, and %temp-file-name below calls
+		// uiop back -- so they are ONE pass with a fixed order, and every pipeline that
+		// splices the prelude needs both. Splicing uiop first is what lets the selection
+		// below see the prelude names its bodies reach.
+		program = UiopLibrary.process(program);
 		List<LispVal> resolved;
 		boolean canonical;
 		try {
@@ -1412,13 +1277,13 @@ public final class LispPreludeLibrary {
 		if (LispNames.MAKE_BROADCAST_STREAM_INTERNAL.equals(entry)) {
 			return callsWithArguments(program, LispNames.MAKE_BROADCAST_STREAM, canonical);
 		}
-		// The two entries uiop:with-temporary-file's EXPANSION calls. Same timing
-		// problem as %make-broadcast-stream: the expansion runs inside the expression
-		// compilers, long after this pass, so the reference this selection would look
-		// for does not exist yet -- without the rule smart-buffer's disk spill compiled
-		// to "%TEMP-FILE-NAME is undefined". The delete is spliced whatever :keep says,
-		// because reading that option here would duplicate the expansion's rule.
-		if (LispNames.TEMP_FILE_NAME.equals(entry) || LispNames.DELETE_FILE_IF_EXISTS.equals(entry)) {
+		// The entry uiop:with-temporary-file's EXPANSION calls. Same timing problem as
+		// %make-broadcast-stream: the expansion runs inside the expression compilers,
+		// long after this pass, so the reference this selection would look for does not
+		// exist yet -- without the rule smart-buffer's disk spill compiled to
+		// "%TEMP-FILE-NAME is undefined". UiopLibrary.reachedBySurfaceForm makes the
+		// mirror-image decision for the uiop half of the same expansion.
+		if (LispNames.TEMP_FILE_NAME.equals(entry)) {
 			return referencesName(program, LispNames.UIOP_WITH_TEMPORARY_FILE_QUALIFIED, canonical);
 		}
 		// The uiop lowerings expandUiopStubCall performs inside the expression
@@ -1426,15 +1291,24 @@ public final class LispPreludeLibrary {
 		// uiop:namestring / uiop:native-namestring become (namestring x), so a program
 		// spelling only the uiop name must still splice the CL definition.
 		if (LispNames.PROBE_FILE.equals(entry)) {
-			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.FILE_EXISTS_P),
-					canonical);
+			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical);
 		}
 		if (LispNames.NAMESTRING_CL.equals(entry)) {
 			return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NAMESTRING), canonical)
-					|| referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, LispNames.NATIVE_NAMESTRING),
-							canonical);
+					|| referencesUiopMember(program, LispNames.NATIVE_NAMESTRING, canonical);
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the program names a uiop member, in either the {@code uiop:} spelling or
+	 * the home sub-package's ({@code UiopExports}) -- this pass runs on a resolved copy,
+	 * where the home spelling is the one that survives, but falls back to the written
+	 * spelling when resolution failed.
+	 */
+	private static boolean referencesUiopMember(List<LispVal> program, String member, boolean canonical) {
+		return referencesName(program, PackageRegistry.qualify(LispNames.UIOP_PKG, member), canonical)
+				|| referencesName(program, UiopExports.qualified(member), canonical);
 	}
 
 	private static boolean callsWithArguments(List<LispVal> program, String name, boolean canonical) {
