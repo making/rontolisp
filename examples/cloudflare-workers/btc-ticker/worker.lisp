@@ -34,9 +34,26 @@
 ;; A Clack application is a function of the request environment. This one
 ;; ignores it: there is one endpoint and it takes no arguments.
 ;;
-;; The body it returns is the async-defun's FUTURE -- a Clack application is
-;; synchronous code, where `await' is not legal -- and the reactor transport
-;; resolves it at the boundary, which is what lets the whole program be this.
+;; It is an ASYNC-DEFUN, and that has nothing to do with the boundary -- the
+;; same source compiles on either one, and on the interpreter, the JVM and
+;; --component. What asks for it is `await': only an async frame may await, and
+;; this application has to look AT the price to choose 200 or 502. So it awaits,
+;; so it is an async-defun, and what it answers is a FUTURE of the response --
+;; which every rontolisp transport resolves at its boundary (the reactor's
+;; %http-reactor-handle, the socket transports' %http-serve-request, wasmtime
+;; serve under --component).
+;;
+;; The other shape keeps `app' an ordinary Clack function and puts the await one
+;; level down, returning that helper's future:
+;;
+;;   (rontolisp:async-defun answer (env) ... (rontolisp:await (ticker)) ...)
+;;   (defun app (env) (answer env))
+;;
+;; Prefer it as soon as anything WRAPS the application -- Clack middleware, a
+;; router -- because a wrapper that inspects the response list would be handed a
+;; future instead. ../dog-fetcher is written that way for exactly that reason:
+;; its routes are composed by tiny-routes. Here nothing wraps `app', so the
+;; await stays where it reads best.
 (rontolisp:async-defun app (env)
   (declare (ignore env))
   (let ((price (rontolisp:await (ticker))))
