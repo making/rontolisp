@@ -1334,6 +1334,10 @@ public final class JvmLispCompiler implements LispCompiler {
 				.index());
 		}
 		mainCtx.emit(Opcode.RETURN);
+		// A condition nobody caught reports itself on standard error instead of
+		// unwinding out of main as a stack trace through mangled Lisp names. Last, so
+		// every handler main already carries dispatches first.
+		JvmUncaughtHandler.append(mainCtx);
 
 		// Pass 2c: Compile lambda bodies (iteratively, new lambdas may be discovered
 		// during defun compilation, top-level compilation, or even lambda compilation)

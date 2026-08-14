@@ -30,6 +30,7 @@ import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
@@ -42,6 +43,7 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
+import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.VecSimd;
@@ -83,9 +85,10 @@ public final class RontoLispCli {
 
 	/**
 	 * The exit code the last {@link #run} produced. Every mode but {@code format} leaves
-	 * it at 0 and reports failure by throwing, which {@code main} turns into a stack
-	 * trace; the {@code format} subcommand instead has to distinguish "these files are
-	 * not formatted" (1) from "something went wrong" (2) so it can be used as a CI gate.
+	 * it at 0 and reports failure by throwing, which {@code main} turns into one line on
+	 * standard error and exit code 1; the {@code format} subcommand instead has to
+	 * distinguish "these files are not formatted" (1) from "something went wrong" (2) so
+	 * it can be used as a CI gate.
 	 * @return the exit code, 0 when there was nothing to report
 	 */
 	public int exitCode() {
@@ -1018,8 +1021,7 @@ public final class RontoLispCli {
 		}
 		if (!buffered) {
 			RontoLispCli cli = new RontoLispCli(System.in, System.out);
-			cli.run(args);
-			exit(cli.exitCode());
+			exit(runReporting(cli, args));
 			return;
 		}
 		PrintStream bufferedOut = new PrintStream(
@@ -1028,13 +1030,59 @@ public final class RontoLispCli {
 		System.setOut(bufferedOut);
 		Runtime.getRuntime().addShutdownHook(new Thread(bufferedOut::flush));
 		RontoLispCli cli = new RontoLispCli(System.in, bufferedOut);
+		int code;
 		try {
-			cli.run(args);
+			code = runReporting(cli, args);
 		}
 		finally {
 			bufferedOut.flush();
 		}
-		exit(cli.exitCode());
+		exit(code);
+	}
+
+	/**
+	 * Runs the CLI and turns a failure into ONE line on standard error plus exit code 1.
+	 * <p>
+	 * Only {@code main} reports: {@link #run} still throws, so an embedded caller (the
+	 * tests, the playground) keeps the exception with its type and its cause. What the
+	 * catch replaces is the default handler's stack trace, which names the INTERPRETER's
+	 * frames rather than the program's -- 212 lines of {@code LispEvaluator.evalLet}
+	 * above the one line that carried the diagnosis. The trace is still one
+	 * {@code RONTOLISP_DEBUG} away, because it is the right answer when the bug being
+	 * chased is rontolisp's own.
+	 */
+	// Package-private, not private, so RontoLispCliTest can drive it: main itself ends
+	// with System.exit and cannot be called from a test JVM.
+	static int runReporting(RontoLispCli cli, String[] args) {
+		try {
+			cli.run(args);
+			return cli.exitCode();
+		}
+		catch (RuntimeException ex) {
+			// The program's own output precedes the report even under
+			// --buffered-output, whose stream is drained only at the exit below.
+			cli.out.flush();
+			System.err.println(failureLine(ex));
+			if (UncaughtReport.debugTraceRequested()) {
+				ex.printStackTrace();
+			}
+			return 1;
+		}
+	}
+
+	/**
+	 * The one line a failure prints. A condition the program signaled and nobody caught
+	 * gets the cross-backend {@link UncaughtReport} wording -- the same line the JVM and
+	 * wasm backends print for the same condition; anything else (a read error, a compile
+	 * failure, a bad command line) is a rontolisp diagnostic and says {@code error:},
+	 * keeping whatever {@code file:line:column:} prefix the frontend already put on it.
+	 */
+	private static String failureLine(RuntimeException ex) {
+		String message = ex.getMessage();
+		if (message == null || message.isEmpty()) {
+			message = ex.getClass().getName();
+		}
+		return ex instanceof LispEvalException ? UncaughtReport.line(message) : "error: " + message;
 	}
 
 	// A non-zero exit code has to go through System.exit -- returning from main is always

@@ -241,11 +241,13 @@ everywhere except `--no-gc`.
   without evaluating anything. `throw` is stack-polymorphic like
   `unreachable`, so call sites are unchanged.
 - **Top-level trap shape** (`WasmEmitHelper.emitCatchAllPrologue/Epilogue`):
-  in EH mode `_start`/`run` and every export wrapper body (incl. serve's
-  `%http-dispatch`) run inside `block` + `try_table (catch_all)` whose landing
-  is `unreachable`; the normal path `return`s from INSIDE the try_table (so no
-  result blocktype is needed whatever the signature). An uncaught condition
-  therefore still exits with the same `unreachable` trap as before.
+  in EH mode every export wrapper body (incl. serve's `%http-dispatch`) runs
+  inside `block` + `try_table (catch_all)` whose landing is `unreachable`; the
+  normal path `return`s from INSIDE the try_table (so no result blocktype is
+  needed whatever the signature). An uncaught condition therefore still exits
+  with the same `unreachable` trap as before. The ENTRY function
+  (`_start`/`run`) uses the reporting variant instead — see the uncaught-report
+  section.
 - **handler-case** (`WasmHandlerCaseCompiler`, mirrors the JVM layout):
   `block $done (result ref null eq)` [+ optional return trampoline] +
   `block $h` + `try_table (catch $lisp-cond $h)`; landing splits the payload,
@@ -576,13 +578,14 @@ whose report would differ cannot exist. Pinned by
 ## Signal messages are lazy on wasm-GC; the last resort signals values (todo-324)
 
 **The invariant: on the wasm-GC backends a signal's message string is rendered only
-where a condition value can reach program hands -- never at the signal point.** The
-observation that licenses it: on these backends an uncaught condition exits as a bare
-`unreachable` trap (no text), and the `$lisp-cond` payload cdr has exactly one reader,
-the handler-case landing's simple-error synthesis, which runs only when the payload car
-(the instance) is nil. So the eagerly rendered message every signal site used to build
--- interpreter/JVM need it for the uncaught `LispEvalException`/`RuntimeException` text
--- was written and never read on wasm. Three changes, one gate:
+where a condition value can reach program hands -- never at the signal point.** What
+"reach program hands" means was WIDENED by todo-350: it used to exclude the top level,
+because an uncaught condition exited as a bare `unreachable` trap (no text) and the
+`$lisp-cond` payload had exactly one reader, the handler-case landing's simple-error
+synthesis. The entry function's landing pad is now a second reader
+(`WasmUncaughtReportCompiler`), so in EH mode BOTH halves of the payload are observable
+and both gates below go broad. Outside EH mode nothing is observable and nothing is
+rendered -- unchanged, byte for byte. Three changes, two gates:
 
 - **`WasmErrorCompiler.compileCond` / `WasmSignalCondCompiler` never compile their
   message operand** (payload cdr = nil). Unconditional: `%error-cond`/`%signal-cond`
@@ -591,14 +594,16 @@ the handler-case landing's simple-error synthesis, which runs only when the payl
   construction per CL. This is what deletes the report-render code from every typed
   signal site (chipz's `%INFLATE` & friends stopped calling `%PRINT-OBJECT-STR`).
 - **A plain `%error`'s message operand compiles only when `Ctx.condMessagesObservable`**
-  -- its message IS the payload a caught raw trap becomes a `simple-error` from, so it
-  must survive exactly where some clause can BIND that instance. The flag is the
-  narrowed routing answer below (forced on under restart mode / `--dynamic`), copied in
+  -- its message IS the payload a caught raw trap becomes a `simple-error` from, AND the
+  only text the entry landing pad has for it, so it must survive where some clause can
+  BIND that instance or where that landing exists. The flag is the routing answer below
+  (forced on under restart mode / `--dynamic` / EH mode), copied in
   `WasmAsyncEmit.freshCtx` like every Ctx flag.
-- **The routing gate itself narrows on wasm**: `expandTopLevelDefinitions` takes
-  `lazyConditionMessages` (only `WasmLispCompiler` passes true; JVM/interpreter keep the
-  broad gate -- their uncaught path prints the eager message, which needs the report
-  machinery at the signal site). Under it the answer is
+- **The routing gate narrows on wasm OUTSIDE EH MODE**: `expandTopLevelDefinitions`
+  takes `lazyConditionMessages` (`WasmLispCompiler` passes `!reportsUncaught`, i.e. true
+  only when no landing pad will read a condition; JVM/interpreter always pass false --
+  their uncaught path prints the eager message, which needs the report machinery at the
+  signal site). Under it the answer is
   `LispMacroExpander.mayHoldConditions`: `mayCreateConditions` minus the throw-only
   constructions (literal-typed `error`/`cerror`, `signal`, the read family's end-of-file
   lowering), keeping handler-case-that-binds, ignore-errors-under-mv,
@@ -609,7 +614,17 @@ the handler-case landing's simple-error synthesis, which runs only when the payl
   (`conditionConstructorName`: `(defun N (...) (%obj-new '%class-COND syms...))`) unless
   some other form references N -- without the exemption every library that merely
   DEFINES conditions (chipz) kept the whole renderer. Broad answer under restart mode /
-  `--dynamic` (`conditionRoutingGate`).
+  `--dynamic` / EH mode (`conditionRoutingGate`).
+  - **`reportsUncaught` is a PRE-SCAN, not the definitive `ehMode`.** The gate is part
+    of `expandTopLevelDefinitions`, which runs before the passes that finish deciding EH
+    mode, so `WasmLispCompiler` scans the program itself for the triggers that can
+    accompany a signal: a catching/cleanup form (`programUsesEhForm`), `catch`/`throw`,
+    restart mode, async mode. The one trigger it cannot see is a cross-lambda
+    `return-from`, lowered afterwards (`CrossLambdaExitLowering`, which has to run after
+    the expansion or a GENERATED dispatcher's `return-from` would go unlowered). A
+    program whose SOLE EH trigger is one of those keeps the narrow gate, so its landing
+    pad prints a plain `%error`'s message and an empty report for a typed condition.
+    **Re-evaluate if** the cross-lambda lowering ever becomes safe to run first.
 - **`%no-applicable-method` signals VALUES, not prose**: the defun is now
   `(error 'no-applicable-method-error :%nam-operation tail :%nam-datum-class
   (%class-designator arg))` against a class seeded ON DEMAND
@@ -655,6 +670,101 @@ exact old text -- the gate by
 `LispMacroExpanderTest.aThrowOnlyConstructionDoesNotRouteReportsWhereMessagesAreLazy` /
 `aHeldConditionStillRoutesReportsWhereMessagesAreLazy`, and cross-backend (component
 leg included) by the ci-spec `no-applicable-method-report` case.
+
+## An uncaught condition reports ONE line, the same one, on all four backends (todo-350)
+
+**The invariant: a signaled condition that escapes the top level writes exactly
+`Unhandled condition: <report>` to standard error, and the process then exits the way it
+always did.** The line is built from `compiler/UncaughtReport.PREFIX` at all three
+emission sites so a backend cannot drift; the report text is the same one `princ` writes
+for the condition, so the pinned example is byte-identical everywhere:
+
+| backend | before | now |
+| --- | --- | --- |
+| interpreter | `Exception in thread "main" ...LispEvalException: boom: 42` + 16 frames (212 for a cl-postgres connect) | the line, exit 1 |
+| JVM | `Exception in thread "main" java.lang.RuntimeException: boom: 42` + 10 frames of `Fail.$pctERROR-RT-47` | the line, then a ONE-line launcher echo, exit 1 |
+| wasm Preview 1 / component (EH mode) | `wasm trap: wasm 'unreachable' instruction executed`, **no message** | the line, then wasmtime's trap report, same trap exit |
+
+- **Interpreter / compile failures** (`RontoLispCli.runReporting`): only `main` catches --
+  `run` still throws, so an embedded caller keeps the exception with its type and cause.
+  A `LispEvalException` gets the shared wording; anything else (a read error, a compile
+  failure, a bad command line) is a rontolisp diagnostic and says `error:`, keeping the
+  `file:line:column:` prefix the frontend already put on it (`locateCompileFailure`).
+  A RUNTIME condition carries no such prefix on any backend, and deliberately: the
+  position table records on the COMPILE path only, because recording it in the
+  interpreter would put a `file:line:` on ordinary runtime error text that
+  `ci-spec.yaml` and the doc examples pin byte for byte (`SourceProvenance`, whose
+  javadoc holds the re-evaluation trigger). `RONTOLISP_DEBUG` (SET, any value)
+  additionally prints the JVM trace.
+- **JVM backend** (`JvmUncaughtHandler`): a last exception-table entry over the whole of
+  `main`, catching `RuntimeException` -- the same width `handler-case` catches here, so
+  anything a clause COULD have taken reports the same way when nothing did. It prints the
+  line, EMPTIES the exception's stack trace (unless `RONTOLISP_DEBUG`) and RETHROWS. Not
+  `System.exit(1)`: a compiled class's `main` is invoked in-process by ~110 assertions in
+  this project's own JVM-backend tests and by any embedder, and killing the calling JVM is
+  not a program's decision. The launcher then supplies exit 1 and echoes one line, the
+  role wasmtime's trap report plays on wasm. Its javadoc carries the re-evaluation trigger
+  for removing that echo.
+- **wasm-GC, EH MODE ONLY** (`WasmUncaughtReportCompiler`): the entry function
+  (`_start`/`run`) wraps its body in `block $trap` + `block $cond (result (ref null eq))`
+  + `try_table (catch $lisp-cond 0) (catch_all 1)`. The $lisp-cond landing gets the
+  payload as the inner block's result -- the very value `emitCatchAllEpilogue` used to
+  drop -- splits it into pseudo-locals (`__uc_cond$N` / `__uc_msg$N`, the
+  `WasmHandlerCaseCompiler` trick) and compiles an ordinary Lisp form:
+  `(%warn (%string-concat "Unhandled condition: " (if cond (%condition-report-str cond)
+  msg)))`, each half guarded by a `(let ((v ...)) (if v v ""))` so a nil never renders as
+  `NIL`. `%warn` is the existing fd-2 writer (already exempt from the lazy-message
+  narrowing), so nothing new reaches the module. Then `unreachable`, unchanged: the exit
+  CLASS every host and test expects is the trap.
+  - The try_table's own `end` restores a reachable, empty stack while `block $cond` owes
+    an `eqref`, so an `unreachable` sits between them -- the normal path already left
+    through the `return` inside.
+  - **Export wrappers keep the catch_all-only landing** (`WasmEmitHelper`): a host call's
+    failure is the host's to report, and a served handler's is `.todo/191`'s. Their
+    artifacts are unchanged.
+- **Outside EH mode nothing changes, byte for byte.** `%error` is a bare `unreachable`
+  that evaluates none of its arguments and the module has no tag section, so there is no
+  payload and no landing. Reporting there means turning EH mode on for every program
+  (121,572 -> 175,486 B on the two-line toy) to buy a path most programs never take, and
+  gives up the byte-identity guarantee. Verified by a stash dance over hello_world /
+  pi_approx / a plain-`error` toy / a typed-condition-but-no-catching-form toy, each in
+  plain / `--optimize=size` / `--component` / `--component --optimize=size` / `--dynamic`
+  / `--no-gc` builds: all identical. `--no-gc` is exempt outright (no error channel,
+  `.kb/no-gc-scalar-wasm.md`), and a `--no-wasi` reactor compiles the landing pad but
+  writes it into the discarding `fd_write` sink -- which is why
+  `doc/{en,ja}/guides/wasm-gc-module.md` still says a load-time failure there is a bare
+  `RuntimeError: unreachable` naming nobody.
+
+**The size this costs, measured (`size-report/programs/zlib`, `--optimize=size`).** zlib
+quickloads chipz, which uses catching forms, so it is the worst case: an EH-mode program
+that DEFINES condition classes and never binds one.
+
+| build | bytes | delta |
+| --- | --- | --- |
+| before | 72,837 | -- |
+| `condMessagesObservable` forced on (plain `%error` messages) | 76,812 | +3,975 |
+| routing gate broad as well (the report machinery) | 85,391 | +12,554 (+17.2%) |
+
+That is the todo-324 narrowing given back for EH-mode programs, and it was taken
+deliberately: with only the first step, a corrupt input printed `Unhandled condition: `
+and nothing else, because a typed signal's text lives in the instance and the renderer
+was gone. With both, wasm prints `Unhandled condition: Invalid gzip header` -- the
+interpreter's exact line. An empty diagnostic is not a diagnostic. **Re-evaluate if** the
+report renderer ever becomes narrowable to the classes that can actually ESCAPE (an
+escape analysis over the signal sites), which would leave a throw-only library like chipz
+paying only for its own reachable reports.
+
+Pinned cross-backend by `ci-spec.yaml`'s `standalone:` list -- a section `CiSpecE2eTest`
+runs one program at a time, per backend, asserting stdout, the stderr lines that must
+APPEAR (wasmtime wraps its own backtrace around ours) and a non-zero exit; the corpus
+itself cannot host these, since running one ends the program. Per backend by
+`RontoLispCliTest.anUncaughtConditionReportsOneLineAndExitsOne` /
+`aRontolispDiagnosticIsNotDressedUpAsACondition`,
+`JvmLispCompilerTest.anUncaughtConditionReportsOneLineAndRethrowsWithoutATrace` (which
+asserts the emptied trace), and `WasmLispCompilerIntegrationTest`'s
+`ehUncaughtPlainErrorReportsItsMessageBeforeTrapping` /
+`ehUncaughtTypedConditionReportsThroughItsReportLambda` /
+`anUncaughtConditionOutsideEhModeStaysSilent`.
 
 ## cerror + signal-operator function values (todo-085, cl-base64)
 

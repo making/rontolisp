@@ -42,6 +42,11 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * declared expected-line count, so a failure names the exact case (and its source) rather
  * than only a line number.
  * <p>
+ * The spec's {@code standalone:} list is the exception: a case whose program ENDS (an
+ * uncaught condition) can neither share that run nor be read off standard output, so each
+ * one is compiled and run by itself and checked against its stdout, the lines it must put
+ * on standard error, and its exit code. See {@link Standalone}.
+ * <p>
  * The {@code WASM_COMPONENT} backend compiles with {@code --component} and runs the
  * resulting WASI 0.3 (Preview 3) component with {@code wasmtime run -W gc=y
  *} (the async canonical ABI and stackful lifts are on by default in wasmtime 46+; only
@@ -85,7 +90,27 @@ class CiSpecE2eTest {
 		}
 	}
 
-	record Spec(List<Case> cases) {
+	/**
+	 * A case that cannot join the shared corpus because running it ENDS the program: an
+	 * uncaught condition takes the process down, and its report goes to standard error,
+	 * which the concatenated run neither slices nor keeps. Each one is compiled and run
+	 * on its own, per backend.
+	 *
+	 * @param name the case name, also the basename of its generated program
+	 * @param source the whole program
+	 * @param stdout the expected standard output, compared line for line
+	 * @param stderr lines that must APPEAR on standard error, in order but not
+	 * exclusively -- wasmtime prints its own trap report around ours
+	 * @param fails whether the program is expected to exit non-zero
+	 */
+	record Standalone(String name, String source, @Nullable String stdout, @Nullable String stderr, boolean fails) {
+	}
+
+	record Spec(List<Case> cases, @Nullable List<Standalone> standalone) {
+
+		List<Standalone> standaloneCases() {
+			return this.standalone == null ? List.of() : this.standalone;
+		}
 	}
 
 	@TempDir
@@ -186,6 +211,12 @@ class CiSpecE2eTest {
 						Stream.of(dynamicTest("(module too large to run)", () -> fail(guardFailure))));
 			}
 		}
+		// The standalone cases are their own programs, so each compiles and runs inside
+		// its own lazily-executed test rather than in the one shared run below.
+		List<DynamicNode> standalone = spec.standaloneCases()
+			.stream()
+			.<DynamicNode>map(s -> dynamicTest("standalone: " + s.name(), () -> runStandalone(backend, bin, s)))
+			.toList();
 
 		List<String> actual;
 		try {
@@ -198,7 +229,8 @@ class CiSpecE2eTest {
 		catch (Exception ex) {
 			System.err.println("[CiSpecE2eTest] backend " + backend + " failed: " + ex.getMessage());
 			return dynamicContainer(backend.name(),
-					Stream.of(dynamicTest("(execution failed)", () -> fail(ex.getMessage(), ex))));
+					Stream.concat(Stream.of(dynamicTest("(execution failed)", () -> fail(ex.getMessage(), ex))),
+							standalone.stream()));
 		}
 
 		List<DynamicNode> tests = new ArrayList<>();
@@ -220,7 +252,54 @@ class CiSpecE2eTest {
 						.as("case '%s' on %s%n--- source ---%n%s--- end source ---", c.name(), backend, c.source())
 						.containsExactlyElementsOf(expected)));
 		}
+		tests.addAll(standalone);
 		return dynamicContainer(backend.name(), tests.stream());
+	}
+
+	/**
+	 * Compiles and runs one {@link Standalone} case on one backend and checks its
+	 * standard output, the lines it must put on standard error, and whether it exits
+	 * non-zero. Standard error is checked by CONTAINMENT, not equality: a wasm program
+	 * that reports and then traps prints wasmtime's own backtrace around our line, and
+	 * that text belongs to the host, not to the contract under test.
+	 */
+	private static void runStandalone(Backend backend, Path bin, Standalone standalone) throws Exception {
+		Path source = workDir.resolve(standalone.name() + ".lisp");
+		Files.writeString(source, standalone.source());
+		String stem = "S" + standalone.name().replaceAll("[^A-Za-z0-9]", "");
+		Result result = switch (backend) {
+			case INTERPRETER -> execCapture(List.of(bin.toString(), source.toString()));
+			case JVM -> {
+				execLabeled("compile-jvm-" + standalone.name(),
+						List.of(bin.toString(), source.toString(), "-o", stem + ".class"));
+				yield execCapture(List.of("java", stem));
+			}
+			case WASM -> {
+				execLabeled("compile-wasm-" + standalone.name(),
+						List.of(bin.toString(), source.toString(), "-o", stem + ".wasm"));
+				yield execCapture(
+						List.of("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--dir", ".", stem + ".wasm"));
+			}
+			case WASM_COMPONENT -> {
+				execLabeled("compile-wasm-component-" + standalone.name(),
+						List.of(bin.toString(), source.toString(), "-o", stem + ".component.wasm", "--component"));
+				yield execCapture(List.of("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "--dir", ".",
+						stem + ".component.wasm"));
+			}
+		};
+		String where = "standalone case '%s' on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
+			.formatted(standalone.name(), backend, standalone.source(), result.stderr());
+		assertThat(splitLines(result.stdout())).as("%s", where)
+			.containsExactlyElementsOf(splitLines(standalone.stdout() == null ? "" : standalone.stdout()));
+		for (String line : splitLines(standalone.stderr() == null ? "" : standalone.stderr())) {
+			assertThat(splitLines(result.stderr())).as("%s", where).contains(line);
+		}
+		if (standalone.fails()) {
+			assertThat(result.exit()).as("%s: expected a non-zero exit", where).isNotZero();
+		}
+		else {
+			assertThat(result.exit()).as("%s", where).isZero();
+		}
 	}
 
 	private static List<String> runBackend(Backend backend, Path bin, Path program) throws Exception {
@@ -273,7 +352,25 @@ class CiSpecE2eTest {
 	 */
 	private static final long EXEC_TIMEOUT_SECONDS = 300;
 
+	/** One child process's whole result; see {@link #execCapture}. */
+	private record Result(String stdout, String stderr, int exit) {
+	}
+
 	private static List<String> exec(List<String> command) throws IOException, InterruptedException {
+		Result result = execCapture(command);
+		if (result.exit() != 0) {
+			throw new IOException(
+					"command %s exited with %d%nstderr:%n%s".formatted(command, result.exit(), result.stderr()));
+		}
+		return splitLines(result.stdout());
+	}
+
+	/**
+	 * Runs a command and answers everything it produced. {@link #exec} is this plus "a
+	 * non-zero exit is a failure", which is right for the corpus and wrong for a
+	 * standalone case whose whole point is to die.
+	 */
+	private static Result execCapture(List<String> command) throws IOException, InterruptedException {
 		ProcessBuilder pb = new ProcessBuilder(command).directory(workDir.toFile());
 		Process process = pb.start();
 		// Drain stdout and stderr concurrently. A single-threaded readAllBytes() on
@@ -288,13 +385,7 @@ class CiSpecE2eTest {
 				process.destroyForcibly();
 				throw new IOException("command %s timed out after %d seconds".formatted(command, EXEC_TIMEOUT_SECONDS));
 			}
-			String stdout = getSafely(stdoutFuture);
-			String stderr = getSafely(stderrFuture);
-			int exit = process.exitValue();
-			if (exit != 0) {
-				throw new IOException("command %s exited with %d%nstderr:%n%s".formatted(command, exit, stderr));
-			}
-			return splitLines(stdout);
+			return new Result(getSafely(stdoutFuture), getSafely(stderrFuture), process.exitValue());
 		}
 		finally {
 			drain.shutdownNow();

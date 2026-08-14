@@ -103,14 +103,20 @@ final class WasmEmitHelper {
 	}
 
 	/**
-	 * Opens the EH-mode catch_all wrapper of an entry function ({@code _start}/
-	 * {@code run}/an export wrapper): {@code block} + {@code try_table (catch_all 0)},
-	 * the catch label being that block. The body compiled next runs inside the try_table;
-	 * {@link #emitCatchAllEpilogue} closes the structure. The normal path exits with a
-	 * {@code return} from inside the try_table (see the epilogue), so no result blocktype
-	 * is needed whatever the function's signature; the catch_all landing pad falls out of
-	 * the block into an {@code unreachable}, preserving the trap shape of an uncaught
-	 * condition.
+	 * Opens the EH-mode catch_all wrapper of an EXPORT WRAPPER: {@code block} +
+	 * {@code try_table (catch_all 0)}, the catch label being that block. The body
+	 * compiled next runs inside the try_table; {@link #emitCatchAllEpilogue} closes the
+	 * structure. The normal path exits with a {@code return} from inside the try_table
+	 * (see the epilogue), so no result blocktype is needed whatever the function's
+	 * signature; the catch_all landing pad falls out of the block into an
+	 * {@code unreachable}, preserving the trap shape of an uncaught condition.
+	 *
+	 * <p>
+	 * The program's own entry ({@code _start}/{@code run}) uses
+	 * {@link WasmUncaughtReportCompiler} instead, which catches the {@code $lisp-cond}
+	 * tag as well and reports the condition before the same trap. A host call's failure
+	 * is the host's to report, and a served handler's is {@code .todo/191}'s, so these
+	 * wrappers keep the silent landing.
 	 * @param ctx the compilation context (its wasmCtrlDepth is raised by the two opened
 	 * control structures)
 	 */

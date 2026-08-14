@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 class JvmLispCompilerTest {
 
@@ -103,6 +105,35 @@ class JvmLispCompilerTest {
 			System.setErr(oldErr);
 		}
 		return err.toString().trim();
+	}
+
+	@Test
+	void anUncaughtConditionReportsOneLineAndRethrowsWithoutATrace() throws Exception {
+		// The generated main's last exception-table entry: one line on standard error
+		// (the same one the interpreter and the wasm-GC landing pad write), then the
+		// SAME exception rethrown with an emptied trace, so the launcher's echo is one
+		// line and an in-process caller still observes the failure.
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		Throwable cause;
+		try {
+			cause = catchThrowable(() -> compileAndRun("""
+					(define-condition uc-db (error) ((text :initarg :text :reader uc-db-text))
+					  (:report (lambda (c s) (format s "database error: ~a" (uc-db-text c)))))
+					(error 'uc-db :text "password authentication failed")
+					"""));
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		assertThat(err.toString().trim())
+			.isEqualTo("Unhandled condition: database error: password authentication failed");
+		assertThat(cause).isInstanceOf(InvocationTargetException.class);
+		Throwable signaled = ((InvocationTargetException) cause).getTargetException();
+		assertThat(signaled).isInstanceOf(RuntimeException.class)
+			.hasMessage("database error: password authentication failed");
+		assertThat(signaled.getStackTrace()).isEmpty();
 	}
 
 	@Test

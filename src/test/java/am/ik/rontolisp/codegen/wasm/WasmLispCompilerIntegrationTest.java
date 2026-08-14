@@ -293,6 +293,19 @@ class WasmLispCompilerIntegrationTest {
 		return result.getStderr();
 	}
 
+	// The non-EH twin of the above: no catching form, so the module carries no tag
+	// section and needs no `-W exceptions=y` -- an uncaught condition is the bare
+	// `unreachable` %error has always been.
+	private static String compileAndRunExpectTrap(String lispCode) throws Exception {
+		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", path("test.wasm"));
+		assertThat(result.getExitCode()).as("expected a trap for: %s\nstdout: %s", lispCode, result.getStdout())
+			.isNotZero();
+		return result.getStderr();
+	}
+
 	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
 	// pre-pass run by RontoLispCli.
 	private static String compileAndRunJson(String lispCode) throws Exception {
@@ -14002,9 +14015,44 @@ class WasmLispCompilerIntegrationTest {
 	void ehHandlerCaseUnmatchedErrorKeepsTrapShape() throws Exception {
 		// An uncaught condition (no matching clause anywhere) is converted back into a
 		// trap by the top-level catch_all wrapper, so the host-visible failure class is
-		// unchanged from the pre-EH `unreachable`.
-		assertThat(compileAndRunEhExpectTrap("(handler-case (error \"boom\") (warning (w) :w))"))
-			.contains("unreachable");
+		// unchanged from the pre-EH `unreachable` -- and since todo-350 it says what it
+		// was on the way out.
+		String stderr = compileAndRunEhExpectTrap("(handler-case (error \"boom\") (warning (w) :w))");
+		assertThat(stderr).contains("unreachable").contains("Unhandled condition: boom");
+	}
+
+	@Test
+	void ehUncaughtPlainErrorReportsItsMessageBeforeTrapping() throws Exception {
+		// The message rides the $lisp-cond payload CDR, which the entry landing pad now
+		// reads: EH mode forces Ctx.condMessagesObservable on so the operand compiles.
+		assertThat(compileAndRunEhExpectTrap("""
+				(print (handler-case (error "caught ~a" 1) (error (e) (princ-to-string e))))
+				(error "boom: ~a" 42)
+				""")).contains("Unhandled condition: boom: 42");
+	}
+
+	@Test
+	void ehUncaughtTypedConditionReportsThroughItsReportLambda() throws Exception {
+		// A typed signal carries a nil cdr, so the landing pad renders the INSTANCE
+		// through %condition-report-str -- one call site for the whole program, which is
+		// what forces the routing gate broad in EH mode. The text is the one princ
+		// writes, i.e. the one the interpreter and the JVM backend print.
+		assertThat(compileAndRunEhExpectTrap("""
+				(define-condition uc-db (error) ((text :initarg :text :reader uc-db-text))
+				  (:report (lambda (c s) (format s "database error: ~a" (uc-db-text c)))))
+				(print (handler-case (error "caught") (error (e) :ok)))
+				(error 'uc-db :text "password authentication failed")
+				""")).contains("Unhandled condition: database error: password authentication failed");
+	}
+
+	@Test
+	void anUncaughtConditionOutsideEhModeStaysSilent() throws Exception {
+		// No catching form anywhere: %error is a bare `unreachable` that evaluates
+		// nothing, the module has no tag section and there is no landing pad to read a
+		// payload that was never built. Reporting here would cost every program the EH
+		// machinery, so it is deliberately not done (.kb/error-handling.md).
+		String stderr = compileAndRunExpectTrap("(print 1) (error \"boom: ~a\" 42)");
+		assertThat(stderr).contains("unreachable").doesNotContain("Unhandled condition");
 	}
 
 	@Test

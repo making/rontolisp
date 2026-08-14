@@ -2107,22 +2107,41 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Computed before expandTopLevelDefinitions, which runs the same scan to
 		// inject the restart-runtime defuns.
 		boolean restartMode = LispMacroExpander.usesRestartSystem(program);
-		// lazyConditionMessages: this backend never renders a signal's message (an
-		// uncaught condition is a bare trap and the %error/%error-cond compilers skip
-		// the message operand), so the report-routing gate narrows to "can program
-		// code HOLD a condition" -- see the expandTopLevelDefinitions overload.
+		// Whether the entry function's landing pad will READ the condition that escapes
+		// it (WasmUncaughtReportCompiler) -- which is exactly EH mode, decided below on
+		// the post-expansion program but needed here, because the report-routing gate is
+		// part of the expansion. The scan covers every trigger that can accompany a
+		// signal: a catching/cleanup form, catch/throw, restart mode, asyncMode. The one
+		// it cannot see is a cross-lambda return-from, which reaches ehMode through
+		// blockExitTag and is lowered only after this pass; a program whose SOLE EH
+		// trigger is one of those keeps the narrow gate, so its landing pad prints a
+		// plain %error's message and an empty report for a typed condition. Widening
+		// that means moving the lowering above this pass -- and the lowering has to run
+		// after it, or a generated dispatcher's return-from would not be lowered at all.
+		boolean reportsUncaught = programUsesEhForm(program) || this.asyncMode || restartMode
+				|| programUsesSymbol(program, LispNames.CATCH) || programUsesSymbol(program, LispNames.THROW);
+		// lazyConditionMessages: without a landing pad that reads it, this backend never
+		// renders a signal's message (an uncaught condition is a bare trap and the
+		// %error/%error-cond compilers skip the message operand), so the report-routing
+		// gate narrows to "can program code HOLD a condition" -- see the
+		// expandTopLevelDefinitions overload. In EH mode the landing pad IS a holder, of
+		// every condition that escapes, so the gate goes back to the broad answer: the
+		// report machinery it injects has ONE call site there, not one per signal.
 		// The dispatch narrower drops generic-function branches no call site can select
 		// (compiler/GenericDispatchNarrowing); only an optimizing, early-bound compile
 		// may narrow -- under --dynamic any name resolves at run time.
 		program = LispMacroExpander.expandTopLevelDefinitions(program, structAccessors, closRegistry,
-				packageResolver::spellsAsExternal, this.dynamic, true,
+				packageResolver::spellsAsExternal, this.dynamic, !reportsUncaught,
 				this.optimize.eliminatesDeadCode() && !this.dynamic
 						? new am.ik.rontolisp.compiler.GenericDispatchNarrowing() : null);
-		// Whether any signal's message string is observable: exactly the narrowed
-		// routing answer (a message is read only through a HELD condition), forced on
-		// with it under restart mode / --dynamic. Read by WasmErrorCompiler to decide
-		// whether a plain %error compiles its message operand.
-		boolean condMessagesObservable = closRegistry.routesConditionReports() || restartMode || this.dynamic;
+		// Whether any signal's message string is observable: the narrowed routing answer
+		// (a message is read only through a HELD condition), forced on with it under
+		// restart mode / --dynamic, and in EH mode by the landing pad -- a plain %error
+		// carries its message in the payload cdr, which is the only text that landing
+		// has. Read by WasmErrorCompiler to decide whether a plain %error compiles its
+		// message operand.
+		boolean condMessagesObservable = closRegistry.routesConditionReports() || restartMode || this.dynamic
+				|| reportsUncaught;
 		// Whether the PROGRAM itself needs the concatenate 'string argument normalizer
 		// (see Ctx.usesSeqString); computed before the wrappers so the lowering only
 		// calls a helper that is actually injected. AFTER expandTopLevelDefinitions --
@@ -2993,12 +3012,13 @@ public final class WasmLispCompiler implements LispCompiler {
 			startWriter.writeUnsignedLeb128(GLOBAL_ENV);
 		}
 
-		// EH mode: an uncaught $lisp-cond throw escaping the top level must keep
-		// today's trap shape (host-visible exit class), so the whole body runs inside
-		// a catch_all whose landing pad is an unreachable. The normal path returns
-		// from inside the try_table, which sidesteps needing a result blocktype.
+		// EH mode: an uncaught $lisp-cond throw escaping the top level keeps today's
+		// trap shape (host-visible exit class) but no longer keeps its silence -- the
+		// landing pad catches the tag, writes the condition's report to fd 2 and only
+		// then falls into the unreachable. The normal path returns from inside the
+		// try_table, which sidesteps needing a result blocktype.
 		if (ehMode) {
-			WasmEmitHelper.emitCatchAllPrologue(ctx);
+			WasmUncaughtReportCompiler.emitPrologue(ctx);
 		}
 		int topLevelAwaits = 0;
 		if (this.asyncMode) {
@@ -3031,7 +3051,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			startWriter.writeSignedLeb128(0);
 		}
 		if (ehMode) {
-			WasmEmitHelper.emitCatchAllEpilogue(ctx);
+			WasmUncaughtReportCompiler.emitEpilogue(ctx);
 		}
 		startWriter.write(Instruction.END);
 

@@ -29,6 +29,54 @@ class RontoLispCliTest {
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
+	/**
+	 * Drives the reporting wrapper {@code main} runs the CLI through, answering
+	 * {@code {exitCode, stdout, stderr}}. {@code main} itself ends in
+	 * {@code System.exit}, so it cannot be called from a test JVM.
+	 */
+	private String[] runReporting(String... args) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		RontoLispCli cli = new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out));
+		PrintStream oldErr = System.err;
+		System.setErr(new PrintStream(err));
+		int code;
+		try {
+			code = RontoLispCli.runReporting(cli, args);
+		}
+		finally {
+			System.setErr(oldErr);
+		}
+		return new String[] { String.valueOf(code), out.toString(StandardCharsets.UTF_8),
+				err.toString(StandardCharsets.UTF_8) };
+	}
+
+	@Test
+	void anUncaughtConditionReportsOneLineAndExitsOne() throws Exception {
+		// The interpreter's half of the cross-backend contract: the condition's report,
+		// once, on standard error -- not the 16 (212 for a cl-postgres connect) frames
+		// of LispEvaluator the default handler used to print. The program's own output
+		// still comes out.
+		Path program = this.tempDir.resolve("boom.lisp");
+		Files.writeString(program, "(print \"before\")\n(error \"boom: ~a\" 42)\n");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[1]).isEqualTo("\"before\"\n");
+		assertThat(result[2].trim()).isEqualTo("Unhandled condition: boom: 42");
+	}
+
+	@Test
+	void aRontolispDiagnosticIsNotDressedUpAsACondition() throws Exception {
+		// Only a signaled condition takes the cross-backend wording; a read error, a
+		// compile failure or a bad command line is the COMPILER talking and says
+		// "error:", keeping the file:line:column: prefix the frontend put on it.
+		Path program = this.tempDir.resolve("unbalanced.lisp");
+		Files.writeString(program, "(print (+ 1 2)\n");
+		String[] result = runReporting(program.toString());
+		assertThat(result[0]).isEqualTo("1");
+		assertThat(result[2].trim()).startsWith("error: ").doesNotContain("Unhandled condition");
+	}
+
 	@Test
 	void replEvaluatesExpression() {
 		String output = runCli("(+ 1 2)\n");

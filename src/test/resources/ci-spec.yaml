@@ -8800,3 +8800,35 @@ cases:
       ((2 4) 10)
       3
       3
+
+# Cases that END the program, so they cannot join the corpus above: each is
+# compiled and run on its own, and what it asserts is the standard-error report
+# plus a non-zero exit. `stderr` lines must APPEAR -- wasmtime wraps its own
+# trap backtrace around ours.
+standalone:
+  - name: uncaught-condition-report
+    source: |
+      ;; handler-case anywhere in the program puts the wasm module in EH mode,
+      ;; which is where an uncaught condition is reportable at all; a real
+      ;; program that loads a library is always in it.
+      (define-condition db-error (error)
+        ((text :initarg :text :reader db-error-text))
+        (:report (lambda (c s) (format s "database error: ~a" (db-error-text c)))))
+      (print (handler-case (error "caught: ~a" 1) (error (e) (princ-to-string e))))
+      (print "before")
+      (error 'db-error :text "password authentication failed")
+    stdout: |
+      "caught: 1"
+      "before"
+    stderr: |
+      Unhandled condition: database error: password authentication failed
+    fails: true
+  - name: uncaught-simple-error-report
+    source: |
+      (print (handler-case (error "caught: ~a" 2) (error (e) (princ-to-string e))))
+      (error "boom: ~a" 42)
+    stdout: |
+      "caught: 2"
+    stderr: |
+      Unhandled condition: boom: 42
+    fails: true
