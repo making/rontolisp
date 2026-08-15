@@ -20,11 +20,13 @@ import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.compiler.CompileTimeBoundp;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
 import am.ik.rontolisp.eval.UsocketLibrary;
@@ -130,6 +132,13 @@ public final class RontoPlayground {
 			}
 			return echoed.toString();
 		}
+		catch (LispExitSignal exit) {
+			// (uiop:quit code) in the browser: there is no process to end, so the run
+			// stops where it stood and the output it produced is the answer -- the same
+			// thing the CLI shows, minus the exit code the page cannot have.
+			replOut.flush();
+			return replBuffer.toString();
+		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();
 		}
@@ -178,6 +187,10 @@ public final class RontoPlayground {
 			.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(VecLibrary.process(
 					LispPreludeLibrary.process(
 							UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))), features)))));
+		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
+		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the
+		// JVM button and for a program that never quits.
+		program = ExitLibrary.process(program, backend, features);
 		// The (boundp 'name) fold runs before the shake for the same reason it does in the
 		// CLI: a guarded library constant is not a top-level definer until its probe is
 		// decided, and the shaker cannot drop what it cannot see

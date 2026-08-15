@@ -36,7 +36,7 @@ one member name:
 | [`uiop/pathname`](uiop/pathname.md) | the pathname algebra (`subpathname`, `parse-unix-namestring`, `enough-pathname`) | 50 / 50 |
 | `uiop/filesystem` | probe, walk and mutate the file system | 8 / 32 |
 | `uiop/stream` | file contents, temporary files, encodings, the standard streams | 3 / 66 |
-| `uiop/image` | the command line, exit, the dump hooks | 1 / 30 |
+| [`uiop/image`](uiop/image.md) | exit, fatal conditions, the dump hooks (and the command line, which is not implemented) | 25 / 30 |
 | `uiop/launch-program` | asynchronous subprocesses | 0 / 19 |
 | `uiop/run-program` | synchronous subprocesses | 0 / 7 |
 | `uiop/lisp-build` | `compile-file*` and the deferred warnings | 1 / 44 |
@@ -50,12 +50,15 @@ target the counts above are measured against, so both move together.
 
 ## What is implemented
 
-Three sub-packages are complete, and each has its own page: `uiop/utility` — the
+Four sub-packages have their own page. Three are complete: `uiop/utility` — the
 68 portable helpers everything else in uiop is written in
 ([uiop/utility](uiop/utility.md)) — `uiop/pathname`, the 50-member pathname
 algebra ([uiop/pathname](uiop/pathname.md)), and `uiop/os`, the 22 host-identity,
 environment and working-directory members ([uiop/os](uiop/os.md), which is where
-[`uiop:getenv`](functions/uiop-getenv.md) lives). The rest:
+[`uiop:getenv`](functions/uiop-getenv.md) lives). The fourth is
+[uiop/image](uiop/image.md), where [`uiop:quit`](uiop/image.md#exiting) ends the
+process with a status code on all four backends, and where the fatal-condition,
+backtrace and image-hook families live. The rest:
 
 | Function | Example | Result |
 |----------|---------|--------|
@@ -72,7 +75,6 @@ environment and working-directory members ([uiop/os](uiop/os.md), which is where
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — the host-OS spelling of a pathname, which here IS the namestring, so this is `namestring` |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | look the name up in the package at run time and apply it — UIOP's late-binding call into a system the caller does not depend on |
-| `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | print a report for a condition (lite: the condition alone — no backend carries a Lisp-level call stack) |
 
 Three members outside the complete sub-packages are **macros**, expanded by the
 compiler rather than called: `uiop:with-temporary-file`,

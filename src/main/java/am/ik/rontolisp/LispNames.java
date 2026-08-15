@@ -6789,6 +6789,20 @@ public final class LispNames {
 	public static final String HOST_GETCWD = "%HOST-GETCWD";
 
 	/**
+	 * The {@code %host-exit} internal primitive behind {@code uiop:quit}: end the process
+	 * with the given status code. The public {@code uiop:quit} is Lisp
+	 * ({@code uiop-image.lisp}) that finishes the standard output streams first and then
+	 * calls this, so the four backends share one definition of what quitting means. Per
+	 * backend: a {@code LispExitSignal} the CLI turns into the process code on the
+	 * interpreter (it is NOT a condition -- {@code handler-case} cannot see it, and
+	 * {@code unwind-protect} deliberately runs no cleanup for it), {@code System.exit} on
+	 * the JVM, and the spliced {@code exit.lisp} defun on both WASM backends -- over
+	 * wasi_snapshot_preview1 {@code proc_exit} on Preview 1 and over wit-imported
+	 * {@code wasi:cli/exit@0.3.0}'s {@code exit-with-code} under {@code --component}.
+	 */
+	public static final String HOST_EXIT = "%HOST-EXIT";
+
+	/**
 	 * The {@code %getenv-override} prelude reader: the {@code (name . value)} entry a
 	 * {@code (setf (uiop:getenv name) value)} wrote, or nil. {@link #GETENV_OVERRIDE_SET}
 	 * is the writer; both carry the store's defvar, the way the {@code symbol-plist}
@@ -7077,6 +7091,20 @@ public final class LispNames {
 	 * named here because {@link #WITH_MUFFLED_CONDITIONS} expands into it.
 	 */
 	public static final String CALL_WITH_MUFFLED_CONDITIONS = "CALL-WITH-MUFFLED-CONDITIONS";
+
+	/**
+	 * {@code uiop:with-fatal-condition-handler () body...} -- shorthand for
+	 * {@link #CALL_WITH_FATAL_CONDITION_HANDLER} over a thunk of the body.
+	 */
+	public static final String WITH_FATAL_CONDITION_HANDLER = "WITH-FATAL-CONDITION-HANDLER";
+
+	/**
+	 * {@code uiop:call-with-fatal-condition-handler thunk} -- runs the thunk under a
+	 * {@code handler-bind} that reports any {@code serious-condition} and exits 99. Lisp
+	 * source ({@code uiop-image.lisp}); named here because
+	 * {@link #WITH_FATAL_CONDITION_HANDLER} expands into it.
+	 */
+	public static final String CALL_WITH_FATAL_CONDITION_HANDLER = "CALL-WITH-FATAL-CONDITION-HANDLER";
 
 	/**
 	 * {@code uiop:with-pathname-defaults ([defaults]) body...} -- runs the body with

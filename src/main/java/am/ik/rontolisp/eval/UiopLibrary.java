@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -393,7 +394,8 @@ public final class UiopLibrary {
 			// VARIABLE -- a definition is a definition, so the same selection carries
 			// its defvar in.
 			LispNames.WITH_PATHNAME_DEFAULTS, List.of(LispNames.NIL_PATHNAME_VAR), LispNames.WITH_ENOUGH_PATHNAME,
-			List.of(LispNames.CALL_WITH_ENOUGH_PATHNAME));
+			List.of(LispNames.CALL_WITH_ENOUGH_PATHNAME), LispNames.WITH_FATAL_CONDITION_HANDLER,
+			List.of(LispNames.CALL_WITH_FATAL_CONDITION_HANDLER));
 
 	/** Whether a definition the program never NAMES is nonetheless reached from it. */
 	private static boolean reachedBySurfaceForm(String name, Set<String> occurring) {
@@ -467,7 +469,15 @@ public final class UiopLibrary {
 		if (!unknown.isEmpty()) {
 			throw new IllegalStateException("uiop-*.lisp defines names uiop does not export: " + unknown);
 		}
-		return new Tables(Map.copyOf(out), Set.copyOf(implemented));
+		// unmodifiable views over the INSERTION-ORDERED maps, not Map.copyOf /
+		// Set.copyOf:
+		// those answer an immutable map whose iteration order is salted per JVM run, and
+		// every consumer here promises inventory order -- the spliced prefix of a
+		// compiled
+		// program (process), the lazy-load closure (closureOf) and the coverage report.
+		// With copyOf the same source compiled twice emitted the definitions in different
+		// orders.
+		return new Tables(Collections.unmodifiableMap(out), Collections.unmodifiableSet(implemented));
 	}
 
 	/**

@@ -1,0 +1,22 @@
+package root:exit;
+
+// The wasi:cli@0.3.0 exit surface exit.lisp binds under --component (vendored from the
+// official WASI 0.3.0 WIT, trimmed to the bound member). It is NOT one of the interfaces
+// the fixed import block declares (src/wasm-component/core.wat), so the binding is an
+// APPENDED USER IMPORT -- which is the point: only a program that calls uiop:quit makes
+// its component import wasi:cli/exit at all. Keep in lockstep with the regen source in
+// src/wasm-component/deps/cli/exit.wit.
+
+package wasi:cli@0.3.0 {
+  interface exit {
+    /// Exit the current instance and any linked instances, reporting the
+    /// specified status code to the host.
+    ///
+    /// The meaning of the code depends on the context, with 0 usually meaning
+    /// "success", and other values indicating various types of failure.
+    ///
+    /// This function does not return; the effect is analogous to a trap, but
+    /// without the connotation that something bad has happened.
+    exit-with-code: func(status-code: u8);
+  }
+}

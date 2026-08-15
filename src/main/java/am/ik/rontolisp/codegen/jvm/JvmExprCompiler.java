@@ -547,6 +547,9 @@ final class JvmExprCompiler {
 				// turns a nil answer into its not-implemented-error.
 				case LispNames.HOST_GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
 				case LispNames.HOST_GETCWD -> JvmGetcwdCompiler.compile(cons, ctx, className);
+				// The exit primitive behind uiop:quit (uiop-image.lisp finishes the
+				// output streams first, on every backend).
+				case LispNames.HOST_EXIT -> JvmExitCompiler.compile(cons, ctx, className);
 				case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
 				case LispNames.SLEEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons, false), ctx, className);

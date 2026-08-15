@@ -13477,6 +13477,123 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopImageQuitIsTheHostExit() {
+		// uiop:quit ends the process with a status code on all four backends. On the
+		// interpreter that is a SIGNAL rather than a System.exit -- run() is embedded,
+		// and
+		// only RontoLispCli.main may turn a program's code into the process's. The code
+		// is
+		// masked to eight bits, which is what a POSIX host does with it anyway and what
+		// wasi:cli/exit's u8 accepts, so the backends agree past 255 too.
+		assertThatThrownBy(() -> evalMulti("(uiop:quit 3)")).isInstanceOf(LispExitSignal.class)
+			.extracting(ex -> ((LispExitSignal) ex).code())
+			.isEqualTo(3);
+		assertThatThrownBy(() -> evalMulti("(uiop:quit)")).isInstanceOf(LispExitSignal.class)
+			.extracting(ex -> ((LispExitSignal) ex).code())
+			.isEqualTo(0);
+		assertThatThrownBy(() -> evalMulti("(uiop:quit 300)")).isInstanceOf(LispExitSignal.class)
+			.extracting(ex -> ((LispExitSignal) ex).code())
+			.isEqualTo(44);
+		assertThatThrownBy(() -> evalMulti("(uiop:shell-boolean-exit nil)")).isInstanceOf(LispExitSignal.class)
+			.extracting(ex -> ((LispExitSignal) ex).code())
+			.isEqualTo(1);
+		assertThatThrownBy(() -> evalMulti("(uiop:shell-boolean-exit :yes)")).isInstanceOf(LispExitSignal.class)
+			.extracting(ex -> ((LispExitSignal) ex).code())
+			.isEqualTo(0);
+		// die reports on *error-output* and quits with the code it was given.
+		assertThatThrownBy(() -> evalMulti("""
+				(let ((*error-output* (make-string-output-stream)))
+				  (uiop:die 7 "no such thing: ~A" :widget))
+				""")).isInstanceOf(LispExitSignal.class).extracting(ex -> ((LispExitSignal) ex).code()).isEqualTo(7);
+	}
+
+	@Test
+	void evalUiopImageQuitNeitherUnwindsNorIsCatchable() {
+		// System.exit / proc_exit / wasi:cli/exit end the process where they stand, so
+		// nothing runs after a quit on the compile backends -- and the interpreter's exit
+		// signal is deliberately invisible to unwind-protect and to handler-case for
+		// exactly that reason. All four backends print :START and nothing else.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out));
+		assertThatThrownBy(() -> {
+			for (LispVal expr : LispReader.readAllFromString("""
+					(print :start)
+					(unwind-protect
+					     (handler-case (uiop:quit 5) (error (e) (print :caught)))
+					  (print :cleanup))
+					(print :after)
+					""")) {
+				evaluator.eval(expr);
+			}
+		}).isInstanceOf(LispExitSignal.class).extracting(ex -> ((LispExitSignal) ex).code()).isEqualTo(5);
+		assertThat(out.toString()).isEqualTo(":START\n");
+	}
+
+	@Test
+	void evalUiopImageHooksAndTheFatalConditionFamily() {
+		// The hooks are REAL lists -- a library may register into one at load time, and
+		// only the act of dumping an image is impossible. Upstream routes both registrars
+		// through register-hook-function, which needs (setf (symbol-value ...)); naming
+		// the variable literally is the same registration without that primitive.
+		assertThat(evalMulti("""
+				(uiop:register-image-dump-hook 'a)
+				(uiop:register-image-dump-hook 'b)
+				(uiop:register-image-dump-hook 'a)
+				(defvar *ran* nil)
+				(uiop:register-image-restore-hook (lambda () (push :restored *ran*)) nil)
+				(uiop:call-image-restore-hook)
+				(list uiop:*image-dump-hook* *ran* uiop:*image-dumped-p* uiop:*lisp-interaction*
+				      uiop:*image-prelude* uiop:*image-entry-point* uiop:*image-postlude*)
+				""").print()).isEqualTo("((B A) (:RESTORED) NIL NIL NIL NIL NIL)");
+		// fatal-condition is a deftype over serious-condition, so a RUNTIME typep and a
+		// handler-bind clause both match it.
+		assertThat(evalMulti("""
+				(list (uiop:fatal-condition-p (make-condition 'error))
+				      (uiop:fatal-condition-p (make-condition 'warning))
+				      (uiop:fatal-condition-p 42))
+				""").print()).isEqualTo("(T NIL NIL)");
+		// The backtrace family is LITE and stays lite: no backend carries a Lisp-level
+		// call stack, so the honest rendering is the condition and no frames.
+		assertThat(evalMulti("""
+				(with-output-to-string (s)
+				  (uiop:print-condition-backtrace (make-condition 'simple-error :format-control "boom")
+				                                  :stream s)
+				  (uiop:print-backtrace :stream s :condition "second")
+				  (uiop:raw-print-backtrace :stream s))
+				""").print()).isEqualTo("\"boom\nsecond\n\"");
+	}
+
+	@Test
+	void evalUiopImageHandleFatalConditionReportsAndExits99() {
+		// *lisp-interaction* is nil here where upstream defaults to t: there is no
+		// debugger to enter on any backend, so the handler reports and dies with
+		// upstream's own status 99.
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		LispEvaluator evaluator = new LispEvaluator(new PrintStream(out));
+		assertThatThrownBy(() -> {
+			for (LispVal expr : LispReader.readAllFromString("""
+					(defvar *report* nil)
+					(let ((*error-output* (make-string-output-stream)))
+					  (uiop:with-fatal-condition-handler () (error "the sky is falling")))
+					""")) {
+				evaluator.eval(expr);
+			}
+		}).isInstanceOf(LispExitSignal.class).extracting(ex -> ((LispExitSignal) ex).code()).isEqualTo(99);
+	}
+
+	@Test
+	void evalUiopImageTheImageItselfIsNotImplemented() {
+		// There is no image: a program is started from source and the compile backends
+		// emit an artifact rather than saving a heap. The three name that instead of
+		// half-doing it.
+		assertThat(evalMulti("""
+				(list (handler-case (uiop:dump-image "x.img") (uiop:not-implemented-error () :dump-image))
+				      (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
+				      (handler-case (uiop:create-image "x" nil) (uiop:not-implemented-error () :create-image)))
+				""").print()).isEqualTo("(:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)");
+	}
+
+	@Test
 	void evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream() {
 		// smart-buffer's finalize-buffer hands one of these to the multipart parser,
 		// and http-body type-tests it against flex:vector-stream for its fast path.

@@ -48,10 +48,15 @@ class UiopLibraryTest {
 		// as upstream); the uiop package IMPORTS the name, so a program spelling uiop:
 		// resolves to the same symbol and must select the same single defun -- not miss
 		// the splice and compile to a call-time undefined-function error.
-		assertThat(splicedNames("(uiop/image:print-condition-backtrace c :stream s)"))
-			.containsExactly("UIOP/IMAGE:PRINT-CONDITION-BACKTRACE");
-		assertThat(splicedNames("(uiop:print-condition-backtrace c :stream s)"))
-			.containsExactly("UIOP/IMAGE:PRINT-CONDITION-BACKTRACE");
+		// The three are one group: print-condition-backtrace is written over
+		// print-backtrace, which applies raw-print-backtrace -- upstream's own layering,
+		// so the fixpoint pulls both in behind the name the program spelled. The order is
+		// the inventory's, which is a promise the tables keep by being insertion-ordered
+		// (Map.copyOf would salt it per JVM run and make the spliced prefix vary).
+		assertThat(splicedNames("(uiop/image:print-condition-backtrace c :stream s)")).containsExactly(
+				"UIOP/IMAGE:PRINT-BACKTRACE", "UIOP/IMAGE:PRINT-CONDITION-BACKTRACE", "UIOP/IMAGE:RAW-PRINT-BACKTRACE");
+		assertThat(splicedNames("(uiop:print-condition-backtrace c :stream s)")).containsExactly(
+				"UIOP/IMAGE:PRINT-BACKTRACE", "UIOP/IMAGE:PRINT-CONDITION-BACKTRACE", "UIOP/IMAGE:RAW-PRINT-BACKTRACE");
 	}
 
 	@Test

@@ -1889,6 +1889,112 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopImageHooksBacktracesAndTheImageItself() throws Exception {
+		// The uiop/image family that does not exit, on the JVM. The hooks are real lists
+		// (only the act of DUMPING is impossible), fatal-condition is a deftype over
+		// serious-condition that a runtime typep matches, the backtrace family prints the
+		// condition and no frames -- no backend carries a Lisp-level call stack -- and
+		// the
+		// three image operations name what is missing instead of half-doing it.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(uiop:register-image-dump-hook 'a)
+				(uiop:register-image-dump-hook 'b)
+				(uiop:register-image-dump-hook 'a)
+				(defvar *ran* nil)
+				(uiop:register-image-restore-hook (lambda () (push :restored *ran*)) nil)
+				(uiop:call-image-restore-hook)
+				(print (list uiop:*image-dump-hook* *ran* uiop:*image-dumped-p* uiop:*lisp-interaction*))
+				(print (list (uiop:fatal-condition-p (make-condition 'error))
+				             (uiop:fatal-condition-p (make-condition 'warning))
+				             (uiop:fatal-condition-p 42)))
+				(print (with-output-to-string (s)
+				         (uiop:print-condition-backtrace (make-condition 'simple-error :format-control "boom")
+				                                         :stream s)
+				         (uiop:print-backtrace :stream s :condition "second")
+				         (uiop:raw-print-backtrace :stream s)))
+				(print (list (handler-case (uiop:dump-image "x.img")
+				               (uiop:not-implemented-error () :dump-image))
+				             (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
+				             (handler-case (uiop:create-image "x" nil)
+				               (uiop:not-implemented-error () :create-image))))
+				""", am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM))).isEqualTo("""
+				((B A) (:RESTORED) NIL NIL)
+				(T NIL NIL)
+				"boom
+				second
+				"
+				(:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)""");
+	}
+
+	@Test
+	void compileAndRunUiopImageQuitEndsTheProcessWithItsCode() throws Exception {
+		// quit is System.exit on this backend -- the one place a generated class ends the
+		// JVM it runs in, and deliberately so: the uncaught-condition handler rethrows
+		// because the program did NOT ask to stop, while quit is the program asking for
+		// exactly that. Which is why this case runs in a CHILD JVM and every other case
+		// here is reflective.
+		//
+		// Nothing runs after it: not the handler-case around it (it is not a condition)
+		// and not the unwind-protect cleanup (System.exit / proc_exit / wasi:cli/exit all
+		// end the process where they stand). All four backends print :BEFORE and exit 3.
+		Run quit = compileAndRunInChildJvm("""
+				(print :before)
+				(unwind-protect
+				     (handler-case (uiop:quit 3) (error (e) (print :caught)))
+				  (print :cleanup))
+				(print :after)
+				""");
+		assertThat(quit.out()).isEqualTo(":BEFORE");
+		assertThat(quit.code()).isEqualTo(3);
+		// die reports on standard error and quits with the code it was given;
+		// shell-boolean-exit is 0 for true and 1 for false.
+		Run die = compileAndRunInChildJvm("(uiop:die 7 \"no such thing: ~A\" :widget)");
+		assertThat(die.out()).isEqualTo("no such thing: WIDGET");
+		assertThat(die.code()).isEqualTo(7);
+		assertThat(compileAndRunInChildJvm("(uiop:shell-boolean-exit nil)").code()).isEqualTo(1);
+		assertThat(compileAndRunInChildJvm("(uiop:shell-boolean-exit :yes)").code()).isEqualTo(0);
+		// The code is masked to eight bits, which is what a POSIX host does with it
+		// anyway and what wasi:cli/exit's u8 accepts.
+		assertThat(compileAndRunInChildJvm("(uiop:quit 300)").code()).isEqualTo(44);
+		// handle-fatal-condition reports and dies with upstream's own status 99; there is
+		// no debugger to enter, which is why *lisp-interaction* is nil here.
+		Run fatal = compileAndRunInChildJvm("""
+				(print :start)
+				(uiop:with-fatal-condition-handler () (error "the sky is falling"))
+				(print :unreachable)
+				""");
+		assertThat(fatal.code()).isEqualTo(99);
+		assertThat(fatal.out()).isEqualTo("""
+				:START
+				Fatal condition:
+				the sky is falling
+				the sky is falling
+				the sky is falling""");
+	}
+
+	/**
+	 * What a compiled class printed (stdout and stderr merged) and the code it exited
+	 * with.
+	 */
+	private record Run(String out, int code) {
+	}
+
+	// Runs the compiled class in a CHILD JVM: a program calling uiop:quit ends the JVM it
+	// runs in, so the reflective compileAndRun above would take the test runner with it.
+	private Run compileAndRunInChildJvm(String lispCode) throws Exception {
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(
+				LispReader.readAllFromString(lispCode, am.ik.rontolisp.reader.Features.JVM),
+				am.ik.rontolisp.reader.Features.JVM);
+		Files.write(this.tempDir.resolve("Test.class"), new JvmLispCompiler("Test").compile(program));
+		Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+				this.tempDir.toString(), "Test")
+			.redirectErrorStream(true)
+			.start();
+		String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		return new Run(out.trim(), process.waitFor());
+	}
+
+	@Test
 	void compileAndRunUiopOsOctetReaders() throws Exception {
 		// read-little-endian / read-null-terminated-string are portable stream work over
 		// read-byte, so the compiled program must answer what the interpreter does. The

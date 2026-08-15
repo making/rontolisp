@@ -9469,6 +9469,59 @@ cases:
         :CHDIR-SIGNALS
         :NO-WORKING-DIRECTORY
         :NOT-IMPLEMENTED
+  - name: uiop-image-hooks-and-backtraces
+    source: |
+      ;; uiop/image (uiop-image.lisp), everything but the EXIT half -- which no
+      ;; case here can hold: the driver concatenates the cases into ONE program
+      ;; per backend, so a (uiop:quit ...) would end the run. quit itself is
+      ;; pinned per backend instead (LispEvaluatorTest / JvmLispCompilerTest's
+      ;; child JVM / WasmLispCompilerIntegrationTest's exit-code helper).
+      ;;
+      ;; The hooks are REAL lists on every backend: a library may register into
+      ;; one at load time, and only the act of DUMPING an image is impossible.
+      ;; Upstream registers through register-hook-function, which needs a
+      ;; (setf (symbol-value ...)) no backend has; naming the variable literally
+      ;; is the same registration without that primitive.
+      (uiop:register-image-dump-hook 'ci-image-a)
+      (uiop:register-image-dump-hook 'ci-image-b)
+      (uiop:register-image-dump-hook 'ci-image-a)
+      (defvar *ci-image-ran* nil)
+      (uiop:register-image-restore-hook (lambda () (push :restored *ci-image-ran*)) nil)
+      (uiop:call-image-restore-hook)
+      (print (list uiop:*image-dump-hook* *ci-image-ran*))
+      ;; The variables carry upstream's defaults, except *lisp-interaction*: no
+      ;; backend has a debugger to enter, so it is nil and handle-fatal-condition
+      ;; reports and dies instead of calling one.
+      (print (list uiop:*image-dumped-p* uiop:*lisp-interaction* uiop:*image-prelude*
+                   uiop:*image-entry-point* uiop:*image-postlude*))
+      ;; fatal-condition is a deftype over serious-condition, so a RUNTIME typep
+      ;; matches it on every backend.
+      (print (list (uiop:fatal-condition-p (make-condition 'error))
+                   (uiop:fatal-condition-p (make-condition 'warning))
+                   (uiop:fatal-condition-p 42)))
+      ;; Backtraces are LITE and stay lite: no backend carries a Lisp-level call
+      ;; stack, so the honest rendering is the condition and no frames.
+      (print (with-output-to-string (s)
+               (uiop:print-condition-backtrace (make-condition 'simple-error :format-control "boom")
+                                               :stream s)
+               (uiop:print-backtrace :stream s :condition "second")
+               (uiop:raw-print-backtrace :stream s)))
+      ;; There is no image to dump, restore or create -- a program is started from
+      ;; source and the compile backends emit an artifact rather than saving a
+      ;; heap -- so the three name that instead of half-doing it.
+      (print (list (handler-case (uiop:dump-image "x.img")
+                     (uiop:not-implemented-error () :dump-image))
+                   (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
+                   (handler-case (uiop:create-image "x" nil)
+                     (uiop:not-implemented-error () :create-image))))
+    expected: |
+      ((CI-IMAGE-B CI-IMAGE-A) (:RESTORED))
+      (NIL NIL NIL NIL NIL)
+      (T NIL NIL)
+      "boom
+      second
+      "
+      (:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)
   - name: print-case
     source: |
       ;; *print-case* converts the case of every SYMBOL the printer spells --

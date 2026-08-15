@@ -7880,7 +7880,8 @@ public final class LispMacroExpander {
 			LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION, LispNames.WITH_TEMPORARY_FILE,
 			LispNames.DEFINE_PACKAGE, LispNames.WITH_UPGRADABILITY, LispNames.NEST, LispNames.WHILE_COLLECTING,
 			LispNames.APPENDF, LispNames.LATEST_TIMESTAMP_F, LispNames.WITH_MUFFLED_CONDITIONS, LispNames.UIOP_DEBUG,
-			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME, LispNames.OS_COND);
+			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME, LispNames.OS_COND,
+			LispNames.WITH_FATAL_CONDITION_HANDLER);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -8419,6 +8420,29 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (uiop:with-fatal-condition-handler () body...)} into
+	 * {@code (uiop:call-with-fatal-condition-handler (lambda () body...))} -- upstream's
+	 * own expansion. The spec list is upstream's {@code (&optional)}, i.e. always empty;
+	 * it is required to be written so the form reads like every other {@code with-}
+	 * macro.
+	 * @param cons the with-fatal-condition-handler expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithFatalConditionHandler(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispNil)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_FATAL_CONDITION_HANDLER)
+					+ " expects (with-fatal-condition-handler () body...): " + cons.print());
+		}
+		List<LispVal> thunk = new java.util.ArrayList<>();
+		thunk.add(new LispSymbol(LispNames.LAMBDA));
+		thunk.add(LispNil.INSTANCE);
+		thunk.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_FATAL_CONDITION_HANDLER)),
+				listToCons(thunk)));
+	}
+
+	/**
 	 * Expands {@code (uiop:with-pathname-defaults ([defaults]) body...)} into
 	 * {@code (let ((*default-pathname-defaults* DEFAULTS)) body...)} -- upstream's own
 	 * expansion, with the no-defaults arm binding {@code uiop:*nil-pathname*} (the
@@ -8566,6 +8590,7 @@ public final class LispMacroExpander {
 			case LispNames.APPENDF -> expandUiopAppendf(cons);
 			case LispNames.LATEST_TIMESTAMP_F -> expandUiopLatestTimestampF(cons);
 			case LispNames.WITH_MUFFLED_CONDITIONS -> expandUiopWithMuffledConditions(cons);
+			case LispNames.WITH_FATAL_CONDITION_HANDLER -> expandUiopWithFatalConditionHandler(cons);
 			case LispNames.WITH_PATHNAME_DEFAULTS -> expandUiopWithPathnameDefaults(cons);
 			case LispNames.WITH_ENOUGH_PATHNAME -> expandUiopWithEnoughPathname(cons);
 			case LispNames.UIOP_DEBUG -> expandUiopDebug(cons);

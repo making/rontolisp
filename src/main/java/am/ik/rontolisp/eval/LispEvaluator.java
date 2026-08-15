@@ -7492,14 +7492,27 @@ public final class LispEvaluator {
 		if (parts.size() < 2) {
 			throw new LispEvalException(LispNames.UNWIND_PROTECT + " expects a protected form");
 		}
+		LispVal result;
 		try {
-			return eval(parts.get(1), env);
+			result = eval(parts.get(1), env);
 		}
-		finally {
+		catch (LispExitSignal exit) {
+			// uiop:quit is the HOST's exit on every backend -- System.exit on the JVM,
+			// proc_exit / wasi:cli/exit on the two wasm ones -- and those end the process
+			// where they stand. Running a cleanup here would make the interpreter the one
+			// backend where something still happens after a quit.
+			throw exit;
+		}
+		catch (RuntimeException | Error ex) {
 			for (int i = 2; i < parts.size(); i++) {
 				eval(parts.get(i), env);
 			}
+			throw ex;
 		}
+		for (int i = 2; i < parts.size(); i++) {
+			eval(parts.get(i), env);
+		}
+		return result;
 	}
 
 	/** Evaluates the optional value of a {@code return} form, defaulting to nil. */

@@ -30,6 +30,11 @@ for `set` and a `symbol-value` note.
 **The caller that named it** (2026-08-14, `.todo/354`): `uiop:register-hook-function`
 is `(pushnew hook (symbol-value variable) :test 'equal)` and nothing more, so it
 is the one member of `uiop/utility` that signals `not-implemented-error` rather
-than working. `uiop/image`'s hook family (`.todo/362`) is the same shape and will
-hit this again. When this lands, that body becomes three lines -- the
+than working. When this lands, that body becomes three lines -- the
 re-evaluation trigger is written into `.kb/uiop.md`.
+
+`uiop/image`'s hook family (`.todo/362`, landed 2026-08-15) is the same shape and
+route around it: `register-image-dump-hook` / `register-image-restore-hook` name
+their variable LITERALLY instead of calling `register-hook-function`, which is
+the same registration without the primitive. When this lands, both bodies become
+the one `register-hook-function` call upstream writes.

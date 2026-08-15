@@ -2290,6 +2290,19 @@ public final class Environment implements Scope {
 			}
 			return cwd == null || cwd.isEmpty() ? LispNil.INSTANCE : new LispString(cwd);
 		}));
+		// %host-exit: end the process with a status code. uiop:quit is Lisp over this
+		// (uiop-image.lisp) and finishes the output streams first, so the four backends
+		// share one definition of what quitting means. Here it is a SIGNAL rather than a
+		// System.exit: run() is embedded (the tests, the playground), and only main may
+		// turn a program's exit code into the process's -- the same rule the JVM
+		// backend's uncaught-condition handler follows.
+		env.defineFunction(LispNames.HOST_EXIT, new LispFunction(LispNames.HOST_EXIT, args -> {
+			requireArgCount(LispNames.HOST_EXIT, args, 1);
+			if (!(args.get(0) instanceof LispInteger code)) {
+				throw new LispEvalException(LispNames.HOST_EXIT + " expects an integer, got: " + args.get(0).print());
+			}
+			throw new LispExitSignal((int) code.value());
+		}));
 		// isqrt: exact integer square root (floor of the real square root).
 		env.defineFunction(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {
 			requireArgCount(LispNames.ISQRT, args, 1);

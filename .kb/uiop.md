@@ -412,6 +412,111 @@ routing them around it would leave three copies of "look a name up in a package,
 error or not". Its compiled-backend status answer is the one
 `.kb/symbol-runtime-api.md` describes (`.todo/254`).
 
+## `uiop/image`'s decisions (todo-362: 25/30)
+
+The whole sub-package is Lisp source in `uiop-image.lisp` except the exit
+PRIMITIVE, which is per backend. Three groups, three answers.
+
+- **`quit` is the host's exit on all four backends, through ONE Lisp
+  definition** (`uiop-image.lisp`) over the `%host-exit` primitive
+  (`LispNames.HOST_EXIT`). The definition finishes `*standard-output*` and
+  `*error-output*` first -- upstream's obligation, and what keeps the last lines
+  of a buffered program from being lost -- and masks the code to eight bits,
+  which is what a POSIX host does with it anyway and what `wasi:cli/exit`'s `u8`
+  accepts, so `(uiop:quit 300)` is 44 everywhere instead of 300 on one backend.
+  `die` and `shell-boolean-exit` are written over it. Per backend:
+  - the interpreter raises `eval.LispExitSignal`, which ESCAPES
+    `RontoLispCli.run` and becomes the process code in `main` (`runReporting`
+    catches it ahead of the `RuntimeException` arm and returns the code, which
+    the existing `exit(code)` turns into a `System.exit` for a non-zero one).
+    `run` is embedded -- the tests, the playground -- and killing the calling
+    JVM is not a call's decision to make, the same rule
+    `JvmUncaughtHandler` follows for an uncaught condition;
+  - the JVM backend emits `System.exit` (`JvmExitCompiler`). This IS the one
+    place a generated class ends the JVM it runs in, and the distinction from
+    the uncaught-condition handler is the whole reason it is allowed: there the
+    program did not ask to stop, here it asked for exactly that. `System.exit`
+    is minted in the compiler rather than in the fixed `systemOps` table, so a
+    program that never quits emits the same bytes as before;
+  - both WASM backends run the spliced `exit.lisp` (`eval/ExitLibrary`), which
+    binds `wasi_snapshot_preview1`'s `proc_exit` through an ordinary
+    `rontolisp:wasm-import` on Preview 1 and wit-imported
+    `wasi:cli/exit@0.3.0`'s `exit-with-code` under `--component`. **Nothing
+    fixed grows for it**: the Preview 1 arm binds the import under the
+    primitive's OWN name (`%host-exit`), so there is no tenth
+    `wasi_snapshot_preview1` slot and no adapter entry point, and the component
+    arm binds an interface the fixed import block does NOT declare, so it is an
+    APPENDED USER IMPORT like `wasi:sockets` / `wasi:http` (unlike
+    `environment.lisp`'s `wasi:cli/environment`, which is bound FROM the block).
+    A program that never quits compiles to the same bytes as before on both.
+  - a `--no-wasi` / `--no-gc` reactor is REFUSED at compile time, by name: it
+    owns no WASI world and its entry points are exports a host calls, so there
+    is no process of its own to end.
+
+- **`quit` neither unwinds nor is catchable, on any backend.** `System.exit`,
+  `proc_exit` and `exit-with-code` end the process where they stand, so
+  `LispEvaluator.evalUnwindProtect` was given an explicit `LispExitSignal` arm
+  that runs NO cleanup -- without it the interpreter would be the one backend
+  where something still happened after a quit. `handler-case` cannot see it
+  either (the interpreter catches `LispEvalException`, and the signal is not
+  one). Pinned by the `(print :before) (unwind-protect (handler-case (uiop:quit
+  3) ...) (print :cleanup))` program in all three per-backend test classes: every
+  backend prints `:BEFORE` and exits 3.
+
+- **Backtraces are lite and stay lite.** No backend carries a Lisp-level call
+  stack, so `raw-print-backtrace` prints its `:condition` and no frames,
+  `print-backtrace` applies it, and `print-condition-backtrace` (the one member
+  that already existed, for `lack-middleware-backtrace`) calls that -- three
+  members, one rendering. `:count` is accepted and ignored. Upstream's own
+  fallback for an implementation with no backtrace API has the same shape.
+
+- **The fatal-condition quartet is real** on top of `handler-bind`:
+  `fatal-condition` is a `deftype` alias for `serious-condition` (a runtime
+  `typep` and a `handler-bind` clause both match a deftype on all four
+  backends), and `with-fatal-condition-handler` is a Java expansion in
+  `LispMacroExpander` like every uiop macro, with its
+  `MACRO_EXPANSION_CALLEES` row. **`*lisp-interaction*` is NIL where upstream
+  defaults to T**: it asks "interactive environment or batch processing?", and
+  every backend runs a program and ends -- there is no `invoke-debugger` here at
+  all. That value is what makes `handle-fatal-condition` report and `die 99`
+  instead of calling a debugger; its interactive arm names the missing primitive
+  rather than pretending. **Re-evaluation trigger**: the day an
+  `invoke-debugger` exists, the arm is one line and the default may change.
+
+- **The image hooks are REAL; only the image is not.** `dump-image`,
+  `restore-image` and `create-image` signal `not-implemented-error` naming what
+  is missing (there is no heap to save: a program is started from source and the
+  compile backends emit an artifact), but the two registrars, the two callers
+  and the six variables are ordinary list work, because a library may register
+  into a hook while it loads and that must not be an error. Upstream routes both
+  registrars through `uiop/utility:register-hook-function`, which needs
+  `(setf (symbol-value var) ...)` over a RUN-TIME variable name and therefore
+  signals here; naming the variable literally is the same registration without
+  that primitive. **Re-evaluation trigger**: the day `(setf (symbol-value ...))`
+  is a place (`.todo/367`), both bodies become the one `register-hook-function`
+  call upstream writes.
+
+- **The command-line five are still missing** (`argv0`,
+  `command-line-arguments`, `raw-command-line-arguments`,
+  `setup-command-line-arguments`, `*command-line-arguments*`): they need a
+  `%host-argv` primitive on four backends, which on `--component` means the
+  fixed import block declaring `wasi:cli/environment`'s `get-arguments` (the
+  block currently declares `get-environment` only, and a second import of the
+  same interface name would be invalid) -- a regeneration of
+  `src/wasm-component/`'s blobs and the WIT fixtures. `.todo/362` carries it.
+
+Pinned by the `evalUiopImage*` block of `LispEvaluatorTest` (five tests,
+including the exit signal's code and the no-cleanup rule),
+`JvmLispCompilerTest.compileAndRunUiopImageHooksBacktracesAndTheImageItself` /
+`.compileAndRunUiopImageQuitEndsTheProcessWithItsCode` (the quitting cases run in
+a CHILD JVM -- a compiled `quit` would take the test runner with it),
+`WasmLispCompilerIntegrationTest.uiopImageHooksBacktracesAndTheImageItselfCompileAndRun`
+/ `.uiopImageQuitEndsTheProcessWithItsCode` (both wasm backends, exit codes
+included), and the `uiop-image-hooks-and-backtraces` ci-spec case -- which
+carries the family MINUS the exit half, because the driver concatenates the cases
+into one program per backend and a `quit` would end the run. Docs:
+`reference/uiop/image.md`.
+
 ## Selection, not pruning
 
 `UiopLibrary.process` prepends only the definitions the program reaches,

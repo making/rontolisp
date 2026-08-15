@@ -3402,6 +3402,101 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopImageHooksBacktracesAndTheImageItselfCompileAndRun() throws Exception {
+		// The uiop/image family that does not exit, on BOTH wasm backends. Same answers
+		// as the interpreter and the JVM: the hooks are real lists (only the act of
+		// DUMPING is impossible), fatal-condition is a deftype over serious-condition a
+		// runtime typep matches, the backtrace family prints the condition and no frames,
+		// and the three image operations name what is missing.
+		String source = """
+				(uiop:register-image-dump-hook 'a)
+				(uiop:register-image-dump-hook 'b)
+				(uiop:register-image-dump-hook 'a)
+				(defvar *ran* nil)
+				(uiop:register-image-restore-hook (lambda () (push :restored *ran*)) nil)
+				(uiop:call-image-restore-hook)
+				(print (list uiop:*image-dump-hook* *ran* uiop:*image-dumped-p* uiop:*lisp-interaction*))
+				(print (list (uiop:fatal-condition-p (make-condition 'error))
+				             (uiop:fatal-condition-p (make-condition 'warning))
+				             (uiop:fatal-condition-p 42)))
+				(print (with-output-to-string (s)
+				         (uiop:print-condition-backtrace (make-condition 'simple-error :format-control "boom")
+				                                         :stream s)
+				         (uiop:print-backtrace :stream s :condition "second")
+				         (uiop:raw-print-backtrace :stream s)))
+				(print (list (handler-case (uiop:dump-image "x.img")
+				               (uiop:not-implemented-error () :dump-image))
+				             (handler-case (uiop:restore-image) (uiop:not-implemented-error () :restore-image))
+				             (handler-case (uiop:create-image "x" nil)
+				               (uiop:not-implemented-error () :create-image))))
+				""";
+		String expected = """
+				((B A) (:RESTORED) NIL NIL)
+				(T NIL NIL)
+				"boom
+				second
+				"
+				(:DUMP-IMAGE :RESTORE-IMAGE :CREATE-IMAGE)""";
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString(source, Features.WASM), Features.WASM))).isEqualTo(expected);
+		assertThat(compileAndRunComponent(source)).isEqualTo(expected);
+	}
+
+	@Test
+	void uiopImageQuitEndsTheProcessWithItsCode() throws Exception {
+		// quit is the HOST's exit on both wasm backends -- wasi_snapshot_preview1's
+		// proc_exit here, wit-imported wasi:cli/exit@0.3.0's exit-with-code under
+		// --component (exit.lisp, eval/ExitLibrary) -- so neither the handler-case around
+		// it (it is not a condition) nor the unwind-protect cleanup runs: the process
+		// ends where the call stands. Byte-identical to the interpreter and the JVM.
+		String quitSource = """
+				(print :before)
+				(unwind-protect
+				     (handler-case (uiop:quit 3) (error (e) (print :caught)))
+				  (print :cleanup))
+				(print :after)
+				""";
+		assertThat(compileAndRunQuittingProgram(quitSource, false)).isEqualTo(new String[] { ":BEFORE", "3" });
+		assertThat(compileAndRunQuittingProgram(quitSource, true)).isEqualTo(new String[] { ":BEFORE", "3" });
+		// die reports on standard error and quits with the code it was given;
+		// shell-boolean-exit is 0 for true and 1 for false; and the code is masked to
+		// eight bits, which is what a POSIX host does with it anyway and what
+		// wasi:cli/exit's u8 accepts.
+		for (boolean component : new boolean[] { false, true }) {
+			assertThat(compileAndRunQuittingProgram("(uiop:die 7 \"no such thing: ~A\" :widget)", component)[1])
+				.isEqualTo("7");
+			assertThat(compileAndRunQuittingProgram("(uiop:shell-boolean-exit nil)", component)[1]).isEqualTo("1");
+			assertThat(compileAndRunQuittingProgram("(uiop:quit 300)", component)[1]).isEqualTo("44");
+			// handle-fatal-condition reports and dies with upstream's own status 99;
+			// *lisp-interaction* is nil because no backend has a debugger to enter.
+			assertThat(compileAndRunQuittingProgram("""
+					(print :start)
+					(uiop:with-fatal-condition-handler () (error "the sky is falling"))
+					(print :unreachable)
+					""", component)).isEqualTo(new String[] { ":START", "99" });
+		}
+	}
+
+	// A program that QUITS: the standard helpers assert exit code 0, and the whole point
+	// here is the code. Answers {stdout, exit code}. The pipeline mirrors the CLI's --
+	// the prelude splice brings uiop:quit in, and ExitLibrary binds %host-exit to
+	// proc_exit / wasi:cli/exit for the backend being compiled.
+	private static String[] compileAndRunQuittingProgram(String lispCode, boolean component) throws Exception {
+		Features features = component ? Features.WASM.with(List.of(Features.COMPONENT)) : Features.WASM;
+		List<LispVal> program = am.ik.rontolisp.eval.ExitLibrary.process(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode, features),
+						features),
+				component ? am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT
+						: am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_GC,
+				features);
+		byte[] bytes = new WasmLispCompiler(false, component).compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(bytes), path("test.wasm"));
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
+				path("test.wasm"));
+		return new String[] { result.getStdout().trim(), String.valueOf(result.getExitCode()) };
+	}
+
+	@Test
 	void uiopOsOctetReadersCompileAndRun() throws Exception {
 		// read-little-endian / read-null-terminated-string are portable stream work over
 		// read-byte; flexi-streams' in-memory octet stream is the one binary input every

@@ -36,7 +36,7 @@
 | [`uiop/pathname`](uiop/pathname.md) | パス名の代数 (`subpathname`、`parse-unix-namestring`、`enough-pathname`) | 50 / 50 |
 | `uiop/filesystem` | ファイルシステムの探索・走査・変更 | 8 / 32 |
 | `uiop/stream` | ファイル内容、一時ファイル、エンコーディング、標準ストリーム | 3 / 66 |
-| `uiop/image` | コマンドライン、終了、ダンプフック | 1 / 30 |
+| [`uiop/image`](uiop/image.md) | 終了、致命的コンディション、ダンプフック（コマンドラインは未実装） | 25 / 30 |
 | `uiop/launch-program` | 非同期のサブプロセス | 0 / 19 |
 | `uiop/run-program` | 同期のサブプロセス | 0 / 7 |
 | `uiop/lisp-build` | `compile-file*` と遅延警告 | 1 / 44 |
@@ -50,12 +50,15 @@
 
 ## 実装済みのもの
 
-3 つのサブパッケージが完全に実装済みで、それぞれ専用のページがあります。uiop の
+専用のページを持つサブパッケージは 4 つです。うち 3 つは完全に実装済みで、uiop の
 他のすべてがその上に書かれている移植性ヘルパ群 `uiop/utility` の 68 個
 ([uiop/utility](uiop/utility.md))、パス名の代数 `uiop/pathname` の 50 個
 ([uiop/pathname](uiop/pathname.md))、そしてホストの識別・環境変数・作業ディレクトリ
 の 22 個 `uiop/os` ([uiop/os](uiop/os.md)。[`uiop:getenv`](functions/uiop-getenv.md)
-もここにあります) です。残りは以下のとおりです。
+もここにあります) です。4 つめは [uiop/image](uiop/image.md) で、
+[`uiop:quit`](uiop/image.md#exiting) が 4 つのバックエンドすべてでステータスコード
+付きのプロセス終了を行い、致命的コンディション・バックトレース・イメージフックの
+各族もここにあります。残りは以下のとおりです。
 
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
@@ -72,7 +75,6 @@
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — パス名のホスト OS の綴り。ここでは名前文字列そのものなので `namestring` と同じです |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです |
-| `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | コンディションのレポートを出力します (ライト版: どのバックエンドも Lisp レベルのコールスタックを持たないため、出力されるのはコンディション自体だけです) |
 
 完全実装済みサブパッケージ以外の 3 つのメンバは**マクロ**で、呼び出されるのではなく
 コンパイラが展開します: `uiop:with-temporary-file`、

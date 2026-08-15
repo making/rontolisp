@@ -33,6 +33,7 @@ import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.eval.EnvironmentLibrary;
+import am.ik.rontolisp.eval.ExitLibrary;
 import am.ik.rontolisp.eval.GrayStreamsLibrary;
 import am.ik.rontolisp.eval.HostFetchLibrary;
 import am.ik.rontolisp.eval.HttpLibrary;
@@ -44,6 +45,7 @@ import am.ik.rontolisp.eval.JsonLibrary;
 import am.ik.rontolisp.eval.LibraryDefunPruner;
 import am.ik.rontolisp.eval.LinalgLibrary;
 import am.ik.rontolisp.eval.LispEvalException;
+import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.VecLibrary;
 import am.ik.rontolisp.eval.VecSimd;
@@ -642,6 +644,13 @@ public final class RontoLispCli {
 		// and with this pass upstream of the splice a smart-buffer program failed the
 		// component compile with "compiled without EnvironmentLibrary.process".
 		program = EnvironmentLibrary.process(program, spliceBackend);
+		// uiop:quit on the WASM backends is exit.lisp over wasi_snapshot_preview1's
+		// proc_exit (Preview 1) / wit-imported wasi:cli/exit@0.3.0 (--component, an
+		// appended user import: the fixed block does not declare that interface). Same
+		// position and same reason as the environment splice above -- a quit any earlier
+		// pass introduced has to be seen too -- and a no-op elsewhere (the interpreter
+		// raises its exit signal, the JVM emits System.exit).
+		program = ExitLibrary.process(program, spliceBackend, features);
 		// Splice the Lisp-source vec library (the scalar reference over the packed
 		// double-float array type) when the program references the vec package. The
 		// --no-gc scalar WASM backend is the exception: it has no general array type and
@@ -1082,6 +1091,14 @@ public final class RontoLispCli {
 		try {
 			cli.run(args);
 			return cli.exitCode();
+		}
+		catch (LispExitSignal exit) {
+			// (uiop:quit code): the program asked for a status code, so main hands the
+			// host exactly that and reports nothing. The buffered stream is drained the
+			// way a normal return drains it -- quit finishes the Lisp output streams
+			// before it signals, and this covers the CLI's own buffer underneath them.
+			cli.out.flush();
+			return exit.code();
 		}
 		catch (RuntimeException ex) {
 			// The program's own output precedes the report even under
