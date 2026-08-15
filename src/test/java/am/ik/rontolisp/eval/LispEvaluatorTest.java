@@ -954,6 +954,22 @@ class LispEvaluatorTest {
 		assertThat(eval("(format nil \"[~6,2f]\" 3.1)")).isEqualTo(new LispString("[  3.10]"));
 	}
 
+	/**
+	 * {@code ~W} writes its argument the way {@code write} does -- {@code prin1} under
+	 * the printer control variables -- and consumes exactly one argument, so a following
+	 * directive still sees the right one (rove's assertion description is
+	 * {@code "Expect ~W to be ~:[true~;false~]."}).
+	 */
+	@Test
+	void evalFormatWriteDirective() {
+		assertThat(eval("(format nil \"~w\" \"str\")")).isEqualTo(new LispString("\"str\""));
+		assertThat(eval("(format nil \"~w|~:w|~@w\" '(1 \"s\") 'a nil)")).isEqualTo(new LispString("(1 \"s\")|A|NIL"));
+		assertThat(eval("(format nil \"Expect ~W to be ~:[true~;false~].\" '(= (add 1 2) 3) nil)"))
+			.isEqualTo(new LispString("Expect (= (ADD 1 2) 3) to be true."));
+		assertThat(eval("(let ((c \"Expect ~W to be ~:[true~;false~].\")) (format nil c '(= (add 1 2) 3) t))"))
+			.isEqualTo(new LispString("Expect (= (ADD 1 2) 3) to be false."));
+	}
+
 	@Test
 	void evalFormatColonAestheticNil() {
 		assertThat(eval("(format nil \"~:a\" nil)")).isEqualTo(new LispString("()"));

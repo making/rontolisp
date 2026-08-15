@@ -26,7 +26,13 @@ missing field is what is left of the "pretty printing" item here.
   seam (`%print-object-str`, `.kb/clos.md`) widened; today an entry fires only
   where the program calls the entry function itself.
 - **`write-to-string` keywords** — `write` takes the full set, `write-to-string`
-  still takes one argument (`.kb/pretty-printer.md` has the reason).
+  still takes one argument (`.kb/pretty-printer.md` has the reason). **Consumer
+  (2026-08-15, `~W` `.todo/381`)**: the `format` directive `~W` is `write` of its
+  argument, and it renders as `prin1-to-string` on both paths for the same reason
+  — so whatever teaches `write-to-string` to read `*print-escape*` /
+  `*print-readably*` owes `~W` the same read (`.kb/format.md` carries the
+  re-evaluation trigger, including the `injectMvSpillGlobal` scan the static path
+  needs before it can read a printer variable).
 - **`pprint-linear` / `pprint-tabular` / `pprint-fill` / `pprint-pop` /
   `pprint-exit-if-list-exhausted`** — not defined; the first three are layout the
   column would decide, the last two are `pprint-logical-block` iteration.

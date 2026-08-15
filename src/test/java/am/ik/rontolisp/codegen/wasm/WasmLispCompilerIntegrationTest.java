@@ -4975,6 +4975,24 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void formatWriteDirectiveRendersLikePrin1OnBothPaths() throws Exception {
+		// ~W is `write` of the argument and consumes exactly one, so the ~:[...~] that
+		// follows it in rove's assertion description reads the right one
+		// (.kb/format.md).
+		assertThat(compileAndRun("""
+				(princ (format nil "Expect ~W to be ~:[true~;false~]." '(= (add 1 2) 3) nil))
+				(terpri)
+				(let ((c "Expect ~W to be ~:[true~;false~]."))
+				  (princ (format nil c '(= (add 1 2) 3) t)))
+				(terpri)
+				(princ (format nil "~w|~:w|~@w|~a" "s" 'a nil "s"))
+				""")).isEqualTo("""
+				Expect (= (ADD 1 2) 3) to be true.
+				Expect (= (ADD 1 2) 3) to be false.
+				"s"|A|NIL|s""");
+	}
+
+	@Test
 	void formatRuntimeControlStringHonorsEveryDirective() throws Exception {
 		// The runtime renderer (format-render.lisp, injected once) understands the whole
 		// directive set, so a computed control renders like the literal one would.

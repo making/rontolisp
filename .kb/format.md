@@ -273,6 +273,22 @@ separating was never its size, it was the funcall-dispatch gate it held open.
   it, or the tree-shaker would delete the very function the report calls.
 - **`~r` without a radix prints decimal digits.** English cardinals/ordinals are
   not implemented on either path.
+- **`~W` renders as `prin1`, and never reads `*print-escape*`.** CL defines it as
+  `write` of the argument under the CURRENT printer variables -- i.e. `princ` when
+  `*print-escape*` is nil -- and both paths render `prin1-to-string` unconditionally
+  instead. Two reasons: `write-to-string` already answers the same way
+  (`.kb/pretty-printer.md`; `.todo/041` owns that gap), and the static path expands
+  in Pass 2, AFTER the scan that decides which printer-mode `defvar`s a compiled
+  program gets (`injectMvSpillGlobal`), so a `*print-escape*` read there would need
+  its own scan trigger the way `print-unreadable-object` has one. Its modifiers bind
+  variables that change no text today (`~:W` -> `*print-pretty*` t, `~@W` ->
+  `*print-level*`/`*print-length*` nil), so all three spellings are the one call, and
+  it takes no prefix parameters. **Re-evaluation trigger**: when the printer entry
+  points honor the control variables past `write`'s own keywords, `~W` has to consult
+  `*print-escape*`/`*print-readably*` exactly as `write` does -- and the static path
+  then owes the scan trigger above. Pinned by the `~w` rows of
+  `FormatRendererTest.staticAndRuntimeRenderingAgree` and the
+  `format-directive-write` ci-spec case (all four backends).
 - **`~&` measures the column from the text rendered so far** (an empty
   accumulator counts as the start of a line), because the renderer answers a
   string and cannot see the stream's column. The literal path's `t` destination

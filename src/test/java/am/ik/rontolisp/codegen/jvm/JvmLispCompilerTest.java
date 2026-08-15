@@ -2840,6 +2840,24 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void formatWriteDirectiveRendersLikePrin1OnBothPaths() throws Exception {
+		// ~W is `write` of the argument, and it consumes exactly one -- rove's assertion
+		// description ends in ~:[...~], which reads the WRONG argument if the ~W before
+		// it is copied out verbatim (.kb/format.md).
+		assertThat(compileAndRun("""
+				(princ (format nil "Expect ~W to be ~:[true~;false~]." '(= (add 1 2) 3) nil))
+				(terpri)
+				(let ((c "Expect ~W to be ~:[true~;false~]."))
+				  (princ (format nil c '(= (add 1 2) 3) t)))
+				(terpri)
+				(princ (format nil "~w|~:w|~@w|~a" "s" 'a nil "s"))
+				""")).isEqualTo("""
+				Expect (= (ADD 1 2) 3) to be true.
+				Expect (= (ADD 1 2) 3) to be false.
+				"s"|A|NIL|s""");
+	}
+
+	@Test
 	void formatRuntimeControlStringHonorsEveryDirective() throws Exception {
 		// A control string the compiler cannot see through renders with the shared
 		// runtime renderer, whose directive set is the literal expansion's: the padded,

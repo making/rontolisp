@@ -2040,6 +2040,20 @@ cases:
       A=1 S="s" D=42 00007% 1,2 cond=c ~ end
       A | B (00007) 1,234,567
       &#xE9;
+  # ~W writes its argument as `write` does (prin1 under the printer control
+  # variables) and consumes exactly one -- rove's assertion description ends in
+  # ~:[...~], which reads the wrong argument if ~W is copied out verbatim.
+  - name: format-directive-write
+    source: |
+      (format t "Expect ~W to be ~:[true~;false~].~%" '(= (add 1 2) 3) nil)
+      (let ((ci-fmt-w "Expect ~W to be ~:[true~;false~]."))
+        (princ (format nil ci-fmt-w '(= (add 1 2) 3) t)))
+      (terpri)
+      (format t "~w|~:w|~@w|~a~%" "s" 'a nil "s")
+    expected: |
+      Expect (= (ADD 1 2) 3) to be true.
+      Expect (= (ADD 1 2) 3) to be false.
+      "s"|A|NIL|s
   # A STRING datum is a format control and the rest are its format arguments
   # whatever the datum's shape in the source, so a control computed at run time
   # renders exactly like a literal one (todo-220).

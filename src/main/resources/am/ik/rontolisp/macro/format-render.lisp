@@ -406,9 +406,9 @@
           (t (%fmt-control ctrl end all out np idx params colon at d raw)))))
 
 (defun %fmt-value-directive-p (d)
-  (or (char= d #\a) (char= d #\s) (char= d #\d) (char= d #\x) (char= d #\o)
-      (char= d #\b) (char= d #\r) (char= d #\c) (char= d #\f) (char= d #\e)
-      (char= d #\g) (char= d #\$) (char= d #\p) (char= d #\?)))
+  (or (char= d #\a) (char= d #\s) (char= d #\w) (char= d #\d) (char= d #\x)
+      (char= d #\o) (char= d #\b) (char= d #\r) (char= d #\c) (char= d #\f)
+      (char= d #\e) (char= d #\g) (char= d #\$) (char= d #\p) (char= d #\?)))
 
 ;;; Directives that consume no argument (and the ones that only move the cursor).
 (defun %fmt-control (ctrl end all out pos i params colon at d raw)
@@ -560,6 +560,11 @@
 (defun %fmt-field (v params colon at d)
   (cond
    ((or (char= d #\a) (char= d #\s)) (%fmt-field-aesthetic v params colon at d))
+   ;; ~W is `write` of the argument -- prin1 under the printer control variables.
+   ;; It takes no prefix parameters, and its modifiers bind variables the printer
+   ;; does not honor yet (~:W *print-pretty*, ~@W *print-level*/*print-length*),
+   ;; so all three spellings are the one conversion (.kb/format.md).
+   ((char= d #\w) (prin1-to-string v))
    ((char= d #\c) (%fmt-char-directive v colon at))
    ((char= d #\f) (%fmt-field-fixed v params at))
    ((char= d #\e) (%fmt-field-exp v params at))

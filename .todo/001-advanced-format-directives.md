@@ -32,6 +32,11 @@ set (`~a`/`~s`, `~d`, `~f`, `~e`, `~$`, `~%`, `~&`, `~~`, prefix parameters,
   `~e` exponent-digit count / overflowchar / exponentchar (scale factor fixed
   at 1).
 - `~<newline>` (line continuation), with its `:` / `@` variants.
+- `~w` (write): `prin1` of the argument on both paths. It takes no prefix
+  parameters, and its modifiers bind printer variables that change no text
+  today (`~:W` -> `*print-pretty*`, `~@W` -> `*print-level*`/`*print-length*`),
+  so all three spellings are one call; it never reads `*print-escape*`
+  (`.kb/format.md` has the reason and the re-evaluation trigger).
 
 Implementation: `LispMacroExpander.FmtParser` (recursive descent) +
 `FmtArgs` (static temporaries at the top level, on-demand item temporaries

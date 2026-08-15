@@ -18005,6 +18005,15 @@ public final class LispMacroExpander {
 					flushFmtLiteral(lit, ops);
 					ops.add(new FmtFreshLine(fmtCount(params, 0, 1, directive)));
 				}
+				// ~W writes the argument as `write` does -- prin1 under the printer
+				// control variables. Its modifiers only bind variables the printer does
+				// not honor yet (~:W *print-pretty*, ~@W *print-level*/*print-length*),
+				// and it takes no prefix parameters, so all three spellings lower to the
+				// one call (.kb/format.md).
+				case 'w' -> {
+					flushFmtLiteral(lit, ops);
+					ops.add(new FmtString(fmtCall(LispNames.PRIN1_TO_STRING, args.next(directive))));
+				}
 				case 'a', 's' -> {
 					flushFmtLiteral(lit, ops);
 					LispVal arg = args.next(directive);

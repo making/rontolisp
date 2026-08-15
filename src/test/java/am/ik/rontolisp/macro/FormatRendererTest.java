@@ -45,8 +45,9 @@ class FormatRendererTest {
 			"~a~a~0@*~a|1 2", "~a~*~a|1 2 3", "a~2%b|", "~3~|", "abc~&def~&~&ghi|", "~[a~;~[x~;y~]~]|1 1",
 			"~:@{[~a ~a]~}|'(1 2) '(3 4)", "~2{~a,~}|'(1 2 3 4)", "~d ~:d ~@d|-5 -1234567 -7",
 			"~,3f ~,2f|-3.14159 -0.005", "~e ~,3e|0.0 0.0", "~,3,2e|1234.5", "~$ ~,3$ ~2,4$|3.5 3.5 3.5",
-			"~:a ~:s|nil nil", "[~10@a]|\"hi\"", "~,,,4:b|255", "~a~^~a|1", "~{~a~^-~}|'(1 2 3)",
-			"~:{~a~^/~a~}|'((1 2) (3))", "&#x~x;|233",
+			"~w ~:w ~@w|\"s\" '(1 2) 3", "Expect ~W to be ~:[true~;false~].|'(= (add 1 2) 3) nil", "~:a ~:s|nil nil",
+			"[~10@a]|\"hi\"", "~,,,4:b|255", "~a~^~a|1", "~{~a~^-~}|'(1 2 3)", "~:{~a~^/~a~}|'((1 2) (3))",
+			"&#x~x;|233",
 			// ~f / ~$ past the point where the scaled magnitude leaves the signed 64-bit
 			// range. Both paths call the ONE %fixed-decimal primitive now, so both
 			// saturate identically; before it they scaled by different powers of ten and

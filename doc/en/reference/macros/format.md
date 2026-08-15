@@ -39,6 +39,7 @@ With destination `nil` the result is returned as a string instead of printed:
 |-----------|---------|
 | `~a`, `~A` | Aesthetic: prints the argument like `princ` (strings without quotes). With `:`, nil prints as `()` |
 | `~s`, `~S` | Standard: prints the argument like `prin1` (readable; a string is quoted and its embedded `"` / `\` escaped). With `:`, nil prints as `()` |
+| `~w`, `~W` | Write: prints the argument like `write` -- `prin1` under the printer control variables. It takes no prefix parameters, and its modifiers bind variables the printer does not honor (`~:W` binds `*print-pretty*`, `~@W` unbinds `*print-level*`/`*print-length*`), so all three spellings print the same text |
 | `~d`, `~D` | Decimal integer. With `:`, digits are grouped with commas; with `@`, a `+` sign precedes non-negative values |
 | `~x`, `~o`, `~b` | Hexadecimal / octal / binary integer (uppercase digits), with the same parameters and modifiers as `~d` |
 | `~R` | Radix: `~NR` prints the integer in radix `N` (2-36). Without the radix parameter the decimal digits are printed (English cardinal/ordinal output is not implemented) |
@@ -70,6 +71,7 @@ default). `~a`/`~s` pad on the right (left with `@`); numbers pad on the left.
 (format t "~,2f and ~$~%" 3.14159 3.14159)
 (format t "~e and ~,4e~%" 1234.5 pi)
 (format t "~10a|~5,'0d|~%" "foo" 42)
+(format t "~w and ~a~%" "str" "str")
 (princ (format nil "Hello ~a!" 'world))
 (terpri)
 (format t "~x ~o ~b ~8r~%" 255 64 5 4096)
@@ -87,6 +89,7 @@ Hello WORLD, you are 42 years old.
 3.14 and 3.14
 1.2345e+3 and 3.1416e+0
 foo       |00042|
+"str" and str
 Hello WORLD!
 FF 100 101 10000
 a #\b Newline
@@ -127,6 +130,7 @@ body), but its `~:^`/`~@^` variants and prefix parameters are not. Further notes
   an argument-divergent `~[` nested inside another composite directive
   (`~(`/`~{`) is not supported.
 - `~:d` grouping and the radix directives `~x`/`~o`/`~b`/`~r` are exact for integers of any magnitude on every backend.
+- `~w` prints as `prin1` and does not read `*print-escape*` / `*print-readably*`, so binding one of them around it does not switch it to `princ` -- the same gap `write-to-string` has (`write` itself honors them).
 
 ## Runtime control strings
 
