@@ -2,9 +2,9 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**7,879 / 17,686 tests pass (44.5%)** -- 2,748 fail, 7,059 signal an error.
+**7,879 / 17,689 tests pass (44.5%)** -- 2,749 fail, 7,061 signal an error.
 
-7 top-level forms could not be read, 2,225 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
+7 top-level forms could not be read, 2,222 could not be evaluated, 0 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
@@ -25,15 +25,15 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | pathnames | 215 | 21 | 3 | 191 | 9.8% | 17 |
 | printer | 505 | 99 | 74 | 332 | 19.6% | 92 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 19 |
-| reader | 560 | 52 | 287 | 221 | 9.3% | 40 |
-| sequences | 2,402 | 1,459 | 202 | 741 | 60.7% | 903 |
+| reader | 560 | 52 | 288 | 220 | 9.3% | 40 |
+| sequences | 2,405 | 1,459 | 202 | 744 | 60.7% | 900 |
 | streams | 709 | 142 | 85 | 482 | 20.0% | 112 |
 | strings | 495 | 192 | 100 | 203 | 38.8% | 32 |
 | structures | 960 | 311 | 241 | 408 | 32.4% | 46 |
 | symbols | 1,138 | 665 | 387 | 86 | 58.4% | 24 |
 | system-construction | 58 | 12 | 3 | 43 | 20.7% | 36 |
 | types-and-classes | 613 | 263 | 235 | 115 | 42.9% | 31 |
-| **total** | **17,686** | **7,879** | **2,748** | **7,059** | **44.5%** | **2,232** |
+| **total** | **17,689** | **7,879** | **2,749** | **7,061** | **44.5%** | **2,229** |
 
 ## Most frequent failure reasons
 
@@ -63,13 +63,13 @@ Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 | 65 | `The variable *FLOATS* is unbound` |
 | 63 | `The function CLASS-PRECEDENCE-LIST-FOO is undefined` |
 | 63 | `X expects 1 arguments, got 5` |
-| 58 | `Unknown keyword argument: :X` |
+| 59 | `Unknown keyword argument: :X` |
 | 55 | `The variable #C is unbound` |
 | 54 | `The function NUNION is undefined` |
 | 53 | `The function SET-UP-PACKAGES is undefined` |
 | 52 | `The function MAKE-TWO-WAY-STREAM is undefined` |
-| 52 | `X expects 1 arguments, got 7` |
 | 52 | `X: :displaced-to cannot be combined with :fill-pointer/:adjustable/:initial-element` |
+| 51 | `X expects 1 arguments, got 7` |
 | 50 | `LispEvalException: X cannot redefine the standard operator X` |
 | 50 | `The function SET-EXCLUSIVE-OR is undefined` |
 | 50 | `The variable *REALS* is unbound` |
