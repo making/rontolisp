@@ -3,7 +3,7 @@
 Difficulty: Low
 
 `doc/{en,ja}/reference/packages.md`'s "Package introspection" section quotes
-`(length (rontolisp:list-functions))` as **367**; the answer is **394**
+`(length (rontolisp:list-functions))` as **367**; the answer is **399**
 (2026-08-15). Its `list-macros` listing is stale too -- it is missing
 `PPRINT-LOGICAL-BLOCK`, which the ci-spec's `list-*` case does carry.
 

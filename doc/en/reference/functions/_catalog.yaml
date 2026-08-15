@@ -158,6 +158,7 @@ categories:
       - { slug: class-name, name: "class-name" }
       - { slug: get, name: "get" }
       - { slug: symbol-plist, name: "symbol-plist" }
+      - { slug: remprop, name: "remprop" }
       - { slug: case-char-p, name: "lower-case-p upper-case-p" }
       - { slug: digit-char-p, name: "digit-char-p" }
       - { slug: digit-char, name: "digit-char" }
@@ -326,6 +327,9 @@ categories:
       - { slug: symbol-name, name: "symbol-name" }
       - { slug: symbol-package, name: "symbol-package" }
       - { slug: package-name, name: "package-name" }
+      - { slug: package-use-list, name: "package-use-list" }
+      - { slug: package-used-by-list, name: "package-used-by-list" }
+      - { slug: package-shadowing-symbols, name: "package-shadowing-symbols" }
       - { slug: symbol-value, name: "symbol-value" }
       - { slug: boundp, name: "boundp" }
       - { slug: fboundp, name: "fboundp" }
@@ -336,6 +340,7 @@ categories:
       - { slug: use-package, name: "use-package" }
       - { slug: export, name: "export" }
       - { slug: unexport, name: "unexport" }
+      - { slug: import, name: "import" }
   - title: "Streams & Files"
     functions:
       - { slug: open, name: "open" }

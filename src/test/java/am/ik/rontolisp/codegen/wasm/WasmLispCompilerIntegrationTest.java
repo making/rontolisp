@@ -4532,6 +4532,54 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void importMakesASymbolAccessibleUnqualified() throws Exception {
+		// Consumed by the PackageResolver like export, so it works in a module that
+		// carries no package registry.
+		assertThat(compileAndRun("""
+				(defpackage :impkg (:use :cl) (:export #:pub))
+				(in-package :impkg)
+				(defun pub () 1)
+				(defun priv () 2)
+				(in-package :cl-user)
+				(import 'impkg:pub)
+				(import '(impkg::priv))
+				(print (+ (pub) (priv)))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void packageRegistryQueries() throws Exception {
+		// Answered from the use table baked in at compile time -- same values the
+		// interpreter reads off its live registry (package-name/-shadowing-symbols are
+		// prelude defuns, so the program takes the prelude splice).
+		assertThat(compileAndRunPrelude("""
+				(defpackage :pql-a (:use :cl) (:export #:hi))
+				(defpackage :pql-b (:use :cl :pql-a))
+				(print (package-use-list :pql-b))
+				(print (package-used-by-list :pql-a))
+				(print (package-use-list :cl))
+				(print (package-shadowing-symbols :cl-user))
+				(print (car (member :pql-a (list-all-packages))))
+				(defun q (p) (package-use-list p))
+				(print (q (find-package "CL-USER")))
+				(print (mapcar #'package-name (funcall #'package-use-list :cl-user)))
+				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"CL\")");
+	}
+
+	@Test
+	void rempropDropsOnePropertyFromThePlist() throws Exception {
+		// get / (setf get) / symbol-plist / remprop are all prelude defuns.
+		assertThat(compileAndRunPrelude("""
+				(setf (get 'rp 'a) 1)
+				(setf (get 'rp 'b) 2)
+				(setf (get 'rp 'c) 3)
+				(print (list (remprop 'rp 'b) (symbol-plist 'rp) (remprop 'rp 'zz)
+				             (remprop 'rp 'c) (symbol-plist 'rp) (get 'rp 'a)))
+				(print (remprop 'nothing 'x))
+				""")).isEqualTo("(T (C 3 A 1) NIL T (A 1) 1)\nNIL");
+	}
+
+	@Test
 	void destructiveListOps() throws Exception {
 		// The destructive ops reuse cons cells; an alias to the original list observes
 		// the
@@ -9907,7 +9955,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("394");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("399");
 	}
 
 	@Test

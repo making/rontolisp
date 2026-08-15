@@ -455,6 +455,14 @@ public final class LispNames {
 	public static final String SYMBOL_PLIST = "SYMBOL-PLIST";
 
 	/**
+	 * The {@code remprop} standard function: drops one indicator/value pair from a
+	 * symbol's property list in the same {@code %symbol-plists} store {@link #GET} and
+	 * {@link #SYMBOL_PLIST} share, answering true when the property was there. A prelude
+	 * defun, so one definition serves all four backends.
+	 */
+	public static final String REMPROP = "REMPROP";
+
+	/**
 	 * The {@code type-of} standard function, a prelude defun over
 	 * {@link #CLASS_DESIGNATOR_INTERNAL}: the type NAME of a struct/CLOS instance (the
 	 * designator is the instance TAG), else the built-in type name the designator
@@ -487,6 +495,30 @@ public final class LispNames {
 	 * {@code (package-name (symbol-package (type-of conn)))}.
 	 */
 	public static final String PACKAGE_NAME = "PACKAGE-NAME";
+
+	/**
+	 * The {@code package-use-list} standard function: the packages a package uses, as the
+	 * keywords {@link #FIND_PACKAGE} answers. The interpreter reads the live registry;
+	 * the compile paths answer from the use table baked in at compile time (see
+	 * {@code .kb/packages.md}).
+	 */
+	public static final String PACKAGE_USE_LIST = "PACKAGE-USE-LIST";
+
+	/**
+	 * The {@code package-used-by-list} standard function: the inverse of
+	 * {@link #PACKAGE_USE_LIST} -- every package whose use list names this one, over the
+	 * same table.
+	 */
+	public static final String PACKAGE_USED_BY_LIST = "PACKAGE-USED-BY-LIST";
+
+	/**
+	 * The {@code package-shadowing-symbols} standard function: always nil here, because
+	 * rontolisp has no symbol shadowing ({@code defpackage}'s {@code :shadow} records the
+	 * names for resolution but mints no shadowing symbol, and the runtime
+	 * {@code shadow}/{@code shadowing-import} are documented non-goals). The package
+	 * designator is still validated, so an unknown one signals like Common Lisp's.
+	 */
+	public static final String PACKAGE_SHADOWING_SYMBOLS = "PACKAGE-SHADOWING-SYMBOLS";
 
 	/**
 	 * The {@code copy-readtable} standard function, lowered to a nil-returning no-op:
@@ -2783,9 +2815,10 @@ public final class LispNames {
 	public static final String FUNCTION_LAMBDA_EXPRESSION = "FUNCTION-LAMBDA-EXPRESSION";
 
 	/**
-	 * The {@code list-all-packages} standard function: a lite prelude stub returning nil
-	 * (symbols are not interned into enumerable package tables; see
-	 * {@code .kb/symbol-runtime-api.md}).
+	 * The {@code list-all-packages} standard function: every registered package as the
+	 * keyword {@link #FIND_PACKAGE} answers for it. The interpreter reads the live
+	 * registry; the compile paths fold the call to the constant list the resolver's final
+	 * registry holds (see {@code .kb/packages.md}).
 	 */
 	public static final String LIST_ALL_PACKAGES = "LIST-ALL-PACKAGES";
 
@@ -3561,6 +3594,16 @@ public final class LispNames {
 	 * {@code use}. Same literal-consumption rule.
 	 */
 	public static final String UNEXPORT = "UNEXPORT";
+
+	/**
+	 * The {@code import} standard function, which makes a symbol of another package
+	 * accessible unqualified in a package -- the runtime spelling of {@code defpackage}'s
+	 * {@code :import-from} clause. Handled exactly like {@link #USE_PACKAGE}: a literal
+	 * top-level call is consumed by the {@code PackageResolver} (so it takes effect for
+	 * the forms that follow and works on every backend), while a computed call stays a
+	 * runtime function only the interpreter can serve.
+	 */
+	public static final String IMPORT = "IMPORT";
 
 	/**
 	 * Internal marker inserted by {@code LoadInliner} before the spliced forms of a

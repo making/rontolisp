@@ -8661,6 +8661,95 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The compiled backends' lowering of the three package-registry QUERIES --
+	 * {@code (list-all-packages)}, {@code (package-use-list P)} and
+	 * {@code (package-used-by-list P)}. A compiled runtime has no registry, so all three
+	 * answer from the use table the backend baked in from the resolver's FINAL registry
+	 * ({@code PackageResolver.runtimePackageUseTable}), and a "package" is its upcased
+	 * canonical name as a keyword, exactly as {@code find-package} answers.
+	 *
+	 * <p>
+	 * {@code list-all-packages} is a constant. The other two fold to a constant as well
+	 * when the designator is LITERAL; a computed one becomes an {@code assoc} keyed by
+	 * the name of the package {@code find-package} answers for it -- which is what makes
+	 * a nickname, a string and a package value all reach the same row -- and an unknown
+	 * designator signals, as it does on the interpreter and in Common Lisp. Frozen at
+	 * compile time, so a package a compiled program creates later is invisible here.
+	 * @param cons the query call
+	 * @param packageTable the designator-to-package-name table (for the literal fold)
+	 * @param useTable the package-to-use-list table
+	 * @return the equivalent expression
+	 */
+	public static LispVal expandPackageQuery(LispCons cons, java.util.Map<String, String> packageTable,
+			java.util.Map<String, java.util.List<String>> useTable) {
+		List<LispVal> parts = cons.toList();
+		String member = parts.get(0) instanceof LispSymbol op ? LispSymbol.memberName(op.name()) : "";
+		if (LispNames.LIST_ALL_PACKAGES.equals(member)) {
+			return quotedPackageList(useTable.keySet());
+		}
+		java.util.Map<String, java.util.List<String>> answers = LispNames.PACKAGE_USE_LIST.equals(member) ? useTable
+				: invertUseTable(useTable);
+		LispVal designatorForm = parts.size() > 1 ? parts.get(1) : LispNil.INSTANCE;
+		String literal = literalPackageDesignator(designatorForm);
+		if (literal != null) {
+			String canonical = packageTable.get(literal);
+			if (canonical == null) {
+				canonical = packageTable.get(literal.toUpperCase(java.util.Locale.ROOT));
+			}
+			if (canonical != null) {
+				return quotedPackageList(answers.getOrDefault(canonical, java.util.List.of()));
+			}
+		}
+		// (let* ((%pq-d DESIGNATOR) (%pq-p (find-package %pq-d)))
+		// (if %pq-p (cdr (assoc (string %pq-p) 'TABLE :test #'string=))
+		// (error "MEMBER: no package named ~A" %pq-d)))
+		LispSymbol designatorVar = new LispSymbol("%PQ-D");
+		LispSymbol packageVar = new LispSymbol("%PQ-P");
+		List<LispVal> rows = new java.util.ArrayList<>(answers.size());
+		answers.forEach((pkg, used) -> {
+			List<LispVal> row = new java.util.ArrayList<>();
+			row.add(new LispString(pkg));
+			for (String use : used) {
+				row.add(new LispSymbol(":" + use));
+			}
+			rows.add(listToCons(row));
+		});
+		LispVal lookup = listToCons(List
+			.of(new LispSymbol(LispNames.CDR), listToCons(List.of(new LispSymbol(LispNames.ASSOC),
+					listToCons(List.of(new LispSymbol(LispNames.STRING), packageVar)),
+					listToCons(List.of(new LispSymbol(LispNames.QUOTE), listToCons(rows))), new LispSymbol(":TEST"),
+					listToCons(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(LispNames.STRING_EQ)))))));
+		LispVal signal = listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString(member + ": no package named ~A"), designatorVar));
+		return listToCons(List.of(new LispSymbol(LispNames.LET_STAR),
+				listToCons(List.of(listToCons(List.of(designatorVar, designatorForm)),
+						listToCons(List.of(packageVar,
+								listToCons(List.of(new LispSymbol(LispNames.FIND_PACKAGE), designatorVar)))))),
+				listToCons(List.of(new LispSymbol(LispNames.IF), packageVar, lookup, signal))));
+	}
+
+	/** A quoted list of package VALUES (the {@code find-package} keyword shape). */
+	private static LispVal quotedPackageList(java.util.Collection<String> names) {
+		LispVal list = LispNil.INSTANCE;
+		List<String> reversed = new java.util.ArrayList<>(names);
+		java.util.Collections.reverse(reversed);
+		for (String name : reversed) {
+			list = new LispCons(new LispSymbol(":" + name), list);
+		}
+		return listToCons(List.of(new LispSymbol(LispNames.QUOTE), list));
+	}
+
+	/** The package-to-USERS table: the inverse of the package-to-use-list one. */
+	private static java.util.Map<String, java.util.List<String>> invertUseTable(
+			java.util.Map<String, java.util.List<String>> useTable) {
+		java.util.Map<String, java.util.List<String>> inverted = new java.util.TreeMap<>();
+		useTable.keySet().forEach(pkg -> inverted.put(pkg, new java.util.ArrayList<>()));
+		useTable.forEach((pkg, used) -> used
+			.forEach(use -> inverted.computeIfAbsent(use, ignored -> new java.util.ArrayList<>()).add(pkg)));
+		return inverted;
+	}
+
+	/**
 	 * The compiled backends' lowering of a one-argument {@code (find-symbol NAME)} whose
 	 * NAME is not a literal string: {@code (intern NAME)}. A symbol IS its canonical
 	 * spelling there, so interning the name IS the lookup -- with the same deviation the

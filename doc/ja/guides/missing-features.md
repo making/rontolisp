@@ -21,7 +21,7 @@ rontolisp は意図的に小さくした Common Lisp のサブセットで、3 �
 | `defstruct` の `:include` | 単一継承のみ。スロットのデフォルトを上書きする `(:include parent (slot default) ...)` は利用可能 |
 | `declare` / `declaim` / `proclaim` / `the` | 結果は変えない。WASM では配列の `type` 宣言が要素アクセサのエミットを誘導（モジュールが小さく速くなる）、それ以外では解析されるだけの no-op |
 | `typep` / `subtypep` / `coerce` / `concatenate` | リテラル（クオートされた）型指定子のみ。`coerce` の結果型は `'list` / `'vector` / `'string`（または浮動小数点型）、`concatenate` はこの 3 つのシーケンス系統を構築 |
-| `make-package` / `export` / `import` / `rename-package`（ランタイム） | 利用不可。`use-package` は `in-package` と同様の読み込み/コンパイル時ディレクティブ。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
+| `make-package` / `rename-package` / `delete-package` / `unintern` / `shadow`（ランタイム） | 利用不可。`export` / `unexport` / `import` / `use-package` は `in-package` と同様の読み込み/コンパイル時ディレクティブとして利用可能。`defpackage` の `:shadow` / `:shadowing-import-from` はエラー |
 | `progv` | インタプリタのみ（JVM/WASM ではコンパイルエラー） |
 | `eval-when` | `progn` として扱う（フェーズの区別なし） |
 | `#:name` | 普通のシンボルとして読まれ、gensym 的な新規性はない |
@@ -161,12 +161,27 @@ CLOS は**静的なサブセット**です
 `:nicknames`、`:import-from` をサポートする、リテラルなトップレベルの
 read/コンパイル時ディレクティブです（`:documentation`/`:size` は受理されるが
 無視されます）。`:shadow` と `:shadowing-import-from` はエラーで（シンボルの
-シャドウイングはありません）。`use-package` は `in-package` と同じ読み込み/
-コンパイル時ディレクティブとして存在します（リテラルなトップレベル呼び出しが
-現在のパッケージの use リストを広げます）が、それ以外の**ランタイム**の
-パッケージ操作はありません: `make-package`、`export`、`import`、
-`rename-package` は利用できないため、パッケージの export シンボルの集合は
-定義時に固定されます。複数の使用先パッケージが同じ名前を export している場合、
+シャドウイングはありません）。`use-package`、
+[`export`](../reference/functions/export.md)、`unexport`、
+[`import`](../reference/functions/import.md) は `in-package` と同じ読み込み/
+コンパイル時ディレクティブとして存在します: リテラルなトップレベル呼び出しは
+それ以降のフォームに対して全バックエンドで効果を持ち、実行時に計算される
+呼び出しはインタープリタのみで動作します。実行時のパッケージ生成・改名は
+できません: `make-package`、`rename-package`、`delete-package` は利用不可です。
+`unintern`（および実行時の `shadow` / `shadowing-import`）はそもそも実現でき
+ません — シンボルは名前そのものであり、そこから取り除くべき intern テーブルが
+存在しないからです。
+問い合わせ系は本物です:
+[`find-package`](../reference/functions/find-package.md)、
+[`package-name`](../reference/functions/package-name.md)、
+[`list-all-packages`](../reference/functions/list-all-packages.md)、
+[`package-use-list`](../reference/functions/package-use-list.md)、
+[`package-used-by-list`](../reference/functions/package-used-by-list.md)、
+[`package-shadowing-symbols`](../reference/functions/package-shadowing-symbols.md)
+（常に `nil`）。コンパイル済みバックエンドはコンパイル時に焼き込まれた
+テーブルから答えるため、コンパイル済みプログラムが後から作ったパッケージは
+そこからは見えません。
+複数の使用先パッケージが同じ名前を export している場合、
 コンフリクトをシグナルする代わりに `:use` 順で最初のパッケージが優先されます。
 
 ## 動的（special）変数

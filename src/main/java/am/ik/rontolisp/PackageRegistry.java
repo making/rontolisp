@@ -159,7 +159,9 @@ public final class PackageRegistry {
 			LispNames.SET_DISPATCH_MACRO_CHARACTER, LispNames.READTABLE_CASE, LispNames.FIND_PACKAGE,
 			LispNames.SYMBOL_PACKAGE, LispNames.PACKAGE_NAME, LispNames.TYPE_OF, LispNames.INVOKE_RESTART,
 			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
-			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE);
+			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE, LispNames.REMPROP,
+			LispNames.IMPORT, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST,
+			LispNames.PACKAGE_SHADOWING_SYMBOLS);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,

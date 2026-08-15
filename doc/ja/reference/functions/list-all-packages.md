@@ -2,8 +2,11 @@
 
 `(list-all-packages)`
 
-ライト版スタブ: 常に `nil` を返します。シンボルは列挙可能なパッケージテーブルに intern されないため、実行時にパッケージを列挙できません。
+登録されているすべてのパッケージを、[`find-package`](find-package.md) が返すのと同じキーワードのリストとして返します（rontolisp にパッケージオブジェクトはありません）。組み込みパッケージ、`keyword` 疑似パッケージ、プログラム中のすべての [`defpackage`](../special-forms/defpackage.md) が含まれます。
+
+インタープリタは生きているレジストリを読みます。コンパイル済みバックエンドには実行時のレジストリがなく、コンパイル時に焼き込まれたテーブルから答えるため、コンパイル済みプログラムが後から作ったパッケージはそこからは見えません。
 
 ```lisp
-(list-all-packages) ; => NIL
+(defpackage #:listed (:use #:cl))
+(car (member :listed (list-all-packages))) ; => :LISTED
 ```

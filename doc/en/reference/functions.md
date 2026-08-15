@@ -108,12 +108,13 @@ page.
 | `macro-function` | `(macro-function 'when)` | The macro expander (real on the interpreter, a signalling stub in compiled output), `nil` for a function or special operator |
 | `compiled-function-p` | `(compiled-function-p #'car)` | Lite stub: always `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | Lite stub: `(values nil t nil)` (no source recorded) |
-| `list-all-packages` | `(list-all-packages)` | Lite stub: always `nil` (no enumerable package tables) |
+| `list-all-packages` | `(list-all-packages)` | Every registered package, as the keywords `find-package` answers (the compilers answer from a table baked in at compile time) |
 | `find-class` | `(find-class 'c)` | The memoized (`eq`-stable) class metaobject; signals unless `errorp` is `nil` |
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | A fresh instance with every slot unbound; no initforms, no `initialize-instance` |
 | `class-name` | `(class-name (class-of 42))` | The name symbol of a class metaobject |
 | `get` | `(get 'sym 'prop)`, `(setf (get 'sym 'prop) v)` | Symbol property lists over one program-global name-keyed store |
 | `symbol-plist` | `(symbol-plist 'sym)` | The whole property list `get` indexes into, out of the same store; no `(setf symbol-plist)` |
+| `remprop` | `(remprop 'sym 'prop)` | Drop one property from the same store; `t` when it was there, `nil` when not |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- true when up/down-casing changes the character (follows the Unicode case tables) |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- the digit weight in the given radix (default 10), or nil |
 | `digit-char` | `(digit-char 11 16)` | `#\B` -- the character for a weight in the radix (default 10), or nil |
@@ -130,6 +131,9 @@ page.
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- symbols read upcased like CL, so `(symbol-name 'car)` is `"CAR"` too |
 | `symbol-package` | `(symbol-package :foo)` | `:keyword` -- the same keyword shape `find-package` returns (`:cl` for standard symbols, `:cl-user` otherwise, `nil` for `#:` symbols); the compilers answer `:cl-user` for both `cl` and `cl-user` |
 | `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- the name string of a package designator, resolved through `find-package`; an unknown designator signals |
+| `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- the packages a package uses, as `find-package` keywords; an unknown designator signals |
+| `package-used-by-list` | `(package-used-by-list :cl)` | The inverse: every package whose use list names this one |
+| `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | Always `nil` (there is no symbol shadowing); the designator is still validated |
 | `symbol-value` | `(symbol-value '*level*)` | The global variable's value; unbound names signal an error (lexical bindings are invisible) |
 | `boundp` | `(boundp '*level*)` | `t` when the symbol names a bound global variable (t/nil/keywords are self-bound) |
 | `fboundp` | `(fboundp 'car)` | `t` for functions, macros and special forms (compilers: a computed argument sees functions only) |
@@ -321,6 +325,7 @@ page.
 | `use-package` | `(use-package :mypkg)` | add packages to a package's use list, so their external symbols are visible unqualified (a literal top-level call is a compile-time directive) |
 | `export` | `(export '(run))` | make symbols external in a package (a literal top-level call is a compile-time directive; export BEFORE the definitions) |
 | `unexport` | `(unexport 'run)` | the inverse of `export`: the symbol stays present but is no longer visible unqualified |
+| `import` | `(import 'other:sym)` | make another package's symbol accessible unqualified -- the runtime form of `:import-from` (a literal top-level call is a compile-time directive) |
 | `file-position` | `(file-position s)` | always `nil` (lite: streams do not support repositioning) |
 | `file-length` | `(file-length s)` | the byte length of the file a file stream is open on; `nil` for any other stream, and `nil` on both WASM backends |
 | `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined (always `nil` on both WASM backends) |

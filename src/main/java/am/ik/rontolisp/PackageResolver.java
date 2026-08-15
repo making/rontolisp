@@ -180,6 +180,17 @@ public final class PackageResolver {
 					return consumed;
 				}
 			}
+			// A literal top-level (import 'p:sym) is consumed for the same reason: which
+			// symbols a package makes accessible unqualified is a read/compile-time
+			// notion here, so the directive has to take effect on THIS pass for the
+			// forms that follow. It is the runtime spelling of defpackage's
+			// :import-from clause and records the same import redirect.
+			if (LispNames.IMPORT.equals(member)) {
+				LispVal consumed = tryConsumeImport(cons);
+				if (consumed != null) {
+					return consumed;
+				}
+			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
 				// The save needs no runtime counterpart: the run-time *package* already
 				// holds the package this pass has current, and the restore below
@@ -374,6 +385,66 @@ public final class PackageResolver {
 			}
 		}
 		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), Set.copyOf(owned), Set.copyOf(externals),
+				Map.copyOf(imports), pkg.shadows()));
+	}
+
+	/**
+	 * Consumes a literal top-level {@code (import SYMBOLS [PACKAGE])} call: records the
+	 * import redirects in the target package and returns {@code t}, the standard
+	 * function's return value. Returns null when an argument is not literal (a runtime
+	 * call only the interpreter can serve).
+	 */
+	private @Nullable LispVal tryConsumeImport(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || parts.size() > 3) {
+			return null;
+		}
+		List<String> names = literalDesignatorList(parts.get(1));
+		String target = this.currentPackage;
+		if (parts.size() == 3) {
+			target = literalDesignator(parts.get(2));
+		}
+		if (names == null || target == null) {
+			return null;
+		}
+		importSymbols(names, target);
+		return LispTrue.INSTANCE;
+	}
+
+	/**
+	 * Makes the named symbols of other packages accessible UNQUALIFIED in the target
+	 * package -- the shared machinery behind the {@code import} directive and its
+	 * interpreter-side runtime function, and the same import redirect
+	 * {@code defpackage}'s {@code :import-from} clause records. Resolution here is
+	 * textual, so an imported name simply resolves to the source package's canonical
+	 * spelling. An UNQUALIFIED name is already a symbol of the current package and, as in
+	 * Common Lisp, importing it is a no-op.
+	 * @param spellings the symbol spellings to import ({@code pkg:name} /
+	 * {@code pkg::name})
+	 * @param targetPackage the package that gains the redirects
+	 */
+	public void importSymbols(List<String> spellings, String targetPackage) {
+		String target = registeredPackageName(this.registry.canonicalName(targetPackage));
+		if (!this.registry.contains(target)) {
+			throw new LispPackageException("No such package: " + targetPackage);
+		}
+		LispPackage pkg = this.registry.get(target);
+		Map<String, String> imports = new HashMap<>(pkg.imports());
+		for (String spelled : spellings) {
+			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(spelled);
+			if (qn == null) {
+				continue;
+			}
+			String source = registeredPackageName(this.registry.canonicalName(qn.pkg()));
+			if (!this.registry.contains(source)) {
+				throw new LispPackageException("No such package: " + qn.pkg());
+			}
+			if (source.equals(target)) {
+				continue;
+			}
+			imports.put(qn.member(), trueHome(source, qn.member()));
+		}
+		this.registry.define(new LispPackage(pkg.name(), pkg.useList(), pkg.symbols(), pkg.externals(),
 				Map.copyOf(imports), pkg.shadows()));
 	}
 
@@ -1585,6 +1656,33 @@ public final class PackageResolver {
 			table.put(designator, value);
 			table.put(designator.toUpperCase(java.util.Locale.ROOT), value);
 		});
+		return table;
+	}
+
+	/**
+	 * The table a compiled backend bakes in so {@code list-all-packages},
+	 * {@code package-use-list} and {@code package-used-by-list} can be answered without a
+	 * registry: every registered package's UPCASED canonical name mapped to the upcased
+	 * canonical names of the packages it uses. Read AFTER {@link #resolveProgram}, so it
+	 * covers every {@code defpackage} in the program; the interpreter does not use it --
+	 * it keeps the live registry. The {@code keyword} pseudo-package is a member here for
+	 * the same reason it is in {@link #runtimePackageTable}: {@code find-package} answers
+	 * for it, so the listing must contain it.
+	 * @return the package-to-use-list table, in a deterministic order
+	 */
+	public Map<String, List<String>> runtimePackageUseTable() {
+		Map<String, List<String>> table = new java.util.TreeMap<>();
+		for (String canonical : new java.util.TreeSet<>(this.registry.designatorTable().values())) {
+			LispPackage pkg = this.registry.get(canonical);
+			List<String> used = new ArrayList<>();
+			if (pkg != null) {
+				for (String use : pkg.useList()) {
+					used.add(use.toUpperCase(java.util.Locale.ROOT));
+				}
+			}
+			table.put(canonical.toUpperCase(java.util.Locale.ROOT), List.copyOf(used));
+		}
+		table.putIfAbsent("KEYWORD", List.of());
 		return table;
 	}
 

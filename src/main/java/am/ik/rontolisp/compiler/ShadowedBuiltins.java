@@ -79,9 +79,11 @@ public final class ShadowedBuiltins {
 			LispNames.WARN, LispNames.MAKE_INSTANCE, LispNames.CLASS_OF);
 
 	/**
-	 * Wrapped names the INTERPRETER evaluates through an {@code evalCons} case or a macro
-	 * expansion rather than a global {@code LispFunction} binding. Its half of todo-237
-	 * stashes only a Java-backed {@code LispFunction}
+	 * Wrapped names the INTERPRETER evaluates through an {@code evalCons} case, a macro
+	 * expansion, or an evaluator-side registration ({@code LispEvaluator.registerEval},
+	 * which needs the resolver's live registry -- {@code find-package} and the three
+	 * package-registry queries) rather than a global {@code LispFunction} binding. Its
+	 * half of todo-237 stashes only a Java-backed {@code LispFunction}
 	 * ({@code LispEvaluator.builtinDefaultMethodFor}), so it stashes nothing for these --
 	 * dispatching a user method on them HERE would diverge from the interpreter in the
 	 * opposite direction. Pinned by {@code ShadowedBuiltinsTest}: every name the set
@@ -92,7 +94,8 @@ public final class ShadowedBuiltins {
 			LispNames.FILE_WRITE_DATE, LispNames.FIND, LispNames.FIND_IF, LispNames.FIND_IF_NOT, LispNames.FIND_PACKAGE,
 			LispNames.FORMAT, LispNames.FUNCALL, LispNames.MAPC, LispNames.MAPCAN, LispNames.MAPCAR, LispNames.MAPCON,
 			LispNames.MAPHASH, LispNames.MAPL, LispNames.MAPLIST, LispNames.MEMBER, LispNames.MEMBER_IF,
-			LispNames.NSUBSTITUTE_IF, LispNames.NSUBSTITUTE_IF_NOT, LispNames.POSITION, LispNames.POSITION_IF,
+			LispNames.NSUBSTITUTE_IF, LispNames.NSUBSTITUTE_IF_NOT, LispNames.LIST_ALL_PACKAGES,
+			LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST, LispNames.POSITION, LispNames.POSITION_IF,
 			LispNames.POSITION_IF_NOT, LispNames.PROBE_FILE, LispNames.RASSOC, LispNames.RASSOC_IF, LispNames.REMOVE_IF,
 			LispNames.REMOVE_IF_NOT, LispNames.SIMPLE_CONDITION_FORMAT_ARGUMENTS,
 			LispNames.SIMPLE_CONDITION_FORMAT_CONTROL, LispNames.SOME, LispNames.SORT, LispNames.STABLE_SORT,

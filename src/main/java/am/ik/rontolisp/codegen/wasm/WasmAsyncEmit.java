@@ -789,6 +789,7 @@ final class WasmAsyncEmit {
 			.userDefunNames(proto.userDefunNames)
 			.usesFmakunbound(proto.usesFmakunbound)
 			.packageTable(proto.packageTable)
+			.packageUseTable(proto.packageUseTable)
 			.structAccessors(proto.structAccessors)
 			.closRegistry(proto.closRegistry)
 			.globals(proto.globals)

@@ -1712,6 +1712,61 @@ public final class LispEvaluator {
 			String found = this.packageResolver.findPackageName(packageDesignator(LispNames.FIND_PACKAGE, args.get(0)));
 			return found == null ? LispNil.INSTANCE : packageKeyword(found);
 		}));
+		// list-all-packages / package-use-list / package-used-by-list: the registry
+		// queries, over the LIVE registry (so a package created after this program was
+		// read counts). A "package" is its upcased canonical name as a keyword, so the
+		// listings are lists of those. The compile paths answer the same three from the
+		// use table baked in at compile time (LispMacroExpander.expandPackageQuery).
+		this.globalEnv.defineFunction(LispNames.LIST_ALL_PACKAGES,
+				new LispFunction(LispNames.LIST_ALL_PACKAGES, args -> {
+					if (!args.isEmpty()) {
+						throw new LispEvalException(
+								LispNames.LIST_ALL_PACKAGES + " expects 0 arguments, got " + args.size());
+					}
+					return packageKeywordList(this.packageResolver.runtimePackageUseTable().keySet());
+				}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_USE_LIST, new LispFunction(LispNames.PACKAGE_USE_LIST, args -> {
+			requireSingleArg(LispNames.PACKAGE_USE_LIST, args);
+			return packageKeywordList(packageUseEntry(LispNames.PACKAGE_USE_LIST,
+					packageDesignator(LispNames.PACKAGE_USE_LIST, args.get(0))));
+		}));
+		this.globalEnv.defineFunction(LispNames.PACKAGE_USED_BY_LIST,
+				new LispFunction(LispNames.PACKAGE_USED_BY_LIST, args -> {
+					requireSingleArg(LispNames.PACKAGE_USED_BY_LIST, args);
+					String name = packageName(LispNames.PACKAGE_USED_BY_LIST,
+							packageDesignator(LispNames.PACKAGE_USED_BY_LIST, args.get(0)));
+					List<String> users = new ArrayList<>();
+					this.packageResolver.runtimePackageUseTable().forEach((pkg, used) -> {
+						if (used.contains(name)) {
+							users.add(pkg);
+						}
+					});
+					return packageKeywordList(users);
+				}));
+		// import: the same split as use-package/export -- a literal top-level call is
+		// consumed by the PackageResolver (so it works on every backend), and this
+		// runtime binding serves the computed calls only the interpreter can run,
+		// resolving against the very same resolver so it takes effect for the forms read
+		// after it.
+		this.globalEnv.defineFunction(LispNames.IMPORT, new LispFunction(LispNames.IMPORT, args -> {
+			if (args.isEmpty() || args.size() > 2) {
+				throw new LispEvalException(LispNames.IMPORT + " expects 1 or 2 arguments, got " + args.size());
+			}
+			List<String> symbols = new ArrayList<>();
+			// A symbol or a LIST of symbols, like CL.
+			if (args.get(0) instanceof LispCons list) {
+				for (LispVal element : list.toList()) {
+					symbols.add(importSpelling(element));
+				}
+			}
+			else if (!(args.get(0) instanceof LispNil)) {
+				symbols.add(importSpelling(args.get(0)));
+			}
+			String target = args.size() == 2 ? packageNameDesignator(LispNames.IMPORT, args.get(1))
+					: this.packageResolver.currentPackageName();
+			this.packageResolver.importSymbols(symbols, target);
+			return LispTrue.INSTANCE;
+		}));
 		// symbol-package: the same keyword shape find-package yields, so the two are
 		// eq-comparable (ironclad's massage-symbol pattern); nil for an uninterned (#:)
 		// symbol. Overrides the backend-neutral prelude defun, which cannot tell cl
@@ -6062,6 +6117,48 @@ public final class LispEvaluator {
 	 */
 	private static LispSymbol packageKeyword(String canonicalName) {
 		return new LispSymbol(":" + canonicalName.toUpperCase(java.util.Locale.ROOT));
+	}
+
+	/** A list of package VALUES (the {@code find-package} keyword shape) from names. */
+	private static LispVal packageKeywordList(java.util.Collection<String> names) {
+		LispVal result = LispNil.INSTANCE;
+		List<String> reversed = new ArrayList<>(names);
+		java.util.Collections.reverse(reversed);
+		for (String name : reversed) {
+			result = new LispCons(packageKeyword(name), result);
+		}
+		return result;
+	}
+
+	/**
+	 * The UPCASED canonical name of a registered package, signalling like Common Lisp's
+	 * package-error when the designator names none.
+	 */
+	private String packageName(String operator, String designator) {
+		String found = this.packageResolver.findPackageName(designator);
+		if (found == null) {
+			throw new LispEvalException(operator + ": no package named " + designator);
+		}
+		return found.toUpperCase(java.util.Locale.ROOT);
+	}
+
+	/** The use list of a registered package, by canonical name. */
+	private List<String> packageUseEntry(String operator, String designator) {
+		List<String> used = this.packageResolver.runtimePackageUseTable().get(packageName(operator, designator));
+		return used == null ? List.of() : used;
+	}
+
+	/**
+	 * The spelling an {@code import} argument names: a SYMBOL's stored spelling, verbatim
+	 * -- unlike a package designator, the qualifier is the whole point here (it says
+	 * which package the symbol comes from).
+	 */
+	private static String importSpelling(LispVal val) {
+		return switch (val) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> sym.name().startsWith("#:") ? sym.name().substring(2) : sym.name();
+			default -> throw new LispEvalException(LispNames.IMPORT + " expects a symbol, got " + val.print());
+		};
 	}
 
 	/**

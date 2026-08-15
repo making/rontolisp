@@ -2981,6 +2981,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.warnedClRedefinitions(warnedClRedefinitions)
 			.usesFmakunbound(programUsesSymbol(program, LispNames.FMAKUNBOUND))
 			.packageTable(packageResolver.runtimePackageTable())
+			.packageUseTable(packageResolver.runtimePackageUseTable())
 			.structAccessors(structAccessors)
 			.closRegistry(closRegistry)
 			.globals(globals)
@@ -7040,6 +7041,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, String> packageTable = Map.of();
 
 		/**
+		 * Every registered package mapped to the packages it uses -- the table
+		 * {@code list-all-packages} / {@code package-use-list} /
+		 * {@code package-used-by-list} are answered from, for the same reason
+		 * {@link #packageTable} exists ({@link LispMacroExpander#expandPackageQuery}).
+		 */
+		Map<String, java.util.List<String>> packageUseTable = Map.of();
+
+		/**
 		 * {@code defstruct} accessor names to their 1-based slot position, collected by
 		 * the pre-pass in {@link WasmLispCompiler#compile}; {@code setf} expansion treats
 		 * these as places. Shared across every context.
@@ -7314,6 +7323,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.userDefunNames = builder.userDefunNames;
 			this.usesFmakunbound = builder.usesFmakunbound;
 			this.packageTable = builder.packageTable;
+			this.packageUseTable = builder.packageUseTable;
 			this.structAccessors = builder.structAccessors;
 			this.closRegistry = builder.closRegistry;
 			this.globals = builder.globals;
@@ -7420,6 +7430,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean usesFmakunbound = false;
 
 			private Map<String, String> packageTable = Map.of();
+
+			private Map<String, java.util.List<String>> packageUseTable = Map.of();
 
 			private Map<String, Integer> structAccessors = Map.of();
 
@@ -7648,6 +7660,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder packageTable(Map<String, String> packageTable) {
 				this.packageTable = packageTable;
+				return this;
+			}
+
+			Builder packageUseTable(Map<String, java.util.List<String>> packageUseTable) {
+				this.packageUseTable = packageUseTable;
 				return this;
 			}
 

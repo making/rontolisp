@@ -5157,6 +5157,56 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalImportMakesASymbolAccessibleUnqualified() {
+		// The runtime spelling of defpackage's :import-from clause: a literal top-level
+		// call is consumed by the resolver, so the forms after it see the redirect.
+		assertThat(evalMulti("""
+				(defpackage :impkg (:use :cl) (:export #:pub))
+				(in-package :impkg)
+				(defun pub () 1)
+				(defun priv () 2)
+				(in-package :cl-user)
+				(import 'impkg:pub)
+				(import '(impkg::priv))
+				(+ (pub) (priv))
+				""")).isEqualTo(new LispInteger(3));
+	}
+
+	@Test
+	void evalPackageRegistryQueriesReadTheLiveRegistry() {
+		assertThat(evalMulti("""
+				(defpackage :pql-a (:use :cl) (:export #:hi))
+				(defpackage :pql-b (:use :cl :pql-a))
+				(list (package-use-list :pql-b)
+				      (package-used-by-list :pql-a)
+				      (package-use-list :cl)
+				      (package-shadowing-symbols :cl-user)
+				      (car (member :pql-a (list-all-packages))))
+				""").print()).isEqualTo("((:CL :PQL-A) (:PQL-B) NIL NIL :PQL-A)");
+		// A designator is anything find-package accepts, and the answer is the same
+		// keyword shape find-package returns.
+		assertThat(evalMulti("(package-use-list (find-package \"CL-USER\"))").print()).isEqualTo("(:CL)");
+		assertThat(evalMulti("(mapcar #'package-name (package-use-list :cl-user))").print()).isEqualTo("(\"CL\")");
+		assertThatThrownBy(() -> evalMulti("(package-use-list :no-such-package)"))
+			.hasMessageContaining("no package named");
+	}
+
+	@Test
+	void rempropDropsOnePropertyFromThePlist() {
+		assertThat(evalMulti("""
+				(setf (get 'rp 'a) 1)
+				(setf (get 'rp 'b) 2)
+				(setf (get 'rp 'c) 3)
+				(list (remprop 'rp 'b) (symbol-plist 'rp) (remprop 'rp 'zz)
+				      (remprop 'rp 'c) (symbol-plist 'rp) (get 'rp 'a))
+				""").print()).isEqualTo("(T (C 3 A 1) NIL T (A 1) 1)");
+		// The head of the list, and a symbol with no plist at all.
+		assertThat(evalMulti("(setf (get 'rp2 'only) 9) (list (remprop 'rp2 'only) (symbol-plist 'rp2))").print())
+			.isEqualTo("(T NIL)");
+		assertThat(evalMulti("(remprop 'rp3 'nothing)")).isEqualTo(LispNil.INSTANCE);
+	}
+
+	@Test
 	void evalLoadContextSpecialsAreLetBindable() {
 		// clack's %load-file binds all four around its read/eval loop.
 		assertThat(evalMulti("""
@@ -6315,7 +6365,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default", "%synonym-target")
 			.isSorted()
-			.hasSize(394);
+			.hasSize(399);
 	}
 
 	@Test

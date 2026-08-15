@@ -105,12 +105,13 @@
 | `macro-function` | `(macro-function 'when)` | マクロ展開器(インタープリタでは本物、コンパイル済み出力ではシグナルするスタブ)。関数と特殊オペレータには `nil` |
 | `compiled-function-p` | `(compiled-function-p #'car)` | ライト版スタブ: 常に `nil` |
 | `function-lambda-expression` | `(function-lambda-expression #'car)` | ライト版スタブ: `(values nil t nil)`(ソース未記録) |
-| `list-all-packages` | `(list-all-packages)` | ライト版スタブ: 常に `nil`(列挙可能なパッケージテーブルなし) |
+| `list-all-packages` | `(list-all-packages)` | 登録済みの全パッケージを `find-package` が返すキーワードのリストで返します(コンパイラはコンパイル時に焼き込んだテーブルから答えます) |
 | `find-class` | `(find-class 'c)` | メモ化された(`eq` 安定な)クラスメタオブジェクト。`errorp` が `nil` でなければシグナル |
 | `allocate-instance` | `(allocate-instance (find-class 'c))` | すべてのスロットが未束縛の新しいインスタンス。initform も `initialize-instance` も実行しない |
 | `class-name` | `(class-name (class-of 42))` | クラスメタオブジェクトの名前シンボル |
 | `get` | `(get 'sym 'prop)`、`(setf (get 'sym 'prop) v)` | シンボル属性リスト(プログラム全体で 1 つの名前キーのストア) |
 | `symbol-plist` | `(symbol-plist 'sym)` | `get` が引く属性リスト全体(同じストアから)。`(setf symbol-plist)` はありません |
+| `remprop` | `(remprop 'sym 'prop)` | 同じストアから属性を 1 つ削除。存在すれば `t`、なければ `nil` |
 | `lower-case-p` `upper-case-p` | `(lower-case-p #\a)`, `(upper-case-p #\A)` | `t`, `t` -- 大文字化・小文字化で文字が変化するとき真（Unicode ケース表に従う） |
 | `digit-char-p` | `(digit-char-p #\7)`, `(digit-char-p #\f 16)` | `7`, `15` -- 指定した基数(デフォルト10)での桁の重み、またはnil |
 | `digit-char` | `(digit-char 11 16)` | `#\B` -- 基数 (既定 10) における重みを表す文字、範囲外なら nil |
@@ -127,6 +128,9 @@
 | `symbol-name` | `(symbol-name 'foo)` | `"FOO"` -- シンボルは CL 同様大文字化されて読まれるので `(symbol-name 'car)` も `"CAR"` |
 | `symbol-package` | `(symbol-package :foo)` | `:keyword` -- `find-package` と同じキーワード形式(標準シンボルは `:cl`、それ以外は `:cl-user`、`#:` シンボルは `nil`)。コンパイラは `cl` と `cl-user` のどちらにも `:cl-user` を返します |
 | `package-name` | `(package-name (find-package :cl-user))` | `"CL-USER"` -- パッケージ指示子の名前文字列。`find-package` で解決され、未知の指示子はシグナルします |
+| `package-use-list` | `(package-use-list :cl-user)` | `(:CL)` -- そのパッケージが use しているパッケージを `find-package` のキーワードで返します。未知の指示子はシグナルします |
+| `package-used-by-list` | `(package-used-by-list :cl)` | 逆向き: use リストにこのパッケージを含むすべてのパッケージ |
+| `package-shadowing-symbols` | `(package-shadowing-symbols :cl-user)` | 常に `nil`(シンボルのシャドーイングはありません)。指示子の検査は行います |
 | `symbol-value` | `(symbol-value '*level*)` | グローバル変数の値。未束縛の名前はエラー(レキシカルな束縛は見えない) |
 | `boundp` | `(boundp '*level*)` | シンボルが束縛されたグローバル変数を指すとき `t`(t/nil/キーワードは自己束縛) |
 | `fboundp` | `(fboundp 'car)` | 関数・マクロ・特殊形式に対して `t`(コンパイラ: 計算された引数は関数のみ判定) |
@@ -318,6 +322,7 @@
 | `use-package` | `(use-package :mypkg)` | パッケージを use リストに追加し、その外部シンボルを修飾なしで見えるようにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `export` | `(export '(run))` | シンボルをパッケージの外部シンボルにします（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ。定義より前に export してください） |
 | `unexport` | `(unexport 'run)` | `export` の逆操作。シンボルは残りますが修飾なしでは見えなくなります |
+| `import` | `(import 'other:sym)` | 他パッケージのシンボルを修飾なしでアクセスできるようにします -- `:import-from` の実行時版（リテラルなトップレベル呼び出しはコンパイル時ディレクティブ） |
 | `file-position` | `(file-position s)` | 常に `nil`(lite: ストリームはシーク非対応) |
 | `file-length` | `(file-length s)` | ファイルストリームが開いているファイルのバイト長。他のストリームでは `nil`、2つのWASMバックエンドでも `nil` |
 | `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil`(2つのWASMバックエンドでは常に `nil`) |

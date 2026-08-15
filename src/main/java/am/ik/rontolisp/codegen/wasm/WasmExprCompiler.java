@@ -784,8 +784,13 @@ final class WasmExprCompiler {
 				case LispNames.FIND_SYMBOL_STATUS -> WasmSymbolApiCompiler.compileFindSymbolStatus(cons, ctx);
 				// A runtime export/unexport (inside a defun body): the compiled package
 				// registry is frozen, so evaluate the arguments and yield t.
-				case LispNames.EXPORT, LispNames.UNEXPORT ->
+				case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons), ctx);
+				// The package-registry queries: answered from the use table baked in at
+				// compile time (the compiled runtimes have no registry).
+				case LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST ->
+					WasmExprCompiler.compileExpr(
+							LispMacroExpander.expandPackageQuery(cons, ctx.packageTable, ctx.packageUseTable), ctx);
 				case LispNames.MAKE_SYMBOL -> WasmSymbolApiCompiler.compileMakeSymbol(cons, ctx);
 				case LispNames.BOUNDP -> WasmSymbolApiCompiler.compileBoundp(cons, ctx);
 				case LispNames.FBOUNDP -> WasmSymbolApiCompiler.compileFboundp(cons, ctx);

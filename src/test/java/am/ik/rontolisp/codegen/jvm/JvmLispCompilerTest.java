@@ -2639,6 +2639,53 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunImportMakesASymbolAccessibleUnqualified() throws Exception {
+		// Like export: a literal top-level import is consumed by the PackageResolver,
+		// which is what makes it work in output that has no package registry.
+		assertThat(compileAndRun("""
+				(defpackage :impkg (:use :cl) (:export #:pub))
+				(in-package :impkg)
+				(defun pub () 1)
+				(defun priv () 2)
+				(in-package :cl-user)
+				(import 'impkg:pub)
+				(import '(impkg::priv))
+				(print (+ (pub) (priv)))
+				""")).isEqualTo("3");
+	}
+
+	@Test
+	void compileAndRunPackageRegistryQueries() throws Exception {
+		// Answered from the use table baked in at compile time -- same values the
+		// interpreter reads off its live registry.
+		assertThat(compileAndRun("""
+				(defpackage :pql-a (:use :cl) (:export #:hi))
+				(defpackage :pql-b (:use :cl :pql-a))
+				(print (package-use-list :pql-b))
+				(print (package-used-by-list :pql-a))
+				(print (package-use-list :cl))
+				(print (package-shadowing-symbols :cl-user))
+				(print (car (member :pql-a (list-all-packages))))
+				(defun q (p) (package-use-list p))
+				(print (q (find-package "CL-USER")))
+				(print (mapcar #'package-name (funcall #'package-use-list :cl-user)))
+				(print (handler-case (package-use-list :no-such-package) (error (e) :signalled)))
+				""")).isEqualTo("(:CL :PQL-A)\n(:PQL-B)\nNIL\nNIL\n:PQL-A\n(:CL)\n(\"CL\")\n:SIGNALLED");
+	}
+
+	@Test
+	void compileAndRunRempropDropsOnePropertyFromThePlist() throws Exception {
+		assertThat(compileAndRun("""
+				(setf (get 'rp 'a) 1)
+				(setf (get 'rp 'b) 2)
+				(setf (get 'rp 'c) 3)
+				(print (list (remprop 'rp 'b) (symbol-plist 'rp) (remprop 'rp 'zz)
+				             (remprop 'rp 'c) (symbol-plist 'rp) (get 'rp 'a)))
+				(print (remprop 'nothing 'x))
+				""")).isEqualTo("(T (C 3 A 1) NIL T (A 1) 1)\nNIL");
+	}
+
+	@Test
 	void compileAndRunLoadContextSpecialsAreLetBindable() throws Exception {
 		// clack's %load-file binds all four; on the compile paths they are declared nil
 		// and stay nil (nothing is being loaded at run time).
@@ -7772,12 +7819,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("394");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("399");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("394");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("399");
 	}
 
 	@Test

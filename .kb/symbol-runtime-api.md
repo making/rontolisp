@@ -91,8 +91,11 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
   under it home where CL would; on the compile paths `*package*` is a `defvar`'d
   special and the let is the ordinary shallow binding of `.kb/dynamic-special-variables.md`.
 
-`unintern`, `export` and the rest of the runtime package-mutation API remain in
-`.todo/038`.
+The runtime package-mutation API is complete except for `unintern`, which is a
+NON-GOAL for the reason below (point 3): `export`/`unexport`/`use-package`/`import`
+are read/compile-time directives with an interpreter-side runtime function, and
+`find-package`/`package-name`/`symbol-package`/`list-all-packages`/`package-use-list`/
+`package-used-by-list`/`package-shadowing-symbols` are the queries (`.kb/packages.md`).
 
 Seven CL functions (`PackageRegistry.CL_FUNCTIONS`, cl function count 210 -> 217) in all three backends. rontolisp symbols compare by name (no intern table), which shapes every deviation: `symbol-name` returns the name **without the package marker** — a keyword's leading `:` and a gensym's `#:` are stripped (`LispSymbol.displayName`, shared with `princ`/`~A`/`string`; `prin1`/`print` keep the stored spelling) — the STORED spelling verbatim, which under the uppercase-canonical model (`.kb/reader-case-upcase.md`) is upcased for every symbol read from source — user AND standard (`(symbol-name 'foo)` = `"FOO"`, `(symbol-name 'car)` = `"CAR"`, the CL answer; there is no lowercase-standard-name deviation); `intern`/`find-symbol` take the name VERBATIM (`(find-symbol "car")` = `NIL` because the standard symbol is named `"CAR"`; `(intern "TIME")` = `TIME`, `(intern "time")` = the distinct `time`). `intern` (1-arg) interns into the **current package** on the interpreter (`PackageResolver.internSpelling`: an accessible symbol keeps its canonical home spelling, an unknown name is homed verbatim into the resolver's `in-package` state — the LispEvaluator override; the Environment converter and the compiled backends stay package-blind), `(intern name :keyword)` builds a keyword, and any other package argument works via the canonical-spelling lowering on the compile paths (see "Runtime-interned symbols as function designators" below; the interpreter is registry-backed via `PackageResolver.internSpellingIn`, which throws `No such package: X` for an unknown package on every backend); `make-symbol` prepends the `#:` uninterned marker (same string twice = `eq` symbols, unlike CL); `find-symbol` returns the symbol only when the (verbatim) name is "known".
 
@@ -104,7 +107,7 @@ Seven CL functions (`PackageRegistry.CL_FUNCTIONS`, cl function count 210 -> 217
 
 **Compile-path folds and limits (both compilers)**: `find-symbol` requires a literal string and matches its VERBATIM name against `isClSymbol` + keyword + Pass-1 `userDefunNames` (so `(find-symbol "car")` is nil, `(find-symbol "CAR")` names `CAR`; runtime-defined globals and defmacro macros are interpreter-only knowledge); a literal `(fboundp 'x)` folds with full knowledge (specialOperatorNames + clFunctionNames + carcdr + userDefunNames + ctx.functions), a computed one sees functions only (`(fboundp (intern "COND"))` = nil compiled, t interpreted — the macro `COND` is interpreter-only knowledge; `(intern "cond")` is the distinct unbound symbol `cond`, nil on both). `#'symbol-name`/`#'intern`/`#'make-symbol` have wrappers; find-symbol/boundp/fboundp/fmakunbound/symbol-value deliberately have none (macroexpand precedent: fold-only or eval-runtime-dependent). On compiled backends symbol-name is princ-to-string-lenient on non-symbols (the interpreter type-errors); JVM intern/make-symbol don't type-check their argument either.
 
-Tests: the *SymbolName/Intern/MakeSymbol/FindSymbol/Boundp/SymbolValue/Fboundp* groups in the three backend tests, the `symbol-runtime-api` ci-spec case, and the 217 count pinned in ci-spec + LispEvaluatorTest + JvmLispCompilerTest (x2) + WasmLispCompilerIntegrationTest. Package-mutation functions (`export`/`use-package`/runtime `find-package`) remain in `.todo/038-symbol-and-package-extensions.md`.
+Tests: the *SymbolName/Intern/MakeSymbol/FindSymbol/Boundp/SymbolValue/Fboundp* groups in the three backend tests, the `symbol-runtime-api` ci-spec case, and the 217 count pinned in ci-spec + LispEvaluatorTest + JvmLispCompilerTest (x2) + WasmLispCompilerIntegrationTest. Package-mutation functions (`export`/`unexport`/`use-package`/`import`) and the package-registry queries are in `.kb/packages.md`.
 
 ## Is "no intern table" (identity = name) a stable design? (assessed 2026-07-05)
 
@@ -112,7 +115,7 @@ Yes — nothing on the roadmap (split-sequence, CLOS subset, condition system, d
 
 1. **WASM canonical-offset discipline (the recurring one)**: env lookup and `eq` compare string-table offsets, so EVERY future primitive that builds a symbol at runtime must route the bytes through `_intern` (reuse the `usesIntern` gate + `_intern_sym` rail) or it princs correctly but fails lookups/`eq`. This is a per-feature tax, not a one-time fix.
 2. **True uninterned identity is unrepresentable**: `(make-symbol "x")` twice is `eq`, hand-written `#:x` literals in two independent macros collide, `copy-symbol` cannot exist. Only affects code that bypasses `gensym`; accepted.
-3. **`unintern` and shadowing can never be implemented** (an intern table is the thing you'd unintern from) — the same deliberate line as `defpackage` rejecting `:shadow`. A library depending on either is where this design hits its wall (`.todo/038`).
+3. **`unintern` and shadowing can never be implemented** (an intern table is the thing you'd unintern from) — the same deliberate line as `defpackage` rejecting `:shadow`. A library depending on either is where this design hits its wall. Assessed again 2026-08-15 while closing the symbol/package umbrella and NOT implemented, deliberately: the registry could drop the name from a package's owned/external sets, but that is not what `unintern` is for. Its whole observable effect is `(find-symbol "X" p)` answering nil afterwards, and here a symbol IS its canonical spelling — the interpreter's find-symbol also probes the DEFINITIONS in the image (`definedInImage`), so a `pkg::x` with a defun stays findable no matter what the registry says, and the compile paths have no registry at run time at all. A registry-only `unintern` would answer t and change nothing observable, which is worse than the honest undefined-function error. **Re-evaluate when** symbol IDENTITY lands (`.todo/156`): with a real intern table there is something to unintern from, and `unintern`/`shadow`/`copy-symbol` become one item. Consumers to check then: uiop/package.lisp (`ensure-package` reads the status `unintern` returns), series, mgl-pax, slime.
 
 ## A definition IS an interning: the find-symbol namespace probe (+ `#'find-symbol`, runtime `export`) — todo-243, 2026-08-03
 
@@ -237,7 +240,9 @@ reader upcased it and answers only to that). The lowering is pure AST, so no per
 codegen exists. **The divergence, and its reason**: the table is frozen at compile time,
 so a package a compiled program creates later (interpreter-only `(eval '(defpackage ...))`)
 is invisible to a computed `find-package` there. **Re-evaluate when** runtime
-`defpackage` becomes a thing on the compiled backends (`.todo/038`).
+`defpackage` becomes a thing on the compiled backends. The three package-registry
+QUERIES (`list-all-packages` / `package-use-list` / `package-used-by-list`) are frozen the
+same way, from the sibling `runtimePackageUseTable()` (`.kb/packages.md`).
 
 **Computed `find-symbol`.** A computed NAME lowers to `(intern name)`
 (`LispMacroExpander.computedFindSymbol`) — a symbol IS its canonical spelling on the
@@ -493,6 +498,16 @@ pass — reaching the `:external` branch calls it. It is a prelude entry
 it carries its OWN copy of the store's `(defvar %symbol-plists nil)`: `defvar` assigns
 only when unbound, so a program that pulls in both entries gets one table. There is no
 `(setf symbol-plist)`.
+
+**`remprop` completes the plist family (2026-08-15, the `.todo/038` close-out)**: the
+same shape — one prelude entry, its own copy of the store's `defvar`, one definition for
+all four backends — walking the entry's plist two cells at a time and splicing the pair
+out with `rplacd` (through the pair BEFORE it, or through the alist entry itself when the
+match is at the head). It answers `t`/`nil` where SBCL answers the plist tail; both are
+the generalized boolean CLHS specifies. rove's `remove-test` is `(remprop name 'test)`
+(`.todo/372` row 13). Pinned by `LispEvaluatorTest#rempropDropsOnePropertyFromThePlist`,
+the matching pairs in `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest` and the
+`symbol-plist-remprop` ci-spec case.
 
 Tests: `LispEvaluatorTest#findSymbolAnswersTheAccessibilityStatusAsItsSecondValue` +
 `#symbolPlistReadsTheWholePropertyList`, the matching pairs in `JvmLispCompilerTest` and

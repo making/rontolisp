@@ -476,8 +476,15 @@ final class JvmExprCompiler {
 				case LispNames.FIND_SYMBOL_STATUS -> JvmSymbolApiCompiler.compileFindSymbolStatus(cons, ctx, className);
 				// A runtime export/unexport (inside a defun body): the compiled package
 				// registry is frozen, so evaluate the arguments and yield t.
-				case LispNames.EXPORT, LispNames.UNEXPORT ->
+				case LispNames.EXPORT, LispNames.UNEXPORT, LispNames.IMPORT ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeExport(cons), ctx, className);
+				// The package-registry queries: answered from the use table baked in at
+				// compile time (the compiled runtimes have no registry).
+				case LispNames.LIST_ALL_PACKAGES, LispNames.PACKAGE_USE_LIST,
+						LispNames.PACKAGE_USED_BY_LIST ->
+					JvmExprCompiler.compileExpr(
+							LispMacroExpander.expandPackageQuery(cons, ctx.packageTable, ctx.packageUseTable), ctx,
+							className);
 				case LispNames.MAKE_SYMBOL -> JvmSymbolApiCompiler.compileMakeSymbol(cons, ctx, className);
 				case LispNames.BOUNDP -> JvmSymbolApiCompiler.compileBoundp(cons, ctx, className);
 				case LispNames.FBOUNDP -> JvmSymbolApiCompiler.compileFboundp(cons, ctx, className);

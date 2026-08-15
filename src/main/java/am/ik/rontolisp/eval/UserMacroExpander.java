@@ -886,8 +886,8 @@ public final class UserMacroExpander {
 		// they are kept verbatim for the compilers' own resolution pass.
 		return LispNames.IN_PACKAGE.equals(member) || LispNames.DEFPACKAGE.equals(member)
 				|| LispNames.USE_PACKAGE.equals(member) || LispNames.EXPORT.equals(member)
-				|| LispNames.UNEXPORT.equals(member) || LispNames.PUSH_PACKAGE.equals(member)
-				|| LispNames.POP_PACKAGE.equals(member);
+				|| LispNames.UNEXPORT.equals(member) || LispNames.IMPORT.equals(member)
+				|| LispNames.PUSH_PACKAGE.equals(member) || LispNames.POP_PACKAGE.equals(member);
 	}
 
 	private static boolean usesMacroexpand(LispVal form) {

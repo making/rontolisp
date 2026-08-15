@@ -1076,7 +1076,12 @@ public final class BuiltinFunctionWrappers {
 			// (LispMacroExpander.expandRuntimeFindPackage), which is exactly what
 			// #'find-package must answer. esrap's resolve-function reaches it with
 			// (mapcar #'find-package '(#:cl #:esrap)).
-			unary(LispNames.FIND_PACKAGE));
+			unary(LispNames.FIND_PACKAGE),
+			// The three package-registry queries, for the same reason: their bodies are
+			// the plain calls, which the per-expression compilers answer from the baked
+			// use table (LispMacroExpander.expandPackageQuery).
+			new WrapperDef(LispNames.LIST_ALL_PACKAGES, List.of(), List.of(call(LispNames.LIST_ALL_PACKAGES))),
+			unary(LispNames.PACKAGE_USE_LIST), unary(LispNames.PACKAGE_USED_BY_LIST));
 
 	/** Backing set of {@link #names()}; initialized after {@code WRAPPER_DEFS}. */
 	private static final Set<String> WRAPPER_NAMES;

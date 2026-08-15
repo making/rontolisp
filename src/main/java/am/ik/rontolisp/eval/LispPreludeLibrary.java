@@ -241,9 +241,6 @@ public final class LispPreludeLibrary {
 		SOURCES.put(LispNames.UNBOUND_SLOT_INSTANCE, """
 				(defun unbound-slot-instance (condition) (slot-value condition 'instance))
 				""");
-		SOURCES.put(LispNames.LIST_ALL_PACKAGES, """
-				(defun list-all-packages () nil)
-				""");
 		// A "package" is the upcased canonical package name as a keyword (there are no
 		// package objects), so symbol-package reads the qualifier off the symbol's
 		// stored spelling: prin1-to-string keeps it, unlike symbol-name. The
@@ -293,6 +290,25 @@ public final class LispPreludeLibrary {
 				(defvar %symbol-plists nil)
 				(defun symbol-plist (symbol)
 				  (cdr (assoc symbol %symbol-plists)))
+				""");
+		// remprop: the plist REMOVER, over the same store -- its own copy of the
+		// defvar for the same reason symbol-plist carries one (a program may drop a
+		// property without ever calling get). rove's remove-test is (remprop name
+		// 'test).
+		SOURCES.put(LispNames.REMPROP, """
+				(defvar %symbol-plists nil)
+				(defun remprop (symbol indicator)
+				  (let ((entry (assoc symbol %symbol-plists)))
+				    (if entry
+				        (do ((prev nil tail)
+				             (tail (cdr entry) (cddr tail)))
+				            ((null tail) nil)
+				          (when (eq (car tail) indicator)
+				            (if prev
+				                (rplacd (cdr prev) (cddr tail))
+				                (rplacd entry (cddr tail)))
+				            (return t)))
+				        nil)))
 				""");
 		SOURCES.put(LispNames.GET, """
 				(defvar %symbol-plists nil)
@@ -545,6 +561,15 @@ public final class LispPreludeLibrary {
 				(defun package-name (%pn-pkg)
 				  (string (or (find-package %pn-pkg)
 				              (error "PACKAGE-NAME: no package named ~A" %pn-pkg))))
+				""");
+		// package-shadowing-symbols: always nil -- rontolisp has no symbol shadowing
+		// (defpackage's :shadow records names for RESOLUTION and mints no shadowing
+		// symbol; the runtime shadow/shadowing-import are documented non-goals,
+		// .kb/packages.md). The designator still goes through package-name, so an
+		// unknown package signals exactly as it does there.
+		SOURCES.put(LispNames.PACKAGE_SHADOWING_SYMBOLS, """
+				(defun package-shadowing-symbols (%pss-pkg)
+				  (progn (package-name %pss-pkg) nil))
 				""");
 		SOURCES.put(LispNames.NAMESTRING_CL, """
 				(defun namestring (%ns-path)

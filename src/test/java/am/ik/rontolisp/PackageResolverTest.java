@@ -631,6 +631,50 @@ class PackageResolverTest {
 	}
 
 	@Test
+	void importMakesASymbolAccessibleUnqualified() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :srcpkg (:use :cl) (:export #:pub))");
+		resolve(resolver, "(in-package :srcpkg)");
+		resolve(resolver, "(in-package :cl-user)");
+		// Before the import the bare name is a cl-user symbol of its own.
+		assertThat(resolve(resolver, "(pub)")).isEqualTo("(PUB)");
+		assertThat(resolve(resolver, "(import 'srcpkg:pub)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(pub)")).isEqualTo("(SRCPKG:PUB)");
+		// A QUOTED list, an INTERNAL symbol, and an explicit target package.
+		resolve(resolver, "(defpackage :tgtpkg (:use :cl))");
+		assertThat(resolve(resolver, "(import '(srcpkg::priv) :tgtpkg)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(priv)")).isEqualTo("(PRIV)");
+		resolve(resolver, "(in-package :tgtpkg)");
+		assertThat(resolve(resolver, "(priv)")).isEqualTo("(SRCPKG::PRIV)");
+	}
+
+	@Test
+	void importOfAnUnqualifiedSymbolIsANoOp() {
+		// The symbol is already the current package's own, as in Common Lisp.
+		PackageResolver resolver = new PackageResolver();
+		assertThat(resolve(resolver, "(import 'plain)")).isEqualTo("T");
+		assertThat(resolve(resolver, "(plain)")).isEqualTo("(PLAIN)");
+	}
+
+	@Test
+	void importUnknownPackageIsRejectedAndAComputedArgumentStaysARuntimeCall() {
+		assertThatThrownBy(() -> resolve("(import 'nosuch:f)")).isInstanceOf(LispPackageException.class)
+			.hasMessageContaining("No such package: NOSUCH");
+		assertThat(resolve("(import (compute-symbol))")).isEqualTo("(IMPORT (COMPUTE-SYMBOL))");
+	}
+
+	@Test
+	void runtimePackageUseTableCarriesEveryRegisteredPackage() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :upkg (:use :cl))");
+		java.util.Map<String, java.util.List<String>> table = resolver.runtimePackageUseTable();
+		assertThat(table).containsEntry("UPKG", java.util.List.of("CL"))
+			.containsEntry("CL", java.util.List.of())
+			.containsEntry("CL-USER", java.util.List.of("CL"))
+			.containsEntry("KEYWORD", java.util.List.of());
+	}
+
+	@Test
 	void defpackageUnknownUsedPackageIsRejected() {
 		assertThatThrownBy(() -> resolve("(defpackage :mypkg (:use :nosuch))")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("No such package: NOSUCH");
