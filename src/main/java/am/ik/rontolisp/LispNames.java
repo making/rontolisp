@@ -1609,6 +1609,25 @@ public final class LispNames {
 	public static final String RUN_HANDLERS_INTERNAL = "%RUN-HANDLERS";
 
 	/**
+	 * The internal {@code (%hb-guard body)} landing pad the {@code handler-bind}
+	 * expansion wraps its body in: a catch-any region that, for an escaping error whose
+	 * handlers did not run at the signal point (a raw built-in failure, an internal
+	 * {@code %error} with no signal hook), synthesizes the condition instance, runs the
+	 * {@code handler-bind} cluster stack, and rethrows carrying the instance. A condition
+	 * whose handlers already ran is recognized by identity against
+	 * {@link #HANDLERS_RAN_VAR} and rethrown untouched.
+	 */
+	public static final String HB_GUARD_INTERNAL = "%HB-GUARD";
+
+	/**
+	 * The condition instance {@code %run-handlers} last completed a cluster walk for (set
+	 * at the END of the walk, so a nested signal inside a handler cannot clear an outer
+	 * condition's mark). {@code %hb-guard} compares against it by identity to keep the
+	 * signal-point run and the landing-pad run from both firing for one condition.
+	 */
+	public static final String HANDLERS_RAN_VAR = "%HANDLERS-RAN%";
+
+	/**
 	 * The dynamic {@code handler-bind} cluster stack: a top-level global holding a list
 	 * of clusters, each a list of {@code (test-closure . handler-function)} entries.
 	 * Mutated with plain {@code setq} and restored through {@code unwind-protect} (never

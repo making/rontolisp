@@ -1171,6 +1171,7 @@ final class JvmExprCompiler {
 				case LispNames.IGNORE_ERRORS ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandIgnoreErrors(cons), ctx, className);
 				case LispNames.HC_DEPTH_DEC_INTERNAL -> JvmHandlerCaseCompiler.compileDepthDec(ctx, className);
+				case LispNames.HB_GUARD_INTERNAL -> JvmHandlerCaseCompiler.compileGuard(cons, ctx, className);
 				case LispNames.AND -> JvmExprCompiler.compileExpr(LispMacroExpander.expandAnd(cons), ctx, className);
 				case LispNames.OR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandOr(cons), ctx, className);
 				case LispNames.WHEN -> JvmExprCompiler.compileExpr(LispMacroExpander.expandWhen(cons), ctx, className);

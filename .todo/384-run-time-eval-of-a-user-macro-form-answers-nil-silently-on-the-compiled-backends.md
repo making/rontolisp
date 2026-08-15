@@ -29,5 +29,12 @@ macro form works (the interpreter's `expandMacroCall` shape; heavier, needs
 must not do. `.todo/372` documents `:compile-at :run-time` as interpreter-only
 either way.
 
+Observed while finishing `.todo/379` (2026-08-15): `--dynamic` reaches the same
+silent nil -- an unresolvable call lowers to the embedded eval
+(`.kb/dynamic-late-binding.md`), so `(undefined-fn)` under `--dynamic` answers
+nil and neither `handler-bind` nor `handler-case` ever fires, where the same
+program without the flag signals the catchable undefined-function stub error.
+Outcome (a) fixes both spellings at once.
+
 Acceptance: the three lines above pinned on all four backends (ci-spec + the
 backend suites); the `compile` and `eval` doc pages' limitation sentences.

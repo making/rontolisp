@@ -14563,6 +14563,50 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void ehHandlerBindSeesASignaledErrorAndAnUndefinedFunctionError() throws Exception {
+		// The rove shape (.todo/379) within this backend's reach: everything thrown
+		// on the $lisp-cond tag -- a typed signal, an internal %error such as the
+		// undefined-function stub -- lands in the handler-bind expansion's
+		// %hb-guard pad. A raw TRAP ((car 1), a failed cast) stays uncatchable:
+		// the documented three-point-spectrum divergence
+		// (.kb/error-handling.md).
+		assertThat(compileAndRunEh("""
+				(print (block b
+				  (handler-bind ((error (lambda (e) (return-from b (list :typed (typep e 'type-error))))))
+				    (error 'type-error :datum 1 :expected-type 'cons))))
+				""")).isEqualTo("(:TYPED T)");
+		assertThat(compileAndRunEh("""
+				(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (no-such-function-xyz 1))))
+				""")).isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void ehHandlerBindRunsEachClusterOnceInnermostFirst() throws Exception {
+		assertThat(compileAndRunEh("""
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons :outer log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)))))
+				                 (no-such-function-xyz 1)))
+				           (error (e) (cons :caught log)))))
+				""")).isEqualTo("(:CAUGHT :OUTER :INNER)");
+	}
+
+	@Test
+	void ehHandlerBindHandlerAndHandlerCaseSeeTheSameInstance() throws Exception {
+		// The signal path attaches the instance %run-handlers saw to the throw, so
+		// the handlers run once and handler-case dispatches on the identical
+		// condition.
+		assertThat(compileAndRunEh("""
+				(print (let ((seen nil) (n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (setq seen c))))
+				               (error "boom"))
+				           (error (e) (list :caught (eq e seen) n)))))
+				""")).isEqualTo("(:CAUGHT T 1)");
+	}
+
+	@Test
 	void ehFindRestartReturnsObjectAndGoLeavesClauseIntoTagbody() throws Exception {
 		// The postmodern transaction.lisp shape: find-restart with a condition
 		// argument returns a first-class restart object, invoke-restart on the

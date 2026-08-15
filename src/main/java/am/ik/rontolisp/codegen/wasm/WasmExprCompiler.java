@@ -1127,6 +1127,7 @@ final class WasmExprCompiler {
 							LispNames.PROGV + " is not supported on the WASM backend (interpreter only)");
 				case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
 				case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
+				case LispNames.HB_GUARD_INTERNAL -> WasmHandlerCaseCompiler.compileGuard(cons, ctx);
 				case LispNames.HANDLER_BIND ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandHandlerBind(cons, ctx.closRegistry), ctx);
 				case LispNames.IGNORE_ERRORS ->

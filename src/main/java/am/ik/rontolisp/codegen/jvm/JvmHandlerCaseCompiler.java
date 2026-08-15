@@ -174,6 +174,106 @@ final class JvmHandlerCaseCompiler {
 	}
 
 	/**
+	 * Compiles the internal {@code (%hb-guard body)} landing pad the {@code handler-bind}
+	 * expansion wraps its body in: a catch-any region over the body whose handler reads
+	 * (and clears) the condition channel, synthesizes the {@code simple-error} of a
+	 * condition-less throw (a raw runtime failure, a plain {@code %error}), runs the
+	 * {@code handler-bind} cluster stack through {@code %run-handlers} unless a walk
+	 * already completed for the identical instance (the {@code %handlers-ran%} mark --
+	 * the restart-mode signal hook runs handlers at the signal point and its terminals
+	 * carry the instance they ran for), restores the channel so an outer
+	 * {@code handler-case} or guard sees the same instance, and rethrows. Unlike
+	 * {@code handler-case} it never touches the handler depth (so {@code signal}
+	 * semantics are unchanged) and has no cleanup, so it pushes no {@code UnwindScope}.
+	 */
+	static void compileGuard(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.HB_GUARD_INTERNAL + " expects a body: " + cons.print());
+		}
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		channel.ensure(ctx.cp, className);
+		int savedNextLocal = ctx.nextLocal;
+		JvmLispCompiler.Ctx.Spill spill = ctx.spillOperandStack();
+		int resultSlot = ctx.allocTemp();
+		int excSlot = ctx.allocTemp();
+		int condSlot = ctx.allocTemp();
+		if (!spill.live().isEmpty()) {
+			ctx.spillScopes.push(new JvmLispCompiler.SpillScope(spill, ctx.blockTargets.size()));
+		}
+		int start = ctx.code.size();
+		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
+		int end = ctx.code.size();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(resultSlot);
+		int gotoDonePos = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		int handler = ctx.code.size();
+		ctx.stack.enterHandler();
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(excSlot);
+		// A cross-lambda non-local exit must pass through untouched (same gate as
+		// handler-case).
+		if (ctx.blockExitChannel) {
+			emitRethrowPendingNle(ctx, className, excSlot);
+		}
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(Objects.requireNonNull(channel.tlGet).index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(condSlot);
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
+		ctx.emit(Opcode.ACONST_NULL);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(condSlot);
+		int ifHaveCondPos = ctx.code.size();
+		ctx.emit(Opcode.IFNONNULL);
+		ctx.emitU2(0);
+		emitSynthesizeSimpleError(excSlot, condSlot, ctx, className);
+		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
+		// Run the cluster stack unless already run, as an ordinary Lisp form over the
+		// condition pseudo-local.
+		String condVarName = "__hb_cond$" + condSlot;
+		ctx.locals.put(condVarName, condSlot);
+		try {
+			JvmExprCompiler.compileExpr(LispMacroExpander.hbGuardHandlerForm(new LispSymbol(condVarName)), ctx,
+					className);
+		}
+		finally {
+			ctx.locals.remove(condVarName);
+		}
+		ctx.emit(Opcode.POP);
+		// Restore the channel (the outer catcher must see the instance the handlers
+		// saw, a synthesized one included) and rethrow.
+		ctx.emit(Opcode.GETSTATIC);
+		ctx.emitU2(Objects.requireNonNull(channel.condTlField).index());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(condSlot);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(Objects.requireNonNull(channel.tlSet).index());
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.ATHROW);
+		int done = ctx.code.size();
+		JvmEmitHelper.patchBranch(ctx, gotoDonePos, done);
+		if (!spill.live().isEmpty()) {
+			ctx.spillScopes.pop();
+			spill.restore(ctx);
+		}
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(resultSlot);
+		if (start < end) {
+			ctx.exceptionTable.add(new ByteCodeWriter.ExceptionTableEntry(start, end, handler, 0));
+		}
+		ctx.nextLocal = savedNextLocal;
+	}
+
+	/**
 	 * Emits, at the handler entry, a guard that rethrows the caught throwable when it is
 	 * the pending cross-lambda non-local exit (its {@code _nleTl} triple's throwable
 	 * equals the caught one), so a {@code return-from} crossing a lambda is never

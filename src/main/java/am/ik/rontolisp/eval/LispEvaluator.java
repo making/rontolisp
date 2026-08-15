@@ -4252,6 +4252,8 @@ public final class LispEvaluator {
 	 */
 	private LispVal evalConsRareOperator(LispCons cons, Environment env, String name) {
 		switch (name) {
+			case LispNames.HB_GUARD_INTERNAL:
+				return evalHbGuard(cons, env);
 			case LispNames.PRINT, LispNames.PRINC, LispNames.PRIN1, LispNames.PRINC_TO_STRING,
 					LispNames.PRIN1_TO_STRING: {
 				// Routed through print-object only when the program defines a method on
@@ -7015,6 +7017,84 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Evaluates the internal {@code (%hb-guard body)} landing pad the
+	 * {@code handler-bind} expansion wraps its body in. On this backend the built-in seam
+	 * in {@link #apply} already runs handlers at the signal point, so the pad only
+	 * catches what never crossed that seam (an undefined function, an internal
+	 * {@code %error} form evaluated directly); the identity mark keeps the two from both
+	 * firing for one condition.
+	 */
+	private LispVal evalHbGuard(LispCons cons, Environment env) {
+		LispVal body = ((LispCons) cons.cdr()).car();
+		try {
+			return eval(body, env);
+		}
+		catch (LispEvalException e) {
+			throw withHandlerBindHandlersRun(e);
+		}
+	}
+
+	/**
+	 * Runs the {@code handler-bind} cluster stack for the condition an escaping error
+	 * carries (synthesizing the {@code simple-error} of a plain error first), unless
+	 * {@code %run-handlers} already completed a walk for the IDENTICAL instance (the
+	 * {@code %handlers-ran%} mark it sets at the end of a walk -- the signal hook and
+	 * this seam never both fire for one condition). Answers the exception to rethrow: the
+	 * original when it already carried the instance, otherwise a replacement carrying it,
+	 * so an outer {@code handler-case} dispatches on the same instance the handlers saw.
+	 * Runs through the same {@code %run-handlers} defun the signal hook calls, so the
+	 * CLHS cluster rebinding applies; a handler that transfers control (a restart, a
+	 * {@code return-from}) throws its own signal out of here instead.
+	 */
+	private LispEvalException withHandlerBindHandlersRun(LispEvalException e) {
+		if (!this.restartRuntimeLoaded) {
+			return e;
+		}
+		LispVal condition = e.condition() != null ? e.condition() : synthesizeSimpleError(e.getMessage());
+		if (condition != handlersRanMark()) {
+			LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
+			if (fn != null) {
+				apply(fn, List.of(condition), this.globalEnv);
+			}
+		}
+		if (e.condition() == condition) {
+			return e;
+		}
+		String message = e.getMessage();
+		LispEvalException typed = new LispEvalException(message == null ? "" : message, condition);
+		typed.initCause(e);
+		return typed;
+	}
+
+	/**
+	 * The current {@code %handlers-ran%} mark, read the way a symbol reference reads a
+	 * special (the active dynamic binding first, else the global default), or null when
+	 * the restart runtime has not defined it.
+	 */
+	private @Nullable LispVal handlersRanMark() {
+		String name = LispNames.HANDLERS_RAN_VAR;
+		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
+			return this.dynamicBindings.get(name);
+		}
+		return this.globalEnv.lookupOrNull(name);
+	}
+
+	/**
+	 * The message a raw Java failure inside a built-in is wrapped with: the exception's
+	 * own message when it is self-describing (contains a letter, e.g. {@code "aref:
+	 * index out of bounds"}), else the built-in's name prefixes the bare payload
+	 * ({@code "make-array: -1"} for a {@code NegativeArraySizeException}).
+	 */
+	private static String builtinFailureMessage(String name, RuntimeException raw) {
+		String message = raw.getMessage();
+		String prefix = name.toLowerCase(java.util.Locale.ROOT);
+		if (message == null || message.isBlank()) {
+			return prefix + " signalled " + raw.getClass().getSimpleName();
+		}
+		return message.chars().anyMatch(Character::isLetter) ? message : prefix + ": " + message;
+	}
+
+	/**
 	 * Evaluates the internal {@code (%signal-cond condition message)} primitive behind
 	 * {@code signal}: raises the condition as a {@link LispEvalException} when a
 	 * {@code handler-case} handler is established, and returns nil otherwise.
@@ -8042,7 +8122,25 @@ public final class LispEvaluator {
 			function = resolveFunction(sym.name());
 		}
 		if (function instanceof LispFunction builtIn) {
-			return builtIn.body().apply(args);
+			// The signal-point seam: an error a BUILT-IN raises runs the handler-bind
+			// cluster stack HERE, before unwinding (restarts established below the
+			// handler-bind are still active, unwind-protect cleanups have not run --
+			// the CL order). A raw Java failure (a bad index, a negative dimension, a
+			// cast) is wrapped into a LispEvalException first, so handler-case sees it
+			// too. Zero cost until an exception escapes, and zero beyond one boolean
+			// read while the restart runtime is not loaded (no handler can exist).
+			try {
+				return builtIn.body().apply(args);
+			}
+			catch (LispEvalException e) {
+				throw withHandlerBindHandlersRun(e);
+			}
+			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
+					| ClassCastException raw) {
+				LispEvalException wrapped = new LispEvalException(builtinFailureMessage(builtIn.name(), raw));
+				wrapped.initCause(raw);
+				throw withHandlerBindHandlersRun(wrapped);
+			}
 		}
 		if (function instanceof LispLambda lambda) {
 			int required = lambda.params().size();

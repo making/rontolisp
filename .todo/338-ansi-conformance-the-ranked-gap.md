@@ -90,6 +90,16 @@ trigger: `.kb/symbol-runtime-api.md`.
 Next by payoff, unchanged: `read-from-string`'s index (.todo/214, most of `reader`'s
 288 wrong-value tests), then runtime `make-package` (.todo/038).
 
+**Interpreter raw-exception escapes, 2026-08-15** (done with .todo/379): the
+built-in seam in `LispEvaluator.apply` wraps an escaping `IndexOutOfBounds` /
+`NegativeArraySize` / `Arithmetic` / `ClassCast` into a `LispEvalException`, so
+`handler-case` now sees an out-of-range `aref` and `(make-array -1)` -- the
+`IndexOutOfBoundsException`-out-of-`aref` shape above is closed for those four
+families (the keyword-argument `UnsupportedOperationException` throws are
+unchanged). Recorded while probing 379, still open here: `(elt (list 1 2) 5)`,
+`(nth -1 ...)` and `(coerce "abc" 'integer)` answer nil where CL signals -- a
+silent-nil family, not a raw throw, so the seam cannot see it.
+
 ## Reading caveat
 
 2,229 top-level forms were lost (unreadable or unevaluable; none non-terminating),

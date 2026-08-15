@@ -229,6 +229,107 @@ final class WasmHandlerCaseCompiler {
 	}
 
 	/**
+	 * Compiles the internal {@code (%hb-guard body)} landing pad the {@code handler-bind}
+	 * expansion wraps its body in (EH mode is implied: restart mode forces it). A
+	 * {@code $lisp-cond} throw escaping the body lands here; the pad synthesizes the
+	 * {@code simple-error} of a plain {@code %error} payload, runs the
+	 * {@code handler-bind} cluster stack through {@code %run-handlers} unless a walk
+	 * already completed for the identical instance (the {@code %handlers-ran%} mark set
+	 * by the restart-mode signal hook), and rethrows {@code (instance . message)} so an
+	 * outer catcher dispatches on the same instance the handlers saw. Unlike
+	 * {@code handler-case} it never touches the handler depth ({@code signal} semantics
+	 * unchanged), has no cleanup (no unwind scope, no return trampoline), and does not
+	 * catch the block-exit tag -- a cross-lambda exit passes through the
+	 * {@code try_table} untouched. Raw wasm TRAPS (a failed cast, integer division by
+	 * zero) do not ride the tag and stay uncatchable: the documented three-point-
+	 * spectrum divergence.
+	 */
+	static void compileGuard(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new IllegalArgumentException(LispNames.HB_GUARD_INTERNAL + " expects a body: " + cons.print());
+		}
+		if (!ctx.ehMode) {
+			// Defensive: without the tag nothing throws catchably, so the pad is
+			// meaningless (restart mode implies EH mode, so this is unreachable today).
+			WasmAsyncEmit.spine(parts.get(1), ctx);
+			return;
+		}
+		int payloadSlot = ctx.allocTemp();
+		int condSlot = ctx.allocTemp();
+		// block $done (result (ref null eq)) -- the guarded body's value.
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		int doneDepth = ctx.wasmCtrlDepth;
+		// block $h (result (ref null eq)) -- the landing pad, receiving the payload.
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.wasmCtrlDepth++;
+		int handlerDepth = ctx.wasmCtrlDepth;
+		// try_table (result (ref null eq)) (catch $lisp-cond $h).
+		ctx.writer.write(Instruction.TRY_TABLE);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.CATCH);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
+		ctx.writer.writeUnsignedLeb128(ctx.wasmCtrlDepth - handlerDepth);
+		ctx.wasmCtrlDepth++;
+		WasmAsyncEmit.spine(parts.get(1), ctx);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // try_table
+		// Normal completion: the body's value is on the stack.
+		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - doneDepth);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // block $h
+		// Landing pad: split the payload, synthesize when the instance is nil.
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(condSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(condSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		ctx.wasmCtrlDepth++;
+		emitSynthesizeSimpleError(payloadSlot, condSlot, ctx);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+		// Run the cluster stack unless already run, as an ordinary Lisp form over the
+		// condition pseudo-local.
+		String condVarName = "__hc_cond$" + condSlot;
+		ctx.locals.put(condVarName, condSlot);
+		try {
+			WasmExprCompiler.compileExpr(LispMacroExpander.hbGuardHandlerForm(new LispSymbol(condVarName)), ctx);
+		}
+		finally {
+			ctx.locals.remove(condVarName);
+		}
+		ctx.writer.write(Instruction.DROP);
+		// Rethrow (instance . message): the instance slot is filled (a synthesized one
+		// included) so an outer catcher sees the instance the handlers saw.
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(condSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(payloadSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(1);
+		WasmErrorCompiler.emitThrowPayload(ctx);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END); // block $done
+	}
+
+	/**
 	 * Compiles a clause body -- {@code (type ([var]) body...)} or {@code (:no-error
 	 * ([var]) body...)} -- binding the optional variable to the value in
 	 * {@code valueSlot} through a pseudo-local, and stores the body's value into

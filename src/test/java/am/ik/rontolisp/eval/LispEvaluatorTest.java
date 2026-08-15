@@ -7150,6 +7150,66 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void handlerBindSeesTheErrorABuiltInRaises() {
+		// The rove shape (.todo/379): a broken test body -- a bad car, an index out
+		// of bounds, a bad argument type -- must run the handler-bind handler, not
+		// abort the run. The built-in seam runs the cluster stack at the signal
+		// point.
+		assertThat(eval("(block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (car 1)))").print())
+			.isEqualTo(":CAUGHT");
+		assertThat(eval("(block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (aref (vector 1 2) 5)))")
+			.print()).isEqualTo(":CAUGHT");
+		assertThat(eval("(block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (+ 1 \"a\")))").print())
+			.isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void handlerBindSeesAnUndefinedFunctionError() {
+		// Raised outside the built-in seam (function resolution), so the %hb-guard
+		// landing pad of the handler-bind expansion is what catches it.
+		assertThat(
+				eval("(block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (no-such-function-xyz 1)))")
+					.print())
+			.isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void handlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst() {
+		// Declining handlers: inner cluster first, then outer, each exactly once,
+		// and the escaping error is still catchable as a typed condition outside.
+		assertThat(eval("""
+				(let ((log nil))
+				  (handler-case
+				      (handler-bind ((error (lambda (c) (setq log (cons :outer log)))))
+				        (handler-bind ((error (lambda (c) (setq log (cons :inner log)))))
+				          (car 1)))
+				    (error (e) (cons :caught log))))
+				""").print()).isEqualTo("(:CAUGHT :OUTER :INNER)");
+	}
+
+	@Test
+	void handlerBindHandlerAndHandlerCaseSeeTheSameInstance() {
+		// The signal path attaches the instance %run-handlers saw to the throw, so
+		// the handler-case clause dispatches on the IDENTICAL condition -- and the
+		// handlers run once, not once per seam.
+		assertThat(eval("""
+				(let ((seen nil) (n 0))
+				  (handler-case
+				      (handler-bind ((error (lambda (c) (setq n (+ n 1)) (setq seen c))))
+				        (error "boom"))
+				    (error (e) (list :caught (eq e seen) n))))
+				""").print()).isEqualTo("(:CAUGHT T 1)");
+	}
+
+	@Test
+	void arefOutOfBoundsAndNegativeMakeArrayAreCatchable() {
+		// These used to escape even handler-case as raw Java exceptions; the
+		// built-in seam wraps them into conditions.
+		assertThat(eval("(handler-case (aref (vector 1 2) 5) (error (e) :caught))").print()).isEqualTo(":CAUGHT");
+		assertThat(eval("(handler-case (make-array -1) (error (e) :caught))").print()).isEqualTo(":CAUGHT");
+	}
+
+	@Test
 	void restartBindInvokesFunctionAtInvocationPoint() {
 		assertThat(eval("""
 				(let ((hit nil))

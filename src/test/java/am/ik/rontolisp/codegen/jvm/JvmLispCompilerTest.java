@@ -646,6 +646,52 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunHandlerBindSeesTheErrorABuiltInRaises() throws Exception {
+		// The rove shape (.todo/379): a raw runtime failure (a bad car, an index out
+		// of bounds) lands in the handler-bind expansion's %hb-guard pad, which runs
+		// the cluster stack and rethrows.
+		assertThat(compileAndRun(
+				"(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (car 1))))"))
+			.isEqualTo(":CAUGHT");
+		assertThat(compileAndRun(
+				"(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (aref (vector 1 2) 5))))"))
+			.isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void compileAndRunHandlerBindSeesAnUndefinedFunctionError() throws Exception {
+		assertThat(compileAndRun(
+				"(print (block b (handler-bind ((error (lambda (e) (return-from b :caught)))) (no-such-function-xyz 1))))"))
+			.isEqualTo(":CAUGHT");
+	}
+
+	@Test
+	void compileAndRunHandlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst() throws Exception {
+		assertThat(compileAndRun("""
+				(print (let ((log nil))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq log (cons :outer log)))))
+				               (handler-bind ((error (lambda (c) (setq log (cons :inner log)))))
+				                 (car 1)))
+				           (error (e) (cons :caught log)))))
+				""")).isEqualTo("(:CAUGHT :OUTER :INNER)");
+	}
+
+	@Test
+	void compileAndRunHandlerBindHandlerAndHandlerCaseSeeTheSameInstance() throws Exception {
+		// The signal path attaches the instance %run-handlers saw to the throw, so
+		// the handlers run once and handler-case dispatches on the identical
+		// condition.
+		assertThat(compileAndRun("""
+				(print (let ((seen nil) (n 0))
+				         (handler-case
+				             (handler-bind ((error (lambda (c) (setq n (+ n 1)) (setq seen c))))
+				               (error "boom"))
+				           (error (e) (list :caught (eq e seen) n)))))
+				""")).isEqualTo("(:CAUGHT T 1)");
+	}
+
+	@Test
 	void compileAndRunFindRestartReturnsObjectAndGoLeavesClauseIntoTagbody() throws Exception {
 		// The postmodern transaction.lisp shape: find-restart with a condition
 		// argument returns a first-class restart object, invoke-restart on the

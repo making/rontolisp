@@ -6075,6 +6075,21 @@ cases:
                (ci-bbb () nil)))
       (print (restart-case (progn (abort) :not-reached) (abort () :aborted)))
       (print (find-restart 'ci-retry-me))
+      ;; .todo/379: the handlers run ONCE per condition (the %hb-guard landing
+      ;; pad recognizes the signal hook's walk by identity), handler-case
+      ;; dispatches on the IDENTICAL instance the handlers saw, and declining
+      ;; clusters run innermost-first exactly once each.
+      (print (let ((ci-hb-seen nil) (ci-hb-n 0))
+               (handler-case
+                   (handler-bind ((error (lambda (c) (setq ci-hb-n (+ ci-hb-n 1)) (setq ci-hb-seen c))))
+                     (error "boom"))
+                 (error (e) (list :caught (eq e ci-hb-seen) ci-hb-n)))))
+      (print (let ((ci-hb-log nil))
+               (handler-case
+                   (handler-bind ((error (lambda (c) (setq ci-hb-log (cons :outer ci-hb-log)))))
+                     (handler-bind ((error (lambda (c) (setq ci-hb-log (cons :inner ci-hb-log)))))
+                       (error 'type-error :datum 1 :expected-type 'cons)))
+                 (type-error (e) (cons :caught ci-hb-log)))))
     expected: |
       (:RECONNECTED 42)
       3
@@ -6086,6 +6101,8 @@ cases:
       (CI-AAA CI-BBB)
       :ABORTED
       NIL
+      (:CAUGHT T 1)
+      (:CAUGHT :OUTER :INNER)
   # A catching form in an ARGUMENT position: the enclosing call has operands live
   # when the protected region begins, and entering a handler discards them (on the
   # JVM the compiler spills them around the region). The float case keeps a raw

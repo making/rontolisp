@@ -19180,6 +19180,14 @@ public final class LispMacroExpander {
 	/** The rendered-message temp of the restart-mode (signal hook) string designator. */
 	private static final String SIG_MSG_VAR = "__sig_msg";
 
+	/**
+	 * The bound hook instance of the restart-mode object-designator string/symbol arms.
+	 */
+	private static final String SIGNAL_INST_VAR = "__signal_inst";
+
+	/** The rendered symbol-datum message of the restart-mode object-designator arm. */
+	private static final String SIGNAL_SYMBOL_MSG_VAR = "__signal_sym_msg";
+
 	/** The instance tag of the built-in {@code simple-condition} class. */
 	private static final String SIMPLE_CONDITION_TAG = LispLayout.CLASS_TAG_PREFIX + "SIMPLE-CONDITION";
 
@@ -19529,7 +19537,12 @@ public final class LispMacroExpander {
 						List.of(new LispSymbol(LispNames.STRING_CONCAT), new LispString("WARNING: "), msgVar))));
 				case LispNames.SIGNAL_COND_INTERNAL ->
 					listToCons(List.of(new LispSymbol(internalName), condVar, msgVar));
-				default -> listToCons(List.of(new LispSymbol(internalName), msgVar));
+				// The error terminal carries the SAME instance %run-handlers just saw
+				// (%error-cond, uncaught output identical to %error): a %hb-guard /
+				// signal-point seam recognizes it by identity and does not run the
+				// handlers a second time, and a handler-case catches the identical
+				// instance the handler-bind handlers were given, as in CL.
+				default -> listToCons(List.of(new LispSymbol(LispNames.ERROR_COND_INTERNAL), condVar, msgVar));
 			};
 			signalCall = makeLet(SIG_MSG_VAR, message,
 					makeLet(SIGNAL_COND_VAR, objNew(tag, List.of(msgVar, LispNil.INSTANCE)),
@@ -19840,17 +19853,38 @@ public final class LispMacroExpander {
 		if (signalHook) {
 			// Restart mode: run the handler-bind handlers at the signal point. The
 			// string/symbol arms synthesize the same simple-* instance a handler-case
-			// would (a fresh instance -- no identity requirement with the one an
-			// unhandled signal later carries); the condition arm passes the datum's
-			// instance itself.
+			// would, bind it, and hand the SAME instance to the throwing terminal
+			// (%error-cond / %signal-cond): a %hb-guard landing pad or the
+			// interpreter's signal-point seam recognizes it by identity
+			// (%handlers-ran%) and does not run the handlers a second time. warn's
+			// terminal does not throw, so its hook instance stays unbound. The
+			// condition arm passes the datum's instance itself.
 			String simpleTag = warn ? "%class-SIMPLE-WARNING" : LispNames.SIGNAL_COND_INTERNAL.equals(internalName)
 					? SIMPLE_CONDITION_TAG : "%class-SIMPLE-ERROR";
-			stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.RUN_HANDLERS_INTERNAL,
-					objNew(simpleTag, List.of(stringMessage, LispNil.INSTANCE))), stringCase));
-			symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
-					callOf(LispNames.RUN_HANDLERS_INTERNAL,
-							objNew(simpleTag, List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
-					symbolCase));
+			if (warn) {
+				stringCase = listToCons(List.of(new LispSymbol(LispNames.PROGN), callOf(LispNames.RUN_HANDLERS_INTERNAL,
+						objNew(simpleTag, List.of(stringMessage, LispNil.INSTANCE))), stringCase));
+				symbolCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
+						callOf(LispNames.RUN_HANDLERS_INTERNAL,
+								objNew(simpleTag,
+										List.of(callOf(LispNames.PRINC_TO_STRING, condVar), LispNil.INSTANCE))),
+						symbolCase));
+			}
+			else {
+				boolean signal = LispNames.SIGNAL_COND_INTERNAL.equals(internalName);
+				String throwInternal = signal ? LispNames.SIGNAL_COND_INTERNAL : LispNames.ERROR_COND_INTERNAL;
+				LispSymbol instVar = new LispSymbol(SIGNAL_INST_VAR);
+				stringCase = makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(stringMessage, LispNil.INSTANCE)),
+						listToCons(List.of(new LispSymbol(LispNames.PROGN),
+								callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
+								listToCons(List.of(new LispSymbol(throwInternal), instVar, stringMessage)))));
+				LispSymbol symMsgVar = new LispSymbol(SIGNAL_SYMBOL_MSG_VAR);
+				symbolCase = makeLet(SIGNAL_SYMBOL_MSG_VAR, callOf(LispNames.PRINC_TO_STRING, condVar),
+						makeLet(SIGNAL_INST_VAR, objNew(simpleTag, List.of(symMsgVar, LispNil.INSTANCE)),
+								listToCons(List.of(new LispSymbol(LispNames.PROGN),
+										callOf(LispNames.RUN_HANDLERS_INTERNAL, instVar),
+										listToCons(List.of(new LispSymbol(throwInternal), instVar, symMsgVar))))));
+			}
 			conditionCase = listToCons(List.of(new LispSymbol(LispNames.PROGN),
 					callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar), conditionCase));
 		}
@@ -24197,10 +24231,34 @@ public final class LispMacroExpander {
 		LispVal push = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar,
 				listToCons(List.of(new LispSymbol(LispNames.CONS), listToCons(clusterParts), clustersVar))));
 		LispVal restore = listToCons(List.of(new LispSymbol(LispNames.SETQ), clustersVar, savedVar));
-		return makeLet(HB_SAVED_VAR, clustersVar,
-				listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT), listToCons(
-						List.of(new LispSymbol(LispNames.PROGN), push, prognOrNil(parts.subList(2, parts.size())))),
-						restore)));
+		// The body runs inside a %hb-guard landing pad: an error a BUILT-IN raises (a
+		// bad car, an index out of bounds, an internal %error with no signal hook)
+		// never went through %run-handlers, so the pad synthesizes the condition
+		// instance, runs the cluster stack, and rethrows. A condition whose handlers
+		// already ran at the signal point is recognized by identity (%handlers-ran%)
+		// and rethrown untouched. The analysis expansion skips the wrapper -- it adds
+		// no variable structure.
+		LispVal body = prognOrNil(parts.subList(2, parts.size()));
+		if (!analysisOnly) {
+			body = listToCons(List.of(new LispSymbol(LispNames.HB_GUARD_INTERNAL), body));
+		}
+		return makeLet(HB_SAVED_VAR, clustersVar, listToCons(List.of(new LispSymbol(LispNames.UNWIND_PROTECT),
+				listToCons(List.of(new LispSymbol(LispNames.PROGN), push, body)), restore)));
+	}
+
+	/**
+	 * The condition-dispatch form a {@code %hb-guard} landing pad compiles over its
+	 * condition pseudo-local: run the {@code handler-bind} cluster stack unless
+	 * {@code %run-handlers} already completed a walk for THIS instance (identity against
+	 * {@code %handlers-ran%}, which {@code %run-handlers} sets at the end of a walk).
+	 * @param condVar the pseudo-local holding the condition instance
+	 * @return the guard dispatch expression
+	 */
+	public static LispVal hbGuardHandlerForm(LispSymbol condVar) {
+		return makeIf(
+				listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), condVar,
+						new LispSymbol(LispNames.HANDLERS_RAN_VAR))),
+				LispNil.INSTANCE, callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar));
 	}
 
 	/**
@@ -24395,15 +24453,18 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * The two restart-runtime stack globals, nil-initialized (prepended on the compile
-	 * path).
-	 * @return the defvar forms for the handler and restart cluster stacks
+	 * The restart-runtime globals, nil-initialized (prepended on the compile path): the
+	 * handler and restart cluster stacks plus the {@code %handlers-ran%} mark the
+	 * {@code %hb-guard} landing pad compares against.
+	 * @return the defvar forms
 	 */
 	public static List<LispVal> restartRuntimeGlobalForms() {
 		return List.of(
 				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLER_CLUSTERS_VAR),
 						LispNil.INSTANCE)),
 				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.RESTART_CLUSTERS_VAR),
+						LispNil.INSTANCE)),
+				listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.HANDLERS_RAN_VAR),
 						LispNil.INSTANCE)));
 	}
 
@@ -24487,8 +24548,15 @@ public final class LispMacroExpander {
 						listToCons(List.of(new LispSymbol(LispNames.PROGN), listToCons(
 								List.of(new LispSymbol(LispNames.SETQ), clusters, callOf(LispNames.CDR, clusters))),
 								runCluster))))));
+		// The mark is set at the END of a completed walk (every handler declined), so
+		// a %hb-guard landing pad can tell this condition's handlers already ran. A
+		// nested signal inside a handler completes ITS walk first and is overwritten
+		// here when the outer walk finishes -- the identity a pad compares stays the
+		// outermost pending condition's.
+		LispVal mark = listToCons(
+				List.of(new LispSymbol(LispNames.SETQ), new LispSymbol(LispNames.HANDLERS_RAN_VAR), c));
 		return listToCons(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(LispNames.RUN_HANDLERS_INTERNAL),
-				listToCons(List.<LispVal>of(c)), clustersLoop, LispNil.INSTANCE));
+				listToCons(List.<LispVal>of(c)), clustersLoop, mark, LispNil.INSTANCE));
 	}
 
 	// (defun find-restart (__fr_id &optional __fr_c)

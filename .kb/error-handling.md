@@ -197,7 +197,11 @@ everywhere except `--no-gc`.
   either raises like `%error-cond` or yields nil. handler-case catches ANY
   `RuntimeException` on the JVM (so `(car 5)`-style runtime failures are
   catchable as `error`); the interpreter catches `LispEvalException` only —
-  a small cross-backend divergence for interpreter-internal Java exceptions.
+  a small cross-backend divergence for interpreter-internal Java exceptions,
+  narrowed by todo-379: the built-in seam in `LispEvaluator.apply` wraps an
+  escaping `IndexOutOfBounds`/`NegativeArraySize`/`Arithmetic`/`ClassCast`
+  into a `LispEvalException`, so the common raw families (`aref` out of
+  range, `(make-array -1)`) are catchable on the interpreter too.
   **The operand-stack spill (the reason it works in an ARGUMENT position).**
   Unlike unwind-protect, whose handler path ends in ATHROW and never rejoins,
   the handler-case handler MERGES back into the normal path — and the JVM
@@ -849,7 +853,8 @@ only come from a difference in the primitives underneath (`catch`/`throw`,
 already. `--no-gc` is the one exception and keeps the historical lite lowering.
 
 - **Two dynamic stacks, both TOP-LEVEL GLOBALS** (`%HANDLER-CLUSTERS%`,
-  `%RESTART-CLUSTERS%`, injected as `defvar`s), mutated with plain `setq` and
+  `%RESTART-CLUSTERS%`, injected as `defvar`s; todo-379 added the third global
+  `%HANDLERS-RAN%`, the completed-walk mark), mutated with plain `setq` and
   restored through an `unwind-protect` cleanup over a LEXICALLY saved value.
   **They are deliberately NOT special-`let` rebindings.** The compile paths skip
   the special-binding restore on the error-throw, `catch`/`throw` and
@@ -897,6 +902,78 @@ already. `--no-gc` is the one exception and keeps the historical lite lowering.
   `handler-case` would. `cerror` in restart mode becomes real: `(restart-case
   (error ...) (continue () :report cfc nil))`. Restart-mode `warn` is wrapped in
   a `muffle-warning` `restart-case` so `(muffle-warning)` aborts the output.
+  **Since todo-379 every restart-mode signal terminal CARRIES the instance the
+  hook just ran**: the string-designator error arm throws `%error-cond` instead
+  of `%error`, and `expandObjectSignal`'s string/symbol arms bind their fresh
+  instance (`__signal_inst`) and hand it to both `%run-handlers` and the
+  terminal. That is the identity contract the guard below depends on, and it
+  also means a `handler-case` in restart mode catches the IDENTICAL instance
+  the `handler-bind` handlers were given (CL semantics; pinned by
+  `handlerBindHandlerAndHandlerCaseSeeTheSameInstance` in all three suites).
+- **Errors BUILT-INS raise run handler-bind handlers too (todo-379).** Rove's
+  whole failure-recording model is `handler-bind` around USER code, so `(car
+  1)`, an out-of-range `aref`, `(/ 1 0)` and an undefined function must reach
+  the handlers, not end the run. Three pieces, one identity contract:
+  - The `handler-bind` expansion wraps its body in the internal `(%hb-guard
+    body)` landing pad, compiled per backend (`JvmHandlerCaseCompiler.compileGuard`,
+    `WasmHandlerCaseCompiler.compileGuard`, `LispEvaluator.evalHbGuard`): a
+    catch-any (JVM) / `$lisp-cond` (wasm) / `LispEvalException` (interpreter)
+    region that synthesizes the `simple-error` of a condition-less throw (the
+    handler-case prologue's synthesis), runs `%run-handlers` -- the FULL
+    cluster stack from the innermost, CLHS rebinding included, so ONE pad run
+    covers every enclosing cluster and outer pads skip by the mark -- and
+    rethrows CARRYING the instance (the JVM restores `_condTl`, wasm rebuilds
+    the payload car, the interpreter attaches it to the exception), so an
+    outer catcher dispatches on the same instance the handlers saw. The pad
+    never touches the hc-depth channel (`signal` under `handler-bind` still
+    falls through to nil), has no cleanup (no `UnwindScope`, no return
+    trampoline), and does not catch the block-exit tag / rethrows a pending
+    NLE, so non-local exits pass through untouched.
+  - The identity contract: `%run-handlers` sets the global `%handlers-ran%` to
+    its argument AT THE END of a completed walk, and every restart-mode
+    terminal carries the instance the hook ran (previous bullet), so a pad
+    recognizes an already-walked condition by `eq` and the handlers run ONCE
+    per condition. End-of-walk (not entry) marking is what keeps a nested
+    signal inside a handler -- completed and caught before the outer walk
+    finishes -- from clearing the outer condition's mark.
+  - The interpreter ADDITIONALLY runs handlers at the SIGNAL POINT for
+    built-ins: `LispEvaluator.apply` wraps `builtIn.body().apply` and, on an
+    escaping `LispEvalException` -- or a raw `IndexOutOfBounds` /
+    `NegativeArraySize` / `Arithmetic` / `ClassCast`, wrapped into one first,
+    which is what made the historical `aref`-out-of-range / `(make-array -1)`
+    escapes `handler-case`-catchable (`builtinFailureMessage` names the
+    built-in when the raw message is letterless: `"make-array: -1"`) -- reuses
+    or synthesizes the condition and runs the walk BEFORE unwinding, so
+    restarts established below the handler-bind are still invocable (the CL
+    order). Errors raised outside that seam (an undefined function at
+    resolution, a directly evaluated internal `%error`) land in the pad
+    instead. Zero cost until an exception escapes, one `restartRuntimeLoaded`
+    read when the restart runtime is absent.
+  - **Deviations, written down**: (1) on the COMPILED backends a raw error's
+    handlers run at the `handler-bind` boundary -- intervening
+    `unwind-protect` cleanups have run and restarts established below it are
+    gone (CL runs handlers first); a SIGNALED condition keeps exact
+    signal-point semantics everywhere. (2) wasm-GC runs handlers only for
+    `$lisp-cond` throws; raw TRAPS (`(car 1)` compiles to a failed cast,
+    integer division by zero) stay uncatchable and skip handlers -- the same
+    three-point spectrum handler-case documents. **A rove test whose body
+    traps therefore still ends a wasm run**; on the interpreter and the JVM it
+    becomes the recorded "Raise an error while testing." failure. (3) an
+    intervening `handler-case` never suppresses the signal-point hook (its
+    clauses are not clusters -- pre-existing Phase 4 shape), and for RAW
+    errors the compiled backends DO suppress the handlers when an inner
+    handler-case catches first (the pad is outside it) while the interpreter
+    runs them (its seam is at the built-in, below the handler-case); CL agrees
+    with the compiled backends here. Re-evaluate (3) if handler-case ever
+    joins the cluster stack.
+  - Pinned by `handlerBindSeesTheErrorABuiltInRaises` /
+    `handlerBindSeesAnUndefinedFunctionError` /
+    `handlerBindRunsEachClusterOnceForABuiltInErrorInnermostFirst` /
+    `arefOutOfBoundsAndNegativeMakeArrayAreCatchable` (evaluator), their
+    `compileAndRun*` twins (JVM), `ehHandlerBindSeesASignaledErrorAndAnUndefinedFunctionError` /
+    `ehHandlerBindRunsEachClusterOnceInnermostFirst` (wasm), the
+    same-instance test in all three, and the extended ci-spec
+    `restart-system` case.
 - **The gate is `LispMacroExpander.usesRestartSystem(program)`, computed on the
   SURFACE program** (the four macros plus a call to / `#'` reference of a
   restart-runtime function). The scan matches those names in OPERATOR POSITION of
