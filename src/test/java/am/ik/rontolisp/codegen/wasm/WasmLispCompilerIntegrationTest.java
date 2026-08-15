@@ -7187,6 +7187,50 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void sequenceAndSetExtensions() throws Exception {
+		// tree-equal / count-if-not / set-exclusive-or / merge are prelude defuns, so the
+		// splice mirrors the CLI pipeline like substAndSimpleStringP above.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (tree-equal '(1 (2 3)) '(1 (2 3))))
+				(print (tree-equal '(1 (2 3)) '(1 (2 4))))
+				(print (tree-equal '(1 (2)) '(1 2)))
+				(print (tree-equal '("a" ("b")) '("A" ("B")) :test #'string-equal))
+				(print (tree-equal '(1 2) '(1 2) :test-not #'eql))
+				(print (count-if-not #'evenp '(1 2 3 4 5)))
+				(print (count-if-not #'evenp #(1 2 3 4 5)))
+				(print (count-if-not #'alpha-char-p "ab1c2"))
+				(print (count-if-not #'evenp '(1 2 3 4 5) :start 1 :end 4))
+				(print (count-if-not #'oddp '((1) (2) (3)) :key #'car))
+				(print (set-exclusive-or '(1 2 3) '(2 3 4)))
+				(print (set-exclusive-or '("a" "b") '("B" "c") :test #'string-equal))
+				(print (set-exclusive-or '((1 a) (2 b)) '((2 x)) :key #'car))
+				(print (merge 'list (list 1 3 5) (list 2 4 6) #'<))
+				(print (merge 'vector (vector 1 3) (vector 2 4) #'<))
+				(print (merge 'string "ac" "bd" #'char<))
+				(print (merge 'list (list '(1 a)) (list '(1 b) '(2 c)) #'< :key #'car))
+				(print (funcall #'tree-equal '(1 2) '(1 2)))
+				""")))).isEqualTo("""
+				T
+				NIL
+				NIL
+				T
+				NIL
+				3
+				3
+				2
+				1
+				1
+				(1 4)
+				("a" "c")
+				((1 A))
+				(1 2 3 4 5 6)
+				#(1 2 3 4)
+				"abcd"
+				((1 A) (1 B) (2 C))
+				T""");
+	}
+
+	@Test
 	void closReaderMethodsDispatchPerClass() throws Exception {
 		assertThat(compileAndRun("""
 				(defclass w1 () ((pad :initarg :pad) (size :initarg :size :accessor size)))
@@ -10045,7 +10089,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("408");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("412");
 	}
 
 	@Test

@@ -184,6 +184,7 @@
 | `position-if` | `(position-if #'evenp '(1 3 6 7))` | `2`(述語を満たす最初の要素の0始まりインデックス、またはnil) |
 | `count` | `(count 2 '(1 2 3 2 2))` | `3`(要素と `eql` になる要素の数。省略可能な `:test`/`:key` キーワードを取ります) |
 | `count-if` | `(count-if #'evenp '(1 2 3 4))` | `2`(述語を満たす要素の数) |
+| `count-if-not` | `(count-if-not #'evenp '(1 2 3 4 5))` | `3`(述語を満たさない要素の数。`:key`/`:start`/`:end`/`:from-end`) |
 | `assoc` | `(assoc 'b '((a . 1) (b . 2)))` | `(b . 2)`(carがキーに一致する最初のペア、またはnil。既定では `eql` で比較し、省略可能な `:test`/`:key` キーワードを取ります。例: `(assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal)`) |
 | `assoc-if` | `(assoc-if #'oddp '((2 a) (3 b)))` | `(3 b)`(carが述語を満たす最初のペア、またはnil) |
 | `getf` | `(getf '(:a 1 :b 2) :b)` | `2`(プロパティリスト中で指標に続く値、またはnil。`remf` の相棒。引数は2つのみで `&optional default` はありません) |
@@ -200,6 +201,7 @@
 | `subst` | `(subst 'x 'a '(a (b a) c))` | `(x (b x) c)`(非破壊的な木の置換。省略可能な `:test`/`:key` キーワードを取ります) |
 | `search` | `(search "bc" "abcd")` | `1`（あるシーケンスが別のシーケンス内に現れる位置、なければ nil。`:start1`/`:end1`/`:start2`/`:end2`/`:test`/`:key`/`:from-end`） |
 | `mismatch` | `(mismatch "apple" "apricot")` | `2` -- 2 つのシーケンスが最初に異なる位置 (第 1 引数上のインデックス)、一致すれば nil。キーワードは `search` と同じ |
+| `tree-equal` | `(tree-equal '(1 (2 3)) '(1 (2 3)))` | `t`(木の形が同じで、葉が `:test`(既定 `eql`)または `:test-not` で一致すること) |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(旧要素と `eql` になるすべての要素を新要素に置き換えたコピー。省略可能な `:test`/`:key` キーワードを取ります) |
 | `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)`(破壊的な `substitute`。マッチするcarをその場で書き換えます。省略可能な `:test`/`:key` キーワードを取ります) |
 | `substitute-if` | `(substitute-if 0 #'oddp '(1 2 3))` | `(0 2 0)`(述語を満たすすべての要素を置き換えたコピー。省略可能な `:key` を取り、`:test` はありません) |
@@ -215,6 +217,7 @@
 | `union` | `(union '(1 2 3) '(2 3 4))` | `(4 1 2 3)`(集合の和。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取ります。結果順序は未規定) |
 | `intersection` | `(intersection '(1 2 3) '(2 3 4))` | `(3 2)`(集合の積。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取ります。結果順序は未規定) |
 | `set-difference` | `(set-difference '(1 2 3) '(2))` | `(3 1)`(第1リストにあって第2リストにない要素。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取ります。結果順序は未規定) |
+| `set-exclusive-or` | `(set-exclusive-or '(1 2 3) '(2 3 4))` | `(1 4)`(対称差。どちらか一方にしかない要素。省略可能な `:test`/`:test-not`/`:key` キーワードを取ります。結果順序は未規定) |
 | `adjoin` | `(adjoin 1 '(2 3))` | `(1 2 3)`(すでにメンバーでない限り要素を先頭に追加します。既定では `eql` 比較で、省略可能な `:test`/`:key` キーワードを取ります) |
 | `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)`(先頭の引数を最後の引数の末尾にconsします) |
 | `acons` | `(acons 'a 1 nil)` | `((a . 1))`(`(key . value)` ペアを連想リストの先頭に追加します) |
@@ -230,6 +233,7 @@
 | `mapcon` | `(mapcon (lambda (x) (list (car x))) '(1 2 3))` | `(1 2 3)`(連続する末尾に適用し、結果リストを連結します。任意個のリストを取ります) |
 | `mapl` | `(mapl #'identity '(1 2 3))` | `(1 2 3)`(連続する末尾に副作用のため適用し、最初のリストを返します。任意個のリストを取ります) |
 | `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)`(比較述語でリストを破壊的にソートします。安定ではありません) |
+| `merge` | `(merge 'list (list 1 3) (list 2 4) #'<)` | `(1 2 3 4)`(ソート済みの 2 つのシーケンスを安定にマージ。結果型は `coerce` が構築する `list`/`vector`/`string`。非破壊) |
 | `rplaca` | `(rplaca x val)` | consセルのcarを破壊的に置き換え、そのセルを返します |
 | `rplacd` | `(rplacd x val)` | consセルのcdrを破壊的に置き換え、そのセルを返します |
 | `1+` | `(1+ 41)` | `42`(`(+ x 1)` と同じ) |

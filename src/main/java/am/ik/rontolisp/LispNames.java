@@ -414,6 +414,15 @@ public final class LispNames {
 	 */
 	public static final String COUNT_IF = "COUNT-IF";
 
+	/**
+	 * The {@code count-if-not} function (a prelude defun): the number of elements the
+	 * predicate REJECTS. Takes the full CL keyword set
+	 * ({@code :key}/{@code :start}/{@code :end}/{@code :from-end}); {@code :from-end}
+	 * only reorders the predicate calls, which cannot change a count, so it is accepted
+	 * and the scan stays forward.
+	 */
+	public static final String COUNT_IF_NOT = "COUNT-IF-NOT";
+
 	/** The {@code assoc} built-in function. */
 	public static final String ASSOC = "ASSOC";
 
@@ -690,6 +699,15 @@ public final class LispNames {
 	public static final String COPY_TREE = "COPY-TREE";
 
 	/**
+	 * The {@code tree-equal} function (a prelude defun): whether two cons trees have the
+	 * same shape and leaves matching under {@code :test} (default {@code eql}) or
+	 * {@code :test-not}. A cons only ever matches a cons, so the walk never compares a
+	 * leaf with a subtree; the CDR direction is a loop, so only the nesting depth (not
+	 * the length) bounds the stack.
+	 */
+	public static final String TREE_EQUAL = "TREE-EQUAL";
+
+	/**
 	 * The {@code search} function (a prelude defun): the position of the first (or with
 	 * {@code :from-end} the last) occurrence of one sequence inside another, or nil.
 	 * Supports {@code :start1}/{@code :end1}/{@code :start2}/{@code :end2}/{@code :test}
@@ -722,6 +740,16 @@ public final class LispNames {
 	 * always a fresh list (a vector argument does not come back as a vector).
 	 */
 	public static final String STABLE_SORT = "STABLE-SORT";
+
+	/**
+	 * The {@code merge} function (a prelude defun): one sorted sequence built from two
+	 * sorted ones, stable (a tie takes from {@code sequence-1} first) and with the result
+	 * built to {@code result-type} through {@code coerce}, so the type specifier may be a
+	 * run-time value but is limited to the families {@code coerce} builds
+	 * ({@code list}/{@code vector}/{@code string}). Non-destructive here, which CL
+	 * permits a caller to rely on only for the result.
+	 */
+	public static final String MERGE = "MERGE";
 
 	/**
 	 * The {@code copy-seq} built-in function (returns a fresh copy of a sequence;
@@ -771,6 +799,15 @@ public final class LispNames {
 	 * present in the second, compared with {@code eql}).
 	 */
 	public static final String SET_DIFFERENCE = "SET-DIFFERENCE";
+
+	/**
+	 * The {@code set-exclusive-or} function (a prelude defun): the symmetric difference
+	 * of two lists -- the elements of either that have no match in the other, compared
+	 * with {@code :test} (default {@code eql}) or {@code :test-not} after {@code :key}.
+	 * The comparison is always made {@code (test list-1-element list-2-element)}, in both
+	 * scans.
+	 */
+	public static final String SET_EXCLUSIVE_OR = "SET-EXCLUSIVE-OR";
 
 	/**
 	 * The {@code adjoin} built-in function (prepends an item to a list unless it is
@@ -2512,6 +2549,13 @@ public final class LispNames {
 	 * downcased code points, accepting a sign in {@code [lo, hi]}.
 	 */
 	public static final String CHAR_FOLD_CHAIN = "%CHAR-FOLD-CHAIN";
+
+	/**
+	 * The {@code %set-xor-match} internal helper backing {@link #SET_EXCLUSIVE_OR}: one
+	 * {@code :test} / {@code :test-not} / {@code :key} decision, so both of that
+	 * function's scans make it with the same argument order.
+	 */
+	public static final String SET_XOR_MATCH = "%SET-XOR-MATCH";
 
 	/** The {@code string-trim} built-in function. */
 	public static final String STRING_TRIM = "STRING-TRIM";

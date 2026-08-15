@@ -3881,6 +3881,77 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalTreeEqual() {
+		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 3)))").print()).isEqualTo("T");
+		assertThat(eval("(tree-equal (list 1 (list 2 3)) (list 1 (list 2 4)))").print()).isEqualTo("NIL");
+		// A cons never matches a leaf, in either direction, so a shorter list and a
+		// longer one differ at the cdr where one side has run out.
+		assertThat(eval("(tree-equal (list 1 2) (list 1 2 3))").print()).isEqualTo("NIL");
+		assertThat(eval("(tree-equal (list 1 (list 2)) (list 1 2))").print()).isEqualTo("NIL");
+		assertThat(eval("(tree-equal 1 1)").print()).isEqualTo("T");
+		assertThat(eval("(tree-equal (cons 1 2) (cons 1 2))").print()).isEqualTo("T");
+		// The leaves compare with :test / :test-not, and nothing else does. (Two equal
+		// strings are already eql here -- .kb/core-representation.md -- so the case that
+		// separates the tests is one the default really rejects.)
+		assertThat(eval("(tree-equal (list \"a\" (list \"b\")) (list \"A\" (list \"B\")))").print()).isEqualTo("NIL");
+		assertThat(
+				eval("(tree-equal (list \"a\" (list \"b\")) (list \"A\" (list \"B\")) :test #'string-equal)").print())
+			.isEqualTo("T");
+		assertThat(eval("(tree-equal (list 1 2) (list 1 2) :test-not #'eql)").print()).isEqualTo("NIL");
+		assertThat(eval("(tree-equal (list 1 2) (list 3 4) :test-not #'eql)").print()).isEqualTo("NIL");
+		// First-class: rove's `expands` assertion passes the test as #'name.
+		assertThat(eval("(funcall #'tree-equal (list 1 2) (list 1 2))").print()).isEqualTo("T");
+		// The cdr direction is a loop, not a recursion -- recursing there is one frame
+		// per element and two long flat lists then overflow the stack. The interpreter
+		// is the strictest of the four (one Java frame chain per Lisp call).
+		assertThat(eval("""
+				(let ((a nil) (b nil))
+				  (dotimes (i 10000) (setq a (cons i a)) (setq b (cons i b)))
+				  (tree-equal a b))
+				""").print()).isEqualTo("T");
+	}
+
+	@Test
+	void evalCountIfNot() {
+		assertThat(eval("(count-if-not #'evenp (list 1 2 3 4 5))").print()).isEqualTo("3");
+		assertThat(eval("(count-if-not #'evenp (vector 1 2 3 4 5))").print()).isEqualTo("3");
+		assertThat(eval("(count-if-not #'alpha-char-p \"ab1c2\")").print()).isEqualTo("2");
+		assertThat(eval("(count-if-not #'evenp (list 1 2 3 4 5) :start 1 :end 4)").print()).isEqualTo("1");
+		assertThat(eval("(count-if-not #'oddp (list (list 1) (list 2) (list 3)) :key #'car)").print()).isEqualTo("1");
+		// :from-end only reorders the predicate calls, so the count is the same.
+		assertThat(eval("(count-if-not #'evenp (list 1 2 3 4 5) :from-end t)").print()).isEqualTo("3");
+		assertThat(eval("(count-if-not #'evenp nil)").print()).isEqualTo("0");
+	}
+
+	@Test
+	void evalSetExclusiveOr() {
+		assertThat(eval("(set-exclusive-or (list 1 2 3) (list 2 3 4))").print()).isEqualTo("(1 4)");
+		assertThat(eval("(set-exclusive-or (list 1 2) nil)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(set-exclusive-or nil (list 1 2))").print()).isEqualTo("(1 2)");
+		assertThat(eval("(set-exclusive-or (list 1 2) (list 2 1))").print()).isEqualTo("NIL");
+		assertThat(eval("(set-exclusive-or (list \"a\" \"b\") (list \"b\" \"c\") :test #'equal)").print())
+			.isEqualTo("(\"a\" \"c\")");
+		assertThat(eval("(set-exclusive-or (list \"a\" \"b\") (list \"b\" \"c\") :test-not #'string/=)").print())
+			.isEqualTo("(\"a\" \"c\")");
+		assertThat(eval("(set-exclusive-or (list (list 1 'a) (list 2 'b)) (list (list 2 'x)) :key #'car)").print())
+			.isEqualTo("((1 A))");
+	}
+
+	@Test
+	void evalMerge() {
+		assertThat(eval("(merge 'list (list 1 3 5) (list 2 4 6) #'<)").print()).isEqualTo("(1 2 3 4 5 6)");
+		assertThat(eval("(merge 'vector (vector 1 3) (vector 2 4) #'<)").print()).isEqualTo("#(1 2 3 4)");
+		assertThat(eval("(merge 'string \"ac\" \"bd\" #'char<)").print()).isEqualTo("\"abcd\"");
+		assertThat(eval("(merge 'list nil (list 1 2) #'<)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(merge 'list (list 1 2) nil #'<)").print()).isEqualTo("(1 2)");
+		// Stable: a tie takes from sequence-1 first, so the (1 A) pair precedes (1 B).
+		assertThat(eval("(merge 'list (list (list 1 'a)) (list (list 1 'b) (list 2 'c)) #'< :key #'car)").print())
+			.isEqualTo("((1 A) (1 B) (2 C))");
+		// The result type may be a run-time value -- merge coerces to whatever it holds.
+		assertThat(eval("(let ((ty 'vector)) (merge ty (list 1) (list 2) #'<))").print()).isEqualTo("#(1 2)");
+	}
+
+	@Test
 	void evalSetfSubseqReplacesInPlace() {
 		assertThat(evalMulti("""
 				(defvar *ss* (make-array 5 :element-type 'character :fill-pointer t :adjustable t))
@@ -6444,8 +6515,10 @@ class LispEvaluatorTest {
 			.contains("WRITE", "PPRINT", "PPRINT-NEWLINE", "PPRINT-INDENT", "PPRINT-TAB", "COPY-PPRINT-DISPATCH",
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default", "%synonym-target")
+			.contains("TREE-EQUAL", "COUNT-IF-NOT", "SET-EXCLUSIVE-OR", "MERGE")
+			.doesNotContain("%set-xor-match")
 			.isSorted()
-			.hasSize(408);
+			.hasSize(412);
 	}
 
 	@Test

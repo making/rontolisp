@@ -6076,6 +6076,50 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunSequenceAndSetExtensions() throws Exception {
+		// The four prelude defuns of the sequence/set family: same one definition the
+		// interpreter lazy-loads, spliced by LispPreludeLibrary.process here.
+		assertThat(compileAndRun("""
+				(print (tree-equal '(1 (2 3)) '(1 (2 3))))
+				(print (tree-equal '(1 (2 3)) '(1 (2 4))))
+				(print (tree-equal '(1 (2)) '(1 2)))
+				(print (tree-equal '("a" ("b")) '("A" ("B")) :test #'string-equal))
+				(print (tree-equal '(1 2) '(1 2) :test-not #'eql))
+				(print (count-if-not #'evenp '(1 2 3 4 5)))
+				(print (count-if-not #'evenp #(1 2 3 4 5)))
+				(print (count-if-not #'alpha-char-p "ab1c2"))
+				(print (count-if-not #'evenp '(1 2 3 4 5) :start 1 :end 4))
+				(print (count-if-not #'oddp '((1) (2) (3)) :key #'car))
+				(print (set-exclusive-or '(1 2 3) '(2 3 4)))
+				(print (set-exclusive-or '("a" "b") '("B" "c") :test #'string-equal))
+				(print (set-exclusive-or '((1 a) (2 b)) '((2 x)) :key #'car))
+				(print (merge 'list (list 1 3 5) (list 2 4 6) #'<))
+				(print (merge 'vector (vector 1 3) (vector 2 4) #'<))
+				(print (merge 'string "ac" "bd" #'char<))
+				(print (merge 'list (list '(1 a)) (list '(1 b) '(2 c)) #'< :key #'car))
+				(print (funcall #'tree-equal '(1 2) '(1 2)))
+				""")).isEqualTo("""
+				T
+				NIL
+				NIL
+				T
+				NIL
+				3
+				3
+				2
+				1
+				1
+				(1 4)
+				("a" "c")
+				((1 A))
+				(1 2 3 4 5 6)
+				#(1 2 3 4)
+				"abcd"
+				((1 A) (1 B) (2 C))
+				T""");
+	}
+
+	@Test
 	void compileAndRunPsetf() throws Exception {
 		// Place subforms are evaluated before any assignment: (cdr last-cdr) reads the
 		// old last-cdr even though the first pair reassigns it.
@@ -7917,12 +7961,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("408");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("412");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("408");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("412");
 	}
 
 	@Test

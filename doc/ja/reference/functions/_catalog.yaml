@@ -194,6 +194,7 @@ categories:
       - { slug: nconc, name: "nconc" }
       - { slug: sort, name: "sort" }
       - { slug: stable-sort, name: "stable-sort" }
+      - { slug: merge, name: "merge" }
       - { slug: copy-seq, name: "copy-seq" }
   - title: "リスト検索"
     functions:
@@ -207,6 +208,7 @@ categories:
       - { slug: position-if-not, name: "position-if-not" }
       - { slug: count, name: "count" }
       - { slug: count-if, name: "count-if" }
+      - { slug: count-if-not, name: "count-if-not" }
       - { slug: assoc, name: "assoc" }
       - { slug: assoc-if, name: "assoc-if" }
       - { slug: rassoc, name: "rassoc" }
@@ -227,6 +229,7 @@ categories:
       - { slug: subst, name: "subst" }
       - { slug: search, name: "search" }
       - { slug: mismatch, name: "mismatch" }
+      - { slug: tree-equal, name: "tree-equal" }
       - { slug: substitute, name: "substitute" }
       - { slug: nsubstitute, name: "nsubstitute" }
       - { slug: substitute-if, name: "substitute-if" }
@@ -238,6 +241,7 @@ categories:
       - { slug: union, name: "union" }
       - { slug: intersection, name: "intersection" }
       - { slug: set-difference, name: "set-difference" }
+      - { slug: set-exclusive-or, name: "set-exclusive-or" }
       - { slug: adjoin, name: "adjoin" }
   - title: "破壊的なセル操作"
     functions:

@@ -1205,6 +1205,33 @@ public final class LispPreludeLibrary {
 				      (cons (copy-tree (car tree)) (copy-tree (cdr tree)))
 				      tree))
 				""");
+		// tree-equal: same SHAPE, leaves matching under :test / :test-not. A cons is
+		// only ever equal to a cons -- the "exactly one side is a cons" arm is what stops
+		// the walk from comparing a leaf with a subtree, and it is why the atom arm can
+		// compare nil with nil (the end of two equally long lists) without a special
+		// case. The CDR direction is a LOOP, not a recursion: recursing there costs one
+		// frame per element, and two 10,000-element flat lists then overflow the stack
+		// on every backend. Only the CAR direction recurses, so the depth is the tree's
+		// nesting depth.
+		SOURCES.put(LispNames.TREE_EQUAL, """
+				(defun tree-equal (tree-1 tree-2 &key (test #'eql) test-not)
+				  (labels ((leaf= (a b)
+				             (if test-not
+				                 (not (funcall test-not a b))
+				                 (if (funcall test a b) t nil)))
+				           (cmp (a b)
+				             (let ((ok t)
+				                   (done nil))
+				               (while (not done)
+				                 (cond ((and (consp a) (consp b))
+				                        (if (cmp (car a) (car b))
+				                            (progn (setq a (cdr a)) (setq b (cdr b)))
+				                            (progn (setq ok nil) (setq done t))))
+				                       ((or (consp a) (consp b)) (setq ok nil) (setq done t))
+				                       (t (setq ok (leaf= a b)) (setq done t))))
+				               ok)))
+				    (cmp tree-1 tree-2)))
+				""");
 		SOURCES.put(LispNames.SEARCH, """
 				(defun search (seq1 seq2 &key (start1 0) end1 (start2 0) end2 (test #'eql) key from-end)
 				  (let* ((e1 (or end1 (length seq1)))
@@ -1222,6 +1249,74 @@ public final class LispPreludeLibrary {
 				                             (if key (funcall key b) b))
 				              (setq ok nil))))
 				        (when ok (setq result pos))))))
+				""");
+		// count-if-not takes the full CL keyword set, unlike count-if (whose two-argument
+		// expansion is inlined per site; .todo/006 records that gap). :from-end only
+		// reorders the predicate calls, which cannot change a count, so it is accepted
+		// and the scan stays forward. A LIST is walked with a cursor rather than indexed
+		// with elt -- elt on a list is an nth walk from the head, so the obvious loop
+		// would be quadratic.
+		SOURCES.put(LispNames.COUNT_IF_NOT, """
+				(defun count-if-not (predicate sequence &key from-end (start 0) end key)
+				  (let* ((lst (listp sequence))
+				         (e (or end (length sequence)))
+				         (i (or start 0))
+				         (cell (if lst (nthcdr i sequence) nil))
+				         (n 0))
+				    (while (and (< i e) (or (not lst) cell))
+				      (let ((x (if lst (car cell) (elt sequence i))))
+				        (unless (funcall predicate (if key (funcall key x) x))
+				          (setq n (+ n 1))))
+				      (setq cell (cdr cell))
+				      (setq i (+ i 1)))
+				    n))
+				""");
+		// set-exclusive-or: the symmetric difference. Both scans call the shared matcher
+		// with the list-1 element FIRST, so an asymmetric :test/:test-not sees the same
+		// argument order in either direction. The result lists the list-1-only elements
+		// in order, then the list-2-only ones (CL leaves the order unspecified).
+		SOURCES.put(LispNames.SET_XOR_MATCH, """
+				(defun %set-xor-match (a b test test-not key)
+				  (let ((ka (if key (funcall key a) a))
+				        (kb (if key (funcall key b) b)))
+				    (if test-not
+				        (not (funcall test-not ka kb))
+				        (if (funcall test ka kb) t nil))))
+				""");
+		SOURCES.put(LispNames.SET_EXCLUSIVE_OR, """
+				(defun set-exclusive-or (list-1 list-2 &key (test #'eql) test-not key)
+				  (let ((out nil))
+				    (dolist (a list-1)
+				      (let ((found nil))
+				        (dolist (b list-2)
+				          (when (%set-xor-match a b test test-not key) (setq found t)))
+				        (unless found (setq out (cons a out)))))
+				    (dolist (b list-2)
+				      (let ((found nil))
+				        (dolist (a list-1)
+				          (when (%set-xor-match a b test test-not key) (setq found t)))
+				        (unless found (setq out (cons b out)))))
+				    (nreverse out)))
+				""");
+		// merge: the classic two-cursor walk, STABLE -- a tie takes from sequence-1,
+		// which is what "(funcall predicate <sequence-2 element> <sequence-1 element>)"
+		// decides: only a strictly-precedes answer moves the sequence-2 cursor. Both
+		// inputs are read as lists and the result is built to result-type through
+		// coerce, so a run-time type specifier works and the families are coerce's
+		// (list / vector / string). Non-destructive, which CL permits.
+		SOURCES.put(LispNames.MERGE, """
+				(defun merge (result-type sequence-1 sequence-2 predicate &key key)
+				  (let ((a (coerce sequence-1 'list))
+				        (b (coerce sequence-2 'list))
+				        (out nil))
+				    (while (and a b)
+				      (if (funcall predicate (if key (funcall key (car b)) (car b))
+				                   (if key (funcall key (car a)) (car a)))
+				          (progn (setq out (cons (car b) out)) (setq b (cdr b)))
+				          (progn (setq out (cons (car a) out)) (setq a (cdr a)))))
+				    (while a (setq out (cons (car a) out)) (setq a (cdr a)))
+				    (while b (setq out (cons (car b) out)) (setq b (cdr b)))
+				    (coerce (nreverse out) result-type)))
 				""");
 		// The whole string comparison family walks ONE shared lexicographic loop:
 		// %string-compare returns (order . mismatch-index), where order is -1/0/1 for

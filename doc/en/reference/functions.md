@@ -187,6 +187,7 @@ page.
 | `position-if` | `(position-if #'evenp '(1 3 6 7))` | `2` (0-based index of the first element satisfying the predicate, or nil) |
 | `count` | `(count 2 '(1 2 3 2 2))` | `3` (number of elements `eql` to the item; optional `:test`/`:key` keywords) |
 | `count-if` | `(count-if #'evenp '(1 2 3 4))` | `2` (number of elements satisfying the predicate) |
+| `count-if-not` | `(count-if-not #'evenp '(1 2 3 4 5))` | `3` (number of elements FAILING the predicate; `:key`/`:start`/`:end`/`:from-end`) |
 | `assoc` | `(assoc 'b '((a . 1) (b . 2)))` | `(b . 2)` (first pair whose car matches the key, or nil; `eql` compare by default, optional `:test`/`:key` keywords, e.g. `(assoc "b" '(("a" . 1) ("b" . 2)) :test #'equal)`) |
 | `assoc-if` | `(assoc-if #'oddp '((2 a) (3 b)))` | `(3 b)` (first pair whose car satisfies the predicate, or nil) |
 | `getf` | `(getf '(:a 1 :b 2) :b)` | `2` (value following the indicator in a property list, or nil; the partner of `remf`. Two arguments only: no `&optional default`) |
@@ -203,6 +204,7 @@ page.
 | `subst` | `(subst 'x 'a '(a (b a) c))` | `(x (b x) c)` (non-destructive tree substitution; optional `:test`/`:key` keywords) |
 | `search` | `(search "bc" "abcd")` | `1` (position of one sequence inside another, or nil; `:start1`/`:end1`/`:start2`/`:end2`/`:test`/`:key`/`:from-end`) |
 | `mismatch` | `(mismatch "apple" "apricot")` | `2` -- the index into the first sequence where the two differ, or nil; same keywords as `search` |
+| `tree-equal` | `(tree-equal '(1 (2 3)) '(1 (2 3)))` | `t` (same tree shape with leaves matching under `:test` (default `eql`) or `:test-not`) |
 | `substitute` | `(substitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (copy with every element `eql` to the old item replaced by the new one; optional `:test`/`:key` keywords) |
 | `nsubstitute` | `(nsubstitute 0 2 '(1 2 3 2))` | `(1 0 3 0)` (destructive `substitute`: rewrites matching cars in place; optional `:test`/`:key` keywords) |
 | `substitute-if` | `(substitute-if 0 #'oddp '(1 2 3))` | `(0 2 0)` (copy with every element satisfying the predicate replaced; optional `:key`, no `:test`) |
@@ -218,6 +220,7 @@ page.
 | `union` | `(union '(1 2 3) '(2 3 4))` | `(4 1 2 3)` (set union, `eql` compare by default, optional `:test`/`:key` keywords; result order unspecified) |
 | `intersection` | `(intersection '(1 2 3) '(2 3 4))` | `(3 2)` (set intersection, `eql` compare by default, optional `:test`/`:key` keywords; result order unspecified) |
 | `set-difference` | `(set-difference '(1 2 3) '(2))` | `(3 1)` (elements of the first list not in the second, `eql` compare by default, optional `:test`/`:key` keywords; result order unspecified) |
+| `set-exclusive-or` | `(set-exclusive-or '(1 2 3) '(2 3 4))` | `(1 4)` (symmetric difference: the elements of either list with no match in the other; optional `:test`/`:test-not`/`:key` keywords; result order unspecified) |
 | `adjoin` | `(adjoin 1 '(2 3))` | `(1 2 3)` (prepend the item unless already a member; `eql` compare by default, optional `:test`/`:key` keywords) |
 | `list*` | `(list* 1 2 '(3 4))`, `(list* 1 2 3)` | `(1 2 3 4)`, `(1 2 . 3)` (cons the leading arguments onto the last one as the tail) |
 | `acons` | `(acons 'a 1 nil)` | `((a . 1))` (prepend a `(key . value)` pair to an alist) |
@@ -233,6 +236,7 @@ page.
 | `mapcon` | `(mapcon (lambda (x) (list (car x))) '(1 2 3))` | `(1 2 3)` (apply to successive tails, concatenate the result lists; takes any number of lists) |
 | `mapl` | `(mapl #'identity '(1 2 3))` | `(1 2 3)` (apply to successive tails for effect, return the first list; takes any number of lists) |
 | `sort` | `(sort '(3 1 2) #'<)` | `(1 2 3)` (destructively sort a list with a comparison predicate; not stable) |
+| `merge` | `(merge 'list (list 1 3) (list 2 4) #'<)` | `(1 2 3 4)` (one sorted sequence from two, stable; the result type is built by `coerce`, so `list`/`vector`/`string`; non-destructive) |
 | `rplaca` | `(rplaca x val)` | Destructively replace car of cons cell, return the cell |
 | `rplacd` | `(rplacd x val)` | Destructively replace cdr of cons cell, return the cell |
 | `1+` | `(1+ 41)` | `42` (same as `(+ x 1)`) |
