@@ -15,15 +15,15 @@ rontolispには、一連の組み込みパッケージと[`defpackage` による
 シンボルはパッケージ修飾子で参照できます: `package:symbol`(例: `cl:car`、`rontolisp:version`)はパッケージの
 external(export 済み)シンボルに届き、`package::symbol` は internal を含む任意のシンボルに届きます —
 Common Lisp と同じシングル/ダブルコロンの区別です([external シンボルと internal シンボル](#external-and-internal-symbols)を参照)。`*package*`
-はカレントパッケージの名前に評価され、`(in-package name)`
-はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。標準の Common Lisp 名
+はカレントパッケージを保持し(`find-package` が返すパッケージキーワードなので `(eq *package* (find-package ...))` が成り立ちます)、`(in-package name)`
+はそれを切り替えます(名前はキーワード、シンボル、または文字列です: `:rontolisp`、`rontolisp`、`"rontolisp"`)。Common Lisp と同様に `*package*` はフォームの実行時に読まれる動的変数です: 関数は呼び出し時点のカレントパッケージを読み、`(let ((*package* ...)) ...)` はその範囲で束縛し、`with-standard-io-syntax` は `cl-user` に束縛し、`setq` で代入できます。標準の Common Lisp 名
 `common-lisp` と `common-lisp-user` は `cl` と `cl-user` の組み込み **ニックネーム** なので、ポータブルな
 `(:use #:common-lisp)` clause や `common-lisp:car` の参照も解決されます。短縮名 `rl` と `la` は `rontolisp` と `linalg`
 の、`quicklisp` は `ql` の組み込みニックネームです。ユーザーパッケージは `defpackage` の
 `:nicknames` clause で独自のニックネームを登録できます。
 
 ```lisp
-(print *package*)              ; => cl-user
+(print *package*)              ; => :cl-user
 (print (rontolisp:version))    ; => (:version "0.1.0-SNAPSHOT" :build-timestamp "..." :git-commit "..." :git-branch "...")
 (print (gethash "n" (rl:json-parse "{\"n\": 41}")))  ; => 41
 (print (la:to-list (la:from-list '(1 2 3))))        ; => (1.0 2.0 3.0)
@@ -180,8 +180,7 @@ Error: The symbol %json-parse is not external in the rontolisp package (use ront
 - `version` と同様に、これらの関数はコンパイルされたランタイムの `eval`/`load` 内ではサポートされません。
 
 パッケージは読み込み/コンパイル時に(ソース順で)解決されるため、`in-package`
-はトップレベルのディレクティブであり、`*package*`
-は可変のランタイム変数ではなくカレントパッケージを反映します。コンパイル出力では、実行時に読み込まれたファイルのパッケージディレクティブは処理されません。`rontolisp`
+はトップレベルのディレクティブです: ソース中のシンボルがどのパッケージに属するかは、その上にある `in-package` で決まり、実行時の `*package*` への `setq` では決まりません(コンパイル出力ではファイル全体が実行前に解決されます。インタプリタはトップレベルフォームに到達するたびに解決するため、そこでは実行時の代入が後続のフォームに影響します)。コンパイル出力では、実行時に読み込まれたファイルのパッケージディレクティブは処理されません。`rontolisp`
 パッケージの関数(`version`、`list-functions` ...)は第一級の値として利用できません(`mapcar`/`funcall`
 に渡せません)。また `cl` を使用しないパッケージ内では、`cl`
 シンボル名をローカル変数としてシャドウしてはいけません。

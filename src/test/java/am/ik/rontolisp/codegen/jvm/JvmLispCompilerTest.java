@@ -7372,7 +7372,47 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunPackageVar() throws Exception {
-		assertThat(compileAndRun("(print *package*)")).isEqualTo("CL-USER");
+		// The value is the package KEYWORD find-package answers, so the two are eq.
+		assertThat(compileAndRun("(print *package*)")).isEqualTo(":CL-USER");
+		assertThat(compileAndRun("(print (eq *package* (find-package \"CL-USER\")))")).isEqualTo("T");
+	}
+
+	@Test
+	void compileAndRunPackageVarIsReadWhenTheFormRuns() throws Exception {
+		// CL's *package* is dynamic: a defun reads the package current at CALL time,
+		// (in-package P) assigns it, a let of it binds it for the extent and
+		// with-standard-io-syntax binds it to CL-USER. The rove shape: a registry keyed
+		// on *package* read inside set-test, filled from a test file in its own package
+		// (the pre-2026-08-15 fold registered everything under set-test's package).
+		assertThat(compileAndRun(
+				"""
+						(defvar *suites* (make-hash-table :test 'eq))
+						(defun package-suite (package) (or (gethash package *suites*) (setf (gethash package *suites*) (list :suite (package-name package)))))
+						(defun set-test (name) (push name (cdr (package-suite *package*))) name)
+						(defun cur () *package*)
+						(defpackage :my-app/tests (:use :cl))
+						(in-package :my-app/tests)
+						(cl-user::set-test 'test-a)
+						(cl-user::set-test 'test-b)
+						(print (cl-user::cur))
+						(print (let ((*package* (find-package :cl-user))) (cl-user::cur)))
+						(print (cl-user::cur))
+						(print (with-standard-io-syntax (cl-user::cur)))
+						(print (gethash (find-package "MY-APP/TESTS") cl-user::*suites*))
+						(print (eq *package* (find-package :my-app/tests)))
+						(in-package :cl-user)
+						(print (cur))
+						(print (package-name *package*))
+						"""))
+			.isEqualTo("""
+					:MY-APP/TESTS
+					:CL-USER
+					:MY-APP/TESTS
+					:CL-USER
+					(:SUITE MY-APP/TESTS::TEST-B MY-APP/TESTS::TEST-A "MY-APP/TESTS")
+					T
+					:CL-USER
+					"CL-USER\"""");
 	}
 
 	@Test

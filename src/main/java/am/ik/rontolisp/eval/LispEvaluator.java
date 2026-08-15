@@ -1373,9 +1373,9 @@ public final class LispEvaluator {
 			return switch (args.get(0)) {
 				case LispTrue ignored -> LispTrue.INSTANCE;
 				case LispNil ignored -> LispTrue.INSTANCE;
-				case LispSymbol sym ->
-					sym.isKeyword() || this.dynamicBindings.isBound(sym.name()) || this.globalEnv.hasBinding(sym.name())
-							? LispTrue.INSTANCE : LispNil.INSTANCE;
+				case LispSymbol sym -> sym.isKeyword() || LispNames.PACKAGE_VAR.equals(sym.name())
+						|| this.dynamicBindings.isBound(sym.name()) || this.globalEnv.hasBinding(sym.name())
+								? LispTrue.INSTANCE : LispNil.INSTANCE;
 				default ->
 					throw new LispEvalException(LispNames.BOUNDP + " expects a symbol, got " + args.get(0).print());
 			};
@@ -1388,6 +1388,9 @@ public final class LispEvaluator {
 				case LispSymbol sym -> {
 					if (sym.isKeyword()) {
 						yield sym;
+					}
+					if (LispNames.PACKAGE_VAR.equals(sym.name())) {
+						yield currentPackageValue();
 					}
 					if (this.dynamicBindings.isBound(sym.name())) {
 						yield this.dynamicBindings.get(sym.name());
@@ -3352,6 +3355,9 @@ public final class LispEvaluator {
 			return sym;
 		}
 		String name = sym.name();
+		if (LispNames.PACKAGE_VAR.equals(name)) {
+			return currentPackageValue();
+		}
 		if ((!this.specialVars.isEmpty() || this.progvUsed) && this.dynamicBindings.isBound(name)) {
 			return this.dynamicBindings.get(name);
 		}
@@ -6312,7 +6318,9 @@ public final class LispEvaluator {
 		// A special name gets a thread-scoped dynamic binding instead of a lexical one;
 		// dynamicNames records those to pop on any exit (left null on the common
 		// all-lexical
-		// path so there is no per-let allocation or finally cost).
+		// path so there is no per-let allocation or finally cost). A *package* binding
+		// is the resolver's current package swapped for the let's extent (see
+		// currentPackageValue); savedPackage is what the finally restores.
 		List<String> dynamicNames = null;
 		String savedPackage = null;
 		if (bindings instanceof LispCons bindingsCons) {
@@ -6325,7 +6333,7 @@ public final class LispEvaluator {
 					List<LispVal> pair = ((LispCons) binding).toList();
 					String bindingName = ((LispSymbol) pair.get(0)).name();
 					LispVal bindingValue = eval(pair.get(1), env);
-					if (LispMacroExpander.PACKAGE_REBIND_VAR.equals(bindingName) && savedPackage == null) {
+					if (LispNames.PACKAGE_VAR.equals(bindingName) && savedPackage == null) {
 						savedPackage = rebindCurrentPackage(bindingValue);
 					}
 					letEnv.define(bindingName, bindingValue);
@@ -6343,7 +6351,7 @@ public final class LispEvaluator {
 					List<LispVal> pair = ((LispCons) bindingList.get(i)).toList();
 					names[i] = ((LispSymbol) pair.get(0)).name();
 					vals[i] = eval(pair.get(1), env);
-					if (LispMacroExpander.PACKAGE_REBIND_VAR.equals(names[i]) && savedPackage == null) {
+					if (LispNames.PACKAGE_VAR.equals(names[i]) && savedPackage == null) {
 						savedPackage = rebindCurrentPackage(vals[i]);
 					}
 				}
@@ -6391,29 +6399,62 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * The runtime half of a {@code (let ((*package* X)) ...)} rebinding (see
-	 * {@code LispMacroExpander.PACKAGE_REBIND_VAR}): swaps the resolver's current package
-	 * to the bound value for the let's extent so a macro-time {@code (intern ...)} homes
-	 * where CL would. Returns the saved package name, or null when the value is not a
-	 * package designator (the binding then has no effect).
+	 * The runtime value of {@code *package*}: the resolver's current package as the
+	 * package keyword {@code find-package} answers. On the interpreter the variable IS
+	 * the resolver state -- one cell, read through here, written through by
+	 * {@link #assignCurrentPackage} -- so everything that consults "the current package"
+	 * (a 1-argument {@code intern}, {@code read}, a macro expansion) and the value the
+	 * program reads can never disagree. Common Lisp's {@code *package*} is dynamic: a
+	 * defun reads the package current when it is CALLED, which is exactly this, and a
+	 * {@code let} of it (rove's {@code run-suite-tests}) is a save/set/restore over the
+	 * same cell ({@link #rebindCurrentPackage}). Not thread-scoped, unlike the specials
+	 * in {@code DynamicBindings}: the resolver is one per evaluator.
+	 */
+	private LispVal currentPackageValue() {
+		return packageKeyword(this.packageResolver.currentPackageName());
+	}
+
+	/**
+	 * Assigns {@code *package*} ({@code setq}): the value must designate a registered
+	 * package -- a string, a symbol, or the package keyword -- else it signals, like
+	 * Common Lisp's type error on a non-package.
+	 */
+	private void assignCurrentPackage(LispVal value) {
+		String found = packageNameOf(value);
+		if (found == null) {
+			throw new LispEvalException(
+					LispNames.PACKAGE_VAR + " must be set to a package designator, got " + value.print());
+		}
+		this.packageResolver.setCurrentPackage(found);
+	}
+
+	/**
+	 * The runtime half of a {@code (let ((*package* X)) ...)} rebinding: swaps the
+	 * resolver's current package to the bound value for the let's extent -- so a called
+	 * function reads the bound package, and a macro-time {@code (intern ...)} homes where
+	 * CL would. Returns the saved package name, or null when the value is not a package
+	 * designator (the binding then has no effect).
 	 */
 	@org.jspecify.annotations.Nullable
 	private String rebindCurrentPackage(LispVal value) {
-		String designator = switch (value) {
-			case LispString str -> str.value();
-			case LispSymbol sym -> LispSymbol.displayName(sym.name());
-			default -> null;
-		};
-		if (designator == null) {
-			return null;
-		}
-		String found = this.packageResolver.findPackageName(designator);
+		String found = packageNameOf(value);
 		if (found == null) {
 			return null;
 		}
 		String saved = this.packageResolver.currentPackageName();
 		this.packageResolver.setCurrentPackage(found);
 		return saved;
+	}
+
+	/** The registered package a runtime designator names, or null. */
+	@org.jspecify.annotations.Nullable
+	private String packageNameOf(LispVal value) {
+		String designator = switch (value) {
+			case LispString str -> str.value();
+			case LispSymbol sym -> LispSymbol.displayName(sym.name());
+			default -> null;
+		};
+		return designator == null ? null : this.packageResolver.findPackageName(designator);
 	}
 
 	/**
@@ -6487,6 +6528,14 @@ public final class LispEvaluator {
 			LispSymbol name = (LispSymbol) parts.get(i);
 			value = eval(parts.get(i + 1), env);
 			String n = name.name();
+			if (LispNames.PACKAGE_VAR.equals(n)) {
+				// *package* IS the resolver's current package (see currentPackageValue):
+				// the assignment writes straight through -- into the active let binding
+				// when one is in extent (evalLet restores the saved package on exit),
+				// else permanently, which is what a top-level (in-package P) resolves to.
+				assignCurrentPackage(value);
+				continue;
+			}
 			// A special with an active dynamic binding is assigned in that binding
 			// (visible to callees within the extent); otherwise env.set walks to the
 			// global default (a special never has a lexical binding to shadow).

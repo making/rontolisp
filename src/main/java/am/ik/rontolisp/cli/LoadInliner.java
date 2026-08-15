@@ -320,8 +320,9 @@ public final class LoadInliner {
 		// past the load: bracket the spliced forms with package save/restore markers so
 		// the
 		// PackageResolver (and, ahead of it, UserMacroExpander's resolver) restores the
-		// caller's package after the file, mirroring Common Lisp binding *package* for
-		// the
+		// caller's package after the file -- at resolution time AND, through the
+		// (setq *package* ...) the pop marker resolves to, at run time -- mirroring
+		// Common Lisp binding *package* for the
 		// duration of load. Files that never change the package (the common case -- a
 		// plain
 		// file of defuns) are spliced verbatim, so their output is unchanged.

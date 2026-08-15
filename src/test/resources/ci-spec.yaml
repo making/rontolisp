@@ -1229,16 +1229,47 @@ cases:
       (1.0 2.0 3.0)
   - name: packages-cl-user-default-uses-cl-and-the
     source: |
+      ;; *package* holds the package KEYWORD find-package answers (so the two are eq),
+      ;; and is a genuine dynamic variable: read when the form RUNS, assigned by
+      ;; in-package, let-bindable, bound to CL-USER by with-standard-io-syntax.
       (print *package*)
+      (print (eq *package* (find-package "CL-USER")))
       (print (car (rontolisp:version)))
       (in-package rontolisp)
       (cl:print cl:*package*)
       (cl:print (cl:car (version)))
+      (cl:in-package :cl-user)
+      (defvar *ci-suites* (make-hash-table :test 'eq))
+      (defun ci-package-suite (package)
+        (or (gethash package *ci-suites*)
+            (setf (gethash package *ci-suites*) (list :suite (package-name package)))))
+      (defun ci-set-test (name)
+        (push name (cdr (ci-package-suite *package*)))
+        name)
+      (defun ci-current-package () *package*)
+      (defpackage :ci-app/tests (:use :cl))
+      (in-package :ci-app/tests)
+      (cl-user::ci-set-test 'test-a)
+      (cl-user::ci-set-test 'test-b)
+      (print (cl-user::ci-current-package))
+      (print (let ((*package* (find-package :cl-user))) (cl-user::ci-current-package)))
+      (print (cl-user::ci-current-package))
+      (print (with-standard-io-syntax (cl-user::ci-current-package)))
+      (print (gethash (find-package "CI-APP/TESTS") cl-user::*ci-suites*))
+      (in-package :cl-user)
+      (print (ci-current-package))
     expected: |
-      CL-USER
+      :CL-USER
+      T
       :VERSION
-      RONTOLISP
+      :RONTOLISP
       :VERSION
+      :CI-APP/TESTS
+      :CL-USER
+      :CI-APP/TESTS
+      :CL-USER
+      (:SUITE CI-APP/TESTS::TEST-B CI-APP/TESTS::TEST-A "CI-APP/TESTS")
+      :CL-USER
   - name: lisp-2-function-namespace-via-function
     source: |
       (cl:in-package cl-user)
@@ -6807,10 +6838,9 @@ cases:
 
   - name: scram-client-proof-arithmetic
     source: |
-      ;; with-standard-io-syntax is an identity wrapper here: every reader/printer
-      ;; control variable Common Lisp asks it to rebind is, in rontolisp, either
-      ;; resolved before run time or informational, so it evaluates its body as a
-      ;; progn and returns the last value.
+      ;; with-standard-io-syntax binds *package* to CL-USER and evaluates its body as
+      ;; a progn (every other reader/printer control variable Common Lisp asks it to
+      ;; rebind is, in rontolisp, informational), returning the last value.
       (print (with-standard-io-syntax (prin1-to-string (list 1 2 3))))
       (print (with-standard-io-syntax 1 2 42))
       ;; The SCRAM-SHA-256 client proof shape: two 32-byte digests XORed as 256-bit

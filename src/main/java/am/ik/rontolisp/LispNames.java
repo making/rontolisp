@@ -3501,8 +3501,9 @@ public final class LispNames {
 	/**
 	 * Internal marker inserted by {@code LoadInliner} after the spliced forms of a loaded
 	 * file: it makes the {@code PackageResolver} restore the package saved by the
-	 * matching {@link #PUSH_PACKAGE}. Consumed by the resolver, never reaching the
-	 * backends.
+	 * matching {@link #PUSH_PACKAGE}. Consumed by the resolver, which leaves the runtime
+	 * restore {@code (setq *package* :SAVED)} in its place; the backends never see the
+	 * marker itself.
 	 */
 	public static final String POP_PACKAGE = "%POP-PACKAGE";
 
@@ -3536,7 +3537,15 @@ public final class LispNames {
 	/** The {@code :import-from} clause keyword of {@code defpackage}. */
 	public static final String IMPORT_FROM_KEYWORD = ":IMPORT-FROM";
 
-	/** The {@code *package*} variable holding the current package name. */
+	/**
+	 * The {@code *package*} variable: the current package, as the package keyword
+	 * {@link #FIND_PACKAGE} answers ({@code :CL-USER}). A genuine dynamic variable on
+	 * every backend, read when a form RUNS: {@code (in-package P)} assigns it and a
+	 * {@code let} of it binds it for the extent. On the interpreter the variable IS the
+	 * {@code PackageResolver}'s current package (one cell, read and written through); the
+	 * compile paths give it a {@code defvar} default when the program reads it
+	 * ({@code LispMacroExpander.injectMvSpillGlobal}).
+	 */
 	public static final String PACKAGE_VAR = "*PACKAGE*";
 
 	/**

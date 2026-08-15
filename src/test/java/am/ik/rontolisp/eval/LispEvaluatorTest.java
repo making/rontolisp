@@ -6275,7 +6275,45 @@ class LispEvaluatorTest {
 
 	@Test
 	void packageDefaultsToClUser() {
-		assertThat(eval("*package*")).isEqualTo(new LispSymbol("CL-USER"));
+		// The value is the package KEYWORD find-package answers, so the two are eq.
+		assertThat(eval("*package*")).isEqualTo(new LispSymbol(":CL-USER"));
+		assertThat(eval("(eq *package* (find-package \"CL-USER\"))")).isEqualTo(LispTrue.INSTANCE);
+	}
+
+	@Test
+	void packageVarIsReadWhenTheFormRunsNotWhenItIsResolved() {
+		// CL's *package* is dynamic: a defun reads the package current at CALL time.
+		// The pre-2026-08-15 fold froze it to the DEFINING package (alexandria's
+		// maybe-intern interned into ALEXANDRIA for every caller; rove's set-test
+		// registered every test under rove's own package).
+		assertThat(evalMulti("""
+				(defun cur () *package*)
+				(defpackage :caller (:use :cl))
+				(in-package :caller)
+				(list (cl-user::cur) (let ((*package* (find-package :cl))) (cl-user::cur)) (cl-user::cur))
+				""").print()).isEqualTo("(:CALLER :CL :CALLER)");
+	}
+
+	@Test
+	void setqOfPackageVarSwitchesTheCurrentPackage() {
+		// A setq writes through to the resolver's current package: the interpreter
+		// resolves the NEXT top-level form in the assigned package, like CL's reader.
+		assertThat(evalMulti("""
+				(defpackage :target (:use :cl))
+				(setq *package* (find-package :target))
+				(list *package* (symbol-package 'probe))
+				""").print()).isEqualTo("(:TARGET :TARGET)");
+		assertThatThrownBy(() -> eval("(setq *package* 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("package designator");
+	}
+
+	@Test
+	void withStandardIoSyntaxBindsPackageToClUser() {
+		assertThat(evalMulti("""
+				(defpackage :wsios (:use :cl))
+				(in-package :wsios)
+				(list (with-standard-io-syntax *package*) *package*)
+				""").print()).isEqualTo("(:CL-USER :WSIOS)");
 	}
 
 	@Test
@@ -6286,7 +6324,7 @@ class LispEvaluatorTest {
 
 	@Test
 	void inPackageUpdatesPackageVar() {
-		assertThat(evalMulti("(in-package :rontolisp) cl:*package*")).isEqualTo(new LispSymbol("RONTOLISP"));
+		assertThat(evalMulti("(in-package :rontolisp) cl:*package*")).isEqualTo(new LispSymbol(":RONTOLISP"));
 	}
 
 	@Test
@@ -6304,7 +6342,7 @@ class LispEvaluatorTest {
 	@Test
 	void inPackageCanSwitchBackToClUser() {
 		assertThat(evalMulti("(in-package :rontolisp) (in-package :cl-user) *package*"))
-			.isEqualTo(new LispSymbol("CL-USER"));
+			.isEqualTo(new LispSymbol(":CL-USER"));
 	}
 
 	@Test

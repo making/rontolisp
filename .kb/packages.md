@@ -1,6 +1,6 @@
 # Packages
 
-A small namespace system with three built-in packages — `cl` (standard symbols), `cl-user` (default, uses `cl`), and `rontolisp` (does not use `cl`; owns `version` and the `list-*` introspection functions). Implemented as a single read/compile-time pass, `PackageResolver` (root `am.ik.rontolisp`), that runs before the evaluator and both compilers and rewrites every form into a canonical shape the backends already handle (bare names for `cl`/`cl-user` symbols; `pkg:name` for external members, `pkg::name` for internal ones, so canonical forms re-resolve to themselves; `*package*` -> quoted current package; `(in-package P)` consumed). Hard errors (`LispPackageException`): an unqualified `cl` symbol in a package that does not use `cl`, and a single-colon reference to a non-external member ("The symbol X is not external in the P package (use P::X)").
+A small namespace system with three built-in packages — `cl` (standard symbols), `cl-user` (default, uses `cl`), and `rontolisp` (does not use `cl`; owns `version` and the `list-*` introspection functions). Implemented as a single read/compile-time pass, `PackageResolver` (root `am.ik.rontolisp`), that runs before the evaluator and both compilers and rewrites every form into a canonical shape the backends already handle (bare names for `cl`/`cl-user` symbols; `pkg:name` for external members, `pkg::name` for internal ones, so canonical forms re-resolve to themselves; `*package*` stays the bare cl variable, read at RUN time; `(in-package P)` consumed and replaced by the runtime assignment `(setq *package* :P)` -- see the "`*package*` is a dynamic variable" section). Hard errors (`LispPackageException`): an unqualified `cl` symbol in a package that does not use `cl`, and a single-colon reference to a non-external member ("The symbol X is not external in the P package (use P::X)").
 
 **External vs internal (CL `:`/`::` semantics)**: `LispPackage` carries an `externals` set (3-arg constructor = everything exported); `PackageRegistry.QualifiedName` carries an `internal` flag parsed from the double colon. Built-ins: `cl` exports `CL_EXTERNALS` (= `CL_SYMBOLS` minus the `%`-prefixed `CL_INTERNALS`; car/cdr compositions count as external via `isCarCdrComposition`), `cl-user` exports nothing (like `COMMON-LISP-USER`), `rontolisp`/`java` export every registered symbol. `pkg::anything` still interns permissively (member need not be registered); an unregistered member (e.g. a defun made under `(in-package rontolisp)`, or the `rontolisp::%json-*` helpers) is internal, so its canonical spelling is double-colon. The JVM method-name mangler maps each `:` to `$colon`, so `::` names compile fine.
 
@@ -38,48 +38,89 @@ A small namespace system with three built-in packages — `cl` (standard symbols
 
 `cl`'s symbol set is `PackageRegistry.CL_SYMBOLS` = union of `CL_SPECIAL_FORMS`/`CL_MACROS`/`CL_FUNCTIONS`/`CL_VARIABLES`/`CL_INTERNALS` (single source of truth). Introspection: runtime in `Environment.registerPackages`, compile-time constants in `Jvm/WasmIntrospectionCompiler` (`cl-user` = Pass-1 user defun names via `Ctx.userDefunNames`); shared logic in `PackageIntrospection`. `listNames`'s default case treats any non-built-in package as a user package: `list-functions` filters the candidates (runtime global function names / Pass-1 defun names) by the `pkg:` prefix and keeps the qualified spellings; `list-macros`/`list-special-forms` are empty. Consequence: the runtime cannot validate a designator (user packages live in the resolver registry), so a computed designator via `funcall` with an unknown package yields nil instead of an error. Adding a package is a registry change, not a resolver change. Limitations (README). Tests: `PackageResolverTest` (incl. the `::` cases, the defpackage clause/error cases and the json.lisp fixed-point pin) + package cases in the per-backend tests + the `defpackage-use-export` ci-spec case.
 
-## `*package*` is folded at RESOLUTION time -- and what that costs
+## `*package*` is a DYNAMIC variable (2026-08-15, todo-255) -- two faces, kept in step
 
-`*package*` in a value position resolves to the quoted CURRENT package
-(`resolveUnqualified` / `resolveQualified`), which is the canonical shape every
-backend consumes. It is a **lite deviation from CL, where `*package*` is
-dynamic**, and it is invisible until a folded value crosses a FUNCTION boundary:
-inside a defun of alexandria's own file the constant is `ALEXANDRIA` forever, so
-`(alexandria:format-symbol t ...)` -- documented as "intern in the current
-package" -- interned into ALEXANDRIA for every caller. The failure is silent
-until something reads the symbol back by name: fast-http's `multipart-parser.lisp`
-generates its 14 state constants that way inside a `#.` and then references them
-by its own package's spelling ("The variable
-FAST-HTTP.MULTIPART-PARSER::+PARSING-DELIMITER-DASH-START+ is unbound").
+Common Lisp's `*package*` is read when a form RUNS. Until 2026-08-15 the resolver
+FOLDED a value-position `*package*` to `(quote CURRENT)`, where CURRENT was the
+package current when the form was RESOLVED -- right at top level, wrong inside any
+defun that outlives its file: alexandria's `maybe-intern` interned into ALEXANDRIA
+for every caller (fast-http's multipart state constants went missing), and rove's
+`set-test` -- `(pushnew name (slot-value (package-suite *package*) '%tests))`, run
+at each `deftest` -- registered every test under `rove/core/suite/package`, so
+`(rove:run-suite *package*)` found 0 tests; a `*package*` inside a macro
+EXPANSION was never folded at all and read "unbound" on the interpreter. Two
+narrow adaptations papered over the first (`eval.AlexandriaSymbols`, deleted in
+the same pass; the macro-expansion package swap below, kept). The model now:
 
-Two narrow adaptations exist; the general fix (a genuinely dynamic `*package*`)
-is a substrate change, `.todo/255`.
+- **Value**: the package KEYWORD `find-package` answers (`:CL-USER`), so
+  `(eq *package* (find-package ...))` holds, `(package-name *package*)` works, a
+  hash keyed on packages (`:test 'eq`) works, and `(typep *package* 'package)` is
+  true. `(print *package*)` prints `:CL-USER` (it printed `CL-USER`, a bare
+  symbol not `eq` to `find-package`'s answer, before). `#.*package*` splices the
+  keyword raw (self-evaluating), so sxql's `(intern name #.*package*)` still works.
+- **Resolver (`PackageResolver`)**: a value-position `*package*` resolves through
+  the GENERIC cl-symbol path -- bare `*PACKAGE*` when the current package uses
+  `cl`, the usual undefined-symbol error otherwise; quoted it is the same symbol
+  (`resolveQuotedData` no longer needs a special case). `(in-package P)` is still
+  consumed (the resolution-time state is what decides which package a source
+  symbol belongs to) but leaves `(setq *package* :P)` in its place
+  (`packageAssignment`); the `%pop-package` restore of a spliced load leaves the
+  same assignment for the SAVED package, `%push-package` leaves the old quoted
+  constant (the run-time value already IS the current package). Top-level forms
+  run in resolution order, so the two states agree at every top-level point.
+- **Interpreter (`LispEvaluator`)**: the variable IS the resolver's current
+  package -- ONE cell. `evalSymbolRef`/`symbol-value`/`boundp` read
+  `currentPackageValue()` (before the dynamic store and the env), `setq` writes
+  through `assignCurrentPackage` (a non-designator signals), and `evalLet`'s
+  `*package*` binding is `rebindCurrentPackage` + restore in the `finally`. So
+  everything that consults "the current package" -- a 1-argument `intern`,
+  `read`, a lazily expanded macro -- and the value the program reads can never
+  disagree. Consequences: a top-level `(setq *package* (find-package :foo))`
+  makes the interpreter resolve the NEXT top-level form in FOO (CL's reader
+  would too; the compile paths resolved the whole file up front, the documented
+  divergence in `doc/*/reference/packages.md`); and it is the one special the
+  interpreter does NOT thread-scope (`DynamicBindings` is per thread, the
+  resolver is per evaluator).
+- **Compile paths**: `LispMacroExpander.injectMvSpillGlobal` prepends
+  `(defvar *package* :cl-user)` when the program READS the variable -- any
+  mention other than the top-level `(setq *package* :P)` shape, or a
+  `with-standard-io-syntax` (which expands to a `let` of it in Pass 2, after the
+  scan) -- which makes it a global with a backing store and a proclaimed special,
+  so a `let` of it is the ordinary shallow binding of
+  `.kb/dynamic-special-variables.md` (dynamic-first reads, ThreadLocal on the
+  JVM when bound). A program that only SWITCHES packages never observes the
+  variable, so its assignments are DROPPED there instead (the
+  `.kb/toplevel-statement-values.md` rule) and such a program stays
+  byte-identical to one without `in-package` (verified: an in-package-only
+  module compiled bit-for-bit equal before/after).
+- **`with-standard-io-syntax`** now expands to `(let ((*package* :cl-user)) body...)`
+  -- the trigger the old expander comment left ("the FIRST reader or printer
+  control variable honored at run time must be bound here") fired.
+  `*print-escape*`/`*print-readably*`/`*print-pretty*` are honored but still not
+  rebound by it (documented deviation on the doc page).
 
-- `eval.AlexandriaSymbols` rewrites the ONE `maybe-intern` form of alexandria's
-  `alexandria-1/symbols.lisp` so the `t` branch goes through the ONE-argument
-  `intern`, whose contract already is "the current package" and which rontolisp
-  answers from the LIVE resolver state rather than from a fold. Everything else
-  in the file stays verbatim (the `ShimLibraries.rewriteComponentSource` tier --
-  `.kb/asdf.md`).
-- **A user macro called from inside a FUNCTION BODY expands with the macro's
-  DEFINING package current** (`LispEvaluator.UserMacro.definitionPackage`,
-  swapped in `expandMacroCall`, restored in the `finally`); a TOP-LEVEL macro
-  call keeps the current package. CL expands a macro while COMPILING the calling
-  file, so `*package*` is that file's; the interpreter expands LAZILY, at call
-  time, and only a top-level call site still has its file's package current. The
-  `functionBodyDepth` counter (incremented around every user-lambda body in
-  `apply`) is what tells the two apart. Both halves are load-bearing: fast-http's
-  `callback-data` is used inside a defun of its own file and expands
-  `(alexandria:format-symbol t "~A-~A" :callbacks name)` into an accessor call
-  (a `cl-user` caller got a bare `CALLBACKS-HEADER-FIELD`), while trivia's
-  top-level `(lispn:define-namespace pattern function)` must generate
-  `TRIVIA.LEVEL2.IMPL::SYMBOL-PATTERN` -- the CALLING file's package, not
-  lisp-namespace's. Known approximation: a macro defined in P and called inside a
-  function of a DIFFERENT file Q gets P where CL would use Q. Pinned by
-  `LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
-  `TriviaE2eTest` and `SxqlE2eTest`.
+**A user macro called from inside a FUNCTION BODY still expands with the macro's
+DEFINING package current** (`LispEvaluator.UserMacro.definitionPackage`, swapped
+in `expandMacroCall`, restored in the `finally`); a TOP-LEVEL macro call keeps the
+current package. Re-decided in this pass and KEPT: CL expands a macro while
+COMPILING the calling file, so `*package*` is that file's; the interpreter expands
+LAZILY, at call time, and only a top-level call site still has its file's package
+current -- so it is what a file-at-a-time compile does, and it is what
+UserMacroExpander's macro-time evaluator gets for free (its resolver tracks the
+calling file's directives). The `functionBodyDepth` counter (incremented around
+every user-lambda body in `apply`) tells the two apart. Both halves are
+load-bearing: fast-http's `callback-data` is used inside a defun of its own file
+and expands `(alexandria:format-symbol t "~A-~A" :callbacks name)` into an accessor
+call, while trivia's top-level `(lispn:define-namespace pattern function)` must
+generate `TRIVIA.LEVEL2.IMPL::SYMBOL-PATTERN` -- the CALLING file's package. Known
+approximation: a macro defined in P and called inside a function of a DIFFERENT
+file Q gets P where CL would use Q. Pinned by
+`LispEvaluatorTest#evalMacroBodyInAFunctionBodyRunsInItsDefiningPackage`,
+`TriviaE2eTest` and `SxqlE2eTest`.
 
-**Re-evaluation trigger**: when `.todo/255` gives `*package*` a real dynamic
-value, both adaptations become dead weight -- delete `AlexandriaSymbols` and
-re-check whether the macro-expansion package swap is still the right default
-(it is what a file-at-a-time compile does, so it probably stays).
+Pinned by `PackageResolverTest#{packageVarStaysARuntimeVariableRead,inPackageAcceptsKeywordAndBareSymbolAndAssignsTheRuntimeVariable,popPackageMarkerRestoresTheRuntimeVariableToo}`,
+`LispEvaluatorTest#{packageDefaultsToClUser,packageVarIsReadWhenTheFormRunsNotWhenItIsResolved,setqOfPackageVarSwitchesTheCurrentPackage,withStandardIoSyntaxBindsPackageToClUser}`,
+`JvmLispCompilerTest#compileAndRunPackageVarIsReadWhenTheFormRuns`,
+`WasmLispCompilerIntegrationTest#packageVarIsReadWhenTheFormRuns` and the
+`packages-cl-user-default-uses-cl-and-the` ci-spec case (the rove registry shape on
+all four backends).

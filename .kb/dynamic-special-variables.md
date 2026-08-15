@@ -252,12 +252,19 @@ it on all backends (pinned in `ci-spec.yaml`, the three backend tests, and
 
 ## Relationship to the two hand-rolled precedents
 
-- **`*package*` load scoping stays separate** -- a conscious decision.
-  `*package*` is resolved at read/compile time by `PackageResolver`
-  (`pushPackage`/`popPackage` + `%push-package`/`%pop-package` markers), NOT as a
-  runtime variable, so the runtime special-binding mechanism here does not cover
-  it. Two distinct models (runtime specials vs compile-time resolver state); see
-  `.kb/packages.md`.
+- **`*package*` is a special with TWO faces (since 2026-08-15, todo-255).**
+  Resolution-time: `PackageResolver` tracks the current package across the forms
+  it walks (`in-package`, `pushPackage`/`popPackage` + the `%push-package`/
+  `%pop-package` markers) -- that state decides which package a source symbol
+  belongs to. Run-time: `*package*` is a genuine variable holding the package
+  keyword; the resolver keeps the two in step by resolving `in-package` (and the
+  pop marker) to `(setq *package* :P)`. On the compile paths the run-time face is
+  the ordinary special of this file (a `(defvar *package* :cl-user)` injected
+  when the program reads it, `let` = shallow binding, dynamic-first reads,
+  ThreadLocal on the JVM when bound); on the interpreter the two faces are ONE
+  cell (a read of `*package*` answers the resolver's current package, `setq`/`let`
+  write it), which is why it is the one special the interpreter does NOT
+  thread-scope. Mechanics and pins: `.kb/packages.md`.
 - **Macro-time setf replay stays separate too.** cl-who reads `*html-mode*` at
   macro-EXPANSION (compile) time; a runtime special binding is invisible to an
   already-expanded macro, so `UserMacroExpander` replays a top-level `(setf (PLACE)

@@ -174,14 +174,31 @@ class PackageResolverTest {
 	}
 
 	@Test
-	void packageVarExpandsToQuotedCurrentPackage() {
-		assertThat(resolve("*package*")).isEqualTo("(QUOTE CL-USER)");
+	void packageVarStaysARuntimeVariableRead() {
+		// *package* is a genuine dynamic variable read when the form RUNS -- never
+		// folded to the package this pass has current (the model before 2026-08-15
+		// resolved it to (QUOTE CL-USER)); the quoted spelling is the same symbol.
+		assertThat(resolve("*package*")).isEqualTo("*PACKAGE*");
+		assertThat(resolve("(cl:car cl:*package*)")).isEqualTo("(CAR *PACKAGE*)");
+		assertThat(resolve("'*package*")).isEqualTo("(QUOTE *PACKAGE*)");
 	}
 
 	@Test
-	void inPackageAcceptsKeywordAndBareSymbol() {
-		assertThat(resolve("(in-package :rontolisp)")).isEqualTo("(QUOTE RONTOLISP)");
-		assertThat(resolve("(in-package rontolisp)")).isEqualTo("(QUOTE RONTOLISP)");
+	void inPackageAcceptsKeywordAndBareSymbolAndAssignsTheRuntimeVariable() {
+		// The directive is consumed here, and leaves the run-time assignment in its
+		// place so a defun reading *package* at CALL time sees the switch.
+		assertThat(resolve("(in-package :rontolisp)")).isEqualTo("(SETQ *PACKAGE* :RONTOLISP)");
+		assertThat(resolve("(in-package rontolisp)")).isEqualTo("(SETQ *PACKAGE* :RONTOLISP)");
+	}
+
+	@Test
+	void popPackageMarkerRestoresTheRuntimeVariableToo() {
+		PackageResolver resolver = new PackageResolver();
+		resolve(resolver, "(defpackage :loaded (:use :cl))");
+		assertThat(resolve(resolver, "(%push-package)")).isEqualTo("(QUOTE CL-USER)");
+		assertThat(resolve(resolver, "(in-package :loaded)")).isEqualTo("(SETQ *PACKAGE* :LOADED)");
+		assertThat(resolve(resolver, "(%pop-package)")).isEqualTo("(SETQ *PACKAGE* :CL-USER)");
+		assertThat(resolve(resolver, "(f x)")).isEqualTo("(F X)");
 	}
 
 	@Test
@@ -335,9 +352,9 @@ class PackageResolverTest {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(defpackage :mypkg (:use :cl) (:export :greet))")).isEqualTo("(QUOTE MYPKG)");
 		// defpackage does not switch the current package.
-		assertThat(resolve(resolver, "*package*")).isEqualTo("(QUOTE CL-USER)");
-		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(QUOTE MYPKG)");
-		assertThat(resolve(resolver, "*package*")).isEqualTo("(QUOTE MYPKG)");
+		assertThat(resolve(resolver, "(f)")).isEqualTo("(F)");
+		assertThat(resolve(resolver, "(in-package :mypkg)")).isEqualTo("(SETQ *PACKAGE* :MYPKG)");
+		assertThat(resolve(resolver, "(f)")).isEqualTo("(MYPKG::F)");
 	}
 
 	@Test
@@ -430,7 +447,7 @@ class PackageResolverTest {
 		resolve(resolver, "(in-package :bare)");
 		assertThatThrownBy(() -> resolve(resolver, "(car x)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("use CL:CAR");
-		assertThat(resolve(resolver, "(cl:car cl:*package*)")).isEqualTo("(CAR (QUOTE BARE))");
+		assertThat(resolve(resolver, "(cl:car cl:*package*)")).isEqualTo("(CAR *PACKAGE*)");
 	}
 
 	@Test
@@ -642,7 +659,7 @@ class PackageResolverTest {
 		resolve(resolver, "(defpackage :mypackage (:use :cl) (:nicknames :mp :mypkg2) (:export :greet))");
 		assertThat(resolve(resolver, "(mp:greet)")).isEqualTo("(MYPACKAGE:GREET)");
 		assertThat(resolve(resolver, "(mypkg2:greet)")).isEqualTo("(MYPACKAGE:GREET)");
-		assertThat(resolve(resolver, "(in-package :mp)")).isEqualTo("(QUOTE MYPACKAGE)");
+		assertThat(resolve(resolver, "(in-package :mp)")).isEqualTo("(SETQ *PACKAGE* :MYPACKAGE)");
 		assertThatThrownBy(() -> resolve(resolver, "(defpackage :mp)")).isInstanceOf(LispPackageException.class)
 			.hasMessageContaining("Package already exists: MP");
 	}
@@ -658,7 +675,7 @@ class PackageResolverTest {
 	void commonLispNicknamesResolveToClAndClUser() {
 		PackageResolver resolver = new PackageResolver();
 		assertThat(resolve(resolver, "(common-lisp:car x)")).isEqualTo("(CAR X)");
-		assertThat(resolve(resolver, "(in-package :common-lisp-user)")).isEqualTo("(QUOTE CL-USER)");
+		assertThat(resolve(resolver, "(in-package :common-lisp-user)")).isEqualTo("(SETQ *PACKAGE* :CL-USER)");
 		resolve(resolver, "(defpackage :mypkg (:use :common-lisp) (:export :f))");
 		resolve(resolver, "(in-package :mypkg)");
 		assertThat(resolve(resolver, "(car x)")).isEqualTo("(CAR MYPKG::X)");
@@ -670,7 +687,7 @@ class PackageResolverTest {
 		assertThat(resolve(resolver, "(rl:version)")).isEqualTo("(RONTOLISP:VERSION)");
 		assertThat(resolve(resolver, "(rl:json-parse s)")).isEqualTo("(RONTOLISP:JSON-PARSE S)");
 		assertThat(resolve(resolver, "(la:zeros 2 2)")).isEqualTo("(LINALG:ZEROS 2 2)");
-		assertThat(resolve(resolver, "(in-package :rl)")).isEqualTo("(QUOTE RONTOLISP)");
+		assertThat(resolve(resolver, "(in-package :rl)")).isEqualTo("(SETQ *PACKAGE* :RONTOLISP)");
 	}
 
 	@Test
@@ -879,7 +896,7 @@ class PackageResolverTest {
 		// The cons-identity rule (.kb/source-positions.md) covers a form nothing
 		// resolved differently; this is the other half. Under (in-package :probe)
 		// essentially every form IS rewritten -- an unqualified name resolves to the
-		// package's canonical spelling, *package* to a quoted package name -- so
+		// package's canonical spelling -- so
 		// without inheritance the whole file, from the top-level form down, is conses
 		// the provenance table has never seen, and every post-read error about it
 		// reports with no position at all.
@@ -895,7 +912,7 @@ class PackageResolverTest {
 			List<LispVal> resolved = new PackageResolver().resolveProgram(program);
 			LispVal defun = resolved.get(2);
 			assertThat(defun.print())
-				.isEqualTo("(DEFUN PROBE::G (PROBE::X) (LIST (QUOTE PROBE) (PROBE::HELPER PROBE::X)))");
+				.isEqualTo("(DEFUN PROBE::G (PROBE::X) (LIST *PACKAGE* (PROBE::HELPER PROBE::X)))");
 			assertThat(SourceProvenance.locate(defun)).isEqualTo(new SourceLocation("prog.lisp", 4, 1));
 			LispVal body = ((LispCons) ((LispCons) ((LispCons) defun).cdr()).cdr()).cdr();
 			assertThat(SourceProvenance.locate(((LispCons) body).car()))

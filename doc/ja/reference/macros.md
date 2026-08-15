@@ -53,7 +53,7 @@
 | `the` | `(the type form)` | `form` の値をそのまま返します。型はチェックされません |
 | `eval-when` | `(eval-when (situation...) body...)` | 本体を `progn` として評価します。すべての状況指定は「今評価する」として扱われます。トップレベルの本体はスプライスされ、ネストした `defun`/`defmacro` 定義も収集されます |
 | `locally` | `(locally declaration... form...)` | 本体を `progn` として評価します。先頭の `declare` フォームは取り除かれます(宣言はパースされるだけの no-op) |
-| `with-standard-io-syntax` | `(with-standard-io-syntax form...)` | 本体を `progn` として評価します。ポータブルなコードがロードできるように提供されています: Common Lisp が再束縛を求めるリーダー/プリンター制御変数は、rontolisp では実行前に解決される(`*package*`)か、情報提供用(`*read-default-float-format*`)か、どのリーダー/プリンターからも読まれないかのいずれかです |
+| `with-standard-io-syntax` | `(with-standard-io-syntax form...)` | `*package*` を `cl-user` に束縛し、本体を `progn` として評価します。Common Lisp が再束縛を求めるその他のリーダー/プリンター制御変数は、rontolisp では情報提供用(`*read-default-float-format*`)か、どのリーダー/プリンターからも読まれないかのいずれかです |
 | `write-char` | `(write-char char [stream])` | 1 文字を書き出してその文字を返します。1 文字の文字列の `write-string` に展開されるため、ファイル/文字列ストリームでも動きます |
 | `flet` | `(flet ((name lambda-list body...)...) body...)` | 局所的な非再帰の関数束縛（Lisp-2: 呼び出し位置と `#'name`）。定義本体は同名の外側の関数を参照し、兄弟定義は見えません。ラムダリストは `defun` の拡張をサポートします |
 | `labels` | `(labels ((name lambda-list body...)...) body...)` | `flet` と同様ですが定義同士が互いに見えます（再帰と相互再帰） |

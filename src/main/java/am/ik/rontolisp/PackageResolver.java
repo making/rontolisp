@@ -24,8 +24,12 @@ import org.jspecify.annotations.Nullable;
  * external symbol (e.g. {@code rontolisp:version}), {@code pkg::name} for an internal one
  * (e.g. {@code rontolisp::%json-parse}), so the canonical form re-resolves to
  * itself;</li>
- * <li>{@code *package*} is replaced by a quoted symbol naming the current package;</li>
- * <li>{@code (in-package P)} is consumed and replaced by a quoted package symbol;</li>
+ * <li>{@code *package*} stays the bare {@code cl} variable it is: its value is READ AT
+ * RUN TIME on every backend, as Common Lisp's dynamic {@code *package*} is (the runtime
+ * value is the package keyword {@code find-package} answers);</li>
+ * <li>{@code (in-package P)} is consumed and replaced by the runtime assignment
+ * {@code (setq *package* :P)}, which keeps the run-time value in step with the
+ * resolution-time state this pass tracks;</li>
  * <li>{@code (defpackage NAME (:use ...) (:export ...))} registers a new package and is
  * likewise consumed and replaced by a quoted package symbol.</li>
  * </ul>
@@ -72,7 +76,8 @@ public final class PackageResolver {
 	 * package, so {@code '(car x)} under a package that does not use {@code cl} is the
 	 * pair of that package's own symbols -- not the error the same names would be in
 	 * operator position -- and a quoted {@code *package*} is the SYMBOL, not the current
-	 * package's name (see {@link #resolveUnqualified}).
+	 * package's name -- and so, since {@code *package*} is a runtime variable read, is an
+	 * evaluated one (see {@link #resolveUnqualified}).
 	 */
 	private boolean inQuotedData = false;
 
@@ -176,12 +181,15 @@ public final class PackageResolver {
 				}
 			}
 			if (LispNames.PUSH_PACKAGE.equals(member)) {
+				// The save needs no runtime counterpart: the run-time *package* already
+				// holds the package this pass has current, and the restore below
+				// re-assigns it explicitly.
 				pushPackage();
 				return quotedSymbol(this.currentPackage);
 			}
 			if (LispNames.POP_PACKAGE.equals(member)) {
 				popPackage();
-				return quotedSymbol(this.currentPackage);
+				return packageAssignment(this.currentPackage);
 			}
 			// The ASDF provenance brackets are consumed here too, so a marker never
 			// survives into a backend as a call to an undefined %END-SYSTEM in whatever
@@ -513,7 +521,27 @@ public final class PackageResolver {
 			throw new LispPackageException("No such package: " + name);
 		}
 		this.currentPackage = name;
-		return quotedSymbol(name);
+		return packageAssignment(name);
+	}
+
+	/**
+	 * The runtime half of a package switch: {@code (setq *package* :NAME)}. Common Lisp's
+	 * {@code *package*} is a dynamic variable read when a form RUNS, so a defun that
+	 * reads it (rove's {@code set-test}, alexandria's {@code maybe-intern}) must see the
+	 * package current at CALL time, not the one this pass had current when the defun was
+	 * resolved. Every top-level {@code in-package} (and the {@code %pop-package} restore
+	 * of a spliced load) therefore assigns the run-time variable too; top-level forms run
+	 * in resolution order, so the two states agree at every top-level point. The value is
+	 * the package KEYWORD -- the same object {@code find-package} answers, so
+	 * {@code (eq *package* (find-package ...))} holds and a hash keyed on packages works.
+	 * The compile paths inject the {@code (defvar *package* :cl-user)} default only when
+	 * the program READS the variable, and drop these assignments otherwise
+	 * ({@code LispMacroExpander.injectMvSpillGlobal}); the interpreter's {@code setq} of
+	 * {@code *package*} writes straight through to this resolver's current package.
+	 */
+	private static LispVal packageAssignment(String name) {
+		return new LispCons(new LispSymbol(LispNames.SETQ), new LispCons(new LispSymbol(LispNames.PACKAGE_VAR),
+				new LispCons(new LispSymbol(":" + name), LispNil.INSTANCE)));
 	}
 
 	/**
@@ -1155,9 +1183,6 @@ public final class PackageResolver {
 		if (!this.registry.contains(pkg)) {
 			throw new LispPackageException("No such package: " + pkg);
 		}
-		if (LispNames.CL_PKG.equals(pkg) && LispNames.PACKAGE_VAR.equals(member)) {
-			return quotedSymbol(this.currentPackage);
-		}
 		// The reader upcases user spellings while a package's canonical members may be
 		// lowercase (a wit-import package's defuns derive from the WIT's lower-kebab
 		// names): retry the lowercase spelling before judging externality.
@@ -1229,15 +1254,10 @@ public final class PackageResolver {
 	}
 
 	private LispVal resolveUnqualified(String name) {
-		// *package* stands for the current package -- but only where it is READ as a
-		// variable. Quoted, it is the ordinary symbol cl:*package*.
-		if (LispNames.PACKAGE_VAR.equals(name) && !this.inQuotedData) {
-			if (currentUsesCl()) {
-				return quotedSymbol(this.currentPackage);
-			}
-			throw new LispPackageException(
-					"Undefined symbol: " + name + " (use " + PackageRegistry.qualify(LispNames.CL_PKG, name) + ")");
-		}
+		// *package* is an ordinary cl variable here -- read at RUN time, never folded to
+		// the package this pass has current (see packageAssignment) -- so it takes the
+		// generic cl-symbol path below: bare when the current package uses cl, else the
+		// undefined-symbol error every unqualified cl name gets there.
 		LispPackage current = this.registry.get(this.currentPackage);
 		// A symbol imported via :import-from resolves to its source package's canonical
 		// spelling. Checked before the cl branch so (:import-from :cl :car) works in a

@@ -364,6 +364,8 @@ consequences worth knowing:
 smart-buffer program failed the `--component` compile with "compiled without
 EnvironmentLibrary.process".
 
-Finally, the individual-form substitution tier gained `eval.AlexandriaSymbols`
-(alexandria's `maybe-intern`) next to `Uax15Tables` and `QuriEtldTables` -- see
-`.kb/packages.md` for what it fixes and when it can be deleted.
+Finally, the individual-form substitution tier briefly held `eval.AlexandriaSymbols`
+(alexandria's `maybe-intern`, 2026-08-04) next to `Uax15Tables` and `QuriEtldTables`;
+it was deleted (2026-08-15) when `*package*` became a genuine dynamic variable and
+the form it rewrote around started reading the caller's package by itself --
+`.kb/packages.md`.

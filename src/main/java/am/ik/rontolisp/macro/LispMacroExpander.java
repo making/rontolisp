@@ -3651,15 +3651,6 @@ public final class LispMacroExpander {
 	public static final int SETF_FUNCTION_MARKER = -1;
 
 	/**
-	 * The variable a {@code (let ((*package* X)) ...)} binding is renamed to by
-	 * {@link #normalizeBindingList}: the resolver's read-time {@code *package*}
-	 * substitution leaves a quoted package in the binding-name slot, so the name is
-	 * replaced with this marker. The interpreter's {@code evalLet} rebinds its runtime
-	 * current package for the binding's extent.
-	 */
-	public static final String PACKAGE_REBIND_VAR = "__package_rebind";
-
-	/**
 	 * Internal function-namespace name for a {@code (setf NAME)} writer function.
 	 * {@code (defun (setf html-mode) ...)} installs a plain defun under this mangled
 	 * name, and {@code (setf (html-mode) v)} / {@code #'(setf html-mode)} resolve to it.
@@ -25059,26 +25050,26 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (with-standard-io-syntax body...)} to {@code (progn body...)}.
+	 * Expands {@code (with-standard-io-syntax body...)} to
+	 * {@code (let ((*package* :cl-user)) body...)}.
 	 *
 	 * <p>
 	 * Common Lisp defines this as a dynamic binding of the whole reader/printer control
-	 * set to standard values. rontolisp has no variable in that set whose value can
-	 * differ from its standard one at run time, so the binding has nothing to do:
-	 * {@code *package*} is resolved to the current package by {@code PackageResolver}
-	 * before the program runs and is not a run-time cell at all;
-	 * {@code *read-default-float-format*} is informational (every float shares the one
-	 * double representation, see {@link LispNames#READ_DEFAULT_FLOAT_FORMAT});
-	 * {@code *print-circle*} and {@code *readtable*} are predefined so library code
-	 * reading them loads, and no printer or reader consults them; the remaining standard
-	 * variables ({@code *print-base*}, {@code *print-escape*}, {@code *read-base*}, ...)
-	 * do not exist, which is the same as being permanently standard.
-	 *
-	 * <p>
-	 * That is the reason, and it is also the trigger to revisit: the FIRST reader or
-	 * printer control variable this implementation starts to honor at run time must be
-	 * bound here, or a {@code with-standard-io-syntax} body will silently inherit the
-	 * caller's setting.
+	 * set to standard values. {@code *package*} is the one variable of that set whose
+	 * run-time value can differ from its standard one here -- it is a genuine dynamic
+	 * variable on every backend, and {@code (in-package P)} assigns it -- so it is bound
+	 * to {@code CL-USER}, exactly as CL does; a body's {@code intern}/{@code read} homes
+	 * there. The rest still has nothing to bind: {@code *read-default-float-format*} is
+	 * informational (every float shares the one double representation, see
+	 * {@link LispNames#READ_DEFAULT_FLOAT_FORMAT}); {@code *print-circle*} and
+	 * {@code *readtable*} are predefined so library code reading them loads, and no
+	 * printer or reader consults them; the printer-mode variables
+	 * ({@code PRINTER_MODE_VARS}) hold their standard values, and the three the printer
+	 * honors ({@code *print-escape*}/{@code *print-readably*}/{@code *print-pretty*}) are
+	 * NOT rebound here -- a caller that bound one of them to a non-standard value around
+	 * this form leaks it into the body, the one remaining deviation (revisit if a program
+	 * depends on it); the remaining standard variables ({@code *read-base*}, ...) do not
+	 * exist, which is the same as being permanently standard.
 	 * @param cons the with-standard-io-syntax expression
 	 * @return the expanded expression
 	 */
@@ -25088,10 +25079,12 @@ public final class LispMacroExpander {
 		if (body.isEmpty()) {
 			return LispNil.INSTANCE;
 		}
-		if (body.size() == 1) {
-			return body.get(0);
-		}
-		return makeProgn(body);
+		List<LispVal> let = new java.util.ArrayList<>(body.size() + 2);
+		let.add(new LispSymbol(LispNames.LET));
+		let.add(listToCons(List.of(listToCons(
+				List.of(new LispSymbol(LispNames.PACKAGE_VAR), new LispSymbol(":" + LispNames.CL_USER_PKG))))));
+		let.addAll(body);
+		return listToCons(let);
 	}
 
 	/**
@@ -29077,18 +29070,6 @@ public final class LispMacroExpander {
 				out.add(listToCons(List.of(pair.car(), LispNil.INSTANCE)));
 				changed = true;
 			}
-			else if (entry instanceof LispCons pair && pair.car() instanceof LispCons quoted
-					&& quoted.car() instanceof LispSymbol qop && LispNames.QUOTE.equals(qop.name())) {
-				// A (let ((*package* X)) ...) rebinding: the resolver substitutes a
-				// *package* READ with its quoted read-time package, which also hits the
-				// binding-name slot. The binding is renamed to the PACKAGE_REBIND_VAR
-				// marker; the interpreter's evalLet additionally rebinds its runtime
-				// current package (so a macro-time (intern ...) under the binding homes
-				// where CL would -- ironclad's optimized-maker-name idiom), while the
-				// compilers treat it as a plain throwaway binding.
-				out.add(listToCons(List.of(new LispSymbol(PACKAGE_REBIND_VAR), pair.toList().get(1))));
-				changed = true;
-			}
 			else {
 				out.add(entry);
 			}
@@ -29098,9 +29079,11 @@ public final class LispMacroExpander {
 
 	/**
 	 * Injects the top-level {@code (setq %mv-spill nil)} /
-	 * {@code (setq *read-default-float-format* ...)} globals the compilers need when the
-	 * program uses a multiple-value operator or the float-format variable; returns the
-	 * program unchanged otherwise.
+	 * {@code (setq *read-default-float-format* ...)} /
+	 * {@code (defvar *package* :cl-user)} globals the compilers need when the program
+	 * uses a multiple-value operator, the float-format variable or reads
+	 * {@code *package*}; returns the program unchanged otherwise (a program that only
+	 * switches packages has its {@code *package*} assignments dropped, see below).
 	 * @param program the top-level forms
 	 * @return the program with the required global initializers prepended
 	 */
@@ -29153,10 +29136,41 @@ public final class LispMacroExpander {
 				}
 			}
 		}
-		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty()) {
+		// *package*: a genuine dynamic variable on every backend (PackageResolver
+		// resolves a read to the bare variable and a top-level in-package to
+		// (setq *package* :P)). It gets its (defvar *package* :cl-user) default -- the
+		// package keyword find-package answers, and a proclaimed special so a let of it
+		// binds dynamically -- only when the program READS it somewhere: any mention
+		// other than those top-level assignments, or a with-standard-io-syntax (which
+		// expands to a let of it in Pass 2, after this scan). A program that merely
+		// switches packages never observes the variable, so its assignments are DROPPED
+		// instead (the top-level-statement rule: nothing emitted only to be dropped),
+		// which keeps such a program byte-identical to one without in-package.
+		boolean readsPackage = false;
+		for (LispVal form : program) {
+			if (!isTopLevelPackageAssignment(form) && (usesSymbol(form, LispNames.PACKAGE_VAR)
+					|| usesSymbol(form, LispNames.WITH_STANDARD_IO_SYNTAX))) {
+				readsPackage = true;
+				break;
+			}
+		}
+		if (!readsPackage) {
+			List<LispVal> kept = new java.util.ArrayList<>(program.size());
+			for (LispVal form : program) {
+				if (!isTopLevelPackageAssignment(form)) {
+					kept.add(form);
+				}
+			}
+			program = kept;
+		}
+		if (!usesMv && !usesFloatFormat && printerVars.isEmpty() && loadContextVars.isEmpty() && !readsPackage) {
 			return program;
 		}
-		List<LispVal> out = new java.util.ArrayList<>(program.size() + 2 + printerVars.size() + loadContextVars.size());
+		List<LispVal> out = new java.util.ArrayList<>(program.size() + 3 + printerVars.size() + loadContextVars.size());
+		if (readsPackage) {
+			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(LispNames.PACKAGE_VAR),
+					new LispSymbol(":" + LispNames.CL_USER_PKG))));
+		}
 		for (String name : loadContextVars) {
 			out.add(listToCons(List.of(new LispSymbol(LispNames.DEFVAR), new LispSymbol(name), LispNil.INSTANCE)));
 		}
@@ -29185,6 +29199,18 @@ public final class LispMacroExpander {
 		}
 		out.addAll(program);
 		return out;
+	}
+
+	/**
+	 * Whether the form is the {@code (setq *package* :P)} a top-level {@code in-package}
+	 * (or a spliced load's {@code %pop-package} restore) resolves to.
+	 */
+	private static boolean isTopLevelPackageAssignment(LispVal form) {
+		return form instanceof LispCons cons && cons.car() instanceof LispSymbol op && LispNames.SETQ.equals(op.name())
+				&& cons.cdr() instanceof LispCons nameCell && nameCell.car() instanceof LispSymbol name
+				&& LispNames.PACKAGE_VAR.equals(name.name()) && nameCell.cdr() instanceof LispCons valueCell
+				&& valueCell.car() instanceof LispSymbol value && value.isKeyword()
+				&& valueCell.cdr() instanceof LispNil;
 	}
 
 	/** True when the form mentions the symbol name anywhere (quote included). */

@@ -75,12 +75,12 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
   Quoted LISTS stay untouched, and the `wasm-export`/`wasm-import` option tail is
   exempt (`inHostFacingData`) because its quoted values are host-facing data — an
   export field name must stay `tick`, not `gl::tick`.
-- **`(let ((*package* X)) ...)`**: the resolver substitutes a `*package*` READ
-  with its quoted read-time package, which also hits a binding-NAME slot, so
-  `normalizeBindingList` renames the binding to the `PACKAGE_REBIND_VAR` marker.
-  The interpreter's `evalLet` additionally swaps the resolver's current package
-  for the binding's extent, so a macro-time `(intern ...)` under it homes where CL
-  would; the compilers treat it as a plain throwaway binding.
+- **`(let ((*package* X)) ...)`** is a genuine dynamic binding on every backend
+  (`.kb/packages.md`, "`*package*` is a dynamic variable"): the interpreter's
+  `evalLet` swaps the resolver's current package -- which IS the variable there --
+  for the binding's extent, so a called function and a macro-time `(intern ...)`
+  under it home where CL would; on the compile paths `*package*` is a `defvar`'d
+  special and the let is the ordinary shallow binding of `.kb/dynamic-special-variables.md`.
 
 `unintern`, `export` and the rest of the runtime package-mutation API remain in
 `.todo/038`.

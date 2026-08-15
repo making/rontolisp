@@ -10,7 +10,7 @@ exactly that are recognized, once, for both backends:
 
 | shape | what it is | what happens |
 | --- | --- | --- |
-| the form IS a constant | `'CHIPZ` (what `PackageResolver` leaves for `in-package`/`defpackage`), `nil` (an unselected `eval-when`, a `declaim`), a stray docstring, a keyword | `ToplevelStatements.prune` deletes the form from the top-level list |
+| the form IS a constant | `'CHIPZ` (what `PackageResolver` leaves for `defpackage` and the `%push-package` marker; `in-package` leaves `(setq *package* :CHIPZ)`, which `LispMacroExpander.injectMvSpillGlobal` drops wholesale when nothing in the program reads `*package*` -- `.kb/packages.md`), `nil` (an unselected `eval-when`, a `declaim`), a stray docstring, a keyword | `ToplevelStatements.prune` deletes the form from the top-level list |
 | the form is a name-valued definer | `defvar`/`defparameter`/`defconstant` -- bind, then return the name symbol | the top-level emitter OFFERS the form the chance to emit no name; the defvar compiler takes it |
 
 ### The offer, and why it is an offer
