@@ -94,14 +94,18 @@ all four backends rather than three. Mechanics, all in `HostFetchLibrary`:
   of the same abstract source. Absent -- the normal case -- puts the stream over the
   import, and an absent-body reply (a HEAD, a 204) is that stream finding EOF at its
   first pull;
-- **one live reply body, deliberately no handle.** The host has ONE read cursor, moved by
-  each `env.fetch`; a module-side counter (`%host-fetch-open`) makes draining a
-  SUPERSEDED body signal instead of answering the next reply's octets. Re-evaluated when
-  the glue became generated (todo-340): it does NOT make a handle free -- the generator
-  moved the leftover-holding cursor into emitted code, but the cursor is still ONE per
-  import and the protocol still carries no call identity, so a per-response handle is
-  still a boundary change. It is `.todo/348`'s: identity is what relaxing the re-entry
-  guard would force onto all three body imports at once;
+- **one live reply body, deliberately no handle -- in the SERIALISED shape.** The host
+  has ONE read cursor, moved by each `env.fetch`; a module-side counter
+  (`%host-fetch-open`) makes draining a SUPERSEDED body signal instead of answering the
+  next reply's octets. Under `--reentrant` the handle EXISTS (todo-369): the import
+  becomes `env.readResponseBody(id, ptr, cap)`, the reply head carries its own id in
+  the reserved `"body-id"` key (`FetchResponseShape.HOST_BODY_ID_KEY`), the generated
+  `defaultHost()` keeps one reader per reply (dropped when drained), and the counter,
+  the superseded error and `lisp.drop` are all absent from that shape -- each reply is
+  drained independently. The id is the REPLY's, not the request's, precisely because a
+  second fetch inside one call used to supersede the first; the serialised shape here
+  is unchanged in every byte. `.kb/wasm-import.md` (the todo-369 bullet) has the whole
+  design;
 - **a NEGATIVE count is the error channel** the split needs: without one a transport that
   died mid-body would look like a short body. It signals at the DRAIN, which is the
   semantic change this forced -- the future now settles at the HEADERS, so only a failure

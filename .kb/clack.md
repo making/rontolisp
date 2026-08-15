@@ -466,6 +466,19 @@ decisions in that, each load-bearing:
     flag moves the bodies IN BAND, which destroys a binary one
     (`.kb/wasm-import.md` has the measurement).
 
+**Under `--reentrant` the same two imports lead with an `:int` CALL ID
+(todo-369)** -- `env.readRequestBody(id, ptr, cap)`, `env.writeResponseBody(id,
+ptr, len)` -- and the thunks take it: the host mints an id per request, the
+envelope carries it as `"call-id"` (`ReactorEnvelope.CALL_ID_KEY`), and the
+transport closes it over the body thunks at the ONE place it parses the envelope
+(`%http-reactor-bind-source` / `-bind-sink` in `%http-reactor-handle`), so every
+consumer downstream stays on the id-less 0-arity source and the id-less shape
+above is byte-identical wherever the flag is off. The whole design -- why the
+fetch reply's id is its own, the glue's per-id state, the gates --
+`.kb/wasm-import.md`. The shared receive buffer (`%http-reactor-chunk-buffer`)
+survives the overlap because `%http-reactor-chunk` copies the octets out before
+anything can suspend.
+
 **The abstract body source is NORMALIZED at every entry (todo-351).** The header
 says a source is `nil`, a string or a 0-arity thunk; what a HOST can put in the
 envelope's `"body"` key is anything JSON has, and its own spelling of "there is

@@ -428,10 +428,14 @@ build's obligation lines state the same rules for a hand-written one.
 
 The flag requires a program that can suspend (an `:async t` import, or
 `--host-fetch` with `rontolisp:fetch` used) and a `--no-wasi` core module. It
-cannot be combined with
-[`--host-boundary=streaming`](#choosing-the-body-boundary---host-boundary) —
-its body imports are a host-side cursor ("the current request's body") with no
-per-call identity, exactly what overlapped calls lack — or with `--dynamic`.
+composes with
+[`--host-boundary=streaming`](#choosing-the-body-boundary---host-boundary):
+under `--reentrant` every body import leads with an `:int` id — the request
+envelope names its call with a `"call-id"` key, a fetch reply names its body
+with `"body-id"` — so each pull and push says what it belongs to instead of
+sharing one host-side cursor. The generated glue mints the ids and keys its
+per-call state by them; a body import declared *without* the leading id is
+refused under the flag. It cannot be combined with `--dynamic`.
 Reach for it when a workload is I/O-bound *and* cannot afford an instance per
 request: measured on the envelope Worker shape, eight concurrent 100 ms
 upstream round trips answer in about 125 ms on one instance, against about

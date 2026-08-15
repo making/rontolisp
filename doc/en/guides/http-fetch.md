@@ -254,7 +254,10 @@ everywhere else — but three things are particular to this backend:
   `fetch` call; one *during* the body signals at the drain, like every other
   backend. One reply body is live at a time: starting the next `fetch` before
   draining the previous one makes that drain signal rather than answer the new
-  reply's octets.
+  reply's octets. (Under
+  [`--reentrant`](wasm-host-boundary.md#overlapping-calls---reentrant) each
+  reply head carries its own `"body-id"` and every pull names it, so replies
+  are drained independently and nothing is superseded.)
 
 The host side owes one obligation in return, which the build also prints:
 enter every export through `WebAssembly.promising` and serialise the calls

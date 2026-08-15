@@ -263,6 +263,9 @@ Lisp側は何も変わりません — オプションも `(:status :headers :bo
   いるレスポンスボディは同時にひとつだけです: 前のボディを読み尽くす前に次の
   `fetch` を始めると、その読み尽くしは新しいレスポンスのオクテットを返す
   代わりに signal します。
+  ([`--reentrant`](wasm-host-boundary.md#overlapping-calls---reentrant) の下
+  では各レスポンスヘッドが自分の `"body-id"` を運び、すべての pull がそれを
+  名乗るため、レスポンスは独立に読み尽くされ、何も上書きされません。)
 
 引き換えにホスト側がひとつ義務を負い、これもビルドが表示します:
 すべてのエクスポートを `WebAssembly.promising` 経由で呼び、呼び出しを直列化(または [`--reentrant`](wasm-host-boundary.md#overlapping-calls---reentrant) でコンパイルして 1 インスタンス上でオーバーラップ)

@@ -74,6 +74,26 @@ class HttpReactorInlinerTest {
 	}
 
 	@Test
+	void theReentrantBridgeThreadsTheCallIdThroughBothBodyImports() {
+		String printed = print(HttpReactorInliner.process(LispReader.readAllFromString(SHIM),
+				WitExportDirective.Backend.WASM_GC, true, HostBoundary.STREAMING, true));
+		// Under --reentrant both body imports lead with the :int CALL ID the
+		// envelope's "call-id" key carries: overlapped calls share the host's body
+		// imports, so every pull/push names the call it belongs to. The thunks take
+		// the id too -- the transport's %http-reactor-bind-source / -bind-sink close
+		// it over them -- and the id-less shape above stays byte-identical wherever
+		// the flag is off.
+		assertThat(printed)
+			.contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-READ-BODY) :FROM \"env\" "
+					+ ":AS \"readRequestBody\" :PARAMS (QUOTE (:INT)) :RETURNS :BYTES :ASYNC T)")
+			.contains("(RONTOLISP:WASM-IMPORT (QUOTE %REACTOR-WRITE-BODY) :FROM \"env\" "
+					+ ":AS \"writeResponseBody\" :PARAMS (QUOTE (:INT :BYTES)) :RETURNS :VOID :ASYNC T)")
+			.contains("(%REACTOR-READ-BODY %REACTOR-CALL %REACTOR-BUF)")
+			.contains("(DEFUN %REACTOR-WRITE-CHUNK (%REACTOR-CALL %REACTOR-CHUNK) "
+					+ "(%REACTOR-WRITE-BODY %REACTOR-CALL (RONTOLISP::%HTTP-REACTOR-OCTETS %REACTOR-CHUNK)))");
+	}
+
+	@Test
 	void theComponentBridgeKeepsTheInBandBody() {
 		// A :bytes import is a wasm-import over a packed array, and --component has
 		// neither -- so a reactor component keeps the whole body inside the envelope's

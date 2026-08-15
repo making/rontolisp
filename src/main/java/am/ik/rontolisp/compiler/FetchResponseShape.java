@@ -132,6 +132,18 @@ public final class FetchResponseShape {
 	 */
 	public static final String HOST_BODY_IMPORT_FIELD = "readResponseBody";
 
+	/**
+	 * The reply head's REPLY-IDENTITY key, written only by a {@code --reentrant}
+	 * streaming host: the id the host minted for THIS reply's body, which the module
+	 * hands back on every {@code readResponseBody(id, ptr, cap)} pull. Overlapped calls
+	 * (and a second fetch inside one call) then each drain their own reply, so nothing is
+	 * superseded and the serialised boundary's one-cursor counter does not exist. A
+	 * reserved key beside {@link #HOST_ENVELOPE_ERROR_KEY} rather than a field of the
+	 * {@code response} record: the id is transport plumbing of one boundary shape, not
+	 * part of the plist a {@code rontolisp:fetch} caller sees on any backend.
+	 */
+	public static final String HOST_BODY_ID_KEY = "body-id";
+
 	/** The response {@code status} used when the plist has none. */
 	public static final int RESPONSE_STATUS_DEFAULT = 200;
 

@@ -235,13 +235,159 @@ class WasmReentrantE2eTest {
 				"overlapped");
 	}
 
+	// The composed-boundary gates: the streaming body protocol under --reentrant. The
+	// call id the envelope carries is what makes the overlap sound -- each pull/push
+	// names its call, each fetch drain names its reply -- so both tests are the
+	// corruption the old refusal prevented, inverted.
+
+	// Overlapped STREAMING requests, one uploading binary and one text, each answered
+	// its own echo. The handler drains its request body (binary-exact through the
+	// :buffered raw-body) and then PARKS on an upstream fetch, so the second request
+	// enters and drains ITS body while the first is suspended; the slower upstream
+	// makes the first-in request answer LAST.
+	private static final String ECHO_MODULE = """
+			(defun read-bytes (stream)
+			  (if (null stream)
+			      nil
+			      (let ((out nil))
+			        (do ((b (read-byte stream nil nil) (read-byte stream nil nil)))
+			            ((null b))
+			          (setq out (cons b out)))
+			        (nreverse out))))
+			(rontolisp:async-defun app (env)
+			  (let ((got (read-bytes (getf env :raw-body))))
+			    (rontolisp:await (rontolisp:fetch
+			                      (concatenate 'string "http://127.0.0.1:"
+			                                   (getf env :query-string)
+			                                   (getf env :path-info))))
+			    (list 200 (list :content-type "text/plain")
+			          (list (format nil "n=~a ~a" (length got) got)))))
+			(rontolisp:http-handler 'app :raw-body :buffered)
+			""";
+
+	private static final String ECHO_DRIVER = """
+			import fs from 'node:fs';
+			import http from 'node:http';
+			import { worker } from './worker.js';
+
+			const upstream = http.createServer((req, res) => {
+			  const delay = req.url.startsWith('/slow') ? 80 : 10;
+			  setTimeout(() => { res.writeHead(200); res.end('ok'); }, delay);
+			});
+			await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+			const port = upstream.address().port;
+
+			const module_ = new WebAssembly.Module(fs.readFileSync(new URL('./worker.wasm', import.meta.url)));
+			console.log('imports', WebAssembly.Module.imports(module_).map((i) => i.module + '.' + i.name).sort().join(','));
+			const w = worker(module_);
+			const post = async (path, body) => {
+			  const res = await w.fetch(new Request(`http://x.test${path}?${port}`, { method: 'POST', body }), {}, {});
+			  return (await res.text()).trim();
+			};
+			await post('/fast', 'warm'); // instantiate + _initialize
+			// The binary upload parks FIRST and resumes LAST: the text request's body
+			// crosses, is drained and answered while the first call is suspended.
+			const [slow, fast] = await Promise.all([
+			  post('/slow', new Uint8Array([0xff, 0xfe, 0x41])),
+			  post('/fast', 'hi!'),
+			]);
+			console.log('slow', slow);
+			console.log('fast', fast);
+			upstream.close();
+			""";
+
+	@Test
+	void overlappedStreamingRequestsEachAnswerTheirOwnEcho() throws Exception {
+		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
+				true, true);
+		Files.write(this.tempDir.resolve("worker.wasm"),
+				compiler.compile(reactorProgram(ECHO_MODULE, HostBoundary.STREAMING, true)));
+		Files.writeString(this.tempDir.resolve("worker.js"),
+				java.util.Objects.requireNonNull(compiler.hostGlueJs("worker.js")), StandardCharsets.UTF_8);
+		Path driver = this.tempDir.resolve("echo.mjs");
+		Files.writeString(driver, ECHO_DRIVER, StandardCharsets.UTF_8);
+		assertThat(runNode(driver, null).lines().toList()).containsExactly(
+				"imports env.fetch,env.readRequestBody,env.readResponseBody,env.writeResponseBody",
+				// The three octets the envelope boundary cannot carry, answered to the
+				// call that uploaded them -- not to the text request that ran through
+				// the module meanwhile.
+				"slow n=3 (255 254 65)", "fast n=3 (104 105 33)");
+	}
+
+	// Two overlapped calls each fetching a DIFFERENT upstream and relaying the reply
+	// body chunk-at-a-time: the handler answers the reply STREAM itself, so every chunk
+	// crosses env.readResponseBody(reply-id) in and env.writeResponseBody(call-id) out
+	// while both calls are in flight -- and each client receives its own upstream's
+	// octets.
+	private static final String RELAY_MODULE = """
+			(rontolisp:async-defun app (env)
+			  (let ((res (rontolisp:await (rontolisp:fetch
+			                               (concatenate 'string "http://127.0.0.1:"
+			                                            (getf env :query-string)
+			                                            (getf env :path-info))))))
+			    (list 200 (list :content-type "text/plain") (getf res :body))))
+			(rontolisp:http-handler 'app)
+			""";
+
+	private static final String RELAY_DRIVER = """
+			import fs from 'node:fs';
+			import http from 'node:http';
+			import { worker } from './worker.js';
+
+			// Five chunks each, phase-shifted so the two relays interleave pull by pull.
+			const upstream = http.createServer((req, res) => {
+			  const letter = req.url.startsWith('/a') ? 'A' : 'B';
+			  const gap = letter === 'A' ? 20 : 31;
+			  res.writeHead(200, { 'content-type': 'text/plain' });
+			  let sent = 0;
+			  const tick = () => {
+			    res.write(letter.repeat(8));
+			    sent += 1;
+			    if (sent < 5) setTimeout(tick, gap);
+			    else res.end();
+			  };
+			  setTimeout(tick, gap);
+			});
+			await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+			const port = upstream.address().port;
+
+			const module_ = new WebAssembly.Module(fs.readFileSync(new URL('./worker.wasm', import.meta.url)));
+			const w = worker(module_);
+			const call = async (path) => {
+			  const res = await w.fetch(new Request(`http://x.test${path}?${port}`), {}, {});
+			  return (await res.text()).trim();
+			};
+			await call('/a'); // warm: instantiate + _initialize
+			const [a, b] = await Promise.all([call('/a'), call('/b')]);
+			console.log('a', a === 'A'.repeat(40) ? 'ok' : a);
+			console.log('b', b === 'B'.repeat(40) ? 'ok' : b);
+			upstream.close();
+			""";
+
+	@Test
+	void overlappedRelaysEachReceiveTheirOwnUpstreamsOctets() throws Exception {
+		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
+				true, true);
+		Files.write(this.tempDir.resolve("worker.wasm"),
+				compiler.compile(reactorProgram(RELAY_MODULE, HostBoundary.STREAMING, true)));
+		Files.writeString(this.tempDir.resolve("worker.js"),
+				java.util.Objects.requireNonNull(compiler.hostGlueJs("worker.js")), StandardCharsets.UTF_8);
+		Path driver = this.tempDir.resolve("relay.mjs");
+		Files.writeString(driver, RELAY_DRIVER, StandardCharsets.UTF_8);
+		assertThat(runNode(driver, null).lines().toList()).containsExactly("a ok", "b ok");
+	}
+
 	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order (the
-	// WasmHostGlueE2eTest harness), on the ENVELOPE boundary --reentrant requires.
+	// WasmHostGlueE2eTest harness).
 	private static List<LispVal> reactorProgram(String source) {
+		return reactorProgram(source, HostBoundary.ENVELOPE, false);
+	}
+
+	private static List<LispVal> reactorProgram(String source, HostBoundary boundary, boolean reentrant) {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(source, Features.WASM_REACTOR));
-		loaded = HostFetchLibrary.process(loaded, HostBoundary.ENVELOPE);
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, HostBoundary.ENVELOPE);
+		loaded = HostFetchLibrary.process(loaded, boundary, reentrant);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary, reentrant);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		return GrayStreamsLibrary

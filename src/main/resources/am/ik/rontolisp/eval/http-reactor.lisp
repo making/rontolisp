@@ -38,7 +38,13 @@
 ;;;; The envelope, both directions (the host speaks JSON because the other side
 ;;;; of a reactor boundary is normally JavaScript):
 ;;;;
-;;;;   in   {"method": "GET",            ; defaults to "GET"
+;;;;   in   {"call-id": 7,               ; optional, PER-CALL IDENTITY: a host
+;;;;                                     ;   that overlaps calls (--reentrant
+;;;;                                     ;   streaming) sends one, and the
+;;;;                                     ;   out-of-band body thunks it passed
+;;;;                                     ;   then take it as a leading argument
+;;;;                                     ;   -- see %http-reactor-bind-source.
+;;;;         "method": "GET",            ; defaults to "GET"
 ;;;;         "target": "/path?a=1",      ; RAW -- path and query still joined and
 ;;;;                                     ;   still encoded. %http-make-env owns
 ;;;;                                     ;   that split; a pre-split path would
@@ -175,9 +181,11 @@
 ;; The ONE receive buffer a host reader fills. Allocated on first use and reused
 ;; for every chunk of every request: reuse is the whole memory argument for
 ;; chunking a body -- a buffer per chunk grows the host's memory by the whole
-;; body, one buffer grows it by nothing -- and it is sound because a reactor
-;; answers one request at a time (a module that can suspend refuses the overlap
-;; that would share it).
+;; body, one buffer grows it by nothing. Sound under one-call-at-a-time serving
+;; (a module that can suspend refuses the overlap that would share it), AND
+;; under --reentrant overlap: %http-reactor-chunk copies the octets out
+;; immediately after the read returns, before anything can suspend, and only a
+;; suspension lets another call run and refill the buffer.
 (defvar rontolisp::%http-reactor-chunk-buffer nil)
 
 (defun rontolisp::%http-reactor-buffer (size)
@@ -472,6 +480,22 @@
      (rontolisp:plist-hash-table
       (if sink head (append head (list :body body)))))))
 
+(defun rontolisp::%http-reactor-bind-source (id thunk)
+  ;; The envelope's "call-id" key is the host's declaration of PER-CALL
+  ;; IDENTITY: with one present, the out-of-band body thunks the host passed
+  ;; take the id as their leading argument, because overlapped calls share the
+  ;; host's body imports and each pull/push has to name the call it belongs to
+  ;; (the --reentrant streaming boundary). Closing over the id HERE -- the one
+  ;; place the envelope is parsed -- keeps every consumer downstream on the
+  ;; id-less 0-arity pull source, so nothing else in this file changes shape.
+  ;; Without the key (every other host) the thunk crosses untouched.
+  (if (and id (functionp thunk)) (lambda () (funcall thunk id)) thunk))
+
+(defun rontolisp::%http-reactor-bind-sink (id sink)
+  ;; The sink half of the same rule: (funcall sink chunk) downstream becomes
+  ;; (funcall sink id chunk) at the host boundary.
+  (if (and id sink) (lambda (chunk) (funcall sink id chunk)) sink))
+
 (defun rontolisp::%http-reactor-handle
     (app request-json &optional body buffered sink)
   "Run the Clack application APP against the JSON request head REQUEST-JSON and
@@ -485,9 +509,12 @@ envelope in this file's header."
   ;; the await special form is not legal. On a reactor the future is settled at
   ;; creation, so the force never blocks.
   (handler-case (let* ((req (rontolisp:json-parse request-json))
+                       (id (gethash "call-id" req))
+                       (in (rontolisp::%http-reactor-bind-source id body))
+                       (out (rontolisp::%http-reactor-bind-sink id sink))
                        (env
                         (rontolisp::%http-make-env
-                         (rontolisp::%http-reactor-request-tuple req body
+                         (rontolisp::%http-reactor-request-tuple req in
                                                                  buffered)))
                        (answer (funcall app env))
                        (triple
@@ -498,7 +525,7 @@ envelope in this file's header."
                   (rontolisp::%http-reactor-envelope (car triple)
                    (car (cdr triple))
                    (rontolisp::%http-reactor-body-out (car (cdr (cdr triple)))
-                                                      sink) sink))
+                                                      out) out))
     (error (e)
       ;; In band whether or not there is a sink: an error is the LAST word, and
       ;; a head that carries a "body" key wins over whatever crossed before it,

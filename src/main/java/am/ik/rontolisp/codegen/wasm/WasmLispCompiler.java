@@ -2042,12 +2042,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					+ " rontolisp:wasm-import declared :async t, or --host-fetch with rontolisp:fetch used):"
 					+ " without a suspension no host can overlap calls, so the flag would buy nothing");
 		}
-		// The streaming boundary's body imports are a GLOBAL cursor on the host side --
-		// "the current request's body", "the last fetch's reply" -- which is exactly the
-		// per-call identity overlapped calls do not have. Until the body protocol
-		// carries a call handle, refuse the combination instead of shipping a cursor
-		// that serves one call another call's octets (the envelope boundary has no
-		// cursor and is the overlap-ready shape).
+		// The streaming boundary's body imports compose with --reentrant only in their
+		// ID-CARRYING shape (a leading :int naming the call / the reply, which the CLI
+		// synthesizes under the flag): without it they are a GLOBAL cursor on the host
+		// side -- "the current request's body", "the last fetch's reply" -- which is
+		// exactly the per-call identity overlapped calls do not have. Refuse the id-less
+		// shape (a hand-written reactor's own imports reach here) instead of shipping a
+		// cursor that serves one call another call's octets.
 		if (this.reentrant) {
 			for (LispVal form : program) {
 				if (!WasmImportCompiler.isImportForm(form)) {
@@ -2057,11 +2058,15 @@ public final class WasmLispCompiler implements LispCompiler {
 				if (ReactorEnvelope.HOST_MODULE.equals(decl.module())
 						&& (ReactorEnvelope.REQUEST_BODY_FIELD.equals(decl.field())
 								|| ReactorEnvelope.RESPONSE_BODY_FIELD.equals(decl.field())
-								|| FetchResponseShape.HOST_BODY_IMPORT_FIELD.equals(decl.field()))) {
-					throw new UnsupportedOperationException("--reentrant cannot be combined with the streaming body"
-							+ " boundary: env." + decl.field() + " is a host-side cursor with no per-call identity, so"
-							+ " overlapped calls would read each other's octets. Use --host-boundary=envelope (the"
-							+ " default), whose boundary carries no cursor");
+								|| FetchResponseShape.HOST_BODY_IMPORT_FIELD.equals(decl.field()))
+						&& (decl.paramTypes().isEmpty() || decl.paramTypes().get(0) != BoundaryType.S32)) {
+					throw new UnsupportedOperationException("--reentrant requires the streaming body protocol to carry"
+							+ " a call identity: env." + decl.field()
+							+ " is declared without the leading :int id, so it"
+							+ " is a host-side cursor and overlapped calls would read each other's octets. Give the"
+							+ " import a leading :int parameter naming the call (what --host-boundary=streaming"
+							+ " synthesizes under --reentrant), or use --host-boundary=envelope, whose boundary"
+							+ " carries no cursor");
 				}
 			}
 		}

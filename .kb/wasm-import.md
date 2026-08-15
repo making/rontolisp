@@ -565,14 +565,40 @@ module stays byte-identical (`WasmReentrantCompilerTest`):
 - **Refusals**: a program nothing can suspend (no `:async t` import and no used
   `--host-fetch` fetch -- overlap cannot happen, the flag would buy nothing);
   `--component` (its concurrency is the component model's); `--dynamic` (the eval
-  mirror is per-instance state the task record does not cover); and
-  `--host-boundary=streaming` -- the body imports are a HOST-SIDE CURSOR ("the current
-  request's body", "the last fetch's reply") with no per-call identity, which is
-  precisely what todo-341 finding 3's no-handle argument rested on; the refusal keeps
-  that argument valid everywhere the protocol exists. Giving the streaming protocol a
-  call handle (an envelope call-id threaded through the body imports and the fetch
-  reply pulls) is `.todo/369`; the envelope boundary carries no cursor and is the
-  overlap-ready shape (`dog-fetcher` itself stays streaming + serialised, unchanged).
+  mirror is per-instance state the task record does not cover); and an ID-LESS
+  streaming body import (a hand-written reactor's own, e.g. `httpbin/worker.lisp`'s)
+  -- the composed shape below is what the CLI synthesizes instead.
+- **The streaming body protocol composes, by carrying a CALL IDENTITY (todo-369,
+  2026-08-15)**: under the flag `HttpReactorInliner` / `HostFetchLibrary` synthesize
+  every body import with a leading `:int` id -- `env.readRequestBody(id, ptr, cap)`,
+  `env.writeResponseBody(id, ptr, len)`, `env.readResponseBody(id, ptr, cap)` -- so
+  todo-341 finding 3's no-handle argument is not relaxed but SCOPED: wherever the
+  id-less protocol exists, the guard or the queue still holds (every serialised build
+  stays byte-identical -- the four `httpbin-*` glue byte-pins are untouched), and the
+  compiler refuses an id-less `env.*` body import under `--reentrant` instead of
+  shipping a cursor. Three identities, two mints: the REQUEST's id is minted by the
+  glue's `worker()` per request and rides the envelope's `"call-id"` key
+  (`ReactorEnvelope.CALL_ID_KEY`, in `REQUEST_KEYS`, absent everywhere else); the
+  transport reads it at the one place the envelope is parsed and closes it over the
+  body thunks (`%http-reactor-bind-source` / `-bind-sink`), so everything downstream
+  stays on the 0-arity source. A fetch REPLY's id is its OWN, not the request's (a
+  second fetch inside one call must not have to supersede the first): `defaultHost()`
+  mints one per fetch, hands it back in the reply head's reserved `"body-id"` key
+  (`FetchResponseShape.HOST_BODY_ID_KEY`), keeps one reader per reply -- dropped when
+  drained; `lisp.drop` and the open-reply "superseded" counter both gone from this
+  shape -- and the module's drain pulls by it. The reentrant glue keys all per-call
+  state by id: `worker()`'s request/response body maps are retired in a `finally`, and
+  the `:bytes` reader's REMAINDER becomes a map keyed by the pull's arguments (the
+  serialised single-slot cursor dropped the other call's leftover octets on every
+  alternation -- silent mid-chunk loss under overlap). Gates in `WasmReentrantE2eTest`:
+  two overlapped streaming requests (one binary `ff fe 41`, one text) each answered
+  its OWN echo, and two overlapped calls each relaying a different upstream's reply
+  chunk-at-a-time to its own client. Pins: `WasmReentrantCompilerTest` (id-less
+  refusal + composed build), `HttpReactorInlinerTest` / `HostFetchLibraryTest` (the
+  synthesized shapes), `RontoLispCliTest.theStreamingBoundaryComposesWithReentrant`
+  (the CLI really threads the flag into the synthesis).
+  `dog-fetcher` itself stays streaming + serialised, unchanged -- the controlled
+  comparison with `btc-ticker` is worth keeping.
 
 Gates, all in `WasmReentrantE2eTest` (node 24 JSPI): the todo-337 reproduction with its
 expectation INVERTED (two overlapped calls binding one special across a suspend each

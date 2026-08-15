@@ -22,8 +22,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <li>the park-block allocator ({@code __ronto_park_alloc}/{@code __ronto_park_free})
  * rides exactly the reentrant modules with a memory-typed boundary;</li>
  * <li>the refusals: a program nothing can suspend, {@code --component},
- * {@code --dynamic}, and the streaming body boundary (whose host-side cursors have no
- * per-call identity).</li>
+ * {@code --dynamic}, and the ID-LESS streaming body boundary (a host-side cursor with no
+ * per-call identity; the id-carrying shape the CLI synthesizes under the flag
+ * composes).</li>
  * </ul>
  */
 class WasmReentrantCompilerTest {
@@ -72,9 +73,11 @@ class WasmReentrantCompilerTest {
 	}
 
 	@Test
-	void reentrantRefusesTheStreamingBodyBoundary() {
-		// The streaming body imports are a host-side cursor -- "the current request's
-		// body" -- with no per-call identity, exactly what overlapped calls lack.
+	void reentrantRefusesTheIdLessStreamingBodyBoundary() {
+		// The ID-LESS body imports are a host-side cursor -- "the current request's
+		// body" -- with no per-call identity, exactly what overlapped calls lack. What
+		// reaches this shape today is a hand-written reactor's own imports; the
+		// synthesized ones carry the id below.
 		String streaming = """
 				(rontolisp:wasm-import 'read-body :from "env" :as "readRequestBody" :params '() :returns :bytes :async t)
 				(defvar *buf* (make-array 16 :element-type '(unsigned-byte 8)))
@@ -82,9 +85,25 @@ class WasmReentrantCompilerTest {
 				(rontolisp:wasm-export 'poke :params '() :returns :int)
 				""";
 		assertThatThrownBy(() -> compile(streaming, true)).isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("streaming body")
+			.hasMessageContaining("call identity")
 			.hasMessageContaining("readRequestBody")
+			.hasMessageContaining("leading :int")
 			.hasMessageContaining("--host-boundary=envelope");
+	}
+
+	@Test
+	void reentrantComposesWithTheIdCarryingStreamingBodyBoundary() {
+		// The composed build the refusal above used to defer: with a
+		// leading :int call id the import stops being a cursor -- every pull names the
+		// call it belongs to -- so the flag and the streaming boundary compose. This is
+		// the shape HttpReactorInliner / HostFetchLibrary synthesize under --reentrant.
+		String streaming = """
+				(rontolisp:wasm-import 'read-body :from "env" :as "readRequestBody" :params '(:int) :returns :bytes :async t)
+				(defvar *buf* (make-array 16 :element-type '(unsigned-byte 8)))
+				(defun poke (id) (rontolisp::%future-force (read-body id *buf*)))
+				(rontolisp:wasm-export 'poke :params '(:int) :returns :int)
+				""";
+		assertThat(containsAscii(compile(streaming, true), "readRequestBody")).isTrue();
 	}
 
 	@Test

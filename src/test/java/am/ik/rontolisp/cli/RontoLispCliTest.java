@@ -451,6 +451,29 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theStreamingBoundaryComposesWithReentrant() throws Exception {
+		// The composed-boundary wiring pin: the CLI threads --reentrant into the
+		// body-import
+		// synthesis, so the composed build declares the ID-CARRYING shape. Without
+		// that threading the synthesized imports are id-less and the compiler's own
+		// "call identity" refusal fires -- which is exactly what this would catch.
+		Path file = tempDir.resolve("wr.lisp");
+		Files.writeString(file, """
+				(rontolisp:async-defun app (env)
+				  (declare (ignore env))
+				  (let ((res (rontolisp:await (rontolisp:fetch "https://example.test/"))))
+				    (list (getf res :status) nil (list "ok"))))
+				(rontolisp:http-handler 'app)
+				""");
+		Path wasm = tempDir.resolve("wr.wasm");
+		runCli("", file.toString(), "-o", wasm.toString(), "--no-wasi", "--host-fetch", "--host-boundary=streaming",
+				"--reentrant");
+		assertThat(new String(Files.readAllBytes(wasm), StandardCharsets.ISO_8859_1)).contains("readRequestBody")
+			.contains("writeResponseBody")
+			.contains("readResponseBody");
+	}
+
+	@Test
 	void theStreamingBoundaryReadsTheSourceWithTheBodyImportsFeature() throws Exception {
 		// The feature a HAND-WRITTEN reactor guards its own body imports with
 		// (examples/cloudflare-workers/httpbin/worker.lisp). Pinned the way

@@ -534,7 +534,7 @@ public final class RontoLispCli {
 		if (outputFile.endsWith(".wasm") && noWasi && !noGc) {
 			loaded = HttpReactorInliner.lowerHttpHandler(loaded);
 			if (hostFetch) {
-				loaded = HostFetchLibrary.process(loaded, boundary);
+				loaded = HostFetchLibrary.process(loaded, boundary, reentrant);
 			}
 		}
 		// Both rontolisp:fetch AND rontolisp:http-handler on the --component path are ONE
@@ -578,7 +578,7 @@ public final class RontoLispCli {
 		// synthesized -- so a Worker source is (clack:clackup #'app :server
 		// :rontolisp) and nothing else. A no-op on the interpreter and the JVM (the
 		// shims do not even read the marker there).
-		loaded = HttpReactorInliner.process(loaded, witBackend, noWasi, boundary);
+		loaded = HttpReactorInliner.process(loaded, witBackend, noWasi, boundary, reentrant);
 		// The shared reactor machinery behind BOTH handler backends
 		// (http-reactor.lisp: the one app store, the JSON envelope over
 		// %http-make-env / %http-normalize-response): spliced for EVERY backend
@@ -939,8 +939,10 @@ public final class RontoLispCli {
 		this.out.println("                     into __ronto_park_alloc/__ronto_park_free blocks (a :string result");
 		this.out.println("                     is one the reader frees; --emit-js-glue writes all of it). Buys");
 		this.out.println("                     I/O overlap, never CPU parallelism: one stack still runs at a");
-		this.out.println("                     time. Not combinable with --host-boundary=streaming (its body");
-		this.out.println("                     cursors have no per-call identity yet) or --dynamic");
+		this.out.println("                     time. Composes with --host-boundary=streaming: the body imports");
+		this.out.println("                     then lead with an :int call id (the envelope's \"call-id\" key,");
+		this.out.println("                     the fetch reply's \"body-id\"), so each pull names its call.");
+		this.out.println("                     Not combinable with --dynamic or --component");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");

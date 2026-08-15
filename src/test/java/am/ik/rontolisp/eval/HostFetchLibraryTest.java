@@ -99,6 +99,26 @@ class HostFetchLibraryTest {
 	}
 
 	@Test
+	void theReentrantStreamingLoweringDrainsByReplyId() {
+		String source = HostFetchLibrary.source(HostBoundary.STREAMING, true);
+		// The reply-body import leads with the :int REPLY ID the head carried back in
+		// its reserved "body-id" key, and every pull hands it over -- so overlapped
+		// calls (and a second fetch inside one call) each drain their own reply, and
+		// the serialised shape's open-reply counter does not exist.
+		assertThat(source).contains(":as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"")
+			.contains(":params '(:int) :returns :bytes")
+			.contains("(rontolisp::%host-fetch-read-body id buf)")
+			.contains("(gethash \"" + FetchResponseShape.HOST_BODY_ID_KEY + "\" envelope)")
+			.doesNotContain("%host-fetch-open")
+			.doesNotContain("superseded by a later fetch");
+		// The in-band fallback still wins, normalized first, like the serialised shape.
+		assertThat(source).contains("(or (rontolisp::%http-reactor-source in-band)");
+		// The envelope boundary ignores the flag: no cursor exists to need identity.
+		assertThat(HostFetchLibrary.source(HostBoundary.ENVELOPE, true))
+			.isEqualTo(HostFetchLibrary.source(HostBoundary.ENVELOPE));
+	}
+
+	@Test
 	void theShippedWorkerHostSpeaksTheSameEnvelope() throws IOException {
 		String host = Files.readString(WORKER_HOST, StandardCharsets.UTF_8);
 		// The host reads every request field the record declares...

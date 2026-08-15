@@ -255,6 +255,27 @@ public final class HttpReactorInliner {
 	 */
 	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend, boolean reactor,
 			HostBoundary boundary) {
+		return process(program, backend, reactor, boundary, false);
+	}
+
+	/**
+	 * The {@code --reentrant}-aware overload of
+	 * {@link #process(List, WitExportDirective.Backend, boolean, HostBoundary)}.
+	 * @param program the top-level forms
+	 * @param backend the backend being compiled for
+	 * @param reactor whether the module is a REACTOR ({@code --no-wasi})
+	 * @param boundary which shape of that reactor boundary was asked for
+	 * @param reentrant whether the module overlaps calls on one instance
+	 * ({@code --reentrant}): the streaming body imports then carry a leading {@code :int}
+	 * CALL ID -- minted by the host per request, threaded through the envelope's
+	 * {@code call-id} key -- because a host serving overlapped calls holds one body
+	 * source per call and each pull/push has to name the call it belongs to. The id-less
+	 * shape stays byte-identical everywhere else: it is sound exactly where the re-entry
+	 * guard (or the serialising queue) still guarantees one call inside the module.
+	 * @return the program, with the reactor export synthesized when applicable
+	 */
+	public static List<LispVal> process(List<LispVal> program, WitExportDirective.Backend backend, boolean reactor,
+			HostBoundary boundary, boolean reentrant) {
 		if (backend == WitExportDirective.Backend.OTHER) {
 			return program;
 		}
@@ -283,8 +304,8 @@ public final class HttpReactorInliner {
 		String bridge = """
 				%s(defun %s (%%reactor-json) (%s %%reactor-json%s))
 				(rontolisp:wasm-export '%s :as "%s" :params '(:string) :returns :string)
-				""".formatted(bodyImport(backend, reactor, boundary), DISPATCH_BRIDGE, marker[0], bodyArgument,
-				DISPATCH_BRIDGE, marker[1]);
+				""".formatted(bodyImport(backend, reactor, boundary, reentrant), DISPATCH_BRIDGE, marker[0],
+				bodyArgument, DISPATCH_BRIDGE, marker[1]);
 		out.addAll(LispReader.readAllFromString(bridge, Features.INTERPRETER));
 		return out;
 	}
@@ -321,9 +342,31 @@ public final class HttpReactorInliner {
 	// octets and the host takes them), where a chunk crossing in is a :bytes RESULT into
 	// a buffer the module passes. Both are the same rule -- the caller owns the memory --
 	// applied to the two directions.
-	private static String bodyImport(WitExportDirective.Backend backend, boolean reactor, HostBoundary boundary) {
+	//
+	// Under --reentrant both imports (and the thunks over them) gain a leading :int CALL
+	// ID: overlapped calls share the host's body imports, so "the current request's
+	// body" stops being a well-defined cursor and every pull/push names the call it
+	// belongs to instead. The id is minted by the host per request, rides the envelope's
+	// "call-id" key, and reaches these thunks through %http-reactor-bind-source /
+	// -bind-sink -- the id-less shape below is untouched, which is what keeps every
+	// serialised module byte-identical.
+	private static String bodyImport(WitExportDirective.Backend backend, boolean reactor, HostBoundary boundary,
+			boolean reentrant) {
 		if (!bodyOutOfBand(backend, reactor, boundary)) {
 			return "";
+		}
+		if (reentrant) {
+			return """
+					(rontolisp:wasm-import '%s :from "%s" :as "%s" :params '(:int) :returns :bytes :async t)
+					(defun %s (%%reactor-call)
+					  (let ((%%reactor-buf (rontolisp::%%http-reactor-buffer %d)))
+					    (rontolisp::%%http-reactor-chunk %%reactor-buf (%s %%reactor-call %%reactor-buf))))
+					(rontolisp:wasm-import '%s :from "%s" :as "%s" :params '(:int :bytes) :returns :void :async t)
+					(defun %s (%%reactor-call %%reactor-chunk)
+					  (%s %%reactor-call (rontolisp::%%http-reactor-octets %%reactor-chunk)))
+					""".formatted(READ_BODY_IMPORT, READ_BODY_MODULE, READ_BODY_FIELD, CHUNK_BRIDGE, CHUNK_BYTES,
+					READ_BODY_IMPORT, WRITE_BODY_IMPORT, READ_BODY_MODULE, WRITE_BODY_FIELD, WRITE_BRIDGE,
+					WRITE_BODY_IMPORT);
 		}
 		return """
 				(rontolisp:wasm-import '%s :from "%s" :as "%s" :params '() :returns :bytes :async t)

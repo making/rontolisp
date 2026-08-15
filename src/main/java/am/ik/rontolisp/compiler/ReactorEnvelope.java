@@ -43,16 +43,29 @@ public final class ReactorEnvelope {
 	public static final String EXPORT_NAME = "handle-request";
 
 	/**
+	 * The request key carrying the CALL's identity, present only in a {@code --reentrant}
+	 * streaming build: overlapped calls share the host's body imports, so each envelope
+	 * names the call its bodies belong to and the imports take that id as a leading
+	 * {@code :int} argument. A host that sends this key declares that the out-of-band
+	 * body thunks it passed take the id as their leading argument; every other host
+	 * leaves it out and nothing changes shape ({@code .todo/341} finding 3's no-handle
+	 * argument still holds wherever the id-less protocol exists, because there the
+	 * re-entry guard or the serialising queue still does).
+	 */
+	public static final String CALL_ID_KEY = "call-id";
+
+	/**
 	 * The request head's keys, in the order {@code %http-reactor-request-tuple} reads
 	 * them. {@code method} defaults to {@code "GET"} and {@code target} to {@code "/"};
 	 * {@code target} is RAW (path and query still joined and still percent-encoded — the
 	 * shared normalizer owns that split); {@code headers} is a JSON OBJECT, and a request
 	 * with a body must carry {@code content-length} in it; {@code body} is the in-band
 	 * body, {@code ""} or absent for none; {@code scheme} defaults to {@code "http"} and
-	 * {@code remote-addr} to nothing.
+	 * {@code remote-addr} to nothing; {@code call-id} is {@link #CALL_ID_KEY}, absent
+	 * everywhere but a {@code --reentrant} streaming build.
 	 */
 	public static final List<String> REQUEST_KEYS = List.of("method", "target", "headers", "body", "scheme",
-			"remote-addr");
+			"remote-addr", CALL_ID_KEY);
 
 	/**
 	 * The response head's keys, in the order {@code %http-reactor-envelope} writes them.
