@@ -829,6 +829,48 @@ class AsdfSystemsTest {
 				                    (funcall (intern #.(string :run-test-system) :prove-asdf) c)))""", "lib-test.asd");
 		assertThat(systems.get(0).files()).containsExactly("main.lisp");
 		assertThat(stderr).isEmpty();
+		// The qualified (:after) method shape has no machinery behind it, so nothing is
+		// recorded either -- and neither is a plain test-op body carrying a #. marker
+		// (recording it would fail the eager compile of the emitted test-op defun).
+		assertThat(systems.get(0).testOp()).isNull();
+	}
+
+	@Test
+	void recordsATestOpPerformBodyWithAsdfUserResolution() {
+		// fukamachi's shape: :perform (test-op (op c) (symbol-call :rove :run c)). The
+		// bare symbol-call resolves the way asdf-user would resolve it -- to the uiop
+		// home spelling -- while the parameter symbols stay as written.
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem "lib/tests"
+				  :components ((:file "main"))
+				  :perform (test-op (op c) (symbol-call :rove :run c)))""");
+		AsdfSystems.TestOp testOp = system.testOp();
+		assertThat(testOp).isNotNull();
+		assertThat(testOp.params()).hasSize(2);
+		assertThat(testOp.body()).hasSize(1);
+		assertThat(testOp.body().get(0).print())
+			.isEqualTo("(" + am.ik.rontolisp.UiopExports.qualified("SYMBOL-CALL") + " :ROVE :RUN C)");
+	}
+
+	@Test
+	void recordsTheInOrderToTestOpChain() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem "lib"
+				  :components ((:file "main"))
+				  :in-order-to ((test-op (test-op "lib/tests"))))""");
+		assertThat(system.testOpEdges()).containsExactly("lib/tests");
+		assertThat(system.testOp()).isNull();
+	}
+
+	@Test
+	void aPerformBodyNamingAnAsdfReaderQualifiesIt() {
+		AsdfSystems.LispSystem system = parse("""
+				(asdf:defsystem "lib/tests"
+				  :components ((:file "main"))
+				  :perform (test-op (o c) (run-tests (component-name c))))""");
+		AsdfSystems.TestOp testOp = system.testOp();
+		assertThat(testOp).isNotNull();
+		assertThat(testOp.body().get(0).print()).isEqualTo("(RUN-TESTS (ASDF:COMPONENT-NAME C))");
 	}
 
 	@Test
@@ -1135,8 +1177,12 @@ class AsdfSystemsTest {
 				"lack-request", "lack-response", "lack-component", "myway", "alexandria");
 		assertThat(registered(registry, "ningle/context").dependsOn()).isEmpty();
 		assertThat(registered(registry, "ningle/route").dependsOn()).containsExactly("myway");
-		// A derived sub-system is a component file, never itself a root for more names.
+		// A derived sub-system is a component file, never itself a root for more names
+		// -- but its runtime metaobject is still an asdf:package-inferred-system
+		// instance, real ASDF's shape (the branch rove's run-system typecase takes).
 		assertThat(registered(registry, "ningle/route").packageInferredDir()).isNull();
+		assertThat(registered(registry, "ningle/route").packageInferredClass()).isTrue();
+		assertThat(registered(registry, "ningle").packageInferredClass()).isTrue();
 	}
 
 	@Test

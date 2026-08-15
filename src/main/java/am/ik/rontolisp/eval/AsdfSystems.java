@@ -76,9 +76,51 @@ public final class AsdfSystems {
 	 * class: such a system lists no {@code :components} and its graph is derived from the
 	 * component files' own {@code defpackage} forms
 	 * ({@link #inferPackageInferredSystems})
+	 * @param packageInferredClass whether the runtime metaobject for this system is an
+	 * {@code asdf:package-inferred-system} instance: true for a primary that declares the
+	 * class ({@code packageInferredDir} non-null) AND for every sub-system derived from
+	 * one -- real ASDF's shape, and the branch rove's {@code run-system} typecase takes
+	 * for a derived {@code lib/tests} system
+	 * @param testOp the recorded {@code :perform (test-op (o c) BODY...)} clause, or
+	 * {@code null} when the {@code .asd} declares none; {@code asdf:test-system} runs the
+	 * body with the two parameters bound (the operation is nil -- there is no
+	 * {@code operate} machinery -- and the component is the system's metaobject)
+	 * @param testOpEdges the system names a {@code :in-order-to ((test-op (test-op
+	 * ...)))} option chains test-op to, in order; {@code asdf:test-system} follows them
+	 * before the system's own perform
 	 */
 	public record LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
-			List<String> features, @Nullable String packageInferredDir) {
+			List<String> features, @Nullable String packageInferredDir, boolean packageInferredClass,
+			@Nullable TestOp testOp, List<String> testOpEdges) {
+
+		/**
+		 * The old-shape constructor: no test-op wiring, package-inferred class iff the
+		 * directory marker is present. Keeps the parse-only construction sites (and the
+		 * tests) readable.
+		 * @param name the system name
+		 * @param dependsOn the names of the systems to load first, in order
+		 * @param files the component source files in load order
+		 * @param baseDir the directory the component files resolve against
+		 * @param features the feature names this system declares
+		 * @param packageInferredDir the sub-system resolution directory, or {@code null}
+		 */
+		public LispSystem(String name, List<String> dependsOn, List<String> files, String baseDir,
+				List<String> features, @Nullable String packageInferredDir) {
+			this(name, dependsOn, files, baseDir, features, packageInferredDir, packageInferredDir != null, null,
+					List.of());
+		}
+	}
+
+	/**
+	 * A recorded {@code :perform (test-op (o c) BODY...)} clause: the two parameter
+	 * symbols as written and the body forms as plain data (bare {@code asdf}/{@code uiop}
+	 * member symbols pre-qualified by {@link #normalizeAsdUserForm}, the resolution a
+	 * real {@code .asd} gets from being read in {@code asdf-user}).
+	 *
+	 * @param params the parameter symbols (operation, component), as written
+	 * @param body the body forms
+	 */
+	public record TestOp(List<LispVal> params, List<LispVal> body) {
 	}
 
 	/**
@@ -125,6 +167,28 @@ public final class AsdfSystems {
 		}
 		checkIgnoredLoadOptions(LispNames.ASDF_LOAD_SYSTEM, items.subList(2, items.size()));
 		return designator(LispNames.ASDF_LOAD_SYSTEM, items.get(1));
+	}
+
+	/**
+	 * If {@code form} is a top-level literal {@code (asdf:test-system NAME)} call,
+	 * returns the system name; otherwise {@code null}. Like
+	 * {@link #loadSystemName(LispVal)}, a non-literal name is a hard error at inline
+	 * time: the compile path must splice the system (and its test-op chain) to have
+	 * anything to run.
+	 * @param form the form to inspect
+	 * @return the literal system name, or {@code null}
+	 */
+	@Nullable public static String testSystemName(LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op)
+				|| !isAsdfMember(op, LispNames.TEST_SYSTEM)) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() != 2) {
+			throw new IllegalStateException(
+					LispNames.ASDF_TEST_SYSTEM + " expects exactly one system name: " + form.print());
+		}
+		return designator(LispNames.ASDF_TEST_SYSTEM, items.get(1));
 	}
 
 	/**
@@ -775,6 +839,8 @@ public final class AsdfSystems {
 		boolean packageInferred = false;
 		LispVal components = null;
 		String pathname = null;
+		TestOp testOp = null;
+		List<String> testOpEdges = new ArrayList<>();
 		for (int i = 2; i < items.size(); i += 2) {
 			if (!(items.get(i) instanceof LispSymbol key) || !key.isKeyword()) {
 				throw new IllegalStateException(LispNames.ASDF_DEFSYSTEM + " " + name
@@ -794,10 +860,21 @@ public final class AsdfSystems {
 						":LICENCE", ":HOMEPAGE", ":BUG-TRACKER", ":SOURCE-CONTROL", ":MAILTO" ->
 					{
 					}
-				// Test-op wiring only (there is no operate/test-op machinery to drive):
-				// tolerated so a real library's .asd parses, ignored like the metadata.
-				case ":IN-ORDER-TO", ":PERFORM" -> {
+				// Test-op wiring: the ONE op with machinery behind it
+				// (asdf:test-system). The test-op shapes are RECORDED -- a
+				// :perform (test-op (o c) BODY) body and the :in-order-to
+				// ((test-op (test-op ...))) chain -- and every other op stays
+				// tolerated-and-ignored. Still in IGNORED_OPTIONS: a #. marker inside is
+				// never resolved and never complained about at parse time (nothing here
+				// resolves the recorded data; an unresolvable marker surfaces only if
+				// asdf:test-system actually runs that body).
+				case ":PERFORM" -> {
+					TestOp parsed = parseTestOpPerform(value);
+					if (parsed != null) {
+						testOp = parsed;
+					}
 				}
+				case ":IN-ORDER-TO" -> testOpEdges.addAll(parseTestOpEdges(value, features));
 				case ":DEPENDS-ON" -> {
 					for (LispVal dep : properList(LispNames.ASDF_DEFSYSTEM + " " + name + " :depends-on", value)) {
 						String depName = dependencyName(name, dep, features);
@@ -847,7 +924,154 @@ public final class AsdfSystems {
 		// resolve:
 		// array-operations says :pathname "src/" and then names array-operations/all.
 		return new LispSystem(name, List.copyOf(dependsOn), files, baseDir == null ? "" : baseDir, declaredFeatures,
-				packageInferred ? (pathname == null ? "" : pathname) : null);
+				packageInferred ? (pathname == null ? "" : pathname) : null, packageInferred, testOp,
+				List.copyOf(testOpEdges));
+	}
+
+	/**
+	 * Parses a {@code :perform} value when it wires {@code test-op}:
+	 * {@code (test-op (o c) BODY...)}. Any other shape -- another operation, a malformed
+	 * clause -- answers {@code null} and stays tolerated-and-ignored (the closed-world
+	 * rule of {@link #IGNORED_OPTIONS}: nothing here may complain). The body's bare
+	 * {@code asdf}/{@code uiop} member symbols are pre-qualified
+	 * ({@link #normalizeAsdUserForm}); the parameter symbols are kept as written.
+	 * @param value the {@code :perform} option value
+	 * @return the recorded test-op, or {@code null}
+	 */
+	@Nullable private static TestOp parseTestOpPerform(LispVal value) {
+		if (!(value instanceof LispCons cons) || !cons.isProperList()) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op) || !LispNames.TEST_OP.equals(memberName(op))) {
+			return null;
+		}
+		if (!(items.get(1) instanceof LispCons paramsCons) || !paramsCons.isProperList()) {
+			return null;
+		}
+		List<LispVal> params = paramsCons.toList();
+		Set<String> bound = new java.util.HashSet<>();
+		for (LispVal param : params) {
+			if (!(param instanceof LispSymbol paramSym)) {
+				return null;
+			}
+			bound.add(paramSym.name());
+		}
+		List<LispVal> body = new ArrayList<>();
+		for (LispVal form : items.subList(2, items.size())) {
+			if (containsReadEvalMarker(form)) {
+				// A #. inside the body (the seven *-test.asd (intern #.(string ...))
+				// files): the IGNORED_OPTIONS rule says a marker here is never resolved
+				// and never complained about, and a recorded marker would fail the
+				// eager compile of the emitted test-op defun -- so the whole clause
+				// stays tolerated-and-ignored, as it always was.
+				return null;
+			}
+			body.add(normalizeAsdUserForm(form, bound));
+		}
+		return new TestOp(List.copyOf(params), List.copyOf(body));
+	}
+
+	private static boolean containsReadEvalMarker(LispVal form) {
+		if (form instanceof LispSymbol sym) {
+			return LispNames.READ_EVAL.equals(sym.name()) || LispNames.READ_EVAL_UNREADABLE.equals(sym.name());
+		}
+		if (form instanceof LispCons cons) {
+			return containsReadEvalMarker(cons.car()) || containsReadEvalMarker(cons.cdr());
+		}
+		return false;
+	}
+
+	/**
+	 * Parses an {@code :in-order-to} value for its {@code test-op} chain:
+	 * {@code ((test-op (test-op "x/tests")) ...)} answers the chained system names in
+	 * order. Any other operation or shape contributes nothing (tolerated-and-ignored,
+	 * like {@link #parseTestOpPerform}).
+	 * @param value the {@code :in-order-to} option value
+	 * @param features the feature set a {@code (:feature ...)} guard would test (none is
+	 * expected here; a designator that fails to parse is skipped)
+	 * @return the chained test-op system names, possibly empty
+	 */
+	private static List<String> parseTestOpEdges(LispVal value, Features features) {
+		if (!(value instanceof LispCons cons) || !cons.isProperList()) {
+			return List.of();
+		}
+		List<String> edges = new ArrayList<>();
+		for (LispVal clause : cons.toList()) {
+			if (!(clause instanceof LispCons clauseCons) || !clauseCons.isProperList()) {
+				continue;
+			}
+			List<LispVal> items = clauseCons.toList();
+			if (items.size() < 2 || !(items.get(0) instanceof LispSymbol op)
+					|| !LispNames.TEST_OP.equals(memberName(op))) {
+				continue;
+			}
+			for (LispVal spec : items.subList(1, items.size())) {
+				if (!(spec instanceof LispCons specCons) || !specCons.isProperList()) {
+					continue;
+				}
+				List<LispVal> specItems = specCons.toList();
+				if (specItems.isEmpty() || !(specItems.get(0) instanceof LispSymbol specOp)
+						|| !LispNames.TEST_OP.equals(memberName(specOp))) {
+					continue;
+				}
+				for (LispVal dep : specItems.subList(1, specItems.size())) {
+					try {
+						edges.add(designator(LispNames.ASDF_DEFSYSTEM + " :in-order-to", dep));
+					}
+					catch (RuntimeException ex) {
+						// Tolerated-and-ignored, like the rest of the option.
+					}
+				}
+			}
+		}
+		return List.copyOf(edges);
+	}
+
+	/**
+	 * Qualifies the bare {@code asdf}/{@code uiop} member symbols of a recorded
+	 * {@code .asd} form. A real {@code .asd} is read in {@code asdf-user} (which uses
+	 * {@code cl}, {@code asdf} and {@code uiop}), so {@code symbol-call} in a
+	 * {@code :perform} body names {@code uiop:symbol-call}; this parse reads the form as
+	 * plain data with no package context, so the same resolution is applied here, once,
+	 * where the form is recorded. Bare {@code cl} names need nothing (the canonical
+	 * shape), symbols the {@code BODY} binds itself ({@code bound}) are left alone, and
+	 * anything else stays as written.
+	 * @param form the recorded form
+	 * @param bound the parameter names bound around the form
+	 * @return the form with {@code asdf}/{@code uiop} members qualified
+	 */
+	/**
+	 * The {@code asdf} externals a bare symbol in a recorded {@code .asd} form may name:
+	 * the runtime FUNCTIONS (a bare class-name symbol is far more likely a variable, so
+	 * class names are deliberately absent).
+	 */
+	private static final Set<String> ASDF_USER_FUNCTION_MEMBERS = Set.of(LispNames.TEST_SYSTEM, LispNames.LOAD_SYSTEM,
+			LispNames.FIND_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
+			LispNames.COMPONENT_PATHNAME, LispNames.REGISTERED_SYSTEMS, LispNames.COMPONENT_NAME,
+			LispNames.COMPONENT_CHILDREN, LispNames.COMPONENT_SIDEWAY_DEPENDENCIES, LispNames.COMPONENT_PARENT,
+			LispNames.COMPONENT_SYSTEM);
+
+	static LispVal normalizeAsdUserForm(LispVal form, Set<String> bound) {
+		if (form instanceof LispSymbol sym) {
+			String symName = sym.name();
+			if (sym.isKeyword() || symName.startsWith("#:") || symName.contains(":") || bound.contains(symName)) {
+				return form;
+			}
+			if (am.ik.rontolisp.UiopExports.homePackage(symName) != null) {
+				return new LispSymbol(am.ik.rontolisp.UiopExports.qualified(symName));
+			}
+			if (ASDF_USER_FUNCTION_MEMBERS.contains(symName)) {
+				return new LispSymbol(PackageRegistry.qualify(LispNames.ASDF_PKG, symName));
+			}
+			return form;
+		}
+		if (form instanceof LispCons cons) {
+			LispVal car = normalizeAsdUserForm(cons.car(), bound);
+			LispVal cdr = normalizeAsdUserForm(cons.cdr(), bound);
+			return car == cons.car() && cdr == cons.cdr() ? form : new LispCons(car, cdr);
+		}
+		return form;
 	}
 
 	/**
@@ -1015,7 +1239,7 @@ public final class AsdfSystems {
 		LispVal packageForm = LispReader.readFirstFormMatching(source, features, path,
 				AsdfSystems::isPackageDefinitionForm);
 		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
-				primary.baseDir(), primary.features(), null);
+				primary.baseDir(), primary.features(), null, true, null, List.of());
 	}
 
 	/**

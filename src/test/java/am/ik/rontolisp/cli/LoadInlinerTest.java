@@ -300,6 +300,22 @@ class LoadInlinerTest {
 	}
 
 	@Test
+	void nestedLoadSystemOfASplicedSystemAnswersNilOnJvm() throws Exception {
+		// lack's find-package-or-load shape: a load-system nested in a defun. The
+		// reference splices the asdf runtime (AsdfRuntimeLibrary), whose
+		// asdf:load-system defun answers nil for the already-spliced system -- and the
+		// call-time error for anything else.
+		List<LispVal> program = UserMacroExpander.expand(inline("""
+				(asdf:load-system :sq)
+				(defun probe () (asdf:load-system "sq" :verbose nil))
+				(print (null (probe)))
+				(print (sq 7))""", Map.of("sq.asd", "(defsystem :sq :components ((:file \"sq\")))", //
+				"sq.lisp", "(defun sq (x) (* x x))")));
+		byte[] classBytes = new JvmLispCompiler("TestNestedLoad").compile(program);
+		assertThat(runMain(classBytes, "TestNestedLoad").lines().map(String::trim)).containsExactly("T", "49");
+	}
+
+	@Test
 	void loadSystemDoesNotLeakTheCurrentPackageToTheCallerOnJvm() throws Exception {
 		// A component file's (in-package :my-lib) must not leak past the load: a defun
 		// AFTER the load-system (referenced by unqualified quoted symbol) must resolve in
@@ -528,8 +544,10 @@ class LoadInlinerTest {
 
 	@Test
 	void foldsFindSystemAndSystemSourceDirectory() {
-		// Inline defsystem registers the system's baseDir; find-system reduces to the
-		// downcased name, system-source-directory to the baseDir with a trailing slash.
+		// Inline defsystem registers the system's baseDir; a literal find-system in
+		// system-source-directory's designator position unwraps (find-system itself no
+		// longer folds -- at run time it answers a metaobject), and the composition
+		// reduces to the baseDir with a trailing slash.
 		List<LispVal> program = LispReader.readAllFromString("""
 				(asdf:defsystem :demo :components ((:file "main")))
 				(defparameter *root* (asdf:system-source-directory (asdf:find-system 'demo nil)))""");

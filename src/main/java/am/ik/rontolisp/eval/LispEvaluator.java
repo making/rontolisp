@@ -285,7 +285,7 @@ public final class LispEvaluator {
 	 * The systems registered by {@code asdf:defsystem} (evaluated inline or read out of a
 	 * {@code NAME.asd} file), by name. Kept per evaluator like the provided-module set.
 	 */
-	private final java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.HashMap<>();
+	private final java.util.Map<String, AsdfSystems.LispSystem> asdfSystems = new java.util.LinkedHashMap<>();
 
 	/**
 	 * "Package P lives in system S", merged from the {@code register-system-packages}
@@ -296,8 +296,12 @@ public final class LispEvaluator {
 
 	/**
 	 * The systems already loaded by {@code asdf:load-system} (loading again is a no-op).
+	 * Insertion-ordered so {@code asdf:registered-systems} answers deterministically.
 	 */
-	private final java.util.Set<String> loadedSystems = new java.util.HashSet<>();
+	private final java.util.Set<String> loadedSystems = new java.util.LinkedHashSet<>();
+
+	/** Whether the asdf runtime (asdf.lisp -- the component metaobjects) is loaded. */
+	private boolean asdfRuntimeLoaded;
 
 	/** The systems currently being loaded, for {@code :depends-on} cycle detection. */
 	private final java.util.Deque<String> loadingSystems = new java.util.ArrayDeque<>();
@@ -2318,90 +2322,70 @@ public final class LispEvaluator {
 			// a library that loads a system at run time spells the call that way
 			// (lack's find-package-or-load passes :verbose nil).
 			ignoreLoadOptions(LispNames.ASDF_LOAD_SYSTEM, args.subList(1, args.size()));
-			String name = AsdfSystems.designator(LispNames.ASDF_LOAD_SYSTEM, args.get(0));
+			String name = asdfDesignator(LispNames.ASDF_LOAD_SYSTEM, args.get(0));
 			loadSystem(name);
 			return new LispSymbol(name);
 		}));
-		// asdf:find-system + asdf:system-source-directory: the runtime companions of
-		// asdf:defsystem/asdf:load-system. A library reads its bundled data files at
-		// load time via
-		// (asdf:system-source-directory (asdf:find-system 'lib nil)) -- the uax-15
-		// precomputed-tables.lisp seed case. Both consult the per-evaluator asdfSystems
+		// The runtime component metaobjects (asdf.lisp / AsdfRuntimeLibrary) define
+		// asdf:find-system, the component readers, registered-systems,
+		// system-source-directory, system-relative-pathname and component-pathname in
+		// Lisp source shared with the compile paths; the interpreter's halves of the
+		// per-backend seam are these two primitives over the LIVE per-evaluator
 		// registry, which loadSystem populates before invoking a system's component
-		// files, so find-system is guaranteed to hit for the system currently loading.
-		String findSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.FIND_SYSTEM);
-		this.globalEnv.defineFunction(findSystemName, new LispFunction(findSystemName, args -> {
-			if (args.isEmpty() || args.size() > 2) {
-				throw new LispEvalException(
-						LispNames.ASDF_FIND_SYSTEM + " expects (name [error-p]), got " + args.size() + " arguments");
+		// files -- so find-system is guaranteed to hit for the system currently
+		// loading. A built-in shim system is findable even before it is loaded:
+		// lack's find-package-or-load probes (asdf:find-system name nil) and loads on
+		// a hit -- the route by which (clackup app :server :rontolisp) pulls in the
+		// clack-handler-rontolisp backend at run time.
+		String systemRecordName = "%ASDF-SYSTEM-RECORD";
+		this.globalEnv.defineFunction(systemRecordName, new LispFunction(systemRecordName, args -> {
+			if (args.size() != 1 || !(args.get(0) instanceof LispString key)) {
+				throw new LispEvalException(systemRecordName + " expects a system name string");
 			}
-			String name = AsdfSystems.designator(LispNames.ASDF_FIND_SYSTEM, args.get(0));
-			boolean errorP = args.size() < 2 || !(args.get(1) instanceof LispNil);
-			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-			if (system == null) {
-				// A built-in system (a shim) is findable even before it is loaded:
-				// lack's find-package-or-load probes (asdf:find-system name nil) and
-				// loads on a hit -- the route by which (clackup app :server :rontolisp)
-				// pulls in the clack-handler-rontolisp backend at run time.
-				if (BuiltinSystems.isBuiltin(name)) {
-					return new LispString(name);
-				}
-				if (errorP) {
-					throw new LispEvalException(LispNames.ASDF_FIND_SYSTEM + ": system not registered: " + name);
-				}
-				return LispNil.INSTANCE;
+			AsdfSystems.LispSystem system = this.asdfSystems.get(key.value());
+			if (system != null) {
+				return AsdfRuntimeLibrary.recordFor(system, this.loadedSystems.contains(key.value()));
 			}
-			// The "system object" is materialized as its downcase-canonical name (a
-			// string): system-source-directory accepts it back verbatim.
-			return new LispString(name);
+			if (BuiltinSystems.isBuiltin(key.value())) {
+				return AsdfRuntimeLibrary.builtinRecord(this.loadedSystems.contains(key.value()));
+			}
+			return LispNil.INSTANCE;
 		}));
-		// asdf:component-pathname is the same lookup under the name a library actually
-		// calls: the only component object rontolisp materializes IS a system.
-		for (String member : List.of(LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.COMPONENT_PATHNAME)) {
-			String qualified = PackageRegistry.qualify(LispNames.ASDF_PKG, member);
-			this.globalEnv.defineFunction(qualified, new LispFunction(qualified, args -> {
-				if (args.size() != 1) {
-					throw new LispEvalException(qualified + " expects 1 argument, got " + args.size());
+		String systemNamesName = "%ASDF-SYSTEM-NAMES";
+		this.globalEnv.defineFunction(systemNamesName, new LispFunction(systemNamesName, args -> {
+			if (!args.isEmpty()) {
+				throw new LispEvalException(systemNamesName + " expects no arguments");
+			}
+			// Declared systems in registration order, then any loaded built-in shims
+			// the registry does not list.
+			java.util.List<LispVal> names = new java.util.ArrayList<>();
+			for (String registered : this.asdfSystems.keySet()) {
+				names.add(new LispString(registered));
+			}
+			for (String loadedName : this.loadedSystems) {
+				if (!this.asdfSystems.containsKey(loadedName) && BuiltinSystems.isBuiltin(loadedName)) {
+					names.add(new LispString(loadedName));
 				}
-				String name = AsdfSystems.designator(qualified, args.get(0));
-				AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-				if (system == null) {
-					throw new LispEvalException(qualified + ": system not registered: " + name);
-				}
-				String base = system.baseDir();
-				if (base == null || base.isEmpty()) {
-					return new LispString("./");
-				}
-				return new LispString(base.endsWith("/") ? base : base + "/");
-			}));
-		}
-		// asdf:system-relative-pathname: the one-call form of
-		// (merge-pathnames* relative (system-source-directory system)). A library that
-		// bundles a data file next to its .asd names it this way -- quri's etld.lisp
-		// reads its 152 KB effective-TLD list through it.
-		String systemRelativePathnameName = PackageRegistry.qualify(LispNames.ASDF_PKG,
-				LispNames.SYSTEM_RELATIVE_PATHNAME);
-		this.globalEnv.defineFunction(systemRelativePathnameName, new LispFunction(systemRelativePathnameName, args -> {
-			if (args.size() < 2) {
-				throw new LispEvalException(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME + " expects (system relative), got "
-						+ args.size() + " arguments");
 			}
-			String name = AsdfSystems.designator(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME, args.get(0));
-			AsdfSystems.LispSystem system = this.asdfSystems.get(name);
-			if (system == null) {
-				throw new LispEvalException(
-						LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME + ": system not registered: " + name);
+			LispVal tail = LispNil.INSTANCE;
+			for (int i = names.size() - 1; i >= 0; i--) {
+				tail = new LispCons(names.get(i), tail);
 			}
-			String relative = PathnameOps.designatorNamestring(args.get(1));
-			if (relative == null) {
-				throw new LispEvalException(LispNames.ASDF_SYSTEM_RELATIVE_PATHNAME
-						+ " expects a pathname designator as its second argument, got " + args.get(1).print());
+			return tail;
+		}));
+		// asdf:test-system: load the system, follow its :in-order-to test-op chain,
+		// then run its recorded :perform (test-op (o c) BODY) with the operation nil
+		// and the component bound to the system's metaobject (fukamachi's .asd shape:
+		// :perform (test-op (op c) (symbol-call :rove :run c))).
+		String testSystemName = PackageRegistry.qualify(LispNames.ASDF_PKG, LispNames.TEST_SYSTEM);
+		this.globalEnv.defineFunction(testSystemName, new LispFunction(testSystemName, args -> {
+			if (args.size() != 1) {
+				throw new LispEvalException(LispNames.ASDF_TEST_SYSTEM + " expects 1 argument, got " + args.size());
 			}
-			String base = system.baseDir();
-			if (base == null || base.isEmpty()) {
-				base = "./";
-			}
-			return new LispString(PathnameOps.mergePathnames(relative, base.endsWith("/") ? base : base + "/"));
+			ensureAsdfRuntimeLoaded();
+			String name = asdfDesignator(LispNames.ASDF_TEST_SYSTEM, args.get(0));
+			runTestOp(name, new java.util.HashSet<>());
+			return LispTrue.INSTANCE;
 		}));
 		// merge-pathnames* / file-exists-p / native-namestring used to be Java built-ins
 		// here. They are Lisp source now (uiop-pathname.lisp, uiop-filesystem.lisp),
@@ -3012,10 +2996,106 @@ public final class LispEvaluator {
 		}
 	}
 
+	/**
+	 * Evaluates the asdf runtime (asdf.lisp -- the component metaobject classes,
+	 * find-system and the readers, {@code AsdfRuntimeLibrary}) into the global
+	 * environment once. Triggered lazily: on the resolution of a name it defines
+	 * (function or the {@code asdf:*user-cache*} variable), on any
+	 * {@code defsystem}/{@code load-system}/{@code quickload}/{@code test-system}, and on
+	 * a class-resolving form ({@code defmethod}/{@code typep}/{@code typecase}/
+	 * {@code make-instance}/{@code defclass}) that mentions one of the component class
+	 * names -- so a specializer like {@code (system asdf:system)} resolves even before
+	 * any system machinery ran.
+	 */
+	private void ensureAsdfRuntimeLoaded() {
+		synchronized (this.libraryLoadLock) {
+			if (this.asdfRuntimeLoaded) {
+				return;
+			}
+			this.asdfRuntimeLoaded = true;
+			for (LispVal form : AsdfRuntimeLibrary.classForms()) {
+				eval(form, this.globalEnv);
+			}
+		}
+	}
+
+	/**
+	 * The class-mention half of the lazy trigger: seeds the asdf classes when the form
+	 * mentions one of them anywhere ({@code AsdfRuntimeLibrary.mentionsComponentClass}).
+	 * Cheap after the first load (one boolean).
+	 */
+	private void ensureAsdfClassesFor(LispVal form) {
+		if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.mentionsComponentClass(form)) {
+			ensureAsdfRuntimeLoaded();
+		}
+	}
+
+	/**
+	 * A runtime system designator that also accepts the component METAOBJECT
+	 * {@code asdf:find-system} answers (rove passes the object straight back into
+	 * {@code load-system}): an asdf component instance answers its name slot, anything
+	 * else goes through {@link AsdfSystems#designator}.
+	 */
+	private static String asdfDesignator(String context, LispVal val) {
+		if (val instanceof am.ik.rontolisp.LispInstance inst
+				&& inst.layout().kind() == am.ik.rontolisp.LispLayout.Kind.CLASS
+				&& inst.layout().printName().startsWith(LispNames.ASDF_PKG + ":") && inst.slotCount() > 0
+				&& inst.slot(0) instanceof LispString nameSlot) {
+			return nameSlot.value();
+		}
+		return AsdfSystems.designator(context, val);
+	}
+
+	/**
+	 * The interpreter's {@code asdf:test-system}: load the system, follow its recorded
+	 * {@code :in-order-to} test-op chain (each edge loaded and tested the same way,
+	 * {@code visited} terminating a cycle), then apply the recorded
+	 * {@code :perform (test-op ...)} body with the operation parameter nil and the
+	 * component parameter bound to the system's metaobject.
+	 */
+	private void runTestOp(String name, java.util.Set<String> visited) {
+		if (!visited.add(name)) {
+			return;
+		}
+		loadSystem(name);
+		AsdfSystems.LispSystem system = this.asdfSystems.get(name);
+		if (system == null) {
+			// A built-in shim system: no test-op wiring to run.
+			return;
+		}
+		for (String edge : system.testOpEdges()) {
+			runTestOp(edge, visited);
+		}
+		AsdfSystems.TestOp testOp = system.testOp();
+		if (testOp == null) {
+			return;
+		}
+		// ((lambda (o c) BODY...) nil (asdf:find-system "name")): the LAST parameter is
+		// the component, every earlier one (the operation) is nil.
+		java.util.List<LispVal> lambda = new java.util.ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(consList(testOp.params()));
+		lambda.addAll(testOp.body());
+		java.util.List<LispVal> call = new java.util.ArrayList<>();
+		call.add(consList(lambda));
+		for (int i = 0; i < testOp.params().size(); i++) {
+			if (i == testOp.params().size() - 1) {
+				call.add(consList(java.util.List.of(new LispSymbol(LispNames.ASDF_FIND_SYSTEM), new LispString(name))));
+			}
+			else {
+				call.add(LispNil.INSTANCE);
+			}
+		}
+		eval(consList(call), this.globalEnv);
+	}
+
 	private void loadSystem(String name) {
 		if (this.loadedSystems.contains(name)) {
 			return;
 		}
+		// The component metaobject classes must exist before any system's own forms
+		// evaluate: a loaded file may defmethod on asdf:system (rove's run-system).
+		ensureAsdfRuntimeLoaded();
 		if (this.loadingSystems.contains(name)) {
 			throw new LispEvalException("Circular system :depends-on detected: "
 					+ String.join(" -> ", this.loadingSystems) + " -> " + name);
@@ -3119,6 +3199,7 @@ public final class LispEvaluator {
 	 * against the directory of the source being loaded.
 	 */
 	private LispVal evalDefsystem(LispCons cons) {
+		ensureAsdfRuntimeLoaded();
 		String baseDir = this.loadDirStack.peekLast();
 		AsdfSystems.LispSystem system = AsdfSystems.parseDefsystem(cons, baseDir == null ? "" : baseDir,
 				Features.INTERPRETER);
@@ -3435,6 +3516,12 @@ public final class LispEvaluator {
 			// uiop exports variables too (49 of them), so the same lazy load has to be
 			// reachable from a variable read.
 			loadUiopDefinition(name);
+			value = this.globalEnv.lookupOrNull(name);
+		}
+		if (value == null && !this.asdfRuntimeLoaded && AsdfRuntimeLibrary.definesName(name)) {
+			// asdf:*user-cache* is a variable, so the asdf runtime's lazy load must be
+			// reachable from a variable read too.
+			ensureAsdfRuntimeLoaded();
 			value = this.globalEnv.lookupOrNull(name);
 		}
 		if (value == null) {
@@ -3923,12 +4010,15 @@ public final class LispEvaluator {
 				case LispNames.DEFSTRUCT:
 					return evalDefstruct(cons, env);
 				case LispNames.DEFCLASS:
+					ensureAsdfClassesFor(cons);
 					return evalDefclass(cons, env);
 				case LispNames.DEFGENERIC:
 					return evalDefgeneric(cons, env);
 				case LispNames.DEFMETHOD:
+					ensureAsdfClassesFor(cons);
 					return evalDefmethod(cons, env);
 				case LispNames.MAKE_INSTANCE:
+					ensureAsdfClassesFor(cons);
 					return eval(LispMacroExpander.expandMakeInstance(cons, this.closRegistry), env);
 				case LispNames.CHANGE_CLASS:
 					return eval(LispMacroExpander.expandChangeClass(cons, this.closRegistry, false), env);
@@ -4332,8 +4422,10 @@ public final class LispEvaluator {
 			case LispNames.PSETF:
 				return eval(LispMacroExpander.expandPsetf(cons), env);
 			case LispNames.TYPECASE:
+				ensureAsdfClassesFor(cons);
 				return eval(LispMacroExpander.expandTypecase(cons, this.closRegistry), env);
 			case LispNames.ETYPECASE:
+				ensureAsdfClassesFor(cons);
 				return eval(LispMacroExpander.expandEtypecase(cons, this.closRegistry), env);
 			case LispNames.CHECK_TYPE:
 				return eval(LispMacroExpander.expandCheckType(cons), env);
@@ -4383,6 +4475,7 @@ public final class LispEvaluator {
 				return evalLoadTimeValue(cons, env);
 			case LispNames.TYPEP:
 				seedMopClassesForTypepForm(cons);
+				ensureAsdfClassesFor(cons);
 				return eval(LispMacroExpander.expandTypep(cons, this.closRegistry), env);
 			case LispNames.PRINT_UNREADABLE_OBJECT:
 				return eval(LispMacroExpander.expandPrintUnreadableObject(cons), env);
@@ -6213,6 +6306,16 @@ public final class LispEvaluator {
 			// same way, one definition at a time.
 			if (UiopLibrary.definesName(name)) {
 				LispVal loaded = loadUiopDefinition(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The asdf runtime (asdf.lisp: the component metaobject classes,
+			// find-system and the readers) loads whole on the first resolution of one
+			// of its names.
+			if (!this.asdfRuntimeLoaded && AsdfRuntimeLibrary.definesName(name)) {
+				ensureAsdfRuntimeLoaded();
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
 				if (loaded != null) {
 					return loaded;
 				}

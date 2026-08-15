@@ -84,8 +84,10 @@ string-typed on every backend.
   primitives only, no splice) — applied ONLY when the instance gate is on, so
   an instance-free program keeps its exact bytes.
 - Deliberately still namestrings: `asdf:system-source-directory` /
-  `component-pathname` / `system-relative-pathname` / `find-system` answers
-  (compile-time locator facts, identical on the interpreter),
+  `component-pathname` / `system-relative-pathname` answers (compile-time
+  locator facts, identical on the interpreter; `find-system` itself answers
+  the component METAOBJECT since todo-374, whose pathname readers stay
+  namestrings — `.kb/asdf.md`),
   `ensure-directories-exist`'s value (CL returns the ARGUMENT pathspec),
   `uiop:with-temporary-file`'s `:pathname` binding (`%temp-file-name` is a
   namestring; its consumers accept both).

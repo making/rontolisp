@@ -1030,26 +1030,36 @@ final class JvmExprCompiler {
 				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_DEFSYSTEM ->
 					throw new UnsupportedOperationException(
 							sym.name() + " is only supported as a literal top-level form on the compile path");
-				// A nested/computed load reached at run time cannot load anything (every
-				// loadable system was spliced at compile time), but it may be dead code
-				// -- lack's find-package-or-load calls it behind a find-package probe
-				// that a spliced system's baked package table already answers -- so it
-				// signals at CALL time (the undefined-function policy), never rejects
-				// the program.
-				case LispNames.ASDF_LOAD_SYSTEM,
-						LispNames.QL_QUICKLOAD ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
-							sym.name() + " cannot load a system at run time on the compiled backends"
-									+ " (systems are spliced at compile time)"),
-							ctx, className);
-				// The runtime counterpart of the literal fold
-				// (CompileTimePathnameFolder):
-				// a compiled program has no system registry, so a COMPUTED find-system
-				// answers nil ("no such system") after evaluating its arguments -- the
-				// probe shape libraries use ((asdf:find-system name nil) guarding a
-				// load-system), where nil routes the caller onto its not-found branch.
-				case LispNames.ASDF_FIND_SYSTEM ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx, className);
+				// A nested/computed load reached at run time: the CLI pipeline splices
+				// the asdf runtime (AsdfRuntimeLibrary) whenever these names occur, so
+				// the calls resolve to its defuns -- an already-spliced system is a nil
+				// no-op, anything else the call-time error. The stub below serves only
+				// a direct backend compile with no LoadInliner in front (a test seam),
+				// where nothing spliced the defuns.
+				case LispNames.ASDF_LOAD_SYSTEM, LispNames.QL_QUICKLOAD -> {
+					if (ctx.functions.containsKey(sym.name())) {
+						JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
+								sym.name() + " cannot load a system at run time on the compiled backends"
+										+ " (systems are spliced at compile time)"),
+								ctx, className);
+					}
+				}
+				// asdf:find-system / asdf:test-system: real defuns whenever the asdf
+				// runtime was spliced (the CLI pipeline splices it on any reference).
+				// Without the splice, find-system keeps the historical nil lowering
+				// ("no such system" after evaluating its arguments) so a direct backend
+				// compile of the probe shape still builds.
+				case LispNames.ASDF_FIND_SYSTEM -> {
+					if (ctx.functions.containsKey(sym.name())) {
+						JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
+					}
+					else {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx, className);
+					}
+				}
 				case LispNames.FUNCALL -> JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				case LispNames.FUNCTION -> JvmFunctionFormCompiler.compile(cons, ctx, className);
 				case LispNames.SYMBOL_FUNCTION -> JvmFunctionFormCompiler.compileSymbolFunction(cons, ctx, className);

@@ -553,8 +553,16 @@ double-float 配列を作るため浮動小数点で計算します(`det`・`inv
 |----------|---------|--------|
 | `asdf:defsystem` | `(asdf:defsystem :my-lib :components ((:file "main")))` | システムを定義する (名前・`:depends-on`・`:serial`・`:components`)。後続の `load-system` 用 |
 | `asdf:load-system` | `(asdf:load-system :my-lib)` | システムをロードする: まず依存システム、次にコンポーネントファイルを順に (コンパイルパスではリテラルかつトップレベルのフォーム) |
+| `asdf:test-system` | `(asdf:test-system "my-app")` | システムをロードし、`:in-order-to` の test-op 連鎖をたどって、記録された `:perform (test-op ...)` 本体を実行する — `.asd` の標準テストエントリポイント |
+| `asdf:find-system` | `(asdf:find-system :my-lib nil)` | システムのメタオブジェクト。名前ごとにメモ化された本物の `asdf:system` CLOS インスタンス (呼び出し間で `eq`)。`error-p` が nil なら未知の名前に nil |
+| `asdf:registered-systems` | `(asdf:registered-systems)` | 登録済みのすべてのシステムの小文字化された名前 (登録順) |
 | `asdf:system-relative-pathname` | `(asdf:system-relative-pathname :my-lib "data/tlds.dat")` | システムのソースディレクトリを基準に解決した名前文字列 (コンパイルパスではリテラルへ畳み込まれる) |
-| `asdf:component-pathname` | `(asdf:component-pathname (asdf:find-system :my-lib))` | 読み込まれたシステムが見つかったディレクトリ (末尾に `/`)。rontolisp がコンポーネントオブジェクトとして実体化するのはシステムだけなので、これはそのソースディレクトリです |
+| `asdf:component-pathname` | `(asdf:component-pathname (asdf:find-system :my-lib))` | システムのソースディレクトリ (末尾に `/`)、またはソースファイルの子の解決済みパス。メタオブジェクトも名前指示子も受け付ける |
+| `asdf:component-name` | `(asdf:component-name (asdf:find-system :my-lib))` | リーダー: コンポーネントの小文字正規形の名前 |
+| `asdf:component-children` | `(asdf:component-children (asdf:find-system :my-lib))` | リーダー: システムのコンポーネントファイル (ロード順、ファイルごとに 1 つの `asdf:cl-source-file`) |
+| `asdf:component-sideway-dependencies` | `(asdf:component-sideway-dependencies (asdf:find-system :my-lib))` | リーダー: システムの `:depends-on` の名前 (package-inferred のサブシステム名を含む) |
+| `asdf:component-parent` | `(asdf:component-parent child)` | リーダー: 親コンポーネント — ソースファイルではシステム、システムでは nil |
+| `asdf:component-system` | `(asdf:component-system child)` | コンポーネントが属するシステム (`component-parent` をたどる) |
 
 ## uiop パッケージの関数
 

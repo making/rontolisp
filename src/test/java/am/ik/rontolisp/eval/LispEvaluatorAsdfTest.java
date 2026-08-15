@@ -110,6 +110,48 @@ class LispEvaluatorAsdfTest {
 	}
 
 	@Test
+	void findSystemAnswersAMemoizedComponentMetaobject() {
+		// asdf.lisp (AsdfRuntimeLibrary): the runtime system object is a real CLOS
+		// instance -- typep works, eq across calls (one object per system), the readers
+		// answer, registered-systems lists the registry, *user-cache* is external nil.
+		String output = run("""
+				(asdf:defsystem :demo :components ((:file "main")))
+				(print (typep (asdf:find-system :demo) 'asdf:system))
+				(print (eq (asdf:find-system :demo) (asdf:find-system "demo")))
+				(print (asdf:component-name (asdf:find-system :demo)))
+				(print (mapcar (lambda (c) (asdf:component-name c))
+				               (asdf:component-children (asdf:find-system :demo))))
+				(print (asdf:registered-systems))
+				(print asdf:*user-cache*)
+				(print (asdf:find-system :absent nil))
+				""", Map.of(), List.of());
+		assertThat(output.trim().lines().map(String::trim)).containsExactly("T", "T", "\"demo\"", "(\"main\")",
+				"(\"demo\")", "NIL", "NIL");
+	}
+
+	@Test
+	void testSystemFollowsTheInOrderToChainIntoThePerformBody() {
+		// fukamachi's .asd shape reduced: test-system on the primary loads it, follows
+		// the :in-order-to test-op edge into the tests system, and runs its recorded
+		// :perform body with the component bound to the system metaobject.
+		String output = run("(asdf:test-system \"lib\")", Map.of(//
+				"lib.asd", """
+						(defsystem :lib
+						  :components ((:file "main"))
+						  :in-order-to ((test-op (test-op "lib/tests"))))
+						(defsystem "lib/tests"
+						  :depends-on ("lib")
+						  :components ((:file "tests"))
+						  :perform (test-op (o c) (run-lib-tests (component-name c))))""", //
+				"main.lisp", "(defun lib-fn () 41)", //
+				"tests.lisp", """
+						(defun run-lib-tests (name)
+						  (print name)
+						  (print (+ 1 (lib-fn))))"""), List.of());
+		assertThat(output.trim().lines().map(String::trim)).containsExactly("\"lib/tests\"", "42");
+	}
+
+	@Test
 	void findSystemAnswersABuiltinSystemBeforeItIsLoaded() {
 		// lack's find-package-or-load probes (asdf:find-system name nil) and loads on
 		// a hit: this is the route by which (clackup app :server :rontolisp) resolves

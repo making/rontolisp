@@ -1,19 +1,20 @@
 # asdf:component-pathname
 
-`(asdf:component-pathname system)`
+`(asdf:component-pathname component)`
 
-Returns the directory a loaded system was found in, with a trailing `/`. In real
-ASDF this is the base pathname of any component; rontolisp only ever materializes
-a *system* as a component object -- its downcase-canonical name, a string, which
-is what `asdf:find-system` answers with -- so here it is the system's source
-directory under the name libraries actually call.
+Returns the component's pathname as a namestring: for a **system**, the
+directory it was found in with a trailing `/`; for a **source file** (an entry
+of [`asdf:component-children`](asdf-component-children.md)), the resolved path
+of the file itself. `component` may be the metaobject
+[`asdf:find-system`](asdf-find-system.md) answers or a plain name designator
+(a string, keyword or symbol) — the designator names a system, which must be
+registered (loaded, or currently loading).
 
-This is how a library locates data files bundled beside its own sources: local-time
-finds its `zoneinfo/` repository with
-`(asdf:component-pathname (asdf:find-system :local-time nil))`. The system must be
-registered (loaded, or currently loading); an unknown name is an error.
-[`asdf:system-relative-pathname`](asdf-system-relative-pathname.md) composes this
-with a relative name in one call.
+This is how a library locates data files bundled beside its own sources:
+local-time finds its `zoneinfo/` repository with
+`(asdf:component-pathname (asdf:find-system :local-time nil))`.
+[`asdf:system-relative-pathname`](asdf-system-relative-pathname.md) composes
+this with a relative name in one call.
 
 ```console
 (asdf:load-system "my-lib")
@@ -23,5 +24,7 @@ with a relative name in one call.
 ## Backend support
 
 Works on all four backends. The interpreter answers from its system registry at
-run time; the compile paths fold the call to a literal namestring when the system
-name is a literal, which is the shape every library uses.
+run time; the compile paths fold the call to a literal namestring when the
+system name is a literal (a literal `find-system` around it included), which is
+the shape every library uses — anything else reads the registry the compiled
+program carries.

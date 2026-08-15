@@ -40,8 +40,11 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>
  * The primitives handled are: {@link LispNames#MAKE_PATHNAME},
- * {@code uiop:merge-pathnames*}, {@link LispNames#ASDF_FIND_SYSTEM} and
- * {@link LispNames#ASDF_SYSTEM_SOURCE_DIRECTORY}. The pass also detects
+ * {@code uiop:merge-pathnames*} and {@link LispNames#ASDF_SYSTEM_SOURCE_DIRECTORY} /
+ * {@code asdf:system-relative-pathname}. {@code asdf:find-system} itself no longer folds
+ * (at run time it answers a memoized system metaobject, {@code AsdfRuntimeLibrary}), but
+ * a nested literal {@code (asdf:find-system 'lib nil)} in a fold's system-designator
+ * position still reduces, so the uax-15 shape keeps folding. The pass also detects
  * {@code (defparameter *NAME* <folded string>)} at top level: the recorded literal feeds
  * later folds that reference the same {@code *NAME*} inside another primitive's argument
  * -- the {@code *data-directory*} + {@code "file.txt"} idiom.
@@ -403,10 +406,9 @@ final class CompileTimePathnameFolder {
 		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)) {
 			return true;
 		}
-		if (LispNames.ASDF_PKG.equals(qn.pkg())
-				&& (LispNames.FIND_SYSTEM.equals(qn.member()) || LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
-						|| LispNames.COMPONENT_PATHNAME.equals(qn.member())
-						|| LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member()))) {
+		if (LispNames.ASDF_PKG.equals(qn.pkg()) && (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
+				|| LispNames.COMPONENT_PATHNAME.equals(qn.member())
+				|| LispNames.SYSTEM_RELATIVE_PATHNAME.equals(qn.member()))) {
 			return true;
 		}
 		return false;
@@ -491,9 +493,6 @@ final class CompileTimePathnameFolder {
 			return reduceMergePathnames(args, systems, parameters, writtenPaths);
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())) {
-			if (LispNames.FIND_SYSTEM.equals(qn.member())) {
-				return reduceFindSystem(args, systems, parameters, writtenPaths);
-			}
 			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
 					|| LispNames.COMPONENT_PATHNAME.equals(qn.member())) {
 				// component-pathname of a SYSTEM is its source directory, and a system is
@@ -589,29 +588,6 @@ final class CompileTimePathnameFolder {
 		return PathnameOps.pathnameValue(PathnameOps.mergePathnames(specifiedNs, defaults));
 	}
 
-	private static @Nullable LispVal reduceFindSystem(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
-			Map<String, LispVal> parameters, java.util.Set<String> writtenPaths) {
-		if (args.isEmpty() || args.size() > 2) {
-			return null;
-		}
-		String name = literalDesignator(args.get(0), parameters);
-		if (name == null) {
-			return null;
-		}
-		boolean errorP = true;
-		if (args.size() == 2) {
-			LispVal errorVal = reduce(args.get(1), systems, parameters, writtenPaths);
-			if (errorVal == null) {
-				return null;
-			}
-			errorP = !(errorVal instanceof LispNil);
-		}
-		if (systems.containsKey(name)) {
-			return new LispString(name);
-		}
-		return errorP ? null : LispNil.INSTANCE;
-	}
-
 	/**
 	 * {@code (asdf:system-relative-pathname SYSTEM RELATIVE)} -> the merged namestring:
 	 * the system's recorded base directory with {@code RELATIVE} merged onto it. The
@@ -626,7 +602,7 @@ final class CompileTimePathnameFolder {
 		if (args.size() != 2) {
 			return null;
 		}
-		String name = literalDesignator(args.get(0), parameters);
+		String name = systemDesignator(args.get(0), parameters);
 		if (name == null) {
 			return null;
 		}
@@ -652,20 +628,7 @@ final class CompileTimePathnameFolder {
 		if (args.size() != 1) {
 			return null;
 		}
-		LispVal reduced = reduce(args.get(0), systems, parameters, writtenPaths);
-		if (reduced == null) {
-			return null;
-		}
-		String name;
-		if (reduced instanceof LispString str) {
-			name = str.value();
-		}
-		else if (reduced instanceof LispSymbol sym) {
-			name = literalDesignator(sym, parameters);
-		}
-		else {
-			return null;
-		}
+		String name = systemDesignator(args.get(0), parameters);
 		if (name == null) {
 			return null;
 		}
@@ -678,6 +641,34 @@ final class CompileTimePathnameFolder {
 			return new LispString("./");
 		}
 		return new LispString(base.endsWith("/") ? base : base + "/");
+	}
+
+	/**
+	 * A literal system designator in a fold's SYSTEM argument position: a plain literal
+	 * ({@link #literalDesignator}) or a nested literal
+	 * {@code (asdf:find-system NAME [ERROR-P])} call. find-system itself no longer folds
+	 * -- at run time it answers a system metaobject ({@code AsdfRuntimeLibrary}) -- but
+	 * the designator-position unwrap keeps the uax-15 seed shape
+	 * {@code (asdf:system-source-directory (asdf:find-system 'lib nil))} folding to the
+	 * same literal it always did.
+	 */
+	private static @Nullable String systemDesignator(LispVal arg, Map<String, LispVal> parameters) {
+		String literal = literalDesignator(arg, parameters);
+		if (literal != null) {
+			return literal;
+		}
+		if (!(arg instanceof LispCons cons) || !(cons.car() instanceof LispSymbol op) || !cons.isProperList()) {
+			return null;
+		}
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(op.name());
+		if (qn == null || !LispNames.ASDF_PKG.equals(qn.pkg()) || !LispNames.FIND_SYSTEM.equals(qn.member())) {
+			return null;
+		}
+		List<LispVal> items = cons.toList();
+		if (items.size() < 2 || items.size() > 3) {
+			return null;
+		}
+		return literalDesignator(items.get(1), parameters);
 	}
 
 	/**

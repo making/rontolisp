@@ -5238,12 +5238,85 @@ public final class LispNames {
 	public static final String ASDF_LOAD_SYSTEM = ASDF_PKG + ":" + LOAD_SYSTEM;
 
 	/**
-	 * {@code asdf:find-system} -- looks up a system by name; returns the system name (as
-	 * a string) when found, or {@code nil} when the optional {@code error-p} arg is nil
-	 * and the system is not registered. The uax-15 pattern:
+	 * {@code asdf:find-system} -- looks up a system by name; returns the memoized
+	 * {@code asdf:system} instance ({@code eq} across calls) when found, or {@code nil}
+	 * when the optional {@code error-p} arg is nil and the system is not registered. The
+	 * uax-15 pattern:
 	 * {@code (asdf:system-source-directory (asdf:find-system 'uax-15 nil))}.
 	 */
 	public static final String FIND_SYSTEM = "FIND-SYSTEM";
+
+	/**
+	 * {@code asdf:test-system} -- loads the system, follows its
+	 * {@code :in-order-to ((test-op (test-op ...)))} edges, then runs its recorded
+	 * {@code :perform (test-op (o c) ...)} body (fukamachi's {@code .asd} shape:
+	 * {@code :perform (test-op (op c) (symbol-call :rove :run c))}).
+	 */
+	public static final String TEST_SYSTEM = "TEST-SYSTEM";
+
+	/** The {@code test-op} operation name in a {@code .asd}'s test-op wiring options. */
+	public static final String TEST_OP = "TEST-OP";
+
+	/** The canonical qualified spelling of {@code asdf:test-system}. */
+	public static final String ASDF_TEST_SYSTEM = ASDF_PKG + ":" + TEST_SYSTEM;
+
+	/**
+	 * {@code asdf:registered-systems} -- the downcased names of every registered system
+	 * (declared by a {@code .asd}/{@code defsystem}, derived package-inferred sub-systems
+	 * and loaded built-in shim systems), in registration order.
+	 */
+	public static final String REGISTERED_SYSTEMS = "REGISTERED-SYSTEMS";
+
+	/**
+	 * {@code asdf:*user-cache*} -- real ASDF's fasl output-translation cache directory.
+	 * There is no fasl cache here, so it is external and {@code nil} (rove's
+	 * {@code resolve-file} returns early on it).
+	 */
+	public static final String ASDF_USER_CACHE = "*USER-CACHE*";
+
+	/** {@code asdf:component-name} -- reader: the component's downcase-canonical name. */
+	public static final String COMPONENT_NAME = "COMPONENT-NAME";
+
+	/**
+	 * {@code asdf:component-children} -- reader: a parent component's children in load
+	 * order (a system's {@code cl-source-file}s, one per component file).
+	 */
+	public static final String COMPONENT_CHILDREN = "COMPONENT-CHILDREN";
+
+	/**
+	 * {@code asdf:component-sideway-dependencies} -- reader: a system's
+	 * {@code :depends-on} names (package-inferred sub-system names included).
+	 */
+	public static final String COMPONENT_SIDEWAY_DEPENDENCIES = "COMPONENT-SIDEWAY-DEPENDENCIES";
+
+	/** {@code asdf:component-parent} -- reader: the parent component, nil on a system. */
+	public static final String COMPONENT_PARENT = "COMPONENT-PARENT";
+
+	/**
+	 * {@code asdf:component-system} -- walks {@code component-parent} up to the system.
+	 */
+	public static final String COMPONENT_SYSTEM = "COMPONENT-SYSTEM";
+
+	/** The {@code asdf:component} base class of the component metaobject family. */
+	public static final String COMPONENT = "COMPONENT";
+
+	/** The {@code asdf:child-component} mixin (a component with a parent). */
+	public static final String CHILD_COMPONENT = "CHILD-COMPONENT";
+
+	/** The {@code asdf:parent-component} mixin (a component with children). */
+	public static final String PARENT_COMPONENT = "PARENT-COMPONENT";
+
+	/** The {@code asdf:module} component class (real ASDF's, {@code system}'s parent). */
+	public static final String MODULE = "MODULE";
+
+	/** The {@code asdf:source-file} component class. */
+	public static final String SOURCE_FILE = "SOURCE-FILE";
+
+	/** The {@code asdf:cl-source-file} component class (one per {@code :file}). */
+	public static final String CL_SOURCE_FILE = "CL-SOURCE-FILE";
+
+	/** The {@code asdf:static-file} component class (ordering-only entries). */
+	public static final String STATIC_FILE = "STATIC-FILE";
 
 	/**
 	 * {@code asdf:system-source-directory} -- returns the system's source directory (with

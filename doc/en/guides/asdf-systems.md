@@ -150,8 +150,12 @@ below.
   a component may carry `:if-feature expr`, which drops the component's files
   when the feature expression does not hold (how libraries gate CLOS-only
   files behind `(:or :sbcl ...)`) while keeping its place in the dependency
-  order. The test-op wiring options `:in-order-to` and `:perform` are
-  tolerated and ignored (there is no `test-op`/`operate` machinery), and a
+  order. The test-op wiring options are the one op with machinery behind
+  them: `:in-order-to ((test-op (test-op ...)))` and
+  `:perform (test-op (o c) ...)` are recorded and driven by
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) (any other
+  operation, a qualified `test-op :after` method, or a `#.` in the body stays
+  tolerated and ignored — there is still no general `operate` machinery). A
   `:version` value may be any literal form including ASDF's
   `(:read-file-form ...)` indirection (never inspected). Anything else
   (`:defsystem-depends-on`, ...) is an error naming the clause.
@@ -175,7 +179,35 @@ below.
 - The compile path requires a literal, top-level `(asdf:load-system NAME)`;
   the interpreter also accepts a computed name at runtime. Both accept and
   ignore trailing keyword options (`:verbose nil`, `:force t`, `:silent t`),
-  which real libraries pass when they load a system at runtime.
+  which real libraries pass when they load a system at runtime. A nested or
+  computed `load-system`/`ql:quickload` in a compiled program answers `nil`
+  when the system was already spliced and signals otherwise — nothing can be
+  loaded at run time there.
+- **The component metaobjects are real at run time.**
+  [`asdf:find-system`](../reference/functions/asdf-find-system.md) answers a
+  memoized CLOS instance per system (`eq` across calls) over real classes —
+  `asdf:component`, `asdf:child-component`/`asdf:parent-component`,
+  `asdf:module`, `asdf:system`, `asdf:package-inferred-system`,
+  `asdf:source-file`, `asdf:cl-source-file`, `asdf:static-file` — so `typep`,
+  `typecase` and `defmethod` specializers over them work on every backend. The
+  readers [`asdf:component-name`](../reference/functions/asdf-component-name.md),
+  [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md),
+  [`asdf:component-children`](../reference/functions/asdf-component-children.md)
+  (one `cl-source-file` per component file, in load order),
+  [`asdf:component-sideway-dependencies`](../reference/functions/asdf-component-sideway-dependencies.md),
+  [`asdf:component-parent`](../reference/functions/asdf-component-parent.md) and
+  [`asdf:component-system`](../reference/functions/asdf-component-system.md)
+  walk the model;
+  [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
+  lists every registered name, and `asdf:*user-cache*` is external and `nil`
+  (there is no fasl cache). This is the component model rove's system-driven
+  test runner reads.
+- **`asdf:test-system` runs the recorded test-op wiring.**
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) loads the
+  system, follows its `:in-order-to` test-op chain, and runs each recorded
+  `:perform (test-op (o c) ...)` body with the component bound to the system
+  metaobject. On the compile paths a literal top-level call splices the test
+  systems too.
 - **Compiling tree-shakes the system.** A function, variable or constant a
   loaded system defines but your program never reaches — following names
   through the source, including quoted symbols and whole string literals — is

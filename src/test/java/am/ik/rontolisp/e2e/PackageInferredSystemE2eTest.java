@@ -38,9 +38,15 @@ class PackageInferredSystemE2eTest extends AsdfLibraryE2eSupport {
 			(print (package-inferred-demo:greet "world"))
 			(print (package-inferred-demo:shout "reexported"))
 			(print (pkg.inferred.tag:tag))
+			(print (typep (asdf:find-system "package-inferred-demo") 'asdf:package-inferred-system))
+			(print (typep (asdf:find-system "package-inferred-demo/main") 'asdf:package-inferred-system))
+			(print (asdf:component-sideway-dependencies (asdf:find-system "package-inferred-demo/main")))
+			(print (mapcar (lambda (c) (asdf:component-name c))
+			               (asdf:component-children (asdf:find-system "package-inferred-demo/main"))))
 			""";
 
-	private static final List<String> EXPECTED = List.of("\"HELLO, world! [tag]\"", "\"REEXPORTED\"", "\"tag\"");
+	private static final List<String> EXPECTED = List.of("\"HELLO, world! [tag]\"", "\"REEXPORTED\"", "\"tag\"", "T",
+			"T", "(\"package-inferred-demo/util/text\" \"package-inferred-demo-tag\")", "(\"main\")");
 
 	@Override
 	protected String systemDir() {

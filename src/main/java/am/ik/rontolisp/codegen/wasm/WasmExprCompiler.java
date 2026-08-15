@@ -1096,21 +1096,34 @@ final class WasmExprCompiler {
 				case LispNames.REQUIRE, LispNames.PROVIDE, LispNames.ASDF_DEFSYSTEM ->
 					throw new UnsupportedOperationException(
 							sym.name() + " is only supported as a literal top-level form on the compile path");
-				// A nested/computed load reached at run time cannot load anything (every
-				// loadable system was spliced at compile time), but it may be dead code
-				// -- lack's find-package-or-load calls it behind a find-package probe
-				// -- so it signals at CALL time (the undefined-function policy).
-				case LispNames.ASDF_LOAD_SYSTEM, LispNames.QL_QUICKLOAD ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
-							sym.name() + " cannot load a system at run time on the compiled backends"
-									+ " (systems are spliced at compile time)"),
-							ctx);
-				// The runtime counterpart of the literal fold: a compiled program has no
-				// system registry, so a COMPUTED find-system answers nil after
-				// evaluating its arguments (the (asdf:find-system name nil) probe
-				// shape; see LispMacroExpander.expandRuntimeFindSystem).
-				case LispNames.ASDF_FIND_SYSTEM ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx);
+				// A nested/computed load reached at run time: the CLI pipeline splices
+				// the asdf runtime (AsdfRuntimeLibrary) whenever these names occur, so
+				// the calls resolve to its defuns -- an already-spliced system is a nil
+				// no-op, anything else the call-time error. The stub below serves only
+				// a direct backend compile with no LoadInliner in front (a test seam).
+				case LispNames.ASDF_LOAD_SYSTEM, LispNames.QL_QUICKLOAD -> {
+					if (ctx.functions.containsKey(sym.name())) {
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(
+								sym.name() + " cannot load a system at run time on the compiled backends"
+										+ " (systems are spliced at compile time)"),
+								ctx);
+					}
+				}
+				// asdf:find-system: a real defun whenever the asdf runtime was spliced
+				// (the CLI pipeline splices it on any reference); without the splice it
+				// keeps the historical nil lowering (see
+				// LispMacroExpander.expandRuntimeFindSystem).
+				case LispNames.ASDF_FIND_SYSTEM -> {
+					if (ctx.functions.containsKey(sym.name())) {
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+					}
+					else {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandRuntimeFindSystem(cons), ctx);
+					}
+				}
 				case LispNames.EVAL -> WasmEvalCompiler.compile(cons, ctx);
 				case LispNames.QUOTE -> WasmQuoteCompiler.compile(cons, ctx);
 				// quote for a compiler-synthesized name: same value, but the spelling is

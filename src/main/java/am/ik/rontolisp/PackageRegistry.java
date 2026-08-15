@@ -526,21 +526,29 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.JAVA_PKG, List.of(), new HashSet<>(Set.of(LispNames.JAVA_NEW,
 				LispNames.JAVA_CALL, LispNames.JAVA_STATIC, LispNames.JAVA_FIELD, LispNames.JAVA_PROXY))));
 		// A limited, API-compatible subset of ASDF (system definitions parsed from .asd
-		// files as plain data -- see eval.AsdfSystems). Does not use cl; both symbols
-		// are external.
+		// files as plain data -- see eval.AsdfSystems; the runtime component metaobject
+		// family lives in Lisp source, eval.AsdfRuntimeLibrary / asdf.lisp). Does not
+		// use cl; every registered symbol is external.
 		define(new LispPackage(LispNames.ASDF_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFSYSTEM, LispNames.LOAD_SYSTEM, LispNames.FIND_SYSTEM,
-						LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
-						LispNames.COMPONENT_PATHNAME,
-						// The system CLASS name, the missing-component CONDITION name and
-						// the retry RESTART name, all external in real ASDF and all
-						// resolve-only here (never defined): trivial-utf-8's
-						// pax:defsection body says (trivial-utf-8 asdf:system), and dbi's
-						// with-autoload-on-missing handler-binds asdf:missing-component /
-						// invokes asdf:retry around its runtime load-system call -- dead
-						// code here, since a missing system is a hard Java-side error,
-						// never a signaled missing-component.
-						"SYSTEM", "MISSING-COMPONENT", "RETRY"))));
+						LispNames.TEST_SYSTEM, LispNames.SYSTEM_SOURCE_DIRECTORY, LispNames.SYSTEM_RELATIVE_PATHNAME,
+						LispNames.COMPONENT_PATHNAME, LispNames.REGISTERED_SYSTEMS, LispNames.ASDF_USER_CACHE,
+						// The component metaobject family (asdf.lisp): the classes and
+						// their readers, real CLOS classes on every backend so typecase /
+						// typep / defmethod specializers work (rove's run-system reads
+						// the whole component model).
+						LispNames.COMPONENT, LispNames.CHILD_COMPONENT, LispNames.PARENT_COMPONENT, LispNames.MODULE,
+						"SYSTEM", LispNames.PACKAGE_INFERRED_SYSTEM, LispNames.SOURCE_FILE, LispNames.CL_SOURCE_FILE,
+						LispNames.STATIC_FILE, LispNames.COMPONENT_NAME, LispNames.COMPONENT_CHILDREN,
+						LispNames.COMPONENT_SIDEWAY_DEPENDENCIES, LispNames.COMPONENT_PARENT,
+						LispNames.COMPONENT_SYSTEM,
+						// The missing-component CONDITION name and the retry RESTART
+						// name, external in real ASDF and resolve-only here (never
+						// defined): dbi's with-autoload-on-missing handler-binds
+						// asdf:missing-component / invokes asdf:retry around its runtime
+						// load-system call -- dead code here, since a missing system is
+						// a hard error, never a signaled missing-component.
+						"MISSING-COMPONENT", "RETRY"))));
 		// A limited, API-compatible subset of Quicklisp: ql:quickload downloads a system
 		// (and its dependencies) from the real Quicklisp distribution into a local cache
 		// and then defers to the asdf subset (see eval.QuicklispClient). Its canonical

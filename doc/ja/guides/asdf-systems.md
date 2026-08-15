@@ -143,8 +143,12 @@ $ rontolisp
   コンポーネントには `:if-feature expr` を付けられます。フィーチャー式が成立しない
   場合、そのコンポーネントのファイルは除外されますが (ライブラリが CLOS 専用
   ファイルを `(:or :sbcl ...)` の後ろにゲートする方法)、依存順序内の位置は
-  維持されます。test-op 配線用のオプション `:in-order-to` と `:perform` は許容され
-  無視されます (`test-op`/`operate` の機構はありません)。`:version` の値は ASDF の
+  維持されます。test-op 配線用のオプションは機構を持つ唯一の op です:
+  `:in-order-to ((test-op (test-op ...)))` と `:perform (test-op (o c) ...)` は
+  記録され、[`asdf:test-system`](../reference/functions/asdf-test-system.md) が
+  駆動します (それ以外の operation、修飾子つきの `test-op :after` メソッド、本体中の
+  `#.` は従来どおり許容されて無視されます — 汎用の `operate` 機構は依然として
+  ありません)。`:version` の値は ASDF の
   `(:read-file-form ...)` 間接参照を含む任意のリテラルフォームで構いません
   (検査されません)。それ以外 (`:defsystem-depends-on` など) は句を名指しする
   エラーです。
@@ -168,6 +172,35 @@ $ rontolisp
   インタプリタは実行時に計算された名前も受け付けます。どちらも末尾のキーワード
   オプション (`:verbose nil`、`:force t`、`:silent t`) を受理して無視します。
   実在のライブラリは実行時にシステムをロードするときこれらを渡します。
+  コンパイルされたプログラムでネストした/計算された `load-system`/`ql:quickload` は、
+  システムがスプライス済みなら `nil` を返し、そうでなければエラーを通知します —
+  実行時には何もロードできません。
+- **コンポーネントメタオブジェクトは実行時に本物です。**
+  [`asdf:find-system`](../reference/functions/asdf-find-system.md) はシステムごとに
+  メモ化された CLOS インスタンス (呼び出し間で `eq`) を返します。クラスは本物です —
+  `asdf:component`、`asdf:child-component`/`asdf:parent-component`、
+  `asdf:module`、`asdf:system`、`asdf:package-inferred-system`、
+  `asdf:source-file`、`asdf:cl-source-file`、`asdf:static-file` — ので、これらに
+  対する `typep`、`typecase`、`defmethod` の特定化子はすべてのバックエンドで
+  動作します。リーダー
+  [`asdf:component-name`](../reference/functions/asdf-component-name.md)、
+  [`asdf:component-pathname`](../reference/functions/asdf-component-pathname.md)、
+  [`asdf:component-children`](../reference/functions/asdf-component-children.md)
+  (コンポーネントファイルごとに 1 つの `cl-source-file`、ロード順)、
+  [`asdf:component-sideway-dependencies`](../reference/functions/asdf-component-sideway-dependencies.md)、
+  [`asdf:component-parent`](../reference/functions/asdf-component-parent.md)、
+  [`asdf:component-system`](../reference/functions/asdf-component-system.md)
+  がモデルをたどり、
+  [`asdf:registered-systems`](../reference/functions/asdf-registered-systems.md)
+  が登録済みの全名前を列挙します。`asdf:*user-cache*` は external で `nil` です
+  (fasl キャッシュはありません)。これは rove のシステム駆動テストランナーが読む
+  コンポーネントモデルです。
+- **`asdf:test-system` は記録された test-op 配線を実行します。**
+  [`asdf:test-system`](../reference/functions/asdf-test-system.md) はシステムを
+  ロードし、`:in-order-to` の test-op 連鎖をたどり、記録された各
+  `:perform (test-op (o c) ...)` 本体を component にシステムメタオブジェクトを束縛して
+  実行します。コンパイルパスではリテラルなトップレベルの呼び出しがテストシステムも
+  スプライスします。
 - **コンパイル時にシステムはツリーシェイキングされます。** ロードしたシステムが定義していても
   プログラムから到達しない関数・変数・定数は — クォートされたシンボルや文字列リテラル全体も
   含めてソース中の名前を辿った上で — `.class`/`.wasm` に含まれません。クラス・総称関数・

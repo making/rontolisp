@@ -89,8 +89,9 @@ Consequences, each load-bearing:
   one clack actually asks ASDF for. Both keys map to the one resource in
   `ShimLibraries.RESOURCES` / `BuiltinSystems`.
 - **The interpreter's runtime `asdf:find-system` answers built-in systems**
-  (returns the name string) even before they are loaded — that hit is what
-  routes `find-package-or-load` onto its `load-system` branch at clackup time.
+  (a plain `asdf:system` metaobject since todo-374; was the name string) even
+  before they are loaded — that hit is what routes `find-package-or-load` onto
+  its `load-system` branch at clackup time.
 - **The compile paths splice the shim EAGERLY with clack**
   (`LoadInliner.spliceSystem`: after splicing system `"clack"`, it splices
   `clack-handler-rontolisp`), because a compiled program cannot load anything
@@ -888,15 +889,16 @@ per isolate and reported by `wrangler deploy` (Worker Startup Time 14 -> 25 ms).
 
 Landed with this milestone, each with its own pin:
 
-- **Nested/computed `asdf:load-system` / `ql:quickload` compile to call-time
-  error stubs** (were compile errors) and **nested/computed
-  `asdf:find-system` lowers to args-then-nil**
-  (`LispMacroExpander.expandRuntimeFindSystem`): lack's
-  `find-package-or-load` has all three inside a defun, guarded by a
-  `find-package` probe the baked table answers for every spliced system — the
-  asdf calls are dead at run time but must compile. Divergence vs the
-  interpreter's live registry (which answers real + builtin systems) is
-  deliberate: a compiled program has no system registry and can load nothing.
+- **Nested/computed `asdf:load-system` / `ql:quickload` / `asdf:find-system`
+  compile** (were compile errors): lack's `find-package-or-load` has all three
+  inside a defun, guarded by a `find-package` probe the baked table answers
+  for every spliced system. Since todo-374 they resolve to the spliced asdf
+  runtime's real defuns over the baked `%asdf-registry%` (find-system answers
+  the metaobject, load of a spliced system is a nil no-op, anything else the
+  call-time error); the historical stub lowerings
+  (`LispMacroExpander.expandRuntimeFindSystem`, the call-time error) survive
+  only as the no-pipeline fallback in the expression compilers. `.kb/asdf.md`,
+  "ASDF component metaobjects at run time".
 - **`with-open-file` with a non-native option VALUE (`:if-exists :append`
   etc.) expands to a call-time stub** instead of throwing at expansion —
   lack-middleware-backtrace's file-output branch, dead under the default

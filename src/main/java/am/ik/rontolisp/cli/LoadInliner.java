@@ -20,6 +20,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.eval.AsdfRuntimeLibrary;
 import am.ik.rontolisp.eval.AsdfSystems;
 import am.ik.rontolisp.eval.BuiltinSystems;
 import am.ik.rontolisp.eval.QuicklispClient;
@@ -162,16 +163,25 @@ public final class LoadInliner {
 	public static List<LispVal> inline(List<LispVal> program, SourceLoader loader, @Nullable String baseDir,
 			List<String> systemPath, Features features, QuicklispClient quicklisp) {
 		List<LispVal> result = new ArrayList<>();
-		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new HashMap<>(), new HashMap<>(),
-				new HashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp, baseDir);
+		// The system registry and the loaded set are insertion-ordered: the baked
+		// %asdf-registry% (AsdfRuntimeLibrary) is emitted from them, and the emitted
+		// program must be deterministic (.kb/emitted-output-determinism.md).
+		Ctx ctx = new Ctx(loader, new ArrayDeque<>(), new HashSet<>(), new java.util.LinkedHashMap<>(), new HashMap<>(),
+				new java.util.LinkedHashSet<>(), new ArrayDeque<>(), new ArrayList<>(systemPath), features, quicklisp,
+				baseDir);
 		expandInto(program, result, ctx, baseDir);
-		// Fold the four ASDF/UIOP pathname primitives + bundle with-open-file bodies of
+		// Fold the ASDF/UIOP pathname primitives + bundle with-open-file bodies of
 		// literal-path files: a real library evaluates them at load time to build a path
 		// pointing at a bundled data file (uax-15's precomputed-tables.lisp), and the
 		// compilers cannot lower them dynamically. See CompileTimePathnameFolder. The
 		// systems registry is complete by this point -- every asdf:load-system, inline
 		// asdf:defsystem and ql:quickload has already registered its LispSystem.
-		return CompileTimePathnameFolder.fold(result, ctx.systems());
+		result = CompileTimePathnameFolder.fold(result, ctx.systems());
+		// The runtime component metaobjects (asdf.lisp + the baked %asdf-registry%
+		// table): spliced when the folded program still references any runtime asdf
+		// name -- after the folder, so a program whose only asdf use folded away pays
+		// nothing. See AsdfRuntimeLibrary.
+		return AsdfRuntimeLibrary.process(result, ctx.systems(), ctx.loadedSystems());
 	}
 
 	/**
@@ -218,6 +228,17 @@ public final class LoadInliner {
 			if (systemName != null) {
 				spliceSystem(systemName, out, ctx, baseDir);
 				out.add(quotedSymbol(systemName));
+				continue;
+			}
+			String testSystemName = AsdfSystems.testSystemName(form);
+			if (testSystemName != null) {
+				// A top-level literal (asdf:test-system NAME) splices the system AND its
+				// :in-order-to test-op chain (the tests system, which a plain load never
+				// pulls in), then KEEPS the call: at run time the generated dispatch
+				// (AsdfRuntimeLibrary) walks the recorded wiring and runs the perform
+				// defuns spliced with each system.
+				spliceTestOpClosure(testSystemName, out, ctx, baseDir, new HashSet<>());
+				out.add(form);
 				continue;
 			}
 			List<String> quickloadNames = quickloadNames(form);
@@ -357,6 +378,28 @@ public final class LoadInliner {
 	}
 
 	/**
+	 * Splices the named system and, transitively, every system its recorded
+	 * {@code :in-order-to ((test-op (test-op ...)))} wiring chains test-op to -- what a
+	 * top-level {@code (asdf:test-system NAME)} needs on a compiled backend, where
+	 * nothing can be loaded at run time. The {@code visited} set terminates a cyclic
+	 * chain.
+	 */
+	private static void spliceTestOpClosure(String name, List<LispVal> out, Ctx ctx, @Nullable String requestBaseDir,
+			Set<String> visited) {
+		if (!visited.add(name)) {
+			return;
+		}
+		spliceSystem(name, out, ctx, requestBaseDir);
+		AsdfSystems.LispSystem system = ctx.systems().get(name);
+		if (system == null) {
+			return;
+		}
+		for (String edge : system.testOpEdges()) {
+			spliceTestOpClosure(edge, out, ctx, requestBaseDir, visited);
+		}
+	}
+
+	/**
 	 * Splices the named system into {@code out}: dependency systems first (recursively),
 	 * then the component files in their {@code :depends-on}/{@code :serial} order. An
 	 * already-loaded system is a no-op; an unknown system is located as {@code NAME.asd}
@@ -456,6 +499,14 @@ public final class LoadInliner {
 				}
 				spliceFile(LispNames.ASDF_LOAD_SYSTEM, SourceLoader.resolve(system.baseDir(), file), out, systemCtx,
 						name, file, system.baseDir());
+			}
+			// The system's recorded :perform (test-op ...) body, as the defun the
+			// generated asdf:test-system dispatch calls -- emitted at the system's own
+			// splice point, so the body compiles in the system's context
+			// (AsdfRuntimeLibrary).
+			LispVal testOpDefun = AsdfRuntimeLibrary.testOpDefun(system);
+			if (testOpDefun != null) {
+				out.add(testOpDefun);
 			}
 		}
 		finally {

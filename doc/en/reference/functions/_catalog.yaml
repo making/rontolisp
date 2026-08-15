@@ -528,8 +528,16 @@ categories:
     functions:
       - { slug: asdf-defsystem, name: "asdf:defsystem" }
       - { slug: asdf-load-system, name: "asdf:load-system" }
+      - { slug: asdf-test-system, name: "asdf:test-system" }
+      - { slug: asdf-find-system, name: "asdf:find-system" }
+      - { slug: asdf-registered-systems, name: "asdf:registered-systems" }
       - { slug: asdf-system-relative-pathname, name: "asdf:system-relative-pathname" }
       - { slug: asdf-component-pathname, name: "asdf:component-pathname" }
+      - { slug: asdf-component-name, name: "asdf:component-name" }
+      - { slug: asdf-component-children, name: "asdf:component-children" }
+      - { slug: asdf-component-sideway-dependencies, name: "asdf:component-sideway-dependencies" }
+      - { slug: asdf-component-parent, name: "asdf:component-parent" }
+      - { slug: asdf-component-system, name: "asdf:component-system" }
   - title: "uiop Package (ASDF portability layer)"
     functions:
       - { slug: uiop-getenv, name: "uiop:getenv" }

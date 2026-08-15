@@ -23920,15 +23920,15 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Lowers a nested/computed {@code (asdf:find-system NAME [ERROR-P])} on the compile
-	 * paths to its arguments evaluated for effect followed by {@code nil}: a compiled
-	 * program carries no system registry (every loadable system was spliced at compile
-	 * time; a LITERAL name folds via {@code CompileTimePathnameFolder} before this is
-	 * reached), so "no such system" is the honest runtime answer. This serves the probe
-	 * shape libraries actually use -- lack's {@code find-package-or-load} guards its
+	 * The NO-PIPELINE fallback for a {@code (asdf:find-system NAME [ERROR-P])} call: its
+	 * arguments evaluated for effect followed by {@code nil}. The CLI pipeline splices
+	 * the asdf runtime ({@code AsdfRuntimeLibrary}) whenever the name occurs, so there
+	 * {@code asdf:find-system} is a real defun answering a system metaobject over the
+	 * baked registry; this lowering is reached only by a direct backend compile with no
+	 * {@code LoadInliner} in front (a test seam), where "no such system" keeps the probe
+	 * shape building -- lack's {@code find-package-or-load} guards its
 	 * {@code load-system} with {@code (asdf:find-system name nil)}, and nil routes it
-	 * onto the not-found branch. Divergence vs the interpreter (which answers from its
-	 * live registry) is accepted and documented in {@code .kb/asdf.md}.
+	 * onto the not-found branch. {@code .kb/asdf.md}.
 	 * @param cons the find-system call
 	 * @return the lowered expression
 	 */
