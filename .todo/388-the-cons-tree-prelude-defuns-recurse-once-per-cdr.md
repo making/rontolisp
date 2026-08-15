@@ -1,4 +1,4 @@
-# 386. The cons-tree prelude defuns recurse once per CDR, so a long flat list overflows the stack
+# 388. The cons-tree prelude defuns recurse once per CDR, so a long flat list overflows the stack
 
 Difficulty: Medium
 
