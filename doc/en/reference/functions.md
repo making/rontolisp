@@ -328,7 +328,8 @@ page.
 | `make-string-output-stream` | `(make-string-output-stream)` | a fresh string output stream -- the explicit form of what `with-output-to-string` builds |
 | `make-string-input-stream` | `(make-string-input-stream string &optional start end)` | an input stream reading from a string -- the explicit form of what `with-input-from-string` binds |
 | `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |
-| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a designator forwarding to the named variable's stream. `*standard-output*` / `*standard-input*` forward per operation (the `nil` designator); any other symbol is lite -- resolved ONCE, where the stream is built |
+| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a stream forwarding every operation to the stream the named variable holds AT THAT MOMENT, for any symbol -- so rebinding the variable afterwards redirects it |
+| `synonym-stream-symbol` | `(synonym-stream-symbol s)` | the symbol a synonym stream forwards to |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | an output stream fanning every write out to each component, in order; with no components, a discarding sink. A stream WITH components is a Gray stream, so `format`/`princ`/`prin1`/`write-string`/`write-char` work and `terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` signal |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |

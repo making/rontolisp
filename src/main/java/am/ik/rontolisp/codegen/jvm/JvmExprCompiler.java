@@ -526,7 +526,19 @@ final class JvmExprCompiler {
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx, className);
 				case LispNames.OPEN -> JvmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className);
-				case LispNames.CLOSE -> JvmCloseCompiler.compile(cons, ctx, className);
+				case LispNames.CLOSE -> {
+					// Closing a SYNONYM stream closes the synonym, not what it forwards
+					// to -- which is nothing to do. The guard is emitted only when the
+					// program can build one; %close is the plain-designator close it
+					// falls through to.
+					if (ctx.usesSynonymStreams) {
+						JvmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverSynonym(cons), ctx, className);
+					}
+					else {
+						JvmCloseCompiler.compile(cons, ctx, className);
+					}
+				}
+				case LispNames.CLOSE_INTERNAL -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.PROBE_FILE_INTERNAL -> JvmProbeFileCompiler.compile(cons, ctx, className);
 				case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
 				case LispNames.SLEEP ->
@@ -622,12 +634,12 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx, className);
 				case LispNames.CONSTANTP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx, className);
-				case LispNames.STREAMP ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons), ctx, className);
+				case LispNames.STREAMP -> JvmExprCompiler
+					.compileExpr(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams), ctx, className);
 				case LispNames.SIMPLE_STRING_P ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx, className);
-				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
-					JvmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx, className);
+				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> JvmExprCompiler.compileExpr(
+						LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams), ctx, className);
 				case LispNames.FILE_POSITION -> JvmExprCompiler
 					.compileExpr(LispMacroExpander.expandConstantResult(cons, LispNil.INSTANCE), ctx, className);
 				case LispNames.PATHNAMEP ->

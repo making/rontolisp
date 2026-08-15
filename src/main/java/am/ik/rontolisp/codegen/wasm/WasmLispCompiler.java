@@ -2986,6 +2986,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.p1StreamTypeIndex(this.usesP1Streams ? p1StreamTypeBase() : -1)
 			.p1StreamFuncBase(this.usesP1Streams ? p1StreamFuncBase() : -1)
 			.instanceTypeIndex(this.usesInstances ? instanceTypeBase() : -1)
+			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
 			.layoutAddresses(layoutAddresses)
 			.asyncFuncBase(this.asyncMode ? asyncFuncBase() : -1)
 			.asyncDefunNames(Set.copyOf(asyncDefunNames))
@@ -6924,6 +6925,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		boolean restartMode = false;
 
 		/**
+		 * True when the program can build a SYNONYM STREAM ({@code make-synonym-stream}
+		 * is the only way to, and it has no read syntax), so every stream-designator
+		 * resolution has to run through {@code %SYNONYM-TARGET}. A program that never
+		 * spells it keeps its exact bytes.
+		 */
+		boolean usesSynonymStreams = false;
+
+		/**
 		 * True when the {@code %seq-string} helper is injected for this program, i.e. the
 		 * program itself writes a {@code (concatenate 'string ...)} with an argument that
 		 * is not a literal string. Only then does the string-family lowering normalize
@@ -7287,6 +7296,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.condMessagesObservable = builder.condMessagesObservable;
 			this.blockExitTag = builder.blockExitTag;
 			this.restartMode = builder.restartMode;
+			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.usesSeqString = builder.usesSeqString;
 			this.ehDepthGlobalIndex = builder.ehDepthGlobalIndex;
 			this.rawSentinelGlobalIndex = builder.rawSentinelGlobalIndex;
@@ -7380,6 +7390,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private boolean blockExitTag = false;
 
 			private boolean restartMode = false;
+
+			private boolean usesSynonymStreams = false;
 
 			private boolean usesSeqString = false;
 
@@ -7575,6 +7587,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder restartMode(boolean restartMode) {
 				this.restartMode = restartMode;
+				return this;
+			}
+
+			Builder usesSynonymStreams(boolean usesSynonymStreams) {
+				this.usesSynonymStreams = usesSynonymStreams;
 				return this;
 			}
 

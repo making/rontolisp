@@ -90,11 +90,14 @@ final class JvmObjCompiler {
 		List<LispVal> args = cons.toList();
 		LispLayout layout = requireLayout(ctx, literalTag(args.get(1)));
 		FieldrefConstant lf = ctx.layoutPool.intern(ctx.cp, className, layout);
-		int slots = layout.slotCount();
-		// capacity, not slotCount: an instance IS its Object[] here, so a change-class
-		// into a wider class of the same chain can only keep the object identity if the
-		// room was reserved at construction (LispLayout.capacity). The surplus cells stay
-		// null (= nil) until %obj-become hands them to the wider layout.
+		int slots = layout.capacity();
+		// capacity, not slotCount, in BOTH places: an instance IS its Object[] here, so a
+		// change-class into a wider class of the same chain can only keep the object
+		// identity if the room was reserved at construction (LispLayout.capacity), and a
+		// type that keeps machinery beside its declared slots
+		// (LispLayout.SYNONYM_STREAM's
+		// reader closure) is handed that cell as an ordinary trailing argument. Cells no
+		// argument reaches stay null (= nil).
 		JvmEmitHelper.emitIntConst(ctx, 1 + layout.capacity());
 		ctx.emit(Opcode.ANEWARRAY);
 		ctx.emitU2(ctx.objectClass.index());

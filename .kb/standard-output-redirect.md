@@ -29,11 +29,15 @@ is still byte-identical to before. The interpreter's half is one
 `resolveOutputDest` hop in `Environment.createGlobal`, applied by `emitTo`,
 `fresh-line`, `write-line` and `force-output`.
 
-**Consequence: `(make-synonym-stream '*standard-output*)` is no longer a
-snapshot.** It answers the `nil` designator, so that synonym forwards PER
-OPERATION exactly like CL's -- the re-evaluation trigger `.kb/read-load-streams.md`
-left behind, retired in the same pass. A synonym over any OTHER symbol is still
-resolved once at construction (see that file for why).
+**A SYNONYM stream is a value that rides this seam, not a designator of its own.**
+`(make-synonym-stream 'sym)` builds an instance carrying a closure that reads
+`sym`, and `StreamDesignators.throughSynonym` wraps whatever the two functions
+above produce in a `%SYNONYM-TARGET` call -- so every operator that resolves its
+destination here forwards through the synonym per operation, for ANY symbol
+(todo-377; the earlier lowering answered the `nil` designator for the two
+standard variables and snapshotted every other symbol). Gated on the program
+spelling `make-synonym-stream`, so nothing else changed bytes. Mechanics:
+`.kb/read-load-streams.md`.
 
 ## The INPUT mirror: `*standard-input*` (landed 2026-07-31, `.todo/149`)
 
@@ -262,7 +266,8 @@ and `synonymStreamOverStandardOutputFollowsALaterBinding` in the JVM and WASM
 suites, `evalExplicitNilStreamArgumentIsTheStandardOutputDesignator` /
 `evalSynonymStreamOverStandardOutputFollowsALaterBinding` /
 `evalMakeSynonymStreamResolvesTheNamedVariable` in `LispEvaluatorTest`, and the
-`postmodern-language-incidentals` ci-spec case (all four backends).
+`postmodern-language-incidentals` + `synonym-stream-value` ci-spec cases (all
+four backends).
 
 The `*error-output*` half: `errorOutputIsTheProcessErrorStream` and
 `bindingErrorOutputCapturesWarnAndRestores` in the JVM and WASM suites,
@@ -272,9 +277,9 @@ The `*error-output*` half: `errorOutputIsTheProcessErrorStream` and
 so the case's first assertion is that the three stderr lines do NOT appear there).
 
 The input half: `bindingStandardInputRedirectsTheStreamlessReadFamily` and
-`makeSynonymStreamOverStandardInputIsTheNilDesignator` in the JVM and WASM
+`makeSynonymStreamOverStandardInputFollowsALaterBinding` in the JVM and WASM
 suites, `evalBindingStandardInputRedirectsTheStreamlessReadFamily` /
-`evalMakeSynonymStreamOverStandardInputIsTheNilDesignator` in
+`evalMakeSynonymStreamOverStandardInputFollowsALaterBinding` in
 `LispEvaluatorTest`, and the same ci-spec case.
 
 ## `format`'s destination is decided at RUN time when it is not a literal

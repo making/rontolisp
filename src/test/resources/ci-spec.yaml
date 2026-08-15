@@ -1609,7 +1609,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      392
+      393
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -7025,9 +7025,9 @@ cases:
                (handler-case (read-char pm-in) (end-of-file () :eof-condition))))
       (print (with-input-from-string (pm-in "")
                (handler-case (read-char pm-in) (error () :also-an-error))))
-      ;; make-synonym-stream (config.lisp's *json-output*): a synonym over
-      ;; *standard-output* IS the nil designator, so it forwards PER OPERATION
-      ;; -- a binding established after the synonym was built still captures.
+      ;; make-synonym-stream (config.lisp's *json-output*): a synonym stream is
+      ;; a VALUE that forwards PER OPERATION -- a binding established after the
+      ;; synonym was built still captures.
       (defvar pm-json-output (make-synonym-stream '*standard-output*))
       (write-line "synonym" pm-json-output)
       (princ (with-output-to-string (*standard-output*)
@@ -7096,6 +7096,48 @@ cases:
       via-synonym-in
       a
       (1 2 3)
+
+  - name: synonym-stream-value
+    source: |
+      ;; A synonym stream is a distinct VALUE, not the nil designator: it is
+      ;; true, it is a stream in both directions, close is a no-op t, and it
+      ;; remembers the symbol it forwards to (rove's *report-stream* shape,
+      ;; whose (when stream ...) guard the nil designator failed).
+      (defvar syn-sink (make-synonym-stream '*standard-output*))
+      (write-line (if syn-sink "syn-true" "syn-false"))
+      (print (list (streamp syn-sink) (input-stream-p syn-sink)
+                   (output-stream-p syn-sink) (close syn-sink)))
+      (print (synonym-stream-symbol syn-sink))
+      (print syn-sink)
+      ;; A synonym over a NON-standard symbol forwards per operation too, so a
+      ;; binding established after construction redirects it -- and a Gray
+      ;; stream on either side of the synonym is carried through.
+      (defvar syn-port t)
+      (defvar syn-over-port (make-synonym-stream 'syn-port))
+      (defclass syn-upcaser (rontolisp:fundamental-character-output-stream)
+        ((target :initarg :target :reader syn-upcaser-target)))
+      (defmethod rontolisp:stream-write-string ((s syn-upcaser) str)
+        (write-string (string-upcase str) (syn-upcaser-target s))
+        str)
+      (defun syn-report ()
+        (list (with-output-to-string (s)
+                (let ((syn-port s)) (write-string "user-bound" syn-over-port)))
+              (with-output-to-string (s)
+                (let ((syn-port s))
+                  (write-string "wrapped"
+                                (make-instance 'syn-upcaser :target syn-over-port))))
+              (with-output-to-string (s)
+                (let ((syn-port (make-instance 'syn-upcaser :target s)))
+                  (write-string "under" syn-over-port)))))
+      (dolist (syn-line (syn-report)) (write-line syn-line))
+    expected: |
+      syn-true
+      (T T T T)
+      *STANDARD-OUTPUT*
+      #<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>
+      user-bound
+      WRAPPED
+      UNDER
 
   - name: error-output-designator
     source: |

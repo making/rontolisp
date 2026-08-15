@@ -43,11 +43,14 @@ final class WasmInstanceCompiler {
 			throw new UnsupportedOperationException(LispNames.OBJ_NEW + ": unknown instance type " + tag);
 		}
 		int address = layoutAddress(ctx, tag);
-		int slotCount = layout.slotCount();
+		int slotCount = layout.capacity();
 		// slots = array.new $buckets (ref.null eq) capacity -- every element nil, so
-		// missing trailing values need no store. capacity, not slotCount: a class a
-		// change-class can widen reserves the target's slot count up front, so the ONE
-		// allocation shape serves both layouts (LispLayout.capacity).
+		// missing trailing values need no store. capacity, not slotCount, for the stores
+		// too: a class a change-class can widen reserves the target's slot count up front
+		// (so the ONE allocation shape serves both layouts), and a type keeping machinery
+		// beside its declared slots (LispLayout.SYNONYM_STREAM's reader closure) is
+		// handed
+		// that cell as an ordinary trailing argument.
 		refNull(ctx);
 		i32Const(ctx, layout.capacity());
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW);

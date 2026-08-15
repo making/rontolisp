@@ -141,6 +141,19 @@ class WasmLispCompilerIntegrationTest {
 		return compileAndRunProgram(LispReader.readAllFromString(lispCode));
 	}
 
+	// Programs that reach a prelude defun mirror the CLI pipeline's prelude splice; the
+	// Gray variant adds GrayStreamsLibrary in the CLI's order, so the dispatch helpers
+	// gray.lisp splices resolve their stream through the prelude's %synonym-target.
+	private static String compileAndRunPrelude(String lispCode) throws Exception {
+		return compileAndRunProgram(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode)));
+	}
+
+	private static String compileAndRunGray(String lispCode) throws Exception {
+		return compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
 	// A --component program run for its standard output, the fourth backend. The core
 	// module is the same one Preview 1 gets, but the I/O adapter is not, so a text
 	// differential is only complete once it has run here too.
@@ -7686,19 +7699,20 @@ class WasmLispCompilerIntegrationTest {
 		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
 		// CLI pipeline.
-		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
-				(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
-				  ((acc :initform "")))
-				(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
-				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
-				  str)
-				(let ((s (make-instance 'gs-upcase)))
-				  (write-string "hello" s)
-				  (write-char #\\! s)
-				  (print (slot-value s 'acc)))
-				(write-string "still-works" t)
-				(terpri)
-				""")))).isEqualTo("\"HELLO!\"\nstill-works");
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "")))
+					(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+					  str)
+					(let ((s (make-instance 'gs-upcase)))
+					  (write-string "hello" s)
+					  (write-char #\\! s)
+					  (print (slot-value s 'acc)))
+					(write-string "still-works" t)
+					(terpri)
+					"""))))).isEqualTo("\"HELLO!\"\nstill-works");
 	}
 
 	@Test
@@ -7707,35 +7721,36 @@ class WasmLispCompilerIntegrationTest {
 		// file-position call sites with a non-literal stream rewrite onto the
 		// %gray-*-dispatch helpers; only the helpers a rewrite produced are
 		// spliced (an unconditional %gray-listen-dispatch would not compile here).
-		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
-				(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
-				  ((bytes :initform nil)))
-				(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
-				  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
-				  byte)
-				(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
-				  ((items :initarg :items) (pos :initform 0)))
-				(defmethod rontolisp:stream-read-byte ((s gbs-source))
-				  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
-				    (if (>= pos (length items))
-				        :eof
-				        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
-				(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
-				(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
-				  (setf (slot-value s 'pos) position))
-				(let ((out (make-instance 'gbs-sink)))
-				  (write-byte 7 out)
-				  (write-byte 250 out)
-				  (print (reverse (slot-value out 'bytes))))
-				(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
-				  (print (read-byte in))
-				  (print (file-position in))
-				  (file-position in 0)
-				  (print (read-byte in))
-				  (print (read-byte in nil :done))
-				  (print (read-byte in nil :done))
-				  (print (read-byte in nil :done)))
-				""")))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
+					  ((bytes :initform nil)))
+					(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
+					  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
+					  byte)
+					(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
+					  ((items :initarg :items) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-byte ((s gbs-source))
+					  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length items))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+					(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
+					(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
+					  (setf (slot-value s 'pos) position))
+					(let ((out (make-instance 'gbs-sink)))
+					  (write-byte 7 out)
+					  (write-byte 250 out)
+					  (print (reverse (slot-value out 'bytes))))
+					(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
+					  (print (read-byte in))
+					  (print (file-position in))
+					  (file-position in 0)
+					  (print (read-byte in))
+					  (print (read-byte in nil :done))
+					  (print (read-byte in nil :done))
+					  (print (read-byte in nil :done)))
+					"""))))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
 	}
 
 	@Test
@@ -8583,16 +8598,56 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void makeSynonymStreamResolvesTheNamedVariable() throws Exception {
-		assertThat(
-				compileAndRun("(defvar *sink* (make-synonym-stream '*standard-output*)) (write-string \"via\" *sink*)"))
+		assertThat(compileAndRunPrelude(
+				"(defvar *sink* (make-synonym-stream '*standard-output*)) (write-string \"via\" *sink*)"))
 			.isEqualTo("via");
 	}
 
 	@Test
+	void makeSynonymStreamIsAStreamValue() throws Exception {
+		// A synonym stream is a VALUE, not the nil designator: it answers true, it is a
+		// stream in both directions, close is a no-op t, and it prints the symbol it
+		// forwards to.
+		assertThat(compileAndRunPrelude("""
+				(defvar *sink* (make-synonym-stream '*standard-output*))
+				(princ (if *sink* "yes" "no"))
+				(princ (streamp *sink*))
+				(princ (input-stream-p *sink*))
+				(princ (output-stream-p *sink*))
+				(princ (close *sink*))
+				(princ (synonym-stream-symbol *sink*))
+				(princ *sink*)""")).isEqualTo("yesTTTT*STANDARD-OUTPUT*#<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>");
+	}
+
+	@Test
+	void synonymStreamOverAUserSpecialFollowsALaterBinding() throws Exception {
+		// The re-evaluation trigger the lite lowering left behind: a synonym over a
+		// NON-standard symbol forwards per operation too, so a binding established after
+		// the synonym was built redirects it. A Gray stream on either side of the
+		// synonym is carried as well (rove's reporter shape).
+		assertThat(compileAndRunGray("""
+				(defvar *port* t)
+				(defvar *syn* (make-synonym-stream '*port*))
+				(defclass upcaser (rontolisp:fundamental-character-output-stream)
+				  ((target :initarg :target :reader upcaser-target)))
+				(defmethod rontolisp:stream-write-string ((s upcaser) str)
+				  (write-string (string-upcase str) (upcaser-target s))
+				  str)
+				(princ (with-output-to-string (s) (let ((*port* s)) (write-string "user" *syn*))))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				  (let ((*port* s)) (write-string "wrap" (make-instance 'upcaser :target *syn*)))))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				  (let ((*port* (make-instance 'upcaser :target s))) (write-string "under" *syn*))))"""))
+			.isEqualTo("user|WRAP|UNDER");
+	}
+
+	@Test
 	void synonymStreamOverStandardOutputFollowsALaterBinding() throws Exception {
-		// The synonym IS the nil designator, so it resolves at WRITE time -- a binding
-		// established after the synonym was built still captures.
-		assertThat(compileAndRun("""
+		// The synonym stream resolves its symbol at WRITE time, so a binding
+		// established after it was built still captures.
+		assertThat(compileAndRunPrelude("""
 				(defvar *sink* (make-synonym-stream '*standard-output*))
 				(princ (with-output-to-string (*standard-output*)
 				  (write-line "captured" *sink*)))
@@ -8615,8 +8670,8 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
-	void makeSynonymStreamOverStandardInputIsTheNilDesignator() throws Exception {
-		assertThat(compileAndRun("""
+	void makeSynonymStreamOverStandardInputFollowsALaterBinding() throws Exception {
+		assertThat(compileAndRunPrelude("""
 				(defvar *src* (make-synonym-stream '*standard-input*))
 				(princ (with-input-from-string (*standard-input* "later")
 				  (read-line *src*)))""")).isEqualTo("later");
@@ -9731,7 +9786,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("392");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("393");
 	}
 
 	@Test

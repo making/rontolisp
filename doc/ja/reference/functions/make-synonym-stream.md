@@ -2,11 +2,11 @@
 
 `(make-synonym-stream symbol)`
 
-`symbol` -- `*standard-output*` のようなストリームを指す特殊変数 -- が保持しているストリームへ転送するストリーム指定子を返します。標準ストリームと同じ出力先を既定値に持つ `defvar` を書くのが典型的な使い方です。
+特殊変数 `symbol` が **その操作の時点で** 保持しているストリームへ、すべての操作を転送するストリームを返します。したがって、後から変数を再束縛すると、先に構築されたシノニムストリームの転送先も変わります。標準ストリームの現在の転送先に追随する既定値を持つ `defvar` を書くのが典型的な使い方です。
 
-`(make-synonym-stream '*standard-output*)` と `(make-synonym-stream '*standard-input*)` は Common Lisp と同じ挙動です。いずれも `nil` 指定子を返し、出力 (入力) 操作はその時点の `*standard-output*` / `*standard-input*` を通して `nil` を解決するため、後から変数を再束縛すると、先に構築されたシノニムストリームの出力先も **変わります**。
+戻り値は指定子ではなくストリームの **値** です。真であり、[`streamp`](streamp.md) / [`input-stream-p`](input-stream-p.md) / [`output-stream-p`](output-stream-p.md) は `t` を返し、[`synonym-stream-symbol`](synonym-stream-symbol.md) でシンボルを取り出せます。[`close`](close.md) はシノニム自体を閉じる (実際には何もしない) ので `t` を返します。
 
-それ以外のシンボルについてはライト実装です。rontolisp は操作のたびではなく、ストリームを作った場所でシンボルを **一度だけ** 解決します。したがって、後からその変数を再束縛してもシノニムストリームの出力先は変わりません。リダイレクトが必要な場合は、ストリームを明示的に渡すか、`*standard-output*` を束縛してストリーム引数なしの print 系関数を使ってください。
+Gray ストリームはどちら側にも置けます。Gray 出力ストリームに渡したシノニムストリームは書き込みが通り、変数が Gray ストリームを保持しているシノニムストリームもそこへ届きます。[Gray ストリーム](../../guides/gray-streams.md) を参照してください。
 
 ```lisp
 (defvar *report-output* (make-synonym-stream '*standard-output*))

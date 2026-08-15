@@ -6432,32 +6432,28 @@ public final class LispMacroExpander {
 	}
 
 	/**
-	 * Expands {@code (make-synonym-stream 'sym)} into a READ of the variable the symbol
-	 * names -- {@code (make-synonym-stream '*standard-output*)} is literally
-	 * {@code *standard-output*}, so the result is whatever stream designator that
-	 * variable holds, and a program that never binds it gets the constant {@code t}
-	 * (standard output) with no new machinery on any backend.
+	 * Expands {@code (make-synonym-stream 'sym)} into the synonym-stream VALUE: an
+	 * instance of the fixed {@link LispLayout#SYNONYM_STREAM} layout holding the symbol
+	 * in its one declared slot and, in the cell reserved beside it, a zero-argument
+	 * closure reading that variable.
+	 *
+	 * <pre>
+	 * (make-synonym-stream '*out*) -&gt; (%obj-new '%SYNONYM-STREAM '*out* (lambda () *out*))
+	 * </pre>
 	 *
 	 * <p>
-	 * {@code (make-synonym-stream '*standard-output*)} and its {@code *standard-input*}
-	 * twin are the cases that are NOT snapshots: each answers the {@code nil} DESIGNATOR,
-	 * which every output (resp. input) operation resolves through
-	 * {@code *standard-output*} / {@code *standard-input*} at the time of that operation
-	 * ({@code StreamDesignators}, {@code .kb/standard-output-redirect.md}) -- so that
-	 * synonym forwards per-operation exactly like CL's, with no new stream kind.
+	 * The closure is what makes the forwarding PER OPERATION on every backend: a stream
+	 * designator resolution calls it ({@code %SYNONYM-TARGET}) and gets the variable's
+	 * value as of that call -- the innermost dynamic binding on the interpreter, and on
+	 * the compile paths the dynamic-first read {@code let} of a special compiles to. No
+	 * backend runtime learns a new stream kind and nothing needs the symbol's name at run
+	 * time, which is why {@code symbol-value} (global-only on the compile paths, and a
+	 * force of the whole eval runtime) is NOT in the lowering.
 	 *
 	 * <p>
-	 * For any OTHER symbol the expansion stays LITE, and the divergence is deliberate:
-	 * CL's synonym stream forwards every operation to the symbol's value at the time of
-	 * that operation, while this one resolves the symbol ONCE, where the stream is
-	 * constructed. Reason for the divergence: a per-operation synonym over an ARBITRARY
-	 * symbol needs a stream-designator kind carrying that symbol which the write helpers
-	 * of all four backends resolve at run time -- {@code nil} is the only designator the
-	 * helpers already have, and it names exactly the standard streams. No known consumer
-	 * needs more (postmodern's {@code config.lisp:224} {@code *json-output*} defvar
-	 * constructs once and never rebinds). RE-EVALUATION TRIGGER: if a consumer ever
-	 * rebinds the symbol behind a non-standard synonym stream, the runtime needs that
-	 * designator kind and this whole expansion has to go.
+	 * A COMPUTED symbol is the one shape that cannot compile a read: it falls back to
+	 * {@code (lambda () (symbol-value sym))} over the let-bound symbol, so the value is
+	 * still a synonym stream and still forwards, with {@code symbol-value}'s own limits.
 	 * @param cons the make-synonym-stream expression
 	 * @return the expanded expression
 	 */
@@ -6469,12 +6465,51 @@ public final class LispMacroExpander {
 		}
 		LispSymbol quoted = quotedSymbol(parts.get(1));
 		if (quoted == null) {
-			return callOf(LispNames.SYMBOL_VALUE, parts.get(1));
+			LispSymbol symVar = new LispSymbol(SYNONYM_SYMBOL_VAR);
+			return makeLet(SYNONYM_SYMBOL_VAR, parts.get(1),
+					synonymStreamOf(symVar, callOf(LispNames.SYMBOL_VALUE, symVar)));
 		}
-		if (LispNames.STANDARD_OUTPUT_VAR.equals(quoted.name()) || LispNames.STANDARD_INPUT_VAR.equals(quoted.name())) {
-			return LispNil.INSTANCE;
+		LispSymbol read = new LispSymbol(quoted.name());
+		return synonymStreamOf(quoteOf(quoted.name()), read);
+	}
+
+	/** The let temporary holding a COMPUTED make-synonym-stream symbol. */
+	private static final String SYNONYM_SYMBOL_VAR = "__syn_sym";
+
+	/**
+	 * {@code (%obj-new '%SYNONYM-STREAM <symbol> (lambda () <read>))} -- the value half
+	 * of {@link #expandMakeSynonymStream}, shared by its literal and computed arms.
+	 */
+	private static LispVal synonymStreamOf(LispVal symbol, LispVal read) {
+		LispVal reader = listToCons(List.of(new LispSymbol(LispNames.LAMBDA), LispNil.INSTANCE, read));
+		return listToCons(
+				List.of(new LispSymbol(LispNames.OBJ_NEW), quoteOf(LispLayout.SYNONYM_STREAM_TAG), symbol, reader));
+	}
+
+	/**
+	 * Expands {@code (close s)} into {@code (let ((__close_s s)) (if (%obj-is __close_s
+	 * '%SYNONYM-STREAM) t (%close __close_s)))} -- CL's rule that closing a synonym
+	 * stream closes the SYNONYM, not the stream it forwards to, which here is nothing to
+	 * do. Emitted only when the program can build a synonym stream at all, so every other
+	 * program's {@code close} keeps its exact bytes.
+	 * @param cons the close expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCloseOverSynonym(LispCons cons) {
+		// (close s :abort t) is the same close; strip the keyword first, exactly like the
+		// backends' own close compilers do, so the guard accepts both shapes.
+		if (stripCloseAbort(cons) instanceof LispCons stripped) {
+			cons = stripped;
 		}
-		return new LispSymbol(quoted.name());
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 2) {
+			throw new UnsupportedOperationException(LispNames.CLOSE + " expects 1 argument, got " + (parts.size() - 1));
+		}
+		LispSymbol temp = new LispSymbol("__close_s");
+		LispVal guard = listToCons(List.of(new LispSymbol(LispNames.IF),
+				listToCons(List.of(new LispSymbol(LispNames.OBJ_IS), temp, quoteOf(LispLayout.SYNONYM_STREAM_TAG))),
+				LispTrue.INSTANCE, callOf(LispNames.CLOSE_INTERNAL, temp)));
+		return makeLet(temp.name(), parts.get(1), guard);
 	}
 
 	/** Fixed temporaries of the read-family end-of-file lowering. */
@@ -7562,18 +7597,29 @@ public final class LispMacroExpander {
 	 * output designator {@code t} counts as a stream so it survives the
 	 * {@code check-type}/{@code streamp} guards of libraries handed
 	 * {@code *standard-output*} (lite).
+	 *
+	 * <p>
+	 * With {@code synonymStreams} the test gains its one non-handle arm: a synonym stream
+	 * is a VALUE ({@code LispLayout.SYNONYM_STREAM}), so it must answer true as well.
+	 * That arm is emitted only for a program that can build one, so every other program's
+	 * {@code streamp} keeps its exact bytes.
 	 * @param cons the streamp expression
+	 * @param synonymStreams whether the program can build a synonym stream
 	 * @return the expanded expression
 	 */
-	public static LispVal expandStreamp(LispCons cons) {
+	public static LispVal expandStreamp(LispCons cons, boolean synonymStreams) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException("streamp expects exactly one argument");
 		}
 		LispSymbol temp = new LispSymbol("__s");
-		LispVal test = listToCons(
-				List.of(new LispSymbol(LispNames.IF), fmtCall(LispNames.EQ_GENERAL, temp, LispTrue.INSTANCE),
-						LispTrue.INSTANCE, callOf(LispNames.INTEGERP, temp)));
+		LispVal handleTest = synonymStreams
+				? listToCons(List
+					.of(new LispSymbol(LispNames.IF), callOf(LispNames.INTEGERP, temp), LispTrue.INSTANCE, listToCons(
+							List.of(new LispSymbol(LispNames.OBJ_IS), temp, quoteOf(LispLayout.SYNONYM_STREAM_TAG)))))
+				: callOf(LispNames.INTEGERP, temp);
+		LispVal test = listToCons(List.of(new LispSymbol(LispNames.IF),
+				fmtCall(LispNames.EQ_GENERAL, temp, LispTrue.INSTANCE), LispTrue.INSTANCE, handleTest));
 		return makeLet("__s", parts.get(1), test);
 	}
 
@@ -7607,17 +7653,19 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (input-stream-p x)} / {@code (output-stream-p x)} into
 	 * {@code (streamp x)}: every stream handle is bidirectional-lite, so both predicates
-	 * coincide with {@code streamp} (including the {@code t} designator).
+	 * coincide with {@code streamp} (including the {@code t} designator and a synonym
+	 * stream).
 	 * @param cons the input-stream-p / output-stream-p expression
+	 * @param synonymStreams whether the program can build a synonym stream
 	 * @return the expanded expression
 	 */
-	public static LispVal expandStreamDirectionP(LispCons cons) {
+	public static LispVal expandStreamDirectionP(LispCons cons, boolean synonymStreams) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() != 2) {
 			throw new IllegalArgumentException(
 					((LispSymbol) cons.car()).name() + " expects exactly one argument: " + cons.print());
 		}
-		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)));
+		return expandStreamp((LispCons) fmtCall(LispNames.STREAMP, parts.get(1)), synonymStreams);
 	}
 
 	/**
@@ -12872,6 +12920,12 @@ public final class LispMacroExpander {
 		switch (head) {
 			case LispNames.OBJ_NEW, LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.SIGNAL,
 					LispNames.MAKE_CONDITION:
+				return true;
+			case LispNames.MAKE_SYNONYM_STREAM:
+				// A synonym stream is an instance of the fixed SYNONYM_STREAM layout
+				// (expandMakeSynonymStream), and this call is the ONLY way to build one
+				// -- it has no read syntax -- so the gate is exactly "the program spells
+				// it".
 				return true;
 			case LispNames.READ, LispNames.READ_FROM_STRING, LispNames.LOAD:
 				// The emitted runtime reader can construct a PATHNAME instance from a

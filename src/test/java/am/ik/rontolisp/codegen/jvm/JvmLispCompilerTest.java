@@ -45,6 +45,14 @@ class JvmLispCompilerTest {
 		FoldDifferential.assertNoDivergence(compileAndRun(FoldDifferential.program()));
 	}
 
+	// Gray-stream tests pre-process with LispPreludeLibrary.process +
+	// GrayStreamsLibrary.process, in the CLI pipeline's order: the dispatch helpers
+	// gray.lisp splices resolve their stream through the prelude's %synonym-target.
+	private String compileAndRunGray(String lispCode) throws Exception {
+		return compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode))));
+	}
+
 	// JSON tests pre-process with JsonLibrary.process, mirroring the compile-path
 	// pre-pass run by RontoLispCli.
 	private String compileAndRunJson(String lispCode) throws Exception {
@@ -2830,9 +2838,49 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void makeSynonymStreamIsAStreamValue() throws Exception {
+		// A synonym stream is a VALUE, not the nil designator: it answers true, it is a
+		// stream in both directions, close is a no-op t, and it prints the symbol it
+		// forwards to.
+		assertThat(compileAndRun("""
+				(defvar *sink* (make-synonym-stream '*standard-output*))
+				(princ (if *sink* "yes" "no"))
+				(princ (streamp *sink*))
+				(princ (input-stream-p *sink*))
+				(princ (output-stream-p *sink*))
+				(princ (close *sink*))
+				(princ (synonym-stream-symbol *sink*))
+				(princ *sink*)""")).isEqualTo("yesTTTT*STANDARD-OUTPUT*#<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>");
+	}
+
+	@Test
+	void synonymStreamOverAUserSpecialFollowsALaterBinding() throws Exception {
+		// The re-evaluation trigger the lite lowering left behind: a synonym over a
+		// NON-standard symbol forwards per operation too, so a binding established after
+		// the synonym was built redirects it. A Gray stream on either side of the
+		// synonym is carried as well (rove's reporter shape).
+		assertThat(compileAndRunGray("""
+				(defvar *port* t)
+				(defvar *syn* (make-synonym-stream '*port*))
+				(defclass upcaser (rontolisp:fundamental-character-output-stream)
+				  ((target :initarg :target :reader upcaser-target)))
+				(defmethod rontolisp:stream-write-string ((s upcaser) str)
+				  (write-string (string-upcase str) (upcaser-target s))
+				  str)
+				(princ (with-output-to-string (s) (let ((*port* s)) (write-string "user" *syn*))))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				  (let ((*port* s)) (write-string "wrap" (make-instance 'upcaser :target *syn*)))))
+				(princ "|")
+				(princ (with-output-to-string (s)
+				  (let ((*port* (make-instance 'upcaser :target s))) (write-string "under" *syn*))))"""))
+			.isEqualTo("user|WRAP|UNDER");
+	}
+
+	@Test
 	void synonymStreamOverStandardOutputFollowsALaterBinding() throws Exception {
-		// The synonym IS the nil designator, so it resolves at WRITE time -- a binding
-		// established after the synonym was built still captures.
+		// The synonym stream resolves its symbol at WRITE time, so a binding
+		// established after it was built still captures.
 		assertThat(compileAndRun("""
 				(defvar *sink* (make-synonym-stream '*standard-output*))
 				(princ (with-output-to-string (*standard-output*)
@@ -2860,7 +2908,7 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
-	void makeSynonymStreamOverStandardInputIsTheNilDesignator() throws Exception {
+	void makeSynonymStreamOverStandardInputFollowsALaterBinding() throws Exception {
 		assertThat(compileAndRun("""
 				(defvar *src* (make-synonym-stream '*standard-input*))
 				(princ (with-input-from-string (*standard-input* "later")
@@ -6361,19 +6409,20 @@ class JvmLispCompilerTest {
 		// The GrayStreamsLibrary pre-pass splices gray.lisp and rewrites the
 		// write-string/write-char call sites onto the dispatch helpers, mirroring the
 		// CLI pipeline.
-		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
-				(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
-				  ((acc :initform "")))
-				(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
-				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
-				  str)
-				(let ((s (make-instance 'gs-upcase)))
-				  (write-string "hello" s)
-				  (write-char #\\! s)
-				  (print (slot-value s 'acc)))
-				(write-string "still-works" t)
-				(terpri)
-				""")))).isEqualTo("\"HELLO!\"\nstill-works");
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gs-upcase (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "")))
+					(defmethod rontolisp:stream-write-string ((s gs-upcase) str)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string-upcase str)))
+					  str)
+					(let ((s (make-instance 'gs-upcase)))
+					  (write-string "hello" s)
+					  (write-char #\\! s)
+					  (print (slot-value s 'acc)))
+					(write-string "still-works" t)
+					(terpri)
+					"""))))).isEqualTo("\"HELLO!\"\nstill-works");
 	}
 
 	@Test
@@ -6384,22 +6433,23 @@ class JvmLispCompilerTest {
 		// let, which defclass then rejected with "expects a keyword slot option, got
 		// ((__gray_fmt_stream :INITARG))". The :report body after the slot list is
 		// ordinary code and still rewrites -- it prints through this very protocol.
-		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
-				(defclass gs-sink (rontolisp:fundamental-character-output-stream)
-				  ((format :initarg :format :reader sink-format)
-				   (acc :initform "")))
-				(defmethod rontolisp:stream-write-string ((s gs-sink) str)
-				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) str))
-				  str)
-				(define-condition bad-format (error)
-				  ((format :initarg :format :reader bad-format-name))
-				  (:report (lambda (condition stream)
-				             (format stream "Invalid format ~a" (bad-format-name condition)))))
-				(let ((s (make-instance 'gs-sink :format :gzip)))
-				  (format s "to ~a" (sink-format s))
-				  (print (list (sink-format s) (slot-value s 'acc))))
-				(print (handler-case (error 'bad-format :format :bzip2) (error (e) (princ-to-string e))))
-				""")))).isEqualTo("(:GZIP \"to GZIP\")\n\"Invalid format BZIP2\"");
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gs-sink (rontolisp:fundamental-character-output-stream)
+					  ((format :initarg :format :reader sink-format)
+					   (acc :initform "")))
+					(defmethod rontolisp:stream-write-string ((s gs-sink) str)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) str))
+					  str)
+					(define-condition bad-format (error)
+					  ((format :initarg :format :reader bad-format-name))
+					  (:report (lambda (condition stream)
+					             (format stream "Invalid format ~a" (bad-format-name condition)))))
+					(let ((s (make-instance 'gs-sink :format :gzip)))
+					  (format s "to ~a" (sink-format s))
+					  (print (list (sink-format s) (slot-value s 'acc))))
+					(print (handler-case (error 'bad-format :format :bzip2) (error (e) (princ-to-string e))))
+					"""))))).isEqualTo("(:GZIP \"to GZIP\")\n\"Invalid format BZIP2\"");
 	}
 
 	@Test
@@ -6407,35 +6457,36 @@ class JvmLispCompilerTest {
 		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
 		// file-position call sites with a non-literal stream rewrite onto the
 		// %gray-*-dispatch helpers; only the helpers a rewrite produced are spliced.
-		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
-				(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
-				  ((bytes :initform nil)))
-				(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
-				  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
-				  byte)
-				(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
-				  ((items :initarg :items) (pos :initform 0)))
-				(defmethod rontolisp:stream-read-byte ((s gbs-source))
-				  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
-				    (if (>= pos (length items))
-				        :eof
-				        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
-				(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
-				(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
-				  (setf (slot-value s 'pos) position))
-				(let ((out (make-instance 'gbs-sink)))
-				  (write-byte 7 out)
-				  (write-byte 250 out)
-				  (print (reverse (slot-value out 'bytes))))
-				(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
-				  (print (read-byte in))
-				  (print (file-position in))
-				  (file-position in 0)
-				  (print (read-byte in))
-				  (print (read-byte in nil :done))
-				  (print (read-byte in nil :done))
-				  (print (read-byte in nil :done)))
-				""")))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gbs-sink (rontolisp:fundamental-binary-output-stream)
+					  ((bytes :initform nil)))
+					(defmethod rontolisp:stream-write-byte ((s gbs-sink) byte)
+					  (setf (slot-value s 'bytes) (cons byte (slot-value s 'bytes)))
+					  byte)
+					(defclass gbs-source (rontolisp:fundamental-binary-input-stream)
+					  ((items :initarg :items) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-byte ((s gbs-source))
+					  (let ((items (slot-value s 'items)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length items))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (nth pos items)))))
+					(defmethod rontolisp:stream-file-position ((s gbs-source)) (slot-value s 'pos))
+					(defmethod (setf rontolisp:stream-file-position) (position (s gbs-source))
+					  (setf (slot-value s 'pos) position))
+					(let ((out (make-instance 'gbs-sink)))
+					  (write-byte 7 out)
+					  (write-byte 250 out)
+					  (print (reverse (slot-value out 'bytes))))
+					(let ((in (make-instance 'gbs-source :items (list 10 20 30))))
+					  (print (read-byte in))
+					  (print (file-position in))
+					  (file-position in 0)
+					  (print (read-byte in))
+					  (print (read-byte in nil :done))
+					  (print (read-byte in nil :done))
+					  (print (read-byte in nil :done)))
+					"""))))).isEqualTo("(7 250)\n10\n1\n10\n20\n30\n:DONE");
 	}
 
 	@Test
@@ -6444,25 +6495,26 @@ class JvmLispCompilerTest {
 		// class defining only stream-read-char: the default element loops of
 		// gray.lisp answer read-line (nil at EOF, the lite default) and
 		// read-sequence, exactly like the interpreter.
-		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary.process(LispReader.readAllFromString("""
-				(defclass gcs-source (rontolisp:fundamental-character-input-stream)
-				  ((text :initarg :text) (pos :initform 0)))
-				(defmethod rontolisp:stream-read-char ((s gcs-source))
-				  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
-				    (if (>= pos (length text))
-				        :eof
-				        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
-				(let ((in (make-instance 'gcs-source :text (format nil "ab~%cd")))
-				      (buf (make-string 2)))
-				  (print (read-char in))
-				  (print (read-line in))
-				  (print (read-line in))
-				  (print (read-line in))
-				  (print (read-line in nil :end))
-				  (setf (slot-value in 'pos) 0)
-				  (print (read-sequence buf in))
-				  (print buf))
-				""")))).isEqualTo("#\\a\n\"b\"\n\"cd\"\nNIL\n:END\n2\n\"ab\"");
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gcs-source (rontolisp:fundamental-character-input-stream)
+					  ((text :initarg :text) (pos :initform 0)))
+					(defmethod rontolisp:stream-read-char ((s gcs-source))
+					  (let ((text (slot-value s 'text)) (pos (slot-value s 'pos)))
+					    (if (>= pos (length text))
+					        :eof
+					        (progn (setf (slot-value s 'pos) (+ pos 1)) (char text pos)))))
+					(let ((in (make-instance 'gcs-source :text (format nil "ab~%cd")))
+					      (buf (make-string 2)))
+					  (print (read-char in))
+					  (print (read-line in))
+					  (print (read-line in))
+					  (print (read-line in))
+					  (print (read-line in nil :end))
+					  (setf (slot-value in 'pos) 0)
+					  (print (read-sequence buf in))
+					  (print buf))
+					"""))))).isEqualTo("#\\a\n\"b\"\n\"cd\"\nNIL\n:END\n2\n\"ab\"");
 	}
 
 	@Test
@@ -7456,12 +7508,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("392");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("393");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("392");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("393");
 	}
 
 	@Test

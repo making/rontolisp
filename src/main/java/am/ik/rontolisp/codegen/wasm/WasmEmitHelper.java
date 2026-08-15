@@ -37,10 +37,10 @@ final class WasmEmitHelper {
 	 */
 	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal streamArg(WasmLispCompiler.Ctx ctx,
 			am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal explicit) {
-		if (!ctx.globalIndices.containsKey(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR)) {
-			return explicit;
-		}
-		return am.ik.rontolisp.compiler.StreamDesignators.resolveOutput(explicit);
+		am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal resolved = ctx.globalIndices
+			.containsKey(am.ik.rontolisp.LispNames.STANDARD_OUTPUT_VAR)
+					? am.ik.rontolisp.compiler.StreamDesignators.resolveOutput(explicit) : explicit;
+		return ctx.usesSynonymStreams ? am.ik.rontolisp.compiler.StreamDesignators.throughSynonym(resolved) : resolved;
 	}
 
 	/**
@@ -54,10 +54,10 @@ final class WasmEmitHelper {
 	 */
 	static am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal inputStreamArg(WasmLispCompiler.Ctx ctx,
 			am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal explicit) {
-		if (!ctx.globalIndices.containsKey(am.ik.rontolisp.LispNames.STANDARD_INPUT_VAR)) {
-			return explicit;
-		}
-		return am.ik.rontolisp.compiler.StreamDesignators.resolveInput(explicit);
+		am.ik.rontolisp.@org.jspecify.annotations.Nullable LispVal resolved = ctx.globalIndices
+			.containsKey(am.ik.rontolisp.LispNames.STANDARD_INPUT_VAR)
+					? am.ik.rontolisp.compiler.StreamDesignators.resolveInput(explicit) : explicit;
+		return ctx.usesSynonymStreams ? am.ik.rontolisp.compiler.StreamDesignators.throughSynonym(resolved) : resolved;
 	}
 
 	/**

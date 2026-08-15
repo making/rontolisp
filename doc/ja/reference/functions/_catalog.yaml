@@ -370,6 +370,7 @@ categories:
       - { slug: make-string-input-stream, name: "make-string-input-stream" }
       - { slug: get-output-stream-string, name: "get-output-stream-string" }
       - { slug: make-synonym-stream, name: "make-synonym-stream" }
+      - { slug: synonym-stream-symbol, name: "synonym-stream-symbol" }
       - { slug: make-broadcast-stream, name: "make-broadcast-stream" }
       - { slug: input-stream-p, name: "input-stream-p" }
       - { slug: output-stream-p, name: "output-stream-p" }

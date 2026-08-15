@@ -776,10 +776,12 @@ public final class LispEvaluator {
 				throw new LispEvalException(LispNames.OBJ_NEW + ": unknown instance type " + tag.name());
 			}
 			// capacity, not slotCount: a change-class target's ancestors reserve room
-			// for the wider layout (LispLayout.capacity).
+			// for the wider layout, and a type keeping machinery beside its declared
+			// slots (LispLayout.SYNONYM_STREAM's reader closure) is handed that cell as
+			// an ordinary trailing argument (LispLayout.capacity).
 			LispVal[] slots = new LispVal[layout.capacity()];
 			for (int i = 0; i < slots.length; i++) {
-				slots[i] = i + 1 < args.size() && i < layout.slotCount() ? args.get(i + 1) : LispNil.INSTANCE;
+				slots[i] = i + 1 < args.size() ? args.get(i + 1) : LispNil.INSTANCE;
 			}
 			return new LispInstance(layout, slots);
 		}));
@@ -1160,7 +1162,8 @@ public final class LispEvaluator {
 		// (trivial-gray-streams) adapt onto that protocol through their shim system;
 		// the core knows no third-party name.
 		LispVal baseWriteString = this.globalEnv.lookupFunction(LispNames.WRITE_STRING);
-		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, args -> {
+		this.globalEnv.defineFunction(LispNames.WRITE_STRING, new LispFunction(LispNames.WRITE_STRING, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
 			if (args.size() >= 2 && args.get(1) instanceof LispInstance) {
 				ensureGrayStreamsLoaded();
 				LispVal generic = resolveFunction(
@@ -1177,7 +1180,8 @@ public final class LispEvaluator {
 		// wrapped built-ins again, which is one extra hop and no recursion (the wrap
 		// routes non-instances straight to the base function).
 		LispVal baseReadByte = this.globalEnv.lookupFunction(LispNames.READ_BYTE);
-		this.globalEnv.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, args -> {
+		this.globalEnv.defineFunction(LispNames.READ_BYTE, new LispFunction(LispNames.READ_BYTE, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
 			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
 				return applyGrayDispatch(GRAY_READ_BYTE_DISPATCH,
 						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
@@ -1186,7 +1190,8 @@ public final class LispEvaluator {
 			return apply(baseReadByte, args, this.globalEnv);
 		}));
 		LispVal baseReadChar = this.globalEnv.lookupFunction(LispNames.READ_CHAR);
-		this.globalEnv.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, args -> {
+		this.globalEnv.defineFunction(LispNames.READ_CHAR, new LispFunction(LispNames.READ_CHAR, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
 			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
 				return applyGrayDispatch(GRAY_READ_CHAR_DISPATCH,
 						List.of(args.get(0), args.size() >= 2 ? args.get(1) : LispTrue.INSTANCE,
@@ -1195,7 +1200,8 @@ public final class LispEvaluator {
 			return apply(baseReadChar, args, this.globalEnv);
 		}));
 		LispVal baseReadLine = this.globalEnv.lookupFunction(LispNames.READ_LINE);
-		this.globalEnv.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, args -> {
+		this.globalEnv.defineFunction(LispNames.READ_LINE, new LispFunction(LispNames.READ_LINE, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
 			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
 				// eof-error-p defaults to NIL, the read-line lite convention the
 				// handle-based built-in documents.
@@ -1206,21 +1212,24 @@ public final class LispEvaluator {
 			return apply(baseReadLine, args, this.globalEnv);
 		}));
 		LispVal baseWriteByte = this.globalEnv.lookupFunction(LispNames.WRITE_BYTE);
-		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, args -> {
+		this.globalEnv.defineFunction(LispNames.WRITE_BYTE, new LispFunction(LispNames.WRITE_BYTE, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 1);
 			if (args.size() == 2 && args.get(1) instanceof LispInstance) {
 				return applyGrayDispatch(GRAY_WRITE_BYTE_DISPATCH, List.of(args.get(0), args.get(1)));
 			}
 			return apply(baseWriteByte, args, this.globalEnv);
 		}));
 		LispVal baseListen = this.globalEnv.lookupFunction(LispNames.LISTEN);
-		this.globalEnv.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, args -> {
+		this.globalEnv.defineFunction(LispNames.LISTEN, new LispFunction(LispNames.LISTEN, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
 			if (args.size() == 1 && args.get(0) instanceof LispInstance) {
 				return applyGrayDispatch(GRAY_LISTEN_DISPATCH, List.of(args.get(0)));
 			}
 			return apply(baseListen, args, this.globalEnv);
 		}));
 		LispVal baseFilePosition = this.globalEnv.lookupFunction(LispNames.FILE_POSITION);
-		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, args -> {
+		this.globalEnv.defineFunction(LispNames.FILE_POSITION, new LispFunction(LispNames.FILE_POSITION, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, 0);
 			if (!args.isEmpty() && args.get(0) instanceof LispInstance) {
 				if (args.size() == 1) {
 					return applyGrayDispatch(GRAY_FILE_POSITION_DISPATCH, List.of(args.get(0)));
@@ -1405,14 +1414,13 @@ public final class LispEvaluator {
 						LispNames.SYMBOL_VALUE + " expects a symbol, got " + args.get(0).print());
 			};
 		}));
-		// (make-synonym-stream 'sym): the stream designator the symbol currently names.
-		// *standard-output* / *standard-input* answer the nil DESIGNATOR, which every
-		// output / input operation resolves through them at the time of that operation
-		// -- so THOSE synonyms forward per-operation like CL's. Any other symbol is
-		// lite: resolved
-		// HERE, not on every operation through the resulting stream (see
-		// LispMacroExpander.expandMakeSynonymStream, the compiled backends' half of the
-		// same contract).
+		// (make-synonym-stream 'sym): the synonym-stream VALUE -- an instance of the
+		// fixed LispLayout.SYNONYM_STREAM layout holding the symbol, plus (in the cell
+		// reserved beside it) a reader closure answering that variable's CURRENT value.
+		// Every stream-designator resolution calls that reader, which is what makes the
+		// forwarding per-operation and dynamic-binding aware. The compiled backends
+		// build the same value from a compiled (lambda () sym) --
+		// LispMacroExpander.expandMakeSynonymStream.
 		this.globalEnv.defineFunction(LispNames.MAKE_SYNONYM_STREAM,
 				new LispFunction(LispNames.MAKE_SYNONYM_STREAM, args -> {
 					requireSingleArg(LispNames.MAKE_SYNONYM_STREAM, args);
@@ -1420,18 +1428,9 @@ public final class LispEvaluator {
 						throw new LispEvalException(
 								LispNames.MAKE_SYNONYM_STREAM + " expects a symbol, got " + args.get(0).print());
 					}
-					if (LispNames.STANDARD_OUTPUT_VAR.equals(sym.name())
-							|| LispNames.STANDARD_INPUT_VAR.equals(sym.name())) {
-						return LispNil.INSTANCE;
-					}
-					if (this.dynamicBindings.isBound(sym.name())) {
-						return this.dynamicBindings.get(sym.name());
-					}
-					LispVal value = this.globalEnv.lookupOrNull(sym.name());
-					if (value == null) {
-						throw new LispEvalException("The variable " + sym.name() + " is unbound");
-					}
-					return value;
+					LispFunction reader = new LispFunction(LispNames.SYNONYM_TARGET,
+							ignored -> symbolValueOf(sym.name()));
+					return new LispInstance(LispLayout.SYNONYM_STREAM, new LispVal[] { sym, reader });
 				}));
 		// fboundp is t for anything callable or expandable: functions, user macros, and
 		// the built-in macros/special forms (CL: fboundp is true of macros and special
@@ -3516,7 +3515,7 @@ public final class LispEvaluator {
 					env);
 		}
 		LispVal seq = eval(parts.get(1), env);
-		LispVal stream = eval(parts.get(2), env);
+		LispVal stream = Environment.synonymTarget(eval(parts.get(2), env));
 		if (stream instanceof LispInstance) {
 			LispVal start = new LispInteger(0);
 			LispVal end = LispNil.INSTANCE;
@@ -4178,7 +4177,7 @@ public final class LispEvaluator {
 			case LispNames.CONSTANTP:
 				return eval(LispMacroExpander.expandConstantp(cons), env);
 			case LispNames.STREAMP:
-				return eval(LispMacroExpander.expandStreamp(cons), env);
+				return eval(LispMacroExpander.expandStreamp(cons, true), env);
 			case LispNames.SIMPLE_STRING_P:
 				return eval(LispMacroExpander.expandSimpleStringP(cons), env);
 			// make-broadcast-stream goes through the SAME expansion the compile paths
@@ -5816,12 +5815,54 @@ public final class LispEvaluator {
 	}
 
 	/** The second argument of an instance primitive: a 0-based slot index in range. */
+	/**
+	 * The current value of the global (dynamic-first) variable a synonym stream names --
+	 * {@code symbol-value}'s rule, which is what the reader closure of an interpreter
+	 * synonym stream answers.
+	 * @param name the variable name
+	 * @return the current value
+	 */
+	private LispVal symbolValueOf(String name) {
+		if (LispNames.PACKAGE_VAR.equals(name)) {
+			return currentPackageValue();
+		}
+		if (this.dynamicBindings.isBound(name)) {
+			return this.dynamicBindings.get(name);
+		}
+		LispVal value = this.globalEnv.lookupOrNull(name);
+		if (value == null) {
+			throw new LispEvalException("The variable " + name + " is unbound");
+		}
+		return value;
+	}
+
+	/**
+	 * The argument list with its stream argument resolved through a SYNONYM STREAM. Every
+	 * Gray-dispatching built-in wrap runs this first: a synonym stream is an instance
+	 * too, so without it the wrap would send the synonym itself to the Gray generic
+	 * instead of forwarding to what it names (which may in turn BE a Gray instance).
+	 * @param args the call arguments
+	 * @param index the position of the stream argument
+	 * @return the same list when nothing forwards, else a copy with the resolved
+	 * designator
+	 */
+	private static List<LispVal> resolveSynonymArg(List<LispVal> args, int index) {
+		if (index >= args.size() || !Environment.isSynonymStream(args.get(index))) {
+			return args;
+		}
+		List<LispVal> resolved = new java.util.ArrayList<>(args);
+		resolved.set(index, Environment.synonymTarget(args.get(index)));
+		return resolved;
+	}
+
 	private static int requireSlotIndex(String name, LispInstance inst, List<LispVal> args) {
 		if (args.size() < 2 || !(args.get(1) instanceof LispInteger idx)) {
 			throw new LispEvalException(name + " expects a slot index");
 		}
 		long k = idx.value();
-		if (k < 0 || k >= inst.slotCount()) {
+		// capacity, not slotCount: the addressable storage of an instance is what its
+		// layout RESERVED, which the compile paths index without a check of their own.
+		if (k < 0 || k >= inst.layout().capacity()) {
 			throw new LispEvalException(name + ": slot index " + k + " is outside " + inst.layout().tag());
 		}
 		return (int) k;

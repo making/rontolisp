@@ -20,7 +20,9 @@ blob bakes it with every other layout) while the type joins **no** `typep` tag
 table, no `structure-object`/`standard-object` enumeration
 (`makeAnyStructInstanceTest` filters on kind `STRUCT`; pathname is kind
 `PATHNAME`) and no `%class-slot-defs` answer. `(typep #P"x"
-'structure-object)` is `NIL`, as in SBCL. The tag is spelled `%PATHNAME` in
+'structure-object)` is `NIL`, as in SBCL. `LispLayout.SYNONYM_STREAM` is the second value
+built this way (`.kb/read-load-streams.md`), so the pattern below is the shape to copy, not
+a one-off. The tag is spelled `%PATHNAME` in
 UPPER case so prelude Lisp can quote it literally under the reader-upcase
 premise.
 

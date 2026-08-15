@@ -127,9 +127,10 @@
 
 ;;; A non-handle designator (nil, or the t the unbound *standard-input* holds)
 ;;; is the host stdin stream; a handle -- a WASI fd or a string input stream --
-;;; goes to the native built-in.
+;;; goes to the native built-in. A synonym stream resolves to what it names
+;;; first (%synonym-target), or it would read as a non-handle.
 (rontolisp:async-defun rontolisp::%stdin-read-line-or-raw-f (s)
-  (let ((in (or s *standard-input*)))
+  (let ((in (%synonym-target (or s *standard-input*))))
     (if (integerp in)
         (rontolisp::%read-line-raw in)
         (rontolisp:await (rontolisp::%stdin-read-line-f)))))
@@ -141,7 +142,7 @@
   ;; look-alike message: a (handler-case (read-char) (end-of-file () ...)) has to
   ;; catch it here exactly as it does on the interpreter and the JVM. The socket
   ;; arm of %read-char-future signals the same class for the same reason.
-  (let ((in (or s *standard-input*)))
+  (let ((in (%synonym-target (or s *standard-input*))))
     (if (integerp in)
         (rontolisp::%read-char-raw in)
         (let ((c (rontolisp:await (rontolisp::%stdin-read-char-f))))

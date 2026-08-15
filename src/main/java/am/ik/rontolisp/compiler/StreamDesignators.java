@@ -161,6 +161,31 @@ public final class StreamDesignators {
 				new LispCons(explicit, new LispCons(standardInput(), LispNil.INSTANCE)));
 	}
 
+	/**
+	 * The same designator expression, resolved through a SYNONYM STREAM: a synonym stream
+	 * is a value ({@code LispLayout.SYNONYM_STREAM}), so the designator a stream
+	 * operation actually acts on is whatever the variable it names holds AT THAT MOMENT
+	 * -- which {@code %SYNONYM-TARGET} answers by calling the reader closure the value
+	 * carries, recursively (a synonym over a synonym resolves too).
+	 *
+	 * <p>
+	 * Applied by both backends' {@code streamArg}/{@code inputStreamArg} seams, and ONLY
+	 * when the program can build a synonym stream at all ({@code Ctx.usesSynonymStreams}
+	 * -- {@code make-synonym-stream} is the sole constructor and has no read syntax), so
+	 * every other program keeps its exact bytes. A literal that can never BE a synonym
+	 * stream -- an omitted argument, {@code t}, a handle -- is handed back untouched.
+	 * @param designator the already-resolved designator expression, or {@code null} for
+	 * the hard-coded standard stream
+	 * @return the expression to compile as the designator
+	 */
+	public static @Nullable LispVal throughSynonym(@Nullable LispVal designator) {
+		if (designator == null || designator instanceof LispTrue || designator instanceof LispInteger
+				|| designator instanceof LispNil) {
+			return designator;
+		}
+		return new LispCons(new LispSymbol(LispNames.SYNONYM_TARGET), new LispCons(designator, LispNil.INSTANCE));
+	}
+
 	private static boolean isStandardOutputRead(LispVal expr) {
 		return isRead(expr, LispNames.STANDARD_OUTPUT_VAR);
 	}

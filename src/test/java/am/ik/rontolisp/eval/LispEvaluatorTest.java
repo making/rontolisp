@@ -572,18 +572,30 @@ class LispEvaluatorTest {
 
 	@Test
 	void evalMakeSynonymStreamResolvesTheNamedVariable() {
-		// A synonym over *standard-output* IS the nil designator, so it forwards
-		// PER OPERATION (resolved at write time, not at construction).
-		assertThat(eval("(make-synonym-stream '*standard-output*)")).isEqualTo(LispNil.INSTANCE);
-		// Any other symbol stays lite: the value at construction time.
-		assertThat(eval("(let ((*x* 7)) (declare (special *x*)) (make-synonym-stream '*x*))"))
-			.isEqualTo(new LispInteger(7));
+		// A synonym stream is a VALUE, not the nil designator: it answers true, it is a
+		// stream, and it remembers the symbol it forwards to.
+		assertThat(eval("(if (make-synonym-stream '*standard-output*) :true :false)").print()).isEqualTo(":TRUE");
+		assertThat(eval("(streamp (make-synonym-stream '*standard-output*))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(input-stream-p (make-synonym-stream '*standard-input*))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(output-stream-p (make-synonym-stream '*standard-output*))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(close (make-synonym-stream '*standard-output*))")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(synonym-stream-symbol (make-synonym-stream '*standard-output*))").print())
+			.isEqualTo("*STANDARD-OUTPUT*");
+		assertThat(eval("(make-synonym-stream '*standard-output*)").print())
+			.isEqualTo("#<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>");
+		// Writing through it resolves the symbol AT WRITE TIME, for any symbol.
+		assertThat(eval("""
+				(progn
+				  (defvar *port* t)
+				  (defvar *syn* (make-synonym-stream '*port*))
+				  (with-output-to-string (s)
+				    (let ((*port* s)) (write-string "via" *syn*))))""")).isEqualTo(new LispString("via"));
 	}
 
 	@Test
 	void evalSynonymStreamOverStandardOutputFollowsALaterBinding() {
 		// The construct-once snapshot could not see a binding established AFTER the
-		// synonym was built; the nil designator does.
+		// synonym was built; the per-operation reader does.
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		LispEvaluator evaluator = new LispEvaluator(new PrintStream(baos));
 		LispVal result = evaluator.eval(LispReader.readFromString("""
@@ -612,8 +624,7 @@ class LispEvaluatorTest {
 	}
 
 	@Test
-	void evalMakeSynonymStreamOverStandardInputIsTheNilDesignator() {
-		assertThat(eval("(make-synonym-stream '*standard-input*)")).isEqualTo(LispNil.INSTANCE);
+	void evalMakeSynonymStreamOverStandardInputFollowsALaterBinding() {
 		assertThat(eval("""
 				(progn
 				  (defvar *src* (make-synonym-stream '*standard-input*))
@@ -6203,7 +6214,7 @@ class LispEvaluatorTest {
 			.contains("BYTE", "BYTE-SIZE", "BYTE-POSITION", "LDB", "DPB")
 			.contains("STRING")
 			.contains("PEEK-CHAR", "MAKE-STRING-OUTPUT-STREAM", "MAKE-STRING-INPUT-STREAM", "GET-OUTPUT-STREAM-STRING",
-					"MAKE-SYNONYM-STREAM")
+					"MAKE-SYNONYM-STREAM", "SYNONYM-STREAM-SYMBOL")
 			.contains("INVOKE-RESTART", "FIND-RESTART", "COMPUTE-RESTARTS", "RESTART-NAME", "MUFFLE-WARNING", "ABORT",
 					"CONTINUE")
 			.doesNotContain("%puthash", "%aset", "%row-major-aset", "%make-string-output-stream",
@@ -6219,9 +6230,9 @@ class LispEvaluatorTest {
 					"GRAPHIC-CHAR-P", "STANDARD-CHAR-P")
 			.contains("WRITE", "PPRINT", "PPRINT-NEWLINE", "PPRINT-INDENT", "PPRINT-TAB", "COPY-PPRINT-DISPATCH",
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
-			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default")
+			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default", "%synonym-target")
 			.isSorted()
-			.hasSize(392);
+			.hasSize(393);
 	}
 
 	@Test

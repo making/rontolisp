@@ -51,10 +51,9 @@ final class JvmStringStreamCompiler {
 	 * output
 	 */
 	static @Nullable LispVal streamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
-		if (!ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR)) {
-			return explicit;
-		}
-		return StreamDesignators.resolveOutput(explicit);
+		LispVal resolved = ctx.globals.contains(LispNames.STANDARD_OUTPUT_VAR)
+				? StreamDesignators.resolveOutput(explicit) : explicit;
+		return ctx.usesSynonymStreams ? StreamDesignators.throughSynonym(resolved) : resolved;
 	}
 
 	/**
@@ -67,10 +66,9 @@ final class JvmStringStreamCompiler {
 	 * input
 	 */
 	static @Nullable LispVal inputStreamArg(JvmLispCompiler.Ctx ctx, @Nullable LispVal explicit) {
-		if (!ctx.globals.contains(LispNames.STANDARD_INPUT_VAR)) {
-			return explicit;
-		}
-		return StreamDesignators.resolveInput(explicit);
+		LispVal resolved = ctx.globals.contains(LispNames.STANDARD_INPUT_VAR) ? StreamDesignators.resolveInput(explicit)
+				: explicit;
+		return ctx.usesSynonymStreams ? StreamDesignators.throughSynonym(resolved) : resolved;
 	}
 
 	/**

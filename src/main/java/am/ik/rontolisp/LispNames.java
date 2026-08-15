@@ -3367,6 +3367,27 @@ public final class LispNames {
 	 */
 	public static final String MAKE_SYNONYM_STREAM = "MAKE-SYNONYM-STREAM";
 
+	/**
+	 * The {@code synonym-stream-symbol} built-in function: the symbol a synonym stream
+	 * forwards to, i.e. the argument {@link #MAKE_SYNONYM_STREAM} was given.
+	 */
+	public static final String SYNONYM_STREAM_SYMBOL = "SYNONYM-STREAM-SYMBOL";
+
+	/**
+	 * The internal prelude helper every stream-designator resolution funnels a designator
+	 * through: a synonym stream answers the CURRENT value of the variable it names (by
+	 * calling the reader closure reserved beside its declared slot), recursively, so a
+	 * synonym over a synonym resolves too; anything else answers itself.
+	 */
+	public static final String SYNONYM_TARGET = "%SYNONYM-TARGET";
+
+	/**
+	 * The internal spelling of {@link #CLOSE} that skips the synonym-stream guard -- the
+	 * plain-designator close the guard falls through to. Without a second name the guard
+	 * would re-expand into itself.
+	 */
+	public static final String CLOSE_INTERNAL = "%CLOSE";
+
 	// The printer entry points and the pretty-printer subset (.kb/pretty-printer.md)
 
 	/**

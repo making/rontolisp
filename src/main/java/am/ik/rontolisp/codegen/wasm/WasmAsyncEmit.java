@@ -771,6 +771,10 @@ final class WasmAsyncEmit {
 			.condMessagesObservable(proto.condMessagesObservable)
 			.blockExitTag(proto.blockExitTag)
 			.restartMode(proto.restartMode)
+			// NOT optional, same reason as the instance pair below: a synonym stream
+			// built or written through at the SYNCHRONOUS top level must resolve like
+			// the same form inside a defun.
+			.usesSynonymStreams(proto.usesSynonymStreams)
 			.usesSeqString(proto.usesSeqString)
 			.ehDepthGlobalIndex(proto.ehDepthGlobalIndex)
 			.simd(proto.simd)

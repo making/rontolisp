@@ -31,9 +31,13 @@ import java.util.List;
  * inherited slots first)
  * @param initforms the per-slot default expressions, in the same order as
  * {@code slotNames}
- * @param capacity how many slots an instance RESERVES room for -- normally
+ * @param capacity how many cells an instance RESERVES room for -- normally
  * {@code slotNames.size()}, but wider when {@code change-class} can turn an instance of
- * this type into one of a descendant (see {@link #withCapacity})
+ * this type into one of a descendant (see {@link #withCapacity}), or when the type keeps
+ * MACHINERY beside its declared slots ({@link #SYNONYM_STREAM}'s reader closure). The
+ * cells past {@code slotNames.size()} are addressable by
+ * {@code %obj-new}/{@code %obj-ref} / {@code %obj-set} and invisible to printing,
+ * {@code equal} and slot introspection
  */
 public record LispLayout(String tag, String printName, Kind kind, List<String> slotNames, List<LispVal> initforms,
 		int capacity) {
@@ -85,6 +89,33 @@ public record LispLayout(String tag, String printName, Kind kind, List<String> s
 	 */
 	public static final LispLayout PATHNAME = new LispLayout(PATHNAME_TAG, "PATHNAME", Kind.PATHNAME,
 			List.of("NAMESTRING"), List.of(LispNil.INSTANCE), 1);
+
+	/**
+	 * The instance tag of the built-in synonym-stream type, spelled in upper case for the
+	 * same reason as {@link #PATHNAME_TAG}: prelude Lisp quotes it literally
+	 * ({@code (%obj-is s '%SYNONYM-STREAM)}) and the reader upcases source symbols.
+	 */
+	public static final String SYNONYM_STREAM_TAG = "%SYNONYM-STREAM";
+
+	/**
+	 * The layout of every synonym-stream value: ONE declared slot holding the symbol
+	 * {@code make-synonym-stream} was given, plus ONE reserved cell (hence capacity 2)
+	 * holding the per-operation READER -- a zero-argument closure over a read of that
+	 * variable, which is how "the symbol's current value, dynamic binding included"
+	 * becomes a first-class value on all four backends. The reader is machinery, not a
+	 * slot: it is outside {@link #slotNames()}, so it never reaches the printers (a
+	 * synonym stream prints as {@code #<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>} on
+	 * every backend, where the closure itself prints differently) nor {@code equal}.
+	 *
+	 * <p>
+	 * A FIXED layout, seeded into {@code ClosRegistry.layoutsByTag} as a LAYOUT ONLY like
+	 * {@link #PATHNAME}, so {@code %obj-new}/{@code %obj-is} resolve the tag on every
+	 * backend while the type joins no {@code typep} tag table, no
+	 * {@code structure-object} / {@code standard-object} enumeration and no
+	 * {@code %class-slot-defs} answer.
+	 */
+	public static final LispLayout SYNONYM_STREAM = new LispLayout(SYNONYM_STREAM_TAG, "SYNONYM-STREAM", Kind.CLASS,
+			List.of("SYMBOL"), List.of(LispNil.INSTANCE), 2);
 
 	/**
 	 * Canonicalizes the collections so a layout is deeply immutable.

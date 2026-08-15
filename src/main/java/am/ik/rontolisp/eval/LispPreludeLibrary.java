@@ -472,6 +472,27 @@ public final class LispPreludeLibrary {
 				(defun %make-broadcast-stream (%mbs-components)
 				  (make-instance '%broadcast-stream :components %mbs-components))
 				""");
+		// %synonym-target: the ONE resolution of a stream DESIGNATOR through a synonym
+		// stream. A synonym stream is a value (LispLayout.SYNONYM_STREAM) whose reserved
+		// cell holds a zero-argument closure reading the variable it names, so calling it
+		// answers that variable's value AS OF NOW -- the per-operation forwarding CL
+		// prescribes -- and the recursion carries a synonym over a synonym. Reached from
+		// both compile-path seams (Jvm/Wasm streamArg, via
+		// StreamDesignators.throughSynonym)
+		// and from every gray.lisp dispatch helper, which must resolve BEFORE its %obj-p
+		// test or a synonym stream would take the CLOS arm.
+		SOURCES.put(LispNames.SYNONYM_TARGET, """
+				(defun %synonym-target (%st-s)
+				  (if (%obj-is %st-s '%SYNONYM-STREAM)
+				      (%synonym-target (funcall (%obj-ref %st-s 1)))
+				      %st-s))
+				""");
+		SOURCES.put(LispNames.SYNONYM_STREAM_SYMBOL, """
+				(defun synonym-stream-symbol (%sss-s)
+				  (if (%obj-is %sss-s '%SYNONYM-STREAM)
+				      (%obj-ref %sss-s 0)
+				      (error "SYNONYM-STREAM-SYMBOL: not a synonym stream: ~S" %sss-s)))
+				""");
 		SOURCES.put(LispNames.CONSTANTLY, """
 				(defun constantly (%ct-value)
 				  (lambda (&rest %ct-args) %ct-value))
@@ -1393,6 +1414,16 @@ public final class LispPreludeLibrary {
 		// compilers, after this pass: uiop:file-exists-p becomes (probe-file x) and
 		// uiop:namestring / uiop:native-namestring become (namestring x), so a program
 		// spelling only the uiop name must still splice the CL definition.
+		// %synonym-target has the same timing problem twice over: the compile-path
+		// seams insert the call inside the expression compilers, and gray.lisp's
+		// dispatch helpers -- which call it unconditionally -- are spliced by
+		// GrayStreamsLibrary AFTER this pass. So the selection keys on the two SURFACE
+		// facts instead: the program builds a synonym stream, or it uses the Gray
+		// protocol (which is exactly when a dispatch helper can be spliced).
+		if (LispNames.SYNONYM_TARGET.equals(entry)) {
+			return referencesName(program, LispNames.MAKE_SYNONYM_STREAM, canonical)
+					|| GrayStreamsLibrary.usesProtocol(program);
+		}
 		if (LispNames.PROBE_FILE.equals(entry)) {
 			return referencesUiopMember(program, LispNames.FILE_EXISTS_P, canonical);
 		}

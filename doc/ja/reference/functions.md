@@ -325,7 +325,8 @@
 | `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
 | `make-string-input-stream` | `(make-string-input-stream string &optional start end)` | 文字列から読み込む入力ストリーム。`with-input-from-string` が束縛するものを明示的に作ります |
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
-| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | 指定した変数のストリームへ転送する指定子。`*standard-output*` と `*standard-input*` は操作ごとに転送します (`nil` 指定子)。それ以外のシンボルはライト実装で、ストリームを作った時点で一度だけ解決します |
+| `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | すべての操作を、指定した変数が **その時点で** 保持しているストリームへ転送するストリーム。どのシンボルでも同じなので、後から変数を再束縛すると転送先も変わります |
+| `synonym-stream-symbol` | `(synonym-stream-symbol s)` | シノニムストリームの転送先シンボル |
 | `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので `format`/`princ`/`prin1`/`write-string`/`write-char` が使え、`terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` はシグナルを発生させます |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |

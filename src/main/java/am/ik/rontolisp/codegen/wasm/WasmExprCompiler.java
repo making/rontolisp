@@ -412,7 +412,20 @@ final class WasmExprCompiler {
 							WasmExprCompiler.compileExpr(LispMacroExpander.expandReadSequence(cons), ctx);
 						case LispNames.WRITE_SEQUENCE_RAW_INTERNAL ->
 							WasmExprCompiler.compileExpr(LispMacroExpander.expandWriteSequence(cons), ctx);
-						default -> WasmCloseCompiler.compile(cons, ctx);
+						// The synonym-stream guard has to apply under the alias too: the
+						// socket rewrite maps (close s) to (%io-close s), whose
+						// non-socket arm lands here, so without it a component would
+						// hand a synonym stream to the handle-typed close and TRAP. The
+						// read/write aliases need nothing -- they share the compilers
+						// whose designator seam already resolves it.
+						default -> {
+							if (ctx.usesSynonymStreams) {
+								WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverSynonym(cons), ctx);
+							}
+							else {
+								WasmCloseCompiler.compile(cons, ctx);
+							}
+						}
 					}
 					return;
 				}
@@ -819,7 +832,19 @@ final class WasmExprCompiler {
 				case LispNames.MAKE_SYNONYM_STREAM ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandMakeSynonymStream(cons), ctx);
 				case LispNames.OPEN -> WasmOpenCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx);
-				case LispNames.CLOSE -> WasmCloseCompiler.compile(cons, ctx);
+				case LispNames.CLOSE -> {
+					// Closing a SYNONYM stream closes the synonym, not what it forwards
+					// to -- which is nothing to do. The guard is emitted only when the
+					// program can build one; %close is the plain-designator close it
+					// falls through to.
+					if (ctx.usesSynonymStreams) {
+						WasmExprCompiler.compileExpr(LispMacroExpander.expandCloseOverSynonym(cons), ctx);
+					}
+					else {
+						WasmCloseCompiler.compile(cons, ctx);
+					}
+				}
+				case LispNames.CLOSE_INTERNAL -> WasmCloseCompiler.compile(cons, ctx);
 				case LispNames.PROBE_FILE_INTERNAL -> WasmProbeFileCompiler.compile(cons, ctx);
 				case LispNames.LIST_DIRECTORY -> WasmListDirectoryCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
@@ -942,11 +967,12 @@ final class WasmExprCompiler {
 				case LispNames.UPPER_CASE_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandUpperCaseP(cons), ctx);
 				case LispNames.CONSTANTP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandConstantp(cons), ctx);
-				case LispNames.STREAMP -> WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons), ctx);
+				case LispNames.STREAMP ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamp(cons, ctx.usesSynonymStreams), ctx);
 				case LispNames.SIMPLE_STRING_P ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.expandSimpleStringP(cons), ctx);
-				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P ->
-					WasmExprCompiler.compileExpr(LispMacroExpander.expandStreamDirectionP(cons), ctx);
+				case LispNames.INPUT_STREAM_P, LispNames.OUTPUT_STREAM_P -> WasmExprCompiler
+					.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams), ctx);
 				// file-length and file-write-date answer nil here rather than signalling:
 				// no WASI filestat call is imported, and "cannot be determined" is what
 				// Common Lisp prescribes for exactly that. %make-directories and

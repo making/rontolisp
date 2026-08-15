@@ -125,7 +125,7 @@ dispatch in every `equalp`-using artifact, versus +63 bytes this way.
 
 | primitive | meaning |
 | --- | --- |
-| `(%obj-new '<tag> v...)` | build an instance of the registered layout; surplus values are evaluated and dropped, missing ones are nil |
+| `(%obj-new '<tag> v...)` | build an instance of the registered layout; values past its `capacity` are evaluated and dropped, missing ones are nil |
 | `(%obj-ref obj <k>)` | read slot `k` (0-based) |
 | `(%obj-set obj <k> v)` | write slot `k`, returning `v` |
 | `(%obj-is obj '<tag>...)` | t when `obj` is an instance of any of the tags, nil for every other value |

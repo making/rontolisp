@@ -138,26 +138,86 @@ there (a string input stream has no such limit, and neither do the interpreter a
 Pinned by `peekCharLeavesTheCharacterInTheStream` / `peekCharSkipsWhitespaceAndUpToACharacter`
 in all three suites plus the ci-spec case.
 
-**`make-synonym-stream` over `*standard-output*` / `*standard-input*` forwards per
-operation; over any other symbol it is resolved ONCE, at construction** (`expandMakeSynonymStream`, and the
-`LispEvaluator` registration next to `symbol-value` so the interpreter's lookup is
-dynamic-binding-aware). `(make-synonym-stream '*standard-output*)` and its `*standard-input*` twin answer the `nil`
-DESIGNATOR, which every output (resp. input) operation resolves through the current
-`*standard-output*` / `*standard-input*` at operation time
-(`.kb/standard-output-redirect.md`) -- so those synonyms have CL's semantics with no new
-stream kind. Any other symbol compiles to a READ of that variable (a runtime symbol
-goes through `symbol-value`), i.e. a snapshot where CL would forward every operation.
-**Reason for the divergence**: a per-operation synonym over an ARBITRARY symbol needs a
-stream-designator KIND carrying that symbol which the write helpers of all four backends
-resolve at run time; `nil` is the only designator the helpers already have, and it names
-exactly the standard streams. No known consumer needs more (postmodern's `config.lisp:224`
-`*json-output*` defvar constructs once and never rebinds). **RE-EVALUATION TRIGGER**: if a
-consumer ever rebinds the symbol behind a NON-standard synonym stream, the runtime needs
-that designator kind and the whole expansion has to go. One parity fix fell out of the
-original pass: the interpreter's `write-line` takes nil/t as the standard-output designator
-like the other three backends already did (its stdout test is "not a handle"). Pinned by
-`makeSynonymStreamResolvesTheNamedVariable` / `synonymStreamOverStandardOutputFollowsALaterBinding`
-(JVM + WASM), their `eval*` twins, and the ci-spec case.
+**A synonym stream is a distinct VALUE that forwards EVERY operation to the current value
+of the symbol it names -- for any symbol** (todo-377, 2026-08-15; before it, a synonym over
+`*standard-output*`/`*standard-input*` was the `nil` designator and any other symbol was
+resolved ONCE, at construction). The value is an instance of the fixed
+`LispLayout.SYNONYM_STREAM` layout (tag `%SYNONYM-STREAM`, seeded into
+`ClosRegistry.layoutsByTag` as a LAYOUT ONLY, the pathname precedent of
+`.kb/pathnames.md`): ONE declared slot holding the symbol, plus ONE RESERVED cell
+(`capacity` 2) holding the per-operation READER.
+
+**The reader is a zero-argument closure over a read of that variable, and that is the whole
+mechanism.** `(make-synonym-stream '*out*)` expands to
+`(%obj-new '%SYNONYM-STREAM '*out* (lambda () *out*))`
+(`LispMacroExpander.expandMakeSynonymStream`; a COMPUTED symbol falls back to
+`(lambda () (symbol-value sym))` over a let-bound temporary). Calling the closure answers
+the variable's value as of that call -- the innermost dynamic binding on the interpreter,
+the dynamic-first read a `let` of a special compiles to on the compile paths. So nothing
+needs the symbol's NAME at run time, which is why `symbol-value` (global-only on the
+compile paths, and a force of the whole eval runtime, `.kb/symbol-runtime-api.md`) is not
+in the lowering. The reader is deliberately OUTSIDE `slotNames`, so it reaches neither the
+printers -- `#<SYNONYM-STREAM :SYMBOL *STANDARD-OUTPUT*>`, identical on all four backends,
+while a closure prints `#<lambda>` on the interpreter and `#<function>` on the other three
+-- nor `equal`.
+
+**The resolution is one shared prelude defun, `%SYNONYM-TARGET`** (`LispPreludeLibrary`):
+"a synonym stream answers `(funcall (%obj-ref s 1))`, recursively; anything else answers
+itself", so a synonym over a synonym resolves and a cycle is the only thing that cannot.
+Reached from five places:
+
+- **Both compile-path seams**: `StreamDesignators.throughSynonym` wraps the designator
+  expression `JvmStringStreamCompiler.streamArg`/`inputStreamArg` and `WasmEmitHelper`'s
+  twins already produce -- so every print/read/byte/sequence operator inherits it from the
+  ONE gate per backend. A literal that cannot BE a synonym (an omitted argument, `t`, a
+  handle) is left untouched.
+- **The interpreter**: `Environment.synonymTarget` (the same walk in Java, over the native
+  `LispFunction` reader the interpreter's `make-synonym-stream` builds), applied by
+  `resolveOutputDest`/`resolveInputSrc` and -- BEFORE the `instanceof LispInstance` test --
+  by every Gray-dispatching built-in wrap in `LispEvaluator` (`resolveSynonymArg`).
+- **`gray.lisp`'s `%gray-*-dispatch` helpers**, which resolve their stream FIRST: a synonym
+  stream is an instance too, so without that they would take the CLOS arm and die on "no
+  applicable method", and the target -- which may itself be a Gray instance -- would never
+  be reached. That is rove's exact composition (an indent stream wrapping
+  `(make-synonym-stream '*standard-output*)`), and it works in both directions.
+- **`streamp` / `input-stream-p` / `output-stream-p` / `close`**: the value answers `t` for
+  the three predicates, and `close` closes the SYNONYM -- nothing to do -- and answers `t`.
+  The `close` guard has to exist TWICE on the wasm side: at the `close` case and at the
+  `%CLOSE-RAW` alias the `--component` socket rewrite falls through to, or a component
+  hands the synonym to the handle-typed close and traps.
+- **The `--component` spliced dispatchers**, which resolve the designator themselves
+  (`sockets.lisp` / `stdin-dispatch.lisp` / `stdin.lisp`): their `(or s *standard-input*)`
+  binding is now `(%synonym-target (or s *standard-input*))`. That rewrite REPLACES the
+  read built-ins, so the compiler's own seam never sees those call sites and a synonym
+  would read as "not a handle" and go to the host stdin cache. Same reason the explicit-nil
+  designator is resolved there (`.kb/standard-output-redirect.md`).
+
+**Everything a program-level operator does is gated on `make-synonym-stream` appearing in
+the source** (`Ctx.usesSynonymStreams`, and `constructsInstance` for the instance gate): it is the only
+constructor and there is no read syntax for one, so a program that never spells it compiles
+byte-identically to before -- no `%SYNONYM-TARGET` call at any stream site, no synonym arm
+in `streamp`, no guard on `close`. **Two LIBRARY splices pay unconditionally**, and that is
+the deliberate price: gray.lisp's dispatch helpers and the `--component` I/O dispatchers
+carry the hop whether or not their program can build a synonym stream, so any program using
+the Gray protocol or the component socket/stdin splice carries `%SYNONYM-TARGET` (one small
+defun) plus one call per dispatch. Making those two conditional would mean editing a
+spliced body per program -- a bypass branch in exchange for a couple of hundred bytes --
+and the shared resolution is worth more than that. It is also why
+`LispPreludeLibrary.referencedBySurfaceForm` splices `%SYNONYM-TARGET` for a program that
+merely uses the GRAY protocol (the same predicate roots it in `LibraryDefunPruner`): both
+compile-path seams insert the call inside the expression compilers, and
+`GrayStreamsLibrary.process` runs AFTER the prelude selection, so the reference the
+selection would look for does not exist yet. **A pipeline that splices gray.lisp must run
+`LispPreludeLibrary.process` too** (the CLI, the playground and the E2E supports all do;
+the backend test harnesses grew a `compileAndRunGray` for it). The component splices have
+no such problem -- they run BEFORE the prelude selection, which therefore sees their
+reference directly.
+
+Pinned by `makeSynonymStreamResolvesTheNamedVariable` / `makeSynonymStreamIsAStreamValue` /
+`synonymStreamOverStandardOutputFollowsALaterBinding` /
+`makeSynonymStreamOverStandardInputFollowsALaterBinding` /
+`synonymStreamOverAUserSpecialFollowsALaterBinding` (JVM + WASM), their `eval*` twins in
+`LispEvaluatorTest`, and the `synonym-stream-value` ci-spec case.
 
 **Binary stdin/stdout is the standard-stream DESIGNATOR, not a new stream kind** (todo-314,
 2026-08-10). `read-byte`/`write-byte` take the same designators every other stream operation

@@ -1170,6 +1170,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			.usesHashTables(usesHashTables)
 			.usesSeqString(usesSeqString)
 			.mayUseInstances(mayUseInstances)
+			.usesSynonymStreams(programUsesSymbol(program, LispNames.MAKE_SYNONYM_STREAM))
 			.mayUseAsyncValues(usesAsyncRuntime)
 			.simdOps(simdRuntime != null ? simdRuntime.ops() : null)
 			.className(this.className)
@@ -4004,6 +4005,14 @@ public final class JvmLispCompiler implements LispCompiler {
 		boolean mayUseInstances = false;
 
 		/**
+		 * True when the program can build a SYNONYM STREAM ({@code make-synonym-stream}
+		 * is the only way to, and it has no read syntax), so every stream-designator
+		 * resolution has to run through {@code %SYNONYM-TARGET}. A program that never
+		 * spells it keeps its exact bytes.
+		 */
+		boolean usesSynonymStreams = false;
+
+		/**
 		 * True when an async runtime value -- a stream or a stream-read token, both
 		 * {@code Object[3]} headed by an interned marker -- can exist in this class.
 		 * Gates the async-value exclusion in the cons-shaped predicates, so a program
@@ -4204,6 +4213,7 @@ public final class JvmLispCompiler implements LispCompiler {
 			this.usesHashTables = builder.usesHashTables;
 			this.usesSeqString = builder.usesSeqString;
 			this.mayUseInstances = builder.mayUseInstances;
+			this.usesSynonymStreams = builder.usesSynonymStreams;
 			this.mayUseAsyncValues = builder.mayUseAsyncValues;
 			this.className = builder.className;
 			this.userDefunNames = builder.userDefunNames;
@@ -4449,6 +4459,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			private boolean usesSeqString = false;
 
 			private boolean mayUseInstances = false;
+
+			private boolean usesSynonymStreams = false;
 
 			private boolean mayUseAsyncValues = false;
 
@@ -4842,6 +4854,11 @@ public final class JvmLispCompiler implements LispCompiler {
 
 			Builder mayUseInstances(boolean mayUseInstances) {
 				this.mayUseInstances = mayUseInstances;
+				return this;
+			}
+
+			Builder usesSynonymStreams(boolean usesSynonymStreams) {
+				this.usesSynonymStreams = usesSynonymStreams;
 				return this;
 			}
 

@@ -146,70 +146,86 @@
 ;; to: a CLOS instance stream goes to the Gray generic, anything else falls
 ;; back to the built-in. The interpreter needs no rewrite -- its built-in
 ;; wraps call these helpers directly.
+;;
+;; Every helper resolves its stream through %synonym-target FIRST: a synonym
+;; stream is an instance too, so without that it would take the CLOS arm and
+;; die on "no applicable method", and its target -- which may itself be a Gray
+;; instance -- would never be reached.
 
 (defun rontolisp::%gray-write-string-dispatch (s stream)
-  (if (%obj-p stream)
-      (rontolisp:stream-write-string stream s)
-      (write-string s stream)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (rontolisp:stream-write-string stream s)
+        (write-string s stream))))
 
 (defun rontolisp::%gray-write-char-dispatch (c stream)
-  ;; write-char lowers to write-string everywhere, so the dispatch does too.
+  ;; write-char lowers to write-string everywhere, so the dispatch does too
+  ;; (which is also where its stream is resolved).
   (rontolisp::%gray-write-string-dispatch (string c) stream))
 
 (defun rontolisp::%gray-write-byte-dispatch (byte stream)
-  (if (%obj-p stream)
-      (progn
-        (rontolisp:stream-write-byte stream byte)
-        byte)
-      (write-byte byte stream)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (progn
+          (rontolisp:stream-write-byte stream byte)
+          byte)
+        (write-byte byte stream))))
 
 (defun rontolisp::%gray-read-byte-dispatch (stream eof-error-p eof-value)
-  (if (%obj-p stream)
-      (let ((b (rontolisp:stream-read-byte stream)))
-        (if (eq b :eof) (if eof-error-p (error 'end-of-file) eof-value) b))
-      (read-byte stream eof-error-p eof-value)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (let ((b (rontolisp:stream-read-byte stream)))
+          (if (eq b :eof) (if eof-error-p (error 'end-of-file) eof-value) b))
+        (read-byte stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-read-char-dispatch (stream eof-error-p eof-value)
-  (if (%obj-p stream)
-      (let ((c (rontolisp:stream-read-char stream)))
-        (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
-      (read-char stream eof-error-p eof-value)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (let ((c (rontolisp:stream-read-char stream)))
+          (if (eq c :eof) (if eof-error-p (error 'end-of-file) eof-value) c))
+        (read-char stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-read-line-dispatch (stream eof-error-p eof-value)
-  (if (%obj-p stream)
-      (let ((l (rontolisp:stream-read-line stream)))
-        (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
-      (read-line stream eof-error-p eof-value)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (let ((l (rontolisp:stream-read-line stream)))
+          (if (eq l :eof) (if eof-error-p (error 'end-of-file) eof-value) l))
+        (read-line stream eof-error-p eof-value))))
 
 (defun rontolisp::%gray-listen-dispatch (stream)
-  (if (%obj-p stream)
-      (if (rontolisp:stream-listen stream) t nil)
-      (listen stream)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (if (rontolisp:stream-listen stream) t nil)
+        (listen stream))))
 
 (defun rontolisp::%gray-read-sequence-dispatch (sequence stream start end)
-  (if (%obj-p stream)
-      (rontolisp:stream-read-sequence stream sequence start
-                                      (if end end (length sequence)))
-      (read-sequence sequence stream
-                     :start start
-                     :end (if end end (length sequence)))))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (rontolisp:stream-read-sequence stream sequence start
+                                        (if end end (length sequence)))
+        (read-sequence sequence stream
+                       :start start
+                       :end (if end end (length sequence))))))
 
 (defun rontolisp::%gray-write-sequence-dispatch (sequence stream start end)
-  (if (%obj-p stream)
-      (progn
-        (rontolisp:stream-write-sequence stream sequence start
-                                         (if end end (length sequence)))
-        sequence)
-      (write-sequence sequence stream
-                      :start start
-                      :end (if end end (length sequence)))))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (progn
+          (rontolisp:stream-write-sequence stream sequence start
+                                           (if end end (length sequence)))
+          sequence)
+        (write-sequence sequence stream
+                        :start start
+                        :end (if end end (length sequence))))))
 
 (defun rontolisp::%gray-file-position-dispatch (stream)
-  (if (%obj-p stream)
-      (rontolisp:stream-file-position stream)
-      (file-position stream)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (rontolisp:stream-file-position stream)
+        (file-position stream))))
 
 (defun rontolisp::%gray-file-position-set-dispatch (stream position)
-  (if (%obj-p stream)
-      (setf (rontolisp:stream-file-position stream) position)
-      (file-position stream position)))
+  (let ((stream (%synonym-target stream)))
+    (if (%obj-p stream)
+        (setf (rontolisp:stream-file-position stream) position)
+        (file-position stream position))))

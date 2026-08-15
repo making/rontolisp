@@ -3724,9 +3724,9 @@ public final class Environment implements Scope {
 		// that is itself nil falls through to standard output instead of looping.
 		java.util.function.UnaryOperator<@Nullable LispVal> resolveOutputDest = dest -> {
 			if ((dest == null || dest == LispNil.INSTANCE) && env.defaultOutput != null) {
-				return env.defaultOutput.get();
+				return synonymTargetOrNull(env.defaultOutput.get());
 			}
-			return dest;
+			return synonymTargetOrNull(dest);
 		};
 		// warn's destination: the current -- dynamic-first -- value of *error-output*,
 		// so (let ((*error-output* s)) (warn ...)) captures the report the way CL does.
@@ -3742,9 +3742,9 @@ public final class Environment implements Scope {
 		// denote *standard-input*. Only t is hard-wired to the process standard input.
 		java.util.function.UnaryOperator<@Nullable LispVal> resolveInputSrc = src -> {
 			if ((src == null || src == LispNil.INSTANCE) && env.defaultInput != null) {
-				return env.defaultInput.get();
+				return synonymTargetOrNull(env.defaultInput.get());
 			}
-			return src;
+			return synonymTargetOrNull(src);
 		};
 		// The socket arm of the character built-ins: a RESOLVED designator whose table
 		// entry is a raw Socket. write-string / write-char / read-char take it exactly
@@ -3968,14 +3968,17 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.INPUT_STREAM_P, new LispFunction(LispNames.INPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.INPUT_STREAM_P, args, 1);
 			// Lite: any stream handle answers t for both directions; the t designator
-			// (standard output, what *standard-output* is bound to) also passes.
+			// (standard output, what *standard-output* is bound to) and a synonym stream
+			// VALUE also pass -- both coincide with streamp.
 			LispVal inArg = args.get(0);
-			return (inArg instanceof LispInteger || inArg instanceof LispTrue) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (inArg instanceof LispInteger || inArg instanceof LispTrue || isSynonymStream(inArg))
+					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.OUTPUT_STREAM_P, new LispFunction(LispNames.OUTPUT_STREAM_P, args -> {
 			requireArgCount(LispNames.OUTPUT_STREAM_P, args, 1);
 			LispVal out2 = args.get(0);
-			return (out2 instanceof LispInteger || out2 instanceof LispTrue) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (out2 instanceof LispInteger || out2 instanceof LispTrue || isSynonymStream(out2))
+					? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		// open-stream-p: REAL against the stream table (close removes the entry), so
 		// the close-if-open idiom (cl-postgres's ensure-socket-is-closed) neither
@@ -4277,6 +4280,11 @@ public final class Environment implements Scope {
 			if (!(args.size() == 1
 					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name())))) {
 				requireArgCount(LispNames.CLOSE, args, 1);
+			}
+			if (isSynonymStream(args.get(0))) {
+				// Closing a synonym stream closes the SYNONYM, not the stream it
+				// forwards to -- which is nothing to do (CLHS 21.1.3).
+				return LispTrue.INSTANCE;
 			}
 			if (!(args.get(0) instanceof LispInteger handle)) {
 				throw new LispEvalException(LispNames.CLOSE + " expects a stream");
@@ -5240,9 +5248,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.STREAMP, args, 1);
 			// Streams are opaque integer handles, and the standard-output designator t
 			// counts as a stream too (lite) -- *standard-output* is bound to t.
+			// A synonym stream is a VALUE (LispLayout.SYNONYM_STREAM), not a handle, so
+			// it is the one non-integer stream this answers for.
 			LispVal v = args.get(0);
-			return (v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispTrue)
-					? LispTrue.INSTANCE : LispNil.INSTANCE;
+			return (v instanceof LispInteger || v instanceof LispBigInteger || v instanceof LispTrue
+					|| isSynonymStream(v)) ? LispTrue.INSTANCE : LispNil.INSTANCE;
 		}));
 		env.defineFunction(LispNames.SIMPLE_STRING_P, new LispFunction(LispNames.SIMPLE_STRING_P, args -> {
 			requireArgCount(LispNames.SIMPLE_STRING_P, args, 1);
@@ -6230,6 +6240,58 @@ public final class Environment implements Scope {
 	private static LispEvalException endOfFile() {
 		return new LispEvalException(ClosRegistry.END_OF_FILE_MESSAGE, ClosRegistry.newEndOfFileCondition());
 	}
+
+	/**
+	 * Whether a value is a SYNONYM STREAM -- an instance of the fixed
+	 * {@link LispLayout#SYNONYM_STREAM} layout, the one stream that is a value rather
+	 * than a handle.
+	 * @param value any value
+	 * @return true for a synonym stream
+	 */
+	static boolean isSynonymStream(@Nullable LispVal value) {
+		return value instanceof LispInstance inst && inst.hasTag(LispLayout.SYNONYM_STREAM_TAG);
+	}
+
+	/**
+	 * The designator a stream operation actually acts on: a synonym stream answers the
+	 * CURRENT value of the variable it names, by calling the reader closure it carries
+	 * beside its declared slot, and the walk repeats so a synonym over a synonym resolves
+	 * too. Anything else is itself.
+	 *
+	 * <p>
+	 * This is the interpreter's half of the resolution the compile paths get from
+	 * {@code %SYNONYM-TARGET} ({@code StreamDesignators.throughSynonym}); the reader is
+	 * dynamic-binding aware on both. A cycle -- a variable holding a synonym stream over
+	 * itself -- is broken by the depth bound rather than hanging.
+	 * @param designator the stream designator as written, possibly null (omitted)
+	 * @return the resolved designator
+	 */
+	static LispVal synonymTarget(LispVal designator) {
+		LispVal current = designator;
+		for (int depth = 0; depth < SYNONYM_DEPTH_LIMIT; depth++) {
+			if (!(current instanceof LispInstance inst) || !inst.hasTag(LispLayout.SYNONYM_STREAM_TAG)) {
+				return current;
+			}
+			if (!(inst.slot(1) instanceof LispFunction reader)) {
+				throw new LispEvalException("not a synonym stream reader: " + inst.slot(1).print());
+			}
+			current = reader.body().apply(List.of());
+		}
+		throw new LispEvalException("synonym stream forwards to itself");
+	}
+
+	/**
+	 * {@link #synonymTarget(LispVal)} over a designator that may be ABSENT, which is how
+	 * the print/read families spell an omitted stream argument.
+	 * @param designator the stream designator as written, or null when omitted
+	 * @return the resolved designator, null when it was absent
+	 */
+	@Nullable static LispVal synonymTargetOrNull(@Nullable LispVal designator) {
+		return designator == null ? null : synonymTarget(designator);
+	}
+
+	/** How deep a chain of synonym streams may nest before it is called a cycle. */
+	private static final int SYNONYM_DEPTH_LIMIT = 64;
 
 	private static void requireArgCount(String name, List<LispVal> args, int expected) {
 		if (args.size() != expected) {

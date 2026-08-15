@@ -28,14 +28,25 @@ supported").
 
 **The dispatch helpers** (`rontolisp::%gray-*-dispatch` defuns at the bottom of
 gray.lisp) hold the ONE copy of "instance -> generic, anything else -> the
-built-in" plus the `:eof` translation, shared by both dispatch seams:
+built-in" plus the `:eof` translation, shared by both dispatch seams. **Each
+resolves its stream through `%synonym-target` FIRST**: a synonym stream
+(`.kb/read-load-streams.md`) is an instance too, so without that it would take
+the CLOS arm and die on "no applicable method", and its target -- which may
+itself be a Gray instance -- would never be reached. That is why the prelude
+splices `%SYNONYM-TARGET` for any program using this protocol
+(`LispPreludeLibrary.referencedBySurfaceForm`, `LibraryDefunPruner`'s root list):
+this pass runs AFTER the prelude selection, so the reference it would look for
+does not exist yet. A pipeline that splices gray.lisp must therefore run
+`LispPreludeLibrary.process` too. The helpers:
 write-string/char, write-byte, read-byte/char/line (read-line's eof-error-p
 defaults NIL — the built-in's lite convention; read-byte/char default T),
 listen, read-sequence/write-sequence (normalize a missing end to
 `(length sequence)`), file-position get/set.
 
-**Interpreter dispatch**: `LispEvaluator` wraps the built-ins — when the
-stream argument is an INSTANCE (`%obj-p`, `.kb/instance-syntax.md`) the wrap
+**Interpreter dispatch**: `LispEvaluator` wraps the built-ins — the wrap
+resolves a synonym stream first (`resolveSynonymArg`, the Java twin of the
+helpers' `%synonym-target` hop) and then, when the stream argument is an INSTANCE
+(`%obj-p`, `.kb/instance-syntax.md`), the wrap
 lazy-loads `gray.lisp` (`ensureGrayStreamsLoaded`) and applies the matching
 `%gray-*-dispatch` defun (`applyGrayDispatch`); non-instances go straight to
 the base built-in (the helpers' fallbacks re-enter the wraps, one extra hop, no

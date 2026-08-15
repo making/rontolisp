@@ -365,14 +365,19 @@
 ;;; the string stream instead of the host stdin cache. A program that never
 ;;; binds the variable compiles the bare read to the constant t, so the
 ;;; not-a-handle test below picks the same stdin path it always did.
+;;;
+;;; %synonym-target is part of the SAME resolution: a synonym stream is a value,
+;;; not a handle, so without it the not-a-handle test would send a read through
+;;; one to the host stdin cache. This rewrite replaces the read built-ins, so the
+;;; compiler's own designator seam never sees these call sites.
 (defun rontolisp::%io-read-line (&optional s)
-  (let ((in (or s *standard-input*)))
+  (let ((in (%synonym-target (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force (rontolisp::%read-line-future in))
         (rontolisp::%read-line-raw in))))
 
 (defun rontolisp::%io-read-char (&optional s)
-  (let ((in (or s *standard-input*)))
+  (let ((in (%synonym-target (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force (rontolisp::%read-char-future in))
         (rontolisp::%read-char-raw in))))
@@ -445,7 +450,7 @@
         (rontolisp::%read-char-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-char-eof (s eof-error-p &optional eof-value)
-  (let ((in (or s *standard-input*)))
+  (let ((in (%synonym-target (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force
          (rontolisp::%read-char-eof-future in eof-error-p eof-value))
@@ -460,7 +465,7 @@
         (rontolisp::%read-line-raw s eof-error-p eof-value))))
 
 (defun rontolisp::%io-read-line-eof (s eof-error-p &optional eof-value)
-  (let ((in (or s *standard-input*)))
+  (let ((in (%synonym-target (or s *standard-input*))))
     (if (or (rontolisp::%sock-entry in) (not (integerp in)))
         (rontolisp::%future-force
          (rontolisp::%read-line-eof-future in eof-error-p eof-value))

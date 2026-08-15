@@ -59,6 +59,11 @@ public final class ClosRegistry {
 		// %obj-new/%obj-is on every backend while keeping it out of every typep tag
 		// table, structure-object enumeration and %class-slot-defs answer.
 		this.layoutsByTag.put(LispLayout.PATHNAME_TAG, LispLayout.PATHNAME);
+		// Same treatment for the synonym-stream layout, and for the same reason: a
+		// synonym stream is a VALUE (LispLayout.SYNONYM_STREAM), and this registration
+		// is what resolves the %SYNONYM-STREAM tag for %obj-new/%obj-is on every
+		// backend without making it a class anything can specialize on or enumerate.
+		this.layoutsByTag.put(LispLayout.SYNONYM_STREAM_TAG, LispLayout.SYNONYM_STREAM);
 		seedClass("CONDITION", null);
 		seedClass("SERIOUS-CONDITION", "CONDITION");
 		seedClass("ERROR", "SERIOUS-CONDITION");
