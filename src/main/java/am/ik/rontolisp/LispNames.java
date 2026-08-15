@@ -3699,8 +3699,28 @@ public final class LispNames {
 	 * it in Java arm for arm, so a drained body is decoded natively there. It is what
 	 * {@code rontolisp:read-all} decodes an octet-chunk stream with, and what the
 	 * host-driven reactor's envelope arm renders an octet body as.
+	 *
+	 * <p>
+	 * The loop is the FALLBACK, not the path: the definition first offers the vector to
+	 * the native {@link #OCTETS_TO_STRING_STRICT_INTERNAL}, and only bytes that decoder
+	 * refuses reach the per-byte arms. Valid UTF-8 -- every real body -- is therefore a
+	 * platform decode, and the answers stay identical by construction (the strict result
+	 * IS the lenient one wherever the input is well formed).
 	 */
 	public static final String OCTETS_TO_STRING_INTERNAL = "%OCTETS-TO-STRING";
+
+	/**
+	 * The internal {@code rontolisp::%octets-to-string-strict} primitive: the STRICT half
+	 * of {@link #OCTETS_TO_STRING_INTERNAL} -- an {@code (unsigned-byte 8)} vector -> the
+	 * string its bytes spell when they are valid UTF-8, and {@code nil} when they are
+	 * not. NATIVE on every backend (a platform decoder on the interpreter and the JVM, a
+	 * validate-then-{@code array.copy} runtime function on WASM), which is what lets the
+	 * lenient decoder answer a well-formed body at memcpy speed and keep the compiled
+	 * per-byte loop for the malformed rest. It never signals and never guesses: an input
+	 * it cannot fast-path -- malformed bytes, a value that is not a packed octet vector
+	 * -- answers {@code nil} and the loop decides.
+	 */
+	public static final String OCTETS_TO_STRING_STRICT_INTERNAL = "%OCTETS-TO-STRING-STRICT";
 
 	/**
 	 * The internal {@code rontolisp::%octets-join} helper: a list of
@@ -4926,6 +4946,15 @@ public final class LispNames {
 	 * ({@link #OCTETS_TO_STRING_INTERNAL}).
 	 */
 	public static final String OCTETS_TO_STRING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + OCTETS_TO_STRING_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of
+	 * {@code rontolisp::%octets-to-string-strict}
+	 * ({@link #OCTETS_TO_STRING_STRICT_INTERNAL}), which is what the compile backends
+	 * gate its runtime helper on.
+	 */
+	public static final String OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::"
+			+ OCTETS_TO_STRING_STRICT_INTERNAL;
 
 	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used

@@ -1704,6 +1704,13 @@ cases:
     # that leads no sequence (#xFF) is its own character, the lenient rule the
     # request decoder applies. stream-read answers the vector itself. A stream
     # mixing string and octet chunks is refused rather than guessed at.
+    #
+    # Both halves of the decoder are here: the FIRST body has a #xFF in it, so
+    # it is the per-byte loop that answers it, while the second is valid UTF-8
+    # (a 4-byte code point straddling the chunk boundary) and so takes the
+    # native strict decoder -- one copy, no walk. %octets-to-string-strict is
+    # that decoder on its own: the string when the bytes are UTF-8, nil when
+    # they are not, which is how the loop learns it has work to do.
     source: |
       (defvar *ci-octet-chunks*
         (list (make-array 1 :element-type '(unsigned-byte 8) :initial-contents '(#x41))
@@ -1724,10 +1731,22 @@ cases:
                  (rontolisp:await (rontolisp:read-all
                                    (rontolisp::%stream-new #'ci-octet-next (lambda () nil))))
                (error () :mixed-refused)))
+      (setq *ci-octet-chunks*
+            (list (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(#x41 #xF0))
+                  (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(#x9F #x98 #x80))))
+      (print (map 'list #'char-code
+                  (rontolisp:await (rontolisp:read-all
+                                    (rontolisp::%stream-new #'ci-octet-next (lambda () nil))))))
+      (print (list (rontolisp::%octets-to-string-strict
+                    (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(#x68 #x69)))
+                   (rontolisp::%octets-to-string-strict
+                    (make-array 1 :element-type '(unsigned-byte 8) :initial-contents '(#xFF)))))
     expected: |
       (65)
       (12354 255 66)
       :MIXED-REFUSED
+      (65 128512)
+      ("hi" NIL)
   - name: stream-new-builds-a-pull-stream-on-every-backend
     # rontolisp::%stream-new is the ONE producer of a stream value that every
     # backend has, and it takes exactly what a stream IS: a read thunk, a close

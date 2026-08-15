@@ -95,6 +95,28 @@ class JvmAsyncCompilerTest {
 	}
 
 	@Test
+	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() throws Exception {
+		// The JVM arm of the .todo/371 gate (the compiled twin of AsyncEvalTest's): the
+		// emitted _utf8Strict answers a well-formed body from the JDK decoder, and the
+		// compiled per-byte loop takes only what it refuses -- the same answers the loop
+		// alone gave, including the four-byte form past U+10FFFF, which used to reach
+		// code-char and throw on this backend alone.
+		assertThat(compileAndRun("""
+				(defun octs (bs)
+				  (let ((a (make-array (length bs) :element-type '(unsigned-byte 8))) (i 0))
+				    (dolist (b bs) (setf (aref a i) b) (setq i (+ i 1)))
+				    a))
+				(print (list (rontolisp::%octets-to-string (octs '(72 105)))
+				             (map 'list #'char-code
+				                  (rontolisp::%octets-to-string (octs '(#xE3 #x81 #x82 #xF0 #x9F #x98 #x80))))
+				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xFF #x41))))
+				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xF4 #x90 #x80 #x80))))
+				             (rontolisp::%octets-to-string-strict (octs '(72 105)))
+				             (rontolisp::%octets-to-string-strict (octs '(#xFF)))))
+				""")).isEqualTo("(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" NIL)");
+	}
+
+	@Test
 	void streamsCarryChunksDrainAndSignalEof() throws Exception {
 		assertThat(compileAndRun("""
 				(let ((s (rontolisp:make-stream)))

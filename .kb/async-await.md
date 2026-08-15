@@ -306,6 +306,49 @@ pins the two arm for arm. Pinned per backend (AsyncEvalTest / JvmAsyncCompilerTe
 and end-to-end by the `read-all-passes-a-string-through` and
 `read-all-decodes-an-octet-chunk-stream` ci-spec cases.
 
+### The lenient loop is the FALLBACK: `%octets-to-string-strict`
+
+Since todo-371 the definition's first move is
+`rontolisp::%octets-to-string-strict`, NATIVE on every backend: the vector's
+bytes decoded as STRICT UTF-8, or `nil` when they are not valid UTF-8 (and for
+any value that is not a packed octet vector, which hands the general case back
+to the loop rather than guessing at it). Only what it refuses walks a byte at a
+time, so a well-formed body -- every real one -- decodes at the speed of a copy.
+The two agree BY CONSTRUCTION: where the input is well formed, the strict answer
+is exactly what the arms would have built, which is what lets the fast path be
+taken without a second rule to keep in step.
+
+| backend | how |
+| --- | --- |
+| interpreter | `Environment.decodeUtf8Strict` -- `CharsetDecoder` with its default REPORT action, `null` on `CharacterCodingException` |
+| JVM | `_utf8Strict` (`JvmAsyncRuntimeBuilder.buildOctetsStrict`, beside `_iv_of_bytes`): the `long[]` unpacked to `byte[]`, the same decoder, the result framed in the storage quotes. Emitted only when the program references the primitive |
+| WASM GC (both tiers) | `_iv_utf8_str` (`WasmStringRuntimeBuilder.buildIvUtf8StrBody`, `FUNC_IV_UTF8_STR`): a strict validator over the `TYPE_I8ARR`, then ONE `array.copy` into a fresh `$str_bytes` between the two quote bytes |
+
+The wasm validator is deliberately NOT `_str_char_at`'s walk. That one only
+needs a byte COUNT per lead byte, so its ranges accept what UTF-8 does not
+spell -- an overlong form, a surrogate, a code point past U+10FFFF, a bare
+continuation byte -- and under those looser ranges a raw copy is simply wrong
+(the lenient rule turns such a byte into its OWN character, and only a strict
+validator can say whether the copy would agree). That is why todo-370 rejected
+"just copy the bytes" and this one had to write the validator: `C2..DF` leads
+one continuation, `E0..EF` two (`E0` needs `A0..BF` first, `ED` needs `80..9F`),
+`F0..F4` three (`F0` needs `90..BF`, `F4` needs `80..8F`), every continuation is
+`10xxxxxx`, and a truncated tail is refused.
+
+Measured warm, a 500 KB ASCII body: interpreter 4 ms -> 2 ms, JVM 19 ms -> 3 ms,
+wasm (both tiers) 102 ms -> 2 ms.
+
+The same pass closed a divergence the loop had carried since todo-370: its
+4-byte arm handed `code-char` whatever the sequence assembled, so an `#xF5` lead
+or an `#xF4` one past U+10FFFF was a hard error on the JVM (which this decoder
+promises never to do), an out-of-range character on wasm, and four separate
+characters on the interpreter, whose Java mirror had the range test all along.
+The arm now re-tests the code point it assembled and falls to the
+own-character arm when it is out of range, so all four agree. `LispPreludeLibraryTest`
+walks both sides of every strict boundary; the per-backend tests are
+`octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes` in AsyncEvalTest,
+JvmAsyncCompilerTest and WasmLispCompilerIntegrationTest (which runs both wasm tiers).
+
 ## `%future-force`: the function spelling of the resolve
 
 `rontolisp::%future-force` (internal) resolves a future from SYNCHRONOUS code

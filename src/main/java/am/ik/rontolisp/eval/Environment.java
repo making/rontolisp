@@ -18,6 +18,9 @@ import java.io.Writer;
 import java.math.BigInteger;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -5293,7 +5296,22 @@ public final class Environment implements Scope {
 				throw new LispEvalException(LispNames.OCTETS_TO_STRING_INTERNAL
 						+ " expects an (unsigned-byte 8) vector, got: " + args.get(0).print());
 			}
-			return new LispString(decodeUtf8Leniently(v));
+			String strict = decodeUtf8Strict(v);
+			return new LispString(strict != null ? strict : decodeUtf8Leniently(v));
+		}));
+		// %octets-to-string-strict: the STRICT half, native on every backend so the
+		// prelude's lenient definition can offer the vector to a platform decoder before
+		// it walks a byte at a time. Present here as its own binding (rather than only
+		// folded into the mirror above) because the compile paths call it BY NAME from
+		// the spliced defun, and LispPreludeLibraryTest evaluates that defun to pin the
+		// two renderings against each other. Anything it cannot fast-path -- malformed
+		// bytes, a value that is not a packed octet vector -- answers nil, and the
+		// caller's loop decides; it never signals.
+		String octetsToStringStrict = LispNames.OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED;
+		env.defineFunction(octetsToStringStrict, new LispFunction(octetsToStringStrict, args -> {
+			requireArgCount(LispNames.OCTETS_TO_STRING_STRICT_INTERNAL, args, 1);
+			String decoded = args.get(0) instanceof LispIntVector v ? decodeUtf8Strict(v) : null;
+			return decoded == null ? LispNil.INSTANCE : new LispString(decoded);
 		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireMinArgCount(LispNames.CONSTANTP, args, 1);
@@ -6234,8 +6252,10 @@ public final class Environment implements Scope {
 	/**
 	 * The lenient UTF-8 decode of an {@code (unsigned-byte 8)} vector, arm for arm the
 	 * prelude's {@code rontolisp::%octets-to-string}: a byte that leads no valid
-	 * sequence, and a sequence the vector truncates, answer their own characters, so
-	 * malformed input never signals.
+	 * sequence, a sequence the vector truncates, and one that assembles a code point
+	 * outside the Unicode range answer their own characters, so malformed input never
+	 * signals. The FALLBACK half -- {@link #decodeUtf8Strict} takes every well-formed
+	 * input before this runs.
 	 * @param v the octets
 	 * @return the decoded string
 	 */
@@ -6271,6 +6291,38 @@ public final class Environment implements Scope {
 			}
 		}
 		return out.toString();
+	}
+
+	/**
+	 * The STRICT UTF-8 decode of an {@code (unsigned-byte 8)} vector: the string its
+	 * bytes spell when they are valid UTF-8, {@code null} when they are not. The fast
+	 * half of {@code rontolisp::%octets-to-string} -- the platform decoder answers a
+	 * well-formed body without the per-byte walk, and only bytes it refuses reach
+	 * {@link #decodeUtf8Leniently}. A vector of any other element width answers
+	 * {@code null} too: the fast path is a fast path, and the general loop stays the one
+	 * that has to handle everything.
+	 * @param v the octets
+	 * @return the decoded string, or {@code null} when the bytes are not valid UTF-8
+	 */
+	@Nullable static String decodeUtf8Strict(LispIntVector v) {
+		if (v.width() != 8) {
+			return null;
+		}
+		long[] data = v.data();
+		byte[] bytes = new byte[data.length];
+		for (int i = 0; i < data.length; i++) {
+			bytes[i] = (byte) data[i];
+		}
+		try {
+			// REPORT is CharsetDecoder's default for both malformed input and
+			// unmappable characters, so a byte sequence UTF-8 does not spell raises
+			// rather than turning into U+FFFD -- which is the whole question being
+			// asked here.
+			return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString();
+		}
+		catch (CharacterCodingException ex) {
+			return null;
+		}
 	}
 
 }

@@ -129,7 +129,10 @@ in `WasmStringRuntimeBuilder`):
   (`princ-to-string`/`prin1-to-string`/`concatenate`), `gensym`/`make-symbol`, `uiop:getenv`,
   fetch response, the host `:string` boundary. (A string output stream's contents is
   the one runtime string built WITHOUT it -- `_str_stream_contents` copies GC array to
-  GC array and stamps the same counter id itself.)
+  GC array and stamps the same counter id itself, and since todo-371 `_iv_utf8_str`
+  (`FUNC_IV_UTF8_STR`, the strict-UTF-8 decode of a packed octet vector) is the second:
+  same reason, one `array.copy` from the `TYPE_I8ARR` with no linear detour.
+  `.kb/async-await.md`.)
 - `FUNC_STR_TO_MEM` `_str_to_mem(str,ptr)->len` -- copies a string's array (quotes
   included) into `linear[ptr..)`; the array->linear bridge for the paths that still
   need a linear pointer: `open`/`load` path, the reader input scratch

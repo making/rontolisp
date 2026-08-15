@@ -191,12 +191,13 @@ character), one Lisp definition compiled on the compile paths and mirrored nativ
 pins the two against each other). Decoding once at the drain also retires the per-chunk
 carry: a chunk boundary inside a code point costs nothing. `stream-read` on such a body
 answers the octet vector -- the documented contract now (`rontolisp-stream-read.md`).
-**Perf trigger**: on the JVM and wasm the decoder is a compiled per-byte loop (~90 /
-~200 ns per byte) where `ofString` / the byte-string lift used to be a platform decode /
-a memcpy; a native raw-copy on wasm alone was rejected because its malformed-input rule
-(`_str_char_at`'s 2/3/4-byte lead ranges) differs from the lenient one. The fix is a
-STRICT native fast path with the lenient loop as fallback -- `.todo/371`, with the
-measurements. Gates: ci-spec
+Since todo-371 the per-byte loop is only the FALLBACK: the definition first offers the
+vector to the native `rontolisp::%octets-to-string-strict`, so valid UTF-8 -- every real
+body -- is a platform decode on the interpreter and the JVM and one `array.copy` on wasm,
+and only malformed bytes walk (a 500 KB body: 102 ms -> 2 ms on wasm, 19 ms -> 3 ms on the
+JVM). The raw copy that todo-370 rejected is exactly what it does, made sound by a STRICT
+validator -- `_str_char_at`'s lead ranges are NOT that validator, and the difference is
+the whole reason this needed writing (`.kb/async-await.md`). Gates: ci-spec
 `read-all-decodes-an-octet-chunk-stream` (all four backends),
 `HttpHandlerTest.directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt` + its
 `HttpHandlerJvmTest` twin,

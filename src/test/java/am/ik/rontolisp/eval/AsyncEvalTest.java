@@ -325,6 +325,31 @@ class AsyncEvalTest {
 	}
 
 	@Test
+	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() {
+		// The interpreter arm of the .todo/371 gate (JvmAsyncCompilerTest and
+		// WasmLispCompilerIntegrationTest are the other three): read-all's decoder is
+		// the native %octets-to-string-strict FIRST -- a well-formed body is a platform
+		// decode, not a per-byte walk -- with the lenient loop for what it refuses. The
+		// answers are the ones the loop alone gave: a byte that leads no valid sequence
+		// is its own character, and a four-byte form past U+10FFFF is refused a code
+		// point at all rather than signalling.
+		Run run = evalMulti("""
+				(defun octs (bs)
+				  (let ((a (make-array (length bs) :element-type '(unsigned-byte 8))) (i 0))
+				    (dolist (b bs) (setf (aref a i) b) (setq i (+ i 1)))
+				    a))
+				(list (rontolisp::%octets-to-string (octs '(72 105)))
+				      (map 'list #'char-code
+				           (rontolisp::%octets-to-string (octs '(#xE3 #x81 #x82 #xF0 #x9F #x98 #x80))))
+				      (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xFF #x41))))
+				      (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xF4 #x90 #x80 #x80))))
+				      (rontolisp::%octets-to-string-strict (octs '(72 105)))
+				      (rontolisp::%octets-to-string-strict (octs '(#xFF))))
+				""");
+		assertThat(run.result().print()).isEqualTo("(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" NIL)");
+	}
+
+	@Test
 	void readAllPassesAStringThrough() {
 		// A body that has fully arrived (a --host-fetch reactor's :body, or the
 		// declared absent-body default "") is its own drained value, on every backend.

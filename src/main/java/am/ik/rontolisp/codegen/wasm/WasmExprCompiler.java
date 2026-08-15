@@ -427,6 +427,19 @@ final class WasmExprCompiler {
 					WasmStrByteCompiler.compile(qn.member(), cons, ctx);
 					return;
 				}
+				if (LispNames.OCTETS_TO_STRING_STRICT_INTERNAL.equals(qn.member())) {
+					// The STRICT half of the prelude's lenient octet decoder: a packed
+					// (unsigned-byte 8) vector validated as UTF-8 and copied into the
+					// string its bytes spell, or nil when they are not valid UTF-8.
+					if (cons.toList().size() != 2) {
+						throw new UnsupportedOperationException(
+								"rontolisp::" + qn.member() + " expects 1 argument, got " + (cons.toList().size() - 1));
+					}
+					WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_IV_UTF8_STR);
+					return;
+				}
 				if (LispNames.RANDOM_BYTE_INTERNAL.equals(qn.member())) {
 					if (ctx.noWasi && !ctx.hostRandom) {
 						// The one place where --no-wasi's PRNG must NOT stand in for the

@@ -1276,7 +1276,16 @@ public final class WasmLispCompiler implements LispCompiler {
 	// entry; appended after the last fixed helper so no index above shifts.
 	static final int FUNC_OSTREAM_ROOM = FUNC_SEQ_LEN + 1;
 
-	static final int FX_FUNC_LAST = FUNC_OSTREAM_ROOM;
+	// _iv_utf8_str ((ref null eq) v) -> (ref null eq): a packed (unsigned-byte 8) vector
+	// validated as STRICT UTF-8 and, when it is, copied into the TYPE_STRING its bytes
+	// spell -- one array.copy between the frame quotes; anything else answers nil. The
+	// native half of the prelude's %octets-to-string, so a well-formed body decodes at
+	// the speed of a copy and only malformed bytes reach the per-byte loop. Reuses the
+	// unary ((ref null eq)) -> (ref null eq) signature (TYPE_CALLABLE_BASE + 0), so no
+	// new type entry; appended after the last fixed helper so no index above shifts.
+	static final int FUNC_IV_UTF8_STR = FUNC_OSTREAM_ROOM + 1;
+
+	static final int FX_FUNC_LAST = FUNC_IV_UTF8_STR;
 
 	// The vec: SIMD block (_v_new/_v_get/_v_set + the twelve v128 kernels), emitted ONLY
 	// under --simd. Fixed indices relative to FX_FUNC_LAST, so every constant
@@ -5072,6 +5081,8 @@ public final class WasmLispCompiler implements LispCompiler {
 													// value
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _seq_len (value) -> length
 				fnDef.addFunction(TYPE_RAT_NEW); // _ostream_room (rec, n) -> buffer
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _iv_utf8_str (v) -> string
+															// (FUNC_IV_UTF8_STR)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -5743,6 +5754,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmLengthCompiler.buildSeqLenBody());
 				// string output-stream buffer helper body (FUNC_OSTREAM_ROOM)
 				code.addFunction(WasmStringStreamRuntimeBuilder.buildOstreamRoomBody(ostreamTableGlobalIndex));
+				// strict UTF-8 octet-vector decode body (FUNC_IV_UTF8_STR)
+				code.addFunction(WasmStringRuntimeBuilder.buildIvUtf8StrBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					for (int i = 0; i < WasmVecSimdRuntimeBuilder.FUNC_COUNT; i++) {

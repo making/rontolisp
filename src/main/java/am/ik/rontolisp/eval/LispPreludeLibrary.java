@@ -664,40 +664,63 @@ public final class LispPreludeLibrary {
 		// signals -- the rule http-server.lisp's request decoder applies, so a body
 		// decodes the same whichever transport carried it. The interpreter mirrors this
 		// in Java arm for arm (Environment); the compile paths compile this defun.
+		//
+		// The per-byte loop is the FALLBACK. %octets-to-string-strict is native on every
+		// backend (a platform decoder on the interpreter and the JVM, a validate-then-
+		// array.copy runtime function on wasm) and answers nil on anything that is not
+		// valid UTF-8, so a well-formed body -- every real one -- decodes at the speed of
+		// a copy and only malformed bytes pay the loop. The two agree by construction:
+		// where the input is well formed the strict answer IS what the arms below build,
+		// which is what lets the fast path be taken without a second rule to keep in
+		// step (LispPreludeLibraryTest pins it).
+		//
+		// The 4-byte arm re-tests the code point it just assembled: an #xF5.. lead, and
+		// an #xF4 one whose continuation carries the sequence past U+10FFFF, spell no
+		// character at all, so they take the "own character" arm like any other byte
+		// that leads nothing. Without that test the arm handed code-char a value outside
+		// the Unicode range, and the backends disagreed about what that meant -- a hard
+		// error on the JVM (which is the one thing this decoder promises never to do),
+		// an out-of-range character on wasm, while the interpreter's Java mirror had the
+		// range test all along (Character.isValidCodePoint).
 		SOURCES.put(LispNames.OCTETS_TO_STRING_INTERNAL, """
 				(defun rontolisp::%octets-to-string (v)
-				  (let ((n (length v)))
-				    (with-output-to-string (s)
-				      (let ((i 0))
-				        (while (< i n)
-				          (let ((b (aref v i))
-				                (b1 (if (< (+ i 1) n) (aref v (+ i 1)) nil))
-				                (b2 (if (< (+ i 2) n) (aref v (+ i 2)) nil))
-				                (b3 (if (< (+ i 3) n) (aref v (+ i 3)) nil)))
-				            (cond ((< b #x80)
-				                   (write-char (code-char b) s)
-				                   (setq i (+ i 1)))
-				                  ((and (>= b #xC0) (< b #xE0) b1)
-				                   (write-char
-				                    (code-char (logior (ash (logand b #x1F) 6) (logand b1 #x3F)))
-				                    s)
-				                   (setq i (+ i 2)))
-				                  ((and (>= b #xE0) (< b #xF0) b1 b2)
-				                   (write-char (code-char
-				                                (logior (ash (logand b #x0F) 12)
-				                                        (ash (logand b1 #x3F) 6)
-				                                        (logand b2 #x3F))) s)
-				                   (setq i (+ i 3)))
-				                  ((and (>= b #xF0) (< b #xF8) b1 b2 b3)
-				                   (write-char (code-char
-				                                (logior (ash (logand b #x07) 18)
-				                                        (ash (logand b1 #x3F) 12)
-				                                        (ash (logand b2 #x3F) 6)
-				                                        (logand b3 #x3F))) s)
-				                   (setq i (+ i 4)))
-				                  (t
-				                   (write-char (code-char b) s)
-				                   (setq i (+ i 1))))))))))
+				  (or
+				   (rontolisp::%octets-to-string-strict v)
+				   (let ((n (length v)))
+				     (with-output-to-string (s)
+				       (let ((i 0))
+				         (while (< i n)
+				           (let ((b (aref v i))
+				                 (b1 (if (< (+ i 1) n) (aref v (+ i 1)) nil))
+				                 (b2 (if (< (+ i 2) n) (aref v (+ i 2)) nil))
+				                 (b3 (if (< (+ i 3) n) (aref v (+ i 3)) nil)))
+				             (cond ((< b #x80)
+				                    (write-char (code-char b) s)
+				                    (setq i (+ i 1)))
+				                   ((and (>= b #xC0) (< b #xE0) b1)
+				                    (write-char
+				                     (code-char (logior (ash (logand b #x1F) 6) (logand b1 #x3F)))
+				                     s)
+				                    (setq i (+ i 2)))
+				                   ((and (>= b #xE0) (< b #xF0) b1 b2)
+				                    (write-char (code-char
+				                                 (logior (ash (logand b #x0F) 12)
+				                                         (ash (logand b1 #x3F) 6)
+				                                         (logand b2 #x3F))) s)
+				                    (setq i (+ i 3)))
+				                   ((and (>= b #xF0) (< b #xF8) b1 b2 b3)
+				                    (let ((cp (logior (ash (logand b #x07) 18)
+				                                      (ash (logand b1 #x3F) 12)
+				                                      (ash (logand b2 #x3F) 6)
+				                                      (logand b3 #x3F))))
+				                      (if (<= cp #x10FFFF)
+				                          (progn (write-char (code-char cp) s)
+				                                 (setq i (+ i 4)))
+				                          (progn (write-char (code-char b) s)
+				                                 (setq i (+ i 1))))))
+				                   (t
+				                    (write-char (code-char b) s)
+				                    (setq i (+ i 1)))))))))))
 				""");
 		// read-all: the stream drained into ONE string. A STRING passes through: a body
 		// that has already fully arrived (the declared absent-body default, a user

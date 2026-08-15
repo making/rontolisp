@@ -573,6 +573,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		// java.security and keeps byte-identical output.
 		boolean usesSecureRandom = programUsesSymbol(program,
 				PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.RANDOM_BYTE_INTERNAL));
+		// Strict UTF-8 decode helper: emitted only when the program references the
+		// internal %octets-to-string-strict primitive (the prelude's lenient octet
+		// decoder is its one caller), so a program that never turns bytes into text
+		// keeps byte-identical output. Gated on ITS OWN name rather than riding
+		// usesAsyncRuntime: %octets-to-string is an ordinary function, reachable from a
+		// program that spawns nothing.
+		boolean usesOctetsStrict = programUsesSymbol(program, LispNames.OCTETS_TO_STRING_STRICT_INTERNAL_QUALIFIED);
 		// Mutex helpers: emitted only when the program references one of the three
 		// rontolisp:*-mutex primitives, so a lock-free program keeps byte-identical
 		// output.
@@ -1767,6 +1774,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// built-ins can grow socket branches.
 		final JvmSecureRandomRuntimeBuilder.@Nullable SecureRandomRuntime secureRandomRuntime = usesSecureRandom
 				? JvmSecureRandomRuntimeBuilder.build(cp, thisClass, longValueOf) : null;
+		final JvmAsyncRuntimeBuilder.@Nullable AsyncMethod octetsStrictRuntime = usesOctetsStrict
+				? JvmAsyncRuntimeBuilder.buildOctetsStrict(cp, stringConcat) : null;
 		final List<JvmMutexRuntimeBuilder.MutexMethod> mutexMethods = usesMutexes ? JvmMutexRuntimeBuilder.build(cp)
 				: List.of();
 		final JvmSocketRuntimeBuilder.@Nullable SocketRuntime socketRuntime = usesSockets
@@ -2503,6 +2512,17 @@ public final class JvmLispCompiler implements LispCompiler {
 									.writeU2(runBody.maxLocals())
 									.writeCode((Object[]) runBody.code().toArray(new Integer[0]));
 								writeAsyncExceptionTable(attr, runBody);
+								attr.writeU2(0);
+							})));
+				}
+				if (octetsStrictRuntime != null) {
+					methods.add(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, octetsStrictRuntime.name(),
+							octetsStrictRuntime.desc(),
+							method -> method.writeAttributes(attrs -> attrs.add(codeUtf8, attr -> {
+								attr.writeU2(octetsStrictRuntime.maxStack())
+									.writeU2(octetsStrictRuntime.maxLocals())
+									.writeCode((Object[]) octetsStrictRuntime.code().toArray(new Integer[0]));
+								writeAsyncExceptionTable(attr, octetsStrictRuntime);
 								attr.writeU2(0);
 							})));
 				}

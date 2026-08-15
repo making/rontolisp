@@ -3415,6 +3415,34 @@ class WasmLispCompilerIntegrationTest {
 			.hasMessageContaining("arity mismatch");
 	}
 
+	@Test
+	void octetsDecodeThroughTheStrictFastPathAndFallBackOnMalformedBytes() throws Exception {
+		// The two WASM arms of the .todo/371 gate (AsyncEvalTest and
+		// JvmAsyncCompilerTest are the other two): _iv_utf8_str validates the packed
+		// octet vector as UTF-8 and, when it is, builds the string with ONE array.copy
+		// -- and the compiled per-byte loop takes only what it refuses, answering
+		// exactly what the loop alone answered. The component leg runs the same core
+		// module through a different I/O adapter, so both are checked.
+		String source = """
+				(defun octs (bs)
+				  (let ((a (make-array (length bs) :element-type '(unsigned-byte 8))) (i 0))
+				    (dolist (b bs) (setf (aref a i) b) (setq i (+ i 1)))
+				    a))
+				(print (list (rontolisp::%octets-to-string (octs '(72 105)))
+				             (map 'list #'char-code
+				                  (rontolisp::%octets-to-string (octs '(#xE3 #x81 #x82 #xF0 #x9F #x98 #x80))))
+				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xFF #x41))))
+				             (map 'list #'char-code (rontolisp::%octets-to-string (octs '(#xF4 #x90 #x80 #x80))))
+				             (rontolisp::%octets-to-string-strict (octs '(72 105)))
+				             (rontolisp::%octets-to-string-strict (octs '(#xFF)))))
+				""";
+		String expected = "(\"Hi\" (12354 128512) (255 65) (244 144 128 128) \"Hi\" NIL)";
+		assertThat(compileAndRunProgram(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source))))
+			.isEqualTo(expected);
+		assertThat(compileAndRunComponent(source)).isEqualTo(expected);
+	}
+
 	private static String compileAndRunComponent(String lispCode) throws Exception {
 		// The wait-for splice mirrors the CLI order (a no-op for a program that
 		// references neither rontolisp:wait-for nor sleep -- under --component `sleep`

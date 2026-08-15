@@ -115,13 +115,25 @@ class LispPreludeLibraryTest {
 		// the two renderings of the same rule can be pinned against each other -- on
 		// valid input, and on every malformed shape the rule names: a stray
 		// continuation byte, an unpaired lead byte, a truncated sequence, an #xF8+ byte.
+		//
+		// The defun's first move is the NATIVE %octets-to-string-strict, so this pins
+		// the fast path too: where the bytes are valid UTF-8 the platform decode has to
+		// be exactly what the loop would have built, and where they are not it has to
+		// answer nil so the loop still runs. The cases below therefore walk both sides
+		// of every strict boundary -- the overlong forms, a surrogate, U+10FFFF and the
+		// code point after it.
 		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
 		for (LispVal form : LispPreludeLibrary.formsFor(am.ik.rontolisp.LispNames.OCTETS_TO_STRING_INTERNAL)) {
 			evaluator.eval(form);
 		}
 		int[][] cases = { { 0x41, 0x42 }, { 0xE3, 0x81, 0x93, 0xE3, 0x82, 0x93 }, { 0xF0, 0x9F, 0x98, 0x80, 0x41 },
 				{ 0xFF, 0xFE, 0x41 }, { 0x80, 0xBF }, { 0xE3, 0x81 }, { 0xC3 }, { 0xF8, 0x41 },
-				{ 0x41, 0xE3, 0x81, 0x82, 0xFF, 0x42, 0xC3, 0xBF }, {} };
+				{ 0x41, 0xE3, 0x81, 0x82, 0xFF, 0x42, 0xC3, 0xBF }, {},
+				// the strict boundaries, accepted side then refused side
+				{ 0xC2, 0x80 }, { 0xC1, 0xBF }, { 0xC0, 0x80 }, { 0xDF, 0xBF }, { 0xE0, 0xA0, 0x80 },
+				{ 0xE0, 0x80, 0x80 }, { 0xED, 0x9F, 0xBF }, { 0xED, 0xA0, 0x80 }, { 0xEF, 0xBF, 0xBF },
+				{ 0xE3, 0x81, 0xC0 }, { 0xF0, 0x90, 0x80, 0x80 }, { 0xF0, 0x80, 0x80, 0x80 },
+				{ 0xF4, 0x8F, 0xBF, 0xBF }, { 0xF4, 0x90, 0x80, 0x80 }, { 0xF5, 0x80, 0x80, 0x80 } };
 		for (int[] c : cases) {
 			long[] data = new long[c.length];
 			StringBuilder literal = new StringBuilder("(rontolisp::%octets-to-string (make-array ").append(c.length)
@@ -140,6 +152,31 @@ class LispPreludeLibraryTest {
 		assertThat(Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8,
 				new long[] { 0xE3, 0x81, 0x93, 0xE3, 0x82, 0x93, 0xF0, 0x9F, 0x98, 0x80 })))
 			.isEqualTo("こん\uD83D\uDE00");
+	}
+
+	@Test
+	void theStrictDecoderTakesExactlyValidUtf8() {
+		// The fast half on its own terms: a string for valid UTF-8 (which is what makes
+		// it worth taking), nil for everything else -- including a value that is not a
+		// packed octet vector at all, because answering nil is how it hands such an
+		// input back to the general loop rather than guessing at it.
+		assertThat(Environment.decodeUtf8Strict(
+				new am.ik.rontolisp.LispIntVector(8, new long[] { 0xE3, 0x81, 0x93, 0xF0, 0x9F, 0x98, 0x80, 0x41 })))
+			.isEqualTo("こ\uD83D\uDE00A");
+		assertThat(Environment.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(8, new long[0]))).isEmpty();
+		// U+10FFFF is the last code point; the four-byte form after it is not UTF-8.
+		assertThat(Environment
+			.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(8, new long[] { 0xF4, 0x8F, 0xBF, 0xBF }))).isNotNull();
+		for (long[] refused : List.of(new long[] { 0xFF }, new long[] { 0x80 }, new long[] { 0xC3 },
+				new long[] { 0xC0, 0x80 }, new long[] { 0xE0, 0x80, 0x80 }, new long[] { 0xED, 0xA0, 0x80 },
+				new long[] { 0xF0, 0x80, 0x80, 0x80 }, new long[] { 0xF4, 0x90, 0x80, 0x80 },
+				new long[] { 0xF5, 0x80, 0x80, 0x80 }, new long[] { 0xE3, 0x81 })) {
+			assertThat(Environment.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(8, refused)))
+				.as(java.util.Arrays.toString(refused))
+				.isNull();
+		}
+		// A vector of another element width is not the shape the fast path takes.
+		assertThat(Environment.decodeUtf8Strict(new am.ik.rontolisp.LispIntVector(16, new long[] { 0x41 }))).isNull();
 	}
 
 	@Test

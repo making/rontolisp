@@ -103,6 +103,16 @@ final class JvmAsyncRuntimeBuilder {
 
 	static final String IV_OF_BYTES_DESC = "([B)[J";
 
+	/**
+	 * {@code _utf8Strict(Object) -> Object}: the packed {@code (unsigned-byte 8)} vector
+	 * ({@code long[]{8, e0, ...}}) decoded as STRICT UTF-8 -- the quote-framed string its
+	 * bytes spell, or {@code null} ({@code nil}) when they are not valid UTF-8. The
+	 * native half of {@code rontolisp::%octets-to-string}: a well-formed body is a JDK
+	 * decode, and only bytes this refuses reach the prelude's per-byte loop. Emitted only
+	 * when the program references the primitive.
+	 */
+	static final String OCTETS_STRICT_METHOD = "_utf8Strict";
+
 	static final String WAIT_FOR_METHOD = "_wait_for";
 
 	static final String RELEASE_HANDOFF_METHOD = "_release_handoff";
@@ -1301,6 +1311,129 @@ final class JvmAsyncRuntimeBuilder {
 		a.iconst(1);
 		a.aload(cdrSlot);
 		a.aastore();
+	}
+
+	/**
+	 * Builds {@code _utf8Strict} ({@link #OCTETS_STRICT_METHOD}), the native STRICT half
+	 * of {@code rontolisp::%octets-to-string}: the packed octet vector's bytes decoded by
+	 * the JDK's UTF-8 decoder, framed in the storage quotes a compiled string carries, or
+	 * {@code null} when they are not valid UTF-8.
+	 *
+	 * <p>
+	 * {@code CharsetDecoder}'s default action for malformed input and unmappable
+	 * characters is REPORT, so an ill-formed sequence raises rather than turning into
+	 * U+FFFD -- which is exactly the question being asked. Anything the fast path cannot
+	 * take -- a value that is not a {@code long[]}, a packed vector of another element
+	 * width -- answers {@code null} too, and the caller's per-byte loop (which walks the
+	 * value through the generic {@code aref}) decides.
+	 * @param cp the constant pool
+	 * @param stringConcat {@code String.concat(String)}
+	 * @return the helper body
+	 */
+	static AsyncMethod buildOctetsStrict(ConstantPool cp, MethodrefConstant stringConcat) {
+		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
+		ClassConstant charsetsClass = cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets"));
+		ConstantPool.FieldrefConstant utf8Field = cp.addFieldref(charsetsClass,
+				cp.addNameAndType(cp.addUtf8("UTF_8"), cp.addUtf8("Ljava/nio/charset/Charset;")));
+		ClassConstant charsetClass = cp.addClass(cp.addUtf8("java/nio/charset/Charset"));
+		MethodrefConstant newDecoder = cp.addMethodref(charsetClass,
+				cp.addNameAndType(cp.addUtf8("newDecoder"), cp.addUtf8("()Ljava/nio/charset/CharsetDecoder;")));
+		ClassConstant byteBufferClass = cp.addClass(cp.addUtf8("java/nio/ByteBuffer"));
+		MethodrefConstant bufferWrap = cp.addMethodref(byteBufferClass,
+				cp.addNameAndType(cp.addUtf8("wrap"), cp.addUtf8("([B)Ljava/nio/ByteBuffer;")));
+		ClassConstant decoderClass = cp.addClass(cp.addUtf8("java/nio/charset/CharsetDecoder"));
+		MethodrefConstant decoderDecode = cp.addMethodref(decoderClass,
+				cp.addNameAndType(cp.addUtf8("decode"), cp.addUtf8("(Ljava/nio/ByteBuffer;)Ljava/nio/CharBuffer;")));
+		ClassConstant charBufferClass = cp.addClass(cp.addUtf8("java/nio/CharBuffer"));
+		MethodrefConstant charBufferToString = cp.addMethodref(charBufferClass,
+				cp.addNameAndType(cp.addUtf8("toString"), cp.addUtf8("()Ljava/lang/String;")));
+		ClassConstant codingExceptionClass = cp.addClass(cp.addUtf8("java/nio/charset/CharacterCodingException"));
+		ConstantPool.StringConstant quote = cp.addString("\"");
+
+		Asm a = new Asm();
+		// slots: 0 v, 1 iv (long[]), 2 bytes, 3 i, 4 decoded
+		int none = a.label();
+		a.aload(0);
+		a.op(Opcode.INSTANCEOF);
+		a.u2(longArrayClass.index());
+		a.branch(Opcode.IFEQ, none);
+		a.aload(0);
+		a.checkcast(longArrayClass);
+		a.astore(1);
+		// A packed vector is {width, e0, ...}: refuse an empty array and any width but 8
+		// rather than reading a header that is not there.
+		a.aload(1);
+		a.op(Opcode.ARRAYLENGTH);
+		a.iconst(1);
+		a.branch(Opcode.IF_ICMPLT, none);
+		a.aload(1);
+		a.iconst(0);
+		a.op(Opcode.LALOAD);
+		a.op(Opcode.L2I);
+		a.iconst(8);
+		a.branch(Opcode.IF_ICMPNE, none);
+		// bytes = new byte[iv.length - 1]; bytes[i] = (byte) iv[i + 1]
+		a.aload(1);
+		a.op(Opcode.ARRAYLENGTH);
+		a.iconst(1);
+		a.op(Opcode.ISUB);
+		a.op(Opcode.NEWARRAY);
+		a.op(8); // T_BYTE
+		a.astore(2);
+		a.iconst(0);
+		a.istore(3);
+		int loop = a.label();
+		int done = a.label();
+		a.bind(loop);
+		a.iload(3);
+		a.aload(2);
+		a.op(Opcode.ARRAYLENGTH);
+		a.branch(Opcode.IF_ICMPGE, done);
+		a.aload(2);
+		a.iload(3);
+		a.aload(1);
+		a.iload(3);
+		a.iconst(1);
+		a.op(Opcode.IADD);
+		a.op(Opcode.LALOAD);
+		a.op(Opcode.L2I);
+		a.op(Opcode.BASTORE);
+		a.iinc(3, 1);
+		a.branch(Opcode.GOTO, loop);
+		a.bind(done);
+		int tryStart = a.pos();
+		a.op(Opcode.GETSTATIC);
+		a.u2(utf8Field.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(newDecoder.index());
+		a.aload(2);
+		a.op(Opcode.INVOKESTATIC);
+		a.u2(bufferWrap.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(decoderDecode.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(charBufferToString.index());
+		int tryEnd = a.pos();
+		// The frame quotes are STORAGE on this backend, so the decoded content is handed
+		// back framed -- what every other compiled string build produces.
+		a.astore(4);
+		a.ldc(quote.index());
+		a.aload(4);
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(stringConcat.index());
+		a.ldc(quote.index());
+		a.op(Opcode.INVOKEVIRTUAL);
+		a.u2(stringConcat.index());
+		a.areturn();
+		// The catch: the decode refused the bytes, so answer nil and let the caller walk
+		// them. Reached only through the exception table, so it needs no label.
+		int handlerPos = a.pos();
+		a.op(Opcode.POP);
+		a.bind(none);
+		a.aconstNull();
+		a.areturn();
+		return new AsyncMethod(cp.addUtf8(OCTETS_STRICT_METHOD), cp.addUtf8(UNARY_DESC), 5, 5, a.finish(),
+				List.of(new int[] { tryStart, tryEnd, handlerPos, codingExceptionClass.index() }));
 	}
 
 	/** Pushes {@code new Object[]{ <interned keyword>, aload(cdrSlot) }}. */
