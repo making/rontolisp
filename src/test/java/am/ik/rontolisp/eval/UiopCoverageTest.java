@@ -226,8 +226,12 @@ class UiopCoverageTest {
 		}
 		// A member the interpreter defines in Java carries no library form at all, so
 		// nothing can shadow the built-in; a member implemented in Lisp carries its own.
-		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.GETENV))).isEmpty();
+		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.SYMBOL_CALL))).isEmpty();
 		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.EMPTYP))).hasSize(1);
+		// getenv carries TWO: the reader and the (setf getenv) writer, keyed under the
+		// one member -- the reader consults the override map the writer fills, and no
+		// backend can write the process environment itself (.kb/uiop.md).
+		assertThat(UiopLibrary.formsFor(UiopExports.qualified(LispNames.GETENV))).hasSize(2);
 		assertThat(implemented).isBetween(1, UiopExports.entries().size());
 	}
 

@@ -176,7 +176,8 @@ public final class RontoPlayground {
 				uploads);
 		List<LispVal> program = WitLibrary
 			.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(VecLibrary.process(
-					LispPreludeLibrary.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))))))));
+					LispPreludeLibrary.process(
+							UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(read))), features)))));
 		// The (boundp 'name) fold runs before the shake for the same reason it does in the
 		// CLI: a guarded library constant is not a top-level definer until its probe is
 		// decided, and the shaker cannot drop what it cannot see

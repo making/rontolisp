@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.macro.FoldDifferential;
+import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.HostWasmtime.ExecResult;
@@ -283,14 +284,17 @@ class WasmLispCompilerIntegrationTest {
 		loaded = am.ik.rontolisp.eval.WaitForLibrary.process(loaded, witBackend);
 		loaded = am.ik.rontolisp.eval.SocketsLibrary.process(loaded, witBackend);
 		loaded = am.ik.rontolisp.eval.StdinLibrary.process(loaded, witBackend, true);
-		loaded = am.ik.rontolisp.eval.EnvironmentLibrary.process(loaded, witBackend);
 		// The prelude splice mirrors the CLI: a handler draining a body stream calls
 		// the prelude's rontolisp:read-all. GrayStreamsLibrary runs after the macro
 		// expansion like the CLI; the buffered :raw-body Gray class needs its call-site
 		// rewrite.
 		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
 			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
-				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded))));
+				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded), Features.WASM)));
+		// EnvironmentLibrary runs LAST, exactly as in the CLI: its trigger is the
+		// %host-getenv primitive, which the uiop splice above is what introduces (the
+		// public uiop:getenv is a Lisp definition over it).
+		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program, witBackend);
 		return new WasmLispCompiler(false, true, false, optimize, true).compile(program);
 	}
 
@@ -371,7 +375,10 @@ class WasmLispCompilerIntegrationTest {
 	// (untrimmed)
 	// stdout, so callers can assert on exact bytes (e.g. that a newline stays 0x0a).
 	private static String compileAndRunRawWithEnv(String lispCode, String env) throws Exception {
-		List<LispVal> program = LispReader.readAllFromString(lispCode);
+		// The prelude splice mirrors the CLI: uiop:getenv is a Lisp definition over the
+		// %host-getenv primitive Preview 1 lowers to the environ-buffer scan.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode),
+				Features.WASM);
 		byte[] wasmBytes = new WasmLispCompiler().compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "--wasm", "gc", "--wasm", "exceptions=y", "--env", env,
@@ -3019,11 +3026,13 @@ class WasmLispCompilerIntegrationTest {
 		// which is what every caller of a lookup already handles, and what
 		// uiop:default-temporary-directory (the other half of smart-buffer's one
 		// load-time form) needs in order to fall back.
-		// %probe-file, not probe-file: the public spelling is a prelude defun the CLI
-		// splices, and this compiler is driven directly. The primitive is what reaches
-		// path_open, which is the stub under test.
+		// %probe-file and %host-getenv, not probe-file and uiop:getenv: both public
+		// spellings are spliced definitions the CLI adds (the prelude, and uiop-os.lisp
+		// over the environment override map), and this compiler is driven directly. The
+		// primitives are what reach path_open and the environ scan, which are the stubs
+		// under test.
 		String program = """
-				(defun envp () (if (uiop:getenv "HOME") 1 0))
+				(defun envp () (if (%host-getenv "HOME") 1 0))
 				(rontolisp:wasm-export 'envp :returns :int)
 				(defun probep () (if (%probe-file "/etc/hosts") 1 0))
 				(rontolisp:wasm-export 'probep :returns :int)
@@ -3348,6 +3357,68 @@ class WasmLispCompilerIntegrationTest {
 				20
 				(T 3)
 				(1 2 3)""");
+	}
+
+	@Test
+	void uiopOsHostIdentityAndGetenvOverrideCompileAndRun() throws Exception {
+		// The uiop/os family on Preview 1. The program AND the uiop resources are read
+		// with the TARGET feature set, so featurep -- and architecture, derived from it
+		// -- answer for THIS backend: :rontolisp-wasm is present, :thread-support is
+		// not, and the architecture is wasm32 where the JVM twin says :jvm
+		// (JvmLispCompilerTest.compileAndRunUiopOsHostIdentityAndGetenvOverride).
+		// getcwd signals here: a WASI program has preopened directories and no current
+		// one, which is the family's only per-backend divergence.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (list (uiop:featurep :rontolisp) (uiop:featurep :rontolisp-wasm)
+				             (uiop:featurep :rontolisp-jvm) (uiop:featurep '(:and :rontolisp :unicode))
+				             (uiop:featurep '(:not :nope))))
+				(print (list (uiop:os-unix-p) (uiop:os-macosx-p) (uiop:os-windows-p) (uiop:os-genera-p)))
+				(print (list (uiop:detect-os) (uiop:operating-system) (uiop:implementation-type)
+				             uiop:*implementation-type* (uiop:architecture) (uiop:hostname)))
+				(print (uiop:os-cond ((uiop:os-windows-p) :win) ((uiop:os-unix-p) :unix) (t :other)))
+				(setf (uiop:getenv "RLENV") "overridden")
+				(print (list (uiop:getenv "RLENV") (uiop:getenvp "RLENV")))
+				(setf (uiop:getenv "RLENV") nil)
+				(print (list (uiop:getenv "RLENV") (uiop:getenvp "RLENV")))
+				(print (handler-case (uiop:getcwd) (uiop:not-implemented-error () :no-working-directory)))
+				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
+				""", Features.WASM), Features.WASM);
+		byte[] wasmBytes = new WasmLispCompiler().compile(program);
+		wasmtime.copyFileToContainer(Transferable.of(wasmBytes), path("test.wasm"));
+		// --env RLENV: the override map must WIN over the host value, and the unset
+		// must hide it again.
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc", "-W", "exceptions=y", "--env",
+				"RLENV=from-host", path("test.wasm"));
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim()).isEqualTo("""
+				(T T NIL T T)
+				(T NIL NIL NIL)
+				(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :WASM32 NIL)
+				:UNIX
+				("overridden" "overridden")
+				(NIL NIL)
+				:NO-WORKING-DIRECTORY
+				:CHDIR-SIGNALS""");
+	}
+
+	@Test
+	void uiopOsOctetReadersCompileAndRun() throws Exception {
+		// read-little-endian / read-null-terminated-string are portable stream work over
+		// read-byte; flexi-streams' in-memory octet stream is the one binary input every
+		// backend can build without a filesystem. The Gray splice is the CLI's, and is
+		// what routes read-byte on a CLOS instance stream to the protocol.
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "flexi-streams")
+				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
+				                        :initial-contents '(1 2 0 0 104 105 0)))
+				       (s (flex:make-in-memory-input-stream v)))
+				  (print (uiop:read-little-endian s))
+				  (print (uiop:read-null-terminated-string s)))
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))).isEqualTo("513\n\"hi\"");
 	}
 
 	@Test
@@ -3809,7 +3880,11 @@ class WasmLispCompilerIntegrationTest {
 	// wit-imported wasi:cli/environment (eval/EnvironmentLibrary), so this helper runs
 	// that splice the way the CLI pipeline does.
 	private static String compileAndRunComponentWithEnv(String lispCode, String env) throws Exception {
-		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(LispReader.readAllFromString(lispCode),
+		// The CLI's order: the prelude splice (which drives the uiop one, and so defines
+		// uiop:getenv over the %host-getenv primitive) and then EnvironmentLibrary,
+		// whose trigger is that primitive.
+		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(
+				am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(lispCode), Features.WASM),
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
 		byte[] componentBytes = new WasmLispCompiler(false, true).compile(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("test.component.wasm"));

@@ -112,6 +112,9 @@ class WitOracleE2eTest {
 				""");
 		program = am.ik.rontolisp.eval.StdinLibrary.process(program,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT, false);
+		// The prelude splice defines uiop:getenv over the %host-getenv primitive, which
+		// is what EnvironmentLibrary binds to wasi:cli/environment (the CLI's order).
+		program = am.ik.rontolisp.eval.LispPreludeLibrary.process(program, am.ik.rontolisp.reader.Features.WASM);
 		program = am.ik.rontolisp.eval.EnvironmentLibrary.process(program,
 				am.ik.rontolisp.compiler.WitExportDirective.Backend.WASM_COMPONENT);
 		program = am.ik.rontolisp.eval.WitLibrary.process(program);

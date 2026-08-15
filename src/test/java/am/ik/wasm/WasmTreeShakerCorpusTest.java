@@ -83,12 +83,19 @@ class WasmTreeShakerCorpusTest {
 		List<LispVal> inlined = am.ik.rontolisp.cli.LoadInliner.inline(read, path -> {
 			throw new java.io.FileNotFoundException(path);
 		}, null, List.of(), am.ik.rontolisp.reader.Features.WASM);
-		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner.prune(am.ik.rontolisp.eval.UsocketLibrary
-			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary
-				.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(am.ik.rontolisp.eval.UrlLibrary
+		// The prelude splice takes the TARGET features, like the CLI: the uiop splice it
+		// drives reads its resources with them, and uiop:featurep -- which the corpus
+		// reaches -- is written over *features*, a symbol the compile backends have no
+		// runtime binding for (.kb/uiop.md).
+		List<LispVal> spliced = am.ik.rontolisp.eval.LispPreludeLibrary.process(
+				am.ik.rontolisp.eval.UrlLibrary
 					.process(am.ik.rontolisp.eval.LinalgLibrary.process(am.ik.rontolisp.eval.JsonLibrary
 						.process(am.ik.rontolisp.eval.UserMacroExpander.expand(am.ik.rontolisp.eval.HttpServerLibrary
-							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))))))));
+							.process(inlined, am.ik.rontolisp.compiler.ClackEnv.usesBufferedBody(inlined)))))),
+				am.ik.rontolisp.reader.Features.WASM);
+		List<LispVal> program = am.ik.rontolisp.eval.LibraryDefunPruner
+			.prune(am.ik.rontolisp.eval.UsocketLibrary.process(
+					am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.VecLibrary.process(spliced))));
 
 		// Both modes exercise renumbering: default WASI drops unused function imports,
 		// no-wasi drops the trap-stub functions that fill the import slots.

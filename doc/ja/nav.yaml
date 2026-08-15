@@ -41,6 +41,8 @@ sections:
         title: uiop パッケージ
       - file: reference/uiop/utility.md
         title: uiop/utility
+      - file: reference/uiop/os.md
+        title: uiop/os
       - file: reference/uiop/pathname.md
         title: uiop/pathname
       - file: reference/function-namespace.md

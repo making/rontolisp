@@ -5758,6 +5758,7 @@ public final class LispEvaluator {
 	 * @return the expanded form
 	 */
 	public LispVal expandSetfMaybeUserExpander(LispCons cons) {
+		ensureUiopSetfPlaceLoaded(cons);
 		if (this.setfExpanders.isEmpty()) {
 			return LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry);
 		}
@@ -5778,6 +5779,31 @@ public final class LispEvaluator {
 			return expandUserSetfPlace(place, parts.get(2));
 		}
 		return LispMacroExpander.expandSetf(cons, this.structAccessors, this.closRegistry);
+	}
+
+	/**
+	 * Loads the uiop definition of a {@code setf} PLACE before the form is expanded --
+	 * the third trigger of the interpreter's lazy load, beside the function and the
+	 * variable lookup. A uiop member's writer is a {@code (defun (setf name) ...)} in the
+	 * same definition group as its reader ({@code eval.UiopLibrary}), and what registers
+	 * the place is EVALUATING that defun; a program whose first touch of the member is
+	 * the write ({@code (setf (uiop:getenv k) v)} -- rove's {@code with-local-envs})
+	 * would otherwise expand against an empty registry and fail with "setf does not
+	 * support place", while the compile paths, which splice the definition ahead of the
+	 * program, handle it.
+	 * @param cons the setf form, whose place heads are inspected
+	 */
+	private void ensureUiopSetfPlaceLoaded(LispCons cons) {
+		if (!cons.isProperList()) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		for (int i = 1; i + 1 < parts.size(); i += 2) {
+			if (parts.get(i) instanceof LispCons place && place.car() instanceof LispSymbol accessor
+					&& !this.structAccessors.containsKey(accessor.name()) && UiopLibrary.definesName(accessor.name())) {
+				loadUiopDefinition(accessor.name());
+			}
+		}
 	}
 
 	/**

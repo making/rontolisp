@@ -32,7 +32,7 @@
 | `uiop/package*` | `uiop/package` が定義するがエクスポートしない 3 つのコンディション・型名 | 0 / 3 |
 | [`uiop/utility`](uiop/utility.md) | 移植性のあるヘルパ (`strcat`、`split-string`、`if-let`、`not-implemented-error`) | 68 / 68 |
 | `uiop/version` | バージョン比較と非推奨コンディション | 1 / 15 |
-| `uiop/os` | ホストの識別、環境変数、作業ディレクトリ | 1 / 22 |
+| [`uiop/os`](uiop/os.md) | ホストの識別、環境変数、作業ディレクトリ | 22 / 22 |
 | [`uiop/pathname`](uiop/pathname.md) | パス名の代数 (`subpathname`、`parse-unix-namestring`、`enough-pathname`) | 50 / 50 |
 | `uiop/filesystem` | ファイルシステムの探索・走査・変更 | 8 / 32 |
 | `uiop/stream` | ファイル内容、一時ファイル、エンコーディング、標準ストリーム | 3 / 66 |
@@ -50,14 +50,15 @@
 
 ## 実装済みのもの
 
-uiop の他のすべてがその上に書かれている移植性ヘルパ群 `uiop/utility` の 68 個と、
-パス名の代数 `uiop/pathname` の 50 個は完全に実装済みで、それぞれ専用のページ
-([uiop/utility](uiop/utility.md)、[uiop/pathname](uiop/pathname.md)) があります。
-残りは以下のとおりです。
+3 つのサブパッケージが完全に実装済みで、それぞれ専用のページがあります。uiop の
+他のすべてがその上に書かれている移植性ヘルパ群 `uiop/utility` の 68 個
+([uiop/utility](uiop/utility.md))、パス名の代数 `uiop/pathname` の 50 個
+([uiop/pathname](uiop/pathname.md))、そしてホストの識別・環境変数・作業ディレクトリ
+の 22 個 `uiop/os` ([uiop/os](uiop/os.md)。[`uiop:getenv`](functions/uiop-getenv.md)
+もここにあります) です。残りは以下のとおりです。
 
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
-| `uiop:getenv` | `(uiop:getenv "PATH")` | 環境変数の値を文字列として、未設定の場合は `nil` を返します。Common Lisp に `getenv` がないためここに置かれています。すべてのバックエンドで動作します。WASM は Preview 1 では実際のホスト環境を、`--component` モードでは `wasi:cli/environment@0.3.0` を読みます (wasmtime に `--env`/`-S inherit-env` を渡してください) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | ファイルが存在すればそのパス名、存在しなければ `nil` — `probe-file` と同じ契約であり、すべてのバックエンドでその基本操作へ落とされます |
 | `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | ディレクトリが存在すれば（末尾に `/` を付けた）そのパス名、存在しなければ `nil` — `file-exists-p` のディレクトリ版であり、空のディレクトリと存在しないディレクトリを区別できる唯一の手段です |
 | `uiop:directory-files` | `(uiop:directory-files "db/" "*.up.sql")` | ディレクトリのうちディレクトリでないエントリ — `(directory "db/*.*")` からサブディレクトリを除いたものです。UIOP の省略可能な第 2 引数 (名前と型のみのワイルドカードのパス名文字列) は `directory` とまったく同じ規則で絞り込みます。省略するとすべてを一覧し、ディレクトリ部分を含むパターンはエラーです |
@@ -91,12 +92,12 @@ uiop の他のすべてがその上に書かれている移植性ヘルパ群 `u
 明確な答えを受け取り、ハンドラで捕捉できます:
 
 ```console
-$ rontolisp -e '(uiop:chdir "/tmp")'
-Unhandled condition: Not (currently) implemented on rontolisp: UIOP/OS:CHDIR
+$ rontolisp -e '(uiop:run-program "ls")'
+Unhandled condition: Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM
 ```
 
 ```lisp
-(handler-case (uiop:chdir "/tmp")
+(handler-case (uiop:run-program "ls")
   (uiop:not-implemented-error () :cannot))   ; => :CANNOT
 ```
 

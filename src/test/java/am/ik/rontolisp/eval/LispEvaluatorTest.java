@@ -13395,6 +13395,88 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopOsHostIdentityIsDerivedFromFeaturep() {
+		// Every host answer in uiop/os comes from ONE source, upstream's own: featurep
+		// over *features*. os-unix-p is the exception and is t outright -- every backend
+		// presents the POSIX-shaped file model, while *features* deliberately carries no
+		// :unix (.kb/uiop.md).
+		assertThat(evalMulti("""
+				(list (uiop:featurep :rontolisp) (uiop:featurep :rontolisp-interpreter)
+				      (uiop:featurep '(:and :rontolisp :unicode)) (uiop:featurep '(:or :nope :rontolisp))
+				      (uiop:featurep '(:not :nope)) (uiop:featurep :nope)
+				      (uiop:featurep :rontolisp '(:other)) (uiop:featurep :other '(:other))
+				      (uiop:os-unix-p) (uiop:os-macosx-p) (uiop:os-windows-p) (uiop:os-genera-p)
+				      (uiop:detect-os) (uiop:operating-system) (uiop:implementation-type)
+				      uiop:*implementation-type* (uiop:architecture)
+				      (uiop:os-cond ((uiop:os-windows-p) :win) ((uiop:os-unix-p) :unix) (t :other))
+				      (uiop:hostname))
+				""").print())
+			.isEqualTo("(T T T T T NIL NIL T T NIL NIL NIL :OS-UNIX :UNIX :RONTOLISP :RONTOLISP" + " :JVM :UNIX NIL)");
+		// The version string is the build's own, so the identifier is pinned by shape.
+		assertThat(evalMulti("(uiop:implementation-identifier)").print()).isEqualTo("\"rontolisp-"
+				+ am.ik.rontolisp.Version.getVersion().toLowerCase(java.util.Locale.ROOT) + "-unix-jvm\"");
+		assertThat(evalMulti("(uiop:lisp-version-string)").print())
+			.isEqualTo("\"" + am.ik.rontolisp.Version.getVersion() + "\"");
+	}
+
+	@Test
+	void evalUiopOsGetenvReadsTheHostAndSetfWritesAnOverride() {
+		// No backend can rewrite its own process environment (the JVM cannot at all,
+		// WASI's is read-only), so (setf (uiop:getenv x) v) records an override that
+		// getenv consults BEFORE the host -- which is what rove's with-local-envs needs.
+		// A nil value is an unset, upstream's own semantics.
+		assertThat(evalMulti("""
+				(list (uiop:getenv "CI_EVAL_UIOP_OS")
+				      (setf (uiop:getenv "CI_EVAL_UIOP_OS") "one")
+				      (uiop:getenv "CI_EVAL_UIOP_OS")
+				      (uiop:getenvp "CI_EVAL_UIOP_OS")
+				      (progn (setf (uiop:getenv "CI_EVAL_UIOP_OS") "two") (uiop:getenv "CI_EVAL_UIOP_OS"))
+				      (progn (setf (uiop:getenv "CI_EVAL_UIOP_OS") nil) (uiop:getenv "CI_EVAL_UIOP_OS"))
+				      (uiop:getenvp "CI_EVAL_UIOP_OS")
+				      (progn (setf (uiop:getenv "CI_EVAL_UIOP_OS") "") (uiop:getenvp "CI_EVAL_UIOP_OS")))
+				""").print()).isEqualTo("(NIL \"one\" \"one\" \"one\" \"two\" NIL NIL NIL)");
+		// The host is still readable through the override map: PATH is set for the test
+		// JVM and no override touched it.
+		assertThat(evalMulti("(stringp (uiop:getenv \"PATH\"))").print()).isEqualTo("T");
+	}
+
+	@Test
+	void evalUiopOsSetfGetenvIsTheFirstTouchOfTheMember() {
+		// The interpreter lazy-loads a uiop definition on FUNCTION or VARIABLE
+		// resolution; a setf PLACE is the third trigger, and without it a program whose
+		// first touch of getenv is the write (rove's with-local-envs, again) expands
+		// against an empty place registry and fails with "setf does not support place".
+		assertThat(evalMulti("""
+				(defun ci-set-env (k v) (setf (uiop:getenv k) v))
+				(ci-set-env "CI_EVAL_UIOP_FIRST" "written")
+				(uiop:getenv "CI_EVAL_UIOP_FIRST")
+				""").print()).isEqualTo("\"written\"");
+	}
+
+	@Test
+	void evalUiopOsWorkingDirectoryAndTheWindowsShortcutFamily() {
+		// getcwd is real where the host has a working directory (here: user.dir);
+		// chdir signals on every backend, because none can move one. The two octet
+		// readers are real stream work; the two .lnk parsers name the primitive they
+		// would need -- file-position on a binary stream, which is nil here.
+		assertThat(evalMulti("(pathnamep (uiop:getcwd))").print()).isEqualTo("T");
+		assertThat(evalMulti("""
+				(list (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir))
+				      (handler-case (uiop:parse-windows-shortcut "x.lnk")
+				        (uiop:not-implemented-error () :parse-windows-shortcut))
+				      (handler-case (uiop:parse-file-location-info nil)
+				        (uiop:not-implemented-error () :parse-file-location-info)))
+				""").print()).isEqualTo("(:CHDIR :PARSE-WINDOWS-SHORTCUT :PARSE-FILE-LOCATION-INFO)");
+		assertThat(evalMulti("""
+				(asdf:load-system "flexi-streams")
+				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
+				                        :initial-contents '(1 2 0 0 104 105 0)))
+				       (s (flex:make-in-memory-input-stream v)))
+				  (list (uiop:read-little-endian s) (uiop:read-null-terminated-string s)))
+				""").print()).isEqualTo("(513 \"hi\")");
+	}
+
+	@Test
 	void evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream() {
 		// smart-buffer's finalize-buffer hands one of these to the multipart parser,
 		// and http-body type-tests it against flex:vector-stream for its fast path.

@@ -10,7 +10,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
+import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
@@ -79,19 +81,20 @@ public final class UiopLibrary {
 	 * stubbed.
 	 */
 	private static final Map<String, String> RESOURCES = Map.of("UIOP/PACKAGE", "uiop-package.lisp", "UIOP/UTILITY",
-			"uiop-utility.lisp", "UIOP/PATHNAME", "uiop-pathname.lisp", "UIOP/FILESYSTEM", "uiop-filesystem.lisp",
-			"UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp", "UIOP/LISP-BUILD",
-			"uiop-lisp-build.lisp");
+			"uiop-utility.lisp", "UIOP/OS", "uiop-os.lisp", "UIOP/PATHNAME", "uiop-pathname.lisp", "UIOP/FILESYSTEM",
+			"uiop-filesystem.lisp", "UIOP/STREAM", "uiop-stream.lisp", "UIOP/IMAGE", "uiop-image.lisp",
+			"UIOP/LISP-BUILD", "uiop-lisp-build.lisp");
 
 	/**
 	 * Members the interpreter defines in Java (and the compilers lower or wrap
-	 * themselves), so a stub would shadow a working built-in. {@code getenv} is the only
-	 * spelling of "read an environment variable" rontolisp offers (Common Lisp has none)
-	 * and is a per-backend primitive; {@code symbol-call} is late binding through the
-	 * runtime intern; {@code add-package-local-nickname} reaches the package registry.
+	 * themselves), so a stub would shadow a working built-in. {@code symbol-call} is late
+	 * binding through the runtime intern; {@code add-package-local-nickname} reaches the
+	 * package registry. {@code getenv} used to be here and is not: it is a Lisp
+	 * definition now ({@code uiop-os.lisp}) over the {@code %host-getenv} primitive, so
+	 * that the override map a {@code (setf (uiop:getenv ...))} writes is consulted on
+	 * every backend.
 	 */
-	private static final Set<String> JAVA_DEFINED = Set.of(LispNames.GETENV, LispNames.SYMBOL_CALL,
-			LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
+	private static final Set<String> JAVA_DEFINED = Set.of(LispNames.SYMBOL_CALL, LispNames.ADD_PACKAGE_LOCAL_NICKNAME);
 
 	/** The {@code &rest} parameter of a synthesized stub; its arguments are ignored. */
 	private static final String STUB_ARGS = "%UIOP-STUB-ARGS";
@@ -109,8 +112,18 @@ public final class UiopLibrary {
 	record Tables(Map<String, List<LispVal>> definitions, Set<String> implemented) {
 	}
 
-	@org.jspecify.annotations.Nullable
-	private static volatile Tables tables;
+	/**
+	 * The built tables per FEATURE SET. The resources are read with the target backend's
+	 * features, so a definition may branch on them -- and one does: {@code featurep}
+	 * evaluates a feature expression against {@code *features*}, which the reader
+	 * substitutes with the target's list on the compile backends and leaves as the symbol
+	 * (a real global) on the interpreter. Everything else in {@code uiop/os} that differs
+	 * per backend -- {@code architecture}, {@code implementation-identifier} -- is
+	 * derived from {@code featurep}, so this one thread is the whole per-backend story.
+	 * Keyed by the feature NAMES (plus the substitution flag), because {@code Features}
+	 * is not a value type.
+	 */
+	private static final Map<String, Tables> TABLES = new ConcurrentHashMap<>();
 
 	private UiopLibrary() {
 	}
@@ -274,6 +287,23 @@ public final class UiopLibrary {
 	 * @return the program with the referenced uiop definitions spliced in
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, Features.INTERPRETER);
+	}
+
+	/**
+	 * {@link #process(List)} for a target backend: the definitions are read with
+	 * {@code features}, so the one member that branches on the feature set --
+	 * {@code featurep}, and through it {@code architecture} and
+	 * {@code implementation-identifier} -- answers for the backend being compiled rather
+	 * than for the interpreter. The reader substitutes {@code *features*} with the
+	 * target's list on the compile backends and leaves the symbol alone on the
+	 * interpreter, where it is a real global.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param features the target backend's feature set
+	 * @return the program with the referenced uiop definitions spliced in
+	 */
+	public static List<LispVal> process(List<LispVal> program, Features features) {
+		Map<String, List<LispVal>> definitions = tables(features).definitions();
 		List<LispVal> resolved;
 		try {
 			resolved = new PackageResolver().resolveProgram(program);
@@ -294,7 +324,7 @@ public final class UiopLibrary {
 			}
 		}
 		Set<String> selected = new LinkedHashSet<>();
-		for (String name : definedNames()) {
+		for (String name : definitions.keySet()) {
 			if (alreadyDefined.contains(name)) {
 				// The dedup guard every library splice carries: the program already
 				// carries this definition (a previous run of this pass, an
@@ -311,10 +341,10 @@ public final class UiopLibrary {
 			grew = false;
 			for (String name : List.copyOf(selected)) {
 				Set<String> referenced = new LinkedHashSet<>();
-				for (LispVal form : formsFor(name)) {
+				for (LispVal form : definitions.getOrDefault(name, List.of())) {
 					collectSymbols(form, referenced);
 				}
-				for (String candidate : definedNames()) {
+				for (String candidate : definitions.keySet()) {
 					if (referenced.contains(candidate) && !alreadyDefined.contains(candidate)
 							&& selected.add(candidate)) {
 						grew = true;
@@ -327,7 +357,7 @@ public final class UiopLibrary {
 		}
 		List<LispVal> out = new ArrayList<>();
 		// Emit in inventory order, not discovery order, so the spliced prefix is stable.
-		for (Map.Entry<String, List<LispVal>> entry : tables().definitions().entrySet()) {
+		for (Map.Entry<String, List<LispVal>> entry : definitions.entrySet()) {
 			if (selected.contains(entry.getKey())) {
 				out.addAll(entry.getValue());
 			}
@@ -393,23 +423,18 @@ public final class UiopLibrary {
 	}
 
 	private static Tables tables() {
-		Tables cached = tables;
-		if (cached == null) {
-			synchronized (UiopLibrary.class) {
-				cached = tables;
-				if (cached == null) {
-					cached = build();
-					tables = cached;
-				}
-			}
-		}
-		return cached;
+		return tables(Features.INTERPRETER);
 	}
 
-	private static Tables build() {
+	private static Tables tables(Features features) {
+		return TABLES.computeIfAbsent(String.join(",", features.names()) + "|" + features.substituteFeaturesVar(),
+				ignored -> build(features));
+	}
+
+	private static Tables build(Features features) {
 		Map<String, List<LispVal>> real = new LinkedHashMap<>();
 		for (Map.Entry<String, String> resource : RESOURCES.entrySet()) {
-			for (LispVal form : LispReader.readAllFromString(readSource(resource.getValue()), Features.INTERPRETER)) {
+			for (LispVal form : LispReader.readAllFromString(readSource(resource.getValue()), features)) {
 				String defined = definedName(form);
 				if (defined == null) {
 					throw new IllegalStateException(resource.getValue() + ": not a definition form: " + form.print());
@@ -495,8 +520,20 @@ public final class UiopLibrary {
 
 	private static @org.jspecify.annotations.Nullable String definedName(LispVal form) {
 		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol op && cons.cdr() instanceof LispCons rest
-				&& rest.car() instanceof LispSymbol defined && DEFINITION_OPERATORS.contains(op.name())) {
-			return defined.name();
+				&& DEFINITION_OPERATORS.contains(op.name())) {
+			if (rest.car() instanceof LispSymbol defined) {
+				return defined.name();
+			}
+			// A SETF FUNCTION -- (defun (setf getenv) (new-value x) ...), which is how
+			// rontolisp spells upstream's (defsetf getenv ...). It is keyed under the
+			// PLACE, so the reader and the writer of one member are one definition:
+			// selected together, lazy-loaded together, and counted once by the coverage
+			// test. (LispMacroExpander rewrites the head onto the %setf- writer name and
+			// registers the place, which is what makes (setf (uiop:getenv x) v) expand.)
+			LispSymbol place = LambdaLists.setfFunctionPlaceName(rest.car());
+			if (place != null) {
+				return place.name();
+			}
 		}
 		return null;
 	}

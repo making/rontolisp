@@ -11,23 +11,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class EnvironmentLibraryTest {
 
+	// The CLI's order: the uiop splice first (it is what puts the %host-getenv reference
+	// in the program -- the public uiop:getenv is a Lisp definition over the primitive),
+	// then this pass, which binds the primitive to wasi:cli/environment on a component.
+	private static List<LispVal> spliced(String source) {
+		return EnvironmentLibrary.process(UiopLibrary.process(LispReader.readAllFromString(source)),
+				WitExportDirective.Backend.WASM_COMPONENT);
+	}
+
 	@Test
 	void processSplicesEnvironmentLibraryForAGetenvReference() {
-		List<LispVal> program = LispReader.readAllFromString("(print (uiop:getenv \"DATABASE_URL\"))");
-		List<LispVal> out = EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
-		assertThat(HttpLibraryTest.definesDefun(out, "UIOP/OS:GETENV")).isTrue();
+		List<LispVal> out = spliced("(print (uiop:getenv \"DATABASE_URL\"))");
+		assertThat(HttpLibraryTest.definesDefun(out, "%HOST-GETENV")).isTrue();
 		// The lowered wit-import binds exactly the one member the defun calls.
 		assertThat(out.stream().map(LispVal::print)).anyMatch(form -> form.contains("get-environment"));
 	}
 
 	@Test
 	void processSplicesForTheDoubleColonSpelling() {
-		// The splice scan runs before PackageResolver normalizes the program, so it must
-		// normalize the spelling itself -- and the defun it splices carries getenv's HOME
-		// package (uiop/os), the spelling a resolved uiop:getenv reference becomes.
-		List<LispVal> program = LispReader.readAllFromString("(print (uiop::getenv \"DATABASE_URL\"))");
-		List<LispVal> out = EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
-		assertThat(HttpLibraryTest.definesDefun(out, "UIOP/OS:GETENV")).isTrue();
+		// The uiop splice recognizes every source spelling of the member and answers the
+		// HOME-package definition, whose body names the %host-getenv primitive this pass
+		// keys on -- so the double-colon spelling reaches the binding too.
+		assertThat(HttpLibraryTest.definesDefun(spliced("(print (uiop::getenv \"DATABASE_URL\"))"), "%HOST-GETENV"))
+			.isTrue();
 	}
 
 	@Test
@@ -43,15 +49,15 @@ class EnvironmentLibraryTest {
 	void processIsANoOpOffTheComponentBackend() {
 		// Preview 1 keeps the host-filled environ buffer scan (_getenv); the interpreter
 		// and the JVM keep System.getenv.
-		List<LispVal> program = LispReader.readAllFromString("(print (uiop:getenv \"DATABASE_URL\"))");
+		List<LispVal> program = UiopLibrary.process(LispReader.readAllFromString("(print (uiop:getenv \"X\"))"));
 		assertThat(EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_GC)).isEqualTo(program);
 		assertThat(EnvironmentLibrary.process(program, WitExportDirective.Backend.OTHER)).isEqualTo(program);
 	}
 
 	@Test
-	void processDoesNotSpliceWhenTheProgramDefinesGetenvItself() {
+	void processDoesNotSpliceWhenTheProgramDefinesTheHostPrimitiveItself() {
 		List<LispVal> program = LispReader
-			.readAllFromString("(defun uiop:getenv (name) name)\n(print (uiop:getenv \"X\"))");
+			.readAllFromString("(defun %host-getenv (name) name)\n(print (%host-getenv \"X\"))");
 		assertThat(EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT)).isEqualTo(program);
 	}
 

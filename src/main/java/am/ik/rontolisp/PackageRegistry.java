@@ -261,7 +261,8 @@ public final class PackageRegistry {
 			LispNames.PROBE_FILE_INTERNAL, LispNames.PATH_NS, LispNames.SYNONYM_TARGET, LispNames.CLOSE_INTERNAL,
 			LispNames.MACRO_FN_INTERNAL, LispNames.MACRO_EXPANDER_STUB, LispNames.WILD_COMPONENT_P,
 			LispNames.WILD_CAPTURES, LispNames.RENAME_FILE_INTERNAL, LispNames.PRINT_CASED_INTERNAL,
-			LispNames.PRINT_CASE_FOLD_INTERNAL);
+			LispNames.PRINT_CASE_FOLD_INTERNAL, LispNames.HOST_GETENV, LispNames.HOST_GETCWD, LispNames.GETENV_OVERRIDE,
+			LispNames.GETENV_OVERRIDE_SET);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

@@ -519,9 +519,12 @@ class WasmLispCompilerTest {
 		loaded = am.ik.rontolisp.eval.HttpServerLibrary.process(loaded, bufferBody);
 		loaded = SocketsLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
 		loaded = StdinLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT, true);
-		loaded = am.ik.rontolisp.eval.EnvironmentLibrary.process(loaded, WitExportDirective.Backend.WASM_COMPONENT);
-		return am.ik.rontolisp.eval.WitLibrary.process(
-				am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded)));
+		List<LispVal> program = am.ik.rontolisp.eval.WitLibrary
+			.process(am.ik.rontolisp.eval.GrayStreamsLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(am.ik.rontolisp.eval.UserMacroExpander.expand(loaded), am.ik.rontolisp.reader.Features.WASM)));
+		// Last, like the CLI: EnvironmentLibrary's trigger is the %host-getenv
+		// primitive, which the uiop splice inside the prelude pass introduces.
+		return am.ik.rontolisp.eval.EnvironmentLibrary.process(program, WitExportDirective.Backend.WASM_COMPONENT);
 	}
 
 	@Test
@@ -554,8 +557,9 @@ class WasmLispCompilerTest {
 		// EXACTLY ONCE -- the unchanged fixed world, with nothing appended for the
 		// binding -- and the component still instantiates (the wasmtime leg is
 		// WasmLispCompilerIntegrationTest#componentGetenvFromWasiEnvironment).
-		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(
-				LispReader.readAllFromString("(print (uiop:getenv \"RLENV\"))"),
+		List<LispVal> program = am.ik.rontolisp.eval.EnvironmentLibrary.process(am.ik.rontolisp.eval.LispPreludeLibrary
+			.process(LispReader.readAllFromString("(print (uiop:getenv \"RLENV\"))"),
+					am.ik.rontolisp.reader.Features.WASM),
 				WitExportDirective.Backend.WASM_COMPONENT);
 		WasmLispCompiler compiler = new WasmLispCompiler(false, true);
 		assertThat(compiler.compile(program)).isNotEmpty();

@@ -9337,7 +9337,9 @@ cases:
                    (ci-uiop-abs "a/b.lisp" nil) (uiop:compile-file-type)))
       ;; A member nothing implements yet signals uiop:not-implemented-error naming
       ;; the operation -- never "undefined function", and the same on all four.
-      (print (handler-case (uiop:chdir "/tmp")
+      ;; (uiop:chdir is no longer one of them: it is a real definition that
+      ;; signals with a REASON -- see the uiop-os-host-identity case.)
+      (print (handler-case (uiop:run-program "ls")
                (uiop:not-implemented-error (c) (princ-to-string c))))
       ;; An unimplemented MACRO drops its argument forms rather than evaluating
       ;; them: ci-uiop-probe must NOT be defined by the time the handler runs.
@@ -9350,7 +9352,7 @@ cases:
       #P"src/"
       (#P"/tmp/x" NIL)
       (#P"/a/b.lisp" #P"/a/b.lisp" #P"a/b.lisp" NIL)
-      "Not (currently) implemented on rontolisp: UIOP/OS:CHDIR"
+      "Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM"
       :SIGNALLED
       NIL
   - name: uiop-utility-helpers
@@ -9406,6 +9408,67 @@ cases:
       (0 T CHARACTER)
       :SW-DONE
       :MUFFLED
+  - name: uiop-os-host-identity
+    source: |
+      ;; uiop/os (uiop-os.lisp): every host answer is derived from ONE source,
+      ;; upstream's own featurep over *features* -- which differs per backend by
+      ;; design (reader.Features), so the architecture line below is the case's
+      ;; point rather than an accident. os-unix-p is t outright: every backend
+      ;; presents the POSIX-shaped file model, but *features* deliberately carries
+      ;; no :unix (that would flip the #+unix branch of every library read).
+      (print (list (uiop:os-unix-p) (uiop:os-macosx-p) (uiop:os-windows-p) (uiop:os-genera-p)))
+      (print (list (uiop:detect-os) (uiop:operating-system) (uiop:implementation-type)))
+      (print (list (uiop:featurep :rontolisp) (uiop:featurep '(:and :rontolisp :unicode))
+                   (uiop:featurep '(:not :nope)) (uiop:featurep :nope)))
+      (print (uiop:architecture))
+      (print (uiop:os-cond ((uiop:os-windows-p) :win) ((uiop:os-unix-p) :unix) (t :other)))
+      ;; The environment is READ from the host and WRITTEN to a per-program
+      ;; override map -- no backend can rewrite its own process environment, so
+      ;; that is what (setf (uiop:getenv x) v) means here (rove's with-local-envs).
+      ;; A nil value is an unset, upstream's own semantics.
+      (setf (uiop:getenv "CI_UIOP_OS_VAR") "overridden")
+      (print (list (uiop:getenv "CI_UIOP_OS_VAR") (uiop:getenvp "CI_UIOP_OS_VAR")))
+      (setf (uiop:getenv "CI_UIOP_OS_VAR") nil)
+      (print (list (uiop:getenv "CI_UIOP_OS_VAR") (uiop:getenvp "CI_UIOP_OS_VAR")))
+      ;; hostname is nil on every backend (none has a host-identity primitive) and
+      ;; chdir signals on every backend (none can move its own working directory);
+      ;; getcwd answers a pathname where there IS one and signals where there is
+      ;; not, which is the only per-backend divergence in the family.
+      (print (uiop:hostname))
+      (print (handler-case (progn (uiop:chdir "/tmp") :moved) (error () :chdir-signals)))
+      (print (handler-case (if (pathnamep (uiop:getcwd)) :working-directory :not-a-pathname)
+               (error () :no-working-directory)))
+      ;; The two octet readers are real; the two .lnk parsers name the primitive
+      ;; they would need (file-position on a binary stream, which is nil here).
+      (print (handler-case (uiop:parse-windows-shortcut "x.lnk") (error () :not-implemented)))
+    expected: |
+      (T NIL NIL NIL)
+      (:OS-UNIX :UNIX :RONTOLISP)
+      (T T T NIL)
+      :JVM
+      :UNIX
+      ("overridden" "overridden")
+      (NIL NIL)
+      NIL
+      :CHDIR-SIGNALS
+      :WORKING-DIRECTORY
+      :NOT-IMPLEMENTED
+    expectedByBackend:
+      # The compiled ABI the artifact targets is what upstream's architecture is
+      # used for, and a WASI program has preopened directories and no CURRENT one,
+      # so getcwd's primitive answers nil there and the shared definition signals.
+      wasm: |
+        (T NIL NIL NIL)
+        (:OS-UNIX :UNIX :RONTOLISP)
+        (T T T NIL)
+        :WASM32
+        :UNIX
+        ("overridden" "overridden")
+        (NIL NIL)
+        NIL
+        :CHDIR-SIGNALS
+        :NO-WORKING-DIRECTORY
+        :NOT-IMPLEMENTED
   - name: print-case
     source: |
       ;; *print-case* converts the case of every SYMBOL the printer spells --

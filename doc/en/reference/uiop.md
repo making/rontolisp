@@ -32,7 +32,7 @@ one member name:
 | `uiop/package*` | the three condition/type names `uiop/package` defines but does not export | 0 / 3 |
 | [`uiop/utility`](uiop/utility.md) | the portable helpers (`strcat`, `split-string`, `if-let`, `not-implemented-error`) | 68 / 68 |
 | `uiop/version` | version comparison and the deprecation conditions | 1 / 15 |
-| `uiop/os` | host identity, the environment, the working directory | 1 / 22 |
+| [`uiop/os`](uiop/os.md) | host identity, the environment, the working directory | 22 / 22 |
 | [`uiop/pathname`](uiop/pathname.md) | the pathname algebra (`subpathname`, `parse-unix-namestring`, `enough-pathname`) | 50 / 50 |
 | `uiop/filesystem` | probe, walk and mutate the file system | 8 / 32 |
 | `uiop/stream` | file contents, temporary files, encodings, the standard streams | 3 / 66 |
@@ -50,14 +50,15 @@ target the counts above are measured against, so both move together.
 
 ## What is implemented
 
-`uiop/utility` — the 68 portable helpers everything else in uiop is written in —
-and `uiop/pathname` — the 50-member pathname algebra — are complete, and each
-has its own page ([uiop/utility](uiop/utility.md),
-[uiop/pathname](uiop/pathname.md)). The rest:
+Three sub-packages are complete, and each has its own page: `uiop/utility` — the
+68 portable helpers everything else in uiop is written in
+([uiop/utility](uiop/utility.md)) — `uiop/pathname`, the 50-member pathname
+algebra ([uiop/pathname](uiop/pathname.md)), and `uiop/os`, the 22 host-identity,
+environment and working-directory members ([uiop/os](uiop/os.md), which is where
+[`uiop:getenv`](functions/uiop-getenv.md) lives). The rest:
 
 | Function | Example | Result |
 |----------|---------|--------|
-| `uiop:getenv` | `(uiop:getenv "PATH")` | the value of an environment variable as a string, or `nil` if unset. Homed here because Common Lisp has no `getenv`. All backends; WASM reads the real host environment in Preview 1 and `wasi:cli/environment@0.3.0` in `--component` mode (pass `--env`/`-S inherit-env` to wasmtime) |
 | `uiop:file-exists-p` | `(uiop:file-exists-p "f.txt")` | the pathname when the file exists, `nil` otherwise — the same contract as `probe-file`, which it lowers onto on every backend |
 | `uiop:directory-exists-p` | `(uiop:directory-exists-p "src/")` | the pathname (with a trailing `/`) when the DIRECTORY exists, `nil` otherwise — the directory twin of `file-exists-p`, and what tells an empty directory from a missing one |
 | `uiop:directory-files` | `(uiop:directory-files "db/" "*.up.sql")` | the non-directory entries of a directory — `(directory "db/*.*")` with the subdirectories dropped. UIOP's optional second argument, the namestring of a name-and-type wildcard, filters them exactly as `directory` matches; omitting it lists everything, and a pattern carrying a directory component is an error |
@@ -91,12 +92,12 @@ that reaches an unfilled corner of uiop gets one clear answer instead of an
 `undefined function` from the middle of a library, and a handler can catch it:
 
 ```console
-$ rontolisp -e '(uiop:chdir "/tmp")'
-Unhandled condition: Not (currently) implemented on rontolisp: UIOP/OS:CHDIR
+$ rontolisp -e '(uiop:run-program "ls")'
+Unhandled condition: Not (currently) implemented on rontolisp: UIOP/RUN-PROGRAM:RUN-PROGRAM
 ```
 
 ```lisp
-(handler-case (uiop:chdir "/tmp")
+(handler-case (uiop:run-program "ls")
   (uiop:not-implemented-error () :cannot))   ; => :CANNOT
 ```
 

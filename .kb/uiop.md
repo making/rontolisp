@@ -80,11 +80,17 @@ without deduplicating the six names two sub-packages both export).
 ## `eval.UiopLibrary`: one home for every definition
 
 Real definitions live in `uiop-<sub-package>.lisp` resources next to the class
-(currently `package`, `utility`, `pathname`, `filesystem`, `stream`, `image`,
-`lisp-build`), in
+(currently `package`, `utility`, `os`, `pathname`, `filesystem`, `stream`,
+`image`, `lisp-build`), in
 canonical shape. **A resource may only define names the inventory lists** --
 `build()` fails loudly otherwise -- so there are no private helpers: a body that
-wants one uses `flet`/`labels`. Everything the inventory lists that no resource
+wants one uses `flet`/`labels`, or calls a `%`-prefixed PRELUDE entry
+(`LispPreludeLibrary`), which is where a definition needing global state has to
+put it (todo-356: `%getenv-override` / `%getenv-override-set`). A
+`(defun (setf NAME) ...)` counts as a definition of NAME -- it is how rontolisp
+spells upstream's `defsetf`, and keying the writer under the PLACE is what makes
+the reader and the writer one definition group: selected together, lazy-loaded
+together, counted once. Everything the inventory lists that no resource
 defines gets a stub SYNTHESIZED from its kind:
 
 | kind | stub |
@@ -96,8 +102,9 @@ defines gets a stub SYNTHESIZED from its kind:
 | `type` | `(deftype NAME () t)` |
 
 Three groups are deliberately NOT stubbed, because something else defines them
-and a stub would shadow it: `JAVA_DEFINED` (`getenv`, `symbol-call`,
-`add-package-local-nickname` -- Java built-ins the compilers lower or wrap),
+and a stub would shadow it: `JAVA_DEFINED` (`symbol-call`,
+`add-package-local-nickname` -- Java built-ins the compilers lower or wrap;
+`getenv` used to be here and moved out with todo-356, see below),
 `LispMacroExpander.hasUiopMacroExpansion` (`if-let`, `with-temporary-file`,
 `with-deprecation`, `define-package`), and -- separately -- the members that
 ALSO carry a fold (`file-exists-p`, `native-namestring`), which do have a Lisp
@@ -106,6 +113,21 @@ definition here so `#'uiop:file-exists-p` is a value like any other.
 **Filling a name in is a one-line change**: add the real definition to the
 matching `.lisp` resource and the stub disappears on its own, because a name the
 resources define is never stubbed. `UiopCoverageTest.printCoverage` then moves.
+
+**The resources are read with the TARGET backend's `Features`** (todo-356):
+`UiopLibrary.process(program, features)` / `LispPreludeLibrary.process(program,
+features)`, passed by `RontoLispCli.compileToFile` and the playground frontend;
+the one-argument overloads mean `Features.INTERPRETER`, which is also what the
+interpreter's lazy load uses. `Tables` is therefore cached per feature set, not
+once. The reason is `featurep`: it evaluates a feature expression against
+`*features*`, which the reader SUBSTITUTES with the target's list on the compile
+backends and leaves as the symbol (a real global) on the interpreter -- so a
+resource read with the interpreter's set would have answered
+`:rontolisp-interpreter` inside a wasm module. Everything else in `uiop/os` that
+differs per backend (`architecture`, and `implementation-identifier` through it)
+is derived from `featurep`, so this one thread is the whole per-backend story.
+A test harness that compiles a uiop program must pass the same set (see the
+`Features.WASM` arguments in `WasmLispCompilerIntegrationTest`).
 
 Stub caveats, deliberate and documented rather than silent:
 
@@ -158,6 +180,11 @@ table now reaches every consumer at once. `unwindProtect` exists for
 binding list, `while-collecting`'s collectors, `with-temporary-file`'s
 `:stream`/`:pathname` plist) or REARRANGE (`nest`) forms the default walk would
 read as ordinary calls.
+
+`os-cond` is in the table for the same reason and expands to a plain `cond`
+(todo-356): upstream evaluates its clause TESTS at macroexpansion time, which
+needs an evaluator the compile paths do not have, and the OS predicates here are
+ordinary runtime functions that make the runtime `cond` select the same clause.
 
 `with-deprecation` and `with-upgradability` additionally splice at TOP LEVEL
 (`flattenTopLevel`, via `isUiopDefinitionWrapper`, which matches both spellings
@@ -213,6 +240,102 @@ all.
   object when nothing was frobbed: upstream's identity shortcut is a
   `return-from` out of a `labels` function, i.e. a cross-lambda exit, which would
   put every program using it into EH mode on WASM.
+
+## `uiop/os`'s decisions (todo-356: 22/22)
+
+The whole sub-package is Lisp source in `uiop-os.lisp`, and **every host answer
+is derived from ONE source, upstream's own `featurep` over `*features*`** --
+which is why the resources are read with the target `Features` (above). The
+per-backend answers are therefore `featurep`'s and nothing else's:
+`architecture` is `:wasm32` under `(featurep :rontolisp-wasm)` and `:jvm`
+otherwise (the ABI the ARTIFACT targets -- a class file is CPU-independent, so
+the CPU is not the answer), and `implementation-identifier` composes
+type/version/os/architecture the way upstream builds a fasl-cache directory
+name. `lisp-version-string` reads `(rontolisp:version)`, which every backend
+answers.
+
+- **`os-unix-p` is `t` outright, NOT `(featurep :unix)`.** Every backend
+  presents the POSIX-shaped file and namestring model (`.kb/pathnames.md`), so
+  the answer is right -- but adding `:unix` to `Features` would flip the
+  `#+unix` reader branch of every library the frontend reads (cl-postgres'
+  unix-domain socket path, bordeaux-threads, ...), which is a far wider claim
+  than one OS predicate. `os-macosx-p` / `os-windows-p` / `os-genera-p` keep
+  upstream's derivations and answer nil, because no backend carries a host-OS
+  feature. `detect-os` returns `:os-unix` without the push upstream does (the
+  reader consumed `*features*`); `os-cond` is a Java macro expansion to a plain
+  `cond` (upstream's own abcl arm -- upstream evaluates the clause tests at
+  MACROEXPANSION time, which the compile paths have no evaluator for, and the
+  predicates here are ordinary runtime functions that select the same clause).
+
+- **The environment is READ from the host and WRITTEN to an override map.** No
+  backend can rewrite its own process environment (the JVM cannot at all, WASI's
+  is read-only), so `(setf (uiop:getenv name) value)` records the value in a
+  per-program map `getenv` consults BEFORE the host, one definition for all
+  four backends -- rove's `with-local-envs` (behind `run`'s `:env`) is the
+  consumer that forced it, and before this it was a HARD `expandSetf` failure,
+  "setf does not support place". A nil value is an UNSET, upstream's own
+  `(setf (getenv x) nil)`, which is why the store's reader answers the whole
+  ENTRY and not its cdr: "present and nil" and "absent" are different answers.
+  Mechanics, all of which moved for this:
+  - `getenv` is no longer `JAVA_DEFINED`. The per-backend primitive is
+    `rontolisp::%host-getenv` (`LispNames.HOST_GETENV`): `Environment`'s
+    `System.getenv` registration, `JvmGetenvCompiler`, `WasmGetenvCompiler`'s
+    Preview 1 environ scan, and `environment.lisp`'s wit-imported
+    `wasi:cli/environment` defun under `--component`, which is what
+    `EnvironmentLibrary` now keys on (its trigger is the PRIMITIVE, so it must
+    run AFTER the uiop splice that introduces the reference -- the CLI's order
+    already had it last, and the test harnesses were moved to match).
+  - the override store is two PRELUDE entries (`%getenv-override`,
+    `%getenv-override-set`), each carrying its own `(defvar %getenv-overrides
+    nil)` like the `%symbol-plists` family, because a uiop resource may not
+    define a private global and a VARIABLE reference is not a lazy-load trigger
+    on the interpreter -- reaching the store through functions is what makes it
+    load.
+  - the writer is `(defun (setf uiop/os:getenv) ...)` in the resource, keyed
+    under `UIOP/OS:GETENV`. On the interpreter, a program whose FIRST touch of
+    the member is the write needs a third lazy-load trigger beside the function
+    and the variable lookup: `LispEvaluator.ensureUiopSetfPlaceLoaded` loads the
+    definition before `expandSetf` reads the place registry.
+
+- **`hostname` answers nil**, which is exactly what upstream answers on an
+  implementation none of its `#+` clauses names. No backend has a host-identity
+  primitive (rontolisp has no `machine-instance`; WASI exposes no hostname), and
+  a fabricated `"localhost"` would be an answer rather than the absence of one.
+  **Re-evaluation trigger**: a `machine-instance` built-in makes this one line.
+
+- **`getcwd` is real where the host has a working directory and signals where it
+  does not; `chdir` signals everywhere.** The primitive `%host-getcwd`
+  (`LispNames.HOST_GETCWD`) answers `user.dir` on the interpreter and the JVM
+  (`JvmGetcwdCompiler`) and NIL on both WASM backends -- a WASI program has
+  preopened directories and no current one -- and the ONE shared Lisp definition
+  turns that nil into `not-implemented-error`, so the divergence is a VALUE
+  rather than a second code path. `chdir` has no primitive at all: Java reads
+  `user.dir` once at startup and cannot move the process working directory, and
+  WASI has no `chdir`, so every backend would have to lie. **Re-evaluation
+  trigger**: a host that lets the process move (a WASI `chdir`, or a JVM that
+  resolves relative opens against a settable directory) makes `chdir` real, and
+  `getcwd`'s signalling arm disappears with it. `uiop/filesystem`'s
+  `with-current-directory` (`.todo/358`) sits on top of this and INHERITS the
+  decision -- it must not invent a second one.
+
+- **The `.lnk` pair signals, naming the primitive it needs.**
+  `read-little-endian` and `read-null-terminated-string` are real (portable
+  `read-byte` work, pinned over flexi-streams' in-memory octet stream, the one
+  binary input every backend can build without a filesystem), but
+  `parse-windows-shortcut` / `parse-file-location-info` navigate the file with
+  `file-position`, which is nil for every file stream here (the deliberately
+  lite repositioning of `.kb/read-load-streams.md`) -- so they name it instead
+  of misparsing silently. **Re-evaluation trigger**: the day `file-position`
+  works on a binary file stream, both are upstream's bodies verbatim.
+
+Pinned by `evalUiopOs*` (three tests in `LispEvaluatorTest`, including the
+setf-place-first lazy load), `JvmLispCompilerTest.compileAndRunUiopOsHostIdentityAndGetenvOverride`
+/ `.compileAndRunUiopOsOctetReaders`,
+`WasmLispCompilerIntegrationTest.uiopOsHostIdentityAndGetenvOverrideCompileAndRun`
+(which also pins the override WINNING over a `--env` host value) /
+`.uiopOsOctetReadersCompileAndRun`, and the `uiop-os-host-identity` ci-spec case
+(all four backends, with the architecture and getcwd lines as the declared
+per-backend difference). Docs: `reference/uiop/os.md`.
 
 ## `uiop/pathname`'s decisions (todo-357: 50/50)
 
@@ -385,8 +508,11 @@ small enough to sit there, and what an unimplemented member signals.
 `.todo/353`'s proposal arrived at when it pays. `uiop/utility` was the first
 (todo-354, 61 members at once): `reference/uiop/utility.md`, its own `nav.yaml`
 entry in every language tree, and the parent page keeps the coverage row (now a
-link) and one sentence. Per-operator detail pages stay for names a user program
-actually calls, not for all 429.
+link) and one sentence. `uiop/pathname` and `uiop/os` followed. Per-operator
+detail pages stay for names a user program actually calls, not for all 429 --
+and when a member MOVES to a sub-package page, its row leaves the parent's
+implemented-member table (todo-356 moved `uiop:getenv`'s), or the same fact is
+maintained in two places.
 
 ## Tests
 
@@ -408,7 +534,10 @@ actually calls, not for all 429.
   `uiopWithUpgradability*` cases of `WasmLispCompilerIntegrationTest` for the
   four with real codegen shape (`strcat`, `string-prefix-p`, `nest`,
   `while-collecting`) plus the splice-selection they depend on; and the
-  `uiop-utility-helpers` ci-spec case end to end on all four.
+  `uiop-utility-helpers` ci-spec case end to end on all four. `uiop/os` adds its
+  own row of each (see its decisions section above): the identity family, the
+  getenv override, the octet readers, and the `uiop-os-host-identity` ci-spec
+  case whose `expectedByBackend` declares the two lines that differ.
 
 ## Deliberate extras (`uiop` owns them; the inventory does not list them)
 

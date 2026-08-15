@@ -8,11 +8,13 @@ import am.ik.rontolisp.LispVal;
 import am.ik.jvm.Opcode;
 
 /**
- * Compiles {@code uiop:getenv}: returns the value of an environment variable as a string,
- * or {@code nil} (a {@code null} reference at runtime) when it is unset. The argument is
- * a runtime string, which carries surrounding quotes ({@code "PATH"}); the quotes are
- * stripped before calling {@code System.getenv} and re-applied to a non-null result so it
- * is a proper Lisp string.
+ * Compiles the {@code %host-getenv} internal primitive: the HOST's value for an
+ * environment variable as a string, or {@code nil} (a {@code null} reference at runtime)
+ * when it is unset. The argument is a runtime string, which carries surrounding quotes
+ * ({@code "PATH"}); the quotes are stripped before calling {@code System.getenv} and
+ * re-applied to a non-null result so it is a proper Lisp string. The public
+ * {@code uiop:getenv} is Lisp over this ({@code uiop-os.lisp}), consulting the override
+ * map a {@code (setf (uiop:getenv ...))} wrote first.
  */
 final class JvmGetenvCompiler {
 
@@ -23,7 +25,7 @@ final class JvmGetenvCompiler {
 		List<LispVal> args = cons.toList();
 		if (args.size() != 2) {
 			throw new UnsupportedOperationException(
-					LispNames.UIOP_GETENV + " expects 1 argument, got " + (args.size() - 1));
+					LispNames.HOST_GETENV + " expects 1 argument, got " + (args.size() - 1));
 		}
 		final int length = JvmEmitHelper.stringMethod(ctx, "length", "()I").index();
 		final int substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;").index();

@@ -1851,6 +1851,67 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopOsHostIdentityAndGetenvOverride() throws Exception {
+		// The whole uiop/os family on the JVM. The pipeline mirrors the CLI's: the
+		// program AND the uiop resources are read with the TARGET feature set, which is
+		// what makes featurep -- and architecture / implementation-identifier, derived
+		// from it -- answer for the backend being compiled instead of for the
+		// interpreter. getenv is a Lisp definition over the %host-getenv primitive here,
+		// so the override map a (setf (uiop:getenv x) v) writes is read back on this
+		// backend exactly as on the interpreter; getcwd is real (user.dir) and chdir
+		// signals.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (list (uiop:featurep :rontolisp) (uiop:featurep :rontolisp-jvm)
+				             (uiop:featurep :rontolisp-interpreter)
+				             (uiop:featurep '(:and :rontolisp :unicode)) (uiop:featurep '(:not :nope))))
+				(print (list (uiop:os-unix-p) (uiop:os-macosx-p) (uiop:os-windows-p) (uiop:os-genera-p)))
+				(print (list (uiop:detect-os) (uiop:operating-system) (uiop:implementation-type)
+				             uiop:*implementation-type* (uiop:architecture) (uiop:hostname)))
+				(print (uiop:os-cond ((uiop:os-windows-p) :win) ((uiop:os-unix-p) :unix) (t :other)))
+				(setf (uiop:getenv "CI_JVM_UIOP_OS") "one")
+				(print (list (uiop:getenv "CI_JVM_UIOP_OS") (uiop:getenvp "CI_JVM_UIOP_OS")))
+				(setf (uiop:getenv "CI_JVM_UIOP_OS") nil)
+				(print (list (uiop:getenv "CI_JVM_UIOP_OS") (uiop:getenvp "CI_JVM_UIOP_OS")))
+				(print (list (stringp (uiop:getenv "PATH")) (pathnamep (uiop:getcwd))))
+				(print (handler-case (uiop:chdir "/tmp") (uiop:not-implemented-error () :chdir-signals)))
+				(print (handler-case (uiop:parse-windows-shortcut "x.lnk")
+				         (uiop:not-implemented-error () :lnk-not-implemented)))
+				""", am.ik.rontolisp.reader.Features.JVM), am.ik.rontolisp.reader.Features.JVM))).isEqualTo("""
+				(T T NIL T T)
+				(T NIL NIL NIL)
+				(:OS-UNIX :UNIX :RONTOLISP :RONTOLISP :JVM NIL)
+				:UNIX
+				("one" "one")
+				(NIL NIL)
+				(T T)
+				:CHDIR-SIGNALS
+				:LNK-NOT-IMPLEMENTED""");
+	}
+
+	@Test
+	void compileAndRunUiopOsOctetReaders() throws Exception {
+		// read-little-endian / read-null-terminated-string are portable stream work over
+		// read-byte, so the compiled program must answer what the interpreter does. The
+		// stream is flexi-streams' in-memory octet stream, the one binary input every
+		// backend can build without a filesystem.
+		List<LispVal> program = am.ik.rontolisp.cli.LoadInliner.inline(LispReader.readAllFromString("""
+				(asdf:load-system "flexi-streams")
+				(let* ((v (make-array 7 :element-type '(unsigned-byte 8)
+				                        :initial-contents '(1 2 0 0 104 105 0)))
+				       (s (flex:make-in-memory-input-stream v)))
+				  (print (uiop:read-little-endian s))
+				  (print (uiop:read-null-terminated-string s)))
+				"""), path -> {
+			throw new java.io.FileNotFoundException(path);
+		});
+		// GrayStreamsLibrary in the CLI's order: read-byte on a CLOS instance stream --
+		// which flexi-streams' in-memory octet stream is -- reaches the Gray dispatch
+		// only through that rewrite; without it the call compiles to the raw stdin read.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(program)))).isEqualTo("513\n\"hi\"");
+	}
+
+	@Test
 	void compileAndRunUiopUnimplementedMacroDropsItsArgumentForms() throws Exception {
 		// A macro nothing implements yet must not evaluate what it was handed. Its
 		// synthesized stub is a real variadic defun (the name has to be fboundp), so

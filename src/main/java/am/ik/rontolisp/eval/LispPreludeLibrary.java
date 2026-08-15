@@ -333,6 +333,30 @@ public final class LispPreludeLibrary {
 				        (rplaca (cdr tail) new-value)
 				        (return new-value)))))
 				""");
+		// The uiop:getenv OVERRIDE store: what (setf (uiop:getenv name) value) writes
+		// and what uiop:getenv reads BEFORE the host. No backend can rewrite its own
+		// process environment -- the JVM cannot at all, WASI's is read-only -- so the
+		// write is a per-program overlay, one definition for all four backends
+		// (.kb/uiop.md). A nil value is an UNSET (upstream's unsetenv semantics), which
+		// is why the reader answers the whole ENTRY rather than its cdr: "present and
+		// nil" and "absent" are different answers. Each entry carries the store's own
+		// defvar, like the %symbol-plists family -- defvar assigns only when unbound, so
+		// two spliced copies are still one store.
+		SOURCES.put(LispNames.GETENV_OVERRIDE, """
+				(defvar %getenv-overrides nil)
+				(defun %getenv-override (%go-name)
+				  (assoc %go-name %getenv-overrides :test #'equal))
+				""");
+		SOURCES.put(LispNames.GETENV_OVERRIDE_SET, """
+				(defvar %getenv-overrides nil)
+				(defun %getenv-override-set (%gos-name %gos-value)
+				  (let ((%gos-entry (assoc %gos-name %getenv-overrides :test #'equal)))
+				    (if %gos-entry
+				        (rplacd %gos-entry %gos-value)
+				        (setq %getenv-overrides
+				              (cons (cons %gos-name %gos-value) %getenv-overrides)))
+				    %gos-value))
+				""");
 		// merge-pathnames / truename: namestring work over primitives every backend
 		// has, so ONE Lisp definition serves all four. The pattern of the whole path
 		// family: coerce a pathname-or-namestring argument through %path-ns
@@ -1684,12 +1708,25 @@ public final class LispPreludeLibrary {
 	 * @return the program with the referenced prelude definitions spliced in
 	 */
 	public static List<LispVal> process(List<LispVal> program) {
+		return process(program, Features.INTERPRETER);
+	}
+
+	/**
+	 * {@link #process(List)} for a target backend: the feature set is handed to the uiop
+	 * splice this pass drives, whose {@code uiop:featurep} answers against the
+	 * {@code *features*} of the backend being compiled ({@code UiopLibrary.process}).
+	 * Nothing else in the prelude branches on features.
+	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param features the target backend's feature set
+	 * @return the program with the referenced prelude definitions spliced in
+	 */
+	public static List<LispVal> process(List<LispVal> program, Features features) {
 		// uiop rides this pass. The two libraries are mutually dependent -- a uiop body
 		// calls namestring / pathname / directory here, and %temp-file-name below calls
 		// uiop back -- so they are ONE pass with a fixed order, and every pipeline that
 		// splices the prelude needs both. Splicing uiop first is what lets the selection
 		// below see the prelude names its bodies reach.
-		program = UiopLibrary.process(program);
+		program = UiopLibrary.process(program, features);
 		List<LispVal> resolved;
 		boolean canonical;
 		try {

@@ -120,8 +120,17 @@ class UiopLibraryTest {
 		// A member with a real LispMacroExpander expansion or a Java built-in carries no
 		// library form at all, so nothing can shadow it.
 		assertThat(splicedNames("(uiop:if-let ((x 1)) x)")).isEmpty();
-		assertThat(splicedNames("(print (uiop:getenv \"HOME\"))")).isEmpty();
 		assertThat(splicedNames("(uiop:symbol-call :cl :list 1 2)")).isEmpty();
+	}
+
+	@Test
+	void getenvSplicesItsDefinitionAndItsSetfWriter() {
+		// getenv is NOT a Java built-in any more: the public name is Lisp over the
+		// %host-getenv primitive, so that the override map a (setf (uiop:getenv x) v)
+		// writes is consulted on every backend. Both forms are keyed under the one
+		// member, so a program that only WRITES still gets the reader and vice versa.
+		assertThat(splicedNames("(print (uiop:getenv \"HOME\"))")).containsExactly("UIOP/OS:GETENV");
+		assertThat(splicedNames("(setf (uiop:getenv \"HOME\") \"/tmp\")")).containsExactly("UIOP/OS:GETENV");
 	}
 
 	@Test

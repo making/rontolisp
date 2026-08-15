@@ -593,25 +593,6 @@ final class WasmExprCompiler {
 				}
 				// Other rontolisp: members (user defuns in that package) fall through.
 			}
-			// uiop:getenv is a real built-in, not part of the uiop stub lowering: Common
-			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
-			// here, ahead of WasmFunctionCallCompiler's expandUiopStubCall.
-			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.GETENV)) {
-				// Under --component getenv is the spliced environment.lisp defun over
-				// wit-imported wasi:cli/environment (eval/EnvironmentLibrary): fall
-				// through to the ordinary call path, which resolves it -- there is no
-				// preview1 host to fill the environ buffer _getenv scans. Reaching here
-				// with no such defun means the pipeline skipped the splice, which the
-				// stub lowering would otherwise turn into a runtime "undefined function".
-				if (!ctx.component) {
-					WasmGetenvCompiler.compile(cons, ctx);
-					return;
-				}
-				if (!ctx.functions.containsKey(LispNames.UIOP_GETENV)) {
-					throw new UnsupportedOperationException(LispNames.UIOP_GETENV
-							+ " under --component is the spliced environment.lisp binding, but the program was compiled without it (eval/EnvironmentLibrary.process must run on the compile path)");
-				}
-			}
 			// The uiop MACROS with real expansions. A macro cannot reach the uiop stub
 			// lowering (which only sees function-call shapes), and these are not stubs:
 			// smart-buffer's disk-spill path runs with-temporary-file, and the
@@ -852,6 +833,34 @@ final class WasmExprCompiler {
 				}
 				case LispNames.CLOSE_INTERNAL -> WasmCloseCompiler.compile(cons, ctx);
 				case LispNames.PROBE_FILE_INTERNAL -> WasmProbeFileCompiler.compile(cons, ctx);
+				// The host environment read behind uiop:getenv (the public name is Lisp
+				// over it -- uiop-os.lisp -- consulting the override map a
+				// (setf (uiop:getenv ...)) wrote first). Under --component it is the
+				// spliced environment.lisp defun over wit-imported wasi:cli/environment
+				// (eval/EnvironmentLibrary), so the call falls through to the ordinary
+				// call path: there is no preview1 host to fill the environ buffer
+				// _getenv scans. Reaching here with no such defun means the pipeline
+				// skipped the splice, which the ordinary path would otherwise turn into
+				// a runtime "undefined function".
+				case LispNames.HOST_GETENV -> {
+					if (!ctx.component) {
+						WasmGetenvCompiler.compile(cons, ctx);
+					}
+					else if (!ctx.functions.containsKey(LispNames.HOST_GETENV)) {
+						throw new UnsupportedOperationException(LispNames.HOST_GETENV
+								+ " under --component is the spliced environment.lisp binding, but the program was compiled without it (eval/EnvironmentLibrary.process must run on the compile path)");
+					}
+					else {
+						// The ordinary call path resolves the spliced defun.
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx);
+					}
+				}
+				// %host-getcwd: nil on both WASM backends. A WASI program has preopened
+				// directories and no CURRENT one -- there is no cwd to answer and no
+				// chdir to move it -- and uiop:getcwd's one shared Lisp definition turns
+				// that nil into its not-implemented-error, so the divergence is a value
+				// rather than a second code path.
+				case LispNames.HOST_GETCWD -> WasmExprCompiler.compileExpr(LispNil.INSTANCE, ctx);
 				case LispNames.LIST_DIRECTORY -> WasmListDirectoryCompiler.compile(cons, ctx);
 				case LispNames.WRITE_LINE -> WasmWriteLineCompiler.compile(cons, ctx);
 				case LispNames.WRITE_STRING -> {

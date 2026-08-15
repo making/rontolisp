@@ -628,9 +628,9 @@ public final class RontoLispCli {
 		// the Gray dispatch helpers when the program uses the protocol (and splices
 		// gray.lisp if no load already did), so a CLOS instance stream reaches the
 		// generics in compiled programs like it does on the interpreter.
-		List<LispVal> program = WitLibrary
-			.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary.process(UrlLibrary
-				.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))))))));
+		List<LispVal> program = WitLibrary.process(UsocketLibrary.process(GrayStreamsLibrary.process(LispPreludeLibrary
+			.process(UrlLibrary.process(LinalgLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded)))),
+					features))));
 		// uiop:getenv on the --component path is environment.lisp over a wit-imported
 		// wasi:cli/environment@0.3.0 -- bound FROM the fixed import block on the base /
 		// sockets variants and as an appended user import under serve, whose service

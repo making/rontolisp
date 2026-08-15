@@ -6765,11 +6765,64 @@ public final class LispNames {
 	/** The canonical package-qualified spelling of {@link #GETENV}. */
 	public static final String UIOP_GETENV = UIOP_OS_PKG + ":" + GETENV;
 
-	/** {@code uiop:os-unix-p} (a {@code not-implemented-error} stub). */
+	/**
+	 * The {@code %host-getenv} internal primitive behind {@link #GETENV}: the HOST's
+	 * value for a variable name, or nil when the host has none. The public
+	 * {@code uiop:getenv} is Lisp ({@code uiop-os.lisp}) that consults the per-program
+	 * override map first ({@link #GETENV_OVERRIDE}) and falls back to this -- which is
+	 * what makes {@code (setf (uiop:getenv x) v)} readable back on all four backends,
+	 * where no host lets a process rewrite its own environment. Per backend:
+	 * {@code System.getenv} on the interpreter and the JVM, the WASI environ buffer scan
+	 * ({@code _getenv}) on Preview 1, and the spliced {@code environment.lisp} defun over
+	 * wit-imported {@code wasi:cli/environment} under {@code --component}.
+	 */
+	public static final String HOST_GETENV = "%HOST-GETENV";
+
+	/**
+	 * The {@code %host-getcwd} internal primitive behind {@code uiop:getcwd}: the host's
+	 * working-directory namestring, or nil when the host has no such notion. The JVM's
+	 * {@code user.dir} on the interpreter and the JVM; nil on both WASM backends, which
+	 * have preopened directories and no current one at all -- {@code uiop:getcwd} turns
+	 * that nil into the {@code not-implemented-error} its one shared Lisp definition
+	 * signals, so the divergence is a value, not a second code path.
+	 */
+	public static final String HOST_GETCWD = "%HOST-GETCWD";
+
+	/**
+	 * The {@code %getenv-override} prelude reader: the {@code (name . value)} entry a
+	 * {@code (setf (uiop:getenv name) value)} wrote, or nil. {@link #GETENV_OVERRIDE_SET}
+	 * is the writer; both carry the store's defvar, the way the {@code symbol-plist}
+	 * family carries {@code %symbol-plists}.
+	 */
+	public static final String GETENV_OVERRIDE = "%GETENV-OVERRIDE";
+
+	/** The {@code %getenv-override-set} prelude writer; see {@link #GETENV_OVERRIDE}. */
+	public static final String GETENV_OVERRIDE_SET = "%GETENV-OVERRIDE-SET";
+
+	/**
+	 * {@code uiop:os-unix-p} -- real: every rontolisp backend presents the POSIX-shaped
+	 * file and namestring model ({@code .kb/pathnames.md}), so this answers {@code t}
+	 * everywhere. It is deliberately NOT derived from a {@code :unix} feature: adding one
+	 * would flip the {@code #+unix} reader branch of every library the frontend reads,
+	 * which is a much wider claim than "uiop's OS predicate" ({@code .kb/uiop.md}).
+	 */
 	public static final String OS_UNIX_P = "OS-UNIX-P";
 
-	/** {@code uiop:os-macosx-p} (a {@code not-implemented-error} stub). */
+	/**
+	 * {@code uiop:os-macosx-p} -- real, and upstream's own derivation
+	 * ({@code (featurep '(:or :darwin ...))}), which answers nil here because no backend
+	 * carries a host-OS feature.
+	 */
 	public static final String OS_MACOSX_P = "OS-MACOSX-P";
+
+	/**
+	 * {@code uiop:os-cond} -- the OS dispatch macro. Upstream evaluates each clause test
+	 * at MACROEXPANSION time and keeps the first winner's body; rontolisp's OS predicates
+	 * are ordinary runtime functions, so the expansion is a plain {@code cond} over the
+	 * clauses (upstream's own abcl arm), which selects the same clause. A Java expansion
+	 * like every uiop macro ({@code .kb/uiop.md}).
+	 */
+	public static final String OS_COND = "OS-COND";
 
 	/**
 	 * {@code uiop:add-package-local-nickname} -- lite: registers a GLOBAL nickname (no

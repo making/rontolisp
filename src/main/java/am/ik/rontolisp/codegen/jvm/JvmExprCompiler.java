@@ -340,13 +340,6 @@ final class JvmExprCompiler {
 				JvmJavaInteropCompiler.compile(qn.member(), cons, ctx, className);
 				return;
 			}
-			// uiop:getenv is a real built-in, not part of the uiop stub lowering: Common
-			// Lisp has no getenv, so the qualified name is the only spelling. Dispatched
-			// here, ahead of JvmFunctionCallCompiler's expandUiopStubCall.
-			if (qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.GETENV)) {
-				JvmGetenvCompiler.compile(cons, ctx, className);
-				return;
-			}
 			// The uiop MACROS with real expansions. A macro cannot reach the uiop stub
 			// lowering (which only sees function-call shapes), and these are not stubs:
 			// smart-buffer's disk-spill path runs with-temporary-file, and the
@@ -548,6 +541,12 @@ final class JvmExprCompiler {
 				}
 				case LispNames.CLOSE_INTERNAL -> JvmCloseCompiler.compile(cons, ctx, className);
 				case LispNames.PROBE_FILE_INTERNAL -> JvmProbeFileCompiler.compile(cons, ctx, className);
+				// The environment primitives behind uiop:getenv / uiop:getcwd. The public
+				// names are Lisp (uiop-os.lisp): getenv consults the override map a
+				// (setf (uiop:getenv ...)) wrote before falling back here, and getcwd
+				// turns a nil answer into its not-implemented-error.
+				case LispNames.HOST_GETENV -> JvmGetenvCompiler.compile(cons, ctx, className);
+				case LispNames.HOST_GETCWD -> JvmGetcwdCompiler.compile(cons, ctx, className);
 				case LispNames.LIST_DIRECTORY -> JvmListDirectoryCompiler.compile(cons, ctx, className);
 				case LispNames.SLEEP ->
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandSleep(cons, false), ctx, className);

@@ -42,6 +42,7 @@ and metaprogramming.
 |----------|---------|
 | `lisp-implementation-type` | Implementation name string |
 | `lisp-implementation-version` | Version string — `rontolisp:version` (`LispNames.java:1964`) is the non-CL analog we already ship |
+| `machine-instance` | The host name. Nothing here can answer it today, which is why `uiop:hostname` returns nil on all four backends (`.kb/uiop.md`, `uiop/os`'s decisions) — that member becomes one line over this |
 | `member` (done) | Already implemented |
 
 ### Random state

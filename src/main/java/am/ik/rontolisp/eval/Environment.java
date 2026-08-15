@@ -2257,10 +2257,14 @@ public final class Environment implements Scope {
 			}
 			return LispNil.INSTANCE;
 		}));
-		// uiop:getenv: the value of an environment variable as a string, or nil if unset.
-		// Homed in uiop, not cl: Common Lisp has no getenv, and uiop's is the portable
-		// spelling every implementation-independent library already uses.
-		String getenvName = LispNames.UIOP_GETENV;
+		// %host-getenv: the HOST's value for an environment variable as a string, or nil
+		// if unset. The public uiop:getenv is Lisp over this (uiop-os.lisp), consulting
+		// the (setf (uiop:getenv ...)) override map first -- no host lets a process
+		// rewrite its own environment, so the write is an overlay on every backend.
+		// Reading one is spelled uiop:getenv and only that: Common Lisp has no getenv,
+		// and uiop's is the portable spelling every implementation-independent library
+		// already uses.
+		String getenvName = LispNames.HOST_GETENV;
 		env.defineFunction(getenvName, new LispFunction(getenvName, args -> {
 			requireArgCount(getenvName, args, 1);
 			if (!(args.get(0) instanceof LispString name)) {
@@ -2268,6 +2272,23 @@ public final class Environment implements Scope {
 			}
 			String value = System.getenv(name.value());
 			return value == null ? LispNil.INSTANCE : new LispString(value);
+		}));
+		// %host-getcwd: the host's working-directory namestring, or nil where the host
+		// has no such notion (both WASM backends: WASI programs have preopened
+		// directories and no current one). uiop:getcwd is Lisp over this and turns the
+		// nil into its not-implemented-error, so the backends share one definition.
+		env.defineFunction(LispNames.HOST_GETCWD, new LispFunction(LispNames.HOST_GETCWD, args -> {
+			requireArgCount(LispNames.HOST_GETCWD, args, 0);
+			String cwd;
+			try {
+				cwd = System.getProperty("user.dir");
+			}
+			catch (RuntimeException ex) {
+				// A host without system properties (the browser playground) has no
+				// working directory to answer, which is the same nil as WASI's.
+				cwd = null;
+			}
+			return cwd == null || cwd.isEmpty() ? LispNil.INSTANCE : new LispString(cwd);
 		}));
 		// isqrt: exact integer square root (floor of the real square root).
 		env.defineFunction(LispNames.ISQRT, new LispFunction(LispNames.ISQRT, args -> {

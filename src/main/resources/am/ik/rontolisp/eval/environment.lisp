@@ -1,10 +1,13 @@
-;;;; environment.lisp -- uiop:getenv over wit-imported wasi:cli/environment@0.3.0.
+;;;; environment.lisp -- %host-getenv over wit-imported wasi:cli/environment@0.3.0.
 ;;;;
-;;;; This is the --component implementation (spliced by eval/EnvironmentLibrary when a
-;;;; --component program references uiop:getenv). The interpreter and the JVM keep
-;;;; System.getenv; Preview 1 keeps the environ_sizes_get / environ_get buffer scan
-;;;; (_getenv, WasmGetenvRuntimeBuilder) -- the host fills that buffer there, and a
-;;;; component has no preview1 host to fill it.
+;;;; This is the --component implementation of the HOST read behind uiop:getenv
+;;;; (spliced by eval/EnvironmentLibrary when a --component program reaches it). The
+;;;; public uiop:getenv is Lisp on every backend (uiop-os.lisp): it consults the
+;;;; override map a (setf (uiop:getenv name) value) wrote before asking the host.
+;;;; The interpreter and the JVM keep System.getenv; Preview 1 keeps the
+;;;; environ_sizes_get / environ_get buffer scan (_getenv, WasmGetenvRuntimeBuilder)
+;;;; -- the host fills that buffer there, and a component has no preview1 host to
+;;;; fill it.
 ;;;;
 ;;;; ONE binding serves every component variant, which is the point of doing it here
 ;;;; rather than in an adapter: the base / sockets blocks already declare
@@ -29,7 +32,7 @@
                       :interface "wasi:cli/environment@0.3.0"
                       :package %environ)
 
-(defun uiop/os:getenv (%getenv-name)
+(defun %host-getenv (%getenv-name)
   (do ((%getenv-rest (%environ:get-environment) (cdr %getenv-rest)))
       ((null %getenv-rest) nil)
     (if (string= (car (car %getenv-rest)) %getenv-name)

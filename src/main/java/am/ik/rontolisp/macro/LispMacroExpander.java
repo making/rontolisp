@@ -7880,7 +7880,7 @@ public final class LispMacroExpander {
 			LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION, LispNames.WITH_TEMPORARY_FILE,
 			LispNames.DEFINE_PACKAGE, LispNames.WITH_UPGRADABILITY, LispNames.NEST, LispNames.WHILE_COLLECTING,
 			LispNames.APPENDF, LispNames.LATEST_TIMESTAMP_F, LispNames.WITH_MUFFLED_CONDITIONS, LispNames.UIOP_DEBUG,
-			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME);
+			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME, LispNames.OS_COND);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -8233,6 +8233,27 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (uiop:os-cond clause...)} into a plain {@code (cond clause...)}.
+	 *
+	 * <p>
+	 * Upstream EVALUATES each clause's test at macroexpansion time and keeps the first
+	 * winner's body, because on some implementations the OS is a compile-time fact. Here
+	 * the OS predicates are ordinary runtime functions over {@code *features*}
+	 * ({@code uiop-os.lisp}), so the runtime {@code cond} -- which is upstream's own abcl
+	 * arm -- selects exactly the same clause, and does it without an expansion-time
+	 * evaluator the compile paths do not have.
+	 * @param cons the os-cond form
+	 * @return the equivalent cond form
+	 */
+	public static LispVal expandUiopOsCond(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		List<LispVal> rebuilt = new java.util.ArrayList<>();
+		rebuilt.add(new LispSymbol(LispNames.COND));
+		rebuilt.addAll(parts.subList(1, parts.size()));
+		return listToCons(rebuilt);
+	}
+
+	/**
 	 * Expands {@code (uiop:nest form...)} -- the anti-indentation macro -- by nesting
 	 * each form inside the previous one's tail, right to left:
 	 *
@@ -8538,6 +8559,7 @@ public final class LispMacroExpander {
 			case LispNames.WHEN_LET_STAR -> expandUiopWhenLetStar(cons);
 			case LispNames.WITH_DEPRECATION -> expandUiopWithDeprecation(cons);
 			case LispNames.WITH_UPGRADABILITY -> expandUiopWithUpgradability(cons);
+			case LispNames.OS_COND -> expandUiopOsCond(cons);
 			case LispNames.WITH_TEMPORARY_FILE -> expandUiopWithTemporaryFile(cons, unwindProtect);
 			case LispNames.NEST -> expandUiopNest(cons);
 			case LispNames.WHILE_COLLECTING -> expandUiopWhileCollecting(cons);

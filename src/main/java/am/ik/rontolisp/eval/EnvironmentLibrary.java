@@ -14,7 +14,6 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
-import am.ik.rontolisp.UiopExports;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
 import am.ik.rontolisp.reader.Features;
@@ -22,12 +21,12 @@ import am.ik.rontolisp.reader.LispReader;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The {@code --component} implementation of {@code uiop:getenv}: a Lisp-source library
- * ({@code environment.lisp}) over a wit-imported {@code wasi:cli/environment@0.3.0}
- * surface ({@code environment.wit}), both on the classpath. The interpreter and the JVM
- * keep {@code System.getenv}; Preview 1 keeps the {@code environ_sizes_get} /
- * {@code environ_get} buffer scan ({@code _getenv}, see
- * {@code WasmGetenvRuntimeBuilder}), which only a preview1 host can fill.
+ * The {@code --component} implementation of {@code %host-getenv} -- the host read behind
+ * {@code uiop:getenv}: a Lisp-source library ({@code environment.lisp}) over a
+ * wit-imported {@code wasi:cli/environment@0.3.0} surface ({@code environment.wit}), both
+ * on the classpath. The interpreter and the JVM keep {@code System.getenv}; Preview 1
+ * keeps the {@code environ_sizes_get} / {@code environ_get} buffer scan ({@code _getenv},
+ * see {@code WasmGetenvRuntimeBuilder}), which only a preview1 host can fill.
  *
  * <p>
  * ONE binding serves every component variant. On the base / sockets variants
@@ -56,9 +55,9 @@ public final class EnvironmentLibrary {
 
 	/**
 	 * The compile-path splice: when a {@code --component} program references
-	 * {@code uiop:getenv}, splice {@code environment.lisp} (its {@code wit-import}
-	 * directive already lowered). A no-op on every other backend and when the program
-	 * does not read the environment.
+	 * {@code %host-getenv} (which the spliced {@code uiop:getenv} definition does),
+	 * splice {@code environment.lisp} (its {@code wit-import} directive already lowered).
+	 * A no-op on every other backend and when the program does not read the environment.
 	 * @param program the top-level forms
 	 * @param backend the backend being compiled for
 	 * @return the program, spliced when applicable
@@ -108,14 +107,14 @@ public final class EnvironmentLibrary {
 		};
 	}
 
-	// Whether the symbol names uiop:getenv, in any source spelling (uiop:getenv,
-	// uiop::getenv, and the home sub-package's uiop/os:getenv): this scan runs before
-	// PackageResolver normalizes the program, so it must normalize itself, but a spliced
-	// library source is already canonical. There is deliberately no cl:getenv alias to
-	// recognize (.kb/time-environment-builtins.md).
+	// Whether the symbol names the HOST read behind uiop:getenv. It is the internal
+	// %host-getenv, not the uiop name: the public uiop:getenv is a Lisp definition on
+	// every backend (uiop-os.lisp) that consults the (setf (uiop:getenv ...)) override
+	// map first, and it is the one that calls this. The name is a rontolisp internal
+	// with no package qualifier, so there is no spelling to normalize -- and this pass
+	// runs after the uiop splice, which is what puts the reference in the program.
 	private static boolean namesGetenv(String symbolName) {
-		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(symbolName);
-		return qn != null && UiopExports.denotes(qn.pkg(), qn.member(), LispNames.GETENV);
+		return LispNames.HOST_GETENV.equals(symbolName);
 	}
 
 	// A defun head in any source spelling: bare defun, cl:defun and
@@ -130,8 +129,8 @@ public final class EnvironmentLibrary {
 				|| (LispNames.RONTOLISP_PKG.equals(qn.pkg()) && LispNames.ASYNC_DEFUN.equals(qn.member())));
 	}
 
-	// Whether the user program already defines uiop:getenv (a defun of it), so the
-	// splice does not collide with it -- the dedup guard every library splice carries.
+	// Whether the program already defines %host-getenv (a defun of it), so the splice
+	// does not collide with it -- the dedup guard every library splice carries.
 	private static boolean definesGetenv(List<LispVal> program) {
 		for (LispVal form : program) {
 			if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && isDefunHead(head.name())
