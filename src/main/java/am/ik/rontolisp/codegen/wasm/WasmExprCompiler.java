@@ -155,6 +155,10 @@ final class WasmExprCompiler {
 		// closure may run after the extent ended and restored the global.
 		if (ctx.specialVars.contains(name) && !ctx.captures.containsKey(name) && ctx.locals.containsKey(name)
 				&& ctx.globalIndices.containsKey(name)) {
+			if (WasmDynVars.handles(ctx, name)) {
+				WasmDynVars.emitRead(ctx, name, java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
+				return;
+			}
 			ctx.writer.write(Instruction.GET_GLOBAL);
 			ctx.writer.writeUnsignedLeb128(java.util.Objects.requireNonNull(ctx.globalIndices.get(name)));
 			return;
@@ -189,9 +193,14 @@ final class WasmExprCompiler {
 		}
 		// A top-level global variable: read from its module-level wasm global. Works from
 		// any function body, so a defun/lambda can reference a defvar/defparameter
-		// global.
+		// global. --reentrant: a dynamically-bound special reads DYNAMIC-FIRST through
+		// the per-call task record (WasmDynVars), the global being only its default.
 		Integer globalIndex = ctx.globalIndices.get(name);
 		if (globalIndex != null) {
+			if (WasmDynVars.handles(ctx, name)) {
+				WasmDynVars.emitRead(ctx, name, globalIndex);
+				return;
+			}
 			ctx.writer.write(Instruction.GET_GLOBAL);
 			ctx.writer.writeUnsignedLeb128(globalIndex);
 			return;

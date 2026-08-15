@@ -194,7 +194,8 @@ Boundary details beyond the scalar types:
   future that `rontolisp:await` resolves, the build prints the host's
   obligations (`Suspending` on the import, `promising` on the exports that can
   reach it, serialised calls — a re-entered export refuses with a trap instead
-  of corrupting both calls), and a call reachable from a top-level form of a
+  of corrupting both calls, unless the module was compiled
+  [`--reentrant`](#overlapping-calls---reentrant)), and a call reachable from a top-level form of a
   `--no-wasi` module is a compile error (`_initialize` cannot suspend). The
   [reference page](../reference/functions/rontolisp-wasm-import.md) has the
   full contract.
@@ -388,3 +389,50 @@ three lines above.
 is the exception, and says so: it declares its `rontolisp:wasm-export` by hand,
 and only the *synthesized* bridge is recognised as the envelope's own entry
 point, so no `worker()` is written for it and its host stays hand-written.
+
+## Overlapping Calls (--reentrant)
+
+A module that can suspend refuses a second call by default: nothing in it owns
+its state per call, so every export wrapper carries a re-entry guard and the
+build's obligation line says *serialise calls*. That is correct, and it costs
+the whole width of an I/O-bound workload — eight concurrent upstream round
+trips through one serialised instance take eight round trips. One instance per
+in-flight call avoids the queue but pays an instantiation per call and a GC
+heap per instance.
+
+`--reentrant` is the opt-in that makes overlap sound on **one** instance: the
+module then owns its per-call state, the guard is dropped, and a JSPI host may
+start a call while another is parked. What overlaps is the parked time — one
+stack still runs at a time — so this buys I/O overlap, never CPU parallelism.
+
+What moves, and what a host owes for it:
+
+- Every dynamically bound special variable lives in a per-call task record
+  instead of the shared module global, so two overlapped calls binding the
+  same variable each read their own binding back.
+- Linear-memory staging that must survive a park moves off the scratch stack
+  into recycled park blocks (`__ronto_park_alloc` / `__ronto_park_free`, both
+  exported). Three rules follow: a `:string`/`:s-expr` **export result**'s
+  `(ptr, len)` is a park block the *reader* frees after decoding; a
+  `:string`/`:s-expr` **import result** must be written into a park block,
+  which the module frees; and a `:bytes` receive buffer a host passes into an
+  export must be a park block too.
+- An arena bracket (`__ronto_alloc_mark` / `__ronto_alloc_reset`) around an
+  entry call is popped *synchronously* the moment the call starts — the
+  arguments are consumed at entry — and the reset never goes below a live park
+  block.
+
+[`--emit-js-glue`](#generating-the-host-glue---emit-js-glue) writes all of
+this and drops the queue, so a generated host needs nothing by hand; the
+build's obligation lines state the same rules for a hand-written one.
+
+The flag requires a program that can suspend (an `:async t` import, or
+`--host-fetch` with `rontolisp:fetch` used) and a `--no-wasi` core module. It
+cannot be combined with
+[`--host-boundary=streaming`](#choosing-the-body-boundary---host-boundary) —
+its body imports are a host-side cursor ("the current request's body") with no
+per-call identity, exactly what overlapped calls lack — or with `--dynamic`.
+Reach for it when a workload is I/O-bound *and* cannot afford an instance per
+request: measured on the envelope Worker shape, eight concurrent 100 ms
+upstream round trips answer in about 125 ms on one instance, against about
+800 ms serialised.

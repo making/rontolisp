@@ -170,14 +170,24 @@ final class WasmSetqCompiler {
 		// A top-level global variable (not shadowed by a lexical here): store into its
 		// module-level wasm global. Works from any function body, so a defun/lambda can
 		// assign a global. The eval mirror still runs at top level (no-op elsewhere).
+		// --reentrant: a dynamically-bound special's setq assigns the ACTIVE binding in
+		// this call's task record when there is one -- the CL rule -- and the global
+		// default otherwise (WasmDynVars.emitWrite).
 		Integer globalIndex = ctx.globalIndices.get(name);
 		if (slot == null && globalIndex != null) {
 			WasmExprCompiler.compileExpr(valueExpr, ctx);
 			int tmpSlot = ctx.allocTemp();
-			ctx.writer.write(Instruction.TEE_LOCAL);
-			ctx.writer.writeUnsignedLeb128(tmpSlot);
-			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(globalIndex);
+			if (WasmDynVars.handles(ctx, name)) {
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
+				WasmDynVars.emitWrite(ctx, name, globalIndex, tmpSlot);
+			}
+			else {
+				ctx.writer.write(Instruction.TEE_LOCAL);
+				ctx.writer.writeUnsignedLeb128(tmpSlot);
+				ctx.writer.write(Instruction.SET_GLOBAL);
+				ctx.writer.writeUnsignedLeb128(globalIndex);
+			}
 			mirrorTopLevelGlobal(name, tmpSlot, ctx);
 			// Leave the assigned value on the stack as the form's result.
 			ctx.writer.write(Instruction.GET_LOCAL);
@@ -199,9 +209,14 @@ final class WasmSetqCompiler {
 	// A special that is dual-bound here (a lexical slot/capture established by a
 	// special-named let, see WasmLetCompiler): the assignment must reach the DYNAMIC
 	// binding too, so a called function reading the special sees it. Stack-neutral.
+	// --reentrant: the dynamic half lives in the per-call task record (WasmDynVars).
 	private static void dualWriteSpecialGlobal(String name, int valueSlot, WasmLispCompiler.Ctx ctx) {
 		Integer globalIndex = ctx.globalIndices.get(name);
 		if (globalIndex == null || !ctx.specialVars.contains(name)) {
+			return;
+		}
+		if (WasmDynVars.handles(ctx, name)) {
+			WasmDynVars.emitWrite(ctx, name, globalIndex, valueSlot);
 			return;
 		}
 		ctx.writer.write(Instruction.GET_LOCAL);

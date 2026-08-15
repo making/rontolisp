@@ -83,6 +83,8 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	private final boolean hostFetch;
 
+	private final boolean reentrant;
+
 	/**
 	 * The one import a {@code --host-random} module carries: preview1's
 	 * {@code random_get(buf, len) -> errno} signature exactly (so a host can forward its
@@ -261,6 +263,39 @@ public final class WasmLispCompiler implements LispCompiler {
 	 */
 	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
 			boolean simd, boolean hostRandom, boolean hostFetch) {
+		this(dynamic, component, noWasi, optimize, serve, simd, hostRandom, hostFetch, false);
+	}
+
+	/**
+	 * Creates a new WASM compiler.
+	 * @param dynamic see {@link #WasmLispCompiler(boolean)}
+	 * @param component see {@link #WasmLispCompiler(boolean, boolean)}
+	 * @param noWasi see {@link #WasmLispCompiler(boolean, boolean, boolean)}
+	 * @param optimize see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel)}
+	 * @param serve see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean)}
+	 * @param simd see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean)}
+	 * @param hostRandom see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean, boolean)}
+	 * @param hostFetch see
+	 * {@link #WasmLispCompiler(boolean, boolean, boolean, OptimizeLevel, boolean, boolean, boolean, boolean)}
+	 * @param reentrant when {@code true} (the CLI's {@code --reentrant}), the module OWNS
+	 * its per-call state and a JSPI host may OVERLAP calls into one instance instead of
+	 * serialising them: the export wrappers drop the re-entry guard, every
+	 * dynamically-bound special moves into a per-call task record swapped around the
+	 * suspending host calls (the JVM {@code _d$} hybrid shape), and linear-memory staging
+	 * that must survive a park moves off the {@code HEAP_PTR} scratch stack into recycled
+	 * park blocks ({@code __ronto_park_alloc}/{@code __ronto_park_free}). What it buys is
+	 * I/O overlap on one instance -- one stack still runs at a time. Requires a program
+	 * that CAN suspend (an {@code :async t} import, or {@code --host-fetch} with
+	 * {@code rontolisp:fetch} used) and changes the host ABI of the memory-typed
+	 * boundaries (see the build's obligation lines); without the flag the output is
+	 * byte-identical to a build that never knew about it
+	 */
+	public WasmLispCompiler(boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean serve,
+			boolean simd, boolean hostRandom, boolean hostFetch, boolean reentrant) {
 		this.dynamic = dynamic;
 		this.component = component;
 		this.noWasi = noWasi;
@@ -269,6 +304,22 @@ public final class WasmLispCompiler implements LispCompiler {
 		this.simd = simd;
 		this.hostRandom = hostRandom;
 		this.hostFetch = hostFetch;
+		this.reentrant = reentrant;
+		// A component's calls are driven by the component-model scheduler, not by JSPI,
+		// and its per-call machinery (cabi marks, task records) is its own; the flag is
+		// a core-module (JSPI host) contract.
+		if (reentrant && component) {
+			throw new UnsupportedOperationException("--reentrant cannot be combined with --component: overlapped calls "
+					+ "are a JSPI (core module) host contract; a component's concurrency is the component model's");
+		}
+		// Late binding reads specials through the eval mirror (GLOBAL_ENV), which is one
+		// per instance, not one per call -- a --dynamic module would keep the very
+		// corruption the per-task store exists to remove.
+		if (reentrant && dynamic) {
+			throw new UnsupportedOperationException(
+					"--reentrant cannot be combined with --dynamic: late-bound variable "
+							+ "reads go through the eval mirror, which is per-instance state the per-task store does not cover");
+		}
 		// A serve component's entire surface is wasi:http -- its imports AND its
 		// handler export -- so a serve build cannot promise "no WASI imports".
 		if (this.serve && noWasi) {
@@ -1817,6 +1868,16 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int OSTREAM_FREE_ADDR = 236;
 
+	// The --reentrant park-block allocator's two cells (240/244, still below the
+	// DATA_BASE_OFFSET=256 headroom): the head of the free list of park blocks (0 =
+	// empty, which untouched memory already says), and the park FLOOR -- the bump-heap
+	// top just after the newest carve, which every arena pop of a reentrant module
+	// clamps to so no pop can hand a live park block's bytes out again. See
+	// WasmExportRuntimeBuilder.buildParkAllocBody.
+	static final int PARK_FREE_ADDR = 240;
+
+	static final int PARK_FLOOR_ADDR = 244;
+
 	// The serve memory module's (mem-http-client.wat) canonical-ABI bump-pointer CELL,
 	// and
 	// the allocation base just above its 8 bytes. cabi_realloc keeps its pointer in this
@@ -1921,9 +1982,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (!suspendingImports.isEmpty()) {
 			CompileWarnings.warn(":async t: this module imports " + String.join(", ", suspendingImports.values())
 					+ ", declared suspending. The host must wrap each in WebAssembly.Suspending (JSPI), enter the"
-					+ " exports that can reach one through WebAssembly.promising, and serialise calls (a suspended"
-					+ " module can be re-entered; a re-entered export refuses with a trap instead of corrupting"
-					+ " both calls); a host that answers synchronously is equally valid -- the call then returns"
+					+ " exports that can reach one through WebAssembly.promising, and "
+					+ (this.reentrant ? "may OVERLAP calls (--reentrant: the module owns its per-call state; a"
+							+ " :string/:s-expr result crosses as a __ronto_park_alloc block the reader frees with"
+							+ " __ronto_park_free)"
+							: "serialise calls (a suspended"
+									+ " module can be re-entered; a re-entered export refuses with a trap instead of"
+									+ " corrupting both calls)")
+					+ "; a host that answers synchronously is equally valid -- the call then returns"
 					+ " an already-settled future either way");
 			if (anySuspendingImportEscapes) {
 				// Whoever received it can call it, so the per-export answer below would
@@ -1969,6 +2035,36 @@ public final class WasmLispCompiler implements LispCompiler {
 		// global, no instruction.
 		boolean hostMaySuspend = !suspendingImports.isEmpty()
 				|| (this.hostFetch && programUsesSymbol(program, LispNames.FETCH_QUALIFIED));
+		// --reentrant relaxes the guard, so it only means anything where the guard would
+		// have existed: a module nothing can suspend has no overlap to allow.
+		if (this.reentrant && !hostMaySuspend) {
+			throw new UnsupportedOperationException("--reentrant requires a program that can suspend (a"
+					+ " rontolisp:wasm-import declared :async t, or --host-fetch with rontolisp:fetch used):"
+					+ " without a suspension no host can overlap calls, so the flag would buy nothing");
+		}
+		// The streaming boundary's body imports are a GLOBAL cursor on the host side --
+		// "the current request's body", "the last fetch's reply" -- which is exactly the
+		// per-call identity overlapped calls do not have. Until the body protocol
+		// carries a call handle, refuse the combination instead of shipping a cursor
+		// that serves one call another call's octets (the envelope boundary has no
+		// cursor and is the overlap-ready shape).
+		if (this.reentrant) {
+			for (LispVal form : program) {
+				if (!WasmImportCompiler.isImportForm(form)) {
+					continue;
+				}
+				WasmImportCompiler.Decl decl = WasmImportCompiler.parse((LispCons) form);
+				if (ReactorEnvelope.HOST_MODULE.equals(decl.module())
+						&& (ReactorEnvelope.REQUEST_BODY_FIELD.equals(decl.field())
+								|| ReactorEnvelope.RESPONSE_BODY_FIELD.equals(decl.field())
+								|| FetchResponseShape.HOST_BODY_IMPORT_FIELD.equals(decl.field()))) {
+					throw new UnsupportedOperationException("--reentrant cannot be combined with the streaming body"
+							+ " boundary: env." + decl.field() + " is a host-side cursor with no per-call identity, so"
+							+ " overlapped calls would read each other's octets. Use --host-boundary=envelope (the"
+							+ " default), whose boundary carries no cursor");
+				}
+			}
+		}
 		if (this.noWasi) {
 			// Every --no-wasi refusal is a call-time condition, which is right for a call
 			// site that may be dead -- but reached from a TOP-LEVEL form there is nothing
@@ -2000,9 +2096,14 @@ public final class WasmLispCompiler implements LispCompiler {
 								+ " head's own \"body\" key (--host-boundary=envelope).")
 						+ " A host may answer synchronously; a host"
 						+ " whose fetch suspends (WebAssembly.Suspending / JSPI) must enter every export through"
-						+ " WebAssembly.promising, and must serialise calls (a suspended module can be"
-						+ " re-entered; a re-entered export refuses with a trap instead of corrupting both"
-						+ " calls)");
+						+ " WebAssembly.promising, and "
+						+ (this.reentrant
+								? "may OVERLAP calls (--reentrant: the module owns its per-call state; a"
+										+ " :string/:s-expr result crosses as a __ronto_park_alloc block the reader"
+										+ " frees with __ronto_park_free)"
+								: "must serialise calls (a suspended module can be"
+										+ " re-entered; a re-entered export refuses with a trap instead of corrupting"
+										+ " both calls)"));
 			}
 			// A --no-wasi module has no filesystem, so file-opening forms lower to
 			// call-time error stubs. First, so every scan below (usesRead/usesEval,
@@ -2628,6 +2729,17 @@ public final class WasmLispCompiler implements LispCompiler {
 		// a global cell for its free readers too.
 		Set<String> specialVars = SpecialVarCollector.collect(program);
 		globals.addAll(specialVars);
+		// --reentrant: the specials that are ever DYNAMICALLY BOUND get a slot in the
+		// per-call task record (WasmDynVars); every other special keeps its plain
+		// module-global read. The JVM hybrid's decision procedure, and the JVM's
+		// contract with it: over-collection is only a read cost, under-collection is a
+		// compile-time throw at the binding site, never a silent process-global binding.
+		Map<String, Integer> dynSlots = new LinkedHashMap<>();
+		if (this.reentrant) {
+			for (String name : SpecialVarCollector.collectDynamicallyBound(program, specialVars)) {
+				dynSlots.put(name, dynSlots.size());
+			}
+		}
 		Map<String, Integer> globalIndices = new HashMap<>();
 		int nextGlobalIndex = GLOBAL_FENV + 1;
 		for (String g : globals) {
@@ -2665,13 +2777,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		// suspend and exports something, so every other module is byte-identical.
 		int lastModeGlobalIndex = this.serve ? serveInitGlobalIndex
 				: this.asyncMode ? taskSeqGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount;
-		int reentryGuardGlobalIndex = hostMaySuspend && !exportDecls.isEmpty() ? lastModeGlobalIndex + 1 : -1;
+		// --reentrant retires the guard (overlap is the point) and instead -- when any
+		// special is dynamically bound -- carries the CURRENT task record in a global of
+		// its own, swapped by the export wrappers and around the suspending host calls
+		// (WasmDynVars). Mutually exclusive with the guard, so they share the slot after
+		// lastModeGlobalIndex.
+		int reentryGuardGlobalIndex = hostMaySuspend && !exportDecls.isEmpty() && !this.reentrant
+				? lastModeGlobalIndex + 1 : -1;
+		int reentrantTaskGlobalIndex = this.reentrant && !dynSlots.isEmpty() ? lastModeGlobalIndex + 1 : -1;
 		// The cached symbol t (built lazily by _t_sym) and the raw-local sentinel (a
 		// private TYPE_CELL instance no user value can be ref.eq to; "shadow ==
 		// sentinel" marks an unboxed local's raw i64 as authoritative -- null cannot
 		// mark it, because nil IS null), always the LAST globals so every mode-gated
 		// index above keeps its value.
-		int tSymGlobalIndex = (reentryGuardGlobalIndex >= 0 ? reentryGuardGlobalIndex : lastModeGlobalIndex) + 1;
+		int tSymGlobalIndex = Math.max(Math.max(reentryGuardGlobalIndex, reentrantTaskGlobalIndex), lastModeGlobalIndex)
+				+ 1;
 		int rawSentinelGlobalIndex = tSymGlobalIndex + 1;
 		// The string output-stream buffer table (a TYPE_HASH_BUCKETS of $str_bytes,
 		// created by the first _make_str_ostream and doubled from there): the GC root the
@@ -2859,6 +2979,9 @@ public final class WasmLispCompiler implements LispCompiler {
 			.currentTaskGlobalIndex(currentTaskGlobalIndex)
 			.serveInitGlobalIndex(serveInitGlobalIndex)
 			.reentryGuardGlobalIndex(reentryGuardGlobalIndex)
+			.reentrant(this.reentrant)
+			.dynSlots(dynSlots)
+			.reentrantTaskGlobalIndex(reentrantTaskGlobalIndex)
 			.callbackExports(cbMode ? this.callbackExportsForTest : Set.of());
 
 		// Passes 2a-2c emit function BODIES, and a body is the only consumer of a string
@@ -2972,6 +3095,11 @@ public final class WasmLispCompiler implements LispCompiler {
 		startWriter.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
 		startWriter.writeUnsignedLeb128(TYPE_STR_BYTES);
 		startWriter.write(Instruction.DROP);
+
+		// --reentrant with dynamically-bound specials: the LOAD PATH binds against a
+		// task record too (a top-level let of a special), so seed one before any user
+		// code runs -- binding sites then never need a null check (WasmDynVars).
+		WasmDynVars.emitTaskBegin(ctx);
 
 		// A program that redirects *standard-output* / *standard-input* (the variable has
 		// a module global only then) seeds its global default with the designator t (the
@@ -3187,6 +3315,21 @@ public final class WasmLispCompiler implements LispCompiler {
 		int bytesCopyFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount + 1 : -1;
 		int bytesFillFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount + 2 : -1;
 		int bytesHelperCount = bytesBoundary ? 3 : 0;
+		// The --reentrant park-block allocator
+		// (WasmExportRuntimeBuilder.buildParkAllocBody):
+		// _park_alloc / _park_free (both exported -- the host's cross-call staging must
+		// come from park blocks too) and _park_str_result (the export wrappers'
+		// :string/:s-expr result staging, host-freed). Appended after the bytes helpers;
+		// present exactly when a reentrant module has any memory-typed boundary, so
+		// every other module is byte-identical.
+		boolean parkHelpers = this.reentrant && memoryHelpers;
+		int parkAllocFuncIndex = parkHelpers ? exportHelperBase + memoryHelperCount + bytesHelperCount : -1;
+		int parkFreeFuncIndex = parkHelpers ? parkAllocFuncIndex + 1 : -1;
+		int parkStrResultFuncIndex = parkHelpers ? parkAllocFuncIndex + 2 : -1;
+		int parkHelperCount = parkHelpers ? 3 : 0;
+		ctxBuilder.parkAllocFuncIndex(parkAllocFuncIndex)
+			.parkFreeFuncIndex(parkFreeFuncIndex)
+			.parkStrResultFuncIndex(parkStrResultFuncIndex);
 		// __ronto_seed_random (i64) -> (): the host's escape hatch out of the --no-wasi
 		// generator's constant start state (WasmIoRuntimeBuilder.buildSeedRandomBody).
 		// Appended after the memory helpers, so it shifts only the COMPUTED wrapper/ABI
@@ -3196,7 +3339,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// the hook is not emitted at all rather than exported as a no-op that a host
 		// could reasonably read as "seeding still matters here".
 		boolean seedRandom = this.noWasi && !this.component && !this.hostRandom;
-		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount + bytesHelperCount : -1;
+		int seedRandomFuncIndex = seedRandom ? exportHelperBase + memoryHelperCount + bytesHelperCount + parkHelperCount
+				: -1;
 		// __ronto_set_time (i64) -> (): the same move for the clock -- the host hands
 		// over the one value it really knows and the module could never invent
 		// (WasmIoRuntimeBuilder.buildSetTimeBody). Emitted on every --no-wasi CORE
@@ -3205,9 +3349,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// same reason: its top level runs at instantiation, so there is no window in
 		// which a host could set the time before the load-time reads.
 		boolean setTime = this.noWasi && !this.component;
-		int setTimeFuncIndex = setTime ? exportHelperBase + memoryHelperCount + bytesHelperCount + (seedRandom ? 1 : 0)
-				: -1;
-		int helperFuncCount = memoryHelperCount + bytesHelperCount + (seedRandom ? 1 : 0) + (setTime ? 1 : 0);
+		int setTimeFuncIndex = setTime
+				? exportHelperBase + memoryHelperCount + bytesHelperCount + parkHelperCount + (seedRandom ? 1 : 0) : -1;
+		int helperFuncCount = memoryHelperCount + bytesHelperCount + parkHelperCount + (seedRandom ? 1 : 0)
+				+ (setTime ? 1 : 0);
 		// Unique host-import slots. Two Lisp wrappers can bind the SAME host function --
 		// a serve+fetch program's two spliced halves may each call
 		// wasi:http/types.fields-append, body-stream-read, ... in their own
@@ -3541,7 +3686,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 			this.hostGlue = new HostGlueEmitter.Surface(glueImports, entropy, glueExports, hostArena, seedRandom,
-					setTime, "_initialize", derivedFetch, envelopeExport);
+					setTime, "_initialize", derivedFetch, envelopeExport, this.reentrant);
 		}
 
 		// Canonical string ABI for --component :string/:s-expr exports (todo 92 Tier 2):
@@ -4618,6 +4763,20 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.write(Type.I32);
 					});
 				}
+				// The --reentrant _park_str_result signature ((ref null eq)) -> (i32,
+				// i32). _park_alloc reuses the fixed TYPE_LOOKUP and _park_free the
+				// arena-reset signature above (hostArena is always on when parkHelpers
+				// is), so this is the only park type appended.
+				if (parkHelpers) {
+					types.add(w -> {
+						w.write(Type.FUNC);
+						w.write(1);
+						w.writeRefType(true, Type.EQ.code());
+						w.write(2);
+						w.write(Type.I32);
+						w.write(Type.I32);
+					});
+				}
 				// The host hooks' shared (i64) -> () signature, last of the appended
 				// block (a --no-wasi core module never takes the component string-ABI
 				// branch above). __ronto_seed_random and __ronto_set_time have the same
@@ -4956,12 +5115,22 @@ public final class WasmLispCompiler implements LispCompiler {
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 				}
-				// The host hooks, which share the (i64)->() signature following them.
-				if (seedRandom) {
+				// The --reentrant park helpers: _park_alloc ((i32)->i32, TYPE_LOOKUP),
+				// _park_free ((i32)->(), the arena-reset signature) and _park_str_result
+				// (the one appended park signature).
+				if (parkHelpers) {
+					fnDef.addFunction(TYPE_LOOKUP);
+					fnDef.addFunction(abiTypeBase + 1);
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0));
 				}
+				// The host hooks, which share the (i64)->() signature following them.
+				if (seedRandom) {
+					fnDef.addFunction(
+							abiTypeBase + (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0) + (parkHelpers ? 1 : 0));
+				}
 				if (setTime) {
-					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0));
+					fnDef.addFunction(
+							abiTypeBase + (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0) + (parkHelpers ? 1 : 0));
 				}
 				// Export wrapper functions (host-callable), one per
 				// (rontolisp:wasm-export ...).
@@ -5124,6 +5293,19 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(Instruction.END);
 					});
 				}
+				// --reentrant: the CURRENT task record at reentrantTaskGlobalIndex, a
+				// (mut (ref null eq)) = null -- the per-call dynamic-variable store
+				// (WasmDynVars), set by _start for the load path and by every export
+				// wrapper on entry, saved/restored around the suspending host calls.
+				if (reentrantTaskGlobalIndex >= 0) {
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
+						g.write(Instruction.END);
+					});
+				}
 				// The cached symbol t at tSymGlobalIndex, a (mut (ref null eq)) = null,
 				// built lazily by _t_sym; then the raw-local sentinel at
 				// rawSentinelGlobalIndex, an immutable (ref null eq) initialized by the
@@ -5254,6 +5436,14 @@ public final class WasmLispCompiler implements LispCompiler {
 						// buffer at the boundary, which it cannot see.
 						exports.addExport("__ronto_alloc_mark", ExternalKind.FUNCTION, allocMarkFuncIndex);
 						exports.addExport("__ronto_alloc_reset", ExternalKind.FUNCTION, allocResetFuncIndex);
+					}
+					// --reentrant: the park-block allocator, for host staging that must
+					// stay valid while a call is parked (a receive buffer handed into an
+					// export, a :string import result) -- the arena bracket cannot cover
+					// those, its pops being what overlapped calls interleave.
+					if (parkHelpers) {
+						exports.addExport("__ronto_park_alloc", ExternalKind.FUNCTION, parkAllocFuncIndex);
+						exports.addExport("__ronto_park_free", ExternalKind.FUNCTION, parkFreeFuncIndex);
 					}
 					// The host's seed hook: a --no-wasi module's `random` runs on its
 					// own generator, whose start state is a constant unless a host
@@ -5582,7 +5772,10 @@ public final class WasmLispCompiler implements LispCompiler {
 					code.addFunction(WasmExportRuntimeBuilder.buildStrFromMemBody());
 					if (hostArena) {
 						code.addFunction(WasmExportRuntimeBuilder.buildAllocMarkBody());
-						code.addFunction(WasmExportRuntimeBuilder.buildAllocResetBody());
+						// A reentrant module's arena pops also clamp to the park floor:
+						// a park block carved while a bracket was open holds another
+						// in-flight call's staging.
+						code.addFunction(WasmExportRuntimeBuilder.buildAllocResetBody(this.reentrant));
 					}
 				}
 				// The :bytes marshalling helper bodies, matching the function-section
@@ -5591,6 +5784,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					code.addFunction(WasmExportRuntimeBuilder.buildBytesFromMemBody());
 					code.addFunction(WasmExportRuntimeBuilder.buildBytesCopyBody());
 					code.addFunction(WasmExportRuntimeBuilder.buildBytesFillBody());
+				}
+				// The --reentrant park-block allocator bodies, matching the
+				// function-section order.
+				if (parkHelpers) {
+					code.addFunction(WasmExportRuntimeBuilder.buildParkAllocBody(allocFuncIndex));
+					code.addFunction(WasmExportRuntimeBuilder.buildParkFreeBody());
+					code.addFunction(WasmExportRuntimeBuilder.buildParkStrResultBody(parkAllocFuncIndex));
 				}
 				// __ronto_seed_random: the host's replacement for the generator's
 				// constant start state, matching the function-section order.
@@ -6959,6 +7159,39 @@ public final class WasmLispCompiler implements LispCompiler {
 		int reentryGuardGlobalIndex = -1;
 
 		/**
+		 * Whether this module is compiled {@code --reentrant}: the guard is retired, the
+		 * dynamically-bound specials read/write/bind through the per-call task record
+		 * ({@link WasmDynVars}), and cross-park linear staging goes through the
+		 * park-block allocator.
+		 */
+		boolean reentrant;
+
+		/**
+		 * {@code --reentrant}: dynamically-bound special name to its slot in the per-call
+		 * task record; empty otherwise.
+		 */
+		Map<String, Integer> dynSlots = Map.of();
+
+		/**
+		 * {@code --reentrant}: the global index of the CURRENT task record (a {@code mut
+		 * (ref null eq)} holding a {@code TYPE_HASH_BUCKETS}), or -1 when no special is
+		 * dynamically bound (or outside reentrant mode).
+		 */
+		int reentrantTaskGlobalIndex = -1;
+
+		/**
+		 * {@code --reentrant}: the {@code _park_alloc} function index, or -1 when the
+		 * module has no memory-typed boundary.
+		 */
+		int parkAllocFuncIndex = -1;
+
+		/** {@code --reentrant}: the {@code _park_free} function index, or -1. */
+		int parkFreeFuncIndex = -1;
+
+		/** {@code --reentrant}: the {@code _park_str_result} function index, or -1. */
+		int parkStrResultFuncIndex = -1;
+
+		/**
 		 * Export names (beyond serve's {@code handle}) given the CALLBACK-lift treatment
 		 * (the test hook); empty on every CLI path.
 		 */
@@ -7052,6 +7285,12 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.currentTaskGlobalIndex = builder.currentTaskGlobalIndex;
 			this.serveInitGlobalIndex = builder.serveInitGlobalIndex;
 			this.reentryGuardGlobalIndex = builder.reentryGuardGlobalIndex;
+			this.reentrant = builder.reentrant;
+			this.dynSlots = builder.dynSlots;
+			this.reentrantTaskGlobalIndex = builder.reentrantTaskGlobalIndex;
+			this.parkAllocFuncIndex = builder.parkAllocFuncIndex;
+			this.parkFreeFuncIndex = builder.parkFreeFuncIndex;
+			this.parkStrResultFuncIndex = builder.parkStrResultFuncIndex;
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
 			this.duplicatedDefunNames = builder.duplicatedDefunNames;
@@ -7168,6 +7407,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			private int serveInitGlobalIndex = -1;
 
 			private int reentryGuardGlobalIndex = -1;
+
+			private boolean reentrant;
+
+			private Map<String, Integer> dynSlots = Map.of();
+
+			private int reentrantTaskGlobalIndex = -1;
+
+			private int parkAllocFuncIndex = -1;
+
+			private int parkFreeFuncIndex = -1;
+
+			private int parkStrResultFuncIndex = -1;
 
 			private Set<String> callbackExports = Set.of();
 
@@ -7433,6 +7684,36 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder reentryGuardGlobalIndex(int reentryGuardGlobalIndex) {
 				this.reentryGuardGlobalIndex = reentryGuardGlobalIndex;
+				return this;
+			}
+
+			Builder reentrant(boolean reentrant) {
+				this.reentrant = reentrant;
+				return this;
+			}
+
+			Builder dynSlots(Map<String, Integer> dynSlots) {
+				this.dynSlots = dynSlots;
+				return this;
+			}
+
+			Builder reentrantTaskGlobalIndex(int reentrantTaskGlobalIndex) {
+				this.reentrantTaskGlobalIndex = reentrantTaskGlobalIndex;
+				return this;
+			}
+
+			Builder parkAllocFuncIndex(int parkAllocFuncIndex) {
+				this.parkAllocFuncIndex = parkAllocFuncIndex;
+				return this;
+			}
+
+			Builder parkFreeFuncIndex(int parkFreeFuncIndex) {
+				this.parkFreeFuncIndex = parkFreeFuncIndex;
+				return this;
+			}
+
+			Builder parkStrResultFuncIndex(int parkStrResultFuncIndex) {
+				this.parkStrResultFuncIndex = parkStrResultFuncIndex;
 				return this;
 			}
 

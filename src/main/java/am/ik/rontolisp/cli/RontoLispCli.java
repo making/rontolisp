@@ -173,7 +173,7 @@ public final class RontoLispCli {
 					OptimizeLevel.parse(options.get("--optimize")), options.contains("--no-gc"),
 					options.contains("--simd"), options.contains("--no-prune"), options.contains("--emit-wit"),
 					options.contains("--emit-js-glue"), options.contains("--host-random"),
-					options.contains("--host-fetch"),
+					options.contains("--host-fetch"), options.contains("--reentrant"),
 					options.contains("--host-boundary") ? HostBoundary.parse(options.get("--host-boundary")) : null,
 					inputFile);
 		}
@@ -187,6 +187,10 @@ public final class RontoLispCli {
 					throw new UnsupportedOperationException(
 							flag + " writes a file next to a compiled output, so it needs -o <file>");
 				}
+			}
+			if (options.contains("--reentrant")) {
+				throw new UnsupportedOperationException(
+						"--reentrant is a WASM module contract (overlapped JSPI calls), so it needs -o <file>.wasm");
 			}
 			interpret(source, baseDir, systemPath, options.contains("--simd"), inputFile);
 		}
@@ -340,7 +344,7 @@ public final class RontoLispCli {
 
 	private void compileToFile(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
 			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// The frontend records where every cons was read from, so a pass that fails long
 		// after the read -- a macro body that signals, an operator no backend knows, a
@@ -351,7 +355,7 @@ public final class RontoLispCli {
 		SourceProvenance.startRecording();
 		try {
 			compileRecorded(source, baseDir, systemPath, outputFile, dynamic, component, noWasi, optimize, noGc, simd,
-					noPrune, wit, jsGlue, hostRandom, hostFetch, hostBoundary, entryFile);
+					noPrune, wit, jsGlue, hostRandom, hostFetch, reentrant, hostBoundary, entryFile);
 		}
 		catch (RuntimeException ex) {
 			throw locateCompileFailure(ex);
@@ -382,7 +386,7 @@ public final class RontoLispCli {
 
 	private void compileRecorded(String source, @Nullable String baseDir, List<String> systemPath, String outputFile,
 			boolean dynamic, boolean component, boolean noWasi, OptimizeLevel optimize, boolean noGc, boolean simd,
-			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch,
+			boolean noPrune, boolean wit, boolean jsGlue, boolean hostRandom, boolean hostFetch, boolean reentrant,
 			@Nullable HostBoundary hostBoundary, @Nullable String entryFile) {
 		// --emit-wit describes a component's typed world, so it is meaningless for any
 		// other
@@ -439,6 +443,15 @@ public final class RontoLispCli {
 					+ " --component (whose host functions cross the canonical ABI, so its bodies are in band"
 					+ " already) or --no-gc (which imports nothing at all)"
 					+ " -- e.g. -o out.wasm --no-wasi --host-boundary=" + HostBoundary.ENVELOPE.spelling());
+		}
+		// --reentrant relaxes the wasm-GC reactor's one-call-at-a-time contract, so it
+		// means nothing anywhere else; the finer guards (needs a suspending import,
+		// no streaming boundary, no --dynamic) live in the compiler, next to the
+		// contracts they protect.
+		if (reentrant && !(noWasi && !component && !noGc && outputFile.endsWith(".wasm"))) {
+			throw new UnsupportedOperationException("--reentrant requires --no-wasi and a .wasm output, without"
+					+ " --component (whose concurrency is the component model's) or --no-gc (which has no suspending"
+					+ " imports to overlap on) -- e.g. -o out.wasm --no-wasi --host-fetch --reentrant");
 		}
 		HostBoundary boundary = hostBoundary == null ? HostBoundary.ENVELOPE : hostBoundary;
 		// Inline top-level (load "path") forms at compile time: the compilers collect
@@ -715,7 +728,7 @@ public final class RontoLispCli {
 				// `random` draw is the host's entropy, which is also what makes
 				// rontolisp:random-bytes sound again.
 				WasmLispCompiler compiler = new WasmLispCompiler(dynamic, component, noWasi, optimize, serve, simd,
-						hostRandom, hostFetch);
+						hostRandom, hostFetch, reentrant);
 				bytes = compiler.compile(program);
 				witText = compiler.componentWit();
 				if (glueFile != null) {
@@ -918,6 +931,16 @@ public final class RontoLispCli {
 		this.out.println("                                  upstream reply you would forward a chunk at a time");
 		this.out.println("                     Either way --emit-js-glue writes the whole host half, so the");
 		this.out.println("                     JavaScript is three lines on both");
+		this.out.println("  --reentrant        With --no-wasi (core module only, and a suspending import: an");
+		this.out.println("                     :async t wasm-import or --host-fetch with fetch used): let a JSPI");
+		this.out.println("                     host OVERLAP calls into ONE instance instead of serialising them.");
+		this.out.println("                     The module then owns its per-call state -- dynamic (special)");
+		this.out.println("                     bindings move into a per-call task record, and cross-call staging");
+		this.out.println("                     into __ronto_park_alloc/__ronto_park_free blocks (a :string result");
+		this.out.println("                     is one the reader frees; --emit-js-glue writes all of it). Buys");
+		this.out.println("                     I/O overlap, never CPU parallelism: one stack still runs at a");
+		this.out.println("                     time. Not combinable with --host-boundary=streaming (its body");
+		this.out.println("                     cursors have no per-call identity yet) or --dynamic");
 		this.out.println("  --optimize[=LEVEL] Dead-code-eliminate the compiled output");
 		this.out.println("                     WASM: drop functions unreachable from the exports/_start, in");
 		this.out.println("                     --component mode too; great with --no-wasi");

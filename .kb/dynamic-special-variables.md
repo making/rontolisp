@@ -151,22 +151,41 @@ in general -- see `.todo/190` for a wasmCloud concurrency trap with a different
 cause.
 
 **That trigger FIRED (2026-08-12), and the answer is a refusal at the export
-boundary, not (yet) a per-task store.** A `--no-wasi` reactor whose host answers
-an import through JSPI (`WebAssembly.Suspending`, `.kb/wasm-import.md`) suspends
-the whole wasm stack mid-call and hands control back to the host's event loop,
-which may re-enter the export before the first call resumes -- exactly the
-"suspends a handler MID-extent" condition above, arriving through a host import
-rather than through `await`. Reproduced on node 24 `--experimental-wasm-jspi`
-(todo-337): two overlapped calls each binding the same special across the
-suspend read each other's binding back and leaked the outer value -- the exact
-pre-2026-07-27 JVM bug. The fix landed as the RE-ENTRY GUARD (todo-337,
-`.kb/wasm-import.md`): every export wrapper of a module that can suspend traps a
-second entry, so no two extents can interleave on the module global and the
-divergence's precondition -- one call at a time on one stack -- is re-established
-BY the module instead of assumed of the host. Re-evaluation trigger, restated:
-if the guard is ever relaxed to allow real overlap, the per-task store (the JVM
-`_d$` hybrid shape, byte-identical when nothing is let-bound) must land FIRST,
-together with a per-call allocator scope.
+boundary, plus -- opt-in -- a per-task store.** A `--no-wasi` reactor whose host
+answers an import through JSPI (`WebAssembly.Suspending`, `.kb/wasm-import.md`)
+suspends the whole wasm stack mid-call and hands control back to the host's
+event loop, which may re-enter the export before the first call resumes --
+exactly the "suspends a handler MID-extent" condition above, arriving through a
+host import rather than through `await`. Reproduced on node 24
+`--experimental-wasm-jspi` (todo-337): two overlapped calls each binding the
+same special across the suspend read each other's binding back and leaked the
+outer value -- the exact pre-2026-07-27 JVM bug. The fix landed as the RE-ENTRY
+GUARD (todo-337, `.kb/wasm-import.md`): every export wrapper of a module that
+can suspend traps a second entry, so no two extents can interleave on the
+module global and the divergence's precondition -- one call at a time on one
+stack -- is re-established BY the module instead of assumed of the host.
+
+**The restated trigger fired too (todo-348, 2026-08-15): `--reentrant` relaxes
+the guard, and the per-task store landed WITH it, first in the same change.**
+The shape is the JVM `_d$` hybrid ported to a per-CALL scope
+(`codegen.wasm/WasmDynVars`): only the specials
+`SpecialVarCollector.collectDynamicallyBound` names get a slot in a per-call
+TASK RECORD -- a `TYPE_HASH_BUCKETS` array of nullable `TYPE_CELL`s in a module
+global -- which every export wrapper creates on entry, `_start` seeds for the
+load path, and the import wrapper saves into a local and restores around the
+suspending host call (the one point another extent can run; a wrapper local
+survives the park). The JVM hybrid's rules carry over exactly: dynamic-first
+reads with the module global as the default, DUAL-BIND with the lexical slot for
+captures, dual `setq` (an active binding's cell, else the global -- the CL
+rule), `specialBindScopes` exit restores in the second spelling, over-collection
+a read cost and under-collection a compile-time throw at the binding site. The
+`.todo/192` unwind holes carry over unchanged -- neither widened nor narrowed.
+Every non-reentrant module is byte-identical (the guard and the divergence above
+stay its contract); a reentrant module with no dynamically-bound special gains
+no task global. Pinned by
+`WasmReentrantE2eTest.overlappedCallsEachReadTheirOwnDynamicBinding` -- the
+todo-337 reproduction with its expectation inverted -- and
+`WasmReentrantCompilerTest`.
 
 Same shape as the pre-thread-scoped JVM design: `Ctx.specialVars`, specials
 unioned into `globals` (module-level

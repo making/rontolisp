@@ -349,7 +349,7 @@ class HostGlueEmitterTest {
 		HostGlueEmitter.Surface surface = new HostGlueEmitter.Surface(List.of(), null,
 				List.of(new HostGlueEmitter.Export("do-it", List.of(), BoundaryType.VOID, false),
 						new HostGlueEmitter.Export("doIt", List.of(), BoundaryType.VOID, false)),
-				false, false, false, null, false, null);
+				false, false, false, null, false, null, false);
 		assertThatThrownBy(() -> HostGlueEmitter.emit("glue.js", surface))
 			.isInstanceOf(UnsupportedOperationException.class)
 			.hasMessageContaining("doIt")

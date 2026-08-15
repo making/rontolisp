@@ -89,7 +89,9 @@ pull ループはリニアメモリをフラットに保ちます。
   `WebAssembly.promising` 経由で呼び出し、呼び出しを直列化する —
   サスペンドしたモジュールは再入されうるためです。再入されたエクスポートは
   両方の呼び出しを静かに壊す代わりに**トラップで拒否**します (サスペンドしうる
-  モジュールのすべてのエクスポートラッパーが再入ガードを持ちます)。
+  モジュールのすべてのエクスポートラッパーが再入ガードを持ちます。ただし
+  [`--reentrant`](../../guides/wasm-host-boundary.md#overlapping-calls---reentrant)
+  でコンパイルした場合は例外で、JSPI ホストは呼び出しをオーバーラップできます)。
   同期的に応答するホストも同様に有効で、その場合も呼び出しは settled 済みの
   future を返します。`--emit-js-glue` はその半分を説明する代わりに書き出します
   ([ホスト境界ガイド](../../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue))。

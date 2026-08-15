@@ -89,7 +89,9 @@ spells both directions `async func`, and the directive carries the direction.)
   `WebAssembly.promising` (the build lists them), and serialise calls — a
   suspended module can be re-entered, and a re-entered export **refuses with a
   trap** instead of silently corrupting both calls (every export wrapper of a
-  module that can suspend carries a re-entry guard). A host that answers
+  module that can suspend carries a re-entry guard, unless it was compiled
+  [`--reentrant`](../../guides/wasm-host-boundary.md#overlapping-calls---reentrant),
+  which lets a JSPI host overlap calls instead). A host that answers
   synchronously is equally valid; the call returns an already-settled future
   either way. `--emit-js-glue` WRITES that half rather than describing it (the
   [host boundary guide](../../guides/wasm-host-boundary.md#generating-the-host-glue---emit-js-glue)):

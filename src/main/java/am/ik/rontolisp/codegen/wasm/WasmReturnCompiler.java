@@ -60,10 +60,7 @@ final class WasmReturnCompiler {
 			if (bind[2] < targetDepth) {
 				break;
 			}
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(bind[1]);
-			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(bind[0]);
+			WasmDynVars.emitRestore(ctx, bind);
 		}
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - marker.depth());
 	}

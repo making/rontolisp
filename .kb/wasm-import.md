@@ -299,9 +299,10 @@ name-collision refusal),
 the file; every other output shape is a clear error), and `WasmHostGlueE2eTest` (node 24
 JSPI: one generated file driving a suspending host, two overlapped calls both answering
 through the queue, then a synchronous host answering a STRING from the same file).
-Re-evaluation trigger: the queue is `.todo/348`'s subject -- once a reactor need not
-serialise, `serially` and the promise chain are what change, and the import object above
-them does not.
+That re-evaluation trigger FIRED (todo-348, 2026-08-15): under `--reentrant` the
+generated file drops the queue and `serially` entirely and the import object above them
+is unchanged -- exactly as predicted. The serialising shape stays the default and its
+emission is byte-identical (`HostGlueEmitterTest`'s checked-in pins are untouched).
 
 **`--host-boundary` -- WHICH boundary, and what each costs (todo-351, 2026-08-14)**: a
 reactor's bodies leaving the envelope (`.kb/clack.md`) was unconditional on the Preview 1
@@ -514,11 +515,72 @@ P1/no-wasi/component). Utility exports (`__ronto_alloc*`, the seed/clock hooks) 
 unguarded -- they are the host's own bracket tools. Pinned by
 `WasmImportCompilerTest.aSuspendingImportGuardsEveryExportAgainstReentry` /
 `hostFetchGuardsExportsExactlyWhereFetchIsUsed` and the
-`aGuardedExportAnswersThroughASynchronousHost` preload E2E. **Deliberately NOT
-per-call state**: making the arena a per-call scope and the dynamic store per-task (the
-JVM `_d$` hybrid shape) would buy real overlap, but that is the concurrency the
-serialising host gave up on purpose -- pay it only when a workload is I/O-bound enough
-to want it, and land the per-task store BEFORE relaxing this guard.
+`aGuardedExportAnswersThroughASynchronousHost` preload E2E. The guard stays the
+DEFAULT; `--reentrant` (todo-348, the section below) is the opt-in that retires it by
+making the module own its per-call state.
+
+**`--reentrant` -- overlapped calls on ONE instance (todo-348, 2026-08-15)**: the
+per-call state the guard's paragraph said had to land first HAS landed, behind an
+opt-in, and the guard is relaxed exactly there. Measured motivation (recorded per the
+todo's own instruction): 8 concurrent 100 ms round trips took 803 ms serialised and
+239 ms as instance-per-request (~17-37 ms `_initialize` per call, PLUS a 16 MiB GC
+pre-grow and ~2 MiB linear memory PER instance -- the shape a Worker's memory budget
+cannot afford at real concurrency); `--reentrant` answers them in ~125 ms on one
+instance. The trigger workload is exactly the todo's: I/O-bound AND unable to afford an
+instance per request. What the flag changes, all of it `reentrant`-gated so every other
+module stays byte-identical (`WasmReentrantCompilerTest`):
+
+- **The per-task dynamic store** (`codegen.wasm/WasmDynVars`,
+  `.kb/dynamic-special-variables.md`): the JVM `_d$` hybrid ported -- only
+  `SpecialVarCollector.collectDynamicallyBound` names get a slot in a per-call TASK
+  RECORD (a `TYPE_HASH_BUCKETS` of nullable `TYPE_CELL`s in a module global), created by
+  every export wrapper on entry (and by `_start` for the load path), saved into a
+  wrapper local and restored around the ONE place another extent can run -- the
+  suspending host call in the import wrapper. Reads are dynamic-first with the module
+  global as the default; binds/`setq`/exit-restores keep the exact save/restore
+  discipline (and the exact `.todo/192` unwind limitations) the shallow path has.
+  Under-collection is a compile-time throw at the binding site, the JVM rule.
+- **The park-block allocator** (`WasmExportRuntimeBuilder.buildParkAllocBody`,
+  exported as `__ronto_park_alloc`/`__ronto_park_free`): the arena's absolute
+  mark/restore is exactly what two interleaved extents cannot share, so staging that
+  must SURVIVE A PARK moves into first-fit free-list blocks carved permanently off the
+  bump heap (never split, never coalesced -- steady same-size overlap recycles
+  perfectly, which is what makes TWO interleaved 64 KiB pull loops memory-flat, the
+  finding-2 gate widened to two callers). Everything else stays on the `HEAP_PTR`
+  scratch stack, whose pops are made park-safe by one clamp: `__ronto_alloc_reset` (and
+  the wrappers' own restores) never go below `PARK_FLOOR_ADDR`, the top of the newest
+  carve. The ABI consequences, stated by the obligation lines and written by the glue:
+  a `:string`/`:s-expr` EXPORT result crosses as a park block the READER frees (the
+  scratch it used to sit at is trampled by whatever wasm runs in the microtask gap
+  before the host's decode -- todo-337's second corruption); a `:string`/`:s-expr`
+  IMPORT result must be park-written by the host and is freed by the wrapper; a
+  `:bytes` receive buffer a host passes into an export must be park-allocated; the
+  glue's argument bracket pops SYNCHRONOUSLY at the entry call (args are boxed before
+  the first suspension).
+- **The glue** drops the queue and `serially` (the todo-340 re-evaluation trigger,
+  fired), keeps the `suspending()` marking protocol and the promising selection, and
+  `worker()` calls the entry directly. The bytes-reader cursors keep their
+  keyed-by-arguments shape; two overlapped calls pulling one source through IDENTICAL
+  arguments are documented as the host's own hazard.
+- **Refusals**: a program nothing can suspend (no `:async t` import and no used
+  `--host-fetch` fetch -- overlap cannot happen, the flag would buy nothing);
+  `--component` (its concurrency is the component model's); `--dynamic` (the eval
+  mirror is per-instance state the task record does not cover); and
+  `--host-boundary=streaming` -- the body imports are a HOST-SIDE CURSOR ("the current
+  request's body", "the last fetch's reply") with no per-call identity, which is
+  precisely what todo-341 finding 3's no-handle argument rested on; the refusal keeps
+  that argument valid everywhere the protocol exists. Giving the streaming protocol a
+  call handle (an envelope call-id threaded through the body imports and the fetch
+  reply pulls) is `.todo/369`; the envelope boundary carries no cursor and is the
+  overlap-ready shape (`dog-fetcher` itself stays streaming + serialised, unchanged).
+
+Gates, all in `WasmReentrantE2eTest` (node 24 JSPI): the todo-337 reproduction with its
+expectation INVERTED (two overlapped calls binding one special across a suspend each
+read their own binding back, default intact); overlapped `:string` boundaries exact in
+both directions; two interleaved 64 KiB pull loops with `memory.buffer.byteLength`
+unchanged; and the width itself -- 8 concurrent upstream round trips through ONE
+envelope worker in ~one round trip (bounded < 500 ms against a 100 ms upstream,
+refuting the 800 ms serial shape).
 
 Tests: `WasmImportCompilerTest` (structural: import-section order, index shift,
 allocator gating, mode rejection), preload-based E2E in

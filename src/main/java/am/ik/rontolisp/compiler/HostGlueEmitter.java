@@ -104,10 +104,16 @@ public final class HostGlueEmitter {
 	 * {@code Request} onto it and a {@code Response} off it is transport work this file
 	 * can write; {@code null} when the module has no such entry point, or when its bodies
 	 * left the envelope
+	 * @param reentrant whether the module was compiled {@code --reentrant}: it owns its
+	 * per-call state, so this file drops the serialisation queue (calls overlap freely),
+	 * pops the argument staging synchronously at the call instead of after it, stages
+	 * cross-call buffers through {@code __ronto_park_alloc}, and frees a
+	 * {@code :string}/{@code :s-expr} result's park block with {@code __ronto_park_free}
+	 * after decoding it
 	 */
 	public record Surface(List<Import> imports, @Nullable Import entropy, List<Export> exports, boolean arena,
 			boolean seedRandom, boolean setTime, @Nullable String initExport, boolean derivedFetch,
-			@Nullable String envelopeExport) {
+			@Nullable String envelopeExport, boolean reentrant) {
 
 		/**
 		 * Every import-object entry, whoever implements it, grouped by module in order.
@@ -335,7 +341,21 @@ public final class HostGlueEmitter {
 				.append(callSketch(export))
 				.append(");\n");
 		}
-		if (canSuspend(surface)) {
+		if (canSuspend(surface) && surface.reentrant()) {
+			out.append("""
+					//
+					// A host that suspends marks its own entries -- suspending(async (...) => ...)
+					// -- and every entry point above then answers a promise: the marked imports are
+					// wrapped in WebAssembly.Suspending and each entry point that can reach one is
+					// entered through WebAssembly.promising. This module was compiled --reentrant:
+					// it owns its per-call state, so calls are NOT serialised -- overlap them
+					// freely (what overlaps is the parked time; one stack still runs at a time).
+					// A read import's remainder is keyed by its arguments only, so two overlapped
+					// calls pulling one source through IDENTICAL arguments are the host's own
+					// hazard to serialise.
+					""");
+		}
+		else if (canSuspend(surface)) {
 			out.append("""
 					//
 					// A host that suspends marks its own entries -- suspending(async (...) => ...)
@@ -704,7 +724,16 @@ public final class HostGlueEmitter {
 				        const input = envelope(request, octets, remoteAddr);
 				""");
 		boolean bodies = reactorBodiesOutOfBand(surface);
-		if (suspends) {
+		if (suspends && surface.reentrant()) {
+			// No queue to take: the module owns its per-call state, so the call enters
+			// directly and overlaps with whatever else is in flight. live() runs
+			// synchronously right before the entry, so no parked call can poison the
+			// instance between the two.
+			out.append("        entered = true;\n        const head = JSON.parse(await live().")
+				.append(entry)
+				.append("(input));\n");
+		}
+		else if (suspends) {
 			out.append("""
 					        const head = JSON.parse(
 					          await live().serially((lisp) => {
@@ -927,8 +956,15 @@ public final class HostGlueEmitter {
 				|| surface.exports().stream().anyMatch(e -> isText(e.returnType()));
 		boolean readBytes = surface.imports().stream().anyMatch(i -> i.paramTypes().contains(BoundaryType.BYTES))
 				|| surface.exports().stream().anyMatch(e -> e.returnType() == BoundaryType.BYTES);
-		boolean writeString = surface.imports().stream().anyMatch(i -> isText(i.returnType()))
-				|| surface.exports().stream().anyMatch(e -> e.paramTypes().stream().anyMatch(HostGlueEmitter::isText));
+		// --reentrant: an import's text RESULT is staged in a park block the MODULE
+		// frees after copying it out -- a bump allocation would leak, since the
+		// synchronous bracket around the call closes before the host's answer exists.
+		boolean writeParkString = surface.reentrant()
+				&& surface.imports().stream().anyMatch(i -> isText(i.returnType()));
+		boolean writeString = surface.exports()
+			.stream()
+			.anyMatch(e -> e.paramTypes().stream().anyMatch(HostGlueEmitter::isText))
+				|| (!surface.reentrant() && surface.imports().stream().anyMatch(i -> isText(i.returnType())));
 		boolean reserve = surface.exports().stream().anyMatch(e -> e.returnType() == BoundaryType.BYTES);
 		boolean write = surface.exports().stream().anyMatch(e -> e.paramTypes().contains(BoundaryType.BYTES));
 		boolean pulls = surface.imports().stream().anyMatch(i -> i.returnType() == BoundaryType.BYTES);
@@ -966,7 +1002,24 @@ public final class HostGlueEmitter {
 		if (writeString) {
 			out.append("  const writeString = (value) => write(encoder.encode(String(value)));\n");
 		}
-		if (reserve) {
+		if (writeParkString) {
+			out.append("""
+					  // An import's text answer lives in a park block until the MODULE has copied
+					  // it out -- which it frees itself with __ronto_park_free.
+					  const writeParkString = (value) => {
+					    const octets = encoder.encode(String(value));
+					    const ptr = exports.__ronto_park_alloc(octets.length);
+					    new Uint8Array(exports.memory.buffer, ptr, octets.length).set(octets);
+					    return [ptr, octets.length];
+					  };
+					""");
+		}
+		if (reserve && surface.reentrant()) {
+			// The receive buffer lives across the WHOLE call (the export fills it at the
+			// end), so under overlap it must be a park block -- the decode frees it.
+			out.append("  const reserve = (n) => [exports.__ronto_park_alloc(n), n];\n");
+		}
+		else if (reserve) {
 			out.append("  const reserve = (n) => [exports.__ronto_alloc(n), n];\n");
 		}
 		if (pulls || write) {
@@ -1001,7 +1054,7 @@ public final class HostGlueEmitter {
 					entropyEntry(out, imp);
 				}
 				else {
-					importEntry(out, imp);
+					importEntry(out, surface, imp);
 				}
 			}
 			out.append("    },\n");
@@ -1146,7 +1199,7 @@ public final class HostGlueEmitter {
 	// One import-object property: the host's own function with the (ptr, len) pairs
 	// unpacked on the way in and its answer staged back into linear memory on the way
 	// out. `bind` decides whether the result is wrapped in WebAssembly.Suspending.
-	private static void importEntry(StringBuilder out, Import imp) {
+	private static void importEntry(StringBuilder out, Surface surface, Import imp) {
 		List<String> params = new ArrayList<>();
 		List<String> args = new ArrayList<>();
 		for (int i = 0; i < imp.paramTypes().size(); i++) {
@@ -1176,14 +1229,16 @@ public final class HostGlueEmitter {
 			.append(") =>\n          settle(what, call(")
 			.append(String.join(", ", args))
 			.append("), ")
-			.append(importResult(imp.returnType()))
+			.append(importResult(imp.returnType(), surface.reentrant()))
 			.append(");\n      }),\n");
 	}
 
-	// How the host's answer is handed back to the module.
-	private static String importResult(BoundaryType type) {
+	// How the host's answer is handed back to the module. --reentrant: a text answer
+	// crosses in a park block the module frees, never a bump allocation the closed
+	// bracket cannot reclaim.
+	private static String importResult(BoundaryType type, boolean reentrant) {
 		return switch (type) {
-			case STRING, S_EXPR -> "writeString";
+			case STRING, S_EXPR -> reentrant ? "writeParkString" : "writeString";
 			case BOOL -> "(value) => (value ? 1 : 0)";
 			case VOID -> "() => undefined";
 			default -> "(value) => value";
@@ -1266,6 +1321,13 @@ public final class HostGlueEmitter {
 					  // the host marked one. An unmarked host never pays for the promise.
 					  const suspends = marked.size !== 0;
 					""");
+			if (surface.reentrant()) {
+				out.append("""
+						  // --reentrant: NO serialisation queue. The module owns its per-call state
+						  // (task-scoped dynamic bindings, park-block staging), so overlapped calls
+						  // into one instance are the point of the build.
+						""");
+			}
 		}
 		for (Export export : surface.exports()) {
 			if (export.promising()) {
@@ -1285,7 +1347,7 @@ public final class HostGlueEmitter {
 					.append("\"];\n");
 			}
 		}
-		if (suspends) {
+		if (suspends && !surface.reentrant()) {
 			out.append("""
 
 					  // One Lisp call at a time. A suspended call returns to the host's event loop,
@@ -1311,10 +1373,10 @@ public final class HostGlueEmitter {
 		}
 		call(out, surface, suspends);
 		for (Export export : surface.exports()) {
-			entryPoint(out, export);
+			entryPoint(out, surface, export);
 		}
-		String run = suspends ? "serialised" : "(work) => work()";
-		if (suspends) {
+		String run = suspends && !surface.reentrant() ? "serialised" : "(work) => work()";
+		if (suspends && !surface.reentrant()) {
 			out.append("""
 
 					  // Host state that belongs to ONE call -- what the module pulls DURING it,
@@ -1347,25 +1409,45 @@ public final class HostGlueEmitter {
 		if (hasReader(surface)) {
 			out.append("    drop,\n");
 		}
-		if (suspends) {
+		if (suspends && !surface.reentrant()) {
 			out.append("    serially,\n");
 		}
 		out.append("  };\n");
 	}
 
 	private static void call(StringBuilder out, Surface surface, boolean suspends) {
-		out.append("""
+		if (surface.reentrant()) {
+			out.append("""
 
-				  // One call into the module: stage the arguments, enter, decode the result out
-				  // of the scratch it sits in, and only THEN pop the arena that scratch is in.
-				  // A promising entry answers a promise, so the tail rides `then`; a synchronous
-				  // one runs the same expression inline. `run` is how the call reaches the
-				  // module -- through the queue, or straight through when it is already inside
-				  // the one call the queue admits.
-				  const call = (run, entry, stage, decode) => {
-				    const work = () => {
-				""");
-		if (surface.imports().stream().anyMatch(i -> i.returnType() == BoundaryType.BYTES)) {
+					  // One call into the module (--reentrant, so calls may OVERLAP). The
+					  // argument staging is popped SYNCHRONOUSLY the moment the entry call
+					  // starts -- the wrapper boxes its parameters before its first suspension,
+					  // and by decode time another overlapped call may hold staging of its own
+					  // above the mark (the reset clamps to the module's park floor, so a park
+					  // block carved meanwhile survives the pop). Anything that must outlive
+					  // this synchronous window crosses in park blocks instead: `reserve`d
+					  // receive buffers, and the module's own :string/:s-expr results, which
+					  // `decode` frees with __ronto_park_free.
+					  const call = (run, entry, stage, decode) => {
+					    const work = () => {
+					""");
+		}
+		else {
+			out.append("""
+
+					  // One call into the module: stage the arguments, enter, decode the result out
+					  // of the scratch it sits in, and only THEN pop the arena that scratch is in.
+					  // A promising entry answers a promise, so the tail rides `then`; a synchronous
+					  // one runs the same expression inline. `run` is how the call reaches the
+					  // module -- through the queue, or straight through when it is already inside
+					  // the one call the queue admits.
+					  const call = (run, entry, stage, decode) => {
+					    const work = () => {
+					""");
+		}
+		if (surface.imports().stream().anyMatch(i -> i.returnType() == BoundaryType.BYTES) && !surface.reentrant()) {
+			// Under overlap another in-flight call may be mid-pull; its cursor is not
+			// this call's to drop.
 			out.append("""
 					      readers.forEach((drop) => drop());
 					""");
@@ -1378,6 +1460,19 @@ public final class HostGlueEmitter {
 					      // so a value that changes once per call is what the platform has.
 					      exports.__ronto_set_time(BigInt(Date.now()) * 1000000n);
 					""");
+		}
+		if (surface.arena() && surface.reentrant()) {
+			out.append("""
+					      const mark = exports.__ronto_alloc_mark();
+					      const raw = entry(...stage());
+					      exports.__ronto_alloc_reset(mark);
+					      return typeof raw?.then === "function" ? raw.then(decode) : decode(raw);
+					    };
+					    return run(work);
+					  };
+					""");
+			out.append('\n');
+			return;
 		}
 		if (surface.arena()) {
 			out.append("""
@@ -1405,7 +1500,7 @@ public final class HostGlueEmitter {
 		out.append('\n');
 	}
 
-	private static void entryPoint(StringBuilder out, Export export) {
+	private static void entryPoint(StringBuilder out, Surface surface, Export export) {
 		List<String> params = new ArrayList<>();
 		List<String> staged = new ArrayList<>();
 		List<String> setup = new ArrayList<>();
@@ -1436,7 +1531,7 @@ public final class HostGlueEmitter {
 			.append(String.join(", ", params))
 			.append(") => {\n");
 		if (export.returnType() == BoundaryType.BYTES) {
-			bytesEntryPoint(out, export, setup, staged);
+			bytesEntryPoint(out, surface, export, setup, staged);
 			return;
 		}
 		out.append("      return call(\n        run,\n        ")
@@ -1446,13 +1541,16 @@ public final class HostGlueEmitter {
 			out.append("          ").append(line).append('\n');
 		}
 		out.append("          return [").append(String.join(", ", staged)).append("];\n        },\n        ");
-		out.append(exportResult(export.returnType())).append(",\n      );\n    };\n\n");
+		out.append(exportResult(export.returnType(), surface.reentrant())).append(",\n      );\n    };\n\n");
 	}
 
 	// The mirror of the import side's read(2) shape: the CALLER passes the buffer, and an
 	// undersized one is answered with the value's FULL length -- so the only sound reply
 	// to a short answer is to ask again with exactly that much, never to truncate.
-	private static void bytesEntryPoint(StringBuilder out, Export export, List<String> setup, List<String> staged) {
+	// --reentrant: the receive buffer is a park block (it lives across the whole call,
+	// which may park), freed here after the copy -- or before the retry.
+	private static void bytesEntryPoint(StringBuilder out, Surface surface, Export export, List<String> setup,
+			List<String> staged) {
 		out.append("      let at = 0;\n      const pull = (cap) =>\n        call(\n          run,\n          ")
 			.append(entryName(export))
 			.append(",\n          () => {\n");
@@ -1461,7 +1559,20 @@ public final class HostGlueEmitter {
 		}
 		out.append("            const out = reserve(cap);\n            at = out[0];\n            return [")
 			.append(String.join(", ", concat(staged, "out[0]", "out[1]")))
-			.append("];\n          },\n          (n) => (n > cap ? n : readBytes(at, n)),\n        );\n");
+			.append("];\n          },\n          ");
+		if (surface.reentrant()) {
+			out.append("""
+					(n) => {
+					            const value = n > cap ? n : readBytes(at, n);
+					            exports.__ronto_park_free(at);
+					            return value;
+					          },
+					        );
+					""");
+		}
+		else {
+			out.append("(n) => (n > cap ? n : readBytes(at, n)),\n        );\n");
+		}
 		out.append("""
 				      // A short answer is the value's full length, so ask once more for that much.
 				      const grow = (value) => (typeof value === "number" ? pull(value) : value);
@@ -1470,9 +1581,17 @@ public final class HostGlueEmitter {
 		out.append("      return typeof first?.then === \"function\" ? first.then(grow) : grow(first);\n    };\n\n");
 	}
 
-	private static String exportResult(BoundaryType type) {
+	// --reentrant: a text result's (ptr, len) is a park block the module staged
+	// (_park_str_result) precisely so nothing tramples it before this decode runs --
+	// freeing it is the decode's other half.
+	private static String exportResult(BoundaryType type, boolean reentrant) {
 		return switch (type) {
-			case STRING, S_EXPR -> "([ptr, len]) => readString(ptr, len)";
+			case STRING, S_EXPR -> reentrant ? """
+					([ptr, len]) => {
+					          const value = readString(ptr, len);
+					          exports.__ronto_park_free(ptr);
+					          return value;
+					        }""" : "([ptr, len]) => readString(ptr, len)";
 			case BOOL -> "(value) => value !== 0";
 			case VOID -> "() => undefined";
 			default -> "(value) => value";

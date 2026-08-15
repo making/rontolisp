@@ -102,6 +102,7 @@ the "grep before you change behavior" rule:
   the top-level order makes decidable, every position it does not, and the free soundness
   gate -> `.kb/compile-time-boundp.md`
 - Backends & flags -- `--dynamic`, `--optimize`, `--component` (WASI 0.3), `--no-gc`, `--simd`,
+  `--reentrant` (overlapped JSPI calls on one instance; `.kb/wasm-import.md`),
   `wit-import`/`wit-export`/`wasm-export`, WASM GC strings.
 - `rontolisp format`, the source formatter: the whitespace-ONLY invariant (identical token
   stream + fixpoint, pinned over every checked-in `.lisp`/`.asd`), why it reads source with

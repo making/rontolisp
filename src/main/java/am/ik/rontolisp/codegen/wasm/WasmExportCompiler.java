@@ -427,6 +427,13 @@ final class WasmExportCompiler {
 			ctx.writer.write(Instruction.END);
 			emitReentryGuardStore(ctx, 1);
 		}
+		// --reentrant: no guard -- instead every call gets a fresh task record, the
+		// per-call home of its dynamic bindings (WasmDynVars). Nothing clears it on
+		// return: the next entry overwrites it, and between calls it only delays the
+		// GC of a few cells.
+		if (ctx.reentrant) {
+			WasmDynVars.emitTaskBegin(ctx);
+		}
 		// Serve mode: `handle` is the wasi:http/incoming-handler export, called once per
 		// request on a possibly REUSED instance (jco / wasmCloud). The canonical-ABI
 		// allocator (mem-http-client's cabi_realloc) is where the host writes a request's
@@ -766,13 +773,32 @@ final class WasmExportCompiler {
 				ctx.writer.write(Instruction.REF_IS_NULL);
 				ctx.writer.write(Instruction.I32_EQZ);
 			}
-			case STRING -> emitStringResult(ctx);
+			// --reentrant: a memory-typed result cannot sit at the un-advanced HEAP_PTR
+			// scratch -- the promising promise settles a microtask AFTER the wrapper
+			// returns, and another overlapped call's wasm can run in between and trample
+			// it (todo-337's second measured corruption). It goes out in a park block
+			// the host frees after decoding (__ronto_park_free(ptr)).
+			case STRING -> {
+				if (ctx.reentrant) {
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(ctx.parkStrResultFuncIndex);
+				}
+				else {
+					emitStringResult(ctx);
+				}
+			}
 			case S_EXPR -> {
 				// Serialize any value to readable s-expression text, then return its
 				// bytes.
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_PRIN1_TO_STR);
-				emitStringResult(ctx);
+				if (ctx.reentrant) {
+					ctx.writer.write(Instruction.CALL);
+					ctx.writer.writeUnsignedLeb128(ctx.parkStrResultFuncIndex);
+				}
+				else {
+					emitStringResult(ctx);
+				}
 			}
 			case BYTES -> {
 				// The returned (unsigned-byte 8) vector goes out through the CALLER's

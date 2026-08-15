@@ -257,7 +257,10 @@ everywhere else — but three things are particular to this backend:
   reply's octets.
 
 The host side owes one obligation in return, which the build also prints:
-enter every export through `WebAssembly.promising` and serialise the calls. A
+enter every export through `WebAssembly.promising` and serialise the calls
+(or compile
+[`--reentrant`](wasm-host-boundary.md#overlapping-calls---reentrant) to
+overlap them on one instance). A
 suspended handler returns control to the event loop, and a second request
 entering the same instance would share its globals and its allocator — the
 module refuses that re-entry with a trap rather than corrupting both calls. A

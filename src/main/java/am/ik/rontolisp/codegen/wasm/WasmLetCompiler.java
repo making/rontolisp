@@ -133,23 +133,46 @@ final class WasmLetCompiler {
 					// closure built in the body captures it -- the closure may run
 					// after this extent ended and restored the global (cl-ppcre's
 					// end-string). A setq of the name writes BOTH (WasmSetqCompiler).
+					// --reentrant: the same save/set/restore discipline over the
+					// per-call task record's slot instead of the module global
+					// (WasmDynVars) -- the record is what keeps two overlapped call
+					// extents from reading each other's binding back.
 					int globalIndex = Objects.requireNonNull(ctx.globalIndices.get(name));
 					WasmExprCompiler.compileExpr(pairList.get(1), ctx);
 					int dupSlot = ctx.allocTemp();
-					ctx.writer.write(Instruction.TEE_LOCAL);
-					ctx.writer.writeUnsignedLeb128(dupSlot);
-					ctx.writer.write(Instruction.GET_GLOBAL);
-					ctx.writer.writeUnsignedLeb128(globalIndex);
-					int saveSlot = ctx.allocTemp();
-					ctx.writer.write(Instruction.SET_LOCAL);
-					ctx.writer.writeUnsignedLeb128(saveSlot);
-					ctx.writer.write(Instruction.SET_GLOBAL);
-					ctx.writer.writeUnsignedLeb128(globalIndex);
+					int saveSlot;
+					int restoreKey;
+					if (WasmDynVars.handles(ctx, name)) {
+						ctx.writer.write(Instruction.SET_LOCAL);
+						ctx.writer.writeUnsignedLeb128(dupSlot);
+						saveSlot = WasmDynVars.emitBind(ctx, name, dupSlot);
+						restoreKey = Objects.requireNonNull(ctx.dynSlots.get(name));
+					}
+					else if (ctx.reentrant) {
+						// The JvmLetCompiler rule: a special being BOUND that the
+						// dynamically-bound collection missed must fail the compile,
+						// never fall back to a silent process-global binding.
+						throw new IllegalStateException(
+								"special variable " + name + " is bound here but was not collected as dynamically bound"
+										+ " (SpecialVarCollector.collectDynamicallyBound)");
+					}
+					else {
+						ctx.writer.write(Instruction.TEE_LOCAL);
+						ctx.writer.writeUnsignedLeb128(dupSlot);
+						ctx.writer.write(Instruction.GET_GLOBAL);
+						ctx.writer.writeUnsignedLeb128(globalIndex);
+						saveSlot = ctx.allocTemp();
+						ctx.writer.write(Instruction.SET_LOCAL);
+						ctx.writer.writeUnsignedLeb128(saveSlot);
+						ctx.writer.write(Instruction.SET_GLOBAL);
+						ctx.writer.writeUnsignedLeb128(globalIndex);
+						restoreKey = globalIndex;
+					}
 					if (dynamicRestores == null) {
 						dynamicRestores = new ArrayList<>();
 					}
-					dynamicRestores.add(new int[] { globalIndex, saveSlot });
-					ctx.specialBindScopes.push(new int[] { globalIndex, saveSlot, ctx.blockMarkers.size() });
+					dynamicRestores.add(new int[] { restoreKey, saveSlot });
+					ctx.specialBindScopes.push(new int[] { restoreKey, saveSlot, ctx.blockMarkers.size() });
 					ctx.writer.write(Instruction.GET_LOCAL);
 					ctx.writer.writeUnsignedLeb128(dupSlot);
 					if (capturedInLet.contains(name)) {
@@ -388,11 +411,7 @@ final class WasmLetCompiler {
 		// global.set).
 		if (dynamicRestores != null) {
 			for (int i = dynamicRestores.size() - 1; i >= 0; i--) {
-				int[] restore = dynamicRestores.get(i);
-				ctx.writer.write(Instruction.GET_LOCAL);
-				ctx.writer.writeUnsignedLeb128(restore[1]);
-				ctx.writer.write(Instruction.SET_GLOBAL);
-				ctx.writer.writeUnsignedLeb128(restore[0]);
+				WasmDynVars.emitRestore(ctx, dynamicRestores.get(i));
 				ctx.specialBindScopes.pop();
 			}
 		}

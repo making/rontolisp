@@ -851,7 +851,7 @@ class WasmExportCompilerTest {
 		// the pool's top only for the modules that export the arena.
 		byte[] bytes = compile("(defun shout (s) (string-upcase s))"
 				+ "(rontolisp:wasm-export 'shout :params '(:string) :returns :string)");
-		assertThat(indexOf(bytes, WasmExportRuntimeBuilder.buildAllocResetBody()))
+		assertThat(indexOf(bytes, WasmExportRuntimeBuilder.buildAllocResetBody(false)))
 			.as("the guarded reset body is emitted")
 			.isNotNegative();
 		byte[] guardStore = hexBytes("41AC01"); // i32.const 172 (RT_INTERN_HEAP_ADDR)

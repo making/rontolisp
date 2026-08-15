@@ -231,13 +231,22 @@ final class WasmImportCompiler {
 		boolean bytesResult = decl.returnType() == BoundaryType.BYTES;
 		int numBytesParams = (int) decl.paramTypes().stream().filter(t -> t == BoundaryType.BYTES).count();
 		boolean bytesStaging = bytesResult || numBytesParams > 0;
+		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+		WasmWriter writer = new WasmWriter(bodyStream);
+		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
+		boolean reentrant = ctx.reentrant;
 		// i32 scratch locals, right after the env+param slots and before any
 		// (ref null eq) temps handed out by allocTemp:
-		// - an :s-expr result needs two, for the (ptr,len) the host returns;
+		// - an :s-expr result needs two, for the (ptr,len) the host returns -- and so
+		// does a :string result under --reentrant, whose park block the wrapper frees
+		// after boxing;
 		// - :bytes staging needs a heap mark (the staged regions are POPPED on return,
 		// so a pull-loop caller's arena stays flat -- the finding-2 shape), a (ptr,len)
-		// pair per :bytes parameter, and (ptr,cap,n) for a :bytes result.
-		int sExprTemps = needsReader(decl) ? 2 : 0;
+		// pair per :bytes parameter, and (ptr,cap,n) for a :bytes result. Under
+		// --reentrant the regions are park blocks instead (freed, not popped: the pop
+		// is an absolute store two interleaved pull loops cannot share) and the mark
+		// slot goes unused.
+		int sExprTemps = needsReader(decl) || (reentrant && usesStrFromMem(decl)) ? 2 : 0;
 		int ptrSlot = numLispParams + 1;
 		int markSlot = numLispParams + 1 + sExprTemps;
 		int bytesParamBase = markSlot + 1;
@@ -245,19 +254,20 @@ final class WasmImportCompiler {
 		int resultCapSlot = resultPtrSlot + 1;
 		int resultLenSlot = resultPtrSlot + 2;
 		int numI32Temps = sExprTemps + (bytesStaging ? 1 + 2 * numBytesParams + (bytesResult ? 3 : 0) : 0);
-		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
-		WasmWriter writer = new WasmWriter(bodyStream);
-		WasmLispCompiler.Ctx ctx = ctxBuilder.writer(writer).bodyStream(bodyStream).build();
 		ctx.nextLocal = numLispParams + 1 + numI32Temps;
+		int stagingAllocFuncIndex = reentrant ? ctx.parkAllocFuncIndex : allocFuncIndex;
 		if (bytesStaging) {
-			// mark = HEAP_PTR; every staged buffer below is a bump allocation popped
-			// back to this mark on return (a stack discipline, like the host arena API).
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
-			ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(markSlot);
-			// Stage each :bytes parameter: len = array.len(arg), ptr = __ronto_alloc(len)
+			if (!reentrant) {
+				// mark = HEAP_PTR; every staged buffer below is a bump allocation popped
+				// back to this mark on return (a stack discipline, like the host arena
+				// API).
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+				ctx.writer.write(Instruction.I32_LOAD, 0x02, 0x00);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(markSlot);
+			}
+			// Stage each :bytes parameter: len = array.len(arg), ptr = alloc(len)
 			// (grow-guarded), then copy the vector's raw bytes into [ptr, ptr+len). The
 			// ref.cast inside the length read traps on a non-byte-vector argument --
 			// exact-or-trap, like every other boundary type.
@@ -271,7 +281,7 @@ final class WasmImportCompiler {
 				emitByteVectorLen(ctx, i + 1);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(lenSlot);
-				emitAllocInto(ctx, lenSlot, bufPtrSlot, allocFuncIndex);
+				emitAllocInto(ctx, lenSlot, bufPtrSlot, stagingAllocFuncIndex);
 				ctx.writer.write(Instruction.GET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(i + 1);
 				ctx.writer.write(Instruction.GET_LOCAL);
@@ -284,13 +294,15 @@ final class WasmImportCompiler {
 				k++;
 			}
 			// Stage the :bytes result's receive region: cap = array.len(buffer) -- the
-			// trailing Lisp argument -- and ptr = __ronto_alloc(cap). The host writes up
-			// to cap bytes there and answers the full length.
+			// trailing Lisp argument -- and ptr = alloc(cap). The host writes up
+			// to cap bytes there and answers the full length. Under --reentrant this is
+			// THE cross-park region: the host writes into it while the call is parked,
+			// so it must be a park block, which nothing pops out from under it.
 			if (bytesResult) {
 				emitByteVectorLen(ctx, numLispParams);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(resultCapSlot);
-				emitAllocInto(ctx, resultCapSlot, resultPtrSlot, allocFuncIndex);
+				emitAllocInto(ctx, resultCapSlot, resultPtrSlot, stagingAllocFuncIndex);
 			}
 		}
 		if (decl.async()) {
@@ -322,13 +334,19 @@ final class WasmImportCompiler {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(resultCapSlot);
 		}
+		// --reentrant: the host call is the ONE place another export call can run (a
+		// suspending import parks this stack), and that call swaps the task global --
+		// so save this call's task record into a local (it survives the park) and put
+		// it back the moment the call returns, before anything reads a special.
+		int taskSave = WasmDynVars.emitTaskSave(ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(PLACEHOLDER_FUNC_BASE + ordinal);
+		WasmDynVars.emitTaskRestore(ctx, taskSave);
 		if (bytesResult) {
 			// n = the host's answer (the value's FULL length); copy min(n, cap) bytes
 			// out of the staged region into the caller's vector, pop the heap back to
-			// the mark, and answer n exactly (through _int_new, so any i32 length
-			// crosses).
+			// the mark (--reentrant: free the park blocks instead), and answer n
+			// exactly (through _int_new, so any i32 length crosses).
 			ctx.writer.write(Instruction.SET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(resultLenSlot);
 			ctx.writer.write(Instruction.GET_LOCAL);
@@ -340,7 +358,12 @@ final class WasmImportCompiler {
 			ctx.writer.write(Instruction.CALL);
 			ctx.writer.writeUnsignedLeb128(bytesFillFuncIndex);
 			ctx.writer.write(Instruction.DROP);
-			emitHeapRestore(ctx, markSlot);
+			if (reentrant) {
+				emitParkFrees(ctx, numBytesParams, bytesParamBase, resultPtrSlot, true);
+			}
+			else {
+				emitHeapRestore(ctx, markSlot);
+			}
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(resultLenSlot);
 			ctx.writer.write(Instruction.I64_EXTEND_S_I32);
@@ -348,12 +371,18 @@ final class WasmImportCompiler {
 			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_INT_NEW);
 		}
 		else {
-			emitBoxResult(ctx, decl.returnType(), ptrSlot, strFromMemFuncIndex);
+			emitBoxResult(ctx, decl.returnType(), ptrSlot, strFromMemFuncIndex, reentrant);
 			if (bytesStaging) {
 				// The staged parameter regions are dead once the host call returned (a
 				// :string/:s-expr result was already copied out of linear memory by the
-				// boxing above), so pop the heap back to the mark.
-				emitHeapRestore(ctx, markSlot);
+				// boxing above), so pop the heap back to the mark (--reentrant: free
+				// the park blocks).
+				if (reentrant) {
+					emitParkFrees(ctx, numBytesParams, bytesParamBase, resultPtrSlot, false);
+				}
+				else {
+					emitHeapRestore(ctx, markSlot);
+				}
 			}
 		}
 		if (decl.async()) {
@@ -400,6 +429,25 @@ final class WasmImportCompiler {
 		ctx.writer.writeUnsignedLeb128(ptrSlot);
 	}
 
+	// --reentrant: return every staged park block to the free list -- the pull-loop
+	// flatness the absolute pop used to buy, without the absolute store two
+	// interleaved pull loops cannot share.
+	private static void emitParkFrees(WasmLispCompiler.Ctx ctx, int numBytesParams, int bytesParamBase,
+			int resultPtrSlot, boolean bytesResult) {
+		for (int k = 0; k < numBytesParams; k++) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(bytesParamBase + 2 * k);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.parkFreeFuncIndex);
+		}
+		if (bytesResult) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(resultPtrSlot);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(ctx.parkFreeFuncIndex);
+		}
+	}
+
 	// HEAP_PTR = local[markSlot]: pops the wrapper's staged regions. A plain store is
 	// safe here -- nothing between the mark and this restore can intern a symbol (the
 	// only writer of the permanent low region), unlike the exported
@@ -439,8 +487,12 @@ final class WasmImportCompiler {
 	}
 
 	// Boxes the host call's result (already on the stack) into (ref null eq).
-	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int ptrSlot,
-			int strFromMemFuncIndex) {
+	// --reentrant: a :string/:s-expr result's (ptr,len) is a park block the HOST
+	// allocated (__ronto_park_alloc) -- a plain __ronto_alloc region would leak, since
+	// the synchronous bracket that used to pop it closes before the host's answer
+	// exists -- and the wrapper frees it here, after copying the bytes out.
+	private static void emitBoxResult(WasmLispCompiler.Ctx ctx, BoundaryType type, int ptrSlot, int strFromMemFuncIndex,
+			boolean reentrant) {
 		switch (type) {
 			case S32 -> ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			case FLOAT -> {
@@ -454,8 +506,21 @@ final class WasmImportCompiler {
 			}
 			// (ptr,len) the host wrote into linear memory -> a fresh Lisp string.
 			case STRING -> {
+				if (reentrant) {
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(ptrSlot + 1); // len
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(ptrSlot); // ptr
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(ptrSlot);
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(ptrSlot + 1);
+				}
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(strFromMemFuncIndex);
+				if (reentrant) {
+					emitParkFreeOf(ctx, ptrSlot);
+				}
 			}
 			// (ptr,len) of s-expression text -> parse via the embedded reader.
 			case S_EXPR -> {
@@ -467,9 +532,20 @@ final class WasmImportCompiler {
 				WasmExportCompiler.storeWord(ctx, WasmLispCompiler.READ_END_ADDR, ptrSlot, true);
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_READ_EXPR);
+				if (reentrant) {
+					emitParkFreeOf(ctx, ptrSlot);
+				}
 			}
 			default -> throw new UnsupportedOperationException("Unknown rontolisp:wasm-import type: " + type);
 		}
+	}
+
+	// _park_free(local[ptrSlot]) -- stack-neutral (the boxed value stays on top).
+	private static void emitParkFreeOf(WasmLispCompiler.Ctx ctx, int ptrSlot) {
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(ptrSlot);
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(ctx.parkFreeFuncIndex);
 	}
 
 }

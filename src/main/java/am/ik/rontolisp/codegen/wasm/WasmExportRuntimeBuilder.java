@@ -276,9 +276,13 @@ final class WasmExportRuntimeBuilder {
 	 * that interned a symbol above the mark therefore keeps the host's buffer alive (the
 	 * permanent bytes sit on top of it); that is the price of a stable symbol identity,
 	 * and interning inside a reactor export is rare.
+	 * @param clampParkFloor whether ({@code --reentrant}) the pop must ALSO stay above
+	 * the park-block region's floor ({@code PARK_FLOOR_ADDR}): a park block carved while
+	 * this bracket was open holds another in-flight call's staging, and popping below it
+	 * would hand its bytes out again
 	 * @return the function body bytes (signature {@code (i32) -> ()})
 	 */
-	static byte[] buildAllocResetBody() {
+	static byte[] buildAllocResetBody(boolean clampParkFloor) {
 		ByteArrayOutputStream body = new ByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int mark = 0;
@@ -289,6 +293,18 @@ final class WasmExportRuntimeBuilder {
 		loadCell(w, WasmLispCompiler.RT_INTERN_HEAP_ADDR);
 		w.write(Instruction.SET_LOCAL);
 		w.writeUnsignedLeb128(water);
+		if (clampParkFloor) {
+			// water = max(water, park-floor): both are permanent floors.
+			loadCell(w, WasmLispCompiler.PARK_FLOOR_ADDR);
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(water);
+			w.write(Instruction.I32_GT_U);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			loadCell(w, WasmLispCompiler.PARK_FLOOR_ADDR);
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(water);
+			w.write(Instruction.END);
+		}
 		// HEAP_PTR = mark > water ? mark : water
 		w.write(Instruction.I32_CONST);
 		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
@@ -664,6 +680,300 @@ final class WasmExportRuntimeBuilder {
 		// return n (the host's full-length answer, unchanged)
 		w.write(Instruction.GET_LOCAL);
 		w.writeUnsignedLeb128(n);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _park_alloc(n i32) -> i32} ({@code --reentrant} only, exported as
+	 * {@code __ronto_park_alloc}): allocates a linear-memory region that stays valid
+	 * while a call is PARKED on a suspending import -- unlike the {@code HEAP_PTR}
+	 * scratch stack, whose top moves whenever any other in-flight call runs. Blocks are
+	 * recycled through a first-fit free list ({@code PARK_FREE_ADDR}); a miss carves a
+	 * new block by permanently advancing the bump heap through {@code __ronto_alloc}
+	 * (grow-guarded) and raises the park floor ({@code PARK_FLOOR_ADDR}), which every
+	 * arena pop in a reentrant module clamps to. Blocks are whole -- never split, never
+	 * coalesced -- so a steady overlap of same-sized staging (the pull-loop shape)
+	 * recycles perfectly, and a burst of mixed sizes retains at most one block per
+	 * concurrent size profile. Layout: an 8-byte {@code [size, next]} header, data
+	 * follows; the returned pointer is the data.
+	 * @param allocFuncIndex the function index of {@code __ronto_alloc}
+	 * @return the function body bytes (signature {@code (i32) -> i32}, reuses
+	 * TYPE_LOOKUP)
+	 */
+	static byte[] buildParkAllocBody(int allocFuncIndex) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int n = 0;
+		final int p = 1;
+		final int prev = 2;
+		w.write(1);
+		w.write(2);
+		w.write(Type.I32);
+		// n = (n + 7) & ~7 -- the __ronto_alloc rounding, so a recycled block's size
+		// compares against the same grid it was carved on.
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(7);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		// p = PARK_FREE; prev = 0
+		loadCell(w, WasmLispCompiler.PARK_FREE_ADDR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(prev);
+		w.write(Instruction.BLOCK, 0x40); // $found
+		w.write(Instruction.BLOCK, 0x40); // $carve
+		w.write(Instruction.LOOP, 0x40); // $scan
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1); // end of list -> $carve
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00); // block size
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(2); // fits -> $found
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(prev);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04); // next
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // $carve
+		// p = __ronto_alloc(n + 8); p[0] = n; PARK_FLOOR = HEAP_PTR; return p + 8
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(allocFuncIndex);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PARK_FLOOR_ADDR);
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // $found
+		// unlink p: (prev ? prev : the head cell).next = p.next
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(prev);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PARK_FREE_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(prev);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_LOAD, 0x02, 0x04);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		w.write(Instruction.END);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(8);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _park_free(ptr i32) -> ()} ({@code --reentrant} only, exported as
+	 * {@code __ronto_park_free}): returns a {@code _park_alloc} block to the free list.
+	 * {@code ptr} is the DATA pointer the alloc answered; the header sits 8 bytes below
+	 * it.
+	 * @return the function body bytes (signature {@code (i32) -> ()})
+	 */
+	static byte[] buildParkFreeBody() {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int ptr = 0;
+		final int blk = 1;
+		w.write(1);
+		w.write(1);
+		w.write(Type.I32);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(ptr);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(8);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(blk);
+		// blk.next = PARK_FREE; PARK_FREE = blk
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(blk);
+		loadCell(w, WasmLispCompiler.PARK_FREE_ADDR);
+		w.write(Instruction.I32_STORE, 0x02, 0x04);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.PARK_FREE_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(blk);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		w.write(Instruction.END);
+		return body.toByteArray();
+	}
+
+	/**
+	 * Builds {@code _park_str_result(v (ref null eq)) -> (i32, i32)} ({@code
+	 * --reentrant} only): stages a {@code :string}/{@code :s-expr} export RESULT in a
+	 * park block instead of at the un-advanced {@code HEAP_PTR} scratch. The scratch is
+	 * trampled by whatever wasm runs next, and under overlap something else CAN run
+	 * between this export's return and the host's decode (the promising promise settles a
+	 * microtask later) -- todo-337's measured second corruption. The host decodes the
+	 * {@code (ptr, len)} and then frees it with {@code __ronto_park_free(ptr)}. Content
+	 * pointer and length, quotes stripped, so the pointer the host frees is exactly the
+	 * one it was answered.
+	 * @param parkAllocFuncIndex the function index of {@code _park_alloc}
+	 * @return the function body bytes (signature {@code ((ref null eq)) -> (i32,i32)})
+	 */
+	static byte[] buildParkStrResultBody(int parkAllocFuncIndex) {
+		ByteArrayOutputStream body = new ByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		final int v = 0;
+		final int base = 1;
+		final int n = 2;
+		final int p = 3;
+		final int idx = 4;
+		w.write(1);
+		w.write(4);
+		w.write(Type.I32);
+		// base = HEAP_PTR; n = _str_to_mem(v, base) -- the quoted spelling at scratch.
+		loadCell(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(base);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(v);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(base);
+		WasmEmitHelper.emitStrToMemCall(w);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		// HEAP_PTR = base + align8(n): _park_alloc may CARVE from the bump heap, and a
+		// carve at the un-advanced scratch would put the block header on top of the
+		// bytes just written. Advance over them first.
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(base);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(7);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(-8);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// p = _park_alloc(n - 2); copy the content bytes (quotes stripped).
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(parkAllocFuncIndex);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF);
+		w.writeUnsignedLeb128(1);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(base);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_LOAD8_U, 0x00, 0x00);
+		w.write(Instruction.I32_STORE8, 0x00, 0x00);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(idx);
+		w.write(Instruction.BR);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// HEAP_PTR = max(base, PARK_FLOOR): pop the scratch spelling, but never below a
+		// block the alloc above may just have carved on top of it.
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(base);
+		loadCell(w, WasmLispCompiler.PARK_FLOOR_ADDR);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(base);
+		loadCell(w, WasmLispCompiler.PARK_FLOOR_ADDR);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		// (ptr, len) -- content only.
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(p);
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(n);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(2);
+		w.write(Instruction.I32_SUB);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
