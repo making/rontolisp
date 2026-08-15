@@ -449,7 +449,8 @@ final class WasmExportRuntimeBuilder {
 	 * vector (a bare {@code TYPE_I8ARR} array) -- <strong>no UTF-8 decode</strong>, which
 	 * is the point of the {@code :bytes} boundary type: the string decoder is
 	 * non-validating and corrupts arbitrary binary. Used to box a {@code :bytes} export
-	 * argument a host wrote into memory.
+	 * argument a host wrote into memory, and to lift a component byte-stream read's chunk
+	 * (an HTTP body, a socket's recv) as the octets it is.
 	 * @return the function body bytes (signature {@code (i32,i32) -> (ref null eq)},
 	 * reuses TYPE_RAT_NEW)
 	 */

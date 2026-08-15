@@ -8,6 +8,13 @@ result always means end of stream. A read on an open, empty stream stays
 pending until a write arrives — that is the suspension an awaiting
 asynchronous function parks on.
 
+A chunk is whatever the producer wrote: a string for a guest-created stream,
+and an `(unsigned-byte 8)` vector for every HTTP body stream (a fetched
+reply's `:body`, a served request's `:raw-body`) — the octets exactly as they
+came off the wire, so a body relayed as a response body crosses byte-exact.
+[`rontolisp:read-all`](rontolisp-read-all.md) is the drain that decodes them
+to text.
+
 ```lisp
 (let ((s (rontolisp:make-stream)))
   (rontolisp:stream-write s "a")
@@ -21,7 +28,7 @@ asynchronous function parks on.
 NIL
 ```
 
-To concatenate all remaining string chunks in one await, use
+To drain all remaining chunks into one string in one await, use
 [`rontolisp:read-all`](rontolisp-read-all.md) instead.
 
 ## Backend support

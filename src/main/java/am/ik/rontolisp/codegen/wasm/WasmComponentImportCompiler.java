@@ -173,9 +173,9 @@ final class WasmComponentImportCompiler {
 		/**
 		 * Whether the stream's element is a resource handle (wasi:sockets' accept
 		 * {@code stream<tcp-socket>}): 4-byte i32 elements read one at a time and lifted
-		 * as opaque integer handles, where a byte stream reads a chunk and lifts a
-		 * string. The directive's alias validation admits only u8 and resource elements,
-		 * so non-prim means resource here.
+		 * as opaque integer handles, where a byte stream reads a chunk and lifts a packed
+		 * {@code (unsigned-byte 8)} vector. The directive's alias validation admits only
+		 * u8 and resource elements, so non-prim means resource here.
 		 */
 		boolean handleElement() {
 			if (!(type() instanceof WitType.StreamOf s) || s.element() == null) {
@@ -834,13 +834,13 @@ final class WasmComponentImportCompiler {
 	 * @return the code entry bytes
 	 */
 	static byte[] buildAsyncBody(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int ordinal,
-			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex,
+			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
 			WasmFutureRuntimeBuilder.@Nullable Sched sched) {
 		int numParams = lispArity(async);
 		Body probe = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				sched, MAX_SCRATCH, MAX_SCRATCH);
+				bytesFromMemFuncIndex, sched, MAX_SCRATCH, MAX_SCRATCH);
 		Body body = emitAsync(ctxBuilder, async, numParams, ordinal, waitOrdinals, allocFuncIndex, strFromMemFuncIndex,
-				sched, probe.i32Pool(), probe.i64Pool());
+				bytesFromMemFuncIndex, sched, probe.i32Pool(), probe.i64Pool());
 		return wrapEntry(body);
 	}
 
@@ -962,7 +962,7 @@ final class WasmComponentImportCompiler {
 	}
 
 	private static Body emitAsync(WasmLispCompiler.Ctx.Builder ctxBuilder, Async async, int numParams, int ordinal,
-			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex,
+			WaitOrdinals waitOrdinals, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
 			WasmFutureRuntimeBuilder.@Nullable Sched sched, int i32Pool, int i64Pool) {
 		ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
 		am.ik.wasm.WasmWriter writer = new am.ik.wasm.WasmWriter(bodyStream);
@@ -971,6 +971,7 @@ final class WasmComponentImportCompiler {
 				i64Pool);
 		gen.waitOrdinals = waitOrdinals;
 		gen.sched = sched;
+		gen.bytesFromMemFuncIndex = bytesFromMemFuncIndex;
 		gen.emitAsyncBody(async);
 		int eqTemps = ctx.nextLocal - (numParams + 1 + i32Pool + i64Pool);
 		return new Body(bodyStream.toByteArray(), gen.i32High, gen.i64High, eqTemps);
@@ -1045,6 +1046,10 @@ final class WasmComponentImportCompiler {
 		// asyncMode module (a BLOCKED stream.read becomes a pending future registered
 		// there); null outside asyncMode, where the BLOCKED park stays.
 		private WasmFutureRuntimeBuilder.@Nullable Sched sched;
+
+		// _bytes_from_mem, the lift of a byte-stream read's chunk (a packed
+		// (unsigned-byte 8) vector); set for the async built-in wrappers, -1 elsewhere.
+		private int bytesFromMemFuncIndex = -1;
 
 		Gen(WasmLispCompiler.Ctx ctx, String lispName, int numParams, int ordinal, int allocFuncIndex,
 				int strFromMemFuncIndex, int i32Pool, int i64Pool) {
@@ -1305,7 +1310,8 @@ final class WasmComponentImportCompiler {
 		}
 
 		// stream.read into a staged chunk: the ASYNC (non-blocking) built-in; one chunk
-		// per call, returning the bytes as a Lisp string, or nil once the stream is
+		// per call, returning the bytes as a packed octet vector, or nil once the stream
+		// is
 		// dropped (EOF). The completion value is (count << 4) | status; a read
 		// completes with at least one byte unless the writer is gone, so count 0 =
 		// EOF. Outside asyncMode a BLOCKED read parks the whole task on the
@@ -1442,8 +1448,11 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.END);
 		}
 
-		// The completed-read lift: a byte chunk becomes a Lisp string; a handle
-		// element (4 bytes, count 1) becomes the opaque integer handle.
+		// The completed-read lift: a byte chunk becomes a packed (unsigned-byte 8)
+		// vector -- the octets exactly as read, no decode, so an HTTP body stream is a
+		// BYTE stream (a relayed reply crosses exactly; rontolisp:read-all decodes) and a
+		// socket's chunk buffer walks bytes with aref; a handle element (4 bytes, count
+		// 1) becomes the opaque integer handle.
 		private void emitReadLift(boolean handleElem, int buf, int n) {
 			if (handleElem) {
 				getLocal(buf);
@@ -1452,10 +1461,14 @@ final class WasmComponentImportCompiler {
 				boxI31();
 				return;
 			}
+			if (this.bytesFromMemFuncIndex < 0) {
+				throw new IllegalStateException(
+						"'" + this.lispName + "': byte-stream read emitted without the _bytes_from_mem helper");
+			}
 			getLocal(buf);
 			getLocal(n);
 			this.w.write(Instruction.CALL);
-			this.w.writeUnsignedLeb128(this.strFromMemFuncIndex);
+			this.w.writeUnsignedLeb128(this.bytesFromMemFuncIndex);
 		}
 
 		// stream.write of a whole Lisp payload: the async built-in plus the BLOCKED

@@ -156,6 +156,26 @@ public final class HttpHandlerJvmRuntime {
 
 	private static final byte[] EMPTY_BODY = new byte[0];
 
+	/**
+	 * The request body as the packed {@code (unsigned-byte 8)} vector of the JVM runtime
+	 * ({@code long[]{8, e0, ...}}) -- the octets as they came, for both {@code :raw-body}
+	 * modes: the emitted {@code handle} hands them to the compiled
+	 * {@code %http-body-stream} (a byte stream, which must never see a re-encoded body)
+	 * or writes them as the default asynchronous stream's one chunk (an octet stream on
+	 * every backend). A bodiless request answers the bare width header.
+	 * @param request the served request
+	 * @return the body octets, {@code long[]{8, e0, ...}}
+	 */
+	public static long[] bodyOctets(HttpHandlerSupport.Request request) {
+		byte[] bytes = request.body();
+		long[] out = new long[bytes.length + 1];
+		out[0] = 8;
+		for (int i = 0; i < bytes.length; i++) {
+			out[i + 1] = bytes[i] & 0xFF;
+		}
+		return out;
+	}
+
 	// long[]{width, e0, ...} -> the raw octets. The elements are already masked to the
 	// element width, so the narrowing cannot lose anything.
 	private static byte[] octetsBytes(long[] octets) {

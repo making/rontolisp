@@ -346,11 +346,21 @@ class WasmHostGlueE2eTest {
 
 	// The STREAMING boundary through the SAME `worker(module)`: what the envelope one
 	// gets for free, on the shape whose bodies leave the envelope. The handler proves
-	// the two things that shape exists for -- a binary request body crossing exactly,
-	// and a reply half-drained before the next fetch, whose leftover octets the derived
-	// env.fetch has to discard or the second drain answers the first reply's.
+	// the three things that shape exists for -- a binary request body crossing
+	// exactly, a binary REPLY relayed as the response body crossing exactly (the
+	// dog-relay shape: nothing reads the stream, the transport pulls each octet chunk
+	// and pushes it out untouched -- it used to be decoded to text and re-encoded, so
+	// a JPEG's ff d8 ff came out c3 bf d8), and a reply half-drained before the next
+	// fetch, whose leftover octets the derived env.fetch has to discard or the second
+	// drain answers the first reply's.
 	private static final String STREAMING_MODULE = """
 			(rontolisp:async-defun grab (url) (rontolisp:await (rontolisp:fetch url)))
+			(rontolisp:async-defun relay (port)
+			  (let ((res (rontolisp:await (grab (concatenate 'string "http://127.0.0.1:" port "/jpeg")))))
+			    (list (getf res :status)
+			          (list :content-type
+			                (cdr (assoc "content-type" (getf res :headers) :test #'string-equal)))
+			          (getf res :body))))
 			(defun read-bytes (stream)
 			  (if (null stream)
 			      nil
@@ -360,10 +370,14 @@ class WasmHostGlueE2eTest {
 			          (setq out (cons b out)))
 			        (nreverse out))))
 			(rontolisp:async-defun app (env)
-			  (if (equal (getf env :path-info) "/echo")
-			      (let ((got (read-bytes (getf env :raw-body))))
-			        (list 200 (list :content-type "text/plain")
-			              (list (format nil "n=~a ~a" (length got) got))))
+			  (cond
+			    ((equal (getf env :path-info) "/echo")
+			     (let ((got (read-bytes (getf env :raw-body))))
+			       (list 200 (list :content-type "text/plain")
+			             (list (format nil "n=~a ~a" (length got) got)))))
+			    ((equal (getf env :path-info) "/relay")
+			     (rontolisp:await (relay (getf env :query-string))))
+			    (t
 			      (let* ((port (getf env :query-string))
 			             (r1
 			              (rontolisp:await
@@ -376,7 +390,7 @@ class WasmHostGlueE2eTest {
 			             (all (rontolisp:await (rontolisp:read-all (getf r2 :body)))))
 			        (declare (ignore head))
 			        (list 200 (list :content-type "text/plain")
-			              (list (format nil "~a ~a" (subseq all 0 6) (length all)))))))
+			              (list (format nil "~a ~a" (subseq all 0 6) (length all))))))))
 			;; :buffered is the Clack raw-body shape, which is what read-byte needs.
 			(rontolisp:http-handler 'app :raw-body :buffered)
 			""";
@@ -386,8 +400,14 @@ class WasmHostGlueE2eTest {
 			import { readFileSync } from "node:fs";
 			import { worker } from "./glue.js";
 
+			const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0x00, 0x41, 0xfe, 0x80, 0xc3, 0xbf]);
 			const server = createServer((request, response) => {
 			  request.resume();
+			  if (request.url.startsWith("/jpeg")) {
+			    response.writeHead(200, { "content-type": "image/jpeg" });
+			    response.end(jpeg);
+			    return;
+			  }
 			  response.writeHead(200, { "content-type": "text/plain" });
 			  response.end(request.url.startsWith("/big") ? "A".repeat(100003) : "B".repeat(300));
 			});
@@ -405,6 +425,13 @@ class WasmHostGlueE2eTest {
 			  new Request("http://x.test/echo", { method: "POST", body: new Uint8Array([0xff, 0xfe, 0x41]) }),
 			);
 			console.log("binary", (await echo.text()).trim());
+
+			// A binary reply RELAYED as the response body: the upstream's exact octets,
+			// content type and all, through env.readResponseBody -> env.writeResponseBody.
+			const relayed = await app.fetch(new Request(`http://x.test/relay?${port}`));
+			const octets = new Uint8Array(await relayed.arrayBuffer());
+			console.log("relayed", relayed.status, relayed.headers.get("content-type"),
+			  octets.length === jpeg.length && octets.every((b, i) => b === jpeg[i]) ? "exact" : Array.from(octets).join(" "));
 
 			// A reply half-drained, then a second fetch: the derived env.fetch drops what
 			// the glue is still holding, so the second drain is its own 300 octets.
@@ -427,7 +454,7 @@ class WasmHostGlueE2eTest {
 				"imports env.fetch,env.readResponseBody,env.readRequestBody,env.writeResponseBody",
 				// The three octets the ENVELOPE boundary cannot carry: there they arrive
 				// as seven, two U+FFFD where two octets were.
-				"binary n=3 (255 254 65)", "superseded BBBBBB 300");
+				"binary n=3 (255 254 65)", "relayed 200 image/jpeg exact", "superseded BBBBBB 300");
 	}
 
 	// The CLI's --no-wasi --host-fetch reactor pipeline, in its order.

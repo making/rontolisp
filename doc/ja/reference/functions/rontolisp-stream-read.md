@@ -8,6 +8,13 @@
 read は書き込みが来るまで未確定のままです — これが await 中の非同期関数が
 パークするサスペンドです。
 
+チャンクは生産側が書いたそのものです。ゲストが作ったストリームなら文字列、
+HTTP ボディストリーム (fetch の応答の `:body`、サーブされたリクエストの
+`:raw-body`) なら `(unsigned-byte 8)` ベクタ — ワイヤから来たオクテットその
+ままなので、レスポンスボディとして中継したボディはバイト単位で正確に渡ります。
+テキストにデコードして読み切るのが [`rontolisp:read-all`](rontolisp-read-all.md)
+です。
+
 ```lisp
 (let ((s (rontolisp:make-stream)))
   (rontolisp:stream-write s "a")
@@ -21,7 +28,7 @@ read は書き込みが来るまで未確定のままです — これが await 
 NIL
 ```
 
-残りの文字列チャンクを 1 回の await で連結するには
+残りのチャンクを 1 回の await で 1 つの文字列に読み切るには
 [`rontolisp:read-all`](rontolisp-read-all.md) を使ってください。
 
 ## バックエンドのサポート

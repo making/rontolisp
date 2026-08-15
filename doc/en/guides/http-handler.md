@@ -250,7 +250,10 @@ instead of `defun`:
 ```
 
 The fetch result's `:headers` alist goes into the response's `headers` slot
-as is, and its `:body` stream into the `body` slot — the server drains it.
+as is, and its `:body` stream into the `body` slot — the server drains it, and
+because the stream's chunks are the upstream's octets and nothing decodes them
+on the way through, the relay is byte-exact: an image comes out as the image
+that went in.
 
 On the WASI component backend the outgoing-request machinery rides along in
 the same component — serve and serve+fetch are one component shape, importing

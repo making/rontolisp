@@ -89,8 +89,11 @@ final class JvmFetchRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8("build"), cp.addUtf8("()Ljava/net/http/HttpRequest;")));
 
 		ClassConstant bodyHandlersClass = cp.addClass(cp.addUtf8("java/net/http/HttpResponse$BodyHandlers"));
-		MethodrefConstant ofString = cp.addMethodref(bodyHandlersClass,
-				cp.addNameAndType(cp.addUtf8("ofString"), cp.addUtf8("()Ljava/net/http/HttpResponse$BodyHandler;")));
+		// The reply body is taken as BYTES: the fetch :body is an octet stream on every
+		// backend (one settled chunk here), so a relayed reply crosses byte-exact and
+		// read-all decodes it -- ofString would have decoded a binary body to text.
+		MethodrefConstant ofByteArray = cp.addMethodref(bodyHandlersClass,
+				cp.addNameAndType(cp.addUtf8("ofByteArray"), cp.addUtf8("()Ljava/net/http/HttpResponse$BodyHandler;")));
 
 		// Request body publishers and the Builder.method(name, publisher) accessor, used
 		// to
@@ -307,7 +310,7 @@ final class JvmFetchRuntimeBuilder {
 		a.op(Opcode.POP); // discard returned builder
 
 		// future = HttpClient.newHttpClient().sendAsync(builder.build(),
-		// BodyHandlers.ofString()) -- the request starts NOW and runs on the client's
+		// BodyHandlers.ofByteArray()) -- the request starts NOW and runs on the client's
 		// executor threads while the compiled program continues. The future itself is
 		// the returned value.
 		a.op(Opcode.INVOKESTATIC);
@@ -318,7 +321,7 @@ final class JvmFetchRuntimeBuilder {
 		a.op(1);
 		a.op(0); // [client, request]
 		a.op(Opcode.INVOKESTATIC);
-		a.u2(ofString.index()); // [client, request, handler]
+		a.u2(ofByteArray.index()); // [client, request, handler]
 		a.op(Opcode.INVOKEVIRTUAL);
 		a.u2(clientSendAsync.index()); // [future]
 		a.areturn();

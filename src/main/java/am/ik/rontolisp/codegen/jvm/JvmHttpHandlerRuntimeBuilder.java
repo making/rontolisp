@@ -119,8 +119,13 @@ final class JvmHttpHandlerRuntimeBuilder {
 						cp.addUtf8(JvmLispCompiler.mangleMethodName(
 								PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.NORMALIZE_RESPONSE))),
 						unaryDesc));
-		MethodrefConstant requestBodyString = cp.addMethodref(requestClass,
-				cp.addNameAndType(cp.addUtf8("bodyString"), cp.addUtf8("()Ljava/lang/String;")));
+		// The request body crosses as OCTETS -- HttpHandlerJvmRuntime.bodyOctets answers
+		// the packed long[] vector -- for both :raw-body modes: the buffered Gray stream
+		// is a byte stream and stores them as they are (encoding a decoded body doubled
+		// every octet >= #x80 of a binary POST), and the default asynchronous stream is
+		// an octet stream on every backend, one settled chunk here.
+		MethodrefConstant bodyOctets = cp.addMethodref(runtimeClass,
+				cp.addNameAndType(cp.addUtf8("bodyOctets"), cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)[J")));
 		MethodrefConstant buildEnv = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("buildEnv"),
 				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;Ljava/lang/Object;)Ljava/lang/Object;")));
 		MethodrefConstant toResponse = cp.addMethodref(runtimeClass, cp.addNameAndType(cp.addUtf8("toResponse"),
@@ -135,46 +140,43 @@ final class JvmHttpHandlerRuntimeBuilder {
 		MethodrefConstant invoke1 = cp.addMethodref(thisClass, cp.addNameAndType(cp.addUtf8("_invoke_1"),
 				cp.addUtf8("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")));
 
-		ConstantPool.StringConstant quote = cp.addString("\"");
-
 		// handle(Request): slots 0 this, 1 request, 2 rawBody, 3 body text scratch /
 		// env, 4 result / triple, 5 drained body.
 		Asm a = new Asm();
 		if (bufferBody) {
-			// rawBody = %http-body-stream(quoted(request.bodyString())) -- the compiled
-			// Gray instance; the defun itself answers nil for an empty body.
+			// rawBody = %http-body-stream(bodyOctets(request)) -- the compiled Gray
+			// instance over the octets as they came; the defun itself answers nil for
+			// an empty body.
 			MethodrefConstant bodyStream = cp.addMethodref(thisClass,
 					cp.addNameAndType(
 							cp.addUtf8(JvmLispCompiler.mangleMethodName(
 									PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, ClackEnv.BODY_STREAM))),
 							unaryDesc));
 			a.aload(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(requestBodyString.index());
-			quoteWrap(a, quote, stringConcat);
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(bodyOctets.index());
 			a.op(Opcode.INVOKESTATIC);
 			a.u2(bodyStream.index());
 			a.astore(2);
 		}
 		else {
-			// rawBody = the asynchronous stream: one settled quoted chunk when the
+			// rawBody = the asynchronous stream: one settled octet chunk when the
 			// request carries a body, an already-closed empty stream otherwise (its
 			// first read observes end of stream) -- interpreter parity.
 			a.op(Opcode.INVOKESTATIC);
 			a.u2(makeStream.index());
 			a.astore(2);
 			a.aload(1);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(requestBodyString.index());
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(bodyOctets.index());
 			a.astore(3);
 			int bodyEmpty = a.label();
 			a.aload(3);
-			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringLength.index());
-			a.branch(Opcode.IFEQ, bodyEmpty);
+			a.op(Opcode.ARRAYLENGTH);
+			a.iconst(1);
+			a.branch(Opcode.IF_ICMPLE, bodyEmpty); // long[]{8} alone: no body
 			a.aload(2);
 			a.aload(3);
-			quoteWrap(a, quote, stringConcat);
 			a.op(Opcode.INVOKESTATIC);
 			a.u2(streamWrite.index());
 			a.op(Opcode.POP);
@@ -227,17 +229,6 @@ final class JvmHttpHandlerRuntimeBuilder {
 				cp.addUtf8("(L" + SUPPORT_CLASS + "$Request;)L" + SUPPORT_CLASS + "$Response;"), 6, 6, a.finish());
 		return new HttpHandlerRuntime(handlerInterface, handlerFieldName, handlerFieldDesc, handlerField, serve,
 				thisClass, progInit, handle);
-	}
-
-	/** Wraps the String on top of the stack in surrounding quotes. */
-	private static void quoteWrap(Asm a, ConstantPool.StringConstant quote, MethodrefConstant stringConcat) {
-		a.ldc(quote.index()); // [value, q]
-		a.op(Opcode.SWAP); // [q, value]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringConcat.index()); // [q+value]
-		a.ldc(quote.index()); // [q+value, q]
-		a.op(Opcode.INVOKEVIRTUAL);
-		a.u2(stringConcat.index()); // [quoted]
 	}
 
 	/** Minimal label-based assembler, mirroring the one in JvmFetchRuntimeBuilder. */

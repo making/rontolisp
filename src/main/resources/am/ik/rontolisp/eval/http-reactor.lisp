@@ -332,18 +332,54 @@
                 (setq k (+ k 1)))))
           out))))
 
+(defun rontolisp::%http-reactor-octet-source (source)
+  ;; The body source -> a THUNK answering the next chunk as OCTETS, an
+  ;; (unsigned-byte 8) vector, nil at end of stream. The byte-shaped mirror of
+  ;; %http-reactor-text-source, and the one a body STREAM is built over: a
+  ;; chunk that arrived as octets crosses untouched, a string chunk (the
+  ;; in-band envelope body, a host that hands over decoded text) is UTF-8
+  ;; encoded once. Nothing decodes here, and that is the point -- a stream
+  ;; whose chunks are the wire's octets relays a binary body byte-exact, and
+  ;; rontolisp:read-all decodes the whole body once at the drain, so a chunk
+  ;; boundary inside a code point costs no carry at all.
+  ;;
+  ;; Never answers an empty chunk before the end, and an EMPTY already-buffered
+  ;; source starts SENT, for the reason the text source gives: "" is the
+  ;; buffered spelling of "no body" and must be end of stream at the first
+  ;; read, exactly as a reader answering 0 is.
+  (if (stringp source)
+      (let ((sent (= (length source) 0)))
+        (lambda ()
+          (if sent
+              nil
+              (progn
+                (setq sent t)
+                (rontolisp::%http-utf8-encode source)))))
+      (let ((done nil))
+        (lambda ()
+          (if done
+              nil
+              (let ((chunk (rontolisp::%http-reactor-pull source)))
+                (cond ((or (null chunk) (= (length chunk) 0))
+                       (setq done t)
+                       nil)
+                      ((stringp chunk) (rontolisp::%http-utf8-encode chunk))
+                      (t chunk))))))))
+
 (defun rontolisp::%http-reactor-body-stream (source)
-  ;; The rontolisp-native :raw-body: ONE first-class pull stream whatever the
-  ;; source was, so (rontolisp:await (rontolisp:read-all (getf env :raw-body)))
-  ;; -- the portable spelling every other backend already serves -- is what a
-  ;; handler writes on a reactor too. An already-buffered string becomes the
-  ;; stream that answers it once and then EOF; a chunked source IS the read
+  ;; The rontolisp-native :raw-body, and a --host-fetch reply's :body: ONE
+  ;; first-class pull stream of OCTET chunks whatever the source was, so
+  ;; (rontolisp:await (rontolisp:read-all (getf env :raw-body))) -- the
+  ;; portable spelling every other backend already serves -- is what a handler
+  ;; writes on a reactor too, and (list status headers (getf res :body)) relays
+  ;; a fetched body byte-exact. An already-buffered string becomes the stream
+  ;; that answers its octets once and then EOF; a chunked source IS the read
   ;; side, one host pull per stream read.
   ;;
   ;; NIL (and anything that is not a source at all) is the EMPTY stream rather
   ;; than an error: a caller holding the envelope's own "body" key holds
   ;; whatever the host put there, and "no body" is the commonest thing it is.
-  (rontolisp::%stream-new (rontolisp::%http-reactor-text-source
+  (rontolisp::%stream-new (rontolisp::%http-reactor-octet-source
                            (or (rontolisp::%http-reactor-source source) ""))
                           (lambda () nil)))
 
@@ -428,29 +464,41 @@
   ;; future, and this transport is synchronous code where await is not legal.
   (rontolisp::%http-reactor-force (rontolisp:stream-read s)))
 
+(defun rontolisp::%http-reactor-body-envelope-text (body)
+  ;; The normalized body -> the TEXT the head's "body" key carries when there
+  ;; is no sink. A string is already it; OCTETS -- an (unsigned-byte 8) body,
+  ;; or the octet chunks every body stream answers, joined -- are rendered as
+  ;; the text their UTF-8 bytes spell, leniently (a byte that leads no
+  ;; sequence stands for its own character), because a JSON string is text and
+  ;; that is the only rendering under which the commonest octet body -- a
+  ;; Clack application's flex:string-to-octets of a page -- crosses the
+  ;; envelope as the page it was. (Flattening one character per octet, the
+  ;; rendering this arm used to apply, doubled every octet >= #x80 once the
+  ;; host UTF-8 encoded the string.) A BINARY body cannot be carried by a JSON
+  ;; string under any rendering: a host that wants one registers
+  ;; env.writeResponseBody -- taking bytes out of band is what the sink is FOR.
+  (if (stringp body) body (rontolisp::%octets-to-string body)))
+
 (defun rontolisp::%http-reactor-body-out (body sink)
   ;; The normalized response body -> what the head's "body" key carries, having
   ;; handed everything else to the SINK.
   ;;
   ;; With a sink the body LEAVES the head: each chunk is written out of band and
   ;; the key is dropped, so a STREAM body (a proxied fetch response) is
-  ;; forwarded chunk at a time rather than being collected into one string
-  ;; first. Without one the body rides the head as before, and a stream is
-  ;; DRAINED into it -- which is the only thing a host that speaks the old shape
-  ;; can be given, and is what this transport used to be missing entirely (a
-  ;; stream reached json-stringify).
+  ;; forwarded chunk at a time rather than being collected first. Without one
+  ;; the body rides the head as before, and a stream is DRAINED into it -- which
+  ;; is the only thing a host that speaks the old shape can be given, and is
+  ;; what this transport used to be missing entirely (a stream reached
+  ;; json-stringify).
   ;;
-  ;; An (unsigned-byte 8) body reaches the SINK as the octets it is, which is
-  ;; the whole reason the normalizer stopped flattening it; the head cannot
-  ;; carry those octets (a JSON string is text, and the finding-4 rule that
-  ;; sent the request body out of band applies in reverse), so without a sink
-  ;; it flattens here and keeps the shape a host already parses.
-  ;;
-  ;; That last arm is the ONE place a binary response is still not byte-exact,
-  ;; and it is deliberate rather than pending: a host that wants one registers
-  ;; env.writeResponseBody. Taking bytes out of band is what the sink is FOR,
-  ;; and no encoding of octets into a JSON string would be the shape the hosts
-  ;; speaking the old envelope already parse.
+  ;; An (unsigned-byte 8) body, and the OCTET chunks a body stream answers,
+  ;; reach the SINK as the octets they are -- the whole reason the normalizer
+  ;; stopped flattening them, and what makes a relayed fetch reply byte-exact
+  ;; on the streaming boundary. The head cannot carry octets (a JSON string is
+  ;; text, and the finding-4 rule that sent the request body out of band
+  ;; applies in reverse), so without a sink they are rendered as text through
+  ;; %http-reactor-body-envelope-text: right for the text-in-octets bodies,
+  ;; lossy for binary, and deliberately so -- see there.
   (cond ((rontolisp:streamp body)
          (if sink
              (let ((chunk (rontolisp::%http-reactor-stream-chunk body)))
@@ -458,16 +506,37 @@
                  (rontolisp::%http-reactor-write sink chunk)
                  (setq chunk (rontolisp::%http-reactor-stream-chunk body)))
                nil)
-             (with-output-to-string (out)
-               (let ((chunk (rontolisp::%http-reactor-stream-chunk body)))
-                 (while chunk
-                   (write-string chunk out)
-                   (setq chunk
-                         (rontolisp::%http-reactor-stream-chunk body)))))))
+             (rontolisp::%http-reactor-body-envelope-text
+              (rontolisp::%http-reactor-body-drain body))))
         (sink
          (rontolisp::%http-reactor-write sink body)
          nil)
-        (t (rontolisp::%http-body-text body))))
+        (t (rontolisp::%http-reactor-body-envelope-text body))))
+
+(defun rontolisp::%http-reactor-body-drain (body)
+  ;; A stream body drained SYNCHRONOUSLY into one value -- one octet vector
+  ;; when its chunks are octets (every HTTP body stream's shape), one string
+  ;; when they are strings (a guest make-stream) -- the same contract as
+  ;; http-server.lisp's async %http-drain, spelled over the resolved reads this
+  ;; transport takes because await is not legal in its synchronous frame.
+  (let ((chunks nil)
+        (octets nil)
+        (text nil)
+        (total 0)
+        (chunk (rontolisp::%http-reactor-stream-chunk body)))
+    (while chunk
+      (if (stringp chunk) (setq text t) (setq octets t))
+      (setq total (+ total (length chunk)))
+      (setq chunks (cons chunk chunks))
+      (setq chunk (rontolisp::%http-reactor-stream-chunk body)))
+    (setq chunks (nreverse chunks))
+    (cond
+     ((and octets text)
+      (error
+       "http-handler: a stream response body mixes string and octet chunks"))
+     (octets (rontolisp::%http-octets-join chunks total))
+     (t
+      (with-output-to-string (out) (dolist (c chunks) (write-string c out)))))))
 
 (defun rontolisp::%http-reactor-envelope (status headers body sink)
   ;; The response HEAD. With a SINK the "body" key is ABSENT rather than empty:

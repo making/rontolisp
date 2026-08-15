@@ -183,8 +183,8 @@ future が一度きり確定するのに対し、**ストリーム** は時間�
 で終えます。消費側は
 [`rontolisp:stream-read`](../reference/functions/rontolisp-stream-read.md) で
 チャンクを取り出す (各読み取りは future を返す) か、
-[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) で文字列
-チャンクを一度の await で読み尽くします:
+[`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md) で
+チャンクを一度の await で 1 つの文字列に読み尽くします:
 
 ```lisp
 (let ((s (rontolisp:make-stream)))
@@ -205,7 +205,12 @@ await 中の非同期関数がサスペンドする対象です。
 ストリーム自体はホストから届きます: [`rontolisp:fetch`](http-fetch.md) の
 レスポンスの `:body` と [`rontolisp:http-handler`](http-handler.md) の
 リクエストの `:raw-body` (デフォルトの `:stream` モード) は、どのバックエンド
-でも非同期ストリームです。
+でも非同期ストリームです。これら HTTP ボディストリームは **バイトストリーム**
+です: 各チャンクはワイヤから来たままのオクテットを持つ `(unsigned-byte 8)`
+ベクタなので、fetch の `:body` を自分のレスポンスボディとして返すハンドラは
+それをバイト単位で正確に中継し、バイトがテキストになるのは `read-all` の中です
+(ボディ全体を 1 回 UTF-8 デコードするので、コードポイントの途中に落ちた
+チャンク境界には何のコストもかかりません)。
 
 ## 内部の仕組み: WASI Preview 3 の future と stream
 

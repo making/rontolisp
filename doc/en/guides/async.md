@@ -191,7 +191,7 @@ and finish with
 [`rontolisp:stream-close`](../reference/functions/rontolisp-stream-close.md);
 consumers take chunks with
 [`rontolisp:stream-read`](../reference/functions/rontolisp-stream-read.md) (each
-read yields a future) or drain the string chunks in one await with
+read yields a future) or drain the chunks into one string in one await with
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md):
 
 ```lisp
@@ -213,7 +213,11 @@ and the JVM backend. On `--component` the stream *operations* work too, but the
 streams themselves arrive from the host: a [`rontolisp:fetch`](http-fetch.md)
 response `:body` and a [`rontolisp:http-handler`](http-handler.md) request
 `:raw-body` (in its default `:stream` mode) are asynchronous streams on every
-backend.
+backend. Those HTTP body streams are **byte streams**: each chunk is an
+`(unsigned-byte 8)` vector holding the octets as they came off the wire, so a
+handler that answers a fetched `:body` as its own response body relays it
+byte-exact, and `read-all` is where the bytes become text (one UTF-8 decode of
+the whole body, so a chunk boundary inside a code point costs nothing).
 
 ## Under the hood: WASI Preview 3 futures & streams
 

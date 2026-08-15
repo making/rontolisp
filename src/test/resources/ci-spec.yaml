@@ -1695,6 +1695,39 @@ cases:
       (print (rontolisp:await (rontolisp:read-all "ci-read-all")))
     expected: |
       "ci-read-all"
+  - name: read-all-decodes-an-octet-chunk-stream
+    # Every HTTP body stream (a fetched reply's :body, a served request's
+    # :raw-body) answers OCTET chunks -- what makes a relayed body byte-exact --
+    # and read-all is where the bytes become text: the chunks are joined once
+    # and UTF-8 decoded once, so a code point a chunk boundary splits (the
+    # three bytes of あ below straddle two chunks) decodes whole, and a byte
+    # that leads no sequence (#xFF) is its own character, the lenient rule the
+    # request decoder applies. stream-read answers the vector itself. A stream
+    # mixing string and octet chunks is refused rather than guessed at.
+    source: |
+      (defvar *ci-octet-chunks*
+        (list (make-array 1 :element-type '(unsigned-byte 8) :initial-contents '(#x41))
+              (make-array 2 :element-type '(unsigned-byte 8) :initial-contents '(#xE3 #x81))
+              (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(#x82 #xFF #x42))))
+      (defun ci-octet-next ()
+        (if *ci-octet-chunks*
+            (let ((c (car *ci-octet-chunks*)))
+              (setq *ci-octet-chunks* (cdr *ci-octet-chunks*))
+              c)
+            nil))
+      (defvar *ci-octet-stream* (rontolisp::%stream-new #'ci-octet-next (lambda () nil)))
+      (print (map 'list #'identity (rontolisp:await (rontolisp:stream-read *ci-octet-stream*))))
+      (print (map 'list #'char-code (rontolisp:await (rontolisp:read-all *ci-octet-stream*))))
+      (setq *ci-octet-chunks*
+            (list "text" (make-array 1 :element-type '(unsigned-byte 8) :initial-contents '(65))))
+      (print (handler-case
+                 (rontolisp:await (rontolisp:read-all
+                                   (rontolisp::%stream-new #'ci-octet-next (lambda () nil))))
+               (error () :mixed-refused)))
+    expected: |
+      (65)
+      (12354 255 66)
+      :MIXED-REFUSED
   - name: stream-new-builds-a-pull-stream-on-every-backend
     # rontolisp::%stream-new is the ONE producer of a stream value that every
     # backend has, and it takes exactly what a stream IS: a read thunk, a close
@@ -8397,13 +8430,17 @@ cases:
       ;; flattened, a byte and a character the application chose are the same
       ;; value, and every transport that UTF-8 encodes what it is given doubles
       ;; the high ones. The head cannot carry octets (a JSON string is text), so
-      ;; without a sink it still gets the one-character-per-octet spelling.
+      ;; without a sink it gets the TEXT the octets spell, decoded leniently --
+      ;; a valid sequence is its character, a stray byte its own -- which is what
+      ;; lets a page a Clack app answered as octets cross the envelope intact.
       (defun ci-sink-octets (env)
         (declare (ignore env))
-        (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
-          (setf (aref v 0) #xFF)
-          (setf (aref v 1) #xFE)
-          (setf (aref v 2) #x41)
+        (let ((v (make-array 5 :element-type '(unsigned-byte 8))))
+          (setf (aref v 0) #xE3)
+          (setf (aref v 1) #x81)
+          (setf (aref v 2) #x82)
+          (setf (aref v 3) #xFF)
+          (setf (aref v 4) #x41)
           (list 200 nil v)))
       (rontolisp::%http-reactor-register #'ci-sink-octets)
       (setq *ci-sink-chunks* nil)
@@ -8414,6 +8451,27 @@ cases:
       (print (map 'list #'char-code
                   (ci-sink-head-body
                    (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}"))))
+      ;; A stream of OCTET chunks -- what every HTTP body stream is, so this is
+      ;; the relayed fetch reply: each chunk reaches the sink as the octets it
+      ;; is (the byte-exact relay), and without a sink the chunks are joined and
+      ;; rendered as text like the vector above.
+      (defun ci-sink-octet-stream-app (env)
+        (declare (ignore env))
+        (setq *ci-sink-parts*
+              (list (make-array 2 :element-type '(unsigned-byte 8)
+                                  :initial-contents '(#xE3 #x81))
+                    (make-array 2 :element-type '(unsigned-byte 8)
+                                  :initial-contents '(#x82 #x41))))
+        (list 200 nil (rontolisp::%stream-new #'ci-sink-part (lambda () nil))))
+      (rontolisp::%http-reactor-register #'ci-sink-octet-stream-app)
+      (setq *ci-sink-chunks* nil)
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}" nil
+                                                 #'ci-sink)))
+      (print (mapcar (lambda (c) (map 'list #'identity c))
+                     (reverse *ci-sink-chunks*)))
+      (print (ci-sink-head-body
+              (rontolisp::%http-reactor-dispatch "{\"target\":\"/\"}")))
     expected: |
       "hello, sink"
       NIL
@@ -8424,8 +8482,11 @@ cases:
       "one two three"
       "in-band"
       NIL
-      (255 254 65)
-      (255 254 65)
+      (227 129 130 255 65)
+      (12354 255 65)
+      NIL
+      ((227 129) (130 65))
+      "あA"
   - name: http-percent-decode
     source: |
       ;; Lenient by design: a malformed escape is copied verbatim, "+" is NOT a
@@ -8487,8 +8548,10 @@ cases:
       ;; an (unsigned-byte 8) body comes back UNFLATTENED, the way a stream body
       ;; does: only the transport knows whether it can write bytes, and once the
       ;; octets are characters nothing can tell them from text the application
-      ;; chose. A transport that writes TEXT flattens them itself, which is what
-      ;; %http-body-text is.
+      ;; chose. A transport that carries TEXT renders them itself -- the reactor
+      ;; envelope's no-sink arm, through rontolisp::%octets-to-string: the
+      ;; LENIENT UTF-8 decode, so text-in-octets crosses as the text it was and
+      ;; a byte that leads no sequence is its own character.
       (defvar *ci-norm-octets*
         (let ((v (make-array 3 :element-type '(unsigned-byte 8))))
           (setf (aref v 0) #xFF)
@@ -8499,8 +8562,10 @@ cases:
                   (car (cdr (cdr (rontolisp::%http-normalize-response
                                   (list 200 nil *ci-norm-octets*)))))))
       (print (map 'list #'char-code
-                  (rontolisp::%http-body-text *ci-norm-octets*)))
-      (print (rontolisp::%http-body-text "already text"))
+                  (rontolisp::%octets-to-string *ci-norm-octets*)))
+      (print (rontolisp::%octets-to-string
+              (make-array 3 :element-type '(unsigned-byte 8)
+                            :initial-contents '(227 129 130))))
     expected: |
       (200 (("content-type" . "text/plain")) "abc")
       (404 NIL "")
@@ -8513,7 +8578,7 @@ cases:
       :REFUSED-STATUS
       (255 254 65)
       (255 254 65)
-      "already text"
+      "あ"
   - name: http-buffered-body-stream
     source: |
       ;; The buffered :raw-body construction (the Gray class on the WASM

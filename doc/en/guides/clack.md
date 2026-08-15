@@ -336,13 +336,13 @@ inside it:
   raw octets — with `nil` or an empty chunk for the end. It may answer a future,
   so a host that suspends while it reads can hand one over.
 
-A chunk boundary may fall inside a UTF-8 sequence: a host reading a socket knows
-nothing about code points, so the open sequence is carried into the next chunk
-rather than decoded as two malformed characters.
-
-Octets stay octets. The buffered `:raw-body` is itself a byte stream, so a chunk
-that arrived as an `(unsigned-byte 8)` vector reaches it unchanged: a binary
-upload is byte-exact, and only a source handing over text is ever decoded.
+Octets stay octets. Both `:raw-body` shapes are byte streams -- the default
+asynchronous stream answers each chunk as an `(unsigned-byte 8)` vector, the
+buffered Gray stream stores the octets as they came -- so a chunk that arrived
+as octets reaches the application unchanged and a binary upload is byte-exact;
+a source handing over text is UTF-8 encoded once. Nothing decodes per chunk, so
+a chunk boundary inside a UTF-8 sequence (a host reading a socket knows nothing
+about code points) costs nothing: `read-all` decodes the whole body once.
 
 A source that is empty at its **first** call is no body at all — `:raw-body`
 stays `nil`, exactly as for a request whose `"body"` is absent, because that is
@@ -397,10 +397,11 @@ An `(unsigned-byte 8)` response body reaches the sink as **octets**, not as
 text: a sink can write bytes, and a JSON head cannot carry them.
 
 Passing no sink keeps the old shape exactly: the body rides the head, a stream
-body is drained into it, and an octet body is rendered one character per octet
-(the only spelling a JSON string has for it). That last one is the ONE place a
-binary response is not byte-exact, and it is the reason the sink exists: a host
-that answers binary passes one.
+body is drained into it, and octets -- an octet body, or a stream's octet
+chunks -- are rendered as the text their UTF-8 bytes spell, so a page a Clack
+application answered as octets crosses as the page it was. A JSON string is
+text, so that is the ONE place a *binary* response is not byte-exact, and it is
+the reason the sink exists: a host that answers binary passes one.
 
 ### The WASM boundary: a head export and two body imports
 

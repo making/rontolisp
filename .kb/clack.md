@@ -341,10 +341,12 @@ rules, each load-bearing:
 - **a STREAM body is forwarded, not collected.** `%http-normalize-response`
   hands a stream body through untouched (`%http-body-string`'s `streamp` arm),
   and with a sink the transport pulls it chunk at a time
-  (`%http-reactor-stream-chunk`, the resolve again) straight into the sink.
-  Without a sink it is DRAINED into the envelope — which is also a fix rather
-  than a fallback: this transport used to hand the stream value itself to
-  `json-stringify`.
+  (`%http-reactor-stream-chunk`, the resolve again) straight into the sink --
+  each chunk an OCTET vector on every HTTP body stream (todo-370), so a relayed
+  fetch reply crosses byte-exact. Without a sink it is DRAINED
+  (`%http-reactor-body-drain`, the synchronous twin of `%http-drain`) and
+  rendered into the envelope — which is also a fix rather than a fallback: this
+  transport used to hand the stream value itself to `json-stringify`.
 
 An `(unsigned-byte 8)` response body reaches the sink as the OCTETS it is, and
 that is why the shared normalizer stopped flattening it: `%http-body-string`
@@ -354,17 +356,18 @@ character the application chose are the same value, and every transport that
 UTF-8 encodes what it is given doubles the high ones — which is what a binary
 response used to cost (`ff fe 41` → `c3 bf c3 be 41`, measured). Every transport
 that writes the wire itself now takes the octets as they are and is byte-exact;
-the ONE that still flattens, through `%http-body-text`, is
-`%http-reactor-body-out`'s no-sink arm, because the envelope's `"body"` key is a
-JSON string. A host that wants a binary response registers the sink. Details and
-the per-transport mechanics: `.kb/http-server.md`.
+the ONE that cannot is `%http-reactor-body-out`'s no-sink arm, because the
+envelope's `"body"` key is a JSON string: it renders octets as the lenient UTF-8
+TEXT they spell (`%http-reactor-body-envelope-text`; it used to flatten one
+character per octet, which the host's UTF-8 encode then doubled -- todo-370). A
+host that wants a binary response registers the sink. Details and the
+per-transport mechanics: `.kb/http-server.md`.
 
 Pinned by the `http-reactor-body-sink` ci-spec case (four backends: a string body
 with and without a sink, a stream body both ways, the error arm staying in band,
 and an octet body reaching the sink unflattened while the head still gets the
-flattened spelling), the `http-response-normalizer` case (the normalizer's
-widened contract, plus `%http-body-text` over both spellings) and
-`LispEvaluatorAsdfTest.aReactorSinkTakesTheResponseBodyOutOfTheHead`.
+text rendering), the `http-response-normalizer` case (the normalizer's widened
+contract) and `LispEvaluatorAsdfTest.aReactorSinkTakesTheResponseBodyOutOfTheHead`.
 
 Two backend bugs surfaced while wiring it, both pre-existing and both now pinned
 by the `stream-new-builds-a-pull-stream-on-every-backend` ci-spec case:
@@ -557,13 +560,17 @@ all -- it used to cost ~15 bytes per character, 63 MB for that body. See
 through the reused scratch, so linear memory grows once to the largest body and
 is reused from there.
 
-**A chunk is a string OR OCTETS** (an `(unsigned-byte 8)` vector), and both
-drains read through ONE adapter, `%http-reactor-text-source`, so neither has to
-know which arrived. Octets are the shape a byte-shaped host boundary has — the
-`:bytes` import of Phase 2b reads into a REUSABLE buffer, which is the only
-convention that keeps linear memory flat (the todo's finding 2), and a `:string`
-result cannot carry arbitrary bytes at all (finding 4). Two rules the adapter
-owns, and both are load-bearing:
+**A chunk is a string OR OCTETS** (an `(unsigned-byte 8)` vector), and the
+TEXT drain reads through ONE adapter, `%http-reactor-text-source`, so it does
+not have to know which arrived (the `:stream` mode's `%http-reactor-body-stream`
+reads through its byte-shaped mirror `%http-reactor-octet-source` since
+todo-370 -- an octet chunk untouched, a string chunk UTF-8 encoded -- and
+decodes nothing: every HTTP body stream answers octets, `.kb/fetch-http.md`).
+Octets are the shape a byte-shaped host boundary has — the `:bytes` import of
+Phase 2b reads into a REUSABLE buffer, which is the only convention that keeps
+linear memory flat (the todo's finding 2), and a `:string` result cannot carry
+arbitrary bytes at all (finding 4). Two rules the text adapter owns, and both are
+load-bearing:
 
 - **an open UTF-8 sequence is carried into the next chunk**
   (`%http-reactor-decode-chunk`, over `http-server.lisp`'s
@@ -628,9 +635,10 @@ directive, because a reactor has no `http-handler` call at run time:
   spelling; `%http-reactor-body-text` stays for a caller that wants text and
   nothing else (`examples/cloudflare-workers/httpbin` echoes the body).
 - **`:stream` (the default)** — `%http-reactor-body-stream` builds a
-  first-class rontolisp pull stream over the source with
-  `rontolisp::%stream-new` (todo-341 Phase 1), so the portable
-  `(await (read-all (getf env :raw-body)))` drain works on a reactor too. That
+  first-class rontolisp pull stream of OCTET chunks over the source with
+  `rontolisp::%stream-new` (todo-341 Phase 1; octets since todo-370), so the
+  portable `(await (read-all (getf env :raw-body)))` drain works on a reactor
+  too, and answering the stream as a response body relays it byte-exact. That
   is what closed the todo's finding 6: `rontolisp:http-handler`'s `:raw-body`
   argument used to be DROPPED by `HttpReactorInliner.lowerHttpHandler` and the
   reactor always buffered, so `examples/net/httpbin.lisp` — whose drain is the

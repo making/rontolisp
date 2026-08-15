@@ -62,9 +62,11 @@ which throws synchronously on invalid arguments).
 `fetch` itself returns the future. Awaiting it yields the property list
 `(:status <integer> :headers <alist> :body <stream>)`, where `:headers` is an
 alist of `(name . value)` response-header pairs and `:body` is an
-**asynchronous stream** of the body's chunks — drain it to one string with
-[`rontolisp:read-all`](rontolisp-read-all.md) (or take the chunks one at a
-time with [`rontolisp:stream-read`](rontolisp-stream-read.md)):
+**asynchronous stream** of the body's octet chunks (`(unsigned-byte 8)`
+vectors, the bytes as they arrive) — drain it to one decoded string with
+[`rontolisp:read-all`](rontolisp-read-all.md), take the chunks one at a
+time with [`rontolisp:stream-read`](rontolisp-stream-read.md), or answer the
+stream itself as a served response body to relay the reply byte-exact:
 
 ```console
 (let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
@@ -74,10 +76,8 @@ time with [`rontolisp:stream-read`](rontolisp-stream-read.md)):
   (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
-> **Backend note.** The stream-valued `:body` is the interpreter/JVM contract.
-> Under `--component` the response currently carries the whole body as one
-> string in `:body` (the component streaming body lands later), so read it
-> there with a plain `(getf res :body)`.
+`:body` is that stream on every backend; on the JVM (whose client takes the
+whole reply at once) it holds one chunk.
 
 A JSON response body parses into Lisp values with
 [`rontolisp:json-parse`](rontolisp-json-parse.md), and

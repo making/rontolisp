@@ -4041,6 +4041,57 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo("proxied backend /up 200");
 	}
 
+	@Test
+	void httpHandlerRelaysAFetchedBodyByteExactlyUnderWasmtimeServe() throws Exception {
+		// The component leg of the .todo/370 gate (HttpHandlerTest#directiveRelays... is
+		// the interpreter's, HttpHandlerJvmTest the JVM's, WasmHostGlueE2eTest the
+		// reactor's): a fetched reply's :body STREAM answered as the response body --
+		// the proxy shape, nothing reads it -- reaches the wire as the upstream's exact
+		// octets. The stream<u8> read lifts each chunk as a packed octet vector,
+		// %http-drain joins them without decoding, and stream<u8>.write stages the
+		// vector raw. read-all on the same kind of reply still answers the decoded text.
+		byte[] backendBytes = compileServeComponent("""
+				(defun handle (env)
+				  (if (string= (getf env :path-info) "/text")
+				      (list 200 (list :content-type "text/plain") (list "こんにちは"))
+				      (let ((v (make-array 9 :element-type '(unsigned-byte 8))))
+				        (setf (aref v 0) 255) (setf (aref v 1) 216) (setf (aref v 2) 255)
+				        (setf (aref v 3) 0) (setf (aref v 4) 65) (setf (aref v 5) 254)
+				        (setf (aref v 6) 128) (setf (aref v 7) 195) (setf (aref v 8) 191)
+				        (list 200 (list :content-type "image/jpeg") v))))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		byte[] proxyBytes = compileServeComponent("""
+				(rontolisp:async-defun handle (env)
+				  (if (string= (getf env :path-info) "/text")
+				      (let ((res (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8095/text"))))
+				        (list 200 (list :content-type "text/plain")
+				              (list (rontolisp:await (rontolisp:read-all (getf res :body))))))
+				      (let ((res (rontolisp:await (rontolisp:fetch "http://127.0.0.1:8095/jpeg"))))
+				        (list (getf res :status)
+				              (list :content-type
+				                    (cdr (assoc "content-type" (getf res :headers) :test #'string-equal)))
+				              (getf res :body)))))
+				(rontolisp:http-handler 'handle)
+				""", null);
+		wasmtime.copyFileToContainer(Transferable.of(backendBytes), "/tmp/relay-backend.wasm");
+		wasmtime.copyFileToContainer(Transferable.of(proxyBytes), "/tmp/relay-proxy.wasm");
+		ExecResult result = wasmtime.execInContainer("bash", "-c",
+				"wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8095 /tmp/relay-backend.wasm >/tmp/relay-backend.log 2>&1 &"
+						+ " wasmtime serve -W gc=y -W exceptions=y --addr 127.0.0.1:8096 /tmp/relay-proxy.wasm >/tmp/relay-proxy.log 2>&1 &"
+						+ " for i in $(seq 1 60); do curl -sf http://127.0.0.1:8095/text >/dev/null && break; sleep 0.25; done;"
+						+ " curl -sf http://127.0.0.1:8095/text >/dev/null"
+						+ " || { echo 'backend never came up' 1>&2; cat /tmp/relay-backend.log 1>&2; exit 1; };"
+						+ " for i in $(seq 1 60); do code=$(curl -s -m 20 -o /tmp/relay.out -D /tmp/relay.hdr -w '%{http_code}'"
+						+ " http://127.0.0.1:8096/relay) && [ \"$code\" != 000 ]"
+						+ " && { echo \"$code $(grep -i '^content-type:' /tmp/relay.hdr | tr -d '\\r' | cut -d' ' -f2)"
+						+ " $(od -An -tx1 /tmp/relay.out | tr -d ' \\n')\"; curl -s http://127.0.0.1:8096/text; echo; exit 0; };"
+						+ " sleep 0.25; done; cat /tmp/relay-backend.log /tmp/relay-proxy.log 1>&2; exit 1");
+		assertThat(result.getExitCode()).as("wasmtime serve relayed body; log: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout().trim().lines().toList()).containsExactly("200 image/jpeg ffd8ff0041fe80c3bf",
+				"こんにちは");
+	}
+
 	// The wasi:keyvalue store, cut down to what a page-hit counter binds. It is the real
 	// upstream interface (wasmtime's own host answers it under -S keyvalue=y), so every
 	// function returns a result and `get` an option<list<u8>> -- exactly the shapes only
@@ -14767,7 +14818,8 @@ class WasmLispCompilerIntegrationTest {
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/types@0.3.0" :package http)
 				(rontolisp:wit-import "iface.wit" :interface "wasi:http/client@0.3.0" :package client)
 
-				;; body-stream-read answers the chunk immediately, or -- when the host
+				;; body-stream-read answers the chunk -- a packed (unsigned-byte 8)
+				;; vector, the octets as read -- immediately, or -- when the host
 				;; reports the read in flight -- a PENDING future the scheduler settles;
 				;; await passes an immediate chunk through and suspends on the pending
 				;; one, so stream reads belong in an async function.
@@ -14775,7 +14827,7 @@ class WasmLispCompilerIntegrationTest {
 				  (let ((chunk (rontolisp:await (http:body-stream-read stream))))
 				    (if (or (null chunk) (= (length chunk) 0))
 				        acc
-				        (rontolisp:await (read-all stream (concatenate 'string acc chunk))))))
+				        (rontolisp:await (read-all stream (concatenate 'string acc (map 'string #'code-char chunk)))))))
 
 				(rontolisp:async-defun get-url (authority path)
 				  (let* ((trailers (http:trailers-future-new))
@@ -14854,7 +14906,7 @@ class WasmLispCompilerIntegrationTest {
 				  (let ((chunk (rontolisp:await (http:body-stream-read stream))))
 				    (if (or (null chunk) (= (length chunk) 0))
 				        acc
-				        (rontolisp:await (read-all stream (concatenate 'string acc chunk))))))
+				        (rontolisp:await (read-all stream (concatenate 'string acc (map 'string #'code-char chunk)))))))
 
 				(rontolisp:async-defun post-url (authority path body)
 				  ;; content-length goes on with fields.append -- its value (a field-value =

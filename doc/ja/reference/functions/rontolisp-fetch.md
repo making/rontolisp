@@ -61,10 +61,12 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 `fetch` 自体は future を返します。それを await するとプロパティリスト
 `(:status <integer> :headers <alist> :body <stream>)` が得られます。`:headers`
 はレスポンスヘッダの `(name . value)` ペアの連想リストで、`:body` はボディの
-チャンクの**非同期ストリーム**です —
-[`rontolisp:read-all`](rontolisp-read-all.md) で 1 つの文字列に読み切ります
-(チャンクを 1 つずつ取るには
-[`rontolisp:stream-read`](rontolisp-stream-read.md) を使います):
+オクテットチャンク (`(unsigned-byte 8)` ベクタ、届いたままのバイト) の
+**非同期ストリーム**です —
+[`rontolisp:read-all`](rontolisp-read-all.md) でデコード済みの 1 つの文字列に
+読み切るか、[`rontolisp:stream-read`](rontolisp-stream-read.md) でチャンクを
+1 つずつ取るか、ストリームそのものをサーブ側のレスポンスボディとして返して
+応答をバイト単位で正確に中継します:
 
 ```console
 (let ((res (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/get"))))
@@ -74,10 +76,8 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
   (print (getf res :headers)))  ; => (("content-type" . "application/json") ...)
 ```
 
-> **バックエンドの注意。** ストリーム値の `:body` はインタプリタ/JVM の契約です。
-> `--component` では現在、レスポンスはボディ全体を 1 つの文字列として `:body` に
-> 運びます (コンポーネントのストリーミングボディは今後の対応です)。そこでは素の
-> `(getf res :body)` で読んでください。
+`:body` はどのバックエンドでもこのストリームです。JVM (クライアントが応答全体を
+一度に受け取る) では 1 チャンクを持ちます。
 
 JSON のレスポンスボディは
 [`rontolisp:json-parse`](rontolisp-json-parse.md) で Lisp の値にパースでき、

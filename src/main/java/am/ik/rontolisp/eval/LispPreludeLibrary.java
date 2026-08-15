@@ -70,7 +70,9 @@ import org.jspecify.annotations.Nullable;
  * ...), a {@code U+XXXX} label for other non-printing code points, nil for graphic
  * characters; mirrors the interpreter's Java primitive.</li>
  * <li>{@code rontolisp:read-all} -- an {@code rontolisp:async-defun} draining an
- * asynchronous stream's string chunks into one string.</li>
+ * asynchronous stream into one string: string chunks concatenated, octet chunks (every
+ * HTTP body stream's) joined by {@code %octets-join} and UTF-8 decoded by
+ * {@code %octets-to-string} -- the lenient decoder the interpreter mirrors natively.</li>
  * <li>{@code rontolisp:then} / {@code then*} / {@code catch} / {@code finally} -- the
  * future-as-value combinator quartet ({@code (rl:then future fn)} attaches a transform,
  * {@code (rl:catch future handler)} an error fallback, {@code (rl:finally future thunk)}
@@ -635,19 +637,97 @@ public final class LispPreludeLibrary {
 				               (hex cp ""))))
 				          (t nil))))
 				""");
-		// A STRING passes through: a body that has already fully arrived (a --host-fetch
-		// reactor's :body, or the declared absent-body default) is its own drained
-		// value, so the one drain spelling works whatever shape :body took.
+		// %octets-join: a list of (unsigned-byte 8) vectors -> ONE packed vector holding
+		// them in order. The blit every drain of an octet-chunk stream needs (read-all
+		// below, %http-drain in http-server.lisp): the chunks are collected and blitted
+		// once rather than concatenated as they arrive, so a body pulled in n chunks
+		// costs one copy, not n -- and a single chunk (the JVM's fetch answers its whole
+		// body as one) costs none. The per-chunk copy is `replace`: native on the
+		// interpreter (an interpreted per-byte loop over a document-sized body cost
+		// seconds), and on wasm the destination is provably an array so the site calls
+		// the narrow %replace-runtime-array arm (.kb/sequence-op-runtimes.md; measured
+		// +0.5 KB on a serve component). http-server.lisp's %http-octets-join is the
+		// same defun again, because that library is prelude-free by rule.
+		SOURCES.put(LispNames.OCTETS_JOIN_INTERNAL, """
+				(defun rontolisp::%octets-join (chunks total)
+				  (if (and chunks (null (cdr chunks)))
+				      (car chunks)
+				      (let ((out (make-array total :element-type '(unsigned-byte 8))) (k 0))
+				        (dolist (v chunks)
+				          (replace out v :start1 k)
+				          (setq k (+ k (length v))))
+				        out)))
+				""");
+		// %octets-to-string: an (unsigned-byte 8) vector -> the string its UTF-8 bytes
+		// spell, LENIENTLY: a byte that leads no valid sequence, and a sequence the
+		// vector truncates, become their own characters, so malformed input never
+		// signals -- the rule http-server.lisp's request decoder applies, so a body
+		// decodes the same whichever transport carried it. The interpreter mirrors this
+		// in Java arm for arm (Environment); the compile paths compile this defun.
+		SOURCES.put(LispNames.OCTETS_TO_STRING_INTERNAL, """
+				(defun rontolisp::%octets-to-string (v)
+				  (let ((n (length v)))
+				    (with-output-to-string (s)
+				      (let ((i 0))
+				        (while (< i n)
+				          (let ((b (aref v i))
+				                (b1 (if (< (+ i 1) n) (aref v (+ i 1)) nil))
+				                (b2 (if (< (+ i 2) n) (aref v (+ i 2)) nil))
+				                (b3 (if (< (+ i 3) n) (aref v (+ i 3)) nil)))
+				            (cond ((< b #x80)
+				                   (write-char (code-char b) s)
+				                   (setq i (+ i 1)))
+				                  ((and (>= b #xC0) (< b #xE0) b1)
+				                   (write-char
+				                    (code-char (logior (ash (logand b #x1F) 6) (logand b1 #x3F)))
+				                    s)
+				                   (setq i (+ i 2)))
+				                  ((and (>= b #xE0) (< b #xF0) b1 b2)
+				                   (write-char (code-char
+				                                (logior (ash (logand b #x0F) 12)
+				                                        (ash (logand b1 #x3F) 6)
+				                                        (logand b2 #x3F))) s)
+				                   (setq i (+ i 3)))
+				                  ((and (>= b #xF0) (< b #xF8) b1 b2 b3)
+				                   (write-char (code-char
+				                                (logior (ash (logand b #x07) 18)
+				                                        (ash (logand b1 #x3F) 12)
+				                                        (ash (logand b2 #x3F) 6)
+				                                        (logand b3 #x3F))) s)
+				                   (setq i (+ i 4)))
+				                  (t
+				                   (write-char (code-char b) s)
+				                   (setq i (+ i 1))))))))))
+				""");
+		// read-all: the stream drained into ONE string. A STRING passes through: a body
+		// that has already fully arrived (the declared absent-body default, a user
+		// plist) is its own drained value, so the one drain spelling works whatever
+		// shape :body took. String chunks (a guest make-stream) are concatenated
+		// through a string output stream rather than pairwise (that is quadratic in the
+		// body size); OCTET chunks -- what every HTTP body stream answers, so a relayed
+		// body crosses byte-exact -- are joined once and UTF-8 decoded, which is what
+		// keeps a document-shaped consumer reading text off a byte stream. A stream
+		// mixing the two kinds is an error rather than a guess.
 		SOURCES.put(LispNames.READ_ALL, """
 				(rontolisp:async-defun rontolisp:read-all (s)
 				  (if (stringp s)
 				      s
-				      (let ((acc "")
+				      (let ((chunks nil) (octets nil) (text nil) (total 0)
 				            (chunk (rontolisp:await (rontolisp:stream-read s))))
 				        (while chunk
-				          (setq acc (concatenate 'string acc chunk))
+				          (if (stringp chunk) (setq text t) (setq octets t))
+				          (setq total (+ total (length chunk)))
+				          (setq chunks (cons chunk chunks))
 				          (setq chunk (rontolisp:await (rontolisp:stream-read s))))
-				        acc)))
+				        (setq chunks (nreverse chunks))
+				        (cond ((and octets text)
+				               (error "read-all: the stream mixes string and octet chunks"))
+				              (octets
+				               (rontolisp::%octets-to-string
+				                (rontolisp::%octets-join chunks total)))
+				              (t
+				               (with-output-to-string (out)
+				                 (dolist (c chunks) (write-string c out))))))))
 				""");
 		// The future-as-value combinator quartet (rontolisp:then / then* / catch /
 		// finally): each returns a FRESH future that composes the input future's

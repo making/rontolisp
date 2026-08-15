@@ -72,6 +72,64 @@ class HttpHandlerTest {
 			    (list 200 (list :content-type "application/octet-stream") v)))
 			""";
 
+	// The relay every backend's round-trip test serves: /relay answers a fetched reply's
+	// :body STREAM as its own response body -- the proxy shape, nothing reads the
+	// stream -- and /text drains the same upstream's reply through read-all. The
+	// upstream port rides the query string. What has to hold: the relay answers the
+	// upstream's exact octets (a body stream is a BYTE stream, so nothing decodes on
+	// the way through), and read-all still answers the decoded text.
+	static final String RELAY_PROGRAM = """
+			(rontolisp:async-defun handle (env)
+			  (let* ((upstream (concatenate 'string "http://127.0.0.1:" (getf env :query-string)))
+			         (path (getf env :path-info)))
+			    (if (string= path "/text")
+			        (let ((res (rontolisp:await (rontolisp:fetch (concatenate 'string upstream "/text")))))
+			          (list 200 (list :content-type "text/plain")
+			                (list (rontolisp:await (rontolisp:read-all (getf res :body))))))
+			        (let ((res (rontolisp:await (rontolisp:fetch (concatenate 'string upstream "/jpeg")))))
+			          (list (getf res :status)
+			                (list :content-type
+			                      (cdr (assoc "content-type" (getf res :headers) :test #'string-equal)))
+			                (getf res :body))))))
+			""";
+
+	// The octets a relay has to answer unchanged: a JPEG's lead bytes, a stray
+	// continuation byte and a valid two-byte sequence, so a transport that decodes and
+	// re-encodes answers something else for every one of them.
+	static final int[] RELAY_OCTETS = { 0xff, 0xd8, 0xff, 0x00, 0x41, 0xfe, 0x80, 0xc3, 0xbf };
+
+	// The upstream the relay tests fetch from: /jpeg answers RELAY_OCTETS, /text a
+	// non-ASCII string. Started on an ephemeral port; the caller stops it with the rest.
+	static int startRelayUpstream() {
+		byte[] jpeg = new byte[RELAY_OCTETS.length];
+		for (int i = 0; i < jpeg.length; i++) {
+			jpeg[i] = (byte) RELAY_OCTETS[i];
+		}
+		HttpServer upstream = HttpHandlerSupport.start(0,
+				request -> request.target().startsWith("/jpeg")
+						? new HttpHandlerSupport.Response(200,
+								List.of(new HttpHandlerSupport.Header("content-type", "image/jpeg")), jpeg)
+						: HttpHandlerSupport.Response.of(200,
+								List.of(new HttpHandlerSupport.Header("content-type", "text/plain")), "こんにちは"));
+		return upstream.getAddress().getPort();
+	}
+
+	@Test
+	void directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt() throws Exception {
+		// The gate of .todo/370: a fetched reply's :body relayed as the response body
+		// crosses byte-exact (it used to be decoded chunk by chunk and re-encoded, so a
+		// JPEG's ff d8 ff came out c3 bf d8), while read-all on the same kind of reply
+		// still answers the decoded text.
+		int upstream = startRelayUpstream();
+		int port = freePort();
+		serveInBackground(RELAY_PROGRAM + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		HttpResponse<byte[]> relayed = getBytes(port, "/relay?" + upstream);
+		assertThat(relayed.statusCode()).isEqualTo(200);
+		assertThat(relayed.headers().firstValue("content-type")).hasValue("image/jpeg");
+		assertThat(relayed.body()).containsExactly(RELAY_OCTETS);
+		assertThat(get(port, "/text?" + upstream).body()).isEqualTo("こんにちは");
+	}
+
 	@Test
 	void startServesHandlerResponse() throws Exception {
 		HttpServer server = HttpHandlerSupport.start(0,

@@ -5,17 +5,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
-import java.nio.charset.CharsetDecoder;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 
-import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispStream;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import org.jspecify.annotations.Nullable;
@@ -41,14 +37,14 @@ final class HttpSupport {
 	 * browser playground's fetch broker delivers this shape (see
 	 * {@code src/web/java/.../eval/Target_HttpSupport.java} and
 	 * {@code BrowserHttpResponses}); it is converted into a {@link Start} with an
-	 * already-settled one-chunk body stream.
+	 * already-settled one-chunk body stream (the body's UTF-8 octets).
 	 */
 	record HttpResult(int status, String body, List<Header> headers) {
 	}
 
 	/**
-	 * The response head: status code and headers, plus the body as a stream of string
-	 * chunks that fills in asynchronously.
+	 * The response head: status code and headers, plus the body as a stream of OCTET
+	 * chunks ({@code (unsigned-byte 8)} vectors) that fills in asynchronously.
 	 */
 	record Start(int status, List<Header> headers, LispStream body) {
 	}
@@ -57,11 +53,11 @@ final class HttpSupport {
 	 * Starts an HTTP request asynchronously (JavaScript {@code fetch}-style) via
 	 * {@link HttpClient#sendAsync}: the request is in flight when this returns, the
 	 * future settles when the response HEAD (status + headers) has arrived, and the body
-	 * streams into the result's {@link LispStream} afterwards (UTF-8 decoded, multi-byte
-	 * sequences preserved across chunk boundaries; a transport failure mid-body fails the
-	 * stream). Request-building failures (e.g. a malformed URL) fail the returned future
-	 * rather than throwing, so every failure surfaces at await time. This is the seam the
-	 * browser playground substitutes (see
+	 * streams into the result's {@link LispStream} afterwards (as octet chunks, exactly
+	 * the bytes received -- {@code rontolisp:read-all} decodes; a transport failure
+	 * mid-body fails the stream). Request-building failures (e.g. a malformed URL) fail
+	 * the returned future rather than throwing, so every failure surfaces at await time.
+	 * This is the seam the browser playground substitutes (see
 	 * {@code src/web/java/.../eval/Target_HttpSupport.java}), where the request is
 	 * buffered and an already-completed future with a one-chunk body stream is returned
 	 * -- and where the default user-agent below is deliberately absent, the browser
@@ -117,18 +113,17 @@ final class HttpSupport {
 
 	/**
 	 * Pumps the response body publisher into a {@link LispStream}: each batch of byte
-	 * buffers is UTF-8 decoded into one string chunk (carrying a trailing partial
-	 * multi-byte sequence over to the next batch) and one batch is requested at a time.
+	 * buffers becomes ONE OCTET CHUNK -- an {@code (unsigned-byte 8)} vector holding the
+	 * bytes exactly as they arrived, no decode -- and one batch is requested at a time.
+	 * The body stream is a BYTE stream on every backend: a handler that relays it as its
+	 * own response body forwards the upstream's octets untouched, and
+	 * {@code rontolisp:read-all} decodes the whole body once, at the drain, which is also
+	 * what keeps a multi-byte sequence a batch boundary split from ever being decoded in
+	 * two halves.
 	 */
 	private static final class BodyPump implements Flow.Subscriber<List<ByteBuffer>> {
 
 		private final LispStream stream;
-
-		private final CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
-			.onMalformedInput(CodingErrorAction.REPLACE)
-			.onUnmappableCharacter(CodingErrorAction.REPLACE);
-
-		private byte[] carry = new byte[0];
 
 		private Flow.@Nullable Subscription subscription;
 
@@ -145,9 +140,9 @@ final class HttpSupport {
 		@Override
 		public void onNext(List<ByteBuffer> buffers) {
 			try {
-				String chunk = decode(buffers, false);
-				if (!chunk.isEmpty()) {
-					this.stream.write(new LispString(chunk));
+				LispIntVector chunk = octets(buffers);
+				if (chunk.length() > 0) {
+					this.stream.write(chunk);
 				}
 				Flow.Subscription active = this.subscription;
 				if (active != null) {
@@ -170,36 +165,22 @@ final class HttpSupport {
 
 		@Override
 		public void onComplete() {
-			String tail = decode(List.of(), true);
-			if (!tail.isEmpty()) {
-				this.stream.write(new LispString(tail));
-			}
 			this.stream.close();
 		}
 
-		private String decode(List<ByteBuffer> buffers, boolean endOfInput) {
-			int total = this.carry.length;
+		private static LispIntVector octets(List<ByteBuffer> buffers) {
+			int total = 0;
 			for (ByteBuffer buffer : buffers) {
 				total += buffer.remaining();
 			}
-			ByteBuffer input = ByteBuffer.allocate(total);
-			input.put(this.carry);
+			long[] data = new long[total];
+			int k = 0;
 			for (ByteBuffer buffer : buffers) {
-				input.put(buffer);
+				while (buffer.hasRemaining()) {
+					data[k++] = buffer.get() & 0xFF;
+				}
 			}
-			input.flip();
-			CharBuffer output = CharBuffer.allocate(total + 2);
-			this.decoder.decode(input, output, endOfInput);
-			if (endOfInput) {
-				this.decoder.flush(output);
-				this.carry = new byte[0];
-			}
-			else {
-				this.carry = new byte[input.remaining()];
-				input.get(this.carry);
-			}
-			output.flip();
-			return output.toString();
+			return new LispIntVector(8, data);
 		}
 
 	}

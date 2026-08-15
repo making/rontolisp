@@ -2,9 +2,13 @@
 
 `(rontolisp:read-all stream)`
 
-Returns a future settling to the concatenation of all remaining *string*
-chunks of an asynchronous stream (a non-string chunk is an error). The future
-settles once the stream reaches end of stream, so the producer side must
+Returns a future settling to the remaining chunks of an asynchronous stream
+drained into **one string**: string chunks (a guest-created stream) are
+concatenated, and octet chunks -- the `(unsigned-byte 8)` vectors every HTTP
+body stream answers, a fetched reply's `:body` and a served request's
+`:raw-body` -- are joined and decoded as UTF-8, so a document-shaped consumer
+reads text off a byte stream. A stream mixing the two kinds is an error. The
+future settles once the stream reaches end of stream, so the producer side must
 eventually call [`rontolisp:stream-close`](rontolisp-stream-close.md).
 
 ```lisp
@@ -24,7 +28,9 @@ response body:
 ```
 
 To take the chunks one at a time instead, use
-[`rontolisp:stream-read`](rontolisp-stream-read.md).
+[`rontolisp:stream-read`](rontolisp-stream-read.md); to forward a body without
+reading it, answer the stream itself as a response body -- the transport drains
+it byte-exact, nothing decodes on the way through.
 
 A **string** passes straight through (the future settles to the string
 itself): a body that has already fully arrived is its own drained value, so the

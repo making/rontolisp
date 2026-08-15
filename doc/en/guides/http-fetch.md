@@ -38,8 +38,9 @@ assumes; here we cover only what is particular to making requests.
 `fetch` returns as soon as the request is in flight. Passing the future to
 `rontolisp:await` suspends until the response arrives and yields the result
 property list `(:status <integer> :headers <alist> :body <stream>)` — on every
-backend `:body` is an [asynchronous stream](async.md#asynchronous-streams),
-drained with
+backend `:body` is an [asynchronous stream](async.md#asynchronous-streams) of
+the body's octets (each chunk an `(unsigned-byte 8)` vector), drained to one
+decoded string with
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md):
 
 ```lisp

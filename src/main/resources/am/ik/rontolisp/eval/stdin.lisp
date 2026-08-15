@@ -44,6 +44,10 @@
 
 (rontolisp:async-defun rontolisp::%stdin-fill ()
   ;; Refill the chunk buffer from the stdin stream; nil (and the eof mark) at EOF.
+  ;; A chunk is a packed (unsigned-byte 8) vector -- the stream<u8> read lifts
+  ;; the octets as they are -- so the cursor below walks BYTES, and a character
+  ;; is assembled from them (a multi-byte sequence a chunk boundary splits still
+  ;; decodes whole, the refill happening between its bytes).
   (let ((chunk
          (rontolisp:await
           (%stdin:stdin-stream-read (rontolisp::%stdin-ensure)))))
@@ -61,19 +65,41 @@
       (< rontolisp::*stdin-cursor* (length rontolisp::*stdin-buf*))
       nil))
 
-(defun rontolisp::%stdin-pop-char ()
-  (let ((c (char rontolisp::*stdin-buf* rontolisp::*stdin-cursor*)))
+(defun rontolisp::%stdin-pop-byte ()
+  (let ((b (aref rontolisp::*stdin-buf* rontolisp::*stdin-cursor*)))
     (setq rontolisp::*stdin-cursor* (+ rontolisp::*stdin-cursor* 1))
-    c))
+    b))
 
-(rontolisp:async-defun rontolisp::%stdin-read-char-f ()
+(rontolisp:async-defun rontolisp::%stdin-read-byte-f ()
   (if (rontolisp::%stdin-buf-ready)
-      (rontolisp::%stdin-pop-char)
+      (rontolisp::%stdin-pop-byte)
       (if rontolisp::*stdin-eof*
           nil
           (if (rontolisp:await (rontolisp::%stdin-fill))
-              (rontolisp::%stdin-pop-char)
+              (rontolisp::%stdin-pop-byte)
               nil))))
+
+(rontolisp:async-defun rontolisp::%stdin-read-char-f ()
+  ;; One UTF-8 sequence assembled byte-wise, the way sockets.lisp's
+  ;; %sock-read-char-f does it: an invalid lead byte stands alone and decodes to
+  ;; whatever the string layer's decoder yields for it.
+  (let ((b0 (rontolisp:await (rontolisp::%stdin-read-byte-f))))
+    (if (null b0)
+        nil
+        (if (< b0 128)
+            (code-char b0)
+            (let ((n (if (< b0 192) 0 (if (< b0 224) 1 (if (< b0 240) 2 3))))
+                  (acc (rontolisp::%str-from-byte b0)))
+              (while (> n 0)
+                (let ((bn (rontolisp:await (rontolisp::%stdin-read-byte-f))))
+                  (if (null bn)
+                      (setq n 0)
+                      (progn
+                        (setq acc
+                              (concatenate 'string acc
+                                           (rontolisp::%str-from-byte bn)))
+                        (setq n (- n 1))))))
+              (char acc 0))))))
 
 (rontolisp:async-defun rontolisp::%stdin-read-line-f ()
   (let ((acc "") (got nil) (done nil))

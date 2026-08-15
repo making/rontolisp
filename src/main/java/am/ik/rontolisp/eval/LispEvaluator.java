@@ -7422,7 +7422,10 @@ public final class LispEvaluator {
 			rawBody = empty;
 		}
 		else {
-			rawBody = LispStream.settled(new LispString(request.bodyString()));
+			// One settled OCTET chunk: the request's bytes as they came, the shape every
+			// HTTP body stream has (a fetched reply's, too), so a handler relaying the
+			// body forwards it byte-exact and read-all decodes it.
+			rawBody = LispStream.settled(octetVector(request.body()));
 		}
 		try {
 			LispVal env = buildClackEnv(request, rawBody);
@@ -7649,14 +7652,24 @@ public final class LispEvaluator {
 				return out.toString().getBytes(StandardCharsets.UTF_8);
 			}
 			case LispStream stream -> {
-				// A proxied fetch body: drained here (buffered send).
-				StringBuilder drained = new StringBuilder();
+				// A proxied fetch body: drained here (buffered send). Its chunks are
+				// OCTET vectors (every HTTP body stream's shape) and go out as they are
+				// --
+				// what makes the relay byte-exact; a string chunk (a guest make-stream)
+				// is UTF-8 encoded.
+				java.io.ByteArrayOutputStream drained = new java.io.ByteArrayOutputStream();
 				LispVal chunk = awaitValue(LispFuture.of(stream.read()));
-				while (chunk instanceof LispString chunkStr) {
-					drained.append(chunkStr.value());
+				while (!(chunk instanceof LispNil)) {
+					switch (chunk) {
+						case LispIntVector octets -> drained.writeBytes(octetsBytes(octets));
+						case LispString chunkStr ->
+							drained.writeBytes(chunkStr.value().getBytes(StandardCharsets.UTF_8));
+						default -> throw new LispEvalException(
+								LispNames.HTTP_HANDLER + ": a stream response body must hold strings or octets");
+					}
 					chunk = awaitValue(LispFuture.of(stream.read()));
 				}
-				return drained.toString().getBytes(StandardCharsets.UTF_8);
+				return drained.toByteArray();
 			}
 			default -> {
 				// The cold arms (an (unsigned-byte 8) vector today) live once, in the
@@ -7676,6 +7689,15 @@ public final class LispEvaluator {
 	}
 
 	private static final byte[] EMPTY_BODY = new byte[0];
+
+	// Raw bytes -> the (unsigned-byte 8) vector a body stream answers them as.
+	private static LispIntVector octetVector(byte[] bytes) {
+		long[] data = new long[bytes.length];
+		for (int i = 0; i < bytes.length; i++) {
+			data[i] = bytes[i] & 0xFF;
+		}
+		return new LispIntVector(8, data);
+	}
 
 	// An (unsigned-byte 8) response body -> the raw octets. The elements are already
 	// masked to the width, so the narrowing cannot lose anything.

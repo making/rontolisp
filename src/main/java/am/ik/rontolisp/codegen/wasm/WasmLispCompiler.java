@@ -3297,6 +3297,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// stays byte-identical.
 		boolean bytesBoundary = exportDecls.stream().anyMatch(WasmExportCompiler::usesBytes)
 				|| importDecls.stream().anyMatch(WasmImportCompiler::usesBytes);
+		// A component byte-stream read (http.lisp's body-stream-read, sockets' recv)
+		// lifts its chunk as a packed (unsigned-byte 8) vector -- the raw octets, no
+		// decode -- through the same _bytes_from_mem helper, so a byte-stream reader
+		// forces that one helper on (its two siblings stay gated on the :bytes
+		// designator). Every module without one is byte-identical.
+		boolean streamReadsBytes = componentAsyncWrappers.values()
+			.stream()
+			.anyMatch(async -> async.stream() && !async.handleElement());
+		boolean bytesFromMem = bytesBoundary || streamReadsBytes;
 		boolean memoryHelpers = exportUsesMemory || importUsesStrFromMem || bytesBoundary
 				|| !componentImportWrappers.isEmpty() || !componentAsyncWrappers.isEmpty()
 				|| !componentCallStartWrappers.isEmpty() || !componentTaskReturnWrappers.isEmpty();
@@ -3316,10 +3325,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// _bytes_from_mem ((i32,i32)->(ref null eq), reuses TYPE_RAT_NEW), then
 		// _bytes_copy and _bytes_fill (((ref null eq),i32,i32)->i32, one appended
 		// signature at abiTypeBase shared by both).
-		int bytesFromMemFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount : -1;
+		int bytesFromMemFuncIndex = bytesFromMem ? exportHelperBase + memoryHelperCount : -1;
 		int bytesCopyFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount + 1 : -1;
 		int bytesFillFuncIndex = bytesBoundary ? exportHelperBase + memoryHelperCount + 2 : -1;
-		int bytesHelperCount = bytesBoundary ? 3 : 0;
+		int bytesHelperCount = bytesBoundary ? 3 : (bytesFromMem ? 1 : 0);
 		// The --reentrant park-block allocator
 		// (WasmExportRuntimeBuilder.buildParkAllocBody):
 		// _park_alloc / _park_free (both exported -- the host's cross-call staging must
@@ -3459,7 +3468,7 @@ public final class WasmLispCompiler implements LispCompiler {
 								Objects.requireNonNull(importSlotIndex
 									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP))),
 						schedRegistryGlobalIndex, schedSetGlobalIndex, schedReadFreeGlobalIndex, allocFuncIndex,
-						strFromMemFuncIndex);
+						strFromMemFuncIndex, bytesFromMemFuncIndex);
 				break;
 			}
 		}
@@ -3526,7 +3535,7 @@ public final class WasmLispCompiler implements LispCompiler {
 						Objects.requireNonNull(importSlotIndex
 							.get(async.module() + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP)));
 				byte[] body = WasmComponentImportCompiler.buildAsyncBody(ctxBuilder, async, ordinal, asyncWaitOrdinals,
-						allocFuncIndex, strFromMemFuncIndex, sched);
+						allocFuncIndex, strFromMemFuncIndex, bytesFromMemFuncIndex, sched);
 				userFunctionBodies.set(Objects.requireNonNull(importBodySlots.get(async.lispName())), body);
 			}
 			for (WasmComponentImportCompiler.AsyncCall call : componentCallStartWrappers.values()) {
@@ -5115,8 +5124,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// The :bytes marshalling helpers: _bytes_from_mem (TYPE_RAT_NEW), then
 				// _bytes_copy / _bytes_fill sharing the one appended signature.
-				if (bytesBoundary) {
+				if (bytesFromMem) {
 					fnDef.addFunction(TYPE_RAT_NEW);
+				}
+				if (bytesBoundary) {
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 					fnDef.addFunction(abiTypeBase + (hostArena ? 2 : 0));
 				}
@@ -5785,8 +5796,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				// The :bytes marshalling helper bodies, matching the function-section
 				// order.
-				if (bytesBoundary) {
+				if (bytesFromMem) {
 					code.addFunction(WasmExportRuntimeBuilder.buildBytesFromMemBody());
+				}
+				if (bytesBoundary) {
 					code.addFunction(WasmExportRuntimeBuilder.buildBytesCopyBody());
 					code.addFunction(WasmExportRuntimeBuilder.buildBytesFillBody());
 				}

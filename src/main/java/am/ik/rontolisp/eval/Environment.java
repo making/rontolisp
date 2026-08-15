@@ -5277,6 +5277,24 @@ public final class Environment implements Scope {
 			};
 			return name == null ? LispNil.INSTANCE : new LispString(name);
 		}));
+		// %octets-to-string: the native mirror of the prelude's lenient UTF-8 decoder
+		// (LispPreludeLibrary.OCTETS_TO_STRING_INTERNAL), the char-name arrangement --
+		// the compile paths compile the Lisp definition, the interpreter finds this one
+		// first and never loads it. It is what read-all decodes a fetched body with, so
+		// it has to be native here: a per-byte interpreted loop over a document-sized
+		// reply is not a cost a fetch may carry. Arm for arm the same rule -- a byte
+		// that leads no valid sequence, and a sequence the vector truncates, answer
+		// their own characters -- pinned against the Lisp one by
+		// LispPreludeLibraryTest.
+		String octetsToString = LispNames.OCTETS_TO_STRING_INTERNAL_QUALIFIED;
+		env.defineFunction(octetsToString, new LispFunction(octetsToString, args -> {
+			requireArgCount(LispNames.OCTETS_TO_STRING_INTERNAL, args, 1);
+			if (!(args.get(0) instanceof LispIntVector v)) {
+				throw new LispEvalException(LispNames.OCTETS_TO_STRING_INTERNAL
+						+ " expects an (unsigned-byte 8) vector, got: " + args.get(0).print());
+			}
+			return new LispString(decodeUtf8Leniently(v));
+		}));
 		env.defineFunction(LispNames.CONSTANTP, new LispFunction(LispNames.CONSTANTP, args -> {
 			requireMinArgCount(LispNames.CONSTANTP, args, 1);
 			LispVal v = args.get(0);
@@ -6211,6 +6229,48 @@ public final class Environment implements Scope {
 		if (args.size() < min || args.size() > max) {
 			throw new LispEvalException(name + " expects " + min + " to " + max + " arguments, got " + args.size());
 		}
+	}
+
+	/**
+	 * The lenient UTF-8 decode of an {@code (unsigned-byte 8)} vector, arm for arm the
+	 * prelude's {@code rontolisp::%octets-to-string}: a byte that leads no valid
+	 * sequence, and a sequence the vector truncates, answer their own characters, so
+	 * malformed input never signals.
+	 * @param v the octets
+	 * @return the decoded string
+	 */
+	static String decodeUtf8Leniently(LispIntVector v) {
+		int n = v.length();
+		StringBuilder out = new StringBuilder(n);
+		int i = 0;
+		while (i < n) {
+			int b = (int) v.elementAt(i);
+			int b1 = i + 1 < n ? (int) v.elementAt(i + 1) : -1;
+			int b2 = i + 2 < n ? (int) v.elementAt(i + 2) : -1;
+			int b3 = i + 3 < n ? (int) v.elementAt(i + 3) : -1;
+			if (b < 0x80) {
+				out.append((char) b);
+				i += 1;
+			}
+			else if (b >= 0xC0 && b < 0xE0 && b1 >= 0) {
+				out.appendCodePoint(((b & 0x1F) << 6) | (b1 & 0x3F));
+				i += 2;
+			}
+			else if (b >= 0xE0 && b < 0xF0 && b1 >= 0 && b2 >= 0) {
+				out.appendCodePoint(((b & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F));
+				i += 3;
+			}
+			else if (b >= 0xF0 && b < 0xF8 && b1 >= 0 && b2 >= 0 && b3 >= 0 && Character
+				.isValidCodePoint(((b & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F))) {
+				out.appendCodePoint(((b & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F));
+				i += 4;
+			}
+			else {
+				out.append((char) b);
+				i += 1;
+			}
+		}
+		return out.toString();
 	}
 
 }

@@ -104,7 +104,9 @@ buffered.
 - **`:stream`** — rontolisp-native: the asynchronous stream, drained with
   `(rontolisp:await (rontolisp:read-all ...))`; a bodiless request gets an
   already-closed stream. Nothing is buffered on the component (the body
-  streams from the host).
+  streams from the host). Its chunks are OCTET vectors on every backend (the
+  todo-370 rule every HTTP body stream follows, `.kb/fetch-http.md`); `read-all`
+  decodes.
 - **`:buffered`** — what Clack needs (its `:raw-body` is a SYNCHRONOUS stream;
   a synchronous read cannot block on a WASI future, so buffering is the only
   shape a Clack app can consume): the body is read in full and wrapped in a
@@ -131,7 +133,10 @@ The buffered construction is per backend too, and this is a measured decision:
   throughput.
 - JVM + WASM: the compiled Gray class (`http-request-body-stream` in
   http-server.lisp, over `rontolisp:fundamental-binary-input-stream`) built by
-  `%http-body-stream`; the class carries a single-pass `stream-read-line`
+  `%http-body-stream` — over the request's OCTETS on both (the JVM's `handle`
+  hands `HttpHandlerJvmRuntime.bodyOctets` over; it used to pass
+  `bodyString()`, a decode the constructor then re-encoded, doubling every
+  octet >= #x80 of a binary POST — closed with todo-370); the class carries a single-pass `stream-read-line`
   method so even compiled code never pays per-character generic dispatch for
   the hot line read. The Gray `:raw-body` needs `GrayStreamsLibrary.process`'s
   call-site rewrite, which is why every harness that drives a compiler
@@ -179,8 +184,15 @@ keeps it regardless.
   UNCHANGED (todo-341 Phase 3b): only the transport knows what it can carry, so
   the normalizer answers a string, octets or a stream, and every transport that
   writes the wire itself writes the octets AS THEY ARE (byte-exact, see below).
-  Only the reactor envelope's no-sink arm still flattens them, through
-  `%http-body-text` (one char per octet), because its head is a JSON string. A
+  Only the reactor envelope's no-sink arm renders them, as the lenient UTF-8
+  text they spell (`%http-reactor-body-envelope-text`), because its head is a
+  JSON string. A stream DRAINS (`%http-drain`, and the reactor's synchronous
+  `%http-reactor-body-drain`) to ONE octet vector when its chunks are octets —
+  every HTTP body stream's shape, so a proxied fetch reply goes out byte-exact
+  — and to one string when they are strings (a guest `make-stream`); a mixed
+  stream is refused. The join is `%http-octets-join`, an aref/aset blit written
+  in this prelude-free library (the prelude's `%octets-join` is the same loop
+  for `read-all`). A
   **NIL element inside the list**
   contributes the empty string rather than signalling: that is how upstream
   renders it (clack-handler-hunchentoot writes every chunk through
@@ -228,8 +240,10 @@ them.**
   — the shape `Request` already had — with a `Response.of(status, headers,
   String)` factory for the ordinary text body. `LispEvaluator.responseBody`
   answers octets (its cold arm reads the packed `LispIntVector`
-  `%http-body-string` handed back) and `HttpHandlerJvmRuntime.toResponse` reads
-  the JVM `long[]{width, e0, ...}`; `writeResponse` no longer encodes anything.
+  `%http-body-string` handed back; its stream arm drains octet chunks to bytes)
+  and `HttpHandlerJvmRuntime.toResponse` reads the JVM `long[]{width, e0, ...}`
+  (`_drain_body` answers one for an octet-chunk stream); `writeResponse` no
+  longer encodes anything.
 - **`--component`**: the octets cross `%http:body-stream-write` as a `list<u8>`,
   and the canonical lowering takes a packed `(unsigned-byte 8)` vector for a
   `list<u8>` / `stream<u8>` parameter — `WasmComponentImportCompiler`'s
@@ -243,13 +257,20 @@ Pinned by `HttpHandlerTest.directiveServesAnOctetBodyByteExactly`, its
 `HttpHandlerJvmTest` twin and
 `WasmLispCompilerIntegrationTest.httpHandlerServesAnOctetBodyByteExactlyUnderWasmtimeServe`
 — all three assert the RAW response bytes, because the text spelling passes on
-the double-encode.
+the double-encode. The STREAM body (a relayed fetch reply) is pinned the same
+way on all four backends by the todo-370 relay tests (`.kb/fetch-http.md`).
 
 **The one exception, deliberately**: the reactor envelope's NO-SINK arm
-(`%http-reactor-body-out`) still flattens through `%http-body-text`. Its head is
-a JSON string, which is text; a host that wants a binary response registers
-`env.writeResponseBody` — taking bytes out of band is what the sink is FOR.
-**Re-evaluation trigger**: this stays as long as the envelope's `"body"` key is
-a JSON string. Give the envelope a byte-shaped spelling and the arm goes.
-`%http-octets-string` / `%http-body-text` exist for that one caller, so a serve
-component (which references neither) does not carry them.
+(`%http-reactor-body-out`) renders octets — an octet body, or a stream's octet
+chunks, joined — as the TEXT their UTF-8 bytes spell, leniently, through
+`%http-reactor-body-envelope-text` (`rontolisp::%octets-to-string`). Its head
+is a JSON string, which is text; a host that wants a binary response registers
+`env.writeResponseBody` — taking bytes out of band is what the sink is FOR. Why
+DECODE rather than the one-char-per-octet flattening the arm used to apply
+(todo-370): the host UTF-8 encodes the JSON string, so flattening doubled every
+octet >= #x80 — a page a Clack app answered through `flex:string-to-octets`
+crossed the envelope mojibake'd — while decoding hands text-in-octets over
+intact, and binary is lost under either rendering. **Re-evaluation trigger**:
+this stays as long as the envelope's `"body"` key is a JSON string. Give the
+envelope a byte-shaped spelling and the arm goes. (`%http-octets-string` /
+`%http-body-text`, the flattening helpers, are deleted.)

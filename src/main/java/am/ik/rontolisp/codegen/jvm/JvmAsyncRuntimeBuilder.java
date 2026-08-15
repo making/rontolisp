@@ -93,6 +93,16 @@ final class JvmAsyncRuntimeBuilder {
 
 	static final String DRAIN_BODY_METHOD = "_drain_body";
 
+	/**
+	 * {@code _iv_of_bytes(byte[]) -> long[]}: raw bytes -> the packed
+	 * {@code (unsigned-byte 8)} vector ({@code long[]{8, e0, ...}}, the {@code _iv*}
+	 * runtime's representation) a body stream answers them as. The fetch reply's one
+	 * chunk and a drained octet body are built through it.
+	 */
+	static final String IV_OF_BYTES_METHOD = "_iv_of_bytes";
+
+	static final String IV_OF_BYTES_DESC = "([B)[J";
+
 	static final String WAIT_FOR_METHOD = "_wait_for";
 
 	static final String RELEASE_HANDOFF_METHOD = "_release_handoff";
@@ -227,6 +237,10 @@ final class JvmAsyncRuntimeBuilder {
 				cp.addNameAndType(cp.addUtf8(AWAIT_METHOD), cp.addUtf8(AWAIT_DESC)));
 		MethodrefConstant streamReadSelf = cp.addMethodref(thisClass,
 				cp.addNameAndType(cp.addUtf8(STREAM_READ_METHOD), cp.addUtf8(UNARY_DESC)));
+		MethodrefConstant ivOfBytesSelf = cp.addMethodref(thisClass,
+				cp.addNameAndType(cp.addUtf8(IV_OF_BYTES_METHOD), cp.addUtf8(IV_OF_BYTES_DESC)));
+		ClassConstant byteArrayClass = cp.addClass(cp.addUtf8("[B"));
+		ClassConstant longArrayClass = cp.addClass(cp.addUtf8("[J"));
 
 		ConstantPool.StringConstant sMarker = cp.addString(SMARKER);
 		ConstantPool.StringConstant rMarker = cp.addString(RMARKER);
@@ -494,7 +508,7 @@ final class JvmAsyncRuntimeBuilder {
 			if (usesFetch) {
 				emitHttpResponseBranch(a, cp, objectClass, objectArrayClass, stringClass, queueClass, queueCtor,
 						queueOffer, atomicIntClass, atomicIntCtor, sMarker, quote, longValueOf, stringLength,
-						stringSubstring, stringConcat, loop);
+						stringSubstring, stringConcat, byteArrayClass, ivOfBytesSelf, loop);
 			}
 			// flatten: v = r; loop (a plain value exits at the type checks above)
 			a.aload(4);
@@ -813,60 +827,196 @@ final class JvmAsyncRuntimeBuilder {
 					List.of()));
 		}
 
-		// --- _drain_body(v): for http-handler response marshaling -- a stream drains
-		// to its quoted string concatenation; any other value passes through. The chunks
-		// come through _stream_read + _await rather than off the queue directly, which
-		// is what makes ONE drain serve both stream modes (and leaves the buffered one
-		// where it was: that pair takes the chunk, re-enqueues the pill at the end and
-		// answers nil).
+		// --- _iv_of_bytes(byte[]): raw bytes -> long[]{8, e0, ...}, the packed
+		// (unsigned-byte 8) vector every HTTP body stream answers its chunks as (the
+		// _iv* runtime's representation, so aref/length dispatch on it as on any
+		// make-array'd octet vector).
 		{
 			Asm a = new Asm();
-			int passThrough = a.label();
-			emitMarkerTest(a, objectArrayClass, sMarker, 0, passThrough);
-			ConstantPool.StringConstant empty = cp.addString("");
-			a.ldc(empty.index());
-			a.astore(2); // acc (raw)
+			// slots: 0 bytes, 1 out, 2 i
+			a.aload(0);
+			a.op(Opcode.ARRAYLENGTH);
+			a.iconst(1);
+			a.op(Opcode.IADD);
+			a.op(Opcode.NEWARRAY);
+			a.op(11); // T_LONG
+			a.astore(1);
+			a.aload(1);
+			a.iconst(0);
+			a.iconst(8);
+			a.op(Opcode.I2L);
+			a.op(Opcode.LASTORE); // out[0] = 8 (the width header)
+			a.iconst(0);
+			a.istore(2);
 			int loop = a.label();
 			int done = a.label();
+			a.bind(loop);
+			a.iload(2);
+			a.aload(0);
+			a.op(Opcode.ARRAYLENGTH);
+			a.branch(Opcode.IF_ICMPGE, done);
+			a.aload(1);
+			a.iload(2);
+			a.iconst(1);
+			a.op(Opcode.IADD);
+			a.aload(0);
+			a.iload(2);
+			a.op(Opcode.BALOAD);
+			a.iconst(255);
+			a.op(Opcode.IAND);
+			a.op(Opcode.I2L);
+			a.op(Opcode.LASTORE); // out[i + 1] = bytes[i] & 0xff
+			a.iinc(2, 1);
+			a.branch(Opcode.GOTO, loop);
+			a.bind(done);
+			a.aload(1);
+			a.areturn();
+			methods.add(new AsyncMethod(cp.addUtf8(IV_OF_BYTES_METHOD), cp.addUtf8(IV_OF_BYTES_DESC), 6, 3, a.finish(),
+					List.of()));
+		}
+
+		// --- _drain_body(v): for http-handler response marshaling -- a stream drains to
+		// ONE body value the transport writes as it is: OCTET chunks (every HTTP body
+		// stream's, so a proxied fetch reply goes out byte-exact) to one long[] octet
+		// vector, string chunks (a guest make-stream) to their quoted concatenation; a
+		// stream mixing the two kinds is refused, like http-server.lisp's %http-drain.
+		// Any other value passes through. The chunks come through _stream_read + _await
+		// rather than off the queue directly, which is what makes ONE drain serve both
+		// stream modes (and leaves the buffered one where it was: that pair takes the
+		// chunk, re-enqueues the pill at the end and answers nil).
+		{
+			ClassConstant baosClass = cp.addClass(cp.addUtf8("java/io/ByteArrayOutputStream"));
+			MethodrefConstant baosInit = cp.addMethodref(baosClass,
+					cp.addNameAndType(cp.addUtf8("<init>"), cp.addUtf8("()V")));
+			MethodrefConstant baosWrite = cp.addMethodref(baosClass,
+					cp.addNameAndType(cp.addUtf8("write"), cp.addUtf8("(I)V")));
+			MethodrefConstant baosWriteBytes = cp.addMethodref(baosClass,
+					cp.addNameAndType(cp.addUtf8("writeBytes"), cp.addUtf8("([B)V")));
+			MethodrefConstant baosToByteArray = cp.addMethodref(baosClass,
+					cp.addNameAndType(cp.addUtf8("toByteArray"), cp.addUtf8("()[B")));
+			MethodrefConstant baosToString = cp.addMethodref(baosClass, cp.addNameAndType(cp.addUtf8("toString"),
+					cp.addUtf8("(Ljava/nio/charset/Charset;)Ljava/lang/String;")));
+			ClassConstant charsetsClass = cp.addClass(cp.addUtf8("java/nio/charset/StandardCharsets"));
+			ConstantPool.FieldrefConstant utf8Field = cp.addFieldref(charsetsClass,
+					cp.addNameAndType(cp.addUtf8("UTF_8"), cp.addUtf8("Ljava/nio/charset/Charset;")));
+			MethodrefConstant stringGetBytes = cp.addMethodref(stringClass,
+					cp.addNameAndType(cp.addUtf8("getBytes"), cp.addUtf8("(Ljava/nio/charset/Charset;)[B")));
+			Asm a = new Asm();
+			// slots: 0 v, 1 sink, 2 chunk, 3 octetsSeen, 4 textSeen, 5 i, 6 iv
+			int passThrough = a.label();
+			emitMarkerTest(a, objectArrayClass, sMarker, 0, passThrough);
+			a.op(Opcode.NEW);
+			a.u2(baosClass.index());
+			a.op(Opcode.DUP);
+			a.op(Opcode.INVOKESPECIAL);
+			a.u2(baosInit.index());
+			a.astore(1);
+			a.iconst(0);
+			a.istore(3);
+			a.iconst(0);
+			a.istore(4);
+			int loop = a.label();
+			int done = a.label();
+			int notIv = a.label();
+			int mixed = a.label();
 			a.bind(loop);
 			a.aload(0);
 			a.op(Opcode.INVOKESTATIC);
 			a.u2(streamReadSelf.index());
 			a.op(Opcode.INVOKESTATIC);
 			a.u2(awaitSelf.index());
-			a.astore(3); // chunk
-			a.aload(3);
+			a.astore(2); // chunk
+			a.aload(2);
 			a.branch(Opcode.IFNULL, done);
 			a.aload(2);
-			a.aload(3);
-			a.checkcast(stringClass);
-			a.op(Opcode.DUP); // [acc, chunk, chunk]
+			a.op(Opcode.INSTANCEOF);
+			a.u2(longArrayClass.index());
+			a.branch(Opcode.IFEQ, notIv);
+			// an octet chunk: every element after the width header, one write each
+			a.iconst(1);
+			a.istore(3);
+			a.aload(2);
+			a.checkcast(longArrayClass);
+			a.astore(6);
+			a.iconst(1);
+			a.istore(5);
+			int ivLoop = a.label();
+			int ivDone = a.label();
+			a.bind(ivLoop);
+			a.iload(5);
+			a.aload(6);
+			a.op(Opcode.ARRAYLENGTH);
+			a.branch(Opcode.IF_ICMPGE, ivDone);
+			a.aload(1);
+			a.aload(6);
+			a.iload(5);
+			a.op(Opcode.LALOAD);
+			a.op(Opcode.L2I);
 			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringLength.index()); // [acc, chunk, len]
+			a.u2(baosWrite.index());
+			a.iinc(5, 1);
+			a.branch(Opcode.GOTO, ivLoop);
+			a.bind(ivDone);
+			a.branch(Opcode.GOTO, loop);
+			// a string chunk: its raw text, UTF-8 encoded
+			a.bind(notIv);
+			a.iconst(1);
+			a.istore(4);
+			a.aload(1);
+			a.aload(2);
+			a.checkcast(stringClass);
+			a.op(Opcode.DUP); // [sink, chunk, chunk]
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(stringLength.index()); // [sink, chunk, len]
 			a.iconst(1);
 			a.op(Opcode.ISUB);
 			a.iconst(1);
-			a.op(Opcode.SWAP); // [acc, chunk, 1, len-1]
+			a.op(Opcode.SWAP); // [sink, chunk, 1, len-1]
 			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringSubstring.index()); // [acc, raw]
+			a.u2(stringSubstring.index()); // [sink, raw]
+			a.op(Opcode.GETSTATIC);
+			a.u2(utf8Field.index());
 			a.op(Opcode.INVOKEVIRTUAL);
-			a.u2(stringConcat.index()); // [acc']
-			a.astore(2);
+			a.u2(stringGetBytes.index()); // [sink, bytes]
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(baosWriteBytes.index());
 			a.branch(Opcode.GOTO, loop);
 			a.bind(done);
-			// quote-wrap the accumulation
+			a.iload(3);
+			a.iload(4);
+			a.op(Opcode.IAND);
+			a.branch(Opcode.IFNE, mixed);
+			int textResult = a.label();
+			a.iload(3);
+			a.branch(Opcode.IFEQ, textResult);
+			// octets: one long[] vector, written by the transport as it is
+			a.aload(1);
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(baosToByteArray.index());
+			a.op(Opcode.INVOKESTATIC);
+			a.u2(ivOfBytesSelf.index());
+			a.areturn();
+			// text (or an empty stream): the quoted concatenation
+			a.bind(textResult);
 			a.ldc(quote.index());
-			a.aload(2);
+			a.aload(1);
+			a.op(Opcode.GETSTATIC);
+			a.u2(utf8Field.index());
+			a.op(Opcode.INVOKEVIRTUAL);
+			a.u2(baosToString.index());
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(stringConcat.index());
 			a.ldc(quote.index());
 			a.op(Opcode.INVOKEVIRTUAL);
 			a.u2(stringConcat.index());
 			a.areturn();
+			a.bind(mixed);
+			emitThrow(a, cp, runtimeExceptionClass, runtimeExceptionInit,
+					"http-handler: a stream response body mixes string and octet chunks");
 			a.bind(passThrough);
 			a.aload(0);
 			a.areturn();
-			methods.add(new AsyncMethod(cp.addUtf8(DRAIN_BODY_METHOD), cp.addUtf8(UNARY_DESC), 4, 4, a.finish(),
+			methods.add(new AsyncMethod(cp.addUtf8(DRAIN_BODY_METHOD), cp.addUtf8(UNARY_DESC), 5, 7, a.finish(),
 					List.of()));
 		}
 
@@ -929,7 +1079,7 @@ final class JvmAsyncRuntimeBuilder {
 			MethodrefConstant queueCtor, MethodrefConstant queueOffer, ClassConstant atomicIntClass,
 			MethodrefConstant atomicIntCtor, ConstantPool.StringConstant sMarker, ConstantPool.StringConstant quote,
 			MethodrefConstant longValueOf, MethodrefConstant stringLength, MethodrefConstant stringSubstring,
-			MethodrefConstant stringConcat, int loopLabel) {
+			MethodrefConstant stringConcat, ClassConstant byteArrayClass, MethodrefConstant ivOfBytes, int loopLabel) {
 		ClassConstant httpResponseClass = cp.addClass(cp.addUtf8("java/net/http/HttpResponse"));
 		MethodrefConstant statusCode = cp.addInterfaceMethodref(httpResponseClass,
 				cp.addNameAndType(cp.addUtf8("statusCode"), cp.addUtf8("()I")));
@@ -981,7 +1131,10 @@ final class JvmAsyncRuntimeBuilder {
 		b.u2(longValueOf.index());
 		b.astore(7);
 
-		// body stream (slot 8) = {SMARKER, q(quotedBody, pill), state(1)}
+		// body stream (slot 8) = {SMARKER, q(octets, pill), state(1)} -- the whole reply
+		// as ONE octet chunk (the fetch took it as byte[]), the shape every HTTP body
+		// stream has: relayed as a response body it goes out byte-exact, and read-all
+		// decodes it.
 		b.op(Opcode.NEW);
 		b.u2(queueClass.index());
 		b.op(Opcode.DUP);
@@ -989,18 +1142,14 @@ final class JvmAsyncRuntimeBuilder {
 		b.u2(queueCtor.index());
 		b.astore(9); // q
 		b.aload(9);
-		b.ldc(quote.index());
 		b.aload(6);
 		b.op(Opcode.INVOKEINTERFACE);
 		b.u2(responseBody.index());
 		b.op(1);
 		b.op(0);
-		b.checkcast(stringClass);
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(stringConcat.index());
-		b.ldc(quote.index());
-		b.op(Opcode.INVOKEVIRTUAL);
-		b.u2(stringConcat.index()); // [q, quotedBody]
+		b.checkcast(byteArrayClass);
+		b.op(Opcode.INVOKESTATIC);
+		b.u2(ivOfBytes.index()); // [q, octets]
 		b.op(Opcode.INVOKEVIRTUAL);
 		b.u2(queueOffer.index());
 		b.op(Opcode.POP);
@@ -1267,6 +1416,22 @@ final class JvmAsyncRuntimeBuilder {
 
 		void aaload() {
 			this.code.add(Opcode.AALOAD);
+		}
+
+		void iload(int slot) {
+			this.code.add(Opcode.ILOAD);
+			this.code.add(slot);
+		}
+
+		void istore(int slot) {
+			this.code.add(Opcode.ISTORE);
+			this.code.add(slot);
+		}
+
+		void iinc(int slot, int delta) {
+			this.code.add(Opcode.IINC);
+			this.code.add(slot);
+			this.code.add(delta & 0xFF);
 		}
 
 		void aastore() {

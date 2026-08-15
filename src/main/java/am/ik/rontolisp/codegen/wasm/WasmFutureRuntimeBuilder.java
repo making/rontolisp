@@ -177,10 +177,13 @@ final class WasmFutureRuntimeBuilder {
 	 * @param allocFuncIndex the function index of {@code __ronto_alloc} (the event
 	 * payload scratch)
 	 * @param strFromMemFuncIndex the function index of {@code _str_from_mem} (lifts a
-	 * completed read's chunk bytes onto the GC heap)
+	 * completed subtask's string result onto the GC heap)
+	 * @param bytesFromMemFuncIndex the function index of {@code _bytes_from_mem} (lifts a
+	 * completed byte-stream read's chunk as a packed {@code (unsigned-byte 8)} vector --
+	 * the raw octets, no decode), or -1 when the module reads no byte stream
 	 */
 	record Sched(WasmComponentImportCompiler.WaitOrdinals ordinals, int registryGlobal, int setGlobal,
-			int readFreeGlobal, int allocFuncIndex, int strFromMemFuncIndex) {
+			int readFreeGlobal, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex) {
 	}
 
 	/**
@@ -1003,10 +1006,11 @@ final class WasmFutureRuntimeBuilder {
 		callOrdinal(w, sched.ordinals().subtaskDrop());
 		w.write(Instruction.ELSE);
 		// kind 1 (byte-stream read) / kind 2 (handle-stream read): unjoin the handle,
-		// lift the completion (0 elements = EOF; kind 1 lifts the chunk as a string,
-		// kind 2 loads the one 4-byte resource handle), recycle the buffer, and run
-		// the close protocol on an EOF of an attached, not-yet-closed stream (kind 2
-		// attaches none).
+		// lift the completion (0 elements = EOF; kind 1 lifts the chunk as a packed
+		// (unsigned-byte 8) vector -- the octets as read, so an HTTP body stream is a
+		// byte stream and a relayed body crosses exactly -- kind 2 loads the one 4-byte
+		// resource handle), recycle the buffer, and run the close protocol on an EOF
+		// of an attached, not-yet-closed stream (kind 2 attaches none).
 		getLocal(w, WAITABLE);
 		i32(w, 0);
 		callOrdinal(w, sched.ordinals().join());
@@ -1022,12 +1026,19 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF);
 		w.writeRefType(true, Type.EQ.code());
-		castCons(w, DATA);
-		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
-		unboxI31(w);
-		getLocal(w, N);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(sched.strFromMemFuncIndex());
+		if (sched.bytesFromMemFuncIndex() < 0) {
+			// No byte-stream read exists in this module, so no kind-1 entry can ever
+			// be registered: the arm is dead, and the helper it would call is absent.
+			w.write(Instruction.UNREACHABLE);
+		}
+		else {
+			castCons(w, DATA);
+			structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+			unboxI31(w);
+			getLocal(w, N);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(sched.bytesFromMemFuncIndex());
+		}
 		w.write(Instruction.ELSE);
 		castCons(w, DATA);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);

@@ -25,8 +25,10 @@
 ;;;;     reach it through the %io-* dispatch defuns the compiler rewrite
 ;;;;     targets; reads buffer one host chunk per socket (a documented
 ;;;;     divergence from the byte-at-a-time interpreter/JVM reads), and the
-;;;;     chunk bookkeeping walks the chunk's BYTES -- the wire truth -- through
-;;;;     the %str-byte-* intrinsics, never its UTF-8-decoded characters.
+;;;;     chunk bookkeeping walks the chunk's BYTES -- the wire truth, a packed
+;;;;     (unsigned-byte 8) vector -- with aref, never UTF-8-decoded characters
+;;;;     (%str-byte-length still guards the WRITE side, where a payload is a
+;;;;     string whose bytes are the wire's).
 
 ;; The WIT interface is lowered by SocketsLibrary (which calls
 ;; WitImportDirective.lower itself), so this directive never reaches
@@ -227,19 +229,21 @@
     (if (consp addr) (getf (cdr addr) :PORT) nil)))
 
 ;;; --- buffered reads (chunked; the %...-future internals are async-defuns so an
-;;; async body's promoted read suspends instead of blocking the task). The chunk
-;;; string's internal BYTES are exactly the bytes the host delivered, and the
-;;; cursor walks those bytes (%str-byte-ref) -- never characters: char access
-;;; UTF-8-decodes, so binary bytes that happen to form a valid multi-byte
-;;; sequence (a PostgreSQL BackendKeyData secret, say) would collapse into one
-;;; char and shift everything after them. ---
+;;; async body's promoted read suspends instead of blocking the task). A chunk
+;;; is a packed (unsigned-byte 8) vector holding exactly the bytes the host
+;;; delivered, and the cursor walks those bytes with aref -- never characters:
+;;; a decoded chunk would collapse binary bytes that happen to form a valid
+;;; multi-byte sequence (a PostgreSQL BackendKeyData secret, say) into one char
+;;; and shift everything after them. ---
 
 (rontolisp:async-defun rontolisp::%sock-fill (e)
   ;; Refill the chunk buffer from the recv stream; nil (and the eof mark) at FIN.
+  ;; A chunk is a packed (unsigned-byte 8) vector -- the stream<u8> read lifts
+  ;; the octets as they are -- so the buffer cursor below walks it with aref.
   (let ((chunk
          (rontolisp:await
           (%sock:sock-stream-read (rontolisp::%sock-e-recv e)))))
-    (if (and chunk (> (rontolisp::%str-byte-length chunk) 0))
+    (if (and chunk (> (length chunk) 0))
         (progn
           (rontolisp::%sock-set-buf e chunk 0)
           t)
@@ -249,13 +253,12 @@
 
 (defun rontolisp::%sock-buf-ready (e)
   (let ((buf (rontolisp::%sock-e-buf e)))
-    (and buf
-         (< (rontolisp::%sock-e-cursor e) (rontolisp::%str-byte-length buf)))))
+    (and buf (< (rontolisp::%sock-e-cursor e) (length buf)))))
 
 (defun rontolisp::%sock-pop-byte (e)
   (let* ((buf (rontolisp::%sock-e-buf e))
          (cursor (rontolisp::%sock-e-cursor e))
-         (b (rontolisp::%str-byte-ref buf cursor)))
+         (b (aref buf cursor)))
     (rontolisp::%sock-set-buf e buf (+ cursor 1))
     b))
 

@@ -2,10 +2,15 @@
 
 `(rontolisp:read-all stream)`
 
-非同期ストリームの残りの*文字列*チャンクすべての連結で確定する future を
-返します (文字列以外のチャンクはエラー)。future はストリームが終端に達した
-時点で確定するため、生産側はいずれ
-[`rontolisp:stream-close`](rontolisp-stream-close.md) を呼ぶ必要があります。
+非同期ストリームの残りのチャンクを **1 つの文字列** に読み切った値で確定する
+future を返します。文字列チャンク (ゲストが作ったストリーム) は連結され、
+オクテットチャンク -- HTTP ボディストリーム、すなわち fetch の応答の `:body` と
+サーブされたリクエストの `:raw-body` が返す `(unsigned-byte 8)` ベクタ -- は
+結合したうえで UTF-8 としてデコードされるため、ドキュメントを読む側は
+バイトストリームからテキストを受け取ります。両方の種類が混在するストリームは
+エラーです。future はストリームが終端に達した時点で確定するため、生産側は
+いずれ [`rontolisp:stream-close`](rontolisp-stream-close.md) を呼ぶ必要が
+あります。
 
 ```lisp
 (let ((s (rontolisp:make-stream)))
@@ -24,7 +29,9 @@
 ```
 
 チャンクを 1 つずつ取り出すには
-[`rontolisp:stream-read`](rontolisp-stream-read.md) を使ってください。
+[`rontolisp:stream-read`](rontolisp-stream-read.md) を使ってください。読まずに
+中継するなら、ストリームそのものをレスポンスボディとして返します --
+トランスポートがバイト単位で正確に読み切り、途中で何もデコードしません。
 
 **文字列**はそのまま素通りします (future は文字列そのもので確定します)。
 すでに全体が到着しているボディはそれ自体が読み切った値なので、上記の 1 つの

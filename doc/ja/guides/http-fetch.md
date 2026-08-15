@@ -38,10 +38,11 @@
 `fetch` はリクエストが飛び始めたらすぐに返ります。future を
 `rontolisp:await` に渡すとレスポンスの到着までサスペンドし、結果の
 プロパティリスト `(:status <integer> :headers <alist> :body <stream>)` が
-得られます — どのバックエンドでも `:body` は
-[非同期ストリーム](async.md#asynchronous-streams)で、
+得られます — どのバックエンドでも `:body` はボディのオクテットの
+[非同期ストリーム](async.md#asynchronous-streams) (各チャンクは
+`(unsigned-byte 8)` ベクタ) で、
 [`rontolisp:read-all`](../reference/functions/rontolisp-read-all.md)
-で読み尽くします:
+でデコード済みの 1 つの文字列に読み尽くします:
 
 ```lisp
 (let ((p (rontolisp:fetch "https://httpbin.ik.am/get")))

@@ -1053,7 +1053,12 @@ public final class JvmLispCompiler implements LispCompiler {
 		// #N@(...), so usesRead does not force this gate. The injected %seq-int-vector
 		// wrapper allocates one, and it is not part of the scanned program, so its own
 		// gate forces this one on.
-		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector;
+		// A fetched reply's :body and a served request's :raw-body are OCTET streams
+		// (their chunks long[] packed vectors built by the runtime, not by any scanned
+		// make-array), so a program that fetches or serves may hold one and needs the
+		// _iv* dispatch on.
+		boolean usesIntArray = programUsesIntArray(program, closRegistry) || usesSeqIntVector || usesFetch
+				|| usesHttpHandler;
 
 		// Whether the array runtime helper group is emitted (the same test that gates
 		// its emission below). The mutable-character-vector consumers -- the _eqv

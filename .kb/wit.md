@@ -174,6 +174,28 @@ only the three `list<u8>`-shaped sites move a byte of emitted output. The `:byte
 boundary type's `_bytes_copy` is the same idea one layer out and is still
 core-module only (below).
 
+**And a `stream<u8>` READ answers a packed byte vector, not a string (todo-370,
+2026-08-15).** The chunk of a byte-stream read -- http.lisp's `body-stream-read`,
+sockets.lisp's recv, stdin.lisp's stdin -- lifts through `_bytes_from_mem` (raw
+octets, no decode) in both places a completion is lifted: the async built-in
+wrapper's immediate path (`emitReadLift`) and the scheduler's kind-1 settle
+(`_sched_dispatch`). `WasmLispCompiler.streamReadsBytes` (any async wrapper over a
+u8 stream) forces that ONE helper on -- `bytesFromMem = bytesBoundary ||
+streamReadsBytes`, its two `:bytes` siblings still gated on the designator -- so a
+module without a byte-stream read is byte-identical. Why: an HTTP body stream is a
+BYTE stream on every backend (`.kb/fetch-http.md`), and the byte-string lift was the
+one place the component made it text (a lossless text, as it happens -- the bytes
+were kept raw -- but `read-all`'s decode and `%http-drain`'s join now speak vectors,
+and one representation across the four backends is the point). sockets.lisp's chunk
+cursor moved from `%str-byte-length`/`%str-byte-ref` to `length`/`aref`, and
+stdin.lisp assembles a character from bytes the way sockets always did (its
+`%stdin-read-char-f`); `%str-byte-*` stay for the WRITE side, where a payload is a
+string whose bytes are the wire's. `list<u8>` RESULTS (kv:get's value, a header
+`field-value`) still lift as byte strings -- the decision above -- so a stream chunk
+and a list value differ in representation; **re-evaluation trigger**: the day a
+`list<u8>` result consumer wants octets, move it to `_bytes_from_mem` the same way
+and retire the byte-string lift.
+
 ## What todo 125 deliberately did NOT do
 
 No Lisp-facing surface (that arrived with todo 126 below, for the export side only).

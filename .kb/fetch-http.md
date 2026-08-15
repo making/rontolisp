@@ -81,8 +81,8 @@ all four backends rather than three. Mechanics, all in `HostFetchLibrary`:
 
 - the thunk is the reactor's own transport calls (`%http-reactor-buffer` /
   `%http-reactor-chunk` / `%http-reactor-body-stream`, `.kb/clack.md`), so ONE reused
-  receive buffer and ONE chunk-boundary UTF-8 decode serve both directions of every
-  reactor boundary. **Consequence to know before measuring a fetch-only build**: naming
+  receive buffer serves both directions of every reactor boundary (and, since todo-370,
+  no per-chunk decode at all: the stream answers octets). **Consequence to know before measuring a fetch-only build**: naming
   them splices `http-reactor.lisp` (and with it `http-server.lisp`), which every real
   `--host-fetch` program -- they are reactors -- already had. Lift the three helpers into
   a library of their own if a fetch-only Worker ever needs those bytes back;
@@ -128,12 +128,14 @@ pull per chunk plus the EOF one, `ff fe 41` crossing exactly, the in-band fallba
 256 KiB reply never drained leaving `memory.buffer.byteLength` where it was over four
 fetches AND four drains of the same body ending where the first left it, the mid-body
 failure at the drain and the superseded-body guard). What ONE drain PEAKS at is not this
-boundary either: the chunk decode's string output stream used to persist a linear copy
-per WRITE, and appends into a GC byte buffer since (`[[read-load-streams]]`).
+boundary either: since todo-370 the chunks are octet vectors joined once and decoded once
+at `read-all` (there is no per-chunk decode any more; the string output stream that
+decode used to write into appends into a GC byte buffer, `[[read-load-streams]]`).
 
 **The result plist is `(:status <int> :headers <alist> :body <stream>)` on every
 backend** -- `:body` is an asynchronous stream drained with
-`(rontolisp:await (rontolisp:read-all ...))`. Its shape is written once, in
+`(rontolisp:await (rontolisp:read-all ...))`, and it is a BYTE stream (the next
+block). Its shape is written once, in
 `compiler/FetchResponseShape` (the fetch-only remainder of the pre-Clack
 `HttpPlistShape`), so its keys and order are derived, not hand-written, in each
 backend's fetch runtime (`Environment`'s fetch result, `JvmAsyncRuntimeBuilder`,
@@ -142,6 +144,65 @@ fetch half). The SERVER side no longer shares this shape: since the Clack
 cutover a handler receives the Clack environment and returns the Clack response
 (`.kb/http-server.md`), while fetch deliberately keeps this plist -- it is the
 client side, a different thing.
+
+**`:body` is a stream of OCTET chunks on every backend, and `read-all` is where the
+bytes become text (todo-370, 2026-08-15).** Every chunk a fetched reply's `:body`
+answers -- and every chunk a served request's default `:raw-body` answers, the same
+rule -- is an `(unsigned-byte 8)` vector holding the wire's bytes; nothing on the
+transport decodes. That is what makes the natural proxy shape,
+`(list status headers (getf res :body))`, byte-exact: `%http-drain` joins the octet
+chunks into one octet vector and every transport writes it as it is (`.kb/http-server.md`,
+"A binary response body is byte-exact"). Before, the stream was a CHARACTER stream on
+every backend (each transport decoded per chunk, with a chunk-boundary carry) and a
+relayed body was re-encoded by the sink, so a JPEG's `ff d8 ff` came out `c3 bf d8` -- a
+stray `ff` decoded to U+00FF and re-encoded; sequences that happened to be valid UTF-8
+round-tripped, so the corruption was silent and content-dependent (measured building
+`examples/cloudflare-workers/dog-relay`). The bivalent-stream alternative (octets kept
+until something asks for text, `stream-read` decoding on demand) was rejected: it needs a
+second read primitive on four stream runtimes and a carry inside each, where "the chunks
+are bytes; the drain decodes" needs one prelude defun. Per backend:
+
+- interpreter: `HttpSupport.BodyPump` writes one `LispIntVector` per publisher batch (no
+  `CharsetDecoder`, no carry); the playground's `BrowserHttpResponses.toStart` settles the
+  broker's text as its UTF-8 octets; `invokeHttpHandler`'s default `:raw-body` is one
+  settled octet chunk, and `responseBody`'s stream arm drains octet chunks to bytes;
+- JVM: `_fetch` takes the reply with `BodyHandlers.ofByteArray()` and `_await`'s response
+  branch queues ONE `long[]{8, ...}` chunk built by `_iv_of_bytes` (`JvmAsyncRuntimeBuilder`);
+  `_drain_body` drains octet chunks to one `long[]` (string chunks to their quoted
+  concatenation, a mixed stream refused); `handle`'s `:raw-body` is
+  `HttpHandlerJvmRuntime.bodyOctets` in both modes -- which also retired the buffered mode
+  passing `bodyString()` to `%http-body-stream`, a decode-then-encode of a binary POST; and
+  `usesIntArray` is forced on by `usesFetch || usesHttpHandler`, since the chunks are
+  packed vectors no scanned `make-array` built;
+- `--component`: the `stream<u8>` READ lift answers a packed vector (`_bytes_from_mem`,
+  `.kb/wit.md`), so http.lisp's `%http-body-value` needs no change and `%http-write-body`
+  stages the joined vector raw;
+- `--no-wasi` reactor: `%http-reactor-body-stream` is `%stream-new` over
+  `%http-reactor-octet-source` (an octet chunk untouched, a string chunk -- the in-band
+  `"body"` key, a host handing over text -- UTF-8 encoded once);
+  `%http-reactor-text-source` stays for `%http-reactor-body-text`, the hand-written
+  reactors' text drain.
+
+`read-all` (prelude, `.kb/async-await.md`) joins the octet chunks (`%octets-join`, one
+blit) and decodes them once with `rontolisp::%octets-to-string` -- LENIENT UTF-8, the rule
+`http-server.lisp`'s request decoder applies (a byte that leads no sequence is its own
+character), one Lisp definition compiled on the compile paths and mirrored natively by
+`Environment` on the interpreter (the `char-name` arrangement; `LispPreludeLibraryTest`
+pins the two against each other). Decoding once at the drain also retires the per-chunk
+carry: a chunk boundary inside a code point costs nothing. `stream-read` on such a body
+answers the octet vector -- the documented contract now (`rontolisp-stream-read.md`).
+**Perf trigger**: on the JVM and wasm the decoder is a compiled per-byte loop (~90 /
+~200 ns per byte) where `ofString` / the byte-string lift used to be a platform decode /
+a memcpy; a native raw-copy on wasm alone was rejected because its malformed-input rule
+(`_str_char_at`'s 2/3/4-byte lead ranges) differs from the lenient one. The fix is a
+STRICT native fast path with the lenient loop as fallback -- `.todo/371`, with the
+measurements. Gates: ci-spec
+`read-all-decodes-an-octet-chunk-stream` (all four backends),
+`HttpHandlerTest.directiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt` + its
+`HttpHandlerJvmTest` twin,
+`WasmLispCompilerIntegrationTest.httpHandlerRelaysAFetchedBodyByteExactlyUnderWasmtimeServe`,
+and the `/relay` leg of `WasmHostGlueE2eTest.theEmittedWorkerHalfServesTheStreamingBoundaryToo`
+(the reactor, through the generated `worker()`).
 
 **The ONE request header we add on the caller's behalf is `User-Agent:
 rontolisp/<version> (<git-commit>)`** (todo-346) -- the abbreviated commit is an RFC 9110

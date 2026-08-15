@@ -289,8 +289,22 @@ the reason a `--host-fetch` reactor's bodies are strings -- todo-347 took that
 body out of its JSON envelope and `:body` is a stream on all four backends now
 (`.kb/fetch-http.md`) -- but the arm stays: a user plist, and the declared
 absent-body default `""`, still take it.
-Pinned per backend (AsyncEvalTest / JvmAsyncCompilerTest) and end-to-end by
-the `read-all-passes-a-string-through` ci-spec case.
+Since todo-370 it drains TWO chunk kinds: string chunks (a guest
+`make-stream`) are concatenated through a string output stream (not pairwise
+-- quadratic), and OCTET chunks -- `(unsigned-byte 8)` vectors, what every
+HTTP body stream answers -- are collected, joined once by the prelude's
+`rontolisp::%octets-join` (an aref/aset blit; a single chunk is answered
+uncopied) and decoded once by `rontolisp::%octets-to-string`, the LENIENT
+UTF-8 decoder (a byte that leads no valid sequence, or a sequence the vector
+truncates, is its own character -- `http-server.lisp`'s request-decoder rule).
+A stream mixing the two kinds is an error. `%octets-to-string` is Lisp in the
+prelude for the compile paths and a native Java mirror in `Environment` on the
+interpreter (the `char-name` arrangement: the interpreter finds the native first
+and never loads the Lisp one), because an interpreted per-byte loop over a
+document-sized reply is not a cost a fetch may carry; `LispPreludeLibraryTest`
+pins the two arm for arm. Pinned per backend (AsyncEvalTest / JvmAsyncCompilerTest)
+and end-to-end by the `read-all-passes-a-string-through` and
+`read-all-decodes-an-octet-chunk-stream` ci-spec cases.
 
 ## `%future-force`: the function spelling of the resolve
 

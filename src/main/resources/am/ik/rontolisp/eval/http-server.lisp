@@ -483,17 +483,55 @@
                (setq rest (cdr (cdr rest))))
              (nreverse out)))))
 
+(defun rontolisp::%http-octets-join (chunks total)
+  ;; A list of (unsigned-byte 8) vectors and their total length -> ONE packed
+  ;; vector holding them in order; a single chunk is answered as it is. The
+  ;; blit both drains share (the async one below, the reactor's synchronous
+  ;; twin): chunks collected and copied once, so a body pulled in n chunks
+  ;; costs one copy. `replace` is native on the interpreter and, the destination
+  ;; being provably an array, the narrow runtime arm on the compile paths. The
+  ;; prelude's %octets-join is this same defun -- this library is prelude-free
+  ;; by rule, so it carries its own.
+  (if (and chunks (null (cdr chunks)))
+      (car chunks)
+      (let ((out (make-array total :element-type '(unsigned-byte 8))) (k 0))
+        (dolist (v chunks)
+          (replace out v :start1 k)
+          (setq k (+ k (length v))))
+        out)))
+
 (rontolisp:async-defun rontolisp::%http-drain (s)
-  ;; Drain a rontolisp asynchronous stream into one string. The accumulator is
-  ;; a string output stream, not (concatenate 'string acc chunk): the latter is
-  ;; quadratic in the body size, which a response proxied from fetch pays in
-  ;; full.
-  (let ((out (make-string-output-stream))
+  ;; Drain a rontolisp asynchronous stream into ONE body value the transport
+  ;; writes as it is. Every HTTP body stream -- a fetched reply's :body, the
+  ;; default :raw-body -- answers OCTET chunks, so the ordinary proxy shape
+  ;; (list status headers (getf res :body)) drains to an (unsigned-byte 8)
+  ;; vector holding the upstream's exact bytes: NOTHING here decodes, which is
+  ;; what makes a relayed binary body byte-exact (a JPEG's ff d8 ff used to
+  ;; come out c3 bf d8, a stray ff decoded to U+00FF and re-encoded). String
+  ;; chunks (a guest make-stream) drain to one string through a string output
+  ;; stream, not (concatenate 'string acc chunk) -- quadratic in the body size.
+  ;; The octet join is %http-octets-join above: chunks collected and blitted
+  ;; once, so a body pulled in n chunks costs one copy. A stream mixing the two
+  ;; kinds is refused rather than guessed at.
+  (let ((chunks nil)
+        (octets nil)
+        (text nil)
+        (total 0)
         (chunk (rontolisp:await (rontolisp:stream-read s))))
     (while chunk
-      (write-string chunk out)
+      (if (stringp chunk) (setq text t) (setq octets t))
+      (setq total (+ total (length chunk)))
+      (setq chunks (cons chunk chunks))
       (setq chunk (rontolisp:await (rontolisp:stream-read s))))
-    (get-output-stream-string out)))
+    (setq chunks (nreverse chunks))
+    (cond
+     ((and octets text)
+      (error
+       "http-handler: a stream response body mixes string and octet chunks"))
+     (octets (rontolisp::%http-octets-join chunks total))
+     (t (let ((out (make-string-output-stream)))
+          (dolist (c chunks) (write-string c out))
+          (get-output-stream-string out))))))
 
 (defun rontolisp::%http-join-strings (parts)
   ;; A NIL element contributes the empty string, as upstream renders it:
@@ -510,30 +548,6 @@
       (setq rest (cdr rest)))
     (get-output-stream-string out)))
 
-(defun rontolisp::%http-octets-string (v)
-  ;; An (unsigned-byte 8) vector body -> one character per octet, for a
-  ;; transport whose response body is TEXT. Called by the transport, not by the
-  ;; normalizer: the octets are what the application meant, and a transport that
-  ;; can write bytes (the reactor's byte-shaped sink, and every transport that
-  ;; writes the wire itself) must get them unflattened.
-  ;;
-  ;; The flattening is LOSSY wherever what it answers is then UTF-8 encoded --
-  ;; every octet >= #x80 doubles -- so the one caller left is the reactor
-  ;; envelope, whose response head is a JSON string and so cannot carry octets
-  ;; at all. A host that wants a binary body there provides a body sink.
-  (let ((out (make-string-output-stream)) (i 0) (n (length v)))
-    (while (< i n)
-      (write-char (code-char (aref v i)) out)
-      (setq i (+ i 1)))
-    (get-output-stream-string out)))
-
-(defun rontolisp::%http-body-text (body)
-  ;; The normalized body -> the STRING a transport that can carry only TEXT
-  ;; writes. Octets flatten one character per octet; a string is already it. A
-  ;; stream is the caller's problem (it needs an await, and only the async
-  ;; frames have one). Lossy for a binary body -- see %http-octets-string.
-  (if (stringp body) body (rontolisp::%http-octets-string body)))
-
 (defun rontolisp::%http-body-string (body)
   ;; A Clack response body -> what the transport writes: a STRING, an
   ;; (unsigned-byte 8) vector, or a rontolisp STREAM. The last two are returned
@@ -546,8 +560,9 @@
   ;; OCTETS stay octets for the same reason a stream does: only the transport
   ;; knows what it can carry. Every transport that writes the wire itself takes
   ;; them as they are; only the reactor envelope, whose head is a JSON string,
-  ;; flattens them through %http-body-text. Flattening HERE would make binary
-  ;; unrecoverable, because a flattened octet is indistinguishable from a
+  ;; renders them as the text they spell (http-reactor.lisp's
+  ;; %http-reactor-body-envelope-text). Rendering HERE would make binary
+  ;; unrecoverable, because a rendered octet is indistinguishable from a
   ;; character the application meant.
   ;;
   ;; A BARE STRING is deliberately rejected, as Clack itself rejects it (lack's
@@ -619,6 +634,6 @@
         ;; A string or an (unsigned-byte 8) vector reaches the transport as it
         ;; is. Flattening octets here would hand every transport characters it
         ;; then UTF-8 encodes, doubling each octet >= #x80; a transport that
-        ;; genuinely cannot write bytes flattens for itself, through
-        ;; %http-body-text.
+        ;; genuinely cannot write bytes renders them for itself (the reactor
+        ;; envelope's %http-reactor-body-envelope-text).
         triple)))

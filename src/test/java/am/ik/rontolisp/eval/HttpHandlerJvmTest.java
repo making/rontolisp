@@ -192,6 +192,22 @@ class HttpHandlerJvmTest {
 	}
 
 	@Test
+	void compiledDirectiveRelaysAFetchedBodyByteExactlyAndReadAllStillDecodesIt() throws Exception {
+		// The JVM twin of HttpHandlerTest#directiveRelaysAFetchedBodyByteExactly...: the
+		// fetch takes the reply as byte[] and answers it as one long[] octet chunk, and
+		// _drain_body hands the octets to toResponse unencoded.
+		int upstream = HttpHandlerTest.startRelayUpstream();
+		int port = freePort();
+		compileAndServeInBackground(
+				HttpHandlerTest.RELAY_PROGRAM + "(rontolisp:http-handler 'handle %d)\n".formatted(port), port);
+		HttpResponse<byte[]> relayed = getBytes(port, "/relay?" + upstream);
+		assertThat(relayed.statusCode()).isEqualTo(200);
+		assertThat(relayed.headers().firstValue("content-type")).hasValue("image/jpeg");
+		assertThat(relayed.body()).containsExactly(HttpHandlerTest.RELAY_OCTETS);
+		assertThat(get(port, "/text?" + upstream).body()).isEqualTo("こんにちは");
+	}
+
+	@Test
 	void compiledDirectiveServesTheTwoElementBodylessResponse() throws Exception {
 		// lack's finalize-response answers (status headers) for a bodyless response.
 		int port = freePort();

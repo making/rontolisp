@@ -3681,10 +3681,37 @@ public final class LispNames {
 
 	/**
 	 * The {@code read-all} function provided by the {@code rontolisp} package. Returns a
-	 * future that settles to the concatenation of all remaining string chunks of a stream
-	 * (an error is signaled for a non-string chunk).
+	 * future that settles to the remaining chunks of a stream drained into ONE string:
+	 * string chunks are concatenated, and OCTET chunks -- the {@code (unsigned-byte 8)}
+	 * vectors every HTTP body stream answers ({@link #OCTETS_TO_STRING_INTERNAL}) -- are
+	 * joined and UTF-8 decoded, so a document-shaped consumer reads text off a byte
+	 * stream. A stream mixing the two kinds is an error.
 	 */
 	public static final String READ_ALL = "READ-ALL";
+
+	/**
+	 * The internal {@code rontolisp::%octets-to-string} primitive: an
+	 * {@code (unsigned-byte 8)} vector -> the string its UTF-8 bytes spell, LENIENTLY --
+	 * a byte that leads no valid sequence, and a sequence the vector truncates, answer
+	 * their own characters, so malformed input never signals (the rule
+	 * {@code http-server.lisp}'s decoder applies to a request). ONE definition in Lisp
+	 * source ({@code LispPreludeLibrary}) for the compile paths; the interpreter mirrors
+	 * it in Java arm for arm, so a drained body is decoded natively there. It is what
+	 * {@code rontolisp:read-all} decodes an octet-chunk stream with, and what the
+	 * host-driven reactor's envelope arm renders an octet body as.
+	 */
+	public static final String OCTETS_TO_STRING_INTERNAL = "%OCTETS-TO-STRING";
+
+	/**
+	 * The internal {@code rontolisp::%octets-join} helper: a list of
+	 * {@code (unsigned-byte 8)} vectors and their total length -> ONE packed vector
+	 * holding them in order (a single chunk is answered as it is, uncopied). The blit
+	 * every drain of an octet-chunk stream needs, written once
+	 * ({@code LispPreludeLibrary}) -- {@code read-all} joins before it decodes, and
+	 * {@code %http-drain} joins a stream response body into the octets a transport writes
+	 * as they are.
+	 */
+	public static final String OCTETS_JOIN_INTERNAL = "%OCTETS-JOIN";
 
 	/**
 	 * The {@code wait-for} function provided by the {@code rontolisp} package. Returns a
@@ -4893,6 +4920,12 @@ public final class LispNames {
 	 * type and its two runtime functions).
 	 */
 	public static final String STREAM_NEW_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + STREAM_NEW_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%octets-to-string}
+	 * ({@link #OCTETS_TO_STRING_INTERNAL}).
+	 */
+	public static final String OCTETS_TO_STRING_INTERNAL_QUALIFIED = RONTOLISP_PKG + "::" + OCTETS_TO_STRING_INTERNAL;
 
 	/**
 	 * The {@code wasm-import} directive provided by the {@code rontolisp} package. Used

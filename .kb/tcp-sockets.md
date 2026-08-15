@@ -321,9 +321,11 @@ External state (a PostgreSQL row) survives; a defvar does not.
   BackendKeyData secret) collapsed into one char under the old char-based
   cursor, shifting the rest of the stream and hanging the driver on a read for
   bytes it had already swallowed. sockets.lisp therefore keeps a BYTE cursor
-  over the chunk through three component-only intrinsics
-  (`WasmStrByteCompiler`): `rontolisp::%str-byte-length` /
-  `rontolisp::%str-byte-ref` (raw `$str_bytes` access) and
+  over the chunk -- since todo-370 the `stream<u8>` read lifts the chunk as a
+  packed `(unsigned-byte 8)` vector (`.kb/wit.md`), so the cursor is plain
+  `length`/`aref`; before, the chunk was a byte string walked through the
+  component-only `rontolisp::%str-byte-length` / `%str-byte-ref` intrinsics
+  (`WasmStrByteCompiler`), which survive for the WRITE side together with
   `rontolisp::%str-from-byte` (a one-content-byte string, valid UTF-8 or not,
   which the raw-`$str_bytes` write path puts on the wire as exactly that byte
   -- `write-byte` of a value >= 128 used to emit a TWO-byte UTF-8 sequence,

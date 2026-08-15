@@ -200,13 +200,17 @@ backend -- `size-report/programs/zlib/zlib.lisp` is exactly that. Per backend:
   `stdin.lisp`'s `%stdin-read-byte-or-raw-f` is now a raw passthrough -- it used to signal
   "read-byte expects an input stream" for a nil designator, on the reasoning that read-byte HAD no
   stdin designator, which this change retires -- so the octets come from the adapter's stdin
-  rather than from stdin.lisp's chunk buffer. That is deliberate: the buffer is a STRING whose
-  cursor walks decoded characters, and binary octets must not be UTF-8-decoded on the way through.
-  The consequence is the documented mixing limit, unchanged: an async program reading stdin BOTH
-  as bytes and as lines/characters holds two host stdin streams with implementation-specific
-  interleaving. **Re-evaluation trigger**: if a program needs a pending BYTE read to suspend the
-  task (the reason the line/char reads went through stdin.lisp at all), stdin.lisp needs a
-  byte-accurate buffer of its own over `%str-byte-ref`, not the character one.
+  rather than from stdin.lisp's chunk buffer. That was decided when the buffer was a STRING whose
+  cursor walked decoded characters; since todo-370 the `stream<u8>` chunk lifts as an octet vector
+  and stdin.lisp's cursor walks BYTES (`%stdin-read-byte-f`, with `%stdin-read-char-f` assembling
+  a character from them the way sockets.lisp does), so the passthrough is no longer forced by the
+  buffer -- it stays because nothing has asked for a suspending byte read. The consequence is the
+  documented mixing limit, unchanged: an async program reading stdin BOTH as bytes and as
+  lines/characters holds two host stdin streams with implementation-specific interleaving.
+  **Re-evaluation trigger**: if a program needs a pending BYTE read to suspend the task (the
+  reason the line/char reads went through stdin.lisp at all), route `%stdin-read-byte-or-raw-f`'s
+  nil designator to `%stdin-read-byte-f` -- the byte-accurate buffer it needs exists now -- and
+  the mixing limit goes with it.
 Pinned by `LispEvaluatorTest#evalBinaryStandardStream{sAreByteTransparent,Designators}`, their
 `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest` twins (the wasm ones render stdout
 through `od` inside the runner, since `ExecResult` decodes it as text), and the ci-spec case.

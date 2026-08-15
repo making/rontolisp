@@ -380,7 +380,7 @@
 | `rontolisp:stream-read` | `(rontolisp:stream-read s)` | ストリームの次のチャンク（終端では `nil`）で確定する future |
 | `rontolisp:stream-write` | `(rontolisp:stream-write s "chunk")` | チャンク（`nil` は不可）を追加します。ストリームが受け付けた時点で確定する future を返します |
 | `rontolisp:stream-close` | `(rontolisp:stream-close s)` | 書き側をクローズします。バッファ済みチャンクは読み取り可能なままで、その後の read は終端を観測します |
-| `rontolisp:read-all` | `(rontolisp:read-all s)` | 残りの文字列チャンクすべての連結で確定する future |
+| `rontolisp:read-all` | `(rontolisp:read-all s)` | 残りのチャンクを 1 つの文字列に読み切った値で確定する future (オクテットチャンク -- HTTP ボディストリームのもの -- は UTF-8 デコード) |
 | `rontolisp:wait-for` | `(rontolisp:wait-for 100)` | 指定ミリ秒後に `nil` で確定する future。`cl:sleep` の非同期版の対応物 |
 | `rontolisp:then` | `(rontolisp:then f (lambda (v) (* 2 v)))` | future に対する変換を値として付与します。成功チャネル上に新しい future を返します (JavaScript の `.then`) |
 | `rontolisp:then*` | `(rontolisp:then* f #'1+ #'1+)` | `rontolisp:then` の可変長チェーン糖衣。各関数は 1 つ前の段の平坦化された値を受け取ります |

@@ -107,6 +107,42 @@ class LispPreludeLibraryTest {
 	}
 
 	@Test
+	void thePreludeOctetsToStringAgreesWithTheInterpretersNativeMirror() {
+		// %octets-to-string is the lenient UTF-8 decoder read-all decodes an octet-chunk
+		// body with: Lisp in the prelude for the compile paths, Java in Environment for
+		// the interpreter (which finds the native first and never loads the Lisp one).
+		// Evaluating the prelude defun HERE overrides the native in this evaluator, so
+		// the two renderings of the same rule can be pinned against each other -- on
+		// valid input, and on every malformed shape the rule names: a stray
+		// continuation byte, an unpaired lead byte, a truncated sequence, an #xF8+ byte.
+		LispEvaluator evaluator = new LispEvaluator(new java.io.PrintStream(new java.io.ByteArrayOutputStream()));
+		for (LispVal form : LispPreludeLibrary.formsFor(am.ik.rontolisp.LispNames.OCTETS_TO_STRING_INTERNAL)) {
+			evaluator.eval(form);
+		}
+		int[][] cases = { { 0x41, 0x42 }, { 0xE3, 0x81, 0x93, 0xE3, 0x82, 0x93 }, { 0xF0, 0x9F, 0x98, 0x80, 0x41 },
+				{ 0xFF, 0xFE, 0x41 }, { 0x80, 0xBF }, { 0xE3, 0x81 }, { 0xC3 }, { 0xF8, 0x41 },
+				{ 0x41, 0xE3, 0x81, 0x82, 0xFF, 0x42, 0xC3, 0xBF }, {} };
+		for (int[] c : cases) {
+			long[] data = new long[c.length];
+			StringBuilder literal = new StringBuilder("(rontolisp::%octets-to-string (make-array ").append(c.length)
+				.append(" :element-type '(unsigned-byte 8) :initial-contents '(");
+			for (int i = 0; i < c.length; i++) {
+				data[i] = c[i];
+				literal.append(c[i]).append(' ');
+			}
+			literal.append(")))");
+			LispVal actual = evaluator.eval(LispReader.readFromString(literal.toString()));
+			assertThat(actual).as(literal.toString()).isInstanceOf(am.ik.rontolisp.LispString.class);
+			assertThat(((am.ik.rontolisp.LispString) actual).value()).as(literal.toString())
+				.isEqualTo(Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8, data)));
+		}
+		// And the native itself decodes valid UTF-8 as the platform does.
+		assertThat(Environment.decodeUtf8Leniently(new am.ik.rontolisp.LispIntVector(8,
+				new long[] { 0xE3, 0x81, 0x93, 0xE3, 0x82, 0x93, 0xF0, 0x9F, 0x98, 0x80 })))
+			.isEqualTo("こん\uD83D\uDE00");
+	}
+
+	@Test
 	void thePreludeMergePathnamesAgreesWithPathnameOps() {
 		// merge-pathnames lives in the prelude (one definition, all four backends) while
 		// make-pathname :defaults and uiop:merge-pathnames* go through the Java
