@@ -68,6 +68,14 @@ page.
 | `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — the directory component of a namestring as CL's list (`:absolute`/`:relative` plus one string per level), `nil` when there is none. Pure string work; nothing is read |
 | `pathname-name` | `(pathname-name "d/a.b.c")` | `"a.b"` — the file-name component without its type: everything after the last `/` and before the LAST dot (a dot at position 0 belongs to the name). `nil` when the namestring names no file |
 | `pathname-type` | `(pathname-type "d/a.b.c")` | `"c"` — the type (extension) without its dot, `nil` when there is none. The other half of the same split |
+| `pathname-host` | `(pathname-host "d/a.txt")` | always `nil` — a flat namestring carries no host component. The designator is still validated |
+| `pathname-device` | `(pathname-device #P"d/a.txt")` | always `nil`, for the same reason (and what SBCL answers on Unix) |
+| `pathname-version` | `(pathname-version #P"d/a.txt")` | always `nil` — there are no file versions here |
+| `wild-pathname-p` | `(wild-pathname-p "d/*.txt" :name)` | whether the pathname (or just the `:directory`/`:name`/`:type` component named) holds a `*` or `?`. `:host`/`:device`/`:version` are always `nil` |
+| `enough-namestring` | `(enough-namestring "/a/b/c.lisp" "/a/")` | `"b/c.lisp"` — the shortest namestring that still names the file when merged against the defaults (`*default-pathname-defaults*` by default): the inverse of `merge-pathnames` |
+| `translate-pathname` | `(translate-pathname "src/f.lisp" "src/*.lisp" "build/*.fasl")` | `#P"build/f.fasl"` — matches the source against the from-wildcard and substitutes what each `*`/`?` captured into the to-wildcard. A source that does not match signals |
+| `translate-logical-pathname` | `(translate-logical-pathname "d/a.txt")` | `#P"d/a.txt"` — the identity: every rontolisp pathname is physical, so there is nothing to translate |
+| `logical-pathname` | `(logical-pathname "SYS:SRC;")` | always signals — no logical host can be defined here, so no argument can name a logical pathname |
 | `pathname` | `(pathname "d/x")` | `#P"d/x"` — the canonical constructor: a pathname unchanged, a string wrapped into the pathname it designates, anything else signals |
 | `parse-namestring` | `(parse-namestring "d/a.txt")` | `#P"d/a.txt"` (and the stop position as a second value) — lite: no host parsing, the whole string is the namestring |
 | `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — composes a pathname from `:directory`/`:name`/`:type`, taking every UNSUPPLIED component from `:defaults`. Component-wise, NOT a merge: a supplied component replaces the defaults' one and an explicit `nil` means "no component". A real function on all four backends; literal calls are additionally folded at compile time |
@@ -331,6 +339,7 @@ page.
 | `file-write-date` | `(file-write-date "x.txt")` | the file's modification time as a universal time; `nil` when it cannot be determined (always `nil` on both WASM backends) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | create the pathspec's directory component and return the pathspec (signals on both WASM backends) |
 | `delete-file` | `(delete-file "notes.txt")` | delete the named file and return `t`; anything that leaves it in place signals, "it was not there" included (signals on both WASM backends, like `ensure-directories-exist` and for the same reason) |
+| `rename-file` | `(rename-file "notes.txt" "notes.bak")` | rename (move) the file and return the defaulted new name as a pathname; the new name is merged with the old one, so a bare file name keeps the directory. Anything that leaves the file in place signals, "it was not there" included (signals on both WASM backends, like `delete-file`) |
 | `make-string-output-stream` | `(make-string-output-stream)` | a fresh string output stream -- the explicit form of what `with-output-to-string` builds |
 | `make-string-input-stream` | `(make-string-input-stream string &optional start end)` | an input stream reading from a string -- the explicit form of what `with-input-from-string` binds |
 | `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |

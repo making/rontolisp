@@ -410,6 +410,129 @@ public final class LispPreludeLibrary {
 				(defun pathname-type (%pt-path)
 				  (third (%pathname-split %pt-path)))
 				""");
+		// The three components a rontolisp namestring does not model. Every one answers
+		// nil -- the answer CL prescribes for a component that is not present, and the
+		// one SBCL gives on Unix for :device and :version -- after validating the
+		// argument through the strict namestring, so a non-designator signals exactly
+		// where the rest of the family does. rove's resolve-file is the caller
+		// (.todo/372 row 13): it pops a directory component only for a device that is
+		// neither nil nor :unspecific.
+		SOURCES.put(LispNames.PATHNAME_HOST, """
+				(defun pathname-host (%phost-path &rest %phost-args)
+				  (progn (namestring %phost-path) nil))
+				""");
+		SOURCES.put(LispNames.PATHNAME_DEVICE, """
+				(defun pathname-device (%pdev-path &rest %pdev-args)
+				  (progn (namestring %pdev-path) nil))
+				""");
+		SOURCES.put(LispNames.PATHNAME_VERSION, """
+				(defun pathname-version (%pver-path &rest %pver-args)
+				  (progn (namestring %pver-path) nil))
+				""");
+		// %wild-component-p: the ONE "this component is wild" rule -- it holds a * or a
+		// ? -- so wild-pathname-p cannot disagree with what %wild-match actually treats
+		// as a wildcard.
+		SOURCES.put(LispNames.WILD_COMPONENT_P, """
+				(defun %wild-component-p (%wc-s)
+				  (and (stringp %wc-s)
+				       (or (position #\\* %wc-s) (position #\\? %wc-s))
+				       t))
+				""");
+		SOURCES.put(LispNames.WILD_PATHNAME_P, """
+				(defun wild-pathname-p (%wp-path &optional %wp-field)
+				  (let* ((%wp-parts (%pathname-split (namestring %wp-path)))
+				         (%wp-dir (first %wp-parts))
+				         (%wp-name (second %wp-parts))
+				         (%wp-type (third %wp-parts)))
+				    (cond ((null %wp-field)
+				           (or (%wild-component-p %wp-dir)
+				               (%wild-component-p %wp-name)
+				               (%wild-component-p %wp-type)))
+				          ((eq %wp-field :directory) (%wild-component-p %wp-dir))
+				          ((eq %wp-field :name) (%wild-component-p %wp-name))
+				          ((eq %wp-field :type) (%wild-component-p %wp-type))
+				          ((or (eq %wp-field :host) (eq %wp-field :device) (eq %wp-field :version)) nil)
+				          (t (error "WILD-PATHNAME-P: unknown field key ~S" %wp-field)))))
+				""");
+		// enough-namestring: the inverse of the merge above it. merge-pathnames prefixes
+		// a relative namestring with the defaults' DIRECTORY, so the shortest namestring
+		// that still names the same file is the path with that directory prefix removed
+		// -- and when the path does not start with it, nothing can be dropped and the
+		// whole namestring is the answer (which is what CL falls back to as well). The
+		// value is a STRING, as CL specifies, not a pathname.
+		SOURCES.put(LispNames.ENOUGH_NAMESTRING, """
+				(defun enough-namestring (%en-path &optional (%en-defaults *default-pathname-defaults*))
+				  (let* ((%en-p (namestring %en-path))
+				         (%en-d (namestring %en-defaults))
+				         (%en-s (position #\\/ %en-d :from-end t))
+				         (%en-dir (if %en-s (subseq %en-d 0 (+ %en-s 1)) ""))
+				         (%en-n (length %en-dir)))
+				    (if (and (> %en-n 0)
+				             (<= %en-n (length %en-p))
+				             (string= %en-dir (subseq %en-p 0 %en-n)))
+				        (subseq %en-p %en-n)
+				        %en-p)))
+				""");
+		// %wild-captures: the CAPTURING twin of %wild-match -- one matcher rule, two
+		// answers. Each wildcard contributes the substring it consumed (one character
+		// for a ?), left to right; :no-match is the failure answer, which no capture
+		// list can collide with. * is tried SHORTEST first, so (translate-pathname
+		// "a/b.c" "*/*.*" "x/*.*") substitutes "b" and "c" rather than letting the
+		// first star swallow the rest.
+		SOURCES.put(LispNames.WILD_CAPTURES, """
+				(defun %wild-captures (%wcp-pat %wcp-str)
+				  (let ((%wcp-pn (length %wcp-pat)) (%wcp-sn (length %wcp-str)))
+				    (labels ((m (p s acc)
+				               (cond ((>= p %wcp-pn) (if (>= s %wcp-sn) (reverse acc) :no-match))
+				                     ((char= (char %wcp-pat p) #\\*)
+				                      (let ((r :no-match) (e s))
+				                        (do () ((or (not (eq r :no-match)) (> e %wcp-sn)) r)
+				                          (setq r (m (+ p 1) e (cons (subseq %wcp-str s e) acc)))
+				                          (setq e (+ e 1)))))
+				                     ((>= s %wcp-sn) :no-match)
+				                     ((char= (char %wcp-pat p) #\\?)
+				                      (m (+ p 1) (+ s 1) (cons (subseq %wcp-str s (+ s 1)) acc)))
+				                     ((char= (char %wcp-pat p) (char %wcp-str s))
+				                      (m (+ p 1) (+ s 1) acc))
+				                     (t :no-match))))
+				      (m 0 0 nil))))
+				""");
+		SOURCES.put(LispNames.TRANSLATE_PATHNAME, """
+				(defun translate-pathname (%tp-source %tp-from %tp-to &rest %tp-args)
+				  (let ((%tp-caps (%wild-captures (namestring %tp-from) (namestring %tp-source))))
+				    (if (eq %tp-caps :no-match)
+				        (error "TRANSLATE-PATHNAME: ~A does not match ~A"
+				               (namestring %tp-source) (namestring %tp-from))
+				        (let* ((%tp-t (namestring %tp-to))
+				               (%tp-n (length %tp-t))
+				               (%tp-acc "")
+				               (%tp-i 0))
+				          (do () ((>= %tp-i %tp-n) (pathname %tp-acc))
+				            (let ((%tp-c (char %tp-t %tp-i)))
+				              (if (or (char= %tp-c #\\*) (char= %tp-c #\\?))
+				                  (progn
+				                    (setq %tp-acc (concatenate 'string %tp-acc
+				                                               (if %tp-caps (car %tp-caps) "")))
+				                    (setq %tp-caps (cdr %tp-caps)))
+				                  (setq %tp-acc (concatenate 'string %tp-acc
+				                                             (subseq %tp-t %tp-i (+ %tp-i 1)))))
+				              (setq %tp-i (+ %tp-i 1))))))))
+				""");
+		// Every rontolisp pathname is PHYSICAL: there are no logical hosts, so no
+		// translation table exists to consult and the translation is the identity --
+		// which is what CL prescribes for a physical argument. logical-pathname is the
+		// honest other half: CL requires a type-error unless the argument names a
+		// logical pathname, and here nothing can, so it always signals rather than
+		// pretending a physical namestring is a logical one.
+		SOURCES.put(LispNames.TRANSLATE_LOGICAL_PATHNAME, """
+				(defun translate-logical-pathname (%tlp-path &rest %tlp-args)
+				  (pathname %tlp-path))
+				""");
+		SOURCES.put(LispNames.LOGICAL_PATHNAME, """
+				(defun logical-pathname (%lp-thing)
+				  (error "LOGICAL-PATHNAME: ~S does not name a logical pathname (rontolisp defines no logical hosts)"
+				         %lp-thing))
+				""");
 		SOURCES.put(LispNames.PATHNAME_DIRECTORY_STRING, """
 				(defun %pathname-directory-string (%pds-dir)
 				  (cond ((null %pds-dir) "")
@@ -481,6 +604,21 @@ public final class LispPreludeLibrary {
 				  (if (%delete-file (namestring %dfl-path))
 				      t
 				      (error "DELETE-FILE: cannot delete ~A" %dfl-path)))
+				""");
+		// rename-file: the signalling ANSI surface over the %rename-file primitive (nil
+		// when the source is not there or the host refused), the delete-file shape one
+		// argument wider. CL merges the new name with the old one, so
+		// (rename-file "d/a.txt" "b.txt") lands on "d/b.txt"; the answer is the
+		// defaulted new name as a pathname. Lite: CL's other two values (the old and new
+		// truenames) are not returned -- a prelude defun's secondary values do not
+		// survive the function boundary on the compile paths (LispNames.RENAME_FILE).
+		SOURCES.put(LispNames.RENAME_FILE, """
+				(defun rename-file (%rnf-file %rnf-new-name)
+				  (let ((%rnf-from (namestring %rnf-file))
+				        (%rnf-to (namestring (merge-pathnames %rnf-new-name %rnf-file))))
+				    (if (%rename-file %rnf-from %rnf-to)
+				        (pathname %rnf-to)
+				        (error "RENAME-FILE: cannot rename ~A to ~A" %rnf-from %rnf-to))))
 				""");
 		// y-or-n-p: prompt + a line of standard input, re-asking on anything that is
 		// neither y nor n. Lite: CL reads single characters without echo, and end of

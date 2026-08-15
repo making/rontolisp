@@ -106,6 +106,13 @@ final class JvmIoRuntimeBuilder {
 	static final String DELETE_FILE_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
+	 * {@code %rename-file}: the third write-side sibling; null when nothing was renamed.
+	 */
+	static final String RENAME_FILE_METHOD = "_renameFile";
+
+	static final String RENAME_FILE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
 	 * {@code file-length}: the byte length of the file behind a FILE stream, read off the
 	 * {@link #STREAM_PATHS_FIELD} table; null for every other stream kind.
 	 */
@@ -392,6 +399,8 @@ final class JvmIoRuntimeBuilder {
 
 	@Nullable private final MethodrefConstant fileDelete;
 
+	@Nullable private final MethodrefConstant fileRenameTo;
+
 	@Nullable private final MethodrefConstant fileLengthRef;
 
 	@Nullable private final FieldrefConstant streamPathsField;
@@ -595,6 +604,8 @@ final class JvmIoRuntimeBuilder {
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("mkdirs"), cp.addUtf8("()Z"))) : null;
 		this.fileDelete = fileMeta.deleteFile()
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("delete"), cp.addUtf8("()Z"))) : null;
+		this.fileRenameTo = fileMeta.renameFile() ? cp.addMethodref(this.fileClass,
+				cp.addNameAndType(cp.addUtf8("renameTo"), cp.addUtf8("(Ljava/io/File;)Z"))) : null;
 		this.fileLengthRef = fileMeta.fileLength()
 				? cp.addMethodref(this.fileClass, cp.addNameAndType(cp.addUtf8("length"), cp.addUtf8("()J"))) : null;
 		this.streamPathsField = fileMeta.fileLength() ? cp.addFieldref(thisClass,
@@ -615,10 +626,12 @@ final class JvmIoRuntimeBuilder {
 	 * @param makeDirectories whether {@code %make-directories} is called
 	 * @param fileLength whether {@code file-length} is called
 	 * @param deleteFile whether {@code %delete-file} is called
+	 * @param renameFile whether {@code %rename-file} is called
 	 */
-	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile) {
+	record FileMeta(boolean writeDate, boolean makeDirectories, boolean fileLength, boolean deleteFile,
+			boolean renameFile) {
 
-		static final FileMeta NONE = new FileMeta(false, false, false, false);
+		static final FileMeta NONE = new FileMeta(false, false, false, false, false);
 
 	}
 
@@ -695,6 +708,10 @@ final class JvmIoRuntimeBuilder {
 		if (this.fileMeta.deleteFile()) {
 			ms.add(new IoMethod(this.cp.addUtf8(DELETE_FILE_METHOD), this.cp.addUtf8(DELETE_FILE_DESC), 4, 2,
 					buildDeleteFile()));
+		}
+		if (this.fileMeta.renameFile()) {
+			ms.add(new IoMethod(this.cp.addUtf8(RENAME_FILE_METHOD), this.cp.addUtf8(RENAME_FILE_DESC), 5, 4,
+					buildRenameFile()));
 		}
 		if (this.fileMeta.fileLength()) {
 			ms.add(new IoMethod(this.cp.addUtf8(SET_STREAM_PATH_METHOD), this.cp.addUtf8(SET_STREAM_PATH_DESC), 4, 4,
@@ -1389,6 +1406,44 @@ final class JvmIoRuntimeBuilder {
 		code.add(Opcode.ACONST_NULL);
 		code.add(Opcode.ARETURN);
 		patchBranch(code, ifDeletedPos, code.size());
+		emitLdc(code, this.tStr.index());
+		code.add(Opcode.ARETURN);
+		return code;
+	}
+
+	/**
+	 * {@code _renameFile(Object from, Object to) -> "T" | null}. Renames the file,
+	 * answering null when there was nothing to rename or the host refused -- the "a
+	 * missing file is a file-error" decision belongs to the Lisp {@code rename-file}
+	 * above it, not here. {@code File.renameTo} is the one JDK call that needs no
+	 * exception table, which is what keeps this a plain emitted body.
+	 */
+	private List<Integer> buildRenameFile() {
+		// Slots: 0=from (Object), 1=to (Object), 2=f (String), 3=t (String)
+		List<Integer> code = new ArrayList<>();
+		emitStripQuotes(code, Opcode.ALOAD_0, Opcode.ASTORE_2, Opcode.ALOAD_2);
+		emitStripQuotes(code, Opcode.ALOAD_1, Opcode.ASTORE_3, Opcode.ALOAD_3);
+		// new File(f).renameTo(new File(t))
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_2);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.NEW);
+		emitU2(code, this.fileClass.index());
+		code.add(Opcode.DUP);
+		code.add(Opcode.ALOAD_3);
+		code.add(Opcode.INVOKESPECIAL);
+		emitU2(code, this.fileInit.index());
+		code.add(Opcode.INVOKEVIRTUAL);
+		emitU2(code, Objects.requireNonNull(this.fileRenameTo).index());
+		int ifRenamedPos = code.size();
+		code.add(Opcode.IFNE);
+		emitU2(code, 0);
+		code.add(Opcode.ACONST_NULL);
+		code.add(Opcode.ARETURN);
+		patchBranch(code, ifRenamedPos, code.size());
 		emitLdc(code, this.tStr.index());
 		code.add(Opcode.ARETURN);
 		return code;

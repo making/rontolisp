@@ -42,26 +42,29 @@ TRANSLATE-PATHNAME* UNIX-NAMESTRING *UNSPECIFIC-PATHNAME-TYPE* WILDEN *WILD*
 *WILD-PATH* WITH-ENOUGH-PATHNAME WITH-PATHNAME-DEFAULTS
 ```
 
-## The prerequisite
+## The prerequisite -- DONE (2026-08-15, `.todo/036`)
 
-`.kb/pathnames.md` "Known lite edges" is explicit that `wild-pathname-p`,
-`pathname-host` / `-device` / `-version`, `translate-pathname` and
-`*default-pathname-defaults*` **do not exist** (`.todo/036`). Roughly a third of
-the list above is written directly over them: every `*wild-*`
-constant, `wilden`, `translate-pathname*`, `pathname-host-pathname`,
+The CL pathname model was the prerequisite and it has been widened, so this item
+no longer has to. `wild-pathname-p`, `pathname-host` / `-device` / `-version`,
+`translate-pathname`, `translate-logical-pathname`, `logical-pathname`,
+`enough-namestring`, `rename-file` and the special `*default-pathname-defaults*`
+(`#P""`, a genuine dynamic variable on all four backends) are all real -- prelude
+Lisp over the namestring, one definition per operator. Read the "algebra over the
+flat namestring" section of `.kb/pathnames.md` before writing the uiop layer over
+them; in particular `%wild-captures` is the capturing matcher
+`translate-pathname` (and therefore `translate-pathname*`) is built on, and
+`%wild-component-p` is the one "this component is wild" rule.
+
+Roughly a third of the list above is written directly over that model: every
+`*wild-*` constant, `wilden`, `translate-pathname*`, `pathname-host-pathname`,
 `directorize-pathname-host-device`, `physicalize-pathname`, and
-`with-pathname-defaults`.
+`with-pathname-defaults`. All of them now have something to stand on.
 
-Do not route around that. Widen the CL pathname model first -- as a scoped part
-of THIS item, not as a `.todo/036` hand-off -- because a uiop layer that
-pretends there is no host/device/version component will have to be rewritten the
-day `.todo/036` lands. The `.todo/036` non-goals are its author's scope, not a
-constraint on this one (see CLAUDE.md, working principles).
-
-`uiop::get-pathname-defaults` is the visible symptom: it is an internal symbol
-answering the literal `""` because there is no `*default-pathname-defaults*`.
-It is external in real uiop (`uiop/filesystem`, `.todo/358`) and cannot stay a
-constant once the special exists.
+`uiop::get-pathname-defaults` is what is LEFT of the symptom: it is an internal
+symbol answering the literal `""` because it predates the special. It is external
+in real uiop (`uiop/filesystem`, `.todo/358`) and must now READ
+`*default-pathname-defaults*` (whose namestring is `""`, so nothing observable
+changes today) rather than stay a constant -- that retirement is this item's.
 
 ## Then the algebra
 
@@ -73,11 +76,15 @@ are `subpathname`, `subpathp`, `parse-unix-namestring`, `unix-namestring`,
 `pathname-parent-directory-pathname`, `split-name-type`, and the four
 predicates (`absolute-` / `relative-` / `directory-` / `file-pathname-p`).
 
-**Logical pathnames**: rontolisp has none. `logical-pathname-p` answers nil,
-`physical-pathname-p` t, `physicalize-pathname` is identity, and
+**Logical pathnames**: rontolisp has none, and the CL half already committed to
+that (`.todo/036`): `translate-logical-pathname` is the identity and
+`logical-pathname` always signals, because no logical host can be defined and no
+`logical-pathname-translations` table exists. So `logical-pathname-p` answers
+nil, `physical-pathname-p` t, `physicalize-pathname` is identity, and
 `make-pathname-logical` / `make-pathname-component-logical` are
-`not-implemented-error`. Write that into `.kb/uiop.md` with the reason, so the
-next visitor can see whether it still holds.
+`not-implemented-error`. Write that into `.kb/uiop.md` with the reason (pointing
+at the `.kb/pathnames.md` paragraph), so the next visitor can see whether it
+still holds.
 
 **All four backends.** These are pure functions over a value type, so the bar is
 the full four -- and the fold in `cli/CompileTimePathnameFolder` should learn the

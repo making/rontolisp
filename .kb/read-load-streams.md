@@ -367,6 +367,20 @@ same tenth-import re-evaluation trigger (`path_unlink_file`) -- which has now FI
 is the caller: it deletes superseded migration files, which is therefore an
 interpreter/JVM-only branch of an operation that otherwise runs everywhere.
 
+**`rename-file` is the THIRD of that shape** (`.todo/036`, 2026-08-15): prelude Lisp over
+`%rename-file`, which answers nil rather than signalling when the source is not there or
+the host refused. Per backend: interpreter `Files.move` (`REPLACE_EXISTING`), JVM
+`_renameFile` (`JvmIoRuntimeBuilder`, `File.renameTo`, gated through the same `FileMeta`
+record, which grew a fifth flag), both WASM backends a call-time
+`LispMacroExpander.renameFileStub()` error. It is the same "no honest non-answer" reason
+and therefore the same `.todo/257` work item, one preview1 import wider
+(`path_rename`). CL's second and third values (the two truenames) are not returned, the
+`ensure-directories-exist` rule; the new name is MERGED with the old one, so a bare file
+name keeps the directory. Pinned by
+`LispEvaluatorTest#renameFileMovesTheFileAndSignalsWhenItIsNotThere`,
+`JvmLispCompilerTest#renameFileMovesTheFileOnDisk` and the rename arm of
+`WasmLispCompilerIntegrationTest#pathnameAlgebraOverTheFlatNamestring`.
+
 **`uiop:read-file-string` must NOT size its buffer from `file-length`** (todo-249). It is
 prelude Lisp over `with-open-file` + a CHUNKED `read-sequence` loop, and both properties of
 that loop are load-bearing rather than stylistic:

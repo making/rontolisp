@@ -583,6 +583,12 @@ public final class Environment implements Scope {
 		env.define(LispNames.READ_DEFAULT_FLOAT_FORMAT, new LispSymbol("DOUBLE-FLOAT"));
 		// The maximum array dimension: Java arrays cap just below Integer.MAX_VALUE.
 		env.define(LispNames.ARRAY_DIMENSION_LIMIT, new LispInteger(2147483639L));
+		// The pathname operators' default `defaults`. #P"" -- the empty pathname, SBCL's
+		// initial value too -- is the only honest one here: rontolisp absolutizes
+		// nothing and names no working directory
+		// (LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR).
+		env.define(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR,
+				new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString("") }));
 		// Accepted and ignored: the printer does no circle detection.
 		env.define(LispNames.PRINT_CIRCLE_VAR, LispNil.INSTANCE);
 		// The two printer-mode variables a portable print-object method tests. Their
@@ -4271,6 +4277,25 @@ public final class Environment implements Scope {
 			}
 			try {
 				return Files.deleteIfExists(Path.of(path.value())) ? LispTrue.INSTANCE : LispNil.INSTANCE;
+			}
+			catch (IOException | RuntimeException ex) {
+				return LispNil.INSTANCE;
+			}
+		}));
+		// %rename-file: the third write-side sibling of %list-directory /
+		// %make-directories / %delete-file, and Files-based for the same reason. Answers
+		// nil rather than signalling when the source is not there or the host refused,
+		// so the "a missing file is a file-error" decision lives once, in the Lisp
+		// rename-file above it (LispPreludeLibrary).
+		env.defineFunction(LispNames.RENAME_FILE_INTERNAL, new LispFunction(LispNames.RENAME_FILE_INTERNAL, args -> {
+			requireArgCount(LispNames.RENAME_FILE_INTERNAL, args, 2);
+			if (!(args.get(0) instanceof LispString from) || !(args.get(1) instanceof LispString to)) {
+				throw new LispEvalException(LispNames.RENAME_FILE_INTERNAL + " expects two string pathnames");
+			}
+			try {
+				Files.move(Path.of(from.value()), Path.of(to.value()),
+						java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+				return LispTrue.INSTANCE;
 			}
 			catch (IOException | RuntimeException ex) {
 				return LispNil.INSTANCE;

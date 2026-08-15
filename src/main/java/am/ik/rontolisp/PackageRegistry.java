@@ -161,7 +161,10 @@ public final class PackageRegistry {
 			LispNames.FIND_RESTART, LispNames.COMPUTE_RESTARTS, LispNames.RESTART_NAME, LispNames.MUFFLE_WARNING,
 			LispNames.ABORT, LispNames.CONTINUE, LispNames.USE_VALUE, LispNames.STORE_VALUE, LispNames.REMPROP,
 			LispNames.IMPORT, LispNames.PACKAGE_USE_LIST, LispNames.PACKAGE_USED_BY_LIST,
-			LispNames.PACKAGE_SHADOWING_SYMBOLS);
+			LispNames.PACKAGE_SHADOWING_SYMBOLS, LispNames.PATHNAME_HOST, LispNames.PATHNAME_DEVICE,
+			LispNames.PATHNAME_VERSION, LispNames.WILD_PATHNAME_P, LispNames.ENOUGH_NAMESTRING,
+			LispNames.TRANSLATE_PATHNAME, LispNames.TRANSLATE_LOGICAL_PATHNAME, LispNames.LOGICAL_PATHNAME,
+			LispNames.RENAME_FILE);
 
 	/** The {@code cl} variables. */
 	private static final Set<String> CL_VARIABLES = Set.of(LispNames.PACKAGE_VAR, LispNames.READ_DEFAULT_FLOAT_FORMAT,
@@ -175,7 +178,8 @@ public final class PackageRegistry {
 			LispNames.PRINT_LINES_VAR, LispNames.PRINT_PPRINT_DISPATCH_VAR, LispNames.PRINT_LENGTH_VAR,
 			LispNames.PRINT_LEVEL_VAR, LispNames.PRINT_BASE_VAR, LispNames.PRINT_RADIX_VAR, LispNames.PRINT_CASE_VAR,
 			LispNames.PRINT_ARRAY_VAR, LispNames.PRINT_GENSYM_VAR, LispNames.MODULES_VAR, LispNames.TRACE_OUTPUT_VAR,
-			LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR);
+			LispNames.DEBUG_IO_VAR, LispNames.QUERY_IO_VAR, LispNames.TERMINAL_IO_VAR,
+			LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR);
 
 	/**
 	 * The {@code cl} type-specifier (and clause-keyword) names that are not also
@@ -254,7 +258,8 @@ public final class PackageRegistry {
 			LispNames.PATHNAME_COMPONENT_STRING, LispNames.DELETE_FILE_INTERNAL, LispNames.SET_SYMBOL_FUNCTION_INTERNAL,
 			LispNames.FENV_FUNCTION_INTERNAL, LispNames.TEMP_FILE_NAME, LispNames.PROBE_FILE_INTERNAL,
 			LispNames.PATH_NS, LispNames.SYNONYM_TARGET, LispNames.CLOSE_INTERNAL, LispNames.MACRO_FN_INTERNAL,
-			LispNames.MACRO_EXPANDER_STUB);
+			LispNames.MACRO_EXPANDER_STUB, LispNames.WILD_COMPONENT_P, LispNames.WILD_CAPTURES,
+			LispNames.RENAME_FILE_INTERNAL);
 
 	/**
 	 * The names of the symbols owned by the {@code cl} package, derived as the union of

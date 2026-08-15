@@ -64,18 +64,21 @@ its argument through `%path-ns` (the LENIENT unwrap: pathname → namestring,
 anything else unchanged, preserving the "non-string coerces to the empty
 namestring" tolerance) or the strict `namestring`, computes on namestrings,
 and wraps its answer with `(pathname ...)`. Internals (`%pathname-split`,
-`%dir-namestring`, `%wild-match`, `%temp-file-name`, the `%probe-file` /
-`%list-directory` / `%delete-file` / `%make-directories` primitives) stay
-string-typed on every backend.
+`%dir-namestring`, `%wild-match`, `%wild-captures`, `%wild-component-p`,
+`%temp-file-name`, the `%probe-file` / `%list-directory` / `%delete-file` /
+`%make-directories` / `%rename-file` primitives) stay string-typed on every
+backend.
 
 - Producers: `pathname`, `parse-namestring` (lite: value + length), `make-pathname`,
-  `merge-pathnames`, `probe-file` (now prelude over the renamed `%probe-file`
+  `merge-pathnames`, `translate-pathname`, `translate-logical-pathname`,
+  `probe-file` (now prelude over the renamed `%probe-file`
   primitive; its `BuiltinFunctionWrappers` entry is GONE — the defun serves
   `#'probe-file`), `truename`, `directory` and the `uiop:` walkers,
   `uiop:directory-exists-p`, `uiop:ensure-directory-pathname`,
   `uiop:default-temporary-directory`, `uiop:file-exists-p`,
   `uiop:merge-pathnames*` (interpreter Java + the compile-time fold agree).
 - Consumers: `open`/`with-open-file`, `load`, `file-write-date`, `delete-file`,
+  `rename-file` (which also PRODUCES: the defaulted new name),
   `ensure-directories-exist`, `uiop:delete-file-if-exists`,
   `asdf:system-relative-pathname`'s second argument. On the interpreter the
   Java built-ins unwrap via `PathnameOps.designatorNamestring`; on the compile
@@ -139,19 +142,79 @@ the gate by itself.
   the `T` built-in-class fallback, the compile paths signal a catchable error
   (the pre-existing unregistered-tag behavior); `find-class 'pathname` is
   likewise absent. `sxhash` of a pathname is the instance fallback 0.
-- `wild-pathname-p`, `pathname-host/device/version`, `translate-pathname`,
-  `rename-file`, `*default-pathname-defaults*` still do not exist
-  (`.todo/036`).
+- Logical pathnames do not exist and cannot: there is no logical HOST and no
+  `logical-pathname-translations` table, so `logical-pathname` always signals
+  (CL requires a type-error unless the argument names a logical pathname, and
+  nothing here can) and `translate-logical-pathname` is the identity -- which is
+  CL's own answer for a physical argument. The pair is deliberate: answering a
+  physical pathname from `logical-pathname` would claim a translation table
+  exists. Re-evaluate only if a host/translation table is ever added.
+- `pathname-host` / `-device` / `-version` answer `nil` -- "the component is not
+  present", the answer CL prescribes for one that is not there, and SBCL's own
+  answer on Unix for `:device`. SBCL answers `:newest` for the VERSION of a
+  parsed namestring; `nil` is the one answer true of every pathname here.
+
+## The algebra over the flat namestring (`.todo/036` closed here)
+
+The last of the CL pathname surface landed 2026-08-15, all of it prelude Lisp
+over the namestring, so the four backends run ONE definition each and cannot
+drift:
+
+- `pathname-host` / `pathname-device` / `pathname-version` -- `nil` (above),
+  after validating the designator through the strict `namestring`.
+- `wild-pathname-p` -- `%wild-component-p` (holds a `*` or a `?`) applied to the
+  component the optional field key names, or to all of them. It reads the SAME
+  `%pathname-split` the rest of the family does and the same two wildcards
+  `%wild-match` matches with, so the predicate and `directory`'s matcher cannot
+  disagree.
+- `enough-namestring` -- the INVERSE of `merge-pathnames`: the merge prefixes a
+  relative namestring with the defaults' directory, so the shortest namestring
+  is the path with that prefix removed, and the whole namestring when it does
+  not start with it. The value is a STRING, as CL specifies.
+- `translate-pathname` -- `%wild-captures`, the CAPTURING twin of `%wild-match`
+  (one matcher rule, two answers; `:no-match` is the failure answer no capture
+  list can collide with, and `*` is tried SHORTEST first so `"*/*.*"` splits at
+  the first `/`), then substitution into the to-wildcard left to right. Matching
+  runs over the FLAT namestring, so a `*` may span a `/`.
+- `rename-file` -- prelude Lisp over the new `%rename-file` primitive, the third
+  write-side sibling of `%list-directory` / `%make-directories` /
+  `%delete-file`: interpreter (`Files.move`) and JVM (`_renameFile`, a
+  `File.renameTo`) rename for real, both WASM backends lower it to a call-time
+  signal (`LispMacroExpander.renameFileStub`, the `deleteFileStub` rule --
+  `.todo/257` owns closing that). CL's second and third values (the truenames)
+  are not returned, the `ensure-directories-exist` rule.
+
+**`*default-pathname-defaults*` is a genuine dynamic variable on all four
+backends**, holding `#P""` -- the empty pathname, SBCL's own initial value and
+the only honest one here, since rontolisp absolutizes nothing and names no
+working directory (`.todo/356` owns the working directory). The interpreter
+defines it in `Environment.createGlobal` and proclaims it special; the compile
+paths get a `defvar` from `LispMacroExpander`'s `PRINTER_MODE_VARS` injection
+for a program that MENTIONS it. That injection runs AFTER `mayCreateInstances`,
+and its value is an instance, so `mayCreateInstance` answers for the variable's
+NAME directly -- mentioning the variable flips the instance gate exactly the way
+a `#P` in source does. `uiop::get-pathname-defaults` still answers the literal
+`""` and is `.todo/357`'s to retire.
 
 ## Pinning
 
 `LispReaderTest#readPathname*`, `LispEvaluatorTest#pathname*` /
+`#pathnameComponentsRontolispDoesNotModelAnswerNil` /
+`#wildPathnamePAnswersPerComponent` /
+`#enoughNamestringDropsTheDefaultsDirectoryPrefix` /
+`#translatePathnameSubstitutesTheCapturedWildcards` /
+`#renameFileMovesTheFileAndSignalsWhenItIsNotThere` /
 `#directoryFamilyAnswersPathnames` /
 `#pathnameDiscriminatesFromStringContentInLackAndJzonShapes` (the lack cond +
 jzon typecase + mito check-type shapes), `LispPreludeLibraryTest` (the
 PathnameOps agreement pins, now through `#P`),
-`Jvm/WasmLispCompilerTest` probe-file/directory/lite-builtins tests, and the
-ci-spec cases `pathname-family-and-broadcast-streams` (predicates, printer,
+`Jvm/WasmLispCompilerTest` probe-file/directory/lite-builtins tests,
+`JvmLispCompilerTest#pathnameAlgebraOverTheFlatNamestring` /
+`#renameFileMovesTheFileOnDisk`,
+`WasmLispCompilerIntegrationTest#pathnameAlgebraOverTheFlatNamestring` /
+`#componentPathnameAlgebraOverTheFlatNamestring`, and the
+ci-spec cases `pathname-algebra-over-the-flat-namestring`,
+`pathname-family-and-broadcast-streams` (predicates, printer,
 `parse-namestring`, `merge-pathnames`, the lack `finalize-response` body cond
 verbatim), `lite-builtins-residue`, `probe-file-existing-and-missing`,
 `directory-listing-and-uiop-walkers` (all four backends).

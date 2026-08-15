@@ -356,6 +356,14 @@ categories:
       - { slug: pathname-directory, name: "pathname-directory" }
       - { slug: pathname-name, name: "pathname-name" }
       - { slug: pathname-type, name: "pathname-type" }
+      - { slug: pathname-host, name: "pathname-host" }
+      - { slug: pathname-device, name: "pathname-device" }
+      - { slug: pathname-version, name: "pathname-version" }
+      - { slug: wild-pathname-p, name: "wild-pathname-p" }
+      - { slug: enough-namestring, name: "enough-namestring" }
+      - { slug: translate-pathname, name: "translate-pathname" }
+      - { slug: translate-logical-pathname, name: "translate-logical-pathname" }
+      - { slug: logical-pathname, name: "logical-pathname" }
       - { slug: open-stream-p, name: "open-stream-p" }
       - { slug: force-output, name: "force-output" }
       - { slug: finish-output, name: "finish-output" }
@@ -372,6 +380,7 @@ categories:
       - { slug: file-write-date, name: "file-write-date" }
       - { slug: ensure-directories-exist, name: "ensure-directories-exist" }
       - { slug: delete-file, name: "delete-file" }
+      - { slug: rename-file, name: "rename-file" }
       - { slug: make-string-output-stream, name: "make-string-output-stream" }
       - { slug: make-string-input-stream, name: "make-string-input-stream" }
       - { slug: get-output-stream-string, name: "get-output-stream-string" }

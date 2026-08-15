@@ -8385,6 +8385,53 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWithDir(code)).isEqualTo("#P\"probe.txt\"\nNIL\nNO");
 	}
 
+	// One program for both WASM modes: pure computation over the namestring, so the
+	// answers have to be the interpreter's and the JVM's exactly.
+	private static final String PATHNAME_ALGEBRA_PROGRAM = """
+			(print (list (pathname-host "d/a.txt") (pathname-device #P"d/a.txt")
+			             (pathname-version #P"d/a.txt")))
+			(print (list (wild-pathname-p "d/*.txt") (wild-pathname-p "d/a.txt")
+			             (wild-pathname-p "d/*.txt" :name) (wild-pathname-p "d/*.txt" :type)
+			             (wild-pathname-p "*/a.txt" :directory) (wild-pathname-p "d/*.txt" :host)))
+			(print (enough-namestring "/a/b/c.lisp" "/a/"))
+			(print (enough-namestring "/a/b/c.lisp" "/x/"))
+			(print (namestring *default-pathname-defaults*))
+			(print (let ((*default-pathname-defaults* #P"/a/b/")) (enough-namestring "/a/b/c.lisp")))
+			(print (translate-pathname "src/foo.lisp" "src/*.lisp" "build/*.fasl"))
+			(print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
+			(print (translate-logical-pathname "d/a.txt"))
+			(print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+			(print (handler-case (rename-file "a.txt" "b.txt") (error () :no-rename)))
+			""";
+
+	private static final String PATHNAME_ALGEBRA_EXPECTED = """
+			(NIL NIL NIL)
+			(T NIL T NIL T NIL)
+			"b/c.lisp"
+			"/a/b/c.lisp"
+			""
+			"c.lisp"
+			#P"build/foo.fasl"
+			"x/a-y.b"
+			#P"d/a.txt"
+			:SIGNALLED
+			:NO-RENAME""";
+
+	@Test
+	void pathnameAlgebraOverTheFlatNamestring() throws Exception {
+		// Everything here is namestring computation shared with the interpreter and the
+		// JVM through one prelude definition, so a divergence would mean the shared
+		// definition stopped being shared. rename-file is the one WASM divergence: the
+		// import set carries no rename call, so %rename-file is a call-time signal (the
+		// %delete-file rule, .todo/257).
+		assertThat(compileAndRunPrelude(PATHNAME_ALGEBRA_PROGRAM)).isEqualTo(PATHNAME_ALGEBRA_EXPECTED);
+	}
+
+	@Test
+	void componentPathnameAlgebraOverTheFlatNamestring() throws Exception {
+		assertThat(compileAndRunComponent(PATHNAME_ALGEBRA_PROGRAM)).isEqualTo(PATHNAME_ALGEBRA_EXPECTED);
+	}
+
 	@Test
 	void fileMetadataAnswersNilAndDirectoryCreationSignals() throws Exception {
 		// The documented WASM divergence (.kb/read-load-streams.md): no WASI filestat
@@ -9955,7 +10002,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("399");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("408");
 	}
 
 	@Test

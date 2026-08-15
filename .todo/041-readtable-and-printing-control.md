@@ -136,5 +136,4 @@ anything when BOUND (`.kb/pretty-printer.md` has the table).
 
 ### Related
 
-- `[[036-io-extensions]]` (stream I/O)
 - `[[038-symbol-and-package-extensions]]` (symbol printing)

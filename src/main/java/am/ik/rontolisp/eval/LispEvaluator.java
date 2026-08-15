@@ -413,6 +413,10 @@ public final class LispEvaluator {
 		// *read-eval* joins them: (let ((*read-eval* nil)) (read ...)) must bind
 		// dynamically for the #. check in resolveReadTimeEval to see it.
 		this.specialVars.add(LispNames.READ_EVAL_VAR);
+		// *default-pathname-defaults* joins them: a portable program binds it around a
+		// block of path work ((let ((*default-pathname-defaults* d)) ...)), which is a
+		// dynamic binding or nothing.
+		this.specialVars.add(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR);
 	}
 
 	/**

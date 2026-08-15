@@ -74,6 +74,14 @@ public final class LispMacroExpander {
 		// the table the program mutates is its own.
 		PRINTER_MODE_VARS.put(LispNames.PRINT_PPRINT_DISPATCH_VAR,
 				() -> listToCons(List.of(new LispSymbol(LispNames.LIST), LispNil.INSTANCE)));
+		// *default-pathname-defaults*: not a printer mode either, and here for the same
+		// reason the stream variables are -- a program BINDS it around a block of path
+		// work, and only a proclaimed-special name gets a dynamic binding. Its value is
+		// the empty pathname #P"" (LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR), which is an
+		// INSTANCE, so mayCreateInstance answers for the variable's name directly: this
+		// injection runs after the gate is computed.
+		PRINTER_MODE_VARS.put(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR,
+				() -> new LispInstance(LispLayout.PATHNAME, new LispVal[] { new LispString("") }));
 	}
 
 	private LispMacroExpander() {
@@ -12985,6 +12993,13 @@ public final class LispMacroExpander {
 		if (form instanceof LispInstance) {
 			return true;
 		}
+		if (form instanceof LispSymbol sym && LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR.equals(sym.name())) {
+			// Mentioning the variable is what makes injectMvSpillGlobal put its #P""
+			// initial value into the program -- an instance literal added AFTER this
+			// scan, so the mention has to stand in for it. Same rule as a #P in source
+			// flipping the gate by itself (.kb/pathnames.md).
+			return true;
+		}
 		if (form instanceof LispArray array) {
 			// A folded #S(...) literal may sit inside a #(...) vector literal, which is
 			// the one container the cons walk below cannot see through.
@@ -23952,6 +23967,19 @@ public final class LispMacroExpander {
 	public static LispVal deleteFileStub() {
 		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
 				new LispString("delete-file is not supported on the WASM backends")));
+	}
+
+	/**
+	 * The call-time stub both WASM backends lower {@code %rename-file} -- and therefore
+	 * {@code rename-file} -- to, for the same reason as {@link #deleteFileStub()}: WASI's
+	 * import set here carries no rename call, and "the file is at the new name
+	 * afterwards" has no honest non-answer. Like the other stubs it keeps a library defun
+	 * merely CONTAINING the form compilable and signals only if it is actually called.
+	 * @return the signaling expression
+	 */
+	public static LispVal renameFileStub() {
+		return listToCons(List.of(new LispSymbol(LispNames.ERROR),
+				new LispString("rename-file is not supported on the WASM backends")));
 	}
 
 	/**

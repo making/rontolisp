@@ -2816,6 +2816,53 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void pathnameAlgebraOverTheFlatNamestring() throws Exception {
+		// The pathname operators that are pure computation over the namestring: the
+		// three components rontolisp does not model, wild-pathname-p per field,
+		// enough-namestring (with the *default-pathname-defaults* special BOUND) and
+		// translate-pathname. Same expectations as the interpreter suite, SBCL-checked.
+		assertThat(compileAndRun("""
+				(print (list (pathname-host "d/a.txt") (pathname-device #P"d/a.txt")
+				             (pathname-version #P"d/a.txt")))
+				(print (list (wild-pathname-p "d/*.txt") (wild-pathname-p "d/a.txt")
+				             (wild-pathname-p "d/*.txt" :name) (wild-pathname-p "d/*.txt" :type)
+				             (wild-pathname-p "*/a.txt" :directory) (wild-pathname-p "d/*.txt" :host)))
+				(print (enough-namestring "/a/b/c.lisp" "/a/"))
+				(print (enough-namestring "/a/b/c.lisp" "/x/"))
+				(print (namestring *default-pathname-defaults*))
+				(print (let ((*default-pathname-defaults* #P"/a/b/")) (enough-namestring "/a/b/c.lisp")))
+				(print (translate-pathname "src/foo.lisp" "src/*.lisp" "build/*.fasl"))
+				(print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
+				(print (translate-logical-pathname "d/a.txt"))
+				(print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+				""")).isEqualTo("""
+				(NIL NIL NIL)
+				(T NIL T NIL T NIL)
+				"b/c.lisp"
+				"/a/b/c.lisp"
+				""
+				"c.lisp"
+				#P"build/foo.fasl"
+				"x/a-y.b"
+				#P"d/a.txt"
+				:SIGNALLED""");
+	}
+
+	@Test
+	void renameFileMovesTheFileOnDisk() throws Exception {
+		java.nio.file.Path root = java.nio.file.Files.createDirectory(tempDir.resolve("rn"));
+		java.nio.file.Files.writeString(root.resolve("a.txt"), "hi\n");
+		String dir = root.toString().replace("\\", "\\\\");
+		assertThat(compileAndRun("""
+				(print (rename-file "%s/a.txt" "b.txt"))
+				(print (probe-file "%s/a.txt"))
+				(print (probe-file "%s/b.txt"))
+				(print (handler-case (rename-file "%s/nope.txt" "c.txt") (error () :signalled)))
+				""".formatted(dir, dir, dir, dir)))
+			.isEqualTo(("#P\"%s/b.txt\"\nNIL\n#P\"%s/b.txt\"\n:SIGNALLED").formatted(root, root));
+	}
+
+	@Test
 	void withOpenFileReturnsBodyValue() throws Exception {
 		String file = tempDir.resolve("wof-ret.txt").toString().replace("\\", "\\\\");
 		assertThat(compileAndRun(
@@ -7819,12 +7866,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("399");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("408");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("399");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("408");
 	}
 
 	@Test

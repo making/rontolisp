@@ -49,7 +49,9 @@ the new information:
   `define-method-combination` -- `objects` at 34.4% (.kb/clos.md)
 - stream constructors `make-two-way-stream` `make-echo-stream`
   `make-concatenated-stream`, `open`'s `:if-exists`/`:direction` beyond the
-  native default, `with-hash-table-iterator` -- `streams` at 20.0% (.todo/036)
+  native default -- `streams` at 20.0% (.todo/387)
+- `with-hash-table-iterator` -- the one hash-table operator ranked here, and it
+  has no item of its own (`.todo/012` is the `:test` semantics, a different gap)
 - the pretty printer `pprint-fill` `pprint-linear` `pprint-tabular`
   `pprint-exit-if-list-exhausted` `formatter` -- `printer` at 19.6%
   (.todo/001, .todo/041)

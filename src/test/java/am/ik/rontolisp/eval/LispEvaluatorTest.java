@@ -5936,6 +5936,84 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void pathnameComponentsRontolispDoesNotModelAnswerNil() {
+		// host / device / version are components a flat namestring does not carry, so
+		// the accessors answer nil -- what CL prescribes for an absent component, and
+		// what SBCL answers on Unix for :device. They still validate the designator.
+		assertThat(eval("(list (pathname-host \"d/a.txt\") (pathname-device #P\"d/a.txt\")"
+				+ " (pathname-version #P\"d/a.txt\"))")
+			.print()).isEqualTo("(NIL NIL NIL)");
+		assertThatThrownBy(() -> eval("(pathname-device 42)")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("not a pathname designator");
+	}
+
+	@Test
+	void wildPathnamePAnswersPerComponent() {
+		// The field keys, checked against SBCL 2.2.9 for truth/falsehood (SBCL answers
+		// the wild component itself where this answers T; both are generalized
+		// booleans).
+		assertThat(eval("(list (wild-pathname-p \"d/*.txt\") (wild-pathname-p \"d/a.txt\")"
+				+ " (wild-pathname-p \"d/a?.txt\") (wild-pathname-p #P\"*/a.txt\"))")
+			.print()).isEqualTo("(T NIL T T)");
+		assertThat(eval("(list (wild-pathname-p \"d/*.txt\" :name) (wild-pathname-p \"d/*.txt\" :type)"
+				+ " (wild-pathname-p \"d/a.*\" :type) (wild-pathname-p \"*/a.txt\" :directory)"
+				+ " (wild-pathname-p \"*/a.txt\" :name) (wild-pathname-p \"d/*.txt\" :host)"
+				+ " (wild-pathname-p \"d/*.txt\" :device) (wild-pathname-p \"d/*.txt\" :version))")
+			.print()).isEqualTo("(T NIL T T NIL NIL NIL NIL)");
+	}
+
+	@Test
+	void enoughNamestringDropsTheDefaultsDirectoryPrefix() {
+		// The inverse of merge-pathnames: what it prefixes, this drops. All four
+		// expectations SBCL-checked.
+		assertThat(eval("(enough-namestring \"/a/b/c.lisp\" \"/a/\")")).isEqualTo(new LispString("b/c.lisp"));
+		assertThat(eval("(enough-namestring #P\"/a/b/c.lisp\" #P\"/x/\")")).isEqualTo(new LispString("/a/b/c.lisp"));
+		assertThat(eval("(merge-pathnames (enough-namestring \"/a/b/c.lisp\" \"/a/\") \"/a/\")").print())
+			.isEqualTo("#P\"/a/b/c.lisp\"");
+		// *default-pathname-defaults* is the default defaults, and it BINDS.
+		assertThat(eval("(namestring *default-pathname-defaults*)")).isEqualTo(new LispString(""));
+		assertThat(eval("(pathnamep *default-pathname-defaults*)")).isEqualTo(LispTrue.INSTANCE);
+		assertThat(eval("(enough-namestring \"/a/b/c.lisp\")")).isEqualTo(new LispString("/a/b/c.lisp"));
+		assertThat(eval("(let ((*default-pathname-defaults* #P\"/a/b/\")) (enough-namestring \"/a/b/c.lisp\"))"))
+			.isEqualTo(new LispString("c.lisp"));
+	}
+
+	@Test
+	void translatePathnameSubstitutesTheCapturedWildcards() {
+		// Every expectation checked against SBCL 2.2.9 on the same forms.
+		assertThat(eval("(translate-pathname \"d/a.txt\" \"d/*.*\" \"e/*.*\")").print()).isEqualTo("#P\"e/a.txt\"");
+		assertThat(eval("(translate-pathname \"src/foo.lisp\" \"src/*.lisp\" \"build/*.fasl\")").print())
+			.isEqualTo("#P\"build/foo.fasl\"");
+		assertThat(eval("(namestring (translate-pathname \"a/b.c\" \"*/*.*\" \"x/*-y.*\"))"))
+			.isEqualTo(new LispString("x/a-y.b"));
+		assertThatThrownBy(() -> eval("(translate-pathname \"d/a.txt\" \"e/*.*\" \"f/*.*\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("does not match");
+		// Every rontolisp pathname is physical, so the logical translation is the
+		// identity and logical-pathname itself can never succeed.
+		assertThat(eval("(translate-logical-pathname \"d/a.txt\")").print()).isEqualTo("#P\"d/a.txt\"");
+		assertThatThrownBy(() -> eval("(logical-pathname \"SYS:SRC;\")")).isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("does not name a logical pathname");
+	}
+
+	@Test
+	void renameFileMovesTheFileAndSignalsWhenItIsNotThere(@TempDir Path tempDir) throws Exception {
+		Files.writeString(tempDir.resolve("a.txt"), "hi\n");
+		String dir = tempDir.toString().replace("\\", "\\\\");
+		// The new name is MERGED with the old one, so a bare file name stays in the
+		// same directory (CL's defaulted-new-name), and the answer is that pathname.
+		assertThat(eval("(rename-file \"" + dir + "/a.txt\" \"b.txt\")").print())
+			.isEqualTo("#P\"" + tempDir + "/b.txt\"");
+		assertThat(Files.exists(tempDir.resolve("a.txt"))).isFalse();
+		assertThat(Files.readString(tempDir.resolve("b.txt"))).isEqualTo("hi\n");
+		assertThat(eval("(rename-file #P\"" + dir + "/b.txt\" #P\"" + dir + "/c.txt\")").print())
+			.isEqualTo("#P\"" + tempDir + "/c.txt\"");
+		assertThatThrownBy(() -> eval("(rename-file \"" + dir + "/nope.txt\" \"d.txt\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessageContaining("cannot rename");
+	}
+
+	@Test
 	void pathnameDiscriminatesFromStringContentInLackAndJzonShapes() {
 		// The two library shapes the old pathnameClauseYields heuristic served, now
 		// answered by the type itself: lack's finalize-response cond and jzon's
@@ -6355,8 +6433,10 @@ class LispEvaluatorTest {
 					"%string-compare", "%run-handlers")
 			.contains("MAKE-PATHNAME", "MERGE-PATHNAMES", "TRUENAME", "PROBE-FILE", "DIRECTORY", "PATHNAME-DIRECTORY",
 					"PATHNAME", "PARSE-NAMESTRING")
+			.contains("PATHNAME-HOST", "PATHNAME-DEVICE", "PATHNAME-VERSION", "WILD-PATHNAME-P", "ENOUGH-NAMESTRING",
+					"TRANSLATE-PATHNAME", "TRANSLATE-LOGICAL-PATHNAME", "LOGICAL-PATHNAME", "RENAME-FILE")
 			.doesNotContain("%list-directory", "%wild-match", "%dir-namestring", "%pathname-typed-p", "%path-ns",
-					"%probe-file")
+					"%probe-file", "%wild-captures", "%wild-component-p", "%rename-file")
 			.contains("CLASS-OF", "CLASS-NAME", "FIND-CLASS", "TYPE-OF", "COMPILE")
 			.doesNotContain("%class-designator", "%find-class")
 			.contains("CHAR-LESSP", "CHAR-GREATERP", "CHAR-NOT-LESSP", "CHAR-NOT-GREATERP", "CHAR-NOT-EQUAL",
@@ -6365,7 +6445,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default", "%synonym-target")
 			.isSorted()
-			.hasSize(399);
+			.hasSize(408);
 	}
 
 	@Test

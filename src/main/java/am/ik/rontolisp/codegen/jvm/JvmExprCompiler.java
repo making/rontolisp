@@ -659,7 +659,8 @@ final class JvmExprCompiler {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandPathnamep(cons), ctx, className);
 				case LispNames.FILE_WRITE_DATE ->
 					JvmFileMetaCompiler.compile(coercePathArgWhenGated(cons, 0, ctx), ctx, className, sym.name());
-				case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.FILE_LENGTH ->
+				case LispNames.MAKE_DIRECTORIES, LispNames.DELETE_FILE_INTERNAL, LispNames.FILE_LENGTH,
+						LispNames.RENAME_FILE_INTERNAL ->
 					JvmFileMetaCompiler.compile(cons, ctx, className, sym.name());
 				case LispNames.STREAM_ELEMENT_TYPE -> JvmExprCompiler.compileExpr(
 						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx,

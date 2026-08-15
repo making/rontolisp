@@ -3169,6 +3169,111 @@ public final class LispNames {
 	public static final String PATHNAME_TYPE = "PATHNAME-TYPE";
 
 	/**
+	 * The {@code pathname-host} built-in: always {@code nil}. A rontolisp namestring is a
+	 * flat Unix-shaped path with no host syntax, so the component is not present, and
+	 * {@code nil} is what CL prescribes for a component that is not there. The argument
+	 * is still validated as a pathname designator, so a non-designator signals exactly as
+	 * {@link #NAMESTRING_CL} does. Prelude Lisp, all four backends.
+	 */
+	public static final String PATHNAME_HOST = "PATHNAME-HOST";
+
+	/**
+	 * The {@code pathname-device} built-in: always {@code nil}, for the reason
+	 * {@link #PATHNAME_HOST} is -- and the same answer SBCL gives on Unix. rove's
+	 * {@code resolve-file} is the caller that asked for it (it pops a directory component
+	 * only for a non-nil, non-{@code :unspecific} device).
+	 */
+	public static final String PATHNAME_DEVICE = "PATHNAME-DEVICE";
+
+	/**
+	 * The {@code pathname-version} built-in: always {@code nil}, for the reason
+	 * {@link #PATHNAME_HOST} is -- rontolisp has no file versions, so no namestring can
+	 * carry one. (SBCL answers {@code :newest} for a pathname it PARSED from a namestring
+	 * and {@code nil} for one {@code make-pathname} built; {@code nil} -- "the component
+	 * is not present" -- is the one answer that is true of every pathname here.)
+	 */
+	public static final String PATHNAME_VERSION = "PATHNAME-VERSION";
+
+	/**
+	 * The {@code wild-pathname-p} built-in: whether the pathname carries a wildcard
+	 * ({@code *} or {@code ?}) in the component the optional field-key names, or in ANY
+	 * component when it is {@code nil}/omitted. {@code :host}, {@code :device} and
+	 * {@code :version} are always {@code nil} here because those components do not exist
+	 * ({@link #PATHNAME_HOST}); {@code :directory}, {@code :name} and {@code :type} test
+	 * the matching piece of the shared {@code %pathname-split}, so the answer cannot
+	 * drift from what {@link #DIRECTORY} actually matches with. Prelude Lisp, all four
+	 * backends.
+	 */
+	public static final String WILD_PATHNAME_P = "WILD-PATHNAME-P";
+
+	/**
+	 * The {@code %wild-component-p} internal helper: whether a namestring piece holds a
+	 * {@code *} or a {@code ?}, i.e. the one definition of "this component is wild" that
+	 * {@link #WILD_PATHNAME_P} tests each component with.
+	 */
+	public static final String WILD_COMPONENT_P = "%WILD-COMPONENT-P";
+
+	/**
+	 * The {@code enough-namestring} built-in: the SHORTEST namestring that still names
+	 * the same file once merged against {@code defaults} (which itself defaults to
+	 * {@link #DEFAULT_PATHNAME_DEFAULTS_VAR}). Over a flat namestring that is exactly
+	 * "drop the defaults' directory prefix when the path starts with it, otherwise answer
+	 * the whole namestring", which is the inverse of the merge {@link #MERGE_PATHNAMES}
+	 * performs, so {@code (merge-pathnames (enough-namestring p d) d)} names {@code p}
+	 * again whenever the prefix matched. rove prints a test's source location with it.
+	 * Prelude Lisp, all four backends.
+	 */
+	public static final String ENOUGH_NAMESTRING = "ENOUGH-NAMESTRING";
+
+	/**
+	 * The {@code translate-pathname} built-in: matches {@code source} against
+	 * {@code from-wildcard} and substitutes the pieces its wildcards captured into
+	 * {@code to-wildcard}, in order. Wildcards are the ones the rest of the pathname
+	 * family understands -- {@code *} (any run of characters) and {@code ?} (one
+	 * character) over the FLAT namestring, so a {@code *} may span {@code /} where a
+	 * structured implementation would stop at a directory boundary. A source that does
+	 * not match {@code from-wildcard} is an error, as it is in CL.
+	 */
+	public static final String TRANSLATE_PATHNAME = "TRANSLATE-PATHNAME";
+
+	/**
+	 * The {@code %wild-captures} internal helper: the list of substrings the wildcards in
+	 * a pattern matched, left to right, or {@code :no-match}. The capturing twin of
+	 * {@link #WILD_MATCH} -- one matcher rule, two answers -- read by
+	 * {@link #TRANSLATE_PATHNAME}.
+	 */
+	public static final String WILD_CAPTURES = "%WILD-CAPTURES";
+
+	/**
+	 * The {@code translate-logical-pathname} built-in: the pathname itself. Every
+	 * rontolisp pathname is PHYSICAL -- there are no logical hosts and no
+	 * {@code logical-pathname-translations} table to consult -- so the translation is the
+	 * identity, which is what CL prescribes for a physical pathname argument. See
+	 * {@link #LOGICAL_PATHNAME} for the other half of that decision.
+	 */
+	public static final String TRANSLATE_LOGICAL_PATHNAME = "TRANSLATE-LOGICAL-PATHNAME";
+
+	/**
+	 * The {@code logical-pathname} built-in: always signals. CL requires a
+	 * {@code type-error} unless the argument is a logical pathname or a logical-pathname
+	 * namestring, and rontolisp can define no logical host, so NO argument can satisfy
+	 * it. Answering a physical pathname instead would claim a translation table exists;
+	 * signalling is the honest half of the pair with {@link #TRANSLATE_LOGICAL_PATHNAME}.
+	 */
+	public static final String LOGICAL_PATHNAME = "LOGICAL-PATHNAME";
+
+	/**
+	 * The {@code *default-pathname-defaults*} variable: the pathname {@code merge}-style
+	 * operators default their {@code defaults} argument to. Initially {@code #P""} -- the
+	 * empty pathname, which is also SBCL's initial value and the only honest one here,
+	 * since rontolisp absolutizes nothing and has no notion of a process working
+	 * directory it could name. A genuine dynamic variable on all four backends (the
+	 * compile paths get a {@code defvar} injected for a program that mentions it), so
+	 * {@code (let ((*default-pathname-defaults* #P"d/")) ...)} binds.
+	 */
+	public static final String DEFAULT_PATHNAME_DEFAULTS_VAR = "*DEFAULT-PATHNAME-DEFAULTS*";
+
+	/**
 	 * The {@code %pathname-split} internal helper: a namestring to
 	 * {@code (directory name . type)}, where {@code name} and {@code type} are nil when
 	 * absent. The ONE place the "last dot separates the type, position 0 does not" rule
@@ -3213,6 +3318,32 @@ public final class LispNames {
 	 * error.
 	 */
 	public static final String DELETE_FILE_INTERNAL = "%DELETE-FILE";
+
+	/**
+	 * The {@code rename-file} built-in function: renames (moves) a file, answering the
+	 * new name as a pathname. Interpreter and JVM rename for real; both WASM backends
+	 * signal at CALL time, exactly like {@link #DELETE_FILE} and for the same reason --
+	 * the WASI import set here carries no rename call, and "the file is at the new name
+	 * afterwards" has no honest non-answer.
+	 *
+	 * <p>
+	 * Lite deviation: CL returns {@code (values defaulted-new-name old-truename
+	 * new-truename)} and this returns the defaulted new name only, the same rule
+	 * {@link #ENSURE_DIRECTORIES_EXIST} follows -- a prelude defun's secondary values
+	 * would not survive the function boundary on the compile paths, so promising them
+	 * would be the lie.
+	 */
+	public static final String RENAME_FILE = "RENAME-FILE";
+
+	/**
+	 * The {@code %rename-file} internal primitive: rename the first namestring to the
+	 * second, answering {@code t}, or {@code nil} when the source does not exist or the
+	 * host refused. The third write-side sibling of {@link #LIST_DIRECTORY} /
+	 * {@link #MAKE_DIRECTORIES} / {@link #DELETE_FILE_INTERNAL}, and the one call
+	 * {@link #RENAME_FILE} is Lisp source over, so the "what does a missing file do" rule
+	 * has a single definition. Both WASM backends lower it to a call-time error.
+	 */
+	public static final String RENAME_FILE_INTERNAL = "%RENAME-FILE";
 
 	/**
 	 * The {@code y-or-n-p} built-in function: prints the (optional) {@code format}

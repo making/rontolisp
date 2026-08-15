@@ -982,8 +982,9 @@ final class WasmExprCompiler {
 					.compileExpr(LispMacroExpander.expandStreamDirectionP(cons, ctx.usesSynonymStreams), ctx);
 				// file-length and file-write-date answer nil here rather than signalling:
 				// no WASI filestat call is imported, and "cannot be determined" is what
-				// Common Lisp prescribes for exactly that. %make-directories and
-				// %delete-file have no such escape -- the directory/file either changed
+				// Common Lisp prescribes for exactly that. %make-directories,
+				// %delete-file and %rename-file have no such escape -- the directory/file
+				// either changed
 				// or
 				// it did not -- so they signal.
 				case LispNames.FILE_POSITION, LispNames.FILE_LENGTH, LispNames.FILE_WRITE_DATE ->
@@ -993,6 +994,8 @@ final class WasmExprCompiler {
 					WasmExprCompiler.compileExpr(LispMacroExpander.makeDirectoriesStub(), ctx);
 				case LispNames.DELETE_FILE_INTERNAL ->
 					WasmExprCompiler.compileExpr(LispMacroExpander.deleteFileStub(), ctx);
+				case LispNames.RENAME_FILE_INTERNAL ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.renameFileStub(), ctx);
 				case LispNames.STREAM_ELEMENT_TYPE -> WasmExprCompiler.compileExpr(
 						LispMacroExpander.expandConstantResult(cons, LispMacroExpander.quotedCharacterTypeName()), ctx);
 				case LispNames.MAKE_BROADCAST_STREAM ->

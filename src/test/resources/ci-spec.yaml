@@ -1609,7 +1609,7 @@ cases:
     expected: |
       (AND ASSERT BLOCK CASE CCASE CERROR CHANGE-CLASS CHECK-TYPE COMPLEMENT COMPLEX COND DECF DECLAIM DECLARE DEFINE-COMPILER-MACRO DEFINE-CONDITION DEFINE-MODIFY-MACRO DEFINE-SETF-EXPANDER DEFSETF DEFTYPE DESTRUCTURING-BIND DO DO* DO-EXTERNAL-SYMBOLS DOCUMENTATION DOLIST DOTIMES ECASE ERROR ETYPECASE EVAL-WHEN FLET FORMAT HANDLER-BIND HANDLER-CASE IGNORE-ERRORS INCF LABELS LET* LOAD-TIME-VALUE LOCALLY LOOP MACROLET MAKE-CONDITION MAKE-INSTANCE MAKE-SEQUENCE MULTIPLE-VALUE-BIND MULTIPLE-VALUE-CALL MULTIPLE-VALUE-LIST MULTIPLE-VALUE-PROG1 MULTIPLE-VALUE-SETQ NTH-VALUE OR POP PPRINT-LOGICAL-BLOCK PRINT-UNREADABLE-OBJECT PROCLAIM PROG PROG* PROG1 PROG2 PSETF PSETQ PUSH PUSHNEW REMF RESTART-BIND RESTART-CASE RETURN-FROM ROTATEF SETF SHIFTF SIGNAL SLOT-BOUNDP SLOT-EXISTS-P SLOT-MAKUNBOUND SLOT-VALUE SYMBOL-MACROLET THE TIME TYPECASE TYPEP UNLESS WARN WHEN WITH-ACCESSORS WITH-INPUT-FROM-STRING WITH-OPEN-FILE WITH-OPEN-STREAM WITH-OUTPUT-TO-STRING WITH-PACKAGE-ITERATOR WITH-SIMPLE-RESTART WITH-SLOTS WITH-STANDARD-IO-SYNTAX WRITE-CHAR)
       (CATCH DEFCLASS DEFCONSTANT DEFGENERIC DEFMACRO DEFMETHOD DEFPACKAGE DEFPARAMETER DEFSTRUCT DEFUN DEFVAR FUNCTION GO IF IN-PACKAGE LAMBDA LET PROGN PROGV QUOTE RETURN SETQ TAGBODY THROW UNWIND-PROTECT WHILE)
-      399
+      408
       (AWAIT CATCH FETCH FINALLY HTTP-HANDLER JSON-PARSE JSON-STRINGIFY LIST-FUNCTIONS LIST-MACROS LIST-SPECIAL-FORMS MAKE-MUTEX MUTEX-ACQUIRE MUTEX-RELEASE QUERY-PARAM QUERY-PARAMS RANDOM-BYTES TCP-ACCEPT TCP-CONNECT TCP-LISTEN TCP-LOCAL-ADDRESS TCP-LOCAL-PORT TCP-PEER-ADDRESS TCP-PEER-PORT THEN THEN* TLS-CONNECT TLS-LISTEN TLS-LISTEN-PEM URL-DECODE URL-ENCODE URL-PATH URL-QUERY VERSION WIT-ERROR-PAYLOAD WIT-PROVIDE)
       (CALL FIELD NEW PROXY STATIC)
       CI-INTRO-FN
@@ -4636,6 +4636,47 @@ cases:
       out
       "
       T
+  - name: pathname-algebra-over-the-flat-namestring
+    source: |
+      ;; The pathname operators that are pure computation over the namestring, so
+      ;; the four backends run ONE prelude definition and must agree exactly.
+      ;; host / device / version are components a flat namestring does not carry.
+      (print (list (pathname-host "d/a.txt") (pathname-device #P"d/a.txt") (pathname-version #P"d/a.txt")))
+      ;; wild-pathname-p, per field key; :host / :device / :version can never be wild.
+      (print (list (wild-pathname-p "d/*.txt") (wild-pathname-p "d/a.txt") (wild-pathname-p "d/a?.txt")))
+      (print (list (wild-pathname-p "d/*.txt" :name) (wild-pathname-p "d/*.txt" :type)
+                   (wild-pathname-p "d/a.*" :type) (wild-pathname-p "*/a.txt" :directory)
+                   (wild-pathname-p "d/*.txt" :host)))
+      ;; enough-namestring is the inverse of merge-pathnames: what the merge
+      ;; prefixes, this drops, so merging the answer back names the file again.
+      (print (enough-namestring "/a/b/c.lisp" "/a/"))
+      (print (enough-namestring "/a/b/c.lisp" "/x/"))
+      (print (merge-pathnames (enough-namestring "/a/b/c.lisp" "/a/") "/a/"))
+      ;; *default-pathname-defaults* is #P"" and is a genuine dynamic variable.
+      (print (list (pathnamep *default-pathname-defaults*) (namestring *default-pathname-defaults*)))
+      (print (let ((*default-pathname-defaults* #P"/a/b/")) (enough-namestring "/a/b/c.lisp")))
+      ;; translate-pathname captures what each wildcard matched and substitutes it.
+      (print (translate-pathname "src/foo.lisp" "src/*.lisp" "build/*.fasl"))
+      (print (namestring (translate-pathname "a/b.c" "*/*.*" "x/*-y.*")))
+      (print (handler-case (translate-pathname "d/a.txt" "e/*.*" "f/*.*") (error () :no-match)))
+      ;; Every rontolisp pathname is PHYSICAL, so translate-logical-pathname is the
+      ;; identity and logical-pathname can never succeed.
+      (print (translate-logical-pathname "d/a.txt"))
+      (print (handler-case (logical-pathname "SYS:SRC;") (error () :signalled)))
+    expected: |
+      (NIL NIL NIL)
+      (T NIL T)
+      (T NIL T T NIL)
+      "b/c.lisp"
+      "/a/b/c.lisp"
+      #P"/a/b/c.lisp"
+      (T "")
+      "c.lisp"
+      #P"build/foo.fasl"
+      "x/a-y.b"
+      :NO-MATCH
+      #P"d/a.txt"
+      :SIGNALLED
   - name: clos-call-next-method-optional-and-meet-branch
     source: |
       ;; (1) a bare call-next-method forwards the &optional section too: &rest

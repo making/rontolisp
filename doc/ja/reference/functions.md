@@ -65,6 +65,14 @@
 | `pathname-directory` | `(pathname-directory "a/b/c.txt")` | `(:RELATIVE "a" "b")` — パス名のディレクトリ部分を CL のリスト形式 (`:absolute`/`:relative` と階層ごとの文字列) で返し、無ければ `nil`。純粋な文字列処理で、ファイルシステムは読みません |
 | `pathname-name` | `(pathname-name "d/a.b.c")` | `"a.b"` — 型を除いたファイル名部分。最後の `/` より後ろで、かつ**最後の**ドットより前です (位置 0 のドットは名前の一部)。ファイルを指さないパス名では `nil` |
 | `pathname-type` | `(pathname-type "d/a.b.c")` | `"c"` — ドットを除いた型 (拡張子)。無ければ `nil`。同じ分割のもう半分です |
+| `pathname-host` | `(pathname-host "d/a.txt")` | 常に `nil` — フラットな名前文字列はホスト部分を持ちません。指示子の検証は行われます |
+| `pathname-device` | `(pathname-device #P"d/a.txt")` | 同じ理由で常に `nil` (Unix 上の SBCL と同じ答えです) |
+| `pathname-version` | `(pathname-version #P"d/a.txt")` | 常に `nil` — ここにファイルのバージョンはありません |
+| `wild-pathname-p` | `(wild-pathname-p "d/*.txt" :name)` | パス名 (またはフィールドキーで指定した `:directory`/`:name`/`:type` 構成要素) が `*` か `?` を含むか。`:host`/`:device`/`:version` は常に `nil` |
+| `enough-namestring` | `(enough-namestring "/a/b/c.lisp" "/a/")` | `"b/c.lisp"` — `defaults` (省略時は `*default-pathname-defaults*`) にマージし直すと同じファイルを指す最短の名前文字列。`merge-pathnames` の逆操作です |
+| `translate-pathname` | `(translate-pathname "src/f.lisp" "src/*.lisp" "build/*.fasl")` | `#P"build/f.fasl"` — source を from-wildcard と照合し、各 `*`/`?` が捕捉した部分を to-wildcard に差し込みます。一致しない source はエラー |
+| `translate-logical-pathname` | `(translate-logical-pathname "d/a.txt")` | `#P"d/a.txt"` — 恒等写像。rontolisp のパス名はすべて物理パス名なので変換するものがありません |
+| `logical-pathname` | `(logical-pathname "SYS:SRC;")` | 常にエラー — 論理ホストを定義できないため、論理パス名を指す引数は存在しません |
 | `pathname` | `(pathname "d/x")` | `#P"d/x"` — 正規のコンストラクタ: パス名はそのまま、文字列はそれが指定するパス名に包まれ、それ以外はシグナルします |
 | `parse-namestring` | `(parse-namestring "d/a.txt")` | `#P"d/a.txt"` (第 2 値は停止位置) — ライト版: ホストのパースはなく、文字列全体が名前文字列です |
 | `make-pathname` | `(make-pathname :name "b" :defaults "d/a.sql")` | `#P"d/b.sql"` — `:directory`/`:name`/`:type` からパス名を組み立て、**指定されなかった**構成要素は `:defaults` から取ります。構成要素ごとの補完でありマージではありません: 指定した構成要素は defaults のものを置き換え、明示的な `nil` は「その構成要素なし」を意味します。4 バックエンドすべてで実行時の関数として動作し、リテラルの呼び出しは加えてコンパイル時に畳み込まれます |
@@ -328,6 +336,7 @@
 | `file-write-date` | `(file-write-date "x.txt")` | ファイルの更新時刻をユニバーサルタイムで返します。判定できない場合は `nil`(2つのWASMバックエンドでは常に `nil`) |
 | `ensure-directories-exist` | `(ensure-directories-exist "logs/app.log")` | pathspec のディレクトリ部分を作成して pathspec を返します(2つのWASMバックエンドではシグナルを発生させます) |
 | `delete-file` | `(delete-file "notes.txt")` | 指定したファイルを削除して `t` を返します。ファイルが残る場合は「そもそも無かった」場合も含めてシグナルを発生させます(2つのWASMバックエンドでは `ensure-directories-exist` と同じ理由でシグナルを発生させます) |
+| `rename-file` | `(rename-file "notes.txt" "notes.bak")` | ファイルをリネーム (移動) し、補完後の新しい名前をパス名として返します。新しい名前は元の名前とマージされるため、ファイル名だけを渡すとディレクトリはそのままです。ファイルが元の場所に残る結果になった場合は「そもそも無かった」場合も含めてエラーになります (`delete-file` と同じく 2 つの WASM バックエンドではエラー) |
 | `make-string-output-stream` | `(make-string-output-stream)` | 新しい文字列出力ストリーム。`with-output-to-string` が内部で作るものを明示的に作ります |
 | `make-string-input-stream` | `(make-string-input-stream string &optional start end)` | 文字列から読み込む入力ストリーム。`with-input-from-string` が束縛するものを明示的に作ります |
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |

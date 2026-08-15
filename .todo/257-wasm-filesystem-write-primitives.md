@@ -1,9 +1,21 @@
-# WASM: `%make-directories` / `%delete-file` are call-time errors on both backends
+# WASM: `%make-directories` / `%delete-file` / `%rename-file` are call-time errors on both backends
 
-Difficulty: Medium -- two more preview1 imports plus their two adapter
+Difficulty: Medium -- three more preview1 imports plus their adapter
 implementations, following the `fd_readdir` precedent step for step. No new
 mechanism; the cost is the import-surface churn and getting both component
 adapters in step. Recommend starting with an Opus-class model.
+
+**Updated 2026-08-15 (`.todo/036`)**: `%rename-file` joined the family. It is the
+same shape as `%delete-file` -- prelude Lisp (`rename-file`) over a primitive
+that answers nil when the source is not there or the host refused, real on the
+interpreter (`Files.move`) and the JVM (`_renameFile`), a call-time
+`LispMacroExpander.renameFileStub()` on both WASM backends. Everything below
+applies to it unchanged; the preview1 call is `path_rename(old_fd, old_ptr,
+old_len, new_fd, new_ptr, new_len) -> errno` (a NEW type, unlike the other two)
+and the WASI 0.3 member is `descriptor.rename-at: async func(old-path: string,
+new-descriptor: borrow<descriptor>, new-path: string) -> result<_, error-code>`
+-- both preopened descriptors are the same one here, so the adapter hands its
+cached preopen twice.
 
 Split out of `.todo/231` (2026-08-04). Decided as a deliberate divergence when
 `.todo/225` landed (2026-08-01) and recorded in `.kb/read-load-streams.md` with
@@ -44,6 +56,7 @@ import addition:
 
 - `path_create_directory(fd, path_ptr, path_len) -> errno`
 - `path_unlink_file(fd, path_ptr, path_len) -> errno`
+- `path_rename(old_fd, old_ptr, old_len, new_fd, new_ptr, new_len) -> errno`
 
 Both take the preopened dir fd 3 and a path staged into linear memory exactly as
 `_open` / `_probe_file` stage theirs (see `WasmIoRuntimeBuilder.buildOpenBody`
@@ -52,20 +65,20 @@ and the new bodies must copy it). `%delete-file`'s contract is "nil when the fil
 is not there or the host refused", so a nonzero errno is simply `nil` -- no
 signalling in the primitive.
 
-**Import surface**: `IMPORT_FUNC_COUNT` goes 9 -> 11 and `FUNC_START` with it, so
+**Import surface**: `IMPORT_FUNC_COUNT` goes 9 -> 12 and `FUNC_START` with it, so
 **every emitted WASM function index shifts**. That is inherent, not a regression
 (`fd_readdir` did the same going 8 -> 9). Keep the three consequences in step:
 
-- `--no-wasi` defines two more trap stubs (same type indexes as the imports);
-- `adapter.wat` exports both (component mode, below);
+- `--no-wasi` defines three more trap stubs (same type indexes as the imports);
+- `adapter.wat` exports all three (component mode, below);
 - `adapter-http-server-p1.wat` exports them too, as a nonzero errno -- the serve
-  world has no filesystem, and both call sites read a nonzero errno as "no".
+  world has no filesystem, and every call site reads a nonzero errno as "no".
 
 Append the new types AFTER the last fixed type the way `TYPE_FD_READDIR` was, so
 the conditional `--simd` / async / instance blocks follow and no existing type
-index moves. NOTE: both new imports have the SAME type as an existing one
+index moves. NOTE: the create/unlink imports have the SAME type as an existing one
 (`(i32 i32 i32) -> i32`), so it may be possible to reuse it -- check before
-adding types.
+adding types. `path_rename` needs a new six-`i32` type.
 
 ## WASI 0.3 / `--component`
 
@@ -91,10 +104,10 @@ descriptor handle 0 is usable (see the `open-at` comment at `adapter.wat:141`).
 
 ## Acceptance
 
-- `ensure-directories-exist` and `delete-file` run for real on both WASM
-  backends, and the ci-spec gains a case creating a directory, writing a file in
-  it, deleting it and probing that it is gone -- green on all four backends
-  against the native binary.
+- `ensure-directories-exist`, `delete-file` and `rename-file` run for real on
+  both WASM backends, and the ci-spec gains a case creating a directory, writing
+  a file in it, renaming it, deleting it and probing that it is gone -- green on
+  all four backends against the native binary.
 - `LackEcosystemE2eTest`'s WASM legs move from
   `SUBSTRATE_EXPECTED_NO_FILESYSTEM` to the spilling expectation, and the
   test's javadoc loses the divergence clause.
