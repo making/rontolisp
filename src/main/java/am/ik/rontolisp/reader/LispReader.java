@@ -2,6 +2,7 @@ package am.ik.rontolisp.reader;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 import org.jspecify.annotations.Nullable;
 
@@ -229,20 +230,39 @@ public final class LispReader {
 	}
 
 	/**
-	 * Reads ONLY the first expression of the input, without parsing the rest. The ASDF
-	 * subset's package-inferred systems use this to read a component file's leading
-	 * {@code defpackage} -- the whole dependency graph of such a system is derived from
-	 * those forms, so every source in the system is opened, and building the AST of each
-	 * one (plus its provenance entries) just to look at its first datum would cost a full
-	 * parse per file. Read-time-eval is tolerated the way a {@code .asd} tolerates it: a
-	 * {@code #.} further down the file must not make the file's package declaration
-	 * unreadable, since the real load resolves those markers later.
+	 * Reads ONLY the first expression of the input, without parsing the rest. Callers
+	 * that want a file's leading declaration read it this way -- building the AST of the
+	 * whole file (plus its provenance entries) just to look at one datum would cost a
+	 * full parse per file, and the ASDF subset opens every source of a package-inferred
+	 * system. Read-time-eval is tolerated the way a {@code .asd} tolerates it: a
+	 * {@code #.} further down the file must not make the file's leading form unreadable,
+	 * since the real load resolves those markers later.
 	 * @param input the source code string
 	 * @param features the active reader features
 	 * @param file the origin file, or {@code null} when unknown
 	 * @return the first expression, or {@code nil} when the input holds none
 	 */
 	public static LispVal readFirstForm(String input, Features features, @Nullable String file) {
+		return readFirstFormMatching(input, features, file, form -> true);
+	}
+
+	/**
+	 * Reads forms until one satisfies {@code predicate}, and answers it -- or {@code nil}
+	 * when the input holds no such form. Same tolerant, provenance-free mode as
+	 * {@link #readFirstForm}, and the same reason for it: a package-inferred system opens
+	 * every source in the system just to look at its package declaration, which real ASDF
+	 * ({@code asdf/package-inferred-system::file-defpackage-form}) locates by skipping
+	 * whatever precedes it -- the {@code (in-package #:cl-user)} header before a
+	 * {@code defpackage} is a common style. Only the forms up to the match are parsed;
+	 * the rest of the file is still the load's business.
+	 * @param input the source code string
+	 * @param features the active reader features
+	 * @param file the origin file, or {@code null} when unknown
+	 * @param predicate the test the wanted form satisfies
+	 * @return the first matching expression, or {@code nil} when there is none
+	 */
+	public static LispVal readFirstFormMatching(String input, Features features, @Nullable String file,
+			Predicate<LispVal> predicate) {
 		List<LocatedToken> tokens = new LispLexer(input, features, LispLexer.ReadEvalMode.SKIP_UNREADABLE, file)
 			.tokenizeWithPositions();
 		// Provenance recording off: these conses are inspected and thrown away, and the
@@ -250,7 +270,13 @@ public final class LispReader {
 		// that
 		// claims its positions.
 		LispReader reader = new LispReader(tokens, features, input, file, false);
-		return reader.pos < reader.tokens.size() ? reader.readExpr() : LispNil.INSTANCE;
+		while (reader.pos < reader.tokens.size()) {
+			LispVal form = reader.readExpr();
+			if (predicate.test(form)) {
+				return form;
+			}
+		}
+		return LispNil.INSTANCE;
 	}
 
 	private static List<LispVal> readAll(String input, Features features, LispLexer.ReadEvalMode readEvalMode,

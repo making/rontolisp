@@ -26,7 +26,7 @@ interface here, so `:stacks` is always nil), the rest are the built-in shims.
 
 | # | rove needs | rontolisp today | item |
 |---|---|---|---|
-| 1 | a package-inferred file whose FIRST form is `(in-package #:cl-user)` and whose `defpackage` is second (core/assertion.lisp, core/result.lisp, ...) | "the first form of a package-inferred system's file must be a DEFPACKAGE" -- `(ql:quickload "rove")` dies there | `.todo/373` |
+| 1 | a package-inferred file whose FIRST form is `(in-package #:cl-user)` and whose `defpackage` is second (core/assertion.lisp, core/result.lisp, ...) | DONE (2026-08-15): the derivation skips forms until the package definition form, like real ASDF's `file-defpackage-form`; rove's whole graph derives | -- |
 | 2 | `asdf:*user-cache*`, `asdf:registered-systems`, `asdf:component-name`/`-children`/`-sideway-dependencies`, `asdf:system`/`package-inferred-system`/`cl-source-file`/`module` as `typecase` types AND `defmethod` specializers, `find-system` -> a system OBJECT, a runtime `load-system` of an already-loaded system | not external ("use ASDF::X"); `find-system` answers a name string (interpreter) or nil (compile paths); nested `load-system` = call-time error stub | `.todo/374` |
 | 3 | `*load-pathname*` bound to the file being loaded when a `deftest` runs (rove's file -> package map, `make-new-suite`, is what `run` walks for a plain `defsystem` test system) | nil at run time on the compile paths -- `(rove:run "foo/tests")` would find no suites there | `.todo/375` |
 | 4 | `*package*` READ at run time inside rove's own `set-test`/`package-suite`, and in the expansions of `setup`/`teardown`/`defhook` | folded to the DEFINING package at resolution (`set-test` registers every test under `rove/core/suite/package`, so `run-suite` finds 0 tests); an expansion-level read is "The variable *PACKAGE* is unbound" on the interpreter (`setup` cannot even be evaluated) | `.todo/255` (rove evidence appended) |
@@ -52,7 +52,7 @@ each as its row lands; the E2E below is the gate that they are all gone.
 
 ## Sequence
 
-1. `.todo/373` (Low) -- the load gate; nothing else is reachable before it.
+1. ~~`.todo/373` (Low) -- the load gate; nothing else is reachable before it.~~ DONE; `(ql:quickload "rove")` now stops at row 2 (`asdf:*user-cache*` is not external).
 2. `.todo/255` (High) + `.todo/376` (Low) -- `deftest` registers under the right suite and `run-suite`/`package-suite` find it. After these two, `(rove:run-suite *package*)` is the first working entry point.
 3. `.todo/377` (Medium) + `.todo/252` (Medium) -- the spec reporter prints, indented, identically on all four.
 4. `.todo/378` (Medium) + `.todo/379` (High) + `.todo/380` (Medium) + `.todo/381` (Low) -- `ok`/`ng`/`signals` are correct and a broken test is a failure, not a crash.

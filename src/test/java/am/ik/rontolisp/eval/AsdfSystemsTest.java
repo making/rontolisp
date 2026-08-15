@@ -1232,7 +1232,7 @@ class AsdfSystemsTest {
 	}
 
 	@Test
-	void aSubSystemFileWithoutALeadingDefpackageIsAHardError() {
+	void aSubSystemFileWithoutADefpackageAtAllIsAHardError() {
 		Map<String, String> systemPackages = new java.util.HashMap<>();
 		Map<String, AsdfSystems.LispSystem> registry = registryOf(
 				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
@@ -1240,7 +1240,47 @@ class AsdfSystemsTest {
 		assertThatThrownBy(() -> AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages,
 				loaderOf(Map.of("sw/lib/a.lisp", "(in-package #:lib)\n(defun f () 1)")), Features.INTERPRETER))
 			.isInstanceOf(IllegalStateException.class)
-			.hasMessageContaining("must be a DEFPACKAGE");
+			.hasMessageContaining("sw/lib/a.lisp")
+			.hasMessageContaining("no package definition form was found");
+	}
+
+	@Test
+	void aDefpackageBehindAnInPackageHeaderStillNamesTheDependencies() {
+		// rove's core/*.lisp shape: (in-package #:cl-user) first, the defpackage second.
+		// Real ASDF (file-defpackage-form) reads forms until the first package
+		// definition form, so the header must not hide the dependency graph.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
+						Features.INTERPRETER, systemPackages));
+		AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages, loaderOf(Map.of("sw/lib/a.lisp", """
+				(in-package #:cl-user)
+				(defpackage #:lib/a
+				  (:use #:cl #:lib/b))
+				(in-package #:lib/a)""", "sw/lib/b.lisp", "(defpackage #:lib/b (:use #:cl))")), Features.INTERPRETER);
+		assertThat(registered(registry, "lib/a").dependsOn()).containsExactly("lib/b");
+	}
+
+	@Test
+	void severalFormsMayPrecedeTheDefpackage() {
+		// Not just in-package: anything ahead of the package definition form is skipped,
+		// and a defpackage further down is NOT a second declaration to merge.
+		Map<String, String> systemPackages = new java.util.HashMap<>();
+		Map<String, AsdfSystems.LispSystem> registry = registryOf(
+				AsdfSystems.parseAsdSource("(defsystem \"lib\" :class :package-inferred-system)", "sw/lib/lib.asd",
+						Features.INTERPRETER, systemPackages));
+		AsdfSystems.inferPackageInferredSystems("lib/a", registry, systemPackages, loaderOf(Map.of("sw/lib/a.lisp", """
+				;; a comment, then two forms before the package declaration
+				(in-package #:cl-user)
+				(eval-when (:compile-toplevel :load-toplevel :execute)
+				  (setf *read-default-float-format* 'double-float))
+				(uiop:define-package #:lib/a
+				  (:use #:cl)
+				  (:import-from #:lib/b #:helper))
+				(defpackage #:lib/a-internal (:use #:cl #:lib/c))""", "sw/lib/b.lisp",
+				"(defpackage #:lib/b (:use #:cl))")), Features.INTERPRETER);
+		assertThat(registered(registry, "lib/a").dependsOn()).containsExactly("lib/b");
+		assertThat(registry).containsOnlyKeys("lib", "lib/a", "lib/b");
 	}
 
 	@Test

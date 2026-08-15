@@ -159,13 +159,15 @@ below.
   array-operations use. Such a system has **no `:components` at all**: a
   sub-system name is a file path under the system's directory (`my-lib/main`
   is `main.lisp`, `my-lib/util/text` is `util/text.lisp`, both below
-  `:pathname` when the system has one), and that file's **leading
-  `defpackage`** names its dependencies — every package in `:use`, `:mix`,
+  `:pathname` when the system has one), and that file's own **`defpackage`**
+  names its dependencies — every package in `:use`, `:mix`,
   `:reexport`, `:use-reexport` and `:mix-reexport`, plus the first argument of
   each `:import-from` / `:shadowing-import-from`. A package name becomes a
   system name: what a `register-system-packages` form declared, otherwise the
-  downcased package name itself (`cl` and friends drop out). Only the first
-  form of each file is read. No other `:class` is supported, and a
+  downcased package name itself (`cl` and friends drop out). Only the forms up
+  to the first package definition form of each file are read, so the common
+  `(in-package #:cl-user)` header before the `defpackage` is fine; a file with
+  no `defpackage`/`uiop:define-package` at all is an error. No other `:class` is supported, and a
   package-inferred system that also lists `:components` is an error.
 - Loading a system twice is a no-op; circular `:depends-on` chains are
   detected and reported — including one written as a cycle between two

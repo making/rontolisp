@@ -938,11 +938,13 @@ public final class AsdfSystems {
 	 * <p>
 	 * A sub-system name is a path under the primary's directory ({@code x/a/b} ->
 	 * {@code a/b.lisp}, below the primary's {@code :pathname} when it has one), and the
-	 * dependencies are the packages that file's leading {@code defpackage} names -- so
-	 * reading the files is not an optimization, it is the whole dependency graph
-	 * ({@code ningle.asd} lists only {@code "ningle/main"} and never mentions myway or
-	 * alexandria). The closure reachable from {@code name} is derived in one pass, so the
-	 * {@code .asd} is not re-read once per sub-system.
+	 * dependencies are the packages that file's own {@code defpackage} names (the first
+	 * one in the file: whatever precedes it, typically an {@code (in-package #:cl-user)}
+	 * header, is skipped like real ASDF does) -- so reading the files is not an
+	 * optimization, it is the whole dependency graph ({@code ningle.asd} lists only
+	 * {@code "ningle/main"} and never mentions myway or alexandria). The closure
+	 * reachable from {@code name} is derived in one pass, so the {@code .asd} is not
+	 * re-read once per sub-system.
 	 * <p>
 	 * Cycles are left to the CALLER's existing {@code :depends-on} cycle check: an edge
 	 * back to an already-registered sibling is simply not followed here, so this walk
@@ -1007,15 +1009,29 @@ public final class AsdfSystems {
 					+ "' is a sub-system of the package-inferred system '" + primary.name() + "', so it names the file "
 					+ path + ", which cannot be read: " + ex.getMessage(), ex);
 		}
-		// Only the first form: every source in the system is opened here, and the rest of
-		// each file is the load's business, not the dependency graph's.
-		LispVal first = LispReader.readFirstForm(source, features, path);
-		return new LispSystem(name, packageDependencies(first, path, systemPackages), List.of(file), primary.baseDir(),
-				primary.features(), null);
+		// Only up to the package definition form: every source in the system is opened
+		// here, and the rest of each file is the load's business, not the dependency
+		// graph's.
+		LispVal packageForm = LispReader.readFirstFormMatching(source, features, path,
+				AsdfSystems::isPackageDefinitionForm);
+		return new LispSystem(name, packageDependencies(packageForm, path, systemPackages), List.of(file),
+				primary.baseDir(), primary.features(), null);
 	}
 
 	/**
-	 * The system names a component file's leading {@code defpackage} /
+	 * Whether {@code form} is the file's package declaration -- a {@code defpackage} or a
+	 * {@code uiop:define-package}. Everything before it is skipped, the way real ASDF's
+	 * {@code file-defpackage-form} does: an {@code (in-package #:cl-user)} header (and
+	 * anything else) ahead of the {@code defpackage} is a common style, and refusing it
+	 * would make the library unloadable over a form that declares no dependency at all.
+	 */
+	private static boolean isPackageDefinitionForm(LispVal form) {
+		return form instanceof LispCons cons && cons.isProperList()
+				&& (operatorMemberIs(form, LispNames.DEFPACKAGE) || operatorMemberIs(form, LispNames.DEFINE_PACKAGE));
+	}
+
+	/**
+	 * The system names a component file's own {@code defpackage} /
 	 * {@code uiop:define-package} declares as dependencies: every package named in
 	 * {@code :use}, {@code :mix}, {@code :reexport}, {@code :use-reexport} and
 	 * {@code :mix-reexport}, plus the FIRST argument of each {@code :import-from} /
@@ -1024,12 +1040,15 @@ public final class AsdfSystems {
 	 * are matched by name rather than rejected wholesale.
 	 */
 	private static List<String> packageDependencies(LispVal form, String path, Map<String, String> systemPackages) {
-		boolean isDefpackage = form instanceof LispCons cons && cons.isProperList()
-				&& (operatorMemberIs(form, LispNames.DEFPACKAGE) || operatorMemberIs(form, LispNames.DEFINE_PACKAGE));
-		List<LispVal> items = isDefpackage ? ((LispCons) form).toList() : List.of();
+		if (!isPackageDefinitionForm(form)) {
+			throw new IllegalStateException(
+					path + ": a package-inferred system's file must contain a " + LispNames.DEFPACKAGE
+							+ " (its dependencies are read from there), but no package definition form" + " was found");
+		}
+		List<LispVal> items = ((LispCons) form).toList();
 		if (items.size() < 2) {
-			throw new IllegalStateException(path + ": the first form of a package-inferred system's file must be a "
-					+ LispNames.DEFPACKAGE + " (its dependencies are read from there), got " + form.print());
+			throw new IllegalStateException(path + ": the " + LispNames.DEFPACKAGE
+					+ " of a package-inferred system's file must name a package, got " + form.print());
 		}
 		List<String> dependencies = new ArrayList<>();
 		for (LispVal clause : items.subList(2, items.size())) {

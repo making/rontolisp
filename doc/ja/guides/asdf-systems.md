@@ -153,12 +153,14 @@ $ rontolisp
   **`:components` を一切持ちません**: サブシステム名がシステムのディレクトリ配下の
   ファイルパスになり (`my-lib/main` は `main.lisp`、`my-lib/util/text` は
   `util/text.lisp`。システムが `:pathname` を持つ場合はいずれもその配下)、
-  そのファイル**先頭の `defpackage`** が依存関係を表します — `:use`、`:mix`、
+  そのファイル自身の **`defpackage`** が依存関係を表します — `:use`、`:mix`、
   `:reexport`、`:use-reexport`、`:mix-reexport` が挙げる全パッケージと、
   `:import-from` / `:shadowing-import-from` の第 1 引数です。パッケージ名は
   システム名になります: `register-system-packages` フォームが宣言していれば
   その名前、なければパッケージ名を小文字化したものです (`cl` などは除外されます)。
-  各ファイルは先頭のフォームだけが読まれます。これ以外の `:class` はサポートせず、
+  各ファイルは最初のパッケージ定義フォームまでしか読まれないので、`defpackage` の前に
+  よくある `(in-package #:cl-user)` ヘッダがあっても問題ありません。
+  `defpackage`/`uiop:define-package` が 1 つも無いファイルはエラーです。これ以外の `:class` はサポートせず、
   `:components` も併記した package-inferred-system はエラーです。
 - 同じシステムの 2 回目のロードは no-op です。循環する `:depends-on` は検出して報告されます
   — 2 つのサブシステムの `defpackage` が互いを指す形で書かれた循環も含みます。
