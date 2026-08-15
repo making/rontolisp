@@ -16,6 +16,7 @@ public class LispEvalException extends RuntimeException {
 
 	private final transient @Nullable LispVal condition;
 
+	/** The seeded condition class this error carries, or {@code null} for a plain one. */
 	private final @Nullable String conditionClassName;
 
 	/**
