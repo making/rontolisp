@@ -63,7 +63,7 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   ANY required parameter; methods order by comparing parameters leftmost-first
   with `specializerRank` per parameter (eql 0, classes 10..99 by descending
   ancestor-set size = subclass first, built-in types 200s with subtypes like
-  `null`/`keyword`/`integer` before `symbol`/`number`/`list`, default 1000;
+  `null`/`package`/`keyword`/`integer` before `symbol`/`number`/`list`, default 1000;
   stable sort keeps definition order within a rank), and a branch tests every
   specialized parameter. A generic whose lambda list continues past the
   required params (`&optional`/`&rest`) gets a variadic dispatcher that
@@ -106,6 +106,20 @@ Everything expands to plain defuns via `LispMacroExpander` (no backend codegen):
   eql/built-in tests reuse
   `makeTypeTest`-family helpers (`makeEqlSpecializerTest`: symbols/keywords
   compare with `equal` — content-safe on WASM — numbers/characters with `eql`);
+  **the TYPE specializers a `defmethod` accepts (`isSupportedTypeSpecializer`) and the
+  types `makeTypeTest` builds are ONE definition, not two lists that drift** — a name
+  admitted there compiles to that type's very test, which is why `package`
+  (todo-376: a keyword naming a registered package, `.kb/symbol-runtime-api.md`)
+  became a specializer by adding the name alone. `package` ranks 205 — ahead of
+  `keyword` (210) and `symbol` (220) — because a package IS a keyword in this value
+  model: rove's `find-suite` pairs a `((package package))` method with an
+  unspecialized DESIGNATOR method that calls `find-package` and recurses, and
+  misordered that recurses forever. A keyword naming no package still falls through
+  to a `keyword`/`symbol` method. Pinned by
+  `LispEvaluatorTest.evalPackageIsADefmethodSpecializer` /
+  `...SpecializerOutranksKeywordAndSymbol` and the `compileAndRun` twins in
+  `JvmLispCompilerTest` / `WasmLispCompilerIntegrationTest`, plus the
+  `package-defmethod-specializer` ci-spec case;
   a class test is `(%obj-is x '%class-C ...)` over the statically-known
   descendant tags. The dispatcher is an ordinary defun, so
   `#'name`/`funcall`/mapcar work with no `BuiltinFunctionWrappers` entry.

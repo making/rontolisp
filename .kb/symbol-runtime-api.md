@@ -33,6 +33,15 @@ Upcased because the compile paths' spelling comes from reader-upcased literals.
   `PackageResolver.resolveCons` (the one pass with the registry), so it answers
   identically on all four backends; a computed designator stays a runtime call,
   which only the interpreter serves.
+- **`package` is BOTH a type specifier and a `defmethod` specializer, from ONE
+  definition**: `LispMacroExpander.isSupportedTypeSpecializer` admits the name and
+  `makeTypeTest` builds the test, so `(typep x 'package)`, a `typecase`/`etypecase`
+  `package` clause and a `((p package))` method parameter are the same "a keyword
+  naming a registered package" predicate on all four backends (todo-376, rove's
+  `find-suite`; the specializer's rank and the recursion hazard it avoids are in
+  `.kb/clos.md`). **Re-evaluate when** a consumer needs package objects DISTINCT from
+  keywords — that one change moves the type and the specializer together, and there is
+  no second list to update.
 - `symbol-package`: registry-backed on the interpreter; a backend-neutral
   `LispPreludeLibrary` defun elsewhere, which reads the qualifier off
   `prin1-to-string` and therefore cannot tell `cl` from `cl-user` (both answer

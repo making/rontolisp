@@ -13061,6 +13061,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void compileAndRunPackageIsADefmethodSpecializer() throws Exception {
+		// rove's find-suite: a (package) method beside an unspecialized DESIGNATOR
+		// method that calls find-package and recurses. The specializer shares the
+		// package TYPE test, and ranks ahead of keyword/symbol -- misordered, the
+		// designator method would recurse forever.
+		assertThat(compileAndRun("""
+				(defpackage :rov-suite (:use :cl))
+				(defvar *package-suites* (make-hash-table :test 'equal))
+				(defgeneric find-suite (package)
+				  (:method ((package package))
+				    (values (gethash package *package-suites*)))
+				  (:method (package-name)
+				    (check-type package-name string-designator)
+				    (let ((package (find-package package-name)))
+				      (unless package (error "No package '~A' found" package-name))
+				      (find-suite package))))
+				(setf (gethash :rov-suite *package-suites*) "suite")
+				(print (list (find-suite :rov-suite) (find-suite "ROV-SUITE") (find-suite 'rov-suite)))
+				""")).isEqualTo("(\"suite\" \"suite\" \"suite\")");
+	}
+
+	@Test
+	void compileAndRunPackageSpecializerOutranksKeywordAndSymbol() throws Exception {
+		// A package IS a keyword in this value model, so the package branch must be
+		// tested first; a keyword naming no package falls through to the keyword method.
+		assertThat(compileAndRun("""
+				(defpackage :psk-pkg (:use :cl))
+				(defgeneric psk-kind (x))
+				(defmethod psk-kind ((x symbol)) :symbol)
+				(defmethod psk-kind ((x keyword)) :keyword)
+				(defmethod psk-kind ((x package)) :package)
+				(defmethod psk-kind (x) :other)
+				(print (list (psk-kind :psk-pkg) (psk-kind :no-such-pkg-xyz) (psk-kind 'psk-pkg) (psk-kind 42)))
+				""")).isEqualTo("(:PACKAGE :KEYWORD :SYMBOL :OTHER)");
+	}
+
+	@Test
 	void compileAndRunEqualpComparesArraysElementwise() throws Exception {
 		// The prelude splice mirrors the CLI pipeline (equalp is a prelude defun).
 		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""

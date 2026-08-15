@@ -14984,11 +14984,16 @@ public final class LispMacroExpander {
 		return objIs(parts.get(1), List.of(LispLayout.PATHNAME_TAG));
 	}
 
-	/** Whether a plain (package-stripped) type name is usable as a TYPE specializer. */
+	/**
+	 * Whether a plain (package-stripped) type name is usable as a TYPE specializer. The
+	 * test a selected name compiles to is {@link #makeTypeTest}'s -- specializer and type
+	 * share ONE definition, so {@code PACKAGE} here and the {@code package} type test are
+	 * the same "a keyword naming a registered package" predicate.
+	 */
 	private static boolean isSupportedTypeSpecializer(String plainName) {
 		return atomicTypePredicate(plainName) != null || switch (plainName) {
 			case "BOOLEAN", "UNSIGNED-BYTE", "SIGNED-BYTE", "VECTOR", "SIMPLE-VECTOR", "ARRAY", "SIMPLE-ARRAY",
-					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME" ->
+					"SEQUENCE", "STANDARD-OBJECT", "STRUCTURE-OBJECT", "PATHNAME", "PACKAGE" ->
 				true;
 			default -> false;
 		};
@@ -16033,6 +16038,11 @@ public final class LispMacroExpander {
 				}
 				yield switch (spec.name()) {
 					case "NULL" -> 200;
+					// A package IS a keyword here, so a package method must be tried
+					// before a keyword/symbol one -- rove's find-suite pairs a
+					// (package) method with an unspecialized DESIGNATOR method that
+					// calls find-package and recurses; misordered it recurses forever.
+					case "PACKAGE" -> 205;
 					case "KEYWORD", "UNSIGNED-BYTE" -> 210;
 					case "BOOLEAN" -> 212;
 					case "STANDARD-CHAR", "BASE-CHAR" -> 215;

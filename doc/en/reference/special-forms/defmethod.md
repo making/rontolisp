@@ -7,7 +7,7 @@ Adds a method to the generic function `name` (creating it when no [`defgeneric`]
 - `(var (eql literal))` — matches when the first argument is the literal (a keyword, quoted symbol, number, or character)
 - `(var class-name)` — matches instances of a [`defclass`](defclass.md) class and its subclasses
 - `(var struct-name)` — matches instances of a [`defstruct`](defstruct.md) type (the dispatcher tests the instance tag, like the struct predicate)
-- `(var type-name)` — matches a built-in type (`integer`, `float`, `number`, `string`, `symbol`, `keyword`, `character`, `cons`, `list`, `null`, `hash-table`, `function`, ...)
+- `(var type-name)` — matches a built-in type (`integer`, `float`, `number`, `string`, `symbol`, `keyword`, `character`, `cons`, `list`, `null`, `hash-table`, `function`, `pathname`, `package`, ...). A `package` parameter matches exactly what [`typep`](../macros/typep.md) calls a package, and is tried BEFORE `keyword`/`symbol`, so the designator idiom "a `package` method plus an unspecialized method that calls [`find-package`](../functions/find-package.md) and recurses" terminates
 - `(var t)` or a plain `var` — the default method
 
 A call runs the most specific matching method: parameters are ranked leftmost-first, and per parameter `eql` methods win over class methods (subclass before superclass), then built-in types (subtypes such as `integer` before their supertypes such as `number`), then the default; with no match the call signals an error. Defining the same specializer combination again replaces the previous method. The lambda list may continue past the required parameters with `&optional`/`&rest` (the dispatcher forwards the tail via `apply`). The body may start with a docstring and `(declare ...)` (both are ignored).

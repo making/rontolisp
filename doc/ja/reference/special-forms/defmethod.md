@@ -7,7 +7,7 @@
 - `(var (eql literal))` — 引数がそのリテラル（キーワード、クォートされたシンボル、数値、文字）のときにマッチ
 - `(var class-name)` — [`defclass`](defclass.md) クラスとそのサブクラスのインスタンスにマッチ
 - `(var struct-name)` — [`defstruct`](defstruct.md) 型のインスタンスにマッチ（ディスパッチャは構造体述語と同じインスタンスタグをテストします）
-- `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function` など）にマッチ
+- `(var type-name)` — 組み込み型（`integer`、`float`、`number`、`string`、`symbol`、`keyword`、`character`、`cons`、`list`、`null`、`hash-table`、`function`、`pathname`、`package` など）にマッチ。`package` 引数は [`typep`](../macros/typep.md) がパッケージとみなすものにちょうどマッチし、`keyword`/`symbol` より先に判定されます。そのため「`package` メソッド + [`find-package`](../functions/find-package.md) を呼んで再帰する非特定化メソッド」という designator のイディオムが停止します
 - `(var t)` または素の `var` — デフォルトメソッド
 
 呼び出しはマッチする最も特定的なメソッドを実行します: まず `eql` メソッド、次にクラスメソッド（サブクラスがスーパークラスより先）、次に組み込み型（`integer` のようなサブタイプが `number` のようなスーパータイプより先）、最後にデフォルトメソッドの順で、マッチがなければエラーを通知します。同じ specializer を再定義すると以前のメソッドを置き換えます。本体はドキュメント文字列と `(declare ...)` で始められます（どちらも無視されます）。
