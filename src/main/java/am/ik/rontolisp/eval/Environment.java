@@ -347,7 +347,8 @@ public final class Environment implements Scope {
 		if (this.parent != null) {
 			return this.parent.lookup(name);
 		}
-		throw new LispEvalException("The variable " + name + " is unbound");
+		throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
+				ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
 	}
 
 	/**
@@ -445,7 +446,9 @@ public final class Environment implements Scope {
 	public LispVal lookupFunction(String name) {
 		LispVal val = lookupFunctionOrNull(name);
 		if (val == null) {
-			throw new LispEvalException("The function " + name + " is undefined");
+			throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
+					ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
+							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
 		}
 		return val;
 	}
@@ -1324,7 +1327,7 @@ public final class Environment implements Scope {
 	private static int rowMajorIndex(String fn, int totalSize, LispVal indexVal) {
 		int index = (int) asLong(indexVal);
 		if (index < 0 || index >= totalSize) {
-			throw new LispEvalException(fn + ": index out of bounds");
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, fn + ": index out of bounds");
 		}
 		return index;
 	}
@@ -1958,7 +1961,7 @@ public final class Environment implements Scope {
 			for (int i = first; i < args.size(); i++) {
 				BigInteger divisorNum = numeratorOf(args.get(i));
 				if (divisorNum.signum() == 0) {
-					throw new LispEvalException("Division by zero");
+					throw LispEvalException.ofClass(ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME, "Division by zero");
 				}
 				num = num.multiply(denominatorOf(args.get(i)));
 				den = den.multiply(divisorNum);
@@ -5672,7 +5675,8 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispNil) {
 				return LispNil.INSTANCE;
 			}
-			throw new LispEvalException("car expects a cons cell, got: " + args.get(0).print());
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"car expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.CDR, new LispFunction(LispNames.CDR, args -> {
 			requireArgCount(LispNames.CDR, args, 1);
@@ -5682,21 +5686,24 @@ public final class Environment implements Scope {
 			if (args.get(0) instanceof LispNil) {
 				return LispNil.INSTANCE;
 			}
-			throw new LispEvalException("cdr expects a cons cell, got: " + args.get(0).print());
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"cdr expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.FIRST, new LispFunction(LispNames.FIRST, args -> {
 			requireArgCount(LispNames.FIRST, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.car();
 			}
-			throw new LispEvalException("first expects a cons cell, got: " + args.get(0).print());
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"first expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.REST, new LispFunction(LispNames.REST, args -> {
 			requireArgCount(LispNames.REST, args, 1);
 			if (args.get(0) instanceof LispCons cons) {
 				return cons.cdr();
 			}
-			throw new LispEvalException("rest expects a cons cell, got: " + args.get(0).print());
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"rest expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.NTH, new LispFunction(LispNames.NTH, args -> {
 			requireArgCount(LispNames.NTH, args, 2);
@@ -5765,7 +5772,8 @@ public final class Environment implements Scope {
 				cons.setCar(args.get(1));
 				return cons;
 			}
-			throw new LispEvalException("rplaca expects a cons cell, got: " + args.get(0).print());
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"rplaca expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.RPLACD, new LispFunction(LispNames.RPLACD, args -> {
 			requireArgCount(LispNames.RPLACD, args, 2);
@@ -5773,7 +5781,8 @@ public final class Environment implements Scope {
 				cons.setCdr(args.get(1));
 				return cons;
 			}
-			throw new LispEvalException("rplacd expects a cons cell, got: " + args.get(0).print());
+			throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+					"rplacd expects a cons cell, got: " + args.get(0).print());
 		}));
 		env.defineFunction(LispNames.REMF_TAIL, new LispFunction(LispNames.REMF_TAIL, args -> {
 			requireArgCount(LispNames.REMF_TAIL, args, 2);
@@ -5841,7 +5850,8 @@ public final class Environment implements Scope {
 		if (cur instanceof LispCons cons) {
 			return cons.car();
 		}
-		throw new LispEvalException(name + " expects a cons cell, got: " + cur.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME,
+				name + " expects a cons cell, got: " + cur.print());
 	}
 
 	private static LispVal appendTwo(LispVal list, LispVal tail) {
@@ -5986,7 +5996,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispInteger i) {
 			return i.value();
 		}
-		throw new LispEvalException("Expected integer, got: " + val.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "Expected integer, got: " + val.print());
 	}
 
 	private static double asDouble(LispVal val) {
@@ -6002,7 +6012,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispRatio r) {
 			return r.doubleValue();
 		}
-		throw new LispEvalException("Expected number, got: " + val.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "Expected number, got: " + val.print());
 	}
 
 	/** Whether every argument is a {@code long}-range integer (the bitwise fast path). */
@@ -6022,7 +6032,7 @@ public final class Environment implements Scope {
 		if (val instanceof LispBigInteger b) {
 			return b.value();
 		}
-		throw new LispEvalException("Expected integer, got: " + val.print());
+		throw LispEvalException.ofClass(ClosRegistry.TYPE_ERROR_CLASS_NAME, "Expected integer, got: " + val.print());
 	}
 
 	/**

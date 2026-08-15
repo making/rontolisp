@@ -7,6 +7,7 @@ import java.util.Objects;
 import am.ik.jvm.ByteCodeWriter;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.Opcode;
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.macro.LispMacroExpander;
 import am.ik.rontolisp.LispLayout;
@@ -19,14 +20,15 @@ import am.ik.rontolisp.LispVal;
  * Compiles {@code (handler-case expr (type ([var]) body...)... [(:no-error ([var])
  * body...)])}: the expression runs inside a catch-any exception-table region (the
  * unwind-protect machinery); the handler reads the typed condition from the per-thread
- * {@code _condTl} channel (set by {@code %error-cond}), synthesizes a
- * {@code simple-error} instance from the exception message when the channel is empty (a
- * plain {@code %error} or a raw runtime exception), dispatches it through the clauses'
- * type tests -- ordinary compiled Lisp forms over a pseudo-local holding the condition --
- * and rethrows when none matches. The per-thread handler depth is incremented around the
- * protected region so {@code signal} raises only under an established handler; a
- * {@code return} exiting the region decrements it through the {@code UnwindScope} cleanup
- * channel ({@code %hc-depth-dec}).
+ * {@code _condTl} channel (set by {@code %error-cond}), synthesizes an instance from the
+ * exception message when the channel is empty (a plain {@code %error} or a raw runtime
+ * exception -- the CLASS then comes from what the throwable is, see
+ * {@code emitSynthesizeCondition}), dispatches it through the clauses' type tests --
+ * ordinary compiled Lisp forms over a pseudo-local holding the condition -- and rethrows
+ * when none matches. The per-thread handler depth is incremented around the protected
+ * region so {@code signal} raises only under an established handler; a {@code return}
+ * exiting the region decrements it through the {@code UnwindScope} cleanup channel
+ * ({@code %hc-depth-dec}).
  */
 final class JvmHandlerCaseCompiler {
 
@@ -121,7 +123,7 @@ final class JvmHandlerCaseCompiler {
 		int ifHaveCondPos = ctx.code.size();
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
-		emitSynthesizeSimpleError(excSlot, condSlot, ctx, className);
+		emitSynthesizeCondition(excSlot, condSlot, ctx, className);
 		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
 		// Dispatch: the condition rides a pseudo-local so the type tests and clause
 		// bodies compile as ordinary Lisp forms.
@@ -234,7 +236,7 @@ final class JvmHandlerCaseCompiler {
 		int ifHaveCondPos = ctx.code.size();
 		ctx.emit(Opcode.IFNONNULL);
 		ctx.emitU2(0);
-		emitSynthesizeSimpleError(excSlot, condSlot, ctx, className);
+		emitSynthesizeCondition(excSlot, condSlot, ctx, className);
 		JvmEmitHelper.patchBranch(ctx, ifHaveCondPos, ctx.code.size());
 		// Run the cluster stack unless already run, as an ordinary Lisp form over the
 		// condition pseudo-local.
@@ -357,21 +359,36 @@ final class JvmHandlerCaseCompiler {
 	}
 
 	/**
-	 * Synthesizes the {@code simple-error} instance of a condition-less throw:
-	 * {@code (%obj-new '%class-SIMPLE-ERROR "<quote-framed message>" nil)}, with a nil
-	 * message slot when the throwable carries none.
+	 * Synthesizes the condition instance of a condition-less throw: the message is
+	 * {@code Throwable.getMessage()} quote-framed (nil when it carries none), and the
+	 * CLASS is decided by what the throwable IS. A cast or an out-of-range index is a
+	 * {@code type-error} (CLHS says so for {@code aref}), an arithmetic failure a
+	 * {@code division-by-zero} or its parent {@code arithmetic-error}, and the two
+	 * failures this compiler itself reports as text -- an unbound variable, an undefined
+	 * function -- are recognized by the very message it emitted, because their throw
+	 * sites are plain {@code RuntimeException}s with no channel to carry a class. The
+	 * rule is the interpreter's ({@code LispEvaluator.rawFailureConditionClass} plus the
+	 * typed built-in throw sites), so {@code (handler-case (car 1) (type-error ...))}
+	 * behaves the same interpreted and compiled; change the two together.
 	 */
-	private static void emitSynthesizeSimpleError(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx,
-			String className) {
+	private static void emitSynthesizeCondition(int excSlot, int condSlot, JvmLispCompiler.Ctx ctx, String className) {
 		ConstantPool.ClassConstant throwableClass = ctx.cp.addClass(ctx.cp.addUtf8("java/lang/Throwable"));
 		ConstantPool.MethodrefConstant getMessage = ctx.cp.addMethodref(throwableClass,
 				ctx.cp.addNameAndType(ctx.cp.addUtf8("getMessage"), ctx.cp.addUtf8("()Ljava/lang/String;")));
 		int concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;").index();
-		int msgSlot = ctx.allocTemp();
+		int rawSlot = ctx.allocTemp();
 		ctx.emit(Opcode.ALOAD);
 		ctx.emit(excSlot);
 		ctx.emit(Opcode.INVOKEVIRTUAL);
 		ctx.emitU2(getMessage.index());
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(rawSlot);
+		emitHostTextOverride(excSlot, rawSlot, "java/lang/ClassCastException", ClosRegistry.TYPE_ERROR_MESSAGE, ctx);
+		emitHostTextOverride(excSlot, rawSlot, "java/lang/IndexOutOfBoundsException",
+				ClosRegistry.INDEX_OUT_OF_BOUNDS_MESSAGE, ctx);
+		int msgSlot = ctx.allocTemp();
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(rawSlot);
 		ctx.emit(Opcode.DUP);
 		int ifNullMsgPos = ctx.code.size();
 		ctx.emit(Opcode.IFNULL);
@@ -396,18 +413,139 @@ final class JvmHandlerCaseCompiler {
 		String msgVarName = "__hc_msg$" + msgSlot;
 		ctx.locals.put(msgVarName, msgSlot);
 		try {
-			// (%obj-new '%class-SIMPLE-ERROR __hc_msg nil)
-			LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
-					new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
-			LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW), new LispCons(quotedTag,
-					new LispCons(new LispSymbol(msgVarName), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
-			JvmExprCompiler.compileExpr(instance, ctx, className);
+			emitClassifiedConstruction(excSlot, rawSlot, condSlot, new LispSymbol(msgVarName), ctx, className);
 		}
 		finally {
 			ctx.locals.remove(msgVarName);
 		}
+	}
+
+	/**
+	 * Replaces the raw message with a rontolisp-level one when the throwable is a host
+	 * failure whose own text names Java internals -- a cast (Java class names) or an
+	 * out-of-range index (a length that counts the instance's layout cell). Every other
+	 * message is the text a rontolisp built-in wrote itself and is kept verbatim.
+	 */
+	private static void emitHostTextOverride(int excSlot, int rawSlot, String type, String text,
+			JvmLispCompiler.Ctx ctx) {
+		int skip = emitInstanceOfJump(excSlot, type, ctx, false);
+		JvmEmitHelper.compileStringLiteral(text, ctx);
+		ctx.emit(Opcode.ASTORE);
+		ctx.emit(rawSlot);
+		JvmEmitHelper.patchBranch(ctx, skip, ctx.code.size());
+	}
+
+	/**
+	 * Emits the class dispatch of {@link #emitSynthesizeCondition}: one guarded arm per
+	 * {@link LispMacroExpander#rawFailureConditionClasses()} entry, each storing its
+	 * construction into {@code condSlot} and jumping to the join, with
+	 * {@code simple-error} as the fallthrough. The arms are ordinary compiled Lisp forms,
+	 * so the slot layout of each class comes from the registry rather than from a baked
+	 * index here.
+	 */
+	private static void emitClassifiedConstruction(int excSlot, int rawSlot, int condSlot, LispSymbol msgVar,
+			JvmLispCompiler.Ctx ctx, String className) {
+		List<String> classes = LispMacroExpander.rawFailureConditionClasses();
+		List<Integer> joins = new ArrayList<>();
+		for (int i = 0; i < classes.size(); i++) {
+			List<Integer> skips = emitRawFailureTest(i, excSlot, rawSlot, ctx);
+			JvmExprCompiler.compileExpr(
+					LispMacroExpander.reportingConditionForm(ctx.closRegistry, classes.get(i), msgVar), ctx, className);
+			ctx.emit(Opcode.ASTORE);
+			ctx.emit(condSlot);
+			joins.add(ctx.code.size());
+			ctx.emit(Opcode.GOTO);
+			ctx.emitU2(0);
+			for (int skip : skips) {
+				JvmEmitHelper.patchBranch(ctx, skip, ctx.code.size());
+			}
+		}
+		LispVal quotedTag = new LispCons(new LispSymbol(LispNames.QUOTE),
+				new LispCons(new LispSymbol(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"), LispNil.INSTANCE));
+		LispVal instance = new LispCons(new LispSymbol(LispNames.OBJ_NEW),
+				new LispCons(quotedTag, new LispCons(msgVar, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE))));
+		JvmExprCompiler.compileExpr(instance, ctx, className);
 		ctx.emit(Opcode.ASTORE);
 		ctx.emit(condSlot);
+		for (int join : joins) {
+			JvmEmitHelper.patchBranch(ctx, join, ctx.code.size());
+		}
+	}
+
+	/**
+	 * Emits the test guarding raw-failure arm {@code index}, and answers the branch
+	 * positions to patch to the arm's END (i.e. the "does not apply" exits). The order
+	 * mirrors {@link LispMacroExpander#rawFailureConditionClasses()}: type-error,
+	 * division-by-zero, arithmetic-error, unbound-variable, undefined-function.
+	 */
+	private static List<Integer> emitRawFailureTest(int index, int excSlot, int rawSlot, JvmLispCompiler.Ctx ctx) {
+		return switch (index) {
+			case 0 -> {
+				// A cast failure or an out-of-range index: type-error. Neither is an
+				// ArithmeticException, so testing this arm first costs the arithmetic
+				// arms nothing.
+				List<Integer> skips = new ArrayList<>();
+				int hit = emitInstanceOfJump(excSlot, "java/lang/ClassCastException", ctx, true);
+				skips.add(emitInstanceOfJump(excSlot, "java/lang/IndexOutOfBoundsException", ctx, false));
+				JvmEmitHelper.patchBranch(ctx, hit, ctx.code.size());
+				yield skips;
+			}
+			case 1 -> {
+				List<Integer> skips = new ArrayList<>();
+				skips.add(emitInstanceOfJump(excSlot, "java/lang/ArithmeticException", ctx, false));
+				skips.add(emitMessageTest(rawSlot, "contains", ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN, ctx));
+				yield skips;
+			}
+			case 2 -> List.of(emitInstanceOfJump(excSlot, "java/lang/ArithmeticException", ctx, false));
+			case 3 -> List.of(emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX, ctx),
+					emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX, ctx));
+			default ->
+				List.of(emitMessageTest(rawSlot, "startsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX, ctx),
+						emitMessageTest(rawSlot, "endsWith", ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX, ctx));
+		};
+	}
+
+	/**
+	 * Emits {@code exc instanceof <type>} and a jump on the given outcome, answering the
+	 * branch position to patch.
+	 */
+	private static int emitInstanceOfJump(int excSlot, String type, JvmLispCompiler.Ctx ctx, boolean jumpWhenTrue) {
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(excSlot);
+		ctx.emit(Opcode.INSTANCEOF);
+		ctx.emitU2(ctx.cp.addClass(ctx.cp.addUtf8(type)).index());
+		int pos = ctx.code.size();
+		ctx.emit(jumpWhenTrue ? Opcode.IFNE : Opcode.IFEQ);
+		ctx.emitU2(0);
+		return pos;
+	}
+
+	/**
+	 * Emits a {@code String} predicate over the RAW message ({@code startsWith} /
+	 * {@code endsWith} / {@code contains}) and a jump taken when it does NOT hold -- a
+	 * null message counts as not holding. Answers the branch position to patch.
+	 */
+	private static int emitMessageTest(int rawSlot, String method, String argument, JvmLispCompiler.Ctx ctx) {
+		String descriptor = "contains".equals(method) ? "(Ljava/lang/CharSequence;)Z" : "(Ljava/lang/String;)Z";
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(rawSlot);
+		int ifNullPos = ctx.code.size();
+		ctx.emit(Opcode.IFNULL);
+		ctx.emitU2(0);
+		ctx.emit(Opcode.ALOAD);
+		ctx.emit(rawSlot);
+		JvmEmitHelper.compileStringLiteral(argument, ctx);
+		ctx.emit(Opcode.INVOKEVIRTUAL);
+		ctx.emitU2(JvmEmitHelper.stringMethod(ctx, method, descriptor).index());
+		int pos = ctx.code.size();
+		ctx.emit(Opcode.IFNE);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, ifNullPos, ctx.code.size());
+		int fail = ctx.code.size();
+		ctx.emit(Opcode.GOTO);
+		ctx.emitU2(0);
+		JvmEmitHelper.patchBranch(ctx, pos, ctx.code.size());
+		return fail;
 	}
 
 	/**

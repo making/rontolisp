@@ -66,7 +66,18 @@ everywhere except `--no-gc`.
   `ClosRegistry`'s constructor seeds the built-in hierarchy (`condition` >
   `serious-condition` > `error` > `simple-error` + `parse-error`,
   `type-error`, ..., `warning` > `simple-warning`; `simple-*` carry
-  `format-control`/`format-arguments` slots). `define-condition` =
+  `format-control`/`format-arguments` slots) from `CONDITION_SEEDS`, ONE static
+  list. Two consumers read it and must keep reading it, never a copy: the
+  constructor (which seeds the classes) and `PackageRegistry.CL_CONDITION_TYPES`
+  = `ClosRegistry.CONDITION_CLASS_NAMES`, which makes every seeded name a `cl`
+  symbol (todo-380; `.kb/packages.md`). Four classes carry
+  `format-control`/`format-arguments` beyond CLHS's slot lists --
+  `type-error`, `arithmetic-error`, `unbound-variable`, `undefined-function` --
+  because those are the classes a BUILT-IN error is synthesized as and the pair is
+  how the synthesized instance carries its message (the same
+  `simple-condition` report path, not a second message channel); `type-error`
+  gaining them leaves `simple-type-error` adding nothing, so both keep their old
+  `%obj-ref` indexes. `define-condition` =
   `defineConditionToDefclass` → the ordinary `expandDefclass` machinery
   (top-level-only on the compile path, spliced by
   `expandTopLevelDefinitions`); `(:report x)` is registered in the registry
@@ -1046,7 +1057,100 @@ The same stub contract `handler-bind` used to use still covers UNDEFINED
 functions: a call to a name with no definition compiles to `The function X is
 undefined` at call time (plus a compile-time warning), matching the
 interpreter's late binding — cl-postgres references `stream-error-stream` (a CL
-condition accessor rontolisp does not provide) on an error path only.
+condition accessor rontolisp does not provide) on an error path only. It stays a
+STRING signal deliberately (todo-380 tried making it a typed
+`undefined-function`): the stub is produced during body compilation, after both
+instance gates are fixed — see the WASM bullet of the next section for the full
+reason and its re-evaluation trigger.
+
+## A built-in error carries its CONDITION CLASS (todo-380)
+
+`(handler-case (car 1) (type-error ...))` matches, and so does a rove
+`(ok (signals (car 1) 'type-error))`. Before this, every error a built-in raised
+was a `simple-error` on every backend. The class is decided where the failure is
+DETECTED, never by pattern-matching the message at the catching end — except for
+the two failures the backends themselves report as bare text, which is called out
+below.
+
+- **Interpreter**: `LispEvalException.ofClass(className, message)` carries the
+  class beside the message; `LispEvaluator.synthesizeCondition` (the ONE
+  synthesis point, shared by `handler-case` and the `%hb-guard` pad) builds it
+  through `ClosRegistry.newReportingCondition`, which nil-fills the layout and
+  puts the message in `format-control`. Typed throw sites: the `car`/`cdr`/
+  `first`/`rest`/`rplaca`/`rplacd` cons-cell family, `Expected integer|number,
+  got:`, the `fn: index out of bounds` check and `Division by zero` in
+  `Environment`, plus the four `The variable X is unbound` / `The function X is
+  undefined` sites. A raw Java failure escaping a built-in is classified by
+  `LispEvaluator.rawFailureConditionClass` at the `apply` seam.
+- **JVM**: the landing pad (`JvmHandlerCaseCompiler.emitSynthesizeCondition`,
+  reached by both `handler-case` and `%hb-guard`) classifies the caught
+  `Throwable`: `ClassCastException`/`IndexOutOfBoundsException` → `type-error`,
+  `ArithmeticException` → `division-by-zero` when its message contains
+  `ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN` else `arithmetic-error`, and —
+  the message exception — a text starting `The variable ` / `The function ` and
+  ending ` is unbound` / ` is undefined` → its cell-error class, because those
+  throw sites are plain
+  `RuntimeException`s emitted in bytecode with no channel to carry a class
+  (`JvmSymbolApiCompiler`) — and neither can the call-time stub for an undefined
+  function, for the reason in the WASM bullet below. The arms are compiled Lisp
+  forms built by `LispMacroExpander.reportingConditionForm`, so no slot index is
+  baked here.
+- **WASM**: the pad is unchanged, and correctly so. Only `$lisp-cond` throws land
+  in it: either they carry the instance a typed signal built, or they are a plain
+  `%error` string, which is a `simple-error` on every backend. Every RAW failure
+  is a trap instead — a failed cast, a zero divide, an unbound `symbol-value`
+  (`unreachable`, `WasmSymbolApiRuntimeBuilder`) — and a trap still ends the run,
+  the documented three-point spectrum above. **One family diverges by class
+  rather than by catchability**: an undefined-function call IS catchable here
+  (the stub signals through `%error`), but as a `simple-error`, where the
+  interpreter and the JVM answer `undefined-function`. The stub cannot construct
+  the typed instance: it is produced during BODY compilation, after
+  `mayCreateInstances` fixed whether the artifact has an instance representation
+  and after `usedLayoutTags` chose which layouts to bake, so building one there
+  is a gate/expansion disagreement (`%OBJ-NEW reached the compiler with no
+  instance representation`, hit while implementing this). **Re-evaluation
+  trigger**: teach both gates about undefined calls — `usedLayoutTags` already
+  has the precedent, standing in for the `end-of-file` tag on the `read` family's
+  presence — and the stub can carry its class everywhere. Pinned as a divergence
+  by the `ehAnUndefinedFunctionCallIsCaughtAsASimpleErrorHere` test of
+  `WasmLispCompilerIntegrationTest`.
+- **The message a raw host failure reports** is rontolisp's, not the host's:
+  `ClosRegistry.TYPE_ERROR_MESSAGE` replaces a `ClassCastException`'s Java class
+  names (identically on the interpreter and the JVM) and
+  `INDEX_OUT_OF_BOUNDS_MESSAGE` replaces the JVM's `Index 10 out of bounds for
+  length 3`, whose length counts the layout cell in slot 0 and so names a length
+  the Lisp program does not have. The per-site texts a built-in writes itself
+  (`car expects a cons cell, got: 1`) are kept and are NOT identical across
+  backends: the JVM's `car` is a `checkcast` that cannot know which operator it
+  came from. **Re-evaluation trigger**: if a program ever needs the operator name
+  in a compiled type error, the fix is per-operator emission at the check, not
+  more message parsing at the pad. What the substitution does NOT reach is the
+  UNCAUGHT top-level line on the JVM (`JvmUncaughtHandler`): it prints
+  `ex.getMessage()` and then rethrows THAT exception, whose message is final, so
+  normalizing the first line would leave the host's echo of the second showing the
+  Java text anyway. Deliberate, not forgotten.
+- **Restart mode moves the undefined-function text out of the pad's reach.** With
+  `handler-bind` anywhere in the program the string-datum `error` arm builds its
+  `simple-error` at the SIGNAL point and hands it over on the condition channel
+  (todo-379's identity contract), so the pad never synthesizes and never sees the
+  text — `(handler-case (nosuchfn) (undefined-function ...))` matches on the JVM
+  in a plain program and does not in a restart-mode one. Everything raised as a
+  RAW host failure (`(car 1)`, `(/ 1 0)`, an out-of-range index, an unbound
+  `symbol-value`) is unaffected in both modes, which is what the rove `signals`
+  shape actually exercises. **Re-evaluation trigger**: restart mode is exactly the
+  case where both instance gates are already open (`mayUseInstances` is forced on,
+  `usedLayoutTags` answers null), so the stub CAN carry its class there — do it in
+  the compilers, which know the mode, rather than by matching text at the signal
+  site.
+- **`conditionNarrowing` marks the five classes constructible** (`LispMacroExpander
+  .rawFailureConditionClasses`) for the same reason it marks the synthesized
+  simple-* three: no site in the program names them, but a pad can build one, and
+  without the mark the report partition would drop their arms and a caught
+  `(car 1)` would print as a bare `#<TYPE-ERROR>`. Unlike the three it is
+  CONDITIONAL on the program establishing a pad at all (`LANDING_PAD_HEADS` ->
+  `ConditionTagScan.hasLandingPad`): a condition-bearing program with no catching
+  form cannot reach one, and marking them unconditionally cost the zlib size-report
+  program 680 B in report arms and layouts nothing in it could construct.
 
 ## Pinned lists and tests
 
@@ -1069,6 +1173,12 @@ complaint and only failed at link time — and cross-backend by the ci-spec
 `handler-case-in-argument-position` case.
 `ParseNumberE2eTest` now expects the `:report`-rendered `Invalid number: ...`
 message (the stopgap `Condition ... was signalled.` pin was updated).
+todo-380 added the ci-spec `condition-types` case (the `cl` spelling from a user
+package, a RUNTIME type specifier naming a seeded class, a typed built-in error)
+plus per-backend `*ConditionTypeNamesAreClSymbols` / `*RuntimeTypeSpecifier*` /
+`*BuiltInErrorCarriesItsConditionClass*` tests -- the interpreter's throw-site
+classes and the JVM pad's exception classification are ONE rule and are pinned
+by the same-named pair.
 
 ## Out of scope (still)
 

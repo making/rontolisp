@@ -21963,11 +21963,33 @@ public final class LispMacroExpander {
 		scan.tags.add("%class-SIMPLE-ERROR");
 		scan.tags.add(SIMPLE_CONDITION_TAG);
 		scan.tags.add("%class-SIMPLE-WARNING");
+		// A landing pad synthesizes one of these for a RAW host failure it caught, with
+		// no site in the program naming the class -- so they are constructible for the
+		// same reason as the simple-* three above (their report arms must survive the
+		// narrowing, or a caught (car 1) would print as a bare #<TYPE-ERROR>), but ONLY
+		// where a pad exists. A program with conditions and no catching form cannot
+		// reach one.
+		if (scan.hasLandingPad) {
+			for (String rawFailure : rawFailureConditionClasses()) {
+				scan.tags.add(LispLayout.CLASS_TAG_PREFIX + rawFailure);
+			}
+		}
 		return new ConditionNarrowing(java.util.Set.copyOf(scan.tags), !scan.rendererForced);
 	}
 
 	private static final java.util.Set<String> CONDITION_SIGNAL_FAMILY = java.util.Set.of(LispNames.ERROR,
 			LispNames.WARN, LispNames.CERROR, LispNames.SIGNAL, LispNames.MAKE_CONDITION);
+
+	/**
+	 * The forms that establish a handler LANDING PAD -- the only sites that synthesize a
+	 * condition for a caught RAW host failure, and hence the only reason the raw-failure
+	 * classes can be constructed by code no site names
+	 * ({@link ConditionTagScan#hasLandingPad}). {@code %hb-guard} is the internal pad
+	 * {@code handler-bind} lowers to, listed so the answer does not depend on whether the
+	 * scan runs before or after that lowering.
+	 */
+	private static final java.util.Set<String> LANDING_PAD_HEADS = java.util.Set.of(LispNames.HANDLER_CASE,
+			LispNames.HANDLER_BIND, LispNames.IGNORE_ERRORS, LispNames.HB_GUARD_INTERNAL);
 
 	/** Whether the form is one of {@code runtimeErrorDefuns}' own generated defuns. */
 	private static boolean isGeneratedErrorRuntimeDefun(LispVal form) {
@@ -21987,6 +22009,15 @@ public final class LispMacroExpander {
 		boolean bail;
 
 		boolean rendererForced;
+
+		/**
+		 * Whether the program establishes a handler LANDING PAD -- the only site that
+		 * synthesizes a condition for a raw host failure, and therefore the only reason
+		 * the raw-failure classes are constructible. Without one the five stay out of the
+		 * report partition, which is what keeps a condition-bearing but pad-free artifact
+		 * (zlib: +680 B when they were added unconditionally) exactly the size it was.
+		 */
+		boolean hasLandingPad;
 
 		boolean inGeneratedErrorRuntime;
 
@@ -22038,6 +22069,9 @@ public final class LispMacroExpander {
 					walk(part, true);
 				}
 				return;
+			}
+			if (LANDING_PAD_HEADS.contains(member)) {
+				this.hasLandingPad = true;
 			}
 			if (LispNames.FUNCTION.equals(member)) {
 				if (parts.size() > 1 && parts.get(1) instanceof LispSymbol named
@@ -23843,12 +23877,26 @@ public final class LispMacroExpander {
 	 * rontolisp does not provide still loads and runs. The compilers emit this stub (plus
 	 * a compile-time warning, so a typo stays visible) instead of rejecting the whole
 	 * program.
+	 *
+	 * <p>
+	 * It signals the TEXT, not a typed {@code undefined-function} instance, and that is a
+	 * deliberate limit rather than an oversight: this stub is produced during BODY
+	 * compilation, long after {@code mayCreateInstances} fixed whether the artifact has
+	 * an instance representation at all and after the wasm layout scan chose which
+	 * layouts to bake, so a construction here would be a gate/expansion disagreement
+	 * (todo-380 tried it: `%OBJ-NEW reached the compiler with no instance
+	 * representation`). The JVM recovers the class at its landing pad from this very
+	 * text; the wasm backends catch it as a {@code simple-error}, one more entry in the
+	 * error-fidelity spectrum their raw traps already occupy. **Re-evaluation trigger**:
+	 * teach the two gates about undefined calls (the wasm scan's `read`-family precedent)
+	 * and the stub can carry its class on every backend.
 	 * @param name the undefined function's name
 	 * @return the signaling expression
 	 */
 	public static LispVal undefinedFunctionCallStub(String name) {
 		return listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), new LispString("The function " + name + " is undefined")));
+				List.of(new LispSymbol(LispNames.ERROR), new LispString(ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX
+						+ name + ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX)));
 	}
 
 	/**
@@ -24259,6 +24307,47 @@ public final class LispMacroExpander {
 				listToCons(List.of(new LispSymbol(LispNames.EQ_GENERAL), condVar,
 						new LispSymbol(LispNames.HANDLERS_RAN_VAR))),
 				LispNil.INSTANCE, callOf(LispNames.RUN_HANDLERS_INTERNAL, condVar));
+	}
+
+	/**
+	 * The condition classes a compiled landing pad synthesizes for a RAW host failure, in
+	 * the order a backend's classification switch numbers them: a cast/index failure is a
+	 * {@code type-error}, a zero divisor a {@code division-by-zero}, any other arithmetic
+	 * failure its parent {@code arithmetic-error}, and the two messages every backend
+	 * spells identically ({@code "The variable X is unbound"},
+	 * {@code "The function X is undefined"}) their cell-error classes. The list is what
+	 * {@link #conditionNarrowing} marks constructible and what
+	 * {@link #reportingConditionForm} is asked to build, so the classification a backend
+	 * emits can never name a class the report runtime dropped.
+	 * @return the class names, in classification order
+	 */
+	public static List<String> rawFailureConditionClasses() {
+		return List.of(ClosRegistry.TYPE_ERROR_CLASS_NAME, ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME,
+				ClosRegistry.ARITHMETIC_ERROR_CLASS_NAME, ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
+				ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME);
+	}
+
+	/**
+	 * The {@code (%obj-new '%class-NAME slot...)} form that builds a seeded condition
+	 * instance reporting the given message: every slot nil but {@code format-control},
+	 * which holds the message. The slot count and the control's position come from the
+	 * REGISTRY, so a landing pad never bakes an index that the seeded layout could move.
+	 * @param closRegistry the class registry
+	 * @param className the seeded condition class name
+	 * @param message the expression holding the message (a pseudo-local or a literal)
+	 * @return the construction form
+	 */
+	public static LispVal reportingConditionForm(ClosRegistry closRegistry, String className, LispVal message) {
+		ClosRegistry.ClassInfo info = closRegistry.findClass(className);
+		List<LispVal> parts = new java.util.ArrayList<>();
+		parts.add(new LispSymbol(LispNames.OBJ_NEW));
+		parts.add(quoteOf(LispLayout.CLASS_TAG_PREFIX + className));
+		if (info != null) {
+			for (ClosRegistry.SlotSpec slot : info.slots()) {
+				parts.add("FORMAT-CONTROL".equals(slot.baseName()) ? message : LispNil.INSTANCE);
+			}
+		}
+		return listToCons(parts);
 	}
 
 	/**

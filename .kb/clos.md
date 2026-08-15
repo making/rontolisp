@@ -743,6 +743,15 @@ cold-branch control string.
   carrying the very test the literal specifier would have compiled to. An
   unrecognized specifier — a COMPOUND one included — yields nil rather than
   signalling: this is the lite runtime-dispatch model, not a real type table.
+  **A runtime specifier is matched by SPELLING**, and the reverse of the
+  member-name fallback above (a QUALIFIED specifier against a class registered
+  under a PLAIN name) is deliberately not emitted: it would need a per-call
+  package-prefix strip in generated code, where the compile-time `findClass`
+  does it for free. The only classes registered plainly are the seeded ones, and
+  since todo-380 their names are `cl` symbols, so a `(:use #:cl)` package's
+  `'type-error` IS the plain spelling (`.kb/error-handling.md`,
+  `.kb/packages.md`). Trigger to revisit: a plainly-registered class whose name
+  is not a `cl` symbol.
 - **The COMPILE paths must not inline that dispatch** (todo-115): its size is
   proportional to the registered-class count, and at cl-postgres scale (165
   layouts, ~68 KB of AST per call site) three sites each overflowed the JVM's

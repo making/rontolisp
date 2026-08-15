@@ -100,6 +100,20 @@ unchanged). Recorded while probing 379, still open here: `(elt (list 1 2) 5)`,
 `(nth -1 ...)` and `(coerce "abc" 'integer)` answer nil where CL signals -- a
 silent-nil family, not a raw throw, so the seam cannot see it.
 
+**Typed built-in errors, 2026-08-15** (done with .todo/380): the classes a
+built-in error is signaled as -- `type-error` for a bad `car`/index/argument
+type, `division-by-zero`, `unbound-variable`, `undefined-function` -- are now
+carried instead of everything being a `simple-error`, and every seeded condition
+class name is a `cl` symbol, so a `(:use #:cl)` package's `'type-error` is the
+CL symbol and a RUNTIME `(typep c ty)` on one matches. Still open here, recorded
+while probing 380: the ANSI condition classes the registry does not SEED at all
+-- `reader-error`, `print-not-readable`, `storage-condition`, the
+`floating-point-*` four -- so `(handler-case ... (reader-error ...))` inside a
+user package resolves to `pkg::reader-error` and can never match. Nothing in
+rontolisp signals any of them today, which is why they are unseeded (a seeded
+class joins every runtime `typep`/class table); seed them WITH a signaling site,
+not before one.
+
 ## Reading caveat
 
 2,229 top-level forms were lost (unreadable or unevaluable; none non-terminating),

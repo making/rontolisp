@@ -547,17 +547,18 @@ class LispMacroExpanderTest {
 
 	@Test
 	void conditionNarrowingCollectsLiteralTagsAndDeclinesTheRenderer() {
-		// Literal datums only: the constructible set is exactly what is named (plus the
-		// synthesized simple-* family), and with no unrendered control in sight the
-		// runtime renderer is declined.
+		// Literal datums only: the constructible set is exactly what is named, plus the
+		// two families no site names but a landing pad can still build -- the
+		// synthesized simple-* three and the raw-failure classes (.todo/380) -- and
+		// with no unrendered control in sight the runtime renderer is declined.
 		LispMacroExpander.ConditionNarrowing narrowing = narrowingOf("""
 				(define-condition my-error (error) ())
 				(handler-case (error 'my-error) (error (e) (princ e)))
 				(handler-case (error "plain ~a message" 1) (error (e) (princ e)))
 				""");
 		assertThat(narrowing.constructibleTags()).isNotNull()
-			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR")
-			.doesNotContain("%class-END-OF-FILE", "%class-DIVISION-BY-ZERO");
+			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR", "%class-TYPE-ERROR", "%class-DIVISION-BY-ZERO")
+			.doesNotContain("%class-END-OF-FILE", "%class-UNBOUND-SLOT");
 		assertThat(narrowing.declineRenderer()).isTrue();
 	}
 

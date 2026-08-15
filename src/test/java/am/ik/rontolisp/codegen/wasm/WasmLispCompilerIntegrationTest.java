@@ -14607,6 +14607,43 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void standardConditionTypeNamesAreClSymbols() throws Exception {
+		// .todo/380: cl owns the condition type names, so a (:use #:cl) package
+		// spells them bare -- which is also what makes the RUNTIME type test below
+		// match the registry's plain class name.
+		assertThat(compileAndRun("""
+				(defpackage #:ct-pkg (:use #:cl))
+				(in-package #:ct-pkg)
+				(print (list 'type-error 'condition 'warning 'division-by-zero 'undefined-function 'end-of-file))
+				""")).isEqualTo("(TYPE-ERROR CONDITION WARNING DIVISION-BY-ZERO UNDEFINED-FUNCTION END-OF-FILE)");
+	}
+
+	@Test
+	void runtimeTypeSpecifierNamingASeededConditionClass() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (let ((ty 'type-error)) (typep (make-condition 'type-error) ty))
+				             (let ((ty 'condition)) (typep (make-condition 'simple-warning) ty))
+				             (let ((ty 'type-error)) (typep (make-condition 'simple-warning) ty))))
+				""")).isEqualTo("(T T NIL)");
+	}
+
+	@Test
+	void ehAnUndefinedFunctionCallIsCaughtAsASimpleErrorHere() throws Exception {
+		// The DIVERGENCE pin (.todo/380): the interpreter and the JVM answer
+		// :UNDEFINED for this, but the call-time stub cannot construct a typed
+		// condition -- it is produced during body compilation, after the layout scan
+		// chose what to bake -- so this backend catches the text as a simple-error.
+		// The raw-trap families ((car 1), (/ 1 0)) are not catchable here at all.
+		// Reason and re-evaluation trigger: .kb/error-handling.md,
+		// LispMacroExpander.undefinedFunctionCallStub.
+		assertThat(compileAndRunEh("""
+				(print (handler-case (no-such-function-xyz 1)
+				         (undefined-function (e) :undefined)
+				         (simple-error (e) (list :simple (princ-to-string e)))))
+				""")).isEqualTo("(:SIMPLE \"The function NO-SUCH-FUNCTION-XYZ is undefined\")");
+	}
+
+	@Test
 	void ehFindRestartReturnsObjectAndGoLeavesClauseIntoTagbody() throws Exception {
 		// The postmodern transaction.lisp shape: find-restart with a condition
 		// argument returns a first-class restart object, invoke-restart on the

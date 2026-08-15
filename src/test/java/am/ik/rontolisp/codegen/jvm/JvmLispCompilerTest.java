@@ -692,6 +692,61 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunStandardConditionTypeNamesAreClSymbols() throws Exception {
+		// .todo/380: cl owns the condition type names, so a (:use #:cl) package
+		// spells them bare -- which is also what makes the RUNTIME type test below
+		// match the registry's plain class name.
+		assertThat(compileAndRun("""
+				(defpackage #:ct-pkg (:use #:cl))
+				(in-package #:ct-pkg)
+				(print (list 'type-error 'condition 'warning 'division-by-zero 'undefined-function 'end-of-file))
+				""")).isEqualTo("(TYPE-ERROR CONDITION WARNING DIVISION-BY-ZERO UNDEFINED-FUNCTION END-OF-FILE)");
+	}
+
+	@Test
+	void compileAndRunRuntimeTypeSpecifierNamingASeededConditionClass() throws Exception {
+		assertThat(compileAndRun("""
+				(print (list (let ((ty 'type-error)) (typep (make-condition 'type-error) ty))
+				             (let ((ty 'condition)) (typep (make-condition 'simple-warning) ty))
+				             (let ((ty 'type-error)) (typep (make-condition 'simple-warning) ty))))
+				""")).isEqualTo("(T T NIL)");
+	}
+
+	@Test
+	void compileAndRunBuiltInErrorCarriesItsConditionClass() throws Exception {
+		// The classification the landing pad emits must agree with the interpreter's
+		// throw-site classes (LispEvaluatorTest#aBuiltInErrorCarriesItsConditionClass).
+		assertThat(compileAndRun("(print (handler-case (car 1) (type-error (e) :type-error) (error (e) :plain)))"))
+			.isEqualTo(":TYPE-ERROR");
+		assertThat(compileAndRun("(print (handler-case (/ 1 0) (division-by-zero (e) :dbz) (error (e) :plain)))"))
+			.isEqualTo(":DBZ");
+		assertThat(compileAndRun(
+				"(print (handler-case (aref (vector 1 2) 5) (type-error (e) :type-error) (error (e) :plain)))"))
+			.isEqualTo(":TYPE-ERROR");
+		assertThat(compileAndRun(
+				"(print (handler-case (no-such-function-xyz 1) (undefined-function (e) :undefined) (error (e) :plain)))"))
+			.isEqualTo(":UNDEFINED");
+		assertThat(compileAndRun(
+				"(print (handler-case (symbol-value 'no-such-var-xyz) (unbound-variable (e) :unbound) (error (e) :plain)))"))
+			.isEqualTo(":UNBOUND");
+		assertThat(compileAndRun(
+				"(print (handler-case (error \"boom\") (type-error (e) :wrong) (simple-error (e) :simple)))"))
+			.isEqualTo(":SIMPLE");
+	}
+
+	@Test
+	void compileAndRunASynthesizedBuiltInConditionReportsARontolispMessage() throws Exception {
+		// A cast failure's host text names Java classes and an out-of-range index's
+		// counts the layout cell; both are replaced at the pad.
+		assertThat(compileAndRun("(print (handler-case (car 1) (type-error (e) (princ-to-string e))))"))
+			.isEqualTo("\"the value is not of the expected type\"");
+		assertThat(compileAndRun("(print (handler-case (aref (vector 1 2) 5) (type-error (e) (princ-to-string e))))"))
+			.isEqualTo("\"index out of bounds\"");
+		assertThat(compileAndRun("(print (handler-case (/ 1 0) (division-by-zero (e) (princ-to-string e))))"))
+			.isEqualTo("\"Division by zero\"");
+	}
+
+	@Test
 	void compileAndRunFindRestartReturnsObjectAndGoLeavesClauseIntoTagbody() throws Exception {
 		// The postmodern transaction.lisp shape: find-restart with a condition
 		// argument returns a first-class restart object, invoke-restart on the

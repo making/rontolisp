@@ -1465,7 +1465,9 @@ public final class LispEvaluator {
 					}
 					LispVal value = this.globalEnv.lookupOrNull(sym.name());
 					if (value == null) {
-						throw new LispEvalException("The variable " + sym.name() + " is unbound");
+						throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
+								ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + sym.name()
+										+ ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
 					}
 					yield value;
 				}
@@ -1551,7 +1553,9 @@ public final class LispEvaluator {
 					}
 					LispVal fn = this.globalEnv.lookupFunctionOrNull(sym.name());
 					if (fn == null) {
-						throw new LispEvalException("The function " + sym.name() + " is undefined");
+						throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
+								ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + sym.name()
+										+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
 					}
 					return fn;
 				}));
@@ -3434,7 +3438,8 @@ public final class LispEvaluator {
 			value = this.globalEnv.lookupOrNull(name);
 		}
 		if (value == null) {
-			throw new LispEvalException("The variable " + name + " is unbound");
+			throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
+					ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
 		}
 		return value;
 	}
@@ -6014,7 +6019,8 @@ public final class LispEvaluator {
 		}
 		LispVal value = this.globalEnv.lookupOrNull(name);
 		if (value == null) {
-			throw new LispEvalException("The variable " + name + " is unbound");
+			throw LispEvalException.ofClass(ClosRegistry.UNBOUND_VARIABLE_CLASS_NAME,
+					ClosRegistry.UNBOUND_VARIABLE_MESSAGE_PREFIX + name + ClosRegistry.UNBOUND_VARIABLE_MESSAGE_SUFFIX);
 		}
 		return value;
 	}
@@ -6297,7 +6303,9 @@ public final class LispEvaluator {
 				LispVal call = new LispCons(new LispSymbol(name), new LispCons(param, LispNil.INSTANCE));
 				return new LispLambda(List.of(param), List.of(call), this.globalEnv);
 			}
-			throw new LispEvalException("The function " + name + " is undefined");
+			throw LispEvalException.ofClass(ClosRegistry.UNDEFINED_FUNCTION_CLASS_NAME,
+					ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_PREFIX + name
+							+ ClosRegistry.UNDEFINED_FUNCTION_MESSAGE_SUFFIX);
 		}
 	}
 
@@ -6967,7 +6975,7 @@ public final class LispEvaluator {
 			}
 		}
 		catch (LispEvalException e) {
-			LispVal condition = e.condition() != null ? e.condition() : synthesizeSimpleError(e.getMessage());
+			LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
 			for (LispVal clauseVal : errorClauses) {
 				LispCons clause = (LispCons) clauseVal;
 				List<LispVal> clauseParts = clause.toList();
@@ -7005,12 +7013,21 @@ public final class LispEvaluator {
 	}
 
 	/**
-	 * Builds the {@code simple-error} instance a {@code handler-case} synthesizes for an
-	 * error that was signaled without a condition object (a plain {@code %error}, or a
-	 * runtime failure inside a built-in).
+	 * Builds the condition instance a {@code handler-case} / {@code handler-bind} landing
+	 * synthesizes for an error that was signaled without a condition object (a plain
+	 * {@code %error}, or a runtime failure inside a built-in). The class is the one the
+	 * failure NAMED at its throw site ({@link LispEvalException#ofClass}) -- so
+	 * {@code (car 1)} is caught by a {@code type-error} clause -- and
+	 * {@code simple-error} only when nothing named one, which is what a plain
+	 * {@code (error "text")} is.
 	 */
-	private LispVal synthesizeSimpleError(@Nullable String message) {
+	private LispVal synthesizeCondition(LispEvalException e) {
+		String message = e.getMessage();
 		LispVal messageVal = message == null ? LispNil.INSTANCE : new LispString(message);
+		String className = e.conditionClassName();
+		if (className != null && this.closRegistry.newReportingCondition(className, messageVal) instanceof LispVal c) {
+			return c;
+		}
 		LispLayout layout = java.util.Objects
 			.requireNonNull(this.closRegistry.findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + "SIMPLE-ERROR"));
 		return new LispInstance(layout, new LispVal[] { messageVal, LispNil.INSTANCE });
@@ -7050,7 +7067,7 @@ public final class LispEvaluator {
 		if (!this.restartRuntimeLoaded) {
 			return e;
 		}
-		LispVal condition = e.condition() != null ? e.condition() : synthesizeSimpleError(e.getMessage());
+		LispVal condition = e.condition() != null ? e.condition() : synthesizeCondition(e);
 		if (condition != handlersRanMark()) {
 			LispVal fn = this.globalEnv.lookupFunctionOrNull(LispNames.RUN_HANDLERS_INTERNAL);
 			if (fn != null) {
@@ -7080,12 +7097,39 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * The condition class a raw Java failure inside a built-in is signaled as. The rule
+	 * is the one the JVM backend emits at its handler landing pad -- a cast failure and
+	 * an out-of-range index are {@code type-error} (CLHS says so for {@code aref}), a
+	 * zero divisor is {@code division-by-zero} and any other arithmetic failure is its
+	 * parent {@code arithmetic-error} -- so a program catching {@code (car 1)} as a
+	 * {@code type-error} behaves the same interpreted and compiled. The two must be
+	 * changed together; they are pinned by the same-named cases in
+	 * {@code LispEvaluatorTest} and {@code JvmLispCompilerTest}.
+	 */
+	private static String rawFailureConditionClass(RuntimeException raw) {
+		if (!(raw instanceof ArithmeticException)) {
+			return ClosRegistry.TYPE_ERROR_CLASS_NAME;
+		}
+		String message = raw.getMessage();
+		return message != null && message.contains(ClosRegistry.DIVISION_BY_ZERO_MESSAGE_TOKEN)
+				? ClosRegistry.DIVISION_BY_ZERO_CLASS_NAME : ClosRegistry.ARITHMETIC_ERROR_CLASS_NAME;
+	}
+
+	/**
 	 * The message a raw Java failure inside a built-in is wrapped with: the exception's
 	 * own message when it is self-describing (contains a letter, e.g. {@code "aref:
 	 * index out of bounds"}), else the built-in's name prefixes the bare payload
-	 * ({@code "make-array: -1"} for a {@code NegativeArraySizeException}).
+	 * ({@code "make-array: -1"} for a {@code NegativeArraySizeException}). A CAST failure
+	 * is the exception: its host text names Java classes, so it reports
+	 * {@link ClosRegistry#TYPE_ERROR_MESSAGE} -- the same text the compiled backends
+	 * substitute.
 	 */
 	private static String builtinFailureMessage(String name, RuntimeException raw) {
+		if (raw instanceof ClassCastException) {
+			// The host's text for a cast failure names Java classes; the compiled
+			// backends replace it with the same constant at their landing pad.
+			return ClosRegistry.TYPE_ERROR_MESSAGE;
+		}
 		String message = raw.getMessage();
 		String prefix = name.toLowerCase(java.util.Locale.ROOT);
 		if (message == null || message.isBlank()) {
@@ -8137,7 +8181,8 @@ public final class LispEvaluator {
 			}
 			catch (IndexOutOfBoundsException | NegativeArraySizeException | ArithmeticException
 					| ClassCastException raw) {
-				LispEvalException wrapped = new LispEvalException(builtinFailureMessage(builtIn.name(), raw));
+				LispEvalException wrapped = LispEvalException.ofClass(rawFailureConditionClass(raw),
+						builtinFailureMessage(builtIn.name(), raw));
 				wrapped.initCause(raw);
 				throw withHandlerBindHandlersRun(wrapped);
 			}

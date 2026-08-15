@@ -6005,6 +6005,27 @@ cases:
       (:OK 3)
       :RAISED
       NIL
+  # The standard condition type names belong to cl, so they read, print and compare
+  # the same from a user package -- which is also what makes a RUNTIME type
+  # specifier naming one match, since the runtime test compares the registry's
+  # plain class name by spelling. A built-in error carries its class too.
+  - name: condition-types
+    source: |
+      (defpackage :ci-cond (:use :cl) (:export :ci-cond-run))
+      (in-package :ci-cond)
+      (defun ci-cond-run ()
+        (list (list 'type-error 'condition 'warning 'division-by-zero 'undefined-function)
+              (let ((ty 'type-error)) (typep (make-condition 'type-error) ty))
+              (let ((ty 'condition)) (typep (make-condition 'simple-warning) ty))
+              (let ((ty 'type-error)) (typep (make-condition 'simple-warning) ty))
+              (handler-case (error 'division-by-zero) (arithmetic-error (e) :arithmetic))))
+      (in-package :cl-user)
+      (print (ci-cond:ci-cond-run))
+      (print (handler-case (error 'type-error :datum 1 :expected-type 'cons)
+               (type-error (e) (list :caught (type-error-datum e) (type-error-expected-type e)))))
+    expected: |
+      ((TYPE-ERROR CONDITION WARNING DIVISION-BY-ZERO UNDEFINED-FUNCTION) T T NIL :ARITHMETIC)
+      (:CAUGHT 1 CONS)
   - name: unwind-protect-cleanups-and-return-channel
     source: |
       (print (unwind-protect (+ 1 2) (print :cleanup)))

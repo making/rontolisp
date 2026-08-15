@@ -215,6 +215,18 @@ public final class PackageRegistry {
 			"STANDARD-OBJECT", "STANDARD-CLASS");
 
 	/**
+	 * The built-in CONDITION class names, taken straight from the hierarchy
+	 * {@link ClosRegistry} seeds so the two can never drift apart. They belong to
+	 * {@code cl} for the same reason the type names above do, and the consequence is
+	 * sharper: a condition name is what a {@code handler-case} clause, a
+	 * {@code define-condition} parent and a RUNTIME {@code (typep c ty)} specifier all
+	 * spell, so a package-local {@code MY-PKG::TYPE-ERROR} made the same condition two
+	 * different symbols in two packages and left the runtime type test -- which matches
+	 * the registry's plain class name by spelling -- answering nil.
+	 */
+	private static final Set<String> CL_CONDITION_TYPES = Set.copyOf(ClosRegistry.CONDITION_CLASS_NAMES);
+
+	/**
 	 * Internal {@code %}-prefixed helpers owned by {@code cl} but excluded from the
 	 * introspection listings.
 	 */
@@ -247,7 +259,7 @@ public final class PackageRegistry {
 	 * the categorized sets above.
 	 */
 	private static final Set<String> CL_SYMBOLS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_INTERNALS, CL_TYPES);
+			CL_INTERNALS, CL_TYPES, CL_CONDITION_TYPES);
 
 	/**
 	 * The exported {@code cl} symbols: everything but the {@code %}-prefixed internals
@@ -255,7 +267,7 @@ public final class PackageRegistry {
 	 * {@link LispNames#isCarCdrComposition} and are also external).
 	 */
 	private static final Set<String> CL_EXTERNALS = union(CL_SPECIAL_FORMS, CL_MACROS, CL_FUNCTIONS, CL_VARIABLES,
-			CL_TYPES);
+			CL_TYPES, CL_CONDITION_TYPES);
 
 	/**
 	 * The functions exported by the {@code linalg} package (numpy-style vector/matrix

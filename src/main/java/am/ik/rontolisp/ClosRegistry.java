@@ -64,42 +64,159 @@ public final class ClosRegistry {
 		// is what resolves the %SYNONYM-STREAM tag for %obj-new/%obj-is on every
 		// backend without making it a class anything can specialize on or enumerate.
 		this.layoutsByTag.put(LispLayout.SYNONYM_STREAM_TAG, LispLayout.SYNONYM_STREAM);
-		seedClass("CONDITION", null);
-		seedClass("SERIOUS-CONDITION", "CONDITION");
-		seedClass("ERROR", "SERIOUS-CONDITION");
-		seedClass("SIMPLE-ERROR", "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedClass("SIMPLE-CONDITION", "CONDITION", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedClass("WARNING", "CONDITION");
-		seedClass("SIMPLE-WARNING", "WARNING", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedClass("STYLE-WARNING", "WARNING");
-		seedClass("PARSE-ERROR", "ERROR");
-		seedClass("TYPE-ERROR", "ERROR", "DATUM", "EXPECTED-TYPE");
-		// simple-type-error carries BOTH the type-error slots and the simple-condition
-		// report slots -- CL's multiple inheritance flattened onto the type-error
-		// branch, which is the branch a handler-case clause tests (alexandria's
-		// sequence bounds checks signal it).
-		seedClass("SIMPLE-TYPE-ERROR", "TYPE-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS");
-		seedClass("STREAM-ERROR", "ERROR");
-		seedClass(END_OF_FILE_CLASS_NAME, "STREAM-ERROR");
+		for (ConditionSeed seed : CONDITION_SEEDS) {
+			seedClass(seed.name(), seed.parent(), seed.slots().toArray(new String[0]));
+		}
 		// The read family signals this class when it runs out of input, so its report is
 		// the message every backend prints for an uncaught end of file. It is a plain
 		// string (no stream slot to name) so that the interpreter can raise the same
 		// message from Java without evaluating a report lambda.
 		registerConditionReport(END_OF_FILE_CLASS_NAME, new LispString(END_OF_FILE_MESSAGE));
-		seedClass("FILE-ERROR", "ERROR");
-		seedClass("ARITHMETIC-ERROR", "ERROR");
-		seedClass("DIVISION-BY-ZERO", "ARITHMETIC-ERROR");
-		seedClass("CONTROL-ERROR", "ERROR");
-		seedClass("PROGRAM-ERROR", "ERROR");
-		seedClass("PACKAGE-ERROR", "ERROR");
-		seedClass("CELL-ERROR", "ERROR", "NAME");
-		seedClass("UNBOUND-VARIABLE", "CELL-ERROR");
-		seedClass("UNDEFINED-FUNCTION", "CELL-ERROR");
-		// The condition a read of an unbound slot signals (CLHS 7.7.2): name = the slot,
-		// instance = the object it was read from.
-		seedClass("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE");
 		registerConditionReport("UNBOUND-SLOT", unboundSlotReport());
 	}
+
+	/**
+	 * The condition class the read family signals at end of input
+	 * ({@code read-char}/{@code read-byte}, and {@code read-line} with an explicit
+	 * eof-error-p). Seeded under {@code stream-error}, so an {@code (error () ...)}
+	 * handler-case clause catches it too.
+	 */
+	public static final String END_OF_FILE_CLASS_NAME = "END-OF-FILE";
+
+	/**
+	 * The registered {@code :report} of {@link #END_OF_FILE_CLASS_NAME} -- the message an
+	 * uncaught end of file prints on every backend.
+	 */
+	public static final String END_OF_FILE_MESSAGE = "end of file";
+
+	/**
+	 * The class a built-in error over a value of the wrong type is signaled as -- a bad
+	 * {@code car}, an arithmetic operation on a non-number, and (per CLHS {@code aref})
+	 * an index outside its bounds.
+	 */
+	public static final String TYPE_ERROR_CLASS_NAME = "TYPE-ERROR";
+
+	/** The class an arithmetic failure that is not a division by zero is signaled as. */
+	public static final String ARITHMETIC_ERROR_CLASS_NAME = "ARITHMETIC-ERROR";
+
+	/** The class a division by zero is signaled as. */
+	public static final String DIVISION_BY_ZERO_CLASS_NAME = "DIVISION-BY-ZERO";
+
+	/**
+	 * The substring that tells a {@code division-by-zero} from any other arithmetic
+	 * failure, in the host exception's message ({@code "/ by zero"},
+	 * {@code "BigInteger divide by zero"}, rontolisp's own {@code "Division by zero"}).
+	 * Matched case-SENSITIVELY, because the backends that classify at their landing pad
+	 * emit the comparison as bytecode and a case fold there would cost a locale-aware
+	 * call for a distinction no host message makes.
+	 */
+	public static final String DIVISION_BY_ZERO_MESSAGE_TOKEN = "zero";
+
+	/** The class a read of an unbound variable is signaled as. */
+	public static final String UNBOUND_VARIABLE_CLASS_NAME = "UNBOUND-VARIABLE";
+
+	/** The class a call to an undefined function is signaled as. */
+	public static final String UNDEFINED_FUNCTION_CLASS_NAME = "UNDEFINED-FUNCTION";
+
+	/**
+	 * The message a call to an undefined function reports, as a prefix around the
+	 * function name (the suffix is {@link #UNDEFINED_FUNCTION_MESSAGE_SUFFIX}). Every
+	 * backend spells it identically -- the interpreter's late binding, the compile paths'
+	 * call-time stub -- and that is what lets a backend which only sees the MESSAGE of a
+	 * failure (the JVM landing pad, whose bytecode-emitted throws carry no condition)
+	 * recover the class from the text it generated itself.
+	 */
+	public static final String UNDEFINED_FUNCTION_MESSAGE_PREFIX = "The function ";
+
+	/** The suffix of {@link #UNDEFINED_FUNCTION_MESSAGE_PREFIX}'s message. */
+	public static final String UNDEFINED_FUNCTION_MESSAGE_SUFFIX = " is undefined";
+
+	/**
+	 * The message a raw CAST failure reports. Both compiled and interpreted, the host's
+	 * own text for one names Java classes ({@code "class java.lang.Long cannot be cast to
+	 * class [Ljava.lang.Object;"}), which is not an answer rontolisp should print for a
+	 * Lisp program; the built-ins that detect the type themselves report their own,
+	 * better text ({@code "car expects a cons cell, got: 1"}) and never reach this.
+	 */
+	public static final String TYPE_ERROR_MESSAGE = "the value is not of the expected type";
+
+	/**
+	 * The message an out-of-range index reports on a backend that only has the host's
+	 * text for it. The JVM's ({@code "Index 10 out of bounds for length 3"}) counts the
+	 * layout cell an instance keeps in slot 0, so it names a length the Lisp program does
+	 * not have.
+	 */
+	public static final String INDEX_OUT_OF_BOUNDS_MESSAGE = "index out of bounds";
+
+	/** The prefix of the message a read of an unbound variable reports. */
+	public static final String UNBOUND_VARIABLE_MESSAGE_PREFIX = "The variable ";
+
+	/** The suffix of {@link #UNBOUND_VARIABLE_MESSAGE_PREFIX}'s message. */
+	public static final String UNBOUND_VARIABLE_MESSAGE_SUFFIX = " is unbound";
+
+	/**
+	 * One entry of {@link #CONDITION_SEEDS}: the class name, its single parent (null at
+	 * the root) and the slots it adds on top of the parent's.
+	 *
+	 * @param name the class name
+	 * @param parent the superclass name, or null for {@code condition}
+	 * @param slots the slot names this class adds
+	 */
+	private record ConditionSeed(String name, @Nullable String parent, List<String> slots) {
+	}
+
+	private static ConditionSeed seed(String name, @Nullable String parent, String... slots) {
+		return new ConditionSeed(name, parent, List.of(slots));
+	}
+
+	/**
+	 * The built-in condition hierarchy, as ONE list: the constructor seeds it and
+	 * {@link #CONDITION_CLASS_NAMES} -- the names {@code PackageRegistry} owns as
+	 * {@code cl} symbols -- is derived from it, so a class added here is a {@code cl}
+	 * symbol by construction rather than by a second list somebody has to remember.
+	 *
+	 * <p>
+	 * Four classes carry {@code format-control}/{@code format-arguments} beyond CLHS's
+	 * slot lists ({@code type-error}, {@code arithmetic-error} and the two
+	 * {@code cell-error} leaves): those are the classes a BUILT-IN error is synthesized
+	 * as, and the two slots are how the synthesized instance carries the message it
+	 * reports -- the same {@code simple-condition} report path every other message-
+	 * bearing condition uses, rather than a second message channel. {@code type-error}
+	 * gaining them is what leaves {@code simple-type-error} with the identical layout (it
+	 * adds nothing now), so the {@code %obj-ref} indexes of both are unchanged.
+	 */
+	private static final List<ConditionSeed> CONDITION_SEEDS = List.of(seed("CONDITION", null),
+			seed("SERIOUS-CONDITION", "CONDITION"), seed("ERROR", "SERIOUS-CONDITION"),
+			seed("SIMPLE-ERROR", "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			seed("SIMPLE-CONDITION", "CONDITION", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"), seed("WARNING", "CONDITION"),
+			seed("SIMPLE-WARNING", "WARNING", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"), seed("STYLE-WARNING", "WARNING"),
+			seed("PARSE-ERROR", "ERROR"),
+			seed(TYPE_ERROR_CLASS_NAME, "ERROR", "DATUM", "EXPECTED-TYPE", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			// simple-type-error carries BOTH the type-error slots and the
+			// simple-condition report slots -- CL's multiple inheritance flattened onto
+			// the type-error branch, which is the branch a handler-case clause tests
+			// (alexandria's sequence bounds checks signal it). Since type-error itself
+			// now carries the report pair, it inherits the whole layout.
+			seed("SIMPLE-TYPE-ERROR", TYPE_ERROR_CLASS_NAME), seed("STREAM-ERROR", "ERROR"),
+			seed(END_OF_FILE_CLASS_NAME, "STREAM-ERROR"), seed("FILE-ERROR", "ERROR"),
+			seed(ARITHMETIC_ERROR_CLASS_NAME, "ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			seed(DIVISION_BY_ZERO_CLASS_NAME, ARITHMETIC_ERROR_CLASS_NAME), seed("CONTROL-ERROR", "ERROR"),
+			seed("PROGRAM-ERROR", "ERROR"), seed("PACKAGE-ERROR", "ERROR"), seed("CELL-ERROR", "ERROR", "NAME"),
+			seed(UNBOUND_VARIABLE_CLASS_NAME, "CELL-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			seed(UNDEFINED_FUNCTION_CLASS_NAME, "CELL-ERROR", "FORMAT-CONTROL", "FORMAT-ARGUMENTS"),
+			// The condition a read of an unbound slot signals (CLHS 7.7.2): name = the
+			// slot, instance = the object it was read from.
+			seed("UNBOUND-SLOT", "CELL-ERROR", "INSTANCE"));
+
+	/**
+	 * The names of the built-in condition classes the constructor seeds, in seeding
+	 * order. {@code PackageRegistry} owns exactly these as {@code cl} symbols: without
+	 * that, {@code 'type-error} inside a {@code (:use #:cl)} package reads, prints and
+	 * compares as {@code MY-PKG::TYPE-ERROR}, two packages naming the same condition hold
+	 * two different symbols, and a RUNTIME type specifier carrying the qualified spelling
+	 * matches no registered class.
+	 */
+	public static final List<String> CONDITION_CLASS_NAMES = CONDITION_SEEDS.stream().map(ConditionSeed::name).toList();
 
 	/**
 	 * Seeds the MOP base classes the static metaobject layer rests on: {@code find-class}
@@ -264,20 +381,6 @@ public final class ClosRegistry {
 	public static final String UNBOUND_CLASS_NAME = "%UNBOUND%";
 
 	/**
-	 * The condition class the read family signals at end of input
-	 * ({@code read-char}/{@code read-byte}, and {@code read-line} with an explicit
-	 * eof-error-p). Seeded under {@code stream-error}, so an {@code (error () ...)}
-	 * handler-case clause catches it too.
-	 */
-	public static final String END_OF_FILE_CLASS_NAME = "END-OF-FILE";
-
-	/**
-	 * The registered {@code :report} of {@link #END_OF_FILE_CLASS_NAME} -- the message an
-	 * uncaught end of file prints on every backend.
-	 */
-	public static final String END_OF_FILE_MESSAGE = "end of file";
-
-	/**
 	 * A fresh {@code end-of-file} condition instance, for the interpreter's read family
 	 * -- which runs inside {@code Environment}, where no registry is in scope. The class
 	 * is SEEDED, so its layout is the same slot-less shape in every registry and can be
@@ -288,6 +391,30 @@ public final class ClosRegistry {
 	 */
 	public static LispVal newEndOfFileCondition() {
 		return new LispInstance(LispLayout.ofClass(END_OF_FILE_CLASS_NAME, List.of(), List.of()), new LispVal[0]);
+	}
+
+	/**
+	 * A fresh instance of a SEEDED condition class reporting the given message: every
+	 * slot nil except {@code format-control}, which is why the four classes a built-in
+	 * error is synthesized as carry that slot (see {@link #CONDITION_SEEDS}). This is the
+	 * one place the interpreter turns a raw failure into a condition, so the class a
+	 * built-in named at its throw site and the message it reports cannot come apart.
+	 * @param className the seeded condition class name
+	 * @param message the reported message, or null for no report
+	 * @return the condition instance, or null when the class is not registered here
+	 */
+	public @Nullable LispVal newReportingCondition(String className, @Nullable LispVal message) {
+		LispLayout layout = findLayoutByTag(LispLayout.CLASS_TAG_PREFIX + normalize(className));
+		if (layout == null) {
+			return null;
+		}
+		LispVal[] slots = new LispVal[Math.max(layout.capacity(), layout.slotNames().size())];
+		java.util.Arrays.fill(slots, LispNil.INSTANCE);
+		int control = layout.slotNames().indexOf("FORMAT-CONTROL");
+		if (control >= 0 && message != null) {
+			slots[control] = message;
+		}
+		return new LispInstance(layout, slots);
 	}
 
 	/** The instance tag of the slot-unbound marker ({@link #UNBOUND_CLASS_NAME}). */

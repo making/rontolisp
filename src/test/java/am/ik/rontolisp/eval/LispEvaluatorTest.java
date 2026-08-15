@@ -7210,6 +7210,68 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void standardConditionTypeNamesAreClSymbols() {
+		// .todo/380: inside a (:use #:cl) package they must NOT read as
+		// MY-PKG::TYPE-ERROR -- two packages naming one condition would hold two
+		// symbols, and the runtime type test (which matches the registry's plain
+		// class name by spelling) would answer nil.
+		assertThat(evalMulti("""
+				(defpackage #:ct-pkg (:use #:cl))
+				(in-package #:ct-pkg)
+				(list 'type-error 'condition 'warning 'division-by-zero 'undefined-function 'end-of-file)
+				""").print())
+			.isEqualTo("(TYPE-ERROR CONDITION WARNING DIVISION-BY-ZERO UNDEFINED-FUNCTION END-OF-FILE)");
+	}
+
+	@Test
+	void aRuntimeTypeSpecifierNamingASeededConditionClassMatches() {
+		// rove's (signals form 'type-error) binds the type to a variable, so the
+		// specifier is only known at run time.
+		assertThat(eval("(let ((ty 'type-error)) (typep (make-condition 'type-error) ty))").print()).isEqualTo("T");
+		assertThat(eval("(let ((ty 'condition)) (typep (make-condition 'simple-warning) ty))").print()).isEqualTo("T");
+		assertThat(eval("(let ((ty 'type-error)) (typep (make-condition 'simple-warning) ty))").print())
+			.isEqualTo("NIL");
+		assertThat(evalMulti("""
+				(defpackage #:ct-rt-pkg (:use #:cl))
+				(in-package #:ct-rt-pkg)
+				(let ((ty 'arithmetic-error)) (typep (make-condition 'division-by-zero) ty))
+				""").print()).isEqualTo("T");
+	}
+
+	@Test
+	void aBuiltInErrorCarriesItsConditionClass() {
+		// .todo/380: the rove acceptance shape, (ok (signals (car 1) 'type-error)).
+		assertThat(eval("(handler-case (car 1) (type-error (e) :type-error) (error (e) :plain))").print())
+			.isEqualTo(":TYPE-ERROR");
+		assertThat(eval("(handler-case (/ 1 0) (division-by-zero (e) :dbz) (error (e) :plain))").print())
+			.isEqualTo(":DBZ");
+		assertThat(eval("(handler-case (aref (vector 1 2) 5) (type-error (e) :type-error) (error (e) :plain))").print())
+			.isEqualTo(":TYPE-ERROR");
+		assertThat(eval("(handler-case (+ 1 \"a\") (type-error (e) :type-error) (error (e) :plain))").print())
+			.isEqualTo(":TYPE-ERROR");
+		assertThat(
+				eval("(handler-case (no-such-function-xyz 1) (undefined-function (e) :undefined) (error (e) :plain))")
+					.print())
+			.isEqualTo(":UNDEFINED");
+		assertThat(eval(
+				"(handler-case (symbol-value 'no-such-var-xyz) (unbound-variable (e) :unbound) (error (e) :plain))")
+			.print()).isEqualTo(":UNBOUND");
+		// A plain (error "text") stays a simple-error -- nothing named a class.
+		assertThat(eval("(handler-case (error \"boom\") (type-error (e) :wrong) (simple-error (e) :simple))").print())
+			.isEqualTo(":SIMPLE");
+	}
+
+	@Test
+	void aSynthesizedBuiltInConditionStillReportsItsMessage() {
+		// The four synthesized classes carry format-control, so princ prints the
+		// message rather than a bare #<TYPE-ERROR>.
+		assertThat(eval("(handler-case (car 1) (type-error (e) (princ-to-string e)))").print())
+			.isEqualTo("\"car expects a cons cell, got: 1\"");
+		assertThat(eval("(handler-case (/ 1 0) (division-by-zero (e) (princ-to-string e)))").print())
+			.isEqualTo("\"Division by zero\"");
+	}
+
+	@Test
 	void restartBindInvokesFunctionAtInvocationPoint() {
 		assertThat(eval("""
 				(let ((hit nil))
