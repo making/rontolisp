@@ -5,27 +5,28 @@ the prose below it is [`../notes/cloudflare-workers.md`](../notes/cloudflare-wor
 What each Worker is: [examples/cloudflare-workers/](../../examples/cloudflare-workers/).
 How the report is built and run: [../README.md](../README.md).
 
-- measured: 2026-08-14
-- rontolisp: 0.1.0-SNAPSHOT (`f6e6ac2`)
+- measured: 2026-08-15
+- rontolisp: 0.1.0-SNAPSHOT (`7a3cd11`)
 - gzip: `gzip -9 -n` (what Cloudflare counts against the 3 MB compressed bundle limit)
 
 | Worker | Flags | raw (B) | gzip (B) | % of the 3 MB limit |
 | --- | --- | ---: | ---: | ---: |
 | hello | `--no-gc --optimize` | 563 | 428 | 0.0% |
-| hello-clack | `--no-wasi --optimize=size` | 234,043 | 72,515 | 2.3% |
-| hello-tiny-routes | `--no-wasi --optimize=size` | 258,672 | 78,052 | 2.5% |
-| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 690,919 | 182,339 | 5.8% |
-| hello-ningle | `--no-wasi --optimize=size` | 2,269,663 | 524,911 | 16.7% |
-| httpbin | `--no-wasi --host-boundary=streaming --optimize=size` | 155,332 | 50,095 | 1.6% |
-| httpbin-clack | `--no-wasi --host-boundary=streaming --optimize=size` | 250,832 | 77,343 | 2.5% |
-| httpbin-clack-one-source | `--no-wasi --host-boundary=streaming --optimize=size` | 250,441 | 77,020 | 2.4% |
-| httpbin-tiny-routes | `--no-wasi --host-boundary=streaming --optimize=size` | 288,006 | 85,501 | 2.7% |
-| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --host-boundary=streaming --optimize=size` | 720,441 | 190,591 | 6.1% |
-| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,276,636 | 527,857 | 16.8% |
-| dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 267,222 | 81,901 | 2.6% |
-| btc-ticker | `--no-wasi --host-fetch --optimize=size` | 239,963 | 74,865 | 2.4% |
-| btc-ticker (streaming boundary) | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 242,153 | 75,519 | 2.4% |
-| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 149,294 | 48,198 | 1.5% |
+| hello-clack | `--no-wasi --optimize=size` | 237,176 | 73,304 | 2.3% |
+| hello-tiny-routes | `--no-wasi --optimize=size` | 262,809 | 79,189 | 2.5% |
+| hello-tiny-routes (full tiny-routes) | `--no-wasi --optimize=size` | 695,233 | 183,940 | 5.8% |
+| hello-ningle | `--no-wasi --optimize=size` | 2,277,597 | 527,196 | 16.8% |
+| httpbin | `--no-wasi --host-boundary=streaming --optimize=size` | 155,886 | 50,274 | 1.6% |
+| httpbin-clack | `--no-wasi --host-boundary=streaming --optimize=size` | 253,988 | 78,071 | 2.5% |
+| httpbin-clack-one-source | `--no-wasi --host-boundary=streaming --optimize=size` | 253,515 | 77,965 | 2.5% |
+| httpbin-tiny-routes | `--no-wasi --host-boundary=streaming --optimize=size` | 291,192 | 86,548 | 2.8% |
+| httpbin-tiny-routes (full tiny-routes) | `--no-wasi --host-boundary=streaming --optimize=size` | 723,630 | 191,429 | 6.1% |
+| httpbin-ningle | `--no-wasi --host-boundary=streaming --optimize=size` | 2,284,570 | 529,334 | 16.8% |
+| dog-fetcher | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 271,375 | 83,433 | 2.7% |
+| dog-relay | `--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size` | 268,278 | 81,725 | 2.6% |
+| btc-ticker | `--no-wasi --host-fetch --optimize=size` | 243,097 | 75,959 | 2.4% |
+| btc-ticker (streaming boundary) | `--no-wasi --host-fetch --host-boundary=streaming --optimize=size` | 245,293 | 76,726 | 2.4% |
+| httpbin-component (core module) | `--component --no-wasi --optimize=size` | 149,698 | 48,361 | 1.5% |
 
 The component row is the core module alone. Reached through `jco transpile`
 a Worker also imports the generated JavaScript: **116,315 B** of it.
@@ -66,6 +67,13 @@ calls the same `rontolisp:fetch` every backend answers, and `--host-fetch`
 lowers it onto ONE host import, so what separates the two rows is that lowering
 plus the JSON parsing of the upstream answer: a reactor's way out costs an
 import entry and a wrapper, not a transport of its own.
+
+**`dog-relay` is that boundary compiled `--reentrant`.** The flag buys
+overlapped calls on one instance, and what it costs in bytes is the per-call
+machinery it turns on -- the task record for dynamically bound specials, the
+park-block allocator, and the call id every body import now leads with. The row
+is here so that cost is a number that moves rather than a guess; the flag is
+never a size decision either way.
 
 **The two `btc-ticker` rows are the same source on the two host BOUNDARIES**, and
 they are here to keep anyone from selling that choice as a size decision. The
