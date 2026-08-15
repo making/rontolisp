@@ -95,3 +95,9 @@ spelling. Hit while trying to patch uiop from Lisp. Fix belongs to the runtime
 
 - `[[034-local-function-definition]]` (`macrolet`/`symbol-macrolet`)
 - `[[035-type-system]]` (`typep` on `symbol` type)
+
+**Consumer (2026-08-15, rove `.todo/372`)**: `remprop` -- rove's `remove-test`
+is `(remprop name 'test)`; today "the function REMPROP is undefined; compiled as
+a call-time error". Same name-keyed side table as `get`/`(setf get)`
+(`LispPreludeLibrary` `%symbol-plists`), one prelude defun. `macro-function` is
+now `.todo/378` (rove needs the compile-path half too).

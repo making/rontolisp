@@ -90,7 +90,7 @@ anything when BOUND (`.kb/pretty-printer.md` has the table).
 | `*print-circle*` | Show circular structure (no circle detection) |
 | `*print-array*` | Print arrays fully (t = the behavior) |
 | `*print-base*` | Integer base (10 = the behavior) |
-| `*print-case*` | `:upcase` = the behavior |
+| `*print-case*` | `:upcase` = the behavior. **Consumer (2026-08-15, rove `.todo/372`)**: `(let ((*print-case* :downcase)) (princ-to-string name))` is how rove names every test (`deftest` expansion, `run*` patterns) -- SBCL prints `add-test`, we print `ADD-TEST`, so a rove report differs from every other implementation's line for line. `:downcase`/`:capitalize` in `princ`/`prin1`/`~A`/`~S`/`write-to-string`/`princ-to-string`, all four backends, is the piece rove needs |
 | `*print-escape*` | DONE (honored) |
 | `*print-readably*` | DONE (honored) |
 | `*print-gensym*` | Print gensyms specially (t = the behavior) |

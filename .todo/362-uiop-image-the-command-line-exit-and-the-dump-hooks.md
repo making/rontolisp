@@ -66,3 +66,15 @@ impossible. `*image-dumped-p*` is nil.
 printing `(uiop:command-line-arguments)` with arguments passed on all four
 backends -- the driver already runs each backend with its own launcher, so this
 also pins that argument passing agrees, which nothing tests today.
+
+## Consumer: rove (2026-08-15, `.todo/372` spike) -- `uiop:quit`
+
+A test runner must end the process with a non-zero exit code on failure;
+rove's `run` returns `(values passedp results)` and leaves the exit to the
+caller (the roswell script calls `uiop:quit`). Today the only way to exit 1 is
+an uncaught `error` (prints "Unhandled condition: ..."). `uiop:quit` with a code
+on all four backends -- interpreter/JVM through an exit signal `RontoLispCli.main`
+turns into the process code (an embedded `run` must keep throwing, the
+`JvmUncaughtHandler` rule), WASI `proc_exit` / `wasi:cli/exit` on the wasm
+pair -- is the piece `.todo/372`'s testing guide wants to show as
+`(uiop:quit (if (rove:run :my-app/tests) 0 1))`.

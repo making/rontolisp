@@ -76,3 +76,13 @@ is absent is the file-system / pathname layer and the full `write`:
 
 - `[[032-multiple-value-system]]` (`delete-file`, `rename-file`, `file-position` return multiple values)
 - `[[031-lambda-list-extensions]]` (`write`, `file-position` use `&optional`/`&key`)
+
+**Consumer (2026-08-15, rove `.todo/372`)**: `pathname-device` (rove's
+`resolve-file`, undefined -> call-time error stub, dead while
+`asdf:*user-cache*` is nil), `enough-namestring` and the special
+`*default-pathname-defaults*` (rove's `enough-namestring*` -- the special is a
+COMPILE error on the JVM/WASM, "Cannot compile symbol reference:
+ROVE/UTILS/REPORTER::*DEFAULT-PATHNAME-DEFAULTS*", so the file does not even
+compile until it exists; `.todo/357` creates the special, `enough-namestring`
+belongs here). rove only reaches them when printing a source location, which
+is `#+sbcl`-only, so definitions that resolve and answer sensibly are enough.

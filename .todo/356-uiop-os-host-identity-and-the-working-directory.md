@@ -66,3 +66,18 @@ prefer that over a stub, since a stub here is a stub for no reason.
 `(uiop:os-unix-p)`, `(uiop:operating-system)` and a `featurep` expression, so
 the per-backend `*features*` difference is visible in the E2E output rather than
 discovered later.
+
+## Consumer: rove (2026-08-15, `.todo/372` spike) -- `(setf uiop:getenv)`
+
+`getenv` is real, its SETF FUNCTION is not: rove's `with-local-envs` (behind
+`run`'s `:env` option) expands `(setf (uiop:getenv k) v)`, and `expandSetf` ends
+in "setf does not support place: (UIOP:GETENV K)" -- a HARD expansion-time
+error, so `rove:run` cannot compile once it is reachable (the interpreter
+expands defmethod bodies lazily and only fails at the call). Real UIOP defines
+`(defun (setf getenv) (new-value x) ...)` per host. No backend can mutate its
+process environment (the JVM cannot at all, WASI's is read-only), so the
+honest shape is an OVERLAY: `(setf (uiop:getenv k) v)` writes a per-program
+map that `getenv`/`getenvp` consult before the host, all four backends, one
+`environment.lisp`-style definition. `implementation-identifier`, `featurep`
+and friends from the list above are also on rove's read path (`resolve-file`,
+dead while `asdf:*user-cache*` is nil).

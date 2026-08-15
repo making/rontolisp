@@ -59,3 +59,26 @@ Give `*package*` a runtime value on every backend:
 Watch out for: `#.*package*` (sxql splices the value at read time), quoted data
 (`'*package*` is the SYMBOL, not the package), and `PackageResolverTest`'s
 `(QUOTE CL-USER)` assertions, which become the record of the OLD model.
+
+## Consumer: rove (2026-08-15, `.todo/372` spike) -- now a milestone blocker
+
+Rove keys its whole test registry on `*package*` read at RUN time inside its
+own functions and macro expansions, and there is no adaptation that covers it:
+
+- `(defun set-test (name test-fn) (pushnew name (slot-value (package-suite *package*) '%tests)) ...)`
+  runs at each `deftest` (load time of the TEST file); the fold freezes it to
+  `ROVE/CORE/SUITE/PACKAGE`, so every test registers under rove's own package
+  and `(rove:run-suite *package*)` in the test file finds an empty suite ("✓ 0
+  tests completed" -- observed).
+- `setup`/`teardown`/`defhook` EXPAND to `(package-suite *package*)`; on the
+  interpreter a `*package*` inside a macro expansion is never folded and reads
+  "The variable *PACKAGE* is unbound" (observed), on the compile paths it folds
+  to the CALLER's package -- right by accident, and the two backends disagree.
+- `run-suite-tests` binds `(let* ((*package* (suite-package suite))) ...)`
+  around the tests, the dynamic-binding shape.
+
+The sketch above is the fix (dynamic value; `in-package` sets it at run time;
+`load`/the spliced-file markers of `.todo/375` save/restore it; `defpackage`
+untouched). The value stays the keyword `find-package` answers, which is also
+what `.todo/376` dispatches on. Rove's `deftest`+`run-suite` round trip on all
+four backends is the acceptance test to add here.

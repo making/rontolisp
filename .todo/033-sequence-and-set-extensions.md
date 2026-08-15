@@ -56,3 +56,8 @@ RontoLisp has a solid base of sequence functions (`member`, `find`, `count`, `re
 
 - `[[006-sequence-test-key-keywords]]` (:test/:key parity)
 - `[[031-lambda-list-extensions]]` (these functions use `&key`)
+
+**Consumer (2026-08-15, rove `.todo/372`)**: `tree-equal` with `:test` is what
+rove's `expands` assertion compares macroexpansions with
+(`(tree-equal x y :test #'equal-or-both-uninterned-symbol-p)`); today "The
+function TREE-EQUAL is undefined" on every backend.

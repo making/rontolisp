@@ -58,3 +58,54 @@ compile time.
   `make-broadcast-stream` doc page, which currently states the limitation).
 - `.kb/gray-streams.md`: the "Limits" paragraph and the broadcast section's
   re-evaluation trigger both come out.
+
+## Consumer: rove (2026-08-15, `.todo/372` spike) -- the contract widens
+
+Rove's spec reporter writes through its own Gray stream (`rove/misc/stream`):
+
+```lisp
+(defclass indent-stream (trivial-gray-stream-mixin fundamental-character-output-stream)
+  ((stream ...) (level ...) (line-column ...) (fresh-line-p ...)))
+(defmethod stream-write-char ((stream indent-stream) char) ...)   ; the ONLY writer it defines
+(defmethod stream-line-column ((stream indent-stream)) ...)
+(defmethod stream-start-line-p ((stream indent-stream)) ...)
+(defmethod stream-finish-output / stream-force-output / stream-clear-output ((stream indent-stream)) ...)
+```
+
+driven by `fresh-line`, `princ`, `format`, `write-char`, `write-string`. Beyond
+the six operators above, the spike found:
+
+1. `write-char` on a Gray instance routes to `stream-write-string`
+   (`%gray-write-char-dispatch`: "write-char lowers to write-string everywhere,
+   so the dispatch does too") and the base classes have NO default
+   `stream-write-string`, so a class defining only `stream-write-char` -- the
+   Gray protocol's one required method -- fails: "No applicable method:
+   STREAM-WRITE-STRING on INDENT-STREAM". `write-char` must reach
+   `stream-write-char`, and `fundamental-character-output-stream` needs the
+   Gray default `stream-write-string` looping `stream-write-char` (both
+   rontolisp's protocol and the trivial-gray-streams delegations).
+2. New generics with the Gray defaults, in rontolisp's protocol AND as
+   `trivial-gray-streams:` spellings (rove's package `(:use
+   #:trivial-gray-streams)`, so an unknown name silently interns as a dead
+   local generic): `stream-line-column` (default nil), `stream-start-line-p`
+   (default: column known and 0), `stream-terpri` (write-char newline),
+   `stream-fresh-line` (`(unless (stream-start-line-p s) (stream-terpri s) t)` --
+   this is what makes rove's report layout come out right; a stream with no
+   column falls back to the plain newline the item above describes),
+   `stream-finish-output`/`stream-force-output`/`stream-clear-output` (nil),
+   `stream-advance-to-column`. `clear-output` itself does not exist as a
+   built-in ("The function CLEAR-OUTPUT is undefined") -- add it with the other
+   two.
+3. On the COMPILE paths `princ`/`prin1`/`print`/`write`/`terpri`/`fresh-line`/
+   `write-line` on a Gray instance are not rewritten (`GrayStreamsLibrary`
+   rewrites write-string/write-char/format/...; the kb's broadcast section lists
+   `princ` as working, the interpreter's `emitTo` does dispatch it), so the JVM
+   and WASM write the text to standard output PAST the instance: rove's report
+   comes out unindented with the newlines lost, while the interpreter's is
+   right. The rewrite list must cover the whole print family.
+
+Acceptance addition: rove's indent-stream shape (a `stream-write-char`-only
+class with `stream-line-column`/`stream-start-line-p`) receiving `princ`,
+`format`, `fresh-line`, `write-string`, `write-char`, `finish-output` prints the
+same bytes on all four backends (`RoveE2eTest`, `.todo/372`, and a direct
+per-backend pin).
