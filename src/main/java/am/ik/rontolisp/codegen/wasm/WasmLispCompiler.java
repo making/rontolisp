@@ -2093,8 +2093,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// pull and no mid-body failure to warn about.
 				boolean split = declaresImport(program, FetchResponseShape.HOST_BODY_IMPORT_FIELD);
 				CompileWarnings.warn("--host-fetch: this module imports env.fetch(request-json) -> " + (split
-						? "response-head-json"
-								+ " and env.readResponseBody(ptr, cap) -> i32, and every rontolisp:fetch crosses both"
+						? "response-head-json and env.readResponseBody(" + (this.reentrant ? "reply-id, " : "")
+								+ "ptr, cap) -> i32, and every rontolisp:fetch crosses both"
 								+ " -- the head with the call, the reply BODY pulled out of band afterwards (0 = end"
 								+ " of stream, a negative count = the transfer failed mid-body)."
 						: "response-json" + ", and every rontolisp:fetch crosses it whole -- the reply's body rides the"

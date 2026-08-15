@@ -598,7 +598,12 @@ module stays byte-identical (`WasmReentrantCompilerTest`):
   synthesized shapes), `RontoLispCliTest.theStreamingBoundaryComposesWithReentrant`
   (the CLI really threads the flag into the synthesis).
   `dog-fetcher` itself stays streaming + serialised, unchanged -- the controlled
-  comparison with `btc-ticker` is worth keeping.
+  comparison with `btc-ticker` is worth keeping -- and the composed shape ships as
+  `examples/cloudflare-workers/dog-relay` (dog.ceo's own reply relayed chunk by chunk,
+  six concurrent relays in about one round trip; its `src/worker.js` is the fifth
+  `HostGlueEmitterTest` pin). What that example surfaced and deliberately does NOT
+  show: a fetched reply relayed as-is is TEXT (`:body` is a character stream on every
+  backend), so a binary upstream body does not cross byte-exact -- `.todo/370`.
 
 Gates, all in `WasmReentrantE2eTest` (node 24 JSPI): the todo-337 reproduction with its
 expectation INVERTED (two overlapped calls binding one special across a suspend each

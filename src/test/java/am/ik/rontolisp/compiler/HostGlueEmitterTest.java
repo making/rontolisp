@@ -29,18 +29,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Pins the {@code --emit-js-glue} output against the declarations it is derived from --
  * the {@link GlImportObjectTest} rule applied to the host boundary of a {@code --no-wasi}
- * reactor. FOUR shapes, and this asserts every checked-in Worker glue is exactly what its
+ * reactor. FIVE shapes, and this asserts every checked-in Worker glue is exactly what its
  * build writes, so no shipped Worker can drift from the compiler: a reactor that FETCHES
  * on each boundary ({@link am.ik.rontolisp.compiler.HostBoundary}) --
  * {@code dog-fetcher/src/worker.js} streaming and {@code btc-ticker/src/worker.js}
- * envelope, the latter carrying the {@code env.fetch} host half as well -- and a reactor
- * that does not, on each boundary: the {@code hello-*} trio, which imports nothing at
- * all, and the four {@code httpbin-*} directories that go through {@code clackup}.
+ * envelope, the latter carrying the {@code env.fetch} host half as well -- the same
+ * streaming fetcher compiled {@code --reentrant} ({@code dog-relay/src/worker.js}: no
+ * queue, per-call body state keyed by the call id), and a reactor that does not fetch, on
+ * each boundary: the {@code hello-*} trio, which imports nothing at all, and the four
+ * {@code httpbin-*} directories that go through {@code clackup}.
  *
  * <p>
  * The glue is derived from the DECLARATIONS alone, which is why the programs compiled
  * here are a handful of lines rather than the examples' own, and why one file per SHAPE
- * covers seven directories: the same reactor shape declares the same imports and the same
+ * covers eight directories: the same reactor shape declares the same imports and the same
  * {@code handle-request} export, so it emits the same file byte for byte. That is
  * asserted rather than assumed -- every directory in a family is pinned against the one
  * derived string. (Verified: each example's own build writes its file unchanged.)
@@ -60,6 +62,8 @@ class HostGlueEmitterTest {
 	private static final List<Path> WORKER_GLUE = glueIn("dog-fetcher");
 
 	private static final List<Path> TICKER_GLUE = glueIn("btc-ticker");
+
+	private static final List<Path> RELAY_GLUE = glueIn("dog-relay");
 
 	// One file between three directories, and one between four: the glue is derived from
 	// the declarations, and these carry the same ones. The claim their READMEs make is
@@ -108,6 +112,32 @@ class HostGlueEmitterTest {
 
 	@Test
 	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
+	void theCheckedInRelayGlueIsWhatAReentrantStreamingReactorBuildWrites() throws IOException {
+		assertPinned(RELAY_GLUE, reentrantReactorGlue());
+	}
+
+	@Test
+	void theReentrantGlueKeysItsBodyStateByCallId() {
+		String glue = reentrantReactorGlue();
+		// No queue -- overlap is the point -- and the per-call body state is a map
+		// keyed by the id worker() mints per request and the envelope carries; the
+		// reply readers are keyed by the id defaultHost() mints per fetch.
+		assertThat(glue).doesNotContain("queue.then(work, work)")
+			.doesNotContain("serially")
+			.contains("handleRequest: make$handleRequest((work) => work()),")
+			.contains("\"" + ReactorEnvelope.CALL_ID_KEY + "\": callId,")
+			.contains("requestBodies.set(callId, octets);")
+			.contains("responseChunks.get(id)?.push(chunk)")
+			.contains("\"" + FetchResponseShape.HOST_BODY_ID_KEY + "\": id,")
+			.contains("upstreams.get(id)")
+			// ...and no single-slot cursor, no drop-on-entry, no lisp thunk.
+			.doesNotContain("readers.forEach((drop) => drop());")
+			.doesNotContain("defaultHost(() => instance)")
+			.contains("const base = defaultHost();");
+	}
+
+	@Test
+	@DisabledIfSystemProperty(named = "rontolisp.glue.fix", matches = "true")
 	void theCheckedInHelloGlueIsWhatAnAnsweringEnvelopeReactorBuildWrites() throws IOException {
 		assertPinned(HELLO_GLUE, answeringEnvelopeGlue());
 	}
@@ -136,6 +166,7 @@ class HostGlueEmitterTest {
 	void fixWorkerGlue() throws IOException {
 		write(WORKER_GLUE, fetchingReactorGlue());
 		write(TICKER_GLUE, envelopeReactorGlue());
+		write(RELAY_GLUE, reentrantReactorGlue());
 		write(HELLO_GLUE, answeringEnvelopeGlue());
 		write(HTTPBIN_GLUE, answeringStreamingGlue());
 	}
@@ -366,6 +397,10 @@ class HostGlueEmitterTest {
 		return reactorGlue(FETCHING_REACTOR, HostBoundary.ENVELOPE, true);
 	}
 
+	private static String reentrantReactorGlue() {
+		return reactorGlue(FETCHING_REACTOR, HostBoundary.STREAMING, true, true);
+	}
+
 	private static String answeringEnvelopeGlue() {
 		return reactorGlue(ANSWERING_REACTOR, HostBoundary.ENVELOPE, false);
 	}
@@ -379,18 +414,22 @@ class HostGlueEmitterTest {
 	// the only differences between the four shipped shapes' glue, which is the point of
 	// running one pipeline four times rather than writing four.
 	private static String reactorGlue(String source, HostBoundary boundary, boolean hostFetch) {
+		return reactorGlue(source, boundary, hostFetch, false);
+	}
+
+	private static String reactorGlue(String source, HostBoundary boundary, boolean hostFetch, boolean reentrant) {
 		List<LispVal> loaded = HttpReactorInliner
 			.lowerHttpHandler(LispReader.readAllFromString(source, Features.WASM_REACTOR));
 		if (hostFetch) {
-			loaded = HostFetchLibrary.process(loaded, boundary);
+			loaded = HostFetchLibrary.process(loaded, boundary, reentrant);
 		}
-		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary);
+		loaded = HttpReactorInliner.process(loaded, WitExportDirective.Backend.WASM_GC, true, boundary, reentrant);
 		loaded = HttpReactorLibrary.process(loaded);
 		loaded = HttpServerLibrary.process(loaded, false);
 		List<LispVal> program = GrayStreamsLibrary
 			.process(LispPreludeLibrary.process(JsonLibrary.process(UserMacroExpander.expand(loaded))));
 		WasmLispCompiler compiler = new WasmLispCompiler(false, false, true, OptimizeLevel.NONE, false, false, false,
-				hostFetch);
+				hostFetch, reentrant);
 		compiler.compile(program);
 		return glue(compiler, "worker.js");
 	}

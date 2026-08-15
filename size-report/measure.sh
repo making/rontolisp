@@ -275,6 +275,7 @@ worker_builds=(
   "httpbin-tiny-routes (full tiny-routes)|examples/cloudflare-workers/httpbin-tiny-routes/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|s|tiny-routes/lite|tiny-routes|g"
   "httpbin-ningle|examples/cloudflare-workers/httpbin-ningle/worker.lisp|--no-wasi --host-boundary=streaming --optimize=size|"
   "dog-fetcher|examples/cloudflare-workers/dog-fetcher/worker.lisp|--no-wasi --host-fetch --host-boundary=streaming --optimize=size|"
+  "dog-relay|examples/cloudflare-workers/dog-relay/worker.lisp|--no-wasi --host-fetch --host-boundary=streaming --reentrant --optimize=size|"
   "btc-ticker|examples/cloudflare-workers/btc-ticker/worker.lisp|--no-wasi --host-fetch --optimize=size|"
   "btc-ticker (streaming boundary)|examples/cloudflare-workers/btc-ticker/worker.lisp|--no-wasi --host-fetch --host-boundary=streaming --optimize=size|"
   "httpbin-component (core module)|examples/cloudflare-workers/httpbin/worker.lisp|--component --no-wasi --optimize=size|"

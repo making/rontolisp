@@ -10,7 +10,9 @@ point of the set is how differently the same endpoints come out, so the versions
 share no code and are not meant to diff cleanly against each other. Two more
 directories are about the **boundary** rather than the library:
 [`dog-fetcher/`](dog-fetcher) and [`btc-ticker/`](btc-ticker) both call out over
-HTTP, on the two shapes `--host-boundary` chooses between.
+HTTP, on the two shapes `--host-boundary` chooses between, and
+[`dog-relay/`](dog-relay) is the streaming shape compiled `--reentrant`, serving
+its requests overlapped on one instance.
 
 Module sizes are measured rather than quoted here:
 [`size-report/results/cloudflare-workers.md`](../../size-report/results/cloudflare-workers.md).
@@ -29,6 +31,7 @@ Module sizes are measured rather than quoted here:
 | [`httpbin-component/`](httpbin-component) | The same `httpbin` source through the component model (`--component --no-wasi` + `jco transpile`) instead of raw linear memory | 37 lines + generated glue |
 | [`dog-fetcher/`](dog-fetcher) | **Outgoing HTTP, streaming bodies.** A proxy over [dog.ceo](https://dog.ceo), routed with `tiny-routes/lite`. `rontolisp:fetch` is wasi:http and a reactor has no WASI, so the client is the host's own `fetch`, imported and bridged with JSPI | GENERATED, and all of it: `src/index.js` is three lines |
 | [`btc-ticker/`](btc-ticker) | **The Worker with nothing in it.** One outgoing request, one JSON answer — on the DEFAULT boundary, where every body rides the envelope and the module imports exactly one function | GENERATED, and all of it: `src/index.js` is three lines |
+| [`dog-relay/`](dog-relay) | **Overlapped calls, relayed bodies.** Forwards dog.ceo's own reply chunk by chunk, and is compiled `--reentrant` so concurrent requests overlap on ONE instance instead of queueing — the streaming boundary with a call id on every body import | GENERATED, and all of it: `src/index.js` is three lines |
 
 ## Which one should I copy?
 
@@ -63,6 +66,10 @@ Module sizes are measured rather than quoted here:
   the body imports too, so this `src/index.js` is also three lines. It is where
   the synchronous-Lisp/asynchronous-JavaScript seam is explained in full; both
   directories rely on it.
+- **`dog-relay/`** when the Worker is I/O-bound and cannot afford a queue: each
+  request is mostly time parked on an upstream, so `--reentrant` lets them
+  overlap on one instance (six concurrent relays in about one round trip). It
+  is dog-fetcher's boundary plus that flag; read dog-fetcher first.
 - **`httpbin-component/`** answers a question rather than being a
   recommendation: *wouldn't the component model be simpler?* For the string
   marshalling, yes. Everywhere else, no.

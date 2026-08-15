@@ -35,6 +35,13 @@ lowers it onto ONE host import, so what separates the two rows is that lowering
 plus the JSON parsing of the upstream answer: a reactor's way out costs an
 import entry and a wrapper, not a transport of its own.
 
+**`dog-relay` is that boundary compiled `--reentrant`.** The flag buys
+overlapped calls on one instance, and what it costs in bytes is the per-call
+machinery it turns on -- the task record for dynamically bound specials, the
+park-block allocator, and the call id every body import now leads with. The row
+is here so that cost is a number that moves rather than a guess; the flag is
+never a size decision either way.
+
 **The two `btc-ticker` rows are the same source on the two host BOUNDARIES**, and
 they are here to keep anyone from selling that choice as a size decision. The
 first is `--host-boundary=envelope` (every body rides the JSON envelope; the

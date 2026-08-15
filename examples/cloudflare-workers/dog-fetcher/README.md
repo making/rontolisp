@@ -196,8 +196,11 @@ program) compiles to the same reactor shape with no edit at all.
 The Worker sandbox and `--no-wasi` limitations of
 [`../hello-clack`](../hello-clack/README.md#limitations) apply unchanged, plus:
 
-- **One in-flight request per isolate**, as above. Overlapping them needs an
-  allocator scope per call, not just a second mark.
+- **One in-flight request per isolate**, as above. Overlapping them is what
+  `--reentrant` buys — the module then owns its per-call state, and the body
+  imports carry a call id — and [`../dog-relay`](../dog-relay) is this boundary
+  with that flag; this directory deliberately stays serialised, as the
+  controlled comparison with `../btc-ticker`.
 - **Started == settled, and settled means the HEAD.** The reactor's fetch
   future is settled at creation (the host call blocked the stack until the
   headers), so two fetches never overlap and a transport failure *before* the
