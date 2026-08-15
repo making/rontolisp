@@ -6426,6 +6426,58 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunGrayOutputProtocolWidening() throws Exception {
+		// todo-252: the line-oriented and print-family operators reach a Gray
+		// instance on the compile path too. A class defining ONLY stream-write-char
+		// (rove's indent-stream shape) answers all of them, and its column protocol
+		// is what fresh-line consults.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gw-col (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "") (col :initform 0)))
+					(defmethod rontolisp:stream-write-char ((s gw-col) c)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+					  (setf (slot-value s 'col) (if (char= c #\\Newline) 0 (+ (slot-value s 'col) 1)))
+					  c)
+					(defmethod rontolisp:stream-line-column ((s gw-col)) (slot-value s 'col))
+					(let ((s (make-instance 'gw-col)))
+					  (write-char #\\a s)
+					  (write-string "bc" s)
+					  (princ "-" s)
+					  (prin1 :k s)
+					  (fresh-line s)
+					  (fresh-line s)
+					  (terpri s)
+					  (write-line "l" s)
+					  (print 7 s)
+					  (format s "f~a" 1)
+					  (force-output s)
+					  (finish-output s)
+					  (clear-output s)
+					  (print (list (slot-value s 'acc) (close s))))
+					(write-line "past" t)
+					"""))))).isEqualTo("(\"abc-:K\n\nl\n7\nf1\" T)\npast");
+	}
+
+	@Test
+	void compileAndRunGrayCloseStandsDownForAProgramThatMethodsClose() throws Exception {
+		// close is CL's own generic: a program that defines a method on it owns the
+		// operator, so the Gray rewrite leaves every close call site alone and the
+		// shadowed-built-in dispatcher answers -- for the Gray class AND for a
+		// handle.
+		assertThat(compileAndRun(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gc-s (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "")))
+					(defmethod rontolisp:stream-write-char ((s gc-s) c) c)
+					(defmethod close ((s gc-s) &key abort)
+					  (declare (ignore abort))
+					  :by-method)
+					(print (close (make-instance 'gc-s)))
+					"""))))).isEqualTo(":BY-METHOD");
+	}
+
+	@Test
 	void grayRewriteLeavesASlotNamedAfterAStreamBuiltinAlone() throws Exception {
 		// A defclass/define-condition SLOT SPEC is data whose head is the slot name.
 		// chipz's (format :initarg :format :reader invalid-format) slot was read as a
@@ -7508,12 +7560,12 @@ class JvmLispCompilerTest {
 
 	@Test
 	void compileAndRunListFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("393");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("394");
 	}
 
 	@Test
 	void compileAndRunListFunctionsAcceptsBareSymbolDesignator() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("393");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions cl)))")).isEqualTo("394");
 	}
 
 	@Test

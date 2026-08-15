@@ -21,12 +21,11 @@
 ```
 
 コンポーネントを**持つ**ブロードキャストストリームは
-[Gray ストリーム](../../guides/gray-streams.md)なので、Gray ストリームにディスパッチ
-する演算子だけが使えます: [`format`](../macros/format.md)、[`princ`](princ.md)、
-[`prin1`](prin1.md)、[`write-string`](write-string.md)、`write-char` です。
+[Gray ストリーム](../../guides/gray-streams.md)なので、出力プロトコル全体が使えます:
+[`format`](../macros/format.md)、[`princ`](princ.md)、[`prin1`](prin1.md)、
+[`print`](print.md)、[`write-string`](write-string.md)、`write-char`、
 [`terpri`](terpri.md)、[`fresh-line`](fresh-line.md)、[`write-line`](write-line.md)、
-[`print`](print.md)、[`force-output`](force-output.md)、
-[`finish-output`](finish-output.md)、[`close`](close.md) はここではそのプロトコルに
-含まれず、ブロードキャストかどうかによらず Gray ストリームに対してシグナルを発生
-させます。改行は `(format s "~%")` で書いてください。コンポーネントのないシンクは
-通常の文字列出力ストリームなので、これらすべてを受け付けます。
+[`force-output`](force-output.md)、[`finish-output`](finish-output.md)、
+[`clear-output`](clear-output.md)、[`close`](close.md) です。
+ブロードキャストストリームは桁位置を追跡しないため行頭かどうかを判断できず、
+`fresh-line` は常に改行を書き込みます。

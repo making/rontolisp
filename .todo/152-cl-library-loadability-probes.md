@@ -92,7 +92,8 @@ verification against the actual Quicklisp dist at probe time)
   with the cross-language table. `(ql:quickload "salza2")` is all it takes to
   bring back; known limits at the time: `salza2:reset` needs `fill` (now present,
   unretested), and `stream.lisp`'s `compressing-stream` compiles with an
-  undefined `stream-error-stream` (`.todo/252`).
+  undefined `stream-error-stream` (a condition accessor no part of the Gray
+  protocol supplies, `.kb/gray-streams.md`; unowned).
 
 ## Deliverable
 

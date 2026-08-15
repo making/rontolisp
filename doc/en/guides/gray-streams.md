@@ -15,7 +15,14 @@ leaves (all in the `rontolisp` package).
 
 | built-in | dispatches to |
 | --- | --- |
-| `write-string`, `write-char`, `format` (stream destination) | `rontolisp:stream-write-string` (`write-char` lowers to a one-character write) |
+| `write-char` | `rontolisp:stream-write-char` |
+| `write-string`, `format` (stream destination) | `rontolisp:stream-write-string` |
+| `princ`, `prin1`, `print` | `rontolisp:stream-write-string` of the rendered text (`print` then `stream-terpri`) |
+| `terpri` | `rontolisp:stream-terpri` (default method writes a newline through `stream-write-char`) |
+| `fresh-line` | `rontolisp:stream-fresh-line` (default method: `stream-terpri` unless `stream-start-line-p`) |
+| `write-line` | `rontolisp:stream-write-string` then `rontolisp:stream-terpri` |
+| `force-output` / `finish-output` / `clear-output` | `rontolisp:stream-force-output` / `-finish-output` / `-clear-output` (default methods answer `nil`) |
+| `close` | answers `t` -- see below |
 | `write-byte` | `rontolisp:stream-write-byte` |
 | `read-byte` | `rontolisp:stream-read-byte` |
 | `read-char` | `rontolisp:stream-read-char` |
@@ -23,6 +30,42 @@ leaves (all in the `rontolisp` package).
 | `listen` | `rontolisp:stream-listen` (default method answers `nil`) |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (default methods loop the element generics) |
 | `file-position` | `rontolisp:stream-file-position`; the two-argument form calls the `(setf rontolisp:stream-file-position)` writer generic |
+
+A character output stream defines **`stream-write-char` or `stream-write-string`
+-- either one is enough**. Each has a default method written in terms of the
+other, so the rest of the output protocol composes out of whichever you wrote.
+(Defining neither is the one broken shape: the two defaults then call each
+other.)
+
+Two more generics have no built-in of their own but are what the line-oriented
+operators consult: `rontolisp:stream-line-column` answers the stream's current
+column, or `nil` (the default) for a stream that tracks none, and
+`rontolisp:stream-start-line-p` answers from it. A stream with no column cannot
+tell whether it is at the start of a line, so `fresh-line` on it always writes
+the newline. `rontolisp:stream-advance-to-column` rounds out the protocol for a
+program that calls it directly.
+
+Closing a Gray stream answers `t` and does nothing else -- there is nothing to
+release. A stream that DOES hold something writes CL's own spelling, a method on
+`close` itself:
+
+```lisp
+(defclass closing-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "") (openp :initform t)))
+(defmethod rontolisp:stream-write-char ((s closing-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+  c)
+(defmethod close ((s closing-stream) &key abort)
+  (declare (ignore abort))
+  (setf (slot-value s 'openp) nil)
+  t)
+(let ((s (make-instance 'closing-stream)))
+  (write-string "bye" s)
+  (list (close s) (slot-value s 'openp))) ; => (T NIL)
+```
+
+Such a method dispatches on every backend. A program that defines one owns
+`close` outright: the Gray default steps aside for it.
 
 On the read side the methods answer the keyword `:eof` at end of stream; the
 built-ins translate that through the usual `eof-error-p` / `eof-value`
@@ -40,6 +83,26 @@ means "no characters left at all".
   (write-string "hello" s)
   (write-char #\! s)
   (slot-value s 'acc)) ; => "HELLO!"
+```
+
+A `stream-write-char`-only stream that tracks its column, so `fresh-line` can
+tell whether it has to break the line:
+
+```lisp
+(defclass column-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "") (col :initform 0)))
+(defmethod rontolisp:stream-write-char ((s column-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+  (setf (slot-value s 'col) (if (char= c #\Newline) 0 (+ (slot-value s 'col) 1)))
+  c)
+(defmethod rontolisp:stream-line-column ((s column-stream)) (slot-value s 'col))
+(let ((s (make-instance 'column-stream)))
+  (princ "one" s)
+  (fresh-line s)      ; column 3 -> writes the newline
+  (fresh-line s)      ; column 0 -> writes nothing
+  (write-line "two" s)
+  ;; newlines shown as / so the whole answer fits on one line
+  (substitute #\/ #\Newline (slot-value s 'acc))) ; => "one/two/"
 ```
 
 A binary input stream with the `file-position` protocol:
@@ -72,9 +135,14 @@ above (see [Systems](asdf-systems.md#built-in-shim-systems)): the
 `trivial-gray-streams` package mirrors every base class (plus
 `trivial-gray-stream-mixin`) and every generic, including
 `stream-read-sequence` / `stream-write-sequence` `(stream sequence start end
-&key)` and `stream-file-position` with its `(setf ...)` writer — this is how
+&key)`, `stream-file-position` with its `(setf ...)` writer, and the output
+family `stream-line-column` / `stream-start-line-p` / `stream-terpri` /
+`stream-fresh-line` / `stream-advance-to-column` / `stream-force-output` /
+`stream-finish-output` / `stream-clear-output` — this is how
 jzon's `:stream` writer API runs, and the class shape fast-io and
-circular-streams define loads unchanged.
+circular-streams define loads unchanged. The defaults are the same ones the
+rontolisp protocol has, so a portable class that defines only
+`trivial-gray-streams:stream-write-char` still answers every operator above.
 
 ```lisp
 (asdf:load-system "trivial-gray-streams")
@@ -98,9 +166,10 @@ circular-streams define loads unchanged.
 
 ## Limits
 
-- `rontolisp:stream-unread-char` exists as a protocol generic but no built-in
-  dispatches to it (`unread-char` is not a built-in); `peek-char` does not
-  dispatch to Gray instances either.
+- `rontolisp:stream-unread-char` and `rontolisp:stream-advance-to-column` exist
+  as protocol generics but no built-in dispatches to them (`unread-char` is not
+  a built-in, and `format`'s `~T` does not consult the column); `peek-char` does
+  not dispatch to Gray instances either.
 - The read generics return primary values only: `stream-read-line` has no
   `(values line missing-newline-p)` pair — `:eof` is the whole EOF signal.
 - `listen` on a Gray instance works on the interpreter and the JVM; the

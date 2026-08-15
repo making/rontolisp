@@ -8,14 +8,44 @@ onto it and the core knows no third-party name.
 `rontolisp:fundamental-stream` at the root, `-input-stream`/`-output-stream`
 below it, `-character-input/-output-stream` and `-binary-input/-output-stream`
 as leaves — plus the generics `stream-write-char`, `stream-write-string
-(stream string &optional start end)`, `stream-write-byte`, `stream-read-byte`,
-`stream-read-char`, `stream-unread-char` (protocol-only, no built-in
-dispatches), `stream-read-line`, `stream-listen`, `stream-read-sequence` /
-`stream-write-sequence` `(stream sequence start end)` (end always an integer by
-method time), `stream-file-position` and its `(setf ...)` writer generic
-(todo-232 setf methods) — all plain CLOS-subset definitions, so the whole
-protocol is backend-free expansion output, no codegen. **Read-side EOF
-convention: the read generics answer the keyword `:eof`**; the dispatch layer
+(stream string &optional start end)`, `stream-write-byte`, the line/column
+family `stream-line-column`, `stream-start-line-p`, `stream-terpri`,
+`stream-fresh-line`, `stream-advance-to-column`, the flush family
+`stream-force-output` / `stream-finish-output` / `stream-clear-output`,
+`stream-read-byte`, `stream-read-char`, `stream-unread-char` (protocol-only, no
+built-in dispatches), `stream-read-line`, `stream-listen`,
+`stream-read-sequence` / `stream-write-sequence` `(stream sequence start end)`
+(end always an integer by method time), `stream-file-position` and its
+`(setf ...)` writer generic (todo-232 setf methods) — all plain CLOS-subset
+definitions, so the whole protocol is backend-free expansion output, no codegen.
+
+**Exactly ONE of `stream-write-char` / `stream-write-string` is required**
+(todo-252). Each has a default method on
+`fundamental-character-output-stream` written in terms of the other
+(`%gray-default-write-string` loops the char generic, `%gray-default-write-char`
+hands the one-character string to the string generic), so a class defines
+whichever it can and inherits the rest of the output protocol. This is
+deliberately WIDER than full Gray, which requires `stream-write-char`: before
+todo-252 `write-char` LOWERED to `write-string` on every seam, so
+`stream-write-char`-only classes — rove's `indent-stream`, the Gray protocol's
+one required method — died with "No applicable method: STREAM-WRITE-STRING",
+while `stream-write-string`-only classes (rontolisp's own broadcast stream,
+jzon's writer, the doc page's example) are what every existing program had
+written. Keeping only one side would have broken the other. **Defining NEITHER
+is the one degenerate shape: the two defaults then call each other** — a
+programming error in any implementation (SBCL signals "no applicable method"),
+here a recursion instead of a message.
+
+Everything above the two element generics composes out of them:
+`stream-terpri` writes a newline through `stream-write-char`,
+`stream-start-line-p` answers from `stream-line-column` (default `nil` = "this
+stream tracks no column", which is what makes `fresh-line` break the line
+unconditionally, the same rule the handle-based built-in follows for a file
+stream), `stream-fresh-line` is
+`(unless (stream-start-line-p s) (stream-terpri s) t)`, and the flush trio
+answers nil (no backend buffers output in a way a program could discard).
+
+**Read-side EOF convention: the read generics answer the keyword `:eof`**; the dispatch layer
 translates it into the `eof-error-p`/`eof-value` contract, signalling
 `(error 'end-of-file)` (same class + "end of file" message as the built-ins).
 `stream-read-line` answers a partial last line as that line and returns
@@ -41,7 +71,40 @@ does not exist yet. A pipeline that splices gray.lisp must therefore run
 write-string/char, write-byte, read-byte/char/line (read-line's eof-error-p
 defaults NIL — the built-in's lite convention; read-byte/char default T),
 listen, read-sequence/write-sequence (normalize a missing end to
-`(length sequence)`), file-position get/set.
+`(length sequence)`), file-position get/set, and (todo-252) terpri, fresh-line,
+write-line, princ/prin1/print, force-output/finish-output/clear-output, close.
+
+**The print-family helpers RENDER and then write**: `%gray-princ-dispatch` /
+`-prin1-dispatch` / `-print-dispatch` call `princ-to-string` / `prin1-to-string`
+and hand the text to `stream-write-string`, so a `print-object` method still
+decides the text (the print-object rewrite hooks exactly those two conversions,
+`LispMacroExpander.expandPrintObjectHook`, and it runs over gray.lisp's bodies
+like any other code) and the instance receives the same bytes the handle-based
+built-in would have written — `print`'s TRAILING newline included, which is
+where rontolisp's `print` puts it (`.todo/215`).
+
+`%gray-fresh-line-dispatch` answers **nil**, like the handle-based `fresh-line`,
+rather than `stream-fresh-line`'s CL-shaped t/nil: the value of the operator
+must not depend on which kind of stream it was handed. The generic's own answer
+is still what a direct caller and the shim's delegation see.
+
+**`close` is the one operator a program can OWN, and the rewrite stands down for
+it.** CL spells a stream's close as a method on `close` ITSELF, and a
+`defmethod` on a built-in name already dispatches on every backend
+(`.kb/clos.md`, todo-237) — fast-io's `(defmethod close ((stream
+fast-output-stream) &key abort) ...)` is exactly that, pinned by
+`FastIoCircularStreamsE2eTest`. So there is deliberately **no
+`rontolisp:stream-close` generic** competing with it (the name is taken by the
+async-stream API anyway), `%gray-close-dispatch` simply answers `t` for an
+instance, and both seams decline the dispatch when the program defines a `close`
+method: `GrayStreamsLibrary.ownsClose` scans the program for a `defmethod`/
+`defgeneric` named `close`, the interpreter's wrap asks
+`closRegistry.findGeneric(CLOSE)`. Same condition, so the two agree. Two
+consequences worth knowing: a Gray program with no `close` method now answers
+`t` for `(close <any instance>)` rather than signalling "CLOSE expects a
+stream", and `%gray-close-dispatch` is the ONE helper that does not resolve a
+synonym stream first — closing a synonym closes the synonym (CLHS 21.1.3), which
+its instance arm already answers.
 
 **Interpreter dispatch**: `LispEvaluator` wraps the built-ins — the wrap
 resolves a synonym stream first (`resolveSynonymArg`, the Java twin of the
@@ -50,11 +113,17 @@ helpers' `%synonym-target` hop) and then, when the stream argument is an INSTANC
 lazy-loads `gray.lisp` (`ensureGrayStreamsLoaded`) and applies the matching
 `%gray-*-dispatch` defun (`applyGrayDispatch`); non-instances go straight to
 the base built-in (the helpers' fallbacks re-enter the wraps, one extra hop, no
-recursion). `read-sequence`/`write-sequence` are macro expansions, not
+recursion). The whole line/print/flush family rides ONE shared wrap builder,
+`wrapGrayOutputOperator(name, streamIndex, helper)` — the stream sits at
+argument 0 for terpri/fresh-line/force-output/finish-output/clear-output and at
+argument 1 for write-line/princ/prin1/print — so a new operator is one line and
+cannot drift from the helper it names. `read-sequence`/`write-sequence` and
+`write-char` are macro expansions, not
 functions, so they are intercepted at `evalCons`
-(`evalSequenceWithGrayDispatch`): seq and stream evaluate once, an instance
-routes to the sequence dispatch helper, anything else re-enters the shared
-expansion with the two evaluated values QUOTED in place (no double
+(`evalSequenceWithGrayDispatch`, `evalWriteCharWithGrayDispatch`): the
+arguments evaluate once, an instance
+routes to the dispatch helper, anything else re-enters the shared
+expansion with the evaluated values QUOTED in place (no double
 evaluation). A `defclass` naming a Gray base class as a superclass eager-loads
 `gray.lisp` (`referencesGrayBaseClass`/`GRAY_BASE_CLASSES` — all seven class
 names) — without that, a bare-protocol user class died on "unknown
@@ -73,7 +142,12 @@ every stream-taking call with an explicit non-literal stream (not
 `write-string`/`write-char`, `write-byte`, `read-byte`/`read-char`/`read-line`
 (absent eof args become their literal defaults), `listen`, `file-position`
 (1-arg -> get helper, 2-arg -> set helper), `read-sequence`/`write-sequence`
-(literal `:start`/`:end` keywords parsed, missing end stays nil) — and (3)
+(literal `:start`/`:end` keywords parsed, missing end stays nil), the unary
+`(op STREAM)` family `terpri`/`fresh-line`/`force-output`/`finish-output`/
+`clear-output`/`close` and the `(op VALUE STREAM)` family
+`write-line`/`princ`/`prin1`/`print` — the stream-LESS spelling of each writes
+to `*standard-output*`, can never be an instance, and is left alone, which is
+also what keeps a program that names no stream byte-identical — and (3)
 **splices ONLY the dispatch defuns the rewrites referenced**
 (`SPLICE_ON_USE`, collected via `dispatchSymbol`; `WRITE_CHAR_DISPATCH`
 transitively pulls `WRITE_STRING_DISPATCH`). Selective splicing is
@@ -186,7 +260,13 @@ call site to rewrite). `stream-read-sequence`/`-write-sequence` methods are
 honored on BOTH seams (the rewrite and `evalSequenceWithGrayDispatch` route to
 the same sequence dispatch helper). A runtime-nil `format` destination used to
 write like a designator instead of returning the string; that divergence is
-RETIRED (see the run-time test in the rewrite above).
+RETIRED (see the run-time test in the rewrite above). The OUTPUT protocol
+stopping at the two write generics — `terpri`/`fresh-line`/`write-line`/
+`force-output`/`finish-output`/`print` signalling "not an output stream" on any
+Gray instance, and `princ`/`print` writing PAST the instance on the compile
+paths — is retired too (todo-252); what is left of that boundary is
+`stream-advance-to-column`, which has no dispatching built-in (`format`'s
+`~T` does not consult it).
 
 ## `make-broadcast-stream` is a Gray stream (todo-249)
 
@@ -201,13 +281,13 @@ only) is gone.
 
 The consequence is worth stating plainly, because it is the price of the design:
 **a broadcast stream with components is a Gray stream, so exactly the operators
-that dispatch on one work with it** -- `format`, `princ`, `write-string`,
-`write-char`. `terpri` / `fresh-line` / `write-line` / `force-output` /
-`finish-output` / `print` / `close` are not part of the protocol here and signal
-on ANY Gray stream, broadcast or not (see Limits above); that is a pre-existing
-protocol boundary this feature inherits rather than one it introduces.
-Widening the protocol to those five is the re-evaluation trigger: do it and
-broadcast streams gain them for free.
+that dispatch on one work with it**. Since todo-252 that is the whole output
+protocol -- `format`, `princ`/`prin1`/`print`, `write-string`/`write-char`,
+`terpri`/`fresh-line`/`write-line`, `force-output`/`finish-output`/
+`clear-output`, `close` -- and it costs the broadcast stream nothing, because
+the widening happened in the protocol rather than per stream kind. `fresh-line`
+on one always breaks the line: a broadcast stream tracks no column, and
+`stream-line-column`'s nil default is what makes that unconditional.
 
 A component-LESS `(make-broadcast-stream)` is unchanged -- the same discarding
 `%make-string-output-stream` handle it always returned -- but note it now rides

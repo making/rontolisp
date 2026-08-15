@@ -55,6 +55,22 @@
 
 (defgeneric trivial-gray-streams:stream-write-byte (stream byte))
 
+(defgeneric trivial-gray-streams:stream-line-column (stream))
+
+(defgeneric trivial-gray-streams:stream-start-line-p (stream))
+
+(defgeneric trivial-gray-streams:stream-terpri (stream))
+
+(defgeneric trivial-gray-streams:stream-fresh-line (stream))
+
+(defgeneric trivial-gray-streams:stream-advance-to-column (stream column))
+
+(defgeneric trivial-gray-streams:stream-force-output (stream))
+
+(defgeneric trivial-gray-streams:stream-finish-output (stream))
+
+(defgeneric trivial-gray-streams:stream-clear-output (stream))
+
 (defgeneric trivial-gray-streams:stream-read-byte (stream))
 
 (defgeneric trivial-gray-streams:stream-read-char (stream))
@@ -89,6 +105,38 @@
 (defmethod rontolisp:stream-write-byte
     ((stream trivial-gray-streams:fundamental-output-stream) byte)
   (trivial-gray-streams:stream-write-byte stream byte))
+
+(defmethod rontolisp:stream-line-column
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (trivial-gray-streams:stream-line-column stream))
+
+(defmethod rontolisp:stream-start-line-p
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (trivial-gray-streams:stream-start-line-p stream))
+
+(defmethod rontolisp:stream-terpri
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (trivial-gray-streams:stream-terpri stream))
+
+(defmethod rontolisp:stream-fresh-line
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (trivial-gray-streams:stream-fresh-line stream))
+
+(defmethod rontolisp:stream-advance-to-column
+    ((stream trivial-gray-streams:fundamental-character-output-stream) column)
+  (trivial-gray-streams:stream-advance-to-column stream column))
+
+(defmethod rontolisp:stream-force-output
+    ((stream trivial-gray-streams:fundamental-output-stream))
+  (trivial-gray-streams:stream-force-output stream))
+
+(defmethod rontolisp:stream-finish-output
+    ((stream trivial-gray-streams:fundamental-output-stream))
+  (trivial-gray-streams:stream-finish-output stream))
+
+(defmethod rontolisp:stream-clear-output
+    ((stream trivial-gray-streams:fundamental-output-stream))
+  (trivial-gray-streams:stream-clear-output stream))
 
 (defmethod rontolisp:stream-read-byte
     ((stream trivial-gray-streams:fundamental-input-stream))
@@ -130,6 +178,48 @@
 ;; without these, the delegating methods above would shadow the rontolisp
 ;; base-class defaults for an adapter class that defines only the element
 ;; generics.
+
+(defmethod trivial-gray-streams:stream-write-string ((stream
+                                                      trivial-gray-streams:fundamental-character-output-stream)
+                                                     string &optional start end)
+  (rontolisp::%gray-default-write-string stream string start end))
+
+(defmethod trivial-gray-streams:stream-write-char ((stream
+                                                    trivial-gray-streams:fundamental-character-output-stream)
+                                                   character)
+  (rontolisp::%gray-default-write-char stream character))
+
+(defmethod trivial-gray-streams:stream-line-column
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  nil)
+
+(defmethod trivial-gray-streams:stream-start-line-p
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (rontolisp::%gray-default-start-line-p stream))
+
+(defmethod trivial-gray-streams:stream-terpri
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (rontolisp::%gray-default-terpri stream))
+
+(defmethod trivial-gray-streams:stream-fresh-line
+    ((stream trivial-gray-streams:fundamental-character-output-stream))
+  (rontolisp::%gray-default-fresh-line stream))
+
+(defmethod trivial-gray-streams:stream-advance-to-column
+    ((stream trivial-gray-streams:fundamental-character-output-stream) column)
+  (rontolisp::%gray-default-advance-to-column stream column))
+
+(defmethod trivial-gray-streams:stream-force-output
+    ((stream trivial-gray-streams:fundamental-output-stream))
+  nil)
+
+(defmethod trivial-gray-streams:stream-finish-output
+    ((stream trivial-gray-streams:fundamental-output-stream))
+  nil)
+
+(defmethod trivial-gray-streams:stream-clear-output
+    ((stream trivial-gray-streams:fundamental-output-stream))
+  nil)
 
 (defmethod trivial-gray-streams:stream-read-line
     ((stream trivial-gray-streams:fundamental-input-stream))

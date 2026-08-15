@@ -116,14 +116,14 @@ public final class PackageRegistry {
 			LispNames.NSUBSTITUTE_IF_NOT, LispNames.SEARCH, LispNames.MISMATCH, LispNames.GET_UNIVERSAL_TIME,
 			LispNames.ENCODE_UNIVERSAL_TIME, LispNames.DECODE_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME,
 			LispNames.GET_INTERNAL_RUN_TIME, LispNames.SLEEP, LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT,
-			LispNames.LISTEN, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER, LispNames.CHAR, LispNames.SCHAR,
-			LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ, LispNames.CHAR_LT, LispNames.CHAR_LE,
-			LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE, LispNames.CHAR_EQUAL, LispNames.CHAR_NOT_EQUAL,
-			LispNames.CHAR_LESSP, LispNames.CHAR_GREATERP, LispNames.CHAR_NOT_LESSP, LispNames.CHAR_NOT_GREATERP,
-			LispNames.GRAPHIC_CHAR_P, LispNames.STANDARD_CHAR_P, LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE,
-			LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P, LispNames.ALPHANUMERICP,
-			LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT, LispNames.BIT,
-			LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
+			LispNames.CLEAR_OUTPUT, LispNames.LISTEN, LispNames.READ_FROM_STRING, LispNames.PARSE_INTEGER,
+			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CODE_CHAR, LispNames.CHAR_EQ,
+			LispNames.CHAR_LT, LispNames.CHAR_LE, LispNames.CHAR_GT, LispNames.CHAR_GE, LispNames.CHAR_NE,
+			LispNames.CHAR_EQUAL, LispNames.CHAR_NOT_EQUAL, LispNames.CHAR_LESSP, LispNames.CHAR_GREATERP,
+			LispNames.CHAR_NOT_LESSP, LispNames.CHAR_NOT_GREATERP, LispNames.GRAPHIC_CHAR_P, LispNames.STANDARD_CHAR_P,
+			LispNames.CHAR_UPCASE, LispNames.CHAR_DOWNCASE, LispNames.CHARACTERP, LispNames.ALPHA_CHAR_P,
+			LispNames.ALPHANUMERICP, LispNames.MAKE_LOAD_FORM_SAVING_SLOTS, LispNames.SXHASH, LispNames.SBIT,
+			LispNames.BIT, LispNames.BOTH_CASE_P, LispNames.SPECIAL_OPERATOR_P, LispNames.MACRO_FUNCTION,
 			LispNames.COMPILED_FUNCTION_P, LispNames.FUNCTION_LAMBDA_EXPRESSION, LispNames.LIST_ALL_PACKAGES,
 			LispNames.USE_PACKAGE, LispNames.EXPORT, LispNames.UNEXPORT, LispNames.FIND_CLASS, LispNames.GET,
 			LispNames.SYMBOL_PLIST, LispNames.DIGIT_CHAR_P, LispNames.DIGIT_CHAR, LispNames.MAKE_HASH_TABLE,
@@ -449,7 +449,10 @@ public final class PackageRegistry {
 				LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE, LispNames.GRAY_STREAM_READ_CHAR,
 				LispNames.GRAY_STREAM_UNREAD_CHAR, LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
 				LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
-				LispNames.GRAY_STREAM_FILE_POSITION));
+				LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI,
+				LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
+				LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
+				LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION));
 		Set<String> rontolispSymbols = new HashSet<>(rontolispExternals);
 		// Internal: the stoppable HTTP server seam behind the clack-handler-rontolisp
 		// shim, spelled rontolisp::%http-server-* by its call sites. Owned by the
@@ -583,16 +586,17 @@ public final class PackageRegistry {
 		define(new LispPackage(LispNames.FLOAT_FEATURES_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.BITS_DOUBLE_FLOAT, LispNames.DOUBLE_FLOAT_BITS,
 						LispNames.SINGLE_FLOAT_BITS, LispNames.BITS_SINGLE_FLOAT))));
-		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(),
-				new HashSet<>(Set.of(LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM,
-						LispNames.GRAY_STREAM_WRITE_CHAR, LispNames.GRAY_STREAM_WRITE_STRING,
-						LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM, LispNames.GRAY_OUTPUT_STREAM,
-						LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
-						LispNames.GRAY_STREAM_MIXIN, LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
-						LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR,
-						LispNames.GRAY_STREAM_READ_LINE, LispNames.GRAY_STREAM_LISTEN,
-						LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
-						LispNames.GRAY_STREAM_FILE_POSITION))));
+		define(new LispPackage(LispNames.TRIVIAL_GRAY_STREAMS_PKG, List.of(), new HashSet<>(Set.of(
+				LispNames.GRAY_CHAR_OUTPUT_STREAM, LispNames.GRAY_CHAR_INPUT_STREAM, LispNames.GRAY_STREAM_WRITE_CHAR,
+				LispNames.GRAY_STREAM_WRITE_STRING, LispNames.GRAY_FUNDAMENTAL_STREAM, LispNames.GRAY_INPUT_STREAM,
+				LispNames.GRAY_OUTPUT_STREAM, LispNames.GRAY_BINARY_INPUT_STREAM, LispNames.GRAY_BINARY_OUTPUT_STREAM,
+				LispNames.GRAY_STREAM_MIXIN, LispNames.GRAY_STREAM_WRITE_BYTE, LispNames.GRAY_STREAM_READ_BYTE,
+				LispNames.GRAY_STREAM_READ_CHAR, LispNames.GRAY_STREAM_UNREAD_CHAR, LispNames.GRAY_STREAM_READ_LINE,
+				LispNames.GRAY_STREAM_LISTEN, LispNames.GRAY_STREAM_READ_SEQUENCE, LispNames.GRAY_STREAM_WRITE_SEQUENCE,
+				LispNames.GRAY_STREAM_LINE_COLUMN, LispNames.GRAY_STREAM_START_LINE_P, LispNames.GRAY_STREAM_TERPRI,
+				LispNames.GRAY_STREAM_FRESH_LINE, LispNames.GRAY_STREAM_ADVANCE_TO_COLUMN,
+				LispNames.GRAY_STREAM_FORCE_OUTPUT, LispNames.GRAY_STREAM_FINISH_OUTPUT,
+				LispNames.GRAY_STREAM_CLEAR_OUTPUT, LispNames.GRAY_STREAM_FILE_POSITION))));
 		// bordeaux-threads (nickname bt) + bt2 (nickname bordeaux-threads-2, mirroring
 		// upstream's apiv2/pkgdcl.lisp): one shim system (bordeaux-threads.lisp,
 		// eval.ShimLibraries) providing both API namespaces. The locking subset rides the

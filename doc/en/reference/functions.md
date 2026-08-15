@@ -76,6 +76,7 @@ page.
 | `open-stream-p` | `(open-stream-p stream)` | `t` while the handle names an open stream, `nil` after `close` (exact for sockets on the interpreter/JVM and on `--component`) |
 | `force-output` | `(force-output stream)` | Flush an output stream (no argument = standard output). Returns nil |
 | `finish-output` | `(finish-output stream)` | The same operation as `force-output` -- every write here is synchronous once flushed |
+| `clear-output` | `(clear-output stream)` | Discard an output stream's unwritten buffer. Nothing is buffered that way here, so it validates the designator and returns nil |
 | `listen` | `(listen stream)` | `t` when input is immediately available without blocking; Preview 1 WASM has no such probe |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | Write the string plus a newline to an output stream (or to standard output). Returns the string |
 | `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | Read one byte (0-255) from a binary input stream, or from standard input for the `t`/`nil` designator. At EOF, signal an `end-of-file` condition, or return `eof-value` when `eof-error-p` is `nil` |
@@ -330,7 +331,7 @@ page.
 | `get-output-stream-string` | `(get-output-stream-string s)` | everything written to a string output stream so far, CLEARING it (CL's contract) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | a stream forwarding every operation to the stream the named variable holds AT THAT MOMENT, for any symbol -- so rebinding the variable afterwards redirects it |
 | `synonym-stream-symbol` | `(synonym-stream-symbol s)` | the symbol a synonym stream forwards to |
-| `make-broadcast-stream` | `(make-broadcast-stream a b)` | an output stream fanning every write out to each component, in order; with no components, a discarding sink. A stream WITH components is a Gray stream, so `format`/`princ`/`prin1`/`write-string`/`write-char` work and `terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` signal |
+| `make-broadcast-stream` | `(make-broadcast-stream a b)` | an output stream fanning every write out to each component, in order; with no components, a discarding sink. A stream WITH components is a Gray stream and takes the whole output protocol |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — whether the value is a pathname (the value `#P"..."` denotes); a string is NOT one, and it agrees with `(typep x 'pathname)` |
 | `input-stream-p` | `(input-stream-p s)` | `t` for any stream handle |
 | `output-stream-p` | `(output-stream-p s)` | `t` for any stream handle |

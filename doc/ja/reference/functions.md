@@ -73,6 +73,7 @@
 | `open-stream-p` | `(open-stream-p stream)` | ハンドルが開いているストリームを指す間は `t`、`close` 後は `nil` (インタプリタ/JVM と `--component` のソケットでは正確) |
 | `force-output` | `(force-output stream)` | 出力ストリームを書き出す (引数なしは標準出力)。nil を返す |
 | `finish-output` | `(finish-output stream)` | `force-output` と同じ操作。ここでは書き出し後の書き込みはすべて同期的 |
+| `clear-output` | `(clear-output stream)` | 出力ストリームの未書き込みバッファを捨てる。ここではその形でバッファしないため、指定子を検証して nil を返す |
 | `listen` | `(listen stream)` | ブロックせずに入力を読めるなら `t`。Preview 1 の WASM にはこの問い合わせ手段がない |
 | `write-line` | `(write-line "hi" stream)`, `(write-line "hi")` | 文字列と改行を出力ストリーム(または標準出力)に書き込みます。文字列を返します |
 | `read-byte` | `(read-byte stream)`, `(read-byte *standard-input* nil nil)` | バイナリ入力ストリーム、または `t`/`nil` 指定子なら標準入力から 1 バイト(0-255)を読み込みます。EOF では `end-of-file` コンディションを通知し、`eof-error-p` が `nil` の場合は `eof-value` を返します |
@@ -327,7 +328,7 @@
 | `get-output-stream-string` | `(get-output-stream-string s)` | 文字列出力ストリームにこれまで書き込まれた内容を返し、ストリームを空にします (CL の仕様どおり) |
 | `make-synonym-stream` | `(make-synonym-stream '*standard-output*)` | すべての操作を、指定した変数が **その時点で** 保持しているストリームへ転送するストリーム。どのシンボルでも同じなので、後から変数を再束縛すると転送先も変わります |
 | `synonym-stream-symbol` | `(synonym-stream-symbol s)` | シノニムストリームの転送先シンボル |
-| `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので `format`/`princ`/`prin1`/`write-string`/`write-char` が使え、`terpri`/`fresh-line`/`write-line`/`print`/`force-output`/`finish-output`/`close` はシグナルを発生させます |
+| `make-broadcast-stream` | `(make-broadcast-stream a b)` | 書き込みのすべてを各コンポーネントへ順に配る出力ストリーム。コンポーネントがなければ書き込みを捨てるシンクです。コンポーネントを持つストリームは Gray ストリームなので出力プロトコル全体が使えます |
 | `pathnamep` | `(pathnamep #P"/tmp/x")` | `t` — 値がパス名 (`#P"..."` が表す値) かどうか。文字列はパス名では**なく**、`(typep x 'pathname)` と一致します |
 | `input-stream-p` | `(input-stream-p s)` | 任意のストリームハンドルに `t` |
 | `output-stream-p` | `(output-stream-p s)` | 任意のストリームハンドルに `t` |

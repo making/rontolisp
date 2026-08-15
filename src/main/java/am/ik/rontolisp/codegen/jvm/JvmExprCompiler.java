@@ -613,6 +613,12 @@ final class JvmExprCompiler {
 				case LispNames.WRITE_BYTE -> JvmWriteByteCompiler.compile(cons, ctx, className);
 				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT ->
 					JvmForceOutputCompiler.compile(cons, ctx, className);
+				case LispNames.CLEAR_OUTPUT ->
+					// Nothing is buffered in a discardable way on any backend, so
+					// clear-output evaluates its designator for effect and answers nil
+					// (.kb/gray-streams.md). A Gray instance never reaches here -- the
+					// pre-pass rewrote that call onto the dispatch helper.
+					JvmExprCompiler.compileExpr(LispMacroExpander.expandClearOutput(cons), ctx, className);
 				case LispNames.LISTEN -> JvmListenCompiler.compile(cons, ctx, className);
 				case LispNames.OPEN_STREAM_P -> JvmOpenStreamPCompiler.compile(cons, ctx, className);
 				case LispNames.READ_SEQUENCE ->

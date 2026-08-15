@@ -15,7 +15,14 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 
 | 組み込み | ディスパッチ先 |
 | --- | --- |
-| `write-string`, `write-char`, `format` (ストリーム宛先) | `rontolisp:stream-write-string` (`write-char` は 1 文字の書き込みに脱糖) |
+| `write-char` | `rontolisp:stream-write-char` |
+| `write-string`, `format` (ストリーム宛先) | `rontolisp:stream-write-string` |
+| `princ`, `prin1`, `print` | 描画したテキストの `rontolisp:stream-write-string` (`print` はその後 `stream-terpri`) |
+| `terpri` | `rontolisp:stream-terpri` (デフォルトメソッドは `stream-write-char` で改行を書く) |
+| `fresh-line` | `rontolisp:stream-fresh-line` (デフォルトメソッド: `stream-start-line-p` でなければ `stream-terpri`) |
+| `write-line` | `rontolisp:stream-write-string` のあと `rontolisp:stream-terpri` |
+| `force-output` / `finish-output` / `clear-output` | `rontolisp:stream-force-output` / `-finish-output` / `-clear-output` (デフォルトメソッドは `nil` を返す) |
+| `close` | `t` を返す — 後述 |
 | `write-byte` | `rontolisp:stream-write-byte` |
 | `read-byte` | `rontolisp:stream-read-byte` |
 | `read-char` | `rontolisp:stream-read-char` |
@@ -23,6 +30,40 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 | `listen` | `rontolisp:stream-listen` (デフォルトメソッドは `nil` を返す) |
 | `read-sequence` / `write-sequence` | `rontolisp:stream-read-sequence` / `-write-sequence` (デフォルトメソッドは要素総称関数をループ) |
 | `file-position` | `rontolisp:stream-file-position`。2 引数形式は `(setf rontolisp:stream-file-position)` ライタ総称関数を呼ぶ |
+
+文字出力ストリームは **`stream-write-char` か `stream-write-string` のどちらか一方を
+定義すれば十分です**。それぞれ他方を使ったデフォルトメソッドを持つため、書いたほうから
+残りの出力プロトコルが組み上がります (どちらも定義しないのが唯一の壊れた形で、2 つの
+デフォルトが互いを呼び合います)。
+
+さらに 2 つ、対応する組み込みは持たないものの行単位の演算子が参照する総称関数があります:
+`rontolisp:stream-line-column` はストリームの現在の桁位置を返し、桁位置を追跡しない
+ストリームでは `nil` (デフォルト) を返します。`rontolisp:stream-start-line-p` はそこから
+答えます。桁位置のないストリームは行頭かどうかを判断できないため、`fresh-line` は常に
+改行を書き込みます。`rontolisp:stream-advance-to-column` は直接呼ぶプログラムのために
+プロトコルを補完します。
+
+Gray ストリームを閉じると `t` を返し、他には何もしません — 解放するものがないからです。
+解放するものが**ある**ストリームは CL 本来の綴り、すなわち `close` 自身へのメソッドを
+書きます:
+
+```lisp
+(defclass closing-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "") (openp :initform t)))
+(defmethod rontolisp:stream-write-char ((s closing-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+  c)
+(defmethod close ((s closing-stream) &key abort)
+  (declare (ignore abort))
+  (setf (slot-value s 'openp) nil)
+  t)
+(let ((s (make-instance 'closing-stream)))
+  (write-string "bye" s)
+  (list (close s) (slot-value s 'openp))) ; => (T NIL)
+```
+
+このメソッドはすべてのバックエンドでディスパッチします。これを定義したプログラムが
+`close` を完全に所有し、Gray のデフォルトは道を譲ります。
 
 読み取り側のメソッドはストリーム終端でキーワード `:eof` を返します。組み込みはそれを通常の
 `eof-error-p` / `eof-value` 契約に翻訳します。`stream-read-line`
@@ -39,6 +80,26 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
   (write-string "hello" s)
   (write-char #\! s)
   (slot-value s 'acc)) ; => "HELLO!"
+```
+
+`stream-write-char` だけを定義し、桁位置を追跡することで `fresh-line` が改行の要否を
+判断できるストリーム:
+
+```lisp
+(defclass column-stream (rontolisp:fundamental-character-output-stream)
+  ((acc :initform "") (col :initform 0)))
+(defmethod rontolisp:stream-write-char ((s column-stream) c)
+  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+  (setf (slot-value s 'col) (if (char= c #\Newline) 0 (+ (slot-value s 'col) 1)))
+  c)
+(defmethod rontolisp:stream-line-column ((s column-stream)) (slot-value s 'col))
+(let ((s (make-instance 'column-stream)))
+  (princ "one" s)
+  (fresh-line s)      ; 桁位置 3 -> 改行を書く
+  (fresh-line s)      ; 桁位置 0 -> 何も書かない
+  (write-line "two" s)
+  ;; 答えを 1 行に収めるため改行を / で表示
+  (substitute #\/ #\Newline (slot-value s 'acc))) ; => "one/two/"
 ```
 
 `file-position` プロトコル付きのバイナリ入力ストリーム:
@@ -71,9 +132,14 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 `trivial-gray-streams` パッケージはすべての基底クラス
 (`trivial-gray-stream-mixin` も含む) とすべての総称関数をミラーします。
 `stream-read-sequence` / `stream-write-sequence` `(stream sequence start end
-&key)` や `stream-file-position` とその `(setf ...)` ライタも含まれます — jzon の
+&key)`、`stream-file-position` とその `(setf ...)` ライタ、そして出力系の
+`stream-line-column` / `stream-start-line-p` / `stream-terpri` /
+`stream-fresh-line` / `stream-advance-to-column` / `stream-force-output` /
+`stream-finish-output` / `stream-clear-output` も含まれます — jzon の
 `:stream` ライタ API はこの仕組みで動いており、fast-io や circular-streams
-の定義するクラス形状もそのままロードできます。
+の定義するクラス形状もそのままロードできます。デフォルトは rontolisp プロトコルと同じ
+ものなので、`trivial-gray-streams:stream-write-char` だけを定義したポータブルなクラスでも
+上のすべての演算子に応答します。
 
 ```lisp
 (asdf:load-system "trivial-gray-streams")
@@ -97,8 +163,9 @@ Gray ストリーム拡張を同梱しています: ユーザークラスが `ro
 
 ## 制限
 
-- `rontolisp:stream-unread-char` はプロトコル総称関数として存在しますが、
-  どの組み込みもディスパッチしません (`unread-char` は組み込みにありません)。
+- `rontolisp:stream-unread-char` と `rontolisp:stream-advance-to-column` は
+  プロトコル総称関数として存在しますが、どの組み込みもディスパッチしません
+  (`unread-char` は組み込みになく、`format` の `~T` も桁位置を参照しません)。
   `peek-char` も Gray インスタンスへディスパッチしません。
 - 読み取り総称関数はプライマリ値のみを返します: `stream-read-line` に
   `(values line missing-newline-p)` のペアはなく、`:eof` が EOF の唯一のシグナルです。

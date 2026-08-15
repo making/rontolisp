@@ -4340,6 +4340,24 @@ public final class Environment implements Scope {
 		};
 		env.defineFunction(LispNames.FORCE_OUTPUT, new LispFunction(LispNames.FORCE_OUTPUT, forceOutput::apply));
 		env.defineFunction(LispNames.FINISH_OUTPUT, new LispFunction(LispNames.FINISH_OUTPUT, forceOutput::apply));
+		// clear-output: DISCARD what the stream has buffered. Nothing is buffered in a
+		// discardable way here -- a write reaches the underlying Writer/Socket
+		// immediately -- so the operation validates its designator and answers nil. It
+		// exists because the Gray protocol names stream-clear-output and a portable
+		// stream class implements it (.kb/gray-streams.md).
+		env.defineFunction(LispNames.CLEAR_OUTPUT, new LispFunction(LispNames.CLEAR_OUTPUT, args -> {
+			if (args.size() > 1) {
+				throw new LispEvalException(LispNames.CLEAR_OUTPUT + " expects 0 or 1 arguments");
+			}
+			LispVal dest = resolveOutputDest.apply(args.isEmpty() ? null : args.get(0));
+			if (dest == null || dest instanceof LispNil || dest instanceof LispTrue) {
+				return LispNil.INSTANCE;
+			}
+			if (!(dest instanceof LispInteger handle) || streams.get(handle.value()) == null) {
+				throw new LispEvalException(LispNames.CLEAR_OUTPUT + " expects an output stream, got: " + dest.print());
+			}
+			return LispNil.INSTANCE;
+		}));
 		// (listen &optional stream): whether input is immediately available without
 		// blocking -- InputStream.available() / Reader.ready() semantics. Sockets answer
 		// from the kernel receive buffer, which is what cl-postgres's

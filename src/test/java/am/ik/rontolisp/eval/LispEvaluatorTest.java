@@ -6232,7 +6232,7 @@ class LispEvaluatorTest {
 					"SET-PPRINT-DISPATCH", "PPRINT-DISPATCH")
 			.doesNotContain("%char-fold-chain", "%pprint-dispatch-default", "%synonym-target")
 			.isSorted()
-			.hasSize(393);
+			.hasSize(394);
 	}
 
 	@Test
@@ -12156,6 +12156,113 @@ class LispEvaluatorTest {
 				  (write-char #\\y sink)
 				  (slot-value sink 'buf))
 				""").print()).isEqualTo("\"hey\"");
+	}
+
+	@Test
+	void grayCharacterOutputStreamTakesTheWholeOutputProtocol() {
+		// todo-252: a class defining ONLY stream-write-char -- full Gray's one
+		// required method, and rove's indent-stream shape -- answers every output
+		// operator, and the column protocol is what lets fresh-line decide.
+		assertThat(evalMulti("""
+				(defclass gw-col (rontolisp:fundamental-character-output-stream)
+				  ((acc :initform "") (col :initform 0)))
+				(defmethod rontolisp:stream-write-char ((s gw-col) c)
+				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+				  (setf (slot-value s 'col) (if (char= c #\\Newline) 0 (+ (slot-value s 'col) 1)))
+				  c)
+				(defmethod rontolisp:stream-line-column ((s gw-col)) (slot-value s 'col))
+				(let ((s (make-instance 'gw-col)))
+				  (write-char #\\a s)
+				  (write-string "bc" s)
+				  (princ "-" s)
+				  (prin1 :k s)
+				  (fresh-line s)
+				  (fresh-line s)
+				  (terpri s)
+				  (write-line "l" s)
+				  (print 7 s)
+				  (format s "f~a" 1)
+				  (list (slot-value s 'acc) (force-output s) (finish-output s) (clear-output s) (close s)))
+				""").print()).isEqualTo("(\"abc-:K\n\nl\n7\nf1\" NIL NIL NIL T)");
+	}
+
+	@Test
+	void grayStreamWriteStringOnlyClassStillAnswersWriteCharAndTerpri() {
+		// The other half of the todo-252 pair: the default stream-write-char hands
+		// the one-character string to stream-write-string, so the shape every
+		// existing program wrote (rontolisp's own broadcast stream, jzon's writer)
+		// keeps working and gains the line operators.
+		assertThat(evalMulti("""
+				(defclass gw-str (rontolisp:fundamental-character-output-stream)
+				  ((acc :initform "")))
+				(defmethod rontolisp:stream-write-string ((s gw-str) str &optional start end)
+				  (setf (slot-value s 'acc)
+				        (concatenate 'string (slot-value s 'acc)
+				                     (subseq str (or start 0) (or end (length str)))))
+				  str)
+				(let ((s (make-instance 'gw-str)))
+				  (write-char #\\a s)
+				  (terpri s)
+				  (write-line "b" s)
+				  (fresh-line s)
+				  (slot-value s 'acc))
+				""").print()).isEqualTo("\"a\nb\n\n\"");
+	}
+
+	@Test
+	void grayShimStreamWriteCharOnlyClassAnswersTheOutputProtocol() {
+		// The same widening through the portable spelling: rove's reporter stream
+		// is (trivial-gray-stream-mixin fundamental-character-output-stream) with
+		// stream-write-char and stream-line-column and nothing else.
+		assertThat(evalMulti("""
+				(asdf:load-system "trivial-gray-streams")
+				(defclass gsw-ind (trivial-gray-streams:trivial-gray-stream-mixin
+				                   trivial-gray-streams:fundamental-character-output-stream)
+				  ((acc :initform "") (col :initform 0)))
+				(defmethod trivial-gray-streams:stream-write-char ((s gsw-ind) c)
+				  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+				  (setf (slot-value s 'col) (if (char= c #\\Newline) 0 (+ (slot-value s 'col) 1)))
+				  c)
+				(defmethod trivial-gray-streams:stream-line-column ((s gsw-ind)) (slot-value s 'col))
+				(let ((s (make-instance 'gsw-ind)))
+				  (princ "hi" s)
+				  (fresh-line s)
+				  (fresh-line s)
+				  (write-char #\\z s)
+				  (finish-output s)
+				  (slot-value s 'acc))
+				""").print()).isEqualTo("\"hi\nz\"");
+	}
+
+	@Test
+	void grayBroadcastStreamTakesTheLineOperators() {
+		// The broadcast stream is prelude Lisp over this protocol, so widening the
+		// protocol widened it too (.kb/gray-streams.md).
+		assertThat(evalMulti("""
+				(with-output-to-string (o)
+				  (let ((b (make-broadcast-stream o)))
+				    (princ "a" b)
+				    (terpri b)
+				    (write-line "b" b)
+				    (print :c b)
+				    (close b)))
+				""").print()).isEqualTo("\"a\nb\n:C\n\"");
+	}
+
+	@Test
+	void grayCloseStandsDownForAProgramThatDefinesACloseMethod() {
+		// close is CL's own generic: a program that methods it owns the operator on
+		// every backend, and the Gray default must not get in front of it.
+		assertThat(evalMulti("""
+				(defclass gc-s (rontolisp:fundamental-character-output-stream)
+				  ((closed :initform nil)))
+				(defmethod rontolisp:stream-write-char ((s gc-s) c) c)
+				(defmethod close ((s gc-s) &key abort)
+				  (declare (ignore abort))
+				  (setf (slot-value s 'closed) :by-method))
+				(let ((s (make-instance 'gc-s)))
+				  (list (close s) (slot-value s 'closed)))
+				""").print()).isEqualTo("(:BY-METHOD :BY-METHOD)");
 	}
 
 	@Test

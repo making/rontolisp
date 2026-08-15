@@ -1240,6 +1240,41 @@ public final class LispEvaluator {
 			}
 			return apply(baseFilePosition, args, this.globalEnv);
 		}));
+		// The line-oriented and print-family output operators (todo-252): the same
+		// instance test, the same helpers the compile-path rewrite targets. Without
+		// these, exactly the two write generics reached a Gray instance and everything
+		// else -- terpri, fresh-line, write-line, princ/prin1/print,
+		// force-output/finish-output/clear-output -- signalled "not an output stream" on
+		// the interpreter and wrote PAST the instance on the compile paths.
+		wrapGrayOutputOperator(LispNames.TERPRI, 0, GRAY_TERPRI_DISPATCH);
+		wrapGrayOutputOperator(LispNames.FRESH_LINE, 0, GRAY_FRESH_LINE_DISPATCH);
+		wrapGrayOutputOperator(LispNames.FORCE_OUTPUT, 0, GRAY_FORCE_OUTPUT_DISPATCH);
+		wrapGrayOutputOperator(LispNames.FINISH_OUTPUT, 0, GRAY_FINISH_OUTPUT_DISPATCH);
+		wrapGrayOutputOperator(LispNames.CLEAR_OUTPUT, 0, GRAY_CLEAR_OUTPUT_DISPATCH);
+		wrapGrayOutputOperator(LispNames.WRITE_LINE, 1, GRAY_WRITE_LINE_DISPATCH);
+		wrapGrayOutputOperator(LispNames.PRINC, 1, GRAY_PRINC_DISPATCH);
+		wrapGrayOutputOperator(LispNames.PRIN1, 1, GRAY_PRIN1_DISPATCH);
+		wrapGrayOutputOperator(LispNames.PRINT, 1, GRAY_PRINT_DISPATCH);
+		// close is the one operator a program can legitimately own: CL spells a stream's
+		// close as a method on CLOSE ITSELF, and a defmethod on a built-in name already
+		// dispatches on every backend (.kb/clos.md) -- fast-io's stream classes do
+		// exactly that. The Gray default therefore stands down as soon as the program
+		// registers a close generic, which is the same condition the compile-path rewrite
+		// checks, so the two seams agree. Deliberately NOT synonym-resolved either:
+		// closing a synonym stream closes the SYNONYM, not the stream it forwards to
+		// (CLHS 21.1.3), which the built-in already answers t for -- and the helper's
+		// instance arm answers the same. The :abort tail is accepted and ignored, like
+		// the built-in's.
+		LispVal baseClose = this.globalEnv.lookupFunction(LispNames.CLOSE);
+		this.globalEnv.defineFunction(LispNames.CLOSE, new LispFunction(LispNames.CLOSE, args -> {
+			boolean closeable = args.size() == 1
+					|| (args.size() == 3 && args.get(1) instanceof LispSymbol kw && ":ABORT".equals(kw.name()));
+			if (closeable && args.get(0) instanceof LispInstance
+					&& this.closRegistry.findGeneric(LispNames.CLOSE) == null) {
+				return applyGrayDispatch(GRAY_CLOSE_DISPATCH, List.of(args.get(0)));
+			}
+			return apply(baseClose, args, this.globalEnv);
+		}));
 		// %probe-file: mediated by the SourceLoader rather than java.nio.file.Files, so a
 		// host without a filesystem (the browser playground's in-memory loader) answers
 		// from whatever IT can load. Working-directory-relative like open, not resolved
@@ -3486,6 +3521,52 @@ public final class LispEvaluator {
 
 	private static final String GRAY_WRITE_SEQUENCE_DISPATCH = GrayStreamsLibrary.WRITE_SEQUENCE_DISPATCH;
 
+	private static final String GRAY_TERPRI_DISPATCH = GrayStreamsLibrary.TERPRI_DISPATCH;
+
+	private static final String GRAY_FRESH_LINE_DISPATCH = GrayStreamsLibrary.FRESH_LINE_DISPATCH;
+
+	private static final String GRAY_WRITE_LINE_DISPATCH = GrayStreamsLibrary.WRITE_LINE_DISPATCH;
+
+	private static final String GRAY_FORCE_OUTPUT_DISPATCH = GrayStreamsLibrary.FORCE_OUTPUT_DISPATCH;
+
+	private static final String GRAY_FINISH_OUTPUT_DISPATCH = GrayStreamsLibrary.FINISH_OUTPUT_DISPATCH;
+
+	private static final String GRAY_CLEAR_OUTPUT_DISPATCH = GrayStreamsLibrary.CLEAR_OUTPUT_DISPATCH;
+
+	private static final String GRAY_PRINC_DISPATCH = GrayStreamsLibrary.PRINC_DISPATCH;
+
+	private static final String GRAY_PRIN1_DISPATCH = GrayStreamsLibrary.PRIN1_DISPATCH;
+
+	private static final String GRAY_PRINT_DISPATCH = GrayStreamsLibrary.PRINT_DISPATCH;
+
+	private static final String GRAY_CLOSE_DISPATCH = GrayStreamsLibrary.CLOSE_DISPATCH;
+
+	private static final String GRAY_WRITE_CHAR_DISPATCH = GrayStreamsLibrary.WRITE_CHAR_DISPATCH;
+
+	/**
+	 * Wraps one stream-taking output built-in so a CLOS-instance stream at
+	 * {@code streamIndex} routes to the given {@code rontolisp::%gray-*-dispatch} helper
+	 * of gray.lisp and everything else reaches the built-in unchanged. The helpers hold
+	 * the one copy of the instance test and the fallback, shared verbatim with the
+	 * compile path's call-site rewrite ({@code GrayStreamsLibrary.process}); the fallback
+	 * re-enters this wrap once, which terminates because a non-instance goes straight to
+	 * the base function.
+	 * @param name the built-in's name
+	 * @param streamIndex the argument position holding the stream
+	 * @param helperName the dispatch helper to apply
+	 */
+	private void wrapGrayOutputOperator(String name, int streamIndex, String helperName) {
+		LispVal base = this.globalEnv.lookupFunction(name);
+		this.globalEnv.defineFunction(name, new LispFunction(name, rawArgs -> {
+			List<LispVal> args = resolveSynonymArg(rawArgs, streamIndex);
+			if (args.size() == streamIndex + 1 && args.get(streamIndex) instanceof LispInstance) {
+				List<LispVal> forwarded = streamIndex == 0 ? List.of(args.get(0)) : List.of(args.get(0), args.get(1));
+				return applyGrayDispatch(helperName, forwarded);
+			}
+			return apply(base, args, this.globalEnv);
+		}));
+	}
+
 	/**
 	 * Applies a {@code rontolisp::%gray-*-dispatch} helper of gray.lisp (loading it on
 	 * first use). The helpers hold the instance test, the :eof translation and the
@@ -3544,6 +3625,31 @@ public final class LispEvaluator {
 		LispCons rebuiltCons = (LispCons) tail;
 		return eval(read ? LispMacroExpander.expandReadSequence(rebuiltCons)
 				: LispMacroExpander.expandWriteSequence(rebuiltCons), env);
+	}
+
+	/**
+	 * Evaluates {@code (write-char char stream)}: {@code write-char} is a macro expansion
+	 * ({@code write-string} of the one-character string), not a function, so its Gray
+	 * dispatch is intercepted here the way {@code read-sequence}/{@code write-sequence}
+	 * are. An INSTANCE stream routes to the write-char dispatch helper, which reaches
+	 * {@code rontolisp:stream-write-char} -- the one method full Gray requires, and the
+	 * only writer a class that defines just it has. Anything else re-enters the shared
+	 * expansion with the two evaluated values QUOTED in place (no double evaluation).
+	 */
+	private LispVal evalWriteCharWithGrayDispatch(LispCons cons, Environment env) {
+		java.util.List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			// Let the expansion handle the stream-less form and signal arity errors.
+			return eval(LispMacroExpander.expandWriteChar(cons), env);
+		}
+		LispVal ch = eval(parts.get(1), env);
+		LispVal stream = Environment.synonymTarget(eval(parts.get(2), env));
+		if (stream instanceof LispInstance) {
+			return applyGrayDispatch(GRAY_WRITE_CHAR_DISPATCH, List.of(ch, stream));
+		}
+		LispCons rebuilt = new LispCons(parts.get(0),
+				new LispCons(quoteValue(ch), new LispCons(quoteValue(stream), LispNil.INSTANCE)));
+		return eval(LispMacroExpander.expandWriteChar(rebuilt), env);
 	}
 
 	private static LispVal quoteValue(LispVal value) {
@@ -4217,7 +4323,7 @@ public final class LispEvaluator {
 			case LispNames.EVAL_WHEN:
 				return eval(LispMacroExpander.expandEvalWhen(cons), env);
 			case LispNames.WRITE_CHAR:
-				return eval(LispMacroExpander.expandWriteChar(cons), env);
+				return evalWriteCharWithGrayDispatch(cons, env);
 			case LispNames.LOCALLY:
 				return eval(LispMacroExpander.expandLocally(cons), env);
 			case LispNames.WITH_STANDARD_IO_SYNTAX:

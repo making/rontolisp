@@ -917,6 +917,8 @@ final class WasmExprCompiler {
 					}
 				}
 				case LispNames.WRITE_BYTE -> WasmWriteByteCompiler.compile(cons, ctx);
+				case LispNames.CLEAR_OUTPUT ->
+					WasmExprCompiler.compileExpr(LispMacroExpander.expandClearOutput(cons), ctx);
 				case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT -> {
 					// Every WASM write goes out synchronously (fd_write / the component's
 					// sock-stream-write park per call), so flushing is the identity: the

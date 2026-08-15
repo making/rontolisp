@@ -139,8 +139,9 @@ itself with `omit-default` (`migration/table.lisp:344`).
   DDL, no error.
 
 All three are `.todo/251`; `.todo/253` carries the SCRAM cost and the
-cached-connection lifetime, and `.todo/252` the Gray output-protocol widening a
-broadcast stream would inherit.
+cached-connection lifetime. The Gray output-protocol widening a broadcast stream
+inherits has landed -- the whole output protocol dispatches now,
+`.kb/gray-streams.md`.
 
 **`count-dao` -- and every sxql SQL FUNCTION operator -- is interpreter-only**
 (found while writing `MitoE2eTest`, `.todo/254`). `count-dao` builds

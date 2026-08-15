@@ -21,12 +21,11 @@ dropped (the CL idiom for a null output stream).
 ```
 
 A broadcast stream WITH components is a [Gray stream](../../guides/gray-streams.md),
-so exactly the operators that dispatch on one work with it:
-[`format`](../macros/format.md), [`princ`](princ.md), [`prin1`](prin1.md),
-[`write-string`](write-string.md) and `write-char`.
-[`terpri`](terpri.md), [`fresh-line`](fresh-line.md),
-[`write-line`](write-line.md), [`print`](print.md),
-[`force-output`](force-output.md), [`finish-output`](finish-output.md) and
-[`close`](close.md) are not part of that protocol here and signal on any Gray
-stream, broadcast or not -- write a newline with `(format s "~%")` instead. The
-component-less sink is an ordinary string output stream and takes all of them.
+so it takes the whole output protocol: [`format`](../macros/format.md),
+[`princ`](princ.md), [`prin1`](prin1.md), [`print`](print.md),
+[`write-string`](write-string.md), `write-char`, [`terpri`](terpri.md),
+[`fresh-line`](fresh-line.md), [`write-line`](write-line.md),
+[`force-output`](force-output.md), [`finish-output`](finish-output.md),
+[`clear-output`](clear-output.md) and [`close`](close.md).
+`fresh-line` always writes a newline on one: a broadcast stream tracks no
+column, so it cannot tell whether it is already at the start of a line.

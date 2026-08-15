@@ -31,7 +31,7 @@ interface here, so `:stacks` is always nil), the rest are the built-in shims.
 | 3 | `*load-pathname*` bound to the file being loaded when a `deftest` runs (rove's file -> package map, `make-new-suite`, is what `run` walks for a plain `defsystem` test system) | nil at run time on the compile paths -- `(rove:run "foo/tests")` would find no suites there | `.todo/375` |
 | 4 | `*package*` READ at run time inside rove's own `set-test`/`package-suite`, and in the expansions of `setup`/`teardown`/`defhook` | DONE (2026-08-15, `.todo/255`): `*package*` is a genuine dynamic variable on all four backends -- the package keyword `find-package` answers, read at call time, assigned by `in-package`, let-bindable, bound to `cl-user` by `with-standard-io-syntax` (`.kb/packages.md`) | -- |
 | 5 | `(defmethod find-suite ((package package)) ...)` + a `(package-name)` designator method | DONE (2026-08-15): `package` is a TYPE specializer sharing the type test's ONE definition, ranked ahead of `keyword`/`symbol` so the designator method cannot recurse forever (`.kb/clos.md`) | -- |
-| 6 | an indent-stream defining only `stream-write-char` (+ `stream-line-column`/`stream-start-line-p`/`stream-finish-output`/`-force-output`/`-clear-output`), driven by `fresh-line`/`princ`/`format`/`write-char`/`write-string` | `write-char` on a Gray instance routes to `stream-write-string`, which has NO default over `stream-write-char`; `fresh-line` signals; on the compile paths `princ` bypasses the instance entirely (JVM/WASM report is unindented, newlines lost) | `.todo/252` (rove contract appended) |
+| 6 | an indent-stream defining only `stream-write-char` (+ `stream-line-column`/`stream-start-line-p`/`stream-finish-output`/`-force-output`/`-clear-output`), driven by `fresh-line`/`princ`/`format`/`write-char`/`write-string` | DONE (2026-08-15, `.todo/252`): the whole OUTPUT protocol dispatches -- `write-char` reaches `stream-write-char`, each write generic defaults to the other, and `terpri`/`fresh-line`/`write-line`/`princ`/`prin1`/`print`/`force-output`/`finish-output`/`clear-output`/`close` are rewritten on the compile paths too (`.kb/gray-streams.md`) | -- |
 | 7 | `(make-synonym-stream '*standard-output*)` as a NON-NIL stream (`(when stream (setf (reporter-stream r) (make-indent-stream stream)))` in `initialize-instance :after`) | DONE (2026-08-15): a synonym stream is a distinct VALUE forwarding per operation for ANY symbol -- true, `streamp`, `synonym-stream-symbol`, and a Gray stream on either side of it writes through (`.kb/read-load-streams.md`) | -- |
 | 8 | real `macro-function` / `special-operator-p` (`form-inspect`, `form-steps`) | nil stubs -> `(ok (signals ...))`, `(ok (if ...))`, `(ok (equal x '(1 2)))` treat the macro / special form / `quote` as a FUNCTION CALL and evaluate the arguments outside it (the `signals` assertion fails; a quoted `'type-error` -> "The variable MY-APP/TESTS::TYPE-ERROR is unbound") | `.todo/378` |
 | 9 | `handler-bind ((error ...))` around a test body catches `(car 1)`, `(aref v 9)`, `(/ 1 0)`, an undefined function -- how a broken test becomes a recorded failure instead of ending the run | only conditions SIGNALED via `error`/`signal`/`warn` run handler-bind handlers; interpreter `aref` OOB / `make-array -1` escape even `handler-case`; wasm traps are uncatchable | `.todo/379` |
@@ -45,7 +45,7 @@ The scratch patch set (the reproduction of "everything else works"): `asdf:` ->
 `asdf::` for the missing externals + a program-level `(defvar asdf::*user-cache* nil)`;
 `run-system` / `system-files` reduced to the package-named suite; `set-test` taking the package from a spike special
 instead of `*package*`; a `stream-write-string` method + a shadowed
-`fresh-line` in `rove/misc/stream`; `*report-stream*` = `t` (row 7, no longer needed); `form-inspect`'s
+`fresh-line` in `rove/misc/stream` (row 6, no longer needed); `*report-stream*` = `t` (row 7, no longer needed); `form-inspect`'s
 argument-inspecting arm disabled; `enough-namestring*` = `namestring`. Undo
 each as its row lands; the E2E below is the gate that they are all gone.
 
@@ -53,7 +53,7 @@ each as its row lands; the E2E below is the gate that they are all gone.
 
 1. ~~`.todo/373` (Low) -- the load gate; nothing else is reachable before it.~~ DONE; `(ql:quickload "rove")` now stops at row 2 (`asdf:*user-cache*` is not external).
 2. ~~`.todo/255` (High) + `.todo/376` (Low)~~ DONE -- `deftest` registers under the right suite and `run-suite`/`package-suite` find it. After these two, `(rove:run-suite *package*)` is the first working entry point.
-3. ~~`.todo/377` (Medium)~~ DONE + `.todo/252` (Medium) -- the spec reporter prints, indented, identically on all four.
+3. ~~`.todo/377` (Medium) + `.todo/252` (Medium)~~ DONE -- the spec reporter prints, indented, identically on all four.
 4. `.todo/378` (Medium) + `.todo/379` (High) + `.todo/380` (Medium) + `.todo/381` (Low) -- `ok`/`ng`/`signals` are correct and a broken test is a failure, not a crash.
 5. `.todo/374` (High) + `.todo/375` (Medium) -- `(rove:run :my-app/tests)` and `(asdf:test-system "my-app")`.
 6. Row 12-14 items are polish; `.todo/041` matters for output parity with SBCL, the rest can trail.

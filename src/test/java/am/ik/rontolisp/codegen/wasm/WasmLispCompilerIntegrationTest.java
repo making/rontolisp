@@ -7716,6 +7716,40 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void grayOutputProtocolWidening() throws Exception {
+		// todo-252: the line-oriented and print-family operators reach a Gray
+		// instance on the WASM path too -- a class defining ONLY stream-write-char
+		// (rove's indent-stream shape) answers all of them, and only the dispatch
+		// helpers the rewrites produced are spliced.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.GrayStreamsLibrary
+			.process(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+					(defclass gw-col (rontolisp:fundamental-character-output-stream)
+					  ((acc :initform "") (col :initform 0)))
+					(defmethod rontolisp:stream-write-char ((s gw-col) c)
+					  (setf (slot-value s 'acc) (concatenate 'string (slot-value s 'acc) (string c)))
+					  (setf (slot-value s 'col) (if (char= c #\\Newline) 0 (+ (slot-value s 'col) 1)))
+					  c)
+					(defmethod rontolisp:stream-line-column ((s gw-col)) (slot-value s 'col))
+					(let ((s (make-instance 'gw-col)))
+					  (write-char #\\a s)
+					  (write-string "bc" s)
+					  (princ "-" s)
+					  (prin1 :k s)
+					  (fresh-line s)
+					  (fresh-line s)
+					  (terpri s)
+					  (write-line "l" s)
+					  (print 7 s)
+					  (format s "f~a" 1)
+					  (force-output s)
+					  (finish-output s)
+					  (clear-output s)
+					  (print (list (slot-value s 'acc) (close s))))
+					(write-line "past" t)
+					"""))))).isEqualTo("(\"abc-:K\n\nl\n7\nf1\" T)\npast");
+	}
+
+	@Test
 	void grayBinaryStreamDispatchAndFilePosition() throws Exception {
 		// The read side of the Gray pre-pass (todo-235): read-byte/write-byte and
 		// file-position call sites with a non-literal stream rewrite onto the
@@ -9786,7 +9820,7 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void listFunctionsLength() throws Exception {
-		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("393");
+		assertThat(compileAndRun("(print (length (rontolisp:list-functions)))")).isEqualTo("394");
 	}
 
 	@Test

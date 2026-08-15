@@ -64,10 +64,10 @@ public final class ShadowedBuiltins {
 	 */
 	private static final Set<String> LOWERED_WITHOUT_WRAPPER = Set.of(LispNames.CLOSE, LispNames.LISTEN,
 			LispNames.OPEN_STREAM_P, LispNames.WRITE_BYTE, LispNames.WRITE_LINE, LispNames.READ,
-			LispNames.GET_OUTPUT_STREAM_STRING, LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.ARRAYP,
-			LispNames.ARRAY_DIMENSIONS, LispNames.RATIONALP, LispNames.NUMERATOR, LispNames.DENOMINATOR,
-			LispNames.RPLACA, LispNames.RPLACD, LispNames.HASH_TABLE_TEST, LispNames.HASH_TABLE_SIZE,
-			LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD);
+			LispNames.GET_OUTPUT_STREAM_STRING, LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT, LispNames.CLEAR_OUTPUT,
+			LispNames.ARRAYP, LispNames.ARRAY_DIMENSIONS, LispNames.RATIONALP, LispNames.NUMERATOR,
+			LispNames.DENOMINATOR, LispNames.RPLACA, LispNames.RPLACD, LispNames.HASH_TABLE_TEST,
+			LispNames.HASH_TABLE_SIZE, LispNames.HASH_TABLE_REHASH_SIZE, LispNames.HASH_TABLE_REHASH_THRESHOLD);
 
 	/**
 	 * Wrapped names a generic must NOT shadow. The signal operators double as

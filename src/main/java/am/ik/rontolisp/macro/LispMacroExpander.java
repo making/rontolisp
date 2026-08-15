@@ -24998,6 +24998,24 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (clear-output [stream])} to {@code (progn stream nil)}: no backend
+	 * buffers output in a way a program could discard -- a write reaches the underlying
+	 * sink as it is made -- so the operation is the designator's evaluation plus nil. A
+	 * Gray-instance stream never reaches this expansion: the Gray pre-pass rewrote that
+	 * call site onto {@code %gray-clear-output-dispatch} first.
+	 * @param cons the clear-output expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandClearOutput(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() > 2) {
+			throw new UnsupportedOperationException(
+					LispNames.CLEAR_OUTPUT + " expects 0 or 1 arguments, got " + (parts.size() - 1));
+		}
+		return parts.size() == 2 ? makeProgn(List.of(parts.get(1), LispNil.INSTANCE)) : LispNil.INSTANCE;
+	}
+
+	/**
 	 * Expands {@code (write-char char [stream])} to {@code write-string} of the
 	 * one-character string, returning the character -- so every backend's existing
 	 * stream-aware string output covers it.

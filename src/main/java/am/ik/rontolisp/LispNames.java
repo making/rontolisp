@@ -3290,6 +3290,16 @@ public final class LispNames {
 	public static final String FINISH_OUTPUT = "FINISH-OUTPUT";
 
 	/**
+	 * The {@code clear-output} built-in function: discards whatever the output stream has
+	 * buffered but not yet written. Nothing is buffered in a discardable way on any
+	 * backend -- a write is synchronous once flushed -- so this validates its stream
+	 * designator and answers nil, the same lite shape {@code force-output} has. It exists
+	 * because the Gray protocol names {@code stream-clear-output} and a portable stream
+	 * class implements it.
+	 */
+	public static final String CLEAR_OUTPUT = "CLEAR-OUTPUT";
+
+	/**
 	 * The {@code listen} built-in function: whether a character/byte is immediately
 	 * available on an input stream without blocking.
 	 */
@@ -6902,6 +6912,39 @@ public final class LispNames {
 	 * {@code (setf rontolisp:stream-file-position)} writer generic.
 	 */
 	public static final String GRAY_STREAM_FILE_POSITION = "STREAM-FILE-POSITION";
+
+	/**
+	 * {@code rontolisp:stream-line-column} -- the Gray column generic; {@code nil} (the
+	 * default method's answer) means the stream tracks no column, which is what makes
+	 * {@code fresh-line} write its newline unconditionally.
+	 */
+	public static final String GRAY_STREAM_LINE_COLUMN = "STREAM-LINE-COLUMN";
+
+	/**
+	 * {@code rontolisp:stream-start-line-p} -- whether the stream is at the start of a
+	 * line; the default method answers from {@link #GRAY_STREAM_LINE_COLUMN}.
+	 */
+	public static final String GRAY_STREAM_START_LINE_P = "STREAM-START-LINE-P";
+
+	/** {@code rontolisp:stream-terpri} -- the {@code terpri} Gray generic. */
+	public static final String GRAY_STREAM_TERPRI = "STREAM-TERPRI";
+
+	/** {@code rontolisp:stream-fresh-line} -- the {@code fresh-line} Gray generic. */
+	public static final String GRAY_STREAM_FRESH_LINE = "STREAM-FRESH-LINE";
+
+	/** {@code rontolisp:stream-advance-to-column} -- the Gray column-padding generic. */
+	public static final String GRAY_STREAM_ADVANCE_TO_COLUMN = "STREAM-ADVANCE-TO-COLUMN";
+
+	/** {@code rontolisp:stream-force-output} -- the {@code force-output} Gray generic. */
+	public static final String GRAY_STREAM_FORCE_OUTPUT = "STREAM-FORCE-OUTPUT";
+
+	/**
+	 * {@code rontolisp:stream-finish-output} -- the {@code finish-output} Gray generic.
+	 */
+	public static final String GRAY_STREAM_FINISH_OUTPUT = "STREAM-FINISH-OUTPUT";
+
+	/** {@code rontolisp:stream-clear-output} -- the {@code clear-output} Gray generic. */
+	public static final String GRAY_STREAM_CLEAR_OUTPUT = "STREAM-CLEAR-OUTPUT";
 
 	/**
 	 * The {@code *standard-output*} variable -- bound to the stream designator {@code t}
