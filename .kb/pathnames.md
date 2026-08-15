@@ -193,8 +193,9 @@ paths get a `defvar` from `LispMacroExpander`'s `PRINTER_MODE_VARS` injection
 for a program that MENTIONS it. That injection runs AFTER `mayCreateInstances`,
 and its value is an instance, so `mayCreateInstance` answers for the variable's
 NAME directly -- mentioning the variable flips the instance gate exactly the way
-a `#P` in source does. `uiop::get-pathname-defaults` still answers the literal
-`""` and is `.todo/357`'s to retire.
+a `#P` in source does. `uiop:get-pathname-defaults` reads this special since
+todo-357 retired the literal-`""` built-in; the whole `uiop/pathname` algebra
+(50/50) is written over this flat model -- its decisions live in `.kb/uiop.md`.
 
 ## Pinning
 

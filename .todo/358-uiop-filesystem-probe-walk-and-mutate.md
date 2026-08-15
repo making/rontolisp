@@ -29,10 +29,10 @@ RESOLVE-SYMLINKS RESOLVE-SYMLINKS* *RESOLVE-SYMLINKS* SAFE-FILE-WRITE-DATE
 SPLIT-NATIVE-PATHNAMES-STRING TRUENAME* TRUENAMIZE WITH-CURRENT-DIRECTORY
 ```
 
-`get-pathname-defaults` is already an INTERNAL symbol here answering the literal
-`""`; it is external upstream and must become a real reader of
-`*default-pathname-defaults*` once `.todo/357` creates that special. Deleting
-the literal is part of this item.
+`get-pathname-defaults` landed with `.todo/357` (2026-08-15): it is Lisp source
+in `uiop-filesystem.lisp` reading `*default-pathname-defaults*`, and both the
+old `""` Java built-in and the compile-path fold are gone. Strike it from the
+list above when working this item.
 
 ## What the backends can and cannot do
 

@@ -13115,6 +13115,162 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void evalUiopPathnameSubpathFamily() {
+		// The uiop/pathname algebra over the flat namestring (.kb/uiop.md): subpathname
+		// merges a relative subpath under the base's DIRECTORY, subpathp answers the
+		// base-relative remainder, enough-pathname falls back to the argument.
+		assertThat(evalMulti("""
+				(list (uiop:subpathname #P"/tmp/foo/" "bar/baz.txt")
+				      (uiop:subpathname #P"/tmp/foo/x.lisp" "n" :type "txt")
+				      (uiop:subpathname* "/tmp/foo" "x.txt")
+				      (uiop:subpathname* nil "x")
+				      (uiop:subpathp #P"/tmp/foo/bar.txt" #P"/tmp/")
+				      (uiop:subpathp #P"/other/x" #P"/tmp/")
+				      (uiop:subpathp "/tmp/foo" #P"/tmp/")
+				      (uiop:enough-pathname #P"/tmp/a/b.txt" #P"/tmp/")
+				      (uiop:enough-pathname #P"/x/a.txt" #P"/tmp/"))
+				""").print()).isEqualTo("(#P\"/tmp/foo/bar/baz.txt\" #P\"/tmp/foo/n.txt\" #P\"/tmp/foo/x.txt\" NIL"
+				+ " #P\"foo/bar.txt\" NIL NIL #P\"a/b.txt\" #P\"/x/a.txt\")");
+	}
+
+	@Test
+	void evalUiopPathnamePredicates() {
+		// absolute / relative / file answer the parsed PATHNAME (a generalized
+		// boolean), directory-pathname-p and the rest answer T/NIL.
+		assertThat(evalMulti("""
+				(list (uiop:absolute-pathname-p "/a/b") (uiop:absolute-pathname-p "a/b")
+				      (uiop:relative-pathname-p "a/b") (uiop:relative-pathname-p "/a/b")
+				      (uiop:directory-pathname-p "/a/b/") (uiop:directory-pathname-p "/a/b")
+				      (uiop:directory-pathname-p "*/") (uiop:file-pathname-p "/a/b")
+				      (uiop:file-pathname-p "/a/b/") (uiop:hidden-pathname-p ".gitignore")
+				      (uiop:hidden-pathname-p "x.txt") (uiop:logical-pathname-p #P"/a")
+				      (uiop:physical-pathname-p #P"/a") (uiop:physicalize-pathname "/a")
+				      (uiop:pathname-equal "/a/b" #P"/a/b") (uiop:pathname-equal #P"a" #P"b")
+				      (uiop:pathname-equal nil nil))
+				""").print())
+			.isEqualTo("(#P\"/a/b\" NIL #P\"a/b\" NIL T NIL NIL #P\"/a/b\" NIL T NIL NIL T" + " #P\"/a\" T NIL T)");
+	}
+
+	@Test
+	void evalUiopPathnameParsingAndDirectories() {
+		assertThat(evalMulti("""
+				(list (uiop:pathname-directory-pathname #P"/a/b/c.txt")
+				      (uiop:pathname-parent-directory-pathname #P"/a/b/c.txt")
+				      (uiop:pathname-parent-directory-pathname #P"/a/")
+				      (uiop:pathname-parent-directory-pathname #P"a/")
+				      (uiop:parse-unix-namestring "a//b/./c.txt")
+				      (uiop:parse-unix-namestring "foo/bar" :type "lisp")
+				      (uiop:parse-unix-namestring "foo/bar" :ensure-directory t)
+				      (uiop:parse-unix-namestring :foo)
+				      (uiop:parse-unix-namestring nil)
+				      (uiop:unix-namestring #P"/a/b.c")
+				      (uiop:pathname-root #P"/a/b")
+				      (uiop:pathname-host-pathname #P"/a/b")
+				      (uiop:nil-pathname)
+				      uiop:*nil-pathname*)
+				""").print()).isEqualTo("(#P\"/a/b/\" #P\"/a/\" #P\"/\" #P\"\" #P\"a/b/c.txt\" #P\"foo/bar.lisp\""
+				+ " #P\"foo/bar/\" #P\"foo\" NIL \"/a/b.c\" #P\"/\" #P\"\" #P\"\" #P\"\")");
+	}
+
+	@Test
+	void evalUiopSplitNameTypeAndSplitUnixNamestringYieldTheirValues() {
+		// Both are MULTIPLE-VALUE producers, and a lone leading dot makes the whole
+		// filename the NAME (type nil = *unspecific-pathname-type*).
+		assertThat(evalMulti("""
+				(append (multiple-value-list (uiop:split-name-type "foo.lisp"))
+				        (multiple-value-list (uiop:split-name-type ".hidden"))
+				        (multiple-value-list (uiop:split-name-type "foo"))
+				        (multiple-value-list
+				         (uiop:split-unix-namestring-directory-components "/a/b/c.txt"))
+				        (multiple-value-list
+				         (uiop:split-unix-namestring-directory-components "a/../b/" :dot-dot :up)))
+				""").print()).isEqualTo("(\"foo\" \"lisp\" \".hidden\" NIL \"foo\" NIL"
+				+ " :ABSOLUTE (\"a\" \"b\") \"c.txt\" NIL :RELATIVE (\"a\" :UP \"b\") NIL NIL)");
+	}
+
+	@Test
+	void evalUiopWildPathnamesAndTranslatePathnameStar() {
+		// The *wild* family are namestring literals over the two wildcards
+		// %wild-match reads; wilden appends *wild-path* under the argument's
+		// directory; translate-pathname* is the output-translations wrapper.
+		assertThat(evalMulti("""
+				(list uiop:*wild* uiop:*wild-file* uiop:*wild-file-for-directory*
+				      uiop:*wild-directory* uiop:*wild-inferiors* uiop:*wild-path*
+				      uiop:*unspecific-pathname-type* uiop:*output-translation-function*
+				      (uiop:wilden #P"/tmp/foo")
+				      (uiop:translate-pathname* #P"/src/a/b.lisp" #P"/src/**/*.*" #P"/out/**/*.*")
+				      (uiop:translate-pathname* #P"/a/x" #P"/a/*" t)
+				      (uiop:translate-pathname* #P"/a/x" #P"/a/*" (lambda (p s) (list p s)))
+				      (uiop:relativize-pathname-directory #P"/a/b/c.txt")
+				      (uiop:relativize-directory-component '(:absolute "a" "b"))
+				      (uiop:directory-separator-for-host)
+				      (uiop:directorize-pathname-host-device #P"/a/b"))
+				""").print()).isEqualTo("(\"*\" #P\"*.*\" #P\"*.*\" #P\"*/\" #P\"**/\" #P\"**/*.*\" NIL IDENTITY"
+				+ " #P\"/tmp/**/*.*\" #P\"/out/a/b.lisp\" #P\"/a/x\" (#P\"/a/x\" #P\"/a/*\")"
+				+ " #P\"a/b/c.txt\" (:RELATIVE \"a\" \"b\") #\\/ #P\"/a/b\")");
+	}
+
+	@Test
+	void evalUiopDirectoryComponentAlgebraAndMakePathnameStar() {
+		assertThat(evalMulti("""
+				(list (uiop:normalize-pathname-directory-component "foo")
+				      (uiop:normalize-pathname-directory-component '(:relative "a"))
+				      (uiop:denormalize-pathname-directory-component '(:absolute "a"))
+				      (uiop:merge-pathname-directory-components '(:relative "x") '(:absolute "a" "b"))
+				      (uiop:merge-pathname-directory-components '(:relative :back "x") '(:absolute "a" "b"))
+				      (uiop:merge-pathname-directory-components '(:absolute "z") '(:absolute "a"))
+				      (uiop:make-pathname-component-logical :unspecific)
+				      (uiop:make-pathname-component-logical "x")
+				      (uiop:make-pathname* :name "n" :type "t" :directory '(:absolute "d")))
+				""").print()).isEqualTo("((:ABSOLUTE \"foo\") (:RELATIVE \"a\") (:ABSOLUTE \"a\")"
+				+ " (:ABSOLUTE \"a\" \"b\" \"x\") (:ABSOLUTE \"a\" \"x\") (:ABSOLUTE \"z\")"
+				+ " NIL \"x\" #P\"/d/n.t\")");
+	}
+
+	@Test
+	void evalUiopEnsurePathnameChecksAndTransforms() {
+		// The lite constraint machine: want-* checks signal (or route through a custom
+		// ON-ERROR), ensure-* transforms, and make-pathname-logical names the missing
+		// logical-host model in a not-implemented-error.
+		assertThat(evalMulti("""
+				(list (uiop:ensure-pathname "a/b" :want-relative t)
+				      (handler-case (uiop:ensure-pathname "/a/b" :want-relative t) (error () :err))
+				      (uiop:ensure-pathname "a/b/" :want-directory t)
+				      (uiop:ensure-pathname "a/b" :ensure-directory t)
+				      (uiop:ensure-pathname "" :empty-is-nil t)
+				      (uiop:ensure-pathname nil)
+				      (handler-case (uiop:ensure-pathname nil :want-pathname t) (error () :err))
+				      (uiop:ensure-pathname "a" :ensure-absolute t :defaults "/base/")
+				      (uiop:ensure-pathname "*.lisp" :want-wild t)
+				      (uiop:ensure-pathname "/a/b.txt" :ensure-subpath t :defaults "/a/")
+				      (uiop:ensure-pathname "/a/b" :on-error (lambda (&rest args) (length args)))
+				      (handler-case (uiop:make-pathname-logical #P"/a" "HOST")
+				        (uiop:not-implemented-error () :nie)))
+				""").print()).isEqualTo("(#P\"a/b\" :ERR #P\"a/b/\" #P\"a/b/\" NIL NIL :ERR #P\"/base/a\""
+				+ " #P\"*.lisp\" #P\"/a/b.txt\" #P\"/a/b\" :NIE)");
+	}
+
+	@Test
+	void evalUiopPathnameDefaultsMacrosAndGetPathnameDefaults() {
+		// get-pathname-defaults reads the *default-pathname-defaults* special (the
+		// .todo/036-era "" Java built-in is retired); the two macros expand into a
+		// dynamic rebinding / call-with-enough-pathname.
+		assertThat(evalMulti("""
+				(list (uiop:get-pathname-defaults)
+				      (let ((*default-pathname-defaults* #P"/dpd/")) (uiop:get-pathname-defaults))
+				      (uiop:get-pathname-defaults #P"/g/")
+				      (uiop:with-pathname-defaults (#P"/wpd/") *default-pathname-defaults*)
+				      (uiop:with-pathname-defaults () *default-pathname-defaults*)
+				      (let ((p #P"/tmp/a/b.txt"))
+				        (uiop:with-enough-pathname (p :defaults #P"/tmp/") p))
+				      (uiop:with-enough-pathname (e :pathname #P"/tmp/x/y.txt" :defaults #P"/tmp/")
+				        (namestring e))
+				      (uiop:call-with-enough-pathname #P"/tmp/x/y.txt" #P"/tmp/" #'namestring))
+				""").print())
+			.isEqualTo("(#P\"\" #P\"/dpd/\" #P\"/g/\" #P\"/wpd/\" #P\"\" #P\"a/b.txt\"" + " \"x/y.txt\" \"x/y.txt\")");
+	}
+
+	@Test
 	void evalFlexiStreamsInMemoryInputStreamIsARealBinaryStream() {
 		// smart-buffer's finalize-buffer hands one of these to the multipart parser,
 		// and http-body type-tests it against flex:vector-stream for its fast path.

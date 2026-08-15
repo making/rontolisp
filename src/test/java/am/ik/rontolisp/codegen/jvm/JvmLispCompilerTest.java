@@ -1800,6 +1800,57 @@ class JvmLispCompilerTest {
 	}
 
 	@Test
+	void compileAndRunUiopPathnameAlgebra() throws Exception {
+		// The uiop/pathname family is pure computation over the flat namestring
+		// (uiop-pathname.lisp), so the compiled program must answer exactly what the
+		// interpreter does -- including the two macros (with-pathname-defaults binds
+		// the *default-pathname-defaults* special, with-enough-pathname lowers onto
+		// call-with-enough-pathname) and get-pathname-defaults reading the special.
+		assertThat(compileAndRun("""
+				(print (namestring (uiop:subpathname #P"/tmp/foo/" "bar/baz.txt")))
+				(print (namestring (uiop:subpathp (pathname "/tmp/foo/bar.txt") (pathname "/tmp/"))))
+				(print (uiop:subpathp #P"/other/x" #P"/tmp/"))
+				(print (namestring (uiop:enough-pathname #P"/tmp/a/b.txt" #P"/tmp/")))
+				(print (namestring (uiop:parse-unix-namestring "a//b/./c.txt")))
+				(print (namestring (uiop:parse-unix-namestring "foo/bar" :type "lisp")))
+				(print (list (if (uiop:absolute-pathname-p "/a/b") t nil)
+				             (if (uiop:relative-pathname-p "a/b") t nil)
+				             (if (uiop:directory-pathname-p "/a/b/") t nil)
+				             (if (uiop:file-pathname-p "/a/b") t nil)
+				             (uiop:hidden-pathname-p ".gitignore")
+				             (uiop:pathname-equal "/a/b" #P"/a/b")))
+				(print (namestring (uiop:pathname-parent-directory-pathname #P"/a/b/c.txt")))
+				(print (multiple-value-list (uiop:split-name-type "foo.lisp")))
+				(print (namestring (uiop:wilden #P"/tmp/foo")))
+				(print (namestring (uiop:translate-pathname* #P"/src/a/b.lisp" #P"/src/**/*.*" #P"/out/**/*.*")))
+				(print (namestring (uiop:ensure-pathname "a/b" :ensure-directory t)))
+				(print (handler-case (uiop:ensure-pathname "/a/b" :want-relative t) (error () :err)))
+				(print (namestring (uiop:get-pathname-defaults)))
+				(uiop:with-pathname-defaults (#P"/wpd/") (print (namestring *default-pathname-defaults*)))
+				(let ((p #P"/tmp/a/b.txt"))
+				  (uiop:with-enough-pathname (p :defaults #P"/tmp/") (print (namestring p))))
+				(print (namestring uiop:*wild-path*))
+				""")).isEqualTo("""
+				"/tmp/foo/bar/baz.txt"
+				"foo/bar.txt"
+				NIL
+				"a/b.txt"
+				"a/b/c.txt"
+				"foo/bar.lisp"
+				(T T T T T T)
+				"/a/"
+				("foo" "lisp")
+				"/tmp/**/*.*"
+				"/out/a/b.lisp"
+				"a/b/"
+				:ERR
+				""
+				"/wpd/"
+				"a/b.txt"
+				"**/*.*\"""");
+	}
+
+	@Test
 	void compileAndRunUiopUnimplementedMacroDropsItsArgumentForms() throws Exception {
 		// A macro nothing implements yet must not evaluate what it was handed. Its
 		// synthesized stub is a real variadic defun (the name has to be fboundp), so

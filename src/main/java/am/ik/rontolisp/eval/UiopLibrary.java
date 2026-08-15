@@ -358,7 +358,12 @@ public final class UiopLibrary {
 					LispNames.DELETE_FILE_IF_EXISTS),
 			LispNames.WITH_MUFFLED_CONDITIONS, List.of(LispNames.CALL_WITH_MUFFLED_CONDITIONS), LispNames.UIOP_DEBUG,
 			List.of(LispNames.LOAD_UIOP_DEBUG_UTILITY), LispNames.LATEST_TIMESTAMP_F,
-			List.of(LispNames.LATEST_TIMESTAMP));
+			List.of(LispNames.LATEST_TIMESTAMP),
+			// The no-defaults arm of with-pathname-defaults binds the *nil-pathname*
+			// VARIABLE -- a definition is a definition, so the same selection carries
+			// its defvar in.
+			LispNames.WITH_PATHNAME_DEFAULTS, List.of(LispNames.NIL_PATHNAME_VAR), LispNames.WITH_ENOUGH_PATHNAME,
+			List.of(LispNames.CALL_WITH_ENOUGH_PATHNAME));
 
 	/** Whether a definition the program never NAMES is nonetheless reached from it. */
 	private static boolean reachedBySurfaceForm(String name, Set<String> occurring) {

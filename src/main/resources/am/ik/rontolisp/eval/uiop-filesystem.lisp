@@ -58,3 +58,16 @@
 ;; delete-file, so the "missing file" answer is nil in one step.
 (defun uiop/filesystem:delete-file-if-exists (%dfe-path)
   (if (and %dfe-path (%delete-file (%path-ns %dfe-path))) t nil))
+
+;; The defaults relative names resolve against. Upstream absolutizes them
+;; against getcwd; rontolisp absolutizes nowhere (every backend resolves a
+;; relative path against the host's working directory), so the honest answer is
+;; the defaults themselves -- *default-pathname-defaults* unless overridden,
+;; whose initial #P"" designates exactly the host working directory, keeping
+;; (merge-pathnames x (uiop:get-pathname-defaults)) = x. This retired the
+;; pre-.todo/036 Java built-in that answered the literal "" before the special
+;; existed.
+(defun uiop/filesystem:get-pathname-defaults
+    (&optional (%gpd-defaults *default-pathname-defaults*))
+  (or (uiop/pathname:absolute-pathname-p %gpd-defaults)
+      (pathname (%path-ns %gpd-defaults))))

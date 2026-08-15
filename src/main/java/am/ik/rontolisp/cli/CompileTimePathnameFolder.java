@@ -403,7 +403,8 @@ final class CompileTimePathnameFolder {
 		if (qn == null) {
 			return false;
 		}
-		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)) {
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)
+				|| UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SUBPATHNAME)) {
 			return true;
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg()) && (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
@@ -491,6 +492,9 @@ final class CompileTimePathnameFolder {
 		}
 		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.MERGE_PATHNAMES_STAR)) {
 			return reduceMergePathnames(args, systems, parameters, writtenPaths);
+		}
+		if (UiopExports.denotes(qn.pkg(), qn.member(), LispNames.SUBPATHNAME)) {
+			return reduceSubpathname(args, systems, parameters, writtenPaths);
 		}
 		if (LispNames.ASDF_PKG.equals(qn.pkg())) {
 			if (LispNames.SYSTEM_SOURCE_DIRECTORY.equals(qn.member())
@@ -586,6 +590,81 @@ final class CompileTimePathnameFolder {
 		// Real uiop:merge-pathnames* answers a pathname; the interpreter's Java twin
 		// wraps too, so the fold and the runtime agree.
 		return PathnameOps.pathnameValue(PathnameOps.mergePathnames(specifiedNs, defaults));
+	}
+
+	/**
+	 * {@code (uiop:subpathname BASE SUB [:type TYPE])} over literals -> the pathname
+	 * literal the {@code uiop-pathname.lisp} definition answers at run time: an absolute
+	 * pathname VALUE passes through, a relative namestring is normalized ({@code ""} and
+	 * {@code "."} components dropped, {@code TYPE} appended to the last component) and
+	 * appended under BASE's directory. An absolute STRING sub is declined -- at run time
+	 * that arm is a {@code :want-relative} error, and a fold must never fold an error
+	 * away.
+	 */
+	private static @Nullable LispVal reduceSubpathname(List<LispVal> args, Map<String, AsdfSystems.LispSystem> systems,
+			Map<String, LispVal> parameters, java.util.Set<String> writtenPaths) {
+		if (args.size() != 2 && args.size() != 4) {
+			return null;
+		}
+		String type = null;
+		if (args.size() == 4) {
+			if (!(args.get(2) instanceof LispSymbol key) || !":TYPE".equals(key.name())) {
+				return null;
+			}
+			LispVal typeVal = reduce(args.get(3), systems, parameters, writtenPaths);
+			if (typeVal instanceof LispString typeStr) {
+				type = typeStr.value();
+			}
+			else if (!(typeVal instanceof LispNil)) {
+				return null;
+			}
+		}
+		LispVal base = reduce(args.get(0), systems, parameters, writtenPaths);
+		String baseNs = base == null ? null : PathnameOps.designatorNamestring(base);
+		if (baseNs == null) {
+			return null;
+		}
+		LispVal sub = reduce(args.get(1), systems, parameters, writtenPaths);
+		if (sub instanceof LispInstance inst && inst.layout().kind() == LispLayout.Kind.PATHNAME) {
+			String subNs = PathnameOps.designatorNamestring(sub);
+			if (subNs != null && subNs.startsWith("/")) {
+				// An absolute pathname VALUE passes through unchanged.
+				return sub;
+			}
+		}
+		String subNs = sub == null ? null : PathnameOps.designatorNamestring(sub);
+		if (subNs == null || subNs.startsWith("/")) {
+			return null;
+		}
+		int slash = baseNs.lastIndexOf('/');
+		String baseDir = slash < 0 ? "" : baseNs.substring(0, slash + 1);
+		boolean directory = subNs.isEmpty() || subNs.endsWith("/");
+		List<String> components = new ArrayList<>();
+		if (!subNs.isEmpty() && subNs.indexOf('/') < 0) {
+			// The bare file-namestring fast path: no component filtering, exactly like
+			// split-unix-namestring-directory-components (so "." stays a name).
+			components.add(subNs);
+		}
+		else {
+			for (String component : subNs.split("/")) {
+				if (!component.isEmpty() && !".".equals(component)) {
+					components.add(component);
+				}
+			}
+		}
+		StringBuilder normalized = new StringBuilder();
+		for (int i = 0; i < components.size(); i++) {
+			String component = components.get(i);
+			boolean last = i == components.size() - 1;
+			if (last && !directory && type != null) {
+				component = component + "." + type;
+			}
+			normalized.append(component);
+			if (!last || directory) {
+				normalized.append('/');
+			}
+		}
+		return PathnameOps.pathnameValue(baseDir + normalized);
 	}
 
 	/**

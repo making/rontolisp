@@ -8,11 +8,12 @@
 受け付け、結果はパス名です。
 
 ```lisp
-(uiop:merge-pathnames* "b.txt" "/tmp/")   ; => "/tmp/b.txt"
+(uiop:merge-pathnames* "b.txt" "/tmp/")   ; => #P"/tmp/b.txt"
 ```
 
 `defaults` を省略すると `""`（作業ディレクトリを指す名前文字列）に対してマージされ、
-`specified` はそのまま残ります — `uiop::get-pathname-defaults` が返す答えと同じです。
+`specified` はそのまま残ります — 初期値の `*default-pathname-defaults*` のもとで
+`uiop:get-pathname-defaults` が返す答えと同じです。
 
 ## バックエンドサポート
 

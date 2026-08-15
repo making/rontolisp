@@ -33,8 +33,8 @@ one member name:
 | [`uiop/utility`](uiop/utility.md) | the portable helpers (`strcat`, `split-string`, `if-let`, `not-implemented-error`) | 68 / 68 |
 | `uiop/version` | version comparison and the deprecation conditions | 1 / 15 |
 | `uiop/os` | host identity, the environment, the working directory | 1 / 22 |
-| `uiop/pathname` | the pathname algebra (`merge-pathnames*`, `ensure-absolute-pathname`) | 4 / 50 |
-| `uiop/filesystem` | probe, walk and mutate the file system | 7 / 32 |
+| [`uiop/pathname`](uiop/pathname.md) | the pathname algebra (`subpathname`, `parse-unix-namestring`, `enough-pathname`) | 50 / 50 |
+| `uiop/filesystem` | probe, walk and mutate the file system | 8 / 32 |
 | `uiop/stream` | file contents, temporary files, encodings, the standard streams | 3 / 66 |
 | `uiop/image` | the command line, exit, the dump hooks | 1 / 30 |
 | `uiop/launch-program` | asynchronous subprocesses | 0 / 19 |
@@ -51,7 +51,9 @@ target the counts above are measured against, so both move together.
 ## What is implemented
 
 `uiop/utility` — the 68 portable helpers everything else in uiop is written in —
-is complete and has [its own page](uiop/utility.md). The rest:
+and `uiop/pathname` — the 50-member pathname algebra — are complete, and each
+has its own page ([uiop/utility](uiop/utility.md),
+[uiop/pathname](uiop/pathname.md)). The rest:
 
 | Function | Example | Result |
 |----------|---------|--------|
@@ -62,22 +64,21 @@ is complete and has [its own page](uiop/utility.md). The rest:
 | `uiop:subdirectories` | `(uiop:subdirectories "src/")` | the subdirectories of a directory, each with its trailing `/` |
 | `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | walk a directory tree: `collectp` decides what reaches `collector`, `recursep` what is descended into. Every directory handed over is in directory form, root included |
 | `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | the whole file as one string. Runs on every backend that can open a file for input. Lite: real UIOP's `&rest` keys are accepted and ignored (`:external-format` has no rontolisp surface — every backend reads UTF-8) |
-| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — the defaults-aware pathname merge, on all four backends |
-| `uiop:ensure-directory-pathname` | `(uiop:ensure-directory-pathname "src")` | `#P"src/"` — the pathname in directory form, which is what merging against it appends to |
-| `uiop:absolute-pathname-p` | `(uiop:absolute-pathname-p "/tmp/x")` | `#P"/tmp/x"` — the pathname when the namestring is absolute (a leading `/`), `nil` otherwise. A generalized boolean, like upstream |
-| `uiop:ensure-absolute-pathname` | `(uiop:ensure-absolute-pathname "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — an absolute path passes through and a relative one is merged against the defaults (a pathname, or a function answering one). Lite: a relative path with no absolute defaults is answered as ITSELF where upstream signals — rontolisp absolutizes nowhere (`truename` carries the namestring it was given), and with no `chdir` a relative namestring denotes the same file for the whole run, so it is already the file identity callers use it as |
 | `uiop:compile-file-type` | `(uiop:compile-file-type)` | `nil` — the pathname type a compiled file carries. There is no `compile-file` here, so there is no such type, and a caller asking "is this path a fasl?" gets `no` for a source path |
 | `uiop:default-temporary-directory` | `(uiop:default-temporary-directory)` | `$TMPDIR` in directory form, or `#P"/tmp/"` when the environment is empty (both WASM backends without `--env`) |
 | `uiop:delete-file-if-exists` | `(uiop:delete-file-if-exists "scratch.txt")` | delete a file, answering `nil` instead of signalling when it is not there — the whole reason UIOP exports it |
+| `uiop:get-pathname-defaults` | `(uiop:get-pathname-defaults)` | the defaults relative names resolve against — `*default-pathname-defaults*` (initially `#P""`, the pathname designating the host working directory) unless an absolute defaults argument is given |
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — the host-OS spelling of a pathname, which here IS the namestring, so this is `namestring` |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | register a package shorthand (lite: global, no per-package scoping). A literal top-level call is a compile-time directive, so it works on every backend |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | look the name up in the package at run time and apply it — UIOP's late-binding call into a system the caller does not depend on |
 | `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | print a report for a condition (lite: the condition alone — no backend carries a Lisp-level call stack) |
 
-Three members outside `uiop/utility` are **macros**, expanded by the compiler
-rather than called: `uiop:with-temporary-file`,
+Three members outside the complete sub-packages are **macros**, expanded by the
+compiler rather than called: `uiop:with-temporary-file`,
 [`uiop:with-deprecation`](macros/uiop-with-deprecation.md) and
 `uiop:define-package` (a literal top-level call is consumed like `defpackage`).
+`uiop/pathname`'s two macros — `uiop:with-pathname-defaults` and
+`uiop:with-enough-pathname` — are [on its page](uiop/pathname.md#relative-to-a-base).
 `uiop/utility`'s own macros — [`uiop:if-let`](macros/uiop-if-let.md),
 `uiop:nest`, `uiop:while-collecting`, `uiop:with-upgradability` and the rest —
 are [on its page](uiop/utility.md#macros).
@@ -104,7 +105,7 @@ both WASM outputs signal the same condition with the same report.
 
 ## rontolisp extras
 
-Three names live in `uiop` that upstream does not export there:
+Two names live in `uiop` that upstream does not export there:
 
 - `uiop:namestring` — upstream only *inherits* Common Lisp's; here it is
   exported and is the very [`namestring`](functions/namestring.md) function, so
@@ -112,7 +113,3 @@ Three names live in `uiop` that upstream does not export there:
 - [`uiop:when-let`](macros/uiop-when-let.md) and
   [`uiop:when-let*`](macros/uiop-when-let-star.md) — alexandria's names, kept
   because programs already spell them. Real UIOP exports `if-let` only.
-- `uiop::get-pathname-defaults` — internal in real UIOP too (hence the double
-  colon), answering `""` on every backend: a relative path resolves against the
-  host's working directory, and `""` is the namestring designating exactly that,
-  so `(merge-pathnames x (uiop::get-pathname-defaults))` yields `x`.

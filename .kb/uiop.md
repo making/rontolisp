@@ -214,7 +214,75 @@ all.
   `return-from` out of a `labels` function, i.e. a cross-lambda exit, which would
   put every program using it into EH mode on WASM.
 
-`find-symbol*` / `find-package*` (`uiop-package.lisp`) landed with this item
+## `uiop/pathname`'s decisions (todo-357: 50/50)
+
+The whole sub-package is Lisp source in `uiop-pathname.lisp`, written over the
+flat-namestring model of `.kb/pathnames.md` (`%pathname-split` / `%path-ns` /
+`pathname` / `namestring` / `wild-pathname-p` / `translate-pathname`), so
+upstream's component-wise care collapses onto namestring computation and one
+definition serves all four backends.
+
+- **Logical pathnames follow the CL half's commitment** (`.kb/pathnames.md`: no
+  logical host can be defined, no `logical-pathname-translations` table exists,
+  `logical-pathname` always signals, `translate-logical-pathname` is the
+  identity). So `logical-pathname-p` answers nil for everything,
+  `physical-pathname-p` is `pathnamep`, `physicalize-pathname` is the coercing
+  identity, and `make-pathname-logical` signals `not-implemented-error` naming
+  the missing model -- answering a physical pathname that claims to be logical
+  would be a lie. `make-pathname-component-logical` IS real (`:unspecific` ->
+  nil, else identity): it is pure component surgery. Re-evaluate only if a
+  host/translation table is ever added.
+- **The `*wild-*` constants are namestring literals** (`*wild*` is the string
+  `"*"`, `*wild-file*` is `#P"*.*"`, `*wild-inferiors*` is `#P"**/"`,
+  `*wild-path*` is `#P"**/*.*"`), the two wildcards `%wild-match` reads, not
+  upstream's `:wild` keywords -- `make-pathname` here renders a directory
+  `:wild` as `*` anyway, and a keyword-valued constant would make
+  `(wilden p)`'s merge meaningless over a flat namestring.
+- **`ensure-pathname` signals DIRECTLY on the default error path** (`%ens-err`
+  branches: nil/t/'error -> a direct `(error ...)`, anything else ->
+  `call-function`). A funcalled `#'error` wrapper is a raw TRAP on the WASM
+  backends where a direct call is a catchable signal, and
+  `(handler-case (ensure-pathname ...) (error () ...))` must catch on all four.
+  Lite otherwise, documented on the doc page: the report is
+  `Invalid pathname ~S: ~A` (no `~?` chain), `:want-logical` always fails,
+  `:resolve-symlinks`/`:truenamize` are accepted and ignored, `:truename`
+  answers `probe-file`.
+- **`ensure-absolute-pathname` keeps its documented divergence** (a relative
+  path with no absolute default is answered as itself, not an error): rontolisp
+  absolutizes nowhere, and the value's job is file IDENTITY (rove's
+  file-to-suite map). `get-pathname-defaults` (home `uiop/filesystem`, defined
+  in `uiop-filesystem.lisp` because the export is homed there) reads
+  `*default-pathname-defaults*` for the same reason -- it RETIRED the
+  pre-`.todo/036` `""` Java built-in in `LispEvaluator` and the
+  `expandUiopStubCall` fold, plus `PackageRegistry`'s hand-added internal
+  symbol (the inventory row covers it now).
+- **Two macros, `with-pathname-defaults` and `with-enough-pathname`**, live in
+  `LispMacroExpander` (`UIOP_MACRO_EXPANSIONS`) like every uiop macro. Their
+  `MACRO_EXPANSION_CALLEES` rows show the table also carries a VARIABLE: the
+  no-defaults arm of `with-pathname-defaults` binds `uiop:*nil-pathname*`, and
+  selection splices a defvar exactly like a defun. `with-enough-pathname`'s
+  `:pathname` defaults to the SPEC VARIABLE itself (upstream's rebinding
+  shorthand), and the `*default-pathname-defaults*` rebinding both expansions
+  emit is a real dynamic `let` on all four backends.
+- **`split-name-type` and `split-unix-namestring-directory-components` return
+  their MULTIPLE VALUES through the spill channel** (`.kb/multiple-values.md`);
+  `parse-unix-namestring` consumes them across the function boundary and the
+  four-backend tests pin that this works compiled.
+- **`cli/CompileTimePathnameFolder` folds `subpathname`** over literal
+  arguments (the `merge-pathnames*` precedent), mirroring the Lisp definition
+  exactly -- including the bare-filename fast path where `"."` is a NAME, and
+  declining an absolute STRING subpath because at run time that arm is a
+  `:want-relative` error a fold must not fold away.
+
+Pinned by the `evalUiopPathname*` / `evalUiopSplitNameType*` /
+`evalUiopWildPathnames*` / `evalUiopEnsurePathname*` block of
+`LispEvaluatorTest`, `JvmLispCompilerTest.compileAndRunUiopPathnameAlgebra`,
+`WasmLispCompilerIntegrationTest.uiopPathnameAlgebraCompileAndRuns` and the
+`uiop-pathname-algebra` ci-spec case (all four backends). Docs:
+`reference/uiop/pathname.md` (the sub-package page) plus detail pages for the
+names libraries actually call.
+
+`find-symbol*` / `find-package*` (`uiop-package.lisp`) landed with todo-354
 rather than with `.todo/361`: `find-standard-case-symbol`, `coerce-class` and
 `symbol-test-to-feature-expression` are all written over `find-symbol*`, and
 routing them around it would leave three copies of "look a name up in a package,
@@ -350,4 +418,8 @@ actually calls, not for all 429.
   function.
 - `uiop:when-let` / `uiop:when-let*` -- alexandria's names, not uiop's (real
   uiop exports `if-let` only). Kept because programs already spell them.
-- `uiop::get-pathname-defaults` -- internal in real UIOP too, answering `""`.
+
+`uiop::get-pathname-defaults` used to be a third extra (a hand-added internal
+answering the literal `""`); todo-357 retired it -- the inventory's
+`UIOP/FILESYSTEM` row covers the name and the definition reads
+`*default-pathname-defaults*` (see "`uiop/pathname`'s decisions" above).

@@ -562,6 +562,19 @@ categories:
       - { slug: uiop-collect-sub-directories, name: "uiop:collect-sub*directories" }
       - { slug: uiop-read-file-string, name: "uiop:read-file-string" }
       - { slug: uiop-merge-pathnames-star, name: "uiop:merge-pathnames*" }
+      - { slug: uiop-subpathname, name: "uiop:subpathname" }
+      - { slug: uiop-subpathp, name: "uiop:subpathp" }
+      - { slug: uiop-parse-unix-namestring, name: "uiop:parse-unix-namestring" }
+      - { slug: uiop-unix-namestring, name: "uiop:unix-namestring" }
+      - { slug: uiop-ensure-pathname, name: "uiop:ensure-pathname" }
+      - { slug: uiop-enough-pathname, name: "uiop:enough-pathname" }
+      - { slug: uiop-pathname-directory-pathname, name: "uiop:pathname-directory-pathname" }
+      - { slug: uiop-pathname-parent-directory-pathname, name: "uiop:pathname-parent-directory-pathname" }
+      - { slug: uiop-split-name-type, name: "uiop:split-name-type" }
+      - { slug: uiop-absolute-pathname-p, name: "uiop:absolute-pathname-p" }
+      - { slug: uiop-relative-pathname-p, name: "uiop:relative-pathname-p" }
+      - { slug: uiop-directory-pathname-p, name: "uiop:directory-pathname-p" }
+      - { slug: uiop-file-pathname-p, name: "uiop:file-pathname-p" }
       - { slug: uiop-native-namestring, name: "uiop:native-namestring" }
       - { slug: uiop-add-package-local-nickname, name: "uiop:add-package-local-nickname" }
       - { slug: uiop-emptyp, name: "uiop:emptyp" }

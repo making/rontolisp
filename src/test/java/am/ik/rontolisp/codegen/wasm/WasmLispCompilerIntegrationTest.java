@@ -3339,6 +3339,49 @@ class WasmLispCompilerIntegrationTest {
 	}
 
 	@Test
+	void uiopPathnameAlgebraCompileAndRuns() throws Exception {
+		// The uiop/pathname family: pure computation over the flat namestring
+		// (uiop-pathname.lisp), spliced by the selection pass, plus the two macros
+		// (with-pathname-defaults binds the *default-pathname-defaults* special,
+		// with-enough-pathname lowers onto call-with-enough-pathname). The JVM twin is
+		// JvmLispCompilerTest.compileAndRunUiopPathnameAlgebra.
+		assertThat(compileAndRunProgram(am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
+				(print (namestring (uiop:subpathname #P"/tmp/foo/" "bar/baz.txt")))
+				(print (namestring (uiop:subpathp (pathname "/tmp/foo/bar.txt") (pathname "/tmp/"))))
+				(print (namestring (uiop:enough-pathname #P"/tmp/a/b.txt" #P"/tmp/")))
+				(print (namestring (uiop:parse-unix-namestring "a//b/./c.txt")))
+				(print (list (if (uiop:absolute-pathname-p "/a/b") t nil)
+				             (if (uiop:relative-pathname-p "a/b") t nil)
+				             (if (uiop:directory-pathname-p "/a/b/") t nil)
+				             (if (uiop:file-pathname-p "/a/b") t nil)
+				             (uiop:hidden-pathname-p ".gitignore")
+				             (uiop:pathname-equal "/a/b" #P"/a/b")))
+				(print (namestring (uiop:pathname-parent-directory-pathname #P"/a/b/c.txt")))
+				(print (multiple-value-list (uiop:split-name-type "foo.lisp")))
+				(print (namestring (uiop:wilden #P"/tmp/foo")))
+				(print (namestring (uiop:translate-pathname* #P"/src/a/b.lisp" #P"/src/**/*.*" #P"/out/**/*.*")))
+				(print (namestring (uiop:ensure-pathname "a/b" :ensure-directory t)))
+				(print (namestring (uiop:get-pathname-defaults)))
+				(uiop:with-pathname-defaults (#P"/wpd/") (print (namestring *default-pathname-defaults*)))
+				(let ((p #P"/tmp/a/b.txt"))
+				  (uiop:with-enough-pathname (p :defaults #P"/tmp/") (print (namestring p))))
+				""")))).isEqualTo("""
+				"/tmp/foo/bar/baz.txt"
+				"foo/bar.txt"
+				"a/b.txt"
+				"a/b/c.txt"
+				(T T T T T T)
+				"/a/"
+				("foo" "lisp")
+				"/tmp/**/*.*"
+				"/out/a/b.lisp"
+				"a/b/"
+				""
+				"/wpd/"
+				"a/b.txt\"""");
+	}
+
+	@Test
 	void uiopUnimplementedMacroDropsItsArgumentFormsCompilesAndRuns() throws Exception {
 		// A macro nothing implements yet must not evaluate what it was handed. Its
 		// synthesized stub is a real variadic defun (the name has to be fboundp), so

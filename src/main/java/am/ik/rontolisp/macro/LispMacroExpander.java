@@ -7764,11 +7764,10 @@ public final class LispMacroExpander {
 	 * spliced definition. Three kinds:
 	 * <ul>
 	 * <li>the FOLDS -- {@code file-exists-p} onto {@code probe-file},
-	 * {@code namestring}/{@code native-namestring} onto {@code cl:namestring},
-	 * {@code get-pathname-defaults} onto {@code ""} and {@code symbol-call} onto a
-	 * runtime {@code intern} + {@code funcall}. Each has a Lisp definition too
-	 * ({@code eval.UiopLibrary}); the fold is what keeps a direct call from dragging it
-	 * in;</li>
+	 * {@code namestring}/{@code native-namestring} onto {@code cl:namestring} and
+	 * {@code symbol-call} onto a runtime {@code intern} + {@code funcall}. Each has a
+	 * Lisp definition too ({@code eval.UiopLibrary}); the fold is what keeps a direct
+	 * call from dragging it in;</li>
 	 * <li>a MACRO nothing implements yet: it lowers to {@code uiop:not-implemented-error}
 	 * with its argument forms DROPPED, because a macro that does nothing must not
 	 * evaluate the forms it was handed (an unimplemented
@@ -7812,15 +7811,6 @@ public final class LispMacroExpander {
 			LispVal bindings = listToCons(
 					List.of(listToCons(List.of(pkgVar, parts.get(1))), listToCons(List.of(nameVar, parts.get(2)))));
 			return listToCons(List.of(new LispSymbol(LispNames.LET), bindings, listToCons(call)));
-		}
-		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.GET_PATHNAME_DEFAULTS.equals(qn.member())
-				&& parts.size() == 1) {
-			// Not a stub: the one uiop pathname accessor with a real cross-backend
-			// answer. See LispNames.GET_PATHNAME_DEFAULTS for why it is "". Only the
-			// no-argument shape (the one every call site uses) is answered; the
-			// &optional defaults shape falls through to the stub error rather than
-			// silently discarding the argument.
-			return new LispString("");
 		}
 		if (LispNames.UIOP_PKG.equals(qn.pkg()) && LispNames.NAMESTRING.equals(qn.member()) && parts.size() == 2) {
 			// Not a stub: real UIOP re-exports CL's namestring, and rontolisp's CL one is
@@ -7890,7 +7880,7 @@ public final class LispMacroExpander {
 			LispNames.WHEN_LET, LispNames.WHEN_LET_STAR, LispNames.WITH_DEPRECATION, LispNames.WITH_TEMPORARY_FILE,
 			LispNames.DEFINE_PACKAGE, LispNames.WITH_UPGRADABILITY, LispNames.NEST, LispNames.WHILE_COLLECTING,
 			LispNames.APPENDF, LispNames.LATEST_TIMESTAMP_F, LispNames.WITH_MUFFLED_CONDITIONS, LispNames.UIOP_DEBUG,
-			LispNames.COMPATFMT);
+			LispNames.COMPATFMT, LispNames.WITH_PATHNAME_DEFAULTS, LispNames.WITH_ENOUGH_PATHNAME);
 
 	/**
 	 * If {@code cons} is a {@code (read-line ...)} call in CL's 2- or 3-argument shape
@@ -8408,6 +8398,76 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (uiop:with-pathname-defaults ([defaults]) body...)} into
+	 * {@code (let ((*default-pathname-defaults* DEFAULTS)) body...)} -- upstream's own
+	 * expansion, with the no-defaults arm binding {@code uiop:*nil-pathname*} (the
+	 * neutral {@code #P""}). {@code *default-pathname-defaults*} is a genuine dynamic
+	 * variable on all four backends ({@code .kb/pathnames.md}), so the {@code let} is a
+	 * real dynamic rebinding.
+	 * @param cons the with-pathname-defaults expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithPathnameDefaults(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons || parts.get(1) instanceof LispNil)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_PATHNAME_DEFAULTS)
+					+ " expects (with-pathname-defaults ([defaults]) body...): " + cons.print());
+		}
+		List<LispVal> spec = parts.get(1) instanceof LispCons specCons ? specCons.toList() : List.of();
+		if (spec.size() > 1) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_PATHNAME_DEFAULTS)
+					+ " expects at most one defaults form: " + cons.print());
+		}
+		LispVal defaults = !spec.isEmpty() && !(spec.get(0) instanceof LispNil) ? spec.get(0)
+				: new LispSymbol(UiopExports.qualified(LispNames.NIL_PATHNAME_VAR));
+		List<LispVal> let = new java.util.ArrayList<>();
+		let.add(new LispSymbol(LispNames.LET));
+		let.add(listToCons(
+				List.of(listToCons(List.of(new LispSymbol(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR), defaults)))));
+		let.addAll(parts.subList(2, parts.size()));
+		return listToCons(let);
+	}
+
+	/**
+	 * Expands {@code (uiop:with-enough-pathname (var &key pathname defaults) body...)}
+	 * into {@code (uiop:call-with-enough-pathname PATHNAME DEFAULTS (lambda (var)
+	 * body...))} -- upstream's own shorthand. {@code :pathname} defaults to the VARIABLE
+	 * named by {@code var} (the rebinding shorthand) and {@code :defaults} to
+	 * {@code *default-pathname-defaults*}.
+	 * @param cons the with-enough-pathname expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandUiopWithEnoughPathname(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() < 2 || !(parts.get(1) instanceof LispCons spec)
+				|| !(spec.car() instanceof LispSymbol variable)) {
+			throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_ENOUGH_PATHNAME)
+					+ " expects (with-enough-pathname (var &key pathname defaults) body...): " + cons.print());
+		}
+		List<LispVal> specParts = spec.toList();
+		LispVal pathname = variable;
+		LispVal defaults = new LispSymbol(LispNames.DEFAULT_PATHNAME_DEFAULTS_VAR);
+		for (int i = 1; i + 1 < specParts.size(); i += 2) {
+			if (!(specParts.get(i) instanceof LispSymbol key)) {
+				throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_ENOUGH_PATHNAME)
+						+ " expects keyword options: " + cons.print());
+			}
+			switch (key.name()) {
+				case ":PATHNAME" -> pathname = specParts.get(i + 1);
+				case ":DEFAULTS" -> defaults = specParts.get(i + 1);
+				default -> throw new UnsupportedOperationException(UiopExports.qualified(LispNames.WITH_ENOUGH_PATHNAME)
+						+ " unknown option " + key.name() + ": " + cons.print());
+			}
+		}
+		List<LispVal> lambda = new java.util.ArrayList<>();
+		lambda.add(new LispSymbol(LispNames.LAMBDA));
+		lambda.add(listToCons(List.of(variable)));
+		lambda.addAll(parts.subList(2, parts.size()));
+		return listToCons(List.of(new LispSymbol(UiopExports.qualified(LispNames.CALL_WITH_ENOUGH_PATHNAME)), pathname,
+				defaults, listToCons(lambda)));
+	}
+
+	/**
 	 * Expands {@code (uiop:uiop-debug key...)} into
 	 * {@code (uiop:load-uiop-debug-utility key...)}. Upstream additionally wraps it in an
 	 * {@code (eval-when (:compile-toplevel :load-toplevel :execute) ...)} so the debug
@@ -8484,6 +8544,8 @@ public final class LispMacroExpander {
 			case LispNames.APPENDF -> expandUiopAppendf(cons);
 			case LispNames.LATEST_TIMESTAMP_F -> expandUiopLatestTimestampF(cons);
 			case LispNames.WITH_MUFFLED_CONDITIONS -> expandUiopWithMuffledConditions(cons);
+			case LispNames.WITH_PATHNAME_DEFAULTS -> expandUiopWithPathnameDefaults(cons);
+			case LispNames.WITH_ENOUGH_PATHNAME -> expandUiopWithEnoughPathname(cons);
 			case LispNames.UIOP_DEBUG -> expandUiopDebug(cons);
 			case LispNames.COMPATFMT -> expandUiopCompatfmt(cons);
 			// define-package is read-time surgery the package resolver performs, not an

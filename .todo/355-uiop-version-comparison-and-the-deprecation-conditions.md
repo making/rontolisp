@@ -43,8 +43,8 @@ All pure; all four backends.
   `version-deprecation`, which maps a version pair to `:style-warning` /
   `:warning` / `:error` / `:delete`. `with-deprecation` already exists as a
   macro; rewire it onto the real classes rather than leaving two mechanisms.
-- **`coerce-pathname`** is the deprecated alias of `parse-unix-namestring`
-  (`.todo/357`); order this item after 357 or leave that one name for it.
+- **`coerce-pathname`** is the deprecated alias of `parse-unix-namestring`,
+  which is real since `.todo/357` (2026-08-15) -- a one-line wrapper here.
 
 ## Gate
 

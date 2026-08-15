@@ -2453,21 +2453,10 @@ public final class LispEvaluator {
 		// with non-literal arguments was "The function UIOP:MERGE-PATHNAMES* is
 		// undefined"
 		// on all three. The interpreter lazy-loads them like any other uiop definition.
-		// uiop::get-pathname-defaults (internal in real UIOP too) -- the pathname
-		// relative names resolve against. Every backend resolves a relative path
-		// against the host's working directory, and "" is the namestring designating
-		// exactly that, so (merge-pathnames X (get-pathname-defaults)) yields X.
-		// Kept identical to the compile paths' lowering in
-		// LispMacroExpander.expandUiopStubCall.
-		String pathnameDefaultsName = PackageRegistry.qualifyInternal(LispNames.UIOP_PKG,
-				LispNames.GET_PATHNAME_DEFAULTS);
-		this.globalEnv.defineFunction(pathnameDefaultsName, new LispFunction(pathnameDefaultsName, args -> {
-			if (!args.isEmpty()) {
-				throw new LispEvalException(
-						pathnameDefaultsName + " expects no arguments, got " + args.size() + " arguments");
-			}
-			return new LispString("");
-		}));
+		// uiop:get-pathname-defaults retired its Java built-in the same way with
+		// .todo/357: it is Lisp source in uiop-filesystem.lisp now, reading the
+		// *default-pathname-defaults* special instead of answering the literal ""
+		// that predated it.
 		// uiop:symbol-call -- real UIOP's late-binding call: look NAME up in PACKAGE at
 		// run time and apply it to the remaining arguments. The interpreter can do this
 		// for real (the resolver knows every package's members and the global function

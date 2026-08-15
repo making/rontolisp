@@ -6830,11 +6830,11 @@ public final class LispNames {
 	public static final String TEMP_FILE_NAME = "%TEMP-FILE-NAME";
 
 	/**
-	 * {@code uiop::get-pathname-defaults} (internal in real UIOP too, hence the double
-	 * colon at every call site) -- the pathname relative names are resolved against.
-	 * rontolisp answers with the empty namestring on every backend: a relative path is
-	 * resolved by the host against its own working directory, and {@code ""} is exactly
-	 * the pathname designating that, so
+	 * {@code uiop:get-pathname-defaults} ({@code uiop/filesystem}'s export) -- the
+	 * defaults relative names are resolved against. Lisp source in
+	 * {@code uiop-filesystem.lisp} reading {@code *default-pathname-defaults*} (initially
+	 * {@code #P""}, the pathname designating the host working directory every backend
+	 * resolves a relative path against), so
 	 * {@code (merge-pathnames X (get-pathname-defaults))} yields {@code X} unchanged.
 	 */
 	public static final String GET_PATHNAME_DEFAULTS = "GET-PATHNAME-DEFAULTS";
@@ -6949,6 +6949,45 @@ public final class LispNames {
 	 * named here because {@link #WITH_MUFFLED_CONDITIONS} expands into it.
 	 */
 	public static final String CALL_WITH_MUFFLED_CONDITIONS = "CALL-WITH-MUFFLED-CONDITIONS";
+
+	/**
+	 * {@code uiop:with-pathname-defaults ([defaults]) body...} -- runs the body with
+	 * {@code *default-pathname-defaults*} bound to the given form, or to
+	 * {@link #NIL_PATHNAME_VAR} when none is given (upstream's neutral-defaults arm).
+	 */
+	public static final String WITH_PATHNAME_DEFAULTS = "WITH-PATHNAME-DEFAULTS";
+
+	/**
+	 * {@code uiop:with-enough-pathname (var &key pathname defaults) body...} -- shorthand
+	 * for {@link #CALL_WITH_ENOUGH_PATHNAME} over a one-argument lambda of the body. The
+	 * {@code :pathname} form defaults to the VARIABLE named by {@code var} (upstream's
+	 * rebinding shorthand) and {@code :defaults} to {@code *default-pathname-defaults*}.
+	 */
+	public static final String WITH_ENOUGH_PATHNAME = "WITH-ENOUGH-PATHNAME";
+
+	/**
+	 * {@code uiop:call-with-enough-pathname maybe-subpath defaults thunk} -- calls the
+	 * thunk with {@code enough-pathname} of the two, under
+	 * {@code *default-pathname-defaults*} bound to the defaults. Lisp source
+	 * ({@code uiop-pathname.lisp}); named here because {@link #WITH_ENOUGH_PATHNAME}
+	 * expands into it.
+	 */
+	public static final String CALL_WITH_ENOUGH_PATHNAME = "CALL-WITH-ENOUGH-PATHNAME";
+
+	/**
+	 * {@code uiop:*nil-pathname*} -- the neutral defaults pathname, {@code #P""} here.
+	 * Named because {@link #WITH_PATHNAME_DEFAULTS}'s no-defaults expansion references
+	 * it, which is also what makes {@code UiopLibrary} splice its {@code defvar}.
+	 */
+	public static final String NIL_PATHNAME_VAR = "*NIL-PATHNAME*";
+
+	/**
+	 * {@code uiop:subpathname pathname subpath &key type} -- a relative subpath merged
+	 * under the pathname's directory. Named for the compile-time fold
+	 * ({@code cli/CompileTimePathnameFolder}): a subpathname over literals is a literal,
+	 * the same way {@code uiop:merge-pathnames*} already folds.
+	 */
+	public static final String SUBPATHNAME = "SUBPATHNAME";
 
 	/**
 	 * {@code uiop:uiop-debug &rest keys} -- loads a developer's personal debug file. The

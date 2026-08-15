@@ -13,7 +13,8 @@ spelling (a pathname or a namestring); the result is a pathname.
 
 Omitting `defaults` merges against `""` (the namestring designating the working
 directory), which leaves `specified` unchanged -- the same answer
-`uiop::get-pathname-defaults` gives.
+`uiop:get-pathname-defaults` gives with the initial
+`*default-pathname-defaults*`.
 
 ## Backend support
 

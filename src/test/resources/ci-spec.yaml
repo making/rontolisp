@@ -4677,6 +4677,65 @@ cases:
       :NO-MATCH
       #P"d/a.txt"
       :SIGNALLED
+  - name: uiop-pathname-algebra
+    source: |
+      ;; The uiop/pathname family (uiop-pathname.lisp): one Lisp definition per
+      ;; member over the flat namestring, so the four backends must answer
+      ;; identically -- exactly the family that would otherwise diverge silently
+      ;; between the interpreter and the codegen paths.
+      (print (uiop:subpathname #P"/tmp/foo/" "bar/baz.txt"))
+      (print (uiop:subpathname #P"/tmp/foo/x.lisp" "n" :type "txt"))
+      (print (uiop:subpathp #P"/tmp/foo/bar.txt" #P"/tmp/"))
+      (print (uiop:subpathp #P"/other/x" #P"/tmp/"))
+      (print (uiop:enough-pathname #P"/tmp/a/b.txt" #P"/tmp/"))
+      (print (uiop:enough-pathname #P"/x/a.txt" #P"/tmp/"))
+      (print (uiop:parse-unix-namestring "a//b/./c.txt"))
+      (print (uiop:parse-unix-namestring "foo/bar" :type "lisp"))
+      (print (uiop:parse-unix-namestring "foo/bar" :ensure-directory t))
+      ;; The four predicates: absolute / relative / file answer the parsed
+      ;; PATHNAME (a generalized boolean), directory-pathname-p answers T.
+      (print (list (uiop:absolute-pathname-p "/a/b") (uiop:absolute-pathname-p "a/b")))
+      (print (list (uiop:relative-pathname-p "a/b") (uiop:relative-pathname-p "/a/b")))
+      (print (list (uiop:directory-pathname-p "/a/b/") (uiop:directory-pathname-p "/a/b")))
+      (print (list (uiop:file-pathname-p "/a/b") (uiop:file-pathname-p "/a/b/")))
+      ;; split-name-type is a multiple-value producer; a lone leading dot makes
+      ;; the whole filename the NAME.
+      (print (append (multiple-value-list (uiop:split-name-type "foo.lisp"))
+                     (multiple-value-list (uiop:split-name-type ".hidden"))))
+      ;; The wild family, wilden, and the output-translations wrapper.
+      (print (list uiop:*wild* uiop:*wild-file* uiop:*wild-path* (uiop:wilden #P"/tmp/foo")))
+      (print (uiop:translate-pathname* #P"/src/a/b.lisp" #P"/src/**/*.*" #P"/out/**/*.*"))
+      ;; ensure-pathname transforms and checks; the failed check is catchable.
+      (print (uiop:ensure-pathname "a/b" :ensure-directory t))
+      (print (handler-case (uiop:ensure-pathname "/a/b" :want-relative t) (error () :err)))
+      ;; get-pathname-defaults reads the *default-pathname-defaults* special, and
+      ;; the two macros expand into a dynamic rebinding / call-with-enough-pathname.
+      (print (uiop:get-pathname-defaults))
+      (uiop:with-pathname-defaults (#P"/wpd/") (print *default-pathname-defaults*))
+      (let ((p #P"/tmp/a/b.txt"))
+        (uiop:with-enough-pathname (p :defaults #P"/tmp/") (print p)))
+    expected: |
+      #P"/tmp/foo/bar/baz.txt"
+      #P"/tmp/foo/n.txt"
+      #P"foo/bar.txt"
+      NIL
+      #P"a/b.txt"
+      #P"/x/a.txt"
+      #P"a/b/c.txt"
+      #P"foo/bar.lisp"
+      #P"foo/bar/"
+      (#P"/a/b" NIL)
+      (#P"a/b" NIL)
+      (T NIL)
+      (#P"/a/b" NIL)
+      ("foo" "lisp" ".hidden" NIL)
+      ("*" #P"*.*" #P"**/*.*" #P"/tmp/**/*.*")
+      #P"/out/a/b.lisp"
+      #P"a/b/"
+      :ERR
+      #P""
+      #P"/wpd/"
+      #P"a/b.txt"
   - name: clos-call-next-method-optional-and-meet-branch
     source: |
       ;; (1) a bare call-next-method forwards the &optional section too: &rest

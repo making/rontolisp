@@ -95,6 +95,11 @@ class UiopLibraryTest {
 		assertThat(splicedNames("(uiop:uiop-debug)")).contains("UIOP/UTILITY:LOAD-UIOP-DEBUG-UTILITY");
 		assertThat(splicedNames("(let ((s 1)) (uiop:latest-timestamp-f s 5))"))
 			.contains("UIOP/UTILITY:LATEST-TIMESTAMP", "UIOP/UTILITY:TIMESTAMPS-LATEST");
+		// with-pathname-defaults' no-defaults arm binds the *nil-pathname* VARIABLE --
+		// the selection carries a defvar exactly like a defun.
+		assertThat(splicedNames("(uiop:with-pathname-defaults () (print 1))")).contains("UIOP/PATHNAME:*NIL-PATHNAME*");
+		assertThat(splicedNames("(uiop:with-enough-pathname (p :defaults #P\"/tmp/\") (print p))")).contains(
+				"UIOP/PATHNAME:CALL-WITH-ENOUGH-PATHNAME", "UIOP/PATHNAME:ENOUGH-PATHNAME", "UIOP/PATHNAME:SUBPATHP");
 	}
 
 	@Test

@@ -602,10 +602,6 @@ public final class PackageRegistry {
 		uiopExternals.add(LispNames.WHEN_LET);
 		uiopExternals.add(LispNames.WHEN_LET_STAR);
 		Set<String> uiopSymbols = new HashSet<>(uiopExternals);
-		// Internal in real UIOP too: every call site spells it
-		// uiop::get-pathname-defaults. Owned by the package rather than reached by
-		// the resolver's tolerance for an unknown :: member.
-		uiopSymbols.add(LispNames.GET_PATHNAME_DEFAULTS);
 		define(new LispPackage(LispNames.UIOP_PKG, List.of(), uiopSymbols, Set.copyOf(uiopExternals),
 				Map.copyOf(uiopImports)));
 		// The dependency-shim packages behind the built-in ASDF systems of the same

@@ -33,8 +33,8 @@
 | [`uiop/utility`](uiop/utility.md) | 移植性のあるヘルパ (`strcat`、`split-string`、`if-let`、`not-implemented-error`) | 68 / 68 |
 | `uiop/version` | バージョン比較と非推奨コンディション | 1 / 15 |
 | `uiop/os` | ホストの識別、環境変数、作業ディレクトリ | 1 / 22 |
-| `uiop/pathname` | パス名の代数 (`merge-pathnames*`、`ensure-absolute-pathname`) | 4 / 50 |
-| `uiop/filesystem` | ファイルシステムの探索・走査・変更 | 7 / 32 |
+| [`uiop/pathname`](uiop/pathname.md) | パス名の代数 (`subpathname`、`parse-unix-namestring`、`enough-pathname`) | 50 / 50 |
+| `uiop/filesystem` | ファイルシステムの探索・走査・変更 | 8 / 32 |
 | `uiop/stream` | ファイル内容、一時ファイル、エンコーディング、標準ストリーム | 3 / 66 |
 | `uiop/image` | コマンドライン、終了、ダンプフック | 1 / 30 |
 | `uiop/launch-program` | 非同期のサブプロセス | 0 / 19 |
@@ -50,8 +50,10 @@
 
 ## 実装済みのもの
 
-uiop の他のすべてがその上に書かれている移植性ヘルパ群 `uiop/utility` の 68 個は
-完全に実装済みで、[専用のページ](uiop/utility.md)があります。残りは以下のとおりです。
+uiop の他のすべてがその上に書かれている移植性ヘルパ群 `uiop/utility` の 68 個と、
+パス名の代数 `uiop/pathname` の 50 個は完全に実装済みで、それぞれ専用のページ
+([uiop/utility](uiop/utility.md)、[uiop/pathname](uiop/pathname.md)) があります。
+残りは以下のとおりです。
 
 | 関数 | 例 | 結果 |
 |----------|---------|--------|
@@ -62,22 +64,21 @@ uiop の他のすべてがその上に書かれている移植性ヘルパ群 `u
 | `uiop:subdirectories` | `(uiop:subdirectories "src/")` | ディレクトリのサブディレクトリを、それぞれ末尾に `/` を付けて返します |
 | `uiop:collect-sub*directories` | `(uiop:collect-sub*directories "src/" (constantly t) (constantly t) #'print)` | ディレクトリツリーを走査します。`collectp` が `collector` へ渡すものを、`recursep` が降りていく先を決めます。渡されるディレクトリはルートも含めてすべてディレクトリ形式です |
 | `uiop:read-file-string` | `(uiop:read-file-string "db/up.sql")` | ファイルの内容全体を 1 つの文字列として返します。ファイルを入力用に開けるすべてのバックエンドで動きます。lite 版: 本家 UIOP の `&rest` キーワードは受け付けて無視します (`:external-format` は rontolisp には存在せず、どのバックエンドも UTF-8 で読みます) |
-| `uiop:merge-pathnames*` | `(uiop:merge-pathnames* "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — デフォルトを考慮したパス名のマージ。4 つのバックエンドすべてで動作します |
-| `uiop:ensure-directory-pathname` | `(uiop:ensure-directory-pathname "src")` | `#P"src/"` — ディレクトリ形式のパス名。これに対してマージすると末尾に追加されます |
-| `uiop:absolute-pathname-p` | `(uiop:absolute-pathname-p "/tmp/x")` | `#P"/tmp/x"` — 名前文字列が絶対パス (先頭が `/`) ならそのパス名、そうでなければ `nil`。本家と同じく一般化ブーリアンです |
-| `uiop:ensure-absolute-pathname` | `(uiop:ensure-absolute-pathname "b.txt" "/tmp/")` | `#P"/tmp/b.txt"` — 絶対パスはそのまま通し、相対パスはデフォルト (パス名、またはそれを返す関数) に対してマージします。lite 版: 絶対デフォルトのない相対パスは、本家がシグナルするのに対しそれ自身を返します — rontolisp はどこでも絶対化を行わず (`truename` も渡された名前文字列をそのまま持ちます)、`chdir` もないため相対名前文字列は実行中ずっと同じファイルを指し、呼び出し側が使うファイルの同一性としてすでに機能するからです |
 | `uiop:compile-file-type` | `(uiop:compile-file-type)` | `nil` — コンパイル済みファイルが持つパス名の型。ここには `compile-file` が存在せずそのような型もないため、「このパスは fasl か?」を問う呼び出し側はソースパスに対して「いいえ」を得ます |
 | `uiop:default-temporary-directory` | `(uiop:default-temporary-directory)` | `$TMPDIR` をディレクトリ形式で。環境変数が空の場合 (`--env` なしの 2 つの WASM バックエンド) は `#P"/tmp/"` |
 | `uiop:delete-file-if-exists` | `(uiop:delete-file-if-exists "scratch.txt")` | ファイルを削除します。存在しない場合はシグナルではなく `nil` を返します — UIOP がこれをエクスポートしている理由そのものです |
+| `uiop:get-pathname-defaults` | `(uiop:get-pathname-defaults)` | 相対名が解決される基準のデフォルト — 絶対なデフォルト引数が与えられない限り `*default-pathname-defaults*` (初期値 `#P""`、ホストの作業ディレクトリを指すパス名) を返します |
 | `uiop:native-namestring` | `(uiop:native-namestring #P"/tmp/x")` | `"/tmp/x"` — パス名のホスト OS の綴り。ここでは名前文字列そのものなので `namestring` と同じです |
 | `uiop:add-package-local-nickname` | `(uiop:add-package-local-nickname '#:j '#:com.example.pkg)` | パッケージ短縮名を登録 (lite: グローバル、パッケージごとのスコープなし)。リテラルなトップレベル呼び出しはコンパイル時ディレクティブなので、すべてのバックエンドで動作します |
 | `uiop:symbol-call` | `(uiop:symbol-call :cl :+ 1 2)` | 実行時にパッケージから名前を引いて適用します — 依存関係に持たないシステムを呼ぶための UIOP の遅延束縛呼び出しです |
 | `uiop/image:print-condition-backtrace` | `(uiop/image:print-condition-backtrace c :stream s)` | コンディションのレポートを出力します (ライト版: どのバックエンドも Lisp レベルのコールスタックを持たないため、出力されるのはコンディション自体だけです) |
 
-`uiop/utility` 以外の 3 つのメンバは**マクロ**で、呼び出されるのではなくコンパイラが
-展開します: `uiop:with-temporary-file`、
+完全実装済みサブパッケージ以外の 3 つのメンバは**マクロ**で、呼び出されるのではなく
+コンパイラが展開します: `uiop:with-temporary-file`、
 [`uiop:with-deprecation`](macros/uiop-with-deprecation.md)、
 `uiop:define-package` (リテラルなトップレベル呼び出しは `defpackage` と同様に処理されます)。
+`uiop/pathname` の 2 つのマクロ — `uiop:with-pathname-defaults` と
+`uiop:with-enough-pathname` — は[そのページ](uiop/pathname.md)にあります。
 `uiop/utility` 自身のマクロ — [`uiop:if-let`](macros/uiop-if-let.md)、
 `uiop:nest`、`uiop:while-collecting`、`uiop:with-upgradability` など — は
 [そのページ](uiop/utility.md#macros)にあります。
@@ -104,7 +105,7 @@ Unhandled condition: Not (currently) implemented on rontolisp: UIOP/OS:CHDIR
 
 ## rontolisp の追加分
 
-本家がそこにエクスポートしていない名前が 3 つ `uiop` にあります:
+本家がそこにエクスポートしていない名前が 2 つ `uiop` にあります:
 
 - `uiop:namestring` — 本家は Common Lisp のものを*継承*しているだけですが、ここでは
   エクスポートされており、[`namestring`](functions/namestring.md) そのものです。
@@ -113,7 +114,3 @@ Unhandled condition: Not (currently) implemented on rontolisp: UIOP/OS:CHDIR
   [`uiop:when-let*`](macros/uiop-when-let-star.md) — alexandria の名前ですが、
   すでに使っているプログラムがあるため残しています。本家 UIOP は `if-let` だけを
   エクスポートしています。
-- `uiop::get-pathname-defaults` — 本家 UIOP でも内部シンボルです (だから二重コロン)。
-  すべてのバックエンドで `""` を返します。相対パスはホストの作業ディレクトリを基準に
-  解決され、`""` はまさにそれを指す名前文字列なので、
-  `(merge-pathnames x (uiop::get-pathname-defaults))` は `x` になります。
